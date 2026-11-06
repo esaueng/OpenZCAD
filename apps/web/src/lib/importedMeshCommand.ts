@@ -11,14 +11,14 @@ export interface MillimetreMesh {
   name: string;
   triangleCount: number;
   /** Millimetres, whatever the file declared. */
-  vertices: number[];
-  indices: number[];
+  vertices: number[] | Float64Array;
+  indices: number[] | Uint32Array;
 }
 
 /** Triangles in the units of the document they are about to join. */
 export interface DocumentUnitTriangles {
-  vertices: number[];
-  indices: number[];
+  vertices: MillimetreMesh['vertices'];
+  indices: MillimetreMesh['indices'];
 }
 
 /**
@@ -46,12 +46,16 @@ export type ImportedMeshPayloadForm =
  */
 export function meshInDocumentUnits(
   mesh: MillimetreMesh,
-  units: UnitSystem
+  units: UnitSystem,
+  reading: UnitSystem = 'mm'
 ): DocumentUnitTriangles {
   const scale = 1 / UNIT_TO_MM[units];
+  const millimetres = UNIT_TO_MM[reading];
   return {
     vertices:
-      scale === 1 ? mesh.vertices : mesh.vertices.map((value) => value * scale),
+      scale === 1 && millimetres === 1
+        ? mesh.vertices
+        : mesh.vertices.map((value) => value * millimetres * scale),
     indices: mesh.indices
   };
 }
@@ -78,7 +82,14 @@ export function importedMeshCommand(
     triangleCount: mesh.triangleCount,
     ...('meshPayloadRef' in payload
       ? { meshPayloadRef: payload.meshPayloadRef }
-      : { vertices: payload.vertices, indices: payload.indices }),
+      : {
+          vertices: Array.isArray(payload.vertices)
+            ? payload.vertices
+            : Array.from(payload.vertices),
+          indices: Array.isArray(payload.indices)
+            ? payload.indices
+            : Array.from(payload.indices)
+        }),
     ...(mesh.assumedUnits ? { assumedUnits: mesh.assumedUnits } : {}),
     ids
   });

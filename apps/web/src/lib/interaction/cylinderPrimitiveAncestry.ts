@@ -12,12 +12,11 @@ import {
   type BooleanOperation,
   type DirectEditOperation,
   type FeatureNode,
+  type PrimitiveKind,
   type ProjectDocument,
   isInPlaceTransform
 } from '@openzcad/shared';
 
-/** Primitive dimension a face drag on a derived body can still drive. */
-type CylinderDimension = 'radius' | 'height';
 type BoxDimension = 'width' | 'height' | 'depth';
 type BoxAxis = 'x' | 'y' | 'z';
 
@@ -33,6 +32,37 @@ interface PrimitiveChain {
   /** Features whose lineage may legitimately name a face on the picked body. */
   publishers: Set<FeatureId>;
   scale: number;
+  /** The boolean the chain crossed, when it crossed one. */
+  crossed?: { operation: BooleanOperation; operandIndex: number };
+}
+
+/** The feature at the far end of a chain, whose stored value the drag edits. */
+export interface ChainSource {
+  matches: (feature: FeatureNode) => boolean;
+  /**
+   * Box roles are recovered in the modifier's axis-aligned frame, so a
+   * rotation before that modifier cannot prove the source's local axis.
+   */
+  axisAligned?: boolean;
+  /** Gear teeth cut along a cylinder stay transparent to its height alone. */
+  throughGear?: boolean;
+}
+
+function primitiveSource(
+  primitiveKind: PrimitiveKind,
+  dimension: string
+): ChainSource {
+  return {
+    matches: (feature) =>
+      feature.data.featureKind === 'primitive' &&
+      feature.data.primitiveKind === primitiveKind &&
+      (typeof feature.data.dimensions[dimension] === 'number' ||
+        // A box side composes a typed expression with the drag.
+        (primitiveKind === 'box' &&
+          typeof feature.data.dimensions[dimension] === 'string')),
+    axisAligned: primitiveKind === 'box',
+    throughGear: primitiveKind === 'cylinder' && dimension === 'height'
+  };
 }
 
 /**
@@ -49,6 +79,13 @@ interface BooleanOperandPath {
    * plain face offset already resolves the union's side exactly.
    */
   requireEdgeModifier: boolean;
+  /**
+   * Operand positions this crossing may resize, per operation; absent means
+   * any consumed operand. A subtract's tools shape only the cut.
+   */
+  operandIndices?: Partial<
+    Record<BooleanOperation, (index: number) => boolean>
+  >;
   /**
    * Whether an earlier direct edit downstream of the operand keeps the
    * primitive's stored dimension authoritative.
@@ -78,8 +115,7 @@ interface BooleanOperandPath {
 function primitiveChain(
   document: ProjectDocument,
   selectedBodyId: BodyId,
-  primitiveKind: 'cylinder' | 'box',
-  dimension: CylinderDimension | BoxDimension,
+  source: ChainSource,
   unionPath?: BooleanOperandPath
 ): PrimitiveChain | null {
   const features = listFeaturesInOrder(document);
@@ -93,7 +129,7 @@ function primitiveChain(
   const consumerIndexByBodyId = new Map<BodyId, number>();
   let bodyId = selectedBodyId;
   let primitive: FeatureNode | null = null;
-  let crossedUnion = false;
+  let crossed: PrimitiveChain['crossed'];
   let hasEdgeModifier = false;
 
   while (!ancestryBodyIds.has(bodyId)) {
@@ -103,13 +139,7 @@ function primitiveChain(
       return null;
     }
     publishers.add(producer.featureId);
-    if (
-      producer.data.featureKind === 'primitive' &&
-      producer.data.primitiveKind === primitiveKind &&
-      (typeof producer.data.dimensions[dimension] === 'number' ||
-        (primitiveKind === 'box' &&
-          typeof producer.data.dimensions[dimension] === 'string'))
-    ) {
+    if (source.matches(producer)) {
       primitive = producer;
       break;
     }
@@ -119,16 +149,22 @@ function primitiveChain(
       // Only a construction-named operand face proves which input to resize.
       // Cuts, intersections, nested/shared carriers and kept source bodies
       // cannot inherit this bounded resize contract.
+      const operandAllowed =
+        unionPath.operandIndices?.[data.operation] ?? (() => true);
       if (
-        crossedUnion ||
+        crossed ||
         (unionPath.requireEdgeModifier && !hasEdgeModifier) ||
         !unionPath.operations.includes(data.operation) ||
+        !operandAllowed(unionPath.operandIndex) ||
         producer.featureId !== unionPath.reference.producingFeatureId ||
         !operand ||
         !booleanConsumedBodyIds(data).includes(operand)
       )
         return null;
-      crossedUnion = true;
+      crossed = {
+        operation: data.operation,
+        operandIndex: unionPath.operandIndex
+      };
       consumerIndexByBodyId.set(operand, features.indexOf(producer));
       bodyId = operand;
       continue;
@@ -139,9 +175,7 @@ function primitiveChain(
         : // Teeth cut along a cylinder span its whole wall and regenerate at
           // any height, so a cap drag on the gear still means the cylinder's
           // height. Its radius is the gear's to own.
-          data.featureKind === 'gear' &&
-            primitiveKind === 'cylinder' &&
-            dimension === 'height'
+          data.featureKind === 'gear' && source.throughGear
           ? data.targetBodyId
           : undefined;
     if (targetBodyId === undefined) {
@@ -153,7 +187,7 @@ function primitiveChain(
     bodyId = targetBodyId;
   }
 
-  if (!primitive || (unionPath && !crossedUnion)) {
+  if (!primitive || (unionPath && !crossed)) {
     return null;
   }
   const hasBlockingDirectEdit = features.some((feature, index) => {
@@ -223,7 +257,7 @@ function primitiveChain(
       // Modifier box roles are recovered in the modifier's axis-aligned frame.
       // A rotation before that modifier cannot prove the primitive's local axis.
       if (
-        primitiveKind === 'box' &&
+        source.axisAligned &&
         (unionPath || consumerIndex < features.length) &&
         [
           feature.data.transform.rotationDeg.x,
@@ -246,8 +280,95 @@ function primitiveChain(
     }
   }
   return Number.isFinite(scale) && scale > 0
-    ? { primitive, publishers, scale }
+    ? { primitive, publishers, scale, ...(crossed ? { crossed } : {}) }
     : null;
+}
+
+/**
+ * Whether a fillet or chamfer in the chain holds an edge pick by hash alone.
+ *
+ * Resizing a boolean operand makes new seam edges, which nothing but a
+ * lineage name can find again, so such a blend would lose its pick (or
+ * silently follow the wrong edge) after a source edit.
+ */
+function chainHasHashOnlyEdgePick(
+  document: ProjectDocument,
+  chain: PrimitiveChain
+): boolean {
+  return listFeaturesInOrder(document).some(
+    (feature) =>
+      chain.publishers.has(feature.featureId) &&
+      (feature.data.featureKind === 'fillet' ||
+        feature.data.featureKind === 'chamfer') &&
+      (feature.data.edgeReferences?.length ?? 0) <
+        feature.data.edgeHashes.length
+  );
+}
+
+/** A planar offset that re-resolves its face by lineage, as WS4 replays it. */
+const isLineageOffset = (operation: DirectEditOperation) =>
+  operation.kind === 'offset-face' && operation.faceReference !== undefined;
+
+/**
+ * Crosses one union or subtract to the consumed operand a face's v5 role
+ * names, under the bounded WS4 contract: the role is current and published
+ * by a feature in the walked chain, the operand is consumed, kept or copied
+ * sources and earlier local edits of the same value stop it, and so does a
+ * fillet or chamfer holding a hash-only edge pick.
+ *
+ * `role` is the operand role with its `boolean.face.operand.N.` prefix
+ * already matched: `operandIndex` is that N.
+ */
+export function booleanOperandSource(
+  document: ProjectDocument,
+  selectedBodyId: BodyId,
+  faceReference: FaceTopologyReferenceV5,
+  operandIndex: number,
+  source: ChainSource,
+  options: {
+    operations?: readonly BooleanOperation[];
+    operandIndices?: BooleanOperandPath['operandIndices'];
+    allowsDirectEdit?: (operation: DirectEditOperation) => boolean;
+  } = {}
+): PrimitiveChain | null {
+  const chain = primitiveChain(document, selectedBodyId, source, {
+    reference: faceReference,
+    operandIndex,
+    operations: options.operations ?? ['union', 'subtract'],
+    requireEdgeModifier: false,
+    ...(options.operandIndices
+      ? { operandIndices: options.operandIndices }
+      : {}),
+    allowsDirectEdit: options.allowsDirectEdit ?? isLineageOffset
+  });
+  if (
+    !chain?.publishers.has(faceReference.producingFeatureId) ||
+    chainHasHashOnlyEdgePick(document, chain)
+  )
+    return null;
+  return chain;
+}
+
+/** `boolean.face.operand.N.<role>`, split into N and the operand's own role. */
+export function booleanOperandRole(
+  lineageName: string
+): { operandIndex: number; role: string } | null {
+  const match = /^boolean\.face\.operand\.(0|[1-9]\d*)\.(.+)$/.exec(
+    lineageName
+  );
+  return match ? { operandIndex: Number(match[1]), role: match[2]! } : null;
+}
+
+/**
+ * +1 when the picked face's outward normal is the source face's own; -1 for
+ * a subtract tool's face, which the cut turns inside out (a bore's floor is
+ * the tool's cap facing back up the bore).
+ */
+function crossingSense(chain: PrimitiveChain): 1 | -1 {
+  return chain.crossed?.operation === 'subtract' &&
+    chain.crossed.operandIndex > 0
+    ? -1
+    : 1;
 }
 
 /**
@@ -256,8 +377,7 @@ function primitiveChain(
  * across both operations, including where a direct wall resize is refused
  * (a boss or bore meeting a sphere).
  */
-const BOOLEAN_CYLINDER_WALL_LINEAGE =
-  /^boolean\.face\.operand\.(0|[1-9]\d*)\.(?:primitive|modifier)\.cylinder\.face\.wall$/;
+const CYLINDER_WALL_ROLE = /^(?:primitive|modifier)\.cylinder\.face\.wall$/;
 
 function cylinderRadiusChain(
   document: ProjectDocument,
@@ -267,40 +387,32 @@ function cylinderRadiusChain(
 ): PrimitiveChain | null {
   const operand =
     faceReference && faceReference.currentHash === faceHash
-      ? BOOLEAN_CYLINDER_WALL_LINEAGE.exec(faceReference.lineageName)
+      ? booleanOperandRole(faceReference.lineageName)
       : null;
-  if (!operand || !faceReference) {
-    return primitiveChain(document, selectedBodyId, 'cylinder', 'radius');
+  if (!operand || !faceReference || !CYLINDER_WALL_ROLE.test(operand.role)) {
+    return primitiveChain(
+      document,
+      selectedBodyId,
+      primitiveSource('cylinder', 'radius')
+    );
   }
-  const chain = primitiveChain(document, selectedBodyId, 'cylinder', 'radius', {
-    reference: faceReference,
-    operandIndex: Number(operand[1]),
-    operations: ['union', 'subtract'],
-    requireEdgeModifier: false,
-    // A lineage-resolved planar offset (a cap pushed after the union) is
-    // regenerated on the resized operand. A wall resize or any measured
-    // edit pins the pre-edit radius and keeps the edit local.
-    allowsDirectEdit: (operation) =>
-      operation.kind === 'offset-face' && operation.faceReference !== undefined
-  });
-  if (!chain?.publishers.has(faceReference.producingFeatureId)) return null;
-  // A fillet or chamfer after the boolean that holds a hash-only edge pick
-  // loses it when the operand changes size: the seam a resized boss makes is
-  // a new edge, and nothing but a lineage name can find it again. Keep those
-  // chains on the local wall resize, which leaves the seam in place. When
-  // the pick is the boss seam itself the local resize cannot carry the blend
-  // either, and the adapter refuses it (`resize_left_blend_behind`) rather
-  // than leave the blend behind at the old radius: neither route is correct
-  // there yet, so the refusal is the answer.
-  const pickedByHashOnly = listFeaturesInOrder(document).some(
-    (feature) =>
-      chain.publishers.has(feature.featureId) &&
-      (feature.data.featureKind === 'fillet' ||
-        feature.data.featureKind === 'chamfer') &&
-      (feature.data.edgeReferences?.length ?? 0) <
-        feature.data.edgeHashes.length
+  // A lineage-resolved planar offset (a cap pushed after the union) is
+  // regenerated on the resized operand. A wall resize or any measured edit
+  // pins the pre-edit radius and keeps the edit local. A fillet or chamfer
+  // holding a hash-only edge pick keeps the local wall resize too, which
+  // leaves the seam in place; when the pick is the boss seam itself the
+  // kernel's own local resize cannot carry the blend, so the adapter removes
+  // the band, resizes the sharp wall and rebuilds the band (WS6 ladder); a
+  // seam it cannot prove and rebuild exactly, such as a chamfer, still
+  // refuses (`resize_left_blend_behind`) rather than leave the blend behind
+  // at the old radius.
+  return booleanOperandSource(
+    document,
+    selectedBodyId,
+    faceReference,
+    operand.operandIndex,
+    primitiveSource('cylinder', 'radius')
   );
-  return pickedByHashOnly ? null : chain;
 }
 
 /**
@@ -325,26 +437,105 @@ export interface CylinderCapAncestor {
   side: 'start' | 'end';
   /** Converts stored primitive dimensions to distances in the selected body's frame. */
   scale: number;
+  /**
+   * The sign a drag along the picked face's outward normal applies to the
+   * height: -1 for a subtract tool's cap, which faces back out of the cut,
+   * so pulling a bore's floor outward makes the bore shallower.
+   */
+  sense: 1 | -1;
 }
 
-/** Both caps drive the source primitive; the start cap also needs a base shift. */
+/**
+ * Any earlier lineage-resolved planar offset may replay on the resized
+ * operand except one of the operand's own caps: that move has its own
+ * baseline, which the stored height must not replace.
+ */
+function allowsOffsetOtherThan(role: RegExp) {
+  return (operation: DirectEditOperation) =>
+    isLineageOffset(operation) &&
+    operation.kind === 'offset-face' &&
+    !role.test(
+      booleanOperandRole(operation.faceReference!.lineageName)?.role ??
+        operation.faceReference!.lineageName
+    );
+}
+
+function capAncestor(
+  document: ProjectDocument,
+  selectedBodyId: BodyId,
+  faceReference: FaceTopologyReferenceV5 | undefined,
+  faceHash: number,
+  primitiveKind: 'cylinder' | 'cone',
+  capRole: RegExp
+): CylinderCapAncestor | null {
+  if (!faceReference || faceReference.currentHash !== faceHash) return null;
+  const operand = booleanOperandRole(faceReference.lineageName);
+  const match = capRole.exec(operand?.role ?? faceReference.lineageName);
+  if (!match) return null;
+  const source = primitiveSource(primitiveKind, 'height');
+  const chain = operand
+    ? booleanOperandSource(
+        document,
+        selectedBodyId,
+        faceReference,
+        operand.operandIndex,
+        source,
+        { allowsDirectEdit: allowsOffsetOtherThan(capRole) }
+      )
+    : primitiveChain(document, selectedBodyId, source);
+  return chain?.publishers.has(faceReference.producingFeatureId)
+    ? {
+        primitive: chain.primitive,
+        side: match[1] as 'start' | 'end',
+        scale: chain.scale,
+        sense: crossingSense(chain)
+      }
+    : null;
+}
+
+/**
+ * Both caps drive the source primitive; the start cap also needs a base
+ * shift. A cap named for one consumed operand of a union or subtract
+ * crosses that boolean under the {@link booleanOperandSource} contract.
+ */
 export function primitiveCylinderCapAncestor(
   document: ProjectDocument,
   selectedBodyId: BodyId,
   faceReference: FaceTopologyReferenceV5 | undefined,
   faceHash: number
 ): CylinderCapAncestor | null {
-  if (!faceReference || faceReference.currentHash !== faceHash) return null;
-  const match = CAP_LINEAGE.exec(faceReference.lineageName);
-  if (!match) return null;
-  const chain = primitiveChain(document, selectedBodyId, 'cylinder', 'height');
-  return chain?.publishers.has(faceReference.producingFeatureId)
-    ? {
-        primitive: chain.primitive,
-        side: match[1] as 'start' | 'end',
-        scale: chain.scale
-      }
-    : null;
+  return capAncestor(
+    document,
+    selectedBodyId,
+    faceReference,
+    faceHash,
+    'cylinder',
+    CAP_LINEAGE
+  );
+}
+
+const CONE_CAP_LINEAGE =
+  /^(?:primitive|modifier)\.cone\.face\.cap\.(start|end)$/;
+
+/**
+ * The cone whose height a cap drag should edit, under the cylinder cap's
+ * contract. Both radii stay fixed, so the drag changes the slope the way
+ * editing the stored height does.
+ */
+export function primitiveConeCapAncestor(
+  document: ProjectDocument,
+  selectedBodyId: BodyId,
+  faceReference: FaceTopologyReferenceV5 | undefined,
+  faceHash: number
+): CylinderCapAncestor | null {
+  return capAncestor(
+    document,
+    selectedBodyId,
+    faceReference,
+    faceHash,
+    'cone',
+    CONE_CAP_LINEAGE
+  );
 }
 
 export function primitiveCylinderHeightAncestor(
@@ -375,6 +566,56 @@ export function primitiveCylinderScale(
   );
 }
 
+/**
+ * The primitive a curved face of a sphere, cone or torus traces to.
+ *
+ * There is no radial drag handle for these surfaces yet, so this proves
+ * ownership only: selecting a sphere patch, a cone wall or a torus shell
+ * opens its source primitive, directly, through fillets and chamfers, or
+ * across one union or subtract that consumed it.
+ */
+const CURVED_PRIMITIVE_ROLE =
+  /^primitive\.(sphere|cone|torus)\.face\.(?:z-max|z-min|wall|shell)$/;
+
+export function primitiveCurvedFaceAncestor(
+  document: ProjectDocument,
+  selectedBodyId: BodyId,
+  faceReference: FaceTopologyReferenceV5 | undefined,
+  faceHash: number
+): FeatureNode | null {
+  if (!faceReference || faceReference.currentHash !== faceHash) return null;
+  const operand = booleanOperandRole(faceReference.lineageName);
+  const match = CURVED_PRIMITIVE_ROLE.exec(
+    operand?.role ?? faceReference.lineageName
+  );
+  if (!match) return null;
+  const primitiveKind = match[1] as 'sphere' | 'cone' | 'torus';
+  const dimension =
+    primitiveKind === 'sphere'
+      ? 'radius'
+      : primitiveKind === 'cone'
+        ? 'height'
+        : 'majorRadius';
+  const source: ChainSource = {
+    matches: (feature) =>
+      feature.data.featureKind === 'primitive' &&
+      feature.data.primitiveKind === primitiveKind &&
+      feature.data.dimensions[dimension] !== undefined
+  };
+  const chain = operand
+    ? booleanOperandSource(
+        document,
+        selectedBodyId,
+        faceReference,
+        operand.operandIndex,
+        source
+      )
+    : primitiveChain(document, selectedBodyId, source);
+  return chain?.publishers.has(faceReference.producingFeatureId)
+    ? chain.primitive
+    : null;
+}
+
 /** `makeBox(width, height, depth)` lays those along x, y, z in that order. */
 const BOX_DIMENSION_BY_AXIS: Record<BoxAxis, BoxDimension> = {
   x: 'width',
@@ -389,8 +630,7 @@ const BOX_DIMENSION_BY_AXIS: Record<BoxAxis, BoxDimension> = {
 const BOX_SIDE_LINEAGE =
   /^(?:primitive|modifier)\.box\.face\.([xyz])-(min|max)$/;
 
-const UNION_BOX_SIDE_LINEAGE =
-  /^boolean\.face\.operand\.(0|[1-9]\d*)\.((?:primitive|modifier)\.box\.face\.[xyz]-max)$/;
+const BOOLEAN_BOX_MAX_SIDE = /^(?:primitive|modifier)\.box\.face\.[xyz]-max$/;
 
 export interface BoxFaceAncestor {
   primitive: FeatureNode;
@@ -401,13 +641,54 @@ export interface BoxFaceAncestor {
 }
 
 /**
+ * Whether no face around the picked side traces to a subtract's tool, so a
+ * longer target leaves the cut where it was. A tool that bites into the
+ * side meets it in a tool-named or unnamed face; one that splits it leaves
+ * the halves unnamed, so the side's own role would not be found at all.
+ */
+function sideClearOfTools(
+  document: ProjectDocument,
+  bodyId: BodyId,
+  faceHash: number
+): boolean {
+  const topology = document.derived.bodyRepresentations[bodyId]?.topology;
+  if (!topology) return false;
+  const lineage = new Map(
+    topology.faces.map((face) => [face.hash, face.reference?.lineageName])
+  );
+  const neighbours = topology.edges.flatMap((edge) =>
+    edge.adjacentFaceHashes?.includes(faceHash)
+      ? edge.adjacentFaceHashes.filter((hash) => hash !== faceHash)
+      : []
+  );
+  // Each operand role a neighbour's name carries must be the target's: a
+  // blend band names both faces it runs between.
+  return (
+    neighbours.length > 0 &&
+    neighbours.every((hash) => {
+      const name = lineage.get(hash);
+      const operands = name?.match(/boolean\.face\.operand\.\d+\./g);
+      return (
+        operands !== undefined &&
+        operands !== null &&
+        operands.every((operand) => operand === 'boolean.face.operand.0.')
+      );
+    })
+  );
+}
+
+/**
  * The box primitive whose side a planar face drag should resize.
  *
  * Same contract as {@link primitiveCylinderHeightAncestor}: identity is
  * proven by a v5 role published by a feature in the walked chain, never by
  * geometry. A minimum-side edit additionally shifts the primitive base so
- * the opposite side stays fixed. Across a union only maximum sides qualify:
- * shifting an input's base could move its junction with the other operands.
+ * the opposite side stays fixed. Across a union or subtract only maximum
+ * sides qualify: shifting an input's base could move its junction with the
+ * other operands. Across a subtract only the target's sides qualify, and
+ * only where no tool reaches the side. Either crossing needs a fillet or
+ * chamfer after the boolean; without one the plain face offset already
+ * resolves the side exactly.
  */
 export function primitiveBoxFaceAncestor(
   document: ProjectDocument,
@@ -418,8 +699,11 @@ export function primitiveBoxFaceAncestor(
   if (!faceReference || faceReference.currentHash !== faceHash) {
     return null;
   }
-  const union = UNION_BOX_SIDE_LINEAGE.exec(faceReference.lineageName);
-  const match = BOX_SIDE_LINEAGE.exec(union?.[2] ?? faceReference.lineageName);
+  const operand = booleanOperandRole(faceReference.lineageName);
+  if (operand && !BOOLEAN_BOX_MAX_SIDE.test(operand.role)) return null;
+  const match = BOX_SIDE_LINEAGE.exec(
+    operand?.role ?? faceReference.lineageName
+  );
   if (!match) {
     return null;
   }
@@ -429,13 +713,13 @@ export function primitiveBoxFaceAncestor(
   const chain = primitiveChain(
     document,
     selectedBodyId,
-    'box',
-    dimension,
-    union
+    primitiveSource('box', dimension),
+    operand
       ? {
           reference: faceReference,
-          operandIndex: Number(union[1]),
-          operations: ['union'],
+          operandIndex: operand.operandIndex,
+          operations: ['union', 'subtract'],
+          operandIndices: { subtract: (index) => index === 0 },
           requireEdgeModifier: true,
           allowsDirectEdit: (operation) =>
             operation.kind === 'offset-face' &&
@@ -443,7 +727,20 @@ export function primitiveBoxFaceAncestor(
         }
       : undefined
   );
-  return chain?.publishers.has(faceReference.producingFeatureId)
-    ? { primitive: chain.primitive, dimension, axis, side, scale: chain.scale }
-    : null;
+  if (!chain?.publishers.has(faceReference.producingFeatureId)) return null;
+  // The union crossing predates the hash-only guard and keeps its contract;
+  // the subtract crossing takes the full WS4 one.
+  if (
+    chain.crossed?.operation === 'subtract' &&
+    (chainHasHashOnlyEdgePick(document, chain) ||
+      !sideClearOfTools(document, selectedBodyId, faceHash))
+  )
+    return null;
+  return {
+    primitive: chain.primitive,
+    dimension,
+    axis,
+    side,
+    scale: chain.scale
+  };
 }

@@ -2,10 +2,14 @@ import { describe, expect, it } from 'vitest';
 import {
   addPrimitiveFeature,
   addSketchFeature,
+  booleanBodies,
   createProjectDocument,
+  directEditBody,
   extrudeSketch,
   findSketch,
-  listFeaturesInOrder
+  listFeaturesInOrder,
+  moveFeature,
+  transformBody
 } from '@openzcad/document-core';
 import {
   FEATURE_SUPPRESSED_METADATA_KEY,
@@ -200,3 +204,135 @@ describe('extrudeCapAncestor', () => {
 function extrudedPlate() {
   return extruded({ distance: 8, operation: 'add' });
 }
+
+describe('extrude far cap across a boolean', () => {
+  function joined(
+    operation: 'union' | 'subtract' | 'intersect',
+    distance = 8,
+    extrudeOperation?: 'add'
+  ) {
+    const { document, bodyId, featureId } = extruded({
+      distance,
+      ...(extrudeOperation ? { operation: extrudeOperation } : {})
+    });
+    const plate = document.bodyOrder[0]!;
+    const result = booleanBodies(document, {
+      name: 'Combine',
+      operation,
+      targetBodyIds: [plate, bodyId]
+    });
+    const booleanId = listFeaturesInOrder(result.document).at(-1)!.featureId;
+    return {
+      document: result.document,
+      bodyId: result.bodyId,
+      extrudeBodyId: bodyId,
+      featureId,
+      cap: reference(
+        booleanId,
+        'boolean.face.operand.1.sweep.face.cap.end.region.ent_1'
+      )
+    };
+  }
+
+  it('drives the consumed extrude, with the cut turning the floor inside out', () => {
+    const union = joined('union');
+    expect(
+      extrudeCapAncestor(union.document, union.bodyId, union.cap, HASH)
+    ).toMatchObject({ feature: { featureId: union.featureId }, sense: 1 });
+    // A pocket's floor is the tool's far cap facing back up the pocket.
+    const cut = joined('subtract', -6);
+    expect(
+      extrudeCapAncestor(cut.document, cut.bodyId, cut.cap, HASH)
+    ).toMatchObject({ feature: { featureId: cut.featureId }, sense: 1 });
+    const grown = joined('subtract', 6);
+    expect(
+      extrudeCapAncestor(grown.document, grown.bodyId, grown.cap, HASH)?.sense
+    ).toBe(-1);
+  });
+
+  it('refuses an intersect, a start cap, a stale or foreign role, and a merged extrude', () => {
+    const intersected = joined('intersect');
+    expect(
+      extrudeCapAncestor(
+        intersected.document,
+        intersected.bodyId,
+        intersected.cap,
+        HASH
+      )
+    ).toBeNull();
+    const { document, bodyId, cap, featureId } = joined('union');
+    for (const candidate of [
+      { ...cap, lineageName: 'boolean.face.operand.1.sweep.face.cap.start' },
+      { ...cap, currentHash: HASH + 1 },
+      { ...cap, producingFeatureId: featureId }
+    ]) {
+      expect(
+        extrudeCapAncestor(document, bodyId, candidate, HASH),
+        candidate.lineageName
+      ).toBeNull();
+    }
+    const merged = joined('union', 8, 'add');
+    expect(
+      extrudeCapAncestor(merged.document, merged.bodyId, merged.cap, HASH)
+    ).toBeNull();
+  });
+
+  it('stops at a copied or scaled source and an earlier move of the same cap', () => {
+    const copied = joined('union');
+    const withCopy = transformBody(copied.document, {
+      name: 'Copy',
+      targetBodyId: copied.extrudeBodyId,
+      translation: { x: 50, y: 0, z: 0 },
+      copy: true
+    }).document;
+    expect(
+      extrudeCapAncestor(withCopy, copied.bodyId, copied.cap, HASH)
+    ).toBeNull();
+
+    const scaled = joined('union');
+    const features = listFeaturesInOrder(scaled.document);
+    const scaledDocument = transformBody(scaled.document, {
+      name: 'Scale',
+      targetBodyId: scaled.extrudeBodyId,
+      translation: { x: 0, y: 0, z: 0 },
+      scale: 2
+    }).document;
+    // Move the scale before the boolean that consumes the boss.
+    const scale = listFeaturesInOrder(scaledDocument).at(-1)!;
+    const reordered = moveFeature(scaledDocument, {
+      featureId: scale.featureId,
+      toIndex: features.length - 1
+    });
+    expect(
+      extrudeCapAncestor(reordered, scaled.bodyId, scaled.cap, HASH)
+    ).toBeNull();
+
+    const { document, bodyId, cap } = joined('union');
+    const offset = (lineageName: string) =>
+      directEditBody(document, {
+        name: 'Offset face',
+        targetBodyId: bodyId,
+        operation: {
+          kind: 'offset-face',
+          faceHash: 77,
+          faceReference: { ...cap, lineageName, currentHash: 77 },
+          sourceSurfaceType: 'plane',
+          sourceArea: 60,
+          sourceCenter: { x: 20, y: 12, z: 18 },
+          sourceNormal: { x: 0, y: 0, z: 1 },
+          offset: 2
+        }
+      }).document;
+    expect(
+      extrudeCapAncestor(offset(cap.lineageName), bodyId, cap, HASH)
+    ).toBeNull();
+    expect(
+      extrudeCapAncestor(
+        offset('boolean.face.operand.0.primitive.box.face.z-min'),
+        bodyId,
+        cap,
+        HASH
+      )?.feature.name
+    ).toBe('Boss');
+  });
+});

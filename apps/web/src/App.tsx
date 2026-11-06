@@ -104,6 +104,7 @@ import {
   type EdgeModifierFormValue
 } from './lib/edgeModifierEdit';
 import {
+  MAX_MESH_SOLID_CONVERSION_TRIANGLES,
   datumPlaneSources,
   documentNodesWithHistory,
   documentTextBudgetError,
@@ -15631,20 +15632,15 @@ export function App() {
       return;
     }
 
-    const { MAX_SOURCE_IMPORT_BYTES, MAX_SOURCE_IMPORT_MB, runStepImport } =
-      await stepImportRun();
-
     if (lowerName.endsWith('.stl')) {
-      if (file.size > MAX_SOURCE_IMPORT_BYTES) {
-        setStatus(`STL import is limited to ${MAX_SOURCE_IMPORT_MB} MB.`);
+      if (importAbortRef.current) {
+        setStatus(
+          'Another import is still running. Try again once it completes.'
+        );
         return;
       }
-      // STL through the same validated-feature job as STEP — commit lock,
-      // progress card, cancel signal, finalize permission recheck — minus the
-      // source-blob store (triangles embed in the feature; the original
-      // upload archives like any mesh import). Without the lock a second drop
-      // mid-parse lands a duplicate mesh, and without the signal Cancel cannot
-      // reach the read it is supposed to stop.
+      // The disposable worker reads one STL at a time. The validated-feature
+      // job handles the commit lock, project recheck and archival.
       //
       // The lock also drives the editor's busy state — and deliberately NOT
       // the project shelf's. `geometryBusy` gates the forms that must wait
@@ -15666,27 +15662,20 @@ export function App() {
           return;
         }
         progress.update({ phase: 'reading', fraction: null });
-        const [{ parseStl }, contents] = await Promise.all([
-          import('@openzcad/io-stl'),
-          file.arrayBuffer()
-        ]);
-        if (abort.signal.aborted) {
-          // Cancelled during the read, before any lock was taken: finish the
-          // abort handle here so navigation never sees a run that no longer
-          // exists. (Later exits go through the run's own finally.)
-          progress.finish({ tone: 'cancelled', message: 'nothing was added' });
-          setStatus(`${file.name} was not imported: you cancelled it.`);
-          finishImportAbort(abort);
-          return;
-        }
+        const { importStlInDisposableWorker } =
+          await import('./lib/meshImportWorkerClient');
+        const parsed = await importStlInDisposableWorker(file, abort.signal);
         // STL states no unit: the file's numbers are read the way the user
         // says (millimetres, as they always were, is the preselected answer).
-        let parsed = parseStl(contents, file.name);
         const importUnits = await import('./lib/importUnits');
+        abort.signal.throwIfAborted();
+        if (managerRef.current !== importManager) {
+          throw new Error('The project changed while the import was reading.');
+        }
         const reading = await readUnitlessImportAs({
           fileName: file.name,
           kind: 'mesh',
-          extent: importUnits.meshExtent(parsed.vertices),
+          extent: parsed.extent,
           documentUnits: doc.units
         });
         if (!reading || abort.signal.aborted) {
@@ -15700,16 +15689,14 @@ export function App() {
           setStatus(message);
           return;
         }
-        if (reading !== 'mm') {
-          parsed = {
-            ...parsed,
-            vertices: importUnits.verticesReadAs(parsed.vertices, reading)
-          };
-        }
         const readingNote =
           reading === 'mm'
             ? ''
             : `, read as ${importUnits.IMPORT_UNIT_LABELS[reading].toLowerCase()}`;
+        const referenceNote =
+          parsed.triangleCount > MAX_MESH_SOLID_CONVERSION_TRIANGLES
+            ? ' as a mesh reference'
+            : '';
         // Taken only around the validated run itself — never across the read.
         // The run's own busy check still refuses a concurrent second drop,
         // and the shelf stays navigable for the switch the run then refuses
@@ -15737,7 +15724,8 @@ export function App() {
           const hold = await meshImport.holdMeshImport(
             parsed,
             doc.units,
-            importMarks()
+            importMarks(),
+            reading
           );
           let outcome:
             Awaited<ReturnType<typeof validatedFeature.run>> | 'failed' =
@@ -15765,7 +15753,7 @@ export function App() {
                 signal: abort.signal,
                 validatingMessage: `Checking ${file.name} against exact geometry…`,
                 successMessage: () =>
-                  `Imported ${parsed.triangleCount} triangles from ${file.name}${readingNote}${note}`,
+                  `Imported ${parsed.triangleCount} triangles from ${file.name}${referenceNote}${readingNote}${note}`,
                 // No revalidation: an import appends a feature to a project,
                 // and a project switch mid-rebuild must refuse (or cancel), not
                 // rebuild the candidate against a document it was never meant
@@ -15844,7 +15832,7 @@ export function App() {
             // save-state indicator and the File menu already offer to archive.
             progress.finish({
               tone: 'ok',
-              message: `${parsed.triangleCount} triangles`,
+              message: `${parsed.triangleCount} triangles${referenceNote}`,
               landed: true
             });
           } else if (outcome === 'cancelled') {
@@ -15943,6 +15931,7 @@ export function App() {
       return;
     }
 
+    const { runStepImport } = await stepImportRun();
     const abort = startImportAbort();
     await runStepImport({
       file,

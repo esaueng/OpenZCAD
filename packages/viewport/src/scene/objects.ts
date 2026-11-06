@@ -62,8 +62,8 @@ export function makeLabel(className: string, text: string): CSS2DObject {
 
 /**
  * CAD display modes keep analytic/topological edges separate from the
- * tessellated face mesh. Three's material wireframe exposes every render
- * triangle, which is useful for mesh debugging but is not a CAD wireframe.
+ * tessellated face mesh. Large mesh references have only source facets, so
+ * their wireframe uses the mesh material to draw those facets on demand.
  */
 export function applyDisplayMode(
   bodyGroup: THREE.Group,
@@ -87,8 +87,9 @@ export function applyDisplayMode(
       }
     } else if (isViewerMesh(child) || child.userData.sectionCap === true) {
       const mesh = child as ViewerMesh;
-      mesh.material.visible = facesVisible;
-      mesh.material.wireframe = false;
+      const facetWireframe = child.userData.meshFacetWireframe === true;
+      mesh.material.visible = facesVisible || facetWireframe;
+      mesh.material.wireframe = facetWireframe && !facesVisible;
     } else if (child.userData.ownColourFill === true) {
       // A selected face follows the body's surfaces, including the
       // translucent faces X-ray displays over wireframe.

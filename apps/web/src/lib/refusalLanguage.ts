@@ -231,7 +231,9 @@ const TRANSLATIONS: ReadonlyArray<{ pattern: RegExp; sentence: string }> = [
   }
 ];
 
-const GENERIC = 'The exact kernel could not build this result.';
+/** The fallback sentence when nothing more specific is known. */
+export const GENERIC_REFUSAL = 'The exact kernel could not build this result.';
+const GENERIC = GENERIC_REFUSAL;
 
 /**
  * A sentence the kernel wrote rather than the adapter: it opens lowercase or
