@@ -82,6 +82,11 @@ test('numeric value has a name and light-theme text meets contrast at the render
   await expect(
     dialog.getByRole('textbox', { name: 'Distance', exact: true })
   ).toBeVisible();
+  // Unit radios live in the expandable keypad, not the compact value row.
+  await dialog.getByRole('button', { name: 'Keypad', exact: true }).click();
+  await expect(
+    dialog.getByRole('radiogroup', { name: 'Entry unit', exact: true })
+  ).toBeVisible();
   const ratios = await page.evaluate(() => {
     const lum = (color: string) => {
       const c = color
@@ -98,7 +103,8 @@ test('numeric value has a name and light-theme text meets contrast at the render
       '.keypad-units button:not(.active)',
       '.viewport-dock-snap'
     ].map((selector) => {
-      const element = document.querySelector(selector)!;
+      const element = document.querySelector(selector);
+      if (!element) throw new Error(`Contrast target is missing: ${selector}`);
       const foreground = getComputedStyle(element).color;
       let node: Element | null = element,
         background = 'rgb(255,255,255)';

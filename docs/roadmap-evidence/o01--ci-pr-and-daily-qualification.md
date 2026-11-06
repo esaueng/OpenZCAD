@@ -27,6 +27,18 @@ Full root validation also exposed an intersection symbol introduced on main
 without font coverage. The pinned math-font subset and its CSS range now
 include U+2229, with an explicit glyph regression assertion and a passing
 interface-wide coverage audit.
+Further complete browser qualification exposed stale harness assumptions:
+the rail test now resolves its CSS length through layout, the contrast test
+opens the keypad before measuring its unit buttons, and camera regressions
+start gestures on measured bare canvas rather than covered fixed coordinates.
+The checkpoint-module fault test uses Save-Data to isolate the explicit import
+from idle prefetch, retaining its exact request-count and persistence checks.
+The imperial-unit refusal reads the validation warning, and the unresolved
+extrude waits for History's failed-feature state before opening its editor.
+The ASCII STL tokenizer now scans native token matches with the same six
+ASCII separators, preserving lookahead, grammar and refusal behavior. Eight
+separator regressions and the existing 500,000/500,001-triangle boundary tests
+pass under coverage without extending their five-second deadlines.
 The four formerly failing journeys also pass in isolation; complete hosted
 qualification remains the queue-admission requirement.
 Full browser qualification uses one attempt and retains failure contexts;

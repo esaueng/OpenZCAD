@@ -66,6 +66,15 @@ for (const fault of ['missing', 'stalled', 'rejected'] as const) {
       updatedAt: document.derived.updatedAt
     };
     await stubApi(page, { collaborationRole: 'editor' });
+    // Exercise the first explicit save import. An idle speculative fetch of
+    // the same chunk would otherwise race this fault injection and inflate
+    // its request count; Save-Data disables only speculative fetching.
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, 'connection', {
+        configurable: true,
+        value: { saveData: true }
+      });
+    });
     await page.route('**/api/projects', (route) =>
       route.fulfill({
         json:

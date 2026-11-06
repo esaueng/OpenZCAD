@@ -6,6 +6,7 @@ import {
   stubApi,
   expectBodyCount,
   enableFullRender,
+  bareCanvasDrags,
   locateEdge,
   waitForStillViewport
 } from './openzcad-fixtures';
@@ -334,6 +335,8 @@ test('orbiting without a handle skips chip panel layout', async ({ page }) => {
   await page.keyboard.press('Escape');
   const canvas = page.locator('.viewer-host canvas').first();
   await expect(canvas).not.toHaveAttribute('data-e2e-handle-x', /.+/);
+  await waitForStillViewport(page);
+  const [start] = await bareCanvasDrags(page, { count: 1, dragX: 80 });
   await page.evaluate(() => {
     const scope = window as typeof window & { __chipPanelScans?: number };
     scope.__chipPanelScans = 0;
@@ -347,11 +350,10 @@ test('orbiting without a handle skips chip panel layout', async ({ page }) => {
     };
   });
   const before = Number(await canvas.getAttribute('data-e2e-frames'));
-  const box = (await canvas.boundingBox())!;
-  await page.mouse.move(box.x + 120, box.y + box.height - 140);
+  await page.mouse.move(start!.x, start!.y);
   await page.keyboard.down('Shift');
   await page.mouse.down();
-  await page.mouse.move(box.x + 180, box.y + box.height - 240, { steps: 12 });
+  await page.mouse.move(start!.x + 60, start!.y - 100, { steps: 12 });
   await page.mouse.up();
   await page.keyboard.up('Shift');
   await expect
@@ -478,13 +480,14 @@ test('a normal-to-face glide does not replay when the bodies change later', asyn
   await expect
     .poll(async () => faceOn(await camera(canvas)), { timeout: 15_000 })
     .toBeGreaterThan(0.999);
-  await page.waitForTimeout(300);
+  await waitForStillViewport(page);
 
   // Turn away from the face, pressing on empty canvas (the armed face would
   // take the press as a push/pull).
-  const box = (await canvas.boundingBox())!;
-  const fromX = box.x + 120;
-  const fromY = box.y + box.height - 140;
+  // The dock now covers the old fixed anchor near the canvas's left edge.
+  const [start] = await bareCanvasDrags(page, { count: 1, dragX: 80 });
+  const fromX = start!.x;
+  const fromY = start!.y;
   await page.keyboard.down('Shift');
   await page.mouse.move(fromX, fromY);
   await page.mouse.down();

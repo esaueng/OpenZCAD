@@ -311,6 +311,9 @@ test('shows an unresolved to-face extrude and repairs it by re-picking a face', 
   // Only the roof is drawn: the post is unresolved, said by name.
   await expectBodyCount(page, 1);
   const row = page.locator('.feature-row', { hasText: 'Post' }).last();
+  // The roof can render before the final failed Post result is published.
+  // Edit only once History has committed the unresolved feature state.
+  await expect(row).toHaveClass(/\bfailed\b/);
   const unresolved = await editExtrudeFromHistory(
     page,
     row.locator('.feature-row-main'),
