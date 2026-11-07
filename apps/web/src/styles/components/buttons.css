@@ -103,13 +103,30 @@
     .encryption-indicator,
     .command-bar-attach,
     .in-place-command-options > summary,
-    .workspace-hint-help summary
+    .workspace-hint-help summary,
+    .drawing-zoom-button,
+    .start-layout-button,
+    .start-folders-new,
+    .start-selection-action,
+    .sketch-type-cycle,
+    .sketch-constraint-edit,
+    .motion-speed,
+    .motion-toggle,
+    .assembly-player-toggle,
+    .command-flyout-reset,
+    .command-flyout-view,
+    .measurement-row-actions button,
+    .edit-refusal-why,
+    .keypad-operation,
+    .history-batch-clear
   ):hover:not(:disabled),
 button.model-panel-grip[aria-expanded='true'],
 .keypad-grid-toggle[aria-expanded='true'],
 .encryption-menu[open] > .encryption-indicator,
 .in-place-command-options[open] > summary,
-.workspace-hint-help[open] summary {
+.workspace-hint-help[open] summary,
+.start-selection-action[aria-expanded='true'],
+.edit-refusal-why[aria-expanded='true'] {
   box-shadow: inset 0 0 0 1px var(--color-border-strong);
 }
 
@@ -124,6 +141,29 @@ button.command-rail:hover:not(:disabled, [aria-disabled='true'], .active),
 .workspace-column .sketch-rail button:hover:not(:disabled):not(.active),
 .sketch-relation:hover:not(:disabled):not(.active),
 .rail-button:hover:not(:disabled):not(.active),
-.rail-button.open:not(.active) {
+.rail-button.open:not(.active),
+.drawing-rail-button:hover:not(:disabled):not(.active),
+.view-mode-button:hover:not(.active),
+.view-mode-button.open:not(.active) {
   box-shadow: inset 0 0 0 1px var(--color-border-strong);
+}
+
+/*
+ * Beside a primary, a secondary action rests bare and becomes a whole
+ * button under the pointer or keyboard focus, so the primary is the one
+ * filled choice. A standalone secondary keeps its outline: with nothing
+ * beside it, it would otherwise read as plain text. A destructive secondary
+ * is the answer, so it keeps its fill. (Dialogs go further: see modals.css.)
+ */
+:is(.secondary:has(~ .primary), .primary ~ .secondary):not(
+  .danger,
+  :hover:not(:disabled),
+  :focus-visible
+),
+:is(
+  .edit-refusal-action:has(~ .is-primary),
+  .is-primary ~ .edit-refusal-action
+):not(.is-primary, :hover, :focus-visible) {
+  background: transparent;
+  border-color: transparent;
 }
