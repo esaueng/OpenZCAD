@@ -3377,13 +3377,10 @@ button.model-panel-grip {
   cursor: grab;
 }
 
-/* The same hover button as the header actions; it stays up while its Move
-   menu is open. */
 button.model-panel-grip:hover,
 button.model-panel-grip[aria-expanded='true'] {
   color: var(--color-text);
   background: var(--color-surface-hover);
-  box-shadow: inset 0 0 0 1px var(--color-border-strong);
 }
 
 .model-panel-header.is-draggable
@@ -3446,12 +3443,9 @@ button.model-panel-grip[aria-expanded='true'] {
   color: var(--color-text-muted);
 }
 
-/* Header actions rest as bare glyphs; under the pointer each becomes a
-   whole button: fill and a hairline edge, inset so nothing moves. */
 .model-panel-action:hover {
   color: var(--color-text);
   background: var(--color-surface-hover);
-  box-shadow: inset 0 0 0 1px var(--color-border-strong);
 }
 
 /* Rounded paint must not cut corners off a header control's 24px target. */
