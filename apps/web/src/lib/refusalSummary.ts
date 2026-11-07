@@ -61,6 +61,14 @@ export function refusalSummary(
       pickAnother: false
     };
   }
+  if (error.headline) {
+    return {
+      status: 'not-built',
+      headline: error.headline,
+      cause: error.message,
+      pickAnother: false
+    };
+  }
   const advice = error.advice;
   if (advice?.kind === 'smaller-size') {
     return {

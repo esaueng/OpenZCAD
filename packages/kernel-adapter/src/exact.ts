@@ -16,6 +16,16 @@ import {
 } from './exact-idle-lineage-view';
 import type { EditAnalysisRequest } from '@openzcad/shared';
 import { projectShapeMesh } from './exact-display-projection';
+import {
+  beginDirectEditProfile,
+  profileDirectEditStage
+} from './direct-edit-profile';
+export type { DirectEditProfile } from './direct-edit-profile';
+
+/** Capture actual WASM calls and adapter stages for a worker performance probe. */
+export function profileDirectEdits() {
+  return beginDirectEditProfile(RemusKernel.prototype);
+}
 import { projectReferenceMesh } from './mesh-reference';
 import {
   drawingTessellationOfShape,
@@ -65,6 +75,7 @@ export type {
 import {
   findSketch,
   getParameterScope,
+  resolveParamValue,
   getParameterHiddenBodyIds,
   listFeaturesInOrder,
   listNodesByKind,
@@ -146,6 +157,10 @@ import type {
 export type { DxfFaceSelector } from './exact-types';
 import { diagnoseImportedSolid } from './exact-lineage-builders';
 import { releasePreparedFaceMove } from './exact-prepared-face-move';
+import {
+  hasPreparedGroupEdit,
+  releasePreparedGroupEdit
+} from './exact-prepared-group-edit';
 import {
   blendRegionKeyOfHashes,
   measureOwnedFaceGeometry,
@@ -891,6 +906,8 @@ export interface ExactKernelAdapter {
     faceReference?: FaceTopologyReferenceV5;
   }): Promise<FaceRecognitionSummary>;
   dispose(): void;
+  /** End disposable drag work on the serialized worker owner. */
+  releaseEditPreview?(): void;
 }
 
 export type MassPropertiesRead =
@@ -1313,6 +1330,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   }
 
   private invalidateHistoryCache(): void {
+    if (this.historyKernel) releasePreparedGroupEdit(this.historyKernel);
     this.clearCurrentMassSnapshot();
     this.historyCheckpoints = [];
     this.historyCheckpointOwners.clear();
@@ -1557,7 +1575,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     const deferredDirectEditFeatureId =
       deferTerminalFaceLineage &&
       terminal?.data.featureKind === 'direct-edit' &&
-      terminal.data.operation.kind === 'offset-face'
+      ['offset-face', 'resize-blend', 'resize-cylindrical-face'].includes(
+        terminal.data.operation.kind
+      )
         ? terminal.featureId
         : undefined;
     // Only a drag preview keeps a prepared face move; any other sync ends it.
@@ -1590,7 +1610,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     // blends display-only, then replay them checked again on release.
     const terminalOffset =
       terminal?.data.featureKind === 'direct-edit' &&
-      terminal.data.operation.kind === 'offset-face';
+      ['offset-face', 'resize-blend', 'resize-cylindrical-face'].includes(
+        terminal.data.operation.kind
+      );
     const checkpointIndices = tailCheckpointIndices(
       historyCheckpointIndices(features.length, this.maxHistoryCheckpoints),
       features.length - (terminalOffset ? 2 : 1),
@@ -2351,6 +2373,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       this.invalidateHistoryCache();
       throw error;
     } finally {
+      if (!deferTerminalFaceLineage) releasePreparedGroupEdit(activeKernel);
       // Cancelled jobs also allocated geometry. Charge completed replay work
       // before yielding ownership, otherwise an edit storm evades recycling.
       if (
@@ -3376,27 +3399,38 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           let projection: ReturnType<typeof projectShapeMesh>;
           try {
             projection = withSyncReadMemo(readMemo, () =>
-              projectShapeMesh(
-                kernel,
-                shape,
-                32 * 1024 * 1024,
-                this.heldDisplayDeflections.get(bodyId),
-                strict ? strictVerdicts : undefined,
-                true
+              profileDirectEditStage('projection', () =>
+                projectShapeMesh(
+                  kernel,
+                  shape,
+                  32 * 1024 * 1024,
+                  this.heldDisplayDeflections.get(bodyId),
+                  strict ? strictVerdicts : undefined,
+                  true,
+                  hasPreparedGroupEdit(kernel)
+                )
               )
             );
           } catch {
             // Display admission is an optimization, not a new refusal gate.
             break deferredTopology;
           }
-          this.heldDisplayDeflections.set(bodyId, projection.linearDeflections);
+          // A disposable drag mesh must never lower the completed display's
+          // held quality, including when the next sync restores this source.
+          if (!hasPreparedGroupEdit(kernel))
+            this.heldDisplayDeflections.set(
+              bodyId,
+              projection.linearDeflections
+            );
           if (
             strict &&
             !projection.closureValidated &&
-            !isClosedConsistentlyOrientedMesh(
-              inspectTriangleMeshClosure(
-                projection.mesh.vertices,
-                projection.mesh.indices
+            !profileDirectEditStage('meshClosure', () =>
+              isClosedConsistentlyOrientedMesh(
+                inspectTriangleMeshClosure(
+                  projection.mesh.vertices,
+                  projection.mesh.indices
+                )
               )
             )
           )
@@ -3409,8 +3443,52 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             kernel,
             Uint32Array.from(projection.faceGroups, (group) => group.handle)
           );
+          const previewEdit = listFeaturesInOrder(document).at(-1);
+          const groupOperation =
+            hasPreparedGroupEdit(kernel) &&
+            previewEdit?.data.featureKind === 'direct-edit'
+              ? previewEdit.data.operation
+              : undefined;
+          const dimensionRadius =
+            groupOperation?.kind === 'resize-blend'
+              ? resolveParamValue(
+                  groupOperation.newRadius,
+                  getParameterScope(document).scope,
+                  'radius'
+                )
+              : groupOperation?.kind === 'resize-cylindrical-face'
+                ? resolveParamValue(
+                    groupOperation.radius,
+                    getParameterScope(document).scope,
+                    'radius'
+                  )
+                : undefined;
+          const dimensionSurface =
+            groupOperation?.kind === 'resize-blend'
+              ? groupOperation.surfaceClass
+              : 'cylinder';
           const faces = withSyncReadMemo(readMemo, () =>
             projection.faceGroups.map((group, index) => {
+              let measureGeometry = dimensionRadius === undefined;
+              if (
+                !measureGeometry &&
+                surfaceTypeOf(kernel, group.handle) === dimensionSurface
+              ) {
+                try {
+                  const p = JSON.parse(
+                    kernel.getAnalyticSurfaceParams(group.handle)
+                  ) as Record<string, unknown>;
+                  const radius =
+                    dimensionSurface === 'torus'
+                      ? (p.minorRadius ?? p.minor_radius)
+                      : p.radius;
+                  measureGeometry =
+                    typeof radius === 'number' &&
+                    Math.abs(radius - dimensionRadius!) < 1e-6;
+                } catch {
+                  measureGeometry = true;
+                }
+              }
               // NURBS area integration is completion metadata, not a display
               // requirement, so B-spline faces carry no geometry. Picks are
               // held for this snapshot.
@@ -3418,7 +3496,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                 kernel,
                 group.handle,
                 digests?.[index],
-                faceWitnessOf
+                faceWitnessOf,
+                measureGeometry
               );
               const hash = topologyHashOfWitness('face', witness);
               return {
@@ -3430,6 +3509,41 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
               };
             })
           );
+          // A resize names its band explicitly. Preserve that display role
+          // on a unique measured result without running whole-body recognition
+          // or publishing a persistent topology reference for a drag frame.
+          if (
+            !consumed &&
+            previewEdit?.data.featureKind === 'direct-edit' &&
+            previewEdit.data.targetBodyId === bodyId &&
+            previewEdit.data.operation.kind === 'resize-blend'
+          ) {
+            const operation = previewEdit.data.operation;
+            const radius = resolveParamValue(
+              operation.newRadius,
+              getParameterScope(document).scope,
+              'radius'
+            );
+            const matching = faces.filter(
+              (f) =>
+                f.geometry?.surfaceType === operation.surfaceClass &&
+                Math.abs(
+                  ((operation.surfaceClass === 'torus'
+                    ? f.geometry.minorRadius
+                    : f.geometry.radius) ?? Infinity) - radius
+                ) < 1e-6
+            );
+            if (matching.length === 1 && matching[0]!.geometry) {
+              matching[0]!.geometry = {
+                ...matching[0]!.geometry,
+                featureType: 'blend',
+                blendRadius: radius,
+                editableDimension: 'blendRadius',
+                blendRegionFaceCount: 1,
+                blendRegionKey: `blend:${matching[0]!.hash}`
+              };
+            }
+          }
           geometryRepresentations[bodyId] = {
             ...metadata,
             mesh: projection.mesh,
@@ -3749,14 +3863,16 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         const pending = yieldControl?.();
         if (pending) await pending;
         throwIfBuildCancelled(cancellation);
-        return structuredClone({
-          bodyRepresentations: geometryRepresentations,
-          warnings: build.warnings,
-          featureWarnings: build.featureWarnings,
-          updatedAt: nowIso(),
-          analysis: 'pending' as const,
-          ...(deferTopology ? { topology: 'pending' as const } : {})
-        });
+        return profileDirectEditStage('publicationClone', () =>
+          structuredClone({
+            bodyRepresentations: geometryRepresentations,
+            warnings: build.warnings,
+            featureWarnings: build.featureWarnings,
+            updatedAt: nowIso(),
+            analysis: 'pending' as const,
+            ...(deferTopology ? { topology: 'pending' as const } : {})
+          })
+        );
       }
       if (
         onGeometryReady &&
@@ -4905,6 +5021,22 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     } finally {
       kernel.free();
     }
+  }
+
+  releaseEditPreview(): void {
+    const kernel = this.historyKernel;
+    if (!kernel) return;
+    if (hasPreparedGroupEdit(kernel)) {
+      const source = this.historyCheckpoints.at(-1);
+      try {
+        if (source) kernel.restore(source.checkpointId);
+      } catch {
+        this.invalidateHistoryCache();
+        return;
+      }
+    }
+    releasePreparedGroupEdit(kernel);
+    releasePreparedFaceMove(kernel);
   }
 
   dispose(): void {

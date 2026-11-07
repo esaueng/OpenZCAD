@@ -40,9 +40,14 @@ const workspaceAliases = Object.fromEntries(
 );
 
 /** Same kernel overlay as the root config: swap in a local remus build. */
-const remusOverlay: Record<string, string> = process.env.REMUS_WASM_PKG
-  ? { 'remus-wasm': process.env.REMUS_WASM_PKG }
-  : {};
+const remusOverlay: Record<string, string> = {
+  ...(process.env.REMUS_WASM_PKG
+    ? { 'remus-wasm': process.env.REMUS_WASM_PKG }
+    : {}),
+  ...(process.env.REMUS_WASM_IO_PKG
+    ? { 'remus-wasm-io': process.env.REMUS_WASM_IO_PKG }
+    : {})
+};
 
 export default defineConfig({
   test: {

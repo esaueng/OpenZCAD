@@ -1,9 +1,11 @@
 import type { BodyRepresentation } from '@openzcad/shared';
+import { profileDirectEditStage } from './direct-edit-profile';
 import type { RemusKernel } from './remus-runtime';
 import type { ExactShape } from './exact-types';
 import {
   displayTessellationForExtents,
-  heldDisplayTessellation
+  heldDisplayTessellation,
+  previewDisplayTessellation
 } from './display-tessellation';
 import { tightenBoundsToMesh, refineBoundsAtSplineFaces } from './exact-bounds';
 import { surfaceTypeOf } from './exact-sync-memo';
@@ -24,7 +26,8 @@ export function projectShapeMesh(
   maxBytes: number,
   heldLinearDeflections: readonly number[] = [],
   verdicts?: ReadonlyMap<number, StrictUnionVerdict>,
-  includeFaces = false
+  includeFaces = false,
+  preview = false
 ): Pick<BodyRepresentation, 'mesh' | 'bbox'> & {
   linearDeflections: number[];
   closureValidated: boolean;
@@ -53,7 +56,7 @@ export function projectShapeMesh(
   for (const solid of shape.solids) {
     const kernelBounds = kernel.boundingBox(solid);
     let b: readonly number[] = Array.from(kernelBounds);
-    const tess = heldDisplayTessellation(
+    const fullQuality = heldDisplayTessellation(
       displayTessellationForExtents(
         b[3]! - b[0]!,
         b[4]! - b[1]!,
@@ -61,6 +64,9 @@ export function projectShapeMesh(
       ),
       heldLinearDeflections[linearDeflections.length]
     );
+    const tess = preview
+      ? previewDisplayTessellation(fullQuality)
+      : fullQuality;
     linearDeflections.push(tess.linearDeflection);
     const verdict = verdicts?.get(solid);
     const retained = takeUnionDisplayMeshForMeasurement(
@@ -85,8 +91,12 @@ export function projectShapeMesh(
       verdict?.meshClosed === true;
     try {
       // WASM accessors materialize arrays. Read each once before iterating.
-      const sourcePositions = ownedMeshPositions(mesh);
-      const sourceIndices = ownedMeshIndices(mesh);
+      const sourcePositions = profileDirectEditStage('meshPositions', () =>
+        ownedMeshPositions(mesh)
+      );
+      const sourceIndices = profileDirectEditStage('meshIndices', () =>
+        ownedMeshIndices(mesh)
+      );
       let boundsFaces: { surfaceType: string }[] | undefined;
       let faceOffsets: Uint32Array | undefined;
       if (includeFaces) {
@@ -116,30 +126,32 @@ export function projectShapeMesh(
         throw new Error('Upstream display exceeds its memory budget.');
       const positions = sourcePositions;
       b = tightenBoundsToMesh(kernelBounds, positions, tess.linearDeflection);
-      if (boundsFaces && faceOffsets) {
+      if (!preview && boundsFaces && faceOffsets) {
         // Same certification as completed measurement. A trimmed spline can
         // leave a sub-deflection gap that ordinary mesh tightening must keep.
-        b = refineBoundsAtSplineFaces(
-          b,
-          { positions, indices: sourceIndices, faceOffsets },
-          boundsFaces,
-          tess.linearDeflection,
-          (deflection) => {
-            const fine = kernel.tessellateSolidGroupedBinary(
-              solid,
-              deflection,
-              tess.angularDeflection
-            );
-            try {
-              return {
-                positions: ownedMeshPositions(fine),
-                indices: ownedMeshIndices(fine),
-                faceOffsets: ownedMeshFaceOffsets(fine)
-              };
-            } finally {
-              fine.free();
+        b = profileDirectEditStage('refineBounds', () =>
+          refineBoundsAtSplineFaces(
+            b,
+            { positions, indices: sourceIndices, faceOffsets },
+            boundsFaces,
+            tess.linearDeflection,
+            (deflection) => {
+              const fine = kernel.tessellateSolidGroupedBinary(
+                solid,
+                deflection,
+                tess.angularDeflection
+              );
+              try {
+                return {
+                  positions: ownedMeshPositions(fine),
+                  indices: ownedMeshIndices(fine),
+                  faceOffsets: ownedMeshFaceOffsets(fine)
+                };
+              } finally {
+                fine.free();
+              }
             }
-          }
+          )
         );
       }
       const shifted =

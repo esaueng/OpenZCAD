@@ -20,8 +20,16 @@ import { plainRefusal, type RefusalClassification } from './refusalLanguage';
 export function splitRefusal(
   text: string,
   classification?: string | RefusalClassification
-): Pick<CommandDiagnostic, 'message' | 'detail' | 'category'> {
+): Pick<CommandDiagnostic, 'message' | 'detail' | 'category' | 'headline'> {
   return plainRefusal(text, classification);
+}
+
+/** Preserve a preview's typed diagnostic across an asynchronous failure. */
+export class PreviewRefusalError extends Error {
+  constructor(public readonly diagnostic: CommandDiagnostic) {
+    super(diagnostic.message);
+    this.name = 'PreviewRefusalError';
+  }
 }
 
 /** Returns a kernel warning attributed to one named feature, without its prefix. */

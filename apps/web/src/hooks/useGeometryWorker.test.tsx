@@ -1,6 +1,10 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createProjectDocument } from '@openzcad/document-core';
+import {
+  createProjectDocument,
+  addPrimitiveFeature,
+  booleanBodies
+} from '@openzcad/document-core';
 import { toBodyId, toUserId } from '@openzcad/shared';
 import { CommandManager } from '@openzcad/command-system';
 import type { GeometryWorkerResult } from '../worker/geometryWorker';
@@ -197,63 +201,79 @@ describe('useGeometryWorker', () => {
     }
   );
 
-  it('retains only a completed live result across metadata changes, without another worker sync', () => {
-    installWorker();
-    const document = createProjectDocument('Saved model', toUserId('user'));
-    const manager = { document } as CommandManager;
-    const host = {
-      manager: () => manager,
-      onDerived: vi.fn(),
-      onError: vi.fn()
-    };
-    const { result } = renderHook(() => useGeometryWorker(host));
-    const worker = FakeWorker.instances[0]!;
-    act(() => result.current.sync(document));
-    expect(result.current.retainReadyGeometry(document)).toBe(false);
-    act(() => {
-      worker.emit({
-        type: 'state',
-        phase: 'ready',
-        projectId: document.projectId,
-        version: document.version,
-        stale: false
+  it.each([false, true])(
+    'retains completed live geometry across metadata; invalidates only relevant demand (boolean=%s)',
+    (withBoolean) => {
+      installWorker();
+      let document = createProjectDocument('Saved model', toUserId('user'));
+      if (withBoolean) {
+        for (const name of ['A', 'B'])
+          document = addPrimitiveFeature(document, {
+            name,
+            primitiveKind: 'box',
+            dimensions: { width: 10, height: 8, depth: 6 }
+          });
+        document = booleanBodies(document, {
+          name: 'Union',
+          operation: 'union',
+          targetBodyIds: [...document.bodyOrder]
+        }).document;
+      }
+      const manager = { document } as CommandManager;
+      const host = {
+        manager: () => manager,
+        onDerived: vi.fn(),
+        onError: vi.fn()
+      };
+      const { result } = renderHook(() => useGeometryWorker(host));
+      const worker = FakeWorker.instances[0]!;
+      act(() => result.current.sync(document));
+      expect(result.current.retainReadyGeometry(document)).toBe(false);
+      act(() => {
+        worker.emit({
+          type: 'state',
+          phase: 'ready',
+          projectId: document.projectId,
+          version: document.version,
+          stale: false
+        });
+        worker.emit({
+          type: 'sync',
+          ok: true,
+          projectId: document.projectId,
+          version: document.version,
+          derived: document.derived
+        });
       });
-      worker.emit({
-        type: 'sync',
-        ok: true,
-        projectId: document.projectId,
-        version: document.version,
-        derived: document.derived
+      const saved = {
+        ...document,
+        version: document.version + 1,
+        checkpoints: [
+          ...document.checkpoints,
+          { ...document.checkpoints[0]!, reason: 'Before drilling' }
+        ]
+      };
+      act(() => {
+        expect(result.current.retainReadyGeometry(saved)).toBe(true);
+        manager.document = saved;
       });
-    });
-    const saved = {
-      ...document,
-      version: document.version + 1,
-      checkpoints: [
-        ...document.checkpoints,
-        { ...document.checkpoints[0]!, reason: 'Before drilling' }
-      ]
-    };
-    act(() => {
-      expect(result.current.retainReadyGeometry(saved)).toBe(true);
-      manager.document = saved;
-    });
-    expect(result.current.isReadyFor(saved)).toBe(true);
-    act(() => result.current.sync(saved));
-    expect(worker.postMessage).toHaveBeenCalledTimes(1);
-    expect(
-      result.current.retainReadyGeometry({ ...saved, name: 'Changed model' })
-    ).toBe(false);
-    expect(
-      result.current.retainReadyGeometry({
-        ...saved,
-        projectId: 'another-project' as typeof document.projectId
-      })
-    ).toBe(false);
-    act(() => result.current.sync(saved, [toBodyId('new-lineage-demand')]));
-    expect(result.current.retainReadyGeometry(saved)).toBe(false);
-    expect(worker.postMessage).toHaveBeenCalledTimes(2);
-  });
+      expect(result.current.isReadyFor(saved)).toBe(true);
+      act(() => result.current.sync(saved));
+      expect(worker.postMessage).toHaveBeenCalledTimes(1);
+      expect(
+        result.current.retainReadyGeometry({ ...saved, name: 'Changed model' })
+      ).toBe(false);
+      expect(
+        result.current.retainReadyGeometry({
+          ...saved,
+          projectId: 'another-project' as typeof document.projectId
+        })
+      ).toBe(false);
+      act(() => result.current.sync(saved, [toBodyId('new-lineage-demand')]));
+      expect(result.current.retainReadyGeometry(saved)).toBe(!withBoolean);
+      expect(worker.postMessage).toHaveBeenCalledTimes(withBoolean ? 2 : 1);
+    }
+  );
 
   it('cannot reuse persisted display meshes or an invalidated worker result', () => {
     installWorker();

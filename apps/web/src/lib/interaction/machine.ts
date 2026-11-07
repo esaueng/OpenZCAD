@@ -46,6 +46,8 @@ export interface FaceTarget extends FaceCapabilityTarget {
   diameter?: number;
   /** Latest replayable edit that owns an imported blend band. */
   directEditFeatureId?: string;
+  /** Local band edit on native geometry, rather than its generating Fillet. */
+  nativeBlendDirectEdit?: boolean;
   /**
    * The one-sided extrude whose far cap this face is. Its drags edit that
    * feature's distance, and the card says Extrude rather than Offset Face:
@@ -344,6 +346,8 @@ export type OperationPhase =
 export interface CommandDiagnostic {
   /** One plain sentence naming the cause. */
   message: string;
+  /** Specific, structured validation copy to show without opening Why. */
+  headline?: string;
   /** Kernel text, shown only on request. */
   detail?: string;
   /**

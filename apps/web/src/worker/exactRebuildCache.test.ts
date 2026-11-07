@@ -1,12 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
-import { createProjectDocument } from '@openzcad/document-core';
+import { createProjectDocument, booleanBodies } from '@openzcad/document-core';
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import {
   ExactRebuildCache,
   LatestBroadcastGate,
   canonicalProjectContentKey,
   geometryContentKey,
+  lineageDemandCacheKey,
   rebindSketchGeometryForContent
 } from './exactRebuildCache';
 
@@ -21,6 +22,61 @@ function deferred<T>() {
 }
 
 describe('canonical exact rebuild keys', () => {
+  it('preserves demand distinctions for booleans while sharing equivalent non-boolean results', () => {
+    const manager = new CommandManager(
+      createProjectDocument('Boolean demand', toUserId('user'))
+    );
+    for (const name of ['A', 'B'])
+      manager.execute(
+        commandFactories.addPrimitive({
+          name,
+          primitiveKind: 'box',
+          dimensions: { width: 10, height: 8, depth: 6 }
+        })
+      );
+    const document = manager.document;
+    expect(lineageDemandCacheKey(document, [])).toBe(
+      lineageDemandCacheKey(document, document.bodyOrder)
+    );
+    expect(lineageDemandCacheKey(document)).toBe(
+      lineageDemandCacheKey(document, [])
+    );
+    const combined = booleanBodies(document, {
+      name: 'Union',
+      operation: 'union',
+      targetBodyIds: [...document.bodyOrder]
+    });
+    expect(lineageDemandCacheKey(combined.document)).not.toBe(
+      lineageDemandCacheKey(combined.document, [])
+    );
+    expect(lineageDemandCacheKey(combined.document, [])).not.toBe(
+      lineageDemandCacheKey(combined.document, [combined.bodyId])
+    );
+    const alreadyRequired = () => true;
+    expect(
+      lineageDemandCacheKey(combined.document, undefined, alreadyRequired)
+    ).toBe(
+      lineageDemandCacheKey(
+        combined.document,
+        [combined.bodyId],
+        alreadyRequired
+      )
+    );
+    const demanded = (
+      _: ProjectDocument,
+      __: unknown,
+      ids?: readonly unknown[]
+    ) => ids?.includes(combined.bodyId) ?? false;
+    expect(
+      lineageDemandCacheKey(combined.document, undefined, demanded)
+    ).not.toBe(lineageDemandCacheKey(combined.document, [], demanded));
+    expect(lineageDemandCacheKey(combined.document, undefined, demanded)).toBe(
+      lineageDemandCacheKey(combined.document, [combined.bodyId], demanded)
+    );
+    expect(lineageDemandCacheKey(combined.document, [], demanded)).not.toBe(
+      lineageDemandCacheKey(combined.document, [combined.bodyId], demanded)
+    );
+  });
   it('ignores derived output and object insertion order', () => {
     const document = createProjectDocument('Cache key', toUserId('user'));
     const reordered = {

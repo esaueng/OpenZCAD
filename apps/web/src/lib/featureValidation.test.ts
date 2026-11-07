@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { toFeatureId } from '@openzcad/shared';
 import {
+  PreviewRefusalError,
   splitRefusal,
   validatedFeatureRejection,
   warningForFeature
@@ -14,6 +15,27 @@ const safe = {
 };
 
 describe('validated feature warnings', () => {
+  it('preserves a typed diameter refusal across preview failure', () => {
+    const diagnostic = validatedFeatureRejection({
+      ...safe,
+      featureWarnings: [
+        {
+          kind: 'refusal',
+          featureId: toFeatureId('resize'),
+          featureName: safe.featureName,
+          message: 'opaque diagnostic',
+          kernelRefusal: {
+            family: 'direct-edit',
+            category: 'unsupported',
+            code: 'cylinder-diameter-unbuildable'
+          }
+        }
+      ]
+    })!;
+    const failure = new PreviewRefusalError(diagnostic);
+    expect(failure.diagnostic.headline).toContain('smaller diameter');
+    expect(failure.diagnostic.detail).toBe('opaque diagnostic');
+  });
   it('extracts only the warning for the candidate feature', () => {
     const warnings = [
       'Feature "Other feature": unrelated',

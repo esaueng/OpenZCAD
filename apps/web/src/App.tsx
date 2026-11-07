@@ -531,7 +531,7 @@ import {
   listInteractionDiagnostics,
   recordInteractionDiagnostic
 } from './lib/interactionDiagnostics';
-import { KERNEL_BUILD } from './lib/kernelBuild';
+import { KERNEL_BUILD, supportsBlendGroupEdits } from './lib/kernelBuild';
 import {
   chordFromEvent,
   chordLeavesTypingAlone,
@@ -712,6 +712,7 @@ import {
   SELECTION_FILTER_LABELS
 } from '@openzcad/viewport/types';
 import { closedCircleLoopSelections } from '@openzcad/viewport/edge-chain';
+import { bottomChamferChain } from './lib/interaction/chamferChain';
 import { effectiveSelectionFilter } from './lib/selectionFilter';
 import {
   bodyFeature,
@@ -751,6 +752,8 @@ import {
   canRemoveImportedBlendFace,
   importedBlendCarriers,
   importedBlendSnapshot,
+  directBlendSnapshot,
+  revisableBlendResize,
   newBlendFaceSelections,
   resolveFilletBlendFace,
   resolveImportedBlendFace
@@ -1675,7 +1678,7 @@ import {
   type ToastAction,
   type ToastModel
 } from './lib/toasts';
-import { splitRefusal } from './lib/featureValidation';
+import { PreviewRefusalError, splitRefusal } from './lib/featureValidation';
 import { useCollaboration } from './lib/useCollaboration';
 import { preflightCadPatch } from './lib/aiPatchPreflight';
 import type {
@@ -4374,18 +4377,22 @@ export function App() {
       };
     },
     derive: async (candidate, signal) => {
-      // Radius/hole gestures read the owned cylinder semantics while they
-      // stream. Keep their complete picking topology until that contract
-      // can be prepared independently from recognition.
+      // New group-edit bindings keep the source picking metadata while
+      // disposable frames defer recognition and full commit validation.
+      const terminal = listFeaturesInOrder(candidate.document).at(-1);
       const derived = await geometry.previewGeometry(candidate.document, {
-        signal
+        signal,
+        deferTopology:
+          supportsBlendGroupEdits(KERNEL_BUILD.packageVersion) &&
+          terminal?.data.featureKind === 'direct-edit' &&
+          terminal.data.operation.kind === 'resize-cylindrical-face'
       });
       const rejection = offsetPreviewRejection({
         ...candidate,
         derived,
         documentMoved: !previewBaseIsCurrent(candidate)
       });
-      if (rejection) throw new Error(rejection.message);
+      if (rejection) throw new PreviewRefusalError(rejection);
       return derived;
     },
     isCurrent: previewSelectionIsCurrent
@@ -4395,9 +4402,13 @@ export function App() {
   >;
   function reportRadiusPreviewFailure(error: unknown, value: number) {
     if (value !== cylinderRadiusHandValue.current) return;
+    const diagnostic =
+      error instanceof PreviewRefusalError ? error.diagnostic : undefined;
     reportPreviewFailure(
       errorMessage(error, 'Exact radius preview failed.'),
-      value
+      value,
+      diagnostic?.advice,
+      diagnostic?.headline
     );
   }
   const cylinderRadiusPreview = useRef(
@@ -4405,6 +4416,7 @@ export function App() {
       ...cylinderRadiusExact,
       publish: (preview) => {
         if (preview) {
+          traceFaceDragPublish(preview.document.radius, preview.document);
           setPreviewVerdict({
             value: preview.document.radius,
             status: 'built'
@@ -4450,7 +4462,7 @@ export function App() {
           derived,
           documentMoved: !previewBaseIsCurrent(candidate)
         });
-        if (rejection) throw new Error(rejection.message);
+        if (rejection) throw new PreviewRefusalError(rejection);
         return derived;
       },
       publish: (preview) => {
@@ -16994,7 +17006,9 @@ export function App() {
     diagnostic?: string | CommandDiagnostic | null
   ): (() => void) | undefined {
     return refusalHarvest.reproductionFor(
-      owner, diagnostic, handleSaveRefusalReproduction
+      owner,
+      diagnostic,
+      handleSaveRefusalReproduction
     );
   }
 
@@ -17853,10 +17867,12 @@ export function App() {
         (feature) => feature.bodyId === selection.bodyId
       );
       const importedBlend =
-        !filletFeature &&
-        sourceFeature?.data.featureKind === 'imported-step' &&
-        faceTopology
-          ? importedBlendSnapshot(faceTopology)
+        !filletFeature && faceTopology
+          ? directBlendSnapshot(
+              representations[selection.bodyId]!,
+              faceTopology,
+              KERNEL_BUILD.packageVersion
+            )
           : null;
       const filletRadialDirection =
         (filletFeature || importedBlend) && geometry
@@ -17916,9 +17932,14 @@ export function App() {
         ...(importedBlend
           ? {
               canResizeImportedBlend: true,
-              removableBlendCount: importedBlendCarriers(
-                representations[selection.bodyId]?.topology?.faces ?? []
-              ).length,
+              nativeBlendDirectEdit:
+                sourceFeature?.data.featureKind !== 'imported-step',
+              removableBlendCount:
+                sourceFeature?.data.featureKind === 'imported-step'
+                  ? importedBlendCarriers(
+                      representations[selection.bodyId]?.topology?.faces ?? []
+                    ).length
+                  : 0,
               blendSurfaceClass: importedBlend.surfaceClass,
               blendCenter: [
                 importedBlend.center.x,
@@ -23569,6 +23590,13 @@ export function App() {
     }
     const profile =
       doc &&
+      !(
+        supportsBlendGroupEdits(KERNEL_BUILD.packageVersion) &&
+        target.concavity === 'boss' &&
+        representations[target.bodyId as BodyId]?.topology?.faces.some(
+          (f) => f.geometry?.featureType === 'blend'
+        )
+      ) &&
       primitiveCylinderRadiusAncestor(
         doc,
         target.bodyId as BodyId,
@@ -23775,12 +23803,20 @@ export function App() {
     // consumed the cylinder. Their stored lineage regenerates the exact
     // downstream B-reps; arbitrary result features and direct edits remain on
     // the strict generic cylindrical-face path.
-    const primitive = primitiveCylinderRadiusAncestor(
-      base,
-      target.bodyId as BodyId,
-      target.reference,
-      target.hash
-    );
+    const localBlendBoss =
+      supportsBlendGroupEdits(KERNEL_BUILD.packageVersion) &&
+      target.concavity === 'boss' &&
+      base.derived.bodyRepresentations[
+        target.bodyId as BodyId
+      ]?.topology?.faces.some((f) => f.geometry?.featureType === 'blend');
+    const primitive = localBlendBoss
+      ? null
+      : primitiveCylinderRadiusAncestor(
+          base,
+          target.bodyId as BodyId,
+          target.reference,
+          target.hash
+        );
     if (primitive?.data.featureKind === 'primitive') {
       const scale =
         primitiveCylinderScale(
@@ -23899,6 +23935,8 @@ export function App() {
   }
 
   function handleCylinderRadiusCancel() {
+    if (managerRef.current)
+      geometry.releaseEditPreview?.(managerRef.current.document);
     cylinderRadiusHandValue.current = null;
     stopCylinderRadiusRestCheck();
     cylinderRadiusPreview.clear();
@@ -24183,9 +24221,16 @@ export function App() {
     >({
       ...edgeBlendExact,
       derive: async (candidate, signal) => {
+        const terminal = listFeaturesInOrder(candidate.document).at(-1);
         const geometryReady = await geometry.previewGeometry(
           candidate.document,
-          { signal }
+          {
+            signal,
+            deferTopology:
+              supportsBlendGroupEdits(KERNEL_BUILD.packageVersion) &&
+              terminal?.data.featureKind === 'direct-edit' &&
+              terminal.data.operation.kind === 'resize-blend'
+          }
         );
         return {
           geometry: geometryReady,
@@ -24199,6 +24244,7 @@ export function App() {
           setPreviewBlendFaces([]);
           return;
         }
+        traceFaceDragPublish(preview.document.size, preview.document);
         if (preview.derived.rejection) {
           // A complete rebuild of a refused size would only refuse it again.
           if (preview.document.size === edgeHandValue.current) {
@@ -24207,7 +24253,8 @@ export function App() {
           reportPreviewFailure(
             preview.derived.rejection.message,
             preview.document.size,
-            preview.derived.rejection.advice
+            preview.derived.rejection.advice,
+            preview.derived.rejection.headline
           );
           return;
         }
@@ -24268,7 +24315,8 @@ export function App() {
             reportPreviewFailure(
               preview.derived.rejection.message,
               preview.document.size,
-              preview.derived.rejection.advice
+              preview.derived.rejection.advice,
+              preview.derived.rejection.headline
             );
           }
           return;
@@ -24311,7 +24359,22 @@ export function App() {
     edgeHandValue.current = size;
     stopEdgeRestCheck();
     reusableEdgePreview.current = null;
-    if (edgePreview.request(size)) queueEdgeRestCheck(size);
+    const current = interactionRef.current;
+    if (size < 0 || (size === 0 && current.mode === 'edges')) {
+      edgePreview.stop();
+      const message =
+        current.mode === 'edges' && current.op === 'chamfer'
+          ? 'Distance should be positive.'
+          : current.mode === 'face'
+            ? 'Radius must be zero or greater.'
+            : 'Radius should be positive.';
+      reportPreviewFailure(message, size, undefined, message);
+      return;
+    }
+    if (edgePreview.request(size)) {
+      if (current.mode !== 'face' || !current.target.canResizeImportedBlend)
+        queueEdgeRestCheck(size);
+    }
     // A size the preview will not judge (zero) is settled here, unchecked.
     else setPreviewVerdict({ value: size, status: 'unchecked' });
   }
@@ -24321,6 +24384,8 @@ export function App() {
     edgePreview.stop();
   }
   function clearEdgePreview() {
+    if (managerRef.current)
+      geometry.releaseEditPreview?.(managerRef.current.document);
     edgeHandValue.current = null;
     stopEdgeRestCheck();
     reusableEdgePreview.current = null;
@@ -24397,12 +24462,35 @@ export function App() {
       ) {
         return null;
       }
+      const base = baseDocument ?? managerRef.current?.document;
+      const revision =
+        base && supportsBlendGroupEdits(KERNEL_BUILD.packageVersion)
+          ? revisableBlendResize(
+              base,
+              target.bodyId,
+              target.directEditFeatureId,
+              target.reference
+            )
+          : null;
+      if (revision) {
+        return commandFactories.updateFeature(
+          {
+            featureId: revision.featureId,
+            data: { operation: { ...revision.operation, newRadius: size } }
+          },
+          'Edit blend radius'
+        );
+      }
       return commandFactories.directEditBody({
         // Remove Fillet commits radius zero; history should say so.
         name:
           typeof size === 'number' && size <= 1e-9
-            ? 'Remove Imported Blend'
-            : 'Resize Imported Blend',
+            ? currentInteraction.target.nativeBlendDirectEdit
+              ? 'Remove Blend'
+              : 'Remove Imported Blend'
+            : currentInteraction.target.nativeBlendDirectEdit
+              ? 'Resize Blend'
+              : 'Resize Imported Blend',
         targetBodyId: target.bodyId as BodyId,
         operation: {
           kind: 'resize-blend',
@@ -24467,7 +24555,23 @@ export function App() {
     };
     return currentInteraction.op === 'fillet'
       ? commandFactories.filletEdges(payload)
-      : commandFactories.chamferEdges(payload);
+      : commandFactories.chamferEdges({
+          ...payload,
+          ...(supportsBlendGroupEdits(KERNEL_BUILD.packageVersion) &&
+          edges.length > 1 &&
+          currentBody?.topology?.faces.some(
+            (f) =>
+              f.geometry?.surfaceType === 'plane' &&
+              (f.geometry.normal?.z ?? 0) < -0.999 &&
+              edges.every((selected) =>
+                currentBody.topology?.edges
+                  .find((e) => e.topologyId === selected.topologyId)
+                  ?.adjacentFaceHashes?.includes(f.hash)
+              )
+          )
+            ? { distance2: size }
+            : {})
+        });
   }
 
   /** Edge-radius drag released (or exact entry): commit fillet/chamfer. */
@@ -24483,6 +24587,14 @@ export function App() {
       return;
     }
     const rounded = Math.round(size * 1000) / 1000;
+    if (rounded <= 0) {
+      const message =
+        interaction.op === 'fillet'
+          ? 'Radius should be positive.'
+          : 'Distance should be positive.';
+      reportPreviewFailure(message, size, undefined, message);
+      return;
+    }
     // A passing preview at this size, or one still rebuilding it, is the
     // commit's rebuild: see handleOffsetCommit.
     const reuse =
@@ -24503,7 +24615,6 @@ export function App() {
       reuse?.candidate.command ?? buildEdgeModifierCommand(exact ?? rounded);
     if (
       !command ||
-      rounded <= 0 ||
       !('targetBodyId' in command.payload) ||
       !('edgeHashes' in command.payload)
     ) {
@@ -24721,7 +24832,7 @@ export function App() {
       command.payload.ids &&
       'featureId' in command.payload.ids
         ? String(command.payload.ids.featureId)
-        : undefined;
+        : current.target.directEditFeatureId;
     const targetBodyId = removing
       ? feature?.data.featureKind === 'fillet'
         ? feature.data.targetBodyId
@@ -24739,8 +24850,10 @@ export function App() {
       removing
         ? feature
           ? `Removed ${feature.name}.`
-          : 'Removed imported blend.'
-        : `Set ${feature?.name ?? 'imported blend'} radius to R ${formatNumber(size)} ${base.units}.`,
+          : current.target.nativeBlendDirectEdit
+            ? 'Removed blend.'
+            : 'Removed imported blend.'
+        : `Set ${feature?.name ?? (current.target.nativeBlendDirectEdit ? 'blend' : 'imported blend')} radius to R ${formatNumber(size)} ${base.units}.`,
       size,
       removing
         ? () => clearEdgePreview()
@@ -24947,7 +25060,8 @@ export function App() {
     message: string,
     value: number,
     /** The adapter's structured verdict, when the rejection carried one. */
-    advice?: CommandDiagnostic['advice']
+    advice?: CommandDiagnostic['advice'],
+    headline?: string
   ) {
     if (!isOperationState(interactionRef.current)) {
       return;
@@ -24955,6 +25069,7 @@ export function App() {
     setPreviewVerdict({ value, status: 'refused' });
     const diagnostic: CommandDiagnostic = {
       ...splitRefusal(message),
+      ...(headline ? { headline } : {}),
       ...(advice ? { advice } : {})
     };
     dispatchInteraction({
@@ -25187,6 +25302,27 @@ export function App() {
 
   function handleSelectionAction(action: SelectionActionId) {
     if (
+      action === 'chamfer' &&
+      interaction.mode === 'edges' &&
+      interaction.edges.length === 1 &&
+      supportsBlendGroupEdits(KERNEL_BUILD.packageVersion)
+    ) {
+      const picked = interaction.edges[0]!;
+      const chain = bottomChamferChain(
+        viewerBodies.find((body) => body.bodyId === picked.bodyId) ??
+          representations[picked.bodyId],
+        picked
+      );
+      if (chain.length > 1) {
+        // Arming a selection does not author geometry. STEP's displayed
+        // topology can precede completed analysis; commit still validates it.
+        clearEdgePreview();
+        selectEdgeChainFromViewer(chain);
+        dispatchInteraction({ type: 'set-edge-op', op: action });
+        return;
+      }
+    }
+    if (
       (action === 'resize-body' || action === 'offset-face') &&
       interaction.mode === 'face' &&
       interaction.target.resizeBodyFeatureId
@@ -25288,19 +25424,40 @@ export function App() {
     if (!face || target.hash === undefined) {
       return null;
     }
+    const capBoundary =
+      base.derived.bodyRepresentations[bodyId]?.topology?.edges.filter((e) =>
+        e.adjacentFaceHashes?.includes(face.hash)
+      ) ?? [];
+    const sampledShoulderCap =
+      supportsBlendGroupEdits(KERNEL_BUILD.packageVersion) &&
+      offset < 0 &&
+      (face.geometry?.normal?.z ?? 0) > 0.999 &&
+      capBoundary.length > 0 &&
+      capBoundary.every((e) => e.curve?.type === 'CIRCLE') &&
+      base.derived.bodyRepresentations[bodyId]?.topology?.faces.some(
+        (f) =>
+          f.geometry?.surfaceType === 'torus' &&
+          f.geometry.featureType === 'blend'
+      ) &&
+      base.derived.bodyRepresentations[bodyId]?.topology?.faces.some(
+        (f) =>
+          f.geometry?.surfaceType === 'cylinder' &&
+          f.geometry.featureType === 'blend'
+      );
     const plan = planFaceOffset({
       document: base,
       bodyId,
       face,
       faceHash: target.hash,
       offset,
-      localOnly: target.localFaceOffset,
+      localOnly: target.localFaceOffset || sampledShoulderCap,
       ...(exact === undefined ? {} : { exact })
     });
     if (
       !plan ||
       (target.resizeBodyFeatureId &&
         !target.localFaceOffset &&
+        !sampledShoulderCap &&
         (plan.kind !== 'primitive-dimension' ||
           plan.primitive.featureId !== target.resizeBodyFeatureId))
     ) {
@@ -25677,7 +25834,8 @@ export function App() {
   // Read through a ref, like the verbs, so the handlers' identity never
   // refills the chip.
   const calloutSaveReproduction = saveRefusalReproduction(
-    'operation', calloutOperationModel?.error
+    'operation',
+    calloutOperationModel?.error
   );
   const calloutOperationActions = {
     onEditCulprit: handleEditCulpritFeature,
@@ -29356,7 +29514,8 @@ export function App() {
       ? { ...baseToolCard, title: `Editing Sketch: ${editingSketchName}` }
       : baseToolCard;
   const toolCardSaveReproduction = saveRefusalReproduction(
-    'operation', contextualToolCard?.error
+    'operation',
+    contextualToolCard?.error
   );
   // The column's header already names the sketch and carries Finish, so the
   // card would say the same thing twice over the viewport. Only the card is

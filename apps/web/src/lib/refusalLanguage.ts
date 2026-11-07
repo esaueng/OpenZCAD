@@ -13,6 +13,7 @@
  */
 export interface PlainRefusal {
   message: string;
+  headline?: string;
   detail?: string;
   /**
    * The kernel's own classification of the refusal, when the rebuild recorded
@@ -95,6 +96,9 @@ const PARTIAL_WALL =
  * because untyped paths (move-faces, previews) reach the same sentences.
  */
 function typedSentence(typed: RefusalClassification): string | null {
+  if (typed.code === 'cylinder-diameter-unbuildable') {
+    return 'That diameter does not fit the existing supports and fillets. Try a smaller diameter.';
+  }
   if (typed.code !== 'unsupported_move_face') {
     return null;
   }
@@ -271,7 +275,14 @@ export function plainRefusal(
   const byCode = typed ? typedSentence(typed) : null;
   if (byCode) {
     const detail = [sentence, tail].filter(Boolean).join('\n');
-    return { message: byCode, detail, ...classified };
+    return {
+      message: byCode,
+      detail,
+      ...classified,
+      ...(typed?.code === 'cylinder-diameter-unbuildable'
+        ? { headline: byCode }
+        : {})
+    };
   }
   const translation = TRANSLATIONS.find(({ pattern }) =>
     pattern.test(sentence)

@@ -1,6 +1,10 @@
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createProjectDocument } from '@openzcad/document-core';
+import {
+  createProjectDocument,
+  addPrimitiveFeature,
+  booleanBodies
+} from '@openzcad/document-core';
 import { toBodyId, toUserId } from '@openzcad/shared';
 import type { GeometryWorkerResult } from '../worker/geometryWorker';
 import { useGeometryWorker } from './useGeometryWorker';
@@ -33,11 +37,23 @@ afterEach(() => {
 describe('useGeometryWorker lineage demand', () => {
   it('posts demand on broadcast syncs and dedupes per version+demand', () => {
     installWorker();
-    const document = createProjectDocument('Demand sync', toUserId('user'));
+    let document = createProjectDocument('Demand sync', toUserId('user'));
+    for (const name of ['A', 'B'])
+      document = addPrimitiveFeature(document, {
+        name,
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 8, depth: 6 }
+      });
+    const union = booleanBodies(document, {
+      name: 'Union',
+      operation: 'union',
+      targetBodyIds: [...document.bodyOrder]
+    });
+    document = union.document;
     const host = { manager: () => null, onDerived: vi.fn(), onError: vi.fn() };
     const { result } = renderHook(() => useGeometryWorker(host));
     const worker = FakeWorker.instances[0]!;
-    const bodyId = toBodyId('body_demanded');
+    const bodyId = union.bodyId;
 
     result.current.sync(document);
     expect(worker.postMessage).toHaveBeenLastCalledWith(

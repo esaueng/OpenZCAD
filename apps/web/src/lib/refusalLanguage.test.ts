@@ -25,6 +25,16 @@ describe('stepImportRefusal', () => {
 });
 
 describe('plainRefusal', () => {
+  it('explains a typed blend-group diameter limit without parsing prose', () => {
+    expect(
+      plainRefusal('opaque detail', {
+        category: 'nonconvergence',
+        code: 'cylinder-diameter-unbuildable'
+      }).message
+    ).toBe(
+      'That diameter does not fit the existing supports and fillets. Try a smaller diameter.'
+    );
+  });
   it('keeps a sentence the adapter wrote, and its detail', () => {
     expect(
       plainRefusal(
