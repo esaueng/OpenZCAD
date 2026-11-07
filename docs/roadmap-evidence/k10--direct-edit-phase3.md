@@ -18,3 +18,11 @@ shortening through the quality-aware local move. The
 latency, the corrected R1-rim fixture and A3 pick, explicit A4 tangent selection,
 and separate full-order versus finishing-chain outcomes. Sampled cap geometry
 is disclosed in Diagnostics; no sampled result is labelled exact.
+
+Round 3 adds opt-in Chrome/worker profiling, disposable prepared-drag display
+quality, and cache keys that preserve actual boolean probe decisions while
+removing equivalent selection/idle replays. The
+[performance report](../qa/video-parity-phase3-round3.md) records faster warm
+frames, exact canonical/cancel/Undo preservation, the release-quality tradeoff,
+and remaining measured kernel costs. Neither latency target is claimed as
+qualified; dependency pins remain unchanged and PR #1276 stays on hold.

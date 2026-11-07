@@ -218,6 +218,26 @@ describe('preview face geometry cache', () => {
     }
     expect(measured).toEqual([]);
   });
+
+  it('does not integrate unrelated preview faces or poison a later complete measurement', () => {
+    const kernel = kernelWith({
+      1: { normal: [0, 0, 1], curve: ellipse(10, 10) }
+    });
+    const { cache, measured } = recordingCache(kernel);
+    const witnessOf = () => witness;
+    expect(
+      cache.describe(kernel as RemusKernel, 1, 'a', witnessOf, false).geometry
+    ).toBeUndefined();
+    expect(measured).toEqual([]);
+    expect(
+      cache.describe(kernel as RemusKernel, 1, 'a', witnessOf).geometry
+    ).toBeDefined();
+    expect(measured).toEqual([1]);
+    expect(
+      cache.describe(kernel as RemusKernel, 1, 'a', witnessOf, false).geometry
+    ).toBeUndefined();
+    expect(measured).toEqual([1]);
+  });
 });
 
 describe('faceContentDigestsOf', () => {

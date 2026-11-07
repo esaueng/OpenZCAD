@@ -51,6 +51,7 @@ export function traceFaceDrag(
   const log = traceLog();
   if (!log || log.length >= MAX_EVENTS) return;
   log.push({ kind, t: performance.now(), ...fields });
+  performance.mark(`oz.drag.${kind}`, { detail: fields });
 }
 
 const publishedPreviews = new WeakSet<object>();

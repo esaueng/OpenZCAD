@@ -9,6 +9,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { documentForWorker, documentForRebuild } from '../lib/meshTransport';
 import {
   geometryContentKey,
+  lineageDemandCacheKey,
   rebindSketchGeometryForContent
 } from '../worker/exactRebuildCache';
 import { attachDerivedState } from '@openzcad/document-core';
@@ -109,7 +110,7 @@ function postSync(
   // Sorted and unique, as `useLineageDemand` hands it over.
   lineageDemand: readonly BodyId[] = []
 ): void {
-  const syncKey = `${document.projectId}:${document.version}:${lineageDemand.join()}`;
+  const syncKey = `${document.projectId}:${document.version}:${lineageDemandCacheKey(document, lineageDemand)}`;
   if (lastSyncedKey.current === syncKey) {
     return;
   }
@@ -711,6 +712,8 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           }
           return;
         }
+        // Opt-in probes consume their diagnostics independently of geometry.
+        if (message.type === 'direct-edit-profile') return;
         if (message.type === 'preview-geometry') {
           const pending = geometryPreviewRequests.current.get(
             message.requestId
@@ -1058,7 +1061,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       const demand = lastDemandRef.current ?? [];
       if (
         lastSyncedKey.current !==
-        `${document.projectId}:${document.version}:${demand.join()}`
+        `${document.projectId}:${document.version}:${lineageDemandCacheKey(document, demand)}`
       ) {
         broadcastDocument.current = document;
         readyDocument.current = null;
@@ -1366,7 +1369,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       }
       readyDocument.current = document;
       broadcastDocument.current = document;
-      lastSyncedKey.current = `${document.projectId}:${document.version}:${(lastDemandRef.current ?? []).join()}`;
+      lastSyncedKey.current = `${document.projectId}:${document.version}:${lineageDemandCacheKey(document, lastDemandRef.current ?? [])}`;
       setState((current) => ({ ...current, version: document.version }));
       return true;
     }

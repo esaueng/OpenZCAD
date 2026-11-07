@@ -16,6 +16,16 @@ import {
 } from './exact-idle-lineage-view';
 import type { EditAnalysisRequest } from '@openzcad/shared';
 import { projectShapeMesh } from './exact-display-projection';
+import {
+  beginDirectEditProfile,
+  profileDirectEditStage
+} from './direct-edit-profile';
+export type { DirectEditProfile } from './direct-edit-profile';
+
+/** Capture actual WASM calls and adapter stages for a worker performance probe. */
+export function profileDirectEdits() {
+  return beginDirectEditProfile(RemusKernel.prototype);
+}
 import { projectReferenceMesh } from './mesh-reference';
 import {
   drawingTessellationOfShape,
@@ -3389,27 +3399,38 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           let projection: ReturnType<typeof projectShapeMesh>;
           try {
             projection = withSyncReadMemo(readMemo, () =>
-              projectShapeMesh(
-                kernel,
-                shape,
-                32 * 1024 * 1024,
-                this.heldDisplayDeflections.get(bodyId),
-                strict ? strictVerdicts : undefined,
-                true
+              profileDirectEditStage('projection', () =>
+                projectShapeMesh(
+                  kernel,
+                  shape,
+                  32 * 1024 * 1024,
+                  this.heldDisplayDeflections.get(bodyId),
+                  strict ? strictVerdicts : undefined,
+                  true,
+                  hasPreparedGroupEdit(kernel)
+                )
               )
             );
           } catch {
             // Display admission is an optimization, not a new refusal gate.
             break deferredTopology;
           }
-          this.heldDisplayDeflections.set(bodyId, projection.linearDeflections);
+          // A disposable drag mesh must never lower the completed display's
+          // held quality, including when the next sync restores this source.
+          if (!hasPreparedGroupEdit(kernel))
+            this.heldDisplayDeflections.set(
+              bodyId,
+              projection.linearDeflections
+            );
           if (
             strict &&
             !projection.closureValidated &&
-            !isClosedConsistentlyOrientedMesh(
-              inspectTriangleMeshClosure(
-                projection.mesh.vertices,
-                projection.mesh.indices
+            !profileDirectEditStage('meshClosure', () =>
+              isClosedConsistentlyOrientedMesh(
+                inspectTriangleMeshClosure(
+                  projection.mesh.vertices,
+                  projection.mesh.indices
+                )
               )
             )
           )
@@ -3422,8 +3443,52 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             kernel,
             Uint32Array.from(projection.faceGroups, (group) => group.handle)
           );
+          const previewEdit = listFeaturesInOrder(document).at(-1);
+          const groupOperation =
+            hasPreparedGroupEdit(kernel) &&
+            previewEdit?.data.featureKind === 'direct-edit'
+              ? previewEdit.data.operation
+              : undefined;
+          const dimensionRadius =
+            groupOperation?.kind === 'resize-blend'
+              ? resolveParamValue(
+                  groupOperation.newRadius,
+                  getParameterScope(document).scope,
+                  'radius'
+                )
+              : groupOperation?.kind === 'resize-cylindrical-face'
+                ? resolveParamValue(
+                    groupOperation.radius,
+                    getParameterScope(document).scope,
+                    'radius'
+                  )
+                : undefined;
+          const dimensionSurface =
+            groupOperation?.kind === 'resize-blend'
+              ? groupOperation.surfaceClass
+              : 'cylinder';
           const faces = withSyncReadMemo(readMemo, () =>
             projection.faceGroups.map((group, index) => {
+              let measureGeometry = dimensionRadius === undefined;
+              if (
+                !measureGeometry &&
+                surfaceTypeOf(kernel, group.handle) === dimensionSurface
+              ) {
+                try {
+                  const p = JSON.parse(
+                    kernel.getAnalyticSurfaceParams(group.handle)
+                  ) as Record<string, unknown>;
+                  const radius =
+                    dimensionSurface === 'torus'
+                      ? (p.minorRadius ?? p.minor_radius)
+                      : p.radius;
+                  measureGeometry =
+                    typeof radius === 'number' &&
+                    Math.abs(radius - dimensionRadius!) < 1e-6;
+                } catch {
+                  measureGeometry = true;
+                }
+              }
               // NURBS area integration is completion metadata, not a display
               // requirement, so B-spline faces carry no geometry. Picks are
               // held for this snapshot.
@@ -3431,7 +3496,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                 kernel,
                 group.handle,
                 digests?.[index],
-                faceWitnessOf
+                faceWitnessOf,
+                measureGeometry
               );
               const hash = topologyHashOfWitness('face', witness);
               return {
@@ -3446,7 +3512,6 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           // A resize names its band explicitly. Preserve that display role
           // on a unique measured result without running whole-body recognition
           // or publishing a persistent topology reference for a drag frame.
-          const previewEdit = listFeaturesInOrder(document).at(-1);
           if (
             !consumed &&
             previewEdit?.data.featureKind === 'direct-edit' &&
@@ -3798,14 +3863,16 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         const pending = yieldControl?.();
         if (pending) await pending;
         throwIfBuildCancelled(cancellation);
-        return structuredClone({
-          bodyRepresentations: geometryRepresentations,
-          warnings: build.warnings,
-          featureWarnings: build.featureWarnings,
-          updatedAt: nowIso(),
-          analysis: 'pending' as const,
-          ...(deferTopology ? { topology: 'pending' as const } : {})
-        });
+        return profileDirectEditStage('publicationClone', () =>
+          structuredClone({
+            bodyRepresentations: geometryRepresentations,
+            warnings: build.warnings,
+            featureWarnings: build.featureWarnings,
+            updatedAt: nowIso(),
+            analysis: 'pending' as const,
+            ...(deferTopology ? { topology: 'pending' as const } : {})
+          })
+        );
       }
       if (
         onGeometryReady &&

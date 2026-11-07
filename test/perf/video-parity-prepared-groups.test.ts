@@ -2,6 +2,7 @@
 import { it, expect, vi } from 'vitest';
 import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 import {
   normalizeDocument,
   withoutDerivedProjection,
@@ -162,6 +163,43 @@ for (const kind of ['blend', 'cylinder'] as const) {
               ) < 1e-6
           )
         ).toBe(true);
+        // Drag quality is disposable. A fresh replay (no preview history or
+        // held display deflection) must publish identical canonical buffers.
+        const fresh = await createExactKernelAdapter();
+        try {
+          // Match the normal source display anchor. A diameter edit changes
+          // the nominal bounding-box tolerance, while a live session holds
+          // its previous full-quality tolerance across small size changes.
+          await fresh.syncDocument(base);
+          const replayed = await fresh.syncDocument(
+            next(kind === 'blend' ? 1.9 : 7.3)
+          );
+          const digest = (mesh: typeof body.mesh) =>
+            createHash('sha256')
+              .update(
+                new Uint8Array(
+                  mesh.vertices.buffer,
+                  mesh.vertices.byteOffset,
+                  mesh.vertices.byteLength
+                )
+              )
+              .update(
+                new Uint8Array(
+                  mesh.indices.buffer,
+                  mesh.indices.byteOffset,
+                  mesh.indices.byteLength
+                )
+              )
+              .digest('hex');
+          expect(digest(replayed.bodyRepresentations[id]!.mesh)).toBe(
+            digest(canonical.bodyRepresentations[id]!.mesh)
+          );
+          expect(replayed.bodyRepresentations[id]!.volume).toEqual(
+            canonical.bodyRepresentations[id]!.volume
+          );
+        } finally {
+          fresh.dispose();
+        }
         await adapter.previewGeometry(next(kind === 'blend' ? 2 : 7), {
           deferTopology: true
         });

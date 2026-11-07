@@ -1,5 +1,22 @@
 # Phase 3 round 2: measured attempt ledger
 
+Round 3 profiles and optimizes these same prepared drags. See the
+[worker/Chrome breakdown and reproduction](video-parity-phase3-round3.md).
+The controlled STEP comparison uses four warm frames after each initial frame:
+
+| Attempt | Before → after warm pointer/paint ms | Before → after canonical paint ms | Result |
+|---|---:|---:|---|
+| A2 convex | 221.6 → 104.1 | 3203.9 → 4075.4 | Exact canonical fingerprint preserved; cancel/Undo preserved; performance targets unmet |
+| A7 boss diameter | 761.6 → 211.6 | 4305.5 → 4838.7 | Exact canonical fingerprint preserved; cancel/Undo preserved; performance targets unmet |
+
+Canonical paint above comes from Chrome `pointerup` → completed `oz:edit.frame`,
+not the older Node/polling Apply timer. Preview tessellation becomes cheaper;
+full-quality meshing on release no longer benefits from full-quality preview
+cache warming, so release regresses in this capture. The kernel call breakdown
+records the remaining cost instead of treating either target as achieved.
+Heavy tracing disabled, warm STEP medians are 105.5 / 222.3 ms. Round-2 numbers
+below remain the historical measurements, with their original timing method.
+
 Read [assessment, limitations and reproduce commands](video-parity-phase3-round2.md). Round 1 used the 15-face saved part; round 2 adds the reference R1 cap rim (16 faces), shortens to z26 instead of z22, and picks the x=0 convex band and x=0/y=18 A3 edge. These are corrected geometry targets, so the latency samples are not a controlled speedup comparison. Typed/keypad times include automation and polling. Pointer-frame timing appears separately.
 
 | Input | Attempt | Round 1 result; preview / Apply ms | Round 2 result; preview / Apply ms | Preservation | Evidence |

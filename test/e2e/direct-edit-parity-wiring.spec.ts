@@ -21,7 +21,8 @@ interface ParityWorkerWindow extends Window {
 for (const mode of ['history', 'step'] as const) {
   for (const kind of ['blend', 'cylinder'] as const) {
     test(`${mode} ${kind} pointer frames cancel and commit`, async ({
-      page
+      page,
+      browser
     }) => {
       test.skip(
         !supplied || !round2,
@@ -29,6 +30,24 @@ for (const mode of ['history', 'step'] as const) {
       );
       await openPart(page, mode);
       const original = await rendered(page);
+      const timeline = process.env.VIDEO_PARITY_PROFILE
+        ? await browser.newBrowserCDPSession()
+        : undefined;
+      const timelineEvents: unknown[] = [];
+      if (timeline) {
+        timeline.on('Tracing.dataCollected', ({ value }) =>
+          timelineEvents.push(...value)
+        );
+        await timeline.send('Tracing.start', {
+          categories:
+            'devtools.timeline,v8.execute,blink.user_timing,disabled-by-default-devtools.timeline',
+          transferMode: 'ReportEvents'
+        });
+        await page.evaluate(() => {
+          (window as Window & { __parityCapture?: boolean }).__parityCapture =
+            true;
+        });
+      }
       const pick = () =>
         kind === 'blend' ? pickConvex(page) : selectCylinder(page);
       const canvas = page.locator('.viewer-host canvas');
@@ -209,6 +228,30 @@ for (const mode of ['history', 'step'] as const) {
         { timeout: 60_000 }
       );
       const commitMs = performance.now() - t;
+      if (timeline) {
+        const done = new Promise((resolve) =>
+          timeline.once('Tracing.tracingComplete', resolve)
+        );
+        await timeline.send('Tracing.end');
+        await done;
+        writeFileSync(
+          join(evidence, `${mode}-${kind}-chrome.json`),
+          JSON.stringify({ traceEvents: timelineEvents })
+        );
+        writeFileSync(
+          join(evidence, `${mode}-${kind}-worker.json`),
+          JSON.stringify(
+            await page.evaluate(
+              () =>
+                (window as Window & { __parityProfiles?: unknown[] })
+                  .__parityProfiles
+            ),
+            null,
+            2
+          )
+        );
+        await timeline.detach();
+      }
       const after = await rendered(page);
       expect(
         after[0]!.geometry.some(
@@ -377,8 +420,26 @@ async function openPart(page: Page, mode: 'history' | 'step') {
   await page.addInitScript(() => {
     const events: { type?: string; error?: string; warnings?: string[] }[] = [];
     (window as ParityWorkerWindow).__parityWorkerEvents = events;
+    const scope = window as Window & {
+      __parityCapture?: boolean;
+      __parityProfiles?: unknown[];
+    };
+    scope.__parityProfiles = [];
     const NativeWorker = window.Worker;
     window.Worker = class extends NativeWorker {
+      override postMessage(
+        message: unknown,
+        options?: StructuredSerializeOptions | Transferable[]
+      ) {
+        const m = message as { type?: string; profile?: boolean };
+        if (
+          scope.__parityCapture &&
+          ['sync', 'preview-geometry'].includes(m?.type ?? '')
+        )
+          m.profile = true;
+        if (Array.isArray(options)) super.postMessage(message, options);
+        else super.postMessage(message, options);
+      }
       constructor(...args: ConstructorParameters<typeof Worker>) {
         super(...args);
         this.addEventListener('message', (e) => {
@@ -387,6 +448,11 @@ async function openPart(page: Page, mode: 'history' | 'step') {
             error?: string;
             geometry?: { warnings?: string[] };
           };
+          if (m?.type === 'direct-edit-profile')
+            scope.__parityProfiles!.push({
+              ...m,
+              receivedAt: performance.now()
+            });
           events.push({
             type: m?.type,
             error: m?.error,

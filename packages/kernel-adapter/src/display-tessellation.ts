@@ -13,6 +13,17 @@ export const DISPLAY_LINEAR_DEFLECTION_RATIO = 2e-4;
 export const DISPLAY_MIN_LINEAR_DEFLECTION = 1e-5;
 export const DISPLAY_ANGULAR_DEFLECTION = 0.06;
 
+/** Disposable prepared-drag meshes only. The exact B-rep and completed
+ * display tessellation retain their ordinary quality and validation. */
+export function previewDisplayTessellation(
+  tess: DisplayTessellation
+): DisplayTessellation {
+  return {
+    linearDeflection: tess.linearDeflection * 8,
+    angularDeflection: 0.18
+  };
+}
+
 export interface DisplayTessellation {
   linearDeflection: number;
   angularDeflection: number;

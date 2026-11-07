@@ -1,9 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   addPrimitiveFeature,
+  booleanBodies,
   createProjectDocument
 } from '@openzcad/document-core';
-import { toBodyId, toUserId, type ProjectDocument } from '@openzcad/shared';
+import {
+  toUserId,
+  type ProjectDocument,
+  type FeatureNode,
+  type BodyId
+} from '@openzcad/shared';
 import type { GeometryWorkerRequest } from './geometryWorker';
 
 function derived(label: string): ProjectDocument['derived'] {
@@ -21,7 +27,12 @@ interface FakeWorkerScope {
 }
 
 async function installWorker(
-  syncDocument: (...args: unknown[]) => Promise<ProjectDocument['derived']>
+  syncDocument: (...args: unknown[]) => Promise<ProjectDocument['derived']>,
+  probeNeeded?: (
+    document: ProjectDocument,
+    feature: FeatureNode,
+    demand?: readonly BodyId[]
+  ) => boolean
 ) {
   const scope: FakeWorkerScope = {
     postMessage: vi.fn(),
@@ -46,7 +57,8 @@ async function installWorker(
   }));
   vi.stubGlobal('self', scope);
   vi.doMock('@openzcad/kernel-adapter/exact', () => ({
-    createExactKernelAdapter
+    createExactKernelAdapter,
+    booleanEvolutionProbeNeeded: probeNeeded
   }));
   await import('./geometryWorker');
   return { scope, createExactKernelAdapter };
@@ -83,7 +95,11 @@ describe('geometry worker lineage demand', () => {
     });
     await vi.waitFor(() =>
       expect(scope.postMessage).toHaveBeenCalledWith(
-        expect.objectContaining({ type: 'sync', ok: true, requestId: 'demanded' })
+        expect.objectContaining({
+          type: 'sync',
+          ok: true,
+          requestId: 'demanded'
+        })
       )
     );
     expect(syncDocument).toHaveBeenCalledOnce();
@@ -94,10 +110,13 @@ describe('geometry worker lineage demand', () => {
     );
   });
 
-  it('changes the worker rebuild cache key', async () => {
+  it('keys actual boolean decisions, sharing equivalent eager/demanded results', async () => {
     const syncDocument = vi.fn(async () => derived('done'));
-    const { scope } = await installWorker(syncDocument);
-    const document = addPrimitiveFeature(
+    const { scope } = await installWorker(
+      syncDocument,
+      (_, feature, demand) => demand?.includes(feature.bodyId!) ?? false
+    );
+    let document = addPrimitiveFeature(
       createProjectDocument('Demand cache', toUserId('user')),
       {
         name: 'Box',
@@ -105,10 +124,22 @@ describe('geometry worker lineage demand', () => {
         dimensions: { width: 10, height: 20, depth: 30 }
       }
     );
-    const bodyId = toBodyId('body_demanded');
+    document = addPrimitiveFeature(document, {
+      name: 'Second',
+      primitiveKind: 'box',
+      dimensions: { width: 10, height: 20, depth: 30 }
+    });
+    const union = booleanBodies(document, {
+      name: 'Union',
+      operation: 'union',
+      targetBodyIds: [...document.bodyOrder]
+    });
+    document = union.document;
+    const bodyId = union.bodyId;
     for (const [requestId, demand] of [
       ['plain', undefined],
       ['demanded', [bodyId]],
+      ['idle-undemanded', []],
       ['plain-again', undefined]
     ] as const) {
       post(scope, {
@@ -123,7 +154,8 @@ describe('geometry worker lineage demand', () => {
         )
       );
     }
-    // Plain, demanded, then plain-again hits the first entry: two builds.
+    // Eager and explicitly demanded both probe; idle-undemanded doesn't.
+    // Returning to eager reuses its first result: exactly two builds.
     expect(syncDocument).toHaveBeenCalledTimes(2);
   });
 

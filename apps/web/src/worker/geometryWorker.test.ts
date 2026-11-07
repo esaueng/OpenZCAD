@@ -96,6 +96,37 @@ beforeEach(() => {
 });
 
 describe('geometry worker rebuild coordination', () => {
+  it('reuses full validation for a selection demand and its idle echo without a boolean', async () => {
+    const document = addPrimitiveFeature(
+      createProjectDocument('Demand cache', toUserId('user')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 8, depth: 6 }
+      }
+    );
+    const syncDocument = vi.fn(async () => derived('validated'));
+    const { scope } = await installWorker(syncDocument);
+    post(scope, { type: 'sync', document, requestId: 'validation' });
+    await vi.waitFor(() =>
+      expect(
+        scope.postMessage.mock.calls.some(([m]) => m.type === 'sync')
+      ).toBe(true)
+    );
+    post(scope, {
+      type: 'sync',
+      document,
+      lineageDemand: [document.bodyOrder[0]!]
+    });
+    await vi.waitFor(() =>
+      expect(
+        scope.postMessage.mock.calls.some(
+          ([m]) => m.type === 'projection-delta'
+        )
+      ).toBe(true)
+    );
+    expect(syncDocument).toHaveBeenCalledOnce();
+  });
   it('releases prepared edits after an in-flight frame without publishing or loading an idle kernel', async () => {
     const document = addPrimitiveFeature(
       createProjectDocument('Prepared cancel', toUserId('user')),

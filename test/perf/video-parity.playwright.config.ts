@@ -8,6 +8,9 @@ export default defineConfig({
   outputDir: '../../artifacts/video-parity/playwright',
   reporter: [['list']],
   use: {
+    ...(process.env.VIDEO_PARITY_PROFILE || process.env.VIDEO_PARITY_CHROME
+      ? { channel: 'chrome' }
+      : {}),
     actionTimeout: 10_000,
     baseURL: process.env.VIDEO_PARITY_URL ?? 'http://127.0.0.1:25349',
     viewport: { width: 1440, height: 1000 },

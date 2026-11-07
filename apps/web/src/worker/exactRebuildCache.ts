@@ -1,5 +1,41 @@
 import type { ProjectDocument } from '@openzcad/shared';
 import { keyableImportedNodes } from '@openzcad/document-core';
+import type { BodyId, FeatureNode } from '@openzcad/shared';
+
+/** Demand can enrich only a boolean. Without one, selections and the full
+ * validation request have identical geometry AND lineage results. Keep the
+ * same cache key so an idle echo cannot replay an accepted imported edit. */
+export function lineageDemandCacheKey(
+  document: ProjectDocument,
+  demand?: readonly BodyId[],
+  probeNeeded?: (
+    document: ProjectDocument,
+    feature: FeatureNode,
+    demand?: readonly BodyId[]
+  ) => boolean
+): string {
+  const booleans = Object.values(document.nodes).filter(
+    (node): node is FeatureNode =>
+      node.kind === 'feature' && node.data.featureKind === 'boolean'
+  );
+  if (!booleans.length) return '';
+  // A downstream fillet can require the probe in both modes. Selecting it
+  // cannot enrich the same result again: key the adapter's actual decisions.
+  if (probeNeeded)
+    return JSON.stringify(
+      booleans
+        .map((feature) => [
+          feature.featureId,
+          // The build loop always probes an eager request. The predicate
+          // itself treats undefined as an empty idle demand, not as eager.
+          demand === undefined || probeNeeded(document, feature, demand)
+        ])
+        .sort((a, b) => String(a[0]).localeCompare(String(b[0])))
+    );
+  return demand === undefined
+    ? ''
+    : `:lazy:${JSON.stringify([...new Set(demand)].sort())}`;
+}
 
 export interface ExactRebuildCacheOptions<T> {
   maxEntries: number;
