@@ -75,6 +75,8 @@ function widthEdit(document: ProjectDocument, delta: number) {
 describe('qualified axial history reuse', { timeout: 120_000 }, () => {
   afterEach(() => vi.restoreAllMocks());
 
+  // Multiple cold full-history oracle replays exceed 120 s on the new kernel
+  // under CI contention; this verifies equivalence, not a latency budget.
   it('preserves geometry, references and idle lineage through successive width edits', async () => {
     const events: RebuildCacheEvent[] = [];
     const adapter = await createExactKernelAdapter({
@@ -116,7 +118,7 @@ describe('qualified axial history reuse', { timeout: 120_000 }, () => {
     } finally {
       adapter.dispose();
     }
-  });
+  }, 300_000);
 
   it('replays when a contraction reaches the non-invariant region', async () => {
     const events: RebuildCacheEvent[] = [];
@@ -135,6 +137,7 @@ describe('qualified axial history reuse', { timeout: 120_000 }, () => {
     }
   });
 
+  // This case also includes several independent cold-history oracles.
   it('retains a checked prefix through a resting preview, release and cancel', async () => {
     const events: RebuildCacheEvent[] = [];
     const adapter = await createExactKernelAdapter({
@@ -180,7 +183,7 @@ describe('qualified axial history reuse', { timeout: 120_000 }, () => {
     } finally {
       adapter.dispose();
     }
-  });
+  }, 300_000);
 
   it('keeps the checked source when an in-flight resting preview is cancelled', async () => {
     const events: RebuildCacheEvent[] = [];
