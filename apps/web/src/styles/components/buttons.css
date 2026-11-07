@@ -167,3 +167,28 @@ button.command-rail:hover:not(:disabled, [aria-disabled='true'], .active),
   background: transparent;
   border-color: transparent;
 }
+
+/*
+ * Menu items rest as bare rows and become a whole button under the pointer
+ * or keyboard focus, so moving through a menu reads the same as hovering
+ * any other action. A destructive item's edge takes the red of its fill.
+ */
+:is(
+    .context-menu-item,
+    .panel-overflow-item,
+    .topbar-menu-item,
+    .start-tile-menu button,
+    .motion-track-menu-item,
+    .encryption-menu-copy
+  ):is(:hover, :focus-visible):not(:disabled) {
+  box-shadow: inset 0 0 0 1px var(--color-border-strong);
+}
+
+:is(
+    .context-menu-item.danger,
+    .panel-overflow-item.danger,
+    .start-tile-menu button.is-destructive
+  ):is(:hover, :focus-visible):not(:disabled) {
+  box-shadow: inset 0 0 0 1px
+    color-mix(in srgb, var(--color-error) 50%, transparent);
+}
