@@ -192,3 +192,20 @@ button.command-rail:hover:not(:disabled, [aria-disabled='true'], .active),
   box-shadow: inset 0 0 0 1px
     color-mix(in srgb, var(--color-error) 50%, transparent);
 }
+
+/*
+ * Tabs and segmented controls: an unselected option rests bare and becomes
+ * a whole button under the pointer, like every other action; the selected
+ * option keeps its selected fill. (The measurement tabs already draw a full
+ * border on hover, so they are not repeated here.)
+ */
+.mode-switch-option:hover:not(:disabled):not(.active),
+.assembly-segmented > button:hover:not(.is-active),
+.tool-card-submode button:hover:not(:disabled):not(.active),
+.drawing-sheet-tab:hover:not(.active),
+.start-shelf-tabs button:hover:not(.is-active),
+.tweak-sheet-tabs > button:hover:not([aria-pressed='true']),
+.settings-segmented input:hover:not(:checked):not(:disabled) + span {
+  background: var(--color-surface-hover);
+  box-shadow: inset 0 0 0 1px var(--color-border-strong);
+}
