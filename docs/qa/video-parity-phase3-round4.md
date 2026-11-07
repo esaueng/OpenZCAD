@@ -376,3 +376,12 @@ TypeScript and the root build pass. The complete web suite passes 512 files /
 5,596 tests (`artifacts/round4-chain-web-full.log`); full lint passes with 18
 existing warnings (`artifacts/round4-chain-lint.log`). Geometry, dependency pins,
 timeouts and all original exported-volume assertions are unchanged.
+
+The same CI run's unit failure is a separate static-manifest omission: the
+newly tagged `direct-edit-parity-wiring.spec.ts` was absent from
+`test/e2e/smoke-shard-weights.json`. The shard contract correctly rejects it.
+The official updater now adds its measured four-second weight from that run's
+`e2e-report-4` artifact; other weights and all smoke tags remain unchanged.
+The contract reproduces red before this change, then all 25 shard/selection/
+unit-manifest tests pass (`artifacts/round4-shard-manifest-green.log`). The
+axial file passes all 10 tests in that CI run; it is not the unit failure.
