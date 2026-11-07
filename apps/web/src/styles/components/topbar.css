@@ -383,15 +383,18 @@
   min-width: 0;
 }
 
+/* Bare glyph at rest, like every other icon-only action; the hover and
+   focus rules below draw the whole button. The 1px border stays, clear, so
+   the hover edge moves nothing. */
 .icon-button {
   width: 28px;
   height: 28px;
   display: inline-grid;
   place-items: center;
   color: var(--color-text-muted);
-  border: var(--border-thin);
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  background: var(--color-surface-2);
+  background: transparent;
   transition:
     background var(--dur-fast) var(--ease-out),
     color var(--dur-fast) var(--ease-out),

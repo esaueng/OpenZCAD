@@ -73,8 +73,9 @@
  * pointer: each one's own rule gives the hover fill, this adds the hairline
  * edge. Inset, so it moves nothing in a dense header or row. One list, so a
  * new glyph action joins the family here rather than restating the edge.
- * Buttons already outlined at rest (.icon-button, .start-tile-action) are
- * not in it.
+ * .icon-button draws its own hover edge with a real border, and
+ * .start-tile-action is outlined at rest on unpinned cards, so neither is
+ * in it.
  */
 :is(
     .model-panel-action,
