@@ -98,9 +98,11 @@
     .sketch-plane-dismiss,
     .start-search-clear,
     .start-selection-clear,
-    .drawing-deselect
+    .drawing-deselect,
+    .encryption-indicator
   ):hover:not(:disabled),
 button.model-panel-grip[aria-expanded='true'],
-.keypad-grid-toggle[aria-expanded='true'] {
+.keypad-grid-toggle[aria-expanded='true'],
+.encryption-menu[open] > .encryption-indicator {
   box-shadow: inset 0 0 0 1px var(--color-border-strong);
 }

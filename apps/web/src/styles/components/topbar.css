@@ -725,8 +725,10 @@ button.save-state:focus-visible,
 .file-menu > summary:hover,
 .file-menu[open] > summary,
 .topbar-actions .settings-action:hover {
-  background: var(--color-surface-2);
-  border-color: var(--color-border);
+  /* The same hover button as the panel and row actions: fill and a
+     strong hairline. */
+  background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
 }
 
 /* The decision states keep their colour; on a borderless item the coloured
