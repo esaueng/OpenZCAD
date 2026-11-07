@@ -118,12 +118,12 @@ button.model-panel-grip[aria-expanded='true'],
  * button under the pointer (or while a rail button's flyout is open). An
  * active tool keeps its own selected fill and is not edged here.
  */
-.view-rail > button:hover:not(:disabled, .active),
+.view-rail > button:hover:not(:disabled):not(.active),
 button.command-rail:hover:not(:disabled, [aria-disabled='true'], .active),
-.tweak-rail button:hover:not(:disabled, .active),
-.workspace-column .sketch-rail button:hover:not(:disabled, .active),
-.sketch-relation:hover:not(:disabled, .active),
-.rail-button:hover:not(:disabled, .active),
+.tweak-rail button:hover:not(:disabled):not(.active),
+.workspace-column .sketch-rail button:hover:not(:disabled):not(.active),
+.sketch-relation:hover:not(:disabled):not(.active),
+.rail-button:hover:not(:disabled):not(.active),
 .rail-button.open:not(.active) {
   box-shadow: inset 0 0 0 1px var(--color-border-strong);
 }
