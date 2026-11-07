@@ -4461,6 +4461,19 @@ button.model-panel-grip[aria-expanded='true'] {
   opacity: 1;
 }
 
+/* Cancel (and Precise values, which shares its look) rests bare like the
+   bar's other secondary actions and becomes a whole button under the
+   pointer; Done stays the filled primary. */
+.in-place-command-cancel {
+  background: transparent;
+  border-color: transparent;
+}
+
+.in-place-command-cancel:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
+}
+
 .in-place-command kbd {
   min-width: 0;
   margin-inline-start: 2px;
@@ -4572,6 +4585,12 @@ button.model-panel-grip[aria-expanded='true'] {
 
 .in-place-command-options > summary::-webkit-details-marker {
   display: none;
+}
+
+.in-place-command-options > summary:hover,
+.in-place-command-options[open] > summary {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
 }
 
 .in-place-command-options-panel {
@@ -5091,6 +5110,18 @@ button.model-panel-grip[aria-expanded='true'] {
 }
 .workspace-hint-help summary::-webkit-details-marker {
   display: none;
+}
+
+/* The bar's help glyph: bare at rest, a whole button under the pointer or
+   while its guidance is open. */
+.workspace-hint-help summary {
+  border-radius: var(--radius-sm);
+}
+
+.workspace-hint-help summary:hover,
+.workspace-hint-help[open] summary {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
 }
 
 @media (max-width: 520px) {
