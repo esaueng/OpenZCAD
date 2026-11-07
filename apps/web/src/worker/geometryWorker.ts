@@ -73,6 +73,7 @@ export type GeometryWorkerRequest =
       document: ProjectDocument;
       requestId: string;
       generation: number;
+      profile?: boolean;
     }
   | {
       type: 'release-edit-preview';
@@ -649,12 +650,29 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
     if (request.generation !== refinementGeneration) return;
     const exact =
       exactKernelStatus === 'ready' ? await exactKernelPromise : null;
+    const finish = request.profile
+      ? (await import('@openzcad/kernel-adapter/exact')).profileDirectEdits()
+      : undefined;
+    const started = request.profile ? performance.now() : 0;
     // This is mesh-cache warming only: no canonical journal or publication.
     try {
       if (await exact?.refineEditPreview?.(request.document))
         refinedPreviewKey = previewRefinementKey(request.document);
     } catch {
       /* A speculative miss must never become a modelling refusal. */
+    } finally {
+      if (finish) {
+        performance.measure('oz:edit.refine', {
+          start: started,
+          end: performance.now()
+        });
+        self.postMessage({
+          type: 'direct-edit-profile',
+          operation: 'refine-edit-preview',
+          requestId: request.requestId,
+          profile: finish()
+        } satisfies GeometryWorkerResult);
+      }
     }
     return;
   }
@@ -764,7 +782,8 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
               type: 'refine-edit-preview',
               document,
               requestId,
-              generation
+              generation,
+              profile: request.profile
             },
             requestId,
             queuedAtMs: performance.now(),

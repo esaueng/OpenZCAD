@@ -1103,10 +1103,11 @@ for (const mode of ['history', 'step'] as const) {
           diagnostic
         });
       } catch (e) {
-        await picture(page, `${mode}-${run}-${label}-error`);
+        const screenshot = await picture(page, `${mode}-${run}-${label}-error`);
         rows.push({
           label,
           value,
+          screenshot,
           harnessError: e instanceof Error ? e.message : String(e)
         });
         writeFileSync(
@@ -1152,7 +1153,11 @@ for (const mode of ['history', 'step'] as const) {
       await attempt('A1-long', '61.2', selectCap, capAt(61.2));
       if (round2) await attempt('A1-short', '26', selectCap, capAt(26));
     }
-    const convex = round4 ? 1.5 : round2 ? 1.9 : 1.5;
+    const convex = round4
+      ? Number(process.env.VIDEO_PARITY_CONVEX_TARGET ?? 1.5)
+      : round2
+        ? 1.9
+        : 1.5;
     await attempt(
       'A2-convex',
       String(convex),

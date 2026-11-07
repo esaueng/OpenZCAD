@@ -179,7 +179,7 @@ export async function pointerProbe(
         );
       },
       undefined,
-      { timeout: 60_000 }
+      { timeout: 15_000 }
     );
     return await page.evaluate(() => {
       const t =

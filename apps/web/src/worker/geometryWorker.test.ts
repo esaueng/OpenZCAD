@@ -79,7 +79,8 @@ async function installWorker(
   }));
   vi.stubGlobal('self', scope);
   vi.doMock('@openzcad/kernel-adapter/exact', () => ({
-    createExactKernelAdapter
+    createExactKernelAdapter,
+    profileDirectEdits: () => () => ({ elapsedMs: 0, stages: {} })
   }));
   await import('./geometryWorker');
   return { scope, createExactKernelAdapter };
@@ -126,6 +127,7 @@ describe('geometry worker rebuild coordination', () => {
       type: 'preview-geometry',
       requestId: 'first',
       document,
+      profile: true,
       deferTopology: true
     });
     await vi.waitFor(() => expect(previewGeometry).toHaveBeenCalledTimes(1));
@@ -133,6 +135,7 @@ describe('geometry worker rebuild coordination', () => {
       type: 'preview-geometry',
       requestId: 'second',
       document,
+      profile: true,
       deferTopology: true
     });
     first.resolve(frame);
@@ -141,6 +144,15 @@ describe('geometry worker rebuild coordination', () => {
     expect(refineEditPreview).not.toHaveBeenCalled();
     second.resolve(frame);
     await vi.waitFor(() => expect(refineEditPreview).toHaveBeenCalledOnce());
+    await vi.waitFor(() =>
+      expect(
+        scope.postMessage.mock.calls.filter(
+          ([m]) =>
+            m.type === 'direct-edit-profile' &&
+            m.operation === 'refine-edit-preview'
+        )
+      ).toHaveLength(1)
+    );
     post(scope, {
       type: 'preview-geometry',
       requestId: 'third',
