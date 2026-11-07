@@ -2,6 +2,12 @@
 
 Round 3 profiles and optimizes these same prepared drags. See the
 [worker/Chrome breakdown and reproduction](video-parity-phase3-round3.md).
+
+Round 4 pins released Remus main a4ca542 and records the strict one-body video
+order, the separate R1.9 control, runtime hashes and release/preview timings in
+the [round-4 report](video-parity-phase3-round4.md). These round-2 measurements
+remain historical evidence; later refusals and latency targets are not hidden
+by replacing their values here.
 The controlled STEP comparison uses four warm frames after each initial frame:
 
 | Attempt | Before → after warm pointer/paint ms | Before → after canonical paint ms | Result |

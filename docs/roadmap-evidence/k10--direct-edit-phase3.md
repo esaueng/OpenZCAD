@@ -26,3 +26,13 @@ removing equivalent selection/idle replays. The
 frames, exact canonical/cancel/Undo preservation, the release-quality tradeoff,
 and remaining measured kernel costs. Neither latency target is claimed as
 qualified; dependency pins remain unchanged and PR #1276 stays on hold.
+
+Round 4 refreshes both immutable dependency pins to Remus main a4ca5422 and
+verifies the actual browser wasm hashes. The
+[round-4 report](../qa/video-parity-phase3-round4.md) records the strict R1.5
+one-body video order separately from the kernel's R1.9 W14 control, including
+the newly accepted concave R2 edit and preserved bodies after refusals. The app
+defers unrelated planar capability proofs, caches immutable preview-source
+measurements, and warms full-quality display meshes once per stable gesture.
+Canonical acceptance, full display quality and geometry remain authoritative.
+The PR remains on hold; this is local qualification, not production evidence.
