@@ -89,11 +89,12 @@ describe('saved refusal reproductions replay through the corpus', () => {
       PRIVATE_FEATURE
     );
     expect(warning.kind).toBe('build-failed');
-    // Typed since the pin carries resizeCylindricalFaceDetailed (#1265).
+    // The new kernel identifies the exact-only reblend policy refusal.
     expect(warning.kernelRefusal).toMatchObject({
       family: 'direct-edit',
-      category: 'unsupported',
-      code: 'unsupported_move_face'
+      category: 'quality_refused',
+      code: 'exact_only_unattainable',
+      reason: 'approximate_reblend_not_permitted'
     });
 
     const fixture = roundTrip(
@@ -130,7 +131,7 @@ describe('saved refusal reproductions replay through the corpus', () => {
     expect(result.outcome).toBe('refused');
     expect(result.message).toBe(fixture.observed.message);
     expect(result.message).toBe(
-      "This face meets a fillet or freeform surface, which resizing and moving faces can't follow yet."
+      'Resizing this face would require an approximate fillet. This edit only allows exact geometry.'
     );
     expect(result.warningKind).toBe(warning.kind);
     expect(result.kernelRefusal).toEqual(warning.kernelRefusal);

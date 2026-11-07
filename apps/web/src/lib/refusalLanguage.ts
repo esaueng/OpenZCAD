@@ -95,6 +95,14 @@ const PARTIAL_WALL =
  * because untyped paths (move-faces, previews) reach the same sentences.
  */
 function typedSentence(typed: RefusalClassification): string | null {
+  if (
+    typed.category === 'quality_refused' &&
+    typed.code === 'exact_only_unattainable'
+  ) {
+    return typed.reason === 'approximate_reblend_not_permitted'
+      ? 'Resizing this face would require an approximate fillet. This edit only allows exact geometry.'
+      : CATEGORY_SENTENCES.quality_refused!;
+  }
   if (typed.code !== 'unsupported_move_face') {
     return null;
   }

@@ -153,9 +153,9 @@ describe('resizing a cylinder wall that meets a sphere', () => {
         (entry) => entry.featureName === 'Resize Cylinder'
       );
       expect(warning?.kernelRefusal).toMatchObject({
-        category: 'unsupported',
-        code: 'unsupported_move_face',
-        reason: 'unsupported_neighbor'
+        category: 'quality_refused',
+        code: 'exact_only_unattainable',
+        reason: 'approximate_reblend_not_permitted'
       });
       expect(typed).toHaveBeenCalledTimes(1);
       expect(legacy).not.toHaveBeenCalled();
