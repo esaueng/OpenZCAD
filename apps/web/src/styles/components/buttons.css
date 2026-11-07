@@ -100,11 +100,16 @@
     .start-search-clear,
     .start-selection-clear,
     .drawing-deselect,
-    .encryption-indicator
+    .encryption-indicator,
+    .command-bar-attach,
+    .in-place-command-options > summary,
+    .workspace-hint-help summary
   ):hover:not(:disabled),
 button.model-panel-grip[aria-expanded='true'],
 .keypad-grid-toggle[aria-expanded='true'],
-.encryption-menu[open] > .encryption-indicator {
+.encryption-menu[open] > .encryption-indicator,
+.in-place-command-options[open] > summary,
+.workspace-hint-help[open] summary {
   box-shadow: inset 0 0 0 1px var(--color-border-strong);
 }
 
