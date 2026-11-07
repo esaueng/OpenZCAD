@@ -3443,9 +3443,12 @@ button.model-panel-grip[aria-expanded='true'] {
   color: var(--color-text-muted);
 }
 
+/* Header actions rest as bare glyphs; under the pointer each becomes a
+   whole button: fill and a hairline edge, inset so nothing moves. */
 .model-panel-action:hover {
   color: var(--color-text);
   background: var(--color-surface-hover);
+  box-shadow: inset 0 0 0 1px var(--color-border-strong);
 }
 
 /* Rounded paint must not cut corners off a header control's 24px target. */
@@ -3464,13 +3467,6 @@ button.model-panel-grip[aria-expanded='true'] {
    row of small boxes inside the panels' boxes. */
 .model-panel-pin.is-pinned {
   color: var(--color-accent-hi);
-}
-
-/* Under the pointer the pin becomes a whole button, as on a pinned start
-   card: fill and a hairline edge. Inset, so the edge moves nothing. */
-.model-panel-pin:hover {
-  background: var(--color-surface-hover);
-  box-shadow: inset 0 0 0 1px var(--color-border-strong);
 }
 
 .model-panel-body {
