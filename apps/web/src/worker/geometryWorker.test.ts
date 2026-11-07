@@ -96,6 +96,73 @@ beforeEach(() => {
 });
 
 describe('geometry worker rebuild coordination', () => {
+  it('warms only the latest stable preview and cancels warm-up on release', async () => {
+    const base = createProjectDocument('Stable mesh', toUserId('user'));
+    const document = addPrimitiveFeature(base, {
+      name: 'Box',
+      primitiveKind: 'box',
+      dimensions: { width: 10, height: 8, depth: 6 }
+    });
+    const frame = {
+      bodyRepresentations: {},
+      warnings: [],
+      updatedAt: document.derived.updatedAt,
+      analysis: 'pending' as const
+    };
+    const first = deferred<typeof frame>(),
+      second = deferred<typeof frame>();
+    const previewGeometry = vi
+      .fn()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise)
+      .mockResolvedValue(frame);
+    const refineEditPreview = vi.fn(async () => true);
+    const { scope } = await installWorker(vi.fn(), {
+      previewGeometry,
+      refineEditPreview,
+      releaseEditPreview: vi.fn()
+    });
+    post(scope, {
+      type: 'preview-geometry',
+      requestId: 'first',
+      document,
+      deferTopology: true
+    });
+    await vi.waitFor(() => expect(previewGeometry).toHaveBeenCalledTimes(1));
+    post(scope, {
+      type: 'preview-geometry',
+      requestId: 'second',
+      document,
+      deferTopology: true
+    });
+    first.resolve(frame);
+    await vi.waitFor(() => expect(previewGeometry).toHaveBeenCalledTimes(2));
+    await new Promise((resolve) => setTimeout(resolve, 180));
+    expect(refineEditPreview).not.toHaveBeenCalled();
+    second.resolve(frame);
+    await vi.waitFor(() => expect(refineEditPreview).toHaveBeenCalledOnce());
+    post(scope, {
+      type: 'preview-geometry',
+      requestId: 'third',
+      // Live candidates regenerate the terminal feature ID for each value.
+      document: addPrimitiveFeature(base, {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 11, height: 8, depth: 6 }
+      }),
+      deferTopology: true
+    });
+    await vi.waitFor(() => expect(previewGeometry).toHaveBeenCalledTimes(3));
+    await new Promise((resolve) => setTimeout(resolve, 180));
+    expect(refineEditPreview).toHaveBeenCalledOnce();
+    post(scope, {
+      type: 'release-edit-preview',
+      requestId: 'cancel',
+      document
+    });
+    await new Promise((resolve) => setTimeout(resolve, 180));
+    expect(refineEditPreview).toHaveBeenCalledOnce();
+  });
   it('reuses full validation for a selection demand and its idle echo without a boolean', async () => {
     const document = addPrimitiveFeature(
       createProjectDocument('Demand cache', toUserId('user')),

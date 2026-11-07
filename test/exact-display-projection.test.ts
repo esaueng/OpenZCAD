@@ -201,9 +201,9 @@ it('uses disposable preview quality without changing the next completed projecti
     true
   );
   expect(preview.linearDeflections[0]).toBe(
-    completed.linearDeflections[0]! * 8
+    completed.linearDeflections[0]! * 12
   );
-  expect(tessellate.mock.calls[1]![2]).toBe(0.18);
+  expect(tessellate.mock.calls[1]![2]).toBe(0.24);
   const next = projectShapeMesh(
     kernel,
     { solids: [2] },

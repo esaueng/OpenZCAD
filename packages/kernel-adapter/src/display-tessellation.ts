@@ -19,8 +19,8 @@ export function previewDisplayTessellation(
   tess: DisplayTessellation
 ): DisplayTessellation {
   return {
-    linearDeflection: tess.linearDeflection * 8,
-    angularDeflection: 0.18
+    linearDeflection: tess.linearDeflection * 12,
+    angularDeflection: 0.24
   };
 }
 

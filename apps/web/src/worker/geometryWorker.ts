@@ -69,6 +69,12 @@ export type GeometryBinaryExportFormat = Extract<
 
 export type GeometryWorkerRequest =
   | {
+      type: 'refine-edit-preview';
+      document: ProjectDocument;
+      requestId: string;
+      generation: number;
+    }
+  | {
       type: 'release-edit-preview';
       document: ProjectDocument;
       requestId: string;
@@ -583,6 +589,7 @@ function environmentRecovery(): void {
 self.ononline = environmentRecovery;
 
 interface GeometryWorkerJob {
+  refinementGeneration?: number;
   request: GeometryWorkerWorkRequest;
   requestId?: string;
   broadcastToken: number | null;
@@ -638,7 +645,21 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
     return; // Cancelled while queued; the caller already dropped its promise.
   }
   const request = job.request;
+  if (request.type === 'refine-edit-preview') {
+    if (request.generation !== refinementGeneration) return;
+    const exact =
+      exactKernelStatus === 'ready' ? await exactKernelPromise : null;
+    // This is mesh-cache warming only: no canonical journal or publication.
+    try {
+      if (await exact?.refineEditPreview?.(request.document))
+        refinedPreviewKey = previewRefinementKey(request.document);
+    } catch {
+      /* A speculative miss must never become a modelling refusal. */
+    }
+    return;
+  }
   if (request.type === 'release-edit-preview') {
+    refinedPreviewKey = undefined;
     const exact =
       exactKernelStatus === 'ready' ? await exactKernelPromise : null;
     exact?.releaseEditPreview?.();
@@ -726,6 +747,31 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         derivedMeshTransferables(geometry)
       );
       post(stateFor('ready', request, { stale: false }));
+      if (
+        request.deferTopology &&
+        exact.refineEditPreview &&
+        refinedPreviewKey !== previewRefinementKey(document) &&
+        job.refinementGeneration === refinementGeneration
+      ) {
+        const generation = job.refinementGeneration;
+        clearTimeout(refinementTimer);
+        refinementTimer = setTimeout(() => {
+          refinementTimer = undefined;
+          if (generation !== refinementGeneration) return;
+          const requestId = `refine:${request.requestId}`;
+          queue.enqueue({
+            request: {
+              type: 'refine-edit-preview',
+              document,
+              requestId,
+              generation
+            },
+            requestId,
+            queuedAtMs: performance.now(),
+            broadcastToken: null
+          });
+        }, 150);
+      }
       return;
     }
 
@@ -1352,8 +1398,22 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
 }
 
 const queue = new GeometryWorkerQueue<GeometryWorkerJob>(execute);
+let refinementGeneration = 0;
+let refinementTimer: ReturnType<typeof setTimeout> | undefined;
+let refinedPreviewKey: string | undefined;
+function previewRefinementKey(document: ProjectDocument): string {
+  // Candidate feature IDs can be regenerated on every pointer frame. The
+  // source history identifies the gesture; warming unchanged faces once is
+  // enough, and repeated synchronous warm-ups would stall the next pointer.
+  return `${document.projectId}:${document.featureOrder.slice(0, -1).join(',')}`;
+}
 
 self.onmessage = (event: MessageEvent<GeometryWorkerRequest>) => {
+  // Any newer input cancels a queued warm-up. A synchronous WASM tessellation
+  // already running completes; never accumulate obsolete warm-up frames.
+  clearTimeout(refinementTimer);
+  refinementTimer = undefined;
+  refinementGeneration++;
   // Unpack before anything reads the document: every consumer past this point
   // — the rebuild, the cache key, the history digest — expects plain arrays.
   const request = unpackWorkerRequest(event.data);
@@ -1377,6 +1437,7 @@ self.onmessage = (event: MessageEvent<GeometryWorkerRequest>) => {
   }
   queue.enqueue({
     request,
+    refinementGeneration,
     queuedAtMs: performance.now(),
     ...(request.requestId ? { requestId: request.requestId } : {}),
     broadcastToken: broadcastGate.issue(isBroadcast)

@@ -673,8 +673,11 @@ export interface ExactKernelAdapter {
       cancellation?: BuildCancellationSignal;
       yieldControl?: () => Promise<void> | void;
       deferTopology?: boolean;
+      fullDisplayQuality?: boolean;
     }
   ): Promise<GeometryReadyState>;
+  /** Warm only the disposable full-quality mesh; never commit a feature. */
+  refineEditPreview?(document: ProjectDocument): Promise<boolean>;
   syncDocument(
     document: ProjectDocument,
     onProgress?: RebuildProgressListener,
@@ -2513,7 +2516,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
      * The linear display deflection each solid of this body was meshed at
      * last time, in solid order; held while the body's size stays close.
      */
-    heldDisplayDeflections?: readonly number[]
+    heldDisplayDeflections?: readonly number[],
+    provePlanarPairs = true
   ): PreparedShapeMeasurement {
     if (shape.solids.length === 0) {
       throw new Error('Exact body contains no solids.');
@@ -2853,7 +2857,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           // Replay collapses a body before direct edit, so a proof against only
           // one member of a multi-solid body would authorize different topology.
           const pairs =
-            shape.solids.length === 1
+            provePlanarPairs && shape.solids.length === 1
               ? provenOpposingPlanarFacePairs(
                   kernel,
                   solid,
@@ -3086,6 +3090,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       yieldControl?: () => Promise<void> | void;
       /** Publish meshes and display faces; picks await complete topology. */
       deferTopology?: boolean;
+      fullDisplayQuality?: boolean;
     }
   ): Promise<GeometryReadyState> {
     return this.runHistoryJob(async () => {
@@ -3100,12 +3105,23 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         undefined,
         options?.yieldControl,
         true,
-        options?.deferTopology ?? false
+        options?.deferTopology ?? false,
+        options?.fullDisplayQuality ?? false
       );
       if (!('analysis' in result))
         throw new Error('Expected preview geometry.');
       return result;
     });
+  }
+
+  async refineEditPreview(document: ProjectDocument): Promise<boolean> {
+    if (!this.historyKernel || !hasPreparedGroupEdit(this.historyKernel))
+      return false;
+    await this.previewGeometry(document, {
+      deferTopology: true,
+      fullDisplayQuality: true
+    });
+    return true;
   }
 
   private async syncMeasuredDocument(
@@ -3119,7 +3135,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     onGeometryReady?: (geometry: GeometryReadyState) => void,
     yieldControl?: () => Promise<void> | void,
     geometryOnly = false,
-    deferTopology = false
+    deferTopology = false,
+    fullDisplayQuality = false
   ): Promise<DerivedState | GeometryReadyState> {
     cancellation = this.historySignal(cancellation);
     if (
@@ -3407,7 +3424,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                   this.heldDisplayDeflections.get(bodyId),
                   strict ? strictVerdicts : undefined,
                   true,
-                  hasPreparedGroupEdit(kernel)
+                  hasPreparedGroupEdit(kernel) && !fullDisplayQuality
                 )
               )
             );
@@ -3600,9 +3617,22 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         const solidKey = shape.solids.join(',');
         const analysisHashes =
           analysis?.bodyId === bodyId ? analysis.faceHashes : undefined;
+        const terminalDimension = listFeaturesInOrder(document).at(-1);
+        // Re-proving unrelated planar moves is capability discovery, not
+        // acceptance of a certified radius/diameter edit. Explicit foreground
+        // analysis can still request fresh proofs on the resulting body.
+        const deferPlanarProofs =
+          analysisHashes === undefined &&
+          terminalDimension?.data.featureKind === 'direct-edit' &&
+          terminalDimension.data.targetBodyId === bodyId &&
+          ['resize-blend', 'resize-cylindrical-face'].includes(
+            terminalDimension.data.operation.kind
+          );
         const analysisKey = analysisHashes
           ? JSON.stringify(analysisHashes)
-          : undefined;
+          : deferPlanarProofs
+            ? 'dimension-edit:planar-proofs-on-demand'
+            : undefined;
         const cached = this.measuredShapeCache.get(bodyId);
         const provenanceKey = measurementProvenanceKey(
           shape,
@@ -3692,7 +3722,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
               1 / UNIT_TO_MM[document.units],
               strictVerdicts,
               measureOpening,
-              this.heldDisplayDeflections.get(bodyId)
+              this.heldDisplayDeflections.get(bodyId),
+              !deferPlanarProofs
             )
           );
           measured = prepared.geometry;

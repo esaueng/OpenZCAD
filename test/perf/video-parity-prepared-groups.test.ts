@@ -143,6 +143,24 @@ for (const kind of ['blend', 'cylinder'] as const) {
         expect(
           calls.filter((c) => c.method === 'previewPreparedGroupEdit')
         ).toHaveLength(3);
+        // Stable-value mesh refinement is speculative: it must neither commit
+        // a journal nor replace the prepared source. Canonical output below
+        // still has to equal an independent replay byte for byte.
+        expect(
+          await adapter.refineEditPreview?.(next(kind === 'blend' ? 1.9 : 7.3))
+        ).toBe(true);
+        expect(
+          calls.filter((c) => c.method === 'commitPreparedGroupEditJournaled')
+        ).toHaveLength(0);
+        expect(
+          calls.filter(
+            (c) =>
+              c.method ===
+              (kind === 'blend'
+                ? 'prepareResizeBlend'
+                : 'prepareResizeCylindricalFace')
+          )
+        ).toHaveLength(1);
         const canonical = await adapter.syncDocument(
           next(kind === 'blend' ? 1.9 : 7.3)
         );

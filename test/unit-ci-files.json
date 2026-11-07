@@ -99,6 +99,8 @@
     "test/e2ee-runtime-budget.test.ts",
     "test/e2ee-share-links.test.ts",
     "test/e2ee-shared-device-removal.test.ts",
+    "test/exact-dimension-proof-demand.test.ts",
+    "test/exact-display-projection.test.ts",
     "test/exact-kernel-adapter.test.ts",
     "test/filleted-union-face-offset.test.ts",
     "test/flange-bolt-hole-resize.test.ts",
@@ -277,6 +279,7 @@
     "src/styles/viewerResponsiveContracts.test.ts",
     "src/theme/contrast.test.ts",
     "src/theme/tokens-defined.test.ts",
+    "src/worker/geometryWorker.test.ts",
     "worker/glimpse.test.ts"
   ]
 }

@@ -7,10 +7,15 @@ import {
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { Page } from '@playwright/test';
-import type { GeometryBodyRepresentation } from '@openzcad/shared';
+import type {
+  GeometryBodyRepresentation,
+  ProjectDocument
+} from '@openzcad/shared';
+import { Round4Oracle, pointerProbe } from './video-parity-round4-helpers';
 import type { DirectEditFixtureObservation } from '../../apps/web/src/lib/directEditFixture';
 import type { FaceDragTraceEvent } from '../../apps/web/src/lib/faceDragTrace';
 interface ParityWorkerWindow extends Window {
+  __parityCommittedDocument?: ProjectDocument;
   __parityWorkerEvents?: {
     type?: string;
     error?: string;
@@ -295,6 +300,7 @@ import {
 
 const supplied = process.env.VIDEO_PARITY_INPUT;
 const round2 = process.env.VIDEO_PARITY_ROUND2 === '1';
+const round4 = process.env.VIDEO_PARITY_ROUND4 === '1';
 const evidence = resolve(
   process.env.VIDEO_PARITY_OUT ?? 'artifacts/video-parity-phase3/post'
 );
@@ -345,10 +351,13 @@ async function diagnostics(page: Page) {
 }
 async function rendered(page: Page) {
   return page.locator('.viewer-host canvas').evaluate(
-    (c) =>
+    (c, round4) =>
       new Promise<
         {
           hash: string;
+          bodyId?: string;
+          volume?: number;
+          mesh?: { vertices: number[]; indices: number[] };
           faces: number;
           geometry: NonNullable<
             GeometryBodyRepresentation['topology']
@@ -369,6 +378,19 @@ async function rendered(page: Page) {
                     bodies
                       .filter((b) => !b.consumed)
                       .map(async (b) => ({
+                        ...(round4
+                          ? {
+                              bodyId: b.bodyId,
+                              volume:
+                                'volume' in b && typeof b.volume === 'number'
+                                  ? b.volume
+                                  : undefined,
+                              mesh: {
+                                vertices: Array.from(b.mesh.vertices),
+                                indices: Array.from(b.mesh.indices)
+                              }
+                            }
+                          : {}),
                         faces: b.faceCount,
                         geometry: b.topology!.faces.map((f) => f.geometry),
                         hash: Array.from(
@@ -393,7 +415,8 @@ async function rendered(page: Page) {
             }
           })
         )
-      )
+      ),
+    round4
   );
 }
 async function selectCylinder(page: Page, radius = 6) {
@@ -432,6 +455,14 @@ async function openPart(page: Page, mode: 'history' | 'step') {
         options?: StructuredSerializeOptions | Transferable[]
       ) {
         const m = message as { type?: string; profile?: boolean };
+        if (
+          m?.type === 'sync' &&
+          !(message as { requestId?: string }).requestId
+        )
+          (window as ParityWorkerWindow).__parityCommittedDocument =
+            structuredClone(
+              (message as { document: ProjectDocument }).document
+            );
         if (
           scope.__parityCapture &&
           ['sync', 'preview-geometry'].includes(m?.type ?? '')
@@ -667,12 +698,20 @@ for (const mode of ['history', 'step'] as const) {
     page
   }) => {
     test.skip(!supplied, 'Local supplied-fixture qualification');
-    test.setTimeout(600_000);
+    test.setTimeout(round4 ? 1_200_000 : 600_000);
     await openPart(page, mode);
     const run =
       process.env.VIDEO_PARITY_SKIP_A1 === '1' ? 'finish-chain' : 'cumulative';
     const rows: unknown[] = [];
     const accepted = [await rendered(page)];
+    const oracle = round4 ? new Round4Oracle() : null;
+    const health = () => rendered(page).then((b) => oracle?.assess(page, b));
+    if (round4)
+      rows.push({
+        label: 'A0-rim',
+        health: await health(),
+        screenshot: await picture(page, `${mode}-A0-rim`)
+      });
     const canvas = page.locator('.viewer-host canvas');
     const selectCap = async () => {
       if (mode === 'history')
@@ -738,6 +777,7 @@ for (const mode of ['history', 'step'] as const) {
       changed: (b: Awaited<ReturnType<typeof rendered>>) => boolean,
       commit = true
     ) => {
+      if (round4) console.log(`Video attempt ${label}=${value}`);
       const before = await rendered(page);
       const firstEntry = Math.max(
         0,
@@ -752,6 +792,19 @@ for (const mode of ['history', 'step'] as const) {
         }
         await pick();
         const selection = await page.locator('.selection-readout').innerText();
+        const pointer =
+          round4 && Number(value) > 0
+            ? await pointerProbe(page, Number(value), label.startsWith('A7'))
+            : null;
+        if (round4) {
+          await expect
+            .poll(async () => (await rendered(page))[0]?.hash, {
+              timeout: 60_000
+            })
+            .toBe(before[0]!.hash);
+          await page.keyboard.press('Escape');
+          await pick();
+        }
         const t = performance.now();
         const eventCount = await page.evaluate(
           () => (window as ParityWorkerWindow).__parityWorkerEvents?.length ?? 0
@@ -813,6 +866,8 @@ for (const mode of ['history', 'step'] as const) {
             })
             .toBe(before[0]!.hash);
           rows.push({
+            pointer,
+            health: await health(),
             label,
             value,
             selection,
@@ -834,6 +889,8 @@ for (const mode of ['history', 'step'] as const) {
           .toBe(before[0]!.hash);
         if (!commit) {
           rows.push({
+            pointer,
+            health: await health(),
             label,
             value,
             selection,
@@ -848,6 +905,8 @@ for (const mode of ['history', 'step'] as const) {
         await pick();
         await entry(page, value);
         const commitStart = performance.now();
+        let releasedAt = 0;
+        let sourceVersion = 0;
         const lastEntry = Math.max(
           0,
           ...(await diagnostics(page)).map((e) => e.entryId)
@@ -890,6 +949,7 @@ for (const mode of ['history', 'step'] as const) {
             })
             .toBe(before[0]!.hash);
           rows.push({
+            pointer,
             label,
             value,
             selection,
@@ -903,7 +963,31 @@ for (const mode of ['history', 'step'] as const) {
           });
           return;
         }
+        if (round4) {
+          sourceVersion = await page.evaluate(
+            () =>
+              (window as ParityWorkerWindow).__parityCommittedDocument
+                ?.version ?? 0
+          );
+          await button.evaluate((b) =>
+            b.addEventListener(
+              'pointerup',
+              () => {
+                (
+                  window as Window & { __r4ReleasedAt?: number }
+                ).__r4ReleasedAt = performance.now();
+              },
+              { once: true, capture: true }
+            )
+          );
+        }
         await button.click();
+        if (round4)
+          releasedAt = await page.evaluate(
+            () =>
+              (window as Window & { __r4ReleasedAt?: number }).__r4ReleasedAt ??
+              0
+          );
         await expect
           .poll(
             async () =>
@@ -948,6 +1032,7 @@ for (const mode of ['history', 'step'] as const) {
             })
             .toBe(before[0]!.hash);
           rows.push({
+            pointer,
             label,
             value,
             selection,
@@ -972,6 +1057,32 @@ for (const mode of ['history', 'step'] as const) {
           throw new Error('Accepted preview did not commit');
         accepted.push(after);
         rows.push({
+          pointer,
+          health: await health(),
+          releaseToCanonicalMs: round4
+            ? await page.evaluate(
+                ({ since, version }) => {
+                  const f = performance
+                    .getEntriesByName('oz:edit.frame')
+                    .find((e) => {
+                      const detail = (
+                        e as unknown as {
+                          detail?: { version: number; analysis: string };
+                        }
+                      ).detail;
+                      return (
+                        e.startTime + e.duration > since &&
+                        detail !== undefined &&
+                        detail.version > version &&
+                        detail.analysis === 'ready'
+                      );
+                    });
+                  return f ? f.startTime + f.duration - since : null;
+                },
+                { since: releasedAt, version: sourceVersion }
+              )
+            : null,
+          canonicalTrigger: 'Apply pointer click',
           label,
           value,
           selection,
@@ -979,6 +1090,14 @@ for (const mode of ['history', 'step'] as const) {
           previewMode,
           commitMs: performance.now() - commitStart,
           screenshot,
+          ...(round4
+            ? {
+                committedScreenshot: await picture(
+                  page,
+                  `${mode}-${run}-${label}-committed`
+                )
+              }
+            : {}),
           cancelUnchanged: true,
           after,
           diagnostic
@@ -994,7 +1113,27 @@ for (const mode of ['history', 'step'] as const) {
           join(evidence, `${mode}-${run}.json`),
           JSON.stringify({ rows }, null, 2)
         );
+        if (round4) {
+          await page.keyboard.press('Escape');
+          await page.keyboard.press('Escape');
+          return;
+        }
         throw e;
+      } finally {
+        const row = rows.at(-1);
+        if (
+          round4 &&
+          row &&
+          typeof row === 'object' &&
+          'label' in row &&
+          row.label === label &&
+          !('health' in row)
+        )
+          Object.assign(row, { health: await health() });
+        writeFileSync(
+          join(evidence, `${mode}-${run}.json`),
+          JSON.stringify({ rows }, null, 2)
+        );
       }
       writeFileSync(
         join(evidence, `${mode}-${run}.json`),
@@ -1013,7 +1152,7 @@ for (const mode of ['history', 'step'] as const) {
       await attempt('A1-long', '61.2', selectCap, capAt(61.2));
       if (round2) await attempt('A1-short', '26', selectCap, capAt(26));
     }
-    const convex = round2 ? 1.9 : 1.5;
+    const convex = round4 ? 1.5 : round2 ? 1.9 : 1.5;
     await attempt(
       'A2-convex',
       String(convex),
@@ -1025,12 +1164,22 @@ for (const mode of ['history', 'step'] as const) {
             Math.abs((g.radius ?? 0) - convex) < 1e-5
         ) ?? false
     );
-    if (!round2)
+    if (!round2 || round4)
       await attempt(
         'A2-concave',
         '2',
-        () =>
-          canvas.evaluate(
+        async () => {
+          if (round4) {
+            await page
+              .getByRole('button', { name: 'Standard views', exact: true })
+              .click();
+            await page
+              .getByRole('group', { name: 'Standard views', exact: true })
+              .getByRole('button', { name: /^Isometric view/ })
+              .click();
+            await waitForStillViewport(page);
+          }
+          return canvas.evaluate(
             (c) =>
               new Promise((resolve) =>
                 c.dispatchEvent(
@@ -1039,7 +1188,8 @@ for (const mode of ['history', 'step'] as const) {
                   })
                 )
               )
-          ),
+          );
+        },
         (b) =>
           b[0]?.geometry.some((g) => Math.abs((g?.radius ?? 0) - 2) < 1e-5) ??
           false
@@ -1054,6 +1204,69 @@ for (const mode of ['history', 'step'] as const) {
         ),
       (b) => (b[0]?.faces ?? 0) > (accepted.at(-1)?.[0]?.faces ?? 0)
     );
+    if (round4) {
+      const freeEnd = () =>
+        edgeAt([30, 11, 24], 'Top front right isometric view');
+      const expandedEnd = async () => {
+        await freeEnd();
+        if (process.env.VIDEO_PARITY_EXPAND_A4 !== '1') return;
+        const projected = await canvas.evaluate(
+          (c) =>
+            new Promise<{ points: { x: number; y: number }[] }>((resolve) =>
+              c.dispatchEvent(
+                new CustomEvent('openzcad:e2e-project-points', {
+                  detail: { points: [[30, 11, 24]], resolve }
+                })
+              )
+            )
+        );
+        await page.mouse.dblclick(
+          projected.points[0]!.x,
+          projected.points[0]!.y
+        );
+      };
+      await attempt(
+        'A4-fillet-1.5',
+        '1.5',
+        expandedEnd,
+        (b) =>
+          b[0]!.geometry.some((g) => Math.abs((g?.radius ?? 0) - 1.5) < 1e-5),
+        false
+      );
+      const checkpoint = (await rendered(page))[0]!.hash;
+      await attempt('A4-fillet-3.7', '3.7', expandedEnd, (b) =>
+        b[0]!.geometry.some((g) => Math.abs((g?.radius ?? 0) - 3.7) < 1e-5)
+      );
+      if ((await rendered(page))[0]!.hash !== checkpoint) {
+        await page.getByRole('button', { name: 'Undo', exact: true }).click();
+        await expect
+          .poll(async () => (await rendered(page))[0]!.hash, {
+            timeout: 60_000
+          })
+          .toBe(checkpoint);
+        accepted.pop();
+      }
+      await attempt(
+        'A4-chamfer-5',
+        '5',
+        async () => {
+          await freeEnd();
+          await page
+            .getByRole('button', { name: 'Selection: Chamfer', exact: true })
+            .click();
+        },
+        (b) => b[0]!.hash !== checkpoint
+      );
+      if ((await rendered(page))[0]!.hash !== checkpoint) {
+        await page.getByRole('button', { name: 'Undo', exact: true }).click();
+        await expect
+          .poll(async () => (await rendered(page))[0]!.hash, {
+            timeout: 60_000
+          })
+          .toBe(checkpoint);
+        accepted.pop();
+      }
+    }
     await attempt(
       'A4-chamfer',
       '.7',
@@ -1078,13 +1291,51 @@ for (const mode of ['history', 'step'] as const) {
       },
       (b) => (b[0]?.faces ?? 0) > (accepted.at(-1)?.[0]?.faces ?? 0)
     );
+    if (round4) {
+      await page.keyboard.press('Escape');
+      await page.keyboard.press('Escape');
+      const before = await rendered(page);
+      await canvas.evaluate(
+        (c) =>
+          new Promise((resolve) =>
+            c.dispatchEvent(
+              new CustomEvent('openzcad:e2e-select-edge', {
+                detail: { resolve }
+              })
+            )
+          )
+      );
+      await entry(page, '-1');
+      await expect(page.getByRole('dialog').getByRole('alert')).toContainText(
+        'Radius should be positive'
+      );
+      await expect(
+        page.getByRole('dialog').getByRole('button', { name: /^Apply / })
+      ).toBeDisabled();
+      const screenshot = await picture(page, `${mode}-A5-negative`);
+      await page.keyboard.press('Escape');
+      await page.keyboard.press('Escape');
+      expect((await rendered(page))[0]!.hash).toBe(before[0]!.hash);
+      rows.push({
+        label: 'A5-negative',
+        value: -1,
+        error: 'Radius should be positive',
+        unchanged: true,
+        screenshot,
+        health: await health()
+      });
+    }
     await attempt(
       'A6',
       '.8',
       () => pickBottom(page),
       (b) => (b[0]?.faces ?? 0) > (accepted.at(-1)?.[0]?.faces ?? 0)
     );
-    for (const diameter of round2 ? [14.6, 17, 21.1, 14.7] : [14.6]) {
+    for (const diameter of round4
+      ? [14.6, 17, 21.1, 14.7, 60]
+      : round2
+        ? [14.6, 17, 21.1, 14.7]
+        : [14.6]) {
       await attempt(
         `A7-D${diameter}`,
         String(diameter),
@@ -1113,8 +1364,22 @@ for (const mode of ['history', 'step'] as const) {
     }
     writeFileSync(
       join(evidence, `${mode}-${run}.json`),
-      JSON.stringify({ rows, undoToOriginal: true }, null, 2)
+      JSON.stringify(
+        {
+          rows,
+          undoToOriginal: true,
+          ...(round4
+            ? {
+                undoHealth: await health(),
+                undoScreenshot: await picture(page, `${mode}-${run}-A8-undo`)
+              }
+            : {})
+        },
+        null,
+        2
+      )
     );
+    await oracle?.dispose();
   });
   test(`${mode} recognized convex band edits R1.5 then R1.9 and undoes`, async ({
     page

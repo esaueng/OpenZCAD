@@ -10,6 +10,11 @@ import {
   sameAnalyticCarrier
 } from './exact-lineage-builders';
 import type { RemusKernel } from './remus-runtime';
+import {
+  PreviewFaceGeometryCache,
+  faceContentDigestsOf
+} from './preview-face-geometry-cache';
+
 import { resizeCylindricalFaceTyped } from './exact-direct-edit-refusal';
 import { AdapterRefusal } from './adapter-refusal';
 import {
@@ -124,6 +129,23 @@ import {
   resizeWallThroughBlends,
   sameBlendCarrier
 } from './exact-direct-edit-reblend';
+
+// The restored drag source is immutable. Exact face digests keep its costly
+// area/domain measurement reusable without trusting recycled handle numbers.
+const previewSources = new WeakMap<RemusKernel, PreviewFaceGeometryCache>();
+function previewSourceGeometry(kernel: RemusKernel, face: number) {
+  let cache = previewSources.get(kernel);
+  if (!cache) {
+    cache = new PreviewFaceGeometryCache();
+    previewSources.set(kernel, cache);
+  }
+  return cache.describe(
+    kernel,
+    face,
+    faceContentDigestsOf(kernel, Uint32Array.of(face))?.[0],
+    faceWitnessOf
+  ).geometry;
+}
 
 /**
  * Reference-first per ADR-013, exactly like fillet/chamfer edges: a stored
@@ -1809,7 +1831,12 @@ export function applyDirectEdit(
     return setFaceDistance(kernel, target, solid, face, operation, scope);
   }
 
-  const geometry = measureFaceGeometry(kernel, face);
+  const geometry =
+    deferOutputLineage &&
+    (operation.kind === 'resize-blend' ||
+      operation.kind === 'resize-cylindrical-face')
+      ? previewSourceGeometry(kernel, face)
+      : measureFaceGeometry(kernel, face);
 
   if (operation.kind === 'remove-face-feature') {
     return {
