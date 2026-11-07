@@ -32,7 +32,6 @@ import {
   importArtifactIds,
   isMeshImportArchiveKind,
   meshDiscardCommitGuard,
-  DocumentTooLargeError,
   getInMemoryPersistence,
   ProjectAdoptionError,
   ProjectQuotaError,
@@ -2186,8 +2185,12 @@ export class D1R2PersistenceService implements PersistenceService {
     source: ProjectDocument,
     name: string
   ): Promise<ProjectDocument> {
-    const document = prepareInitialProjectDocument(userId, source, name);
-    this.assertDocumentCanBeStored(document);
+    const document = prepareInitialProjectDocument(
+      userId,
+      source,
+      name,
+      this.projectDocumentLimitBytes()
+    );
     if (await this.projectIdInUse(document)) throw projectIdTaken();
     return document;
   }
@@ -3705,9 +3708,7 @@ export class D1R2PersistenceService implements PersistenceService {
       documentBytes: totals?.document_bytes ?? 0,
       revisionBytes: revisions?.revision_bytes ?? 0,
       revisionCount: revisions?.revision_count ?? 0,
-      documentLimitBytes: this.projectStorageBucket()
-        ? MAX_CLOUD_PROJECT_DOCUMENT_BYTES
-        : MAX_PERSISTED_DOCUMENT_BYTES,
+      documentLimitBytes: this.projectDocumentLimitBytes(),
       maxRevisionsPerProject: MAX_PROJECT_REVISIONS,
       artifactBytes: artifacts.bytes,
       artifactCount: artifacts.count,
@@ -3810,7 +3811,7 @@ export class D1R2PersistenceService implements PersistenceService {
         };
       }
     }
-    this.assertCloudDocumentWithinCeiling(document);
+    assertPersistableDocument(document, MAX_CLOUD_PROJECT_DOCUMENT_BYTES);
     const journaled = input.journaledHead;
     if (!revision && journaled && journaled.version === document.version) {
       // A resumed run stages the same head again: the journal's object
@@ -6476,19 +6477,14 @@ export class D1R2PersistenceService implements PersistenceService {
       : undefined;
   }
 
-  private assertCloudDocumentWithinCeiling(document: ProjectDocument): void {
-    const bytes = persistedDocumentBytes(document);
-    if (bytes > MAX_CLOUD_PROJECT_DOCUMENT_BYTES) {
-      throw new DocumentTooLargeError(bytes, MAX_CLOUD_PROJECT_DOCUMENT_BYTES);
-    }
+  private projectDocumentLimitBytes(): number {
+    return this.projectStorageBucket()
+      ? MAX_CLOUD_PROJECT_DOCUMENT_BYTES
+      : MAX_PERSISTED_DOCUMENT_BYTES;
   }
 
   private assertDocumentCanBeStored(document: ProjectDocument): void {
-    if (this.projectStorageBucket()) {
-      this.assertCloudDocumentWithinCeiling(document);
-    } else {
-      assertPersistableDocument(document);
-    }
+    assertPersistableDocument(document, this.projectDocumentLimitBytes());
   }
 
   private async putProjectStorageObjects(
@@ -6510,7 +6506,7 @@ export class D1R2PersistenceService implements PersistenceService {
         'Project object storage is not configured.'
       );
     }
-    this.assertCloudDocumentWithinCeiling(document);
+    assertPersistableDocument(document, MAX_CLOUD_PROJECT_DOCUMENT_BYTES);
     // Checkpoints publish to a room after inserting their immutable snapshot.
     // Until publication wins, new sources belong only to that snapshot: keep
     // them embedded so refusal can remove them without racing a canonical save
@@ -8049,14 +8045,10 @@ const MAX_PENDING_SOCKET_TICKETS = 32;
 const SOCKET_TICKET_TTL_MS = 30_000;
 
 /**
- * The room reuses the account's document ceiling
- * ({@link MAX_PERSISTED_DOCUMENT_BYTES}) rather than setting its own, so a
- * document cannot be small enough to live in the room and too large to be
- * saved. SQLite-backed Durable Object storage independently rejects a single
- * value over 2 MiB, and every document now occupies a key of its own, so the
- * shared limit is also below the hard one. Documents above it are refused
- * before any in-memory state moves, because a write that fails after the
- * mutation leaves the room serving state that no longer survives eviction.
+ * Each room document occupies one SQLite-backed Durable Object value, so the
+ * room uses {@link MAX_PERSISTED_DOCUMENT_BYTES} to stay below the 2 MiB value
+ * limit. It refuses larger documents before changing in-memory state so it
+ * never serves a state that would be lost on eviction.
  */
 
 /**

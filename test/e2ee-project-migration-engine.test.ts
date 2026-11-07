@@ -16,6 +16,7 @@ import {
   encodeImportedMeshPayload,
   documentNodesWithHistory,
   importedSourceReferenceOf,
+  MAX_PERSISTED_DOCUMENT_BYTES,
   parseWorkspaceResumeState,
   type ProjectDocument,
   type ProjectSummary,
@@ -567,6 +568,29 @@ async function expectOpensWithHistory(
 // --- Migration, cutover and purge -------------------------------------------------
 
 describe('encrypting an existing project', () => {
+  it('migrates an account document above the legacy document limit', async () => {
+    const srv = roomServer();
+    const document = initialDocument('Large account project');
+    const created = await srv.call('POST', '/api/projects', {
+      body: { name: document.name, initialDocument: document }
+    });
+    expect(created.status).toBe(201);
+    const warning = 'x'.repeat(MAX_PERSISTED_DOCUMENT_BYTES + 1);
+    await autosave(srv, {
+      ...document,
+      derived: { ...document.derived, warnings: [warning] }
+    });
+
+    await migrateFully(
+      engineOn(srv, owner, 'owner_laptop'),
+      document.projectId
+    );
+    expect(formatOf(srv, document.projectId)).toBe(2);
+    const desktop = device(srv, owner, 'owner_desktop');
+    const loaded = await desktop.store.loadProject(document.projectId);
+    expect(loaded.derived.warnings[0] === warning).toBe(true);
+  });
+
   it('stages every save state, cuts over, purges, and leaves no plaintext anywhere', async () => {
     const srv = roomServer();
     const plain = await plaintextProject(srv);

@@ -409,7 +409,6 @@ export class DocumentTooLargeError extends Error {
   }
 }
 
-/** @throws DocumentTooLargeError when the serialized document exceeds the cap. */
 /**
  * The checks a browser-built new project gets before the account stores it
  * (ADR-024 Phase 1): the creator owns it, it carries the requested name and an
@@ -419,7 +418,8 @@ export class DocumentTooLargeError extends Error {
 export function prepareInitialProjectDocument(
   userId: UserId,
   source: ProjectDocument,
-  name: string
+  name: string,
+  limitBytes = MAX_PERSISTED_DOCUMENT_BYTES
 ): ProjectDocument {
   if (!isClientMintedProjectId(source.projectId)) {
     throw new SavePointRequestError('The new project id is malformed.');
@@ -436,7 +436,7 @@ export function prepareInitialProjectDocument(
   }
   // Stored as the browser built it (ADR-024 Phase 1).
   const document = withoutDerivedProjection(source);
-  assertPersistableDocument(document);
+  assertPersistableDocument(document, limitBytes);
   return document;
 }
 
@@ -448,10 +448,14 @@ export function projectIdTaken(): ProjectAdoptionError {
   );
 }
 
-export function assertPersistableDocument(document: ProjectDocument): void {
+/** @throws DocumentTooLargeError when the serialized document exceeds the cap. */
+export function assertPersistableDocument(
+  document: ProjectDocument,
+  limitBytes = MAX_PERSISTED_DOCUMENT_BYTES
+): void {
   const bytes = persistedDocumentBytes(document);
-  if (bytes > MAX_PERSISTED_DOCUMENT_BYTES) {
-    throw new DocumentTooLargeError(bytes, MAX_PERSISTED_DOCUMENT_BYTES);
+  if (bytes > limitBytes) {
+    throw new DocumentTooLargeError(bytes, limitBytes);
   }
 }
 

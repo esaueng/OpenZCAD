@@ -17,6 +17,7 @@ import {
 } from '@openzcad/document-core';
 import {
   createId,
+  MAX_PERSISTED_DOCUMENT_BYTES,
   toProjectId,
   toUserId,
   type ProjectDocument
@@ -707,6 +708,28 @@ describe('branches', () => {
 // --- Adoption ------------------------------------------------------------------
 
 describe('adoption', () => {
+  it('saves and reloads a device project above the legacy document limit', async () => {
+    const srv = server();
+    const laptop = device(srv, owner, 'owner_laptop');
+    const document = initialDocument('Large device project');
+    const warning = 'x'.repeat(MAX_PERSISTED_DOCUMENT_BYTES + 1);
+    document.derived.warnings = [warning];
+
+    const created = await laptop.store.createProject({
+      name: document.name,
+      adoptionProtocolVersion: 2,
+      localProjectId: 'proj_large_device',
+      document
+    });
+    expect(created.project).toMatchObject({
+      projectId: document.projectId,
+      storageFormat: 2
+    });
+    const desktop = device(srv, owner, 'owner_desktop');
+    const opened = await desktop.store.loadProject(document.projectId);
+    expect(opened.derived.warnings[0] === warning).toBe(true);
+  });
+
   it('saves a device project encrypted, its device-only files following as blobs', async () => {
     const srv = server();
     const laptop = device(srv, owner, 'owner_laptop');
