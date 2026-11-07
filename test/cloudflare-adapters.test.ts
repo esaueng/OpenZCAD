@@ -22,6 +22,7 @@ import {
   submission
 } from './support/e2ee-room-fakes';
 import {
+  MAX_PERSISTED_DOCUMENT_BYTES,
   MAX_PROJECT_REVISION_RECORDS,
   toArtifactId,
   toProjectId,
@@ -271,6 +272,49 @@ describe('cloudflare adapters', () => {
         (project) => project.projectId === created.project.projectId
       )
     ).toBe(true);
+  });
+
+  it('creates and reloads a browser-built project above the D1 limit with R2', async () => {
+    const owner = toUserId('user_large_initial_document');
+    const db = migratedDatabase();
+    db.prepare(
+      'INSERT INTO users (id, email, created_at) VALUES (?, ?, ?)'
+    ).run(owner, 'owner@example.com', '2026-01-01T00:00:00.000Z');
+    const DB = sqliteD1(db);
+    const document = createProjectDocument('Large document', owner);
+    const warning = 'x'.repeat(MAX_PERSISTED_DOCUMENT_BYTES + 1);
+    document.derived.warnings = [warning];
+    const request = { name: document.name, initialDocument: document };
+
+    await expect(
+      new D1R2PersistenceService({ DB }).createProject(owner, request)
+    ).rejects.toMatchObject({ limitBytes: MAX_PERSISTED_DOCUMENT_BYTES });
+
+    const objects = new Map<string, ArrayBuffer>();
+    const bucket = {
+      put: async (key: string, body: ArrayBuffer) => {
+        objects.set(key, body.slice(0));
+      },
+      get: async (key: string) => {
+        const body = objects.get(key);
+        return body ? { arrayBuffer: async () => body.slice(0) } : null;
+      },
+      delete: async (key: string) => {
+        objects.delete(key);
+      }
+    } as unknown as R2Bucket;
+    const env = { DB, ARTIFACTS: bucket };
+    const created = await new D1R2PersistenceService(env).createProject(
+      owner,
+      request
+    );
+    expect(created.project.projectId).toBe(document.projectId);
+    expect(objects.size).toBe(1);
+    const loaded = await new D1R2PersistenceService(env).loadProject(
+      owner,
+      document.projectId
+    );
+    expect(loaded?.derived.warnings[0] === warning).toBe(true);
   });
 
   it("requires an owner's sharing preference for member project access", async () => {

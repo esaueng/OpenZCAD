@@ -94,6 +94,7 @@ import {
   type VersionLogRecord
 } from '@openzcad/crypto';
 import {
+  MAX_CLOUD_PROJECT_DOCUMENT_BYTES,
   PROJECT_STORAGE_FORMAT_E2EE_V1,
   type CreateProjectRequest,
   type CreateProjectResponse,
@@ -2684,7 +2685,12 @@ export function createEncryptedProjectStore(
   /** The browser's checks of a new project's document (ADR-024 Phase 1). */
   function prepared(source: ProjectDocument, name: string): ProjectDocument {
     try {
-      return prepareInitialProjectDocument(userId as UserId, source, name);
+      return prepareInitialProjectDocument(
+        userId as UserId,
+        source,
+        name,
+        MAX_CLOUD_PROJECT_DOCUMENT_BYTES
+      );
     } catch (error) {
       throw new ApiError(
         400,
@@ -2905,7 +2911,7 @@ export function createEncryptedProjectStore(
         // server: the account checks, not `prepareInitialProjectDocument`.
         const document = withoutDerivedProjection(source);
         try {
-          assertPersistableDocument(document);
+          assertPersistableDocument(document, MAX_CLOUD_PROJECT_DOCUMENT_BYTES);
         } catch (error) {
           throw new ApiError(
             413,

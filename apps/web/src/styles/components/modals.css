@@ -1805,3 +1805,15 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/*
+ * A dialog's secondary actions (Cancel, Not now, Decide later, Discard,
+ * Retry, Verify) rest bare beside its filled primary and become a whole
+ * button under the pointer or keyboard focus, like the command bar's and the
+ * inspector's Cancel. A destructive secondary (Remove, Leave) is the
+ * dialog's answer, so it keeps its fill.
+ */
+.modal-backdrop .secondary:not(.danger, :hover:not(:disabled), :focus-visible) {
+  background: transparent;
+  border-color: transparent;
+}

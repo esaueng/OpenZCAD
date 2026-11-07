@@ -2138,6 +2138,14 @@
   border-color: var(--color-accent-border);
 }
 
+/* A pinned pin at rest is the accent glyph alone: a bordered button sitting
+   on every pinned card read as a control asking to be pressed. The button
+   comes back under the pointer or keyboard focus, where it is one. */
+.start-tile-pin[aria-pressed='true']:not(:hover, :focus-visible) {
+  background: transparent;
+  border-color: transparent;
+}
+
 /* Opens upward over the card from its button, inside the card's own cell. */
 .start-tile-menu {
   position: absolute;
