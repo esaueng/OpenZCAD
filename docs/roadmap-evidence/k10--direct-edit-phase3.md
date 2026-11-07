@@ -36,3 +36,9 @@ defers unrelated planar capability proofs, caches immutable preview-source
 measurements, and warms full-quality display meshes once per stable gesture.
 Canonical acceptance, full display quality and geometry remain authoritative.
 The PR remains on hold; this is local qualification, not production evidence.
+
+The CI follow-up preserves ordinary single-edge Chamfer and offers a separate
+named tangent-chain action from a qualified bottom pick. The existing smoke
+journey retains its volume/export/reload assertions; native and STEP seven-edge
+A6 selection/chamfer/Undo reruns pass. The round-4 report records the regression
+and the updated UI route without replacing earlier timing evidence.

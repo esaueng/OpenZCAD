@@ -145,6 +145,8 @@ export interface SelectionCalloutVerbInput {
   faceCapabilities?: readonly SelectionCapability[] | null;
   /** The machine holds the picked edges, so Fillet/Chamfer switch its op. */
   edgesArmed?: boolean;
+  /** A single bottom-edge pick has a qualified smooth run to select. */
+  chamferChainAvailable?: boolean;
   /**
    * The face's body can be resized from it (a primitive's face), which is
    * the edit a face drag makes first; Offset then moves the face alone.
@@ -312,6 +314,17 @@ export function selectionCalloutVerbs(
       return [
         edgeVerb('fillet', input),
         edgeVerb('chamfer', input),
+        ...(input.edgesArmed && input.chamferChainAvailable
+          ? [
+              {
+                id: 'action:chamfer-chain' as const,
+                label: 'Chamfer tangent chain',
+                title: 'Chamfer the connected smooth bottom outline',
+                disabled: false,
+                pressed: false
+              }
+            ]
+          : []),
         ...tools('datum-axis')
       ];
     // No Shell: it starts from the faces it opens, so a face's card offers

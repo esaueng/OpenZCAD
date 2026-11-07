@@ -597,7 +597,10 @@ async function pickBottom(page: Page) {
   await waitForStillViewport(page);
   await clickWorldPoint(page, [20, 0, 0]);
   await page
-    .getByRole('button', { name: 'Selection: Chamfer', exact: true })
+    .getByRole('button', {
+      name: 'Selection: Chamfer tangent chain',
+      exact: true
+    })
     .click();
 }
 async function entry(page: Page, value: string) {

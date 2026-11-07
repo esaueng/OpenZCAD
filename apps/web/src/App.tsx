@@ -8727,6 +8727,16 @@ export function App() {
             kind: calloutKind,
             faceCapabilities: calloutFaceCapabilities,
             edgesArmed: interaction.mode === 'edges',
+            chamferChainAvailable:
+              interaction.mode === 'edges' &&
+              interaction.edges.length === 1 &&
+              supportsBlendGroupEdits(KERNEL_BUILD.packageVersion) &&
+              bottomChamferChain(
+                viewerBodies.find(
+                  (body) => body.bodyId === interaction.edges[0]!.bodyId
+                ) ?? representations[interaction.edges[0]!.bodyId],
+                interaction.edges[0]!
+              ).length > 1,
             resizeBody:
               interaction.mode === 'face' &&
               Boolean(interaction.target.resizeBodyFeatureId),
@@ -25301,8 +25311,10 @@ export function App() {
   }
 
   function handleSelectionAction(action: SelectionActionId) {
+    // Keep Chamfer local to the user's explicit selection. The named chain
+    // action opts one bottom-edge pick into its complete smooth run.
     if (
-      action === 'chamfer' &&
+      action === 'chamfer-chain' &&
       interaction.mode === 'edges' &&
       interaction.edges.length === 1 &&
       supportsBlendGroupEdits(KERNEL_BUILD.packageVersion)
@@ -25318,10 +25330,11 @@ export function App() {
         // topology can precede completed analysis; commit still validates it.
         clearEdgePreview();
         selectEdgeChainFromViewer(chain);
-        dispatchInteraction({ type: 'set-edge-op', op: action });
+        dispatchInteraction({ type: 'set-edge-op', op: 'chamfer' });
         return;
       }
     }
+    if (action === 'chamfer-chain') return;
     if (
       (action === 'resize-body' || action === 'offset-face') &&
       interaction.mode === 'face' &&

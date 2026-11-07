@@ -337,3 +337,42 @@ The later report commit changes documentation only. On this frozen source:
 The full root-unit local collection limitation above remains. These are local
 checks, not a claim about hosted checks or production deployment. The PR stays
 on hold, with auto-merge disabled.
+
+## CI follow-up: preserve single-edge chamfer intent
+
+Shard 4 on `db6665f7` exposes an app selection regression, not a slow native
+commit: ordinary Chamfer expanded the rounded-box fixture's picked edge to
+three edges. A distance of 2.1 is valid for the original edge but refused for
+that run; the browser waited on disabled Apply until its 180-second deadline
+on all three attempts. The same failure reproduces locally. CI evidence is
+run `42417216140`, job `128537803398`; local reproduction is
+`artifacts/round4-chamfer-repro.log`.
+
+Ordinary **Chamfer** now retains the explicitly selected edges. A qualified
+single bottom-edge pick additionally offers **Chamfer tangent chain**, which
+selects its smooth run and uses the same `chamferV2` route. A6 still starts from
+one geometric pick; choose that named action. This avoids silently changing
+the geometry the ordinary command targets and preserves older-kernel behavior.
+The earlier cumulative matrix records the old automatic action on its stated
+source; its geometry and performance measurements are retained as historical
+evidence, rather than relabelled as new captures.
+
+The existing smoke regression is strengthened to verify three edges through
+the chain action, cancel, then one edge through ordinary Chamfer. Its original
+2.1-mm volume, STEP validity, cylinder census, Undo/Redo and reload assertions
+are retained; the complete browser journey passes locally in 24.6 seconds.
+Standalone A6 native-history and imported-STEP tests both pass with the named
+action: seven selected edges, accepted 0.8-mm chamfer and preserved Undo.
+Screenshots, runtime hashes and JSON are in
+`artifacts/video-parity-phase3-round4/chain-choice/`; the single-edge journey's
+screenshots and trace are under `single-edge-regression/` there. These are
+functional reruns, not replacement performance captures.
+
+Code: `apps/web/src/App.tsx:8730` exposes the qualified choice, and `:25317`
+dispatches it separately. `selectionCallout.ts:317` names the action;
+`SelectionRail.tsx:49` supplies its icon. Focused selection/rail/capability tests
+pass (79 tests), the three chamfer adapter suites pass (seven tests), and
+TypeScript and the root build pass. The complete web suite passes 512 files /
+5,596 tests (`artifacts/round4-chain-web-full.log`); full lint passes with 18
+existing warnings (`artifacts/round4-chain-lint.log`). Geometry, dependency pins,
+timeouts and all original exported-volume assertions are unchanged.

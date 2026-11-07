@@ -80,9 +80,34 @@ test(
     await clickWorldPoint(page, [17.5, 0, 0]);
     const chip = page.locator('.selection-callout-chip');
     await expect(chip).toHaveAttribute('aria-label', 'Fillet operation');
+    await expect(
+      chip.getByRole('button', {
+        name: 'Selection: Chamfer tangent chain',
+        exact: true
+      })
+    ).toBeVisible();
+    await chip
+      .getByRole('button', {
+        name: 'Selection: Chamfer tangent chain',
+        exact: true
+      })
+      .click();
+    const selectedEdgeCount = () =>
+      page
+        .locator('.viewer-host canvas')
+        .evaluate(
+          (canvas) =>
+            (canvas as HTMLElement).dataset.e2eSelectedEdges?.split(',').length
+        );
+    await expect.poll(selectedEdgeCount).toBe(3);
+    await page.keyboard.press('Escape');
+    await waitForStillViewport(page);
+    await clickWorldPoint(page, [17.5, 0, 0]);
+    await expect(chip).toHaveAttribute('aria-label', 'Fillet operation');
     await chip
       .getByRole('button', { name: 'Selection: Chamfer', exact: true })
       .click();
+    await expect.poll(selectedEdgeCount).toBe(1);
     await page.getByTestId('direct-manipulation-value').click();
     const keypad = page.getByRole('dialog', { name: 'Distance value' });
     await keypad.getByRole('textbox').fill('2.1');
