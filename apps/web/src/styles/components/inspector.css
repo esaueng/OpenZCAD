@@ -550,6 +550,14 @@ fieldset.field > legend {
   flex: 1;
 }
 
+/* The inspector's secondary action (Cancel) rests bare beside the filled
+   Apply, like the command bar's Cancel, and becomes a whole button under
+   the pointer. */
+.inspector .form-actions .secondary:not(:hover, :focus-visible) {
+  background: transparent;
+  border-color: transparent;
+}
+
 /* An unchanged edit: the reason Apply is off, said beside it. */
 .form-pristine {
   margin: 4px 0 0;
