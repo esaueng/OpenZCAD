@@ -107,3 +107,18 @@ button.model-panel-grip[aria-expanded='true'],
 .encryption-menu[open] > .encryption-indicator {
   box-shadow: inset 0 0 0 1px var(--color-border-strong);
 }
+
+/*
+ * The rails' tool buttons follow the same rule: bare at rest, a whole
+ * button under the pointer (or while a rail button's flyout is open). An
+ * active tool keeps its own selected fill and is not edged here.
+ */
+.view-rail > button:hover:not(:disabled, .active),
+button.command-rail:hover:not(:disabled, [aria-disabled='true'], .active),
+.tweak-rail button:hover:not(:disabled, .active),
+.workspace-column .sketch-rail button:hover:not(:disabled, .active),
+.sketch-relation:hover:not(:disabled, .active),
+.rail-button:hover:not(:disabled, .active),
+.rail-button.open:not(.active) {
+  box-shadow: inset 0 0 0 1px var(--color-border-strong);
+}
