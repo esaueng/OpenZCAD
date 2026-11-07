@@ -109,6 +109,31 @@ function warningFor(
 }
 
 describe('refusal reproduction sanitizer', () => {
+  it('keeps the typed exact-only cause when formatting the captured refusal', () => {
+    const { document, cutFeatureId } = privateDocument();
+    const fixture = buildRefusalReproduction({
+      document,
+      warning: warningFor(cutFeatureId, {
+        message: 'exact-only policy: approximate fallback was declined',
+        kernelRefusal: {
+          family: 'direct-edit',
+          operation: 'resize-cylindrical-face',
+          category: 'quality_refused',
+          code: 'exact_only_unattainable',
+          reason: 'approximate_reblend_not_permitted'
+        }
+      }),
+      kernel: KERNEL,
+      capturedAt: CAPTURED_AT
+    });
+    expect(fixture.observed.message).toBe(
+      'Resizing this face would require an approximate fillet. This edit only allows exact geometry.'
+    );
+    expect(fixture.observed.kernelRefusal?.reason).toBe(
+      'approximate_reblend_not_permitted'
+    );
+  });
+
   it('writes a feature-build fixture the corpus accepts', () => {
     const { document, cutFeatureId } = privateDocument();
     const fixture = buildRefusalReproduction({

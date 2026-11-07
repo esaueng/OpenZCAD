@@ -11,6 +11,7 @@ import {
 } from '../apps/web/src/lib/featureValidation';
 import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
 import { sphereCylinderUnionInputs } from './support/sphere-cylinder-union';
+import { inspectTriangleMeshClosure } from '../packages/kernel-adapter/src/boolean-result-validation';
 
 /**
  * The owner's original 2026-11-05 case: a direct diameter edit of a boss that
@@ -19,16 +20,17 @@ import { sphereCylinderUnionInputs } from './support/sphere-cylinder-union';
  *
  * An imported body has no source dimension, so the only route is local: the
  * WS6 ladder would remove the seam band, resize the sharp wall and rebuild the
- * band. On the pinned kernel no step of that ladder exists for this band, so
+ * band. The off-axis seam still cannot be rebuilt exactly on this pin, so
  * the edit must refuse with the typed cause and leave the body alone. The
  * second block pins each missing kernel capability on its own: when a Remus
- * pin bump makes one of them succeed, the matching test fails and says which
- * WS6 step can now be built.
+ * pin bump makes one of them succeed, the remaining tripwires identify which
+ * WS6 step can now be built. Exact coaxial torus-band removal is qualified
+ * separately; it does not make the off-axis freeform reblend exact.
  */
 
 const SEAM_FILLET = 2;
-const FREEFORM =
-  "This face meets a fillet or freeform surface, which resizing and moving faces can't follow yet.";
+const EXACT_ONLY =
+  'Resizing this face would require an approximate fillet. This edit only allows exact geometry.';
 
 describe('direct resize of a seam-filleted boss on a sphere', () => {
   let adapter: ExactKernelAdapter;
@@ -104,7 +106,7 @@ describe('direct resize of a seam-filleted boss on a sphere', () => {
   });
 
   it.each([7, 5])(
-    'refuses r 6 → %d with the typed freeform-neighbour cause',
+    'refuses r 6 → %d with the exact-only reblend cause',
     async (radius) => {
       const manager = new CommandManager(document);
       const candidate = manager.runTransaction('Resize', [
@@ -131,17 +133,14 @@ describe('direct resize of a seam-filleted boss on a sphere', () => {
       expect(warning?.kernelRefusal).toEqual({
         family: 'direct-edit',
         operation: 'resize-cylindrical-face',
-        category: 'unsupported',
-        code: 'unsupported_move_face',
-        reason: 'unsupported_neighbor',
-        neighborSurfaceType: 'nurbs'
+        category: 'quality_refused',
+        code: 'exact_only_unattainable',
+        reason: 'approximate_reblend_not_permitted'
       });
       const text = warningForFeature('Resize Cylinder', refused.warnings);
       const plain = splitRefusal(text!, warning?.kernelRefusal);
-      expect(plain.message).toBe(FREEFORM);
-      expect(plain.detail).toMatch(
-        /move-face does not support face .*\(nurbs\)/
-      );
+      expect(plain.message).toBe(EXACT_ONLY);
+      expect(plain.detail).toMatch(/exact|approximate/i);
     },
     600_000
   );
@@ -219,7 +218,7 @@ describe('why the WS6 remove → resize → re-blend ladder cannot run on this p
     ).toThrow(/only implemented for planar wound neighbors/);
   }, 120_000);
 
-  it('cannot remove even the exact torus band of a coaxial boss', () => {
+  it('removes the exact torus band of a coaxial boss as a closed valid solid', () => {
     const kernel = new RemusKernel();
     const { solid, seam } = bossOnSphere(kernel, true);
     const filleted = kernel.filletDetailed(solid, seam, SEAM_FILLET, true);
@@ -231,9 +230,24 @@ describe('why the WS6 remove → resize → re-blend ladder cannot run on this p
       faces: [band],
       radius: SEAM_FILLET
     });
+    const sharp = kernel.resizeBlend(body, band, SEAM_FILLET, 0);
+    expect(kernel.validateSolid(sharp)).toBe(0);
     expect(
-      () => kernel.resizeBlend(body, band, SEAM_FILLET, 0),
-      NOW_POSSIBLE
-    ).toThrow(/unsupported analytic support pair: cylinder x sphere/);
+      [...kernel.getSolidFaces(sharp)].map((face) =>
+        kernel.getSurfaceType(face)
+      )
+    ).not.toContain('torus');
+    const mesh = kernel.tessellateSolidGroupedBinary(sharp, 0.02, 0.06);
+    try {
+      expect(
+        inspectTriangleMeshClosure(mesh.positions, mesh.indices)
+      ).toMatchObject({
+        boundaryEdges: 0,
+        nonManifoldEdges: 0,
+        inconsistentWindingEdges: 0
+      });
+    } finally {
+      mesh.free();
+    }
   }, 120_000);
 });

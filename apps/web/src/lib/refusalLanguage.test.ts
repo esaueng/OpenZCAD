@@ -316,3 +316,32 @@ describe('plainRefusal with the kernel category', () => {
     );
   });
 });
+
+describe('exact-only typed refusals', () => {
+  it('explains an approximate reblend refusal before generic raw-text matching', () => {
+    const raw = 'exact-only policy: approximate fallback was declined';
+    expect(
+      plainRefusal(raw, {
+        category: 'quality_refused',
+        code: 'exact_only_unattainable',
+        reason: 'approximate_reblend_not_permitted'
+      })
+    ).toEqual({
+      message:
+        'Resizing this face would require an approximate fillet. This edit only allows exact geometry.',
+      detail: raw,
+      category: 'quality_refused'
+    });
+  });
+  it('explains exact quality refusal without inventing a fillet cause', () => {
+    const raw = 'exact-only policy: exact result unavailable';
+    expect(
+      plainRefusal(raw, {
+        category: 'quality_refused',
+        code: 'exact_only_unattainable'
+      }).message
+    ).toBe(
+      'The exact kernel could not build this exactly, and an approximate result was declined.'
+    );
+  });
+});

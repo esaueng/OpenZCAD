@@ -232,7 +232,7 @@ export function buildRefusalReproduction(
   renames.push([input.document.name, REPRODUCTION_DOCUMENT_NAME]);
   const plain = splitRefusal(
     renameInText(reason, renames),
-    warning.kernelRefusal?.category
+    warning.kernelRefusal
   );
   const upstream = listFeaturesInOrder(input.document);
   const position = upstream.findIndex(

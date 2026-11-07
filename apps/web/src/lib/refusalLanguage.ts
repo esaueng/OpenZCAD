@@ -99,6 +99,14 @@ function typedSentence(typed: RefusalClassification): string | null {
   if (typed.code === 'cylinder-diameter-unbuildable') {
     return 'That diameter does not fit the existing supports and fillets. Try a smaller diameter.';
   }
+  if (
+    typed.category === 'quality_refused' &&
+    typed.code === 'exact_only_unattainable'
+  ) {
+    return typed.reason === 'approximate_reblend_not_permitted'
+      ? 'Resizing this face would require an approximate fillet. This edit only allows exact geometry.'
+      : CATEGORY_SENTENCES.quality_refused!;
+  }
   if (typed.code !== 'unsupported_move_face') {
     return null;
   }

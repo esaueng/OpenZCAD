@@ -2414,7 +2414,15 @@ function resizeCylindricalFaceExactly(
     // A refusal the kernel classifies as `unsupported` — a rim that meets a
     // sphere or a blend, a partial wall it cannot reverse — is a statement
     // about the geometry, not the size, so no waypoint can clear it.
-    if (kernelRefusalCategoryOf(error) === 'unsupported') throw error;
+    const refusal = kernelRefusalRecordOf(error);
+    const exactOnlyReblend =
+      refusal?.category === 'quality_refused' &&
+      refusal.code === 'exact_only_unattainable' &&
+      refusal.reason === 'approximate_reblend_not_permitted';
+    // Changing the waypoint cannot make an approximate seam exact. Preserve
+    // ordinary sleeve-quality retries while respecting this typed policy.
+    if (kernelRefusalCategoryOf(error) === 'unsupported' || exactOnlyReblend)
+      throw error;
     const inward = [0.85, 0.7].map(
       (factor) => factor * Math.min(fromRadius, toRadius)
     );
