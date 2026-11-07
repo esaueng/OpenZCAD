@@ -95,10 +95,10 @@ The override's source-commit safety check may require the same per-command Git `
 
 ## App changes and validation
 
-- `packages/kernel-adapter/src/display-tessellation.ts:20` and `exact-display-projection.ts:26`: disposable prepared-drag projection quality, with completed bounds refinement and normal display quality retained.
+- `packages/kernel-adapter/src/display-tessellation.ts:18` and `exact-display-projection.ts:26`: disposable prepared-drag projection quality, with completed bounds refinement and normal display quality retained.
 - `packages/kernel-adapter/src/exact.ts:3401` and `preview-face-geometry-cache.ts:133`: keep the normal display anchor, defer unrelated face measurements, and retain the dragged dimension's measured metadata. Prepared bindings are required; the older pin keeps the existing path.
-- `apps/web/src/worker/exactRebuildCache.ts:8`, `geometryWorker.ts:1063`, and `hooks/useGeometryWorker.ts:113`: deduplicate equivalent results without collapsing different boolean probe decisions. The eager rule is preserved explicitly.
-- `packages/kernel-adapter/src/direct-edit-profile.ts:15`, `apps/web/src/worker/geometryWorker.ts:654`, and `apps/web/src/lib/faceDragTrace.ts:74`: opt-in binding/stage profiling and matching Chrome user timing markers.
+- `apps/web/src/worker/exactRebuildCache.ts:8`, `geometryWorker.ts:1076`, and `hooks/useGeometryWorker.ts:113`: deduplicate equivalent results without collapsing different boolean probe decisions. The eager rule is preserved explicitly.
+- `packages/kernel-adapter/src/direct-edit-profile.ts:15`, `apps/web/src/worker/geometryWorker.ts:654`, and `apps/web/src/lib/faceDragTrace.ts:54`: opt-in binding/stage profiling and matching Chrome user timing markers.
 
 Final checks pass: lint (18 existing hook warnings), TypeScript, the complete web suite (512 files / 5,591 tests), 70 focused root regressions on each kernel, 12 actual boolean-demand tests on each kernel, two supplied-part canonical mesh/volume replay checks, and the combined-kernel parity corpus (92 passed, one existing skip). Canonical replay compares binary mesh digests and volume after establishing the same ordinary source display anchor in a fresh session without previewing. Both root builds include wasm verification and bundle budgets. The combined kernel passes four final pointer/cancel/commit/Undo cases; the installed pin passes six browser regressions. Roadmap fragments and the privacy guard pass.
 
