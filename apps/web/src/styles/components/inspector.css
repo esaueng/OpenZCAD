@@ -695,28 +695,6 @@ fieldset.field > legend {
   max-width: 100%;
 }
 
-/* Dropdowns in the inspector and the command cards (tool card, Extrude
-   editor, Move panel, Measure) rest bare like their other secondary
-   controls, the native arrow alone marking them, and become a whole control
-   under the pointer. :not([multiple]) lifts the rule over the cards' own
-   select rules; focus restates the shared accent ring for the same reason. */
-:is(.inspector, .command-float) select:not([multiple]) {
-  background: transparent;
-  border-color: transparent;
-  cursor: pointer;
-}
-
-:is(.inspector, .command-float)
-  select:not([multiple]):hover:not(:disabled):not(:focus) {
-  background: var(--color-surface-hover);
-  border-color: var(--color-border-strong);
-}
-
-:is(.inspector, .command-float) select:not([multiple]):focus {
-  background: var(--color-bg);
-  border-color: var(--color-accent);
-}
-
 .object-definition-row {
   display: flex;
   align-items: center;
