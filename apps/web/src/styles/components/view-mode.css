@@ -326,15 +326,15 @@
   min-height: 26px;
   padding: 0 8px;
   color: var(--color-text-muted);
-  background: var(--color-surface-2);
-  border: var(--border-thin);
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
   font: inherit;
   font-size: var(--fs-sm);
   cursor: pointer;
 }
 
-.view-mode-views-panel button:hover {
+.view-mode-views-panel button:hover:not(:disabled) {
   color: var(--color-text);
   background: var(--color-surface-hover);
 }

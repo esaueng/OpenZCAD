@@ -171,7 +171,8 @@ button.command-rail:hover:not(:disabled, [aria-disabled='true'], .active),
 /*
  * Menu items rest as bare rows and become a whole button under the pointer
  * or keyboard focus, so moving through a menu reads the same as hovering
- * any other action. A destructive item's edge takes the red of its fill.
+ * any other action. The toolbar Views dropdowns' tiles follow the same
+ * rule. A destructive item's edge takes the red of its fill.
  */
 :is(
     .context-menu-item,
@@ -179,7 +180,9 @@ button.command-rail:hover:not(:disabled, [aria-disabled='true'], .active),
     .topbar-menu-item,
     .start-tile-menu button,
     .motion-track-menu-item,
-    .encryption-menu-copy
+    .encryption-menu-copy,
+    .rail-views-panel button,
+    .view-mode-views-panel button
   ):is(:hover, :focus-visible):not(:disabled) {
   box-shadow: inset 0 0 0 1px var(--color-border-strong);
 }
