@@ -297,11 +297,23 @@
   padding: 0;
   color: var(--color-text-muted);
   background: transparent;
-  border: 1px dashed var(--color-border-strong);
+  /* Off rests bare, like an unchosen chip: the dimmed glyph says it is off,
+     and the pointer or keyboard focus turns it into a whole button. */
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
   font-size: var(--fs-xs);
   line-height: 1;
-  opacity: 0.7;
+  opacity: 0.55;
+}
+
+.relation-glyph-toggle:not([aria-pressed='true']):not(:disabled):is(
+    :hover,
+    :focus-visible
+  ) {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
+  opacity: 1;
 }
 
 .relation-glyph-toggle[aria-pressed='true'] {
