@@ -46,7 +46,11 @@ const CANVAS_ONLY_CSS = `body * { visibility: hidden !important; }
 
 // A Retina-class backing store: line widths and antialiasing are judged at
 // the pixel ratio most users see them at (the viewer caps it at 2).
-test.use({ deviceScaleFactor: 2 });
+// OZ_LOOKDEV_SCHEME=light captures the light stage instead of the dark one.
+test.use({
+  deviceScaleFactor: 2,
+  colorScheme: process.env.OZ_LOOKDEV_SCHEME === 'light' ? 'light' : 'dark'
+});
 test.setTimeout(240_000);
 
 for (const scene of LOOKDEV_SCENES) {

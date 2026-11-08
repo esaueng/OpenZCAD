@@ -109,9 +109,20 @@ viewport, and a roadmap evidence fragment.
    150k triangles get none. Against the dark stage an outline that borders
    only the backdrop stays subtle, which the stage pass addresses.
 
-
 5. **Stage.** A slightly lighter neutral backdrop and a visible, quiet grid
    through the tokens, both themes. Revisit `DEFAULT_BODY_COLOR` with G2.
+
+   **Outcome (8 November).** The dark stage is a neutral graphite
+   (`#222428` → `#18191c` → `#121315`, grid `#5a5e66` / `#878c95`) instead of
+   near-black with a blue cast; outlines, the ground shadow and the grid now
+   have something to read against. The light stage already read well with
+   the new shading and is unchanged (`OZ_LOOKDEV_SCHEME=light` captures it).
+   `DEFAULT_BODY_COLOR` moves from `#99a0b2` to `#a2a6ae`: the same
+   lightness, desaturated, since the studio shading no longer washes top
+   faces out (G2's reason for the darker steel) and the blue read as a blue
+   part. `stagePalette.test.ts` now pins the graphite fallback to the dark
+   tokens.
+
 6. **Optional ambient occlusion.** Only if 2–4 leave interior corners flat. It
    is the one item that needs a post-processing chain (multisampled target to
    keep antialiasing, stencil decoration pass preserved), rendered on settled

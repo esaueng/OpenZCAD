@@ -1000,11 +1000,11 @@ export interface StagePalette {
 
 /** The graphite stage: the scene's colours before any theme is applied. */
 export const DARK_STAGE_PALETTE: Readonly<StagePalette> = {
-  backdropTop: '#171a1f',
-  backdropMiddle: '#101215',
-  backdropBottom: '#0b0c0f',
-  gridMinor: '#5c6573',
-  gridMajor: '#838d9c',
+  backdropTop: '#222428',
+  backdropMiddle: '#18191c',
+  backdropBottom: '#121315',
+  gridMinor: '#5a5e66',
+  gridMajor: '#878c95',
   shadowOpacity: 0.55
 };
 
