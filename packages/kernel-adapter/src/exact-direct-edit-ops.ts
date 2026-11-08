@@ -2151,8 +2151,15 @@ export function applyDirectEdit(
     fromSolid: number,
     wall: number,
     journaled: boolean
-  ): { output: number; journal: RemusMoveFacesJournal | null } => {
+  ): {
+    output: number;
+    journal: RemusMoveFacesJournal | null;
+    approximate: boolean;
+  } => {
     let journal: RemusMoveFacesJournal | null = null;
+    // Set when the kernel rolled a freeform seam fillet back on at the
+    // approximate quality it already had (see `resizeCylindricalFaceTyped`).
+    let approximate = false;
     if (journaled) {
       try {
         journal = decodeRemusMoveFacesJournal(
@@ -2174,7 +2181,10 @@ export function applyDirectEdit(
         axisStart,
         axisDir,
         axisTolerance,
-        operation.concavity
+        operation.concavity,
+        () => {
+          approximate = true;
+        }
       );
     if (kernel.validateSolidRelaxed(output) !== 0) {
       throw new Error(
@@ -2207,7 +2217,7 @@ export function applyDirectEdit(
           : `The wall could not be resized to radius ${newRadius} exactly; it would become an approximation.`
       );
     }
-    return { output, journal };
+    return { output, journal, approximate };
   };
   const acceptance = (output: number) => ({
     sourceSolid: solid,
@@ -2222,8 +2232,13 @@ export function applyDirectEdit(
   });
   let output: number;
   let journal: RemusMoveFacesJournal | null;
+  let approximate: boolean;
   try {
-    ({ output, journal } = plainResize(solid, face, !deferOutputLineage));
+    ({ output, journal, approximate } = plainResize(
+      solid,
+      face,
+      !deferOutputLineage
+    ));
     // A wall under a seam blend can come back at the new radius, closed and
     // valid, with the blend left at the old size and capped off by a new
     // face (K10, box×cylinder seam fillet). Hash-only seam fillets route
@@ -2251,6 +2266,9 @@ export function applyDirectEdit(
         axisDirection: axisDir,
         axisTolerance,
         radiusTolerance,
+        // The ladder rebuilds only exact, recognised bands; its sharp wall
+        // has no seam fillet, so this resize never takes the approximate
+        // re-blend path.
         resize: (sharp, wall) => plainResize(sharp, wall, false).output
       });
       assertWallResizeAccepted(kernel, acceptance(rebuilt));
@@ -2258,6 +2276,11 @@ export function applyDirectEdit(
       throw error;
     }
     return { solids: [rebuilt] };
+  }
+  if (approximate) {
+    // The owner's rule (kernel robustness plan, 2026-11-06): a re-fillet may
+    // keep the approximate quality its band already had, disclosed.
+    onAdvisory?.(APPROXIMATE_REBLEND_ADVISORY);
   }
   if (deferOutputLineage || !journal) return { solids: [output] };
   const relation = moveFacesJournalFaceMap(
@@ -2289,6 +2312,13 @@ export function applyDirectEdit(
   };
 }
 
+/**
+ * The disclosure on a wall resize that rebuilt its freeform seam fillet. The
+ * band was a NURBS fit before the edit and is one after it.
+ */
+export const APPROXIMATE_REBLEND_ADVISORY =
+  'The fillet along this wall was rebuilt at its new size as an approximate surface, as it was before: a NURBS fit within modeling tolerance. Volume, measurements and STEP export use that approximate surface.';
+
 /** Relative change below which the kernel's resize sleeve may be refused. */
 const SLEEVE_BAND = 0.15;
 
@@ -2314,10 +2344,17 @@ function resizeCylindricalFaceExactly(
   axisPoint: Vec3,
   axisDirection: Vec3,
   axisTolerance: number,
-  concavity: 'hole' | 'boss'
+  concavity: 'hole' | 'boss',
+  onApproximate?: () => void
 ): number {
   try {
-    return resizeCylindricalFaceTyped(kernel, solid, face, toRadius);
+    return resizeCylindricalFaceTyped(
+      kernel,
+      solid,
+      face,
+      toRadius,
+      onApproximate
+    );
   } catch (error) {
     // Only a change inside the band is worth a detour. The refusal is told
     // by size, not by its wording: the kernel reports it as an exact-only
@@ -2346,7 +2383,13 @@ function resizeCylindricalFaceExactly(
       concavity === 'hole' ? [...inward, ...outward] : [...outward, ...inward];
     for (const waypoint of waypoints) {
       try {
-        const via = resizeCylindricalFaceTyped(kernel, solid, face, waypoint);
+        const via = resizeCylindricalFaceTyped(
+          kernel,
+          solid,
+          face,
+          waypoint,
+          onApproximate
+        );
         const wall = Array.from(kernel.getSolidFaces(via)).filter((handle) => {
           const measured = measureFaceGeometry(kernel, handle);
           if (
@@ -2375,7 +2418,13 @@ function resizeCylindricalFaceExactly(
           );
         });
         if (wall.length !== 1) continue;
-        return resizeCylindricalFaceTyped(kernel, via, wall[0]!, toRadius);
+        return resizeCylindricalFaceTyped(
+          kernel,
+          via,
+          wall[0]!,
+          toRadius,
+          onApproximate
+        );
       } catch {
         // This waypoint is blocked; the other direction may not be.
       }

@@ -57,8 +57,9 @@ function roundTrip(fixture: DirectEditFixture): DirectEditFixture {
 
 describe('saved refusal reproductions replay through the corpus', () => {
   it('reproduces the sphere-boss direct resize refusal', async () => {
-    // The seam-filleted boss: the plain boss on a sphere resizes since Remus
-    // #1558, but a wall meeting the freeform fillet band still refuses typed.
+    // The seam-filleted boss re-fillets on a resize since the approximate
+    // re-blend was permitted, but not down to r 1: the R2 ball no longer
+    // rolls on the new seam, and the kernel refuses.
     const { manager, bodyId, wall } = await filletedSphereBoss(adapter);
     expect(wall).toBeDefined();
     const { candidate, warning } = await refusedCandidate(
@@ -75,7 +76,7 @@ describe('saved refusal reproductions replay through the corpus', () => {
               sourceAxisStart: wall.geometry!.axisStart!,
               sourceAxisEnd: wall.geometry!.axisEnd!,
               concavity: 'boss',
-              radius: 7
+              radius: 1
             }
           }),
           // A later feature the reproduction must trim away.
@@ -89,12 +90,9 @@ describe('saved refusal reproductions replay through the corpus', () => {
       PRIVATE_FEATURE
     );
     expect(warning.kind).toBe('build-failed');
-    // The new kernel identifies the exact-only reblend policy refusal.
     expect(warning.kernelRefusal).toMatchObject({
       family: 'direct-edit',
-      category: 'quality_refused',
-      code: 'exact_only_unattainable',
-      reason: 'approximate_reblend_not_permitted'
+      operation: 'resize-cylindrical-face'
     });
 
     const fixture = roundTrip(
@@ -130,9 +128,6 @@ describe('saved refusal reproductions replay through the corpus', () => {
     const result = await replayFixture(adapter, fixture);
     expect(result.outcome).toBe('refused');
     expect(result.message).toBe(fixture.observed.message);
-    expect(result.message).toBe(
-      'Resizing this face would require an approximate fillet. This edit only allows exact geometry.'
-    );
     expect(result.warningKind).toBe(warning.kind);
     expect(result.kernelRefusal).toEqual(warning.kernelRefusal);
     expect(fixture.observed.kernelRefusal).toEqual(warning.kernelRefusal);

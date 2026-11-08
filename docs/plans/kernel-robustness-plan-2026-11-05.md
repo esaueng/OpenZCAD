@@ -496,6 +496,19 @@ reports `quality: "approximate"`, the feature carries an advisory saying the
 blend surface is approximate, and the display-mesh advice no longer claims
 that volume and STEP export are exact for that band.
 
+**Delivered (2026-11-08, Remus `2026.1.126`).** The direct resize of the
+filleted boss on the sphere now succeeds. The adapter passes
+`allowApproximate` to `resizeCylindricalFaceDetailed`, which removes the seam
+band, resizes the sharp wall and re-fillets the new seam with the measured
+ball in one call. The kernel enforces the rule above: an exact band is
+rebuilt exactly or refused, and only the freeform band that was already a
+NURBS fit comes back approximate. The edit then carries a disclosure
+advisory. At r 7, 5, 6.3 and 12 the result matches the source route's volume
+to within 0.05 mm³, with one wall and one band, closed and exportable. A
+radius the ball cannot roll on (r 1) refuses and keeps the body; that refusal
+is still the kernel's generic `operation_failed` and needs its own code
+upstream.
+
 ## Milestones
 
 | Milestone | Scope                                                                                                                                                                      | Exit signal                                                                                                   |
