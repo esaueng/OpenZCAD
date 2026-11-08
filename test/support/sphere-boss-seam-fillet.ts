@@ -5,10 +5,9 @@ import { sphereCylinderUnionInputs } from './sphere-cylinder-union';
 
 /**
  * The off-axis boss on a sphere with its seam rounded by an R2 fillet — the
- * owner's 2026-11-05 case. Its band is one freeform face, so a direct wall
- * resize still refuses with the typed `unsupported_neighbor` (nurbs) cause
- * after the sphere-neighbour resize landed (Remus #1558). Tests that need a
- * real, typed direct-edit refusal build on it.
+ * owner's 2026-11-05 case. Its band is one freeform face: a direct wall
+ * resize re-fillets it at that approximate quality, disclosed, and refuses
+ * a radius the ball no longer rolls on (r 1).
  */
 export async function filletedSphereBoss(adapter: ExactKernelAdapter): Promise<{
   manager: CommandManager;
