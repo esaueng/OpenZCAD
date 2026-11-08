@@ -91,20 +91,35 @@
   gap: 6px;
 }
 
+/*
+ * A swatch rests as its colour alone, without a button outline. The faint
+ * inner edge is part of the swatch, not of a button: without it a swatch
+ * that matches the panel (white on the light theme, near-black on the dark)
+ * would vanish. Hover rings it, separated by a gap of the panel's colour;
+ * the chosen swatch takes the same ring in the accent.
+ */
 .color-picker-presets button {
+  --swatch-edge: inset 0 0 0 1px
+    color-mix(in srgb, var(--color-text) 16%, transparent);
   width: 22px;
   height: 22px;
   padding: 0;
-  border: var(--border-thin);
+  border: 0;
   border-radius: var(--radius-sm);
+  box-shadow: var(--swatch-edge);
   cursor: pointer;
 }
 
 .color-picker-presets button:hover {
-  border-color: var(--color-border-strong);
+  box-shadow:
+    var(--swatch-edge),
+    0 0 0 2px var(--color-surface-2),
+    0 0 0 3px var(--color-border-strong);
 }
 
 .color-picker-presets button.active {
-  border-color: var(--color-accent);
-  box-shadow: 0 0 0 2px var(--color-accent-dim);
+  box-shadow:
+    var(--swatch-edge),
+    0 0 0 2px var(--color-surface-2),
+    0 0 0 4px var(--color-accent);
 }
