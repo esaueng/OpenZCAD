@@ -50,6 +50,7 @@ describe('balanced e2e shards', () => {
     for (const env of [
       { OZ_PERF: '1' },
       { OZ_CAPTURE: '1' },
+      { OZ_LOOKDEV: '1' },
       { H02_SESSION_PROBE: '1' }
     ]) {
       expect(resolveSuite({ CI: 'true', ...env })).toBe('full');

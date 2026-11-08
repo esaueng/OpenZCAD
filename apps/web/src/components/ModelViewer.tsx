@@ -234,6 +234,7 @@ import {
   type DimensionGraphic,
   SELECTION_SEMANTICS,
   contextBodyColor,
+  isBodyMaterial,
   selectedFaceColor,
   SKETCH_GLIDE_MS,
   sketchGlideEase,
@@ -12529,8 +12530,7 @@ export function ModelViewer({
        * old translucent accent film, since nothing recedes there.
        */
       const bodyMaterial =
-        object instanceof THREE.Mesh &&
-        object.material instanceof THREE.MeshPhongMaterial
+        object instanceof THREE.Mesh && isBodyMaterial(object.material)
           ? object.material
           : null;
       const selectedFill = (geometry: THREE.BufferGeometry) => {
