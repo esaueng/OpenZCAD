@@ -695,6 +695,26 @@ fieldset.field > legend {
   max-width: 100%;
 }
 
+/* The material dropdown rests bare like the inspector's other secondary
+   controls, its arrow alone marking it, and becomes a whole control under
+   the pointer. Focus keeps the shared accent ring (restated here because
+   this rule outranks the plain select:focus rule). */
+.kv-grid > span select {
+  background: transparent;
+  border-color: transparent;
+  cursor: pointer;
+}
+
+.kv-grid > span select:hover:not(:disabled):not(:focus) {
+  background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
+}
+
+.kv-grid > span select:focus {
+  background: var(--color-bg);
+  border-color: var(--color-accent);
+}
+
 .object-definition-row {
   display: flex;
   align-items: center;
