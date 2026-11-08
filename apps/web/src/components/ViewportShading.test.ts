@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import {
+  aimCameraKey,
   applySectionPlane,
+  createCameraKeyLight,
   createBodyMaterial,
   createFatLineMaterial,
   createObjectForBody,
   createStudioHemisphereLight,
+  isBodyMaterial,
   sectionClippingPlane,
+  STUDIO_RIG,
   shouldRenderTopologyEdge,
   VIEWPORT_RENDER_ORDER
 } from '@openzcad/viewport';
@@ -149,14 +153,22 @@ describe('CAD viewport shading', () => {
     expect(Array.from(geometry.getIndex()!.array)).toEqual([0, 1, 2, 3, 4, 5]);
   });
 
-  it('uses a classic technical material for CAD solids', () => {
-    const body = bodyWithMesh({ kind: 'mesh', vertices: Float32Array.from([]), indices: Uint32Array.from([]) });
+  it('uses the studio satin material for CAD solids', () => {
+    const body = bodyWithMesh({
+      kind: 'mesh',
+      vertices: Float32Array.from([]),
+      indices: Uint32Array.from([])
+    });
     const material = createBodyMaterial(body);
     const object = createObjectForBody(body) as THREE.Mesh;
 
-    expect(material).toBeInstanceOf(THREE.MeshPhongMaterial);
-    expect(material.shininess).toBe(14);
-    expect(material.specular.getHex()).toBe(0x2f3641);
+    // Physically based so the studio environment reaches it (U10): Phong
+    // ignores scene.environment, which left every face in one narrow band.
+    expect(material).toBeInstanceOf(THREE.MeshStandardMaterial);
+    expect(isBodyMaterial(material)).toBe(true);
+    expect(material.roughness).toBe(STUDIO_RIG.material.roughness);
+    expect(material.metalness).toBe(0);
+    expect(material.dithering).toBe(true);
     expect(material.side).toBe(THREE.FrontSide);
     expect(material.polygonOffset).toBe(true);
     expect(material.polygonOffsetFactor).toBe(1);
@@ -268,15 +280,14 @@ describe('CAD viewport shading', () => {
     let materials = 0;
     group.traverse((child) => {
       const material = (child as THREE.Mesh).material as
-        | THREE.Material
-        | undefined;
+        THREE.Material | undefined;
       if (!material || Array.isArray(material)) {
         return;
       }
       materials += 1;
       expect(material.clippingPlanes).toEqual([plane]);
       expect(material.clipShadows).toBe(true);
-      if (material instanceof THREE.MeshPhongMaterial) {
+      if (isBodyMaterial(material)) {
         expect(material.side).toBe(THREE.DoubleSide);
       }
     });
@@ -286,26 +297,43 @@ describe('CAD viewport shading', () => {
     applySectionPlane(group, null);
     group.traverse((child) => {
       const material = (child as THREE.Mesh).material as
-        | THREE.Material
-        | undefined;
+        THREE.Material | undefined;
       if (!material || Array.isArray(material)) {
         return;
       }
       expect(material.clippingPlanes).toBeNull();
       expect(material.clipShadows).toBe(false);
-      if (material instanceof THREE.MeshPhongMaterial) {
+      if (isBodyMaterial(material)) {
         // The orientation canary returns as soon as the section clears.
         expect(material.side).toBe(THREE.FrontSide);
       }
     });
   });
 
-  it('uses a visible ground bounce for downward-facing surfaces', () => {
+  it('keeps a dark floor bounce so undersides separate from walls', () => {
     const light = createStudioHemisphereLight();
 
-    expect(light.color.getHex()).toBe(0xd7e6f7);
-    expect(light.groundColor.getHex()).toBe(0xe2e8f0);
-    expect(light.intensity).toBe(0.45);
+    // A ground colour almost as bright as the sky (the old #e2e8f0 against
+    // #d7e6f7) lifted walls and undersides to the tops' value.
+    expect(light.groundColor.getHSL({ h: 0, s: 0, l: 0 }).l).toBeLessThan(
+      light.color.getHSL({ h: 0, s: 0, l: 0 }).l * 0.4
+    );
+    expect(light.intensity).toBe(STUDIO_RIG.hemisphere.intensity);
     expect(light.position.toArray()).toEqual([0, 0, 1]);
+  });
+
+  it('turns the key light with the camera', () => {
+    const light = createCameraKeyLight();
+    expect(light.castShadow).toBe(false);
+    const front = light.position.clone();
+    // Orbit half a turn about Z: the light swings round with the camera.
+    const orbit = new THREE.Quaternion().setFromAxisAngle(
+      new THREE.Vector3(0, 0, 1),
+      Math.PI
+    );
+    aimCameraKey(light, orbit);
+    expect(light.position.x).toBeCloseTo(-front.x, 6);
+    expect(light.position.y).toBeCloseTo(-front.y, 6);
+    expect(light.position.z).toBeCloseTo(front.z, 6);
   });
 });

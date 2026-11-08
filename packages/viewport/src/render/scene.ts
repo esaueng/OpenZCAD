@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
@@ -14,6 +13,7 @@ import {
 import { tweenOrientationFor, VIEW_DIRECTIONS } from '../camera/views';
 import { keepProgram } from './programRetention';
 import { COPLANAR_DEPTH_ATTRIBUTE, withCoplanarDepth } from './coplanarBodies';
+import { STUDIO_RIG } from './studio';
 
 const CAD_CREASE_ANGLE = THREE.MathUtils.degToRad(30);
 const DOT_EPSILON = 1e-10;
@@ -620,17 +620,21 @@ const DECORATION_STENCIL_TEST = {
  * an `instanceof` against the old class would quietly stop matching and send
  * every edit down the full-rebuild path.
  */
-export type BodyMaterial = THREE.MeshPhongMaterial;
+export type BodyMaterial = THREE.MeshStandardMaterial;
 
 /** Whether `material` is a committed solid's material ({@link BodyMaterial}). */
 export function isBodyMaterial(material: unknown): material is BodyMaterial {
-  return material instanceof THREE.MeshPhongMaterial;
+  return material instanceof THREE.MeshStandardMaterial;
 }
 
 /**
- * Classic CAD body material. Phong gives planar faces an even technical shade
- * and broad highlights on curves without environment-map reflections crawling
- * across tessellation triangles.
+ * The CAD body material: a satin, non-metallic physically based finish lit by
+ * the studio rig (`studio.ts`). Its ambient term comes from the gradient
+ * environment, which is what gives tops, walls and undersides their own
+ * values; Phong ignored `scene.environment` entirely, which is why every face
+ * used to sit in one narrow band (U10). The environment holds no small
+ * features, so the reflection crawl across long tessellation triangles that
+ * once sent bodies to Phong has nothing sharp to reflect.
  */
 export function createBodyMaterial(
   body: GeometryBodyRepresentation
@@ -642,14 +646,14 @@ export function createBodyMaterial(
   // redo relinked the body shader from scratch.
   return withCoplanarDepth(
     keepProgram(
-      new THREE.MeshPhongMaterial({
+      new THREE.MeshStandardMaterial({
         color: body.color,
-        // A broad, dim highlight: at shininess 38 and #667487 every fillet
-        // corner and torus band carried a small white hotspot under the key
-        // light that read as a rendering glitch rather than a curve; at 18
-        // and #465160 the spherical corners still flared.
-        shininess: 14,
-        specular: '#2f3641',
+        roughness: STUDIO_RIG.material.roughness,
+        metalness: STUDIO_RIG.material.metalness,
+        // A planar face now carries a gentle gradient, and on 8-bit output a
+        // gradient that spans one or two levels shows as a hard contour
+        // across the face. Dithering breaks the contour up.
+        dithering: true,
         transparent: translucent,
         opacity,
         // Translucent walls must not write depth or back faces and interior
@@ -977,30 +981,6 @@ export function updateObjectForBody(
   object.material.color.set(body.color);
   updateBodyMaterialOpacity(object.material, body.opacity ?? 1);
   return true;
-}
-
-/**
- * Neutral studio rig baked to a PMREM environment map. One RoomEnvironment
- * render at startup gives every standard material soft studio reflections —
- * the single biggest step away from the flat "janky" WebGL look.
- */
-export function createStudioEnvironment(
-  renderer: THREE.WebGLRenderer
-): THREE.Texture {
-  const pmrem = new THREE.PMREMGenerator(renderer);
-  const texture = pmrem.fromScene(new RoomEnvironment(), 0.04);
-  pmrem.dispose();
-  return texture.texture;
-}
-
-/**
- * Z-up studio fill. The cool ground colour acts as bounced floor light so
- * downward-facing surfaces stay legible without flattening the key light.
- */
-export function createStudioHemisphereLight(): THREE.HemisphereLight {
-  const light = new THREE.HemisphereLight('#d7e6f7', '#e2e8f0', 0.45);
-  light.position.set(0, 0, 1);
-  return light;
 }
 
 /**
