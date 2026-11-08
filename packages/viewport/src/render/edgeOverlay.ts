@@ -21,6 +21,7 @@ import { shouldRenderTopologyEdge } from '../scene/objects';
 import { easeToward, fadeStepMs, hasSettled } from '../motion';
 import { boundaryEdgesOfFaces } from '../selection/boundaryEdgesOfFace';
 import { tangentEdgeIds } from './tangentEdges';
+import { createSilhouetteLines, silhouetteCandidates } from './silhouette';
 import type { DisplayMode } from '../types';
 import {
   createFatLineSegments,
@@ -315,6 +316,11 @@ export class BodyEdgeOverlay extends THREE.Group {
   readonly selectedFaceBoundaryHiddenEdges: LineSegments2;
   /** Seam-only fallback so an all-seam body still draws in wireframe. */
   readonly seamEdges: LineSegments2 | null;
+  /**
+   * The outline of its curved faces, which no B-rep edge draws (see
+   * `silhouette.ts`). Styled as a resting sharp edge; never picked.
+   */
+  readonly silhouetteEdges: LineSegments2 | null;
   /** Raycast segment index in `idleEdges` to exact topology identity. */
   readonly ownershipBySegment: readonly EdgeSegmentOwner[];
   /** The same for `idleTangentEdges`. */
@@ -486,6 +492,27 @@ export class BodyEdgeOverlay extends THREE.Group {
       this.seamEdges.userData = { bodyId: this.bodyId, edgeOverlay: true };
       this.seamEdges.raycast = () => undefined;
       this.add(this.seamEdges);
+    }
+    const silhouettes =
+      body.mesh && body.topology?.faces.length
+        ? silhouetteCandidates(body.mesh, body.topology.faces)
+        : null;
+    this.silhouetteEdges = silhouettes
+      ? createSilhouetteLines(silhouettes, {
+          color: EDGE_IDLE_COLOR,
+          linewidth: EDGE_IDLE_WIDTH,
+          opacity: EDGE_IDLE_OPACITY,
+          resolution,
+          depthBias: this.depthBias
+        })
+      : null;
+    if (this.silhouetteEdges) {
+      this.silhouetteEdges.renderOrder = VIEWPORT_RENDER_ORDER.BODY_EDGE;
+      this.silhouetteEdges.userData = {
+        bodyId: this.bodyId,
+        edgeOverlay: true
+      };
+      this.add(this.silhouetteEdges);
     }
     this.hoverTier = new PresenceTier(
       this.hoverEdges,
@@ -729,14 +756,12 @@ export class BodyEdgeOverlay extends THREE.Group {
     ];
     const visible = tiers.map((line) => line.visible);
     for (const line of tiers) line.visible = false;
-    const idle = [this.idleEdges, this.idleTangentEdges].map(
-      ({ material }) => ({
-        material,
-        color: material.color.getHex(),
-        linewidth: material.linewidth,
-        opacity: material.opacity
-      })
-    );
+    const idle = this.restingLines().map(({ material }) => ({
+      material,
+      color: material.color.getHex(),
+      linewidth: material.linewidth,
+      opacity: material.opacity
+    }));
     const bodySelected = this.bodySelected;
     if (bodySelected) {
       this.bodySelected = false;
@@ -782,12 +807,20 @@ export class BodyEdgeOverlay extends THREE.Group {
     return true;
   }
 
+  /** The batches drawn at rest: sharp, tangent and outline. */
+  private restingLines(): LineSegments2[] {
+    return [
+      this.idleEdges,
+      this.idleTangentEdges,
+      ...(this.silhouetteEdges ? [this.silhouetteEdges] : [])
+    ];
+  }
+
   /** Applies CAD display mode without rebuilding any edge batch. */
   setDisplayMode(mode: DisplayMode) {
     this.displayMode = mode;
     for (const line of [
-      this.idleEdges,
-      this.idleTangentEdges,
+      ...this.restingLines(),
       this.hoverEdges,
       this.hoverHiddenEdges,
       this.selectedEdges,
@@ -809,7 +842,7 @@ export class BodyEdgeOverlay extends THREE.Group {
    */
   private applyIdleStyle() {
     const inked = this.displayMode === 'wireframe' || this.xrayView;
-    for (const line of [this.idleEdges, this.idleTangentEdges]) {
+    for (const line of this.restingLines()) {
       const material = line.material;
       if (this.bodySelected) {
         material.color.setHex(EDGE_SELECTED_COLOR);
@@ -830,8 +863,7 @@ export class BodyEdgeOverlay extends THREE.Group {
   /** Keeps all three stable fat-line materials correct after a resize. */
   setResolution(resolution: FatLineResolution) {
     for (const line of [
-      this.idleEdges,
-      this.idleTangentEdges,
+      ...this.restingLines(),
       this.hoverEdges,
       this.hoverHiddenEdges,
       this.selectedEdges,
@@ -889,6 +921,7 @@ export class BodyEdgeOverlay extends THREE.Group {
     this.idleEdges.visible = showEdges && this.ownershipBySegment.length > 0;
     this.idleTangentEdges.visible =
       showEdges && this.tangentOwnershipBySegment.length > 0;
+    if (this.silhouetteEdges) this.silhouetteEdges.visible = showEdges;
     // Both are gated on presence rather than key count, so a tier's x-ray
     // twin survives its own fade-out, which runs after the keys are gone.
     this.selectedEdges.visible = showEdges && this.selectedTier.drawable;

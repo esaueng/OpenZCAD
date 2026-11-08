@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { BodyRepresentation } from '@openzcad/shared';
 import { currentRenderProfile } from '../components/viewer/renderProfile';
 import {
+  SELECTION_SEMANTICS,
   STUDIO_RIG,
   VIEW_DIRECTIONS,
   aimCameraKey,
@@ -168,11 +169,12 @@ export function renderThumbnailFrame(
           continue;
         }
         const line = createFatLine(points, {
-          color: '#162437',
+          // The viewport's idle ink, so a card and the workspace agree.
+          color: SELECTION_SEMANTICS.idle.edge,
           // Pixels of the capture, so they scale with it to keep the edge
           // the same weight on the card.
           linewidth: 1.25 * THUMBNAIL_SCALE,
-          opacity: 0.92,
+          opacity: SELECTION_SEMANTICS.idle.edgeOpacity,
           resolution
         });
         line.name = 'thumbnail-edge';

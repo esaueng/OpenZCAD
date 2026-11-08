@@ -18,11 +18,16 @@
 export const SELECTION_SEMANTICS = {
   /** Nothing is pointing at it. */
   idle: {
-    edge: 0x121519,
+    /**
+     * Near-black ink at full strength (U10): at 0.92 over the lit studio
+     * shading the outline read grey, and the part lost the crisp drawn
+     * edge a CAD view is read by.
+     */
+    edge: 0x0b0d10,
     /** Idle edge contrast when no shaded face sits behind the topology. */
     wireframeEdge: 0xb0bcd4,
-    edgeWidth: 1.4,
-    edgeOpacity: 0.92,
+    edgeWidth: 1.5,
+    edgeOpacity: 1,
     /**
      * An edge whose faces meet tangentially, such as a fillet's rim, in the
      * shaded view. Drawn at full strength, a filleted shoulder read as four
@@ -30,8 +35,13 @@ export const SELECTION_SEMANTICS = {
      * faint, it still marks where a pick will land without claiming a corner.
      * At 0.3 the rims still read as creases on a light body; hover and
      * selection draw them at full strength regardless.
+     *
+     * Raised to 0.42 with the studio lighting (U10): the shading now carries
+     * a fillet's curvature on its own, so a 0.18 rim all but vanished and a
+     * filleted part lost where its faces begin. At this strength the rim
+     * marks the boundary without reading as a corner.
      */
-    tangentEdgeOpacity: 0.18
+    tangentEdgeOpacity: 0.42
   },
   /** Under the pointer, not yet committed to. */
   hover: {
