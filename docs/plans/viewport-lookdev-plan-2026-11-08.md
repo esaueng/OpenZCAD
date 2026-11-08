@@ -80,10 +80,20 @@ viewport, and a roadmap evidence fragment.
    environment) raise the hemisphere to 0.95 instead.
    Seen in passing, not caused here: a faint ring where a body crosses Z = 0
    (ground decorations), present in the baseline captures too.
+
 3. **Edge ink.** Sharp edges solid near-black at about 1.6 px (scaled for the
    pixel ratio); tangent edges at about 0.5 opacity, with a view setting for
    all / faint / hidden. Recheck hover and selection contrast in
    `semantics.ts`.
+
+   **Outcome (8 November).** Idle edges are `#0b0d10` at full opacity and
+   1.5 CSS px (widths are CSS pixels, so they already scale with the pixel
+   ratio); tangent rims rest at 0.42. Thumbnails take the same ink. The
+   all / faint / hidden setting is deferred: the display modes already offer
+   shaded without edges, and nothing yet asks for a third state. Outlines
+   that fall on a silhouette still vanish against the dark stage, where half
+   the line lies over it; slice 4 and the stage pass address that.
+
 4. **Curved-surface outlines.** Candidate edges between triangles inside each
    smooth B-rep face carry both adjacent normals; the fat-line vertex shader
    (already patched for depth bias) keeps only the ones whose faces straddle
