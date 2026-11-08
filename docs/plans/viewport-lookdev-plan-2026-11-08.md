@@ -66,6 +66,20 @@ viewport, and a roadmap evidence fragment.
    - B. Phong with a gradient environment map.
      Choose A only if the sphere and fillet scenes show no crawl. Update the
      `ViewportShading` contracts; add an E2E-profile fallback.
+
+   **Outcome (8 November).** A, in `packages/viewport/src/render/studio.ts`
+   (`STUDIO_RIG`). The environment is one smooth Z-up curve (zenith 1.0, nadir
+   0.15) plus one broad overhead lobe; the sphere and fillet captures show no
+   crawl. Three findings from the captures shaped it: a horizon kink in the
+   gradient reflected as a ring on spheres, so the curve is continuous; an
+   underside went nearly black from below (the camera key keeps world-up), so
+   the nadir is 0.15, not 0.05; and a planar face's new gentle gradient banded
+   to a one-level contour on 8-bit output, so the body material dithers. The
+   rim light is gone; the world key only casts the shadow (0.45). The exact
+   section fill and project thumbnails use the same rig; E2E builds (no
+   environment) raise the hemisphere to 0.95 instead.
+   Seen in passing, not caused here: a faint ring where a body crosses Z = 0
+   (ground decorations), present in the baseline captures too.
 3. **Edge ink.** Sharp edges solid near-black at about 1.6 px (scaled for the
    pixel ratio); tangent edges at about 0.5 opacity, with a view setting for
    all / faint / hidden. Recheck hover and selection contrast in

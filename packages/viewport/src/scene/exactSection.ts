@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { DEFAULT_BODY_COLOR } from '@openzcad/shared';
+import { STUDIO_RIG } from '../render/studio';
 import type { DisplayMode } from '../types';
 
 /**
@@ -135,8 +136,12 @@ export function applyExactSection(
           ? bodyOpacity
           : (bodyOpacity?.opacity ?? 1);
       const opacity = readOpacity();
-      const fill = new THREE.MeshPhongMaterial({
+      // Lit like the body it cuts (render/studio.ts), so the cut face sits
+      // in the same light rather than reading as a flat sticker on it.
+      const fill = new THREE.MeshStandardMaterial({
         color: sectionCutColor(bodyColor),
+        roughness: STUDIO_RIG.material.roughness,
+        metalness: STUDIO_RIG.material.metalness,
         side: THREE.DoubleSide,
         opacity,
         transparent: opacity < 1,

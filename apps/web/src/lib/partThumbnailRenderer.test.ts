@@ -8,6 +8,7 @@ const fake = vi.hoisted(() => {
     created: 0,
     disposed: 0,
     contextsLost: 0,
+    environments: 0,
     lost: false
   };
   class FakeRenderer {
@@ -30,12 +31,23 @@ const fake = vi.hoisted(() => {
       state.contextsLost += 1;
     }
   }
-  return { state, FakeRenderer };
+  class FakePmrem {
+    fromScene() {
+      state.environments += 1;
+      return { texture: { dispose() {} } };
+    }
+    dispose() {}
+  }
+  return { state, FakeRenderer, FakePmrem };
 });
 
 vi.mock('three', async (importOriginal) => {
   const actual = await importOriginal<typeof Three>();
-  return { ...actual, WebGLRenderer: fake.FakeRenderer };
+  return {
+    ...actual,
+    WebGLRenderer: fake.FakeRenderer,
+    PMREMGenerator: fake.FakePmrem
+  };
 });
 
 const { renderThumbnailFrame } = await import('./partThumbnail');
@@ -63,7 +75,12 @@ describe('renderThumbnailFrame', () => {
   beforeEach(() => {
     fake.state.lost = true; // force a fresh renderer per test
     renderThumbnailFrame([triangle()]);
-    Object.assign(fake.state, { created: 0, disposed: 0, contextsLost: 0 });
+    Object.assign(fake.state, {
+      created: 0,
+      disposed: 0,
+      contextsLost: 0,
+      environments: 0
+    });
   });
 
   it('draws every card with one kept renderer', () => {
@@ -79,6 +96,8 @@ describe('renderThumbnailFrame', () => {
     expect(fake.state.created).toBe(0);
     expect(fake.state.disposed).toBe(0);
     expect(fake.state.contextsLost).toBe(0);
+    // The studio environment is baked with the renderer, not per card.
+    expect(fake.state.environments).toBe(0);
   });
 
   it('replaces the renderer once the browser takes its context away', () => {
@@ -90,6 +109,7 @@ describe('renderThumbnailFrame', () => {
 
     expect(fake.state.created).toBe(1);
     expect(fake.state.disposed).toBe(1);
+    expect(fake.state.environments).toBe(1);
   });
 
   it('does not create a context for a document with nothing to draw', () => {

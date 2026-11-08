@@ -172,9 +172,12 @@ import {
   disposeObject,
   keepProgram,
   createShadowCatcher,
+  aimCameraKey,
+  createCameraKeyLight,
   createStudioEnvironment,
   createStudioGrid,
   createStudioHemisphereLight,
+  STUDIO_RIG,
   dimensionLabelLayout,
   directEditDirectionFromNormal,
   fitCameraToObjects,
@@ -2856,8 +2859,11 @@ export function ModelViewer({
     // Material-level clipping for the section view; global clipping would
     // also cut the grid, backdrop, and gizmos.
     renderer.localClippingEnabled = true;
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.0;
+    // Neutral rather than ACES: ACES desaturated and hue-shifted the body
+    // colours people choose, and compressed the highlights that model
+    // curvature (U10).
+    renderer.toneMapping = STUDIO_RIG.toneMapping;
+    renderer.toneMappingExposure = STUDIO_RIG.toneMappingExposure;
     renderer.shadowMap.enabled = profile.shadows;
     renderer.shadowMap.autoUpdate = false;
     /**
@@ -2887,13 +2893,13 @@ export function ModelViewer({
     renderer.shadowMap.type = THREE.PCFShadowMap;
     host.appendChild(renderer.domElement);
 
-    // Studio environment rig: soft IBL reflections do the heavy lifting for
-    // "real CAD" shading, so the analytic lights stay gentle.
+    // Studio rig (viewport/render/studio.ts): the gradient environment gives
+    // each face orientation its value, the camera key separates walls.
     const environment = profile.environment
       ? timed('viewer.environment', () => createStudioEnvironment(renderer))
       : null;
     scene.environment = environment;
-    scene.environmentIntensity = 0.4;
+    scene.environmentIntensity = STUDIO_RIG.environmentIntensity;
     const interactionShaderWarmup = new InteractionShaderWarmup(
       renderer,
       scene
@@ -2945,12 +2951,23 @@ export function ModelViewer({
     };
     orientationDragRef.current = orientationDragControls;
 
-    // Z-up sky plus cool floor bounce keeps undersides readable without
-    // weakening the directional key that defines face orientation.
+    // A dim sky/floor fill beside the environment; without an environment map
+    // (E2E builds) it carries the ambient term on its own.
     const skyLight = createStudioHemisphereLight();
+    if (!environment) {
+      skyLight.intensity = STUDIO_RIG.hemisphereWithoutEnvironment;
+    }
     scene.add(skyLight);
-    // Right, front, above — the studio key that casts the grounding shadow.
-    const keyLight = new THREE.DirectionalLight('#ffffff', 1.35);
+    // The key that turns with the camera, aimed before every frame.
+    const cameraKey = createCameraKeyLight();
+    scene.add(cameraKey);
+    // Right, front, above — world-fixed, because it casts the grounding
+    // shadow and the shadow map is frozen while orbiting. Dim: the camera key
+    // does the modelling.
+    const keyLight = new THREE.DirectionalLight(
+      '#ffffff',
+      STUDIO_RIG.shadowKeyIntensity
+    );
     keyLight.position.set(90, -100, 140);
     keyLight.castShadow = true;
     tuneShadowFrustum(keyLight, 120, shadowMapSize);
@@ -2960,10 +2977,6 @@ export function ModelViewer({
     refreshShadowMap();
     scene.add(keyLight);
     scene.add(keyLight.target);
-    // Left, behind, slightly above — cool rim for edge separation.
-    const rimLight = new THREE.DirectionalLight('#7aa3d0', 0.5);
-    rimLight.position.set(-80, 90, 40);
-    scene.add(rimLight);
 
     // Shader construction plane with distance fade, plus an invisible floor
     // that only receives the key light's soft shadow.
@@ -3322,9 +3335,9 @@ export function ModelViewer({
             grid: [grid, axes],
             content: [
               skyLight,
+              cameraKey,
               keyLight,
               keyLight.target,
-              rimLight,
               shadowCatcher,
               bodyGroup,
               regionGroup,
@@ -11715,6 +11728,7 @@ export function ModelViewer({
         cubeLink?.update(cubeAxes);
         cubeLinkFresh = false;
       }
+      aimCameraKey(cameraKey, context.activeCamera.quaternion);
       let renderStarted = performance.now();
       // The first draw compiles every material's shaders and uploads the
       // environment map, so it costs far more than steady-state frames.

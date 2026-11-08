@@ -2,10 +2,15 @@ import * as THREE from 'three';
 import type { BodyRepresentation } from '@openzcad/shared';
 import { currentRenderProfile } from '../components/viewer/renderProfile';
 import {
+  STUDIO_RIG,
   VIEW_DIRECTIONS,
+  aimCameraKey,
   clearGroup,
+  createCameraKeyLight,
   createFatLine,
   createObjectForBody,
+  createStudioEnvironment,
+  createStudioHemisphereLight,
   keepProgram,
   shouldRenderTopologyEdge
 } from '@openzcad/viewport';
@@ -122,15 +127,22 @@ export function renderThumbnailFrame(
 
   try {
     scene.add(bodyGroup);
-    scene.add(new THREE.HemisphereLight('#d7e6f7', '#28384b', 1.25));
-
-    const keyLight = new THREE.DirectionalLight('#ffffff', 2.4);
+    // The viewport's studio rig (viewport/render/studio.ts), so a card shows
+    // the part the way the workspace does.
+    const environment = thumbnailEnvironment(renderer);
+    scene.environment = environment;
+    scene.environmentIntensity = STUDIO_RIG.environmentIntensity;
+    const sky = createStudioHemisphereLight();
+    if (!environment) sky.intensity = STUDIO_RIG.hemisphereWithoutEnvironment;
+    scene.add(sky);
+    const cameraKey = createCameraKeyLight();
+    scene.add(cameraKey);
+    const keyLight = new THREE.DirectionalLight(
+      '#ffffff',
+      STUDIO_RIG.shadowKeyIntensity
+    );
     keyLight.position.set(80, -100, 140);
     scene.add(keyLight);
-
-    const rimLight = new THREE.DirectionalLight('#6daeff', 0.9);
-    rimLight.position.set(-80, 70, 50);
-    scene.add(rimLight);
 
     const resolution = {
       width: THUMBNAIL_WIDTH,
@@ -174,6 +186,7 @@ export function renderThumbnailFrame(
       bounds.expandByObject(object);
     }
     const camera = createThumbnailCamera(bounds);
+    aimCameraKey(cameraKey, camera.quaternion);
 
     renderer.render(scene, camera);
     return renderer.domElement.toDataURL('image/webp', 0.86);
@@ -191,6 +204,26 @@ export function renderThumbnailFrame(
 }
 
 let keptRenderer: THREE.WebGLRenderer | null = null;
+let keptEnvironment: {
+  renderer: THREE.WebGLRenderer;
+  texture: THREE.Texture | null;
+} | null = null;
+
+/** The studio environment, baked once per kept renderer. */
+function thumbnailEnvironment(
+  renderer: THREE.WebGLRenderer
+): THREE.Texture | null {
+  if (keptEnvironment?.renderer !== renderer) {
+    keptEnvironment?.texture?.dispose();
+    keptEnvironment = {
+      renderer,
+      texture: currentRenderProfile().environment
+        ? createStudioEnvironment(renderer)
+        : null
+    };
+  }
+  return keptEnvironment.texture;
+}
 
 /**
  * The one renderer every card is drawn with, created on first use and kept.
@@ -217,8 +250,9 @@ function thumbnailRenderer(): THREE.WebGLRenderer {
   renderer.setSize(THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT, false);
   renderer.setClearColor('#05080c', 1);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.08;
+  renderer.toneMapping = STUDIO_RIG.toneMapping;
+  // A touch brighter than the viewport: a small card on a dark shelf.
+  renderer.toneMappingExposure = STUDIO_RIG.toneMappingExposure * 1.08;
   keptRenderer = renderer;
   return renderer;
 }
