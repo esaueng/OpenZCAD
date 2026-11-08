@@ -99,6 +99,17 @@ viewport, and a roadmap evidence fragment.
    (already patched for depth bias) keeps only the ones whose faces straddle
    the view direction. GPU per frame, same width and antialiasing as B-rep
    edges, no post-processing chain. Large STL references are excluded.
+
+   **Outcome (8 November).** `packages/viewport/src/render/silhouette.ts`:
+   candidates are the interior mesh edges of each non-planar B-rep face
+   (vertices welded by position so periodic seams join; coplanar neighbours
+   dropped), carried in `BodyEdgeOverlay.silhouetteEdges` with the resting
+   sharp-edge style, visibility and selection outline. About 5 ms per 4k
+   triangles and 35 ms per 65k to build, once per body change; bodies over
+   150k triangles get none. Against the dark stage an outline that borders
+   only the backdrop stays subtle, which the stage pass addresses.
+
+
 5. **Stage.** A slightly lighter neutral backdrop and a visible, quiet grid
    through the tokens, both themes. Revisit `DEFAULT_BODY_COLOR` with G2.
 6. **Optional ambient occlusion.** Only if 2–4 leave interior corners flat. It
