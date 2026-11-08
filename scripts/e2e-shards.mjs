@@ -72,7 +72,11 @@ export function listSpecs(dir = SPEC_DIR) {
 
 /** CI trades the extended regression matrix for explicitly tagged journeys. */
 export function resolveSuite(env = process.env) {
-  const probe = env.OZ_PERF || env.OZ_CAPTURE || env.H02_SESSION_PROBE === '1';
+  const probe =
+    env.OZ_PERF ||
+    env.OZ_CAPTURE ||
+    env.OZ_LOOKDEV ||
+    env.H02_SESSION_PROBE === '1';
   const suite = env.OPENZCAD_E2E_SUITE ?? (env.CI && !probe ? 'smoke' : 'full');
   if (suite !== 'smoke' && suite !== 'full') {
     throw new Error(`Unknown browser suite "${suite}"; use smoke or full.`);

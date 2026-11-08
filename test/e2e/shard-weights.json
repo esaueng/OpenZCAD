@@ -167,6 +167,7 @@
   "typed-parameters.spec.ts": 4,
   "upstream-sketch-edit.spec.ts": 7,
   "viewport-background.spec.ts": 10,
+  "viewport-lookdev.spec.ts": 0,
   "viewport-overlay-lanes.spec.ts": 20,
   "viewport-xray-box-select.spec.ts": 125,
   "viewport.spec.ts": 208,

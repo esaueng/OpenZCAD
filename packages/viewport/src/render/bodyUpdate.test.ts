@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
 import { toBodyId, type BodyRepresentation } from '@openzcad/shared';
 import {
+  createBodyMaterial,
   createObjectForBody,
+  isBodyMaterial,
   sameBodyProjection,
   updateObjectForBody
 } from './scene';
@@ -57,6 +59,19 @@ function expectSameGeometry(a: THREE.BufferGeometry, b: THREE.BufferGeometry) {
 }
 
 describe('retained exact body buffers', () => {
+  it('recognises the body material it creates, so buffer reuse stays reachable', () => {
+    // updateObjectForBody reuses buffers only for a body material. If the
+    // shading model changes class and the guard does not follow, nothing
+    // fails: every edit just rebuilds its buffers. Pin the round trip.
+    const body = cylinder();
+    expect(isBodyMaterial(createBodyMaterial(body))).toBe(true);
+    const object = createObjectForBody(body) as THREE.Mesh;
+    expect(isBodyMaterial(object.material)).toBe(true);
+    expect(isBodyMaterial(new THREE.MeshBasicMaterial())).toBe(false);
+    expect(updateObjectForBody(object, cylinder(9))).toBe(true);
+    disposeObject(object);
+  });
+
   it('updates ground occlusion when a reused body changes opacity', () => {
     const body = cylinder();
     const object = createObjectForBody(body) as THREE.Mesh<

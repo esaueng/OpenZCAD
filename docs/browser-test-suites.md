@@ -24,9 +24,9 @@ selection until the separate activation PR lands.
 - `pnpm test:e2e:full`: explicitly full, including when `CI` is set.
 - `OPENZCAD_E2E_SUITE=full`: opt a sharded CI/manual run into the full suite.
 
-Performance probes and documentation captures (`OZ_PERF`, `OZ_CAPTURE`,
-`H02_SESSION_PROBE=1`) keep their full selection by default, so a focused
-untagged probe is not filtered away. Unknown suite names fail immediately.
+Performance probes, documentation and look-development captures (`OZ_PERF`,
+`OZ_CAPTURE`, `OZ_LOOKDEV`, `H02_SESSION_PROBE=1`) keep their full selection
+by default, so a focused untagged probe is not filtered away. Unknown suite names fail immediately.
 Both suites retain the existing timeouts, retries and two-worker CI budget.
 
 ## Sharding and timing

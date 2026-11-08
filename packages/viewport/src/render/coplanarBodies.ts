@@ -17,9 +17,9 @@ export const COPLANAR_DEPTH_ATTRIBUTE = 'coplanarDepth';
 const depthSteps = new WeakMap<THREE.WebGLRenderer, number>();
 
 /** Shift clip Z only; leave model/view positions, clipping and shadows exact. */
-export function withCoplanarDepth(
-  material: THREE.MeshPhongMaterial
-): THREE.MeshPhongMaterial {
+export function withCoplanarDepth<T extends THREE.Material>(
+  material: T
+): T {
   const enabled = { value: 1 };
   const depthStep = { value: 2 / (2 ** 24 - 1) };
   material.onBeforeCompile = (shader) => {

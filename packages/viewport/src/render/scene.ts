@@ -613,11 +613,28 @@ const DECORATION_STENCIL_TEST = {
 };
 
 /**
+ * The material every committed solid is drawn in. Code that needs the body's
+ * own material (buffer reuse, the selected-face fill) checks with
+ * {@link isBodyMaterial} rather than naming the three.js class, so changing
+ * the shading model is one edit here instead of a silent fallback elsewhere:
+ * an `instanceof` against the old class would quietly stop matching and send
+ * every edit down the full-rebuild path.
+ */
+export type BodyMaterial = THREE.MeshPhongMaterial;
+
+/** Whether `material` is a committed solid's material ({@link BodyMaterial}). */
+export function isBodyMaterial(material: unknown): material is BodyMaterial {
+  return material instanceof THREE.MeshPhongMaterial;
+}
+
+/**
  * Classic CAD body material. Phong gives planar faces an even technical shade
  * and broad highlights on curves without environment-map reflections crawling
  * across tessellation triangles.
  */
-export function createBodyMaterial(body: GeometryBodyRepresentation) {
+export function createBodyMaterial(
+  body: GeometryBodyRepresentation
+): BodyMaterial {
   const opacity = body.opacity ?? 1;
   const translucent = opacity < 1;
   // Every exact result replaces the body's object, and the old one is
@@ -870,7 +887,7 @@ export function updateObjectForBody(
 ): boolean {
   if (
     !(object instanceof THREE.Mesh) ||
-    !(object.material instanceof THREE.MeshPhongMaterial) ||
+    !isBodyMaterial(object.material) ||
     !body.topology?.edges.length
   )
     return false;
