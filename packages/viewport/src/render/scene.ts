@@ -21,13 +21,11 @@ import { tangentFacePairs } from './tangentEdges';
 const CAD_CREASE_ANGLE = THREE.MathUtils.degToRad(30);
 const DOT_EPSILON = 1e-10;
 
-interface ExactSmoothingLayout {
-  sourceIndices: Uint32Array;
-  sourceVertexCount: number;
-  faceRanges: number[];
-  renderSources: Uint32Array;
-  normalSums: Float64Array;
-}
+import {
+  preparedBodies,
+  type ExactSmoothingLayout,
+  type PreparedBodyGeometry
+} from './preparedBody';
 
 // One layout per installed geometry; topology changes release it with that
 // geometry. Mesh-only inputs retain the angle-dependent crease algorithm.
@@ -385,6 +383,52 @@ function geometryFromMesh(
   return geometry;
 }
 
+/** CPU-only preparation, safe to run in a dedicated viewport worker. */
+export function prepareBodyGeometry(
+  body: GeometryBodyRepresentation
+): PreparedBodyGeometry {
+  const geometry = geometryFromMesh(body.mesh, body.topology);
+  const result: PreparedBodyGeometry = {
+    positions: geometry.getAttribute('position').array as Float32Array,
+    normals: geometry.getAttribute('normal').array as Float32Array,
+    depth: geometry.getAttribute(COPLANAR_DEPTH_ATTRIBUTE)
+      .array as Float32Array,
+    indices: geometry.index!.array as Uint16Array | Uint32Array,
+    ...(topologyBoundaryOutlines.has(geometry)
+      ? { outline: topologyBoundaryOutlines.get(geometry)! }
+      : {}),
+    ...(exactSmoothingLayouts.has(geometry)
+      ? { layout: exactSmoothingLayouts.get(geometry)! }
+      : {})
+  };
+  geometry.dispose();
+  return result;
+}
+
+function preparedGeometry(data: PreparedBodyGeometry): THREE.BufferGeometry {
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute(
+    'position',
+    new THREE.BufferAttribute(data.positions.slice(), 3)
+  );
+  geometry.setAttribute(
+    'normal',
+    new THREE.BufferAttribute(data.normals.slice(), 3)
+  );
+  geometry.setAttribute(
+    COPLANAR_DEPTH_ATTRIBUTE,
+    new THREE.BufferAttribute(data.depth.slice(), 1)
+  );
+  geometry.setIndex(new THREE.BufferAttribute(data.indices.slice(), 1));
+  if (data.outline) topologyBoundaryOutlines.set(geometry, data.outline);
+  if (data.layout)
+    exactSmoothingLayouts.set(geometry, {
+      ...data.layout,
+      normalSums: new Float64Array(data.layout.normalSums.length)
+    });
+  return geometry;
+}
+
 /** Viewport size in CSS pixels; fat-line widths are expressed in the same unit. */
 export interface FatLineResolution {
   width: number;
@@ -729,7 +773,9 @@ export function createObjectForBody(
           new THREE.BufferAttribute(body.mesh.vertices, 3)
         )
         .setIndex(new THREE.BufferAttribute(body.mesh.indices, 1))
-    : geometryFromMesh(body.mesh, body.topology);
+    : preparedBodies.has(body)
+      ? preparedGeometry(preparedBodies.get(body)!.geometry)
+      : geometryFromMesh(body.mesh, body.topology);
   const material = createBodyMaterial(body);
   const mesh = new THREE.Mesh(geometry, material);
   if (largeReference) {

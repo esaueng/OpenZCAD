@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { preparedBodies } from './preparedBody';
 import type { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import type {
   EdgeTopology,
@@ -381,14 +382,16 @@ export class BodyEdgeOverlay extends THREE.Group {
     // A faceted coil's joints (see FACETED_JOINT_MAX_ANGLE) are measured
     // with its wider angle and drawn like seams: in wireframe only.
     const faceted = facetedSource(body.source);
+    const prepared = preparedBodies.get(body as GeometryBodyRepresentation);
     const tangentIds =
-      body.mesh && body.topology
+      prepared?.tangentIds ??
+      (body.mesh && body.topology
         ? tangentEdgeIds(
             body.mesh,
             body.topology,
             faceted ? FACETED_JOINT_MAX_ANGLE : undefined
           )
-        : new Set<string>();
+        : new Set<string>());
     let facetJoints = 0;
     const sharp: IdleBatch = { positions: [], ownership: [] };
     const tangent: IdleBatch = { positions: [], ownership: [] };
@@ -523,8 +526,9 @@ export class BodyEdgeOverlay extends THREE.Group {
       this.seamEdges.raycast = () => undefined;
       this.add(this.seamEdges);
     }
-    const silhouettes =
-      body.mesh && body.topology?.faces.length
+    const silhouettes = prepared
+      ? prepared.silhouettes
+      : body.mesh && body.topology?.faces.length
         ? timedSilhouetteCandidates(body.mesh, body.topology.faces)
         : null;
     this.silhouetteEdges = silhouettes
@@ -995,7 +999,7 @@ export class BodyEdgeOverlay extends THREE.Group {
 }
 
 /** Whether a body's source builds curved surfaces from flat facets. */
-function facetedSource(source: string | undefined): boolean {
+export function facetedSource(source: string | undefined): boolean {
   return source === 'helical-sweep';
 }
 

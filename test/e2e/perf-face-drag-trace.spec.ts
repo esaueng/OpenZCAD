@@ -1,5 +1,5 @@
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
-import { longFilletedUnion } from '../support/filleted-union';
+import { filletedUnion, longFilletedUnion } from '../support/filleted-union';
 import {
   appendFileSync,
   mkdirSync,
@@ -19,6 +19,7 @@ import {
 import { createNativeHolderStages } from '../fixtures/hammer-holder/native-document';
 import type { FaceDragTraceEvent } from '../../apps/web/src/lib/faceDragTrace';
 import {
+  distribution,
   summarizeFaceDragTrace,
   type FaceDragTraceSummary
 } from '../support/faceDragTraceSummary';
@@ -50,8 +51,21 @@ test.skip(!process.env.OZ_PERF, 'Performance probe; set OZ_PERF=1 to run it.');
 // OZ_FACE_DRAG_VIDEO=1 records each case as a video in its test-results.
 if (process.env.OZ_FACE_DRAG_VIDEO === '1')
   test.use({ video: { mode: 'on', size: { width: 1440, height: 1000 } } });
-if (process.env.OZ_FACE_DRAG_HIGH_PERF_GPU === '1')
-  test.use({ launchOptions: { args: ['--force_high_performance_gpu'] } });
+if (
+  process.env.OZ_FACE_DRAG_ANGLE ||
+  process.env.OZ_FACE_DRAG_HIGH_PERF_GPU === '1'
+)
+  test.use({
+    launchOptions: {
+      args: [
+        '--enable-gpu',
+        '--ignore-gpu-blocklist',
+        ...(process.env.OZ_FACE_DRAG_ANGLE
+          ? [`--use-angle=${process.env.OZ_FACE_DRAG_ANGLE}`]
+          : ['--force_high_performance_gpu'])
+      ]
+    }
+  });
 
 const OUT =
   process.env.OZ_PERF_OUT ?? 'perf-results/perf-face-drag-trace.jsonl';
@@ -173,7 +187,8 @@ async function traceDrag(
   page: Page,
   canvas: Locator,
   handle: Handle,
-  reach: number
+  reach: number,
+  oneWay = false
 ) {
   reach *= REACH_SCALE;
   const box = (await canvas.boundingBox())!;
@@ -232,12 +247,13 @@ async function traceDrag(
   }
   await page.mouse.down();
   await canvas.evaluate(
-    async (element, { start, handle, reach, moves, interval }) => {
+    async (element, { start, handle, reach, moves, interval, oneWay }) => {
       const pointerId = Number(element.dataset.traceDragPointerId);
       const turn = Math.round(moves * 0.6);
       for (let index = 1; index <= moves; index += 1) {
-        const distance =
-          index <= turn
+        const distance = oneWay
+          ? (reach * index) / moves
+          : index <= turn
             ? (reach * index) / turn
             : reach - ((reach * 2) / 3) * ((index - turn) / (moves - turn));
         element.dispatchEvent(
@@ -256,14 +272,16 @@ async function traceDrag(
         await new Promise((resolve) => setTimeout(resolve, interval));
       }
     },
-    { start, handle, reach, moves: MOVES, interval: MOVE_INTERVAL_MS }
+    { start, handle, reach, moves: MOVES, interval: MOVE_INTERVAL_MS, oneWay }
   );
   // DOM-dispatched moves do not move the browser's physical cursor. Release
   // from the final sample, or pointerup sees zero travel and cancels the edit.
+  const motionEndedAt = await page.evaluate(() => performance.now());
   await page.keyboard.down('Shift');
+  const finalDistance = oneWay ? reach : reach / 3;
   await page.mouse.move(
-    start.x + handle.dx * handle.pixelsPerUnit * (reach / 3),
-    start.y + handle.dy * handle.pixelsPerUnit * (reach / 3)
+    start.x + handle.dx * handle.pixelsPerUnit * finalDistance,
+    start.y + handle.dy * handle.pixelsPerUnit * finalDistance
   );
   // Let the last requested value reach the screen before releasing.
   await page.waitForFunction(
@@ -347,7 +365,7 @@ async function traceDrag(
     );
   }
   return page.evaluate(
-    ({ releaseAt, committedFrameAt }) => {
+    ({ motionEndedAt, releaseAt, committedFrameAt }) => {
       const scope = window as typeof window & {
         __ozFaceDragTrace: FaceDragTraceEvent[];
         __ozLongTasks: { t: number; ms: number }[];
@@ -376,6 +394,21 @@ async function traceDrag(
             } | null;
             return detail?.latencyMs ?? NaN;
           }),
+        motionEndedAt,
+        frames: performance
+          .getEntriesByName('oz:viewer.frame')
+          .filter((entry) => entry.startTime >= (trace[0]?.t ?? 0))
+          .map((entry) => ({
+            t: entry.startTime,
+            ...((entry as PerformanceMark).detail as {
+              continuous: boolean;
+              frameMs: number | null;
+              cpuMs: number;
+              renderMs: number;
+              drawCalls: number;
+              triangles: number;
+            })
+          })),
         releaseAt,
         committedFrameAt,
         releasedAt: performance.now(),
@@ -385,7 +418,7 @@ async function traceDrag(
         )
       };
     },
-    { releaseAt, committedFrameAt }
+    { motionEndedAt, releaseAt, committedFrameAt }
   );
 }
 
@@ -406,6 +439,45 @@ function record(
     userAgent: process.env.OZ_PERF_HOST ?? null,
     summary,
     reactCommits: result.reactCommits,
+    rendering: Object.fromEntries(
+      [
+        [
+          'motion',
+          result.frames.filter((frame) => frame.t <= result.motionEndedAt)
+        ],
+        [
+          'settleAndRelease',
+          result.frames.filter((frame) => frame.t > result.motionEndedAt)
+        ]
+      ].map(([phase, values]) => {
+        const frames = values as typeof result.frames;
+        const intervals = frames
+          .filter((frame) => frame.continuous)
+          .map((frame) => frame.frameMs ?? NaN)
+          .filter(Number.isFinite)
+          .sort((a, b) => a - b);
+        return [
+          phase,
+          {
+            intervalMs: distribution(intervals),
+            p99Ms:
+              intervals[Math.max(0, Math.ceil(intervals.length * 0.99) - 1)] ??
+              null,
+            hitchesOver25Ms: intervals.filter((ms) => ms > 25).length,
+            cpuMs: distribution(frames.map((frame) => frame.cpuMs)),
+            renderMs: distribution(frames.map((frame) => frame.renderMs)),
+            peakDrawCalls: Math.max(
+              0,
+              ...frames.map((frame) => frame.drawCalls)
+            ),
+            peakTriangles: Math.max(
+              0,
+              ...frames.map((frame) => frame.triangles)
+            )
+          }
+        ];
+      })
+    ),
     gpu: result.gpu,
     devicePixelRatio: result.devicePixelRatio,
     longTasks: {
@@ -413,15 +485,73 @@ function record(
       totalMs: result.longTasks.reduce((sum, task) => sum + task.ms, 0),
       maxMs: Math.max(0, ...result.longTasks.map((task) => task.ms))
     },
+    longTaskEntries: result.longTasks,
+    frames: result.frames,
     trace: result.trace
   };
   mkdirSync(dirname(OUT), { recursive: true });
   appendFileSync(OUT, `${JSON.stringify(line)}\n`);
-  console.log(`[face-drag-trace] ${label} ${JSON.stringify(summary, null, 1)}`);
+  console.log(
+    `[face-drag-trace] ${label} ${JSON.stringify({ summary, reactCommits: line.reactCommits, rendering: line.rendering, longTasks: line.longTasks }, null, 1)}`
+  );
   return summary;
 }
 
 test.setTimeout(Number(process.env.OZ_FACE_DRAG_TIMEOUT_MS ?? 600_000));
+
+// Public surrogate for the recording: same union/fillet end-face operation,
+// with the fixture's documented R5 band and height edit, not the private
+// seven-feature model's unspecified edge selections.
+test('traces a filleted union width from 30 to 22.5 mm', async ({ page }) => {
+  const adapter = await createExactKernelAdapter();
+  try {
+    const { document } = await filletedUnion(adapter);
+    await startPage(page, false);
+    await openDocument(page, document, 180_000);
+    const { canvas, handle } = await armPlanarFace(page, { x: 1, y: 0, z: 0 });
+    const summary = record(
+      'filleted union width 30 to 22.5 mm',
+      {
+        features: document.featureOrder.length,
+        fixture: 'public R5 union surrogate'
+      },
+      await traceDrag(page, canvas, handle, -7.5, true)
+    );
+    expect(
+      summary.proxyPresentedFrames + summary.presentedFrames
+    ).toBeGreaterThan(0);
+    expect(summary.releaseToFrameMs).not.toBeNull();
+    if (!NORMAL_OVERRIDE && REACH_SCALE === 1) {
+      const maxX = await canvas.evaluate((element) => {
+        let x: number | null = null;
+        element.dispatchEvent(
+          new CustomEvent('openzcad:e2e-render-policy', {
+            detail: {
+              resolve: (state: {
+                bodyFaces: {
+                  visible: boolean;
+                  worldBounds?: { max: number[] };
+                }[];
+              }) => {
+                const faces = state.bodyFaces.filter(
+                  (face) => face.visible && face.worldBounds
+                );
+                if (faces.length)
+                  x = Math.max(
+                    ...faces.map((face) => face.worldBounds!.max[0]!)
+                  );
+              }
+            }
+          })
+        );
+        return x;
+      });
+      expect(maxX).toBeCloseTo(22.5, 3);
+    }
+  } finally {
+    adapter.dispose();
+  }
+});
 
 test('traces a long native history face drag', async ({ page }) => {
   const adapter = await createExactKernelAdapter();

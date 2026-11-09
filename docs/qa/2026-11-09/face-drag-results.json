@@ -1,0 +1,342 @@
+{
+  "baseline": "68ffc56ee03e9abfe6fb5a477218fd13c221db1b",
+  "note": "Shared host under severe memory contention; final long-history repeat includes a 102-second scheduling pause. No FPS improvement claim.",
+  "runs": [
+    {
+      "phase": "before",
+      "scenario": "filleted union width 30 to 22.5 mm",
+      "at": "2026-11-09T21:18:26.619Z",
+      "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 3090/PCIe/SSE2, OpenGL 4.5.0)",
+      "pointerEvents": 120,
+      "reactCommits": 133,
+      "installMs": {
+        "n": 1,
+        "p50": 267.7,
+        "p95": 267.7,
+        "max": 267.7,
+        "mean": 267.7
+      },
+      "motionCpuMs": {
+        "n": 162,
+        "p50": 9.6,
+        "p95": 13.7,
+        "max": 30.1,
+        "mean": 9
+      },
+      "continuousMotionIntervals": {
+        "n": 7,
+        "p95": 100,
+        "p99": 100,
+        "max": 100,
+        "hitchesOver25Ms": 7
+      },
+      "longTasks": {
+        "count": 3,
+        "totalMs": 455,
+        "maxMs": 268
+      },
+      "kernelWorkerMs": {
+        "n": 1,
+        "p50": 389.4,
+        "p95": 389.4,
+        "max": 389.4,
+        "mean": 389.4
+      },
+      "releaseToFrameMs": 755.5
+    },
+    {
+      "phase": "before",
+      "scenario": "filleted union width 30 to 22.5 mm",
+      "at": "2026-11-09T21:18:42.819Z",
+      "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 3090/PCIe/SSE2, OpenGL 4.5.0)",
+      "pointerEvents": 120,
+      "reactCommits": 132,
+      "installMs": {
+        "n": 1,
+        "p50": 188.5,
+        "p95": 188.5,
+        "max": 188.5,
+        "mean": 188.5
+      },
+      "motionCpuMs": {
+        "n": 180,
+        "p50": 6.9,
+        "p95": 11.4,
+        "max": 24,
+        "mean": 6.5
+      },
+      "continuousMotionIntervals": {
+        "n": 11,
+        "p95": 66.7,
+        "p99": 66.7,
+        "max": 66.69999999999982,
+        "hitchesOver25Ms": 6
+      },
+      "longTasks": {
+        "count": 2,
+        "totalMs": 295,
+        "maxMs": 188
+      },
+      "kernelWorkerMs": {
+        "n": 1,
+        "p50": 301.3,
+        "p95": 301.3,
+        "max": 301.3,
+        "mean": 301.3
+      },
+      "releaseToFrameMs": 584.5
+    },
+    {
+      "phase": "before",
+      "scenario": "public filleted union history",
+      "at": "2026-11-09T21:15:28.880Z",
+      "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 3090/PCIe/SSE2, OpenGL 4.5.0)",
+      "pointerEvents": 115,
+      "reactCommits": 122,
+      "installMs": {
+        "n": 1,
+        "p50": 430.3,
+        "p95": 430.3,
+        "max": 430.3,
+        "mean": 430.3
+      },
+      "motionCpuMs": {
+        "n": 153,
+        "p50": 12.7,
+        "p95": 84.1,
+        "max": 186.3,
+        "mean": 21
+      },
+      "continuousMotionIntervals": {
+        "n": 4,
+        "p95": 183.4,
+        "p99": 183.4,
+        "max": 183.39999999999782,
+        "hitchesOver25Ms": 4
+      },
+      "longTasks": {
+        "count": 50,
+        "totalMs": 6240,
+        "maxMs": 523
+      },
+      "kernelWorkerMs": {
+        "n": 1,
+        "p50": 1389.9,
+        "p95": 1389.9,
+        "max": 1389.9,
+        "mean": 1389.9
+      },
+      "releaseToFrameMs": 777.8
+    },
+    {
+      "phase": "before",
+      "scenario": "public filleted union history",
+      "at": "2026-11-09T21:16:15.858Z",
+      "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 3090/PCIe/SSE2, OpenGL 4.5.0)",
+      "pointerEvents": 113,
+      "reactCommits": 122,
+      "installMs": {
+        "n": 1,
+        "p50": 281.9,
+        "p95": 281.9,
+        "max": 281.9,
+        "mean": 281.9
+      },
+      "motionCpuMs": {
+        "n": 147,
+        "p50": 12.5,
+        "p95": 39.8,
+        "max": 432.4,
+        "mean": 18.8
+      },
+      "continuousMotionIntervals": {
+        "n": 4,
+        "p95": 450,
+        "p99": 450,
+        "max": 450,
+        "hitchesOver25Ms": 4
+      },
+      "longTasks": {
+        "count": 42,
+        "totalMs": 4651,
+        "maxMs": 606
+      },
+      "kernelWorkerMs": {
+        "n": 1,
+        "p50": 988,
+        "p95": 988,
+        "max": 988,
+        "mean": 988
+      },
+      "releaseToFrameMs": 734
+    },
+    {
+      "phase": "after",
+      "scenario": "filleted union width 30 to 22.5 mm",
+      "at": "2026-11-09T21:23:41.139Z",
+      "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 3090/PCIe/SSE2, OpenGL 4.5.0)",
+      "pointerEvents": 90,
+      "reactCommits": 13,
+      "installMs": {
+        "n": 1,
+        "p50": 57.5,
+        "p95": 57.5,
+        "max": 57.5,
+        "mean": 57.5
+      },
+      "motionCpuMs": {
+        "n": 117,
+        "p50": 16.7,
+        "p95": 113.6,
+        "max": 231.7,
+        "mean": 31.9
+      },
+      "continuousMotionIntervals": {
+        "n": 4,
+        "p95": 150,
+        "p99": 150,
+        "max": 150,
+        "hitchesOver25Ms": 4
+      },
+      "longTasks": {
+        "count": 59,
+        "totalMs": 7625,
+        "maxMs": 719
+      },
+      "kernelWorkerMs": {
+        "n": 1,
+        "p50": 1742.9,
+        "p95": 1742.9,
+        "max": 1742.9,
+        "mean": 1742.9
+      },
+      "releaseToFrameMs": 1862.6
+    },
+    {
+      "phase": "after",
+      "scenario": "public filleted union history",
+      "at": "2026-11-09T21:24:35.317Z",
+      "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 3090/PCIe/SSE2, OpenGL 4.5.0)",
+      "pointerEvents": 102,
+      "reactCommits": 11,
+      "installMs": {
+        "n": 1,
+        "p50": 88.7,
+        "p95": 88.7,
+        "max": 88.7,
+        "mean": 88.7
+      },
+      "motionCpuMs": {
+        "n": 137,
+        "p50": 12.4,
+        "p95": 50.4,
+        "max": 351.1,
+        "mean": 21.4
+      },
+      "continuousMotionIntervals": {
+        "n": 4,
+        "p95": 200,
+        "p99": 200,
+        "max": 200,
+        "hitchesOver25Ms": 4
+      },
+      "longTasks": {
+        "count": 58,
+        "totalMs": 5632,
+        "maxMs": 436
+      },
+      "kernelWorkerMs": {
+        "n": 1,
+        "p50": 1283.7,
+        "p95": 1283.7,
+        "max": 1283.7,
+        "mean": 1283.7
+      },
+      "releaseToFrameMs": 1962.3
+    },
+    {
+      "phase": "after",
+      "scenario": "filleted union width 30 to 22.5 mm",
+      "at": "2026-11-09T21:25:19.155Z",
+      "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 3090/PCIe/SSE2, OpenGL 4.5.0)",
+      "pointerEvents": 111,
+      "reactCommits": 11,
+      "installMs": {
+        "n": 1,
+        "p50": 25.2,
+        "p95": 25.2,
+        "max": 25.2,
+        "mean": 25.2
+      },
+      "motionCpuMs": {
+        "n": 142,
+        "p50": 13,
+        "p95": 53.4,
+        "max": 107.2,
+        "mean": 19
+      },
+      "continuousMotionIntervals": {
+        "n": 4,
+        "p95": 166.6,
+        "p99": 166.6,
+        "max": 166.60000000000218,
+        "hitchesOver25Ms": 4
+      },
+      "longTasks": {
+        "count": 45,
+        "totalMs": 3562,
+        "maxMs": 136
+      },
+      "kernelWorkerMs": {
+        "n": 1,
+        "p50": 1299.6,
+        "p95": 1299.6,
+        "max": 1299.6,
+        "mean": 1299.6
+      },
+      "releaseToFrameMs": 1742.8
+    },
+    {
+      "phase": "after",
+      "scenario": "public filleted union history",
+      "at": "2026-11-09T21:29:33.920Z",
+      "renderer": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 3090/PCIe/SSE2, OpenGL 4.5.0)",
+      "pointerEvents": 108,
+      "reactCommits": 10,
+      "installMs": {
+        "n": 1,
+        "p50": 84.4,
+        "p95": 84.4,
+        "max": 84.4,
+        "mean": 84.4
+      },
+      "motionCpuMs": {
+        "n": 152,
+        "p50": 13.9,
+        "p95": 91.8,
+        "max": 102559.4,
+        "mean": 699.6
+      },
+      "continuousMotionIntervals": {
+        "n": 3,
+        "p95": 483.3,
+        "p99": 483.3,
+        "max": 483.3000000000029,
+        "hitchesOver25Ms": 3
+      },
+      "longTasks": {
+        "count": 79,
+        "totalMs": 150570,
+        "maxMs": 102761
+      },
+      "kernelWorkerMs": {
+        "n": 1,
+        "p50": 2595.2,
+        "p95": 2595.2,
+        "max": 2595.2,
+        "mean": 2595.2
+      },
+      "releaseToFrameMs": 42064.4
+    }
+  ]
+}

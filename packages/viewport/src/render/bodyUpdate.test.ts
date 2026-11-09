@@ -3,11 +3,13 @@ import * as THREE from 'three';
 import { toBodyId, type BodyRepresentation } from '@openzcad/shared';
 import {
   createBodyMaterial,
+  prepareBodyGeometry,
   createObjectForBody,
   isBodyMaterial,
   sameBodyProjection,
   updateObjectForBody
 } from './scene';
+import { preparedBodies } from './preparedBody';
 import { disposeObject } from '../scene/objects';
 import { SELECTION_SEMANTICS } from './semantics';
 import { createFaceHighlightGeometry } from '../selection/faceHighlightGeometry';
@@ -60,6 +62,39 @@ function expectSameGeometry(a: THREE.BufferGeometry, b: THREE.BufferGeometry) {
 }
 
 describe('retained exact body buffers', () => {
+  it('installs worker-prepared smoothing bit for bit without detaching source buffers', () => {
+    const body = cylinder(8, 12, 256);
+    const sourceVertices = body.mesh.vertices.slice();
+    const sourceIndices = body.mesh.indices.slice();
+    const fresh = createObjectForBody(body) as THREE.Mesh;
+    const data = prepareBodyGeometry(body);
+    // Simulate the worker transfer: preparation owns these arrays, not the document.
+    const transferred = structuredClone(data, {
+      transfer: [
+        data.positions.buffer,
+        data.normals.buffer,
+        data.depth.buffer,
+        data.indices.buffer
+      ]
+    });
+    preparedBodies.set(body, {
+      geometry: transferred,
+      tangentIds: new Set(),
+      silhouettes: null
+    });
+    const installed = createObjectForBody(body) as THREE.Mesh;
+    expectSameGeometry(installed.geometry, fresh.geometry);
+    expect(body.mesh.vertices).toEqual(sourceVertices);
+    expect(body.mesh.indices).toEqual(sourceIndices);
+    expect(updateObjectForBody(installed, cylinder(9, 13, 256))).toBe(true);
+    // A later reuse mutates GPU attributes, never the immutable preparation.
+    const again = createObjectForBody(body) as THREE.Mesh;
+    expectSameGeometry(again.geometry, fresh.geometry);
+    disposeObject(again);
+    disposeObject(fresh);
+    disposeObject(installed);
+  });
+
   it('recognises the body material it creates, so buffer reuse stays reachable', () => {
     // updateObjectForBody reuses buffers only for a body material. If the
     // shading model changes class and the guard does not follow, nothing

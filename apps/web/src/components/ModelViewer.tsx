@@ -47,6 +47,7 @@ import {
 } from './viewer/orientationCubeOverlay';
 import { mark, measure, timed } from '../lib/perf';
 import { InteractionShaderWarmup } from './viewer/interactionShaderWarmup';
+import { usePreparedBodies } from './viewer/usePreparedBodies';
 import { reportPresentedGeometry } from '../lib/startupReadiness';
 import { useWorkspaceFrameReady } from './WorkspaceLoading';
 import { recordEditPhase } from '../lib/editTrace';
@@ -2204,7 +2205,7 @@ export function ModelViewer({
   onViewChange,
   onViewSettled,
   onGeometryPresented,
-  geometryTrace,
+  geometryTrace: incomingGeometryTrace,
   onBodiesDrawnElsewhere,
   onWheelDeviceLearned,
   orientationRef,
@@ -2306,11 +2307,13 @@ export function ModelViewer({
   const drawingBodiesRef = useRef<
     readonly GeometryBodyRepresentation[] | undefined
   >(undefined);
-  const bodies = useMemo(() => {
+  const renderBodies = useMemo(() => {
     const result = reuseRenderBodies(drawingBodiesRef.current, suppliedBodies);
     drawingBodiesRef.current = result;
     return result;
   }, [suppliedBodies]);
+  const { bodies, preparing } = usePreparedBodies(renderBodies);
+  const geometryTrace = preparing ? undefined : incomingGeometryTrace;
   const hostRef = useRef<HTMLDivElement | null>(null);
   const contextRef = useRef<SceneContext | null>(null);
   /** The Assemble workspace's posing, glyphs and drags (AS02). */
@@ -12000,10 +12003,14 @@ export function ModelViewer({
       if (!interactionShaderWarmup.isScheduled) {
         const warmupEdges = context.edgeOverlaysByBodyId.values().next().value;
         if (warmupEdges) {
+          const warmupBody = context.objectsByBodyId.values().next().value;
           interactionShaderWarmup.schedule(
             context.activeCamera,
             [selection.hoverFaceMesh, selection.hoverHiddenFaceMesh],
-            [warmupEdges.hoverEdges, warmupEdges.hoverHiddenEdges]
+            [warmupEdges.hoverEdges, warmupEdges.hoverHiddenEdges],
+            warmupBody instanceof THREE.Mesh && !Array.isArray(warmupBody.material)
+              ? warmupBody.material
+              : undefined
           );
         }
       }

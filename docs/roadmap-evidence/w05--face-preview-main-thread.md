@@ -1,0 +1,4 @@
+---
+row: W05
+---
+Measured face-drag main-thread follow-up: dense body smoothing, tangent classification and curved-outline preparation run in a disposable viewport worker; stale results cannot install, source meshes remain intact, and revision readiness waits for the actual installation. Preview verdict subscriptions no longer render the workspace for closed-keypad drag ticks. The existing asynchronous shader warmup also prepares the ghost and clipped pull programs. The opt-in face-drag probe adds a 30 to 22.5 mm inward public surrogate, separate motion/release frame statistics, raw long-task records and explicit ANGLE selection. Local measurements, model limits and regression evidence are recorded in [face-drag main-thread work](docs/qa/2026-11-09/face-drag-main-thread.md); this is not a deployed-device frame-rate guarantee.

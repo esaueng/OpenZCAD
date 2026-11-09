@@ -767,7 +767,8 @@ import {
 import { retireStatus, type StatusEntry } from './lib/statusLifetime';
 import { LIBRARY_MODE_STATUS } from './lib/libraryStatus';
 import type { KeypadRequest, KeypadUiState } from './components/NumericKeypad';
-import type { DimensionMode, PreviewVerdict } from './lib/keypad';
+import type { DimensionMode } from './lib/keypad';
+import { usePreviewVerdict } from './hooks/usePreviewVerdict';
 import { evaluateKeypadInput } from './lib/keypad';
 import {
   inPlacePanelSections,
@@ -3778,9 +3779,7 @@ export function App() {
    * edit control is Ready only once the value it shows has one, so Enter
    * never applies an earlier value's preview against newer input.
    */
-  const [previewVerdict, setPreviewVerdict] = useState<PreviewVerdict | null>(
-    null
-  );
+  const [previewVerdict, setPreviewVerdict] = usePreviewVerdict(keypad !== null);
   /** What the open edit control says, for the guidance row's key hints. */
   const [keypadUi, setKeypadUi] = useState<KeypadUiState | null>(null);
   /** New exact blend faces, computed once when an edge-fillet preview lands. */
