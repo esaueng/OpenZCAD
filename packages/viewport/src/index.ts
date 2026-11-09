@@ -17,6 +17,10 @@ export * from './render/semantics';
 export * from './render/selectionTint';
 export * from './render/edgeOverlay';
 export * from './render/ambientOcclusion';
+export {
+  installSilhouetteUpdates,
+  updateSilhouettes
+} from './render/silhouette';
 export { applyCoplanarBodyDepthSlots } from './render/coplanarBodies';
 
 // Camera: the controller that owns cameras/controls/projection/glides,

@@ -291,7 +291,8 @@ Follow-ups (outline code is being reworked in a separate PR, so none are
 made here, and these numbers are its "before"):
 
 - Filter outline candidates on the CPU per camera so only the segments on
-  the outline are drawn (in progress in that PR).
+  the outline are drawn (done; see "Follow-up (9 November): outline cost"
+  below).
 - Build candidates without per-vertex string keys or per-edge objects. A
   drop-in rewrite with bit-identical output measured 2–7× faster in the
   browser (sphere row ×1 317 → 42 ms, torus ×4 923 → 248 ms, sphere row ×6
@@ -303,6 +304,33 @@ On a real iPad: Settings → Advanced → Frame rate overlay shows the live
 frame interval while orbiting zcad.app. For a timeline, enable Web
 Inspector (Settings → Apps → Safari → Advanced), connect the iPad to a Mac
 and record Safari's Timelines; `oz:viewer.bodies` appears under User Timing.
+
+## Follow-up (9 November): outline cost
+
+The per-frame shader test in slice 4 drew one fat-line quad per candidate,
+visible or not. Fillets are tessellated finely: the 13-face rotational
+sleeve of `rotational-direct-edits.spec.ts` has five torus faces of
+10k–14k triangles, which gave 58,957 candidates against about 1,050
+instances for every other line in the scene. On CI's software rasterizer
+that took most of each frame. The spec went from 40–83 s to 128–187 s
+against its 180 s budget, and it failed locally within its first 5 s poll.
+On a tablet GPU it was a needless share of each frame.
+
+`updateSilhouette` now does the straddle test on the CPU, in the batch's own
+space, and only when the camera or the body has moved. It uploads just the
+segments on the outline, about 560 for the sleeve. A scene installs it with
+`installSilhouetteUpdates`, which runs in `scene.onBeforeRender`: three runs
+that after the scene's matrices update and before it uploads any buffer, so
+every camera that renders the scene, captures included, draws its own
+outline. The outline uses the stock fat-line program, and the shader patch
+is gone.
+
+- Picking costs about 1 ms per view change for the sleeve's 59k
+  candidates (p95 2 ms, desktop), and nothing while the view rests.
+- The lookdev captures (15 views, 5 scenes) are pixel-identical to the
+  shader version.
+- With this change, `rotational-direct-edits` passed 3 of 3 runs locally
+  (59–72 s); before it, it failed 4 of 4.
 
 ## Running the harness
 

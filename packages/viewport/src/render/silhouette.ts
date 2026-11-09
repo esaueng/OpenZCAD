@@ -1,5 +1,4 @@
 import type { MeshGeometry } from '@openzcad/shared';
-import type { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import type { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import * as THREE from 'three';
 import { createFatLineSegments, type FatLineOptions } from './scene';
@@ -14,11 +13,10 @@ import { createFatLineSegments, type FatLineOptions } from './scene';
  * The outline of a tessellated surface is the set of mesh edges where one
  * neighbouring triangle faces the camera and the other faces away. Every
  * mesh edge inside a curved B-rep face is a candidate; each carries both
- * neighbours' normals, and the fat-line vertex shader keeps only the
- * candidates whose neighbours straddle the view direction this frame, by
- * collapsing the rest outside the clip volume. The work stays on the GPU
- * while orbiting, and the outline draws with exactly the width, ink and
- * antialiasing of the B-rep edges beside it.
+ * neighbours' normals, and `updateSilhouette` draws only the candidates
+ * whose neighbours straddle the view, picked again whenever the view
+ * changes. The outline draws with exactly the width, ink and antialiasing of
+ * the B-rep edges beside it.
  *
  * It follows the mesh the faces are drawn from, so it lies on the shaded
  * silhouette to the pixel. Planar faces are skipped (their interior edges can
@@ -33,8 +31,9 @@ export interface SilhouetteCandidates {
 }
 
 /**
- * Above this, outlines are skipped: a dense import pays per frame for each
- * candidate, and building them costs about 35 ms per 65k triangles.
+ * Above this, outlines are skipped: building them costs about 35 ms per 65k
+ * triangles, and picking them again costs a pass over every candidate each
+ * time the view moves.
  */
 export const MAX_SILHOUETTE_CANDIDATES = 150_000;
 
@@ -199,67 +198,179 @@ function isPlanar(normals: Float32Array, start: number, end: number) {
   return true;
 }
 
-const NORMAL_ATTRIBUTE_ANCHOR = 'uniform vec2 resolution;';
-const VIEW_ANCHOR = 'vec4 end = modelViewMatrix * vec4( instanceEnd, 1.0 );';
-const OUTPUT_ANCHOR = 'gl_Position = clip;';
-
-/**
- * The fat-line vertex shader, keeping only segments whose two neighbouring
- * normals straddle the view direction. The test runs on the view-space
- * positions before any depth bias moves them.
- */
-export function silhouetteVertexShader(source: string): string {
-  for (const anchor of [NORMAL_ATTRIBUTE_ANCHOR, VIEW_ANCHOR, OUTPUT_ANCHOR]) {
-    if (source.split(anchor).length !== 2) {
-      throw new Error(
-        `Fat-line shader changed: silhouette anchor "${anchor}" not found once.`
-      );
-    }
-  }
-  return source
-    .replace(
-      NORMAL_ATTRIBUTE_ANCHOR,
-      `${NORMAL_ATTRIBUTE_ANCHOR}
-		attribute vec3 instanceNormalA;
-		attribute vec3 instanceNormalB;`
-    )
-    .replace(
-      VIEW_ANCHOR,
-      `${VIEW_ANCHOR}
-			vec3 silhouetteToEye = projectionMatrix[ 2 ][ 3 ] == - 1.0
-				? - 0.5 * ( start.xyz + end.xyz )
-				: vec3( 0.0, 0.0, 1.0 );
-			float silhouetteFacingA = dot( normalMatrix * instanceNormalA, silhouetteToEye );
-			float silhouetteFacingB = dot( normalMatrix * instanceNormalB, silhouetteToEye );
-			bool silhouetteHidden = silhouetteFacingA * silhouetteFacingB > 0.0;`
-    )
-    .replace(
-      OUTPUT_ANCHOR,
-      // Outside the clip volume: the segment's quad is culled before raster.
-      'gl_Position = silhouetteHidden ? vec4( 0.0, 0.0, 2.0, 1.0 ) : clip;'
-    );
+/** What `createSilhouetteLines` keeps to pick the outline again per view. */
+interface SilhouetteState {
+  readonly candidates: SilhouetteCandidates;
+  /** Each candidate's midpoint, where a perspective eye ray is aimed. */
+  readonly midpoints: Float32Array;
+  /** The drawn segments: the first `instanceCount` are this view's outline. */
+  readonly drawn: Float32Array;
+  readonly buffer: THREE.InterleavedBuffer;
+  /** The object-space eye the drawn outline was picked for. */
+  readonly lastEye: Float64Array;
+  lastPerspective: boolean | null;
 }
 
-/** The outline batch for one body's curved faces, or null when it has none. */
+const SILHOUETTE_STATE = Symbol('openzcad-silhouette');
+
+type SilhouetteLines = LineSegments2 & {
+  [SILHOUETTE_STATE]?: SilhouetteState;
+};
+
+/**
+ * The outline batch for one body's curved faces.
+ *
+ * It holds every candidate but draws only those whose two neighbouring
+ * triangles straddle the view, picked on the CPU by `updateSilhouette`
+ * whenever the camera or the body moves. A fillet tessellated into thousands
+ * of triangles yields tens of thousands of candidates, of which a few hundred
+ * are ever on the outline. Testing each one in the vertex shader cost every
+ * frame a fat-line quad per candidate: a 13-face sleeve with five fillets
+ * drew 59k of them, which was most of each frame on a software rasterizer
+ * and a needless share of it on a tablet GPU. Here the test is two dot
+ * products per candidate and runs only when the view changes, and the
+ * outline draws with the stock fat-line program shared with every other
+ * edge.
+ */
 export function createSilhouetteLines(
   candidates: SilhouetteCandidates,
   options: FatLineOptions
 ): LineSegments2 {
-  const lines = createFatLineSegments(candidates.positions, options);
-  lines.geometry.setAttribute(
-    'instanceNormalA',
-    new THREE.InstancedBufferAttribute(candidates.normalsA, 3)
+  const count = candidates.positions.length / 6;
+  // `setPositions` keeps the array it is given; hand it a copy to overwrite,
+  // so the candidates themselves stay intact.
+  const lines: SilhouetteLines = createFatLineSegments(
+    Float32Array.from(candidates.positions),
+    options
   );
-  lines.geometry.setAttribute(
-    'instanceNormalB',
-    new THREE.InstancedBufferAttribute(candidates.normalsB, 3)
-  );
-  const material: LineMaterial = lines.material;
-  material.vertexShader = silhouetteVertexShader(material.vertexShader);
-  // Its program differs from every other fat line's; say so, or three may
-  // reuse a cached plain fat-line program for it.
-  material.customProgramCacheKey = () => 'openzcad-silhouette';
+  const midpoints = new Float32Array(count * 3);
+  for (let i = 0; i < count; i += 1) {
+    for (let axis = 0; axis < 3; axis += 1) {
+      midpoints[i * 3 + axis] =
+        0.5 *
+        (candidates.positions[i * 6 + axis]! +
+          candidates.positions[i * 6 + 3 + axis]!);
+    }
+  }
+  const start = lines.geometry.getAttribute(
+    'instanceStart'
+  ) as THREE.InterleavedBufferAttribute;
+  lines[SILHOUETTE_STATE] = {
+    candidates,
+    midpoints,
+    drawn: start.data.array as Float32Array,
+    buffer: start.data,
+    lastEye: new Float64Array(3),
+    lastPerspective: null
+  };
+  // Nothing is outlined until a view has picked the outline. The bounds
+  // `setPositions` measured over every candidate stay, so frustum culling
+  // still sees the whole surface.
+  lines.geometry.instanceCount = 0;
   lines.name = 'body-edge-silhouette';
   lines.raycast = () => undefined;
   return lines;
+}
+
+const inverseWorld = new THREE.Matrix4();
+const eye = new THREE.Vector3();
+
+/**
+ * Picks the outline of `lines` for `camera`: the candidates whose two
+ * neighbours face opposite ways along the eye ray (towards the camera for a
+ * perspective view, along the view axis for an orthographic one). The test
+ * runs in the batch's own space, where a normal dotted with a direction is
+ * unchanged by any affine placement of the body.
+ *
+ * @returns Whether the drawn outline was picked again.
+ */
+export function updateSilhouette(
+  lines: LineSegments2,
+  camera: THREE.Camera
+): boolean {
+  const state = (lines as SilhouetteLines)[SILHOUETTE_STATE];
+  if (!state) return false;
+  inverseWorld.copy(lines.matrixWorld).invert();
+  const perspective =
+    (camera as THREE.PerspectiveCamera).isPerspectiveCamera === true;
+  if (perspective) {
+    eye.setFromMatrixPosition(camera.matrixWorld).applyMatrix4(inverseWorld);
+  } else {
+    // Towards the viewer: the camera looks down its local -Z.
+    eye
+      .setFromMatrixColumn(camera.matrixWorld, 2)
+      .transformDirection(inverseWorld);
+  }
+  if (
+    state.lastPerspective === perspective &&
+    state.lastEye[0] === eye.x &&
+    state.lastEye[1] === eye.y &&
+    state.lastEye[2] === eye.z
+  ) {
+    return false;
+  }
+  state.lastPerspective = perspective;
+  state.lastEye[0] = eye.x;
+  state.lastEye[1] = eye.y;
+  state.lastEye[2] = eye.z;
+
+  const { positions, normalsA, normalsB } = state.candidates;
+  const { midpoints, drawn } = state;
+  const count = midpoints.length / 3;
+  const { x, y, z } = eye;
+  let toX = x;
+  let toY = y;
+  let toZ = z;
+  let kept = 0;
+  for (let i = 0; i < count; i += 1) {
+    const n = i * 3;
+    if (perspective) {
+      toX = x - midpoints[n]!;
+      toY = y - midpoints[n + 1]!;
+      toZ = z - midpoints[n + 2]!;
+    }
+    const facingA =
+      normalsA[n]! * toX + normalsA[n + 1]! * toY + normalsA[n + 2]! * toZ;
+    const facingB =
+      normalsB[n]! * toX + normalsB[n + 1]! * toY + normalsB[n + 2]! * toZ;
+    if (facingA * facingB > 0) continue;
+    const from = i * 6;
+    const to = kept * 6;
+    for (let k = 0; k < 6; k += 1) drawn[to + k] = positions[from + k]!;
+    kept += 1;
+  }
+  lines.geometry.instanceCount = kept;
+  state.buffer.clearUpdateRanges();
+  if (kept > 0) {
+    state.buffer.addUpdateRange(0, kept * 6);
+    state.buffer.needsUpdate = true;
+  }
+  return true;
+}
+
+/**
+ * Picks every visible outline under `root` for `camera`. Called from the
+ * scene's `onBeforeRender`, which three runs after the scene's matrices
+ * update and before it uploads any buffer, so the outline drawn always
+ * belongs to the camera drawing it, captures from another camera included.
+ */
+export function updateSilhouettes(root: THREE.Object3D, camera: THREE.Camera) {
+  root.traverseVisible((child) => {
+    if (SILHOUETTE_STATE in child) {
+      updateSilhouette(child as unknown as LineSegments2, camera);
+    }
+  });
+}
+
+/**
+ * Keeps the outlines in `scene` picked for whichever camera renders it,
+ * chaining any `onBeforeRender` the scene already has.
+ */
+export function installSilhouetteUpdates(scene: THREE.Scene) {
+  const previous = scene.onBeforeRender;
+  scene.onBeforeRender = function (...args) {
+    // For a scene three passes (renderer, scene, camera, render target).
+    updateSilhouettes(args[1], args[2]);
+    previous.apply(this, args);
+  };
 }
