@@ -68,6 +68,7 @@ import { lazyWithStaleChunkNotice } from '../lib/staleChunk';
 import { ErrorBoundary } from './ErrorBoundary';
 import { BrandMark } from './BrandMark';
 import { ExternalAnchor } from './ExternalAnchor';
+import { AssistantConnectionSettings } from './AssistantConnectionSettings';
 import { api } from '../lib/api';
 import { APP_SETTINGS_NUMBER_BOUNDS } from '../lib/appSettings';
 import { isDesktopApp } from '../lib/desktopBridge';
@@ -378,13 +379,6 @@ const MIDDLE_DRAG_OPTIONS: readonly SegmentOption<
   value,
   label: MIDDLE_DRAG_LABELS[value]
 }));
-
-const CREDENTIAL_OPTIONS: readonly SegmentOption<
-  AppSettings['assistant']['credentialSource']
->[] = [
-  { value: 'deployment', label: 'Built-in' },
-  { value: 'personal', label: 'Personal token' }
-];
 
 const DELETION_OPTIONS: readonly SegmentOption<AccountDeletionScope>[] = [
   { value: 'projects', label: 'Projects' },
@@ -1036,24 +1030,6 @@ export function SettingsPage({
 
   const credential = accountState?.credential;
   const effective = accountState?.effectiveAssistant;
-  const builtInDataPolicy =
-    effective?.provider === 'openrouter'
-      ? {
-          text: 'OpenRouter and the model provider may retain this data or use it for training and service improvement under their policies.',
-          href: 'https://openrouter.ai/docs/guides/privacy/provider-logging',
-          label: 'OpenRouter data policies'
-        }
-      : effective?.provider === 'openai'
-        ? {
-            text: 'OpenAI may retain API data for safety and service operation. API data is not used for training unless the deployment operator opts in to sharing.',
-            href: 'https://developers.openai.com/api/docs/guides/your-data',
-            label: 'OpenAI API data policies'
-          }
-        : {
-            text: 'The configured AI provider may retain this data or use it for training and service improvement under its policies. Ask your deployment operator which service and data policies apply.',
-            href: null,
-            label: ''
-          };
   const credentialValidated = Boolean(credential?.lastValidatedAt);
   // From the start screen there is no workspace behind Settings to go back to.
   const backLabel = workspaceOpen ? 'Back to workspace' : 'Back to projects';
@@ -1805,77 +1781,12 @@ export function SettingsPage({
               title="AI Assistant"
               intro="Every proposal is previewed before it changes your model."
             >
-              <Group>
-                <SettingRow
-                  title="AI assistant"
-                  hint="Off removes it from the workspace."
-                >
-                  <Toggle
-                    checked={settings.assistant.enabled}
-                    label="AI assistant"
-                    onChange={(enabled) => patchAssistant({ enabled })}
-                  />
-                </SettingRow>
-                <SettingRow
-                  title="Credential source"
-                  hint="Use the built-in model, or your own API key and model."
-                >
-                  <Segmented
-                    label="AI credential source"
-                    value={settings.assistant.credentialSource}
-                    options={CREDENTIAL_OPTIONS}
-                    onChange={(credentialSource) =>
-                      patchAssistant({ credentialSource })
-                    }
-                  />
-                </SettingRow>
-                {settings.assistant.credentialSource === 'personal' ? null : (
-                  <SettingRow
-                    title="Built-in assistant"
-                    hint={
-                      effective
-                        ? `${effective.provider} · ${effective.model} · ${effective.reasoningEffort} reasoning`
-                        : 'Status appears when the server is reachable.'
-                    }
-                  >
-                    <Status tone={effective?.configured ? 'good' : 'warning'}>
-                      {effective?.configured ? 'Ready' : 'Not configured'}
-                    </Status>
-                  </SettingRow>
-                )}
-              </Group>
-
-              {settings.assistant.credentialSource === 'deployment' ? (
-                <Group title="Data use">
-                  {effective?.configured &&
-                  effective.provider === 'openrouter' &&
-                  effective.model.endsWith(':free') ? (
-                    <Notice>
-                      Free with no personal API key. Usage limits and provider
-                      availability apply.
-                    </Notice>
-                  ) : null}
-                  <Notice>
-                    The built-in assistant sends your prompts, conversation,
-                    model context, and any attachments to the configured AI
-                    provider. {builtInDataPolicy.text} Avoid sending sensitive
-                    or confidential data. Use a personal API key to choose
-                    another model; that provider’s data policies and charges
-                    apply.{' '}
-                    {builtInDataPolicy.href ? (
-                      <ExternalAnchor href={builtInDataPolicy.href}>
-                        {builtInDataPolicy.label}
-                      </ExternalAnchor>
-                    ) : null}
-                  </Notice>
-                </Group>
-              ) : (
-                <Notice>
-                  Requests use your selected provider and model. That provider’s
-                  data retention, training policies, usage limits, and charges
-                  apply to prompts, model context, and attachments.
-                </Notice>
-              )}
+              <AssistantConnectionSettings
+                assistant={settings.assistant}
+                accountState={accountState}
+                sessionUserId={session?.userId}
+                onChange={patchAssistant}
+              />
 
               {settings.assistant.credentialSource === 'personal' ? (
                 <>
