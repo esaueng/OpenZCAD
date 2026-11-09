@@ -51,14 +51,15 @@ Reports name their suite in `config.metadata.e2eSuite`. Updating weights from
 the other suite is refused, so short smoke timings cannot corrupt the full
 suite's balancing. Older reports without suite metadata count as full runs.
 
-Timing estimates are optional: an unmeasured selected spec uses the conservative
-60-second default and emits a warning. Inventory, exact-once assignment,
-nonempty shards and stale/invalid weight checks remain enforced. Refresh timing
+Newly affected specs can run without timing estimates, using the conservative
+60-second default and emitting a warning. Committed smoke specs still require
+complete timing entries. Inventory, exact-once assignment, nonempty shards and
+stale/invalid weight checks remain enforced. Refresh timing
 weights from successful reports for the current kernel rather than mixing
 older kernel performance into the balance.
 
 CI records a trace on the first retry and screenshots on failure. The v8 callee
 retains passing timing/bundle reports for seven days and failures for fourteen,
 including browser failure contexts. Daily qualification keeps every full-suite
-case, coverage and its single attempt; its failed artifacts also last fourteen
-days. Privacy receipts and CodeQL caches have their own retention policies.
+case, coverage, its single attempt and seven-day artifact retention. Privacy
+receipts and CodeQL caches have their own retention policies.

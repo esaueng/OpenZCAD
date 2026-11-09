@@ -69,6 +69,7 @@ describe('balanced e2e shards', () => {
     expect(smoke.length).toBeGreaterThan(CI_SHARDS);
     expect(smoke.length).toBeLessThan(specs.length);
     validateWeights(smokeWeights, smoke);
+    expect(Object.keys(smokeWeights).sort()).toEqual(smoke);
     const plans = partitionSpecs(smoke, smokeWeights, CI_SHARDS);
     expect(plans.every((plan) => plan.files.length > 0)).toBe(true);
     expect(plans.flatMap((plan) => plan.files).sort()).toEqual(smoke);

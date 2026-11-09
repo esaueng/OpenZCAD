@@ -46,7 +46,7 @@ jobs:
             qualification-root.json
             coverage/
           if-no-files-found: error
-          retention-days: ${{ job.status == 'success' && 7 || 14 }}
+          retention-days: 7
   web:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -71,7 +71,7 @@ jobs:
             apps/web/qualification-web.json
             apps/web/coverage/
           if-no-files-found: error
-          retention-days: ${{ job.status == 'success' && 7 || 14 }}
+          retention-days: 7
   browser:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -97,9 +97,8 @@ jobs:
           SHARD: ${{ matrix.shard }}
           PLAYWRIGHT_JSON_OUTPUT_FILE: qualification-browser.json
         run: |
-          spec_selection="$(node scripts/e2e-shards.mjs --suite full "$SHARD/6")"
-          mapfile -t specs <<< "$spec_selection"
-          pnpm test:e2e:full --retries=0 --reporter=dot,json "${specs[@]}"
+          specs="$(node scripts/e2e-shards.mjs --suite full "$SHARD/6")"
+          pnpm test:e2e:full --retries=0 --reporter=dot,json $specs
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
@@ -108,7 +107,7 @@ jobs:
             qualification-browser.json
             test-results/
           if-no-files-found: error
-          retention-days: ${{ job.status == 'success' && 7 || 14 }}
+          retention-days: 7
   report:
     if: always()
     needs: [unit, web, browser]

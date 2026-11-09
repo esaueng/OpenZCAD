@@ -11,8 +11,9 @@ deadlines, retries and all six required contexts stay enforced.
 Manifest additions preserve the existing baseline before using affected-test
 selection. Missing discovery/history, removals, unknown inputs and dynamic
 package assets require broader validation. Browser files changed by a PR run
-all their cases. New browser timing samples are optional metadata, with a
-conservative default and exact-once inventory tests. Six shards use refreshed
+all their cases. Newly affected browser specs use a conservative timing default;
+the committed smoke baseline still requires complete timing metadata and
+exact-once inventory tests. Six shards use refreshed
 current-kernel timings; fewer shards or a smaller baseline require separate
 qualification.
 
