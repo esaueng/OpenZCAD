@@ -2,6 +2,7 @@
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join, basename } from 'node:path';
 const root = process.argv[2] ?? 'artifacts/video-parity-phase3-round4';
+const mode = process.env.VIDEO_PARITY_REPORT_MODE ?? 'history';
 const escape = (value) =>
   String(value ?? '—')
     .replace(/\u001b\[[0-9;]*m/g, '')
@@ -11,7 +12,7 @@ const ms = (value) => (Number.isFinite(value) ? value.toFixed(1) : '—');
 for (const phase of process.argv.slice(3).length
   ? process.argv.slice(3)
   : ['strict-final', 'w14-r19-control']) {
-  const path = join(root, phase, 'history-cumulative.json');
+  const path = join(root, phase, `${mode}-cumulative.json`);
   if (!existsSync(path)) continue;
   const data = JSON.parse(readFileSync(path, 'utf8'));
   const lines = [
@@ -35,7 +36,7 @@ for (const phase of process.argv.slice(3).length
           : 'Fail'
         : row.error
           ? 'Pass rejection'
-          : row.label === 'A0-rim'
+          : row.label === 'A0-rim' && !row.diagnostic
             ? 'Partial: loaded fixture'
             : row.health?.valid === false
               ? 'Partial: mesh gaps'

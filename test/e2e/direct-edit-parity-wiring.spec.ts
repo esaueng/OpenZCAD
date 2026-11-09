@@ -300,7 +300,8 @@ import {
 
 const supplied = process.env.VIDEO_PARITY_INPUT;
 const round2 = process.env.VIDEO_PARITY_ROUND2 === '1';
-const round4 = process.env.VIDEO_PARITY_ROUND4 === '1';
+const round5 = process.env.VIDEO_PARITY_ROUND5 === '1';
+const round4 = process.env.VIDEO_PARITY_ROUND4 === '1' || round5;
 const evidence = resolve(
   process.env.VIDEO_PARITY_OUT ?? 'artifacts/video-parity-phase3/post'
 );
@@ -537,7 +538,7 @@ async function openPart(page: Page, mode: 'history' | 'step') {
       },
       { timeout: 45_000 }
     )
-    .toBe(round2 ? 16 : 15);
+    .toBe(round2 && !round5 ? 16 : 15);
   const loaded = await Promise.all(wasm);
   for (const expected of [
     process.env.VIDEO_PARITY_EXPECT_CORE,
@@ -709,7 +710,7 @@ for (const mode of ['history', 'step'] as const) {
     const accepted = [await rendered(page)];
     const oracle = round4 ? new Round4Oracle() : null;
     const health = () => rendered(page).then((b) => oracle?.assess(page, b));
-    if (round4)
+    if (round4 && !round5)
       rows.push({
         label: 'A0-rim',
         health: await health(),
@@ -782,6 +783,8 @@ for (const mode of ['history', 'step'] as const) {
     ) => {
       if (round4) console.log(`Video attempt ${label}=${value}`);
       const before = await rendered(page);
+      const targetChanged = (b: Awaited<ReturnType<typeof rendered>>) =>
+        b[0]?.hash !== before[0]?.hash && changed(b);
       const firstEntry = Math.max(
         0,
         ...(await diagnostics(page)).map((e) => e.entryId)
@@ -817,7 +820,7 @@ for (const mode of ['history', 'step'] as const) {
         await expect
           .poll(
             async () =>
-              changed(await rendered(page)) ||
+              targetChanged(await rendered(page)) ||
               (await dialog.innerText()).includes('Solid unchanged') ||
               (await page.evaluate(
                 (n) =>
@@ -842,11 +845,11 @@ for (const mode of ['history', 'step'] as const) {
         const previewMs = performance.now() - t;
         const screenshot = await picture(page, `${mode}-${run}-${label}`);
         const preview = await rendered(page);
-        const previewMode = changed(preview)
+        const previewMode = targetChanged(preview)
           ? 'rendered-target'
           : 'worker-settled/no-target-change';
         const text = await dialog.innerText();
-        if (!changed(preview) && text.includes('Solid unchanged')) {
+        if (!targetChanged(preview) && text.includes('Solid unchanged')) {
           const workerErrors = await page.evaluate(
             (n) =>
               (window as ParityWorkerWindow).__parityWorkerEvents
@@ -1151,6 +1154,34 @@ for (const mode of ['history', 'step'] as const) {
           (g.normal?.z ?? 0) > 0.99 &&
           Math.abs(g.center.z - z) < 1e-4
       ) ?? false;
+    if (round5) {
+      await attempt(
+        'A0-rim',
+        '1',
+        async () => {
+          await setSelectionFilter(page, 'Edge');
+          const picked = await canvas.evaluate(
+            (c) =>
+              new Promise<{
+                circleRadius?: number;
+              }>((resolve) =>
+                c.dispatchEvent(
+                  new CustomEvent('openzcad:e2e-select-edge', {
+                    detail: { curve: 'circle', role: 'topmost', resolve }
+                  })
+                )
+              )
+          );
+          expect(picked?.circleRadius).toBe(6);
+        },
+        (b) =>
+          b[0]!.geometry.some(
+            (g) =>
+              g?.surfaceType === 'torus' &&
+              Math.abs((g.minorRadius ?? g.radius ?? 0) - 1) < 1e-5
+          ) || b[0]!.faces > accepted[0]![0]!.faces
+      );
+    }
     if (run === 'cumulative') {
       if (!round2) await attempt('A1-short', '22', selectCap, capAt(22));
       await attempt('A1-long', '61.2', selectCap, capAt(61.2));
@@ -1177,6 +1208,18 @@ for (const mode of ['history', 'step'] as const) {
         'A2-concave',
         '2',
         async () => {
+          if (round5) {
+            await setSelectionFilter(page, 'Face');
+            await page
+              .getByRole('button', { name: 'Standard views', exact: true })
+              .click();
+            await page
+              .getByRole('group', { name: 'Standard views', exact: true })
+              .getByRole('button', { name: /^Front view/ })
+              .click();
+            await waitForStillViewport(page);
+            return clickWorldPoint(page, [7, -0.65, 12]);
+          }
           if (round4) {
             await page
               .getByRole('button', { name: 'Standard views', exact: true })
@@ -1215,9 +1258,9 @@ for (const mode of ['history', 'step'] as const) {
     if (round4) {
       const freeEnd = () =>
         edgeAt([30, 11, 24], 'Top front right isometric view');
-      const expandedEnd = async () => {
+      const expandedEnd = async (force = false) => {
         await freeEnd();
-        if (process.env.VIDEO_PARITY_EXPAND_A4 !== '1') return;
+        if (!force && process.env.VIDEO_PARITY_EXPAND_A4 !== '1') return;
         const projected = await canvas.evaluate(
           (c) =>
             new Promise<{ points: { x: number; y: number }[] }>((resolve) =>
@@ -1258,7 +1301,7 @@ for (const mode of ['history', 'step'] as const) {
         'A4-chamfer-5',
         '5',
         async () => {
-          await freeEnd();
+          await expandedEnd(round5);
           await page
             .getByRole('button', { name: 'Selection: Chamfer', exact: true })
             .click();
