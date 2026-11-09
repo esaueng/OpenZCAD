@@ -403,3 +403,54 @@ describe('BodyEdgeOverlay tangent batch', () => {
     expect(overlay.selectedEdges.geometry.instanceCount).toBe(1);
   });
 });
+
+describe('BodyEdgeOverlay on a faceted coil', () => {
+  /**
+   * Strips turning 18° apiece, as a helical sweep's chorded tube does, then
+   * a square rim where the coil ends.
+   */
+  function facetedStrip() {
+    const at = (degrees: number, from: [number, number]) => {
+      const angle = THREE.MathUtils.degToRad(degrees);
+      const round = (value: number) => Math.round(value * 1e9) / 1e9;
+      return [
+        round(from[0] + Math.cos(angle)),
+        round(from[1] + Math.sin(angle))
+      ] as [number, number];
+    };
+    const a: [number, number] = [0, 0];
+    const b = at(18, a);
+    const c = at(36, b);
+    const d = at(126, c);
+    return sweptProfile([
+      [[-1, 0], a],
+      [a, b],
+      [b, c],
+      [c, d]
+    ]);
+  }
+
+  it('draws its facet joints only in wireframe and keeps the rim sharp', () => {
+    const { mesh, topology } = facetedStrip();
+    const coil = createBodyEdgeOverlay(
+      { bodyId: BODY_ID, topology, mesh, source: 'helical-sweep' },
+      { width: 800, height: 600 }
+    );
+    expect(coil.ownershipBySegment.map((owner) => owner.topologyId)).toEqual([
+      'edge-2-3'
+    ]);
+    expect(coil.tangentOwnershipBySegment).toHaveLength(0);
+    coil.setDisplayMode('shaded-edges');
+    expect(coil.seamEdges?.visible).toBe(false);
+    coil.setDisplayMode('wireframe');
+    expect(coil.seamEdges?.visible).toBe(true);
+
+    // Any other body draws an 18° turn as the edge it is.
+    const prism = createBodyEdgeOverlay(
+      { bodyId: BODY_ID, topology, mesh, source: 'extrude' },
+      { width: 800, height: 600 }
+    );
+    expect(prism.ownershipBySegment).toHaveLength(3);
+    expect(prism.seamEdges).toBeNull();
+  });
+});

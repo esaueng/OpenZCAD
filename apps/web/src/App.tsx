@@ -23226,7 +23226,10 @@ export function App() {
 
   function handleHoverRegion(region: RegionPickData | null) {
     if (region) {
-      setStatus('Closed sketch profile — click to select.');
+      // A running command's bar already names what to pick next; a hover
+      // notice under it would only linger after the pick.
+      if (!inPlace.active)
+        setStatus('Closed sketch profile — click to select.');
       return;
     }
     if (tool === 'extrude') {

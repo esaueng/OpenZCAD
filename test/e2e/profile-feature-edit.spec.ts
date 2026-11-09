@@ -271,10 +271,9 @@ for (const kind of ['loft', 'sweep', 'helical-sweep'] as const) {
       ).toHaveAttribute('aria-checked', 'true');
       await bar.locator('summary').click();
     } else {
-      // The stored expressions are what the chips hold.
-      await expect(page.getByTestId('command-handle-radius')).toHaveText(
-        'Radius 10 mm'
-      );
+      // The stored expressions are what the chips hold. A typed pitch
+      // reopens as a pitch; the radius has no chip (it stays as stored).
+      await expect(page.getByTestId('command-handle-radius')).toHaveCount(0);
       await expect(page.getByTestId('command-handle-pitch')).toHaveText(
         'Pitch 5 mm'
       );

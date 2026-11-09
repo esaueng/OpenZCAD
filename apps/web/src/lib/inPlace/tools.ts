@@ -612,6 +612,22 @@ export type HandleSpec = (
       params: { origin: Vector3; direction: Vector3; scale?: number };
     }
   | {
+      /**
+       * A coil's free end, dragged along the coil to wind turns on or off
+       * at the same spacing; its value is the number of turns.
+       */
+      valueId: string;
+      kind: 'coil';
+      key: string;
+      params: {
+        center: Vector3;
+        axis: Vector3;
+        startDirection: Vector3;
+        radius: number;
+        pitch: number;
+      };
+    }
+  | {
       /** A value with no drag of its own (a count): just its chip. */
       valueId: string;
       kind: 'chip';
@@ -1368,24 +1384,252 @@ const TYPED_AXIS_VALUES: ValueSpec[] = [
   ...vectorValues('axisD', 'count', { x: 0, y: 0, z: 1 }, 'Direction')
 ];
 
+/** How a coil is sized: its height and turns (the pitch follows), or its pitch. */
+const HELIX_SIZE_OPTION: OptionSpec = {
+  id: 'size',
+  label: 'Size by',
+  choices: [
+    {
+      value: 'height',
+      label: 'Height & turns',
+      tip: 'How tall the coil stands; the pitch follows'
+    },
+    {
+      value: 'pitch',
+      label: 'Pitch & turns',
+      tip: 'How far one turn climbs; the height follows'
+    }
+  ],
+  initial: 'height'
+};
+
+/** Which way along its axis a coil grows from its profile. */
+const HELIX_GROW_OPTION: OptionSpec = {
+  id: 'grow',
+  label: 'Grows',
+  choices: [
+    { value: 'up', label: 'Up' },
+    { value: 'down', label: 'Down' }
+  ],
+  initial: 'up'
+};
+
+/** A stored value with its sign turned, an expression kept as one. */
+function negated(value: ParamValue): ParamValue {
+  return typeof value === 'number' ? -value : `-(${value})`;
+}
+
+/** One stored value over another, an expression kept as one. */
+function divided(top: ParamValue, bottom: ParamValue): ParamValue {
+  return typeof top === 'number' && typeof bottom === 'number'
+    ? top / bottom
+    : `(${String(top)}) / (${String(bottom)})`;
+}
+
+/**
+ * A picked line's direction, turned to point up: world +Z where it has any
+ * Z, else +Y, else +X. A sketch's own axis can run either way, and a spring
+ * should grow up from its profile unless asked otherwise.
+ */
+function pointedUp(direction: Vector3): Vector3 {
+  const lead =
+    Math.abs(direction.z) > 1e-9
+      ? direction.z
+      : Math.abs(direction.y) > 1e-9
+        ? direction.y
+        : direction.x;
+  return lead < 0 ? reversed(direction) : direction;
+}
+
+/** A direction turned round, with no negative zeros in what is stored. */
+function reversed(direction: Vector3): Vector3 {
+  const flip = (part: number) => (part === 0 ? 0 : -part);
+  return { x: flip(direction.x), y: flip(direction.y), z: flip(direction.z) };
+}
+
+/** Whether a helix stands on the stored axis of the helix being edited. */
+function onSavedAxis(axis: RevolveAxisCandidate | null, ctx: InPlaceContext) {
+  return (
+    axis !== null &&
+    'saved' in axis.choice &&
+    ctx.saved?.featureKind === 'helical-sweep'
+  );
+}
+
+/**
+ * Which way the coil climbs, as a unit vector: the stored axis as stored, a
+ * typed one as typed, a picked line pointed up; Down reverses each.
+ */
+function helixClimb(
+  axisLine: RevolveAxisCandidate,
+  options: Record<string, string>,
+  ctx: InPlaceContext
+): Vector3 {
+  const direction = unit(axisLine.direction);
+  const along =
+    options.axisMode === 'typed' || onSavedAxis(axisLine, ctx)
+      ? direction
+      : pointedUp(direction);
+  return options.grow === 'down' ? reversed(along) : along;
+}
+
+/** The profile's middle and its distance from the axis line. */
+function profileOffAxis(
+  outline: readonly Vector3[],
+  axisLine: Pick<RevolveAxisCandidate, 'origin' | 'direction'>
+): { distance: number; crosses: boolean } | null {
+  if (outline.length === 0) return null;
+  const axis = unit(axisLine.direction);
+  const radial = (point: Vector3) => {
+    const offset = {
+      x: point.x - axisLine.origin.x,
+      y: point.y - axisLine.origin.y,
+      z: point.z - axisLine.origin.z
+    };
+    const along = dot(offset, axis);
+    return {
+      x: offset.x - axis.x * along,
+      y: offset.y - axis.y * along,
+      z: offset.z - axis.z * along
+    };
+  };
+  const middle = radial(
+    outline.reduce(
+      (sum, point) => ({
+        x: sum.x + point.x / outline.length,
+        y: sum.y + point.y / outline.length,
+        z: sum.z + point.z / outline.length
+      }),
+      { x: 0, y: 0, z: 0 }
+    )
+  );
+  const distance = Math.hypot(middle.x, middle.y, middle.z);
+  if (distance <= 1e-9) return { distance, crosses: true };
+  // Crossed when any point lies on the far side of the axis, or on it.
+  const side = unit(middle);
+  const crosses = outline.some((point) => dot(radial(point), side) <= 1e-9);
+  return { distance, crosses };
+}
+
+/** A profile's height along an axis: what one turn must clear. */
+function profileTallness(outline: readonly Vector3[], axis: Vector3): number {
+  const heights = outline.map((point) => dot(point, axis));
+  return Math.max(...heights) - Math.min(...heights);
+}
+
+/** Where a profile's middle stands on an axis line: the coil's start level. */
+function axisFoot(
+  outline: readonly Vector3[],
+  axisLine: Pick<RevolveAxisCandidate, 'origin' | 'direction'>
+): Vector3 {
+  if (outline.length === 0) return { ...axisLine.origin };
+  const axis = unit(axisLine.direction);
+  const middle = outline.reduce(
+    (sum, point) => ({
+      x: sum.x + point.x / outline.length,
+      y: sum.y + point.y / outline.length,
+      z: sum.z + point.z / outline.length
+    }),
+    { x: 0, y: 0, z: 0 }
+  );
+  const along = dot(
+    {
+      x: middle.x - axisLine.origin.x,
+      y: middle.y - axisLine.origin.y,
+      z: middle.z - axisLine.origin.z
+    },
+    axis
+  );
+  return {
+    x: axisLine.origin.x + axis.x * along,
+    y: axisLine.origin.y + axis.y * along,
+    z: axisLine.origin.z + axis.z * along
+  };
+}
+
+/**
+ * Where the built coil runs, for the handle on its end: its start on the
+ * axis, which way its first turn sets off, and its radius, as the pinned
+ * kernel's `helicalSweep` builds them. That call starts the helix at
+ * `origin + radius · u`, with `u` the climb crossed with world X (world Y
+ * for a climb near X), whatever side of the axis the profile is on. Null
+ * when the radius does not read.
+ */
+function coilPath(
+  slots: InPlaceSlots,
+  ctx: InPlaceContext,
+  options: Record<string, string>,
+  outline: readonly Vector3[],
+  axisLine: RevolveAxisCandidate,
+  climb: Vector3
+): {
+  center: Vector3;
+  axis: Vector3;
+  startDirection: Vector3;
+  radius: number;
+} | null {
+  const saved =
+    options.axisMode !== 'typed' &&
+    onSavedAxis(slots.axis, ctx) &&
+    ctx.saved?.featureKind === 'helical-sweep'
+      ? ctx.saved
+      : null;
+  const radius = saved
+    ? (ctx.evaluate?.(saved.radius) ?? null)
+    : (profileOffAxis(outline, axisLine)?.distance ?? null);
+  if (radius === null || !(radius > 0)) return null;
+  const center =
+    saved || options.axisMode === 'typed'
+      ? { ...axisLine.origin }
+      : axisFoot(outline, axisLine);
+  const seed =
+    Math.abs(climb.x) < 0.9 ? { x: 1, y: 0, z: 0 } : { x: 0, y: 1, z: 0 };
+  const startDirection = unit({
+    x: climb.y * seed.z - climb.z * seed.y,
+    y: climb.z * seed.x - climb.x * seed.z,
+    z: climb.x * seed.y - climb.y * seed.x
+  });
+  return { center, axis: climb, startDirection, radius };
+}
+
 const helicalSweep: InPlaceToolSpec = {
   id: 'helical-sweep',
   title: 'Helical sweep',
   profileMode: 'one',
   wantsAxis: true,
+  // Any line it can coil round: a sketch axis, a datum or world axis, a
+  // straight edge or a cylinder's axis. It stores the line's numbers.
+  axisPicks: true,
   wantsPath: false,
+  refuseAxis(slots, axis, ctx) {
+    const pick = slots.profiles[0];
+    if (!pick) return 'Pick the profile first, then the axis';
+    const off = profileOffAxis(profileOutline(ctx, pick), axis);
+    return off?.crosses
+      ? 'That line runs through the profile; pick one beside it'
+      : null;
+  },
   values: [
     // Ranges here are what the stored feature takes, no narrower: a value
-    // made elsewhere (an import, an older card) stays editable.
+    // made elsewhere (an import, an older card) stays editable. The radius
+    // is not one of them: the profile's distance from the axis is the
+    // radius, so the coil always runs through the profile.
     {
-      id: 'radius',
-      label: 'Radius',
+      id: 'height',
+      label: 'Height',
       unit: 'length',
-      initial: 10,
+      initial: 15,
       min: 0,
-      exclusive: true
+      exclusive: true,
+      note: 'How tall the coil stands, end to end'
     },
-    { id: 'pitch', label: 'Pitch', unit: 'length', initial: 5 },
+    {
+      id: 'pitch',
+      label: 'Pitch',
+      unit: 'length',
+      initial: 5,
+      note: 'How far one turn climbs'
+    },
     {
       id: 'turns',
       label: 'Turns',
@@ -1397,85 +1641,176 @@ const helicalSweep: InPlaceToolSpec = {
     },
     ...TYPED_AXIS_VALUES
   ],
-  options: [AXIS_MODE_OPTION],
-  defaults(slots, ctx): Record<string, number> {
+  options: [HELIX_SIZE_OPTION, HELIX_GROW_OPTION, AXIS_MODE_OPTION],
+  layout: [
+    { items: ['size', 'grow', 'height', 'pitch', 'turns'] },
+    {
+      label: 'Axis',
+      collapsed: true,
+      items: [
+        'axisMode',
+        'axisOX',
+        'axisOY',
+        'axisOZ',
+        'axisDX',
+        'axisDY',
+        'axisDZ'
+      ]
+    }
+  ],
+  carries(valueId, value, values) {
+    // More turns wind on at the same spacing: the coil grows, as pulling
+    // its end out does. (The arrow stretches the coil instead.)
+    if (valueId !== 'turns') return null;
+    const before = values.turns ?? 3;
+    if (!(before > 0) || !(value > 0)) return null;
+    return { height: ((values.height ?? 15) / before) * value };
+  },
+  summary(state, units) {
+    // The value the other two decide, so each row's effect reads at once.
+    const turns = state.numbers.turns ?? 3;
+    if (!(turns > 0)) return null;
+    const round = (value: number) => Math.round(value * 1000) / 1000;
+    return state.options.size === 'pitch'
+      ? `Stands ${round(Math.abs(state.numbers.pitch ?? 5) * turns)} ${units} tall`
+      : `Each turn climbs ${round((state.numbers.height ?? 15) / turns)} ${units}`;
+  },
+  defaults(slots, ctx, numbers): Record<string, number> {
     const pick = slots.profiles[0];
     if (!pick || !slots.axis) return {};
     const outline = profileOutline(ctx, pick);
-    const placement = revolveRigPlacement(outline, slots.axis);
-    if (!placement) return {};
-    // The helix passes through the profile's middle, and each turn climbs a
-    // little more than the profile is tall so the coils never touch.
-    const axis = placement.axis;
-    const heights = outline.map((point) =>
-      dot(
-        {
-          x: point.x - placement.center.x,
-          y: point.y - placement.center.y,
-          z: point.z - placement.center.z
-        },
-        axis
-      )
+    if (outline.length === 0) return {};
+    // Each turn climbs a little more than the profile is tall, so the
+    // coils never touch; an unset height is that many turns of it.
+    const pitch = Math.max(
+      profileTallness(outline, unit(slots.axis.direction)) * 1.25,
+      0.001
     );
-    const tall = Math.max(...heights) - Math.min(...heights);
-    const middle = outline.reduce(
-      (sum, point) => ({
-        x: sum.x + point.x / outline.length,
-        y: sum.y + point.y / outline.length,
-        z: sum.z + point.z / outline.length
-      }),
-      { x: 0, y: 0, z: 0 }
-    );
-    const radial = {
-      x: middle.x - placement.center.x,
-      y: middle.y - placement.center.y,
-      z: middle.z - placement.center.z
-    };
-    return {
-      radius: Math.hypot(radial.x, radial.y, radial.z),
-      pitch: Math.max(tall * 1.25, 0.001)
-    };
+    return { pitch, height: pitch * (numbers.turns ?? 3) };
   },
-  hint(slots, options) {
-    if (slots.profiles.length === 0) return 'Pick a profile';
+  optionCarries(optionId, value, state) {
+    // A switch keeps the coil as it stands: its pitch from its height, or
+    // its height from its pitch.
+    if (optionId !== 'size') return null;
+    const turns = state.numbers.turns ?? 3;
+    if (!(turns > 0)) return null;
+    const carried: Record<string, { value: number; from: string }> = {};
+    if (value === 'pitch') {
+      carried.pitch = {
+        value: (state.numbers.height ?? 15) / turns,
+        from: 'height'
+      };
+    } else {
+      carried.height = {
+        value: Math.abs(state.numbers.pitch ?? 5) * turns,
+        from: 'pitch'
+      };
+    }
+    return carried;
+  },
+  hint(slots, options, ctx) {
+    if (slots.profiles.length === 0) return 'Pick the profile to coil';
     if (options?.axisMode === 'typed') return 'Tap the axis chips to type it';
-    if (!slots.axis) return 'Pick the helix axis';
-    return 'Drag radius and pitch · tap turns';
+    if (!slots.axis) {
+      return 'Pick the axis to coil around: a dashed line, an edge or a cylinder';
+    }
+    const pick = slots.profiles[0]!;
+    const off = ctx
+      ? profileOffAxis(profileOutline(ctx, pick), slots.axis)
+      : null;
+    if (off?.crosses && ctx && !onSavedAxis(slots.axis, ctx)) {
+      return 'The profile crosses this axis: pick a dashed line beside it';
+    }
+    return options?.size === 'pitch'
+      ? 'Drag the arrow for the pitch · drag the coil’s end to wind turns'
+      : 'Drag the arrow to stretch · drag the coil’s end to wind turns';
   },
-  ready: (slots, options) =>
-    slots.profiles.length > 0 &&
-    (slots.axis !== null || options?.axisMode === 'typed'),
+  ready(slots, options, ctx) {
+    if (slots.profiles.length === 0) return false;
+    if (options?.axisMode === 'typed') return true;
+    if (!slots.axis) return false;
+    if (!ctx || onSavedAxis(slots.axis, ctx)) return true;
+    const off = profileOffAxis(
+      profileOutline(ctx, slots.profiles[0]!),
+      slots.axis
+    );
+    return off !== null && !off.crosses;
+  },
   request(slots, values, options, ctx, numbers) {
     const pick = slots.profiles[0];
     if (!pick) return null;
-    if (options.axisMode === 'typed') {
-      // A typed axis goes out as typed, expressions and all.
-      if (!commandAxis(slots, numbers ?? {}, options)) return null;
-      return {
-        tool: 'helical-sweep',
-        profile: section(pick),
-        axisOrigin: typedVector(values, 'axisO', { x: 0, y: 0, z: 0 }),
-        axisDirection: typedVector(values, 'axisD', { x: 0, y: 0, z: 1 }),
-        radius: values.radius ?? 10,
-        pitch: values.pitch ?? 5,
-        turns: values.turns ?? 3
-      };
-    }
-    if (!slots.axis) return null;
-    const direction = unit(slots.axis.direction);
-    // An edited helix's own axis goes back as stored, expressions and all.
+    const axisLine = commandAxis(slots, numbers ?? {}, options);
+    if (!axisLine) return null;
     const saved =
-      'saved' in slots.axis.choice && ctx.saved?.featureKind === 'helical-sweep'
+      ctx.saved?.featureKind === 'helical-sweep' &&
+      onSavedAxis(slots.axis, ctx) &&
+      options.axisMode !== 'typed'
         ? ctx.saved
         : null;
+    // The radius is the profile's distance from the axis: the coil runs
+    // through the profile. An edited helix on its own axis keeps the radius
+    // it stores (one made before, or elsewhere, may differ).
+    let radius: ParamValue;
+    if (saved) {
+      radius = saved.radius;
+    } else {
+      const off = profileOffAxis(profileOutline(ctx, pick), axisLine);
+      if (!off || off.crosses) return null;
+      radius = off.distance;
+    }
+    const turns = values.turns ?? 3;
+    let pitch: ParamValue;
+    if (options.size === 'pitch') {
+      pitch = values.pitch ?? 5;
+    } else {
+      pitch = divided(values.height ?? 15, turns);
+      // An untouched edit writes the pitch back as stored, not as a
+      // height divided again (which can drift in the last digit).
+      const before = saved ? ctx.evaluate?.(saved.pitch) : null;
+      const now =
+        typeof pitch === 'number' ? pitch : (ctx.evaluate?.(pitch) ?? null);
+      if (
+        saved &&
+        typeof before === 'number' &&
+        typeof now === 'number' &&
+        Math.abs(before - now) <= 1e-9 * Math.max(1, Math.abs(before))
+      ) {
+        pitch = saved.pitch;
+      }
+    }
+    const down = options.grow === 'down';
+    let axisOrigin: ParametricVector3;
+    let axisDirection: ParametricVector3;
+    if (options.axisMode === 'typed') {
+      // A typed axis goes out as typed, expressions and all.
+      axisOrigin = typedVector(values, 'axisO', { x: 0, y: 0, z: 0 });
+      const typed = typedVector(values, 'axisD', { x: 0, y: 0, z: 1 });
+      axisDirection = down
+        ? { x: negated(typed.x), y: negated(typed.y), z: negated(typed.z) }
+        : typed;
+    } else if (saved) {
+      // An edited helix's own axis goes back as stored, expressions and all.
+      axisOrigin = { ...saved.axisOrigin };
+      axisDirection = down
+        ? {
+            x: negated(saved.axisDirection.x),
+            y: negated(saved.axisDirection.y),
+            z: negated(saved.axisDirection.z)
+          }
+        : { ...saved.axisDirection };
+    } else {
+      // Level with the profile: the coil starts at the profile's height.
+      axisOrigin = { ...axisFoot(profileOutline(ctx, pick), axisLine) };
+      axisDirection = { ...helixClimb(axisLine, options, ctx) };
+    }
     return {
       tool: 'helical-sweep',
       profile: section(pick),
-      axisOrigin: saved ? { ...saved.axisOrigin } : { ...slots.axis.origin },
-      axisDirection: saved ? { ...saved.axisDirection } : { ...direction },
-      radius: values.radius ?? 10,
-      pitch: values.pitch ?? 5,
-      turns: values.turns ?? 3
+      axisOrigin,
+      axisDirection,
+      radius,
+      pitch,
+      turns
     };
   },
   handles(slots, values, ctx, options) {
@@ -1488,7 +1823,31 @@ const helicalSweep: InPlaceToolSpec = {
     if (!axisLine) return chips;
     const placement = helixRigPlacement(outline, axisLine);
     if (!placement) return chips;
-    const { center, axis, startDirection } = placement;
+    const { center, startDirection } = placement;
+    const climb = helixClimb(axisLine, options, ctx);
+    // One arrow beside the profile, just outside it, climbing with the
+    // coil: its length is the height (or one turn's pitch). Turns sit on
+    // a chip beside it.
+    let reach = 0;
+    for (const point of outline) {
+      reach = Math.max(
+        reach,
+        dot(
+          {
+            x: point.x - center.x,
+            y: point.y - center.y,
+            z: point.z - center.z
+          },
+          startDirection
+        )
+      );
+    }
+    const gap = Math.max(reach * 0.12, 0.5);
+    const origin = {
+      x: center.x + startDirection.x * (reach + gap),
+      y: center.y + startDirection.y * (reach + gap),
+      z: center.z + startDirection.z * (reach + gap)
+    };
     const base = keyOf(
       pick.sketchId,
       pick.regionFingerprint,
@@ -1496,34 +1855,36 @@ const helicalSweep: InPlaceToolSpec = {
         ? `typed:${[axisLine.origin, axisLine.direction].map((v) => `${v.x},${v.y},${v.z}`).join(':')}`
         : axisLine.id
     );
-    const radius = values.radius ?? 10;
+    const byPitch = options.size === 'pitch';
+    const turns = values.turns ?? 3;
+    const pitch = byPitch
+      ? Math.abs(values.pitch ?? 5)
+      : (values.height ?? 15) / (turns > 0 ? turns : 1);
+    const coil = coilPath(slots, ctx, options, outline, axisLine, climb);
+    const turnsHandle: HandleSpec = coil
+      ? {
+          valueId: 'turns',
+          kind: 'coil',
+          // Rebuilt when the arrow restretches the coil: the end it rides
+          // moves with the pitch, not with its own drag.
+          key: keyOf(base, 'turns', pitch, coil.radius),
+          params: { ...coil, pitch }
+        }
+      : {
+          valueId: 'turns',
+          kind: 'chip',
+          key: `${base}:turns`,
+          params: { anchor: origin }
+        };
     return [
       ...chips,
       {
-        valueId: 'radius',
+        valueId: byPitch ? 'pitch' : 'height',
         kind: 'linear',
-        key: `${base}:radius`,
-        params: { origin: center, direction: startDirection }
+        key: `${base}:${byPitch ? 'pitch' : 'height'}`,
+        params: { origin, direction: climb }
       },
-      {
-        // From the axis too, so neither handle moves when the other does.
-        valueId: 'pitch',
-        kind: 'linear',
-        key: `${base}:pitch`,
-        params: { origin: center, direction: axis }
-      },
-      {
-        valueId: 'turns',
-        kind: 'chip',
-        key: `${base}:turns`,
-        params: {
-          anchor: {
-            x: center.x - axis.x * radius * 0.5,
-            y: center.y - axis.y * radius * 0.5,
-            z: center.z - axis.z * radius * 0.5
-          }
-        }
-      }
+      turnsHandle
     ];
   }
 };
@@ -3929,7 +4290,8 @@ const axisRotate: InPlaceToolSpec = {
   options: [COPY_OPTION],
   hint(slots) {
     if (slots.bodies.length === 0) return 'Click the body to rotate';
-    if (!slots.axis) return 'Pick an axis: edge, cylinder, X/Y/Z or datum';
+    if (!slots.axis)
+      return 'Pick an axis: edge, cylinder, X/Y/Z or datum';
     return 'Drag the angle, or tap it to type';
   },
   ready: (slots) => slots.bodies.length > 0 && slots.axis !== null,
@@ -4246,8 +4608,7 @@ const circularPattern: InPlaceToolSpec = {
   ],
   hint(slots, options) {
     if (slots.bodies.length === 0) return 'Click the body to repeat';
-    if (!slots.axis)
-      return 'Pick an axis: edge, cylinder, X/Y/Z or datum';
+    if (!slots.axis) return 'Pick an axis: edge, cylinder, X/Y/Z or datum';
     return options?.spacing === 'step'
       ? 'Drag the step · tap the count'
       : 'Drag the angle · tap the count';

@@ -8,6 +8,9 @@ describe('command outcome messages', () => {
     expect(commandOutcomeMessage('Transform body')).toBe('Moved body.');
     expect(commandOutcomeMessage('Fillet edges')).toBe('Filleted edges.');
     expect(commandOutcomeMessage('Sweep profile')).toBe('Swept profile.');
+    expect(commandOutcomeMessage('Helical sweep profile')).toBe(
+      'Coiled the profile.'
+    );
   });
 
   it('reports history and parameter commands as what happened, not as additions', () => {
