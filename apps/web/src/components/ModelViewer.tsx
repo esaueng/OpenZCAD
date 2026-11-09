@@ -3800,6 +3800,17 @@ export function ModelViewer({
       delete renderer.domElement.dataset.e2eOffsetGhost;
       requestRender();
     }
+    // While the pointer holds the face, material the drag adds is still a
+    // proposal and draws as ghost; letting go makes the part solid again.
+    function syncOffsetVeil() {
+      if (!offsetGhost) return;
+      const target = offsetHandleRef.current;
+      const live =
+        offsetDrag && target
+          ? context.objectsByBodyId.get(target.bodyId)
+          : null;
+      offsetGhost.veilAddedMaterial(live instanceof THREE.Mesh ? live : null);
+    }
     offsetGhostClearRef.current = clearOffsetGhost;
     offsetGhostClipRef.current = (plane) => {
       offsetGhost?.setClippingPlane(plane);
@@ -10867,6 +10878,10 @@ export function ModelViewer({
       if (offsetDrag && event.pointerId === offsetDrag.pointerId) {
         const completed = offsetDrag;
         offsetDrag = null;
+        // Letting go makes the pulled material solid at once, before the
+        // commit lands; the ghost of the old part stays until it does.
+        syncOffsetVeil();
+        requestRender();
         offsetDragActiveRef.current = false;
         onDirectManipulationChangeRef.current(false);
         gestures.release(event, 'grab');
@@ -11646,6 +11661,7 @@ export function ModelViewer({
       }
       const cylinderRadiusProxyFrame = flushCylinderRadiusProxy();
       const offsetBodyProxyFrame = flushOffsetBodyProxy();
+      syncOffsetVeil();
       updateOffsetChip();
       // After the offset chip, which clears the keypad anchor without a rig
       // of its own: the command's anchor has to be the frame's last word.

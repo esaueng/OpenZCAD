@@ -12,6 +12,7 @@ import {
 } from '@openzcad/shared';
 import { tweenOrientationFor, VIEW_DIRECTIONS } from '../camera/views';
 import { keepProgram } from './programRetention';
+import { SELECTION_SEMANTICS } from './semantics';
 import { COPLANAR_DEPTH_ATTRIBUTE, withCoplanarDepth } from './coplanarBodies';
 import { STUDIO_RIG } from './studio';
 import { tangentFacePairs } from './tangentEdges';
@@ -488,7 +489,7 @@ const DEPTH_BIASED_LINE_VERTEX_SHADER = (() => {
  * top, all but vanished — measured on the flange's hidden hub rim, only the
  * doubled caps survived, so a hidden edge drew as a row of dots.
  */
-const TRANSLUCENT_LINE_STENCIL = 2;
+export const TRANSLUCENT_LINE_STENCIL = 2;
 
 /** Makes a translucent fat line blend once per pixel instead of per segment. */
 export function drawFatLineOncePerPixel(material: LineMaterial) {
@@ -745,13 +746,23 @@ export function createObjectForBody(
     const featureEdges = boundary
       ? undefined
       : new THREE.EdgesGeometry(geometry, 24);
+    if (!geometry.boundingSphere) geometry.computeBoundingSphere();
+    // The resting ink of the topology edge overlay: a drag's preview is drawn through here and its commit through the
+    // overlay, so the outline must not change at release. At partial opacity
+    // the overlapping caps of neighbouring segments blended twice and the
+    // coverage dither broke the line up, and without the depth bias a
+    // curved face's chords hid stretches of its rim: preview arcs read as
+    // beaded, dashed lines that turned crisp only once applied.
     const edges = createFatLineSegments(
       boundary ?? featureEdges!.getAttribute('position').array,
       {
-        color: '#0a0f16',
-        linewidth: 1.4,
-        opacity: 0.78,
-        resolution
+        color: SELECTION_SEMANTICS.idle.edge,
+        linewidth: SELECTION_SEMANTICS.idle.edgeWidth,
+        opacity: SELECTION_SEMANTICS.idle.edgeOpacity,
+        resolution,
+        depthBias: fatLineDepthBiasForExtent(
+          2 * (geometry.boundingSphere?.radius ?? 0)
+        )
       }
     );
     featureEdges?.dispose();

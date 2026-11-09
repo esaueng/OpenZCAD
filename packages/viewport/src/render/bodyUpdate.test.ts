@@ -9,6 +9,7 @@ import {
   updateObjectForBody
 } from './scene';
 import { disposeObject } from '../scene/objects';
+import { SELECTION_SEMANTICS } from './semantics';
 import { createFaceHighlightGeometry } from '../selection/faceHighlightGeometry';
 
 function cylinder(radius = 8, height = 12, segments = 16): BodyRepresentation {
@@ -69,6 +70,28 @@ describe('retained exact body buffers', () => {
     expect(isBodyMaterial(object.material)).toBe(true);
     expect(isBodyMaterial(new THREE.MeshBasicMaterial())).toBe(false);
     expect(updateObjectForBody(object, cylinder(9))).toBe(true);
+    disposeObject(object);
+  });
+
+  it('outlines a preview without topology edges in the resting ink', () => {
+    // A drag's preview draws its rim through this fallback and its commit
+    // through the topology overlay; the outline must not change at release.
+    const { edges: _edges, ...faces } = cylinder().topology!;
+    const object = createObjectForBody({
+      ...cylinder(),
+      topology: { ...faces, edges: [] }
+    }) as THREE.Mesh;
+    const outline = object.getObjectByName('body-edge') as THREE.Mesh<
+      THREE.BufferGeometry,
+      THREE.ShaderMaterial
+    >;
+    expect(outline.material.opacity).toBe(SELECTION_SEMANTICS.idle.edgeOpacity);
+    expect(outline.material.uniforms.linewidth!.value).toBe(
+      SELECTION_SEMANTICS.idle.edgeWidth
+    );
+    // Pulled forward past the chord error, or a curved face hides stretches
+    // of its rim and the arc reads dashed.
+    expect(outline.material.uniforms.depthBias!.value).toBeGreaterThan(0);
     disposeObject(object);
   });
 
