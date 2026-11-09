@@ -153,6 +153,8 @@ import {
   type CylinderProfilePreview,
   faceTrianglesCentroid,
   createBodyEdgeOverlay,
+  DEFAULT_TANGENT_EDGE_STYLE,
+  type TangentEdgeStyle,
   createAnalyticCylinderGhost,
   createFaceHighlightGeometry,
   createAxesGizmo,
@@ -1060,6 +1062,8 @@ export interface ModelViewerProps {
   fieldOfView?: number;
   /** Face opacity in X-ray (`settings.xray`), 0–1. */
   xrayOpacity?: number;
+  /** How resting fillet and blend rims draw in Shaded + edges. */
+  tangentEdges?: TangentEdgeStyle;
   /**
    * A whole smooth run of edges at once, from double-clicking one of them.
    *
@@ -2203,6 +2207,7 @@ export function ModelViewer({
   onBoxSelectTopology,
   fieldOfView = VIEWPORT_FIELD_OF_VIEW_BOUNDS.default,
   xrayOpacity = XRAY_OPACITY_BOUNDS.default / 100,
+  tangentEdges = DEFAULT_TANGENT_EDGE_STYLE,
   offsetHandle,
   onOffsetPreview,
   onOffsetCommit,
@@ -2411,6 +2416,8 @@ export function ModelViewer({
   unitLabelRef.current = displayLengthName(units as UnitSystem);
   const displayModeRef = useRef(settings.displayMode);
   displayModeRef.current = settings.displayMode;
+  const tangentEdgesRef = useRef(tangentEdges);
+  tangentEdgesRef.current = tangentEdges;
   const sectionViewRef = useRef(settings.sectionView ?? null);
   sectionViewRef.current = settings.sectionView ?? null;
   const exactSectionRef = useRef(exactSection);
@@ -3211,6 +3218,7 @@ export function ModelViewer({
               const mesh = createObjectForBody(body!, resolution);
               const edges = createBodyEdgeOverlay(body!, resolution);
               edges.setDisplayMode(displayModeRef.current);
+              edges.setTangentEdgeStyle(tangentEdgesRef.current);
               mesh.add(edges);
               copy.add(mesh);
               applyDisplayMode(copy, displayModeRef.current, xrayRef.current);
@@ -6114,6 +6122,8 @@ export function ModelViewer({
           name: string;
           renderOrder: number;
           visible: boolean;
+          materialVisible: boolean;
+          opacity: number;
         }[] = [];
         root.traverse((child) => {
           if (child instanceof LineSegments2) {
@@ -6122,7 +6132,9 @@ export function ModelViewer({
               depthWrite: child.material.depthWrite,
               name: child.name,
               renderOrder: child.renderOrder,
-              visible: child.visible
+              visible: child.visible,
+              materialVisible: child.material.visible,
+              opacity: child.material.opacity
             });
           }
         });
@@ -12613,6 +12625,7 @@ export function ModelViewer({
       if (!edgeOverlay) {
         edgeOverlay = createBodyEdgeOverlay(body, edgeResolution);
         edgeOverlay.setDisplayMode(displayModeRef.current);
+        edgeOverlay.setTangentEdgeStyle(tangentEdgesRef.current);
         object.add(edgeOverlay);
         context.edgeOverlaysByBodyId.set(body.bodyId, edgeOverlay);
       }
@@ -15487,6 +15500,16 @@ export function ModelViewer({
       context.requestRender();
     }
   }, [settings.showGrid, settings.displayMode, settings.xray]);
+
+  useEffect(() => {
+    const context = contextRef.current;
+    if (!context) return;
+    let changed = false;
+    for (const edgeOverlay of context.edgeOverlaysByBodyId.values()) {
+      changed = edgeOverlay.setTangentEdgeStyle(tangentEdges) || changed;
+    }
+    if (changed) context.requestRender();
+  }, [tangentEdges]);
 
   useEffect(() => {
     const context = contextRef.current;

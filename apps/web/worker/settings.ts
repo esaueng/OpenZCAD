@@ -11,6 +11,7 @@ import {
   normalizeKeymapOverrides,
   nowIso,
   PANEL_WIDTH_LIMITS,
+  SETTINGS_TANGENT_EDGES,
   VIEWPORT_FIELD_OF_VIEW_BOUNDS,
   XRAY_OPACITY_BOUNDS,
   UNITLESS_IMPORT_UNITS,
@@ -318,6 +319,14 @@ export function parseUpdateAppSettingsRequest(
         ),
         showGrid: requiredBoolean(viewport, 'showGrid'),
         displayMode: requiredMember(viewport, 'displayMode', DISPLAY_MODES),
+        // Optional, like middleDrag: an older client omits it, and its save
+        // carries the stored value forward (CarriedViewportField).
+        tangentEdges: optionalMember(
+          viewport,
+          'tangentEdges',
+          SETTINGS_TANGENT_EDGES,
+          DEFAULT_APP_SETTINGS.viewport.tangentEdges
+        ),
         // Optional in the payload so a client from before this preference
         // existed keeps saving instead of being rejected.
         zoomToCursor:
@@ -958,7 +967,11 @@ export function settingsRequestOmitsKeymap(body: unknown): boolean {
 
 /** Viewport preferences newer than some clients that still save settings. */
 export type CarriedViewportField =
-  'fieldOfView' | 'xrayOpacity' | 'touchHistoryGestures' | 'pencilDrawsOnly';
+  | 'fieldOfView'
+  | 'xrayOpacity'
+  | 'touchHistoryGestures'
+  | 'pencilDrawsOnly'
+  | 'tangentEdges';
 
 /**
  * The viewport preferences a settings PATCH leaves out because its client
@@ -971,7 +984,8 @@ export function settingsRequestOmittedViewportFields(
     'fieldOfView',
     'xrayOpacity',
     'touchHistoryGestures',
-    'pencilDrawsOnly'
+    'pencilDrawsOnly',
+    'tangentEdges'
   ];
   if (!body || typeof body !== 'object') return fields;
   const settings = (body as Record<string, unknown>).settings;

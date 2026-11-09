@@ -144,6 +144,17 @@ sphere outline.
   face, a selected face, a selected body and X-ray on the boss-on-block
   scene. Under the studio rig all four read clearly, so their tints and
   dimming are unchanged.
+- **Tangent edge setting.** The all / faint / hidden choice deferred in
+  slice 3 now ships as Settings › Viewport › **Tangent edges**: Show, Faint
+  (the default, the 0.42 rim above) or Hide (`viewport.tangentEdges`, an
+  app setting the Worker carries across older clients' saves). It governs
+  resting rims in Shaded + edges only. Wireframe and X-ray still draw every
+  edge in one ink, and a selected body still outlines its rims. Hide turns
+  off the tangent batch's material, not the line, so PickService still
+  reaches a hidden rim: hovering or selecting one draws it in the hover and
+  selection batches. Curved-surface outlines are unaffected, and thumbnails
+  keep the default look (they build their own lines). `OZ_LOOKDEV_TANGENT_EDGES`
+  makes the harness capture a given choice.
 
 ## Running the harness
 

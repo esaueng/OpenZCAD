@@ -31185,6 +31185,7 @@ export function App() {
             onBoxSelectTopology={handleBoxSelectTopologyFromViewer}
             fieldOfView={appSettings.viewport.fieldOfView}
             xrayOpacity={appSettings.viewport.xrayOpacity / 100}
+            tangentEdges={appSettings.viewport.tangentEdges}
             onSelectSketchProfile={handleSelectSketchProfile}
             onResizePrimitiveFace={handleResizePrimitiveFace}
             onContextMenu={handleViewportContextMenu}

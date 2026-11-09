@@ -372,6 +372,38 @@ describe('batched topology edge picking', () => {
     expect(service.pick(centreEvent())).toBeNull();
   });
 
+  it('still picks a tangent edge whose resting ink is hidden', () => {
+    const bodyGroup = new THREE.Group();
+    const body = new THREE.Group();
+    body.userData.bodyId = 'rim-body';
+    const overlay = createBodyEdgeOverlay(
+      {
+        bodyId: toBodyId('rim-body'),
+        topology: {
+          faces: [],
+          edges: [
+            {
+              topologyId: 'edge-rim',
+              hash: 3,
+              isSmooth: true,
+              points: [-4, 0, 0, 0, 0, 0, 4, 0, 0]
+            }
+          ]
+        }
+      },
+      { width: 100, height: 100 }
+    );
+    overlay.setTangentEdgeStyle('hide');
+    expect(overlay.idleTangentEdges.material.visible).toBe(false);
+    body.add(overlay);
+    bodyGroup.add(body);
+    bodyGroup.updateMatrixWorld(true);
+
+    const pick = makeService({ bodyGroup }, 'edge').service.pick(centreEvent());
+    expect(pick?.kind).toBe('edge');
+    expect(pick?.selection?.topologyId).toBe('edge-rim');
+  });
+
   it('keeps edge and face filters correct with a batched edge in front', () => {
     const bodyGroup = new THREE.Group();
     bodyGroup.add(

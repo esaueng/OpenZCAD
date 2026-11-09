@@ -73,6 +73,7 @@
   "status-lifetime.spec.ts": 7,
   "stl-mesh-compat.spec.ts": 21,
   "tablet-layout.spec.ts": 4,
+  "tangent-edge-setting.spec.ts": 40,
   "text-authoring.spec.ts": 6,
   "through-hole-chamfer-resize.spec.ts": 37,
   "tool-rail-pins.spec.ts": 5,

@@ -768,6 +768,39 @@ describe('application settings', () => {
     });
   });
 
+  it('reads tangent edges as faint unless set, and rejects unknown styles', () => {
+    expect(normalizeAppSettings({}).viewport.tangentEdges).toBe('faint');
+    expect(DEFAULT_APP_SETTINGS.viewport.tangentEdges).toBe('faint');
+    for (const tangentEdges of ['show', 'faint', 'hide'] as const) {
+      expect(
+        normalizeAppSettings({ viewport: { tangentEdges } }).viewport
+          .tangentEdges
+      ).toBe(tangentEdges);
+    }
+    expect(
+      normalizeAppSettings({ viewport: { tangentEdges: 'phantom' } }).viewport
+        .tangentEdges
+    ).toBe('faint');
+    const legacy = deepClone(DEFAULT_APP_SETTINGS) as unknown as {
+      viewport: Record<string, unknown>;
+    };
+    delete legacy.viewport.tangentEdges;
+    expect(
+      parseUpdateAppSettingsRequest(
+        { expectedRevision: 1, settings: legacy },
+        'development'
+      ).settings.viewport.tangentEdges
+    ).toBe('faint');
+    const hidden = deepClone(DEFAULT_APP_SETTINGS);
+    hidden.viewport.tangentEdges = 'hide';
+    expect(
+      parseUpdateAppSettingsRequest(
+        { expectedRevision: 1, settings: hidden },
+        'development'
+      ).settings.viewport.tangentEdges
+    ).toBe('hide');
+  });
+
   it('reads Pencil-only drawing as on unless switched off', () => {
     expect(normalizeAppSettings({}).viewport.pencilDrawsOnly).toBe(true);
     expect(
