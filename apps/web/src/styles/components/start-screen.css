@@ -404,8 +404,6 @@
   width: 28px;
   padding: 0;
   color: var(--color-text-muted);
-  background: transparent;
-  border-color: var(--color-border);
 }
 
 /* The shelf's search sits with its other tools now there is no bar. */
