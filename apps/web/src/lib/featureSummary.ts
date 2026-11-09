@@ -1,24 +1,37 @@
 import type {
   BooleanOperation,
   DirectEditOperation,
+  EdgeTopologyReferenceV5,
   FeatureNode,
   ParamValue,
   UnitSystem,
   Vector3
 } from '@openzcad/shared';
+import { edgeSelectionName, storedLoopEdges } from './edgeLoops';
 import { unitLabel } from './measurements';
 import { evalParamValue, formatNumber } from './model';
 
 /**
  * "5 edges · r 2 mm": a blend over several edges says how many, so two
  * fillets of one radius still read apart. A single edge needs no count.
+ *
+ * A rim a boolean split into four arcs is the one closed edge the user
+ * clicked, and the readout said so; the row reads "closed edge · r 3.8 mm"
+ * rather than a count of arcs. Without stored witnesses for every edge the
+ * row keeps the plain count.
  */
 function withEdgeCount(
   edgeHashes: readonly number[] | undefined,
+  edgeReferences: readonly EdgeTopologyReferenceV5[] | undefined,
   value: string
 ): string {
   const count = new Set(edgeHashes ?? []).size;
-  return count > 1 ? `${count} edges · ${value}` : value;
+  if (count < 2) return value;
+  const edges = storedLoopEdges(edgeHashes, edgeReferences);
+  // The readout's own label, lower-cased to sit mid-row: "closed edge".
+  const named = edges ? edgeSelectionName(edges).label : `${count} edges`;
+  const label = `${named[0]!.toLowerCase()}${named.slice(1)}`;
+  return `${label} · ${value}`;
 }
 
 const BOOLEAN_JOINERS: Record<BooleanOperation, string> = {
@@ -355,6 +368,7 @@ export function featureValueSummary(
       const end = data.endRadius === undefined ? null : num(data.endRadius);
       return withEdgeCount(
         data.edgeHashes,
+        data.edgeReferences,
         end !== null ? `r ${radius}–${end} ${unit}` : `r ${radius} ${unit}`
       );
     }
@@ -367,12 +381,14 @@ export function featureValueSummary(
       if (second !== null) {
         return withEdgeCount(
           data.edgeHashes,
+          data.edgeReferences,
           `${distance} × ${second} ${unit}`
         );
       }
       const angle = data.angleDeg === undefined ? null : num(data.angleDeg);
       return withEdgeCount(
         data.edgeHashes,
+        data.edgeReferences,
         angle !== null
           ? `${distance} ${unit} × ${angle}°`
           : `${distance} ${unit}`

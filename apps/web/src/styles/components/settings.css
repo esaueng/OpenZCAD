@@ -837,6 +837,12 @@
   background: var(--color-accent-dim);
 }
 
+/* An ordinary wait (the account or sign-in still loading): quiet copy, no
+   colour, since nothing is wrong. */
+.settings-notice.neutral {
+  color: var(--color-text-muted);
+}
+
 .settings-footnote {
   display: flex;
   align-items: center;
@@ -922,6 +928,13 @@
    to hold open above the status line. */
 .settings-turnstile:empty {
   min-height: 0;
+}
+
+/* While the check is still loading, though, the widget is on its way: hold
+   its slot so the form does not grow under the pointer when it arrives. */
+.settings-turnstile-shell:has(> .settings-challenge-state.loading)
+  > .settings-turnstile:empty {
+  min-height: 65px;
 }
 
 .settings-challenge-state {

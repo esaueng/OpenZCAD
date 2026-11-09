@@ -1,4 +1,5 @@
 import { withoutDerivedProjection } from '@openzcad/document-core';
+import { formatBytes } from './formatBytes';
 import {
   documentNodesWithHistory,
   importedSourceReferenceOf,
@@ -7,7 +8,6 @@ import {
   type ProjectSummary,
   type UnitSystem
 } from '@openzcad/shared';
-import { formatByteSize } from './byteSize';
 
 export interface ProjectProperties {
   source: 'device' | 'account';
@@ -96,4 +96,6 @@ export async function loadProjectProperties(
   return local ? describeProject(local, 'device', !localCurrent) : null;
 }
 
-export const formatProjectBytes = formatByteSize;
+export function formatProjectBytes(bytes: number): string {
+  return formatBytes(bytes, 'iec');
+}

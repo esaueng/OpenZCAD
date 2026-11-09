@@ -58,8 +58,12 @@ import {
   type HealthResponse
 } from '@openzcad/shared';
 import { countLabel } from '../lib/toasts';
-import { formatByteSize } from '../lib/byteSize';
+import { formatBytes } from '../lib/formatBytes';
 import { fetchEncryptionAvailability } from '../lib/e2ee/availability';
+import {
+  loadAccountShapeHint,
+  rememberAccountShape
+} from '../lib/accountShapeHint';
 import { lazyWithStaleChunkNotice } from '../lib/staleChunk';
 import { ErrorBoundary } from './ErrorBoundary';
 import { BrandMark } from './BrandMark';
@@ -113,12 +117,6 @@ import {
 } from './PersonalInfoToggle';
 
 /**
- * Binary units, named as such, scaling up to GiB: a Premium allowance of
- * 100 GiB read as "102400.0 MB" before.
- */
-const formatBytes = formatByteSize;
-
-/**
  * Names the ceiling even before anyone is near it. A limit discovered only at
  * the moment a save is refused reads as a bug; a limit stated up front reads as
  * a limit.
@@ -127,7 +125,7 @@ function storageHint(usage: AccountStorageUsage | null): string {
   if (!usage) {
     return 'Projects and revisions saved to your account.';
   }
-  return `${countLabel(usage.projectCount, 'project', 'projects')} · ${countLabel(usage.revisionCount, 'revision', 'revisions')}. Up to ${formatBytes(usage.documentLimitBytes)} and ${usage.maxRevisionsPerProject} revisions per project.`;
+  return `${countLabel(usage.projectCount, 'project', 'projects')} · ${countLabel(usage.revisionCount, 'revision', 'revisions')}. Up to ${formatBytes(usage.documentLimitBytes)} and ${usage.maxRevisionsPerProject.toLocaleString()} revisions per project.`;
 }
 
 /** Usage against an allowance, naming an overage outright. */
@@ -149,6 +147,12 @@ interface SettingsPageProps {
   accountState: AppSettingsResponse | null;
   authConfig: AuthConfigResponse | null;
   authConfigStatus: AuthConfigStatus;
+  /**
+   * The saved session (and, once signed in, the account's settings) is still
+   * being restored. Distinct from signed out: nothing account-shaped is
+   * guessed while this is true, and no sign-in form is offered.
+   */
+  accountResolving?: boolean;
   health: HealthResponse | null;
   session: AuthSession | null;
   busy: boolean;
@@ -665,12 +669,41 @@ function TurnstileWidget({
   );
 }
 
+/**
+ * The signed-in Profile rows' shape, without their values, while a reload
+ * restores the session this device last had. Drawing the sign-in form here
+ * instead flashed a signed-out page at someone who never signed out, and the
+ * real rows then pushed everything below them down.
+ */
+function RestoringProfileRows() {
+  return (
+    <>
+      <SettingRow
+        title="Restoring your sign-in…"
+        hint="Reconnecting the session saved on this device."
+      >
+        <button className="secondary" type="button" disabled>
+          <LogOut size={14} aria-hidden="true" />
+          Sign out
+        </button>
+      </SettingRow>
+      <SettingRow
+        title="Membership"
+        hint="Limits appear after your account reconnects."
+      >
+        <Status>—</Status>
+      </SettingRow>
+    </>
+  );
+}
+
 export function SettingsPage({
   settings,
   cloudFunctionsEnabled,
   accountState,
   authConfig,
   authConfigStatus,
+  accountResolving = false,
   health,
   session,
   busy,
@@ -730,6 +763,10 @@ export function SettingsPage({
   const [encryptionAvailable, setEncryptionAvailable] = useState<
     boolean | null
   >(null);
+  // The account's last known shape on this device, read once: while a reload
+  // restores the session, Settings draws that shape rather than a signed-out
+  // guess that rearranges itself when the server answers.
+  const [accountHint] = useState(loadAccountShapeHint);
   /**
    * Set, to the account it was opened for, while sign-out asks whether to
    * keep this device unlocked; it never applies to an account that replaced
@@ -745,7 +782,7 @@ export function SettingsPage({
   const contentRef = useRef<HTMLElement>(null);
   const pageRef = useRef<HTMLDivElement>(null);
   const brandRef = useRef<HTMLButtonElement>(null);
-  const navRef = useRef<HTMLElement>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
   const scrollTopRef = useRef(
     initialSection === undefined ? initialViewState.scrollTop : 0
   );
@@ -796,20 +833,34 @@ export function SettingsPage({
   // The Encryption section exists only for an account the server opened the
   // beta to; asked once per signed-in account while Settings is open.
   const sessionUserId = session?.userId;
+  // No session yet, but one may still be restoring: the answer is pending,
+  // not no, so the Encryption item is neither dropped nor inserted meanwhile.
+  const awaitingSession =
+    cloudFunctionsEnabled && accountResolving && !sessionUserId;
   useEffect(() => {
     if (!sessionUserId || !cloudFunctionsEnabled) {
-      setEncryptionAvailable(false);
+      setEncryptionAvailable(awaitingSession ? null : false);
       return;
     }
     setEncryptionAvailable(null);
     let cancelled = false;
     void fetchEncryptionAvailability().then((available) => {
-      if (!cancelled) setEncryptionAvailable(available);
+      if (cancelled) return;
+      setEncryptionAvailable(available);
+      rememberAccountShape({ signedIn: true, encryption: available });
     });
     return () => {
       cancelled = true;
     };
-  }, [cloudFunctionsEnabled, sessionUserId]);
+  }, [awaitingSession, cloudFunctionsEnabled, sessionUserId]);
+  /**
+   * Draw the signed-in shape (placeholders, not values) while the session a
+   * signed-in device last had is still restoring.
+   */
+  const restoringSignedIn = awaitingSession && accountHint.signedIn && !session;
+  /** Whether the account behind the cloud controls is still unknown. */
+  const cloudPending =
+    cloudFunctionsEnabled && accountResolving && !accountState;
 
   // A prompt opened for another account is withdrawn, never re-targeted.
   const signOutChoice =
@@ -880,9 +931,10 @@ export function SettingsPage({
   }, [onClose]);
 
   // The overlay's modal focus lands on the first control, the brand button,
-  // which closes Settings: a first Enter dismissed the page. Start on the open
-  // section instead. A passive effect runs after that hook has recorded the
-  // opener, so focus still returns there on close.
+  // which closes Settings: a first Enter dismissed the page. Start on the
+  // heading instead, so restoring Settings does not paint a keyboard focus
+  // ring on the active nav item. A passive effect runs after that hook has
+  // recorded the opener, so focus still returns there on close.
   useEffect(() => {
     const current = document.activeElement;
     if (
@@ -892,11 +944,7 @@ export function SettingsPage({
     ) {
       return;
     }
-    const nav = navRef.current;
-    (
-      nav?.querySelector<HTMLElement>('[aria-current="page"]') ??
-      nav?.querySelector<HTMLElement>('button')
-    )?.focus();
+    headingRef.current?.focus();
   }, []);
 
   useLayoutEffect(() => {
@@ -940,10 +988,26 @@ export function SettingsPage({
     () =>
       visibleSettingsSections({
         cloudFunctionsEnabled,
-        encryptionAvailable: encryptionAvailable === true && Boolean(session),
+        // Until the server answers, the item holds the place it had last
+        // time on this device, so the rows below it do not shift under the
+        // pointer when the answer lands.
+        encryptionAvailable:
+          encryptionAvailable === null
+            ? cloudFunctionsEnabled &&
+              (Boolean(session) || awaitingSession) &&
+              accountHint.signedIn &&
+              accountHint.encryption
+            : encryptionAvailable && Boolean(session),
         query
       }),
-    [cloudFunctionsEnabled, encryptionAvailable, query, session]
+    [
+      accountHint,
+      awaitingSession,
+      cloudFunctionsEnabled,
+      encryptionAvailable,
+      query,
+      session
+    ]
   );
 
   // A search that matches somewhere other than the open section should take the
@@ -1043,7 +1107,7 @@ export function SettingsPage({
               <SearchX size={16} aria-hidden="true" />
             </button>
           )}
-          <nav ref={navRef}>
+          <nav>
             {visibleSections.map((section, index) => (
               <Fragment key={section.id}>
                 {section.group !== visibleSections[index - 1]?.group &&
@@ -1093,11 +1157,13 @@ export function SettingsPage({
                   ? 'Offline mode'
                   : authConfigStatus === 'unavailable'
                     ? 'Cloud unreachable'
-                    : session
-                      ? accountState
-                        ? 'Cloud profile connected'
-                        : 'Cloud profile unavailable'
-                      : 'Device only'}
+                    : accountResolving && !accountState
+                      ? 'Checking account…'
+                      : session
+                        ? accountState
+                          ? 'Cloud profile connected'
+                          : 'Cloud profile unavailable'
+                        : 'Device only'}
               </strong>
               <small>Changes save automatically</small>
             </span>
@@ -1107,7 +1173,9 @@ export function SettingsPage({
         {/* The head stays put while a long page scrolls under it, as the
             workspace's top bar does. */}
         <header className="settings-head">
-          <h1 className="settings-head-title">Settings</h1>
+          <h1 ref={headingRef} className="settings-head-title" tabIndex={-1}>
+            Settings
+          </h1>
           <span className="settings-save-message" aria-live="polite">
             {message}
           </span>
@@ -1677,7 +1745,13 @@ export function SettingsPage({
                   <Status tone="good">Always on</Status>
                 </SettingRow>
               </Group>
-              <Group title="Cloud">
+              {/* Until the account is known these hold their saved values
+                  but stay disabled: a live switch beside a footer that
+                  still says "Device only" claimed a sync nothing runs. */}
+              <Group
+                title="Cloud"
+                note={cloudPending ? 'Checking account…' : undefined}
+              >
                 <SettingRow
                   title="Cloud autosave"
                   hint={`Off: update the cloud copy only when you save a revision${saveKeyCopy}.`}
@@ -1685,7 +1759,7 @@ export function SettingsPage({
                   <Toggle
                     label="Cloud autosave"
                     checked={settings.files.cloudAutosave}
-                    disabled={!cloudFunctionsEnabled}
+                    disabled={!cloudFunctionsEnabled || cloudPending}
                     onChange={(cloudAutosave) =>
                       onChange({
                         ...settings,
@@ -1705,7 +1779,9 @@ export function SettingsPage({
                     unit="s"
                     label="Cloud autosave delay in seconds"
                     disabled={
-                      !cloudFunctionsEnabled || !settings.files.cloudAutosave
+                      !cloudFunctionsEnabled ||
+                      cloudPending ||
+                      !settings.files.cloudAutosave
                     }
                     value={settings.files.cloudAutosaveDelaySeconds}
                     onCommit={(cloudAutosaveDelaySeconds) =>
@@ -1721,7 +1797,11 @@ export function SettingsPage({
                   hint={`Saving a revision${saveKeyCopy} adds a checkpoint.`}
                 >
                   <Status>
-                    {cloudFunctionsEnabled ? 'Manual' : 'Disabled'}
+                    {!cloudFunctionsEnabled
+                      ? 'Disabled'
+                      : cloudPending
+                        ? '—'
+                        : 'Manual'}
                   </Status>
                 </SettingRow>
               </Group>
@@ -2214,7 +2294,7 @@ export function SettingsPage({
                           title="Membership"
                           hint={
                             session.entitlements
-                              ? `${countLabel(session.entitlements.projectLimit, 'cloud project', 'cloud projects')} · ${formatBytes(session.entitlements.projectStorageLimitBytes)} project storage · ${formatBytes(session.entitlements.artifactLimitBytes)} cloud file storage · ${session.entitlements.ai.requestLimit} hosted AI requests per ${session.entitlements.ai.windowSeconds / 60} minutes`
+                              ? `${countLabel(session.entitlements.projectLimit, 'cloud project', 'cloud projects')} · ${formatBytes(session.entitlements.projectStorageLimitBytes)} project storage · ${formatBytes(session.entitlements.artifactLimitBytes)} cloud file storage · ${session.entitlements.ai.requestLimit.toLocaleString()} hosted AI requests per ${(session.entitlements.ai.windowSeconds / 60).toLocaleString()} minutes`
                               : 'Limits appear after your account reconnects.'
                           }
                           details={
@@ -2288,8 +2368,14 @@ export function SettingsPage({
                           </Notice>
                         ) : null}
                       </>
+                    ) : restoringSignedIn ? (
+                      <RestoringProfileRows />
+                    ) : awaitingSession ? (
+                      <Notice tone="neutral">Checking your account…</Notice>
                     ) : authConfigStatus === 'loading' ? (
-                      <Notice>Checking whether sign-in is available…</Notice>
+                      <Notice tone="neutral">
+                        Checking whether sign-in is available…
+                      </Notice>
                     ) : authConfigStatus === 'unavailable' ? (
                       <Notice
                         role="alert"
@@ -2483,15 +2569,19 @@ export function SettingsPage({
                       title="Preference synchronization"
                       hint="Preferences follow your account."
                     >
-                      <Status
-                        tone={session && accountState ? 'good' : 'warning'}
-                      >
-                        {session && accountState?.synced
-                          ? 'Available'
-                          : session
-                            ? 'Ready to save'
-                            : 'Device only'}
-                      </Status>
+                      {cloudPending ? (
+                        <Status>Checking…</Status>
+                      ) : (
+                        <Status
+                          tone={session && accountState ? 'good' : 'warning'}
+                        >
+                          {session && accountState?.synced
+                            ? 'Available'
+                            : session
+                              ? 'Ready to save'
+                              : 'Device only'}
+                        </Status>
+                      )}
                     </SettingRow>
                   </Group>
                   <Group title="Sharing">
@@ -2508,7 +2598,7 @@ export function SettingsPage({
                   </Group>
                   {/* Usage belongs to a signed-in profile; signed out there
                       is nothing to measure, so the group would be two dashes. */}
-                  {session ? (
+                  {session || restoringSignedIn ? (
                     <Group title="Storage">
                       <SettingRow
                         title="Account storage"
@@ -2565,6 +2655,19 @@ export function SettingsPage({
             </Section>
           )}
 
+          {active === 'encryption' &&
+            anyMatch &&
+            encryptionAvailable === null &&
+            (Boolean(session) || awaitingSession) && (
+              <Section
+                title="Encryption"
+                intro="Beta. Encrypted cloud projects can be read only on your devices."
+              >
+                <p className="encryption-loading" role="status">
+                  Loading encryption keys…
+                </p>
+              </Section>
+            )}
           {active === 'encryption' &&
             anyMatch &&
             session &&

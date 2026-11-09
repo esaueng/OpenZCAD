@@ -636,6 +636,9 @@
 }
 
 .workspace-hint.has-notice {
+  /* The compact refusal opens upward, outside this row. Ordinary hints
+     clip their text, but doing so here hides the entire explanation. */
+  overflow: visible;
   display: flex;
   flex-wrap: wrap;
   align-items: center;

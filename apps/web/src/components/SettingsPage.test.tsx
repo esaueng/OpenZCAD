@@ -6,7 +6,7 @@ import {
   within
 } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { useState, type ComponentProps } from 'react';
+import { useRef, useState, type ComponentProps } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   defaultAppSettings,
@@ -29,6 +29,8 @@ import type * as DesktopBridge from '../lib/desktopBridge';
 import { SettingsPage } from './SettingsPage';
 import { POINTER_CONTROL_GROUPS } from '../lib/controlReference';
 import { api } from '../lib/api';
+import { modalHoldsKeyboard, useModalFocus } from '../lib/useModalFocus';
+import { updateSettingsViewState } from '../lib/settingsViewState';
 
 // The desktop app opens external links through native code.
 vi.mock('../lib/desktopBridge', async (importOriginal) => ({
@@ -463,13 +465,115 @@ describe('settings number fields', () => {
 });
 
 describe('settings navigation', () => {
-  it('opens on the active section, not the brand button that closes it', () => {
+  it('opens on the heading without focusing the active nav item or close button', async () => {
+    const user = userEvent.setup();
     window.localStorage.clear();
     const onClose = vi.fn();
     renderSettings(null, { onClose });
 
-    expect(screen.getByRole('button', { name: 'General' })).toHaveFocus();
+    expect(screen.getByRole('heading', { name: 'Settings' })).toHaveFocus();
+    expect(screen.getByRole('button', { name: 'General' })).not.toHaveFocus();
+    await user.keyboard('{Enter}');
+    expect(onClose).not.toHaveBeenCalled();
   });
+
+  // The same owner-mounted focus hook and delayed body as App's overlay.
+  function SettingsDialog({
+    initiallyOpen,
+    loaded
+  }: {
+    initiallyOpen: boolean;
+    loaded: boolean;
+  }) {
+    const [open, setOpen] = useState(initiallyOpen);
+    const dialogRef = useRef<HTMLDivElement>(null);
+    useModalFocus(dialogRef, { enabled: open, autoFocus: true });
+    return (
+      <>
+        <button type="button" onClick={() => setOpen(true)}>
+          Open Settings
+        </button>
+        {open && (
+          <div
+            ref={dialogRef}
+            role="dialog"
+            aria-label="Settings"
+            tabIndex={-1}
+          >
+            {loaded && settingsElement(null, { onClose: () => setOpen(false) })}
+          </div>
+        )}
+      </>
+    );
+  }
+
+  it.each([
+    { initiallyOpen: true, loaded: true },
+    { initiallyOpen: true, loaded: false },
+    { initiallyOpen: false, loaded: true },
+    { initiallyOpen: false, loaded: false }
+  ])(
+    'keeps modal keyboard navigation on open/restore (restored: $initiallyOpen, ready: $loaded)',
+    async ({ initiallyOpen, loaded }) => {
+      const user = userEvent.setup();
+      window.localStorage.clear();
+      if (initiallyOpen) {
+        updateSettingsViewState({ open: true, activeSection: 'account' });
+      }
+      const { rerender } = render(
+        <SettingsDialog initiallyOpen={initiallyOpen} loaded={loaded} />
+      );
+      const opener = screen.getByText('Open Settings');
+      if (!initiallyOpen) await user.click(opener);
+
+      expect(opener).toHaveAttribute('inert');
+      expect(modalHoldsKeyboard()).toBe(true);
+      if (!loaded) {
+        expect(screen.getByRole('dialog', { name: 'Settings' })).toHaveFocus();
+        rerender(<SettingsDialog initiallyOpen={initiallyOpen} loaded />);
+      }
+
+      await waitFor(() =>
+        expect(screen.getByRole('heading', { name: 'Settings' })).toHaveFocus()
+      );
+      const activeSection = screen.getByRole('button', {
+        name: initiallyOpen ? 'Account' : 'General'
+      });
+      expect(activeSection).toHaveAttribute('aria-current', 'page');
+      expect(activeSection).not.toHaveFocus();
+      await user.keyboard('{Enter}');
+      expect(screen.getByRole('dialog', { name: 'Settings' })).toBeVisible();
+
+      await user.tab();
+      expect(
+        screen.getByRole('textbox', { name: 'Find a setting' })
+      ).toHaveFocus();
+      await user.tab({ shift: true });
+      const navigation = screen.getByRole('navigation');
+      const lastSection = within(navigation).getAllByRole('button').at(-1)!;
+      expect(lastSection).toHaveFocus();
+      await user.keyboard('{Enter}');
+      expect(lastSection).toHaveAttribute('aria-current', 'page');
+      expect(lastSection).toHaveFocus();
+
+      // Cycling from the first Tab stop still wraps within the dialog.
+      const brand = screen.getByRole('button', { name: /OpenZCAD/ });
+      brand.focus();
+      await user.tab({ shift: true });
+      expect(screen.getByRole('dialog')).toContainElement(
+        document.activeElement as HTMLElement
+      );
+      expect(brand).not.toHaveFocus();
+      await user.tab();
+      expect(brand).toHaveFocus();
+
+      await user.keyboard('{Escape}');
+      expect(screen.queryByRole('dialog', { name: 'Settings' })).toBeNull();
+      expect(modalHoldsKeyboard()).toBe(false);
+      expect(opener).not.toHaveAttribute('inert');
+      if (!initiallyOpen) expect(opener).toHaveFocus();
+    }
+  );
 
   it('clears a search with Escape before Escape closes Settings', async () => {
     const user = userEvent.setup();
@@ -1446,11 +1550,9 @@ describe('settings privacy and data section', () => {
     expect(meter).toHaveAttribute('aria-valuenow', limit);
     expect(meter).toHaveAttribute(
       'aria-valuetext',
-      '120 MiB of 100 MiB · over allowance'
+      '120 MB of 100 MB · over allowance'
     );
-    expect(
-      screen.getByText('120 MiB of 100 MiB · over allowance')
-    ).toBeVisible();
+    expect(screen.getByText('120 MB of 100 MB · over allowance')).toBeVisible();
   });
 
   it('reports in-range file usage as it is', async () => {
@@ -1460,10 +1562,70 @@ describe('settings privacy and data section', () => {
       name: 'Cloud file storage used'
     });
     expect(meter).toHaveAttribute('aria-valuenow', String(5 * 1_048_576));
-    expect(meter).toHaveAttribute('aria-valuetext', '5 MiB of 100 MiB');
+    expect(meter).toHaveAttribute('aria-valuetext', '5 MB of 100 MB');
   });
 
-  it('states project storage as the quota measures it, against a GiB allowance', async () => {
+  it('formats Premium membership limits and account storage readably', async () => {
+    vi.mocked(api.storageUsage).mockResolvedValue({
+      ...storageUsage,
+      projectCount: 129,
+      revisionCount: 0,
+      documentLimitBytes: 24 * 1024 ** 2,
+      maxRevisionsPerProject: 50,
+      artifactBytes: 24 * 1024 ** 2,
+      artifactLimitBytes: 100 * 1024 ** 3
+    });
+    renderSettings(readyHealth, {
+      initialSection: 'account',
+      session: {
+        ...session,
+        entitlements: {
+          tier: 'premium',
+          projectLimit: 10_000,
+          projectStorageLimitBytes: 100 * 1024 ** 3,
+          artifactLimitBytes: 100 * 1024 ** 3,
+          ai: {
+            requestLimit: 500,
+            costLimitUnits: 2400,
+            windowSeconds: 600,
+            concurrencyLimit: 8
+          }
+        }
+      }
+    });
+
+    expect(
+      screen.getByText(
+        '10,000 cloud projects · 100 GB project storage · 100 GB cloud file storage · 500 hosted AI requests per 10 minutes'
+      )
+    ).toBeVisible();
+    expect(
+      await screen.findByText(
+        '129 projects · 0 revisions. Up to 24 MB and 50 revisions per project.'
+      )
+    ).toBeVisible();
+    expect(
+      screen.getByRole('meter', { name: 'Cloud file storage used' })
+    ).toHaveAttribute('aria-valuetext', '24 MB of 100 GB');
+    expect(screen.getByText('24 MB of 100 GB')).toBeVisible();
+  });
+
+  it('groups large account usage and revision-limit counts', async () => {
+    vi.mocked(api.storageUsage).mockResolvedValue({
+      ...storageUsage,
+      projectCount: 1_234,
+      revisionCount: 12_345,
+      maxRevisionsPerProject: 1_000
+    });
+    renderSettings(readyHealth, { initialSection: 'account', session });
+    expect(
+      await screen.findByText(
+        '1,234 projects · 12,345 revisions. Up to 10 MB and 1,000 revisions per project.'
+      )
+    ).toBeVisible();
+  });
+
+  it('states project storage as the quota measures it, against a GB allowance', async () => {
     const gibibyte = 1_073_741_824;
     vi.mocked(api.storageUsage).mockResolvedValue({
       ...storageUsage,
@@ -1487,7 +1649,7 @@ describe('settings privacy and data section', () => {
     });
     renderSettings(readyHealth, { initialSection: 'account', session });
 
-    // Large allowances read in GiB, never as "25600.0 MB".
+    // Large allowances read in GB, never as "25600.0 MB".
     const projects = await screen.findByRole('meter', {
       name: 'Account storage used'
     });
@@ -1496,10 +1658,10 @@ describe('settings privacy and data section', () => {
       String(Math.round(24.8 * 1_048_576))
     );
     expect(projects).toHaveAttribute('aria-valuemax', String(25 * gibibyte));
-    expect(screen.getByText('24.8 MiB of 25 GiB')).toBeVisible();
+    expect(screen.getByText('24.8 MB of 25 GB')).toBeVisible();
     expect(
       screen.getByRole('meter', { name: 'Cloud file storage used' })
-    ).toHaveAttribute('aria-valuetext', '5 MiB of 25 GiB');
+    ).toHaveAttribute('aria-valuetext', '5 MB of 25 GB');
   });
 
   it('names an account storage overage outright', async () => {
@@ -1523,7 +1685,7 @@ describe('settings privacy and data section', () => {
 
     expect(
       await screen.findByRole('meter', { name: 'Account storage used' })
-    ).toHaveAttribute('aria-valuetext', '2 GiB of 1 GiB · over allowance');
+    ).toHaveAttribute('aria-valuetext', '2 GB of 1 GB · over allowance');
   });
 
   it('keeps the Account page usable when the storage report omits fields', async () => {
