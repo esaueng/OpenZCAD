@@ -1,4 +1,5 @@
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -6,7 +7,7 @@ import {
   within
 } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { useState, type ComponentProps } from 'react';
+import { useRef, useState, type ComponentProps } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   defaultAppSettings,
@@ -29,6 +30,13 @@ import type * as DesktopBridge from '../lib/desktopBridge';
 import { SettingsPage } from './SettingsPage';
 import { POINTER_CONTROL_GROUPS } from '../lib/controlReference';
 import { api } from '../lib/api';
+import { modalHoldsKeyboard, useModalFocus } from '../lib/useModalFocus';
+import { updateSettingsViewState } from '../lib/settingsViewState';
+import { loadAssistantStatus } from '../lib/assistantStream';
+
+vi.mock('../lib/assistantStream', () => ({
+  loadAssistantStatus: vi.fn()
+}));
 
 // The desktop app opens external links through native code.
 vi.mock('../lib/desktopBridge', async (importOriginal) => ({
@@ -51,6 +59,9 @@ const storageUsage = {
 
 beforeEach(() => {
   vi.spyOn(api, 'storageUsage').mockResolvedValue(storageUsage);
+  vi.mocked(loadAssistantStatus).mockImplementation(
+    () => new Promise(() => {})
+  );
 });
 
 afterEach(() => {
@@ -462,13 +473,115 @@ describe('settings number fields', () => {
 });
 
 describe('settings navigation', () => {
-  it('opens on the active section, not the brand button that closes it', () => {
+  it('opens on the heading without focusing the active nav item or close button', async () => {
+    const user = userEvent.setup();
     window.localStorage.clear();
     const onClose = vi.fn();
     renderSettings(null, { onClose });
 
-    expect(screen.getByRole('button', { name: 'General' })).toHaveFocus();
+    expect(screen.getByRole('heading', { name: 'Settings' })).toHaveFocus();
+    expect(screen.getByRole('button', { name: 'General' })).not.toHaveFocus();
+    await user.keyboard('{Enter}');
+    expect(onClose).not.toHaveBeenCalled();
   });
+
+  // The same owner-mounted focus hook and delayed body as App's overlay.
+  function SettingsDialog({
+    initiallyOpen,
+    loaded
+  }: {
+    initiallyOpen: boolean;
+    loaded: boolean;
+  }) {
+    const [open, setOpen] = useState(initiallyOpen);
+    const dialogRef = useRef<HTMLDivElement>(null);
+    useModalFocus(dialogRef, { enabled: open, autoFocus: true });
+    return (
+      <>
+        <button type="button" onClick={() => setOpen(true)}>
+          Open Settings
+        </button>
+        {open && (
+          <div
+            ref={dialogRef}
+            role="dialog"
+            aria-label="Settings"
+            tabIndex={-1}
+          >
+            {loaded && settingsElement(null, { onClose: () => setOpen(false) })}
+          </div>
+        )}
+      </>
+    );
+  }
+
+  it.each([
+    { initiallyOpen: true, loaded: true },
+    { initiallyOpen: true, loaded: false },
+    { initiallyOpen: false, loaded: true },
+    { initiallyOpen: false, loaded: false }
+  ])(
+    'keeps modal keyboard navigation on open/restore (restored: $initiallyOpen, ready: $loaded)',
+    async ({ initiallyOpen, loaded }) => {
+      const user = userEvent.setup();
+      window.localStorage.clear();
+      if (initiallyOpen) {
+        updateSettingsViewState({ open: true, activeSection: 'account' });
+      }
+      const { rerender } = render(
+        <SettingsDialog initiallyOpen={initiallyOpen} loaded={loaded} />
+      );
+      const opener = screen.getByText('Open Settings');
+      if (!initiallyOpen) await user.click(opener);
+
+      expect(opener).toHaveAttribute('inert');
+      expect(modalHoldsKeyboard()).toBe(true);
+      if (!loaded) {
+        expect(screen.getByRole('dialog', { name: 'Settings' })).toHaveFocus();
+        rerender(<SettingsDialog initiallyOpen={initiallyOpen} loaded />);
+      }
+
+      await waitFor(() =>
+        expect(screen.getByRole('heading', { name: 'Settings' })).toHaveFocus()
+      );
+      const activeSection = screen.getByRole('button', {
+        name: initiallyOpen ? 'Account' : 'General'
+      });
+      expect(activeSection).toHaveAttribute('aria-current', 'page');
+      expect(activeSection).not.toHaveFocus();
+      await user.keyboard('{Enter}');
+      expect(screen.getByRole('dialog', { name: 'Settings' })).toBeVisible();
+
+      await user.tab();
+      expect(
+        screen.getByRole('textbox', { name: 'Find a setting' })
+      ).toHaveFocus();
+      await user.tab({ shift: true });
+      const navigation = screen.getByRole('navigation');
+      const lastSection = within(navigation).getAllByRole('button').at(-1)!;
+      expect(lastSection).toHaveFocus();
+      await user.keyboard('{Enter}');
+      expect(lastSection).toHaveAttribute('aria-current', 'page');
+      expect(lastSection).toHaveFocus();
+
+      // Cycling from the first Tab stop still wraps within the dialog.
+      const brand = screen.getByRole('button', { name: /OpenZCAD/ });
+      brand.focus();
+      await user.tab({ shift: true });
+      expect(screen.getByRole('dialog')).toContainElement(
+        document.activeElement as HTMLElement
+      );
+      expect(brand).not.toHaveFocus();
+      await user.tab();
+      expect(brand).toHaveFocus();
+
+      await user.keyboard('{Escape}');
+      expect(screen.queryByRole('dialog', { name: 'Settings' })).toBeNull();
+      expect(modalHoldsKeyboard()).toBe(false);
+      expect(opener).not.toHaveAttribute('inert');
+      if (!initiallyOpen) expect(opener).toHaveFocus();
+    }
+  );
 
   it('clears a search with Escape before Escape closes Settings', async () => {
     const user = userEvent.setup();
@@ -581,7 +694,9 @@ describe('settings navigation', () => {
 describe('assistant data disclosure', () => {
   it('does not promise free access when a restricted deployment denies the account', () => {
     const settings = defaultAppSettings();
+    settings.assistant.enabled = true;
     renderSettings(null, {
+      settings,
       initialSection: 'assistant',
       session: {
         userId: toUserId('user_restricted'),
@@ -603,7 +718,7 @@ describe('assistant data disclosure', () => {
         }
       }
     });
-    expect(screen.getByText('Not configured')).toBeVisible();
+    expect(screen.getByText('Unavailable')).toBeVisible();
     expect(
       screen.queryByText(/Free with no personal API key/)
     ).not.toBeInTheDocument();
@@ -662,14 +777,136 @@ describe('assistant data disclosure', () => {
     }
   );
 
-  it('does not assume a provider before deployment status is available', () => {
-    renderSettings(null, { initialSection: 'assistant' });
-    expect(screen.getByText(/Ask your deployment operator/)).toBeVisible();
-    expect(screen.queryByText(/OpenRouter/)).not.toBeInTheDocument();
+  it('reserves the data notice while loading, without flashing fallback copy', async () => {
+    let finishRead!: (
+      result: Awaited<ReturnType<typeof loadAssistantStatus>>
+    ) => void;
+    vi.mocked(loadAssistantStatus).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishRead = resolve;
+        })
+    );
+    const { rerender } = renderSettings(null, { initialSection: 'assistant' });
+    const signal = vi.mocked(loadAssistantStatus).mock.calls.at(-1)?.[0];
+    expect(screen.getByText('Loading…')).toBeVisible();
     expect(
-      screen.queryByRole('link', { name: /data policies/ })
-    ).not.toBeInTheDocument();
+      screen.getByRole('status', { name: 'Loading assistant data policies' })
+    ).toBeVisible();
+    expect(screen.queryByText(/Ask your deployment operator/)).toBeNull();
+    expect(
+      screen.queryByText('Status appears when the server is reachable.')
+    ).toBeNull();
+    expect(screen.queryByText('Not configured')).toBeNull();
+    expect(screen.queryByRole('link', { name: /data policies/ })).toBeNull();
+    const reserve = document.querySelector('.settings-assistant-data-reserve');
+    expect(reserve).toHaveAttribute('aria-hidden', 'true');
+
+    const settings = defaultAppSettings();
+    rerender(
+      settingsElement(null, {
+        initialSection: 'assistant',
+        accountState: {
+          settings,
+          revision: 1,
+          synced: true,
+          credential: { stored: false, storageAvailable: true },
+          effectiveAssistant: {
+            configured: false,
+            source: 'deployment',
+            provider: 'openrouter',
+            model: 'openai/gpt-5-luna',
+            reasoningEffort: 'high'
+          }
+        }
+      })
+    );
+    expect(screen.queryByText('Loading…')).toBeNull();
+    expect(screen.getByText('Off')).toBeVisible();
+    expect(
+      screen.getByText('openrouter · openai/gpt-5-luna · high reasoning')
+    ).toBeVisible();
+    expect(
+      screen.getByRole('link', { name: 'OpenRouter data policies' })
+    ).toBeVisible();
+    expect(screen.queryByText(/Ask your deployment operator/)).toBeNull();
+    expect(document.querySelector('.settings-assistant-data-reserve')).toBe(
+      reserve
+    );
+    expect(signal?.aborted).toBe(true);
+    await act(async () => {
+      finishRead({
+        configured: true,
+        provider: 'openai',
+        model: 'stale-model',
+        reasoningEffort: 'high'
+      });
+    });
+    expect(screen.queryByText(/stale-model/)).toBeNull();
+    expect(
+      screen.getByRole('link', { name: 'OpenRouter data policies' })
+    ).toBeVisible();
   });
+
+  it('keeps the unreachable message and generic policy after the server fails', async () => {
+    vi.mocked(loadAssistantStatus).mockRejectedValue(new Error('Offline'));
+    renderSettings(null, { initialSection: 'assistant' });
+    expect(
+      await screen.findByText('Status appears when the server is reachable.')
+    ).toBeVisible();
+    expect(screen.getByText('Unavailable')).toBeVisible();
+    expect(screen.getByText(/Ask your deployment operator/)).toBeVisible();
+    expect(screen.queryByText('Loading…')).toBeNull();
+    expect(screen.queryByText(/OpenRouter/)).toBeNull();
+  });
+
+  it('loads the deployment policy even when no account settings arrive', async () => {
+    vi.mocked(loadAssistantStatus).mockResolvedValue({
+      configured: false,
+      source: 'deployment',
+      provider: 'openai',
+      model: 'gpt-5-luna',
+      reasoningEffort: 'high'
+    });
+    renderSettings(null, { initialSection: 'assistant' });
+    expect(
+      await screen.findByRole('link', { name: 'OpenAI API data policies' })
+    ).toBeVisible();
+    expect(screen.getByText('Off')).toBeVisible();
+    expect(screen.queryByText(/Ask your deployment operator/)).toBeNull();
+  });
+
+  it.each([
+    { enabled: false, configured: false, badge: 'Off' },
+    { enabled: false, configured: true, badge: 'Off' },
+    { enabled: true, configured: true, badge: 'Ready' },
+    { enabled: true, configured: false, badge: 'Unavailable' }
+  ])(
+    'labels enabled=$enabled and configured=$configured as $badge',
+    ({ enabled, configured, badge }) => {
+      const settings = defaultAppSettings();
+      settings.assistant.enabled = enabled;
+      renderSettings(null, {
+        settings,
+        initialSection: 'assistant',
+        accountState: {
+          settings,
+          revision: 1,
+          synced: true,
+          credential: { stored: false, storageAvailable: true },
+          effectiveAssistant: {
+            configured,
+            source: 'deployment',
+            provider: 'openrouter',
+            model: 'deployment-model',
+            reasoningEffort: 'high'
+          }
+        }
+      });
+      expect(screen.getByText(badge)).toBeVisible();
+      expect(screen.queryByText('Not configured')).toBeNull();
+    }
+  );
 
   it('explains the free built-in model and data use, then keeps the personal model option', async () => {
     const user = userEvent.setup();
@@ -911,9 +1148,7 @@ describe('settings assistant section', () => {
       accountState,
       initialSection: 'assistant'
     });
-    expect(
-      screen.getByRole('option', { name: 'Off' })
-    ).toBeDisabled();
+    expect(screen.getByRole('option', { name: 'Off' })).toBeDisabled();
   });
 
   it('resets Off when editing the Anthropic model to an unsupported one', async () => {
@@ -929,9 +1164,7 @@ describe('settings assistant section', () => {
       initialSection: 'assistant',
       onChange
     });
-    await user.clear(
-      screen.getByRole('textbox', { name: 'AI model' })
-    );
+    await user.clear(screen.getByRole('textbox', { name: 'AI model' }));
     expect(onChange.mock.calls.at(-1)?.[0].assistant.reasoningEffort).toBe(
       'provider-default'
     );
@@ -945,10 +1178,17 @@ describe('settings assistant section', () => {
       settings: accountState.settings,
       accountState,
       initialSection: 'assistant',
-      session: { userId: toUserId('user_provider_switch'), displayName: 'person', mode: 'email-code' },
+      session: {
+        userId: toUserId('user_provider_switch'),
+        displayName: 'person',
+        mode: 'email-code'
+      },
       onChange
     });
-    await user.type(screen.getByLabelText('Personal API token'), 'test-other-provider-token');
+    await user.type(
+      screen.getByLabelText('Personal API token'),
+      'test-other-provider-token'
+    );
     await user.selectOptions(
       screen.getByRole('combobox', { name: 'AI provider' }),
       'anthropic'
@@ -1445,11 +1685,9 @@ describe('settings privacy and data section', () => {
     expect(meter).toHaveAttribute('aria-valuenow', limit);
     expect(meter).toHaveAttribute(
       'aria-valuetext',
-      '120.0 MB of 100.0 MB · over allowance'
+      '120 MB of 100 MB · over allowance'
     );
-    expect(
-      screen.getByText('120.0 MB of 100.0 MB · over allowance')
-    ).toBeVisible();
+    expect(screen.getByText('120 MB of 100 MB · over allowance')).toBeVisible();
   });
 
   it('reports in-range file usage as it is', async () => {
@@ -1459,7 +1697,67 @@ describe('settings privacy and data section', () => {
       name: 'Cloud file storage used'
     });
     expect(meter).toHaveAttribute('aria-valuenow', String(5 * 1_048_576));
-    expect(meter).toHaveAttribute('aria-valuetext', '5.0 MB of 100.0 MB');
+    expect(meter).toHaveAttribute('aria-valuetext', '5 MB of 100 MB');
+  });
+
+  it('formats Premium membership limits and account storage readably', async () => {
+    vi.mocked(api.storageUsage).mockResolvedValue({
+      ...storageUsage,
+      projectCount: 129,
+      revisionCount: 0,
+      documentLimitBytes: 24 * 1024 ** 2,
+      maxRevisionsPerProject: 50,
+      artifactBytes: 24 * 1024 ** 2,
+      artifactLimitBytes: 100 * 1024 ** 3
+    });
+    renderSettings(readyHealth, {
+      initialSection: 'account',
+      session: {
+        ...session,
+        entitlements: {
+          tier: 'premium',
+          projectLimit: 10_000,
+          projectStorageLimitBytes: 100 * 1024 ** 3,
+          artifactLimitBytes: 100 * 1024 ** 3,
+          ai: {
+            requestLimit: 500,
+            costLimitUnits: 2400,
+            windowSeconds: 600,
+            concurrencyLimit: 8
+          }
+        }
+      }
+    });
+
+    expect(
+      screen.getByText(
+        '10,000 cloud projects · 100 GB project storage · 100 GB cloud file storage · 500 hosted AI requests per 10 minutes'
+      )
+    ).toBeVisible();
+    expect(
+      await screen.findByText(
+        '129 projects · 0 revisions. Up to 24 MB and 50 revisions per project.'
+      )
+    ).toBeVisible();
+    expect(
+      screen.getByRole('meter', { name: 'Cloud file storage used' })
+    ).toHaveAttribute('aria-valuetext', '24 MB of 100 GB');
+    expect(screen.getByText('24 MB of 100 GB')).toBeVisible();
+  });
+
+  it('groups large account usage and revision-limit counts', async () => {
+    vi.mocked(api.storageUsage).mockResolvedValue({
+      ...storageUsage,
+      projectCount: 1_234,
+      revisionCount: 12_345,
+      maxRevisionsPerProject: 1_000
+    });
+    renderSettings(readyHealth, { initialSection: 'account', session });
+    expect(
+      await screen.findByText(
+        '1,234 projects · 12,345 revisions. Up to 10 MB and 1,000 revisions per project.'
+      )
+    ).toBeVisible();
   });
 
   it('names the diagnostic download for what it downloads', () => {

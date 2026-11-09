@@ -172,6 +172,12 @@ describe('a refusal in the command strip (F014)', () => {
 });
 
 describe('a refusal in the bottom lane', () => {
+  it('lets the explanation extend above the guidance row', () => {
+    expect(
+      rules(sheet('edit-control.css'), '.workspace-hint.has-notice').join('\n')
+    ).toMatch(/overflow:\s*visible/);
+  });
+
   it('takes its own clicks, while the lane lets the stage take the rest', () => {
     // With no control open the refusal stands in the guidance row with its
     // remedies (Keep, Try, Why?); the lane passes clicks to the stage, and

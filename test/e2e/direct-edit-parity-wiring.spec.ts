@@ -599,7 +599,7 @@ async function pickBottom(page: Page) {
   await clickWorldPoint(page, [20, 0, 0]);
   await page
     .getByRole('button', {
-      name: 'Selection: Chamfer tangent chain',
+      name: 'Selection: Chamfer whole outline',
       exact: true
     })
     .click();

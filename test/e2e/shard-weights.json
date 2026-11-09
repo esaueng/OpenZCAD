@@ -50,6 +50,7 @@
   "extrude-preview-commit-reuse.spec.ts": 5,
   "extrude-through-all.spec.ts": 14,
   "extrude-to-face-draft.spec.ts": 27,
+  "face-edge-chamfer.spec.ts": 15,
   "face-edit-view.spec.ts": 41,
   "feature-delete.spec.ts": 21,
   "feature-history.spec.ts": 59,

@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import type { FeatureData, FeatureNode } from '@openzcad/shared';
+import type {
+  EdgeTopologyReferenceV5,
+  EdgeWitnessV1,
+  FeatureData,
+  FeatureId,
+  FeatureNode
+} from '@openzcad/shared';
 import { featureValueSummary } from './featureSummary';
 
 function feature(
@@ -364,6 +370,133 @@ describe('featureValueSummary', () => {
         'mm'
       )
     ).toBe('2 edges · 1 mm');
+  });
+
+  describe('names a rim stored as arcs as the readout does', () => {
+    const Q = 1e6;
+    /** A quantized point on an r6 circle at height z, `quarter` turns round. */
+    const at = (quarter: number, z: number): [number, number, number] => {
+      const angle = (quarter * Math.PI) / 2;
+      return [
+        Math.round(6 * Math.cos(angle) * Q),
+        Math.round(6 * Math.sin(angle) * Q),
+        Math.round(z * Q)
+      ];
+    };
+    const reference = (
+      hash: number,
+      witness: EdgeWitnessV1
+    ): EdgeTopologyReferenceV5 => ({
+      kind: 'edge',
+      producingFeatureId: 'feat_union' as FeatureId,
+      lineageName: `boolean.edge.${hash}`,
+      currentHash: hash,
+      witnessVersion: 1,
+      witness
+    });
+    /** Quarter arc `quarter` of the rim at height z, as a stored reference. */
+    const arc = (hash: number, quarter: number, z = 28) =>
+      reference(hash, {
+        curveType: 'CIRCLE',
+        length: 3 * Math.PI,
+        closed: false,
+        endpoints: [at(quarter, z), at(quarter + 1, z)],
+        midpoint: at(quarter + 0.5, z)
+      });
+    const line = (hash: number, from: number, to: number) =>
+      reference(hash, {
+        curveType: 'LINE',
+        length: Math.abs(to - from),
+        closed: false,
+        endpoints: [
+          [from * Q, 0, 0],
+          [to * Q, 0, 0]
+        ],
+        midpoint: [((from + to) / 2) * Q, 0, 0]
+      });
+    const fillet = (references: EdgeTopologyReferenceV5[], hashes?: number[]) =>
+      featureValueSummary(
+        feature({
+          featureKind: 'fillet',
+          radius: 3.8,
+          edgeHashes: hashes ?? references.map((r) => r.currentHash),
+          edgeReferences: references
+        }),
+        {},
+        'mm'
+      );
+
+    it('reads four quarter arcs of one rim as a closed edge', () => {
+      expect(fillet([0, 1, 2, 3].map((q) => arc(10 + q, q)))).toBe(
+        'closed edge · r 3.8 mm'
+      );
+      // Chamfers share the naming.
+      expect(
+        featureValueSummary(
+          feature({
+            featureKind: 'chamfer',
+            distance: 1,
+            edgeHashes: [10, 11, 12, 13],
+            edgeReferences: [0, 1, 2, 3].map((q) => arc(10 + q, q))
+          }),
+          {},
+          'mm'
+        )
+      ).toBe('closed edge · 1 mm');
+    });
+
+    it('counts two rims as two closed edges', () => {
+      const rims = [0, 1, 2, 3].flatMap((q) => [
+        arc(20 + q, q, 0),
+        arc(30 + q, q, 28)
+      ]);
+      expect(fillet(rims)).toBe('2 closed edges · r 3.8 mm');
+    });
+
+    it('keeps the plain count for an open chain', () => {
+      const chain = [0, 1, 2, 3, 4].map((i) => line(40 + i, i, i + 1));
+      expect(fillet(chain)).toBe('5 edges · r 3.8 mm');
+    });
+
+    it('shows no count for a single edge', () => {
+      expect(fillet([arc(10, 0)])).toBe('r 3.8 mm');
+      expect(
+        fillet([
+          reference(50, {
+            curveType: 'CIRCLE',
+            length: 12 * Math.PI,
+            closed: true,
+            center: [0, 0, 28 * Q],
+            axis: [0, 0, Q]
+          })
+        ])
+      ).toBe('r 3.8 mm');
+    });
+
+    it('falls back to the count when an edge has no stored witness', () => {
+      const rim = [0, 1, 2, 3].map((q) => arc(10 + q, q));
+      // A hash-only pick, or an older document with no references.
+      expect(fillet(rim.slice(0, 3), [10, 11, 12, 13])).toBe(
+        '4 edges · r 3.8 mm'
+      );
+      expect(
+        featureValueSummary(
+          feature({
+            featureKind: 'fillet',
+            radius: 3.8,
+            edgeHashes: [10, 11, 12, 13]
+          }),
+          {},
+          'mm'
+        )
+      ).toBe('4 edges · r 3.8 mm');
+      // A malformed witness from untrusted JSON names nothing.
+      const broken = {
+        ...rim[3]!,
+        witness: { curveType: 'CIRCLE', length: 1, closed: false }
+      } as unknown as EdgeTopologyReferenceV5;
+      expect(fillet([...rim.slice(0, 3), broken])).toBe('4 edges · r 3.8 mm');
+    });
   });
 
   it('tells a run of offset-face rows apart by face and signed distance', () => {

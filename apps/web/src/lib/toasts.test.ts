@@ -55,6 +55,12 @@ describe('countLabel', () => {
     expect(countLabel(1, 'body', 'bodies')).toBe('1 body');
     expect(countLabel(2, 'body', 'bodies')).toBe('2 bodies');
   });
+
+  it('groups large counts with locale separators', () => {
+    expect(countLabel(10_000, 'cloud project', 'cloud projects')).toBe(
+      '10,000 cloud projects'
+    );
+  });
 });
 
 describe('statusRepeatedByToast', () => {

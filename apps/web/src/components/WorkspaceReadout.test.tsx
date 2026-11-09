@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { OVERLAY_EXIT_MS } from '../hooks/useDelayedUnmount';
 import { STATUS_MIN_DWELL_MS } from '../hooks/usePacedStatus';
+import { EditRefusal } from './EditRefusal';
 import {
   STATUS_CLOCK_STEP_MS,
   STATUS_LIFETIME_MS
@@ -25,6 +26,51 @@ const SUMMARY = {
 };
 
 describe('WorkspaceReadout', () => {
+  it('opens and closes the compact refusal without clearing the pick', async () => {
+    const user = userEvent.setup();
+    const onPick = vi.fn();
+    render(
+      <div onPointerDown={onPick}>
+        <WorkspaceReadout
+          {...SUMMARY}
+          status=""
+          tone="ready"
+          onOpenLog={vi.fn()}
+          pick={<span>Box · Right face · 297.7 mm²</span>}
+          notice={
+            <EditRefusal
+              variant="bar"
+              unitLabel="mm"
+              operation={{
+                title: 'Resize Body',
+                phase: 'failed',
+                error: { message: 'Refused.', detail: 'Exact check failed.' },
+                onEditCulprit: vi.fn(),
+                onViewDetails: vi.fn(),
+                onKeepLastValid: vi.fn(),
+                onSelectAllEdges: vi.fn()
+              }}
+            />
+          }
+        />
+      </div>
+    );
+    const why = screen.getByRole('button', { name: 'Why?' });
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await user.click(why);
+      expect(why).toHaveAttribute('aria-expanded', 'true');
+      expect(
+        document.getElementById(why.getAttribute('aria-controls')!)
+      ).toBeVisible();
+      expect(screen.getByText('The solid is unchanged.')).toBeVisible();
+      await user.keyboard('{Escape}');
+      expect(why).toHaveAttribute('aria-expanded', 'false');
+      expect(screen.queryByText('The solid is unchanged.')).toBeNull();
+    }
+    expect(onPick).not.toHaveBeenCalled();
+    expect(screen.getByText('Box · Right face · 297.7 mm²')).toBeVisible();
+  });
+
   it('announces a tool-state change without retaining the previous state for its dwell', () => {
     const { rerender } = render(
       <WorkspaceReadout
@@ -154,9 +200,7 @@ describe('WorkspaceReadout', () => {
     // Unlaid out, the row has no height: no gap for a row that is not there.
     // It used to read 8px, which lifted the notice lane over the handle's
     // value chip while an operation was armed.
-    expect(viewer.style.getPropertyValue('--workspace-guidance-h')).toBe(
-      '0px'
-    );
+    expect(viewer.style.getPropertyValue('--workspace-guidance-h')).toBe('0px');
   });
 
   it('leads the guidance with the pick, which outlasts a live message', () => {

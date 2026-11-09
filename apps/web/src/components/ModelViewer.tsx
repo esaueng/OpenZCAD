@@ -503,8 +503,10 @@ export interface OffsetHandleTarget {
   topologyId: string;
   point: { x: number; y: number; z: number };
   normal: { x: number; y: number; z: number };
-  /** Restored after a failed exact-kernel validation. */
+  /** Displayed displacement; zero when the committed face is restored. */
   initialValue?: number;
+  /** Editable chip/keypad input, independent of the displayed displacement. */
+  inputValue?: number;
   /** Primitive height when this offset is really an overall-height edit. */
   totalBaseline?: number;
   /** -1 when a drag along the handle subtracts from that total; default +1. */
@@ -1089,6 +1091,8 @@ export interface ModelViewerProps {
   onSelectEdgeChain(selections: TopologySelection[]): void;
   /** Armed face-offset handle (selection-first direct manipulation). */
   offsetHandle: OffsetHandleTarget | null;
+  /** Semantic selection remains available while geometry temporarily withdraws the handle. */
+  offsetDragTarget: Pick<OffsetHandleTarget, 'bodyId' | 'topologyId'> | null;
   /** Streamed signed offset; App coalesces exact rebuilds. */
   onOffsetPreview(offset: number, exactGeometry?: boolean): void;
   /** Fired when an offset-handle drag releases with a non-zero offset. */
@@ -2224,6 +2228,7 @@ export function ModelViewer({
   xrayOpacity = XRAY_OPACITY_BOUNDS.default / 100,
   tangentEdges = DEFAULT_TANGENT_EDGE_STYLE,
   offsetHandle: incomingOffsetHandle,
+  offsetDragTarget,
   onOffsetPreview,
   onOffsetCommit,
   onOffsetCancel,
@@ -2830,6 +2835,7 @@ export function ModelViewer({
   /** The handle the live offset rig was built from. */
   const offsetRigBuiltRef = useRef<{ handle: OffsetHandleTarget } | null>(null);
   const offsetDragActiveRef = useRef(false);
+  const retireOffsetDragRef = useRef<(() => void) | null>(null);
   /** How far the body reaches behind the armed face, for the "Total" reading. */
   const offsetExtentRef = useRef<number | null>(null);
   /** Which number the offset chip shows: the drag delta, or the whole span. */
@@ -2840,6 +2846,7 @@ export function ModelViewer({
   const cylinderRadiusProxyControllerRef = useRef<VisualProxyController | null>(
     null
   );
+  const resetBodyPickingRef = useRef<(() => void) | null>(null);
   const offsetGhostClearRef = useRef<(() => void) | null>(null);
   const offsetGhostClipRef = useRef<
     ((plane: THREE.Plane | null) => void) | null
@@ -3934,7 +3941,9 @@ export function ModelViewer({
       delete renderer.domElement.dataset.e2eHeightProxyOffset;
     }
     function restoreOffsetBodyProxy() {
+      const hadProxy = offsetBodyProxy !== null;
       discardOffsetBodyProxy();
+      if (hadProxy) resetBodyPickingRef.current?.();
       refreshShadowMap();
       requestRender();
     }
@@ -4046,6 +4055,16 @@ export function ModelViewer({
       restore: restoreOffsetBodyProxy,
       discard: discardOffsetBodyProxy
     };
+    retireOffsetDragRef.current = () => {
+      if (!offsetDrag) return;
+      gestures.release(offsetDrag.pointerId, 'grab');
+      offsetDrag = null;
+      offsetDragActiveRef.current = false;
+      clearOffsetGhost();
+      restoreOffsetBodyProxy();
+      onDirectManipulationChangeRef.current(false);
+      onOffsetCancelRef.current();
+    };
 
     const topologyPickList = new TopologyPickList({
       hud,
@@ -4156,6 +4175,15 @@ export function ModelViewer({
       renderer.domElement.style.cursor = 'default';
       requestRender();
       return cancelled;
+    };
+    resetBodyPickingRef.current = () => {
+      // Candidates and dwell can hold hits from a mesh that a proxy deformed
+      // or an exact frame replaced. Nothing from that projection may fade out.
+      pendingHoverEvent = null;
+      depthCycle = null;
+      topologyPickList.hide();
+      hoverDwellRef.current.reset();
+      selection.resetForRebuild();
     };
     const handleCapturedEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && topologyPickList.visible) {
@@ -4496,7 +4524,7 @@ export function ModelViewer({
             : undefined;
         if (
           onOpenOffsetKeypadRef.current(
-            offsetRig.value(),
+            offsetHandleRef.current?.inputValue ?? offsetRig.value(),
             total,
             total === undefined
               ? undefined
@@ -7445,7 +7473,10 @@ export function ModelViewer({
         const scale =
           (rig.group.userData.gizmoScale as number | undefined) ?? 1;
         anchor = rig.chipAnchor(scale);
-        const rawValue = rig.value();
+        const rawValue =
+          rig === offsetRigRef.current && !offsetDragActiveRef.current
+            ? (offsetHandleRef.current?.inputValue ?? rig.value())
+            : rig.value();
         const value = Math.round(rawValue * 100) / 100;
         if (rig.kind === 'cylinder-radius') {
           const mode = cylinderDimensionModeRef.current;
@@ -11130,9 +11161,8 @@ export function ModelViewer({
           Math.abs(finalOffset) > 1e-9
         ) {
           queueOffsetBodyProxy(finalOffset);
-          // A refused release can keep the last value that built on screen,
-          // still uncommitted, so its ghost stays too; a restored body
-          // clears the ghost when it is installed.
+          // A refusal may retain the last accepted exact shape. The
+          // re-armed handle follows that projection, never the refused input.
           const outcome = onOffsetCommitRef.current(finalOffset);
           if (outcome === 'blocked') {
             rig.setValue(completed.initialOffset);
@@ -11140,6 +11170,8 @@ export function ModelViewer({
             restoreOffsetBodyProxy();
             onOffsetCancelRef.current();
           } else if (outcome === 'refused') {
+            rig.setValue(offsetHandleRef.current?.initialValue ?? 0);
+            clearOffsetGhost();
             restoreOffsetBodyProxy();
           }
         } else {
@@ -12394,6 +12426,8 @@ export function ModelViewer({
       openExactEntryRef.current = null;
       cylinderRadiusProxyControllerRef.current = null;
       offsetBodyProxyControllerRef.current = null;
+      resetBodyPickingRef.current = null;
+      retireOffsetDragRef.current = null;
       offsetGhostClearRef.current?.();
       offsetGhostClearRef.current = null;
       offsetGhostClipRef.current = null;
@@ -12563,8 +12597,7 @@ export function ModelViewer({
   }, [measurementAnnotations]);
 
   // Body geometry is rebuilt only when the derived body projection changes.
-  // Selection-only renders reuse the installed meshes, materials, edge
-  // batches, and frozen shadow map while refreshing lightweight overlays.
+  // Keep this before assemble poses, parameter visibility and handle effects.
   useEffect(() => {
     const context = contextRef.current;
     if (!context) {
@@ -12622,8 +12655,7 @@ export function ModelViewer({
         offsetGhostClearRef.current?.();
       // The manager owns hover-slot geometry even while the slots are
       // parented under bodies, so it must detach them before body disposal.
-      context.selection.resetForRebuild();
-      hoverDwellRef.current.reset();
+      resetBodyPickingRef.current?.();
       // Same reasoning as the highlight dropped rather than retired below:
       // the bodies these were fading against are about to be disposed. Their
       // fade also died with the set `resetForRebuild` just cleared.
@@ -13754,6 +13786,18 @@ export function ModelViewer({
   // commit. Never rebuilt mid-drag (the drag holds offsetDragActiveRef).
   useEffect(() => {
     const context = contextRef.current;
+    const builtTarget = offsetRigBuiltRef.current?.handle;
+    if (
+      offsetDragActiveRef.current &&
+      builtTarget &&
+      (!offsetDragTarget ||
+        builtTarget.bodyId !== offsetDragTarget.bodyId ||
+        builtTarget.topologyId !== offsetDragTarget.topologyId)
+    ) {
+      // A tool switch or another selection can end the session while the
+      // pointer is captured. Retire that drag without reselecting its face.
+      retireOffsetDragRef.current?.();
+    }
     if (!context || offsetDragActiveRef.current) {
       return;
     }
@@ -13788,6 +13832,8 @@ export function ModelViewer({
       // re-armed handle. Its semantic target did not change: preserve the
       // rig and HUD rather than hiding them for another render frame.
       built.handle = offsetHandle;
+      offsetGhostClearRef.current?.();
+      offsetBodyProxyControllerRef.current?.restore();
       previous.setValue(offsetHandle.initialValue ?? 0);
       context.requestRender();
       return;
@@ -13797,8 +13843,10 @@ export function ModelViewer({
     const takesOver =
       previous !== null &&
       offsetHandle !== null &&
-      (built?.handle.locked === true || built?.handle.entry === true) &&
-      built.handle.bodyId === offsetHandle.bodyId;
+      (built?.handle.locked === true ||
+        built?.handle.entry === true ||
+        offsetHandle.inputValue !== undefined) &&
+      built?.handle.bodyId === offsetHandle.bodyId;
     if (previous) {
       if (takesOver) previous.dispose();
       else retireRig(previous, retiringRigsRef.current);
@@ -13876,7 +13924,7 @@ export function ModelViewer({
     offsetRigRef.current = rig;
     offsetRigBuiltRef.current = { handle: offsetHandle };
     context.requestRender();
-  }, [offsetHandle, bodies]);
+  }, [offsetHandle, offsetDragTarget, bodies]);
 
   // The rig effect above retires its own rig when the handle changes; this
   // retires the last one when the viewer goes.

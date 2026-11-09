@@ -274,6 +274,16 @@ class PresenceTier {
     this.hidden.material.linewidth = widthAt(this.hiddenPresence);
   }
 
+  /** A projection being discarded must leave no x-ray fade behind it. */
+  reset() {
+    this.presence = 0;
+    this.hiddenPresence = 0;
+    this.target = 0;
+    this.firstStep = false;
+    this.finishClearing();
+    this.apply();
+  }
+
   /**
    * Advances the x-ray twin one frame, the only part of a tier that moves
    * over time. Returns false once there is nothing left to move.
@@ -711,6 +721,13 @@ export class BodyEdgeOverlay extends THREE.Group {
     this.hoverTier.retarget(nextKeys.size > 0);
     this.refreshVisibility();
     return true;
+  }
+
+  /** Drops hover immediately when its source geometry is restored/replaced. */
+  resetHover() {
+    this.hoveredKeys.clear();
+    this.hoverTier.reset();
+    this.refreshVisibility();
   }
 
   /**
