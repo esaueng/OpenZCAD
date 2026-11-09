@@ -66,6 +66,7 @@
     "test/bundle-size-policy.test.ts",
     "test/chamfer-curved-chain.test.ts",
     "test/chamfer-fillet-corner.test.ts",
+    "test/cone-shoulder-fillet.test.ts",
     "test/chamfer-rounded-block.test.ts",
     "test/chamfer-rounded-edge.test.ts",
     "test/ci-qualification.test.ts",
