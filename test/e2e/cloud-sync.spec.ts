@@ -1531,3 +1531,90 @@ test('resumes a workspace on another device and carries undo and redo back acros
     await Promise.all([deviceA.close(), deviceB.close()]);
   }
 });
+
+test('a workspace view sync notice clears the live drag guidance and dismisses once', async ({
+  page
+}) => {
+  const api = new SharedCloudProjectApi();
+  await api.install(page);
+  let writes = 0;
+  await page.route('**/api/projects/*/workspace-sessions', (route) => {
+    if (route.request().method() !== 'PUT') return route.fallback();
+    writes++;
+    return route.fulfill({
+      status: 400,
+      json: { error: 'Invalid workspace session.' }
+    });
+  });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('View sync notice');
+  await page.getByRole('button', { name: 'New project' }).click();
+  await createPrimitiveInPlace(page, 'cylinder', {
+    sizes: { radius: '14', height: '28' }
+  });
+  await expect(
+    page.getByRole('status', { name: 'Saved', exact: true })
+  ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+  await expect.poll(() => writes).toBe(1);
+  const toast = page.locator('.viewer-area .toast');
+  await expect(toast).toContainText("Workspace view isn't syncing.", {
+    timeout: 10_000
+  });
+  // Hold the notice while preparing a real drag so its normal expiry does
+  // not race the bounds check on a slow runner.
+  await toast.hover();
+  const canvas = page.locator('.viewer-host canvas');
+  await canvas.evaluate((element) =>
+    element.dispatchEvent(
+      new CustomEvent('openzcad:e2e-select-cylinder', {
+        detail: { surface: 'wall' }
+      })
+    )
+  );
+  await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
+  const handle = await canvas.evaluate((element) => ({
+    x: Number(element.dataset.e2eHandleX),
+    y: Number(element.dataset.e2eHandleY),
+    dx: Number(element.dataset.e2eHandleDx),
+    dy: Number(element.dataset.e2eHandleDy),
+    pixelsPerUnit: Number(element.dataset.e2eHandlePixelsPerUnit)
+  }));
+  const bounds = (await canvas.boundingBox())!;
+  await page.mouse.move(bounds.x + handle.x, bounds.y + handle.y);
+  await page.mouse.down();
+  try {
+    await page.mouse.move(
+      bounds.x + handle.x + handle.dx * handle.pixelsPerUnit * 4,
+      bounds.y + handle.y + handle.dy * handle.pixelsPerUnit * 4,
+      { steps: 8 }
+    );
+    const guidance = page
+      .locator('.workspace-hint')
+      .filter({ hasText: 'Release to apply' });
+    await expect(guidance).toBeVisible();
+    const [noticeBox, hintBox] = await Promise.all([
+      toast.boundingBox(),
+      guidance.boundingBox()
+    ]);
+    expect(noticeBox).not.toBeNull();
+    expect(hintBox).not.toBeNull();
+    expect(
+      noticeBox!.x + noticeBox!.width <= hintBox!.x ||
+        hintBox!.x + hintBox!.width <= noticeBox!.x ||
+        noticeBox!.y + noticeBox!.height <= hintBox!.y ||
+        hintBox!.y + hintBox!.height <= noticeBox!.y
+    ).toBe(true);
+  } finally {
+    await page.keyboard.press('Escape');
+    await page.mouse.up();
+  }
+  await toast.getByRole('button', { name: 'Dismiss', exact: true }).click();
+  await expect(toast).toHaveCount(0);
+  // Continued activity leaves the refusal visible in hook state but never
+  // reissues the permanent request or reinstates the dismissed notice.
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(5000);
+  expect(writes).toBe(1);
+  await expect(page.locator('.toast')).toHaveCount(0);
+});

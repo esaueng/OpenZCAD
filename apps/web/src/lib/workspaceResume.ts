@@ -3,7 +3,57 @@ import {
   type ProjectWorkspaceSession
 } from '@openzcad/shared';
 import { desktopFetch } from './desktopBridge';
-import { isEncryptedProject } from './api';
+import { ApiError, isEncryptedProject } from './api';
+
+export interface WorkspaceResumeFailure {
+  kind:
+    | 'network'
+    | 'server'
+    | 'document-sync'
+    | 'invalid'
+    | 'auth'
+    | 'forbidden'
+    | 'permanent';
+  status?: number;
+  code?: string;
+}
+
+export function workspaceResumeFailure(error: unknown): WorkspaceResumeFailure {
+  if (!(error instanceof ApiError)) return { kind: 'network' };
+  const { status, code } = error;
+  const kind =
+    status >= 500
+      ? 'server'
+      : status === 409 && (!code || code === 'E2EE_VIEW_STATE_AHEAD')
+        ? 'document-sync'
+        : status === 400
+          ? 'invalid'
+          : status === 401
+            ? 'auth'
+            : status === 403
+              ? 'forbidden'
+              : 'permanent';
+  return { kind, status, ...(code ? { code } : {}) };
+}
+
+async function refusal(response: Response): Promise<ApiError> {
+  let payload: Record<string, unknown> = {};
+  try {
+    const body: unknown = await response.json();
+    if (body && typeof body === 'object' && !Array.isArray(body))
+      payload = body as Record<string, unknown>;
+  } catch {
+    // A proxy's non-JSON error must still retain its HTTP status.
+  }
+  return new ApiError(
+    response.status,
+    typeof payload.error === 'string'
+      ? payload.error
+      : 'Workspace view sync failed.',
+    typeof payload.code === 'string' ? payload.code : undefined,
+    payload
+  );
+}
 
 /** An encrypted project's view state: signed, encrypted envelopes (slice 4-7). */
 const encryptedViewStates = async () =>
@@ -46,7 +96,7 @@ export const workspaceSessionApi = {
       `/api/projects/${encodeURIComponent(projectId)}/workspace-sessions`,
       { credentials: 'same-origin' }
     );
-    if (!response.ok) throw new Error('Workspace sessions are unavailable.');
+    if (!response.ok) throw await refusal(response);
     const data = (await response.json()) as {
       sessions?: ProjectWorkspaceSession[];
     };
@@ -67,9 +117,6 @@ export const workspaceSessionApi = {
         body: JSON.stringify(session)
       }
     );
-    if (!response.ok)
-      throw new Error(
-        'Workspace session sync is pending.'
-      );
+    if (!response.ok) throw await refusal(response);
   }
 };

@@ -124,6 +124,7 @@ import {
 } from '@openzcad/shared';
 import type { SketchCompositeSummary } from './components/SketchEntityEditor';
 import { useWorkspaceResume } from './hooks/useWorkspaceResume';
+import { useWorkspaceResumeNotice } from './hooks/useWorkspaceResumeNotice';
 import { buildMeasurementRecord } from './lib/measurementRecord';
 import {
   loadProjectBackupFiles,
@@ -3428,6 +3429,12 @@ export function App() {
       setResumeViewGeneration((value) => value + 1);
     }
   });
+  useWorkspaceResumeNotice(
+    workspaceResume.lastFailure !== null,
+    doc?.projectId ?? null,
+    session?.userId ?? null,
+    announce
+  );
   const sessionRef = useRef(session);
   sessionRef.current = session;
   const keySessionEventRef = useRef<(event: KeySessionEvent) => void>(() => {});
@@ -32386,12 +32393,6 @@ export function App() {
       }
       overlays={
         <>
-          {workspaceResume.status === 'offline' && (
-            <div className="toast" role="status">
-              Session sync is pending. It will retry while this project is open.
-            </div>
-          )}
-
           {shareCopyChoice && (
             <SharedLinkCopyDialog
               accountEncrypts={shareCopyChoice.accountEncrypts}
