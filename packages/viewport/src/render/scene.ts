@@ -14,6 +14,7 @@ import { tweenOrientationFor, VIEW_DIRECTIONS } from '../camera/views';
 import { keepProgram } from './programRetention';
 import { COPLANAR_DEPTH_ATTRIBUTE, withCoplanarDepth } from './coplanarBodies';
 import { STUDIO_RIG } from './studio';
+import { tangentFacePairs } from './tangentEdges';
 
 const CAD_CREASE_ANGLE = THREE.MathUtils.degToRad(30);
 const DOT_EPSILON = 1e-10;
@@ -247,6 +248,16 @@ function geometryFromMesh(
     topologyFaceByTriangle.every((face) => face >= 0);
   const boundarySlots: number[] = [];
   const creaseDot = Math.cos(CAD_CREASE_ANGLE);
+  // Two topology faces that meet tangentially — the halves of a sphere or a
+  // cylinder split at a seam, a fillet rolling into its wall — are one smooth
+  // surface. Creasing their shared vertices gave each side its own one-sided
+  // normal, and the two disagreed by up to the tessellation's angular
+  // deflection: a faint ring around a sphere's equator, a line along every
+  // fillet rim. Smooth across them; any genuine crease stays split.
+  const isTangentPair =
+    topology && topology.faces.length > 1
+      ? tangentFacePairs(mesh, topology.faces)
+      : null;
   for (let slot = 0; slot < edgeCount; slot += 1) {
     // Non-manifold edges stay creased; smoothing across more than two incident
     // faces can blend unrelated shells that merely share indexed vertices.
@@ -259,17 +270,21 @@ function geometryFromMesh(
     const firstTopologyFace = topologyFaceByTriangle[first]!;
     const secondTopologyFace = topologyFaceByTriangle[second]!;
     const hasTopologyFace = firstTopologyFace >= 0 || secondTopologyFace >= 0;
+    const crossesFaces =
+      hasTopologyFace && firstTopologyFace !== secondTopologyFace;
     const shouldSmooth = hasTopologyFace
-      ? firstTopologyFace >= 0 && firstTopologyFace === secondTopologyFace
+      ? firstTopologyFace >= 0 &&
+        (firstTopologyFace === secondTopologyFace ||
+          isTangentPair?.(firstTopologyFace, secondTopologyFace) === true)
       : faceNormals[first * 3]! * faceNormals[second * 3]! +
           faceNormals[first * 3 + 1]! * faceNormals[second * 3 + 1]! +
           faceNormals[first * 3 + 2]! * faceNormals[second * 3 + 2]! +
           DOT_EPSILON >=
         creaseDot;
-    if (!shouldSmooth) {
-      boundarySlots.push(slot);
-      continue;
-    }
+    // A deferred-topology preview still outlines every face boundary,
+    // tangent ones included, as the committed body's edges would.
+    if (crossesFaces || !shouldSmooth) boundarySlots.push(slot);
+    if (!shouldSmooth) continue;
     for (const vertexIndex of [edgeStart[slot]!, edgeEnd[slot]!]) {
       const firstCorner = cornerForVertex(first, vertexIndex);
       const secondCorner = cornerForVertex(second, vertexIndex);
@@ -1000,11 +1015,11 @@ export interface StagePalette {
 
 /** The graphite stage: the scene's colours before any theme is applied. */
 export const DARK_STAGE_PALETTE: Readonly<StagePalette> = {
-  backdropTop: '#171a1f',
-  backdropMiddle: '#101215',
-  backdropBottom: '#0b0c0f',
-  gridMinor: '#5c6573',
-  gridMajor: '#838d9c',
+  backdropTop: '#222428',
+  backdropMiddle: '#18191c',
+  backdropBottom: '#121315',
+  gridMinor: '#5a5e66',
+  gridMajor: '#878c95',
   shadowOpacity: 0.55
 };
 

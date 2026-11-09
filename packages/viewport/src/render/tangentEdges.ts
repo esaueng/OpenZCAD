@@ -45,11 +45,40 @@ export function tangentEdgeIds(
 ): Set<string> {
   const tangent = new Set<string>();
   const faces = topology.faces;
+  const isTangentPair = tangentFacePairs(mesh, faces);
+  // A hash two faces share names neither of them.
+  const faceByHash = new Map<number, number>();
+  faces.forEach((face, index) => {
+    faceByHash.set(face.hash, faceByHash.has(face.hash) ? -1 : index);
+  });
+  for (const edge of topology.edges) {
+    const hashes = [...new Set(edge.adjacentFaceHashes ?? [])];
+    if (hashes.length !== 2) continue;
+    const first = faceByHash.get(hashes[0]!) ?? -1;
+    const second = faceByHash.get(hashes[1]!) ?? -1;
+    if (first < 0 || second < 0) continue;
+    if (isTangentPair(first, second)) tangent.add(edge.topologyId);
+  }
+  return tangent;
+}
+
+const NEVER_TANGENT = () => false;
+
+/**
+ * Which pairs of topology faces, by index, meet tangentially along every
+ * mesh vertex they share (see {@link tangentEdgeIds} for the measure). The
+ * shading uses it to carry smooth normals across a seam or a fillet rim, and
+ * the edge overlay to draw those rims quieter.
+ */
+export function tangentFacePairs(
+  mesh: Pick<MeshGeometry, 'vertices' | 'indices'>,
+  faces: BodyTopology['faces']
+): (first: number, second: number) => boolean {
   const faceCount = faces.length;
   const vertexCount = Math.floor(mesh.vertices.length / 3);
   const triangleCount = Math.floor(mesh.indices.length / 3);
   if (faceCount < 2 || vertexCount === 0 || triangleCount === 0) {
-    return tangent;
+    return NEVER_TANGENT;
   }
   const indices = mesh.indices;
   const positions = mesh.vertices;
@@ -85,7 +114,7 @@ export function tangentEdgeIds(
     }
   }
   if (sharedCorners === 0) {
-    return tangent;
+    return NEVER_TANGENT;
   }
 
   // One slot per (shared vertex, face), chained per vertex: a vertex is shared
@@ -188,22 +217,12 @@ export function tangentEdgeIds(
     }
   }
 
-  // A hash two faces share names neither of them.
-  const faceByHash = new Map<number, number>();
-  faces.forEach((face, index) => {
-    faceByHash.set(face.hash, faceByHash.has(face.hash) ? -1 : index);
-  });
   const tangentDot = Math.cos(TANGENT_EDGE_MAX_ANGLE);
-  for (const edge of topology.edges) {
-    const hashes = [...new Set(edge.adjacentFaceHashes ?? [])];
-    if (hashes.length !== 2) continue;
-    const first = faceByHash.get(hashes[0]!) ?? -1;
-    const second = faceByHash.get(hashes[1]!) ?? -1;
-    if (first < 0 || second < 0) continue;
+  return (first, second) => {
+    if (first === second || first < 0 || second < 0) return false;
     const dot = pairDot.get(pairKey(first, second, faceCount));
-    if (dot !== undefined && dot >= tangentDot) tangent.add(edge.topologyId);
-  }
-  return tangent;
+    return dot !== undefined && dot >= tangentDot;
+  };
 }
 
 function pairKey(first: number, second: number, faceCount: number) {

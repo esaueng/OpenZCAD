@@ -5171,8 +5171,13 @@ export const toSketchCompositeId = (value: string): SketchCompositeId =>
  * design's neutral (#b0b6cb), which the key light washed out on top faces so
  * that a selected one barely lifted. The viewport stage is dark in both
  * themes, so one value serves both.
+ *
+ * Desaturated from #99a0b2 at the same lightness with the studio lighting
+ * (U10): the physically based shading no longer washes top faces out, and
+ * the old steel-blue read as a blue part beside a neutral reference CAD
+ * view. A trace of cool remains so it still reads as metal, not plastic.
  */
-export const DEFAULT_BODY_COLOR = '#99a0b2';
+export const DEFAULT_BODY_COLOR = '#a2a6ae';
 
 /**
  * What a live command preview draws its result body in: the hue of the web

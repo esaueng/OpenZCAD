@@ -177,6 +177,7 @@ import {
   createStudioEnvironment,
   createStudioGrid,
   createStudioHemisphereLight,
+  DARK_STAGE_PALETTE,
   STUDIO_RIG,
   dimensionLabelLayout,
   directEditDirectionFromNormal,
@@ -2801,7 +2802,7 @@ export function ModelViewer({
     const scene = new THREE.Scene();
     // Solid clear colour stays behind the clip-space gradient as a safe first
     // frame/context-recovery fallback.
-    scene.background = new THREE.Color('#0b0c0f');
+    scene.background = new THREE.Color(DARK_STAGE_PALETTE.backdropBottom);
     const gradientBackdrop = createGradientBackdrop();
     scene.add(gradientBackdrop);
 
