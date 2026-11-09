@@ -36,6 +36,19 @@ async function exportedDocument(page: Page): Promise<ProjectDocument> {
   ).document;
 }
 
+/**
+ * The stored mesh draws, and can be picked, before the exact model behind it
+ * is rebuilt. Until then the app withholds editing — the cap's value chip
+ * stays hidden — and says so on the status line. After a reload that rebuild
+ * is cold (kernel load plus a full 20-tooth replay), so it is waited for by
+ * that state, not by the chip inside an assertion's default budget.
+ */
+async function waitForEditableModel(page: Page) {
+  await expect(
+    page.getByRole('group', { name: 'Workspace status' })
+  ).not.toContainText('editing waits until it is ready', { timeout: 60_000 });
+}
+
 async function setHeight(page: Page, height: number) {
   const keypad = page.getByRole('dialog', { name: 'Total value' });
   // Import reference repairs can start a rebuild after the stored mesh is
@@ -153,10 +166,13 @@ test(
       timeout: 30_000
     });
     await expectBodyCount(page, 1);
+    await waitForEditableModel(page);
     await waitForStillViewport(page);
     await expect
       .poll(() => pickPlanarFace(page, { x: 0, y: 0, z: 1 }))
       .not.toBeNull();
+    // The pick's lineage demand can start one more (warm) rebuild.
+    await waitForEditableModel(page);
     await expect(page.getByTestId('direct-manipulation-value')).toContainText(
       '56'
     );
