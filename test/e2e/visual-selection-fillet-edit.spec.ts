@@ -646,3 +646,145 @@ test('still refuses an oversize radius after a slow blend preview', async ({
     .toBeCloseTo(3, 6);
   await expect(chip).not.toHaveAttribute('data-state', 'warning');
 });
+
+interface BlendPreviewGate {
+  hold: boolean;
+  held: number;
+  release(): void;
+}
+
+test(
+  'says catching up while a slow blend drag still shows the previous radius',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(process.env.CI ? 240_000 : 120_000);
+    // Every rebuild counts as slow, so the drag degrades on its first frame.
+    // The gate then holds one preview-geometry reply, keeping the next radius
+    // genuinely in flight while the earlier radius's geometry stays on screen.
+    await page.addInitScript(() => {
+      window.__openzcadE2ESlowFrameMs = 0;
+      const scope = window as typeof window & {
+        blendPreviewGate: BlendPreviewGate;
+      };
+      const held: (() => void)[] = [];
+      scope.blendPreviewGate = {
+        hold: false,
+        held: 0,
+        release() {
+          this.hold = false;
+          for (const deliver of held.splice(0)) deliver();
+        }
+      };
+      const descriptor = Object.getOwnPropertyDescriptor(
+        Worker.prototype,
+        'onmessage'
+      )!;
+      Object.defineProperty(Worker.prototype, 'onmessage', {
+        ...descriptor,
+        set(listener: (event: MessageEvent) => void) {
+          descriptor.set!.call(this, (event: MessageEvent) => {
+            const gate = scope.blendPreviewGate;
+            if (
+              gate.hold &&
+              (event.data as { type?: string }).type === 'preview-geometry'
+            ) {
+              gate.held += 1;
+              held.push(() => listener.call(this, event));
+            } else listener.call(this, event);
+          });
+        }
+      });
+    });
+    await stubApi(page);
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.goto('/');
+    await page.getByLabel('Project name').fill('Slow blend catch-up');
+    await page.getByRole('button', { name: 'New project' }).click();
+    await createPrimitiveInPlace(page, 'box');
+    const canvas = page.locator('.viewer-host canvas');
+    await expect
+      .poll(
+        () =>
+          canvas.evaluate(
+            (element) =>
+              new Promise<boolean>((resolve) => {
+                element.dispatchEvent(
+                  new CustomEvent('openzcad:e2e-select-edge', {
+                    detail: {
+                      resolve: (selection: unknown) =>
+                        resolve(selection !== null)
+                    }
+                  })
+                );
+              })
+          ),
+        { timeout: 30_000 }
+      )
+      .toBe(true);
+
+    const chip = page.getByTestId('direct-manipulation-value');
+    await expect(chip).toHaveText('R 0 mm');
+    await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
+    const handle = await canvas.evaluate((element) => ({
+      x: Number(element.dataset.e2eHandleX),
+      y: Number(element.dataset.e2eHandleY),
+      dx: Number(element.dataset.e2eHandleDx),
+      dy: Number(element.dataset.e2eHandleDy),
+      pixelsPerUnit: Number(element.dataset.e2eHandlePixelsPerUnit)
+    }));
+    expect(Object.values(handle).every(Number.isFinite)).toBe(true);
+    const box = (await canvas.boundingBox())!;
+    const start = { x: box.x + handle.x, y: box.y + handle.y };
+    const dragTo = (distance: number) =>
+      page.mouse.move(
+        start.x + handle.dx * handle.pixelsPerUnit * distance,
+        start.y + handle.dy * handle.pixelsPerUnit * distance,
+        { steps: 1 }
+      );
+    const shownRadius = async () => (await readBlend(canvas))?.blendRadius ?? 0;
+    const chipRadius = async () =>
+      Number(/R ([\d.]+) mm/.exec((await chip.textContent()) ?? '')?.[1]);
+
+    await page.mouse.move(start.x, start.y);
+    await page.mouse.down();
+    await dragTo(2);
+    await expect.poll(shownRadius, { timeout: 30_000 }).toBeGreaterThan(0);
+    const first = await shownRadius();
+    expect(first).toBeCloseTo(await chipRadius(), 2);
+    // The slow first frame landed where the hand is: nothing to catch up on.
+    await expect(chip).toHaveAttribute('data-state', 'ready');
+
+    await page.evaluate(() => {
+      (
+        window as typeof window & { blendPreviewGate: BlendPreviewGate }
+      ).blendPreviewGate.hold = true;
+    });
+    await dragTo(3.5);
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (window as typeof window & { blendPreviewGate: BlendPreviewGate })
+              .blendPreviewGate.held
+        )
+      )
+      .toBe(1);
+    // The chip names the new radius over the previous radius's geometry. It
+    // used to stay ready here, with nothing saying the shape was behind.
+    expect(await chipRadius()).toBeGreaterThan(first + 0.5);
+    await expect(chip).toHaveAttribute('data-state', 'deferred');
+    await expect(chip).toHaveAttribute('aria-busy', 'true');
+    expect(await shownRadius()).toBeCloseTo(first, 6);
+
+    await page.evaluate(() =>
+      (
+        window as typeof window & { blendPreviewGate: BlendPreviewGate }
+      ).blendPreviewGate.release()
+    );
+    const second = await chipRadius();
+    await expect.poll(shownRadius, { timeout: 30_000 }).toBeCloseTo(second, 2);
+    await expect(chip).toHaveAttribute('data-state', 'ready');
+    await page.keyboard.press('Escape');
+    await page.mouse.up();
+  }
+);

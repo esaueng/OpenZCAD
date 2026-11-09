@@ -13908,6 +13908,12 @@ export function ModelViewer({
     edgeRigRef.current?.setWarning?.(offsetPreviewInvalid);
     contextRef.current?.requestRender();
   }, [offsetPreviewInvalid]);
+  // The chip reads the deferred state in the frame loop. A hand at rest, or
+  // a value typed into the keypad, asks for no frame of its own, so the
+  // catching-up state would otherwise wait for an unrelated repaint.
+  useEffect(() => {
+    contextRef.current?.requestRender();
+  }, [previewDeferred]);
 
   // Edge-radius handle: built when edges arm fillet/chamfer, torn down on
   // deselect or commit. Never rebuilt mid-drag.
