@@ -230,7 +230,12 @@ function resolveDirectEditFaceInSolids(
       : { status: 'unsupported', operation: 'direct-edit' }
   );
   if (resolution.status === 'failed') {
-    throw new Error(`Direct-edit face is stale: ${resolution.message}`);
+    const message = `Direct-edit face is stale: ${resolution.message}`;
+    // A name the body no longer publishes is a lost reference, the same
+    // verdict a vanished hash gets; the card branches on the code.
+    throw resolution.reason === 'lineage-not-found'
+      ? new AdapterRefusal('reference_missing', message)
+      : new Error(message);
   }
   if (typeof resolution.candidate.value !== 'number') {
     throw new Error(

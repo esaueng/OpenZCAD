@@ -1,5 +1,8 @@
 import type { CommandDiagnostic } from './interaction/machine';
-import { isStaleSelectionError } from './interaction/machine';
+import {
+  isDependentReferenceError,
+  isStaleSelectionError
+} from './interaction/machine';
 
 /**
  * The one line a refused edit shows on its own control, worked out from the
@@ -58,6 +61,18 @@ export function refusalSummary(
       status: 'selection-changed',
       headline: 'Pick the edge or face again',
       cause: error.message,
+      pickAnother: false
+    };
+  }
+  // The user's pick is fine: a later feature stored edges or faces this
+  // change reshapes past recognition. Say which, and what to do about it;
+  // "Selection changed" would blame the face still under the cursor.
+  if (isDependentReferenceError(error)) {
+    const name = error.culprit!.featureName;
+    return {
+      status: 'not-built',
+      headline: `“${name}” can’t follow this change`,
+      cause: `“${name}” is applied to edges or faces this change reshapes, and it can no longer tell which ones they are on the new shape. Try a smaller change, or edit “${name}” and pick its edges or faces again.`,
       pickAnother: false
     };
   }

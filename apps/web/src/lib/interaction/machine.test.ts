@@ -3,6 +3,10 @@ import {
   IDLE,
   commandSessionFor,
   composingTextDraft,
+  editedFeatureIdFor,
+  isDependentReferenceError,
+  isStaleReferenceError,
+  isStaleSelectionError,
   sketchToolKeysSuspended,
   sketchPickArmed,
   projectionRepickHolds,
@@ -1693,5 +1697,83 @@ describe('operationSelectionKey', () => {
       expect(operationSelectionKey(other)).not.toBe(key);
     }
     expect(operationSelectionKey(IDLE)).toBeNull();
+  });
+});
+
+describe('stale reference verdicts', () => {
+  const lost = {
+    message: 'A selected edge no longer exists.',
+    category: 'invalid_input',
+    code: 'reference_missing'
+  };
+
+  it('reads a lost reference from the adapter code, never the sentence', () => {
+    expect(isStaleReferenceError(lost)).toBe(true);
+    expect(isStaleSelectionError(lost)).toBe(true);
+    expect(
+      isStaleReferenceError({ message: 'A selected edge no longer exists.' })
+    ).toBe(false);
+    expect(
+      isStaleSelectionError({
+        ...lost,
+        code: 'reference_positional'
+      })
+    ).toBe(true);
+    expect(
+      isStaleReferenceError({ ...lost, code: 'edge_modifier_refused' })
+    ).toBe(false);
+  });
+
+  it('tells a later feature stranded by the edit from a stale pick', () => {
+    const stranded = {
+      ...lost,
+      culprit: {
+        featureId: 'feat_chamfer',
+        featureName: 'Chamfer',
+        dependent: true
+      }
+    };
+    expect(isStaleSelectionError(stranded)).toBe(false);
+    expect(isDependentReferenceError(stranded)).toBe(true);
+    // The edited feature's own stale reference is still the user's pick.
+    expect(
+      isStaleSelectionError({
+        ...lost,
+        culprit: { featureId: 'feat_fillet', featureName: 'Fillet' }
+      })
+    ).toBe(true);
+
+    const resizing = interactionReducer(IDLE, {
+      type: 'select-face',
+      target: face({ resizeBodyFeatureId: 'feat_box' })
+    });
+    const refused = interactionReducer(
+      interactionReducer(resizing, { type: 'validation-start', value: -7.5 }),
+      { type: 'validation-failed', diagnostic: stranded, value: -7.5 }
+    );
+    expect(toolCardFor(refused)?.hint).toBe(
+      'Try a smaller change, or edit “Chamfer” to pick its edges or faces again.'
+    );
+  });
+});
+
+describe('editedFeatureIdFor', () => {
+  it('names the step a face command edits, and only that', () => {
+    const select = (target: FaceTarget) =>
+      interactionReducer(IDLE, { type: 'select-face', target });
+    expect(
+      editedFeatureIdFor(select(face({ resizeBodyFeatureId: 'feat_box' })))
+    ).toBe('feat_box');
+    expect(
+      editedFeatureIdFor(select(face({ extrudeFeatureId: 'feat_extrude' })))
+    ).toBe('feat_extrude');
+    // An explicit local Offset Face adds its own step.
+    expect(
+      editedFeatureIdFor(
+        select(face({ resizeBodyFeatureId: 'feat_box', localFaceOffset: true }))
+      )
+    ).toBeNull();
+    expect(editedFeatureIdFor(select(face()))).toBeNull();
+    expect(editedFeatureIdFor(IDLE)).toBeNull();
   });
 });

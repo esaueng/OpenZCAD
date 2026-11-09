@@ -44,6 +44,7 @@ export function offsetPreviewRejection(
       const rejection = validatedFeatureRejection({
         featureName: target.featureName,
         featureId: target.featureId,
+        ...(target.dependent ? { dependent: true } : {}),
         warnings: input.derived.warnings,
         ...(input.derived.featureWarnings
           ? { featureWarnings: input.derived.featureWarnings }

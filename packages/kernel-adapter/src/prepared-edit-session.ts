@@ -191,6 +191,10 @@ export class PreparedEditSession {
         result.faceReferenceRepairs ?? [],
         before.faceReferenceRepairs ?? []
       ) ||
+      !sameEntries(
+        result.edgeHashRepairs ?? [],
+        before.edgeHashRepairs ?? []
+      ) ||
       !sameMap(result.sketchBases, before.sketchBases) ||
       !sameMap(result.datumFrames, before.datumFrames) ||
       !sameMap(result.datumAxes, before.datumAxes) ||

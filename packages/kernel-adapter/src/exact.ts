@@ -4001,6 +4001,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         ...(build.referenceRepairs.length > 0
           ? { referenceRepairs: build.referenceRepairs }
           : {}),
+        ...(build.edgeHashRepairs?.length
+          ? { edgeHashRepairs: build.edgeHashRepairs }
+          : {}),
         featureWarnings: build.featureWarnings
       };
       if (transient) this.transientResults.add(derived);

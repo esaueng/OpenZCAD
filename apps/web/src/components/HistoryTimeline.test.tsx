@@ -136,6 +136,43 @@ describe('HistoryTimeline', () => {
     expect(container.querySelector('.history-pending-row')).toBeNull();
   });
 
+  it('says a refused edit of an existing step on that step, not as a new one', () => {
+    // Resize Body edits its Box: a refusal is about the Box row, and there is
+    // no new step that could have been "not built".
+    const { container, rerender, props } = renderTimeline({
+      selectedFeatureNodeId: 'node-2',
+      editingFeatureId: 'feature-2',
+      pendingStep: {
+        title: 'Resize Body',
+        message: '“Chamfer” can’t follow this change.'
+      }
+    });
+    expect(container.querySelector('.history-pending-row')).toBeNull();
+    const edited = row('Feature 2');
+    expect(edited).toHaveClass('is-editing');
+    const flag = edited.querySelector('.history-row-refused');
+    expect(flag).toHaveTextContent('edit not applied');
+    expect(flag).toHaveAttribute(
+      'title',
+      'Resize Body not applied: “Chamfer” can’t follow this change.'
+    );
+    expect(container.querySelectorAll('.history-row-refused')).toHaveLength(1);
+    // Still editing, nothing refused: the row is marked, with no flag.
+    rerender(<HistoryTimeline {...props} pendingStep={null} />);
+    expect(row('Feature 2')).toHaveClass('is-editing');
+    expect(container.querySelector('.history-row-refused')).toBeNull();
+    // A step the command would add still reads as a trailing pending row.
+    rerender(
+      <HistoryTimeline
+        {...props}
+        editingFeatureId={null}
+        pendingStep={{ title: 'Offset Face', message: 'Refused.' }}
+      />
+    );
+    expect(container.querySelector('.history-pending-row')).not.toBeNull();
+    expect(row('Feature 2')).not.toHaveClass('is-editing');
+  });
+
   it('names a Boolean row by the bodies it combined', () => {
     renderTimeline({
       features: [

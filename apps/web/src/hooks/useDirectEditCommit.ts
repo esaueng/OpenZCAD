@@ -5,6 +5,7 @@ import { directEditRejection } from '../lib/directEdit';
 import { errorMessage } from '../lib/errors';
 import type { CommandDiagnostic } from '../lib/interaction/machine';
 import {
+  refusingWarningDetail,
   splitRefusal,
   validatedFeatureRejection
 } from '../lib/featureValidation';
@@ -133,6 +134,7 @@ export function useDirectEditCommit(
             rejection = validatedFeatureRejection({
               featureName: target.featureName,
               ...(target.featureId ? { featureId: target.featureId } : {}),
+              ...(target.dependent ? { dependent: true } : {}),
               warnings: derived.warnings,
               ...(derived.featureWarnings
                 ? { featureWarnings: derived.featureWarnings }
@@ -161,7 +163,17 @@ export function useDirectEditCommit(
             bodyPresent: Boolean(derived.bodyRepresentations[targetBodyId]),
             documentMoved
           });
-          rejection = message ? splitRefusal(message) : null;
+          // Classified exactly as the live preview classifies it
+          // (`offsetPreviewRejection`), so the two cannot word or route the
+          // same refusal differently.
+          const warning = refusingWarningDetail(
+            command.label,
+            derived.warnings,
+            derived.featureWarnings
+          );
+          rejection = message
+            ? splitRefusal(message, warning?.kernelRefusal ?? warning?.category)
+            : null;
         }
         // Reported rather than thrown: a refusal is an answer, and rebuilding
         // it from an Error's message would drop the feature it names — which

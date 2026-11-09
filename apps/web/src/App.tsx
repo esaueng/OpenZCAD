@@ -785,6 +785,7 @@ import {
   commandSessionFor,
   isOperationState,
   isStaleSelectionError,
+  editedFeatureIdFor,
   operationSelectionKey,
   nextSketchCircleMode,
   nextSketchCurveMode,
@@ -4408,7 +4409,8 @@ export function App() {
       errorMessage(error, 'Exact radius preview failed.'),
       value,
       diagnostic?.advice,
-      diagnostic?.headline
+      diagnostic?.headline,
+      diagnostic
     );
   }
   const cylinderRadiusPreview = useRef(
@@ -4567,9 +4569,10 @@ export function App() {
           documentMoved
         });
         if (rejection) {
-          throw new Error(
-            withFaceTravelHint(rejection.message, candidate.travelHint)
-          );
+          throw new PreviewRefusalError({
+            ...rejection,
+            message: withFaceTravelHint(rejection.message, candidate.travelHint)
+          });
         }
         return derived;
       },
@@ -4603,7 +4606,13 @@ export function App() {
       onFailure: ({ error, value }) => {
         const message = errorMessage(error, 'Exact offset preview failed.');
         traceFaceDrag('refusal', { value, message });
-        reportPreviewFailure(message, value);
+        reportPreviewFailure(
+          message,
+          value,
+          undefined,
+          undefined,
+          error instanceof PreviewRefusalError ? error.diagnostic : undefined
+        );
       },
       acceptValue: (offset) =>
         Number.isFinite(offset) && Math.abs(offset) > 1e-9,
@@ -9177,7 +9186,12 @@ export function App() {
       const appended = localHistoryAppend(beforeDocument, next);
       if (appended) setLatestLocalAppend(appended);
       setDoc(next);
-      if (derived) applyProjectionWriteBack(derived);
+      if (derived) {
+        applyProjectionWriteBack(derived);
+        // An upstream edit may have carried a later fillet's hash-only
+        // edges; persist where they are now together with the commit.
+        applyTopologyReferenceRepairs(derived);
+      }
       if (isAnalyticsEnabled()) {
         trackUsage('feature_used');
         trackDetail('feature_operation', command.kind);
@@ -9231,7 +9245,12 @@ export function App() {
       const appended = localHistoryAppend(beforeDocument, next);
       if (appended) setLatestLocalAppend(appended);
       setDoc(next);
-      if (derived) applyProjectionWriteBack(derived);
+      if (derived) {
+        applyProjectionWriteBack(derived);
+        // An upstream edit may have carried a later fillet's hash-only
+        // edges; persist where they are now together with the commit.
+        applyTopologyReferenceRepairs(derived);
+      }
       if (isAnalyticsEnabled()) {
         trackUsage('feature_used');
         for (const command of commands)
@@ -25077,7 +25096,12 @@ export function App() {
     value: number,
     /** The adapter's structured verdict, when the rejection carried one. */
     advice?: CommandDiagnostic['advice'],
-    headline?: string
+    headline?: string,
+    /**
+     * The typed verdict and the feature it names, so a drag-time refusal
+     * reads and routes exactly as the same refusal does on release.
+     */
+    typed?: Pick<CommandDiagnostic, 'code' | 'category' | 'culprit'>
   ) {
     if (!isOperationState(interactionRef.current)) {
       return;
@@ -25085,6 +25109,9 @@ export function App() {
     setPreviewVerdict({ value, status: 'refused' });
     const diagnostic: CommandDiagnostic = {
       ...splitRefusal(message),
+      ...(typed?.category ? { category: typed.category } : {}),
+      ...(typed?.code ? { code: typed.code } : {}),
+      ...(typed?.culprit ? { culprit: typed.culprit } : {}),
       ...(headline ? { headline } : {}),
       ...(advice ? { advice } : {})
     };
@@ -30015,6 +30042,7 @@ export function App() {
             }
           : null
       }
+      editingHistoryFeatureId={editedFeatureIdFor(interaction)}
       historyDetails={
         <FeatureHistoryPanel
           document={doc}

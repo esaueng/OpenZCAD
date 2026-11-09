@@ -84,6 +84,13 @@ describe('affected feature targets', () => {
     expect(
       targets.every((target) => typeof target.featureId === 'string')
     ).toBe(true);
+    // The edited feature is the user's; every later one only replays it, so
+    // a refusal it raises is about what the edit did to it.
+    expect(targets.map((target) => target.dependent ?? false)).toEqual([
+      false,
+      true,
+      true
+    ]);
   });
 
   it('walks datum consumers and tolerates a later datum (R01)', () => {

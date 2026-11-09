@@ -5669,6 +5669,7 @@ export function attachDerivedState(
     sketchGeometry,
     referenceRepairs: _referenceRepairs,
     faceReferenceRepairs: _faceReferenceRepairs,
+    edgeHashRepairs: _edgeHashRepairs,
     featureWarnings: _featureWarnings,
     ...persisted
   } = derived;

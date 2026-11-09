@@ -3307,6 +3307,20 @@ export interface EdgeReferenceRepair {
 }
 
 /**
+ * A hash-only fillet/chamfer selection the rebuild carried across an upstream
+ * parameter edit: its stored hashes no longer resolve because the edit moved
+ * the edges, but the input topology is the one the selection was last
+ * resolved on, so each edge is known by its position in it. `to[i]` is where
+ * `from[i]` now is. The app persists the new hashes so the selection resolves
+ * directly again, including after a reload.
+ */
+export interface EdgeHashRepair {
+  featureId: FeatureId;
+  from: number[];
+  to: number[];
+}
+
+/**
  * One warning the rebuild loop raised, with the feature it belongs to.
  *
  * `warnings` is a flat list of strings prefixed `Feature "<name>":`, which is
@@ -3503,6 +3517,8 @@ export interface DerivedState {
   referenceRepairs?: EdgeReferenceRepair[];
   /** Session-only direct-edit advice, stripped alongside edge repairs. */
   faceReferenceRepairs?: FaceReferenceRepair[];
+  /** Session-only carried hash-only edge selections, stripped likewise. */
+  edgeHashRepairs?: EdgeHashRepair[];
   /**
    * Complete feature-warning provenance for this rebuild. Session-only and
    * stripped like the repairs. Older adapter results may omit it.

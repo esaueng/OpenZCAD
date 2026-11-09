@@ -52,6 +52,8 @@ export interface ValidatedFeatureVerdictInput {
   featureName: string;
   /** Identifies the feature so a refusal can offer to open it. */
   featureId?: FeatureId;
+  /** A later feature the edit only rebuilds (`AffectedFeatureTarget`). */
+  dependent?: boolean;
   warnings: readonly string[];
   /**
    * Attribution for `warnings`, when the rebuild supplied it. Absent for an
@@ -170,7 +172,8 @@ export function validatedFeatureRejection(
         ? {
             culprit: {
               featureId: input.featureId,
-              featureName: input.featureName
+              featureName: input.featureName,
+              ...(input.dependent ? { dependent: true } : {})
             }
           }
         : {})

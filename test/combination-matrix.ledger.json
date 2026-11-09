@@ -29,7 +29,7 @@
     "box×cylinder/aligned/union/no-modifier/reopen": "qualified",
     "box×cylinder/aligned/union/no-modifier/step-roundtrip": "qualified",
     "box×cylinder/aligned/union/fillet-seam/none": "qualified",
-    "box×cylinder/aligned/union/fillet-seam/source-grow": "typed-refusal",
+    "box×cylinder/aligned/union/fillet-seam/source-grow": "qualified",
     "box×cylinder/aligned/union/fillet-seam/direct-grow": "qualified",
     "box×cylinder/aligned/union/cap-offset/none": "qualified",
     "box×cylinder/aligned/subtract/no-modifier/none": "qualified",

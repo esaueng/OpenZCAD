@@ -1,4 +1,5 @@
 import { faceReferenceRepairCandidate } from './exact-reference-resolution';
+import { edgeSelectionKey } from './exact-edge-selection-transport';
 import { buildGearFeature } from './exact-gear';
 import { buildThreadFeature } from './exact-thread';
 import { requireValidSolid } from './kernel-validation';
@@ -2399,12 +2400,17 @@ function buildEdgeModifierFeature(
     throw new Error('Edge modifier target is unavailable.');
   }
   const target = collapseShape(kernel, storedTarget);
-  const { handles: selected, repairedReferences } = resolveEdgeModifierEdges(
+  const {
+    handles: selected,
+    repairedReferences,
+    carriedHashes
+  } = resolveEdgeModifierEdges(
     kernel,
     storedTarget,
     target,
     data.edgeHashes,
-    data.edgeReferences
+    data.edgeReferences,
+    edgeSelectionKey(document.projectId, feature.featureId)
   );
   const size = resolveParamValue(
     data.featureKind === 'fillet' ? data.radius : data.distance,
@@ -2606,6 +2612,12 @@ function buildEdgeModifierFeature(
     result.referenceRepairs.push({
       featureId: feature.featureId,
       edgeReferences: repairedReferences
+    });
+  }
+  if (carriedHashes) {
+    (result.edgeHashRepairs ??= []).push({
+      featureId: feature.featureId,
+      ...carriedHashes
     });
   }
 }

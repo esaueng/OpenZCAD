@@ -10,6 +10,7 @@ import type {
   FaceTopologyReferenceV5,
   BodyTopology,
   EdgeReferenceRepair,
+  EdgeHashRepair,
   FaceReferenceRepair,
   FeatureId,
   FeatureWarning,
@@ -99,6 +100,8 @@ export interface ExactBuildResult {
    */
   referenceRepairs: EdgeReferenceRepair[];
   faceReferenceRepairs?: FaceReferenceRepair[];
+  /** Hash-only edge selections carried across an upstream edit. */
+  edgeHashRepairs?: EdgeHashRepair[];
   /**
    * I01: each linked sketch projection's state at its sketch's history
    * position, keyed by object id. Published as `derived.sketchProjections`.

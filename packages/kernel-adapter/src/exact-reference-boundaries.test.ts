@@ -67,7 +67,11 @@ describe('v5 references at unsupported lineage boundaries', () => {
   it('resolves unique exact witnesses without claiming lineage', () => {
     const { face, edge, pickFace, pickEdge } = fixture();
     expect(pickFace()).toEqual({ face, viaLineage: false });
-    expect(pickEdge()).toEqual({ handles: [edge], repairedReferences: null });
+    expect(pickEdge()).toEqual({
+      handles: [edge],
+      carriedHashes: null,
+      repairedReferences: null
+    });
   });
 
   it('rejects a face witness mismatch even when its hash still matches', () => {
