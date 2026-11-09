@@ -28,6 +28,7 @@ import {
   type LayoutEdge
 } from './exact-edge-selection-transport';
 import { AdapterRefusal } from './adapter-refusal';
+import type { UpstreamSnapshot } from './exact-carry-edit-gate';
 import {
   edgeHandlesByFingerprint,
   edgeWitnessOf,
@@ -135,12 +136,21 @@ export function resolveEdgeModifierEdges(
   hashes: readonly number[],
   references: readonly EdgeTopologyReferenceV5[] | undefined,
   /**
-   * The adapter's selection memory and this feature's key in it, for
-   * carrying a hash-only selection across an upstream parameter edit
-   * (`exact-edge-selection-transport.ts`). Absent, a stored hash that no
-   * longer resolves refuses exactly as it always did.
+   * The adapter's selection memory and this feature's key in it
+   * (`exact-edge-selection-transport.ts`). Every hash-only resolution is
+   * recorded, which changes no output. Only with `propose` (an edit's
+   * preview or validation build) may a stored hash that no longer resolves
+   * be carried, and the carry is reported for the app to store; otherwise it
+   * refuses exactly as it always did, so a plain build of a document is the
+   * same on every adapter. `upstream` is the features before this one, for
+   * the dimension-edit gate.
    */
-  carry?: { memory: EdgeSelectionMemory; key: string }
+  carry?: {
+    memory: EdgeSelectionMemory;
+    key: string;
+    propose: boolean;
+    upstream: () => UpstreamSnapshot | null;
+  }
 ): {
   handles: number[];
   /**
@@ -285,7 +295,8 @@ export function resolveEdgeModifierEdges(
       // The fingerprint embeds the edge's dimensions, so an upstream resize
       // orphans it although the edge may still be there. Without a carry it
       // refuses here; with one, the whole selection is judged below.
-      if (!carry) throw unresolvedReferenceError('edge', hash, handles.length);
+      if (!carry?.propose)
+        throw unresolvedReferenceError('edge', hash, handles.length);
       missing.push(hash);
       repairCandidates.push(null);
       return null;
@@ -301,7 +312,9 @@ export function resolveEdgeModifierEdges(
   // one resolves by lineage or throws above.
   let layout: EdgeTopologyLayout | undefined;
   let carried: Map<number, number> | null = null;
-  if (carry && missing.length > 0) {
+  let upstream: UpstreamSnapshot | null | undefined;
+  const upstreamOnce = () => (upstream ??= carry?.upstream() ?? null);
+  if (carry?.propose && missing.length > 0) {
     layout = edgeTopologyLayout(kernel, solid, measured);
     carried = carryEdgeSelection(
       carry.memory,
@@ -309,7 +322,8 @@ export function resolveEdgeModifierEdges(
       layout,
       measured,
       direct,
-      missing
+      missing,
+      upstreamOnce()
     );
     if (!carried) {
       throw unresolvedReferenceError('edge', missing[0]!, handles.length);
@@ -318,6 +332,18 @@ export function resolveEdgeModifierEdges(
   const handlesResolved = resolved.map(
     (handle, index) => handle ?? carried!.get(requested[index]!)!
   );
+  // A carried edge offers the lineage repair a build of the stored result
+  // would: the one for its own, new hash.
+  for (let index = 0; index < resolved.length; index += 1) {
+    if (resolved[index] !== null) continue;
+    const handle = handlesResolved[index]!;
+    repairCandidates[index] = edgeReferenceRepairCandidate(
+      kernel,
+      shape,
+      handle,
+      hashOfHandle.get(handle)!
+    );
+  }
   if (new Set(handlesResolved).size !== handlesResolved.length) {
     throw new Error('Edge modifier edges do not resolve to a unique set.');
   }
@@ -332,6 +358,7 @@ export function resolveEdgeModifierEdges(
         storedHash,
         handle: handlesResolved[index]!
       })),
+      upstreamOnce,
       layout
     );
   }

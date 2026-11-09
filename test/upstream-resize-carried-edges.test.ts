@@ -30,7 +30,7 @@ import {
   DEMO_DEFINITIONS
 } from '../apps/web/src/lib/demos';
 import {
-  topologyReferenceRepairCommand,
+  carriedSelectionCommands,
   withCarriedSelections
 } from '../apps/web/src/lib/topologyReferenceRepairs';
 
@@ -115,6 +115,27 @@ describe(
       adapter = await createExactKernelAdapter();
     }, 120_000);
     afterAll(() => adapter.dispose());
+
+    /**
+     * An edit's validation build, as the app runs it: it may propose
+     * carrying a hash-only pick the edit stranded. Every other sync here is
+     * a plain build, which never carries.
+     */
+    const validate = (document: ProjectDocument) =>
+      adapter.syncDocument(document, undefined, undefined, undefined, {
+        proposeCarry: true
+      });
+
+    /** What decides a build's outcome, for comparing two builds of one document. */
+    function outcome(derived: ProjectDocument['derived']) {
+      return {
+        warnings: derived.warnings,
+        featureWarnings: derived.featureWarnings,
+        bodies: Object.entries(derived.bodyRepresentations).map(
+          ([id, body]) => [id, Math.round(body.volume * 1e6) / 1e6]
+        )
+      };
+    }
 
     async function modify(
       model: { document: ProjectDocument; bodyId: BodyId },
@@ -278,9 +299,10 @@ describe(
       // The drag's exact preview and the release's commit run the same
       // resolution, so they give the same answer.
       const preview = await adapter.previewGeometry(candidate, {
-        deferTopology: true
+        deferTopology: true,
+        proposeCarry: true
       });
-      const commit = await adapter.syncDocument(candidate);
+      const commit = await validate(candidate);
       expect(preview.warnings).toEqual([]);
       expect(commit.warnings).toEqual([]);
       expect(
@@ -295,19 +317,23 @@ describe(
       commit: ProjectDocument['derived'],
       carried = true
     ) {
-      const repair = topologyReferenceRepairCommand(
-        { ...candidate, derived: commit },
-        commit
-      );
+      // What the commit stores with the edit (`withCarriedSelections`).
+      const carry = carriedSelectionCommands(candidate, commit);
+      expect(carry.unpersisted).toEqual([]);
       // Only an edit that moved an unnamed pick has anything to persist.
-      expect(repair !== null).toBe(carried);
-      const persisted = repair ? repair.apply(candidate) : candidate;
+      expect(carry.commands.length > 0).toBe(carried);
+      const persisted = carry.commands.reduce(
+        (document, command) => command.apply(document),
+        candidate
+      );
       // A cold reload: a new adapter holds no memory of earlier builds.
       const fresh = await createExactKernelAdapter();
       try {
         if (carried) {
-          // Proof that the reload is cold: the edit without its persisted
-          // hashes has nothing to carry from, and refuses.
+          // The edit without its stored hashes refuses on a cold adapter,
+          // and a plain build on this session's adapter, which has seen the
+          // old size, gives exactly the same answer: a carry is a proposal
+          // of the edit's validation, never an input of a plain build.
           const stale = await fresh.syncDocument(candidate);
           expect(
             stale.featureWarnings?.some(
@@ -316,6 +342,9 @@ describe(
                 warning.kernelRefusal?.code === 'reference_missing'
             )
           ).toBe(true);
+          expect(outcome(await adapter.syncDocument(candidate))).toEqual(
+            outcome(stale)
+          );
           fresh.dispose();
         }
         const cold = carried ? await createExactKernelAdapter() : fresh;
@@ -550,7 +579,7 @@ describe(
       });
       expect(plan?.kind).toBe('primitive-dimension');
       const candidate = plan!.command.apply(model.document);
-      const commit = await adapter.syncDocument(candidate);
+      const commit = await validate(candidate);
       expect(commit.warnings).toEqual([]);
       expect(commit.bodyRepresentations[model.bodyId]!.bbox.max.z).toBeCloseTo(
         14,
@@ -608,9 +637,7 @@ describe(
         offset: -26
       });
       expect(plan?.kind).toBe('primitive-dimension');
-      const commit = await adapter.syncDocument(
-        plan!.command.apply(model.document)
-      );
+      const commit = await validate(plan!.command.apply(model.document));
       const refusal = commit.featureWarnings?.find(
         (warning) => warning.featureName === 'Chamfer'
       );
@@ -729,10 +756,11 @@ describe(
           }
         });
         const preview = await adapter.previewGeometry(edited, {
-          deferTopology: true
+          deferTopology: true,
+          proposeCarry: true
         });
         expect(preview.warnings.length).toBeGreaterThan(0);
-        expectRefused(await adapter.syncDocument(edited), 'Front break');
+        expectRefused(await validate(edited), 'Front break');
       }
     );
 
@@ -761,7 +789,7 @@ describe(
           plane: { origin: { x: 0, y: 0, z: 0 }, normal: { x: 0, y: 1, z: 0 } }
         }
       });
-      expectRefused(await adapter.syncDocument(edited), 'Front break');
+      expectRefused(await validate(edited), 'Front break');
     });
 
     it('stores the carry with the edit while an unrelated feature is broken', async () => {
@@ -814,7 +842,7 @@ describe(
       });
       expect(plan?.kind).toBe('primitive-dimension');
       const candidate = plan!.command.apply(model.document);
-      const commit = await adapter.syncDocument(candidate);
+      const commit = await validate(candidate);
       expectRefusedOnly(commit, 'Broken');
       expect(
         commit.edgeHashRepairs?.map((repair) => repair.featureId)
@@ -900,7 +928,7 @@ describe(
         featureId: blockFeature.featureId,
         data: { dimensions: { width: 22.5, height: 18, depth: 24 } }
       });
-      expectRefused(await adapter.syncDocument(edited), 'Break bottom');
+      expectRefused(await validate(edited), 'Break bottom');
     });
 
     it('carries the Heat Sink corner fillets to the corners a fresh pick takes', async () => {
@@ -923,7 +951,7 @@ describe(
         featureId: extrude.featureId,
         data: { distance: 'base_t + 1' }
       });
-      const commit = await adapter.syncDocument(thicker);
+      const commit = await validate(thicker);
       expect(commit.warnings).toEqual([]);
       expect(commit.edgeHashRepairs?.map((r) => r.featureId)).toEqual([
         fillet.featureId
@@ -1020,7 +1048,7 @@ describe(
       // A base thicker than the fins are tall swallows them. The corners the
       // fillet saved belong to a different shape now, so it cannot follow:
       // the downstream failure the e2e explains and opens for repair.
-      const swallowed = await adapter.syncDocument(
+      const swallowed = await validate(
         updateFeature(sink, {
           featureId: extrude.featureId,
           data: { distance: 'base_t + fin_h' }
@@ -1032,6 +1060,142 @@ describe(
           ?.filter((warning) => warning.kind === 'build-failed')
           .map((warning) => warning.featureName)
       ).toEqual(['Base corner fillets']);
+    });
+
+    describe('a disk with an off-centre boss', () => {
+      /**
+       * Disk r20 h10 at the origin ∪ a boss standing on it, then a Turn
+       * about z, then a hash-only fillet on one vertical boss edge (the kernel cannot chamfer it where it meets the disk). The
+       * disk's rims keep their hashes under any turn about its own axis, and
+       * a turned boss can sit exactly where a moved one would.
+       */
+      async function diskWithBoss(options: {
+        boss: { width: number; height: number };
+        at: { x: number; y: number };
+        edge: { x: number; y: number };
+      }) {
+        const disk = addPrimitiveFeature(
+          createProjectDocument('Disk with boss', user),
+          {
+            name: 'Disk',
+            primitiveKind: 'cylinder',
+            dimensions: { radius: 20, height: 10 }
+          }
+        );
+        const boss = addPrimitiveFeature(disk, {
+          name: 'Boss',
+          primitiveKind: 'box',
+          dimensions: { ...options.boss, depth: 6 }
+        });
+        const placed = transformBody(boss, {
+          name: 'Place boss',
+          targetBodyId: boss.bodyOrder[1]!,
+          translation: { ...options.at, z: 10 }
+        }).document;
+        const joined = booleanBodies(placed, {
+          name: 'Union 1',
+          operation: 'union',
+          targetBodyIds: [placed.bodyOrder[0]!, placed.bodyOrder[1]!]
+        });
+        const turned = transformBody(joined.document, {
+          name: 'Turn',
+          targetBodyId: joined.bodyId,
+          translation: { x: 0, y: 0, z: 0 },
+          rotationDeg: { x: 0, y: 0, z: 0 }
+        }).document;
+        const base = await adapter.syncDocument(turned);
+        expect(base.warnings).toEqual([]);
+        const body = base.bodyRepresentations[joined.bodyId]!;
+        const near = (a: number, b: number) => Math.abs(a - b) < 1e-6;
+        const edges = body.topology!.edges.filter((edge) => {
+          for (let i = 0; i < edge.points.length; i += 3) {
+            if (
+              !near(edge.points[i]!, options.edge.x) ||
+              !near(edge.points[i + 1]!, options.edge.y)
+            )
+              return false;
+          }
+          return true;
+        });
+        expect(edges).toHaveLength(1);
+        // Imported or legacy picks are hashes alone.
+        return settled({
+          document: filletEdges(turned, {
+            name: 'Boss break',
+            targetBodyId: joined.bodyId,
+            edgeHashes: [edges[0]!.hash],
+            size: 0.5
+          }).document,
+          bodyId: joined.bodyId
+        });
+      }
+
+      function turnedTo(model: Model, degrees: number) {
+        const turn = feature(model.document, 'Turn');
+        if (turn.data.featureKind !== 'transform') throw new Error('no turn');
+        return updateFeature(model.document, {
+          featureId: turn.featureId,
+          data: {
+            transform: {
+              ...turn.data.transform,
+              rotationDeg: { x: 0, y: 0, z: degrees }
+            }
+          }
+        });
+      }
+
+      it('refuses to carry through a 180° turn that looks like a move', async () => {
+        // The boss goes from x∈[3,7] to x∈[−7,−3]: only the x planes move,
+        // and the rims stay put. The turned edge is at (−7, −2); the edge
+        // where the old one sat is at (−3, 2). Only the edit tells them apart.
+        const model = await diskWithBoss({
+          boss: { width: 4, height: 4 },
+          at: { x: 3, y: -2 },
+          edge: { x: 7, y: 2 }
+        });
+        expectRefused(await validate(turnedTo(model, 180)), 'Boss break');
+      });
+
+      it('refuses to carry through a 90° turn of a boss centred off-axis', async () => {
+        // The boss at x∈[3,7], y∈[3,7] turns to x∈[−7,−3], y∈[3,7]: the y
+        // planes stay, the x planes move along one line, the rims anchor.
+        const model = await diskWithBoss({
+          boss: { width: 4, height: 4 },
+          at: { x: 3, y: 3 },
+          edge: { x: 7, y: 7 }
+        });
+        expectRefused(await validate(turnedTo(model, 90)), 'Boss break');
+      });
+
+      it('carries a boss width edit to the edge a fresh pick takes', async () => {
+        const model = await diskWithBoss({
+          boss: { width: 4, height: 4 },
+          at: { x: 3, y: -2 },
+          edge: { x: 7, y: 2 }
+        });
+        const boss = feature(model.document, 'Boss');
+        const candidate = updateFeature(model.document, {
+          featureId: boss.featureId,
+          data: { dimensions: { width: 5, height: 4, depth: 6 } }
+        });
+        const commit = await validate(candidate);
+        expect(commit.warnings).toEqual([]);
+        const { persisted, reopened } = await persistedAndReopened(
+          candidate,
+          commit
+        );
+        expectSameAsFreshPick(
+          persisted,
+          reopened,
+          model.bodyId,
+          await diskWithBoss({
+            boss: { width: 5, height: 4 },
+            at: { x: 3, y: -2 },
+            edge: { x: 8, y: 2 }
+          }),
+          ['Boss break']
+        );
+      });
     });
 
     describe('a part with equal sides', () => {
@@ -1079,7 +1243,7 @@ describe(
       it('refuses a quarter turn about the origin', async () => {
         const model = await squarePart();
         expectRefused(
-          await adapter.syncDocument(turnedBy(model, 90)),
+          await validate(turnedBy(model, 90)),
           'Front break'
         );
       });
@@ -1088,7 +1252,7 @@ describe(
         // A quarter turn about the centre maps the part onto itself, so the
         // stored hash still names the edge at −Y, as it always has.
         const model = await squarePart();
-        const derived = await adapter.syncDocument(
+        const derived = await validate(
           turnedBy(model, 90, { x: 10, y: 10, z: 0 })
         );
         expect(derived.warnings).toEqual([]);
@@ -1108,7 +1272,7 @@ describe(
           featureId: box.featureId,
           data: { dimensions: { ...square, width: 26 } }
         });
-        const commit = await adapter.syncDocument(candidate);
+        const commit = await validate(candidate);
         expect(commit.warnings).toEqual([]);
         const { persisted, reopened } = await persistedAndReopened(
           candidate,

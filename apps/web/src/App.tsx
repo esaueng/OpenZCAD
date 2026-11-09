@@ -4111,7 +4111,12 @@ export function App() {
     document: doc,
     currentDocument: () => managerRef.current?.document,
     warnings: attributedFeatureWarnings(),
-    rebuild: geometry.syncOnce,
+    // A user edit's check may propose carrying a later hash-only pick; the
+    // commit stores it in the edit's own revision (`withCarriedSelections`).
+    rebuild: (document, analysis, lineageDemand) =>
+      geometry.syncOnce(document, analysis, lineageDemand, {
+        proposeCarry: true
+      }),
     track: trackKernelRefusal
   });
   const { syncCandidate, syncParameterCandidate } = refusalHarvest;
@@ -4453,6 +4458,8 @@ export function App() {
       const terminal = listFeaturesInOrder(candidate.document).at(-1);
       const derived = await geometry.previewGeometry(candidate.document, {
         signal,
+        // An edit's preview, built like its release check (see `syncOnce`).
+        proposeCarry: true,
         deferTopology:
           supportsBlendGroupEdits(KERNEL_BUILD.packageVersion) &&
           terminal?.data.featureKind === 'direct-edit' &&
@@ -4623,7 +4630,9 @@ export function App() {
         }
         const derived = await geometry.previewGeometry(candidate.document, {
           signal,
-          deferTopology: true
+          deferTopology: true,
+          // Built like the release check, so preview and commit agree.
+          proposeCarry: true
         });
         const live = managerRef.current;
         const documentMoved =
@@ -24411,6 +24420,7 @@ export function App() {
           candidate.document,
           {
             signal,
+            proposeCarry: true,
             deferTopology:
               supportsBlendGroupEdits(KERNEL_BUILD.packageVersion) &&
               terminal?.data.featureKind === 'direct-edit' &&

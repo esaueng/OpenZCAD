@@ -34,21 +34,32 @@
  *    about its own centre keeps a centred rim fixed, but it moves the x and
  *    y planes together, so it is refused.
  *
- * Labels are world-frame directions, so these checks are what keep a turned
- * or mirrored part from matching by its label multiset alone. Anything else —
- * no record for this input, a changed structure, a stored hash that resolves
- * to an edge whose label disagrees with the record — refuses exactly as
- * before.
+ * 4. The edit is a pure dimension edit (`exact-carry-edit-gate.ts`, an
+ *    explicit allow-list). A rotation can satisfy 1–3: a rim keeps its hash
+ *    under a turn about its own axis, and a turned off-centre boss can look
+ *    exactly like a moved one. Only the edit tells them apart.
+ * 5. Each carried edge's own hash names it alone, so storing that hash
+ *    rebuilds the same edge.
  *
- * Records are adapter state, cleared with the adapter, and filled by the
- * build that runs before any edit can be made. A hash that still resolves is
- * never overridden. The builder reports each carried selection so the app can
- * persist the new hashes in the same revision as the edit, after which the
- * stored selection resolves directly again, including after a reload.
+ * Anything else — no record for this input, a changed structure, a stored
+ * hash that resolves to an edge whose label disagrees with the record —
+ * refuses exactly as before.
+ *
+ * A carry is a proposal, never a silent build input. Only a build that asks
+ * for one (`proposeCarry`: an edit's preview or validation) may carry, and
+ * it reports the new hashes so the app writes them in the edit's own
+ * revision. A plain build of a document never consults the records, so it
+ * produces exactly what a fresh adapter does for that document; recording
+ * on any build changes no output. Records are adapter state, cleared with
+ * the adapter. A hash that still resolves is never overridden.
  */
 import type { EdgeWitnessV1 } from '@openzcad/shared';
 import type { RemusKernel } from './remus-runtime';
 import { faceWitnessOf } from './exact-witnesses';
+import {
+  onlyDimensionEdits,
+  type UpstreamSnapshot
+} from './exact-carry-edit-gate';
 
 /** Refinement rounds: enough to separate a part's sides by what they meet. */
 const ROUNDS = 6;
@@ -89,6 +100,8 @@ interface SelectionRecord {
   hashSet: string;
   /** The selection the record was made for. */
   selection: string;
+  /** The features up to the modifier on the build that recorded this. */
+  upstream: UpstreamSnapshot;
 }
 
 /**
@@ -376,6 +389,7 @@ export function rememberEdgeSelection(
   solid: number,
   edges: readonly LayoutEdge[],
   selected: readonly { storedHash: number; handle: number }[],
+  upstream: () => UpstreamSnapshot | null,
   layout?: EdgeTopologyLayout
 ): void {
   const hashSet = hashSetOf(edges);
@@ -411,12 +425,18 @@ export function rememberEdgeSelection(
     if (label === undefined || current.counts.get(label) !== 1) continue;
     selectedLabels.set(storedHash, label);
   }
+  const snapshot = upstream();
+  if (!snapshot) {
+    memory.forget(key);
+    return;
+  }
   memory.store(key, current.signature, {
     edgeLabels,
     selected: selectedLabels,
     planes: current.planes,
     hashSet,
-    selection
+    selection,
+    upstream: snapshot
   });
 }
 
@@ -433,10 +453,14 @@ export function carryEdgeSelection(
   layout: EdgeTopologyLayout,
   edges: readonly LayoutEdge[],
   direct: readonly { storedHash: number; handle: number }[],
-  missing: readonly number[]
+  missing: readonly number[],
+  upstream: UpstreamSnapshot | null
 ): Map<number, number> | null {
   const record = memory.lookup(key, layout.signature);
-  if (!record) return null;
+  if (!record || !upstream) return null;
+  // Only a dimension edit may be carried across: a turn or a mirror can
+  // leave a solid no comparison tells from a resize (`exact-carry-edit-gate`).
+  if (!onlyDimensionEdits(record.upstream, upstream)) return null;
 
   for (const { storedHash, handle } of direct) {
     const recorded = record.selected.get(storedHash);
@@ -457,11 +481,18 @@ export function carryEdgeSelection(
     carried.set(hash, target);
   }
   const targets = new Set(carried.values());
+  // The carry is a proposal to store each target's own hash. That hash must
+  // name exactly that edge, or the stored document would not rebuild it.
+  const unique = uniqueHashes(edges);
+  const ownHash = new Map(edges.map((edge) => [edge.handle, edge.hash]));
+  for (const target of targets) {
+    if (unique.get(ownHash.get(target)!) !== target) return null;
+  }
 
   // A fixed frame: an edge that kept its own hash keeps its label, and at
   // least one such edge is not one of the edges being carried.
   let anchors = 0;
-  for (const [hash, handle] of uniqueHashes(edges)) {
+  for (const [hash, handle] of unique) {
     const recorded = record.edgeLabels.get(hash);
     if (recorded === undefined) continue;
     if (recorded !== layout.labels.get(handle)) return null;

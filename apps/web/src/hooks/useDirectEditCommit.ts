@@ -1,4 +1,5 @@
 import { useRef } from 'react';
+import { refusalOfWorkerError } from '../lib/workerRefusal';
 import type { BodyId, ProjectDocument } from '@openzcad/shared';
 import type { AnyCommand, CommandManager } from '@openzcad/command-system';
 import { directEditRejection } from '../lib/directEdit';
@@ -196,7 +197,10 @@ export function useDirectEditCommit(
         // looking at; echoing it into the workspace status line as well is how
         // the same failure used to appear twice, and how one copy went stale
         // while the other moved on.
-        host.onValidationFailed(splitRefusal(message), submittedValue);
+        host.onValidationFailed(
+          splitRefusal(message, refusalOfWorkerError(error)),
+          submittedValue
+        );
         return false;
       } finally {
         inFlight.current = false;

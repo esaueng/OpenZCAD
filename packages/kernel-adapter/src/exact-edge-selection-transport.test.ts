@@ -56,7 +56,13 @@ describe('edge selection memory', () => {
     selected: new Map<number, string>(),
     planes: new Map<string, string>(),
     hashSet: '',
-    selection
+    selection,
+    upstream: {
+      units: 'mm',
+      features: [],
+      sketches: new Map(),
+      scope: {}
+    }
   });
 
   it('keeps a bounded number of layouts per feature, newest last', () => {

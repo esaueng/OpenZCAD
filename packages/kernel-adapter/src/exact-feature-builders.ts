@@ -1,5 +1,6 @@
 import { faceReferenceRepairCandidate } from './exact-reference-resolution';
 import { edgeSelectionKey } from './exact-edge-selection-transport';
+import { upstreamSnapshot } from './exact-carry-edit-gate';
 import { buildGearFeature } from './exact-gear';
 import { buildThreadFeature } from './exact-thread';
 import { requireValidSolid } from './kernel-validation';
@@ -2413,7 +2414,9 @@ function buildEdgeModifierFeature(
     ctx.edgeSelections
       ? {
           memory: ctx.edgeSelections,
-          key: edgeSelectionKey(document.projectId, feature.featureId)
+          key: edgeSelectionKey(document.projectId, feature.featureId),
+          propose: ctx.proposeCarry === true,
+          upstream: () => upstreamSnapshot(document, feature.featureId)
         }
       : undefined
   );

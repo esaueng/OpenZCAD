@@ -47,6 +47,7 @@ import {
   unpackWorkerRequest
 } from '../lib/meshTransport';
 import { resolveExactSourceBytes } from '../lib/exactSourceResolver';
+import { workerRefusalOf, type WorkerRefusal } from '../lib/workerRefusal';
 import { documentFontsArrived, preloadDocumentFonts } from '../lib/textFonts';
 
 /**
@@ -86,6 +87,8 @@ export type GeometryWorkerRequest =
       requestId: string;
       deferTopology?: boolean;
       profile?: boolean;
+      /** An edit's preview may propose carrying a hash-only selection. */
+      proposeCarry?: boolean;
     }
   | {
       type: 'sync';
@@ -103,6 +106,12 @@ export type GeometryWorkerRequest =
       lineageDemand?: BodyId[];
       forceFull?: boolean;
       profile?: boolean;
+      /**
+       * An edit's validation may propose carrying a hash-only selection the
+       * edit stranded; see `ExactKernelAdapter.syncDocument`. Keyed apart in
+       * the result cache, so a plain rebuild never receives a carried result.
+       */
+      proposeCarry?: boolean;
     }
   | {
       type: 'export';
@@ -260,6 +269,8 @@ export type GeometrySyncResult =
       version: number;
       requestId?: string;
       error: string;
+      /** The typed refusal behind the failure, when it was one. */
+      refusal?: WorkerRefusal;
     };
 
 export type GeometryExportResult =
@@ -395,6 +406,8 @@ export type GeometryWorkerResult =
       ok: false;
       requestId: string;
       error: string;
+      /** The typed refusal behind the failure, when it was one. */
+      refusal?: WorkerRefusal;
     }
   | {
       type: 'projection-delta';
@@ -731,6 +744,7 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       let yieldMs = 0;
       const geometry = await exact.previewGeometry(document, {
         deferTopology: request.deferTopology,
+        ...(request.proposeCarry ? { proposeCarry: true } : {}),
         cancellation: {
           isCancelled: () => cancelledRequests.has(request.requestId)
         },
@@ -1147,7 +1161,7 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       contentKey === null
         ? emptyDerived(document)
         : await rebuildCache.get(
-            `${contentKey}${request.type === 'sync' && request.analysis ? `:analysis:${JSON.stringify(request.analysis)}` : ''}${lineageDemandKey}`,
+            `${contentKey}${request.type === 'sync' && request.analysis ? `:analysis:${JSON.stringify(request.analysis)}` : ''}${lineageDemandKey}${request.type === 'sync' && request.proposeCarry ? ':carry-proposal' : ''}`,
             async () => {
               resultCacheHit = false;
               // 'failed' retries on the next load call, so it counts as a
@@ -1230,6 +1244,9 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
                   yieldControl: geometryYield(),
                   ...(request.type === 'sync' && request.lineageDemand
                     ? { lineageDemand: request.lineageDemand }
+                    : {}),
+                  ...(request.type === 'sync' && request.proposeCarry
+                    ? { proposeCarry: true }
                     : {})
                 }
               );
@@ -1306,12 +1323,15 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       return;
     }
     const message = errorMessage(error);
+    // A refusal keeps its code across the boundary; see `workerRefusal.ts`.
+    const refusal = workerRefusalOf(error);
     if (request.type === 'preview-geometry') {
       post({
         type: 'preview-geometry',
         ok: false,
         requestId: request.requestId,
-        error: message
+        error: message,
+        ...(refusal ? { refusal } : {})
       });
     } else if (request.type === 'export') {
       const result: GeometryExportResult = {
@@ -1378,7 +1398,8 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         projectId: document.projectId,
         version: document.version,
         ...(request.requestId ? { requestId: request.requestId } : {}),
-        error: message
+        error: message,
+        ...(refusal ? { refusal } : {})
       };
       post(result);
     }

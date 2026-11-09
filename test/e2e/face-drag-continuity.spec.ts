@@ -452,7 +452,15 @@ test(
                     type: 'sync',
                     ok: false,
                     requestId: request.requestId,
-                    error: 'The selected face no longer exists.'
+                    error: 'The selected face no longer exists.',
+                    // A lost reference crosses the worker typed, as the
+                    // worker reports one (`workerRefusal.ts`); the app
+                    // routes a stale pick on this code, never the sentence.
+                    refusal: {
+                      family: 'reference',
+                      category: 'invalid_input',
+                      code: 'reference_missing'
+                    }
                   }
                 })
               ),

@@ -916,7 +916,14 @@ export class CellTimeout extends Error {}
 export async function sync(
   session: Session,
   document: ProjectDocument,
-  bodyId?: BodyId
+  bodyId?: BodyId,
+  /**
+   * `proposeCarry` marks an edit's validation, as the app's edit checks
+   * run it: a hash-only pick the edit stranded may be carried, and the
+   * commit (`commitWithCarry`) stores it. Reopen, undo and redo are plain
+   * rebuilds and never carry.
+   */
+  options?: { proposeCarry?: boolean }
 ): Promise<DerivedState> {
   if (Date.now() > session.deadline) throw new CellTimeout('budget spent');
   return session.adapter.syncDocument(
@@ -926,10 +933,14 @@ export async function sync(
     undefined,
     {
       cancellation: { isCancelled: () => Date.now() > session.deadline },
-      ...(bodyId ? { lineageDemand: [bodyId] } : {})
+      ...(bodyId ? { lineageDemand: [bodyId] } : {}),
+      ...(options?.proposeCarry ? { proposeCarry: true } : {})
     }
   );
 }
+
+/** An edit's validation build: see `sync`. */
+const EDIT = { proposeCarry: true } as const;
 
 /**
  * A sync on a new adapter: a reload, with no memory of any earlier build.
@@ -1232,9 +1243,10 @@ async function offsetCapStep(
       }
     };
   }
+  const before = stage.manager.document;
   stage.manager.execute(plan.command);
   const bodyId = stage.manager.document.bodyOrder.at(-1)!;
-  const derived = await sync(session, stage.manager.document, bodyId);
+  const derived = await sync(session, stage.manager.document, bodyId, EDIT);
   const next: Stage = {
     ...stage,
     derived,
@@ -1243,7 +1255,18 @@ async function offsetCapStep(
     notes: [...stage.notes, `${label} via ${plan.kind}`]
   };
   const refused = refusal(derived, label);
-  return refused ? { ...next, stopped: refused } : next;
+  if (refused) return { ...next, stopped: refused };
+  const committed = await commitWithCarry(
+    session,
+    before,
+    plan.command.label,
+    [plan.command],
+    derived,
+    bodyId
+  );
+  return 'stopped' in committed
+    ? { ...next, stopped: committed.stopped }
+    : { ...next, manager: committed.manager };
 }
 
 /** Runs the history up to and including the modifier. */
@@ -1442,7 +1465,7 @@ async function sourceEdit(
   );
   manager.execute(edit);
   const bodyId = manager.document.bodyOrder.at(-1)!;
-  const derived = await sync(session, manager.document, bodyId);
+  const derived = await sync(session, manager.document, bodyId, EDIT);
   const refused = refusal(derived, 'source edit');
   if (!refused) {
     const committed = await commitWithCarry(
@@ -1485,10 +1508,10 @@ async function directResize(
       }
     };
   }
-  const manager = new CommandManager(stage.manager.document);
+  const before = stage.manager.document;
+  let manager = new CommandManager(before);
   const op = stage.model.boolean;
-  manager.execute(
-    commandFactories.directEditBody({
+  const resize = commandFactories.directEditBody({
       name: 'Resize Cylinder',
       targetBodyId: stage.bodyId,
       operation: {
@@ -1501,10 +1524,28 @@ async function directResize(
         concavity: op === 'subtract' ? 'hole' : 'boss',
         radius
       }
-    })
-  );
+    });
+  manager.execute(resize);
   const bodyId = manager.document.bodyOrder.at(-1)!;
-  const derived = await sync(session, manager.document, bodyId);
+  const derived = await sync(session, manager.document, bodyId, EDIT);
+  const refused = refusal(derived, 'direct resize');
+  if (!refused) {
+    const committed = await commitWithCarry(
+      session,
+      before,
+      resize.label,
+      [resize],
+      derived,
+      bodyId
+    );
+    if ('stopped' in committed) {
+      return {
+        stage: { ...stage, manager, derived, bodyId },
+        refused: committed.stopped
+      };
+    }
+    manager = committed.manager;
+  }
   const next: Stage = {
     ...stage,
     manager,
@@ -1512,7 +1553,6 @@ async function directResize(
     bodyId,
     model: withToolDimension(stage.model, 'radius', radius)
   };
-  const refused = refusal(derived, 'direct resize');
   return refused ? { stage: next, refused } : { stage: next };
 }
 

@@ -65,25 +65,27 @@ export function carriedSelectionCommands(
   return { commands, unpersisted };
 }
 
-/** Build one atomic normalization from advice for this exact document version. */
+/**
+ * Build one atomic normalization from advice for this exact document version.
+ *
+ * Carried hash-only selections are not normalized here. A carry is only ever
+ * proposed by an edit's own validation build, and `withCarriedSelections`
+ * writes it in that edit's revision; a plain rebuild never carries, so a path
+ * that commits without a validated build (resume, AI patch, an unvalidated
+ * sketch edit) leaves a stranded pick refused, never silently moved.
+ */
 export function topologyReferenceRepairCommand(
   document: ProjectDocument,
   derived: DerivedState
 ): AnyCommand | null {
-  // A carried selection is a fact about geometry this build already used,
-  // not advice from a partial replay, so it is written even when another
-  // feature failed. Normally the edit's own commit has written it already.
-  const carried = carriedSelectionCommands(document, derived).commands;
   // Never normalize a partially replayed model.
   if (
     derived.featureWarnings?.some(
       (w) => w.kind === 'build-failed' || w.kind === 'refusal'
-    ) ||
-    (!derived.featureWarnings && derived.warnings.length)
+    )
   )
-    return carried.length
-      ? composeCommands('Repair topology references', carried)
-      : null;
+    return null;
+  if (!derived.featureWarnings && derived.warnings.length) return null;
   const features = listFeaturesInOrder(document);
   const commands: AnyCommand[] = [];
   for (const repair of derived.referenceRepairs ?? []) {
@@ -113,7 +115,6 @@ export function topologyReferenceRepairCommand(
       )
     );
   }
-  commands.push(...carried);
   for (const repair of derived.faceReferenceRepairs ?? []) {
     const feature = features.find((f) => f.featureId === repair.featureId);
     if (!feature || feature.data.featureKind !== 'direct-edit') continue;

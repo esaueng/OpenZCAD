@@ -148,6 +148,12 @@ export interface FeatureBuildContext {
    * (`exact-edge-selection-transport.ts`). Absent, nothing is carried.
    */
   edgeSelections?: EdgeSelectionMemory;
+  /**
+   * This build is an edit's preview or validation and may propose carrying
+   * a hash-only selection (reported in `edgeHashRepairs`). A plain build
+   * never carries, so its result depends on the document alone.
+   */
+  proposeCarry?: boolean;
 }
 
 /** The narrowed data payload for one feature kind (or a union of kinds). */
@@ -212,7 +218,9 @@ function* buildDocumentHistorySteps(
   deferredDirectEditFeatureId?: FeatureId,
   trackIdleLineageViews = false,
   /** See {@link FeatureBuildContext.edgeSelections}. */
-  edgeSelections?: EdgeSelectionMemory
+  edgeSelections?: EdgeSelectionMemory,
+  /** See {@link FeatureBuildContext.proposeCarry}. */
+  proposeCarry = false
 ): Generator<void, ExactBuildResult> {
   const { scope, errors } = getParameterScope(document);
   // F05: a feature fed a typed parameter as the wrong quantity (a length as
@@ -280,7 +288,8 @@ function* buildDocumentHistorySteps(
     strictVerdicts,
     ...(heldDisplayDeflection === undefined ? {} : { heldDisplayDeflection }),
     ...(cancellation === undefined ? {} : { cancellation }),
-    ...(edgeSelections === undefined ? {} : { edgeSelections })
+    ...(edgeSelections === undefined ? {} : { edgeSelections }),
+    ...(proposeCarry ? { proposeCarry: true } : {})
   };
 
   try {

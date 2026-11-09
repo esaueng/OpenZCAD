@@ -61,22 +61,27 @@ function withUnrelatedFailure(
 }
 
 describe('carried edge selections', () => {
-  it('persists where a hash-only selection now is', () => {
+  it('never writes a carried selection outside the edit that proposed it', () => {
+    // A carry is proposed only by an edit's own validation build and stored
+    // in that edit's revision (`withCarriedSelections`). The after-build
+    // normalization leaves it alone, so a path that commits without a
+    // validated build can only leave the pick refused.
     const { document, chamfer } = chamfered();
-    const command = topologyReferenceRepairCommand(
-      document,
-      derivedWith(document, {
-        featureId: chamfer.featureId,
-        from: [11, 12],
-        to: [21, 22]
-      })
-    );
-    expect(command).not.toBeNull();
-    const repaired = listFeaturesInOrder(command!.apply(document)).at(-1)!;
-    expect(repaired.data).toMatchObject({ edgeHashes: [21, 22] });
+    const derived = derivedWith(document, {
+      featureId: chamfer.featureId,
+      from: [11, 12],
+      to: [21, 22]
+    });
+    expect(topologyReferenceRepairCommand(document, derived)).toBeNull();
+    expect(
+      topologyReferenceRepairCommand(
+        document,
+        withUnrelatedFailure(document, derived)
+      )
+    ).toBeNull();
   });
 
-  it('ignores a repair that does not describe the stored selection', () => {
+  it('refuses a carry that does not describe the stored selection', () => {
     const { document, chamfer } = chamfered();
     for (const repair of [
       // A different selection: the user re-picked since that rebuild.
@@ -86,29 +91,9 @@ describe('carried edge selections', () => {
       { featureId: chamfer.featureId, from: [11, 12], to: [21] }
     ]) {
       expect(
-        topologyReferenceRepairCommand(document, derivedWith(document, repair))
-      ).toBeNull();
+        withCarriedSelections(document, [], derivedWith(document, repair))
+      ).toHaveProperty('refusal');
     }
-  });
-
-  it('persists a carried selection even when an unrelated feature failed', () => {
-    // The carry is a fact about geometry the build already used, not advice
-    // from the partial replay; leaving it out saved hashes that refuse on
-    // the next reload.
-    const { document, chamfer } = chamfered();
-    const derived = withUnrelatedFailure(
-      document,
-      derivedWith(document, {
-        featureId: chamfer.featureId,
-        from: [11, 12],
-        to: [21, 22]
-      })
-    );
-    const command = topologyReferenceRepairCommand(document, derived);
-    expect(command).not.toBeNull();
-    expect(
-      listFeaturesInOrder(command!.apply(document)).at(-1)!.data
-    ).toMatchObject({ edgeHashes: [21, 22] });
   });
 
   it('still withholds lineage repairs from a partially built model', () => {

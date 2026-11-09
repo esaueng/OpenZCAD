@@ -676,6 +676,8 @@ export interface ExactKernelAdapter {
       yieldControl?: () => Promise<void> | void;
       deferTopology?: boolean;
       fullDisplayQuality?: boolean;
+      /** As for `syncDocument`: an edit's preview may propose a carry. */
+      proposeCarry?: boolean;
     }
   ): Promise<GeometryReadyState>;
   /** Warm only the disposable full-quality mesh; never commit a feature. */
@@ -699,6 +701,13 @@ export interface ExactKernelAdapter {
       onGeometryReady?: (geometry: GeometryReadyState) => void;
       /** Deliver incoming worker messages between indivisible kernel operations. */
       yieldControl?: () => Promise<void> | void;
+      /**
+       * An edit's validation: a hash-only fillet/chamfer selection the edit
+       * stranded may be carried, and the carry is reported in
+       * `edgeHashRepairs` for the caller to store with the edit. Without it a
+       * build depends on the document alone.
+       */
+      proposeCarry?: boolean;
     }
   ): Promise<DerivedState>;
   /**
@@ -1046,6 +1055,24 @@ function checkpointMemoryStats(
   return diagnostic.checkpointMemoryStats
     ? (JSON.parse(diagnostic.checkpointMemoryStats()) as CheckpointMemoryStats)
     : undefined;
+}
+
+/**
+ * Keeps a build that may propose carrying a hash-only selection apart from
+ * a plain build in the history cache: only a hash-only fillet or chamfer can
+ * resolve differently between the two, and salting its digest invalidates
+ * every checkpoint from it on.
+ */
+function carryProposalSalt(
+  feature: { data: { featureKind: string; edgeReferences?: unknown } },
+  proposeCarry: boolean
+): string {
+  return proposeCarry &&
+    (feature.data.featureKind === 'fillet' ||
+      feature.data.featureKind === 'chamfer') &&
+    feature.data.edgeReferences === undefined
+    ? '|carry-proposal'
+    : '';
 }
 
 export class RemusKernelAdapter implements ExactKernelAdapter {
@@ -1560,7 +1587,14 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     cancellation?: BuildCancellationSignal,
     yieldControl?: () => Promise<void> | void,
     deferTerminalFaceLineage = false,
-    displayOnlyBlends = false
+    displayOnlyBlends = false,
+    /**
+     * An edit's preview or validation, which may propose carrying a
+     * hash-only edge selection. Its hash-only modifiers' digests are salted,
+     * so no checkpoint a carry built is ever restored by a plain build and
+     * no plain refusal is restored by a carry build.
+     */
+    proposeCarry = false
   ): Promise<{
     kernel: RemusKernel;
     build: ExactBuildResult;
@@ -1654,6 +1688,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             (feature.featureId === deferredDirectEditFeatureId
               ? '|display-output'
               : '') +
+            carryProposalSalt(feature, proposeCarry) +
             displayOnlyBlendSalt(feature, displayOnlyBlends)
         )
       : [];
@@ -1687,6 +1722,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                 (feature.featureId === deferredDirectEditFeatureId
                   ? '|display-output'
                   : '') +
+                carryProposalSalt(feature, proposeCarry) +
                 displayOnlyBlendSalt(feature, displayOnlyBlends)
             )
           : [];
@@ -2371,7 +2407,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         cachingEnabled &&
           (this.options.historyCheckpointEstimatedBytes ??
             MAX_HISTORY_CHECKPOINT_ESTIMATED_BYTES) > 0,
-        this.edgeSelections
+        this.edgeSelections,
+        proposeCarry
       );
     } catch (error) {
       // A cancelled build keeps the retained prefix: the checkpoints pushed
@@ -3071,6 +3108,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       lineageDemand?: readonly BodyId[] | ReadonlySet<BodyId>;
       onGeometryReady?: (geometry: GeometryReadyState) => void;
       yieldControl?: () => Promise<void> | void;
+      proposeCarry?: boolean;
     }
   ): Promise<DerivedState> {
     return this.runHistoryJob(async () => {
@@ -3083,7 +3121,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         options?.lineageDemand,
         options?.cancellation,
         options?.onGeometryReady,
-        options?.yieldControl
+        options?.yieldControl,
+        false,
+        false,
+        false,
+        options?.proposeCarry === true
       );
       if ('analysis' in result)
         throw new Error('Document analysis is pending.');
@@ -3099,6 +3141,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       /** Publish meshes and display faces; picks await complete topology. */
       deferTopology?: boolean;
       fullDisplayQuality?: boolean;
+      proposeCarry?: boolean;
     }
   ): Promise<GeometryReadyState> {
     return this.runHistoryJob(async () => {
@@ -3114,7 +3157,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         options?.yieldControl,
         true,
         options?.deferTopology ?? false,
-        options?.fullDisplayQuality ?? false
+        options?.fullDisplayQuality ?? false,
+        options?.proposeCarry === true
       );
       if (!('analysis' in result))
         throw new Error('Expected preview geometry.');
@@ -3144,7 +3188,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     yieldControl?: () => Promise<void> | void,
     geometryOnly = false,
     deferTopology = false,
-    fullDisplayQuality = false
+    fullDisplayQuality = false,
+    proposeCarry = false
   ): Promise<DerivedState | GeometryReadyState> {
     cancellation = this.historySignal(cancellation);
     if (
@@ -3201,7 +3246,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         cancellation,
         yieldControl,
         geometryOnly && deferTopology,
-        geometryOnly && displayOnlyBlendsSupported(RemusKernel)
+        geometryOnly && displayOnlyBlendsSupported(RemusKernel),
+        proposeCarry
       );
       historyDone();
       const bodies = listNodesByKind(document, 'body');
@@ -4037,7 +4083,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           onGeometryReady,
           yieldControl,
           geometryOnly,
-          deferTopology
+          deferTopology,
+          false,
+          proposeCarry
         );
       }
       throw error;
