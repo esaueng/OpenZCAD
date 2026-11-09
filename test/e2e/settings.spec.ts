@@ -1137,7 +1137,7 @@ test('forcing mouse navigation makes a trackpad-style scroll zoom again', async 
 });
 
 for (const tier of ['free', 'premium'] as const) {
-  test(`shows ${tier} membership and effective account limits`, async ({
+  test(`shows ${tier} membership and effective account limits @ci-smoke`, async ({
     page
   }) => {
     await stubApi(page);
@@ -1173,7 +1173,7 @@ for (const tier of ['free', 'premium'] as const) {
       .filter({ hasText: 'Membership' });
     await expect(membership).toContainText(premium ? 'Premium' : 'Free');
     await expect(membership).toContainText(
-      `${premium ? 600 : 6} hosted AI requests per 10 minutes`
+      `${premium ? '10,000' : '100'} cloud projects · ${premium ? '100' : '2'} GB project storage · ${premium ? '100' : '2'} GB cloud file storage · ${premium ? 600 : 6} hosted AI requests per 10 minutes`
     );
     await expect(membership).toContainText('cloud file storage');
   });

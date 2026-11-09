@@ -42,7 +42,7 @@ export function countLabel(
   singular: string,
   plural: string
 ): string {
-  return `${count} ${count === 1 ? singular : plural}`;
+  return `${count.toLocaleString()} ${count === 1 ? singular : plural}`;
 }
 
 /**
