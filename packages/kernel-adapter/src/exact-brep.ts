@@ -357,26 +357,45 @@ export function brepVertexIds(
   return [ids[0]!, ids[1]!];
 }
 
+/** Read continuity once per solid; an unavailable verdict keeps edges selectable. */
+export function brepSmoothEdges(
+  kernel: RemusKernel,
+  solid: number
+): ReadonlySet<number> | undefined {
+  try {
+    return new Set(kernel.getSolidSmoothEdges(solid));
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * A periodic face references its UV-closing seam twice. Remus's sphere is
  * currently built from two same-surface hemispheres, so their smooth equator
  * fragments are display seams too. Neither case is a physical feature edge.
+ * Spline self-seams require RemusKernel.getSolidSmoothEdges's G1 verdict:
+ * the current pin omits self-owned edges, so they stay features until Remus
+ * reports them. Spline closure flags alone cannot rule out a real crease.
  */
 export function brepEdgeDisplayRole(
   kernel: RemusKernel,
   edge: number,
-  edgeToFaces: Record<string, number[]>
+  edgeToFaces: Record<string, number[]>,
+  isSmooth?: boolean
 ): 'feature' | 'seam' {
   const owners = edgeToFaces[String(edge)];
   if (!Array.isArray(owners) || owners.length < 2) {
     return 'feature';
   }
   const uniqueOwners = [...new Set(owners)];
-  if (
-    uniqueOwners.length === 1 &&
-    PERIODIC_SURFACE_TYPES.has(surfaceTypeOf(kernel, uniqueOwners[0]!))
-  ) {
-    return 'seam';
+  if (uniqueOwners.length === 1) {
+    const surfaceType = surfaceTypeOf(kernel, uniqueOwners[0]!);
+    if (
+      PERIODIC_SURFACE_TYPES.has(surfaceType) ||
+      ((surfaceType === 'bspline' || surfaceType === 'nurbs') && isSmooth === true)
+    ) {
+      return 'seam';
+    }
   }
   return sameSphereSurface(kernel, uniqueOwners) ? 'seam' : 'feature';
 }

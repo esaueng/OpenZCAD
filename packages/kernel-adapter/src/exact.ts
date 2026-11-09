@@ -239,6 +239,7 @@ import {
   brepAdjacentFaceHashes,
   brepEdgeCurve,
   brepEdgeDisplayRole,
+  brepSmoothEdges,
   brepVertexIds
 } from './exact-brep';
 export { brepEdgeCurve, edgeCircleMisfit } from './exact-brep';
@@ -2885,13 +2886,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       // angular limits as the shaded mesh. This keeps circular outlines closed
       // and prevents a smooth edge from visibly drifting away from its surface.
       const edgeHandles = Array.from(kernel.getSolidEdges(solid));
-      let smoothEdges: Set<number> | undefined;
-      try {
-        smoothEdges = new Set(kernel.getSolidSmoothEdges(solid));
-      } catch {
-        // Continuity is optional selection advice. A boundary whose normals
-        // cannot be classified stays selectable; it must not hide the body.
-      }
+      const smoothEdges = brepSmoothEdges(kernel, solid);
       const edgeLines = kernel.meshEdgesAll(
         solid,
         displayTessellation.linearDeflection,
@@ -2940,7 +2935,12 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             hash,
             reference: verifiedReference,
             length: kernel.edgeLength(edge),
-            displayRole: brepEdgeDisplayRole(kernel, edge, edgeToFaces),
+            displayRole: brepEdgeDisplayRole(
+              kernel,
+              edge,
+              edgeToFaces,
+              smoothEdges?.has(edge)
+            ),
             isSmooth: smoothEdges?.has(edge),
             adjacentFaceHashes: brepAdjacentFaceHashes(
               edge,
