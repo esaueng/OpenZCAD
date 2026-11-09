@@ -1706,16 +1706,20 @@
   padding: 7px 14px;
   color: var(--color-text);
   font-size: var(--fs-xs);
-  background: var(--color-surface-2);
-  border: 1px solid var(--color-accent-border);
+  /* Bare at rest like the other secondary actions; the pointer or keyboard
+     focus turns it into a whole button. The label keeps full text colour so
+     it still reads over the model. */
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: var(--radius-md);
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.4);
   transform: translateX(-50%);
   cursor: pointer;
 }
 
-.revert-sketch-pill:hover {
-  background: var(--color-accent-dim);
+.revert-sketch-pill:is(:hover, :focus-visible) {
+  background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.4);
 }
 
 .extrude-controls {
