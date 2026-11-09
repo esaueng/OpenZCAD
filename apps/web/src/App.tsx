@@ -24304,7 +24304,10 @@ export function App() {
       ...(E2E_SLOW_FRAME_MS === undefined
         ? {}
         : { slowFrameMs: E2E_SLOW_FRAME_MS }),
-      onDegrade: () => setPreviewDeferred(true)
+      // A slow frame is judged after it publishes: when that frame caught up
+      // with the hand there is nothing to catch up on yet. The next size the
+      // hand moves to raises it (see `requestEdgePreview`).
+      onDegrade: () => setPreviewDeferred(edgePreview.lagging)
     })
   ).current;
   /**
@@ -24393,6 +24396,10 @@ export function App() {
     }
     // A size the preview will not judge (zero) is settled here, unchecked.
     else setPreviewVerdict({ value: size, status: 'unchecked' });
+    // A slow gesture's chip goes ready when a frame catches up; a new size
+    // puts the hand ahead again, so say so now. Publish alone left the chip
+    // ready over the previous radius's geometry until the new frame landed.
+    setPreviewDeferred(edgePreview.degraded && edgePreview.lagging);
   }
   /** Ends the drag's work; what is on screen stays until `clearEdgePreview`. */
   function stopEdgePreview() {
