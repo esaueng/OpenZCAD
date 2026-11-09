@@ -4895,7 +4895,12 @@ export function App() {
       // Release has refused the edit: every preview now yields to the
       // committed projection. stop() alone retains the displayed candidate.
       offsetPreview.clear();
-      setLastValidPreview(null);
+      if (
+        pending?.interaction.mode === 'face' &&
+        pending.interaction.op === 'offset-face'
+      ) {
+        setLastValidPreview(null);
+      }
       regionExtrudePreview.clear();
       setPreviewDeferred(false);
       offsetPreviewValueRef.current = null;
@@ -25543,6 +25548,9 @@ export function App() {
       return 'blocked';
     }
     if (plan.preflightRejection) {
+      offsetPreview.clear();
+      offsetPreviewValueRef.current = null;
+      setLastValidPreview(null);
       reportPreviewFailure(plan.preflightRejection, offset);
       return 'refused';
     }
