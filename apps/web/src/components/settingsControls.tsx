@@ -350,7 +350,8 @@ export function Notice({
   action,
   children
 }: {
-  tone?: 'warning' | 'success' | 'info';
+  /** `neutral` is for an ordinary wait, which is not a warning. */
+  tone?: 'warning' | 'success' | 'info' | 'neutral';
   role?: 'status' | 'alert';
   action?: ReactNode;
   children: ReactNode;
