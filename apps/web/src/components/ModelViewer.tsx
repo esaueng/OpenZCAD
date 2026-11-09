@@ -3825,19 +3825,44 @@ export function ModelViewer({
       if (!offsetGhost) return;
       offsetGhost.dispose();
       offsetGhost = null;
+      showHighlightsUnderGhost();
       offsetRigRef.current?.setChangeShownByBody?.(false);
       delete renderer.domElement.dataset.e2eOffsetGhost;
       requestRender();
+    }
+    // The moved face's selection fill lies under the ghost wherever a push
+    // removes material, and seen through the ghost's differently lit top and
+    // sides it reads as a misplaced blue panel standing off the part. The
+    // handle marks the face meanwhile; the fill returns with the ghost gone.
+    // Each one hidden keeps the visibility it had, to hand back.
+    const highlightsUnderGhost = new Map<THREE.Object3D, boolean>();
+    function hideHighlightsUnderGhost(live: THREE.Object3D | undefined) {
+      live?.traverse((child) => {
+        if (
+          child.name !== 'body-face-selected' &&
+          child.name !== 'body-face-selected-hidden'
+        )
+          return;
+        if (!highlightsUnderGhost.has(child))
+          highlightsUnderGhost.set(child, child.visible);
+        child.visible = false;
+      });
+    }
+    function showHighlightsUnderGhost() {
+      for (const [highlight, visible] of highlightsUnderGhost)
+        highlight.visible = visible;
+      highlightsUnderGhost.clear();
     }
     // While the pointer holds the face, material the drag adds is still a
     // proposal and draws as ghost; letting go makes the part solid again.
     function syncOffsetVeil() {
       if (!offsetGhost) return;
       const target = offsetHandleRef.current;
-      const live =
-        offsetDrag && target
-          ? context.objectsByBodyId.get(target.bodyId)
-          : null;
+      const body = target ? context.objectsByBodyId.get(target.bodyId) : null;
+      // Selection rebuilds its overlays with each preview body, so this
+      // runs every frame the ghost is up.
+      hideHighlightsUnderGhost(body ?? undefined);
+      const live = offsetDrag ? body : null;
       offsetGhost.veilAddedMaterial(live instanceof THREE.Mesh ? live : null);
     }
     offsetGhostClearRef.current = clearOffsetGhost;
