@@ -1,11 +1,10 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
-import {
-  MAX_ACCOUNT_PROJECTS,
-  MAX_ACCOUNT_PROJECT_STORAGE_BYTES
-} from '@openzcad/shared';
+import { MAX_ACCOUNT_PROJECTS } from '@openzcad/shared';
 
+/** Migration 0019's triggers hard-code 2 GiB; 0022 made it per account. */
+const MAX_ACCOUNT_PROJECT_STORAGE_BYTES = 2 * 1024 ** 3;
 const MIGRATIONS = new URL('../apps/web/migrations/', import.meta.url);
 
 function migrate(db: DatabaseSync, through = '0019'): void {

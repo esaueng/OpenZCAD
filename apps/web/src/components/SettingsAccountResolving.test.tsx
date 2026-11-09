@@ -115,6 +115,7 @@ beforeEach(() => {
     documentBytes: 2_048,
     revisionBytes: 1_024,
     revisionCount: 4,
+    projectStorageBytes: 3_072,
     documentLimitBytes: 10 * 1_048_576,
     maxRevisionsPerProject: 20,
     artifactBytes: 5 * 1_048_576,

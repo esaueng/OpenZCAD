@@ -129,12 +129,15 @@ function storageHint(usage: AccountStorageUsage | null): string {
   return `${countLabel(usage.projectCount, 'project', 'projects')} · ${countLabel(usage.revisionCount, 'revision', 'revisions')}. Up to ${formatBytes(usage.documentLimitBytes)} and ${usage.maxRevisionsPerProject.toLocaleString()} revisions per project.`;
 }
 
+/** Usage against an allowance, naming an overage outright. */
+function allowanceFigure(usedBytes: number, limitBytes: number): string {
+  const figure = `${formatBytes(usedBytes)} of ${formatBytes(limitBytes)}`;
+  return usedBytes > limitBytes ? `${figure} · over allowance` : figure;
+}
+
 /** Cloud file usage against the allowance, naming an overage outright. */
 function fileStorageFigure(usage: AccountStorageUsage): string {
-  const figure = `${formatBytes(usage.artifactBytes)} of ${formatBytes(usage.artifactLimitBytes)}`;
-  return usage.artifactBytes > usage.artifactLimitBytes
-    ? `${figure} · over allowance`
-    : figure;
+  return allowanceFigure(usage.artifactBytes, usage.artifactLimitBytes);
 }
 
 type SectionId = SettingsSectionId;
@@ -815,6 +818,11 @@ export function SettingsPage({
       cancelled = true;
     };
   }, [active, cloudFunctionsEnabled, session]);
+
+  /** The owner's project-storage allowance; older servers omit it. */
+  const projectStorageLimit = (
+    storageUsage?.entitlements ?? session?.entitlements
+  )?.projectStorageLimitBytes;
 
   // The Encryption section exists only for an account the server opened the
   // beta to; asked once per signed-in account while Settings is open.
@@ -2507,14 +2515,31 @@ export function SettingsPage({
                         title="Account storage"
                         hint={storageHint(storageUsage)}
                       >
-                        <Status>
-                          {storageUsage
-                            ? formatBytes(
-                                storageUsage.documentBytes +
-                                  storageUsage.revisionBytes
-                              )
-                            : '—'}
-                        </Status>
+                        {storageUsage && projectStorageLimit ? (
+                          <span className="settings-meter-figure">
+                            <Meter
+                              used={storageUsage.projectStorageBytes}
+                              limit={projectStorageLimit}
+                              label="Account storage used"
+                              valueText={allowanceFigure(
+                                storageUsage.projectStorageBytes,
+                                projectStorageLimit
+                              )}
+                            />
+                            <span>
+                              {allowanceFigure(
+                                storageUsage.projectStorageBytes,
+                                projectStorageLimit
+                              )}
+                            </span>
+                          </span>
+                        ) : (
+                          <Status>
+                            {storageUsage
+                              ? formatBytes(storageUsage.projectStorageBytes)
+                              : '—'}
+                          </Status>
+                        )}
                       </SettingRow>
                       <SettingRow
                         title="Cloud file storage"

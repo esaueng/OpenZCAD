@@ -29,6 +29,11 @@ describe('formatBytes', () => {
     expect(formatBytes(1024 ** 4, 'iec')).toBe('1 TiB');
   });
 
+  it('renders a dash for a size a partial storage report leaves out', () => {
+    expect(formatBytes(undefined as unknown as number)).toBe('—');
+    expect(formatBytes(Number.NaN, 'iec')).toBe('—');
+  });
+
   it('uses locale separators for both byte counts and fractional sizes', () => {
     const locale = vi
       .spyOn(Number.prototype, 'toLocaleString')

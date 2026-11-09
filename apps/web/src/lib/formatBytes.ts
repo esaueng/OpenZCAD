@@ -7,6 +7,9 @@ export function formatBytes(
   bytes: number,
   unitStyle: 'short' | 'iec' = 'short'
 ): string {
+  // A field an older or partial storage report leaves out must not take
+  // the Account page down with it.
+  if (!Number.isFinite(bytes)) return '—';
   const units =
     unitStyle === 'iec'
       ? ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB']

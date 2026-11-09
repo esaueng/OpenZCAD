@@ -951,6 +951,24 @@ describe('trash and deletion', () => {
       revisionCount: 1
     });
     expect(counts.revisionBytes).toBeGreaterThan(0);
+    // Settings reports the same storage: an encrypted project's row keeps
+    // `document_bytes = 0`, so the plaintext columns alone read 0 B.
+    const storage = await srv.call('GET', '/api/account/storage');
+    expect(storage.status).toBe(200);
+    // The quota counts every retained envelope (migration 0042's trigger).
+    const retained = rows<{ n: number }>(
+      srv,
+      `SELECT SUM(envelope_bytes) AS n FROM e2ee_project_versions
+       WHERE envelope_key IS NOT NULL OR envelope_inline IS NOT NULL`
+    )[0]!.n;
+    expect(retained).toBeGreaterThanOrEqual(heads);
+    expect(await storage.json()).toMatchObject({
+      projectCount: 2,
+      documentBytes: heads,
+      revisionBytes: counts.revisionBytes,
+      revisionCount: 1,
+      projectStorageBytes: retained
+    });
 
     const erased = await srv.call('POST', '/api/account/delete-data', {
       body: { scope: 'projects', confirmation: 'DELETE CLOUD PROJECTS' }

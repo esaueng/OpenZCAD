@@ -50,6 +50,7 @@ const storageUsage = {
   documentBytes: 2_048,
   revisionBytes: 1_024,
   revisionCount: 4,
+  projectStorageBytes: 3_072,
   documentLimitBytes: 10 * 1_048_576,
   maxRevisionsPerProject: 20,
   artifactBytes: 5 * 1_048_576,
@@ -1758,6 +1759,85 @@ describe('settings privacy and data section', () => {
         '1,234 projects · 12,345 revisions. Up to 10 MB and 1,000 revisions per project.'
       )
     ).toBeVisible();
+  });
+
+  it('states project storage as the quota measures it, against a GB allowance', async () => {
+    const gibibyte = 1_073_741_824;
+    vi.mocked(api.storageUsage).mockResolvedValue({
+      ...storageUsage,
+      // Logical sizes differ from stored ones; the quota counts stored bytes.
+      documentBytes: 40 * 1_048_576,
+      revisionBytes: 0,
+      projectStorageBytes: Math.round(24.8 * 1_048_576),
+      artifactLimitBytes: 25 * gibibyte,
+      entitlements: {
+        tier: 'premium',
+        projectLimit: 10_000,
+        projectStorageLimitBytes: 25 * gibibyte,
+        artifactLimitBytes: 25 * gibibyte,
+        ai: {
+          requestLimit: 600,
+          costLimitUnits: 2_400,
+          windowSeconds: 600,
+          concurrencyLimit: 8
+        }
+      }
+    });
+    renderSettings(readyHealth, { initialSection: 'account', session });
+
+    // Large allowances read in GB, never as "25600.0 MB".
+    const projects = await screen.findByRole('meter', {
+      name: 'Account storage used'
+    });
+    expect(projects).toHaveAttribute(
+      'aria-valuenow',
+      String(Math.round(24.8 * 1_048_576))
+    );
+    expect(projects).toHaveAttribute('aria-valuemax', String(25 * gibibyte));
+    expect(screen.getByText('24.8 MB of 25 GB')).toBeVisible();
+    expect(
+      screen.getByRole('meter', { name: 'Cloud file storage used' })
+    ).toHaveAttribute('aria-valuetext', '5 MB of 25 GB');
+  });
+
+  it('names an account storage overage outright', async () => {
+    vi.mocked(api.storageUsage).mockResolvedValue({
+      ...storageUsage,
+      projectStorageBytes: 2 * 1_073_741_824,
+      entitlements: {
+        tier: 'free',
+        projectLimit: 100,
+        projectStorageLimitBytes: 1_073_741_824,
+        artifactLimitBytes: 1_073_741_824,
+        ai: {
+          requestLimit: 6,
+          costLimitUnits: 24,
+          windowSeconds: 600,
+          concurrencyLimit: 2
+        }
+      }
+    });
+    renderSettings(readyHealth, { initialSection: 'account', session });
+
+    expect(
+      await screen.findByRole('meter', { name: 'Account storage used' })
+    ).toHaveAttribute('aria-valuetext', '2 GB of 1 GB · over allowance');
+  });
+
+  it('keeps the Account page usable when the storage report omits fields', async () => {
+    // Older servers and the e2e stubs send only the document fields.
+    vi.mocked(api.storageUsage).mockResolvedValue({
+      projectCount: 0,
+      documentBytes: 0,
+      revisionBytes: 0,
+      revisionCount: 0,
+      documentLimitBytes: 1_500_000,
+      maxRevisionsPerProject: 50
+    } as unknown as typeof storageUsage);
+    renderSettings(readyHealth, { initialSection: 'account', session });
+
+    expect(await screen.findByText('Cloud file storage')).toBeVisible();
+    expect(screen.getByText('Account storage')).toBeVisible();
   });
 
   it('names the diagnostic download for what it downloads', () => {

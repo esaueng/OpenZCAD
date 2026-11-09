@@ -123,6 +123,7 @@ describe('account storage accounting', () => {
       documentBytes: 0,
       revisionBytes: 0,
       revisionCount: 0,
+      projectStorageBytes: 0,
       documentLimitBytes: MAX_PERSISTED_DOCUMENT_BYTES,
       maxRevisionsPerProject: MAX_PROJECT_REVISIONS,
       artifactBytes: 0,

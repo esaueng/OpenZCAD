@@ -414,11 +414,12 @@ export async function stubApi(
         documentBytes: 0,
         revisionBytes: 0,
         revisionCount: 0,
+        projectStorageBytes: 0,
         documentLimitBytes: 1_500_000,
         maxRevisionsPerProject: 50,
         artifactBytes: 0,
         artifactCount: 0,
-        artifactLimitBytes: 2 * 1024 ** 3
+        artifactLimitBytes: 1024 ** 3
       } satisfies AccountStorageUsage
     })
   );

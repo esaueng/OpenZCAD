@@ -529,8 +529,8 @@ describe('desktop authorization', () => {
       entitlements: {
         tier: 'free',
         projectLimit: 100,
-        projectStorageLimitBytes: 2 * 1024 ** 3,
-        artifactLimitBytes: 2 * 1024 ** 3,
+        projectStorageLimitBytes: 1024 ** 3,
+        artifactLimitBytes: 1024 ** 3,
         ai: {
           requestLimit: 6,
           costLimitUnits: 24,
@@ -571,8 +571,8 @@ describe('desktop authorization', () => {
       entitlements: {
         tier: 'free',
         projectLimit: 100,
-        projectStorageLimitBytes: 2 * 1024 ** 3,
-        artifactLimitBytes: 2 * 1024 ** 3,
+        projectStorageLimitBytes: 1024 ** 3,
+        artifactLimitBytes: 1024 ** 3,
         ai: {
           requestLimit: 6,
           costLimitUnits: 24,

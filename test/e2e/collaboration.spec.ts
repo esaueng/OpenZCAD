@@ -1677,6 +1677,7 @@ test('uses a one-use native ticket for desktop collaboration without exposing a 
               documentBytes: 0,
               revisionBytes: 0,
               revisionCount: 0,
+              projectStorageBytes: 0,
               documentLimitBytes: 1_500_000,
               maxRevisionsPerProject: 50
             });

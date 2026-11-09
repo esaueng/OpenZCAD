@@ -872,7 +872,8 @@ describe('durable multipart quota accounting', () => {
        (upload_session_id, part_number, bytes, etag, reservation_token)
        VALUES (?, ?, ?, 'etag', ?)`
     );
-    for (const target of sessions.slice(0, 2)) {
+    // One full upload (32 parts of 32 MiB) fills the 1 GiB Free allowance.
+    for (const target of sessions.slice(0, 1)) {
       for (let part = 1; part <= 32; part += 1) {
         insertPart.run(
           target.session.uploadSessionId,
@@ -1540,7 +1541,8 @@ describe('tier-aware project quotas', () => {
         .prepare(`UPDATE projects SET document_bytes = ? WHERE id = ?`)
         .run(MAX_ACCOUNT_ARTIFACT_BYTES + 9, PROJECT)
     ).toThrow('project_account_document_quota');
-    // A missing owner row must use the Free fallback rather than SQL NULL disabling a guard.
+    // A missing owner row must use the database fallback (the 2 GiB the
+    // triggers hard-code) rather than SQL NULL disabling a guard.
     sqlite
       .prepare(
         `INSERT INTO projects (id, user_id, name, document_json, updated_at) VALUES ('legacy-owner', 'missing-user', 'Legacy', '{}', '2026-01-01')`
@@ -1551,7 +1553,7 @@ describe('tier-aware project quotas', () => {
         .prepare(
           `UPDATE projects SET document_bytes = ? WHERE id = 'legacy-owner'`
         )
-        .run(MAX_ACCOUNT_ARTIFACT_BYTES + 1)
+        .run(2 * 1024 ** 3 + 1)
     ).toThrow('project_account_document_quota');
   });
 });
