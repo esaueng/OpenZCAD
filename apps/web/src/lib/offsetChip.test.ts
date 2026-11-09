@@ -3,9 +3,12 @@ import {
   chipPanelDodge,
   edgeChipCenterX,
   faceOffsetChipState,
+  keptOffsetValue,
   offsetChipText,
+  offsetLimitChipText,
   rearmedChipMode,
-  regionChipState
+  regionChipState,
+  valueInsideLimit
 } from './offsetChip';
 
 describe('offset chip', () => {
@@ -218,5 +221,47 @@ describe('a handle chip under a model panel', () => {
     expect(covered(after, sheet)).toBe(false);
     expect(after.bottom).toBeLessThanOrEqual(402);
     expect(after.top).toBeGreaterThanOrEqual(102);
+  });
+});
+
+describe('a refused offset that names its limit', () => {
+  // The Front face of a block whose Right face keeps a 6.4 flat between two
+  // r8.8 rounds: pushing it in past 6.4 collapses that flat.
+  it('reads how far the face can move, or the span it cannot pass', () => {
+    const base = { limit: -6.400000000000002, sense: 1, units: 'mm' };
+    expect(offsetLimitChipText({ ...base, mode: 'offset', span: 24 })).toBe(
+      'max 6.4 mm'
+    );
+    expect(offsetLimitChipText({ ...base, mode: 'total', span: 24 })).toBe(
+      'min 17.6 mm'
+    );
+    // A total with no span to read falls back to the distance.
+    expect(offsetLimitChipText({ ...base, mode: 'total', span: null })).toBe(
+      'max 6.4 mm'
+    );
+    // A pull that grows the span is capped from above.
+    expect(
+      offsetLimitChipText({ ...base, limit: 3, mode: 'total', span: 10 })
+    ).toBe('max 13 mm');
+  });
+
+  it('offers the nearest hundredth inside the limit, on its side of zero', () => {
+    expect(valueInsideLimit(-6.400000000000002)).toBe(-6.39);
+    expect(valueInsideLimit(6.4)).toBe(6.39);
+    expect(valueInsideLimit(6.405)).toBe(6.39);
+    expect(valueInsideLimit(0.01)).toBeNull();
+    expect(valueInsideLimit(Number.NaN)).toBeNull();
+  });
+
+  it('keeps the value inside the limit rather than an earlier frame', () => {
+    // Released at −9 after the last built frame at −5: Keep offers −6.39.
+    expect(keptOffsetValue(-6.400000000000002, -5)).toBe(-6.39);
+    // Nothing built during the drag: the limit still offers a way out.
+    expect(keptOffsetValue(-6.4, null)).toBe(-6.39);
+    // A built frame at least as far on the same side is proven: keep it.
+    expect(keptOffsetValue(-6.4, -6.395)).toBe(-6.395);
+    // No limit: the last frame that built, as before.
+    expect(keptOffsetValue(undefined, -5)).toBe(-5);
+    expect(keptOffsetValue(undefined, null)).toBeNull();
   });
 });

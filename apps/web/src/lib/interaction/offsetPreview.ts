@@ -79,9 +79,14 @@ export function offsetPreviewRejection(
     input.derived.warnings,
     input.derived.featureWarnings
   );
-  return message
-    ? splitRefusal(message, warning?.kernelRefusal ?? warning?.category)
-    : null;
+  if (!message) return null;
+  const limit = warning?.kernelRefusal?.limit;
+  return {
+    ...splitRefusal(message, warning?.kernelRefusal ?? warning?.category),
+    // How far the face can go, when the kernel named it: the chip shows it
+    // and the way out offers the value just inside it.
+    ...(limit !== undefined ? { limit } : {})
+  };
 }
 
 function length(vector: Vector3): number {

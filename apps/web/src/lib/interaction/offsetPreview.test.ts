@@ -210,3 +210,47 @@ describe('offsetPreviewRejection for a blend preview', () => {
     ).toBeNull();
   });
 });
+
+describe('offsetPreviewRejection for a face pushed past a neighbour', () => {
+  // The adapter's typed refusal for the Front face of a block whose Right
+  // face keeps a 6.4 flat between two r8.8 rounds
+  // (test/parity/offset-face-fillet-limit.spec.ts).
+  const kernelWords =
+    'resize blend: exact reconstruction refused: … exact prismatic blend translation failed (offset: move-face would change topology at face None, edge Some(Id(8)): line edge 8 with one moving end would reverse: a move of -9 against a fixed-to-moving extent of 6.400000000000002)';
+  const message = `Feature "Offset Face": A neighbouring face would shrink to nothing past 6.4. Try a smaller offset.\n${kernelWords}`;
+
+  it('keeps the category, the kernel words and the limit', () => {
+    const rejection = offsetPreviewRejection({
+      label: 'Offset Face',
+      bodyId: toBodyId('body'),
+      documentMoved: false,
+      derived: {
+        bodyRepresentations: {},
+        warnings: [message],
+        featureWarnings: [
+          {
+            featureId: toFeatureId('offset'),
+            featureName: 'Offset Face',
+            message,
+            kind: 'build-failed',
+            kernelRefusal: {
+              family: 'direct-edit',
+              operation: 'offset-face',
+              category: 'invalid_topology',
+              code: 'offset_face_collapses_neighbor',
+              reason: 'reverse',
+              limit: -6.400000000000002
+            }
+          }
+        ]
+      }
+    });
+    expect(rejection).toEqual({
+      message:
+        'A neighbouring face would shrink to nothing past 6.4. Try a smaller offset.',
+      detail: kernelWords,
+      category: 'invalid_topology',
+      limit: -6.400000000000002
+    });
+  });
+});

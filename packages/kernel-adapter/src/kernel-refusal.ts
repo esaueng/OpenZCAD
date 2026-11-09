@@ -99,6 +99,13 @@ export interface KernelRefusalInit {
   kernelReason?: string;
   /** The blocking neighbour's surface type, when the kernel named one. */
   neighborSurfaceType?: string;
+  /**
+   * The value of the refused parameter at which the refusal begins, signed
+   * like the parameter, when the refusal names one: a face offset past which
+   * a neighbouring face collapses. The value itself refuses; anything
+   * strictly inside it is not refused for this reason.
+   */
+  limit?: number;
   cause?: unknown;
 }
 
@@ -117,6 +124,7 @@ export class KernelRefusal extends Error {
   readonly reason: string;
   readonly kernelReason?: string;
   readonly neighborSurfaceType?: string;
+  readonly limit?: number;
 
   constructor(init: KernelRefusalInit) {
     super(
@@ -134,6 +142,9 @@ export class KernelRefusal extends Error {
     }
     if (init.neighborSurfaceType !== undefined) {
       this.neighborSurfaceType = init.neighborSurfaceType;
+    }
+    if (init.limit !== undefined) {
+      this.limit = init.limit;
     }
   }
 }
@@ -211,6 +222,8 @@ export interface KernelRefusalRecord {
   reason?: string;
   /** {@link KernelRefusal.neighborSurfaceType}, when the kernel gave one. */
   neighborSurfaceType?: string;
+  /** {@link KernelRefusal.limit}, when the refusal named one. */
+  limit?: number;
 }
 
 /** The record for an error, or undefined when the kernel gave no category. */
@@ -230,7 +243,8 @@ export function kernelRefusalRecordOf(
     ...(refusal.kernelReason ? { reason: refusal.kernelReason } : {}),
     ...(refusal.neighborSurfaceType
       ? { neighborSurfaceType: refusal.neighborSurfaceType }
-      : {})
+      : {}),
+    ...(refusal.limit !== undefined ? { limit: refusal.limit } : {})
   };
 }
 

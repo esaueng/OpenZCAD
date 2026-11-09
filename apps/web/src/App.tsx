@@ -789,8 +789,10 @@ import {
   sketchToolKeysSuspended,
   interactionReducer,
   commandSessionFor,
+  holdsRefusal,
   isOperationState,
   isStaleSelectionError,
+  pendingHistoryStepFor,
   operationSelectionKey,
   nextSketchCircleMode,
   nextSketchCurveMode,
@@ -1686,6 +1688,7 @@ import {
   type ToastModel
 } from './lib/toasts';
 import { PreviewRefusalError, splitRefusal } from './lib/featureValidation';
+import { keptOffsetValue } from './lib/offsetChip';
 import { useCollaboration } from './lib/useCollaboration';
 import { preflightCadPatch } from './lib/aiPatchPreflight';
 import type {
@@ -4624,8 +4627,25 @@ export function App() {
           documentMoved
         });
         if (rejection) {
-          throw new Error(
-            withFaceTravelHint(rejection.message, candidate.travelHint)
+          // The whole diagnostic crosses the async boundary — its category,
+          // the kernel's words and any limit — not just its sentence. A
+          // travel estimate leads the detail, as it did when it rode the
+          // sentence.
+          const hinted = withFaceTravelHint(
+            rejection.message,
+            candidate.travelHint
+          );
+          const hint =
+            hinted === rejection.message
+              ? null
+              : hinted.slice(rejection.message.length + 1);
+          throw new PreviewRefusalError(
+            hint
+              ? {
+                  ...rejection,
+                  detail: [hint, rejection.detail].filter(Boolean).join('\n')
+                }
+              : rejection
           );
         }
         return derived;
@@ -4660,7 +4680,10 @@ export function App() {
       onFailure: ({ error, value }) => {
         const message = errorMessage(error, 'Exact offset preview failed.');
         traceFaceDrag('refusal', { value, message });
-        reportPreviewFailure(message, value);
+        reportPreviewFailure(
+          error instanceof PreviewRefusalError ? error.diagnostic : message,
+          value
+        );
       },
       acceptValue: (offset) =>
         Number.isFinite(offset) && Math.abs(offset) > 1e-9,
@@ -25190,23 +25213,31 @@ export function App() {
    * that builds recovers all of it (see `recoverPreviewInteraction`).
    */
   function reportPreviewFailure(
-    message: string,
+    /**
+     * The refusal: a sentence to split, or the diagnostic a preview already
+     * built, kept whole so its detail, category and limit survive.
+     */
+    failure: string | CommandDiagnostic,
     value: number,
     /** The adapter's structured verdict, when the rejection carried one. */
     advice?: CommandDiagnostic['advice'],
     headline?: string
   ) {
-    if (!isOperationState(interactionRef.current)) {
+    const current = interactionRef.current;
+    if (!isOperationState(current)) {
       return;
     }
     setPreviewVerdict({ value, status: 'refused' });
     const diagnostic: CommandDiagnostic = {
-      ...splitRefusal(message),
+      ...(typeof failure === 'string' ? splitRefusal(failure) : failure),
       ...(headline ? { headline } : {}),
       ...(advice ? { advice } : {})
     };
+    // Under a held handle the refusal is the chip's to show: the drag keeps
+    // its prompt, its Escape and its collapsed rail until it is released.
+    const dragging = current.phase === 'dragging';
     dispatchInteraction({
-      type: 'validation-failed',
+      type: dragging ? 'preview-refused' : 'validation-failed',
       diagnostic,
       value
     });
@@ -25214,13 +25245,32 @@ export function App() {
       diagnostic.message,
       diagnostic.detail ? { detail: diagnostic.detail } : undefined
     );
-    recordDirectEditOutcome('preview-failed', { value, message });
+    // One diagnostic fixture per gesture: every refused frame of a drag past
+    // the limit is the same refusal, and each capture is a document write.
+    if (dragging && previewFailureRecordedForDrag.current) return;
+    if (dragging) previewFailureRecordedForDrag.current = true;
+    recordDirectEditOutcome('preview-failed', {
+      value,
+      message: diagnostic.message,
+      ...(diagnostic.detail ? { detail: diagnostic.detail } : {})
+    });
   }
+  const previewFailureRecordedForDrag = useRef(false);
+  useEffect(() => {
+    if (!(isOperationState(interaction) && interaction.phase === 'dragging'))
+      previewFailureRecordedForDrag.current = false;
+  }, [interaction]);
 
   /** The first buildable value after a refusal re-arms the live gesture. */
   function recoverPreviewInteraction() {
     const current = interactionRef.current;
-    if (!isOperationState(current) || current.phase !== 'failed') {
+    if (!isOperationState(current)) return;
+    // A refused frame under the hand clears in place: the drag never left.
+    if (current.phase === 'dragging' && current.error) {
+      dispatchInteraction({ type: 'drag-engage' });
+      return;
+    }
+    if (current.phase !== 'failed') {
       return;
     }
     dispatchInteraction({ type: 'recover' });
@@ -25690,8 +25740,9 @@ export function App() {
       return 'blocked';
     }
     // A refused value is not committed from a failed card; the value the
-    // last passing preview showed is, and validation judges it again.
-    if (current.phase === 'failed' && !options?.keepingLastValid) {
+    // last passing preview showed is, and validation judges it again. A
+    // release on a refused frame reads the drag before its release renders.
+    if (holdsRefusal(current) && !options?.keepingLastValid) {
       setStatus(
         current.error?.message ?? 'The current offset preview is invalid.'
       );
@@ -25940,32 +25991,41 @@ export function App() {
    * runs again on the way in, reusing that preview's rebuild when it still
    * matches the document.
    */
+  // A face offset refused at a limit the kernel named offers the value just
+  // inside that limit, which is nearer the hand than the last frame that
+  // happened to build; validation still judges it on the way in.
+  const keepValue =
+    isOperationState(interaction) &&
+    interaction.phase === 'failed' &&
+    interaction.mode === 'face' &&
+    interaction.op === 'offset-face'
+      ? keptOffsetValue(interaction.error?.limit, lastValidPreview)
+      : lastValidPreview;
   const keepLastValid =
     isOperationState(interaction) &&
     interaction.phase === 'failed' &&
-    lastValidPreview !== null &&
+    keepValue !== null &&
     !isStaleSelectionError(interaction.error) &&
     (interaction.mode === 'region' ||
       interaction.mode === 'edges' ||
       (interaction.mode === 'face' &&
         (interaction.op === 'offset-face' || interaction.op === 'edit-fillet')))
       ? {
-          label:
-            `Keep ${formatNumber(lastValidPreview)} ${doc?.units ?? ''}`.trim(),
+          label: `Keep ${formatNumber(keepValue)} ${doc?.units ?? ''}`.trim(),
           keep: () => {
             if (interaction.mode === 'edges' || interaction.mode === 'face') {
               if (
                 interaction.mode === 'face' &&
                 interaction.op === 'offset-face'
               ) {
-                handleOffsetCommit(lastValidPreview, undefined, {
+                handleOffsetCommit(keepValue, undefined, {
                   keepingLastValid: true
                 });
               } else {
-                handleEdgeCommit(lastValidPreview);
+                handleEdgeCommit(keepValue);
               }
             } else {
-              handleRegionExtrudeCommit(lastValidPreview);
+              handleRegionExtrudeCommit(keepValue);
             }
           }
         }
@@ -30156,14 +30216,7 @@ export function App() {
         openReferenceImage(imageId as ReferenceImageId)
       }
       warnings={diagnostics}
-      pendingHistoryStep={
-        commandSession?.phase === 'failed' && commandSession.error
-          ? {
-              title: commandSession.title,
-              message: commandSession.error.message
-            }
-          : null
-      }
+      pendingHistoryStep={pendingHistoryStepFor(commandSession)}
       historyDetails={
         <FeatureHistoryPanel
           document={doc}
@@ -30853,8 +30906,13 @@ export function App() {
               return handleOffsetCommit(value);
             }}
             onOffsetCancel={handleOffsetCancel}
-            offsetPreviewInvalid={
-              isOperationState(interaction) && interaction.phase === 'failed'
+            offsetPreviewInvalid={holdsRefusal(interaction)}
+            offsetPreviewLimit={
+              holdsRefusal(interaction) &&
+              interaction.mode === 'face' &&
+              interaction.op === 'offset-face'
+                ? (interaction.error?.limit ?? null)
+                : null
             }
             previewDeferred={previewDeferred}
             onOpenOffsetKeypad={handleOpenOffsetKeypad}

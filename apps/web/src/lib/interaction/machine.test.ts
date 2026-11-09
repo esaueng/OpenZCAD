@@ -8,10 +8,12 @@ import {
   projectionRepickHolds,
   radialFaceOperationName,
   escapeTarget,
+  holdsRefusal,
   interactionReducer,
   isOperationState,
   nextSketchCircleMode,
   operationSelectionKey,
+  pendingHistoryStepFor,
   toolCardFor,
   type FaceTarget,
   type InteractionState,
@@ -22,6 +24,7 @@ import {
   sketchCurveModeTool
 } from './machine';
 import { commandPrompt } from './prompt';
+import { selectionRailCollapsed } from '../../components/SelectionRail';
 import type {
   FaceTopologyReferenceV5,
   FeatureId,
@@ -1693,5 +1696,121 @@ describe('operationSelectionKey', () => {
       expect(operationSelectionKey(other)).not.toBe(key);
     }
     expect(operationSelectionKey(IDLE)).toBeNull();
+  });
+});
+
+describe('a preview refused under a held handle', () => {
+  // The Front face of a filleted block pushed in past the 6.4 flat its
+  // neighbour keeps between two r8.8 rounds.
+  const refusal = {
+    message:
+      'A neighbouring face would shrink to nothing past 6.4. Try a smaller offset.',
+    detail: 'move-face would change topology …',
+    category: 'invalid_topology',
+    limit: -6.4
+  };
+  function draggingOffset(): InteractionState {
+    let state = interactionReducer(IDLE, {
+      type: 'select-face',
+      target: face()
+    });
+    state = interactionReducer(state, { type: 'drag-engage' });
+    expect(isOperationState(state) && state.phase).toBe('dragging');
+    return state;
+  }
+  const railCollapsed = (state: InteractionState) =>
+    selectionRailCollapsed({
+      label: null,
+      verbs: [],
+      anchor: 'selection',
+      onVerb: () => {},
+      operation: {
+        title: 'Offset Face',
+        phase: commandSessionFor(state)?.phase ?? undefined,
+        onEditCulprit: () => {},
+        onViewDetails: () => {},
+        onKeepLastValid: () => {},
+        onSelectAllEdges: () => {}
+      }
+    });
+
+  it('keeps the drag: phase, Escape, prompt and collapsed rail', () => {
+    const before = draggingOffset();
+    const refused = interactionReducer(before, {
+      type: 'preview-refused',
+      diagnostic: refusal,
+      value: -9
+    });
+    expect(isOperationState(refused) && refused.phase).toBe('dragging');
+    expect(isOperationState(refused) && refused.error).toEqual(refusal);
+    expect(isOperationState(refused) && refused.lastValue).toBe(-9);
+    expect(holdsRefusal(refused)).toBe(true);
+    expect(escapeTarget(refused)).toBe('cancel-drag');
+    expect(commandPrompt(refused, 'radius')?.escape).toBe(
+      commandPrompt(before, 'radius')?.escape
+    );
+    expect(commandPrompt(refused, 'radius')?.step).toBe(
+      commandPrompt(before, 'radius')?.step
+    );
+    expect(railCollapsed(refused)).toBe(true);
+  });
+
+  it('shows no "not built" history row while the hand is down', () => {
+    const refused = interactionReducer(draggingOffset(), {
+      type: 'preview-refused',
+      diagnostic: refusal,
+      value: -9
+    });
+    expect(pendingHistoryStepFor(commandSessionFor(refused))).toBeNull();
+  });
+
+  it('clears in place when a later frame builds, and stays a drag', () => {
+    const refused = interactionReducer(draggingOffset(), {
+      type: 'preview-refused',
+      diagnostic: refusal,
+      value: -9
+    });
+    // recoverPreviewInteraction re-engages a refused drag in place.
+    const recovered = interactionReducer(refused, { type: 'drag-engage' });
+    expect(isOperationState(recovered) && recovered.phase).toBe('dragging');
+    expect(isOperationState(recovered) && recovered.error).toBeNull();
+    expect(holdsRefusal(recovered)).toBe(false);
+    expect(
+      interactionReducer(recovered, { type: 'drag-release' })
+    ).toMatchObject({ phase: 'armed', error: null });
+  });
+
+  it('becomes the refusal once released, with its row and its limit', () => {
+    const refused = interactionReducer(draggingOffset(), {
+      type: 'preview-refused',
+      diagnostic: refusal,
+      value: -9
+    });
+    const released = interactionReducer(refused, { type: 'drag-release' });
+    expect(released).toMatchObject({
+      phase: 'failed',
+      lastValue: -9,
+      error: { limit: -6.4 }
+    });
+    expect(escapeTarget(released)).toBe('clear-selection');
+    expect(railCollapsed(released)).toBe(false);
+    expect(pendingHistoryStepFor(commandSessionFor(released))).toEqual({
+      title: commandSessionFor(released)!.title,
+      message: refusal.message
+    });
+  });
+
+  it('is a validation failure outside a drag', () => {
+    let state = interactionReducer(IDLE, {
+      type: 'select-face',
+      target: face()
+    });
+    state = interactionReducer(state, { type: 'keypad-open' });
+    state = interactionReducer(state, {
+      type: 'preview-refused',
+      diagnostic: refusal,
+      value: -9
+    });
+    expect(state).toMatchObject({ phase: 'failed', lastValue: -9 });
   });
 });

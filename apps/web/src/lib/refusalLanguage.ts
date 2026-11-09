@@ -130,7 +130,23 @@ function typedSentence(typed: RefusalClassification): string | null {
   }
 }
 
-const TRANSLATIONS: ReadonlyArray<{ pattern: RegExp; sentence: string }> = [
+/**
+ * One table row. A sentence that names a number the kernel stated is written
+ * as a function of the match; the words are still ours, only the number is
+ * the kernel's.
+ */
+interface Translation {
+  pattern: RegExp;
+  sentence: string | ((match: RegExpExecArray) => string);
+}
+
+function sentenceOf(translation: Translation, text: string): string {
+  if (typeof translation.sentence === 'string') return translation.sentence;
+  const match = translation.pattern.exec(text);
+  return match ? translation.sentence(match) : GENERIC;
+}
+
+const TRANSLATIONS: readonly Translation[] = [
   {
     pattern: /unsupported STEP entity:/i,
     sentence:
@@ -214,6 +230,16 @@ const TRANSLATIONS: ReadonlyArray<{ pattern: RegExp; sentence: string }> = [
     pattern:
       /non-manifold|degenerate topology|boolean result has|empty result|produced no (?:output |offset )?(?:faces|vertices|solids)|would leave only|would empty|no faces could be assembled/i,
     sentence: "The resulting body wouldn't be valid."
+  },
+  {
+    // A face move re-limits its neighbours; pushed past the length of a
+    // neighbour's flat, that flat would vanish (`collapse`) or turn inside
+    // out (`reverse`), which changes the body's topology. The kernel names
+    // the extent it ran against, and that is how far the face can go.
+    pattern:
+      /move-face would change topology.*?would (?:collapse|reverse): a move of -?[\d.]+(?:e-?\d+)? against a fixed-to-moving extent of (\d+(?:\.\d+)?(?:e-?\d+)?)/i,
+    sentence: (match) =>
+      `A neighbouring face would shrink to nothing past ${Math.round(Number(match[1]) * 100) / 100}. Try a smaller offset.`
   },
   {
     pattern:
@@ -301,10 +327,9 @@ export function plainRefusal(
   // no more than "it did not work". The category says more than that and
   // takes its place. Everything else the kernel wrote used to collapse into
   // that one line; a category now replaces the fallback there too.
+  const translated = translation ? sentenceOf(translation, sentence) : null;
   const tabled =
-    translation && translation.sentence !== GENERIC
-      ? translation.sentence
-      : undefined;
+    translated !== null && translated !== GENERIC ? translated : undefined;
   const plain =
     tabled ??
     (translation || looksLikeKernelText(sentence)

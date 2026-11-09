@@ -279,6 +279,7 @@ import {
   edgeChipCenterX,
   faceOffsetChipState,
   offsetChipText,
+  offsetLimitChipText,
   rearmedChipMode,
   regionChipState,
   type OffsetChipMode
@@ -1102,6 +1103,11 @@ export interface ModelViewerProps {
   onOffsetCancel(): void;
   /** Current exact preview or release validation refused this offset. */
   offsetPreviewInvalid: boolean;
+  /**
+   * Where the refused offset's limit lies, signed like the offset, when the
+   * refusal named one. The chip shows it beside the value it refused.
+   */
+  offsetPreviewLimit?: number | null;
   /**
    * The live preview gave up on this gesture: the handle still moves, the
    * geometry no longer follows. Shown on the value chip so frozen geometry
@@ -2207,6 +2213,7 @@ export function ModelViewer({
   onOffsetCommit,
   onOffsetCancel,
   offsetPreviewInvalid,
+  offsetPreviewLimit = null,
   previewDeferred,
   onOpenOffsetKeypad,
   keypadAnchorRef,
@@ -2495,6 +2502,8 @@ export function ModelViewer({
   onOffsetCancelRef.current = onOffsetCancel;
   const offsetPreviewInvalidRef = useRef(offsetPreviewInvalid);
   offsetPreviewInvalidRef.current = offsetPreviewInvalid;
+  const offsetPreviewLimitRef = useRef(offsetPreviewLimit);
+  offsetPreviewLimitRef.current = offsetPreviewLimit;
   const previewDeferredRef = useRef(previewDeferred);
   previewDeferredRef.current = previewDeferred;
   const onOpenOffsetKeypadRef = useRef(onOpenOffsetKeypad);
@@ -7474,6 +7483,16 @@ export function ModelViewer({
           });
           if (offsetPreviewInvalidRef.current) {
             text = `⚠ ${text}`;
+            const limit = offsetPreviewLimitRef.current;
+            if (limit !== null && limit !== undefined) {
+              text = `${text} · ${offsetLimitChipText({
+                limit,
+                mode: offsetChipModeRef.current,
+                span: totalBaseline ?? offsetExtentRef.current,
+                sense: totalSense,
+                units: unitLabelRef.current
+              })}`;
+            }
           }
         }
       }
@@ -13922,7 +13941,7 @@ export function ModelViewer({
     offsetRigRef.current?.setWarning?.(offsetPreviewInvalid);
     edgeRigRef.current?.setWarning?.(offsetPreviewInvalid);
     contextRef.current?.requestRender();
-  }, [offsetPreviewInvalid]);
+  }, [offsetPreviewInvalid, offsetPreviewLimit]);
   // The chip reads the deferred state in the frame loop. A hand at rest, or
   // a value typed into the keypad, asks for no frame of its own, so the
   // catching-up state would otherwise wait for an unrelated repaint.
