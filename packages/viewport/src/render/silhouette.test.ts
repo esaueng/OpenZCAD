@@ -4,6 +4,7 @@ import { toBodyId, type BodyRepresentation } from '@openzcad/shared';
 import {
   createSilhouetteLines,
   installSilhouetteUpdates,
+  SILHOUETTE_BUILD_MARK,
   silhouetteCandidates,
   updateSilhouette
 } from './silhouette';
@@ -256,5 +257,24 @@ describe('curved-surface outlines', () => {
     const { mesh, faces } = cylinderMesh();
     const { mesh: _mesh, ...withoutMesh } = body(mesh, faces);
     expect(createBodyEdgeOverlay(withoutMesh).silhouetteEdges).toBeNull();
+  });
+
+  it('leaves a timing mark for each body build, for performance timelines', () => {
+    performance.clearMarks(SILHOUETTE_BUILD_MARK);
+    const { mesh, faces } = cylinderMesh();
+    createBodyEdgeOverlay(body(mesh, faces));
+    const marks = performance.getEntriesByName(
+      SILHOUETTE_BUILD_MARK
+    ) as PerformanceMark[];
+    expect(marks).toHaveLength(1);
+    const detail = marks[0]!.detail as {
+      ms: number;
+      triangles: number;
+      candidates: number;
+    };
+    expect(detail.ms).toBeGreaterThanOrEqual(0);
+    expect(detail.triangles).toBe(mesh.indices.length / 3);
+    expect(detail.candidates).toBe(24);
+    performance.clearMarks(SILHOUETTE_BUILD_MARK);
   });
 });

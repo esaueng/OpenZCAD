@@ -331,6 +331,12 @@ is gone.
   shader version.
 - With this change, `rotational-direct-edits` passed 3 of 3 runs locally
   (59–72 s); before it, it failed 4 of 4.
+- Building the candidates runs on the main thread at every body build. It
+  now uses typed arrays and open-addressed hashing instead of a string key
+  per vertex and an object per edge. The output is bit-identical, and the
+  sleeve builds in 27 ms instead of 81 ms (2–7× faster in the frame-timing
+  probe's scenes). Each build leaves an `oz:viewer.silhouettes` User Timing
+  mark, which the frame-timing probe and Safari's timeline both show.
 
 ## Running the harness
 
