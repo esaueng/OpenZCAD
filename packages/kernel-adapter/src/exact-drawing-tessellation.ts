@@ -1,7 +1,7 @@
 import type { RemusKernel } from './remus-runtime';
 import type { ExactShape } from './exact-types';
 import { displayTessellationForExtents } from './display-tessellation';
-import { brepEdgeDisplayRole } from './exact-brep';
+import { brepEdgeDisplayRole, brepSmoothEdges } from './exact-brep';
 import { edgeToFaceMapOf } from './exact-sync-memo';
 import {
   ownedMeshFaceOffsets,
@@ -219,6 +219,7 @@ export function drawingTessellationOfShape(
       mesh.free();
     }
     const edgeToFaces = edgeToFaceMapOf(kernel, solid);
+    const smoothEdges = brepSmoothEdges(kernel, solid);
     const edgeHandles = Array.from(kernel.getSolidEdges(solid));
     const lines = kernel.meshEdgesAll(
       solid,
@@ -240,7 +241,12 @@ export function drawingTessellationOfShape(
       for (let e = 0; e < edgeHandles.length; e += 1) {
         // Seams are not physical edges; a drawing never shows them.
         if (
-          brepEdgeDisplayRole(kernel, edgeHandles[e]!, edgeToFaces) !== 'seam'
+          brepEdgeDisplayRole(
+            kernel,
+            edgeHandles[e]!,
+            edgeToFaces,
+            smoothEdges?.has(edgeHandles[e]!)
+          ) !== 'seam'
         )
           edges.push(points.slice(offsets[e], offsets[e + 1]));
       }

@@ -5,6 +5,7 @@ import { displayTessellationForExtents } from './display-tessellation';
 import {
   brepEdgeCurve,
   brepEdgeDisplayRole,
+  brepSmoothEdges,
   brepVertexIds
 } from './exact-brep';
 import { edgeToFaceMapOf } from './exact-sync-memo';
@@ -194,6 +195,7 @@ function sectionEdgeTopology(
       if (!vertexIdByHandle.has(vertex))
         vertexIdByHandle.set(vertex, nextVertexId++);
     const edgeToFaces = edgeToFaceMapOf(kernel, solid);
+    const smoothEdges = brepSmoothEdges(kernel, solid);
     const handles = Array.from(kernel.getSolidEdges(solid));
     const lines = kernel.meshEdgesAll(
       solid,
@@ -214,7 +216,12 @@ function sectionEdgeTopology(
           topologyId: `edge:${hash}`,
           hash,
           length: kernel.edgeLength(edge),
-          displayRole: brepEdgeDisplayRole(kernel, edge, edgeToFaces),
+          displayRole: brepEdgeDisplayRole(
+            kernel,
+            edge,
+            edgeToFaces,
+            smoothEdges?.has(edge)
+          ),
           curve: brepEdgeCurve(kernel, edge, points),
           vertexIds: brepVertexIds(
             edge,
