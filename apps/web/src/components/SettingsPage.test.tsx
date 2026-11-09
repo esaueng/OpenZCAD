@@ -6,7 +6,7 @@ import {
   within
 } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { useState, type ComponentProps } from 'react';
+import { useRef, useState, type ComponentProps } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   defaultAppSettings,
@@ -29,6 +29,8 @@ import type * as DesktopBridge from '../lib/desktopBridge';
 import { SettingsPage } from './SettingsPage';
 import { POINTER_CONTROL_GROUPS } from '../lib/controlReference';
 import { api } from '../lib/api';
+import { modalHoldsKeyboard, useModalFocus } from '../lib/useModalFocus';
+import { updateSettingsViewState } from '../lib/settingsViewState';
 
 // The desktop app opens external links through native code.
 vi.mock('../lib/desktopBridge', async (importOriginal) => ({
@@ -462,13 +464,115 @@ describe('settings number fields', () => {
 });
 
 describe('settings navigation', () => {
-  it('opens on the active section, not the brand button that closes it', () => {
+  it('opens on the heading without focusing the active nav item or close button', async () => {
+    const user = userEvent.setup();
     window.localStorage.clear();
     const onClose = vi.fn();
     renderSettings(null, { onClose });
 
-    expect(screen.getByRole('button', { name: 'General' })).toHaveFocus();
+    expect(screen.getByRole('heading', { name: 'Settings' })).toHaveFocus();
+    expect(screen.getByRole('button', { name: 'General' })).not.toHaveFocus();
+    await user.keyboard('{Enter}');
+    expect(onClose).not.toHaveBeenCalled();
   });
+
+  // The same owner-mounted focus hook and delayed body as App's overlay.
+  function SettingsDialog({
+    initiallyOpen,
+    loaded
+  }: {
+    initiallyOpen: boolean;
+    loaded: boolean;
+  }) {
+    const [open, setOpen] = useState(initiallyOpen);
+    const dialogRef = useRef<HTMLDivElement>(null);
+    useModalFocus(dialogRef, { enabled: open, autoFocus: true });
+    return (
+      <>
+        <button type="button" onClick={() => setOpen(true)}>
+          Open Settings
+        </button>
+        {open && (
+          <div
+            ref={dialogRef}
+            role="dialog"
+            aria-label="Settings"
+            tabIndex={-1}
+          >
+            {loaded && settingsElement(null, { onClose: () => setOpen(false) })}
+          </div>
+        )}
+      </>
+    );
+  }
+
+  it.each([
+    { initiallyOpen: true, loaded: true },
+    { initiallyOpen: true, loaded: false },
+    { initiallyOpen: false, loaded: true },
+    { initiallyOpen: false, loaded: false }
+  ])(
+    'keeps modal keyboard navigation on open/restore (restored: $initiallyOpen, ready: $loaded)',
+    async ({ initiallyOpen, loaded }) => {
+      const user = userEvent.setup();
+      window.localStorage.clear();
+      if (initiallyOpen) {
+        updateSettingsViewState({ open: true, activeSection: 'account' });
+      }
+      const { rerender } = render(
+        <SettingsDialog initiallyOpen={initiallyOpen} loaded={loaded} />
+      );
+      const opener = screen.getByText('Open Settings');
+      if (!initiallyOpen) await user.click(opener);
+
+      expect(opener).toHaveAttribute('inert');
+      expect(modalHoldsKeyboard()).toBe(true);
+      if (!loaded) {
+        expect(screen.getByRole('dialog', { name: 'Settings' })).toHaveFocus();
+        rerender(<SettingsDialog initiallyOpen={initiallyOpen} loaded />);
+      }
+
+      await waitFor(() =>
+        expect(screen.getByRole('heading', { name: 'Settings' })).toHaveFocus()
+      );
+      const activeSection = screen.getByRole('button', {
+        name: initiallyOpen ? 'Account' : 'General'
+      });
+      expect(activeSection).toHaveAttribute('aria-current', 'page');
+      expect(activeSection).not.toHaveFocus();
+      await user.keyboard('{Enter}');
+      expect(screen.getByRole('dialog', { name: 'Settings' })).toBeVisible();
+
+      await user.tab();
+      expect(
+        screen.getByRole('textbox', { name: 'Find a setting' })
+      ).toHaveFocus();
+      await user.tab({ shift: true });
+      const navigation = screen.getByRole('navigation');
+      const lastSection = within(navigation).getAllByRole('button').at(-1)!;
+      expect(lastSection).toHaveFocus();
+      await user.keyboard('{Enter}');
+      expect(lastSection).toHaveAttribute('aria-current', 'page');
+      expect(lastSection).toHaveFocus();
+
+      // Cycling from the first Tab stop still wraps within the dialog.
+      const brand = screen.getByRole('button', { name: /OpenZCAD/ });
+      brand.focus();
+      await user.tab({ shift: true });
+      expect(screen.getByRole('dialog')).toContainElement(
+        document.activeElement as HTMLElement
+      );
+      expect(brand).not.toHaveFocus();
+      await user.tab();
+      expect(brand).toHaveFocus();
+
+      await user.keyboard('{Escape}');
+      expect(screen.queryByRole('dialog', { name: 'Settings' })).toBeNull();
+      expect(modalHoldsKeyboard()).toBe(false);
+      expect(opener).not.toHaveAttribute('inert');
+      if (!initiallyOpen) expect(opener).toHaveFocus();
+    }
+  );
 
   it('clears a search with Escape before Escape closes Settings', async () => {
     const user = userEvent.setup();
