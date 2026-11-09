@@ -739,7 +739,7 @@ export function SettingsPage({
   const contentRef = useRef<HTMLElement>(null);
   const pageRef = useRef<HTMLDivElement>(null);
   const brandRef = useRef<HTMLButtonElement>(null);
-  const navRef = useRef<HTMLElement>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
   const scrollTopRef = useRef(
     initialSection === undefined ? initialViewState.scrollTop : 0
   );
@@ -869,9 +869,10 @@ export function SettingsPage({
   }, [onClose]);
 
   // The overlay's modal focus lands on the first control, the brand button,
-  // which closes Settings: a first Enter dismissed the page. Start on the open
-  // section instead. A passive effect runs after that hook has recorded the
-  // opener, so focus still returns there on close.
+  // which closes Settings: a first Enter dismissed the page. Start on the
+  // heading instead, so restoring Settings does not paint a keyboard focus
+  // ring on the active nav item. A passive effect runs after that hook has
+  // recorded the opener, so focus still returns there on close.
   useEffect(() => {
     const current = document.activeElement;
     if (
@@ -881,11 +882,7 @@ export function SettingsPage({
     ) {
       return;
     }
-    const nav = navRef.current;
-    (
-      nav?.querySelector<HTMLElement>('[aria-current="page"]') ??
-      nav?.querySelector<HTMLElement>('button')
-    )?.focus();
+    headingRef.current?.focus();
   }, []);
 
   useLayoutEffect(() => {
@@ -1014,7 +1011,7 @@ export function SettingsPage({
               <SearchX size={16} aria-hidden="true" />
             </button>
           )}
-          <nav ref={navRef}>
+          <nav>
             {visibleSections.map((section, index) => (
               <Fragment key={section.id}>
                 {section.group !== visibleSections[index - 1]?.group &&
@@ -1078,7 +1075,9 @@ export function SettingsPage({
         {/* The head stays put while a long page scrolls under it, as the
             workspace's top bar does. */}
         <header className="settings-head">
-          <h1 className="settings-head-title">Settings</h1>
+          <h1 ref={headingRef} className="settings-head-title" tabIndex={-1}>
+            Settings
+          </h1>
           <span className="settings-save-message" aria-live="polite">
             {message}
           </span>
