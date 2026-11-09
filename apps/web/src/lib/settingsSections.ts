@@ -83,6 +83,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
     settings: [
       'Projection',
       'Display mode',
+      'Tangent edges',
       'Show construction grid',
       'Field of view',
       'X-ray opacity',
@@ -95,7 +96,10 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'apply defaults',
       'fov',
       'xray',
-      'transparent'
+      'transparent',
+      'fillet',
+      'smooth edges',
+      'tangent'
     ]
   },
   {

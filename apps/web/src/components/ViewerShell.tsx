@@ -50,6 +50,7 @@ import type {
   SectionPlaneId,
   SelectionFilter,
   SketchOverlay,
+  TangentEdgeStyle,
   ViewerSettings,
   ViewTarget,
   ViewRequestTarget,
@@ -401,6 +402,8 @@ interface ViewerShellProps {
   fieldOfView?: number;
   /** Face opacity in X-ray, 0–1 (Settings › Viewport). */
   xrayOpacity?: number;
+  /** How fillet and blend rims draw at rest (Settings › Viewport). */
+  tangentEdges?: TangentEdgeStyle;
   sectionRange: { min: number; max: number } | null;
   onToggleSection(): void;
   /** Whether the section controls show while the cut is on (remembered). */
@@ -564,6 +567,7 @@ export function ViewerShell({
   onToggleProjection,
   fieldOfView,
   xrayOpacity,
+  tangentEdges,
   sectionRange,
   onToggleSection,
   sectionPanelOpen,
@@ -788,6 +792,7 @@ export function ViewerShell({
         {...(onBoxSelectTopology ? { onBoxSelectTopology } : {})}
         {...(fieldOfView !== undefined ? { fieldOfView } : {})}
         {...(xrayOpacity !== undefined ? { xrayOpacity } : {})}
+        {...(tangentEdges !== undefined ? { tangentEdges } : {})}
         offsetHandle={offsetHandle ?? datumOffsetTarget}
         onOffsetPreview={
           datumOffsetTarget && datumHandle

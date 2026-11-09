@@ -4,6 +4,7 @@ import type {
   EdgeTopology,
   GeometryBodyRepresentation,
   EdgeTopologyReferenceV5,
+  SettingsTangentEdges,
   TopologySelection
 } from '@openzcad/shared';
 import { SELECTION_SEMANTICS } from './semantics';
@@ -69,6 +70,13 @@ const BODY_SELECTED_EDGE_WIDTH = SELECTION_SEMANTICS.selected.bodyEdgeWidth;
 const HIDDEN_EDGE_OPACITY = 0.34;
 const TANGENT_EDGE_OPACITY = SELECTION_SEMANTICS.idle.tangentEdgeOpacity;
 
+/**
+ * How resting tangent edges draw in the shaded view (Settings › Viewport).
+ * `faint` is the shipped look and the default; thumbnails and any overlay
+ * nobody restyles keep it.
+ */
+export type TangentEdgeStyle = SettingsTangentEdges;
+export const DEFAULT_TANGENT_EDGE_STYLE: TangentEdgeStyle = 'faint';
 function edgeKey(owner: Pick<EdgeSegmentOwner, 'bodyId' | 'topologyId'>) {
   return `${owner.bodyId}:${owner.topologyId}`;
 }
@@ -306,7 +314,10 @@ class PresenceTier {
  */
 export class BodyEdgeOverlay extends THREE.Group {
   readonly idleEdges: LineSegments2;
-  /** Tangent edges: a fillet's rims. Fainter than `idleEdges` when shaded. */
+  /**
+   * Tangent edges: a fillet's rims. When shaded, fainter than `idleEdges` by
+   * default; see `setTangentEdgeStyle`.
+   */
   readonly idleTangentEdges: LineSegments2;
   readonly hoverEdges: LineSegments2;
   readonly hoverHiddenEdges: LineSegments2;
@@ -341,6 +352,7 @@ export class BodyEdgeOverlay extends THREE.Group {
   private readonly selectedTier: PresenceTier;
   private readonly faceBoundaryTier: PresenceTier;
   private displayMode: DisplayMode = 'shaded-edges';
+  private tangentEdgeStyle: TangentEdgeStyle = DEFAULT_TANGENT_EDGE_STYLE;
   private xrayEnabled = true;
   /** The X-ray display: translucent faces, every edge drawn. */
   private xrayView = false;
@@ -778,7 +790,8 @@ export class BodyEdgeOverlay extends THREE.Group {
       material,
       color: material.color.getHex(),
       linewidth: material.linewidth,
-      opacity: material.opacity
+      opacity: material.opacity,
+      visible: material.visible
     }));
     const bodySelected = this.bodySelected;
     if (bodySelected) {
@@ -790,10 +803,11 @@ export class BodyEdgeOverlay extends THREE.Group {
       tiers.forEach((line, index) => {
         line.visible = visible[index]!;
       });
-      for (const { material, color, linewidth, opacity } of idle) {
+      for (const { material, color, linewidth, opacity, visible } of idle) {
         material.color.setHex(color);
         material.linewidth = linewidth;
         material.opacity = opacity;
+        material.visible = visible;
       }
     };
   }
@@ -834,6 +848,20 @@ export class BodyEdgeOverlay extends THREE.Group {
     ];
   }
 
+  /**
+   * How resting tangent edges draw in the shaded view: the sharp ink
+   * (`show`), the quiet tangent ink (`faint`), or not at all (`hide`).
+   * Restyles the tangent batch in place; nothing is rebuilt.
+   */
+  setTangentEdgeStyle(style: TangentEdgeStyle) {
+    if (this.tangentEdgeStyle === style) {
+      return false;
+    }
+    this.tangentEdgeStyle = style;
+    this.applyIdleStyle();
+    return true;
+  }
+
   /** Applies CAD display mode without rebuilding any edge batch. */
   setDisplayMode(mode: DisplayMode) {
     this.displayMode = mode;
@@ -853,15 +881,21 @@ export class BodyEdgeOverlay extends THREE.Group {
   }
 
   /**
-   * A tangent edge differs from a sharp one only at rest in the shaded view.
-   * Wireframe and X-ray have no shading to carry the smooth surface, so there
-   * the edges are all of the structure and draw in one ink; a selected body
-   * outlines every edge alike.
+   * A tangent edge differs from a sharp one only at rest in the shaded view,
+   * and there it follows `tangentEdgeStyle`. Wireframe and X-ray have no
+   * shading to carry the smooth surface, so there the edges are all of the
+   * structure and draw in one ink; a selected body outlines every edge alike.
+   *
+   * `hide` turns off the tangent batch's *material*, not the line: the
+   * renderer skips it, but the line stays visible to PickService, which
+   * walks `Object3D.visible` only. A hidden rim is therefore still hovered
+   * and selected — in the hover and selection batches, which draw it.
    */
   private applyIdleStyle() {
     const inked = this.displayMode === 'wireframe' || this.xrayView;
     for (const line of this.restingLines()) {
       const material = line.material;
+      material.visible = true;
       if (this.bodySelected) {
         material.color.setHex(EDGE_SELECTED_COLOR);
         material.linewidth = BODY_SELECTED_EDGE_WIDTH;
@@ -870,11 +904,15 @@ export class BodyEdgeOverlay extends THREE.Group {
       }
       material.color.setHex(inked ? EDGE_WIREFRAME_COLOR : EDGE_IDLE_COLOR);
       material.linewidth = EDGE_IDLE_WIDTH;
-      material.opacity = inked
-        ? 1
-        : line === this.idleTangentEdges
-          ? TANGENT_EDGE_OPACITY
-          : EDGE_IDLE_OPACITY;
+      if (inked || line !== this.idleTangentEdges) {
+        material.opacity = inked ? 1 : EDGE_IDLE_OPACITY;
+        continue;
+      }
+      material.opacity =
+        this.tangentEdgeStyle === 'show'
+          ? EDGE_IDLE_OPACITY
+          : TANGENT_EDGE_OPACITY;
+      material.visible = this.tangentEdgeStyle !== 'hide';
     }
   }
 

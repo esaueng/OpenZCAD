@@ -386,6 +386,100 @@ describe('BodyEdgeOverlay tangent batch', () => {
     expect(tangent.opacity).toBe(SELECTION_SEMANTICS.idle.tangentEdgeOpacity);
   });
 
+  it('defaults to the faint rim and draws the sharp ink on Show', () => {
+    const overlay = overlayFor();
+    const sharp = overlay.idleEdges.material;
+    const tangent = overlay.idleTangentEdges.material;
+    overlay.setDisplayMode('shaded-edges');
+    expect(tangent.opacity).toBe(SELECTION_SEMANTICS.idle.tangentEdgeOpacity);
+
+    expect(overlay.setTangentEdgeStyle('faint')).toBe(false);
+    expect(overlay.setTangentEdgeStyle('show')).toBe(true);
+    expect(tangent.visible).toBe(true);
+    expect(tangent.color.getHex()).toBe(sharp.color.getHex());
+    expect(tangent.opacity).toBe(sharp.opacity);
+    expect(tangent.linewidth).toBe(sharp.linewidth);
+
+    overlay.setTangentEdgeStyle('faint');
+    expect(tangent.opacity).toBe(SELECTION_SEMANTICS.idle.tangentEdgeOpacity);
+  });
+
+  it('hides resting rims on Hide but keeps them pickable and highlightable', () => {
+    const overlay = overlayFor();
+    const tangent = overlay.idleTangentEdges.material;
+    overlay.setDisplayMode('shaded-edges');
+    overlay.setTangentEdgeStyle('hide');
+
+    // The renderer skips the material; the line itself stays visible, which
+    // is what PickService walks, so the rim can still be pointed at.
+    expect(tangent.visible).toBe(false);
+    expect(overlay.idleTangentEdges.visible).toBe(true);
+    expect(overlay.idleEdges.material.visible).toBe(true);
+    const owner = batchedEdgeTarget(overlay.idleTangentEdges, 0)!.owner;
+    overlay.setHovered(owner);
+    expect(overlay.hoverEdges.visible).toBe(true);
+    expect(overlay.hoverEdges.geometry.instanceCount).toBe(1);
+    overlay.setHovered(null);
+    overlay.setSelected([
+      { bodyId: BODY_ID, kind: 'edge', topologyId: owner.topologyId }
+    ]);
+    expect(overlay.selectedEdges.visible).toBe(true);
+    expect(overlay.selectedEdges.material.visible).toBe(true);
+  });
+
+  it('hides rims only at rest in the shaded view', () => {
+    const overlay = overlayFor();
+    const tangent = overlay.idleTangentEdges.material;
+    overlay.setTangentEdgeStyle('hide');
+
+    overlay.setDisplayMode('wireframe');
+    expect(tangent.visible).toBe(true);
+    expect(tangent.opacity).toBe(1);
+    overlay.setDisplayMode('shaded-edges');
+    overlay.setXrayView(true);
+    expect(tangent.visible).toBe(true);
+    overlay.setXrayView(false);
+    expect(tangent.visible).toBe(false);
+
+    // A selected body outlines every edge, the rims included.
+    overlay.setBodySelected(true);
+    expect(tangent.visible).toBe(true);
+    expect(tangent.color.getHex()).toBe(EDGE_SELECTED_COLOR);
+    // A still image draws the resting look, then puts the outline back.
+    const restore = overlay.suspendHighlights();
+    expect(tangent.visible).toBe(false);
+    restore();
+    expect(tangent.visible).toBe(true);
+    overlay.setBodySelected(false);
+    expect(tangent.visible).toBe(false);
+
+    overlay.setTangentEdgeStyle('faint');
+    expect(tangent.visible).toBe(true);
+    expect(tangent.opacity).toBe(SELECTION_SEMANTICS.idle.tangentEdgeOpacity);
+  });
+
+  it('leaves the curved-surface outline alone', () => {
+    const { mesh, topology } = filletedStep();
+    const overlay = createBodyEdgeOverlay(
+      { bodyId: BODY_ID, topology, mesh },
+      { width: 800, height: 600 }
+    );
+    const outline = overlay.silhouetteEdges!.material;
+    const before = {
+      visible: outline.visible,
+      opacity: outline.opacity,
+      color: outline.color.getHex()
+    };
+    for (const style of ['show', 'hide', 'faint'] as const) {
+      overlay.setTangentEdgeStyle(style);
+      expect({
+        visible: outline.visible,
+        opacity: outline.opacity,
+        color: outline.color.getHex()
+      }).toEqual(before);
+    }
+  });
+
   it('hovers and selects a tangent edge at full strength', () => {
     const overlay = overlayFor();
     const owner = batchedEdgeTarget(overlay.idleTangentEdges, 0)!.owner;

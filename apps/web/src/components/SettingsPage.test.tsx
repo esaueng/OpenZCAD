@@ -1658,6 +1658,35 @@ describe('settings page pattern', () => {
     );
   });
 
+  it('offers Show, Faint and Hide for tangent edges, Faint by default', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn<ComponentProps<typeof SettingsPage>['onChange']>();
+    renderSettings(null, { initialSection: 'viewport', onChange });
+
+    const tangent = screen.getByRole('radiogroup', { name: 'Tangent edges' });
+    expect(
+      within(tangent)
+        .getAllByRole('radio')
+        .map((option) => option.closest('label')?.textContent)
+    ).toEqual(['Show', 'Faint', 'Hide']);
+    expect(within(tangent).getByRole('radio', { name: 'Faint' })).toBeChecked();
+    await user.click(within(tangent).getByRole('radio', { name: 'Hide' }));
+    expect(onChange.mock.calls[0]?.[0].viewport.tangentEdges).toBe('hide');
+  });
+
+  it('finds the tangent edge setting by the words people use for it', async () => {
+    const user = userEvent.setup();
+    window.localStorage.clear();
+    renderSettings();
+    await user.type(screen.getByLabelText('Find a setting'), 'fillet');
+    expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent(
+      'Viewport'
+    );
+    expect(
+      screen.getByRole('radiogroup', { name: 'Tangent edges' })
+    ).toBeVisible();
+  });
+
   it('names an abbreviated unit in full for assistive technology', () => {
     renderSettings(null, { initialSection: 'general' });
     const units = screen.getByRole('radiogroup', { name: 'Default units' });

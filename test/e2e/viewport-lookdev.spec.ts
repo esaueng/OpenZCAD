@@ -1,6 +1,8 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
+import { DEFAULT_APP_SETTINGS } from '@openzcad/shared';
+import { APP_SETTINGS_STORAGE_KEY } from '../../apps/web/src/lib/appSettings';
 import { LOOKDEV_SCENES, LOOKDEV_VIEWS } from '../fixtures/lookdev-scenes';
 import type { Page } from '@playwright/test';
 import {
@@ -28,6 +30,9 @@ import type { LookdevScene } from '../fixtures/lookdev-scenes';
   Captures land in `artifacts/lookdev/<label>` (git-ignored); OZ_LOOKDEV_DIR
   writes somewhere else. Skipped unless OZ_LOOKDEV is set and weighted 0 in
   `shard-weights.json`, like the documentation captures.
+
+  OZ_LOOKDEV_TANGENT_EDGES=show|faint|hide captures with that Settings ›
+  Viewport › Tangent edges choice (faint, the default, otherwise).
 
   Only the WebGL canvas is captured: every other element is hidden first, so
   panels, labels and toasts never land in a comparison.
@@ -75,6 +80,24 @@ async function openScene(page: Page, scene: LookdevScene) {
   }
   await enableFullRender(page);
   await stubApi(page, { panelLayout: null });
+  const tangentEdges = process.env.OZ_LOOKDEV_TANGENT_EDGES;
+  if (tangentEdges) {
+    await page.addInitScript(
+      ({ key, settings }) => {
+        localStorage.setItem(
+          key,
+          JSON.stringify({ settings, syncedRevision: null })
+        );
+      },
+      {
+        key: APP_SETTINGS_STORAGE_KEY,
+        settings: {
+          ...DEFAULT_APP_SETTINGS,
+          viewport: { ...DEFAULT_APP_SETTINGS.viewport, tangentEdges }
+        }
+      }
+    );
+  }
   await page.setViewportSize(VIEWPORT);
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));

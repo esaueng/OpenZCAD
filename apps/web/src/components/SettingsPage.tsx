@@ -346,6 +346,14 @@ const DISPLAY_OPTIONS: readonly SegmentOption<
   { value: 'wireframe', label: 'Wireframe' }
 ];
 
+const TANGENT_EDGE_OPTIONS: readonly SegmentOption<
+  AppSettings['viewport']['tangentEdges']
+>[] = [
+  { value: 'show', label: 'Show' },
+  { value: 'faint', label: 'Faint' },
+  { value: 'hide', label: 'Hide' }
+];
+
 const RELATION_GLYPH_OPTIONS: readonly SegmentOption<
   AppSettings['sketching']['relationGlyphs']
 >[] = [
@@ -1330,6 +1338,21 @@ export function SettingsPage({
                     onChange={(displayMode) =>
                       patch({
                         viewport: { ...settings.viewport, displayMode }
+                      })
+                    }
+                  />
+                </SettingRow>
+                <SettingRow
+                  title="Tangent edges"
+                  hint="Fillet and blend rims in Shaded + edges. Hovering one still shows it."
+                >
+                  <Segmented
+                    label="Tangent edges"
+                    value={settings.viewport.tangentEdges}
+                    options={TANGENT_EDGE_OPTIONS}
+                    onChange={(tangentEdges) =>
+                      patch({
+                        viewport: { ...settings.viewport, tangentEdges }
                       })
                     }
                   />

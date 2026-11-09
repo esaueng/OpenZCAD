@@ -157,6 +157,7 @@
   "stl-import-lifecycle.spec.ts": 29,
   "sweep-faceting.spec.ts": 4,
   "tablet-layout.spec.ts": 8,
+  "tangent-edge-setting.spec.ts": 60,
   "text-authoring.spec.ts": 55,
   "text-place-transform.spec.ts": 35,
   "topbar-open-transition.spec.ts": 2,
