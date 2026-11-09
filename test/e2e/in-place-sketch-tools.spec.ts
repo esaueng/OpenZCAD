@@ -351,9 +351,9 @@ test('Helical sweep runs in place: profile, then axis, then height and turns', a
     timeout: 30_000
   });
 
-  // Drag the coil's end a quarter turn further along it: the pinned kernel
-  // starts the helix along +Y here (the climb crossed with +X), 2.5 apart,
-  // so three turns end at (0, 10, 7.5) and 3.25 at (-10, 0, 8.125).
+  // Drag the coil's end a quarter turn further along it: wound in place,
+  // the coil starts at the profile, along +X here, 2.5 apart, so three
+  // turns end at (10, 0, 7.5) and 3.25 at (0, 10, 8.125).
   const turns = page.getByTestId('command-handle-turns');
   await expect(turns).toHaveText('3 turns');
   // Framed on the coil, so its end and chip stand clear of the top bar.
@@ -367,10 +367,10 @@ test('Helical sweep runs in place: profile, then axis, then height and turns', a
   for (let step = 1; step <= 8; step += 1) {
     const turn = 3 + (0.25 * step) / 8;
     const angle = (turn % 1) * Math.PI * 2;
-    // Start along +Y, turning right-handed about +Z toward -X.
+    // Start along +X, at the profile, turning right-handed about +Z.
     const along = await projected(canvas, [
-      -10 * Math.sin(angle),
       10 * Math.cos(angle),
+      10 * Math.sin(angle),
       2.5 * turn
     ]);
     await page.mouse.move(along.x, along.y, { steps: 2 });
@@ -403,4 +403,6 @@ test('Helical sweep runs in place: profile, then axis, then height and turns', a
   expect(helices).toHaveLength(1);
   expect(helices[0]!.turns).toBe(5);
   expect(Number(helices[0]!.radius)).toBeCloseTo(10, 6);
+  // Wound where the profile sits, as exact curved surfaces.
+  expect(helices[0]!.construction).toBe('in-place');
 });

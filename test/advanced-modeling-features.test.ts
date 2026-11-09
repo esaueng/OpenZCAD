@@ -1282,6 +1282,45 @@ describe('advanced exact modeling features', { timeout: 30_000 }, () => {
     expect(body?.volume).toBeLessThan(800);
   });
 
+  it('winds a helical sweep in place as exact curved surfaces', async () => {
+    // A round wire r = 2 at the origin, coiled once about a line 18 away in
+    // its own plane: the profile stays put and the coil starts there.
+    const profile = addSection(
+      createProjectDocument('Spring', toUserId('user_spring')),
+      'Wire',
+      0,
+      { objectKind: 'circle', radius: 2, centerX: 0, centerY: 0 }
+    );
+    const helical = helicalSweepProfile(profile.document, {
+      name: 'Spring 1',
+      profile: profile.section,
+      axisOrigin: { x: 18, y: 0, z: 0 },
+      axisDirection: { x: 0, y: 1, z: 0 },
+      radius: 18,
+      pitch: 8,
+      turns: 1,
+      construction: 'in-place'
+    });
+    const stored = Object.values(helical.document.nodes).find(
+      (node) => node.kind === 'feature' && node.bodyId === helical.bodyId
+    );
+    expect(stored).toMatchObject({
+      data: { featureKind: 'helical-sweep', construction: 'in-place' }
+    });
+
+    const derived = await adapter.syncDocument(helical.document);
+    const body = derived.bodyRepresentations[helical.bodyId];
+    expect(derived.warnings).toEqual([]);
+    expect(body?.source).toBe('helical-sweep');
+    // Pappus for a screw motion of a profile in a plane through the axis:
+    // area × the centroid's turn, 4π · 2π · 18, with no chord shortfall.
+    const exact = 144 * Math.PI ** 2;
+    expect(Math.abs(body!.volume - exact) / exact).toBeLessThan(1e-3);
+    // Two side patches (the circle in two exact halves) and two flat caps,
+    // not thousands of facets.
+    expect(body?.faceCount).toBeLessThan(10);
+  });
+
   it('drafts and thickens exact selected faces without mutating their sources', async () => {
     const base = addPrimitiveFeature(
       createProjectDocument('Modify', toUserId('user_modify')),

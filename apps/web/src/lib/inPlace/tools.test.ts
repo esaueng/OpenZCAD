@@ -1583,8 +1583,10 @@ describe('review: loft apex and guided sweeps', () => {
       axisDirection: { x: 0, y: 0, z: 1 },
       pitch: '(h) / (4)'
     });
-    // The radius is the profile middle's distance from the line.
+    // The radius is the profile middle's distance from the line, and a new
+    // helix is wound in place, starting at the profile.
     expect((up as { radius: number }).radius).toBeCloseTo(Math.hypot(22, 2));
+    expect(up).toMatchObject({ construction: 'in-place' });
     expect(
       helix.request(slots, values, { grow: 'down' }, ctx, {})
     ).toMatchObject({ axisDirection: { x: 0, y: 0, z: -1 } });
@@ -1595,20 +1597,33 @@ describe('review: loft apex and guided sweeps', () => {
     expect(helix.carries?.('height', 40, { height: 30, turns: 3 }, slots)).toBe(
       null
     );
-    // Its turns ride the coil's end, set off where the pinned kernel starts
-    // the helix: the climb crossed with world X.
-    const end = helix
-      .handles(slots, { height: 12, turns: 4 }, ctx, {})
-      .find((handle) => handle.valueId === 'turns');
+    // Its turns ride the coil's end, set off from the profile: level with
+    // its middle, toward it. The height arrow stands on the axis from that
+    // level, clear of the end, which runs at the coil's radius.
+    const rigs = helix.handles(slots, { height: 12, turns: 4 }, ctx, {});
+    expect(rigs.find((handle) => handle.valueId === 'height')).toMatchObject({
+      kind: 'linear',
+      params: {
+        origin: { x: -20, y: 0, z: 0 },
+        direction: { x: 0, y: 0, z: 1 }
+      }
+    });
+    const end = rigs.find((handle) => handle.valueId === 'turns');
     expect(end).toMatchObject({
       kind: 'coil',
-      params: { axis: { x: 0, y: 0, z: 1 }, pitch: 3 }
+      params: {
+        axis: { x: 0, y: 0, z: 1 },
+        center: { x: -20, y: 0, z: 0 },
+        pitch: 3
+      }
     });
-    expect(end?.kind === 'coil' && end.params.startDirection).toEqual({
-      x: 0,
-      y: 1,
-      z: 0
-    });
+    const start = end?.kind === 'coil' ? end.params.startDirection : null;
+    expect(start?.x).toBeCloseTo(22 / Math.hypot(22, 2));
+    expect(start?.y).toBeCloseTo(2 / Math.hypot(22, 2));
+    expect(start?.z).toBeCloseTo(0);
+    expect(end?.kind === 'coil' && end.params.radius).toBeCloseTo(
+      Math.hypot(22, 2)
+    );
     // Options reads out the value the other two decide.
     expect(
       helix.summary?.({ options: {}, numbers: { height: 12, turns: 4 } }, 'mm')

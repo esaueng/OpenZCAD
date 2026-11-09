@@ -457,6 +457,8 @@ export interface HelicalSweepInput {
   radius: ParamValue;
   pitch: ParamValue;
   turns: ParamValue;
+  /** See the helical-sweep `FeatureData`; omitted is the legacy faceted helix. */
+  construction?: 'in-place';
   ids?: BodyFeatureIds;
 }
 
@@ -2741,7 +2743,12 @@ export function helicalSweepProfile(
       axisDirection: deepClone(input.axisDirection),
       radius: input.radius,
       pitch: input.pitch,
-      turns: input.turns
+      turns: input.turns,
+      // Written only when asked for; absent is the faceted helix every one
+      // authored before the in-place construction existed was built as.
+      ...(input.construction === undefined
+        ? {}
+        : { construction: input.construction })
     },
     input.ids,
     input.bodyName
@@ -4632,7 +4639,8 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'axisDirection',
     'radius',
     'pitch',
-    'turns'
+    'turns',
+    'construction'
   ],
   boolean: ['operation', 'targetBodyIds', 'keepOriginals'],
   transform: ['targetBodyId', 'transform', 'axisRotation'],
