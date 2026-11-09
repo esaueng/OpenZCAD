@@ -3406,6 +3406,13 @@ export interface FeatureWarning {
     reason?: string;
     /** The surface type of the neighbour that blocked the edit, if named. */
     neighborSurfaceType?: string;
+    /**
+     * Where the refusal begins, for a refusal that names a limit on the
+     * edit's value, signed like that value: a face offset of `-6.4` means
+     * a neighbouring face collapses once the face has moved 6.4 inward.
+     * The limit itself refuses. Absent when the refusal named none.
+     */
+    limit?: number;
   };
   /**
    * What the adapter's size ladder proved about a refused fillet or chamfer.

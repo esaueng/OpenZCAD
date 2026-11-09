@@ -383,13 +383,24 @@ export interface CommandDiagnostic {
    * headline and its one-click remedy read this, never the sentence.
    */
   advice?: BlendRefusalAdvice;
+  /**
+   * Where the refusal begins, signed like the operation's value, when the
+   * kernel named one: a face offset past which a neighbouring face would
+   * collapse. The value itself refuses. The value chip shows it, and the
+   * way out at release offers the nearest value inside it.
+   */
+  limit?: number;
 }
 
 interface OperationLifecycle {
   phase: OperationPhase;
   /** Last submitted value, retained when exact validation fails. */
   lastValue: number | null;
-  /** Exact-kernel failure; only present in the failed phase. */
+  /**
+   * Exact-kernel failure. Present in the failed phase, and while dragging
+   * when the frame under the hand was refused (`preview-refused`): the
+   * gesture keeps its phase, and releasing it there lands in `failed`.
+   */
   error: CommandDiagnostic | null;
 }
 
@@ -459,6 +470,17 @@ export type InteractionEvent =
       type: 'validation-failed';
       diagnostic: CommandDiagnostic;
       value?: number;
+    }
+  /**
+   * A live preview frame refused while the hand is still on the handle. The
+   * gesture stays `dragging` — the prompt, Escape and the collapsed rail
+   * all belong to the drag until it is released — and only the value chip
+   * turns to its warning. Outside a drag it is a `validation-failed`.
+   */
+  | {
+      type: 'preview-refused';
+      diagnostic: CommandDiagnostic;
+      value: number;
     }
   | { type: 'recover' }
   | { type: 'reset-value' }
@@ -849,8 +871,10 @@ function reduceInteraction(
         ? { ...state, phase: 'dragging', error: null }
         : state;
     case 'drag-release':
+      // Letting go on a refused frame is the refusal: the card, its Why and
+      // its way out take over only now that the hand is off the handle.
       return isOperationState(state) && state.phase === 'dragging'
-        ? { ...state, phase: 'armed' }
+        ? { ...state, phase: state.error ? 'failed' : 'armed' }
         : state;
     case 'set-face-offset-mode':
       return state.mode === 'face' &&
@@ -901,6 +925,16 @@ function reduceInteraction(
             error: event.diagnostic
           }
         : state;
+    case 'preview-refused':
+      if (!isOperationState(state)) return state;
+      return state.phase === 'dragging'
+        ? { ...state, lastValue: event.value, error: event.diagnostic }
+        : {
+            ...state,
+            phase: 'failed',
+            lastValue: event.value,
+            error: event.diagnostic
+          };
     case 'recover':
       return isOperationState(state) && state.phase === 'failed'
         ? { ...state, phase: 'armed', error: null }
@@ -1516,6 +1550,32 @@ export function isStaleReferenceError(
   error: CommandDiagnostic | null | undefined
 ): boolean {
   return error?.code !== undefined && STALE_REFERENCE_CODES.has(error.code);
+}
+
+/**
+ * The history panel's "not built" row for the running command: only once a
+ * refusal is the command's verdict. A refused frame under a held handle is
+ * not one yet — the hand may still move back — so it shows no row.
+ */
+export function pendingHistoryStepFor(
+  session: CommandSession | null
+): { title: string; message: string } | null {
+  return session?.phase === 'failed' && session.error
+    ? { title: session.title, message: session.error.message }
+    : null;
+}
+
+/**
+ * A refusal the operation holds that has not been answered yet: the failed
+ * phase, or a refused frame still under the hand. A release reads this
+ * before its own `drag-release` has rendered.
+ */
+export function holdsRefusal(state: InteractionState): boolean {
+  return (
+    isOperationState(state) &&
+    (state.phase === 'failed' ||
+      (state.phase === 'dragging' && state.error !== null))
+  );
 }
 
 /**

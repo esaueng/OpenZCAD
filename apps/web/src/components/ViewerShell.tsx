@@ -257,6 +257,7 @@ interface ViewerShellProps {
   onOffsetCommit: ModelViewerProps['onOffsetCommit'];
   onOffsetCancel(): void;
   offsetPreviewInvalid: boolean;
+  offsetPreviewLimit?: ModelViewerProps['offsetPreviewLimit'];
   previewDeferred: boolean;
   onOpenOffsetKeypad(
     currentOffset: number,
@@ -486,6 +487,7 @@ export function ViewerShell({
   onOffsetCommit,
   onOffsetCancel,
   offsetPreviewInvalid,
+  offsetPreviewLimit = null,
   previewDeferred,
   onOpenOffsetKeypad,
   keypadAnchorRef,
@@ -820,6 +822,7 @@ export function ViewerShell({
           onOffsetCancel();
         }}
         offsetPreviewInvalid={offsetPreviewInvalid}
+        offsetPreviewLimit={offsetPreviewLimit}
         previewDeferred={previewDeferred}
         onOpenOffsetKeypad={
           datumOffsetTarget && !offsetHandle

@@ -346,4 +346,44 @@ describe('exact-only typed refusals', () => {
       'The exact kernel could not build this exactly, and an approximate result was declined.'
     );
   });
+
+  describe('a face move that would collapse a neighbouring face', () => {
+    // Captured from Remus on the pin: the Front face of a 27 × 24 × 16 block
+    // whose right-hand vertical edges are rounded r8.8 (see
+    // test/parity/offset-face-fillet-limit.spec.ts), pushed in 9.
+    const captured =
+      'resize blend: exact reconstruction refused: remove/rebuild failed (resize blend: exact reconstruction refused: blend region has unsupported support surfaces ["torus", "torus", "plane", "cylinder", "cylinder", "plane", "plane", "plane"]; expected all planes or one supported analytic pair); exact prismatic blend translation failed (offset: move-face would change topology at face None, edge Some(Id(8)): line edge 8 with one moving end would reverse: a move of -9 against a fixed-to-moving extent of 6.400000000000002)';
+
+    it('names the limit instead of an internal failure', () => {
+      expect(plainRefusal(captured, { category: 'internal' })).toEqual({
+        message:
+          'A neighbouring face would shrink to nothing past 6.4. Try a smaller offset.',
+        detail: captured,
+        category: 'internal'
+      });
+    });
+
+    it('reads the collapse wording the same way', () => {
+      expect(
+        plainRefusal(
+          captured.replace(
+            'would reverse: a move of -9',
+            'would collapse: a move of -6.4'
+          )
+        ).message
+      ).toBe(
+        'A neighbouring face would shrink to nothing past 6.4. Try a smaller offset.'
+      );
+    });
+
+    it('keeps the adapter sentence and the kernel words behind Why', () => {
+      const adapter = `A neighbouring face would shrink to nothing past 6.4. Try a smaller offset.\n${captured}`;
+      expect(plainRefusal(adapter, { category: 'invalid_topology' })).toEqual({
+        message:
+          'A neighbouring face would shrink to nothing past 6.4. Try a smaller offset.',
+        detail: captured,
+        category: 'invalid_topology'
+      });
+    });
+  });
 });

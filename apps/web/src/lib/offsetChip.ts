@@ -78,6 +78,63 @@ export function offsetChipText(input: {
   return `${value >= 0 ? '+' : ''}${value} ${units}`;
 }
 
+/**
+ * The limit a refused offset named, in the reading the chip is in: how far
+ * the face can move ("max 6.4 mm"), or the span it cannot pass ("min 17.6 mm"
+ * when the offset shrinks the span, "max" when it grows it). Hundredths, like
+ * the value beside it. The limit itself refuses, so "max" is the display
+ * precision's last word, not a promise that 6.4 exactly builds.
+ */
+export function offsetLimitChipText(input: {
+  /** Signed like the offset: where the refusal begins. */
+  limit: number;
+  mode: OffsetChipMode;
+  span: number | null;
+  sense: number;
+  units: string;
+}): string {
+  const { limit, mode, span, sense, units } = input;
+  if (mode === 'total' && span !== null) {
+    const bound = Math.round((span + sense * limit) * 100) / 100;
+    return `${sense * limit < 0 ? 'min' : 'max'} ${formatNumber(bound)} ${units}`;
+  }
+  return `max ${formatNumber(Math.round(Math.abs(limit) * 100) / 100)} ${units}`;
+}
+
+/**
+ * The value a refusal's way out offers when the refusal named a limit: the
+ * nearest hundredth at least one hundredth inside it, on the limit's side of
+ * zero. Null when no such value is left. Not proven to build — the commit
+ * validates it like any other value — but past the boundary the kernel named.
+ */
+export function valueInsideLimit(limit: number): number | null {
+  if (!Number.isFinite(limit)) return null;
+  const magnitude = Math.floor((Math.abs(limit) - 0.01) * 100 + 1e-6) / 100;
+  return magnitude > 0 ? Math.sign(limit) * magnitude : null;
+}
+
+/**
+ * What a refused face offset's "Keep" commits: the value just inside the
+ * limit the refusal named, unless the last frame that built already went at
+ * least that far on the same side — that one is proven. Without a limit, the
+ * last frame that built, as before.
+ */
+export function keptOffsetValue(
+  limit: number | undefined,
+  lastValid: number | null
+): number | null {
+  const inside = limit === undefined ? null : valueInsideLimit(limit);
+  if (inside === null) return lastValid;
+  if (
+    lastValid !== null &&
+    Math.sign(lastValid) === Math.sign(inside) &&
+    Math.abs(lastValid) >= Math.abs(inside)
+  ) {
+    return lastValid;
+  }
+  return inside;
+}
+
 /** The gap kept between an edge chip and the right lane or the stage edge. */
 const EDGE_CHIP_MARGIN_PX = 8;
 
