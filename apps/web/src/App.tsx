@@ -742,7 +742,7 @@ import {
   primitiveCylinderScale
 } from './lib/interaction/cylinderPrimitiveAncestry';
 import { commandPromptText } from './lib/interaction/prompt';
-import { edgeSelectionName } from './lib/edgeLoops';
+import { committedEdgesPhrase, edgeSelectionName } from './lib/edgeLoops';
 import {
   offsetPreviewRejection,
   resolveOffsetPreviewFace
@@ -24733,7 +24733,7 @@ export function App() {
     void executeValidatedDirectEdit(
       command,
       resultBodyId,
-      `${op === 'fillet' ? 'Filleted' : 'Chamfered'} ${command.payload.edgeHashes.length} edge${command.payload.edgeHashes.length === 1 ? '' : 's'} at ${rounded} ${doc?.units ?? ''}.`,
+      `${op === 'fillet' ? 'Filleted' : 'Chamfered'} ${committedEdgesPhrase(command.payload.edgeHashes, 'edgeReferences' in command.payload ? command.payload.edgeReferences : undefined)} at ${rounded} ${doc?.units ?? ''}.`,
       rounded,
       () => {
         clearEdgePreview();
