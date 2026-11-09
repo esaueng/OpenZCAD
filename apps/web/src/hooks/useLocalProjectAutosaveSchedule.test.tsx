@@ -27,6 +27,11 @@ const rebuilt = attachDerivedState(committed, {
   updatedAt: 'later'
 });
 
+interface SchedulingInputs {
+  document: ProjectDocument | null;
+  preview: number | null;
+}
+
 function setup({ heldUpload = false, cloudEnabled = true } = {}) {
   const write = vi.fn(async (_document: ProjectDocument) => true);
   let release!: (response: SaveProjectDocumentResponse) => void;
@@ -66,14 +71,9 @@ function setup({ heldUpload = false, cloudEnabled = true } = {}) {
     onError: () => setStatus('device-failed'),
     onDirtyChange: vi.fn()
   });
+  const initialProps: SchedulingInputs = { document: null, preview: null };
   const hook = renderHook(
-    ({
-      document,
-      preview
-    }: {
-      document: ProjectDocument | null;
-      preview: number | null;
-    }) => {
+    ({ document, preview }: SchedulingInputs) => {
       const [status, updateStatus] = useState<WorkspaceSaveState>('synced');
       setStatus = updateStatus;
       const timeoutRef = useRef<number | null>(null);
@@ -96,7 +96,7 @@ function setup({ heldUpload = false, cloudEnabled = true } = {}) {
       return { status, preview };
     },
     {
-      initialProps: { document: null, preview: null }
+      initialProps
     }
   );
   return {
