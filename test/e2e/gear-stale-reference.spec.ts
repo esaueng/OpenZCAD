@@ -36,6 +36,19 @@ async function exportedDocument(page: Page): Promise<ProjectDocument> {
   ).document;
 }
 
+/**
+ * The stored mesh draws, and can be picked, before the exact model behind it
+ * is rebuilt. Until then the app withholds editing — the cap's value chip
+ * stays hidden — and says so on the status line. After a reload that rebuild
+ * is cold (kernel load plus a full 20-tooth replay), so it is waited for by
+ * that state, not by the chip inside an assertion's default budget.
+ */
+async function waitForEditableModel(page: Page) {
+  await expect(
+    page.getByRole('group', { name: 'Workspace status' })
+  ).not.toContainText('editing waits until it is ready', { timeout: 60_000 });
+}
+
 async function setHeight(page: Page, height: number) {
   const keypad = page.getByRole('dialog', { name: 'Total value' });
   // Import reference repairs can start a rebuild after the stored mesh is
@@ -70,7 +83,13 @@ test(
   'an older gear reference survives cap offsets and a History edit',
   { tag: '@ci-smoke' },
   async ({ page }, testInfo) => {
-    test.setTimeout(120_000);
+    // Six exact replays of a 20-tooth gear, two of them cold (import and
+    // reload), run back to back here, each behind the deliberate 1.5 s sync
+    // delay. On the 2-core CI runners a passing run takes 71–119 s (median
+    // 102 s), so the earlier 120 s budget ran out mid-way through the last
+    // cap edit about half the time: Apply still "Checking…", or the commit
+    // not yet exported. Nothing was wrong; the final rebuild was not done.
+    test.setTimeout(180_000);
     const errors: string[] = [];
     page.on('pageerror', (error) => errors.push(error.message));
     await stubApi(page, { panelLayout: MODEL_ONLY });
@@ -147,10 +166,13 @@ test(
       timeout: 30_000
     });
     await expectBodyCount(page, 1);
+    await waitForEditableModel(page);
     await waitForStillViewport(page);
     await expect
       .poll(() => pickPlanarFace(page, { x: 0, y: 0, z: 1 }))
       .not.toBeNull();
+    // The pick's lineage demand can start one more (warm) rebuild.
+    await waitForEditableModel(page);
     await expect(page.getByTestId('direct-manipulation-value')).toContainText(
       '56'
     );
