@@ -31,10 +31,10 @@
   gap: 5px;
   padding: 0 10px;
   color: var(--color-text);
-  /* Filled and outlined at rest, not only on hover: with no divider beside
-     it, a bare label read as a heading rather than a button. */
-  background: var(--color-surface-2);
-  border: 1px solid var(--color-border-strong);
+  /* Bare at rest like every other secondary action; the pointer or
+     keyboard focus turns it into a whole button. */
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
   font-family: var(--font-ui);
   font-size: var(--fs-sm);
@@ -43,6 +43,7 @@
   cursor: pointer;
 }
 
-.corner-action:hover {
+.corner-action:is(:hover, :focus-visible) {
   background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
 }
