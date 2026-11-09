@@ -32094,7 +32094,7 @@ export function App() {
             instructionDetails={
               displayedGeometryComplete && offsetHandleTarget
                 ? offsetHandleTarget.totalBaseline === undefined
-                  ? 'Total measures material behind the picked point using the displayed mesh. Holes or a different pick location can change it. Offset shows only the signed distance of this edit.'
+                  ? 'Total measures from this face to the flat face opposite it behind the picked point. Holes, fillets and chamfers are not counted; a stepped face can read differently where you pick. Offset shows only the signed distance of this edit.'
                   : 'Total shows the feature dimension. Offset shows only the signed distance of this edit.'
                 : null
             }

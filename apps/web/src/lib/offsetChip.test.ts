@@ -11,8 +11,8 @@ import {
 describe('offset chip', () => {
   it('reads any face with a span as its total, and only a spanless one as the change', () => {
     expect(faceOffsetChipState(20, 10)).toEqual({ mode: 'total', extent: 10 });
-    // A face that is not a primitive's own still reads the body's reach
-    // behind it: Total is the default, not just a primitive resize's.
+    // A face that is not a primitive's own still reads the span to the plane
+    // opposite it: Total is the default, not just a primitive resize's.
     expect(faceOffsetChipState(undefined, 10)).toEqual({
       mode: 'total',
       extent: 10
