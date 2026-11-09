@@ -401,6 +401,9 @@ class SharedCloudProjectApi {
             : 0,
           revisionBytes: 0,
           revisionCount: 0,
+          projectStorageBytes: this.project
+            ? new TextEncoder().encode(JSON.stringify(this.project)).byteLength
+            : 0,
           documentLimitBytes: 24 * 1024 * 1024,
           maxRevisionsPerProject: 50
         }

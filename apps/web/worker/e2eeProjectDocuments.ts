@@ -2442,57 +2442,6 @@ export async function projectVersionErasureStatements(
   ];
 }
 
-/**
- * What the account stores of the caller's encrypted projects, for the
- * erasure preview (slice 4-8): each head's envelope as document bytes, and
- * the named saves with their retained envelopes as revisions. Zero before
- * migration 0033, so the preview of a plaintext account is unchanged.
- */
-export async function encryptedProjectUsage(
-  db: D1Database | undefined,
-  userId: string
-): Promise<{
-  documentBytes: number;
-  revisionBytes: number;
-  revisionCount: number;
-}> {
-  const none = { documentBytes: 0, revisionBytes: 0, revisionCount: 0 };
-  if (!db || !(await isE2eeProjectVersionStorageReady(db))) return none;
-  const row = await db
-    .prepare(
-      `SELECT
-         COALESCE((SELECT SUM(v.envelope_bytes)
-                   FROM e2ee_project_versions v
-                   JOIN projects p ON p.id = v.project_id
-                   WHERE p.user_id = ? AND p.storage_format = 2
-                     AND v.document_version = p.document_version), 0)
-           AS document_bytes,
-         COALESCE((SELECT SUM(v.envelope_bytes)
-                   FROM e2ee_project_revisions r
-                   JOIN e2ee_project_versions v
-                     ON v.project_id = r.project_id
-                    AND v.document_version = r.document_version
-                   JOIN projects p ON p.id = r.project_id
-                   WHERE p.user_id = ? AND p.storage_format = 2), 0)
-           AS revision_bytes,
-         (SELECT COUNT(*) FROM e2ee_project_revisions r
-          JOIN projects p ON p.id = r.project_id
-          WHERE p.user_id = ? AND p.storage_format = 2) AS revision_count`
-    )
-    .bind(userId, userId, userId)
-    .first<{
-      document_bytes: number;
-      revision_bytes: number;
-      revision_count: number;
-    }>();
-  return row
-    ? {
-        documentBytes: row.document_bytes,
-        revisionBytes: row.revision_bytes,
-        revisionCount: row.revision_count
-      }
-    : none;
-}
 // --- The collaboration room (slice 4-9) -------------------------------------
 
 /** The context a version write runs in, for the room's account seam. */

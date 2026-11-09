@@ -58,6 +58,7 @@ import {
   type HealthResponse
 } from '@openzcad/shared';
 import { countLabel } from '../lib/toasts';
+import { formatByteSize } from '../lib/byteSize';
 import { fetchEncryptionAvailability } from '../lib/e2ee/availability';
 import { lazyWithStaleChunkNotice } from '../lib/staleChunk';
 import { ErrorBoundary } from './ErrorBoundary';
@@ -111,15 +112,11 @@ import {
   usePersonalInfoVisible
 } from './PersonalInfoToggle';
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) {
-    return `${bytes} B`;
-  }
-  const megabytes = bytes / (1024 * 1024);
-  return megabytes >= 1
-    ? `${megabytes.toFixed(1)} MB`
-    : `${Math.round(bytes / 1024)} KB`;
-}
+/**
+ * Binary units, named as such, scaling up to GiB: a Premium allowance of
+ * 100 GiB read as "102400.0 MB" before.
+ */
+const formatBytes = formatByteSize;
 
 /**
  * Names the ceiling even before anyone is near it. A limit discovered only at
@@ -133,12 +130,15 @@ function storageHint(usage: AccountStorageUsage | null): string {
   return `${countLabel(usage.projectCount, 'project', 'projects')} · ${countLabel(usage.revisionCount, 'revision', 'revisions')}. Up to ${formatBytes(usage.documentLimitBytes)} and ${usage.maxRevisionsPerProject} revisions per project.`;
 }
 
+/** Usage against an allowance, naming an overage outright. */
+function allowanceFigure(usedBytes: number, limitBytes: number): string {
+  const figure = `${formatBytes(usedBytes)} of ${formatBytes(limitBytes)}`;
+  return usedBytes > limitBytes ? `${figure} · over allowance` : figure;
+}
+
 /** Cloud file usage against the allowance, naming an overage outright. */
 function fileStorageFigure(usage: AccountStorageUsage): string {
-  const figure = `${formatBytes(usage.artifactBytes)} of ${formatBytes(usage.artifactLimitBytes)}`;
-  return usage.artifactBytes > usage.artifactLimitBytes
-    ? `${figure} · over allowance`
-    : figure;
+  return allowanceFigure(usage.artifactBytes, usage.artifactLimitBytes);
 }
 
 type SectionId = SettingsSectionId;
@@ -787,6 +787,11 @@ export function SettingsPage({
       cancelled = true;
     };
   }, [active, cloudFunctionsEnabled, session]);
+
+  /** The owner's project-storage allowance; older servers omit it. */
+  const projectStorageLimit = (
+    storageUsage?.entitlements ?? session?.entitlements
+  )?.projectStorageLimitBytes;
 
   // The Encryption section exists only for an account the server opened the
   // beta to; asked once per signed-in account while Settings is open.
@@ -2509,14 +2514,31 @@ export function SettingsPage({
                         title="Account storage"
                         hint={storageHint(storageUsage)}
                       >
-                        <Status>
-                          {storageUsage
-                            ? formatBytes(
-                                storageUsage.documentBytes +
-                                  storageUsage.revisionBytes
-                              )
-                            : '—'}
-                        </Status>
+                        {storageUsage && projectStorageLimit ? (
+                          <span className="settings-meter-figure">
+                            <Meter
+                              used={storageUsage.projectStorageBytes}
+                              limit={projectStorageLimit}
+                              label="Account storage used"
+                              valueText={allowanceFigure(
+                                storageUsage.projectStorageBytes,
+                                projectStorageLimit
+                              )}
+                            />
+                            <span>
+                              {allowanceFigure(
+                                storageUsage.projectStorageBytes,
+                                projectStorageLimit
+                              )}
+                            </span>
+                          </span>
+                        ) : (
+                          <Status>
+                            {storageUsage
+                              ? formatBytes(storageUsage.projectStorageBytes)
+                              : '—'}
+                          </Status>
+                        )}
                       </SettingRow>
                       <SettingRow
                         title="Cloud file storage"

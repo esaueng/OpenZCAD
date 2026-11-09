@@ -7,6 +7,7 @@ import {
   type ProjectSummary,
   type UnitSystem
 } from '@openzcad/shared';
+import { formatByteSize } from './byteSize';
 
 export interface ProjectProperties {
   source: 'device' | 'account';
@@ -95,13 +96,4 @@ export async function loadProjectProperties(
   return local ? describeProject(local, 'device', !localCurrent) : null;
 }
 
-export function formatProjectBytes(bytes: number): string {
-  const units = ['B', 'KiB', 'MiB', 'GiB'];
-  let value = bytes;
-  let index = 0;
-  while (value >= 1024 && index < units.length - 1) {
-    value /= 1024;
-    index += 1;
-  }
-  return `${value.toLocaleString(undefined, { maximumFractionDigits: index === 0 ? 0 : 1 })} ${units[index]}`;
-}
+export const formatProjectBytes = formatByteSize;

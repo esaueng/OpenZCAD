@@ -42,6 +42,7 @@ const storageUsage = {
   documentBytes: 2_048,
   revisionBytes: 1_024,
   revisionCount: 4,
+  projectStorageBytes: 3_072,
   documentLimitBytes: 10 * 1_048_576,
   maxRevisionsPerProject: 20,
   artifactBytes: 5 * 1_048_576,
@@ -1445,10 +1446,10 @@ describe('settings privacy and data section', () => {
     expect(meter).toHaveAttribute('aria-valuenow', limit);
     expect(meter).toHaveAttribute(
       'aria-valuetext',
-      '120.0 MB of 100.0 MB · over allowance'
+      '120 MiB of 100 MiB · over allowance'
     );
     expect(
-      screen.getByText('120.0 MB of 100.0 MB · over allowance')
+      screen.getByText('120 MiB of 100 MiB · over allowance')
     ).toBeVisible();
   });
 
@@ -1459,7 +1460,70 @@ describe('settings privacy and data section', () => {
       name: 'Cloud file storage used'
     });
     expect(meter).toHaveAttribute('aria-valuenow', String(5 * 1_048_576));
-    expect(meter).toHaveAttribute('aria-valuetext', '5.0 MB of 100.0 MB');
+    expect(meter).toHaveAttribute('aria-valuetext', '5 MiB of 100 MiB');
+  });
+
+  it('states project storage as the quota measures it, against a GiB allowance', async () => {
+    const gibibyte = 1_073_741_824;
+    vi.mocked(api.storageUsage).mockResolvedValue({
+      ...storageUsage,
+      // Logical sizes differ from stored ones; the quota counts stored bytes.
+      documentBytes: 40 * 1_048_576,
+      revisionBytes: 0,
+      projectStorageBytes: Math.round(24.8 * 1_048_576),
+      artifactLimitBytes: 25 * gibibyte,
+      entitlements: {
+        tier: 'premium',
+        projectLimit: 10_000,
+        projectStorageLimitBytes: 25 * gibibyte,
+        artifactLimitBytes: 25 * gibibyte,
+        ai: {
+          requestLimit: 600,
+          costLimitUnits: 2_400,
+          windowSeconds: 600,
+          concurrencyLimit: 8
+        }
+      }
+    });
+    renderSettings(readyHealth, { initialSection: 'account', session });
+
+    // Large allowances read in GiB, never as "25600.0 MB".
+    const projects = await screen.findByRole('meter', {
+      name: 'Account storage used'
+    });
+    expect(projects).toHaveAttribute(
+      'aria-valuenow',
+      String(Math.round(24.8 * 1_048_576))
+    );
+    expect(projects).toHaveAttribute('aria-valuemax', String(25 * gibibyte));
+    expect(screen.getByText('24.8 MiB of 25 GiB')).toBeVisible();
+    expect(
+      screen.getByRole('meter', { name: 'Cloud file storage used' })
+    ).toHaveAttribute('aria-valuetext', '5 MiB of 25 GiB');
+  });
+
+  it('names an account storage overage outright', async () => {
+    vi.mocked(api.storageUsage).mockResolvedValue({
+      ...storageUsage,
+      projectStorageBytes: 2 * 1_073_741_824,
+      entitlements: {
+        tier: 'free',
+        projectLimit: 100,
+        projectStorageLimitBytes: 1_073_741_824,
+        artifactLimitBytes: 1_073_741_824,
+        ai: {
+          requestLimit: 6,
+          costLimitUnits: 24,
+          windowSeconds: 600,
+          concurrencyLimit: 2
+        }
+      }
+    });
+    renderSettings(readyHealth, { initialSection: 'account', session });
+
+    expect(
+      await screen.findByRole('meter', { name: 'Account storage used' })
+    ).toHaveAttribute('aria-valuetext', '2 GiB of 1 GiB · over allowance');
   });
 
   it('names the diagnostic download for what it downloads', () => {

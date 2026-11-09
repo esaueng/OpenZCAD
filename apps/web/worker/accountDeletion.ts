@@ -7,10 +7,7 @@ import { projectGroupErasureStatements } from './e2eeProjects';
 import { assistantConsentErasureStatements } from './e2eeAssistantConsents';
 import { deviceRemovalErasureStatements } from './e2eeDeviceRemoval';
 import { projectMigrationErasureStatements } from './e2eeProjectMigrations';
-import {
-  encryptedProjectUsage,
-  projectVersionErasureStatements
-} from './e2eeProjectDocuments';
+import { projectVersionErasureStatements } from './e2eeProjectDocuments';
 import {
   isE2eeProjectPreferenceStorageReady,
   projectPreferenceErasureStatement
@@ -141,6 +138,8 @@ export async function accountDeletionPreview(
     );
   }
   await assertDeletionStorageReady(scope, env);
+  // Includes encrypted projects' heads and named saves (ADR-024 Phase 4),
+  // which are erased with the rest.
   const usage = await persistence.getStorageUsage(session.userId);
   const collaborators = await env
     .DB!.prepare(
@@ -151,15 +150,12 @@ export async function accountDeletionPreview(
     )
     .bind(session.userId)
     .first<{ collaborator_count: number }>();
-  // Encrypted projects' heads and named saves (ADR-024 Phase 4) are erased
-  // with the rest, so the preview counts them too.
-  const encrypted = await encryptedProjectUsage(env.DB, session.userId);
   return {
     ...confirmationFor(session, scope),
     projectCount: usage.projectCount,
-    documentBytes: usage.documentBytes + encrypted.documentBytes,
-    revisionBytes: usage.revisionBytes + encrypted.revisionBytes,
-    revisionCount: usage.revisionCount + encrypted.revisionCount,
+    documentBytes: usage.documentBytes,
+    revisionBytes: usage.revisionBytes,
+    revisionCount: usage.revisionCount,
     collaboratorCount: collaborators?.collaborator_count ?? 0
   };
 }

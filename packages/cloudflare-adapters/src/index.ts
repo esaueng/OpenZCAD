@@ -3,7 +3,8 @@ import { createHash } from 'node:crypto';
 export {
   accountEntitlements,
   accountTier,
-  accountAiLimits
+  accountAiLimits,
+  syncStoredAccountLimits
 } from './account-tiers';
 import {
   E2EE_MIGRATION_CODES,
@@ -3687,27 +3688,34 @@ export class D1R2PersistenceService implements PersistenceService {
     if (!this.env.DB) {
       return getInMemoryPersistence().getStorageUsage(userId);
     }
-    const totals = await this.env.DB.prepare(
-      `SELECT COUNT(*) AS project_count, COALESCE(SUM(document_bytes), 0) AS document_bytes
+    const db = this.env.DB;
+    const totals = await db
+      .prepare(
+        `SELECT COUNT(*) AS project_count, COALESCE(SUM(document_bytes), 0) AS document_bytes
        FROM projects WHERE user_id = ?`
-    )
+      )
       .bind(userId)
       .first<{ project_count: number; document_bytes: number }>();
-    const revisions = await this.env.DB.prepare(
-      `SELECT COUNT(*) AS revision_count, COALESCE(SUM(revisions.document_bytes), 0) AS revision_bytes
+    const revisions = await db
+      .prepare(
+        `SELECT COUNT(*) AS revision_count, COALESCE(SUM(revisions.document_bytes), 0) AS revision_bytes
        FROM revisions
        JOIN projects ON projects.id = revisions.project_id
        WHERE projects.user_id = ?`
-    )
+      )
       .bind(userId)
       .first<{ revision_count: number; revision_bytes: number }>();
+    const encrypted = await this.encryptedProjectUsage(userId);
     const artifacts = await this.accountArtifactUsage(userId);
     const entitlements = await this.ownerEntitlements(userId);
     return {
       projectCount: totals?.project_count ?? 0,
-      documentBytes: totals?.document_bytes ?? 0,
-      revisionBytes: revisions?.revision_bytes ?? 0,
-      revisionCount: revisions?.revision_count ?? 0,
+      documentBytes: (totals?.document_bytes ?? 0) + encrypted.documentBytes,
+      revisionBytes: (revisions?.revision_bytes ?? 0) + encrypted.revisionBytes,
+      revisionCount: (revisions?.revision_count ?? 0) + encrypted.revisionCount,
+      projectStorageBytes:
+        (await this.plaintextProjectStorageBytes(userId)) +
+        encrypted.storedBytes,
       documentLimitBytes: this.projectDocumentLimitBytes(),
       maxRevisionsPerProject: MAX_PROJECT_REVISIONS,
       artifactBytes: artifacts.bytes,
@@ -3715,6 +3723,106 @@ export class D1R2PersistenceService implements PersistenceService {
       artifactLimitBytes: entitlements.artifactLimitBytes,
       entitlements
     };
+  }
+
+  /**
+   * Plaintext project storage as the quota triggers measure it (migrations
+   * 0022 and 0043): documents and revisions held inline in D1 by their
+   * `document_bytes`, and those moved to R2, with externalized source
+   * assets, by their stored (compressed) size. A project staged for
+   * decryption counts once its cutover lands, as in the triggers.
+   */
+  private async plaintextProjectStorageBytes(userId: UserId): Promise<number> {
+    const staged = (await isE2eeReverseStorageReady(this.env.DB))
+      ? ' AND projects.id NOT IN (SELECT project_id FROM e2ee_decrypt_staged_projects)'
+      : '';
+    const row = await this.env
+      .DB!.prepare(
+        `SELECT
+           COALESCE((SELECT SUM(document_bytes) FROM projects
+                     WHERE user_id = ?1 AND document_object_id IS NULL), 0)
+         + COALESCE((SELECT SUM(revisions.document_bytes) FROM revisions
+                     JOIN projects ON projects.id = revisions.project_id
+                     WHERE projects.user_id = ?1
+                       AND revisions.document_object_id IS NULL), 0)
+         + COALESCE((SELECT SUM(objects.stored_bytes)
+                     FROM project_document_objects objects
+                     JOIN projects ON projects.id = objects.project_id
+                     WHERE projects.user_id = ?1${staged}), 0)
+         + COALESCE((SELECT SUM(assets.stored_bytes)
+                     FROM project_storage_assets assets
+                     JOIN projects ON projects.id = assets.project_id
+                     WHERE projects.user_id = ?1${staged}), 0) AS bytes`
+      )
+      .bind(userId)
+      .first<{ bytes: number }>();
+    return row?.bytes ?? 0;
+  }
+
+  /**
+   * What the account stores of its encrypted projects (ADR-024 Phase 4). An
+   * encrypted project's row keeps `document_bytes = 0` and has no
+   * `revisions` rows, so the plaintext sums miss it entirely: each head's
+   * envelope is its document bytes, the named saves' envelopes are its
+   * revisions, and every retained envelope is what its quota trigger
+   * (migration 0042) counts. Zero before migration 0033.
+   */
+  private async encryptedProjectUsage(userId: UserId): Promise<{
+    documentBytes: number;
+    revisionBytes: number;
+    revisionCount: number;
+    storedBytes: number;
+  }> {
+    const none = {
+      documentBytes: 0,
+      revisionBytes: 0,
+      revisionCount: 0,
+      storedBytes: 0
+    };
+    if (!(await isE2eeProjectVersionStorageReady(this.env.DB))) return none;
+    const row = await this.env
+      .DB!.prepare(
+        `SELECT
+           COALESCE((SELECT SUM(v.envelope_bytes)
+                     FROM e2ee_project_versions v
+                     JOIN projects p ON p.id = v.project_id
+                     WHERE p.user_id = ?1 AND p.storage_format = 2
+                       AND v.document_version = p.document_version), 0)
+             AS document_bytes,
+           COALESCE((SELECT SUM(v.envelope_bytes)
+                     FROM e2ee_project_revisions r
+                     JOIN e2ee_project_versions v
+                       ON v.project_id = r.project_id
+                      AND v.document_version = r.document_version
+                     JOIN projects p ON p.id = r.project_id
+                     WHERE p.user_id = ?1 AND p.storage_format = 2), 0)
+             AS revision_bytes,
+           (SELECT COUNT(*) FROM e2ee_project_revisions r
+            JOIN projects p ON p.id = r.project_id
+            WHERE p.user_id = ?1 AND p.storage_format = 2) AS revision_count,
+           COALESCE((SELECT SUM(v.envelope_bytes)
+                     FROM e2ee_project_versions v
+                     JOIN projects p ON p.id = v.project_id
+                     WHERE p.user_id = ?1 AND p.storage_format = 2
+                       AND (v.envelope_key IS NOT NULL
+                            OR v.envelope_inline IS NOT NULL)), 0)
+             AS stored_bytes`
+      )
+      .bind(userId)
+      .first<{
+        document_bytes: number;
+        revision_bytes: number;
+        revision_count: number;
+        stored_bytes: number;
+      }>();
+    return row
+      ? {
+          documentBytes: row.document_bytes,
+          revisionBytes: row.revision_bytes,
+          revisionCount: row.revision_count,
+          storedBytes: row.stored_bytes
+        }
+      : none;
   }
 
   /**
