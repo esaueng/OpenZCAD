@@ -417,8 +417,11 @@ test('refuses an extrusion edit that invalidates a downstream fillet without sav
   });
   // The edit runs in place; its refusals are said in its bar.
   const edit = await editExtrudeFromHistory(page, feature, 'Extrude base');
+  // A base thicker than the fins are tall swallows them, stranding the
+  // corner fillets' saved edges; `base_t + 1` carries them (see
+  // test/upstream-resize-carried-edges.test.ts).
   await setInPlaceOptionValues(page, 'Edit Extrude base', {
-    Distance: 'base_t + 1'
+    Distance: 'base_t + fin_h'
   });
   await expect(edit).toContainText('Base corner fillets', {
     timeout: 30_000
@@ -430,7 +433,7 @@ test('refuses an extrusion edit that invalidates a downstream fillet without sav
   const options = edit.locator('details.in-place-command-options');
   const distance = edit.getByRole('button', { name: 'Distance', exact: true });
   await options.locator('summary').click();
-  await expect(distance).toHaveText('base_t + 1');
+  await expect(distance).toHaveText('base_t + fin_h');
   await options.locator('summary').click();
   await expect(
     page.getByRole('button', { name: 'Undo', exact: true })

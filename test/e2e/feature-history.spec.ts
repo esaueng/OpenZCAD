@@ -479,7 +479,8 @@ test('a failed edit brings a closed History panel forward with its record', asyn
     'aria-pressed',
     'false'
   );
-  await setBarValues(page, edit, { Distance: 'base_t + 1' });
+  // Swallowing the fins strands the corner fillets (see the first test).
+  await setBarValues(page, edit, { Distance: 'base_t + fin_h' });
   await expect(edit).toContainText('Base corner fillets', {
     timeout: 30_000
   });
