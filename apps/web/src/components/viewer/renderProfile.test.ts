@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   E2E_RENDER_PROFILE,
   FULL_RENDER_PROFILE,
+  ambientOcclusionEnabled,
   renderProfile
 } from './renderProfile';
 
@@ -24,7 +25,8 @@ describe('renderProfile', () => {
     expect(E2E_RENDER_PROFILE).toEqual({
       antialias: false,
       shadows: false,
-      environment: false
+      environment: false,
+      ambientOcclusion: false
     });
   });
 
@@ -41,5 +43,19 @@ describe('renderProfile', () => {
   it('renders in full for perf and capture builds without a page opt-in', () => {
     expect(renderProfile(E2E_FULL, undefined)).toBe(FULL_RENDER_PROFILE);
     expect(renderProfile(E2E_FULL, {})).toBe(FULL_RENDER_PROFILE);
+  });
+
+  it('computes ambient occlusion only in full renders, when switched on and not opted out', () => {
+    expect(ambientOcclusionEnabled(FULL_RENDER_PROFILE, true, undefined)).toBe(
+      true
+    );
+    expect(ambientOcclusionEnabled(FULL_RENDER_PROFILE, true, {})).toBe(true);
+    expect(
+      ambientOcclusionEnabled(FULL_RENDER_PROFILE, true, {
+        __ozAmbientOcclusion: false
+      })
+    ).toBe(false);
+    expect(ambientOcclusionEnabled(FULL_RENDER_PROFILE, false, {})).toBe(false);
+    expect(ambientOcclusionEnabled(E2E_RENDER_PROFILE, true, {})).toBe(false);
   });
 });
