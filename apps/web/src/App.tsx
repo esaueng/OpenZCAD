@@ -23681,8 +23681,11 @@ export function App() {
     doc,
     representations,
     interaction,
-    renderedOffsetPreview ?? offsetPreviewValueRef.current,
-    E2E_EXACT_FACE_DRAG
+    // Only a published candidate supplies a displayed displacement. The
+    // refused/hand value remains input, never an anchor for a restored face.
+    currentFaceGeometryPreview ? renderedOffsetPreview : 0,
+    E2E_EXACT_FACE_DRAG,
+    keypad?.kind === 'offset' ? offsetPreviewValueRef.current : null
   );
 
   const cylinderRadiusHandleTarget = useMemo(() => {
@@ -30810,6 +30813,11 @@ export function App() {
               modelingLocked || !displayedGeometryComplete
                 ? null
                 : offsetHandleTarget
+            }
+            offsetDragTarget={
+              interaction.mode === 'face' && interaction.op === 'offset-face'
+                ? interaction.target
+                : null
             }
             onOffsetPreview={handleOffsetPreview}
             onOffsetCommit={(value) => {
