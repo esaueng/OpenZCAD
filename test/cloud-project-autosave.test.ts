@@ -1450,6 +1450,79 @@ describe('cloud project autosave — refusals', () => {
   });
 });
 
+describe('cloud project autosave — canonical deduplication', () => {
+  it('keeps the original debounce deadline for pending derived-only replacements', async () => {
+    const { controller, saves, statuses } = harness();
+    const document = documentAt(2);
+    controller.openProject(document.projectId, 1);
+    controller.schedule(document);
+    const count = statuses.length;
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS - 1);
+    controller.schedule({
+      ...document,
+      derived: { ...document.derived, updatedAt: 'later' }
+    });
+    expect(statuses).toHaveLength(count);
+    await vi.advanceTimersByTimeAsync(1);
+    await controller.whenIdle();
+    expect(saves).toEqual([{ expectedVersion: 1, version: 2 }]);
+    controller.dispose();
+  });
+
+  it('deduplicates queued, in-flight and acknowledged content without replacing a newer edit', async () => {
+    const held = gate();
+    const started = gate();
+    const { controller, saves, statuses } = harness({
+      respond: async ({ document }) => {
+        if (document.version === 2) {
+          started.open();
+          await held.wait;
+        }
+        return {
+          projectId: document.projectId,
+          version: document.version,
+          updatedAt: ''
+        };
+      }
+    });
+    const document = documentAt(2);
+    const derived = {
+      ...document,
+      derived: { ...document.derived, updatedAt: 'later' }
+    };
+    controller.openProject(document.projectId, 1);
+    controller.schedule(document);
+    const first = controller.flush();
+    // The first request is chained but has not started yet.
+    controller.schedule(derived);
+    expect(controller.hasPendingChanges).toBe(false);
+    await started.wait;
+    controller.schedule(derived);
+    expect(controller.hasPendingChanges).toBe(false);
+    const newer = documentAt(3, document);
+    controller.schedule(newer);
+    const count = statuses.length;
+    controller.schedule(derived);
+    expect(statuses).toHaveLength(count);
+    held.open();
+    await first;
+    await controller.flushPending();
+    expect(saves).toEqual([
+      { expectedVersion: 1, version: 2 },
+      { expectedVersion: 2, version: 3 }
+    ]);
+    controller.schedule({ ...newer, derived: derived.derived });
+    expect(controller.hasPendingChanges).toBe(false);
+    await controller.flushPending();
+    expect(saves).toHaveLength(2);
+    // Same-version metadata edits are still canonical work.
+    controller.schedule({ ...newer, name: 'Renamed' });
+    await controller.flushPending();
+    expect(saves).toHaveLength(3);
+    controller.dispose();
+  });
+});
+
 describe('cloud project autosave — flushing', () => {
   it('rechecks edits when a drain begins with a write already in flight', async () => {
     const held = gate();

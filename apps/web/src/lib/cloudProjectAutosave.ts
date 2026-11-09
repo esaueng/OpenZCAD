@@ -15,6 +15,7 @@ import {
   withoutDerivedProjection
 } from '@openzcad/document-core';
 import { ApiError, isProjectDocumentUnavailableError } from './api';
+import { sameLocalProjectContent } from './localProjectAutosave';
 
 /**
  * What a `refused` write says when the account will never hold the document
@@ -148,6 +149,8 @@ interface PendingSave {
   document: ProjectDocument;
   editEpoch: number;
   projectId: string;
+  /** Bound when this snapshot joins the serialized write queue. */
+  projectEpoch?: number;
 }
 
 type SaveResult =
@@ -201,7 +204,8 @@ export class CloudProjectAutosave {
   #projectEpoch = 0;
   #editEpoch = 0;
   #pending: PendingSave | null = null;
-  /** Writes taken off `#pending` and chained on `#queue`, not yet started. */
+  #acknowledgedDocument: ProjectDocument | null = null;
+  /** Writes taken off `#pending`, including the active request. */
   readonly #queued = new Set<PendingSave>();
   #timer: ReturnType<typeof setTimeout> | null = null;
   #queue: Promise<SaveResult> = Promise.resolve({ state: 'stale' });
@@ -340,6 +344,7 @@ export class CloudProjectAutosave {
       this.#pending = null;
       this.#pendingSince = null;
     }
+    this.#acknowledgedDocument = null;
     this.#project = {
       projectId,
       version: accountVersion,
@@ -455,6 +460,7 @@ export class CloudProjectAutosave {
   closeProject(): void {
     this.#clearTimer();
     this.#projectEpoch += 1;
+    this.#acknowledgedDocument = null;
     this.#project = null;
     this.#pending = null;
     this.#pendingSince = null;
@@ -482,6 +488,7 @@ export class CloudProjectAutosave {
       return;
     }
     this.#clearTimer();
+    this.#acknowledgedDocument = null;
     this.#project = {
       projectId,
       version: accountVersion,
@@ -501,12 +508,31 @@ export class CloudProjectAutosave {
   /** Records an edit. Cheap: the write itself is debounced. */
   schedule(document: ProjectDocument): void {
     this.#assertUsable();
+    // A rebuild replaces only the derived cache. Do not restart the debounce,
+    // overwrite a newer edit or enqueue a duplicate behind its own request.
+    if (
+      sameLocalProjectContent(this.#pending?.document ?? null, document) ||
+      sameLocalProjectContent(this.#acknowledgedDocument, document) ||
+      [...this.#queued].some(
+        (waiting) =>
+          waiting.projectEpoch === this.#project?.epoch &&
+          sameLocalProjectContent(waiting.document, document)
+      )
+    )
+      return;
     this.#editEpoch += 1;
     this.#pending = {
       document,
       editEpoch: this.#editEpoch,
       projectId: document.projectId
     };
+    this.#schedulePending();
+  }
+
+  /** Re-evaluate a newer pending edit after an older request was refused. */
+  #schedulePending(): void {
+    const pending = this.#pending!;
+    const document = pending.document;
     this.#automaticRetries = 0;
     this.#clearTimer();
 
@@ -519,7 +545,7 @@ export class CloudProjectAutosave {
     if (
       this.#halted === 'refused' &&
       this.#sizeRefusal &&
-      this.#pending.editEpoch > this.#sizeRefusal.editEpoch
+      pending.editEpoch > this.#sizeRefusal.editEpoch
     ) {
       const canonical = withoutDerivedProjection(document);
       if (
@@ -543,7 +569,7 @@ export class CloudProjectAutosave {
     if (
       this.#halted === 'refused' &&
       this.#contentRefusal &&
-      this.#pending.editEpoch > this.#contentRefusal.editEpoch
+      pending.editEpoch > this.#contentRefusal.editEpoch
     ) {
       try {
         assertStorableDocument(document);
@@ -593,6 +619,7 @@ export class CloudProjectAutosave {
 
     const epoch = this.#project.epoch;
     this.#pending = null;
+    next.projectEpoch = epoch;
     this.#queued.add(next);
     const save = this.#queue.then(
       () => this.#persist(next, epoch),
@@ -676,6 +703,7 @@ export class CloudProjectAutosave {
       });
       if (saved && this.#isActive(epoch, projectId)) {
         this.#project!.version = saved.version;
+        this.#acknowledgedDocument = saved;
         // A newer queued edit is based on this checkpoint's model. Keep it
         // and the project epoch so any autosave queued behind us uses the
         // acknowledged fence rather than being cancelled as stale.
@@ -714,18 +742,20 @@ export class CloudProjectAutosave {
     this.#clearTimer();
     this.#unsubscribeConnectivity();
     this.#projectEpoch += 1;
+    this.#acknowledgedDocument = null;
     this.#project = null;
   }
 
   async #persist(next: PendingSave, epoch: number): Promise<SaveResult> {
-    this.#queued.delete(next);
     if (!this.#isActive(epoch, next.projectId)) {
+      this.#queued.delete(next);
       return { state: 'stale' };
     }
     // Eligibility can change while this snapshot waits behind another request.
     // Keep the newest edit for resume or an explicit checkpoint; an old queued
     // snapshot must never displace a later one.
     if (this.#halted || !this.#enabled || !this.#connectivity.isOnline()) {
+      this.#queued.delete(next);
       this.#requeue(next);
       this.#emit(this.#halted ?? (!this.#enabled ? 'paused' : 'offline'));
       return { state: 'halted' };
@@ -744,6 +774,7 @@ export class CloudProjectAutosave {
         return { state: 'stale' };
       }
       this.#project!.version = response.version;
+      this.#acknowledgedDocument = next.document;
       this.#options.onSynced?.({
         projectId: next.projectId,
         version: response.version
@@ -754,6 +785,8 @@ export class CloudProjectAutosave {
         return { state: 'stale' };
       }
       return this.#handleFailure(next, error);
+    } finally {
+      this.#queued.delete(next);
     }
   }
 
@@ -772,7 +805,7 @@ export class CloudProjectAutosave {
       this.#contentRefusal = { editEpoch: next.editEpoch };
       this.#emit('refused', error);
       if (this.#pending && this.#pending.editEpoch > next.editEpoch) {
-        this.schedule(this.#pending.document);
+        this.#schedulePending();
       }
       return { state: 'halted' };
     }
@@ -866,13 +899,14 @@ export class CloudProjectAutosave {
         this.#pending &&
         this.#pending.editEpoch > next.editEpoch
       ) {
-        this.schedule(this.#pending.document);
+        this.#schedulePending();
       }
       return { state: 'halted' };
     }
 
     if (status === 401) {
       this.#requeue(next);
+      this.#acknowledgedDocument = null;
       this.#project = null;
       this.#projectEpoch += 1;
       this.#emit('local');

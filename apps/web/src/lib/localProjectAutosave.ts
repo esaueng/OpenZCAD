@@ -33,6 +33,7 @@ export function sameLocalProjectContent(
 export interface LocalProjectAutosaveOptions {
   /** False means this tab is not allowed to persist the document. */
   write(document: ProjectDocument): Promise<boolean>;
+  /** Emitted only when canonical work becomes durable; newerQueued excludes cache writes. */
   onSaved(document: ProjectDocument, newerQueued: boolean): void;
   onError(error: unknown): void;
   onDirtyChange(dirty: boolean): void;
@@ -41,22 +42,27 @@ export interface LocalProjectAutosaveOptions {
 /** One device writer: coalesce waiting snapshots, never overlap transactions,
  * and keep failed work dirty. A flush includes the active write and its tail. */
 export class LocalProjectAutosave {
-  private queued: ProjectDocument | null = null;
+  private queued: { document: ProjectDocument; revision: number } | null = null;
+  /** Internal canonical generations, independent of document version metadata. */
+  private revision = 0;
+  private savedRevision = 0;
   private scheduled: ProjectDocument | null = null;
   private inFlight: Promise<void> | null = null;
 
   constructor(private readonly options: LocalProjectAutosaveOptions) {}
 
   get dirty(): boolean {
-    return this.queued !== null || this.inFlight !== null;
+    return this.revision !== this.savedRevision;
   }
 
   /** Returns true for a canonical change, which must bypass the derived debounce. */
   enqueue(document: ProjectDocument): boolean {
     const canonicalChange = !sameLocalProjectContent(this.scheduled, document);
+    const wasDirty = this.dirty;
+    if (canonicalChange) this.revision += 1;
     this.scheduled = document;
-    this.queued = document;
-    this.options.onDirtyChange(true);
+    this.queued = { document, revision: this.revision };
+    if (this.dirty !== wasDirty) this.options.onDirtyChange(this.dirty);
     return canonicalChange;
   }
 
@@ -72,15 +78,26 @@ export class LocalProjectAutosave {
   private async drain(): Promise<void> {
     try {
       while (this.queued) {
-        const document = this.queued;
+        const snapshot = this.queued;
+        const { document, revision } = snapshot;
         this.queued = null;
         try {
           const saved = await this.options.write(document);
-          if (saved) this.options.onSaved(document, this.queued !== null);
+          const canonicalWrite = revision !== this.savedRevision;
+          const wasDirty = this.dirty;
+          this.savedRevision = revision;
+          if (this.dirty !== wasDirty) this.options.onDirtyChange(this.dirty);
+          // Cache refreshes are durable too, but they do not acknowledge a
+          // new edit or change the workspace's storage status.
+          if (saved && canonicalWrite)
+            this.options.onSaved(document, this.dirty);
         } catch (error) {
           // A later snapshot already includes this edit. Never repark the old
           // one over it, and never drop the only copy on a failed device write.
-          this.queued ??= document;
+          this.queued ??= snapshot;
+          // The canonical document is already safe. A cache-only failure can
+          // retry later without claiming that the user's edits were lost.
+          if (!this.dirty) return;
           this.options.onError(error);
           // An awaited flush is a durability barrier for in-app departure and
           // identity transfer too. It must not release ownership after failure.
@@ -89,7 +106,6 @@ export class LocalProjectAutosave {
       }
     } finally {
       this.inFlight = null;
-      this.options.onDirtyChange(this.dirty);
     }
   }
 }
