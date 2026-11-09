@@ -153,6 +153,42 @@ describe('CAD viewport shading', () => {
     expect(Array.from(geometry.getIndex()!.array)).toEqual([0, 1, 2, 3, 4, 5]);
   });
 
+  it('shades across a tangent face boundary as one smooth surface', () => {
+    // Two faces of one smooth surface split at a seam (a sphere's equator, a
+    // fillet's rim) meet at a few degrees on the display mesh. Creased, each
+    // side kept its own normal and the seam showed as a faint ring (U10).
+    const angle = THREE.MathUtils.degToRad(4);
+    const mesh: MeshGeometry = {
+      kind: 'mesh',
+      vertices: Float32Array.from([
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        -Math.cos(angle),
+        Math.sin(angle)
+      ]),
+      indices: Uint32Array.from([0, 1, 2, 1, 0, 3])
+    };
+    const faces = [
+      { topologyId: 'face:1', hash: 1, triangleStart: 0, triangleCount: 1 },
+      { topologyId: 'face:2', hash: 2, triangleStart: 1, triangleCount: 1 }
+    ];
+    const geometry = renderedGeometry(mesh, { faces, edges: [] });
+
+    // The two shared corners each become one render vertex with one normal.
+    expect(geometry.getAttribute('normal').count).toBe(4);
+    const index = Array.from(geometry.getIndex()!.array);
+    expect(index[0]).toBe(index[4]);
+    expect(index[1]).toBe(index[3]);
+  });
+
   it('uses the studio satin material for CAD solids', () => {
     const body = bodyWithMesh({
       kind: 'mesh',

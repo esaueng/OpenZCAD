@@ -131,12 +131,27 @@ viewport, and a roadmap evidence fragment.
 Slices 2 and 3 carry most of the visible change; slice 4 is the cylinder and
 sphere outline.
 
+## Follow-up (8 November)
+
+- **Seam rings.** The faint ring at a sphere's equator, first taken for a
+  ground-plane artefact, was the shading: the kernel splits one smooth
+  surface into several B-rep faces, and the normal smoothing creased every
+  face boundary, so each side kept its own one-sided normal. Tangent face
+  pairs (`tangentFacePairs`, the measure the tangent edge ink already used)
+  now share normals across their boundary; genuine creases stay split, and a
+  deferred-topology preview still outlines every face boundary.
+- **Interaction states.** `lookdev: interaction states` captures a hovered
+  face, a selected face, a selected body and X-ray on the boss-on-block
+  scene. Under the studio rig all four read clearly, so their tints and
+  dimming are unchanged.
+
 ## Running the harness
 
 ```bash
 OZ_LOOKDEV=1 OZ_LOOKDEV_LABEL=before pnpm exec playwright test test/e2e/viewport-lookdev.spec.ts
 # change the renderer
 OZ_LOOKDEV=1 OZ_LOOKDEV_LABEL=after pnpm exec playwright test test/e2e/viewport-lookdev.spec.ts
+# OZ_LOOKDEV_SCHEME=light captures the light stage
 node scripts/lookdev-compare.mjs artifacts/lookdev/before artifacts/lookdev/after
 ```
 
