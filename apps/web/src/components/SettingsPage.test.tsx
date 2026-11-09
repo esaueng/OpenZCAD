@@ -1,4 +1,5 @@
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -29,6 +30,11 @@ import type * as DesktopBridge from '../lib/desktopBridge';
 import { SettingsPage } from './SettingsPage';
 import { POINTER_CONTROL_GROUPS } from '../lib/controlReference';
 import { api } from '../lib/api';
+import { loadAssistantStatus } from '../lib/assistantStream';
+
+vi.mock('../lib/assistantStream', () => ({
+  loadAssistantStatus: vi.fn()
+}));
 
 // The desktop app opens external links through native code.
 vi.mock('../lib/desktopBridge', async (importOriginal) => ({
@@ -51,6 +57,9 @@ const storageUsage = {
 
 beforeEach(() => {
   vi.spyOn(api, 'storageUsage').mockResolvedValue(storageUsage);
+  vi.mocked(loadAssistantStatus).mockImplementation(
+    () => new Promise(() => {})
+  );
 });
 
 afterEach(() => {
@@ -581,7 +590,9 @@ describe('settings navigation', () => {
 describe('assistant data disclosure', () => {
   it('does not promise free access when a restricted deployment denies the account', () => {
     const settings = defaultAppSettings();
+    settings.assistant.enabled = true;
     renderSettings(null, {
+      settings,
       initialSection: 'assistant',
       session: {
         userId: toUserId('user_restricted'),
@@ -603,7 +614,7 @@ describe('assistant data disclosure', () => {
         }
       }
     });
-    expect(screen.getByText('Not configured')).toBeVisible();
+    expect(screen.getByText('Unavailable')).toBeVisible();
     expect(
       screen.queryByText(/Free with no personal API key/)
     ).not.toBeInTheDocument();
@@ -662,14 +673,136 @@ describe('assistant data disclosure', () => {
     }
   );
 
-  it('does not assume a provider before deployment status is available', () => {
-    renderSettings(null, { initialSection: 'assistant' });
-    expect(screen.getByText(/Ask your deployment operator/)).toBeVisible();
-    expect(screen.queryByText(/OpenRouter/)).not.toBeInTheDocument();
+  it('reserves the data notice while loading, without flashing fallback copy', async () => {
+    let finishRead!: (
+      result: Awaited<ReturnType<typeof loadAssistantStatus>>
+    ) => void;
+    vi.mocked(loadAssistantStatus).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishRead = resolve;
+        })
+    );
+    const { rerender } = renderSettings(null, { initialSection: 'assistant' });
+    const signal = vi.mocked(loadAssistantStatus).mock.calls.at(-1)?.[0];
+    expect(screen.getByText('Loading…')).toBeVisible();
     expect(
-      screen.queryByRole('link', { name: /data policies/ })
-    ).not.toBeInTheDocument();
+      screen.getByRole('status', { name: 'Loading assistant data policies' })
+    ).toBeVisible();
+    expect(screen.queryByText(/Ask your deployment operator/)).toBeNull();
+    expect(
+      screen.queryByText('Status appears when the server is reachable.')
+    ).toBeNull();
+    expect(screen.queryByText('Not configured')).toBeNull();
+    expect(screen.queryByRole('link', { name: /data policies/ })).toBeNull();
+    const reserve = document.querySelector('.settings-assistant-data-reserve');
+    expect(reserve).toHaveAttribute('aria-hidden', 'true');
+
+    const settings = defaultAppSettings();
+    rerender(
+      settingsElement(null, {
+        initialSection: 'assistant',
+        accountState: {
+          settings,
+          revision: 1,
+          synced: true,
+          credential: { stored: false, storageAvailable: true },
+          effectiveAssistant: {
+            configured: false,
+            source: 'deployment',
+            provider: 'openrouter',
+            model: 'openai/gpt-5-luna',
+            reasoningEffort: 'high'
+          }
+        }
+      })
+    );
+    expect(screen.queryByText('Loading…')).toBeNull();
+    expect(screen.getByText('Off')).toBeVisible();
+    expect(
+      screen.getByText('openrouter · openai/gpt-5-luna · high reasoning')
+    ).toBeVisible();
+    expect(
+      screen.getByRole('link', { name: 'OpenRouter data policies' })
+    ).toBeVisible();
+    expect(screen.queryByText(/Ask your deployment operator/)).toBeNull();
+    expect(document.querySelector('.settings-assistant-data-reserve')).toBe(
+      reserve
+    );
+    expect(signal?.aborted).toBe(true);
+    await act(async () => {
+      finishRead({
+        configured: true,
+        provider: 'openai',
+        model: 'stale-model',
+        reasoningEffort: 'high'
+      });
+    });
+    expect(screen.queryByText(/stale-model/)).toBeNull();
+    expect(
+      screen.getByRole('link', { name: 'OpenRouter data policies' })
+    ).toBeVisible();
   });
+
+  it('keeps the unreachable message and generic policy after the server fails', async () => {
+    vi.mocked(loadAssistantStatus).mockRejectedValue(new Error('Offline'));
+    renderSettings(null, { initialSection: 'assistant' });
+    expect(
+      await screen.findByText('Status appears when the server is reachable.')
+    ).toBeVisible();
+    expect(screen.getByText('Unavailable')).toBeVisible();
+    expect(screen.getByText(/Ask your deployment operator/)).toBeVisible();
+    expect(screen.queryByText('Loading…')).toBeNull();
+    expect(screen.queryByText(/OpenRouter/)).toBeNull();
+  });
+
+  it('loads the deployment policy even when no account settings arrive', async () => {
+    vi.mocked(loadAssistantStatus).mockResolvedValue({
+      configured: false,
+      source: 'deployment',
+      provider: 'openai',
+      model: 'gpt-5-luna',
+      reasoningEffort: 'high'
+    });
+    renderSettings(null, { initialSection: 'assistant' });
+    expect(
+      await screen.findByRole('link', { name: 'OpenAI API data policies' })
+    ).toBeVisible();
+    expect(screen.getByText('Off')).toBeVisible();
+    expect(screen.queryByText(/Ask your deployment operator/)).toBeNull();
+  });
+
+  it.each([
+    { enabled: false, configured: false, badge: 'Off' },
+    { enabled: false, configured: true, badge: 'Off' },
+    { enabled: true, configured: true, badge: 'Ready' },
+    { enabled: true, configured: false, badge: 'Unavailable' }
+  ])(
+    'labels enabled=$enabled and configured=$configured as $badge',
+    ({ enabled, configured, badge }) => {
+      const settings = defaultAppSettings();
+      settings.assistant.enabled = enabled;
+      renderSettings(null, {
+        settings,
+        initialSection: 'assistant',
+        accountState: {
+          settings,
+          revision: 1,
+          synced: true,
+          credential: { stored: false, storageAvailable: true },
+          effectiveAssistant: {
+            configured,
+            source: 'deployment',
+            provider: 'openrouter',
+            model: 'deployment-model',
+            reasoningEffort: 'high'
+          }
+        }
+      });
+      expect(screen.getByText(badge)).toBeVisible();
+      expect(screen.queryByText('Not configured')).toBeNull();
+    }
+  );
 
   it('explains the free built-in model and data use, then keeps the personal model option', async () => {
     const user = userEvent.setup();
@@ -911,9 +1044,7 @@ describe('settings assistant section', () => {
       accountState,
       initialSection: 'assistant'
     });
-    expect(
-      screen.getByRole('option', { name: 'Off' })
-    ).toBeDisabled();
+    expect(screen.getByRole('option', { name: 'Off' })).toBeDisabled();
   });
 
   it('resets Off when editing the Anthropic model to an unsupported one', async () => {
@@ -929,9 +1060,7 @@ describe('settings assistant section', () => {
       initialSection: 'assistant',
       onChange
     });
-    await user.clear(
-      screen.getByRole('textbox', { name: 'AI model' })
-    );
+    await user.clear(screen.getByRole('textbox', { name: 'AI model' }));
     expect(onChange.mock.calls.at(-1)?.[0].assistant.reasoningEffort).toBe(
       'provider-default'
     );
@@ -945,10 +1074,17 @@ describe('settings assistant section', () => {
       settings: accountState.settings,
       accountState,
       initialSection: 'assistant',
-      session: { userId: toUserId('user_provider_switch'), displayName: 'person', mode: 'email-code' },
+      session: {
+        userId: toUserId('user_provider_switch'),
+        displayName: 'person',
+        mode: 'email-code'
+      },
       onChange
     });
-    await user.type(screen.getByLabelText('Personal API token'), 'test-other-provider-token');
+    await user.type(
+      screen.getByLabelText('Personal API token'),
+      'test-other-provider-token'
+    );
     await user.selectOptions(
       screen.getByRole('combobox', { name: 'AI provider' }),
       'anthropic'

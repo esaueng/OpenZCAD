@@ -798,6 +798,60 @@
 /* ── Notices ──
    A full-width line inside a card for a state the user should know about,
    with its action at the end. */
+.settings-assistant-model,
+.settings-assistant-model-loading {
+  display: block;
+  height: 1lh;
+}
+
+.settings-assistant-model {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-assistant-model-loading {
+  width: min(24em, 100%);
+  color: transparent;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-2);
+}
+
+/* All provider policies share a reserved envelope, including the optional
+   free-model line. It wraps with the card rather than guessing pixel heights. */
+.settings-assistant-data {
+  display: grid;
+}
+
+.settings-assistant-data-reserve,
+.settings-assistant-data-content {
+  grid-area: 1 / 1;
+  min-width: 0;
+}
+
+.settings-assistant-data-content {
+  position: relative;
+}
+
+.settings-assistant-data-reserve {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.settings-assistant-data-reserve > div::before {
+  content: attr(data-copy);
+}
+
+.settings-assistant-data-loading {
+  position: absolute;
+  inset: 10px var(--sp-4);
+  background: repeating-linear-gradient(
+    to bottom,
+    var(--color-surface-2) 0 0.65em,
+    transparent 0.65em 1.5em
+  );
+}
+
 .settings-notice {
   display: flex;
   flex-wrap: wrap;
