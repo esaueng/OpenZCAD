@@ -5,6 +5,13 @@ import type { WorkspaceSaveState } from '../lib/cloudProjectAutosave';
 import { TopBar } from './TopBar';
 import type { EncryptionIndicatorProps } from './EncryptionIndicator';
 import { WORKSPACE_MODE_OPTIONS } from '../lib/topBarPresentation';
+import {
+  IDLE,
+  commandSessionFor,
+  interactionReducer,
+  type InteractionState
+} from '../lib/interaction/machine';
+import type { TopologySelection } from '@openzcad/shared';
 
 function renderTopBar(
   options: {
@@ -18,6 +25,7 @@ function renderTopBar(
     geometryFailed?: boolean;
     editPending?: boolean;
     editRefusal?: string;
+    interactionState?: InteractionState;
     canExport?: boolean;
     exportWithheld?: string | null;
     exportUnavailableReason?: string | null;
@@ -49,8 +57,17 @@ function renderTopBar(
       saveState={options.saveState ?? 'local'}
       geometryPending={options.geometryPending}
       geometryFailed={options.geometryFailed}
-      editPending={options.editPending}
-      editRefusal={options.editRefusal}
+      editPending={
+        options.interactionState
+          ? commandSessionFor(options.interactionState)?.phase === 'validating'
+          : options.editPending
+      }
+      editRefusal={
+        options.interactionState
+          ? (commandSessionFor(options.interactionState)?.error?.message ??
+            null)
+          : options.editRefusal
+      }
       saveToAccount={options.saveToAccount ?? false}
       knownDeviceOnly={options.knownDeviceOnly ?? false}
       localOnlySourceCount={0}
@@ -126,6 +143,50 @@ describe('TopBar workspace mode help', () => {
 });
 
 describe('TopBar save chip', () => {
+  it.each([
+    'clear',
+    'escape',
+    'toggle-edge-op',
+    'keypad-open',
+    'drag-engage',
+    'commit-complete',
+    'validation-start'
+  ] as const)('retires the active refusal on %s', (type) => {
+    const armed = interactionReducer(IDLE, {
+      type: 'select-edge',
+      selection: {
+        bodyId: 'body_1',
+        kind: 'edge',
+        topologyId: 'edge:1',
+        hash: 1
+      } as TopologySelection,
+      additive: false
+    });
+    const failed = interactionReducer(armed, {
+      type: 'validation-failed',
+      diagnostic: { message: 'Exact edit refused.' },
+      value: 20
+    });
+    renderTopBar({ saveState: 'synced', interactionState: failed });
+    expect(
+      screen.getByRole('button', { name: 'Edit not applied' })
+    ).toBeVisible();
+    cleanup();
+    renderTopBar({
+      saveState: 'synced',
+      interactionState: interactionReducer(
+        failed,
+        type === 'validation-start' ? { type, value: 2 } : { type }
+      )
+    });
+    expect(screen.queryByText('Edit not applied')).toBeNull();
+    expect(
+      screen.getByRole('status', {
+        name: type === 'validation-start' ? 'Checking' : 'Saved'
+      })
+    ).toBeVisible();
+  });
+
   it('follows the project name instead of leading the action row', () => {
     renderTopBar({ saveState: 'synced', signedIn: true });
     const chip = screen.getByRole('status', { name: 'Saved' });
