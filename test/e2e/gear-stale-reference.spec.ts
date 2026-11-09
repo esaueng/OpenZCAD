@@ -70,7 +70,13 @@ test(
   'an older gear reference survives cap offsets and a History edit',
   { tag: '@ci-smoke' },
   async ({ page }, testInfo) => {
-    test.setTimeout(120_000);
+    // Six exact replays of a 20-tooth gear, two of them cold (import and
+    // reload), run back to back here, each behind the deliberate 1.5 s sync
+    // delay. On the 2-core CI runners a passing run takes 71–119 s (median
+    // 102 s), so the earlier 120 s budget ran out mid-way through the last
+    // cap edit about half the time: Apply still "Checking…", or the commit
+    // not yet exported. Nothing was wrong; the final rebuild was not done.
+    test.setTimeout(180_000);
     const errors: string[] = [];
     page.on('pageerror', (error) => errors.push(error.message));
     await stubApi(page, { panelLayout: MODEL_ONLY });
