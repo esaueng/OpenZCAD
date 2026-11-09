@@ -75,6 +75,17 @@ source mesh/topology cloning and the temporary installation copies remain. This
 is an ownership change covered by identity/cache assertions, not a measured new
 peak-RSS or frame-time claim.
 
+## Main integration
+
+Merged `origin/main` at `0860905255a9d45ba1c8e8f65965960d27f840f9` (#1315)
+with a merge commit, without rebasing. The ModelViewer conflict combines the
+`incomingOffsetHandle` preparation snapshot binding with the separate semantic
+`offsetDragTarget`. The displayed-face handle anchoring, `resetBodyPickingRef`
+reset on proxy restoration/exact replacement, #731 last-valid retention,
+plain `useEffect` ordering and retire-only-on-target-change drag logic survive.
+`App.tsx` and `edgeOverlay.ts` merged automatically; their combined changes were
+inspected. No auto-merge or PR watch is enabled.
+
 ## Reproduction
 
 Build and serve the same revision for both runs:
@@ -193,7 +204,7 @@ PLAYWRIGHT_PORT=24671 OZ_PERF=1 OZ_FACE_DRAG_ANGLE=gl \
 - Typecheck passed. Full lint initially exited 137 under host memory pressure;
   delivery status records the recovery attempt separately.
 
-## Rework verification
+## Earlier rework verification
 
 - Typecheck passed. Changed-file ESLint passed with the existing ModelViewer
   `exhaustive-deps` warning (zero errors); no assertion or protection was weakened.
@@ -234,3 +245,50 @@ Baseline reproduction, from the unmodified exported original-head tree:
 ```bash
 OPENZCAD_BUILD_COMMIT=20b30878b9fd731b4eca4d31b3e6d96cf548c2ad CI=1 OPENZCAD_E2E_SUITE=full PLAYWRIGHT_PORT=24672 pnpm exec playwright test face-drag-continuity --grep 'committed face stays selected|commit reads as complete|applying a fillet goes straight' --workers=1 --retries=0 --reporter=line
 ```
+
+## Follow-up review verification after main integration
+
+Validated the merged code tree at `ac1afef5840b7ebe33ddef847ce95ba654730e3b`;
+subsequent edits only update this note and its roadmap evidence fragment.
+
+- PASS: Node 22 typecheck. The initial Node 24 attempt crashed with `SIGSEGV`
+  without a TypeScript diagnostic; serial Node 22 runs passed before and after
+  merging main.
+- PASS: changed-file ESLint, zero errors and one existing ModelViewer
+  `exhaustive-deps` warning.
+- PASS: focused web Vitest, 43 tests across six files, including #1315's
+  `useOffsetFaceHandle` and `ModelViewer.lifecycle` suites. New hook cases assert
+  same-render colour/name and presentation updates with no worker post after
+  staging-array release; a picking-only change still requires preparation.
+  Existing fallback cases now assert both the performance mark and drag-trace
+  reason for timeout, error, message error, bad reply and post failure.
+- PASS: focused root Vitest, 75 tests across six files. Installation assertions
+  verify absence of cached `normalSums`, release of geometry arrays through all
+  appearance aliases, isolated installed buffers and release after in-place
+  updates. Smoothing/restoration and edge-overlay tests remain passing.
+- PASS: `pnpm build`, including immutable Remus bytes, production Vite build,
+  provenance and bundle-size checks.
+- Browser command FAIL: 14 passed, 3 failed (17 total, one worker, no retries).
+  Both `generic-face-drag-preview` cases passed. The three continuity failures
+  are at `face-drag-continuity.spec.ts:678`, `:718`, and `:808` (assertions at
+  `:709`, `:772`, `:859`): `slowAnalysis.held` remains zero before the continuity
+  assertions. These match the baseline failure signature documented above and
+  in #1315; this follow-up did not repeat the baseline run or weaken assertions.
+  The newly merged retained/committed handle-anchor and cancellation cases passed.
+- PASS: roadmap-evidence validation and `git diff --check`.
+
+Exact follow-up commands (repository root; Node 22 selected via PATH):
+
+```bash
+PATH=/usr/bin:$PATH pnpm typecheck
+PATH=/usr/bin:$PATH pnpm exec eslint apps/web/src/components/ModelViewer.tsx apps/web/src/components/viewer/usePreparedBodies.ts apps/web/src/components/viewer/usePreparedBodies.test.tsx apps/web/src/lib/faceDragTrace.ts packages/viewport/src/render/preparedBody.ts packages/viewport/src/render/scene.ts packages/viewport/src/render/bodyUpdate.test.ts
+PATH=/usr/bin:$PATH pnpm --filter @openzcad/web exec vitest run src/components/viewer/usePreparedBodies.test.tsx src/components/viewer/interactionShaderWarmup.test.ts src/components/viewer/previewShaderSamples.test.ts src/hooks/useOffsetFaceHandle.test.tsx src/components/ModelViewer.lifecycle.test.tsx src/hooks/usePreviewVerdict.test.tsx --maxWorkers=1
+PATH=/usr/bin:$PATH pnpm exec vitest run test/face-drag-trace-summary.test.ts packages/viewport/src/render/bodyUpdate.test.ts packages/viewport/src/render/smoothingParity.test.ts packages/viewport/src/render/edgeOverlay.test.ts packages/viewport/src/render/silhouette.test.ts packages/viewport/src/render/tangentEdges.test.ts --maxWorkers=1
+PATH=/usr/bin:$PATH pnpm build
+CI=1 OPENZCAD_E2E_SUITE=full PATH=/usr/bin:$PATH pnpm exec playwright test generic-face-drag-preview face-drag-continuity --workers=1 --retries=0 --reporter=line --output=/tmp/pr1317-followup-playwright
+node scripts/roadmap-evidence.mjs
+git diff --check
+```
+
+No new timing or peak-memory benchmark was run. Full lint and other Playwright
+specs were excluded to respect the host-memory and verification scope.
