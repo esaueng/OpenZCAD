@@ -11,11 +11,22 @@ import { describe, expect, it } from 'vitest';
 import {
   resolveDatumAxisEdge,
   resolveDatumAxisFace,
+  resolveEdgeVertex,
   type EdgeVertexCandidate,
   type ExactRevolutionAxisData,
   type FaceAttachmentCandidate
 } from './face-attachment';
 import { topologyHashOfWitness } from './topology-lineage';
+import { kernelRefusalOf } from './kernel-refusal';
+
+function thrown(run: () => unknown): Error {
+  try {
+    run();
+  } catch (error) {
+    if (error instanceof Error) return error;
+  }
+  throw new Error('expected a refusal');
+}
 
 /**
  * R01 datum axis sources resolve solely through verified lineage: a straight
@@ -151,24 +162,44 @@ describe('datum axis edge source', () => {
 
   it('refuses a now-closed edge and a deleted one', () => {
     const witness = edgeWitness('LINE', a, b);
-    expect(() =>
+    const closed = thrown(() =>
       resolveDatumAxisEdge({
         reference: edgeReference(witness),
         candidates: [edgeCandidate(witness, null)],
         datumName: 'Corner',
         sourceFeatureName: 'Block'
       })
-    ).toThrow(/the edge is closed/);
-    expect(() =>
+    );
+    expect(closed.message).toMatch(/the edge is closed/);
+    expect(kernelRefusalOf(closed)).toBeNull();
+    const deleted = thrown(() =>
       resolveDatumAxisEdge({
         reference: edgeReference(witness),
         candidates: [edgeCandidate(witness, [a, b], 'edge.other')],
         datumName: 'Corner',
         sourceFeatureName: 'Block'
       })
-    ).toThrow(
+    );
+    expect(deleted.message).toMatch(
       /Datum axis "Corner" cannot run along an edge of source feature "Block": its edge was deleted/
     );
+    // A lost source is typed like every other lost reference.
+    expect(kernelRefusalOf(deleted)?.kernelCode).toBe('reference_missing');
+  });
+
+  it('types a datum vertex whose edge was deleted as a missing reference', () => {
+    const witness = edgeWitness('LINE', a, b);
+    const deleted = thrown(() =>
+      resolveEdgeVertex({
+        reference: edgeReference(witness),
+        end: 0,
+        candidates: [edgeCandidate(witness, [a, b], 'edge.other')],
+        datumName: 'Corner',
+        sourceFeatureName: 'Block'
+      })
+    );
+    expect(deleted.message).toMatch(/its edge was deleted/);
+    expect(kernelRefusalOf(deleted)?.kernelCode).toBe('reference_missing');
   });
 });
 

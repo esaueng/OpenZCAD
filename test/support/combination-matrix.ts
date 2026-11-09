@@ -26,7 +26,11 @@
  * until its ledger changes in the same PR. See
  * docs/plans/kernel-robustness-plan-2026-11-05.md (WS1).
  */
-import { CommandManager, commandFactories } from '@openzcad/command-system';
+import {
+  CommandManager,
+  commandFactories,
+  type AnyCommand
+} from '@openzcad/command-system';
 import {
   addPrimitiveFeature,
   createProjectDocument,
@@ -35,7 +39,10 @@ import {
   transformBody,
   withoutDerivedProjection
 } from '@openzcad/document-core';
-import type { ExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
+import {
+  createExactKernelAdapter,
+  type ExactKernelAdapter
+} from '@openzcad/kernel-adapter/exact';
 import {
   toUserId,
   type BodyId,
@@ -48,6 +55,7 @@ import {
   type ProjectDocument
 } from '@openzcad/shared';
 import { planFaceOffset } from '../../apps/web/src/lib/interaction/faceOffsetPlan';
+import { withCarriedSelections } from '../../apps/web/src/lib/topologyReferenceRepairs';
 import {
   inspectTriangleMeshClosure,
   isClosedConsistentlyOrientedMesh
@@ -923,6 +931,68 @@ export async function sync(
   );
 }
 
+/**
+ * A sync on a new adapter: a reload, with no memory of any earlier build.
+ * A reopen check on the session's own adapter could not tell a document
+ * that rebuilds from one the session only rebuilds from memory.
+ */
+export async function coldSync(
+  session: Session,
+  document: ProjectDocument,
+  bodyId?: BodyId
+): Promise<DerivedState> {
+  const adapter = await createExactKernelAdapter();
+  try {
+    return await sync({ ...session, adapter }, document, bodyId);
+  } finally {
+    adapter.dispose();
+  }
+}
+
+/**
+ * Commits a validated edit the way the app does (`executeCommand`): when the
+ * rebuild carried a hash-only fillet/chamfer selection, the new hashes land
+ * in the same revision. The committed document must then rebuild the same
+ * body cold, since nothing else will remember the old edges. Returns the
+ * manager holding the committed document, or the cell's outcome when the
+ * carry could not be stored or does not survive a reload.
+ */
+export async function commitWithCarry(
+  session: Session,
+  before: ProjectDocument,
+  label: string,
+  commands: AnyCommand[],
+  derived: DerivedState,
+  bodyId: BodyId
+): Promise<{ manager: CommandManager } | { stopped: CellOutcome }> {
+  const manager = new CommandManager(before);
+  const carried = withCarriedSelections(before, commands, derived);
+  if ('refusal' in carried) {
+    return {
+      stopped: {
+        state: 'wrong',
+        evidence: `the carried selection could not be stored: ${carried.refusal}`
+      }
+    };
+  }
+  manager.runTransaction(label, carried.commands);
+  if (carried.commands.length === commands.length) return { manager };
+  const cold = await coldSync(session, manager.document, bodyId);
+  const refused = refusal(cold, 'cold reopen after the carry');
+  if (refused) return { stopped: refused };
+  const shown = derived.bodyRepresentations[bodyId];
+  const reopened = cold.bodyRepresentations[bodyId];
+  if (!shown || !reopened || !sameBody(shown, reopened)) {
+    return {
+      stopped: {
+        state: 'wrong',
+        evidence: `the carried edit reopens differently: ${reopened?.volume} ${reopened ? census(reopened) : ''} vs ${shown?.volume}`
+      }
+    };
+  }
+  return { manager };
+}
+
 /** The refusal a sync carries, or null when every feature built. */
 export function refusal(
   derived: DerivedState,
@@ -1356,23 +1426,38 @@ async function sourceEdit(
   value: number
 ): Promise<{ stage: Stage; refused?: CellOutcome }> {
   const key = stage.model.pair.grow.key;
-  const manager = new CommandManager(stage.manager.document);
+  const before = stage.manager.document;
+  let manager = new CommandManager(before);
   const feature = listNodesByKind(manager.document, 'feature').find(
     (node) => node.featureId === stage.toolFeatureId
   )!;
   const dims =
     feature.data.featureKind === 'primitive' ? feature.data.dimensions : {};
-  manager.execute(
-    commandFactories.updateFeature(
-      {
-        featureId: stage.toolFeatureId,
-        data: { dimensions: { ...dims, [key]: value } }
-      },
-      `Resize ${stage.model.b.def.name}`
-    )
+  const edit = commandFactories.updateFeature(
+    {
+      featureId: stage.toolFeatureId,
+      data: { dimensions: { ...dims, [key]: value } }
+    },
+    `Resize ${stage.model.b.def.name}`
   );
+  manager.execute(edit);
   const bodyId = manager.document.bodyOrder.at(-1)!;
   const derived = await sync(session, manager.document, bodyId);
+  const refused = refusal(derived, 'source edit');
+  if (!refused) {
+    const committed = await commitWithCarry(
+      session,
+      before,
+      edit.label,
+      [edit],
+      derived,
+      bodyId
+    );
+    if ('stopped' in committed) {
+      return { stage: { ...stage, manager, derived, bodyId }, refused: committed.stopped };
+    }
+    manager = committed.manager;
+  }
   const next: Stage = {
     ...stage,
     manager,
@@ -1380,7 +1465,6 @@ async function sourceEdit(
     bodyId,
     model: withToolDimension(stage.model, key, value)
   };
-  const refused = refusal(derived, 'source edit');
   return refused ? { stage: next, refused } : { stage: next };
 }
 
@@ -1621,7 +1705,7 @@ async function followUp(
       ) as ProjectDocument;
       const reopened = normalizeDocument(stored);
       const bodyId = reopened.bodyOrder.at(-1)!;
-      const derived = await sync(session, reopened, bodyId);
+      const derived = await coldSync(session, reopened, bodyId);
       const refused = refusal(derived, 'reopen');
       if (refused) return refused;
       const after = derived.bodyRepresentations[bodyId];

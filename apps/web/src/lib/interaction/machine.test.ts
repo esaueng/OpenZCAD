@@ -4,6 +4,7 @@ import {
   commandSessionFor,
   composingTextDraft,
   editedFeatureIdFor,
+  faceOffsetPlanKey,
   isDependentReferenceError,
   isStaleReferenceError,
   isStaleSelectionError,
@@ -1775,5 +1776,39 @@ describe('editedFeatureIdFor', () => {
     ).toBeNull();
     expect(editedFeatureIdFor(select(face()))).toBeNull();
     expect(editedFeatureIdFor(IDLE)).toBeNull();
+  });
+
+  it('follows the plan: a blended cap dragged down appends a local offset', () => {
+    const select = (target: FaceTarget) =>
+      interactionReducer(IDLE, { type: 'select-face', target });
+    const cap = select(face({ extrudeFeatureId: 'feat_extrude' }));
+    const key = faceOffsetPlanKey(cap)!;
+    expect(key).not.toBeNull();
+    // Dragged down, the sampled shoulder cap is a local offset: a new step,
+    // so the history shows the pending row instead of marking the Extrude.
+    expect(editedFeatureIdFor(cap, { key, editedFeatureId: null })).toBeNull();
+    // Dragged up, the same face edits its Extrude.
+    expect(
+      editedFeatureIdFor(cap, { key, editedFeatureId: 'feat_extrude' })
+    ).toBe('feat_extrude');
+    // A cylinder or gear cap carries no source id on its target, but its
+    // plan edits the primitive or gear in place, like a Box.
+    const cylinderCap = select(face());
+    expect(
+      editedFeatureIdFor(cylinderCap, {
+        key: faceOffsetPlanKey(cylinderCap)!,
+        editedFeatureId: 'feat_cylinder'
+      })
+    ).toBe('feat_cylinder');
+    // A plan made for another selection says nothing about this one.
+    expect(
+      editedFeatureIdFor(cap, {
+        key: `${key}:other`,
+        editedFeatureId: null
+      })
+    ).toBe('feat_extrude');
+    expect(
+      editedFeatureIdFor(IDLE, { key, editedFeatureId: 'feat_extrude' })
+    ).toBeNull();
   });
 });

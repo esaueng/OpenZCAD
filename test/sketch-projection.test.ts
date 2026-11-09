@@ -599,6 +599,17 @@ describe('sketch projection in the exact build', () => {
     expect(state?.status).toBe('broken');
     if (state?.status === 'broken') {
       expect(state.reason).toMatch(/deleted or no longer exists|fingerprint/);
+      // A lost source edge is typed like every other lost reference, so the
+      // card reads it as a stale pick, not as a value to adjust.
+      const advisory = (derived.featureWarnings ?? []).find((warning) =>
+        warning.message.includes(`${id} is broken`)
+      );
+      expect(advisory?.kind).toBe('advisory');
+      expect(advisory?.kernelRefusal?.code).toBe(
+        /deleted or no longer exists/.test(state.reason)
+          ? 'reference_missing'
+          : undefined
+      );
     }
     expect(volumeOf(derived, outline.plateId)).toBeCloseTo(20 * 10 * 3, 6);
   });

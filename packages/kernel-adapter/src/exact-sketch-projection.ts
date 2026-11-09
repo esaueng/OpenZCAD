@@ -34,6 +34,14 @@ import {
   type EdgeTopologyResolutionCandidate
 } from './topology-lineage';
 import { raiseFeatureWarning } from './exact-feature-warnings';
+import { adapterRefusalRecord } from './adapter-refusal';
+
+/**
+ * Broken states whose source edge is gone, as opposed to one that projects
+ * differently: their warning carries the typed `reference_missing` code, so
+ * the card reads it as a lost pick, the way it reads a vanished fillet edge.
+ */
+const MISSING_SOURCE = new WeakSet<SketchProjectionState>();
 
 /**
  * I01 (schema v33): re-project every linked projection of `sketch` at the
@@ -149,7 +157,10 @@ export function resolveSketchProjectionsAtHistory(
         result,
         feature,
         `Projected ${node?.kind === 'sketch-object' ? node.data.objectKind : 'entity'} ${objectId} is broken: ${state.reason} The sketch keeps its last projected position until the edge is re-picked or the projection is unlinked.`,
-        'advisory'
+        'advisory',
+        MISSING_SOURCE.has(state)
+          ? adapterRefusalRecord('reference_missing')
+          : undefined
       );
     }
   }
@@ -194,11 +205,18 @@ function resolveOne(
   }
   const resolution = resolveTopologyReference(source.edgeReference, candidates);
   if (resolution.status === 'failed') {
-    return broken(
+    if (
       resolution.reason === 'lineage-not-found' ||
-        resolution.reason === 'hash-not-found'
-        ? `its source edge from "${sourceFeatureName}" was deleted or no longer exists.`
-        : `its source edge from "${sourceFeatureName}" cannot be re-found: ${resolution.message}`
+      resolution.reason === 'hash-not-found'
+    ) {
+      const missing = broken(
+        `its source edge from "${sourceFeatureName}" was deleted or no longer exists.`
+      );
+      MISSING_SOURCE.add(missing);
+      return missing;
+    }
+    return broken(
+      `its source edge from "${sourceFeatureName}" cannot be re-found: ${resolution.message}`
     );
   }
   if (resolution.via !== 'lineage') {

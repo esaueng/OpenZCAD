@@ -2410,7 +2410,12 @@ function buildEdgeModifierFeature(
     target,
     data.edgeHashes,
     data.edgeReferences,
-    edgeSelectionKey(document.projectId, feature.featureId)
+    ctx.edgeSelections
+      ? {
+          memory: ctx.edgeSelections,
+          key: edgeSelectionKey(document.projectId, feature.featureId)
+        }
+      : undefined
   );
   const size = resolveParamValue(
     data.featureKind === 'fillet' ? data.radius : data.distance,

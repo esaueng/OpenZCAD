@@ -204,6 +204,7 @@ import {
   type StrictUnionVerdict,
   type StrictUnionVerdicts
 } from './exact-build-loop';
+import { EdgeSelectionMemory } from './exact-edge-selection-transport';
 import { suppressedPassThroughBody } from './exact-suppression';
 import { ImportedStepCache } from './exact-imported-step-cache';
 import { ImportedMeshCache } from './exact-imported-mesh-cache';
@@ -1079,6 +1080,12 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
    * recover their source bytes normally.
    */
   private readonly importedSteps: ImportedStepCache;
+  /**
+   * Hash-only fillet/chamfer selections this adapter has resolved, so an
+   * upstream resize can carry them (`exact-edge-selection-transport.ts`).
+   * Adapter-scoped: a new adapter, like a reload, starts empty.
+   */
+  private readonly edgeSelections = new EdgeSelectionMemory();
 
   /**
    * Checksums the preceding prefetch failed to resolve for a reason this
@@ -2363,7 +2370,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         deferredDirectEditFeatureId,
         cachingEnabled &&
           (this.options.historyCheckpointEstimatedBytes ??
-            MAX_HISTORY_CHECKPOINT_ESTIMATED_BYTES) > 0
+            MAX_HISTORY_CHECKPOINT_ESTIMATED_BYTES) > 0,
+        this.edgeSelections
       );
     } catch (error) {
       // A cancelled build keeps the retained prefix: the checkpoints pushed
@@ -5087,6 +5095,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     // kernel and its checkpoints are adapter-scoped and must be released.
     this.invalidateHistoryCache();
     this.importedSteps.clear();
+    this.edgeSelections.clear();
     this.meshPayloads.clear();
     this.heldDisplayDeflections.clear();
   }

@@ -1,17 +1,22 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { commandFactories } from '@openzcad/command-system';
 import {
   addPrimitiveFeature,
   booleanBodies,
   chamferEdges,
   createProjectDocument,
   filletEdges,
-  listFeaturesInOrder
+  listFeaturesInOrder,
+  mirrorBody,
+  transformBody,
+  updateFeature
 } from '@openzcad/document-core';
 import {
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
 import {
+  FEATURE_SUPPRESSED_METADATA_KEY,
   toUserId,
   type BodyId,
   type BodyRepresentation,
@@ -20,7 +25,14 @@ import {
   type ProjectDocument
 } from '@openzcad/shared';
 import { planFaceOffset } from '../apps/web/src/lib/interaction/faceOffsetPlan';
-import { topologyReferenceRepairCommand } from '../apps/web/src/lib/topologyReferenceRepairs';
+import {
+  buildDemoDocument,
+  DEMO_DEFINITIONS
+} from '../apps/web/src/lib/demos';
+import {
+  topologyReferenceRepairCommand,
+  withCarriedSelections
+} from '../apps/web/src/lib/topologyReferenceRepairs';
 
 /**
  * Resize Body through later fillets and chamfers whose picks have no name.
@@ -143,14 +155,20 @@ describe(
       };
     }
 
-    /** The reported part, its later picks chosen the way a viewport stores them. */
-    async function reportedPart(): Promise<Model> {
+    /**
+     * The reported part, its later picks chosen the way a viewport stores
+     * them. Built at other dimensions it is the fresh-pick reference a
+     * carried selection must match edge for edge.
+     */
+    async function reportedPart(
+      dimensions = { width: 30, height: 18, depth: 24 }
+    ): Promise<Model> {
       const box = addPrimitiveFeature(
         createProjectDocument('Carried edges', user),
         {
           name: 'Box 1',
           primitiveKind: 'box',
-          dimensions: { width: 30, height: 18, depth: 24 }
+          dimensions
         }
       );
       const cylinder = addPrimitiveFeature(box, {
@@ -201,7 +219,7 @@ describe(
               isPlane(face, 'x', -1) ||
               isPlane(face, 'y', -1) ||
               (isPlane(face, 'z', 1) &&
-                Math.abs(face.geometry!.center.z - 24) < 1e-6)
+                Math.abs(face.geometry!.center.z - dimensions.depth) < 1e-6)
           )
       );
       // The sharp bottom edges left; the merged bottom face is unnamed.
@@ -284,16 +302,79 @@ describe(
       // Only an edit that moved an unnamed pick has anything to persist.
       expect(repair !== null).toBe(carried);
       const persisted = repair ? repair.apply(candidate) : candidate;
+      // A cold reload: a new adapter holds no memory of earlier builds.
       const fresh = await createExactKernelAdapter();
       try {
-        const reopened = await fresh.syncDocument(persisted);
-        expect(reopened.warnings).toEqual([]);
-        // The stored hashes resolve directly now: nothing left to carry.
-        expect(reopened.edgeHashRepairs ?? []).toEqual([]);
-        return { persisted, reopened };
+        if (carried) {
+          // Proof that the reload is cold: the edit without its persisted
+          // hashes has nothing to carry from, and refuses.
+          const stale = await fresh.syncDocument(candidate);
+          expect(
+            stale.featureWarnings?.some(
+              (warning) =>
+                warning.kind === 'build-failed' &&
+                warning.kernelRefusal?.code === 'reference_missing'
+            )
+          ).toBe(true);
+          fresh.dispose();
+        }
+        const cold = carried ? await createExactKernelAdapter() : fresh;
+        try {
+          const reopened = await cold.syncDocument(persisted);
+          expect(reopened.warnings).toEqual([]);
+          // The stored hashes resolve directly now: nothing left to carry.
+          expect(reopened.edgeHashRepairs ?? []).toEqual([]);
+          return { persisted, reopened };
+        } finally {
+          cold.dispose();
+        }
       } finally {
         fresh.dispose();
       }
+    }
+
+    /** Hash-only modifiers: the picks a carry rewrites. */
+    const HASH_ONLY = ['Fillet 2', 'Fillet 3', 'Chamfer'] as const;
+
+    function storedHashes(document: ProjectDocument, name: string) {
+      const data = feature(document, name).data;
+      if (data.featureKind !== 'fillet' && data.featureKind !== 'chamfer') {
+        throw new Error(`${name} is not an edge modifier`);
+      }
+      return {
+        named: data.edgeReferences !== undefined,
+        hashes: [...data.edgeHashes].sort((a, b) => a - b)
+      };
+    }
+
+    /**
+     * Edge identity, not just a plausible shape: the persisted picks are the
+     * hashes a fresh pick on the part built directly at the new size stores,
+     * and the two solids agree in volume and face/edge census.
+     */
+    function expectSameAsFreshPick(
+      persisted: ProjectDocument,
+      reopened: ProjectDocument['derived'],
+      bodyId: BodyId,
+      reference: Model,
+      names: readonly string[]
+    ) {
+      for (const name of names) {
+        const carried = storedHashes(persisted, name);
+        const fresh = storedHashes(reference.document, name);
+        if (fresh.named) continue;
+        expect(carried.named, name).toBe(false);
+        expect(carried.hashes, `${name} edges`).toEqual(fresh.hashes);
+      }
+      const body = reopened.bodyRepresentations[bodyId]!;
+      expect(body.volume).toBeCloseTo(reference.body.volume, 6);
+      expect(body.topology!.faces).toHaveLength(
+        reference.body.topology!.faces.length
+      );
+      expect(body.topology!.edges).toHaveLength(
+        reference.body.topology!.edges.length
+      );
+      expect(body.bbox).toEqual(reference.body.bbox);
     }
 
     it('resizes the reported part 30 → 22.5 mm from its right face', async () => {
@@ -322,9 +403,12 @@ describe(
         candidate,
         commit
       );
-      expect(reopened.bodyRepresentations[model.bodyId]!.volume).toBeCloseTo(
-        resized.volume,
-        6
+      expectSameAsFreshPick(
+        persisted,
+        reopened,
+        model.bodyId,
+        await reportedPart({ width: 22.5, height: 18, depth: 24 }),
+        HASH_ONLY
       );
       const stored = feature(persisted, 'Chamfer').data;
       if (stored.featureKind !== 'chamfer') throw new Error('not a chamfer');
@@ -340,15 +424,15 @@ describe(
     });
 
     it.each([
-      ['x-max', 6, 36, true],
-      ['y-max', -6, 12, true],
-      ['y-max', 4.5, 22.5, true],
+      ['x-max', 6, 36, true, { width: 36, height: 18, depth: 24 }],
+      ['y-max', -6, 12, true, { width: 30, height: 12, depth: 24 }],
+      ['y-max', 4.5, 22.5, true, { width: 30, height: 22.5, depth: 24 }],
       // Height moves no unnamed pick: the bottom chamfer and the cylinder's
       // rim stay where they were, and their hashes still resolve.
-      ['z-max', -4, 20, false]
+      ['z-max', -4, 20, false, { width: 30, height: 18, depth: 20 }]
     ] as const)(
       'resizes the %s side by %s mm through every later modifier',
-      async (side, offset, expected, carried) => {
+      async (side, offset, expected, carried, dimensions) => {
         const model = await reportedPart();
         const { candidate, commit } = await resize(
           model,
@@ -356,18 +440,30 @@ describe(
           offset,
           expected
         );
-        await persistedAndReopened(candidate, commit, carried);
+        const { persisted, reopened } = await persistedAndReopened(
+          candidate,
+          commit,
+          carried
+        );
+        expectSameAsFreshPick(
+          persisted,
+          reopened,
+          model.bodyId,
+          await reportedPart(dimensions),
+          HASH_ONLY
+        );
       }
     );
 
-    it('carries a plain box chamfer saved by hash alone', async () => {
+    /** A box whose bottom edges a document saved before names chamfered. */
+    async function hashOnlyBottomChamfer(dimensions: {
+      width: number;
+      height: number;
+      depth: number;
+    }) {
       const box = addPrimitiveFeature(
         createProjectDocument('Plain box', user),
-        {
-          name: 'Block',
-          primitiveKind: 'box',
-          dimensions: { width: 30, height: 18, depth: 24 }
-        }
+        { name: 'Block', primitiveKind: 'box', dimensions }
       );
       const base = await adapter.syncDocument(box);
       const body = base.bodyRepresentations[box.bodyOrder[0]!]!;
@@ -376,13 +472,22 @@ describe(
       );
       expect(bottom).toHaveLength(4);
       // A document saved before edges had names: hashes only.
-      const chamfered = chamferEdges(box, {
-        name: 'Break bottom',
-        targetBodyId: box.bodyOrder[0]!,
-        edgeHashes: bottom.map((edge) => edge.hash),
-        size: 1
+      return settled(
+        chamferEdges(box, {
+          name: 'Break bottom',
+          targetBodyId: box.bodyOrder[0]!,
+          edgeHashes: bottom.map((edge) => edge.hash),
+          size: 1
+        })
+      );
+    }
+
+    it('carries a plain box chamfer saved by hash alone', async () => {
+      const model = await hashOnlyBottomChamfer({
+        width: 30,
+        height: 18,
+        depth: 24
       });
-      const model = await settled(chamfered);
       const { candidate, commit } = await resize(
         model,
         boxSide(model.body, 'x-max'),
@@ -393,16 +498,26 @@ describe(
         22.5,
         6
       );
-      await persistedAndReopened(candidate, commit);
+      const { persisted, reopened } = await persistedAndReopened(
+        candidate,
+        commit
+      );
+      expectSameAsFreshPick(
+        persisted,
+        reopened,
+        model.bodyId,
+        await hashOnlyBottomChamfer({ width: 22.5, height: 18, depth: 24 }),
+        ['Break bottom']
+      );
     });
 
-    it('carries a cylinder height edit past a hash-only rim chamfer', async () => {
+    async function hashOnlyRimChamfer(height: number) {
       const cylinder = addPrimitiveFeature(
         createProjectDocument('Chamfered cylinder', user),
         {
           name: 'Post',
           primitiveKind: 'cylinder',
-          dimensions: { radius: 6, height: 20 }
+          dimensions: { radius: 6, height }
         }
       );
       const base = await adapter.syncDocument(cylinder);
@@ -410,14 +525,19 @@ describe(
       const rims = body.topology!.edges.filter(
         (edge) => edge.displayRole !== 'seam'
       );
-      expect(rims.length).toBeGreaterThan(0);
-      const chamfered = chamferEdges(cylinder, {
-        name: 'Break rims',
-        targetBodyId: cylinder.bodyOrder[0]!,
-        edgeHashes: rims.map((edge) => edge.hash),
-        size: 1
-      });
-      const model = await settled(chamfered);
+      expect(rims).toHaveLength(2);
+      return settled(
+        chamferEdges(cylinder, {
+          name: 'Break rims',
+          targetBodyId: cylinder.bodyOrder[0]!,
+          edgeHashes: rims.map((edge) => edge.hash),
+          size: 1
+        })
+      );
+    }
+
+    it('carries a cylinder height edit past a hash-only rim chamfer', async () => {
+      const model = await hashOnlyRimChamfer(20);
       const top = model.body
         .topology!.faces.filter((face) => isPlane(face, 'z', 1))
         .sort((a, b) => b.geometry!.center.z - a.geometry!.center.z)[0]!;
@@ -436,7 +556,17 @@ describe(
         14,
         6
       );
-      await persistedAndReopened(candidate, commit);
+      const { persisted, reopened } = await persistedAndReopened(
+        candidate,
+        commit
+      );
+      expectSameAsFreshPick(
+        persisted,
+        reopened,
+        model.bodyId,
+        await hashOnlyRimChamfer(14),
+        ['Break rims']
+      );
     });
 
     it('still refuses, typed, when the edit removes a selected edge', async () => {
@@ -490,6 +620,508 @@ describe(
         code: 'reference_missing'
       });
       expect(commit.edgeHashRepairs ?? []).toEqual([]);
+    });
+    /** The edit refused the named modifier as a lost reference, carrying nothing. */
+    function expectRefused(
+      derived: ProjectDocument['derived'],
+      name: string
+    ) {
+      const refusal = derived.featureWarnings?.find(
+        (warning) => warning.featureName === name
+      );
+      expect(refusal?.kind, `${name} refusal`).toBe('build-failed');
+      expect(refusal?.kernelRefusal).toMatchObject({
+        family: 'reference',
+        code: 'reference_missing'
+      });
+      expect(derived.edgeHashRepairs ?? []).toEqual([]);
+    }
+
+    /** The long front (−Y) bottom edge, saved by hash alone. */
+    function frontBottomChamfer(
+      document: ProjectDocument,
+      derived: ProjectDocument['derived'],
+      bodyId: BodyId,
+      length: number
+    ) {
+      const body = derived.bodyRepresentations[bodyId]!;
+      const front = body.topology!.edges.filter((edge) => {
+        const faces = adjacentFaces(body, edge);
+        return (
+          faces.some((face) => isPlane(face, 'z', -1)) &&
+          faces.some((face) => isPlane(face, 'y', -1))
+        );
+      });
+      expect(front).toHaveLength(1);
+      expect(front[0]!.length).toBeCloseTo(length, 6);
+      return chamferEdges(document, {
+        name: 'Front break',
+        targetBodyId: bodyId,
+        edgeHashes: [front[0]!.hash],
+        size: 1
+      });
+    }
+
+    /**
+     * Box 30 × 18 × 24 ∪ a cylinder standing on the middle of its footprint
+     * and rising through its top: the bottoms are coplanar, so the merged
+     * bottom face is one face.
+     */
+    function boxWithCentredPost(
+      dimensions = { width: 30, height: 18, depth: 24 },
+      at = { x: dimensions.width / 2, y: dimensions.height / 2 }
+    ) {
+      const box = addPrimitiveFeature(
+        createProjectDocument('Turned part', user),
+        { name: 'Box 1', primitiveKind: 'box', dimensions }
+      );
+      const post = addPrimitiveFeature(box, {
+        name: 'Post',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 6, height: dimensions.depth + 7.25 }
+      });
+      const placed = transformBody(post, {
+        name: 'Place post',
+        targetBodyId: post.bodyOrder[1]!,
+        translation: { ...at, z: 0 }
+      }).document;
+      return booleanBodies(placed, {
+        name: 'Union 1',
+        operation: 'union',
+        targetBodyIds: [placed.bodyOrder[0]!, placed.bodyOrder[1]!]
+      });
+    }
+
+    it.each([
+      ['about the origin', undefined],
+      // The post's rim stays where it was, so the frame looks fixed by its
+      // anchors alone; the x and y planes moving together refuses it.
+      ['about the post', { x: 15, y: 9, z: 0 }]
+    ] as const)(
+      'refuses to carry a hash-only pick through a 90° turn %s',
+      async (_, pivot) => {
+        const joined = boxWithCentredPost();
+        const turned = transformBody(joined.document, {
+          name: 'Turn',
+          targetBodyId: joined.bodyId,
+          translation: { x: 0, y: 0, z: 0 },
+          rotationDeg: { x: 0, y: 0, z: 0 },
+          ...(pivot ? { pivot } : {})
+        }).document;
+        const base = await adapter.syncDocument(turned);
+        expect(base.warnings).toEqual([]);
+        const model = await settled({
+          document: frontBottomChamfer(turned, base, joined.bodyId, 30)
+            .document,
+          bodyId: joined.bodyId
+        });
+        // The same labels in the same multiset after a quarter turn: the
+        // old short 18 mm edge now sits at −Y and would read as the pick.
+        const turn = feature(model.document, 'Turn');
+        if (turn.data.featureKind !== 'transform') throw new Error('no turn');
+        const edited = updateFeature(model.document, {
+          featureId: turn.featureId,
+          data: {
+            transform: {
+              ...turn.data.transform,
+              rotationDeg: { x: 0, y: 0, z: 90 }
+            }
+          }
+        });
+        const preview = await adapter.previewGeometry(edited, {
+          deferTopology: true
+        });
+        expect(preview.warnings.length).toBeGreaterThan(0);
+        expectRefused(await adapter.syncDocument(edited), 'Front break');
+      }
+    );
+
+    it('refuses to carry a hash-only pick on a mirror copy whose plane turns', async () => {
+      const joined = boxWithCentredPost();
+      const mirrored = mirrorBody(joined.document, {
+        name: 'Mirror',
+        targetBodyId: joined.bodyId,
+        plane: { origin: { x: 0, y: 0, z: 0 }, normal: { x: 1, y: 0, z: 0 } }
+      });
+      const base = await adapter.syncDocument(mirrored.document);
+      expect(base.warnings).toEqual([]);
+      const model = await settled({
+        document: frontBottomChamfer(
+          mirrored.document,
+          base,
+          mirrored.bodyId,
+          30
+        ).document,
+        bodyId: mirrored.bodyId
+      });
+      const mirror = feature(model.document, 'Mirror');
+      const edited = updateFeature(model.document, {
+        featureId: mirror.featureId,
+        data: {
+          plane: { origin: { x: 0, y: 0, z: 0 }, normal: { x: 0, y: 1, z: 0 } }
+        }
+      });
+      expectRefused(await adapter.syncDocument(edited), 'Front break');
+    });
+
+    it('stores the carry with the edit while an unrelated feature is broken', async () => {
+      // A second, unrelated body whose own chamfer names an edge that was
+      // never there: fail-soft replay drops it on every build.
+      async function withBrokenNeighbour(width: number) {
+        const model = await hashOnlyBottomChamfer({
+          width,
+          height: 18,
+          depth: 24
+        });
+        const spare = addPrimitiveFeature(model.document, {
+          name: 'Spare',
+          primitiveKind: 'box',
+          dimensions: { width: 5, height: 5, depth: 5 }
+        });
+        const broken = chamferEdges(spare, {
+          name: 'Broken',
+          targetBodyId: spare.bodyOrder.at(-1)!,
+          edgeHashes: [123456789],
+          size: 1
+        }).document;
+        const derived = await adapter.syncDocument(broken);
+        expectRefusedOnly(derived, 'Broken');
+        return {
+          document: { ...broken, derived },
+          bodyId: model.bodyId,
+          body: derived.bodyRepresentations[model.bodyId]!
+        };
+      }
+
+      function expectRefusedOnly(
+        derived: ProjectDocument['derived'],
+        name: string
+      ) {
+        expect(
+          derived.featureWarnings
+            ?.filter((warning) => warning.kind !== 'advisory')
+            .map((warning) => [warning.featureName, warning.kind])
+        ).toEqual([[name, 'build-failed']]);
+      }
+
+      const model = await withBrokenNeighbour(30);
+      const plan = planFaceOffset({
+        document: model.document,
+        bodyId: model.bodyId,
+        face: boxSide(model.body, 'x-max'),
+        faceHash: boxSide(model.body, 'x-max').hash,
+        offset: -7.5
+      });
+      expect(plan?.kind).toBe('primitive-dimension');
+      const candidate = plan!.command.apply(model.document);
+      const commit = await adapter.syncDocument(candidate);
+      expectRefusedOnly(commit, 'Broken');
+      expect(
+        commit.edgeHashRepairs?.map((repair) => repair.featureId)
+      ).toEqual([feature(model.document, 'Break bottom').featureId]);
+
+      // What `executeCommand` commits: the edit and the carried hashes, in
+      // one revision, although the model is partially built.
+      const result = withCarriedSelections(
+        model.document,
+        [plan!.command],
+        commit
+      );
+      if ('refusal' in result) throw new Error(result.refusal);
+      expect(result.commands).toHaveLength(2);
+      const committed = result.commands.reduce(
+        (document, command) => command.apply(document),
+        model.document
+      );
+      const cold = await createExactKernelAdapter();
+      try {
+        const reopened = await cold.syncDocument(committed);
+        expectRefusedOnly(reopened, 'Broken');
+        expect(reopened.edgeHashRepairs ?? []).toEqual([]);
+        const reference = await withBrokenNeighbour(22.5);
+        expect(storedHashes(committed, 'Break bottom').hashes).toEqual(
+          storedHashes(reference.document, 'Break bottom').hashes
+        );
+        expect(
+          reopened.bodyRepresentations[model.bodyId]!.volume
+        ).toBeCloseTo(reference.body.volume, 6);
+      } finally {
+        cold.dispose();
+      }
+    });
+
+    it('does not carry downstream of a suppressed step, where it could not be stored', async () => {
+      // Block → Spare (suppressed) → a hash-only chamfer on Block. Nothing a
+      // build learns after a suppressed step is written back, so a carry
+      // there would build geometry the saved document cannot rebuild.
+      const block = addPrimitiveFeature(
+        createProjectDocument('Suppressed neighbour', user),
+        {
+          name: 'Block',
+          primitiveKind: 'box',
+          dimensions: { width: 30, height: 18, depth: 24 }
+        }
+      );
+      const spare = addPrimitiveFeature(block, {
+        name: 'Spare',
+        primitiveKind: 'box',
+        dimensions: { width: 5, height: 5, depth: 5 }
+      });
+      const base = await adapter.syncDocument(spare);
+      const body = base.bodyRepresentations[block.bodyOrder[0]!]!;
+      const chamfered = chamferEdges(spare, {
+        name: 'Break bottom',
+        targetBodyId: block.bodyOrder[0]!,
+        edgeHashes: body
+          .topology!.edges.filter((edge) => atBottom(adjacentFaces(body, edge)))
+          .map((edge) => edge.hash),
+        size: 1
+      }).document;
+      const spareNode = feature(chamfered, 'Spare');
+      const suppressed: ProjectDocument = {
+        ...chamfered,
+        nodes: {
+          ...chamfered.nodes,
+          [spareNode.id]: {
+            ...spareNode,
+            metadata: {
+              ...spareNode.metadata,
+              [FEATURE_SUPPRESSED_METADATA_KEY]: true
+            }
+          }
+        }
+      };
+      const settledBuild = await adapter.syncDocument(suppressed);
+      expect(
+        settledBuild.featureWarnings?.map((warning) => warning.kind)
+      ).toEqual(['suppressed']);
+      const blockFeature = feature(suppressed, 'Block');
+      const edited = updateFeature(suppressed, {
+        featureId: blockFeature.featureId,
+        data: { dimensions: { width: 22.5, height: 18, depth: 24 } }
+      });
+      expectRefused(await adapter.syncDocument(edited), 'Break bottom');
+    });
+
+    it('carries the Heat Sink corner fillets to the corners a fresh pick takes', async () => {
+      // The e2e edit (feature-history.spec.ts): the base extrude's Distance
+      // set to `base_t + 1`. The fins stay seated at `base_t - 0.5`, so the
+      // base thickens under them and every corner keeps its place.
+      const sink = await buildDemoDocument(
+        DEMO_DEFINITIONS.find((demo) => demo.key === 'heatsink')!,
+        user,
+        (candidate) => adapter.syncDocument(candidate)
+      );
+      const fillet = feature(sink, 'Base corner fillets');
+      if (fillet.data.featureKind !== 'fillet') throw new Error('no fillet');
+      expect(fillet.data.edgeReferences).toBeUndefined();
+      const bodyId = fillet.bodyId!;
+      // Opened as the app opens it: built once under its own project id.
+      expect((await adapter.syncDocument(sink)).warnings).toEqual([]);
+      const extrude = feature(sink, 'Extrude base');
+      const thicker = updateFeature(sink, {
+        featureId: extrude.featureId,
+        data: { distance: 'base_t + 1' }
+      });
+      const commit = await adapter.syncDocument(thicker);
+      expect(commit.warnings).toEqual([]);
+      expect(commit.edgeHashRepairs?.map((r) => r.featureId)).toEqual([
+        fillet.featureId
+      ]);
+      const carried = commit.bodyRepresentations[bodyId]!;
+
+      // Fresh pick at the new thickness: the four vertical base corners, by
+      // the demo's own rule, on the union the fillet reads.
+      const suppressed: ProjectDocument = {
+        ...thicker,
+        nodes: {
+          ...thicker.nodes,
+          [fillet.id]: {
+            ...fillet,
+            metadata: {
+              ...fillet.metadata,
+              [FEATURE_SUPPRESSED_METADATA_KEY]: true
+            }
+          }
+        }
+      };
+      const cold = await createExactKernelAdapter();
+      try {
+        const union = (await cold.syncDocument(suppressed))
+          .bodyRepresentations[fillet.data.targetBodyId]!;
+        const near = (value: number, target: number) =>
+          Math.abs(value - target) < 0.01;
+        const corners = union.topology!.edges.filter((edge) => {
+          const xs: number[] = [];
+          const ys: number[] = [];
+          const zs: number[] = [];
+          for (let i = 0; i < edge.points.length; i += 3) {
+            xs.push(edge.points[i]!);
+            ys.push(edge.points[i + 1]!);
+            zs.push(edge.points[i + 2]!);
+          }
+          return (
+            xs.every((x) => near(x, xs[0]!)) &&
+            ys.every((y) => near(y, ys[0]!)) &&
+            (near(xs[0]!, 0) || near(xs[0]!, 90)) &&
+            (near(ys[0]!, 0) || near(ys[0]!, 60)) &&
+            Math.min(...zs) > -0.1 &&
+            Math.max(...zs) < 7.1 &&
+            Math.max(...zs) - Math.min(...zs) > 4
+          );
+        });
+        expect(corners).toHaveLength(4);
+        const fresh = corners.map((edge) => edge.hash).sort((a, b) => a - b);
+        const result = withCarriedSelections(
+          sink,
+          [
+            {
+              ...commandFactories.updateFeature({
+                featureId: extrude.featureId,
+                data: { distance: 'base_t + 1' }
+              })
+            }
+          ],
+          commit
+        );
+        if ('refusal' in result) throw new Error(result.refusal);
+        const committed = result.commands.reduce(
+          (document, command) => command.apply(document),
+          sink
+        );
+        expect(storedHashes(committed, 'Base corner fillets').hashes).toEqual(
+          fresh
+        );
+        const reference = (
+          await cold.syncDocument(
+            updateFeature(thicker, {
+              featureId: fillet.featureId,
+              data: { edgeHashes: fresh }
+            })
+          )
+        ).bodyRepresentations[bodyId]!;
+        expect(carried.volume).toBeCloseTo(reference.volume, 6);
+        expect(carried.topology!.faces).toHaveLength(
+          reference.topology!.faces.length
+        );
+        expect(carried.topology!.edges).toHaveLength(
+          reference.topology!.edges.length
+        );
+        // Four 2.5 mm corner rounds over the 7 mm base: (4 - π) r² · 7
+        // less than the unrounded union.
+        expect(union.volume - carried.volume).toBeCloseTo(
+          (4 - Math.PI) * 2.5 ** 2 * 7,
+          4
+        );
+      } finally {
+        cold.dispose();
+      }
+
+      // A base thicker than the fins are tall swallows them. The corners the
+      // fillet saved belong to a different shape now, so it cannot follow:
+      // the downstream failure the e2e explains and opens for repair.
+      const swallowed = await adapter.syncDocument(
+        updateFeature(sink, {
+          featureId: extrude.featureId,
+          data: { distance: 'base_t + fin_h' }
+        })
+      );
+      expectRefused(swallowed, 'Base corner fillets');
+      expect(
+        swallowed.featureWarnings
+          ?.filter((warning) => warning.kind === 'build-failed')
+          .map((warning) => warning.featureName)
+      ).toEqual(['Base corner fillets']);
+    });
+
+    describe('a part with equal sides', () => {
+      const square = { width: 20, height: 20, depth: 24 };
+
+      async function squarePart(dimensions = square, turn = true) {
+        // The post stays where the square part centres it.
+        const joined = boxWithCentredPost(dimensions, { x: 10, y: 10 });
+        const turned = turn
+          ? transformBody(joined.document, {
+              name: 'Turn',
+              targetBodyId: joined.bodyId,
+              translation: { x: 0, y: 0, z: 0 },
+              rotationDeg: { x: 0, y: 0, z: 0 }
+            }).document
+          : joined.document;
+        const base = await adapter.syncDocument(turned);
+        expect(base.warnings).toEqual([]);
+        return settled({
+          document: frontBottomChamfer(
+            turned,
+            base,
+            joined.bodyId,
+            dimensions.width
+          ).document,
+          bodyId: joined.bodyId
+        });
+      }
+
+      function turnedBy(model: Model, degrees: number, pivot?: { x: number; y: number; z: number }) {
+        const turn = feature(model.document, 'Turn');
+        if (turn.data.featureKind !== 'transform') throw new Error('no turn');
+        return updateFeature(model.document, {
+          featureId: turn.featureId,
+          data: {
+            transform: {
+              ...turn.data.transform,
+              rotationDeg: { x: 0, y: 0, z: degrees },
+              ...(pivot ? { pivot } : {})
+            }
+          }
+        });
+      }
+
+      it('refuses a quarter turn about the origin', async () => {
+        const model = await squarePart();
+        expectRefused(
+          await adapter.syncDocument(turnedBy(model, 90)),
+          'Front break'
+        );
+      });
+
+      it('leaves a turn onto itself to the stored hash, carrying nothing', async () => {
+        // A quarter turn about the centre maps the part onto itself, so the
+        // stored hash still names the edge at −Y, as it always has.
+        const model = await squarePart();
+        const derived = await adapter.syncDocument(
+          turnedBy(model, 90, { x: 10, y: 10, z: 0 })
+        );
+        expect(derived.warnings).toEqual([]);
+        expect(derived.edgeHashRepairs ?? []).toEqual([]);
+        expect(derived.bodyRepresentations[model.bodyId]!.volume).toBeCloseTo(
+          model.body.volume,
+          6
+        );
+      });
+
+      it('carries a resize to the edge a fresh pick takes', async () => {
+        // The post is placed by a transform, so this edits the Box's width
+        // the way its dimension field does: 20 → 26, the post staying put.
+        const model = await squarePart(square, false);
+        const box = feature(model.document, 'Box 1');
+        const candidate = updateFeature(model.document, {
+          featureId: box.featureId,
+          data: { dimensions: { ...square, width: 26 } }
+        });
+        const commit = await adapter.syncDocument(candidate);
+        expect(commit.warnings).toEqual([]);
+        const { persisted, reopened } = await persistedAndReopened(
+          candidate,
+          commit
+        );
+        expectSameAsFreshPick(
+          persisted,
+          reopened,
+          model.bodyId,
+          await squarePart({ width: 26, height: 20, depth: 24 }, false),
+          ['Front break']
+        );
+      });
     });
   }
 );

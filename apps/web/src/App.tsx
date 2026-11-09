@@ -72,7 +72,10 @@ import type {
   ReferenceImagePlane
 } from '@openzcad/shared';
 import type { ReferenceImageUpdateInput } from '@openzcad/document-core';
-import { topologyReferenceRepairCommand } from './lib/topologyReferenceRepairs';
+import {
+  topologyReferenceRepairCommand,
+  withCarriedSelections
+} from './lib/topologyReferenceRepairs';
 import {
   parameterMinimums,
   parameterInputError,
@@ -790,6 +793,8 @@ import {
   isOperationState,
   isStaleSelectionError,
   editedFeatureIdFor,
+  faceOffsetPlanKey,
+  type FaceOffsetPlanEdit,
   operationSelectionKey,
   nextSketchCircleMode,
   nextSketchCurveMode,
@@ -1914,6 +1919,8 @@ const DISPLAY_MODE_ORDER: DisplayMode[] = [
 interface OffsetEditPlan {
   command: AnyCommand;
   bodyId: BodyId;
+  /** The feature the plan edits in place; null when it appends a step. */
+  editedFeatureId: string | null;
   successMessage: string;
   validationTargets?: AffectedFeatureTarget[];
   preflightRejection?: string;
@@ -3829,6 +3836,9 @@ export function App() {
    * edit control is Ready only once the value it shows has one, so Enter
    * never applies an earlier value's preview against newer input.
    */
+  /** What the latest face-offset plan does to history (`editedFeatureIdFor`). */
+  const [offsetPlanEdit, setOffsetPlanEdit] =
+    useState<FaceOffsetPlanEdit | null>(null);
   const [previewVerdict, setPreviewVerdict] = useState<PreviewVerdict | null>(
     null
   );
@@ -4564,6 +4574,7 @@ export function App() {
         const base = managerRef.current?.document;
         const plan = base ? buildOffsetEditPlan(offset, undefined, base) : null;
         const current = interactionRef.current;
+        notePlanEdit(current, plan);
         const candidate =
           base && plan && current.mode === 'face'
             ? plan.command.apply(base)
@@ -9243,7 +9254,19 @@ export function App() {
       setPreviewDoc(null);
       const beforeDocument = managerRef.current.document;
       const before = beforeDocument.derived.bodyRepresentations;
-      let next = managerRef.current.execute(command);
+      // An upstream edit may have carried a later fillet's hash-only edges:
+      // store where they are now in this same revision, or do not commit.
+      const carried = derived
+        ? withCarriedSelections(beforeDocument, [command], derived)
+        : null;
+      if (carried && 'refusal' in carried) {
+        setStatus(carried.refusal);
+        return false;
+      }
+      let next =
+        carried && carried.commands.length > 1
+          ? managerRef.current.runTransaction(command.label, carried.commands)
+          : managerRef.current.execute(command);
       // A drawing-sheet edit leaves the model alone: keep the ready geometry
       // rather than posting a rebuild (and a "Rebuilding" lane) per view move.
       // Drawings, images and folders edit presentation without rebuilding.
@@ -9267,12 +9290,7 @@ export function App() {
       const appended = localHistoryAppend(beforeDocument, next);
       if (appended) setLatestLocalAppend(appended);
       setDoc(next);
-      if (derived) {
-        applyProjectionWriteBack(derived);
-        // An upstream edit may have carried a later fillet's hash-only
-        // edges; persist where they are now together with the commit.
-        applyTopologyReferenceRepairs(derived);
-      }
+      if (derived) applyProjectionWriteBack(derived);
       if (isAnalyticsEnabled()) {
         trackUsage('feature_used');
         trackDetail('feature_operation', command.kind);
@@ -9313,7 +9331,18 @@ export function App() {
       setPreviewDoc(null);
       const beforeDocument = managerRef.current.document;
       const before = beforeDocument.derived.bodyRepresentations;
-      let next = managerRef.current.runTransaction(label, commands);
+      // As in `executeCommand`: carried edges are stored with the edit.
+      const carried = derived
+        ? withCarriedSelections(beforeDocument, commands, derived)
+        : null;
+      if (carried && 'refusal' in carried) {
+        setStatus(carried.refusal);
+        return false;
+      }
+      let next = managerRef.current.runTransaction(
+        label,
+        carried ? carried.commands : commands
+      );
       // A batch of sheet edits leaves the model alone, as one does alone.
       if (commands.every(isDrawingCommand)) geometry.retainReadyGeometry(next);
       if (derived) {
@@ -9326,12 +9355,7 @@ export function App() {
       const appended = localHistoryAppend(beforeDocument, next);
       if (appended) setLatestLocalAppend(appended);
       setDoc(next);
-      if (derived) {
-        applyProjectionWriteBack(derived);
-        // An upstream edit may have carried a later fillet's hash-only
-        // edges; persist where they are now together with the commit.
-        applyTopologyReferenceRepairs(derived);
-      }
+      if (derived) applyProjectionWriteBack(derived);
       if (isAnalyticsEnabled()) {
         trackUsage('feature_used');
         for (const command of commands)
@@ -25594,6 +25618,24 @@ export function App() {
    * regenerates at the new rim, which is what keeping the modifier in history
    * is for. Anything unproven stays on the generic offset.
    */
+  /**
+   * Remembers whether the latest face-offset plan edits a feature or
+   * appends one, so the history marks the right row while it runs.
+   */
+  function notePlanEdit(
+    state: InteractionState,
+    plan: OffsetEditPlan | null
+  ): void {
+    const key = faceOffsetPlanKey(state);
+    if (key === null || !plan) return;
+    const editedFeatureId = plan.editedFeatureId;
+    setOffsetPlanEdit((previous) =>
+      previous?.key === key && previous.editedFeatureId === editedFeatureId
+        ? previous
+        : { key, editedFeatureId }
+    );
+  }
+
   function buildOffsetEditPlan(
     offset: number,
     exact?: ParamValue,
@@ -25657,6 +25699,7 @@ export function App() {
       return {
         command: plan.command,
         bodyId,
+        editedFeatureId: plan.primitive.featureId,
         successMessage: `${plan.primitive.name} ${primitiveDimensionLabel(
           plan.primitive.data.featureKind === 'primitive'
             ? plan.primitive.data.primitiveKind
@@ -25676,6 +25719,7 @@ export function App() {
       return {
         command: plan.command,
         bodyId,
+        editedFeatureId: plan.feature.featureId,
         successMessage: `${plan.feature.name} ${plan.kind === 'gear-width' ? 'face width' : 'distance'} set to ${formatNumber(plan.value)} ${base.units}.`,
         validationTargets: affectedFeatureTargets(base, plan.feature.featureId),
         ...(plan.preflightRejection
@@ -25686,6 +25730,7 @@ export function App() {
     return {
       command: plan.command,
       bodyId,
+      editedFeatureId: null,
       successMessage: `Offset face by ${Math.round(offset * 100) / 100} ${base.units}.`,
       ...(plan.travelHint ? { travelHint: plan.travelHint } : {})
     };
@@ -25727,6 +25772,7 @@ export function App() {
       return 'refused';
     }
     const plan = buildOffsetEditPlan(offset, exact);
+    notePlanEdit(interactionRef.current, plan);
     if (!plan) {
       setStatus('Exact face measurements are unavailable for this offset.');
       dispatchInteraction({ type: 'clear' });
@@ -30193,7 +30239,7 @@ export function App() {
             }
           : null
       }
-      editingHistoryFeatureId={editedFeatureIdFor(interaction)}
+      editingHistoryFeatureId={editedFeatureIdFor(interaction, offsetPlanEdit)}
       historyDetails={
         <FeatureHistoryPanel
           document={doc}

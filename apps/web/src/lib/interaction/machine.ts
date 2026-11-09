@@ -1459,19 +1459,43 @@ export function commandSessionFor(
 }
 
 /**
- * The existing feature a running face command edits rather than adding a
- * step after it: Resize Body changes its source Box, a cap drag its Extrude.
- * Null for a command that will append its own step (Offset Face, a local
- * push/pull), so the history can tell "editing Box" from "adding a step".
+ * Identifies the face-offset command a plan was built for: the same face,
+ * operation and local/feature mode. A plan recorded for another selection
+ * says nothing about this one.
  */
-export function editedFeatureIdFor(state: InteractionState): string | null {
-  if (
-    state.mode !== 'face' ||
-    state.op !== 'offset-face' ||
-    state.target.localFaceOffset
-  ) {
-    return null;
-  }
+export function faceOffsetPlanKey(state: InteractionState): string | null {
+  if (state.mode !== 'face' || state.op !== 'offset-face') return null;
+  return `${state.op}:${state.target.bodyId}:${state.target.topologyId}:${Boolean(state.target.localFaceOffset)}`;
+}
+
+/** What the latest face-offset plan for a selection does to history. */
+export interface FaceOffsetPlanEdit {
+  /** `faceOffsetPlanKey` of the selection the plan was built for. */
+  key: string;
+  /** The feature it edits in place, or null when it appends a step. */
+  editedFeatureId: string | null;
+}
+
+/**
+ * The existing feature a running face command edits rather than adding a
+ * step after it: Resize Body changes its source Box, a cap drag its Extrude,
+ * Cylinder or Gear. Null for a command that will append its own step (Offset
+ * Face, a local push/pull), so the history can tell "editing Box" from
+ * "adding a step".
+ *
+ * The plan decides, when one was built for this selection: the same face can
+ * edit its source one way and append a local offset the other (a blended
+ * cylinder cap dragged down), and only the plan knows which. Before any plan
+ * the target's own source is the answer.
+ */
+export function editedFeatureIdFor(
+  state: InteractionState,
+  plan?: FaceOffsetPlanEdit | null
+): string | null {
+  const key = faceOffsetPlanKey(state);
+  if (key === null || state.mode !== 'face') return null;
+  if (plan && plan.key === key) return plan.editedFeatureId;
+  if (state.target.localFaceOffset) return null;
   return (
     state.target.extrudeFeatureId ?? state.target.resizeBodyFeatureId ?? null
   );

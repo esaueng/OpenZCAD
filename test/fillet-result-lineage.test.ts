@@ -169,27 +169,20 @@ describe('fillet result lineage', { timeout: 60_000 }, () => {
     expect(body!.volume).toBeCloseTo(rebuilt, 6);
   });
 
-  it('carries a hash-only stacked fillet across the radius change', async () => {
-    // The rebuild that resolved the bare hash recorded where its edge sits in
-    // the unchanged structure, so the radius edit no longer strands it
-    // (`exact-edge-selection-transport.ts`), and it rounds the same edge the
-    // named variant does.
+  it('still fails closed when the stacked fillet is hash-only', async () => {
+    // A radius edit moves every edge of this body, so no edge keeps its own
+    // hash to fix the frame a carry would be judged in
+    // (`exact-edge-selection-transport.ts`): nothing proves which edge the
+    // stale hash meant, and the named variant above is the way through.
     const chain = await stackedChain({ secondWithReference: false });
     expect((await adapter.syncDocument(chain.document)).warnings).toEqual([]);
 
     const after = await adapter.syncDocument(withRadius(chain.document, 6.4));
-    expect(after.warnings).toEqual([]);
-    expect(after.edgeHashRepairs?.map((repair) => repair.featureId)).toEqual([
-      listFeaturesInOrder(chain.document).at(-1)!.featureId
+    expect(after.warnings).toEqual([
+      'Feature "Fillet bottom": A selected edge no longer exists. Re-select the edges and re-create this feature.'
     ]);
-    const named = await stackedChain({ secondWithReference: true });
-    const namedAfter = await adapter.syncDocument(
-      withRadius(named.document, 6.4)
-    );
-    expect(after.bodyRepresentations[chain.bodyId]!.volume).toBeCloseTo(
-      namedAfter.bodyRepresentations[named.bodyId]!.volume,
-      6
-    );
+    expect(after.bodyRepresentations[chain.bodyId]).toBeUndefined();
+    expect(after.edgeHashRepairs ?? []).toEqual([]);
   });
 
   it('still fails closed when no build resolved the hash-only fillet', async () => {

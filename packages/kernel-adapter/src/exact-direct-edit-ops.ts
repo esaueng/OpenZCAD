@@ -1579,11 +1579,17 @@ function resolveFaceDistanceEndpoint(
         candidate.normal[2] === analytic.normal[2]
       );
     });
+    if (matches.length === 0) {
+      // Lost, not mis-sized: typed like every other vanished reference.
+      throw new AdapterRefusal(
+        'reference_missing',
+        'Direct-edit face is stale: its exact planar carrier no longer exists after an upstream face-distance edit.',
+        error
+      );
+    }
     if (matches.length !== 1) {
       throw new Error(
-        matches.length === 0
-          ? 'Direct-edit face is stale: its exact planar carrier no longer exists after an upstream face-distance edit.'
-          : 'Direct-edit face is stale: its exact planar carrier is ambiguous after an upstream face-distance edit.',
+        'Direct-edit face is stale: its exact planar carrier is ambiguous after an upstream face-distance edit.',
         { cause: error }
       );
     }
