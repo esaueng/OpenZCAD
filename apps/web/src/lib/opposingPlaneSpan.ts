@@ -253,9 +253,9 @@ export function opposingPlaneSpan(
  * own footprint: where the line from the pick leaves only by a curved face (a
  * pick beside a rounded back edge), the line from the face's area centroid
  * may still reach the opposing plane, and the plane-to-plane span it reads is
- * the same one. The centroid is moved onto the pick's plane first, and a
- * centroid off the face (a ring's, in its hole) starts outside the material
- * and answers null on its own.
+ * the same one. The centroid is moved onto the pick's plane first. A centroid
+ * off the face (a ring's, in its hole) starts outside the material and
+ * answers null on its own, so the face's largest facets are tried after it.
  */
 export function faceTotalSpan(
   object: THREE.Object3D,
@@ -266,14 +266,78 @@ export function faceTotalSpan(
 ): number | null {
   const fromPick = opposingPlaneSpan(object, origin, direction, lift);
   if (fromPick !== null) return fromPick;
-  const footprint = faceCentroid(object, topologyId);
-  if (!footprint) return null;
   const forward = direction.clone().normalize();
-  footprint.addScaledVector(
-    forward,
-    -forward.dot(new THREE.Vector3().subVectors(footprint, origin))
-  );
-  return opposingPlaneSpan(object, footprint, direction, lift);
+  // The centroid first, then points known to lie on the face: a ring's
+  // centroid (a plate's top around a central hole) sits in its hole, where
+  // the line starts outside the material, but a facet's own centroid never
+  // leaves the face. Largest facets first; a few are enough.
+  const centroid = faceCentroid(object, topologyId);
+  const candidates = [
+    ...(centroid ? [centroid] : []),
+    ...faceFacetCentroids(object, topologyId, FOOTPRINT_SAMPLES)
+  ];
+  for (const footprint of candidates) {
+    footprint.addScaledVector(
+      forward,
+      -forward.dot(new THREE.Vector3().subVectors(footprint, origin))
+    );
+    const span = opposingPlaneSpan(object, footprint, direction, lift);
+    if (span !== null) return span;
+  }
+  return null;
+}
+
+/** How many of the face's own facets {@link faceTotalSpan} tries. */
+const FOOTPRINT_SAMPLES = 8;
+
+/** World centroids of a face's largest facets, largest first. */
+function faceFacetCentroids(
+  object: THREE.Object3D,
+  topologyId: string,
+  limit: number
+): THREE.Vector3[] {
+  const facets: { area: number; centroid: THREE.Vector3 }[] = [];
+  const a = new THREE.Vector3();
+  const b = new THREE.Vector3();
+  const c = new THREE.Vector3();
+  const cross = new THREE.Vector3();
+  object.updateWorldMatrix(true, true);
+  forEachMesh(object, (mesh) => {
+    const face = (
+      mesh.userData as { topology?: { faces?: TopologyFace[] } }
+    ).topology?.faces?.find((candidate) => candidate.topologyId === topologyId);
+    if (!face) return;
+    const position = mesh.geometry.getAttribute('position') as
+      THREE.BufferAttribute | THREE.InterleavedBufferAttribute | undefined;
+    if (!position) return;
+    const index = mesh.geometry.getIndex();
+    const corner = (triangle: number, which: number) => {
+      const at = triangle * 3 + which;
+      return index ? index.getX(at) : at;
+    };
+    const end = face.triangleStart + face.triangleCount;
+    for (let triangle = face.triangleStart; triangle < end; triangle += 1) {
+      a.fromBufferAttribute(position, corner(triangle, 0)).applyMatrix4(
+        mesh.matrixWorld
+      );
+      b.fromBufferAttribute(position, corner(triangle, 1)).applyMatrix4(
+        mesh.matrixWorld
+      );
+      c.fromBufferAttribute(position, corner(triangle, 2)).applyMatrix4(
+        mesh.matrixWorld
+      );
+      const area = cross.subVectors(b, a).cross(c.clone().sub(a)).length() / 2;
+      if (!(area > 0)) continue;
+      facets.push({
+        area,
+        centroid: a.clone().add(b).add(c).divideScalar(3)
+      });
+    }
+  });
+  return facets
+    .sort((left, right) => right.area - left.area)
+    .slice(0, limit)
+    .map((facet) => facet.centroid);
 }
 
 /** The world area centroid of a planar face in the body's topology table. */

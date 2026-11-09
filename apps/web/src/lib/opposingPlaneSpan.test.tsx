@@ -393,6 +393,62 @@ describe('opposingPlaneSpan', () => {
     ).toBeCloseTo(20, 9);
   });
 
+  it('reads a ring face whose pick and centroid both sit in its hole', () => {
+    // An 80 × 40 × 6 plate with a Ø10 hole through its middle: the top
+    // face's handle and its area centroid are both over the hole.
+    const outline = new THREE.Shape();
+    outline.moveTo(0, 0);
+    outline.lineTo(80, 0);
+    outline.lineTo(80, 40);
+    outline.lineTo(0, 40);
+    outline.lineTo(0, 0);
+    const hole = new THREE.Path();
+    hole.absarc(40, 20, 5, 0, Math.PI * 2, true);
+    outline.holes.push(hole);
+    const plate = withTopology(
+      new THREE.ExtrudeGeometry(outline, {
+        depth: 6,
+        bevelEnabled: false,
+        curveSegments: 64
+      }),
+      prismFaces(
+        [
+          { id: 'top', axis: 'z', at: 6, sign: 1 },
+          { id: 'bottom', axis: 'z', at: 0, sign: -1 },
+          { id: 'left', axis: 'x', at: 0, sign: -1 },
+          { id: 'right', axis: 'x', at: 80, sign: 1 },
+          { id: 'front', axis: 'y', at: 0, sign: -1 },
+          { id: 'back', axis: 'y', at: 40, sign: 1 }
+        ],
+        () => ({ id: 'hole', surfaceType: 'cylinder' })
+      )
+    );
+    const faces = (plate.userData.topology as { faces: FaceTopology[] })
+      .faces;
+    faces.find((face) => face.topologyId === 'top')!.geometry!.centroid = {
+      x: 40,
+      y: 20,
+      z: 6
+    };
+    faces.find((face) => face.topologyId === 'bottom')!.geometry!.centroid = {
+      x: 40,
+      y: 20,
+      z: 0
+    };
+    const up = new THREE.Vector3(0, 0, 1);
+    const overHole = new THREE.Vector3(40, 20, 6);
+    expect(opposingPlaneSpan(plate, overHole, up)).toBeNull();
+    expect(faceTotalSpan(plate, 'top', overHole, up)).toBeCloseTo(6, 9);
+    expect(
+      faceTotalSpan(
+        plate,
+        'bottom',
+        new THREE.Vector3(40, 20, 0),
+        new THREE.Vector3(0, 0, -1)
+      )
+    ).toBeCloseTo(6, 9);
+  });
+
   it('keeps the stepped tab and separated lobe readings local to the pick', () => {
     const block = (
       size: [number, number, number],
