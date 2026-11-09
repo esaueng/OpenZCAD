@@ -902,6 +902,29 @@ describe('fade stepping', () => {
 });
 
 describe('rebuild reset', () => {
+  it('cuts both edge hover passes on restoration, including a retiring x-ray', () => {
+    const { manager, objectsByBodyId } = makeManager();
+    const { bodyId, overlay, selection, hit } = makeBatchedEdge();
+    const object = new THREE.Group();
+    object.add(overlay);
+    objectsByBodyId.set(bodyId, object);
+    manager.applyHover(candidate({ kind: 'edge', selection, hit }));
+    for (let step = 0; step < 30; step++) overlay.step(16);
+    expect(overlay.hoverHiddenEdges.visible).toBe(true);
+    // The hover leaves just before a refused proxy is restored. Ordinary
+    // hover-out keeps its hidden outline alive for a few frames.
+    manager.applyHover(null);
+    expect(overlay.hoverHiddenEdges.visible).toBe(true);
+    manager.resetForRebuild();
+    expect(overlay.hoverEdges.visible).toBe(false);
+    expect(overlay.hoverHiddenEdges.visible).toBe(false);
+    expect(overlay.hoverEdges.geometry.instanceCount).toBe(0);
+    expect(overlay.step(16)).toBe(false);
+    // The same edge on the committed mesh can be hovered afresh.
+    manager.applyHover(candidate({ kind: 'edge', selection, hit }));
+    expect(overlay.hoverEdges.visible).toBe(true);
+  });
+
   it('drops hover state that points at disposed objects', () => {
     const { manager } = makeManager();
     manager.setEdgeHover(makeEdge(false));

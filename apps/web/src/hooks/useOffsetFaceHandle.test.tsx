@@ -107,6 +107,41 @@ describe('offset face handle source recognition', () => {
     }
   );
 
+  it('restores the committed anchor but keeps a refused input editable', () => {
+    const props = inputs();
+    const { result, rerender } = renderHook(useHandle, { initialProps: props });
+    rerender({
+      ...props,
+      value: -7.5,
+      interaction: { ...armed, phase: 'validating', lastValue: -7.5 }
+    });
+    expect(result.current?.initialValue).toBe(-7.5);
+    rerender({
+      ...props,
+      value: -7.5,
+      interaction: {
+        ...armed,
+        phase: 'failed',
+        lastValue: -7.5,
+        error: { message: 'Exact check refused' }
+      }
+    });
+    expect(result.current).toMatchObject({
+      point: { x: 10, y: 10, z: 26 },
+      initialValue: 0,
+      refusedValue: -7.5
+    });
+    // Reopening entry does not move the pin until the user changes the input.
+    rerender({
+      ...props,
+      interaction: { ...armed, phase: 'exact-entry', lastValue: -7.5 }
+    });
+    expect(result.current?.initialValue).toBe(0);
+    expect(result.current?.refusedValue).toBeUndefined();
+    rerender({ ...props, interaction: { mode: 'idle' } });
+    expect(result.current).toBeNull();
+  });
+
   it('rechecks a replacement source and declines a pick missing from its topology', () => {
     recognize.mockReturnValue(null);
     const props = inputs();

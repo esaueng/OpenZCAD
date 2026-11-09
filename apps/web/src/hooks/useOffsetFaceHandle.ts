@@ -121,7 +121,17 @@ export function useOffsetFaceHandle(
       profile
         ? {
             ...profile,
-            initialValue: previewValue ?? lastValue ?? 0,
+            // The refused number remains editable, but is not a displacement
+            // of the committed face. A new drag starts from that face too.
+            initialValue:
+              phase === 'failed'
+                ? 0
+                : (previewValue ??
+                  (phase === 'validating' ? lastValue : 0) ??
+                  0),
+            ...(phase === 'failed' && lastValue !== null
+              ? { refusedValue: lastValue }
+              : {}),
             ...(phase === 'validating' ? { locked: true } : {}),
             ...(phase === 'exact-entry' ? { entry: true } : {})
           }

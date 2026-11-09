@@ -431,7 +431,114 @@ test('a refused generic face drag holds its last exact preview', async ({
   await expect.poll(front).toBeCloseTo(0, 4);
 });
 
-test('the face an exact preview redrew can still be grabbed after a refusal', async ({
+test(
+  'an exact release refusal restores the same anchor as its committed face',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(120_000);
+    await page.addInitScript(() => {
+      window.__openzcadE2EExactFaceDrag = true;
+      const scope = window as unknown as { refuseRelease: boolean };
+      scope.refuseRelease = false;
+      const send = Worker.prototype.postMessage;
+      Worker.prototype.postMessage = function (message, transfer) {
+        const request = message as { type?: string; requestId?: string };
+        if (scope.refuseRelease && request.type === 'sync') {
+          window.setTimeout(
+            () =>
+              this.dispatchEvent(
+                new MessageEvent('message', {
+                  data: {
+                    type: 'sync',
+                    ok: false,
+                    requestId: request.requestId,
+                    error: 'Injected release refusal'
+                  }
+                })
+              ),
+            0
+          );
+          return;
+        }
+        return send.call(this, message, transfer as StructuredSerializeOptions);
+      };
+    });
+    const { canvas, handle } = await armedBox(page);
+    const anchor = () =>
+      canvas.evaluate((element) => [
+        Number(element.dataset.e2eChipAnchorWorldX),
+        Number(element.dataset.e2eChipAnchorWorldY),
+        Number(element.dataset.e2eChipAnchorWorldZ)
+      ]);
+    const committedAnchor = await anchor();
+    await page.mouse.move(handle.x, handle.y);
+    await page.mouse.down();
+    await page.mouse.move(
+      handle.x - handle.dx * handle.pixels * 6,
+      handle.y - handle.dy * handle.pixels * 6,
+      { steps: 12 }
+    );
+    await expect.poll(() => renderedMinimumY(canvas)).toBeCloseTo(6, 4);
+    await page.evaluate(() => {
+      (window as unknown as { refuseRelease: boolean }).refuseRelease = true;
+    });
+    await page.mouse.up();
+    const chip = page.getByTestId('direct-manipulation-value');
+    await expect(chip).toHaveAttribute('data-state', 'warning');
+    await expect(chip).toContainText('12 mm');
+    await expect.poll(() => renderedMinimumY(canvas)).toBeCloseTo(0, 4);
+    await expect.poll(anchor).toEqual(committedAnchor);
+    await expect(canvas).not.toHaveAttribute('data-e2e-offset-ghost');
+    await expect(canvas).not.toHaveAttribute('data-e2e-height-proxy-offset');
+    // Moving over the restored part cannot bring back a rejected projection.
+    await page.mouse.move(handle.x + 40, handle.y + 20, { steps: 6 });
+    await frames(page);
+    await expect.poll(() => renderedMinimumY(canvas)).toBeCloseTo(0, 4);
+    await expect.poll(anchor).toEqual(committedAnchor);
+    await expect(
+      page.locator('.feature-row-main', { hasText: 'Offset face' })
+    ).toHaveCount(0);
+    // The warning chip still edits the refused total, not the restored span.
+    await chip.click();
+    const keypad = page.getByRole('dialog', { name: 'Total value' });
+    await expect(keypad.getByRole('textbox')).toHaveValue('12');
+  }
+);
+
+for (const cancel of ['Escape', 'click-away', 'tool switch'] as const) {
+  test(`a ${cancel} abandons every typed face preview visual`, async ({
+    page
+  }) => {
+    test.setTimeout(120_000);
+    const { canvas } = await armedBox(page);
+    const anchor = () =>
+      canvas.evaluate((element) => [
+        Number(element.dataset.e2eChipAnchorWorldX),
+        Number(element.dataset.e2eChipAnchorWorldY),
+        Number(element.dataset.e2eChipAnchorWorldZ)
+      ]);
+    const committedAnchor = await anchor();
+    await page.getByTestId('direct-manipulation-value').click();
+    const keypad = page.getByRole('dialog', { name: 'Total value' });
+    await keypad.getByRole('textbox').fill('21');
+    await expect.poll(() => renderedMinimumY(canvas)).toBeCloseTo(-3, 3);
+    await expect(canvas).toHaveAttribute('data-e2e-offset-ghost', '1');
+    if (cancel === 'Escape') await keypad.getByRole('textbox').press('Escape');
+    else if (cancel === 'click-away')
+      await canvas.click({ position: { x: 5, y: 5 } });
+    else await page.getByRole('button', { name: 'View', exact: true }).click();
+    await expect(keypad).toBeHidden();
+    await expect.poll(() => renderedMinimumY(canvas)).toBeCloseTo(0, 3);
+    await expect(canvas).not.toHaveAttribute('data-e2e-offset-ghost');
+    await expect(canvas).not.toHaveAttribute('data-e2e-height-proxy-offset');
+    if (cancel === 'Escape') await expect.poll(anchor).toEqual(committedAnchor);
+    await expect(
+      page.locator('.feature-row-main', { hasText: 'Offset face' })
+    ).toHaveCount(0);
+  });
+}
+
+test('a refused release restores the committed face, handle and next pick', async ({
   page
 }) => {
   test.setTimeout(process.env.CI ? 240_000 : 120_000);
@@ -446,6 +553,13 @@ test('the face an exact preview redrew can still be grabbed after a refusal', as
     y: handle.y - handle.dy * handle.pixels * value
   });
   const armedFace = await canvas.getAttribute('data-e2e-selected-face');
+  const anchor = () =>
+    canvas.evaluate((element) => [
+      Number(element.dataset.e2eChipAnchorWorldX),
+      Number(element.dataset.e2eChipAnchorWorldY),
+      Number(element.dataset.e2eChipAnchorWorldZ)
+    ]);
+  const committedAnchor = await anchor();
   await page.mouse.move(handle.x, handle.y);
   await page.mouse.down();
   await page.mouse.move(at(6).x, at(6).y, { steps: 12 });
@@ -457,7 +571,8 @@ test('the face an exact preview redrew can still be grabbed after a refusal', as
     'data-e2e-selected-face',
     armedFace ?? ''
   );
-  // Through the back of the 18 mm box: refused, keeping the 6 mm preview.
+  // Through the back of the 18 mm box: release refuses the edit and
+  // restores the committed projection rather than retaining the preview.
   await page.mouse.move(at(24).x, at(24).y, { steps: 12 });
   await page.mouse.up();
   const card = page.getByRole('region', { name: 'Offset Face operation' });
@@ -466,6 +581,13 @@ test('the face an exact preview redrew can still be grabbed after a refusal', as
   await expect(
     page.locator('.feature-row-main', { hasText: 'Offset face' })
   ).toHaveCount(0);
+  await expect(canvas).not.toHaveAttribute('data-e2e-offset-ghost');
+  await expect(canvas).not.toHaveAttribute('data-e2e-height-proxy-offset');
+  await expect.poll(() => renderedMinimumY(canvas)).toBeCloseTo(0, 4);
+  await expect.poll(anchor).toEqual(committedAnchor);
+  await expect(canvas).toHaveAttribute('data-e2e-selected-face', armedFace!);
+  await expect(chip).toHaveAttribute('data-state', 'warning');
+  await expect(chip).toContainText('-6 mm');
   await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
   const rearmed = await canvas.evaluate((element) => ({
     x: Number(element.dataset.e2eHandleX),

@@ -6,6 +6,7 @@ import type {
 } from '@openzcad/shared';
 import type { PickCandidate } from '../pick/PickService';
 import {
+  BodyEdgeOverlay,
   batchedEdgeTarget,
   isSameBatchedEdge,
   type BatchedEdgeTarget
@@ -735,8 +736,15 @@ export class SelectionManager {
    * group with its own rebuild.
    */
   resetForRebuild() {
+    // A hover already left may still have a hidden pass fading out, even
+    // though hoveredEdgeTarget is null or points at another body now.
+    for (const object of this.options.objectsByBodyId.values()) {
+      object.traverse((child) => {
+        if (child instanceof BodyEdgeOverlay) child.resetHover();
+      });
+    }
     if (this.hoveredEdgeTarget && isBatchedEdgeTarget(this.hoveredEdgeTarget)) {
-      this.hoveredEdgeTarget.batch.setHovered(null);
+      this.hoveredEdgeTarget.batch.resetHover();
     }
     this.hoveredBodyId = null;
     this.hoveredEdgeTarget = null;
