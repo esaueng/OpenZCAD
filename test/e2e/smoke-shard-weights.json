@@ -61,6 +61,7 @@
   "reload-face-offset.spec.ts": 23,
   "rotational-direct-edits.spec.ts": 149,
   "save-state-history.spec.ts": 17,
+  "settings-reload-cover.spec.ts": 4,
   "settings.spec.ts": 8,
   "shoulder-cap-offset.spec.ts": 668,
   "sketch-modify-tools.spec.ts": 12,
