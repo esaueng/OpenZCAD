@@ -1615,6 +1615,7 @@ import { useAppSettingsSync } from './hooks/useAppSettingsSync';
 import { useDirectEditCommit } from './hooks/useDirectEditCommit';
 import { useSettledFlag } from './hooks/useSettledFlag';
 import { useSteadySaveState } from './hooks/useSteadySaveState';
+import { useLocalProjectAutosaveSchedule } from './hooks/useLocalProjectAutosaveSchedule';
 import { useMeasurementWorkbench } from './hooks/useMeasurementWorkbench';
 import {
   useValidatedFeatureCommit,
@@ -7105,27 +7106,18 @@ export function App() {
       setSaveState('local');
       return;
     }
-    setSaveState('saving');
-    setLocalSaveFailed(false);
-    const canonicalChange = localAutosave.enqueue(doc);
-    if (canonicalChange) {
-      // History is already accepted and visible: start its device transaction
-      // now, before paint. Only derived rebuild bookkeeping stays debounced.
-      void flushPendingLocalSave().catch(() => undefined);
-      return;
+  }, [doc, shareSession, projectOpenElsewhere]);
+
+  useLocalProjectAutosaveSchedule({
+    document: shareSession || projectOpenElsewhere ? null : doc,
+    autosave: localAutosave,
+    flush: flushPendingLocalSave,
+    timeoutRef: localSaveTimeoutRef,
+    onCanonicalChange: () => {
+      setSaveState('saving');
+      setLocalSaveFailed(false);
     }
-    const timeout = window.setTimeout(() => {
-      localSaveTimeoutRef.current = null;
-      void flushPendingLocalSave().catch(() => undefined);
-    }, 450);
-    localSaveTimeoutRef.current = timeout;
-    return () => {
-      if (localSaveTimeoutRef.current === timeout) {
-        window.clearTimeout(timeout);
-        localSaveTimeoutRef.current = null;
-      }
-    };
-  }, [doc, cloudAvailable, shareSession, localAutosave, flushPendingLocalSave]);
+  });
 
   useEffect(() => {
     const projectId = doc?.projectId;
