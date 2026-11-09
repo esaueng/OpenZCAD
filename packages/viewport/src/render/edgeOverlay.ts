@@ -4,6 +4,7 @@ import type {
   EdgeTopology,
   GeometryBodyRepresentation,
   EdgeTopologyReferenceV5,
+  SettingsTangentEdges,
   TopologySelection
 } from '@openzcad/shared';
 import { SELECTION_SEMANTICS } from './semantics';
@@ -20,7 +21,8 @@ import {
 import { shouldRenderTopologyEdge } from '../scene/objects';
 import { easeToward, fadeStepMs, hasSettled } from '../motion';
 import { boundaryEdgesOfFaces } from '../selection/boundaryEdgesOfFace';
-import { tangentEdgeIds } from './tangentEdges';
+import { FACETED_JOINT_MAX_ANGLE, tangentEdgeIds } from './tangentEdges';
+import { createSilhouetteLines, silhouetteCandidates } from './silhouette';
 import type { DisplayMode } from '../types';
 import {
   createFatLineSegments,
@@ -68,6 +70,13 @@ const BODY_SELECTED_EDGE_WIDTH = SELECTION_SEMANTICS.selected.bodyEdgeWidth;
 const HIDDEN_EDGE_OPACITY = 0.34;
 const TANGENT_EDGE_OPACITY = SELECTION_SEMANTICS.idle.tangentEdgeOpacity;
 
+/**
+ * How resting tangent edges draw in the shaded view (Settings › Viewport).
+ * `faint` is the shipped look and the default; thumbnails and any overlay
+ * nobody restyles keep it.
+ */
+export type TangentEdgeStyle = SettingsTangentEdges;
+export const DEFAULT_TANGENT_EDGE_STYLE: TangentEdgeStyle = 'faint';
 function edgeKey(owner: Pick<EdgeSegmentOwner, 'bodyId' | 'topologyId'>) {
   return `${owner.bodyId}:${owner.topologyId}`;
 }
@@ -305,7 +314,10 @@ class PresenceTier {
  */
 export class BodyEdgeOverlay extends THREE.Group {
   readonly idleEdges: LineSegments2;
-  /** Tangent edges: a fillet's rims. Fainter than `idleEdges` when shaded. */
+  /**
+   * Tangent edges: a fillet's rims. When shaded, fainter than `idleEdges` by
+   * default; see `setTangentEdgeStyle`.
+   */
   readonly idleTangentEdges: LineSegments2;
   readonly hoverEdges: LineSegments2;
   readonly hoverHiddenEdges: LineSegments2;
@@ -315,6 +327,11 @@ export class BodyEdgeOverlay extends THREE.Group {
   readonly selectedFaceBoundaryHiddenEdges: LineSegments2;
   /** Seam-only fallback so an all-seam body still draws in wireframe. */
   readonly seamEdges: LineSegments2 | null;
+  /**
+   * The outline of its curved faces, which no B-rep edge draws (see
+   * `silhouette.ts`). Styled as a resting sharp edge; never picked.
+   */
+  readonly silhouetteEdges: LineSegments2 | null;
   /** Raycast segment index in `idleEdges` to exact topology identity. */
   readonly ownershipBySegment: readonly EdgeSegmentOwner[];
   /** The same for `idleTangentEdges`. */
@@ -335,6 +352,7 @@ export class BodyEdgeOverlay extends THREE.Group {
   private readonly selectedTier: PresenceTier;
   private readonly faceBoundaryTier: PresenceTier;
   private displayMode: DisplayMode = 'shaded-edges';
+  private tangentEdgeStyle: TangentEdgeStyle = DEFAULT_TANGENT_EDGE_STYLE;
   private xrayEnabled = true;
   /** The X-ray display: translucent faces, every edge drawn. */
   private xrayView = false;
@@ -348,7 +366,7 @@ export class BodyEdgeOverlay extends THREE.Group {
    */
   constructor(
     body: Pick<GeometryBodyRepresentation, 'bodyId' | 'topology'> &
-      Partial<Pick<GeometryBodyRepresentation, 'mesh'>>,
+      Partial<Pick<GeometryBodyRepresentation, 'mesh' | 'source'>>,
     resolution?: FatLineResolution
   ) {
     super();
@@ -360,10 +378,18 @@ export class BodyEdgeOverlay extends THREE.Group {
       edgePointExtent(body.topology?.edges ?? [])
     );
 
+    // A faceted coil's joints (see FACETED_JOINT_MAX_ANGLE) are measured
+    // with its wider angle and drawn like seams: in wireframe only.
+    const faceted = facetedSource(body.source);
     const tangentIds =
       body.mesh && body.topology
-        ? tangentEdgeIds(body.mesh, body.topology)
+        ? tangentEdgeIds(
+            body.mesh,
+            body.topology,
+            faceted ? FACETED_JOINT_MAX_ANGLE : undefined
+          )
         : new Set<string>();
+    let facetJoints = 0;
     const sharp: IdleBatch = { positions: [], ownership: [] };
     const tangent: IdleBatch = { positions: [], ownership: [] };
     // Seams are construction boundaries, not features, so they stay out of the
@@ -391,6 +417,15 @@ export class BodyEdgeOverlay extends THREE.Group {
       };
       const positions = segmentsFromPolyline(edge.points);
       if (positions.length === 0) {
+        continue;
+      }
+      if (
+        faceted &&
+        edge.isSmooth !== true &&
+        tangentIds.has(edge.topologyId)
+      ) {
+        seamPositions.push(...positions);
+        facetJoints += 1;
         continue;
       }
       this.entriesByKey.set(edgeKey(owner), { owner, positions });
@@ -470,7 +505,8 @@ export class BodyEdgeOverlay extends THREE.Group {
     // absent from `ownershipBySegment`, so no seam can be mistaken for a
     // feature edge by anything downstream.
     this.seamEdges =
-      this.entriesByKey.size === 0 && seamPositions.length > 0
+      (this.entriesByKey.size === 0 || facetJoints > 0) &&
+      seamPositions.length > 0
         ? createFatLineSegments(seamPositions, {
             color: EDGE_WIREFRAME_COLOR,
             linewidth: EDGE_IDLE_WIDTH,
@@ -486,6 +522,27 @@ export class BodyEdgeOverlay extends THREE.Group {
       this.seamEdges.userData = { bodyId: this.bodyId, edgeOverlay: true };
       this.seamEdges.raycast = () => undefined;
       this.add(this.seamEdges);
+    }
+    const silhouettes =
+      body.mesh && body.topology?.faces.length
+        ? silhouetteCandidates(body.mesh, body.topology.faces)
+        : null;
+    this.silhouetteEdges = silhouettes
+      ? createSilhouetteLines(silhouettes, {
+          color: EDGE_IDLE_COLOR,
+          linewidth: EDGE_IDLE_WIDTH,
+          opacity: EDGE_IDLE_OPACITY,
+          resolution,
+          depthBias: this.depthBias
+        })
+      : null;
+    if (this.silhouetteEdges) {
+      this.silhouetteEdges.renderOrder = VIEWPORT_RENDER_ORDER.BODY_EDGE;
+      this.silhouetteEdges.userData = {
+        bodyId: this.bodyId,
+        edgeOverlay: true
+      };
+      this.add(this.silhouetteEdges);
     }
     this.hoverTier = new PresenceTier(
       this.hoverEdges,
@@ -729,14 +786,13 @@ export class BodyEdgeOverlay extends THREE.Group {
     ];
     const visible = tiers.map((line) => line.visible);
     for (const line of tiers) line.visible = false;
-    const idle = [this.idleEdges, this.idleTangentEdges].map(
-      ({ material }) => ({
-        material,
-        color: material.color.getHex(),
-        linewidth: material.linewidth,
-        opacity: material.opacity
-      })
-    );
+    const idle = this.restingLines().map(({ material }) => ({
+      material,
+      color: material.color.getHex(),
+      linewidth: material.linewidth,
+      opacity: material.opacity,
+      visible: material.visible
+    }));
     const bodySelected = this.bodySelected;
     if (bodySelected) {
       this.bodySelected = false;
@@ -747,10 +803,11 @@ export class BodyEdgeOverlay extends THREE.Group {
       tiers.forEach((line, index) => {
         line.visible = visible[index]!;
       });
-      for (const { material, color, linewidth, opacity } of idle) {
+      for (const { material, color, linewidth, opacity, visible } of idle) {
         material.color.setHex(color);
         material.linewidth = linewidth;
         material.opacity = opacity;
+        material.visible = visible;
       }
     };
   }
@@ -782,12 +839,34 @@ export class BodyEdgeOverlay extends THREE.Group {
     return true;
   }
 
+  /** The batches drawn at rest: sharp, tangent and outline. */
+  private restingLines(): LineSegments2[] {
+    return [
+      this.idleEdges,
+      this.idleTangentEdges,
+      ...(this.silhouetteEdges ? [this.silhouetteEdges] : [])
+    ];
+  }
+
+  /**
+   * How resting tangent edges draw in the shaded view: the sharp ink
+   * (`show`), the quiet tangent ink (`faint`), or not at all (`hide`).
+   * Restyles the tangent batch in place; nothing is rebuilt.
+   */
+  setTangentEdgeStyle(style: TangentEdgeStyle) {
+    if (this.tangentEdgeStyle === style) {
+      return false;
+    }
+    this.tangentEdgeStyle = style;
+    this.applyIdleStyle();
+    return true;
+  }
+
   /** Applies CAD display mode without rebuilding any edge batch. */
   setDisplayMode(mode: DisplayMode) {
     this.displayMode = mode;
     for (const line of [
-      this.idleEdges,
-      this.idleTangentEdges,
+      ...this.restingLines(),
       this.hoverEdges,
       this.hoverHiddenEdges,
       this.selectedEdges,
@@ -802,15 +881,21 @@ export class BodyEdgeOverlay extends THREE.Group {
   }
 
   /**
-   * A tangent edge differs from a sharp one only at rest in the shaded view.
-   * Wireframe and X-ray have no shading to carry the smooth surface, so there
-   * the edges are all of the structure and draw in one ink; a selected body
-   * outlines every edge alike.
+   * A tangent edge differs from a sharp one only at rest in the shaded view,
+   * and there it follows `tangentEdgeStyle`. Wireframe and X-ray have no
+   * shading to carry the smooth surface, so there the edges are all of the
+   * structure and draw in one ink; a selected body outlines every edge alike.
+   *
+   * `hide` turns off the tangent batch's *material*, not the line: the
+   * renderer skips it, but the line stays visible to PickService, which
+   * walks `Object3D.visible` only. A hidden rim is therefore still hovered
+   * and selected — in the hover and selection batches, which draw it.
    */
   private applyIdleStyle() {
     const inked = this.displayMode === 'wireframe' || this.xrayView;
-    for (const line of [this.idleEdges, this.idleTangentEdges]) {
+    for (const line of this.restingLines()) {
       const material = line.material;
+      material.visible = true;
       if (this.bodySelected) {
         material.color.setHex(EDGE_SELECTED_COLOR);
         material.linewidth = BODY_SELECTED_EDGE_WIDTH;
@@ -819,19 +904,22 @@ export class BodyEdgeOverlay extends THREE.Group {
       }
       material.color.setHex(inked ? EDGE_WIREFRAME_COLOR : EDGE_IDLE_COLOR);
       material.linewidth = EDGE_IDLE_WIDTH;
-      material.opacity = inked
-        ? 1
-        : line === this.idleTangentEdges
-          ? TANGENT_EDGE_OPACITY
-          : EDGE_IDLE_OPACITY;
+      if (inked || line !== this.idleTangentEdges) {
+        material.opacity = inked ? 1 : EDGE_IDLE_OPACITY;
+        continue;
+      }
+      material.opacity =
+        this.tangentEdgeStyle === 'show'
+          ? EDGE_IDLE_OPACITY
+          : TANGENT_EDGE_OPACITY;
+      material.visible = this.tangentEdgeStyle !== 'hide';
     }
   }
 
   /** Keeps all three stable fat-line materials correct after a resize. */
   setResolution(resolution: FatLineResolution) {
     for (const line of [
-      this.idleEdges,
-      this.idleTangentEdges,
+      ...this.restingLines(),
       this.hoverEdges,
       this.hoverHiddenEdges,
       this.selectedEdges,
@@ -889,6 +977,7 @@ export class BodyEdgeOverlay extends THREE.Group {
     this.idleEdges.visible = showEdges && this.ownershipBySegment.length > 0;
     this.idleTangentEdges.visible =
       showEdges && this.tangentOwnershipBySegment.length > 0;
+    if (this.silhouetteEdges) this.silhouetteEdges.visible = showEdges;
     // Both are gated on presence rather than key count, so a tier's x-ray
     // twin survives its own fade-out, which runs after the keys are gone.
     this.selectedEdges.visible = showEdges && this.selectedTier.drawable;
@@ -903,6 +992,11 @@ export class BodyEdgeOverlay extends THREE.Group {
     this.selectedFaceBoundaryHiddenEdges.visible =
       this.xrayEnabled && this.faceBoundaryTier.hiddenDrawable;
   }
+}
+
+/** Whether a body's source builds curved surfaces from flat facets. */
+function facetedSource(source: string | undefined): boolean {
+  return source === 'helical-sweep';
 }
 
 export function createBodyEdgeOverlay(

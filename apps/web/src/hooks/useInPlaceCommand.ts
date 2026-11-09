@@ -542,15 +542,18 @@ export function useInPlaceCommand(
         ? [...own, ...axisCandidatesFor(EMPTY_SLOTS, ctx, spec.axisSource)]
         : [];
     }
-    return [
-      ...own,
-      ...axisCandidatesFor(
-        { ...EMPTY_SLOTS, profiles },
-        ctx,
-        'sketch',
-        editSeed?.slots.axisId
-      )
-    ];
+    // A listed line the command would refuse (a helix's axis through its
+    // own profile) is not offered: every line drawn is one that works.
+    const listed = axisCandidatesFor(
+      { ...EMPTY_SLOTS, profiles },
+      ctx,
+      'sketch',
+      editSeed?.slots.axisId
+    ).filter(
+      (candidate) =>
+        !spec.refuseAxis?.({ ...EMPTY_SLOTS, profiles }, candidate, ctx)
+    );
+    return [...own, ...listed];
     // The base version re-reads the saved axis's expressions, as the effect
     // below does for typed values: a parameter can change with no change
     // to the feature itself.

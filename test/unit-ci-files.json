@@ -69,6 +69,7 @@
     "test/chamfer-rounded-block.test.ts",
     "test/chamfer-rounded-edge.test.ts",
     "test/ci-qualification.test.ts",
+    "test/ci-runtime-optimization.test.ts",
     "test/ci-selection.test.ts",
     "test/cloudflare-adapters.test.ts",
     "test/collaboration-checkpoint.test.ts",

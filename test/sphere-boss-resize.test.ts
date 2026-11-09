@@ -20,9 +20,9 @@ import { sphereCylinderUnionInputs } from './support/sphere-cylinder-union';
  * neighbour, so the boss (union) and the blind bore cut from the same sphere
  * (subtract) now resize as local direct edits. The result must be the body
  * the source route builds: the same sphere ∪/− a Cylinder of the new radius.
- * A wall meeting the seam fillet's freeform band still refuses typed (see
- * `sphere-boss-seam-fillet-resize.test.ts`); that refusal must not run the
- * old small-change waypoint ladder.
+ * A wall meeting the seam fillet's freeform band re-fillets at its
+ * approximate quality, disclosed (see `sphere-boss-seam-fillet-resize.test.ts`),
+ * in one kernel call: a small change must not run the old waypoint ladder.
  */
 const CASES: ReadonlyArray<[BooleanOperation, 'boss' | 'hole']> = [
   ['union', 'boss'],
@@ -122,7 +122,7 @@ describe('resizing a cylinder wall that meets a sphere', () => {
     300_000
   );
 
-  it('refuses a seam-filleted wall without the waypoint ladder', async () => {
+  it('re-fillets a seam-filleted wall in one call, without the waypoint ladder', async () => {
     const { manager, bodyId, wall } = await filletedSphereBoss(adapter);
     const typed = vi.spyOn(
       RemusKernel.prototype,
@@ -131,7 +131,7 @@ describe('resizing a cylinder wall that meets a sphere', () => {
     const legacy = vi.spyOn(RemusKernel.prototype, 'resizeCylindricalFace');
     try {
       // 6 -> 6.3 is a 5% change, inside the 15% band that used to detour.
-      const refused = await adapter.syncDocument(
+      const derived = await adapter.syncDocument(
         manager.runTransaction('Resize', [
           commandFactories.directEditBody({
             name: 'Resize Cylinder',
@@ -149,14 +149,17 @@ describe('resizing a cylinder wall that meets a sphere', () => {
           })
         ])
       );
-      const warning = refused.featureWarnings?.find(
+      const warnings = (derived.featureWarnings ?? []).filter(
         (entry) => entry.featureName === 'Resize Cylinder'
       );
-      expect(warning?.kernelRefusal).toMatchObject({
-        category: 'quality_refused',
-        code: 'exact_only_unattainable',
-        reason: 'approximate_reblend_not_permitted'
-      });
+      expect(warnings.map((entry) => entry.kind)).toEqual(['advisory']);
+      expect(
+        derived.bodyRepresentations[bodyId]!.topology!.faces.some(
+          (face) =>
+            face.geometry?.surfaceType === 'cylinder' &&
+            Math.abs((face.geometry.radius ?? 0) - 6.3) < 1e-6
+        )
+      ).toBe(true);
       expect(typed).toHaveBeenCalledTimes(1);
       expect(legacy).not.toHaveBeenCalled();
     } finally {

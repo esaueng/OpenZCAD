@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
@@ -13,7 +12,11 @@ import {
 } from '@openzcad/shared';
 import { tweenOrientationFor, VIEW_DIRECTIONS } from '../camera/views';
 import { keepProgram } from './programRetention';
+import { SELECTION_SEMANTICS } from './semantics';
 import { COPLANAR_DEPTH_ATTRIBUTE, withCoplanarDepth } from './coplanarBodies';
+import { STUDIO_RIG } from './studio';
+import { withBodyAmbientOcclusion } from './ambientOcclusion';
+import { tangentFacePairs } from './tangentEdges';
 
 const CAD_CREASE_ANGLE = THREE.MathUtils.degToRad(30);
 const DOT_EPSILON = 1e-10;
@@ -247,6 +250,16 @@ function geometryFromMesh(
     topologyFaceByTriangle.every((face) => face >= 0);
   const boundarySlots: number[] = [];
   const creaseDot = Math.cos(CAD_CREASE_ANGLE);
+  // Two topology faces that meet tangentially — the halves of a sphere or a
+  // cylinder split at a seam, a fillet rolling into its wall — are one smooth
+  // surface. Creasing their shared vertices gave each side its own one-sided
+  // normal, and the two disagreed by up to the tessellation's angular
+  // deflection: a faint ring around a sphere's equator, a line along every
+  // fillet rim. Smooth across them; any genuine crease stays split.
+  const isTangentPair =
+    topology && topology.faces.length > 1
+      ? tangentFacePairs(mesh, topology.faces)
+      : null;
   for (let slot = 0; slot < edgeCount; slot += 1) {
     // Non-manifold edges stay creased; smoothing across more than two incident
     // faces can blend unrelated shells that merely share indexed vertices.
@@ -259,17 +272,21 @@ function geometryFromMesh(
     const firstTopologyFace = topologyFaceByTriangle[first]!;
     const secondTopologyFace = topologyFaceByTriangle[second]!;
     const hasTopologyFace = firstTopologyFace >= 0 || secondTopologyFace >= 0;
+    const crossesFaces =
+      hasTopologyFace && firstTopologyFace !== secondTopologyFace;
     const shouldSmooth = hasTopologyFace
-      ? firstTopologyFace >= 0 && firstTopologyFace === secondTopologyFace
+      ? firstTopologyFace >= 0 &&
+        (firstTopologyFace === secondTopologyFace ||
+          isTangentPair?.(firstTopologyFace, secondTopologyFace) === true)
       : faceNormals[first * 3]! * faceNormals[second * 3]! +
           faceNormals[first * 3 + 1]! * faceNormals[second * 3 + 1]! +
           faceNormals[first * 3 + 2]! * faceNormals[second * 3 + 2]! +
           DOT_EPSILON >=
         creaseDot;
-    if (!shouldSmooth) {
-      boundarySlots.push(slot);
-      continue;
-    }
+    // A deferred-topology preview still outlines every face boundary,
+    // tangent ones included, as the committed body's edges would.
+    if (crossesFaces || !shouldSmooth) boundarySlots.push(slot);
+    if (!shouldSmooth) continue;
     for (const vertexIndex of [edgeStart[slot]!, edgeEnd[slot]!]) {
       const firstCorner = cornerForVertex(first, vertexIndex);
       const secondCorner = cornerForVertex(second, vertexIndex);
@@ -473,7 +490,7 @@ const DEPTH_BIASED_LINE_VERTEX_SHADER = (() => {
  * top, all but vanished — measured on the flange's hidden hub rim, only the
  * doubled caps survived, so a hidden edge drew as a row of dots.
  */
-const TRANSLUCENT_LINE_STENCIL = 2;
+export const TRANSLUCENT_LINE_STENCIL = 2;
 
 /** Makes a translucent fat line blend once per pixel instead of per segment. */
 export function drawFatLineOncePerPixel(material: LineMaterial) {
@@ -613,48 +630,73 @@ const DECORATION_STENCIL_TEST = {
 };
 
 /**
- * Classic CAD body material. Phong gives planar faces an even technical shade
- * and broad highlights on curves without environment-map reflections crawling
- * across tessellation triangles.
+ * The material every committed solid is drawn in. Code that needs the body's
+ * own material (buffer reuse, the selected-face fill) checks with
+ * {@link isBodyMaterial} rather than naming the three.js class, so changing
+ * the shading model is one edit here instead of a silent fallback elsewhere:
+ * an `instanceof` against the old class would quietly stop matching and send
+ * every edit down the full-rebuild path.
  */
-export function createBodyMaterial(body: GeometryBodyRepresentation) {
+export type BodyMaterial = THREE.MeshStandardMaterial;
+
+/** Whether `material` is a committed solid's material ({@link BodyMaterial}). */
+export function isBodyMaterial(material: unknown): material is BodyMaterial {
+  return material instanceof THREE.MeshStandardMaterial;
+}
+
+/**
+ * The CAD body material: a satin, non-metallic physically based finish lit by
+ * the studio rig (`studio.ts`). Its ambient term comes from the gradient
+ * environment, which is what gives tops, walls and undersides their own
+ * values; Phong ignored `scene.environment` entirely, which is why every face
+ * used to sit in one narrow band (U10). The environment holds no small
+ * features, so the reflection crawl across long tessellation triangles that
+ * once sent bodies to Phong has nothing sharp to reflect.
+ */
+export function createBodyMaterial(
+  body: GeometryBodyRepresentation
+): BodyMaterial {
   const opacity = body.opacity ?? 1;
   const translucent = opacity < 1;
   // Every exact result replaces the body's object, and the old one is
   // disposed before the new one draws: without this each commit, undo or
   // redo relinked the body shader from scratch.
-  return withCoplanarDepth(
-    keepProgram(
-      new THREE.MeshPhongMaterial({
-        color: body.color,
-        // A broad, dim highlight: at shininess 38 and #667487 every fillet
-        // corner and torus band carried a small white hotspot under the key
-        // light that read as a rendering glitch rather than a curve; at 18
-        // and #465160 the spherical corners still flared.
-        shininess: 14,
-        specular: '#2f3641',
-        transparent: translucent,
-        opacity,
-        // Translucent walls must not write depth or back faces and interior
-        // features hidden behind them would be culled instead of showing through.
-        depthWrite: !translucent,
-        stencilWrite: !translucent,
-        stencilRef: OPAQUE_BODY_STENCIL,
-        stencilWriteMask: OPAQUE_BODY_STENCIL,
-        stencilZPass: THREE.ReplaceStencilOp,
-        // Push only the disposable face rasterization back by the smallest
-        // practical depth-buffer bias. GL line materials ignore polygonOffset;
-        // keeping the bias on the faces lets depth-tested edge/sketch overlays
-        // sit stably on their exact model plane without moving authoritative
-        // geometry.
-        polygonOffset: true,
-        polygonOffsetFactor: 1,
-        polygonOffsetUnits: 1,
-        // Exact kernels emit consistently oriented closed faces. Keep culling on
-        // so an orientation regression remains visible instead of being hidden by
-        // a double-sided material.
-        side: THREE.FrontSide
-      })
+  // The settled ambient occlusion (ambientOcclusion.ts) wraps the coplanar
+  // depth hooks; until a viewer computes a frame it does nothing.
+  return withBodyAmbientOcclusion(
+    withCoplanarDepth(
+      keepProgram(
+        new THREE.MeshStandardMaterial({
+          color: body.color,
+          roughness: STUDIO_RIG.material.roughness,
+          metalness: STUDIO_RIG.material.metalness,
+          // A planar face now carries a gentle gradient, and on 8-bit output a
+          // gradient that spans one or two levels shows as a hard contour
+          // across the face. Dithering breaks the contour up.
+          dithering: true,
+          transparent: translucent,
+          opacity,
+          // Translucent walls must not write depth or back faces and interior
+          // features hidden behind them would be culled instead of showing through.
+          depthWrite: !translucent,
+          stencilWrite: !translucent,
+          stencilRef: OPAQUE_BODY_STENCIL,
+          stencilWriteMask: OPAQUE_BODY_STENCIL,
+          stencilZPass: THREE.ReplaceStencilOp,
+          // Push only the disposable face rasterization back by the smallest
+          // practical depth-buffer bias. GL line materials ignore polygonOffset;
+          // keeping the bias on the faces lets depth-tested edge/sketch overlays
+          // sit stably on their exact model plane without moving authoritative
+          // geometry.
+          polygonOffset: true,
+          polygonOffsetFactor: 1,
+          polygonOffsetUnits: 1,
+          // Exact kernels emit consistently oriented closed faces. Keep culling on
+          // so an orientation regression remains visible instead of being hidden by
+          // a double-sided material.
+          side: THREE.FrontSide
+        })
+      )
     )
   );
 }
@@ -709,13 +751,23 @@ export function createObjectForBody(
     const featureEdges = boundary
       ? undefined
       : new THREE.EdgesGeometry(geometry, 24);
+    if (!geometry.boundingSphere) geometry.computeBoundingSphere();
+    // The resting ink of the topology edge overlay: a drag's preview is drawn through here and its commit through the
+    // overlay, so the outline must not change at release. At partial opacity
+    // the overlapping caps of neighbouring segments blended twice and the
+    // coverage dither broke the line up, and without the depth bias a
+    // curved face's chords hid stretches of its rim: preview arcs read as
+    // beaded, dashed lines that turned crisp only once applied.
     const edges = createFatLineSegments(
       boundary ?? featureEdges!.getAttribute('position').array,
       {
-        color: '#0a0f16',
-        linewidth: 1.4,
-        opacity: 0.78,
-        resolution
+        color: SELECTION_SEMANTICS.idle.edge,
+        linewidth: SELECTION_SEMANTICS.idle.edgeWidth,
+        opacity: SELECTION_SEMANTICS.idle.edgeOpacity,
+        resolution,
+        depthBias: fatLineDepthBiasForExtent(
+          2 * (geometry.boundingSphere?.radius ?? 0)
+        )
       }
     );
     featureEdges?.dispose();
@@ -870,7 +922,7 @@ export function updateObjectForBody(
 ): boolean {
   if (
     !(object instanceof THREE.Mesh) ||
-    !(object.material instanceof THREE.MeshPhongMaterial) ||
+    !isBodyMaterial(object.material) ||
     !body.topology?.edges.length
   )
     return false;
@@ -963,30 +1015,6 @@ export function updateObjectForBody(
 }
 
 /**
- * Neutral studio rig baked to a PMREM environment map. One RoomEnvironment
- * render at startup gives every standard material soft studio reflections —
- * the single biggest step away from the flat "janky" WebGL look.
- */
-export function createStudioEnvironment(
-  renderer: THREE.WebGLRenderer
-): THREE.Texture {
-  const pmrem = new THREE.PMREMGenerator(renderer);
-  const texture = pmrem.fromScene(new RoomEnvironment(), 0.04);
-  pmrem.dispose();
-  return texture.texture;
-}
-
-/**
- * Z-up studio fill. The cool ground colour acts as bounced floor light so
- * downward-facing surfaces stay legible without flattening the key light.
- */
-export function createStudioHemisphereLight(): THREE.HemisphereLight {
-  const light = new THREE.HemisphereLight('#d7e6f7', '#e2e8f0', 0.45);
-  light.position.set(0, 0, 1);
-  return light;
-}
-
-/**
  * The stage colours a theme repaints: the backdrop gradient, the grid lines
  * and the ground shadow's strength. Everything else in the scene (bodies,
  * edges, axes, handles) reads on either stage.
@@ -1003,11 +1031,11 @@ export interface StagePalette {
 
 /** The graphite stage: the scene's colours before any theme is applied. */
 export const DARK_STAGE_PALETTE: Readonly<StagePalette> = {
-  backdropTop: '#171a1f',
-  backdropMiddle: '#101215',
-  backdropBottom: '#0b0c0f',
-  gridMinor: '#5c6573',
-  gridMajor: '#838d9c',
+  backdropTop: '#222428',
+  backdropMiddle: '#18191c',
+  backdropBottom: '#121315',
+  gridMinor: '#5a5e66',
+  gridMajor: '#878c95',
   shadowOpacity: 0.55
 };
 

@@ -4410,6 +4410,18 @@ export type AppDensity = 'compact' | 'comfortable';
 export type LibraryCardSize = 'small' | 'medium' | 'large';
 export type SettingsProjectionMode = 'perspective' | 'orthographic';
 export type SettingsDisplayMode = 'shaded-edges' | 'shaded' | 'wireframe';
+/**
+ * How a tangent edge — a fillet's or blend's rim, where two faces meet
+ * smoothly — draws at rest in Shaded + edges: in the full edge ink, in the
+ * quiet faint ink (the default), or not at all. Hovering or selecting one
+ * still highlights it, and wireframe and X-ray draw every edge regardless.
+ */
+export type SettingsTangentEdges = 'show' | 'faint' | 'hide';
+export const SETTINGS_TANGENT_EDGES: readonly SettingsTangentEdges[] = [
+  'show',
+  'faint',
+  'hide'
+];
 export type SettingsMiddleDrag = 'pan' | 'orbit' | 'zoom';
 /**
  * How to read a wheel event. `auto` classifies each one; the other two force
@@ -4491,6 +4503,8 @@ export interface AppSettings {
     defaultProjection: SettingsProjectionMode;
     showGrid: boolean;
     displayMode: SettingsDisplayMode;
+    /** How fillet and blend rims draw at rest in Shaded + edges. */
+    tangentEdges: SettingsTangentEdges;
     /** Wheel zoom moves toward the pointer rather than the orbit target. */
     zoomToCursor: boolean;
     /** What a middle-button drag does: pan, orbit, or zoom. */
@@ -4660,6 +4674,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     defaultProjection: 'perspective',
     showGrid: true,
     displayMode: 'shaded-edges',
+    tangentEdges: 'faint',
     zoomToCursor: true,
     middleDrag: 'pan',
     pointerNavigation: 'auto',
@@ -5171,8 +5186,13 @@ export const toSketchCompositeId = (value: string): SketchCompositeId =>
  * design's neutral (#b0b6cb), which the key light washed out on top faces so
  * that a selected one barely lifted. The viewport stage is dark in both
  * themes, so one value serves both.
+ *
+ * Desaturated from #99a0b2 at the same lightness with the studio lighting
+ * (U10): the physically based shading no longer washes top faces out, and
+ * the old steel-blue read as a blue part beside a neutral reference CAD
+ * view. A trace of cool remains so it still reads as metal, not plastic.
  */
-export const DEFAULT_BODY_COLOR = '#99a0b2';
+export const DEFAULT_BODY_COLOR = '#a2a6ae';
 
 /**
  * What a live command preview draws its result body in: the hue of the web

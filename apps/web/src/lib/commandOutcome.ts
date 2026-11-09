@@ -52,6 +52,8 @@ export function commandOutcomeMessage(label: string): string {
     if (operation === 'intersect') return 'Intersected bodies.';
     return 'United bodies.';
   }
+  // "Helical sweep profile": what it adds is a coil, not a profile.
+  if (/^helical sweep\b/i.test(trimmed)) return 'Coiled the profile.';
   const past = PAST_TENSE[verb!.toLowerCase()];
   if (past && rest.length > 0) {
     return `${past} ${rest.join(' ')}.`;

@@ -23,7 +23,11 @@ import {
   principalFrameFor,
   type PlacementFrame
 } from '../lib/inPlace/primitives';
-import { currentRenderProfile } from './viewer/renderProfile';
+import {
+  ambientOcclusionEnabled,
+  currentRenderProfile,
+  type FullRenderScope
+} from './viewer/renderProfile';
 import { createdBodiesToFrame, type AutoFrameRequest } from '../lib/autoFrame';
 import {
   readCubePalette,
@@ -95,6 +99,7 @@ import {
   CameraController,
   ANGLE_RIG_KIND,
   buildAngleHandle,
+  buildCoilHandle,
   buildLinearHandle,
   buildCylinderRadiusHandle,
   buildEdgeRadiusHandle,
@@ -152,6 +157,9 @@ import {
   type CylinderProfilePreview,
   faceTrianglesCentroid,
   createBodyEdgeOverlay,
+  DEFAULT_TANGENT_EDGE_STYLE,
+  type TangentEdgeStyle,
+  installSilhouetteUpdates,
   createAnalyticCylinderGhost,
   createFaceHighlightGeometry,
   createAxesGizmo,
@@ -172,9 +180,13 @@ import {
   disposeObject,
   keepProgram,
   createShadowCatcher,
+  aimCameraKey,
+  createCameraKeyLight,
   createStudioEnvironment,
   createStudioGrid,
   createStudioHemisphereLight,
+  DARK_STAGE_PALETTE,
+  STUDIO_RIG,
   dimensionLabelLayout,
   directEditDirectionFromNormal,
   fitCameraToObjects,
@@ -233,12 +245,16 @@ import {
   type CalloutLayoutItem,
   type DimensionGraphic,
   SELECTION_SEMANTICS,
+  AMBIENT_OCCLUSION,
+  SettledAmbientOcclusion,
   contextBodyColor,
+  isBodyMaterial,
   selectedFaceColor,
   SKETCH_GLIDE_MS,
   sketchGlideEase,
   viewJumpEase,
   type AngleRigParams,
+  type CoilRigParams,
   type CameraGlideStyle,
   type HandleVec3,
   type WheelDevice
@@ -771,6 +787,10 @@ export type CommandHandleView = (
       kind: 'linear';
       params: { origin: HandleVec3; direction: HandleVec3 };
     }
+  | {
+      kind: 'coil';
+      params: Omit<CoilRigParams, 'turns' | 'minTurns' | 'maxTurns'>;
+    }
   | { kind: 'chip'; params: { anchor: HandleVec3 } }
 ) & {
   valueId: string;
@@ -790,6 +810,10 @@ export type CommandHandleView = (
 const EMPTY_COMMAND_HANDLES: readonly CommandHandleView[] = [];
 /** How far inside the canvas edge a command chip is kept, in CSS pixels. */
 const COMMAND_CHIP_MARGIN_PX = 12;
+/** How far an axis name tag sits along its line from the line's origin. */
+const AXIS_LABEL_OFFSET_PX = 72;
+/** An axis tag closer than this to the canvas edge is moved or hidden. */
+const AXIS_LABEL_MARGIN_PX = 24;
 /**
  * How far a command chip's box centre stands above its point, in chip
  * heights: `.handle-value-chip` is drawn at translate(-50%, -130%).
@@ -1045,6 +1069,8 @@ export interface ModelViewerProps {
   fieldOfView?: number;
   /** Face opacity in X-ray (`settings.xray`), 0–1. */
   xrayOpacity?: number;
+  /** How resting fillet and blend rims draw in Shaded + edges. */
+  tangentEdges?: TangentEdgeStyle;
   /**
    * A whole smooth run of edges at once, from double-clicking one of them.
    *
@@ -2188,6 +2214,7 @@ export function ModelViewer({
   onBoxSelectTopology,
   fieldOfView = VIEWPORT_FIELD_OF_VIEW_BOUNDS.default,
   xrayOpacity = XRAY_OPACITY_BOUNDS.default / 100,
+  tangentEdges = DEFAULT_TANGENT_EDGE_STYLE,
   offsetHandle,
   onOffsetPreview,
   onOffsetCommit,
@@ -2396,6 +2423,8 @@ export function ModelViewer({
   unitLabelRef.current = displayLengthName(units as UnitSystem);
   const displayModeRef = useRef(settings.displayMode);
   displayModeRef.current = settings.displayMode;
+  const tangentEdgesRef = useRef(tangentEdges);
+  tangentEdgesRef.current = tangentEdges;
   const sectionViewRef = useRef(settings.sectionView ?? null);
   sectionViewRef.current = settings.sectionView ?? null;
   const exactSectionRef = useRef(exactSection);
@@ -2526,6 +2555,17 @@ export function ModelViewer({
   const planePickerRigRef = useRef<ReturnType<
     typeof buildPlanePickerRig
   > | null>(null);
+  /** Makes one axis name tag on the HUD; set when the viewer mounts. */
+  const axisLabelFactoryRef = useRef<(() => HTMLDivElement) | null>(null);
+  /** The axis picker's name tags, each placed on its line every frame. */
+  const axisLabelsRef = useRef<
+    {
+      id: string;
+      element: HTMLDivElement;
+      origin: THREE.Vector3;
+      direction: THREE.Vector3;
+    }[]
+  >([]);
   const axisPickerRigRef = useRef<ReturnType<typeof buildAxisPickerRig> | null>(
     null
   );
@@ -2795,9 +2835,12 @@ export function ModelViewer({
     const drawnBodyReport = new DrawnBodyReport();
     let lastPerfFrameAt: number | null = null;
     const scene = new THREE.Scene();
+    // Curved-surface outlines are picked per camera just before each render
+    // of this scene, for the viewport camera and any capture alike.
+    installSilhouetteUpdates(scene);
     // Solid clear colour stays behind the clip-space gradient as a safe first
     // frame/context-recovery fallback.
-    scene.background = new THREE.Color('#0b0c0f');
+    scene.background = new THREE.Color(DARK_STAGE_PALETTE.backdropBottom);
     const gradientBackdrop = createGradientBackdrop();
     scene.add(gradientBackdrop);
 
@@ -2855,8 +2898,11 @@ export function ModelViewer({
     // Material-level clipping for the section view; global clipping would
     // also cut the grid, backdrop, and gizmos.
     renderer.localClippingEnabled = true;
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.0;
+    // Neutral rather than ACES: ACES desaturated and hue-shifted the body
+    // colours people choose, and compressed the highlights that model
+    // curvature (U10).
+    renderer.toneMapping = STUDIO_RIG.toneMapping;
+    renderer.toneMappingExposure = STUDIO_RIG.toneMappingExposure;
     renderer.shadowMap.enabled = profile.shadows;
     renderer.shadowMap.autoUpdate = false;
     /**
@@ -2886,13 +2932,27 @@ export function ModelViewer({
     renderer.shadowMap.type = THREE.PCFShadowMap;
     host.appendChild(renderer.domElement);
 
-    // Studio environment rig: soft IBL reflections do the heavy lifting for
-    // "real CAD" shading, so the analytic lights stay gentle.
+    // Studio rig (viewport/render/studio.ts): the gradient environment gives
+    // each face orientation its value, the camera key separates walls.
     const environment = profile.environment
       ? timed('viewer.environment', () => createStudioEnvironment(renderer))
       : null;
     scene.environment = environment;
-    scene.environmentIntensity = 0.4;
+    scene.environmentIntensity = STUDIO_RIG.environmentIntensity;
+    // Contact shading in concave corners, computed once the view has come
+    // to rest and faded in; nothing while it moves (viewport
+    // render/ambientOcclusion.ts). `requestRender` is hoisted below.
+    const ambientOcclusion = ambientOcclusionEnabled(
+      profile,
+      AMBIENT_OCCLUSION.enabled,
+      window as FullRenderScope
+    )
+      ? new SettledAmbientOcclusion(renderer, () => requestRender(), {
+          // Perf builds wait for the GPU so the settle cost is measurable.
+          measureGpu: import.meta.env.OZ_PERF === '1'
+        })
+      : null;
+    let ambientOcclusionState: string | null = null;
     const interactionShaderWarmup = new InteractionShaderWarmup(
       renderer,
       scene
@@ -2944,12 +3004,23 @@ export function ModelViewer({
     };
     orientationDragRef.current = orientationDragControls;
 
-    // Z-up sky plus cool floor bounce keeps undersides readable without
-    // weakening the directional key that defines face orientation.
+    // A dim sky/floor fill beside the environment; without an environment map
+    // (E2E builds) it carries the ambient term on its own.
     const skyLight = createStudioHemisphereLight();
+    if (!environment) {
+      skyLight.intensity = STUDIO_RIG.hemisphereWithoutEnvironment;
+    }
     scene.add(skyLight);
-    // Right, front, above — the studio key that casts the grounding shadow.
-    const keyLight = new THREE.DirectionalLight('#ffffff', 1.35);
+    // The key that turns with the camera, aimed before every frame.
+    const cameraKey = createCameraKeyLight();
+    scene.add(cameraKey);
+    // Right, front, above — world-fixed, because it casts the grounding
+    // shadow and the shadow map is frozen while orbiting. Dim: the camera key
+    // does the modelling.
+    const keyLight = new THREE.DirectionalLight(
+      '#ffffff',
+      STUDIO_RIG.shadowKeyIntensity
+    );
     keyLight.position.set(90, -100, 140);
     keyLight.castShadow = true;
     tuneShadowFrustum(keyLight, 120, shadowMapSize);
@@ -2959,10 +3030,6 @@ export function ModelViewer({
     refreshShadowMap();
     scene.add(keyLight);
     scene.add(keyLight.target);
-    // Left, behind, slightly above — cool rim for edge separation.
-    const rimLight = new THREE.DirectionalLight('#7aa3d0', 0.5);
-    rimLight.position.set(-80, 90, 40);
-    scene.add(rimLight);
 
     // Shader construction plane with distance fade, plus an invisible floor
     // that only receives the key light's soft shadow.
@@ -3175,6 +3242,7 @@ export function ModelViewer({
               const mesh = createObjectForBody(body!, resolution);
               const edges = createBodyEdgeOverlay(body!, resolution);
               edges.setDisplayMode(displayModeRef.current);
+              edges.setTangentEdgeStyle(tangentEdgesRef.current);
               mesh.add(edges);
               copy.add(mesh);
               applyDisplayMode(copy, displayModeRef.current, xrayRef.current);
@@ -3321,9 +3389,9 @@ export function ModelViewer({
             grid: [grid, axes],
             content: [
               skyLight,
+              cameraKey,
               keyLight,
               keyLight.target,
-              rimLight,
               shadowCatcher,
               bodyGroup,
               regionGroup,
@@ -3781,9 +3849,45 @@ export function ModelViewer({
       if (!offsetGhost) return;
       offsetGhost.dispose();
       offsetGhost = null;
+      showHighlightsUnderGhost();
       offsetRigRef.current?.setChangeShownByBody?.(false);
       delete renderer.domElement.dataset.e2eOffsetGhost;
       requestRender();
+    }
+    // The moved face's selection fill lies under the ghost wherever a push
+    // removes material, and seen through the ghost's differently lit top and
+    // sides it reads as a misplaced blue panel standing off the part. The
+    // handle marks the face meanwhile; the fill returns with the ghost gone.
+    // Each one hidden keeps the visibility it had, to hand back.
+    const highlightsUnderGhost = new Map<THREE.Object3D, boolean>();
+    function hideHighlightsUnderGhost(live: THREE.Object3D | undefined) {
+      live?.traverse((child) => {
+        if (
+          child.name !== 'body-face-selected' &&
+          child.name !== 'body-face-selected-hidden'
+        )
+          return;
+        if (!highlightsUnderGhost.has(child))
+          highlightsUnderGhost.set(child, child.visible);
+        child.visible = false;
+      });
+    }
+    function showHighlightsUnderGhost() {
+      for (const [highlight, visible] of highlightsUnderGhost)
+        highlight.visible = visible;
+      highlightsUnderGhost.clear();
+    }
+    // While the pointer holds the face, material the drag adds is still a
+    // proposal and draws as ghost; letting go makes the part solid again.
+    function syncOffsetVeil() {
+      if (!offsetGhost) return;
+      const target = offsetHandleRef.current;
+      const body = target ? context.objectsByBodyId.get(target.bodyId) : null;
+      // Selection rebuilds its overlays with each preview body, so this
+      // runs every frame the ghost is up.
+      hideHighlightsUnderGhost(body ?? undefined);
+      const live = offsetDrag ? body : null;
+      offsetGhost.veilAddedMaterial(live instanceof THREE.Mesh ? live : null);
     }
     offsetGhostClearRef.current = clearOffsetGhost;
     offsetGhostClipRef.current = (plane) => {
@@ -4387,6 +4491,70 @@ export function ModelViewer({
       chip.hidden = true;
       return chip;
     };
+    axisLabelFactoryRef.current = () => hud.create('axis-pick-label');
+    /**
+     * Sets each axis name tag a little way along its own line from the
+     * line's origin, on whichever side stays on the canvas; hides it behind
+     * the camera. Two lines through one point (a sketch's two axes) part
+     * along their own directions, so their tags never stack.
+     */
+    function updateAxisLabels() {
+      const labels = axisLabelsRef.current;
+      if (labels.length === 0) return;
+      const camera = context.activeCamera;
+      const width = canvasWidth();
+      const height = canvasHeight();
+      const toScreen = (point: THREE.Vector3) => {
+        const ndc = point.clone().project(camera);
+        return {
+          x: ((ndc.x + 1) / 2) * width,
+          y: ((1 - ndc.y) / 2) * height
+        };
+      };
+      const inside = (at: { x: number; y: number }) =>
+        at.x > AXIS_LABEL_MARGIN_PX &&
+        at.x < width - AXIS_LABEL_MARGIN_PX &&
+        at.y > AXIS_LABEL_MARGIN_PX &&
+        at.y < height - AXIS_LABEL_MARGIN_PX;
+      for (const label of labels) {
+        if (isBehindCamera(label.origin, camera)) {
+          label.element.hidden = true;
+          continue;
+        }
+        const base = toScreen(label.origin);
+        const ahead = toScreen(
+          label.origin
+            .clone()
+            .addScaledVector(label.direction, worldPerPixelAt(label.origin))
+        );
+        const length = Math.hypot(ahead.x - base.x, ahead.y - base.y);
+        // A line seen end-on has no side to sit along: the tag sits on it.
+        const along =
+          length > 1e-6
+            ? { x: (ahead.x - base.x) / length, y: (ahead.y - base.y) / length }
+            : { x: 0, y: 0 };
+        const forward = {
+          x: base.x + along.x * AXIS_LABEL_OFFSET_PX,
+          y: base.y + along.y * AXIS_LABEL_OFFSET_PX
+        };
+        const backward = {
+          x: base.x - along.x * AXIS_LABEL_OFFSET_PX,
+          y: base.y - along.y * AXIS_LABEL_OFFSET_PX
+        };
+        const at = inside(forward)
+          ? forward
+          : inside(backward)
+            ? backward
+            : inside(base)
+              ? base
+              : null;
+        if (!at) {
+          label.element.hidden = true;
+          continue;
+        }
+        hud.showAt(label.element, at.x, at.y);
+      }
+    }
     /** Places each command chip at its handle; hides any off screen. */
     function updateCommandChips() {
       const rigs = commandRigsRef.current;
@@ -6003,6 +6171,8 @@ export function ModelViewer({
           name: string;
           renderOrder: number;
           visible: boolean;
+          materialVisible: boolean;
+          opacity: number;
         }[] = [];
         root.traverse((child) => {
           if (child instanceof LineSegments2) {
@@ -6011,7 +6181,9 @@ export function ModelViewer({
               depthWrite: child.material.depthWrite,
               name: child.name,
               renderOrder: child.renderOrder,
-              visible: child.visible
+              visible: child.visible,
+              materialVisible: child.material.visible,
+              opacity: child.material.opacity
             });
           }
         });
@@ -10866,6 +11038,10 @@ export function ModelViewer({
       if (offsetDrag && event.pointerId === offsetDrag.pointerId) {
         const completed = offsetDrag;
         offsetDrag = null;
+        // Letting go makes the pulled material solid at once, before the
+        // commit lands; the ghost of the old part stays until it does.
+        syncOffsetVeil();
+        requestRender();
         offsetDragActiveRef.current = false;
         onDirectManipulationChangeRef.current(false);
         gestures.release(event, 'grab');
@@ -11294,6 +11470,7 @@ export function ModelViewer({
         previous?.dispose();
       }
       refreshShadowMap();
+      ambientOcclusion?.invalidate();
       resizePending = true;
       requestRender();
     };
@@ -11404,6 +11581,11 @@ export function ModelViewer({
      * sleep sees the whole idle gap on the clock, which is not animation time.
      */
     let loopWasAnimating = false;
+    /**
+     * Whether only the ambient occlusion fade kept it awake. Those frames are
+     * drawn at rest, so they say nothing about how fast the device navigates.
+     */
+    let loopOnlyFading = false;
     const frameMeter = new FrameIntervalMeter();
     const resetAnimationContinuity = () => {
       loopWasAnimating = false;
@@ -11413,7 +11595,9 @@ export function ModelViewer({
       animationFrame = null;
       const frameStarted = performance.now();
       const continuous =
-        loopWasAnimating && document.visibilityState !== 'hidden';
+        loopWasAnimating &&
+        !loopOnlyFading &&
+        document.visibilityState !== 'hidden';
       frameMeter.sample(now, continuous);
       // The view cube's widget can remount with the chrome; follow whichever
       // link is current, and push it the camera at once so its hit layer is
@@ -11645,10 +11829,12 @@ export function ModelViewer({
       }
       const cylinderRadiusProxyFrame = flushCylinderRadiusProxy();
       const offsetBodyProxyFrame = flushOffsetBodyProxy();
+      syncOffsetVeil();
       updateOffsetChip();
       // After the offset chip, which clears the keypad anchor without a rig
       // of its own: the command's anchor has to be the frame's last word.
       updateCommandChips();
+      updateAxisLabels();
       // Read the current presentation after every preview has posed its meshes.
       // Reuse the body's bounds for the scale bar, then include sketches in the
       // camera range without letting grids, axes or HUD decorations set it.
@@ -11727,6 +11913,28 @@ export function ModelViewer({
         cubeProjection = projectCube(cubeAxes);
         cubeLink?.update(cubeAxes);
         cubeLinkFresh = false;
+      }
+      aimCameraKey(cameraKey, context.activeCamera.quaternion);
+      // After everything above has posed the bodies and the camera: a change
+      // to either hides the occlusion until the view rests again.
+      const occlusion = ambientOcclusion?.beforeRender({
+        now,
+        camera: context.activeCamera,
+        roots: [bodyGroup],
+        enabled: !xrayRef.current && displayModeRef.current !== 'wireframe',
+        reducedMotion: reducesMotion(reducedMotionRef.current)
+      });
+      if (occlusion) {
+        if (
+          e2eCanvasHooksEnabled &&
+          occlusion.state !== ambientOcclusionState
+        ) {
+          renderer.domElement.dataset.e2eAmbientOcclusion = occlusion.state;
+        }
+        ambientOcclusionState = occlusion.state;
+        if (occlusion.computedMs !== null && import.meta.env.OZ_PERF === '1') {
+          mark('viewer.ambientOcclusion', { ms: occlusion.computedMs });
+        }
       }
       let renderStarted = performance.now();
       // The first draw compiles every material's shaders and uploads the
@@ -11858,7 +12066,8 @@ export function ModelViewer({
       );
 
       const hoverAnimating = selection.isSettling;
-      loopWasAnimating =
+      const occlusionFading = occlusion?.animating ?? false;
+      const sceneAnimating =
         tweening ||
         zooming ||
         controlsChanged ||
@@ -11869,6 +12078,8 @@ export function ModelViewer({
         retiringOverlaysRef.current.length > 0 ||
         inferenceAnimating ||
         context.fadeIns.size > 0;
+      loopWasAnimating = sceneAnimating || occlusionFading;
+      loopOnlyFading = occlusionFading && !sceneAnimating;
       if (loopWasAnimating) {
         requestRender();
       }
@@ -11914,6 +12125,7 @@ export function ModelViewer({
 
     return () => {
       interactionShaderWarmup.dispose();
+      ambientOcclusion?.dispose();
       document.removeEventListener(
         'visibilitychange',
         resetAnimationContinuity
@@ -12509,6 +12721,7 @@ export function ModelViewer({
       if (!edgeOverlay) {
         edgeOverlay = createBodyEdgeOverlay(body, edgeResolution);
         edgeOverlay.setDisplayMode(displayModeRef.current);
+        edgeOverlay.setTangentEdgeStyle(tangentEdgesRef.current);
         object.add(edgeOverlay);
         context.edgeOverlaysByBodyId.set(body.bodyId, edgeOverlay);
       }
@@ -12543,8 +12756,7 @@ export function ModelViewer({
        * old translucent accent film, since nothing recedes there.
        */
       const bodyMaterial =
-        object instanceof THREE.Mesh &&
-        object.material instanceof THREE.MeshPhongMaterial
+        object instanceof THREE.Mesh && isBodyMaterial(object.material)
           ? object.material
           : null;
       const selectedFill = (geometry: THREE.BufferGeometry) => {
@@ -14296,14 +14508,65 @@ export function ModelViewer({
     if (!context || axisPickerKey === null) {
       return;
     }
-    const rig = buildAxisPickerRig(axisPickerCandidatesRef.current);
+    const rig = buildAxisPickerRig(
+      axisPickerCandidatesRef.current,
+      context.fatLineResolution()
+    );
     rig.setScale(() => 0.05);
     context.scene.add(rig.group);
     axisPickerRigRef.current = rig;
+    // Each line's name on a tag that picks it too: easier to aim at than
+    // a line, and it says what the line is.
+    const makeLabel = axisLabelFactoryRef.current;
+    const labels = makeLabel
+      ? axisPickerCandidatesRef.current.flatMap((candidate) => {
+          if (!candidate.label) return [];
+          const element = makeLabel();
+          element.textContent = candidate.label;
+          element.setAttribute('role', 'button');
+          element.setAttribute('aria-label', `Use the ${candidate.label}`);
+          element.tabIndex = 0;
+          element.dataset.testid = `axis-pick-${candidate.id}`;
+          const pick = () => onPickAxisRef.current?.(candidate.id);
+          const hover = (id: string | null) => {
+            axisPickerRigRef.current?.setHover(id);
+            context.requestRender();
+          };
+          element.addEventListener('click', pick);
+          element.addEventListener('keydown', (event) => {
+            if (event.key !== 'Enter' && event.key !== ' ') return;
+            // Enter and Space are the workspace's own shortcuts too.
+            event.preventDefault();
+            event.stopPropagation();
+            pick();
+          });
+          element.addEventListener('pointerenter', () => hover(candidate.id));
+          element.addEventListener('pointerleave', () => hover(null));
+          return [
+            {
+              id: candidate.id,
+              element,
+              origin: new THREE.Vector3(
+                candidate.origin.x,
+                candidate.origin.y,
+                candidate.origin.z
+              ),
+              direction: new THREE.Vector3(
+                candidate.direction.x,
+                candidate.direction.y,
+                candidate.direction.z
+              ).normalize()
+            }
+          ];
+        })
+      : [];
+    axisLabelsRef.current = labels;
     context.requestRender();
     return () => {
       context.scene.remove(rig.group);
       rig.dispose();
+      for (const label of labels) label.element.remove();
+      if (axisLabelsRef.current === labels) axisLabelsRef.current = [];
       if (axisPickerRigRef.current === rig) {
         axisPickerRigRef.current = null;
       }
@@ -14313,6 +14576,12 @@ export function ModelViewer({
   const selectedAxisId = axisPicker?.selectedId ?? null;
   useEffect(() => {
     axisPickerRigRef.current?.setSelected(selectedAxisId);
+    for (const label of axisLabelsRef.current) {
+      label.element.classList.toggle(
+        'is-selected',
+        label.id === selectedAxisId
+      );
+    }
     contextRef.current?.requestRender();
   }, [selectedAxisId, axisPickerKey]);
 
@@ -14355,7 +14624,17 @@ export function ModelViewer({
                 ...(handle.min === undefined ? {} : { min: handle.min }),
                 ...(handle.max === undefined ? {} : { max: handle.max })
               })
-            : null;
+            : handle.kind === 'coil'
+              ? buildCoilHandle({
+                  ...handle.params,
+                  turns: handle.value,
+                  // A count above zero: the rig keeps a sliver of a turn.
+                  ...(handle.min === undefined || handle.min <= 0
+                    ? {}
+                    : { minTurns: handle.min }),
+                  ...(handle.max === undefined ? {} : { maxTurns: handle.max })
+                })
+              : null;
       if (rig) {
         context.scene.add(rig.group);
         context.scene.add(rig.worldGroup);
@@ -15317,6 +15596,16 @@ export function ModelViewer({
       context.requestRender();
     }
   }, [settings.showGrid, settings.displayMode, settings.xray]);
+
+  useEffect(() => {
+    const context = contextRef.current;
+    if (!context) return;
+    let changed = false;
+    for (const edgeOverlay of context.edgeOverlaysByBodyId.values()) {
+      changed = edgeOverlay.setTangentEdgeStyle(tangentEdges) || changed;
+    }
+    if (changed) context.requestRender();
+  }, [tangentEdges]);
 
   useEffect(() => {
     const context = contextRef.current;

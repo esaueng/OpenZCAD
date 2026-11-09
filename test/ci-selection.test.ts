@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { browserSpecsFromChanges, selectCI } from '../scripts/ci-selection.mjs';
+import {
+  additiveUnitManifest,
+  browserSpecsFromChanges,
+  selectCI
+} from '../scripts/ci-selection.mjs';
 import {
   relatedFiles,
   runUnits,
@@ -9,6 +13,55 @@ import { unitTestInclude } from '../scripts/unit-suites.mjs';
 import { resolve } from 'node:path';
 
 describe('critical and affected CI selection', () => {
+  it('narrows only semantic additions that preserve both critical manifests', () => {
+    const before = { root: ['test/auth.test.ts'], web: ['src/App.test.tsx'] };
+    const after = { ...before, root: [...before.root, 'test/io.test.ts'] };
+    expect(
+      additiveUnitManifest(JSON.stringify(before), JSON.stringify(after))
+    ).toBe(true);
+    for (const invalid of [
+      before,
+      { ...after, root: ['test/io.test.ts'] },
+      { ...after, web: [] },
+      { ...after, root: [...after.root, 'test/io.test.ts'] },
+      { ...after, extra: [] },
+      { ...after, root: ['../auth.test.ts'] }
+    ])
+      expect(
+        additiveUnitManifest(JSON.stringify(before), JSON.stringify(invalid))
+      ).toBe(false);
+    expect(additiveUnitManifest('not JSON', JSON.stringify(after))).toBe(false);
+    expect(
+      selectCI(['test/unit-ci-files.json'], { manifestAdditions: true }).unit
+    ).toBe('smoke');
+    expect(selectCI(['test/unit-ci-files.json']).unit).toBe('full');
+    expect(
+      selectCI(['test/unit-ci-files.json', 'pnpm-lock.yaml'], {
+        manifestAdditions: true
+      }).unit
+    ).toBe('full');
+  });
+
+  it('retains critical policy tests and invalidates dynamically loaded package assets', () => {
+    for (const path of [
+      '.github/workflows/dependency-audit.yml',
+      'scripts/dependency-audit-selection.mjs',
+      'scripts/install-cargo-audit.sh'
+    ])
+      expect(selectCI([path]).unit).toBe('smoke');
+    for (const path of [
+      'packages/kernel-adapter/src/fixture.json',
+      'packages/kernel-adapter/src/kernel.wasm',
+      'packages/shared/src/template.svg'
+    ])
+      expect(selectCI([path]).unit).toBe('full');
+    expect(unitTestInclude('root', { CI: 'true' })).toContain(
+      'test/css-class-coverage.test.ts'
+    );
+    expect(unitTestInclude('root', { CI: 'true' })).toContain(
+      'test/ci-runtime-optimization.test.ts'
+    );
+  });
   it('runs the full project on failed discovery and preserves the real test exit code', () => {
     const calls: string[][] = [];
     const status = runUnits(

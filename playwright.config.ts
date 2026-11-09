@@ -110,6 +110,8 @@ export default defineConfig({
     timeout: process.env.CI ? 30_000 : 5_000
   },
   use: {
+    trace: process.env.CI ? 'on-first-retry' : 'off',
+    screenshot: process.env.CI ? 'only-on-failure' : 'off',
     baseURL: `http://127.0.0.1:${PORT}`,
     // Playwright's default emulation prefers LIGHT, and the theme setting's
     // 'system' default follows it — so without this pin the whole suite would

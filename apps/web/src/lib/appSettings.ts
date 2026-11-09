@@ -4,6 +4,7 @@ import {
   EXPORT_UNITS,
   normalizeHiddenRelationGlyphs,
   PANEL_WIDTH_LIMITS,
+  SETTINGS_TANGENT_EDGES,
   VIEWPORT_FIELD_OF_VIEW_BOUNDS,
   XRAY_OPACITY_BOUNDS,
   UNITLESS_IMPORT_UNITS,
@@ -222,6 +223,12 @@ export function normalizeAppSettings(value: unknown): AppSettings {
         viewport.displayMode,
         DISPLAY_MODES,
         defaults.viewport.displayMode
+      ),
+      // Absent from settings written before it existed: the faint rims.
+      tangentEdges: member(
+        viewport.tangentEdges,
+        SETTINGS_TANGENT_EDGES,
+        defaults.viewport.tangentEdges
       ),
       zoomToCursor: boolean(
         viewport.zoomToCursor,

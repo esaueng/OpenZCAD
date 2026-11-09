@@ -171,7 +171,8 @@ button.command-rail:hover:not(:disabled, [aria-disabled='true'], .active),
 /*
  * Menu items rest as bare rows and become a whole button under the pointer
  * or keyboard focus, so moving through a menu reads the same as hovering
- * any other action. A destructive item's edge takes the red of its fill.
+ * any other action. The toolbar Views dropdowns' tiles follow the same
+ * rule. A destructive item's edge takes the red of its fill.
  */
 :is(
     .context-menu-item,
@@ -179,7 +180,9 @@ button.command-rail:hover:not(:disabled, [aria-disabled='true'], .active),
     .topbar-menu-item,
     .start-tile-menu button,
     .motion-track-menu-item,
-    .encryption-menu-copy
+    .encryption-menu-copy,
+    .rail-views-panel button,
+    .view-mode-views-panel button
   ):is(:hover, :focus-visible):not(:disabled) {
   box-shadow: inset 0 0 0 1px var(--color-border-strong);
 }
@@ -191,6 +194,17 @@ button.command-rail:hover:not(:disabled, [aria-disabled='true'], .active),
   ):is(:hover, :focus-visible):not(:disabled) {
   box-shadow: inset 0 0 0 1px
     color-mix(in srgb, var(--color-error) 50%, transparent);
+}
+
+/*
+ * Sketch rail flyouts (the type strip, the folded modify tools, the point
+ * relations) rest bare too; an armed item keeps its accent fill and edge.
+ */
+:is(.sketch-type-tile, .sketch-modify-item, .sketch-point-relation):is(
+    :hover,
+    :focus-visible
+  ):not(:disabled):not(.active) {
+  box-shadow: inset 0 0 0 1px var(--color-border-strong);
 }
 
 /*
@@ -208,6 +222,85 @@ button.command-rail:hover:not(:disabled, [aria-disabled='true'], .active),
 .settings-segmented input:hover:not(:checked):not(:disabled) + span {
   background: var(--color-surface-hover);
   box-shadow: inset 0 0 0 1px var(--color-border-strong);
+}
+
+/*
+ * Secondary buttons that still rested filled: the Measure dock's mode tabs,
+ * radial toggle, row-editor and footer actions, the inspector's and the
+ * assembly panel's tool buttons, and the pattern progress Cancel. They rest
+ * bare and become a whole button under the pointer or keyboard focus; a
+ * chosen tab keeps its accent fill.
+ */
+.measurement-mode-tabs button:not(.active):not(:hover):not(:focus-visible),
+.measurement-radial-toggle button:not(.active):not(:hover):not(:focus-visible),
+.measurement-row-editor-actions button:not(:hover):not(:focus-visible),
+.measurement-dock-foot button:not(:hover):not(:focus-visible),
+.tool-button:not(:hover):not(:focus-visible),
+.assembly-tool-button:not(:hover):not(:focus-visible),
+.pattern-progress button:not(:hover):not(:focus-visible) {
+  background: transparent;
+  border-color: transparent;
+}
+
+/* Borderless at rest, so their hover edge is drawn inset and nothing moves. */
+.drawing-tool-hint-cancel:not(:hover):not(:focus-visible),
+.view-mode-section-off:not(:hover):not(:focus-visible) {
+  background: transparent;
+}
+
+/* An unchosen joint kind rests bare like an unchosen chip. */
+.assembly-kind-option:not(.is-active):not(:hover):not(:focus-visible) {
+  background: transparent;
+  border-color: transparent;
+}
+
+.drawing-tool-hint-cancel:is(:hover, :focus-visible),
+.view-mode-section-off:is(:hover, :focus-visible) {
+  background: var(--color-surface-hover);
+  box-shadow: inset 0 0 0 1px var(--color-border-strong);
+}
+
+.assembly-kind-option:not(.is-active):not(:disabled):is(
+    :hover,
+    :focus-visible
+  ) {
+  background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
+}
+
+.measurement-row-editor-actions button:hover:not(:disabled),
+.measurement-dock-foot button:hover:not(:disabled),
+.tool-button:hover:not(:disabled),
+.assembly-tool-button:hover:not(:disabled),
+.pattern-progress button:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
+}
+
+/*
+ * Dropdowns rest bare, the native arrow alone marking them, and become a
+ * whole control under the pointer; focus keeps the accent ring. The html
+ * prefix lifts this over the component rules that only size a select. Two
+ * keep their own field look: the new-project form's sunk fields, and the
+ * object filter, whose select sits inside the filter's own box.
+ */
+html select:not([multiple]):not(.start-field *):not(.object-filter *) {
+  background-color: transparent;
+  border-color: transparent;
+  cursor: pointer;
+}
+
+html
+  select:not([multiple]):not(.start-field *):not(.object-filter *):hover:not(
+    :disabled
+  ):not(:focus) {
+  background-color: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
+}
+
+html select:not([multiple]):not(.start-field *):not(.object-filter *):focus {
+  background-color: var(--color-bg);
+  border-color: var(--color-accent);
 }
 
 /*

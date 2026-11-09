@@ -235,8 +235,12 @@ describe('applyStagePalette', () => {
     expect(scene.background.getHexString()).toBe('e6e6e6');
 
     applyStagePalette({ backdrop, grid, shadowCatcher }, DARK_STAGE_PALETTE);
-    expect(hex(backdropMaterial, 'middleColor')).toBe('101215');
-    expect(hex(gridMaterial, 'majorColor')).toBe('838d9c');
+    expect(`#${hex(backdropMaterial, 'middleColor')}`).toBe(
+      DARK_STAGE_PALETTE.backdropMiddle
+    );
+    expect(`#${hex(gridMaterial, 'majorColor')}`).toBe(
+      DARK_STAGE_PALETTE.gridMajor
+    );
     expect((shadowCatcher.material as THREE.ShadowMaterial).opacity).toBe(0.55);
 
     for (const mesh of [backdrop, grid, shadowCatcher]) {
@@ -259,15 +263,20 @@ describe('createGradientBackdrop', () => {
     expect(material.transparent).toBe(false);
     expect(material.toneMapped).toBe(false);
     expect(material.dithering).toBe(true);
+    const stop = (name: string) =>
+      `#${(material.uniforms[name]!.value as THREE.Color).getHexString()}`;
+    expect(stop('topColor')).toBe(DARK_STAGE_PALETTE.backdropTop);
+    // --color-viewport-bg: the stage the islands float on.
+    expect(stop('middleColor')).toBe(DARK_STAGE_PALETTE.backdropMiddle);
+    expect(stop('bottomColor')).toBe(DARK_STAGE_PALETTE.backdropBottom);
+    // A neutral graphite, not near-black: the outline and grid need a stage
+    // to read against (U10).
     expect(
-      (material.uniforms.topColor!.value as THREE.Color).getHexString()
-    ).toBe('171a1f');
-    expect(
-      (material.uniforms.middleColor!.value as THREE.Color).getHexString()
-    ).toBe('101215'); // --color-viewport-bg: the stage the islands float on
-    expect(
-      (material.uniforms.bottomColor!.value as THREE.Color).getHexString()
-    ).toBe('0b0c0f');
+      new THREE.Color(stop('middleColor')).getHSL(
+        { h: 0, s: 0, l: 0 },
+        THREE.SRGBColorSpace
+      ).l
+    ).toBeGreaterThan(0.08);
     expect(material.uniforms.middleStop!.value).toBe(0.45);
     expect(material.fragmentShader).toContain(
       '#include <dithering_pars_fragment>'

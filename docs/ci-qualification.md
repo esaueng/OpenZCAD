@@ -1,6 +1,6 @@
 # Fast PR checks and complete qualification
 
-The staged `fleet-ci-v7.yml` separates lint and typecheck, partitions root
+The staged `fleet-ci-v8.yml` supersedes v7, separates lint and typecheck, partitions root
 unit tests over two runners, and combines the critical unit manifest with
 Vitest's affected-file inventory from the full project. Changed tests are
 eligible even when they are absent from the smoke manifest. Missing Git
@@ -20,8 +20,23 @@ immediately, manually dispatch `ci` on the PR branch; a rerun retains its
 original event payload. Unit selection
 and timing artifacts identify the files executed by each partition.
 
+An additive edit to `test/unit-ci-files.json` keeps critical plus affected
+selection only when both valid manifests retain every previous entry. Removals,
+replacements, malformed manifests and missing baselines still require complete
+units. Package assets loaded outside the import graph also require complete
+units. The dependency-audit workflow, its selector and tool installer have
+dedicated tests in the critical manifest; other unknown scripts/workflows
+remain broad inputs. CSS class coverage stays critical.
+
+The v8 preflight runs the kernel declaration before application jobs. It remains
+inside required `checks / validate`, so activating v8 does not depend on a
+branch-protection setting change. Failed, missing or canceled preflights cannot
+start application jobs or satisfy the completion gates.
+
 Ordinary merge candidates run the unit selection, build/parity and browser
-history/save journeys against the combined tree. Explicit full requests and
+five tagged history/save canaries against the combined tree. They are a bounded
+selection, not all cases in those two files. Queue reports retain the source
+run and failure context. Explicit full requests and
 browser regression deletions run the full browser partitions. A skipped or failed selected set cannot satisfy
 the completion gates. Prior PR success does not stand in for a combined-tree
 browser check.
@@ -49,14 +64,15 @@ geometry, privacy, persistence or timeout assertions to clear it.
 
 The staging PR leaves `ci.yml` and `fleet-ci-v6.yml` unchanged. After it lands:
 
-1. Require the new `kernel-pin-declaration` context, retaining all existing
-   required contexts and their GitHub App bindings.
-2. Activate v7 at the staging squash commit reachable from main, following
+1. Retain the inline kernel declaration and all six existing required contexts
+   and their GitHub App bindings. Requiring the separate declaration is an
+   optional settings change; it must be verified before removing inline enforcement.
+2. Activate v8 at the staging squash commit reachable from main, following
    [runner routing](runner-routing.md). Verify the new version on that PR's
    exact head and separate merge candidate before retiring v6.
-3. Remove label events from expensive `ci.yml`. The separate `kernel-pin.yml`
-   workflow continues to re-evaluate declarations on label addition/removal,
-   without replacing the required unit/browser check suite.
+3. Keep label events until the separate declaration is required. Any later
+   trigger change must document when `ci:full` takes effect and update policy
+   tests with it.
 
 Compare PR and merge-candidate P50/P95 latency, summed runner-minutes and
 daily-only regressions before reducing the critical manifest or shard count

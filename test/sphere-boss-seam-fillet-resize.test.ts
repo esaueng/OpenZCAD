@@ -5,10 +5,7 @@ import {
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
 import type { BodyId, FaceTopology, ProjectDocument } from '@openzcad/shared';
-import {
-  splitRefusal,
-  warningForFeature
-} from '../apps/web/src/lib/featureValidation';
+import { listFeaturesInOrder } from '@openzcad/document-core';
 import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
 import { sphereCylinderUnionInputs } from './support/sphere-cylinder-union';
 import { inspectTriangleMeshClosure } from '../packages/kernel-adapter/src/boolean-result-validation';
@@ -18,19 +15,19 @@ import { inspectTriangleMeshClosure } from '../packages/kernel-adapter/src/boole
  * grows out of a sphere, with its seam rounded by an R2 fillet
  * (docs/plans/kernel-robustness-plan-2026-11-05.md, WS6/WS7, reference R2).
  *
- * An imported body has no source dimension, so the only route is local: the
- * WS6 ladder would remove the seam band, resize the sharp wall and rebuild the
- * band. The off-axis seam still cannot be rebuilt exactly on this pin, so
- * the edit must refuse with the typed cause and leave the body alone. The
- * second block pins each missing kernel capability on its own: when a Remus
- * pin bump makes one of them succeed, the remaining tripwires identify which
- * WS6 step can now be built. Exact coaxial torus-band removal is qualified
- * separately; it does not make the off-axis freeform reblend exact.
+ * An imported body has no source dimension, so the only route is local. The
+ * kernel's detailed resize removes the seam band, resizes the sharp wall and
+ * rolls the R2 ball back onto the new seam in one call. The off-axis band has
+ * no exact form, so under the owner's 2026-11-06 rule it comes back at the
+ * approximate quality it already had, disclosed, and must match the body the
+ * source route builds. The second block pins the remaining kernel gaps for
+ * the adapter's own WS6 ladder: when a Remus pin bump makes one of them
+ * succeed, the tripwire identifies which step can now be built.
  */
 
 const SEAM_FILLET = 2;
-const EXACT_ONLY =
-  'Resizing this face would require an approximate fillet. This edit only allows exact geometry.';
+const APPROXIMATE_REBLEND =
+  'The fillet along this wall was rebuilt at its new size as an approximate surface, as it was before: a NURBS fit within modeling tolerance. Volume, measurements and STEP export use that approximate surface.';
 
 describe('direct resize of a seam-filleted boss on a sphere', () => {
   let adapter: ExactKernelAdapter;
@@ -105,45 +102,109 @@ describe('direct resize of a seam-filleted boss on a sphere', () => {
     adapter.dispose();
   });
 
-  it.each([7, 5])(
-    'refuses r 6 → %d with the exact-only reblend cause',
+  function resized(radius: number): ProjectDocument {
+    return new CommandManager(document).runTransaction('Resize', [
+      commandFactories.directEditBody({
+        name: 'Resize Cylinder',
+        targetBodyId: bodyId,
+        operation: {
+          kind: 'resize-cylindrical-face',
+          faceHash: wall.hash,
+          ...(wall.reference ? { faceReference: wall.reference } : {}),
+          sourceRadius: 6,
+          sourceAxisStart: wall.geometry!.axisStart!,
+          sourceAxisEnd: wall.geometry!.axisEnd!,
+          concavity: 'boss',
+          radius
+        }
+      })
+    ]);
+  }
+
+  /** The source route: the same history with the Cylinder itself resized. */
+  async function sourceRouteVolume(radius: number): Promise<number> {
+    const manager = new CommandManager(document);
+    const cylinder = listFeaturesInOrder(manager.document).find(
+      (feature) => feature.name === 'Cylinder'
+    )!;
+    if (cylinder.data.featureKind !== 'primitive') {
+      throw new Error('The boss source is not a primitive.');
+    }
+    manager.execute(
+      commandFactories.updateFeature(
+        {
+          featureId: cylinder.featureId,
+          data: { dimensions: { ...cylinder.data.dimensions, radius } }
+        },
+        'Resize source'
+      )
+    );
+    const derived = await adapter.syncDocument(manager.document);
+    expect(
+      derived.featureWarnings?.filter((entry) => entry.kind !== 'advisory')
+    ).toEqual([]);
+    return derived.bodyRepresentations[manager.document.bodyOrder.at(-1)!]!
+      .volume;
+  }
+
+  it.each([7, 5, 6.3, 12])(
+    'resizes r 6 → %d, re-filleting the seam at its approximate quality, disclosed',
     async (radius) => {
-      const manager = new CommandManager(document);
-      const candidate = manager.runTransaction('Resize', [
-        commandFactories.directEditBody({
-          name: 'Resize Cylinder',
-          targetBodyId: bodyId,
-          operation: {
-            kind: 'resize-cylindrical-face',
-            faceHash: wall.hash,
-            ...(wall.reference ? { faceReference: wall.reference } : {}),
-            sourceRadius: 6,
-            sourceAxisStart: wall.geometry!.axisStart!,
-            sourceAxisEnd: wall.geometry!.axisEnd!,
-            concavity: 'boss',
-            radius
-          }
-        })
-      ]);
-      const refused = await adapter.syncDocument(candidate);
-      const warning = refused.featureWarnings?.find(
+      const derived = await adapter.syncDocument(resized(radius));
+      const warnings = (derived.featureWarnings ?? []).filter(
         (entry) => entry.featureName === 'Resize Cylinder'
       );
-      expect(warning?.kind).toBe('build-failed');
-      expect(warning?.kernelRefusal).toEqual({
-        family: 'direct-edit',
-        operation: 'resize-cylindrical-face',
-        category: 'quality_refused',
-        code: 'exact_only_unattainable',
-        reason: 'approximate_reblend_not_permitted'
+      // The owner's 2026-11-06 rule: the band was a NURBS fit before the
+      // edit, so it may come back as one, and the edit says so.
+      expect(warnings.map((entry) => entry.kind)).toEqual(['advisory']);
+      expect(warnings[0]!.message).toContain(APPROXIMATE_REBLEND);
+      const body = derived.bodyRepresentations[bodyId]!;
+      const faces = body.topology!.faces;
+      expect(
+        faces.filter(
+          (face) =>
+            face.geometry?.surfaceType === 'cylinder' &&
+            Math.abs((face.geometry.radius ?? 0) - radius) < 1e-6
+        )
+      ).toHaveLength(1);
+      // One band, rebuilt on the new seam rather than left at the old size.
+      expect(
+        faces.filter((face) => face.geometry?.surfaceType === 'bspline')
+      ).toHaveLength(1);
+      expect(faces).toHaveLength(5);
+      expect(body.exportableStep).toBe(true);
+      expect(
+        inspectTriangleMeshClosure(body.mesh.vertices, body.mesh.indices)
+      ).toMatchObject({
+        boundaryEdges: 0,
+        nonManifoldEdges: 0,
+        inconsistentWindingEdges: 0
       });
-      const text = warningForFeature('Resize Cylinder', refused.warnings);
-      const plain = splitRefusal(text!, warning?.kernelRefusal);
-      expect(plain.message).toBe(EXACT_ONLY);
-      expect(plain.detail).toMatch(/exact|approximate/i);
+      // The direct edit and the source edit build the same body: both are
+      // the sphere ∪ an r-`radius` boss with an R2 rolling-ball seam.
+      const source = await sourceRouteVolume(radius);
+      expect(Math.abs(body.volume - source)).toBeLessThan(
+        Math.max(0.05, 1e-7 * source)
+      );
     },
     600_000
   );
+
+  it('refuses typed when the ball no longer rolls on the new seam, keeping the body', async () => {
+    const before = await adapter.syncDocument(document);
+    const derived = await adapter.syncDocument(resized(1));
+    const warning = derived.featureWarnings?.find(
+      (entry) => entry.featureName === 'Resize Cylinder'
+    );
+    expect(warning?.kind).toBe('build-failed');
+    expect(warning?.kernelRefusal).toMatchObject({
+      family: 'direct-edit',
+      operation: 'resize-cylindrical-face'
+    });
+    expect(derived.bodyRepresentations[bodyId]!.volume).toBe(
+      before.bodyRepresentations[bodyId]!.volume
+    );
+  }, 600_000);
 });
 
 const translation = (x: number, y: number, z: number) =>

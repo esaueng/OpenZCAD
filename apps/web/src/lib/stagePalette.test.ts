@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DARK_STAGE_PALETTE } from '@openzcad/viewport';
 import {
@@ -40,6 +42,31 @@ describe('readStagePalette', () => {
     const palette = readStagePalette(root);
     expect(palette.backdropMiddle).toBe('#eeeeee');
     expect(palette.backdropTop).toBe('#F5F5F5');
+  });
+
+  it('keeps the graphite fallback equal to the dark theme tokens', () => {
+    // The fallback paints the first frame and any unreadable token; drifting
+    // from the stylesheet would flash one stage and then settle on another.
+    const css = readFileSync(
+      resolve(__dirname, '../theme/tokens.css'),
+      'utf8'
+    ).replace(/\/\*[\s\S]*?\*\//g, '');
+    // The first block that sets the stage is the default (dark) theme's.
+    const first = css.indexOf('--color-viewport-bg:');
+    const darkRoot = css.slice(
+      css.lastIndexOf('{', first),
+      css.indexOf('}', first)
+    );
+    const token = (name: string) =>
+      new RegExp(`${name}:\\s*([^;]+);`).exec(darkRoot)?.[1]?.trim();
+    expect({
+      backdropTop: token('--color-stage-top'),
+      backdropMiddle: token('--color-viewport-bg'),
+      backdropBottom: token('--color-stage-bottom'),
+      gridMinor: token('--color-stage-grid-minor'),
+      gridMajor: token('--color-stage-grid-major'),
+      shadowOpacity: Number(token('--stage-shadow-opacity'))
+    }).toEqual(DARK_STAGE_PALETTE);
   });
 
   it('falls back to the graphite stage when a token is missing or unreadable', () => {

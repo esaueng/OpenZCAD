@@ -95,12 +95,15 @@
      the WebGL backdrop gradient, grid and ground shadow from them, so the
      stage follows the theme with the chrome. --color-viewport-bg is the
      gradient's middle stop and the colour behind the canvas before it
-     draws. */
-  --color-viewport-bg: #101215;
-  --color-stage-top: #171a1f;
-  --color-stage-bottom: #0b0c0f;
-  --color-stage-grid-minor: #454d59;
-  --color-stage-grid-major: #707b8a;
+     draws.
+     A neutral graphite, lifted from near-black (U10): on #0b0c0f a part's
+     outline and the grid had nothing to read against, and the backdrop's
+     blue cast tinted the whole stage. */
+  --color-viewport-bg: #18191c;
+  --color-stage-top: #222428;
+  --color-stage-bottom: #121315;
+  --color-stage-grid-minor: #5a5e66;
+  --color-stage-grid-major: #878c95;
   --stage-shadow-opacity: 0.55;
   /* Text and rules drawn straight on the stage, with no card of their own
      (the scale bar, the snap refusal). They re-theme with the stage; the
