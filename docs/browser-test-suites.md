@@ -29,6 +29,44 @@ Performance probes, documentation and look-development captures (`OZ_PERF`,
 by default, so a focused untagged probe is not filtered away. Unknown suite names fail immediately.
 Both suites retain the existing timeouts, retries and two-worker CI budget.
 
+## Viewport frame timing (iPad proxy)
+
+`test/e2e/perf-frame-timing.spec.ts` (`OZ_PERF=1`, weighted 0, never in CI)
+measures how smoothly the viewport orbits heavy curved parts on an
+iPad-class **proxy**: desktop Chromium with an iPad Pro-sized touch viewport
+(1366 × 1024, device pixel ratio 2, coarse pointer, so the touch render
+budget applies), CDP CPU throttling of the page's main thread (×1, ×4, ×6),
+and a one-finger orbit sent through Chromium's touch input domain. On
+Windows it runs WebGL on the machine's GPU through ANGLE D3D11 (headless
+Chromium otherwise falls back to SwiftShader). It does not model Safari,
+an iPad GPU, thermal throttling or 120 Hz ProMotion; treat its numbers as
+relative, build against build.
+
+```bash
+VITE_E2E=1 OZ_PERF=1 pnpm --filter @openzcad/web build
+pnpm --filter @openzcad/web preview --host 127.0.0.1 --port 24651
+OZ_PERF=1 OZ_PERF_LABEL=main PLAYWRIGHT_PORT=24651   pnpm exec playwright test test/e2e/perf-frame-timing.spec.ts --workers=1
+node scripts/frame-timing-report.mjs --compare   before=artifacts/perf/pre-r1,artifacts/perf/pre-r2   after=artifacts/perf/main-r1,artifacts/perf/main-r2
+```
+
+Each scene (`test/fixtures/frame-timing-scenes.ts`) and rate writes a JSON
+file and a screenshot to `artifacts/perf/<label>` (git-ignored), plus
+`summary.{json,md}`: requestAnimationFrame intervals (p50/p95/p99), refreshes
+dropped at 60 Hz, the viewer's own CPU time per frame (`oz:viewer.frame`),
+GPU time per frame from `EXT_disjoint_timer_query_webgl2` where available,
+and the body install (`oz:viewer.bodies`, which includes building the
+curved-outline candidates; an `oz:viewer.silhouettes` mark is recorded too
+if a build emits one). Knobs: `OZ_PERF_THROTTLE`, `OZ_PERF_SECONDS`,
+`OZ_PERF_SCENES`, `OZ_PERF_PORTRAIT=1`, `OZ_PERF_GPU_TIMER=0`,
+`OZ_PERF_SOFTWARE_GL=1`. Other agents' builds share the machine, so run
+each build several times, interleaved, and report the spread.
+
+On a real iPad: Settings → Advanced → Frame rate overlay shows the live
+frame interval while orbiting. For a timeline, connect the iPad to a Mac,
+enable Web Inspector (Settings → Apps → Safari → Advanced) and record
+Safari's Timelines on the open project; the `oz:viewer.bodies` measure
+appears under User Timing, and the rendering frames show per-frame cost.
+
 ## Sharding and timing
 
 Both suites use the existing six shards and required E2E completion gate.

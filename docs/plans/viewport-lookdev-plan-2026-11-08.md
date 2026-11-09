@@ -156,6 +156,109 @@ sphere outline.
   keep the default look (they build their own lines). `OZ_LOOKDEV_TANGENT_EDGES`
   makes the harness capture a given choice.
 
+### Frame timing on an iPad-class proxy (9 November)
+
+Measured, but **by proxy, not on a device**: no iPad or iOS simulator is
+available to the agents. `test/e2e/perf-frame-timing.spec.ts` (`OZ_PERF=1`;
+see [Browser test suites](../browser-test-suites.md)) drives a six-second
+one-finger orbit through Chromium's touch input domain in an iPad
+Pro-sized touch viewport (1366 × 1024, device pixel ratio 2, coarse pointer
+so the touch render budget applies), with CDP CPU throttling ×1, ×4 and ×6,
+on six heavy curved scenes (`test/fixtures/frame-timing-scenes.ts`). The
+browser was headless Chromium 156 on Windows, drawing through ANGLE D3D11 on
+the laptop's Intel UHD integrated GPU: an i7-10750H, whose single core is
+roughly an A12–A13 iPad's, and a GPU nearer a base iPad's than an M-series
+one, at the full 2732 × 2048 backing store. It is not Safari, not Metal, has
+no thermal limit and no 120 Hz ProMotion. ×4 and ×6 are harsher than any
+current iPad's CPU. Read the numbers build against build, not as a device
+budget.
+
+Pre-U10 is `3da524a4` (the parent of #1288); main is `a1102d8e` (U10 slices
+1–5 and the seam follow-up). Each cell is the median of three runs,
+interleaved pre/main, pre → main. Frame = requestAnimationFrame interval
+while orbiting; dropped = 60 Hz refreshes with no new frame; GPU = timer
+query time per frame; body install = `oz:viewer.bodies` on import, including
+the outline-candidate build. Runs spread widely (other agents built on the
+same machine), and the throttled rows most of all; the full tables with
+min–max spreads are in the PR.
+
+| Scene             | CPU× | Frame p50 ms |  Frame p95 ms |   Frame p99 ms | Dropped % |  GPU p95 ms | Body install ms |
+| ----------------- | ---: | -----------: | ------------: | -------------: | --------: | ----------: | --------------: |
+| rounded-block     |    1 |  16.7 → 16.7 |   33.4 → 50.0 |   49.9 → 166.7 |   22 → 41 | 19.8 → 23.4 |         44 → 84 |
+| rounded-block     |    4 |  33.3 → 33.3 | 116.6 → 100.0 |  183.4 → 183.3 |   63 → 59 | 29.4 → 26.8 |        95 → 291 |
+| rounded-block     |    6 |  49.9 → 50.0 | 133.3 → 133.4 |  183.4 → 233.4 |   67 → 68 | 32.4 → 41.1 |       447 → 518 |
+| gear-60t          |    1 |  16.7 → 33.3 |   33.4 → 33.4 |    83.3 → 50.1 |   31 → 39 | 21.3 → 26.2 |       168 → 334 |
+| gear-60t          |    4 |  33.4 → 33.3 | 183.3 → 116.6 |  233.3 → 183.2 |   67 → 64 | 36.4 → 31.1 |     1830 → 1159 |
+| gear-60t          |    6 |  33.3 → 50.0 | 183.3 → 116.6 |  283.3 → 133.3 |   71 → 69 | 33.8 → 47.3 |     1351 → 2120 |
+| filleted-block    |    1 |  16.7 → 16.7 |   33.4 → 33.5 |   183.3 → 83.4 |   29 → 34 | 20.7 → 24.3 |       282 → 306 |
+| filleted-block    |    4 |  33.3 → 33.3 |  166.7 → 83.3 |  233.4 → 116.7 |   70 → 49 | 28.2 → 29.6 |       476 → 628 |
+| filleted-block    |    6 |  49.9 → 33.3 | 150.1 → 116.6 |  183.4 → 250.1 |   67 → 66 | 32.7 → 31.3 |       747 → 783 |
+| torus             |    1 |  16.7 → 33.2 |  133.4 → 50.0 |  266.7 → 166.6 |   52 → 43 | 25.5 → 26.4 |       274 → 290 |
+| torus             |    4 |  33.3 → 33.4 | 100.0 → 150.1 |  216.7 → 250.0 |   56 → 66 | 24.8 → 47.5 |      560 → 1943 |
+| torus             |    6 |  33.3 → 50.0 | 116.7 → 216.7 |  216.6 → 250.0 |   61 → 76 | 36.4 → 43.5 |      420 → 2224 |
+| sphere-row        |    1 |  16.7 → 33.3 |   33.4 → 50.0 |    83.4 → 66.6 |   25 → 43 | 20.5 → 28.9 |       456 → 841 |
+| sphere-row        |    4 |  16.8 → 33.3 |  216.6 → 66.7 |  333.3 → 116.7 |   73 → 59 | 35.9 → 31.3 |     1126 → 1706 |
+| sphere-row        |    6 | 16.7 → 100.0 | 366.6 → 700.0 | 1100.0 → 916.6 |   81 → 92 | 36.5 → 89.6 |     2595 → 3081 |
+| rotational-sleeve |    1 |  16.7 → 33.3 |   50.0 → 50.0 |  100.1 → 100.0 |   33 → 41 | 23.4 → 26.6 |       135 → 606 |
+| rotational-sleeve |    4 |  33.3 → 33.3 |  66.8 → 166.6 |  166.6 → 333.4 |   50 → 65 | 23.7 → 31.4 |      368 → 1035 |
+| rotational-sleeve |    6 |  33.4 → 33.4 |  150.0 → 75.1 |  266.7 → 166.6 |   67 → 57 | 37.2 → 31.5 |     1039 → 1068 |
+
+Triangles drawn per frame, pre → main: rounded block 9k → 61k, gear 140k →
+371k, filleted block 33k → 288k, torus 87k → 606k, sphere row 125k → 874k,
+rotational sleeve 69k → 423k. Each outline candidate is an instanced fat-line
+quad drawn every frame, whether or not it is on the outline that frame.
+
+What it shows:
+
+- **The studio material and environment are free.** With the display mode
+  set to Shaded (no edges, no outlines; `OZ_PERF_DISPLAY=Shaded`), pre-U10
+  and main measured the same on every scene (GPU p95 within ±2 ms, dropped
+  frames within ±5 points). `MeshStandardMaterial`, the PMREM environment,
+  the camera key light and dithering did not register.
+- **The per-frame cost is the curved-surface outlines.** In the default
+  Shaded + edges mode, GPU p95 at ×1 rose 1–8 ms per scene (most on the
+  sphere row near the 150k cap, 20.5 → 28.9 ms) and the triangle count
+  rose 3–9×. On this integrated GPU the pre-U10 baseline already missed
+  60 Hz (about 15–20 ms of GPU per frame at 2732 × 2048), so U10 deepened
+  an existing miss: dropped frames at ×1 rose on five of six scenes
+  (sphere row 25 → 43%, gear 31 → 39%); the torus's pre-U10 runs were too
+  noisy to compare (23–58%).
+- **The touch render budget absorbs most of it.** After a first gesture
+  (`OZ_PERF_WARMUP=1`), a device that dropped frames navigates at pixel
+  ratio 1.25, and pre and main then measured alike: frame p95 17–42 ms,
+  dropped frames mostly under 20% on both.
+- **The outline-candidate build hitches every body build.** It runs on the
+  main thread on import, on each edit and on each exact frame of a drag: at
+  ×1, 22–320 ms per body (sphere row 317 ms); at ×4–×6, 0.2–1.5 s
+  (torus ×4 923 ms; sphere row ×6 1448 ms). That is most of the body-install
+  growth above (torus ×4: 560 → 1943 ms).
+
+Verdict for iPads: U10's look costs nothing in shading, but its curved
+outlines add GPU work every frame in proportion to curved tessellation and
+a main-thread hitch to every curved body build. On a recent iPad (M-series
+or A14+ GPU, ~2× this laptop's per-core speed) the frame cost likely fits
+in 16.7 ms; on a base or older iPad it will cost frames on big curved parts
+until the touch budget lowers resolution. The candidate build is the
+likelier visible regression: a 100–300 ms stall on opening or editing a
+heavy curved part.
+
+Follow-ups (outline code is being reworked in a separate PR, so none are
+made here, and these numbers are its "before"):
+
+- Filter outline candidates on the CPU per camera so only the segments on
+  the outline are drawn (in progress in that PR).
+- Build candidates without per-vertex string keys or per-edge objects. A
+  drop-in rewrite with bit-identical output measured 2–7× faster in the
+  browser (sphere row ×1 317 → 42 ms, torus ×4 923 → 248 ms, sphere row ×6
+  1448 → 406 ms) and was handed to that PR rather than landed here.
+- Not measured: rebuild cost during a face drag on a curved part, where
+  every exact frame rebuilds the body.
+
+On a real iPad: Settings → Advanced → Frame rate overlay shows the live
+frame interval while orbiting zcad.app. For a timeline, enable Web
+Inspector (Settings → Apps → Safari → Advanced), connect the iPad to a Mac
+and record Safari's Timelines; `oz:viewer.bodies` appears under User Timing.
+
 ## Running the harness
 
 ```bash
