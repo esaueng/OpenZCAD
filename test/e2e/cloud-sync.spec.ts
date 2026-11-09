@@ -1535,11 +1535,13 @@ test('resumes a workspace on another device and carries undo and redo back acros
 test('a workspace view sync notice clears the live drag guidance and dismisses once', async ({
   page
 }) => {
+  test.setTimeout(60_000);
   const api = new SharedCloudProjectApi();
   await api.install(page);
   let writes = 0;
+  let refuse = false;
   await page.route('**/api/projects/*/workspace-sessions', (route) => {
-    if (route.request().method() !== 'PUT') return route.fallback();
+    if (route.request().method() !== 'PUT' || !refuse) return route.fallback();
     writes++;
     return route.fulfill({
       status: 400,
@@ -1556,6 +1558,10 @@ test('a workspace view sync notice clears the live drag guidance and dismisses o
   await expect(
     page.getByRole('status', { name: 'Saved', exact: true })
   ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+  // Start the failure after geometry is ready: a slow initial model build
+  // must not spend the toast's lifetime before the drag can be exercised.
+  refuse = true;
+  await switchWorkspace(page, 'View');
   await expect.poll(() => writes).toBe(1);
   const toast = page.locator('.viewer-area .toast');
   await expect(toast).toContainText("Workspace view isn't syncing.", {
@@ -1563,6 +1569,8 @@ test('a workspace view sync notice clears the live drag guidance and dismisses o
   });
   // Hold the notice while preparing a real drag so its normal expiry does
   // not race the bounds check on a slow runner.
+  await toast.hover();
+  await switchWorkspace(page, 'Build');
   await toast.hover();
   const canvas = page.locator('.viewer-host canvas');
   await canvas.evaluate((element) =>
