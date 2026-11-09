@@ -432,6 +432,23 @@ function record(
     committedFrameAt: result.committedFrameAt,
     proxyFrameLatenciesMs: result.proxyFrameLatenciesMs
   });
+  const renderingSummary = (frames: typeof result.frames) => {
+    const intervals = frames
+      .filter((frame) => frame.continuous)
+      .map((frame) => frame.frameMs ?? NaN)
+      .filter(Number.isFinite)
+      .sort((a, b) => a - b);
+    return {
+      intervalMs: distribution(intervals),
+      p99Ms:
+        intervals[Math.max(0, Math.ceil(intervals.length * 0.99) - 1)] ?? null,
+      hitchesOver25Ms: intervals.filter((ms) => ms > 25).length,
+      cpuMs: distribution(frames.map((frame) => frame.cpuMs)),
+      renderMs: distribution(frames.map((frame) => frame.renderMs)),
+      peakDrawCalls: Math.max(0, ...frames.map((frame) => frame.drawCalls)),
+      peakTriangles: Math.max(0, ...frames.map((frame) => frame.triangles))
+    };
+  };
   const line = {
     label,
     model,
@@ -439,45 +456,14 @@ function record(
     userAgent: process.env.OZ_PERF_HOST ?? null,
     summary,
     reactCommits: result.reactCommits,
-    rendering: Object.fromEntries(
-      [
-        [
-          'motion',
-          result.frames.filter((frame) => frame.t <= result.motionEndedAt)
-        ],
-        [
-          'settleAndRelease',
-          result.frames.filter((frame) => frame.t > result.motionEndedAt)
-        ]
-      ].map(([phase, values]) => {
-        const frames = values as typeof result.frames;
-        const intervals = frames
-          .filter((frame) => frame.continuous)
-          .map((frame) => frame.frameMs ?? NaN)
-          .filter(Number.isFinite)
-          .sort((a, b) => a - b);
-        return [
-          phase,
-          {
-            intervalMs: distribution(intervals),
-            p99Ms:
-              intervals[Math.max(0, Math.ceil(intervals.length * 0.99) - 1)] ??
-              null,
-            hitchesOver25Ms: intervals.filter((ms) => ms > 25).length,
-            cpuMs: distribution(frames.map((frame) => frame.cpuMs)),
-            renderMs: distribution(frames.map((frame) => frame.renderMs)),
-            peakDrawCalls: Math.max(
-              0,
-              ...frames.map((frame) => frame.drawCalls)
-            ),
-            peakTriangles: Math.max(
-              0,
-              ...frames.map((frame) => frame.triangles)
-            )
-          }
-        ];
-      })
-    ),
+    rendering: {
+      motion: renderingSummary(
+        result.frames.filter((frame) => frame.t <= result.motionEndedAt)
+      ),
+      settleAndRelease: renderingSummary(
+        result.frames.filter((frame) => frame.t > result.motionEndedAt)
+      )
+    },
     gpu: result.gpu,
     devicePixelRatio: result.devicePixelRatio,
     longTasks: {

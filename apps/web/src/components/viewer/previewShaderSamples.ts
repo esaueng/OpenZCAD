@@ -23,7 +23,7 @@ export function previewShaderSamples(
   const sample = () => {
     visit(body);
     ghost.object.traverse((child) => {
-      if (child instanceof THREE.Mesh) visit(child);
+      if (child instanceof THREE.Mesh) visit(child as THREE.Mesh);
     });
   };
   try {

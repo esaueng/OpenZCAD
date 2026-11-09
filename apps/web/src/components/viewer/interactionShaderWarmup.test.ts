@@ -125,7 +125,10 @@ describe('InteractionShaderWarmup', () => {
         if (!(object instanceof THREE.Mesh)) return;
         const material = object.material as THREE.Material;
         if (material.clippingPlanes?.length) clipped = true;
-        expect(object.geometry.drawRange).toEqual({ start: 1, count: 0 });
+        expect((object.geometry as THREE.BufferGeometry).drawRange).toEqual({
+          start: 1,
+          count: 0
+        });
       });
       return Promise.resolve();
     });

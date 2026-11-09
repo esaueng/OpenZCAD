@@ -12008,8 +12008,9 @@ export function ModelViewer({
             context.activeCamera,
             [selection.hoverFaceMesh, selection.hoverHiddenFaceMesh],
             [warmupEdges.hoverEdges, warmupEdges.hoverHiddenEdges],
-            warmupBody instanceof THREE.Mesh && !Array.isArray(warmupBody.material)
-              ? warmupBody.material
+            warmupBody instanceof THREE.Mesh &&
+              !Array.isArray(warmupBody.material)
+              ? (warmupBody.material as THREE.Material)
               : undefined
           );
         }
