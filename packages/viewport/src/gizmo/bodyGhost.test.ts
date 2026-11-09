@@ -583,17 +583,13 @@ function surfaceArea(geometry: THREE.BufferGeometry) {
     new THREE.Vector3(),
     new THREE.Vector3(),
     new THREE.Vector3()
-  ];
+  ] as const;
   let area = 0;
   for (let i = 0; i < (index?.count ?? position.count); i += 3) {
     vertices.forEach((point, j) =>
       point.fromBufferAttribute(position, index ? index.getX(i + j) : i + j)
     );
-    area += new THREE.Triangle(
-      vertices[0]!,
-      vertices[1]!,
-      vertices[2]!
-    ).getArea();
+    area += new THREE.Triangle(vertices[0], vertices[1], vertices[2]).getArea();
   }
   return area;
 }
