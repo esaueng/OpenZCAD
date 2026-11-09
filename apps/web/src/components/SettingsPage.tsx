@@ -58,6 +58,7 @@ import {
   type HealthResponse
 } from '@openzcad/shared';
 import { countLabel } from '../lib/toasts';
+import { formatBytes } from '../lib/formatBytes';
 import { fetchEncryptionAvailability } from '../lib/e2ee/availability';
 import { lazyWithStaleChunkNotice } from '../lib/staleChunk';
 import { ErrorBoundary } from './ErrorBoundary';
@@ -111,16 +112,6 @@ import {
   usePersonalInfoVisible
 } from './PersonalInfoToggle';
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) {
-    return `${bytes} B`;
-  }
-  const megabytes = bytes / (1024 * 1024);
-  return megabytes >= 1
-    ? `${megabytes.toFixed(1)} MB`
-    : `${Math.round(bytes / 1024)} KB`;
-}
-
 /**
  * Names the ceiling even before anyone is near it. A limit discovered only at
  * the moment a save is refused reads as a bug; a limit stated up front reads as
@@ -130,7 +121,7 @@ function storageHint(usage: AccountStorageUsage | null): string {
   if (!usage) {
     return 'Projects and revisions saved to your account.';
   }
-  return `${countLabel(usage.projectCount, 'project', 'projects')} · ${countLabel(usage.revisionCount, 'revision', 'revisions')}. Up to ${formatBytes(usage.documentLimitBytes)} and ${usage.maxRevisionsPerProject} revisions per project.`;
+  return `${countLabel(usage.projectCount, 'project', 'projects')} · ${countLabel(usage.revisionCount, 'revision', 'revisions')}. Up to ${formatBytes(usage.documentLimitBytes)} and ${usage.maxRevisionsPerProject.toLocaleString()} revisions per project.`;
 }
 
 /** Cloud file usage against the allowance, naming an overage outright. */
@@ -2209,7 +2200,7 @@ export function SettingsPage({
                           title="Membership"
                           hint={
                             session.entitlements
-                              ? `${countLabel(session.entitlements.projectLimit, 'cloud project', 'cloud projects')} · ${formatBytes(session.entitlements.projectStorageLimitBytes)} project storage · ${formatBytes(session.entitlements.artifactLimitBytes)} cloud file storage · ${session.entitlements.ai.requestLimit} hosted AI requests per ${session.entitlements.ai.windowSeconds / 60} minutes`
+                              ? `${countLabel(session.entitlements.projectLimit, 'cloud project', 'cloud projects')} · ${formatBytes(session.entitlements.projectStorageLimitBytes)} project storage · ${formatBytes(session.entitlements.artifactLimitBytes)} cloud file storage · ${session.entitlements.ai.requestLimit.toLocaleString()} hosted AI requests per ${(session.entitlements.ai.windowSeconds / 60).toLocaleString()} minutes`
                               : 'Limits appear after your account reconnects.'
                           }
                           details={

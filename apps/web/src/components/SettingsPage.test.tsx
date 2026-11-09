@@ -1445,11 +1445,9 @@ describe('settings privacy and data section', () => {
     expect(meter).toHaveAttribute('aria-valuenow', limit);
     expect(meter).toHaveAttribute(
       'aria-valuetext',
-      '120.0 MB of 100.0 MB · over allowance'
+      '120 MB of 100 MB · over allowance'
     );
-    expect(
-      screen.getByText('120.0 MB of 100.0 MB · over allowance')
-    ).toBeVisible();
+    expect(screen.getByText('120 MB of 100 MB · over allowance')).toBeVisible();
   });
 
   it('reports in-range file usage as it is', async () => {
@@ -1459,7 +1457,67 @@ describe('settings privacy and data section', () => {
       name: 'Cloud file storage used'
     });
     expect(meter).toHaveAttribute('aria-valuenow', String(5 * 1_048_576));
-    expect(meter).toHaveAttribute('aria-valuetext', '5.0 MB of 100.0 MB');
+    expect(meter).toHaveAttribute('aria-valuetext', '5 MB of 100 MB');
+  });
+
+  it('formats Premium membership limits and account storage readably', async () => {
+    vi.mocked(api.storageUsage).mockResolvedValue({
+      ...storageUsage,
+      projectCount: 129,
+      revisionCount: 0,
+      documentLimitBytes: 24 * 1024 ** 2,
+      maxRevisionsPerProject: 50,
+      artifactBytes: 24 * 1024 ** 2,
+      artifactLimitBytes: 100 * 1024 ** 3
+    });
+    renderSettings(readyHealth, {
+      initialSection: 'account',
+      session: {
+        ...session,
+        entitlements: {
+          tier: 'premium',
+          projectLimit: 10_000,
+          projectStorageLimitBytes: 100 * 1024 ** 3,
+          artifactLimitBytes: 100 * 1024 ** 3,
+          ai: {
+            requestLimit: 500,
+            costLimitUnits: 2400,
+            windowSeconds: 600,
+            concurrencyLimit: 8
+          }
+        }
+      }
+    });
+
+    expect(
+      screen.getByText(
+        '10,000 cloud projects · 100 GB project storage · 100 GB cloud file storage · 500 hosted AI requests per 10 minutes'
+      )
+    ).toBeVisible();
+    expect(
+      await screen.findByText(
+        '129 projects · 0 revisions. Up to 24 MB and 50 revisions per project.'
+      )
+    ).toBeVisible();
+    expect(
+      screen.getByRole('meter', { name: 'Cloud file storage used' })
+    ).toHaveAttribute('aria-valuetext', '24 MB of 100 GB');
+    expect(screen.getByText('24 MB of 100 GB')).toBeVisible();
+  });
+
+  it('groups large account usage and revision-limit counts', async () => {
+    vi.mocked(api.storageUsage).mockResolvedValue({
+      ...storageUsage,
+      projectCount: 1_234,
+      revisionCount: 12_345,
+      maxRevisionsPerProject: 1_000
+    });
+    renderSettings(readyHealth, { initialSection: 'account', session });
+    expect(
+      await screen.findByText(
+        '1,234 projects · 12,345 revisions. Up to 10 MB and 1,000 revisions per project.'
+      )
+    ).toBeVisible();
   });
 
   it('names the diagnostic download for what it downloads', () => {
