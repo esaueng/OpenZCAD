@@ -1,11 +1,15 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
+import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
+import * as sectionCaps from '../scene/sectionCaps';
 import {
   createFatLineSegments,
   TRANSLUCENT_LINE_STENCIL,
   VIEWPORT_RENDER_ORDER
 } from '../render/scene';
 import { createBodyGhost, GHOST_SURFACE_STENCIL } from './bodyGhost';
+
+afterEach(() => vi.restoreAllMocks());
 
 function body() {
   const mesh = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2));
@@ -236,6 +240,11 @@ describe('the offset body ghost', () => {
         .filter((child) => child.name.startsWith('offset-body-ghost-veil'))
         .map((child) => child.name);
     const at = (x: number) => new THREE.Vector3(x, 0, 0);
+    const capOf = (ghost: { object: THREE.Object3D }) =>
+      ghost.object.getObjectByName('offset-body-ghost-veil-cap') as THREE.Mesh<
+        THREE.BufferGeometry,
+        THREE.Material
+      >;
 
     it('draws the material beyond the old face as ghost, and the rest solid up to it', () => {
       const plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 5);
@@ -285,8 +294,13 @@ describe('the offset body ghost', () => {
       expect(depth.renderOrder).toBeLessThan(fill.renderOrder);
       // Both before the body's edges, which keep their ink over the frost.
       expect(fill.renderOrder).toBeLessThan(VIEWPORT_RENDER_ORDER.BODY_EDGE);
-      // The old face closes the solid in the body's own finish.
-      expect(cap.material).toBe(live.material);
+      // The live section closes the solid in the body's own finish,
+      // without clipping itself on the keep plane through rounding.
+      expect(cap.material.type).toBe(live.material.type);
+      expect(cap.material).not.toBe(live.material);
+      expect(cap.material.clippingPlanes).toEqual([plane]);
+      expect(cap.material.side).toBe(THREE.DoubleSide);
+      expect(surfaceArea(cap.geometry)).toBeCloseTo(4, 5);
       // Lit like it, too: without normals a lit material shades it black.
       expect(cap.geometry.getAttribute('normal')).toBeDefined();
 
@@ -305,6 +319,169 @@ describe('the offset body ghost', () => {
       expect(next.highlight.material.clippingPlanes).toBeNull();
       ghost.dispose();
     });
+
+    it.each([
+      ['Top', new THREE.Vector3(0, 0, 1)],
+      ['Front', new THREE.Vector3(0, -1, 0)]
+    ] as const)(
+      'closes the full live section during a rounded-box %s pull',
+      (_, normal) => {
+        const original = new RoundedBoxGeometry(24, 16, 16, 8, 4.4);
+        const faceRange = indexPlanarFaceFirst(
+          original,
+          new THREE.Plane(normal, -8)
+        );
+        const source = new THREE.Mesh(
+          original,
+          new THREE.MeshStandardMaterial()
+        );
+        // Extend by 14, carrying the end's bounding rounds with the face.
+        const live = new THREE.Mesh(
+          new RoundedBoxGeometry(
+            24,
+            normal.y ? 30 : 16,
+            normal.z ? 30 : 16,
+            8,
+            4.4
+          ).translate(normal.x * 7, normal.y * 7, normal.z * 7),
+          new THREE.MeshStandardMaterial()
+        );
+        const ghost = createBodyGhost(source, { faceRange });
+        const oldFace = ghost.object.getObjectByName(
+          'offset-body-ghost-face'
+        ) as THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
+        expect(surfaceArea(oldFace.geometry)).toBeCloseTo(109.44, 3);
+        ghost.veilAddedMaterial(live);
+        const cap = capOf(ghost);
+        const keep = live.material.clippingPlanes![0]!;
+        const section = sectionCaps.sectionCapGeometry(live.geometry, keep)!;
+        expect(surfaceArea(cap.geometry)).toBeCloseTo(surfaceArea(section), 5);
+        // A 24 x 16 rounded rectangle, within tessellation tolerance.
+        expect(
+          Math.abs(surfaceArea(cap.geometry) - (384 - (4 - Math.PI) * 4.4 ** 2))
+        ).toBeLessThan(0.5);
+        const positions = cap.geometry.getAttribute('position');
+        for (let i = 0; i < positions.count; i++)
+          expect(
+            keep.distanceToPoint(
+              new THREE.Vector3().fromBufferAttribute(positions, i)
+            )
+          ).toBeCloseTo(0, 5);
+        expect(oldFace.material.opacity).toBe(0.14);
+        section.dispose();
+        ghost.dispose();
+        original.dispose();
+        source.material.dispose();
+        live.geometry.dispose();
+        live.material.dispose();
+      }
+    );
+
+    it.each([false, true])(
+      'rebuilds the cap only when the live position buffer changes (interleaved: %s)',
+      (interleaved) => {
+        const ghost = createBodyGhost(body(), {
+          faceRange: { triangleStart: 0, triangleCount: 2 }
+        });
+        const { live } = pulled();
+        if (interleaved) {
+          const array = Float32Array.from(
+            live.geometry.getAttribute('position').array
+          );
+          live.geometry.setAttribute(
+            'position',
+            new THREE.InterleavedBufferAttribute(
+              new THREE.InterleavedBuffer(array, 3),
+              3,
+              0
+            )
+          );
+        }
+        const section = vi.spyOn(sectionCaps, 'sectionCapGeometry');
+        ghost.veilAddedMaterial(live);
+        const first = capOf(ghost).geometry;
+        const disposed = vi.spyOn(first, 'dispose');
+        for (let i = 0; i < 5; i++) ghost.veilAddedMaterial(live);
+        expect(section).toHaveBeenCalledTimes(1);
+        expect(capOf(ghost).geometry).toBe(first);
+
+        const position = live.geometry.getAttribute('position');
+        for (let i = 0; i < position.count; i++)
+          position.setY(i, position.getY(i) * 2);
+        position.needsUpdate = true;
+        ghost.veilAddedMaterial(live);
+        const second = capOf(ghost).geometry;
+        expect(section).toHaveBeenCalledTimes(2);
+        expect(second).not.toBe(first);
+        expect(disposed).toHaveBeenCalledTimes(1);
+        expect(surfaceArea(second)).toBeCloseTo(8, 5);
+        ghost.veilAddedMaterial(live);
+        expect(section).toHaveBeenCalledTimes(2);
+        const disposedSecond = vi.spyOn(second, 'dispose');
+        ghost.dispose();
+        expect(disposedSecond).toHaveBeenCalledTimes(1);
+      }
+    );
+
+    it('sections in the live frame and replaces the cap after a geometry swap', () => {
+      const source = body();
+      source.position.set(8, -3, 5);
+      source.rotation.z = Math.PI / 3;
+      const ghost = createBodyGhost(source, {
+        faceRange: { triangleStart: 0, triangleCount: 2 }
+      });
+      const { live } = pulled();
+      live.position.copy(source.position);
+      live.rotation.copy(source.rotation);
+      ghost.veilAddedMaterial(live);
+      const first = capOf(ghost).geometry;
+      expect(surfaceArea(first)).toBeCloseTo(4, 5);
+      live.geometry = new THREE.BoxGeometry(4, 3, 2).translate(1, 0, 0);
+      ghost.veilAddedMaterial(live);
+      const cap = capOf(ghost);
+      expect(cap.geometry).not.toBe(first);
+      expect(surfaceArea(cap.geometry)).toBeCloseTo(6, 5);
+      const keep = live.material.clippingPlanes![0]!;
+      const position = cap.geometry.getAttribute('position');
+      for (let i = 0; i < position.count; i++)
+        expect(
+          keep.distanceToPoint(
+            new THREE.Vector3()
+              .fromBufferAttribute(position, i)
+              .applyMatrix4(ghost.object.matrix)
+          )
+        ).toBeCloseTo(0, 5);
+      ghost.dispose();
+    });
+
+    it.each(['empty', 'throws'])(
+      'leaves the body solid and caches a failed section (%s)',
+      (failure) => {
+        const ghost = createBodyGhost(body(), {
+          faceRange: { triangleStart: 0, triangleCount: 2 }
+        });
+        const { live, highlight } = pulled();
+        ghost.veilAddedMaterial(live);
+        const section = vi
+          .spyOn(sectionCaps, 'sectionCapGeometry')
+          .mockImplementation(() => {
+            if (failure === 'throws') throw new Error('Unsectionable preview');
+            return null;
+          });
+        live.geometry.getAttribute('position').needsUpdate = true;
+        ghost.veilAddedMaterial(live);
+        expect(veilParts(ghost)).toEqual([]);
+        expect(live.material.clippingPlanes).toBeNull();
+        expect(highlight.material.clippingPlanes).toBeNull();
+        ghost.veilAddedMaterial(live);
+        expect(section).toHaveBeenCalledTimes(1);
+        section.mockRestore();
+        live.geometry.getAttribute('position').needsUpdate = true;
+        ghost.veilAddedMaterial(live);
+        expect(surfaceArea(capOf(ghost).geometry)).toBeCloseTo(4, 5);
+        ghost.dispose();
+      }
+    );
 
     it('stays out of a push, where nothing lies past the old face', () => {
       // Pushed in, the old face stands over empty space: a cap there would
@@ -354,6 +531,9 @@ describe('the offset body ghost', () => {
         'offset-body-ghost-veil-fill'
       ) as THREE.Mesh<THREE.BufferGeometry, THREE.Material>;
       expect(fill.material.clippingPlanes![0]).toBe(section);
+      expect(capOf(ghost).material.clippingPlanes).toEqual([section]);
+      ghost.setClippingPlane(null);
+      expect(capOf(ghost).material.clippingPlanes).toBeNull();
       // Disposing a held ghost leaves the body as it found it.
       ghost.dispose();
       expect(live.material.clippingPlanes).toEqual([section]);
@@ -395,6 +575,52 @@ describe('the offset body ghost', () => {
     });
   });
 });
+
+function surfaceArea(geometry: THREE.BufferGeometry) {
+  const position = geometry.getAttribute('position');
+  const index = geometry.index;
+  const vertices = [
+    new THREE.Vector3(),
+    new THREE.Vector3(),
+    new THREE.Vector3()
+  ];
+  let area = 0;
+  for (let i = 0; i < (index?.count ?? position.count); i += 3) {
+    vertices.forEach((point, j) =>
+      point.fromBufferAttribute(position, index ? index.getX(i + j) : i + j)
+    );
+    area += new THREE.Triangle(
+      vertices[0]!,
+      vertices[1]!,
+      vertices[2]!
+    ).getArea();
+  }
+  return area;
+}
+
+/** Put just the flat end's triangles first, as the viewport's face range. */
+function indexPlanarFaceFirst(
+  geometry: THREE.BufferGeometry,
+  plane: THREE.Plane
+) {
+  const position = geometry.getAttribute('position');
+  const face: number[] = [];
+  const rest: number[] = [];
+  for (let i = 0; i < position.count; i += 3) {
+    const ids = [i, i + 1, i + 2];
+    const flat = ids.every(
+      (id) =>
+        Math.abs(
+          plane.distanceToPoint(
+            new THREE.Vector3().fromBufferAttribute(position, id)
+          )
+        ) < 1e-5
+    );
+    (flat ? face : rest).push(...ids);
+  }
+  geometry.setIndex([...face, ...rest]);
+  return { triangleStart: 0, triangleCount: face.length / 3 };
+}
 
 /** One indexed geometry from several, positions only. */
 function mergeGeometries(parts: THREE.BufferGeometry[]) {
