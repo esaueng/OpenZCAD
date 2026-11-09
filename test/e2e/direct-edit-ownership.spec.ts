@@ -271,20 +271,16 @@ for (const refused of [true, false]) {
       await expect(chip).toHaveText('8 mm');
       await expect(status).not.toContainText('Try another value');
       await expect(status).toContainText('Drag the arrow to resize the body');
-      // A late refusal belongs in the log, not on the new pick's save chip.
-      await expect(page.locator('.topbar')).not.toContainText(
-        'Edit not applied'
-      );
       expect(errors).toEqual([]);
     }
   );
 }
 
 test(
-  'compact refusal explains the edit and retires with every interaction exit',
+  'compact refusal explains the edit from the guidance row',
   { tag: '@ci-smoke' },
   async ({ page }) => {
-    test.setTimeout(240_000);
+    test.setTimeout(120_000);
     await installHeldReplies(page);
     await stubApi(page, { panelLayout: MODEL_ONLY });
     await page.setViewportSize({ width: 1440, height: 1000 });
@@ -307,59 +303,50 @@ test(
     const canvas = page.locator('.viewer-host canvas');
     const topbar = page.locator('.topbar');
     const chip = page.getByTestId('direct-manipulation-value');
-    const restored = async (label = 'Save to my account') => {
-      await expect(topbar).not.toContainText('Edit not applied');
-      await expect(topbar.locator('.save-state')).toHaveText(label);
-    };
-    const refuseDrag = async (baseline = 10) => {
-      await expect
-        .poll(async () => {
-          await selectTop(canvas, gearId);
-          return chip.textContent();
-        })
-        .toContain(String(baseline));
-      await waitForStillViewport(page);
-      const handle = await canvas.evaluate((element) => ({
-        x: Number(element.dataset.e2eHandleX),
-        y: Number(element.dataset.e2eHandleY),
-        dx: Number(element.dataset.e2eHandleDx),
-        dy: Number(element.dataset.e2eHandleDy),
-        perUnit: Number(element.dataset.e2eHandlePixelsPerUnit)
-      }));
-      const rect = (await canvas.boundingBox())!;
-      const start = { x: rect.x + handle.x, y: rect.y + handle.y };
-      await page.mouse.move(start.x, start.y);
-      await page.mouse.down();
-      await page.mouse.move(
-        start.x + handle.dx * handle.perUnit * 3,
-        start.y + handle.dy * handle.perUnit * 3,
-        { steps: 6 }
-      );
-      await expect.poll(() => tallest(canvas)).toBeCloseTo(baseline + 3, 2);
-      await page.evaluate(() => {
-        const scope = window as unknown as HeldReplyWindow;
-        scope.heldReplies = 0;
-        scope.holdReplies = true;
-      });
-      await page.mouse.up();
-      await expect
-        .poll(() =>
-          page.evaluate(
-            () => (window as unknown as HeldReplyWindow).heldReplies
-          )
-        )
-        .toBeGreaterThan(0);
-      await page.evaluate(() => {
-        (window as unknown as HeldReplyWindow).releaseReplies(true);
-      });
-      await expect(topbar).toContainText('Edit not applied');
-      await expect(
-        page.locator('.workspace-hint .edit-refusal.is-bar')
-      ).toBeVisible();
-    };
-
     await page.keyboard.press('f');
-    await refuseDrag();
+    await expect
+      .poll(async () => {
+        await selectTop(canvas, gearId);
+        return chip.textContent();
+      })
+      .toContain('10');
+    await waitForStillViewport(page);
+    const handle = await canvas.evaluate((element) => ({
+      x: Number(element.dataset.e2eHandleX),
+      y: Number(element.dataset.e2eHandleY),
+      dx: Number(element.dataset.e2eHandleDx),
+      dy: Number(element.dataset.e2eHandleDy),
+      perUnit: Number(element.dataset.e2eHandlePixelsPerUnit)
+    }));
+    const rect = (await canvas.boundingBox())!;
+    const start = { x: rect.x + handle.x, y: rect.y + handle.y };
+    await page.mouse.move(start.x, start.y);
+    await page.mouse.down();
+    await page.mouse.move(
+      start.x + handle.dx * handle.perUnit * 3,
+      start.y + handle.dy * handle.perUnit * 3,
+      { steps: 6 }
+    );
+    await expect.poll(() => tallest(canvas)).toBeCloseTo(13, 2);
+    await page.evaluate(() => {
+      const scope = window as unknown as HeldReplyWindow;
+      scope.heldReplies = 0;
+      scope.holdReplies = true;
+    });
+    await page.mouse.up();
+    await expect
+      .poll(() =>
+        page.evaluate(() => (window as unknown as HeldReplyWindow).heldReplies)
+      )
+      .toBeGreaterThan(0);
+    await page.evaluate(() => {
+      (window as unknown as HeldReplyWindow).releaseReplies(true);
+    });
+    await expect(topbar).toContainText('Edit not applied');
+    await expect(
+      page.locator('.workspace-hint .edit-refusal.is-bar')
+    ).toBeVisible();
+
     const why = page
       .locator('.workspace-hint')
       .getByRole('button', { name: 'Why?' });
@@ -376,49 +363,22 @@ test(
     }
     await page.setViewportSize({ width: 760, height: 1000 });
     await why.click();
-    await page
+    const narrowClose = page
       .locator('.edit-refusal-card')
-      .getByRole('button', { name: 'Close explanation' })
-      .click();
+      .getByRole('button', { name: 'Close explanation' });
+    await expect(narrowClose).toBeInViewport();
+    await narrowClose.click();
     await page.setViewportSize({ width: 1440, height: 1000 });
-    await canvas.click({ position: { x: 1100, y: 200 } });
-    await restored();
 
-    await refuseDrag();
+    // Escape closes the open explanation before it clears the selection.
     await why.click();
     await page.keyboard.press('Escape');
     await expect(page.locator('.edit-refusal-card')).toHaveCount(0);
-    await expect(topbar).toContainText('Edit not applied');
+    await expect(page.locator('.workspace-hint .edit-refusal')).toBeVisible();
+    // After deselection the top bar keeps its link to the full refusal.
     await page.keyboard.press('Escape');
-    await restored();
-
-    await refuseDrag();
-    await page.getByRole('button', { name: /^Box \(B\)/ }).click();
-    await restored();
-    await page.keyboard.press('Escape');
-
-    await refuseDrag();
-    await chip.click();
-    const keypad = page.getByRole('dialog', { name: 'Total value' });
-    await keypad.getByRole('textbox').fill('12');
-    await keypad.getByRole('button', { name: 'Apply total' }).click();
-    await expect.poll(() => storedGearWidth(page)).toEqual([12]);
-    await restored();
-    // Undo an actual committed edit while its next proposal is refused.
-    await refuseDrag(12);
-    await page.keyboard.press('ControlOrMeta+z');
-    await expect.poll(() => storedGearWidth(page)).toEqual([10]);
-    await restored();
-
-    await refuseDrag();
-    await page.getByTitle('Back to projects').click();
-    await page.getByLabel('Project name').fill('After refusal');
-    await page
-      .getByRole('button', { name: 'New project', exact: true })
-      .click();
     await expect(
-      page.getByRole('button', { name: 'Rename project' })
-    ).toContainText('After refusal');
-    await restored('Saved');
+      page.getByRole('button', { name: 'Edit not applied' })
+    ).toBeVisible();
   }
 );

@@ -4311,6 +4311,15 @@ export function App() {
     candidate: RadiusPreviewCandidate;
     derived: ProjectDocument['derived'];
   } | null>(null);
+  const [lastDirectEditFailure, setLastDirectEditFailure] = useState<{
+    projectId: ProjectDocument['projectId'];
+    version: number;
+    message: string;
+  } | null>(null);
+  useEffect(
+    () => setLastDirectEditFailure(null),
+    [doc?.projectId, doc?.version]
+  );
   /** Full blend/extrude preview results may still be reused on release. */
   const previewRebuilds = useRef(
     new PreviewRebuilds<ProjectDocument['derived']>()
@@ -4858,6 +4867,18 @@ export function App() {
     onValidationFailed: (diagnostic, value) => {
       const pending = pendingDirectEditRef.current;
       pendingDirectEditRef.current = null;
+      const current = managerRef.current?.document;
+      if (
+        current &&
+        pending?.document.projectId === current.projectId &&
+        pending.document.version === current.version
+      ) {
+        setLastDirectEditFailure({
+          projectId: current.projectId,
+          version: current.version,
+          message: diagnostic.message
+        });
+      }
       recordDirectEditOutcome('refused', {
         ...(pending
           ? {
@@ -30222,7 +30243,12 @@ export function App() {
           editPending={
             isOperationState(interaction) && interaction.phase === 'validating'
           }
-          editRefusal={commandSession?.error?.message ?? null}
+          editRefusal={
+            lastDirectEditFailure?.projectId === doc.projectId &&
+            lastDirectEditFailure.version === doc.version
+              ? lastDirectEditFailure.message
+              : null
+          }
           onReviewEditFailure={openActivityLog}
           geometryPending={!geometry.isReadyFor(doc)}
           geometryFailed={geometry.state.phase === 'failed'}
