@@ -46,11 +46,11 @@ export function faceLift(
 /**
  * How deep the material runs behind the point the face was picked at: the
  * length of a line from `origin` back along `-direction` to where it leaves
- * the solid. This is the span an offset arrow's "Total" reads and draws, so
- * it changes with where on the face the pick lands — a thin tab reads its
- * thickness, the block below it reads the block — instead of the whole
- * body's reach behind the face's plane. A hole straight behind the point
- * ends the line at its wall: that is where the material ends there.
+ * the solid, by whatever surface — a hole straight behind the point ends the
+ * line at its wall, since that is where the material ends there.
+ *
+ * A material-depth query, not a dimension: the offset arrow's "Total" reads
+ * `opposingPlaneSpan`, which never stops on a hole wall, fillet or chamfer.
  *
  * `lift` is how far a preview has moved the face in front of the plane the
  * gesture started on (`faceLift`); the line starts on the face as rendered

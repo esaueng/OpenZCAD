@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { mark, measure, timed } from '../../lib/perf';
+import { previewShaderSamples } from './previewShaderSamples';
 
 /** Prepares the bounded set of highlight variants once per renderer lifetime. */
 export class InteractionShaderWarmup {
@@ -21,25 +22,29 @@ export class InteractionShaderWarmup {
   schedule(
     camera: THREE.Camera,
     faces: readonly THREE.Mesh[],
-    edges: readonly THREE.Mesh[]
+    edges: readonly THREE.Mesh[],
+    bodyMaterial?: THREE.Material
   ) {
     if (this.started || this.disposed) return;
     this.started = true;
     // Let the first model frame present before preparing interaction shaders.
     this.timer = setTimeout(() => {
       this.timer = undefined;
-      void this.prepare(camera, faces, edges).catch((error: unknown) => {
-        if (!this.disposed) {
-          console.warn('Could not prepare viewport highlight shaders', error);
+      void this.prepare(camera, faces, edges, bodyMaterial).catch(
+        (error: unknown) => {
+          if (!this.disposed) {
+            console.warn('Could not prepare viewport highlight shaders', error);
+          }
         }
-      });
+      );
     }, 0);
   }
 
   private async prepare(
     camera: THREE.Camera,
     faces: readonly THREE.Mesh[],
-    edges: readonly THREE.Mesh[]
+    edges: readonly THREE.Mesh[],
+    bodyMaterial?: THREE.Material
   ) {
     const warmup = new THREE.Scene();
     warmup.environment = this.scene.environment;
@@ -93,6 +98,27 @@ export class InteractionShaderWarmup {
       // Keep programs cached when body rebuilds dispose their edge materials.
       const material = retain(mesh.material as THREE.Material);
       warmup.add(new THREE.Mesh(lineGeometry, material));
+    }
+    if (bodyMaterial) {
+      previewShaderSamples(bodyMaterial, (mesh) => {
+        const source = mesh.material as THREE.Material;
+        const sides =
+          source.transparent && source.side === THREE.DoubleSide
+            ? [THREE.BackSide, THREE.FrontSide]
+            : [source.side];
+        for (const side of sides) {
+          const material = retain(source);
+          material.side = side;
+          warmup.add(
+            new THREE.Mesh(
+              mesh.geometry.hasAttribute('normal')
+                ? faceGeometry
+                : lineGeometry,
+              material
+            )
+          );
+        }
+      });
     }
     warmup.traverse((object) => {
       object.frustumCulled = false;

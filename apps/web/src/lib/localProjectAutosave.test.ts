@@ -89,6 +89,72 @@ describe('device save classification', () => {
   });
 });
 
+describe('derived cache writes', () => {
+  it('persists a rebuilt cache without dirtying or re-announcing saved canonical content', async () => {
+    const { queue, write, onDirtyChange, onSaved } = harness();
+    const document = documentAt(2);
+    queue.enqueue(document);
+    await queue.flush();
+    onDirtyChange.mockClear();
+    onSaved.mockClear();
+    const derived = {
+      ...document,
+      derived: { ...document.derived, updatedAt: 'later' }
+    };
+    expect(queue.enqueue(derived)).toBe(false);
+    expect(queue.dirty).toBe(false);
+    await queue.flush();
+    expect(write).toHaveBeenLastCalledWith(derived);
+    expect(onDirtyChange).not.toHaveBeenCalled();
+    expect(onSaved).not.toHaveBeenCalled();
+  });
+
+  it('does not report lost edits when only a cache refresh fails, and retries the cache', async () => {
+    const { queue, write, onError, onSaved } = harness();
+    const document = documentAt(2);
+    queue.enqueue(document);
+    await queue.flush();
+    write.mockRejectedValueOnce(new Error('Device cache unavailable'));
+    const rebuilt = {
+      ...document,
+      derived: { ...document.derived, updatedAt: 'later' }
+    };
+    queue.enqueue(rebuilt);
+    await queue.flush();
+    expect(queue.dirty).toBe(false);
+    expect(onError).not.toHaveBeenCalled();
+    await queue.flush();
+    expect(write).toHaveBeenLastCalledWith(rebuilt);
+    expect(onSaved).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears canonical dirty state before a queued cache transaction finishes', async () => {
+    const first = deferred();
+    const cache = deferred();
+    const { queue, onSaved } = harness(
+      vi
+        .fn<(document: ProjectDocument) => Promise<boolean>>()
+        .mockReturnValueOnce(first.promise)
+        .mockReturnValueOnce(cache.promise)
+    );
+    const document = documentAt(2);
+    queue.enqueue(document);
+    const saving = queue.flush();
+    await Promise.resolve();
+    queue.enqueue({
+      ...document,
+      derived: { ...document.derived, updatedAt: 'later' }
+    });
+    first.resolve(true);
+    await Promise.resolve();
+    expect(queue.dirty).toBe(false);
+    expect(onSaved).toHaveBeenCalledWith(document, false);
+    cache.resolve(true);
+    await saving;
+    expect(onSaved).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('local save departure safety', () => {
   it('stays dirty throughout an in-flight transaction and clears only after commit', async () => {
     const pending = deferred();

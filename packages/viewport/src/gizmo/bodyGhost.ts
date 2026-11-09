@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
+import { sectionCapGeometry } from '../scene/sectionCaps';
 import {
   createFatLineSegments,
   drawFatLineOncePerPixel,
@@ -66,9 +67,9 @@ export interface BodyGhost {
   /**
    * While a body is given, the material it has gained beyond the dragged
    * face's old plane draws as ghost, not solid: the change is still only a
-   * proposal. The part up to the old face stays solid, capped by the old
-   * face. Call it each frame with the body as currently displayed (an exact
-   * preview replaces the object); `null` makes the whole part solid again.
+   * proposal. The part up to the old face stays solid, capped by the live
+   * cross-section. Call it each frame with the body as currently displayed
+   * (an exact preview replaces the object); `null` makes the whole part solid again.
    * Does nothing for a dragged face that is not planar.
    */
   veilAddedMaterial(live: THREE.Mesh | null): void;
@@ -163,8 +164,6 @@ export function createBodyGhost(
     for (let i = start; i < end; i++) faceIndices.push(index.getX(i));
     const faceGeometry = new THREE.BufferGeometry();
     faceGeometry.setAttribute('position', geometry.getAttribute('position'));
-    // The veil's cap shades this face in the body's lit finish; without
-    // normals it renders black.
     const normal = geometry.getAttribute('normal');
     if (normal) faceGeometry.setAttribute('normal', normal);
     faceGeometry.setIndex(faceIndices);
@@ -283,7 +282,7 @@ export function createBodyGhost(
     beyond: THREE.Plane;
     depth: THREE.Mesh;
     fill: THREE.Mesh;
-    cap: THREE.Mesh;
+    cap: THREE.Mesh<THREE.BufferGeometry, THREE.Material>;
     /** The old part beyond the old plane that is not the dragged face. */
     rest: THREE.Mesh | null;
   } | null = null;
@@ -305,6 +304,7 @@ export function createBodyGhost(
     if (!veil) return;
     for (const part of [veil.depth, veil.fill, veil.cap, veil.rest])
       part?.removeFromParent();
+    veil.cap.material.dispose();
     if (veil.rest) (veil.rest.material as THREE.Material).dispose();
     const keep = veil.keep;
     for (const target of veil.clipped) {
@@ -361,6 +361,61 @@ export function createBodyGhost(
     reach = { position, version, matrix: live.matrixWorld.clone(), beyond };
     return beyond;
   }
+  // Section the live shape only after a reshape or placement change, not
+  // every animation frame. Cache failures too: an open preview must stay
+  // solid rather than retrying a failed section on every frame.
+  let capSection: {
+    geometry: THREE.BufferGeometry;
+    position: THREE.BufferAttribute | THREE.InterleavedBufferAttribute;
+    version: number;
+    index: THREE.BufferAttribute | null;
+    indexVersion: number;
+    matrix: THREE.Matrix4;
+    cap: THREE.BufferGeometry | null;
+  } | null = null;
+  function liveCap(live: THREE.Mesh, keep: THREE.Plane) {
+    const position = live.geometry.getAttribute('position');
+    const version =
+      position instanceof THREE.BufferAttribute
+        ? position.version
+        : position.data.version;
+    const index = live.geometry.index;
+    if (
+      capSection &&
+      capSection.geometry === live.geometry &&
+      capSection.position === position &&
+      capSection.version === version &&
+      capSection.index === index &&
+      capSection.indexVersion === (index?.version ?? 0) &&
+      capSection.matrix.equals(live.matrixWorld)
+    )
+      return capSection.cap;
+    capSection?.cap?.dispose();
+    let cap: THREE.BufferGeometry | null = null;
+    try {
+      const localPlane = keep
+        .clone()
+        .applyMatrix4(live.matrixWorld.clone().invert());
+      cap = sectionCapGeometry(live.geometry, localPlane);
+      // Veil parts live beside the original body, in its captured frame.
+      cap?.applyMatrix4(
+        object.matrix.clone().invert().multiply(live.matrixWorld)
+      );
+    } catch {
+      cap?.dispose();
+      cap = null;
+    }
+    capSection = {
+      geometry: live.geometry,
+      position,
+      version,
+      index,
+      indexVersion: index?.version ?? 0,
+      matrix: live.matrixWorld.clone(),
+      cap
+    };
+    return cap;
+  }
   function veilAddedMaterial(live: THREE.Mesh | null) {
     const liveMaterial = live?.material;
     if (
@@ -374,7 +429,7 @@ export function createBodyGhost(
       return;
     }
     // Where the solid stops and the veil starts: a hair past the old face,
-    // so the old face itself always caps the solid side.
+    // leaving the old face as a quiet reference on the solid side.
     const { plane, margin } = veilFrame(oldPlane);
     // Only a pull adds material to veil. Pushed in, nothing lies past the
     // old face, and a cap there would close empty air with a solid face.
@@ -383,21 +438,25 @@ export function createBodyGhost(
       return;
     }
     if (veil && veil.live !== live) unveil();
+    // three.js keeps what lies on a plane's positive side.
+    const keep =
+      veil?.keep ??
+      new THREE.Plane(plane.normal.clone().negate(), -plane.constant + margin);
+    const cap = liveCap(live, keep);
+    if (!cap) {
+      unveil();
+      return;
+    }
     if (!veil) {
-      // three.js keeps what lies on a plane's positive side.
-      const keep = new THREE.Plane(
-        plane.normal.clone().negate(),
-        -plane.constant + margin
-      );
       const beyond = new THREE.Plane(
         plane.normal.clone(),
         plane.constant - margin
       );
-      const part = (
+      const part = <T extends THREE.Mesh>(
         name: string,
-        mesh: THREE.Mesh,
+        mesh: T,
         renderOrder: number
-      ): THREE.Mesh => {
+      ): T => {
         mesh.name = name;
         mesh.renderOrder = renderOrder;
         mesh.raycast = () => undefined;
@@ -443,10 +502,11 @@ export function createBodyGhost(
           new THREE.Mesh(live.geometry, veilFillMaterial),
           VEIL_FILL_ORDER
         ),
-        // The old face closes the clipped solid, in the body's own finish.
+        // The live section closes the whole solid, including the band
+        // around an inset face whose bounding fillets moved with it.
         cap: part(
           'offset-body-ghost-veil-cap',
-          new THREE.Mesh(face.geometry, liveMaterial),
+          new THREE.Mesh(cap, liveMaterial.clone()),
           0
         ),
         rest
@@ -458,6 +518,12 @@ export function createBodyGhost(
       veil.depth.geometry = live.geometry;
       veil.fill.geometry = live.geometry;
     }
+    veil.cap.geometry = cap;
+    veil.cap.material.copy(liveMaterial);
+    // The cap lies on the keep plane; clipping it by that same plane can
+    // discard it through rounding. Only the user's section cuts the cap.
+    veil.cap.material.clippingPlanes = section ? [section] : null;
+    veil.cap.material.side = THREE.DoubleSide;
     // The body, and what selection draws on it: the dragged face's own
     // highlight would otherwise paint the new end solid. Its edges stay, so
     // the proposed shape keeps its outline.
@@ -487,7 +553,7 @@ export function createBodyGhost(
       section = plane;
       const planes = plane ? [plane] : null;
       object.traverse((child) => {
-        // The veil's parts carry their own cut, and its cap is the body's.
+        // The veil's parts carry their own cut.
         if (child.name.startsWith('offset-body-ghost-veil')) return;
         const material = (child as THREE.Mesh).material as
           THREE.Material | undefined;
@@ -496,6 +562,8 @@ export function createBodyGhost(
         material.needsUpdate = true;
       });
       if (veil) {
+        veil.cap.material.clippingPlanes = planes;
+        veil.cap.material.needsUpdate = true;
         const parts = [...veilMaterials];
         if (veil.rest) parts.push(veil.rest.material as THREE.Material);
         for (const target of parts) {
@@ -507,6 +575,7 @@ export function createBodyGhost(
     veilAddedMaterial,
     dispose() {
       unveil();
+      capSection?.cap?.dispose();
       veilDepthMaterial.dispose();
       veilFillMaterial.dispose();
       object.removeFromParent();

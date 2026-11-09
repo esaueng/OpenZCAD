@@ -12,6 +12,26 @@ const at = (
 ): FaceDragTraceEvent => ({ t, kind, ...fields });
 
 describe('face-drag trace summary', () => {
+  it('reports viewport-worker copying separately from installation', () => {
+    const summary = summarizeFaceDragTrace(
+      [
+        at(0, 'pointer'),
+        at(1, 'publish', { value: 1 }),
+        at(2, 'prepare-post', { ms: 7 }),
+        at(10, 'install', { ms: 3, detail: { renderChanged: 1 } }),
+        at(11, 'frame', { detail: { presented: 1 } }),
+        at(20, 'prepare-post', { ms: 5 })
+      ],
+      { releaseAt: 15 }
+    );
+    expect(summary.stages.preparationPostMs).toMatchObject({
+      n: 2,
+      p50: 5,
+      max: 7
+    });
+    expect(summary.stages.installMs).toMatchObject({ n: 1, p50: 3 });
+  });
+
   it('reports proxy frames separately from exact geometry and the accepted commit', () => {
     const summary = summarizeFaceDragTrace(
       [at(0, 'pointer', { value: 1 }), at(8, 'frame')],

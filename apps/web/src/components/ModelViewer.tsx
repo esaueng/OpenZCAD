@@ -47,6 +47,8 @@ import {
 } from './viewer/orientationCubeOverlay';
 import { mark, measure, timed } from '../lib/perf';
 import { InteractionShaderWarmup } from './viewer/interactionShaderWarmup';
+import { usePreparedBodies } from './viewer/usePreparedBodies';
+import { releasePreparedBodyGeometry } from '../../../../packages/viewport/src/render/preparedBody';
 import { reportPresentedGeometry } from '../lib/startupReadiness';
 import { useWorkspaceFrameReady } from './WorkspaceLoading';
 import { recordEditPhase } from '../lib/editTrace';
@@ -282,7 +284,8 @@ import {
   type OffsetChipMode
 } from '../lib/offsetChip';
 import { chipLeader, separateChips } from '../lib/commandChipLayout';
-import { faceDepthBehind, faceLift } from '../lib/faceDepthBehind';
+import { faceLift } from '../lib/faceDepthBehind';
+import { faceTotalSpan } from '../lib/opposingPlaneSpan';
 import { setLiveDiameter } from '../lib/liveLabels';
 import type { SelectionCalloutContent } from '../lib/selectionCallout';
 import {
@@ -1963,33 +1966,6 @@ function sameEdgeRigPlacement(a: EdgeRigPlacement, b: EdgeRigPlacement) {
   );
 }
 
-function bodyExtentBehind(
-  object: THREE.Object3D,
-  origin: THREE.Vector3,
-  direction: THREE.Vector3
-): number | null {
-  let least = Number.POSITIVE_INFINITY;
-  const vertex = new THREE.Vector3();
-  object.updateWorldMatrix(true, true);
-  forEachMesh(object, (mesh) => {
-    const position = mesh.geometry.getAttribute('position') as
-      THREE.BufferAttribute | THREE.InterleavedBufferAttribute | undefined;
-    if (!position) {
-      return;
-    }
-    for (let index = 0; index < position.count; index += 1) {
-      vertex
-        .fromBufferAttribute(position, index)
-        .applyMatrix4(mesh.matrixWorld);
-      const along = vertex.sub(origin).dot(direction);
-      if (along < least) {
-        least = along;
-      }
-    }
-  });
-  return Number.isFinite(least) && least < -1e-6 ? -least : null;
-}
-
 function retireRig(rig: DragRig, retiring: DragRig[]): void {
   if (!rig.beginExit || !rig.isGone) {
     rig.dispose();
@@ -2183,14 +2159,14 @@ export function ModelViewer({
   parameterVisualPreview = null,
   sketches,
   measurementAnnotations,
-  selectedBodyIds,
-  selectedTopology,
-  previewFaceHighlights,
-  focusFaces = NO_FOCUS_FACES,
-  selectionCallout = null,
+  selectedBodyIds: incomingSelectedBodyIds,
+  selectedTopology: incomingSelectedTopology,
+  previewFaceHighlights: incomingPreviewFaceHighlights,
+  focusFaces: incomingFocusFaces = NO_FOCUS_FACES,
+  selectionCallout: incomingSelectionCallout = null,
   pickLabel = true,
-  focusGhostBodies,
-  selectedEdges,
+  focusGhostBodies: incomingFocusGhostBodies,
+  selectedEdges: incomingSelectedEdges,
   pickListEnabled,
   settings,
   exactSection,
@@ -2208,7 +2184,7 @@ export function ModelViewer({
   onViewChange,
   onViewSettled,
   onGeometryPresented,
-  geometryTrace,
+  geometryTrace: incomingGeometryTrace,
   onBodiesDrawnElsewhere,
   onWheelDeviceLearned,
   orientationRef,
@@ -2225,7 +2201,7 @@ export function ModelViewer({
   fieldOfView = VIEWPORT_FIELD_OF_VIEW_BOUNDS.default,
   xrayOpacity = XRAY_OPACITY_BOUNDS.default / 100,
   tangentEdges = DEFAULT_TANGENT_EDGE_STYLE,
-  offsetHandle,
+  offsetHandle: incomingOffsetHandle,
   offsetDragTarget,
   onOffsetPreview,
   onOffsetCommit,
@@ -2235,7 +2211,7 @@ export function ModelViewer({
   onOpenOffsetKeypad,
   keypadAnchorRef,
   offsetSetterRef,
-  cylinderRadiusHandle,
+  cylinderRadiusHandle: incomingCylinderRadiusHandle,
   cylinderDimensionMode,
   onCylinderDimensionModeChange,
   cylinderRadiusLabelSetterRef,
@@ -2245,7 +2221,7 @@ export function ModelViewer({
   onOpenCylinderRadiusKeypad,
   cancelDirectManipulationRef,
   openExactEntryRef,
-  edgeHandle,
+  edgeHandle: incomingEdgeHandle,
   onEdgeRadiusPreview,
   onEdgeCommit,
   onEdgeCancel,
@@ -2311,11 +2287,38 @@ export function ModelViewer({
   const drawingBodiesRef = useRef<
     readonly GeometryBodyRepresentation[] | undefined
   >(undefined);
-  const bodies = useMemo(() => {
+  const renderBodies = useMemo(() => {
     const result = reuseRenderBodies(drawingBodiesRef.current, suppliedBodies);
     drawingBodiesRef.current = result;
     return result;
   }, [suppliedBodies]);
+  const { bodies, preparing, presentation } = usePreparedBodies(renderBodies, {
+    selectedBodyIds: incomingSelectedBodyIds,
+    selectedTopology: incomingSelectedTopology,
+    previewFaceHighlights: incomingPreviewFaceHighlights,
+    focusFaces: incomingFocusFaces,
+    selectionCallout: incomingSelectionCallout,
+    focusGhostBodies: incomingFocusGhostBodies,
+    selectedEdges: incomingSelectedEdges,
+    offsetHandle: incomingOffsetHandle,
+    cylinderRadiusHandle: incomingCylinderRadiusHandle,
+    edgeHandle: incomingEdgeHandle
+  });
+  // Selection and rigs describe the same projection as the bodies on screen,
+  // including intermediate worker replies during rapid previews.
+  const {
+    selectedBodyIds,
+    selectedTopology,
+    previewFaceHighlights,
+    focusFaces,
+    selectionCallout,
+    focusGhostBodies,
+    selectedEdges,
+    offsetHandle,
+    cylinderRadiusHandle,
+    edgeHandle
+  } = presentation!;
+  const geometryTrace = preparing ? undefined : incomingGeometryTrace;
   const hostRef = useRef<HTMLDivElement | null>(null);
   const contextRef = useRef<SceneContext | null>(null);
   /** The Assemble workspace's posing, glyphs and drags (AS02). */
@@ -4485,7 +4488,7 @@ export function ModelViewer({
       if (offsetRig && offsetHandleRef.current?.locked) return true;
       if (offsetRig) {
         // Exact entry edits whatever the chip is showing: the whole span
-        // (a primitive's height, or the body's reach behind the face) in
+        // (a primitive's height, or the span to the face opposite it) in
         // Total mode, the plain offset otherwise.
         const span =
           offsetHandleRef.current?.totalBaseline ?? offsetExtentRef.current;
@@ -7459,7 +7462,7 @@ export function ModelViewer({
           text = `${label ? `${label} · ` : ''}${prefix} ${value} ${unitLabelRef.current}`;
         } else {
           // "Total" reads the whole span this face sets: a primitive's own
-          // height when it has one, else the body's reach behind the face.
+          // height when it has one, else the span to the flat face opposite it.
           const totalBaseline = offsetHandleRef.current?.totalBaseline;
           const totalSense = offsetHandleRef.current?.totalSense ?? 1;
           text = offsetChipText({
@@ -12032,10 +12035,15 @@ export function ModelViewer({
       if (!interactionShaderWarmup.isScheduled) {
         const warmupEdges = context.edgeOverlaysByBodyId.values().next().value;
         if (warmupEdges) {
+          const warmupBody = context.objectsByBodyId.values().next().value;
           interactionShaderWarmup.schedule(
             context.activeCamera,
             [selection.hoverFaceMesh, selection.hoverHiddenFaceMesh],
-            [warmupEdges.hoverEdges, warmupEdges.hoverHiddenEdges]
+            [warmupEdges.hoverEdges, warmupEdges.hoverHiddenEdges],
+            warmupBody instanceof THREE.Mesh &&
+              !Array.isArray(warmupBody.material)
+              ? (warmupBody.material as THREE.Material)
+              : undefined
           );
         }
       }
@@ -12710,6 +12718,9 @@ export function ModelViewer({
         }
       }
       if (!object) object = createObjectForBody(body, edgeResolution);
+      // An unchanged installed geometry (e.g. a picking-only change) also
+      // consumes readiness without needing the prepared smoothing arrays.
+      releasePreparedBodyGeometry(body);
       object.userData.bodyId = body.bodyId;
       const previousSelectionOverlay = object.getObjectByName(
         'body-selection-overlay'
@@ -13847,16 +13858,20 @@ export function ModelViewer({
       placement.direction.y,
       placement.direction.z
     );
-    // Total reads the line from the picked point back through the part to
-    // where it comes out, not the whole body's reach behind the face's plane
-    // (which spanned to an unrelated lobe), so it follows where you click.
+    // Total reads plane to plane, from this face to the flat face across the
+    // material from it that the line back from the pick reaches — never a
+    // hole wall, fillet or chamfer the line passes, nor the whole body's
+    // reach behind the face's plane (which spanned to an unrelated lobe).
+    // With no such face only Offset is offered. The keypad's Total entry
+    // reads this same span, so a typed Total subtracts what the chip shows.
     const extentBehind = body
-      ? (faceDepthBehind(
+      ? faceTotalSpan(
           body,
+          offsetHandle.topologyId,
           handleOrigin,
           handleDirection,
           faceLift(body, offsetHandle.topologyId, handleOrigin, handleDirection)
-        ) ?? bodyExtentBehind(body, handleOrigin, handleDirection))
+        )
       : null;
     const chipState = faceOffsetChipState(
       offsetHandle.totalBaseline,

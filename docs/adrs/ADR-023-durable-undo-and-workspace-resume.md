@@ -43,8 +43,14 @@ version, generic device label, camera, projection, display settings, hidden and
 selected body ids, workbench, and panel collapse state. They contain no model
 snapshots, credentials, unfinished tool operations, or AI conversation.
 
-Writes occur after deliberate activity settles, with retries while the project
-remains open. Existing device view persistence remains independent.
+Writes occur after deliberate activity settles. Unchanged normalized view state
+and document version are not written again after acknowledgement. Network/server
+failures retry with bounded exponential backoff while the project remains open;
+a document-version fence waits for a later model-sync acknowledgement. Permanent
+payload/auth refusals stop automatic retries. New activity does not clear a
+failure: only a successful write does. A grace-delayed, dismissible viewer toast
+announces each failure episode once. Existing device view persistence remains
+independent.
 Idle polling and page teardown do not create a new activity timestamp. The
 server supplies timestamps, ignores repeated/older sequences, and refuses
 records ahead of the durable model. Each account/project keeps at most 20

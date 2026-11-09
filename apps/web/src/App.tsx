@@ -127,6 +127,7 @@ import {
 } from '@openzcad/shared';
 import type { SketchCompositeSummary } from './components/SketchEntityEditor';
 import { useWorkspaceResume } from './hooks/useWorkspaceResume';
+import { useWorkspaceResumeNotice } from './hooks/useWorkspaceResumeNotice';
 import { buildMeasurementRecord } from './lib/measurementRecord';
 import {
   loadProjectBackupFiles,
@@ -774,7 +775,8 @@ import {
 import { retireStatus, type StatusEntry } from './lib/statusLifetime';
 import { LIBRARY_MODE_STATUS } from './lib/libraryStatus';
 import type { KeypadRequest, KeypadUiState } from './components/NumericKeypad';
-import type { DimensionMode, PreviewVerdict } from './lib/keypad';
+import type { DimensionMode } from './lib/keypad';
+import { usePreviewVerdict } from './hooks/usePreviewVerdict';
 import { evaluateKeypadInput } from './lib/keypad';
 import {
   inPlacePanelSections,
@@ -1621,6 +1623,7 @@ import { useAppSettingsSync } from './hooks/useAppSettingsSync';
 import { useDirectEditCommit } from './hooks/useDirectEditCommit';
 import { useSettledFlag } from './hooks/useSettledFlag';
 import { useSteadySaveState } from './hooks/useSteadySaveState';
+import { useLocalProjectAutosaveSchedule } from './hooks/useLocalProjectAutosaveSchedule';
 import { useMeasurementWorkbench } from './hooks/useMeasurementWorkbench';
 import {
   useValidatedFeatureCommit,
@@ -3469,6 +3472,12 @@ export function App() {
       setResumeViewGeneration((value) => value + 1);
     }
   });
+  useWorkspaceResumeNotice(
+    workspaceResume.lastFailure !== null,
+    doc?.projectId ?? null,
+    session?.userId ?? null,
+    announce
+  );
   const sessionRef = useRef(session);
   sessionRef.current = session;
   const keySessionEventRef = useRef<(event: KeySessionEvent) => void>(() => {});
@@ -3831,17 +3840,15 @@ export function App() {
    * this on screen as the model's state, and the card offers to keep it.
    */
   const [lastValidPreview, setLastValidPreview] = useState<number | null>(null);
+  /** What the latest face-offset plan does to history (`editedFeatureIdFor`). */
+  const [offsetPlanEdit, setOffsetPlanEdit] =
+    useState<FaceOffsetPlanEdit | null>(null);
   /**
    * The kernel's verdict on the last value previewed, built or refused. The
    * edit control is Ready only once the value it shows has one, so Enter
    * never applies an earlier value's preview against newer input.
    */
-  /** What the latest face-offset plan does to history (`editedFeatureIdFor`). */
-  const [offsetPlanEdit, setOffsetPlanEdit] =
-    useState<FaceOffsetPlanEdit | null>(null);
-  const [previewVerdict, setPreviewVerdict] = useState<PreviewVerdict | null>(
-    null
-  );
+  const [previewVerdict, setPreviewVerdict] = usePreviewVerdict(keypad !== null);
   /** What the open edit control says, for the guidance row's key hints. */
   const [keypadUi, setKeypadUi] = useState<KeypadUiState | null>(null);
   /** New exact blend faces, computed once when an edge-fillet preview lands. */
@@ -7125,27 +7132,18 @@ export function App() {
       setSaveState('local');
       return;
     }
-    setSaveState('saving');
-    setLocalSaveFailed(false);
-    const canonicalChange = localAutosave.enqueue(doc);
-    if (canonicalChange) {
-      // History is already accepted and visible: start its device transaction
-      // now, before paint. Only derived rebuild bookkeeping stays debounced.
-      void flushPendingLocalSave().catch(() => undefined);
-      return;
+  }, [doc, shareSession, projectOpenElsewhere]);
+
+  useLocalProjectAutosaveSchedule({
+    document: shareSession || projectOpenElsewhere ? null : doc,
+    autosave: localAutosave,
+    flush: flushPendingLocalSave,
+    timeoutRef: localSaveTimeoutRef,
+    onCanonicalChange: () => {
+      setSaveState('saving');
+      setLocalSaveFailed(false);
     }
-    const timeout = window.setTimeout(() => {
-      localSaveTimeoutRef.current = null;
-      void flushPendingLocalSave().catch(() => undefined);
-    }, 450);
-    localSaveTimeoutRef.current = timeout;
-    return () => {
-      if (localSaveTimeoutRef.current === timeout) {
-        window.clearTimeout(timeout);
-        localSaveTimeoutRef.current = null;
-      }
-    };
-  }, [doc, cloudAvailable, shareSession, localAutosave, flushPendingLocalSave]);
+  });
 
   useEffect(() => {
     const projectId = doc?.projectId;
@@ -32242,7 +32240,7 @@ export function App() {
             instructionDetails={
               displayedGeometryComplete && offsetHandleTarget
                 ? offsetHandleTarget.totalBaseline === undefined
-                  ? 'Total measures material behind the picked point using the displayed mesh. Holes or a different pick location can change it. Offset shows only the signed distance of this edit.'
+                  ? 'Total measures from this face to the flat face opposite it behind the picked point. Holes, fillets and chamfers are not counted; a stepped face can read differently where you pick. Offset shows only the signed distance of this edit.'
                   : 'Total shows the feature dimension. Offset shows only the signed distance of this edit.'
                 : null
             }
@@ -32616,12 +32614,6 @@ export function App() {
       }
       overlays={
         <>
-          {workspaceResume.status === 'offline' && (
-            <div className="toast" role="status">
-              Session sync is pending. It will retry while this project is open.
-            </div>
-          )}
-
           {shareCopyChoice && (
             <SharedLinkCopyDialog
               accountEncrypts={shareCopyChoice.accountEncrypts}
