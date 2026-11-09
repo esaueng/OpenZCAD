@@ -11,7 +11,7 @@ function fixture(maxX = 30) {
     filletWithEvolution: () => ({ result: { solid: 2 } }),
     validateSolidRelaxed: () => 0,
     edgeLength: () => 13,
-    volume: (solid: number) => (solid === 1 ? 15205 : 15181),
+    volume: (solid: number): number => (solid === 1 ? 15205 : 15181),
     getSolidFaces: (solid: number) => Uint32Array.of(solid === 1 ? 10 : 11),
     getSurfaceType: (face: number) => (face === 10 ? 'plane' : 'bspline'),
     checkpoint: vi.fn(() => 5),
