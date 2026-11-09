@@ -1,4 +1,3 @@
-import { displayTessellationForExtents } from '../../packages/kernel-adapter/src/display-tessellation';
 import { roundedPlateDocument } from '../support/rounded-plate';
 import {
   test,
@@ -93,13 +92,15 @@ for (const units of ['mm', 'inch'] as const) {
           .click();
         await expect(keypad).toBeHidden();
       };
-      // The plate is 80 mm wide. At y=20 a Ø10 hole at x=40 ends
-      // the material at x=45; y=8 misses the hole and reads all 80 mm.
-      await pick(80, 20, 35);
+      // The plate is 80 mm wide with a Ø10 hole at x=40. Total reads plane to
+      // plane, to the flat face across the plate: the line from y=20 crosses
+      // the hole's wall, which is not the reference, and still reads 80, the
+      // same as y=8 beside the hole.
+      await pick(80, 20, 80);
       const initial = await count();
       await pick(80, 8, 80);
       expect(await count()).toBe(initial);
-      await pick(80, 20, 35);
+      await pick(80, 20, 80);
       // Accepting the rounded prefill must not subtract it from a more precise
       // mesh baseline and accidentally create a microscopic offset feature.
       await value.click();
@@ -108,32 +109,27 @@ for (const units of ['mm', 'inch'] as const) {
       await expect(unchanged).toBeHidden();
       expect(await count()).toBe(initial);
       await expect.poll(span).toBeCloseTo(80 * scale, 4);
-      await enter(units === 'mm' ? '35 + 6' : '41 / 25.4');
+      // A typed Total is the width the plate is left at: 75 stores −5.
+      await enter(units === 'mm' ? '70 + 5' : '75 / 25.4');
       await expect.poll(count).toBe(initial + 1);
-      // Total is explicitly mesh-derived: a chord through the hole can differ
-      // from its analytic circle by the viewer's existing deflection budget.
-      const tolerance =
-        displayTessellationForExtents(80, 40, 6).linearDeflection * scale;
-      await expect
-        .poll(async () => Math.abs((await span()) - 86 * scale))
-        .toBeLessThanOrEqual(tolerance);
+      await expect.poll(span).toBeCloseTo(75 * scale, 4);
       const grown = await span();
-      await expect.poll(read).toBeCloseTo(41 * scale, 2);
-      await pick(grown / scale, 8, 86);
-      await pick(grown / scale, 20, 41);
+      await expect.poll(read).toBeCloseTo(75 * scale, 2);
+      await pick(grown / scale, 8, 75);
+      await pick(grown / scale, 20, 75);
       await page.getByRole('button', { name: 'Undo', exact: true }).click();
       await expect.poll(span).toBeCloseTo(80 * scale, 4);
-      await pick(80, 20, 35);
+      await pick(80, 20, 80);
       await page.getByRole('button', { name: 'Redo', exact: true }).click();
       await expect.poll(span).toBeCloseTo(grown, 4);
-      await pick(grown / scale, 20, 41);
+      await pick(grown / scale, 20, 75);
       await page.getByTestId('direct-manipulation-mode').click();
       await expect(page.getByTestId('direct-manipulation-mode')).toHaveText(
         /^Offset/
       );
-      await enter(units === 'mm' ? '-6' : '-6 / 25.4', 'Offset');
+      await enter(units === 'mm' ? '5' : '5 / 25.4', 'Offset');
       await expect.poll(count).toBe(initial + 2);
-      const restored = grown - 6 * scale;
+      const restored = grown + 5 * scale;
       await expect.poll(span).toBeCloseTo(restored, 4);
       // Device persistence is a separate witness from the account save label.
       await expect
@@ -179,12 +175,12 @@ for (const units of ['mm', 'inch'] as const) {
         .toBe(true);
       await page.reload({ waitUntil: 'domcontentloaded' });
       await expectBodyCount(page, 1);
-      await pick(restored / scale, 20, 35);
+      await pick(restored / scale, 20, 80);
       await expect.poll(span).toBeCloseTo(restored, 4);
       expect(await count()).toBe(initial + 2);
       await page.getByLabel('Operation instructions', { exact: true }).click();
       await expect(page.locator('.workspace-hint-help[open]')).toContainText(
-        'Holes or a different pick location can change it.'
+        'Holes, fillets and chamfers are not counted'
       );
       for (const width of [1440, 390]) {
         await page.setViewportSize({ width, height: 1000 });

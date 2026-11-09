@@ -10,15 +10,16 @@ export type OffsetChipMode = 'offset' | 'total';
 /** What a freshly armed offset-arrow rig's chip starts from. */
 export interface OffsetChipState {
   mode: OffsetChipMode;
-  /** How far the body reaches behind the armed face, for "Total". */
+  /** The span to the plane opposing the armed face, for "Total". */
   extent: number | null;
 }
 
 /**
  * A face offset reads the whole span by default — a primitive's own
- * dimension, or the body's reach behind any other face — since that is the
- * size the gesture leaves; the change alone is one click away. Only a face
- * with no span to read starts on the change.
+ * dimension, or the distance to the flat face opposing any other face — since
+ * that is the size the gesture leaves; the change alone is one click away.
+ * Only a face with no span to read (nothing flat across from it) starts on,
+ * and stays on, the change.
  */
 export function faceOffsetChipState(
   totalBaseline: number | undefined,
