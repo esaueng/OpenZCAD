@@ -95,6 +95,7 @@ import {
   CameraController,
   ANGLE_RIG_KIND,
   buildAngleHandle,
+  buildCoilHandle,
   buildLinearHandle,
   buildCylinderRadiusHandle,
   buildEdgeRadiusHandle,
@@ -244,6 +245,7 @@ import {
   sketchGlideEase,
   viewJumpEase,
   type AngleRigParams,
+  type CoilRigParams,
   type CameraGlideStyle,
   type HandleVec3,
   type WheelDevice
@@ -776,6 +778,10 @@ export type CommandHandleView = (
       kind: 'linear';
       params: { origin: HandleVec3; direction: HandleVec3 };
     }
+  | {
+      kind: 'coil';
+      params: Omit<CoilRigParams, 'turns' | 'minTurns' | 'maxTurns'>;
+    }
   | { kind: 'chip'; params: { anchor: HandleVec3 } }
 ) & {
   valueId: string;
@@ -795,6 +801,10 @@ export type CommandHandleView = (
 const EMPTY_COMMAND_HANDLES: readonly CommandHandleView[] = [];
 /** How far inside the canvas edge a command chip is kept, in CSS pixels. */
 const COMMAND_CHIP_MARGIN_PX = 12;
+/** How far an axis name tag sits along its line from the line's origin. */
+const AXIS_LABEL_OFFSET_PX = 72;
+/** An axis tag closer than this to the canvas edge is moved or hidden. */
+const AXIS_LABEL_MARGIN_PX = 24;
 /**
  * How far a command chip's box centre stands above its point, in chip
  * heights: `.handle-value-chip` is drawn at translate(-50%, -130%).
@@ -2531,6 +2541,17 @@ export function ModelViewer({
   const planePickerRigRef = useRef<ReturnType<
     typeof buildPlanePickerRig
   > | null>(null);
+  /** Makes one axis name tag on the HUD; set when the viewer mounts. */
+  const axisLabelFactoryRef = useRef<(() => HTMLDivElement) | null>(null);
+  /** The axis picker's name tags, each placed on its line every frame. */
+  const axisLabelsRef = useRef<
+    {
+      id: string;
+      element: HTMLDivElement;
+      origin: THREE.Vector3;
+      direction: THREE.Vector3;
+    }[]
+  >([]);
   const axisPickerRigRef = useRef<ReturnType<typeof buildAxisPickerRig> | null>(
     null
   );
@@ -4402,6 +4423,70 @@ export function ModelViewer({
       chip.hidden = true;
       return chip;
     };
+    axisLabelFactoryRef.current = () => hud.create('axis-pick-label');
+    /**
+     * Sets each axis name tag a little way along its own line from the
+     * line's origin, on whichever side stays on the canvas; hides it behind
+     * the camera. Two lines through one point (a sketch's two axes) part
+     * along their own directions, so their tags never stack.
+     */
+    function updateAxisLabels() {
+      const labels = axisLabelsRef.current;
+      if (labels.length === 0) return;
+      const camera = context.activeCamera;
+      const width = canvasWidth();
+      const height = canvasHeight();
+      const toScreen = (point: THREE.Vector3) => {
+        const ndc = point.clone().project(camera);
+        return {
+          x: ((ndc.x + 1) / 2) * width,
+          y: ((1 - ndc.y) / 2) * height
+        };
+      };
+      const inside = (at: { x: number; y: number }) =>
+        at.x > AXIS_LABEL_MARGIN_PX &&
+        at.x < width - AXIS_LABEL_MARGIN_PX &&
+        at.y > AXIS_LABEL_MARGIN_PX &&
+        at.y < height - AXIS_LABEL_MARGIN_PX;
+      for (const label of labels) {
+        if (isBehindCamera(label.origin, camera)) {
+          label.element.hidden = true;
+          continue;
+        }
+        const base = toScreen(label.origin);
+        const ahead = toScreen(
+          label.origin
+            .clone()
+            .addScaledVector(label.direction, worldPerPixelAt(label.origin))
+        );
+        const length = Math.hypot(ahead.x - base.x, ahead.y - base.y);
+        // A line seen end-on has no side to sit along: the tag sits on it.
+        const along =
+          length > 1e-6
+            ? { x: (ahead.x - base.x) / length, y: (ahead.y - base.y) / length }
+            : { x: 0, y: 0 };
+        const forward = {
+          x: base.x + along.x * AXIS_LABEL_OFFSET_PX,
+          y: base.y + along.y * AXIS_LABEL_OFFSET_PX
+        };
+        const backward = {
+          x: base.x - along.x * AXIS_LABEL_OFFSET_PX,
+          y: base.y - along.y * AXIS_LABEL_OFFSET_PX
+        };
+        const at = inside(forward)
+          ? forward
+          : inside(backward)
+            ? backward
+            : inside(base)
+              ? base
+              : null;
+        if (!at) {
+          label.element.hidden = true;
+          continue;
+        }
+        hud.showAt(label.element, at.x, at.y);
+      }
+    }
     /** Places each command chip at its handle; hides any off screen. */
     function updateCommandChips() {
       const rigs = commandRigsRef.current;
@@ -11650,6 +11735,7 @@ export function ModelViewer({
       // After the offset chip, which clears the keypad anchor without a rig
       // of its own: the command's anchor has to be the frame's last word.
       updateCommandChips();
+      updateAxisLabels();
       // Read the current presentation after every preview has posed its meshes.
       // Reuse the body's bounds for the scale bar, then include sketches in the
       // camera range without letting grids, axes or HUD decorations set it.
@@ -14297,14 +14383,65 @@ export function ModelViewer({
     if (!context || axisPickerKey === null) {
       return;
     }
-    const rig = buildAxisPickerRig(axisPickerCandidatesRef.current);
+    const rig = buildAxisPickerRig(
+      axisPickerCandidatesRef.current,
+      context.fatLineResolution()
+    );
     rig.setScale(() => 0.05);
     context.scene.add(rig.group);
     axisPickerRigRef.current = rig;
+    // Each line's name on a tag that picks it too: easier to aim at than
+    // a line, and it says what the line is.
+    const makeLabel = axisLabelFactoryRef.current;
+    const labels = makeLabel
+      ? axisPickerCandidatesRef.current.flatMap((candidate) => {
+          if (!candidate.label) return [];
+          const element = makeLabel();
+          element.textContent = candidate.label;
+          element.setAttribute('role', 'button');
+          element.setAttribute('aria-label', `Use the ${candidate.label}`);
+          element.tabIndex = 0;
+          element.dataset.testid = `axis-pick-${candidate.id}`;
+          const pick = () => onPickAxisRef.current?.(candidate.id);
+          const hover = (id: string | null) => {
+            axisPickerRigRef.current?.setHover(id);
+            context.requestRender();
+          };
+          element.addEventListener('click', pick);
+          element.addEventListener('keydown', (event) => {
+            if (event.key !== 'Enter' && event.key !== ' ') return;
+            // Enter and Space are the workspace's own shortcuts too.
+            event.preventDefault();
+            event.stopPropagation();
+            pick();
+          });
+          element.addEventListener('pointerenter', () => hover(candidate.id));
+          element.addEventListener('pointerleave', () => hover(null));
+          return [
+            {
+              id: candidate.id,
+              element,
+              origin: new THREE.Vector3(
+                candidate.origin.x,
+                candidate.origin.y,
+                candidate.origin.z
+              ),
+              direction: new THREE.Vector3(
+                candidate.direction.x,
+                candidate.direction.y,
+                candidate.direction.z
+              ).normalize()
+            }
+          ];
+        })
+      : [];
+    axisLabelsRef.current = labels;
     context.requestRender();
     return () => {
       context.scene.remove(rig.group);
       rig.dispose();
+      for (const label of labels) label.element.remove();
+      if (axisLabelsRef.current === labels) axisLabelsRef.current = [];
       if (axisPickerRigRef.current === rig) {
         axisPickerRigRef.current = null;
       }
@@ -14314,6 +14451,12 @@ export function ModelViewer({
   const selectedAxisId = axisPicker?.selectedId ?? null;
   useEffect(() => {
     axisPickerRigRef.current?.setSelected(selectedAxisId);
+    for (const label of axisLabelsRef.current) {
+      label.element.classList.toggle(
+        'is-selected',
+        label.id === selectedAxisId
+      );
+    }
     contextRef.current?.requestRender();
   }, [selectedAxisId, axisPickerKey]);
 
@@ -14356,7 +14499,17 @@ export function ModelViewer({
                 ...(handle.min === undefined ? {} : { min: handle.min }),
                 ...(handle.max === undefined ? {} : { max: handle.max })
               })
-            : null;
+            : handle.kind === 'coil'
+              ? buildCoilHandle({
+                  ...handle.params,
+                  turns: handle.value,
+                  // A count above zero: the rig keeps a sliver of a turn.
+                  ...(handle.min === undefined || handle.min <= 0
+                    ? {}
+                    : { minTurns: handle.min }),
+                  ...(handle.max === undefined ? {} : { maxTurns: handle.max })
+                })
+              : null;
       if (rig) {
         context.scene.add(rig.group);
         context.scene.add(rig.worldGroup);

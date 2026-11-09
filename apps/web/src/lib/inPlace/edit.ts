@@ -398,9 +398,27 @@ export function inPlaceEditSeed(
         value(`axisO${axis.toUpperCase()}`, data.axisOrigin[axis]);
         value(`axisD${axis.toUpperCase()}`, data.axisDirection[axis]);
       }
-      value('radius', data.radius);
+      // Its radius stays as stored while it keeps its own axis; the
+      // command has no value for it (the profile's distance is the radius).
       value('pitch', data.pitch);
       value('turns', data.turns);
+      // Sized by height when its pitch is a plain climb up its axis; a typed
+      // or reversed pitch keeps its own row, so it is written back as it is.
+      const pitch = ctx.evaluate(data.pitch);
+      const turns = ctx.evaluate(data.turns);
+      if (
+        typeof data.pitch === 'number' &&
+        pitch !== null &&
+        pitch > 0 &&
+        turns !== null &&
+        turns > 0
+      ) {
+        seed.options.size = 'height';
+        seed.values.height = pitch * turns;
+        seed.touched.push('height');
+      } else {
+        seed.options.size = 'pitch';
+      }
       break;
     }
     case 'hole': {

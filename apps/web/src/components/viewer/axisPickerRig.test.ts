@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
+import type { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { buildAxisPickerRig } from './axisPickerRig';
 
 const candidates = [
@@ -47,15 +48,18 @@ describe('axis picker rig', () => {
     expect(raycaster.intersectObjects(rig.targets(), false)).toHaveLength(0);
   });
 
-  it('highlights only the hovered line', () => {
+  it('highlights only the hovered line: wider and solid', () => {
     const rig = buildAxisPickerRig(candidates);
     rig.setHover('sketch-vertical');
-    const colors = rig.group.children.map((holder) =>
-      (
-        (holder.children[0] as THREE.Line).material as THREE.LineDashedMaterial
-      ).color.getHex()
+    const materials = rig.group.children.map(
+      (holder) => (holder.children[0] as LineSegments2).material
     );
-    expect(colors[0]).not.toBe(colors[1]);
+    expect(materials[1]!.linewidth).toBeGreaterThan(materials[0]!.linewidth);
+    expect(materials.map((material) => material.dashed)).toEqual([true, false]);
+    // The picked line turns its own colour.
+    rig.setHover(null);
+    rig.setSelected('sketch-horizontal');
+    expect(materials[0]!.color.getHex()).not.toBe(materials[1]!.color.getHex());
     rig.dispose();
     expect(rig.group.children).toHaveLength(0);
   });

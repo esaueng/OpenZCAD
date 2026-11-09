@@ -778,6 +778,48 @@ describe('an untouched edit writes the feature back as stored', () => {
     });
   });
 
+  it('helical sweep: reopens sized by height, and writes an untouched pitch back as stored', () => {
+    const profile = { all: true as const, sourceEntityIds: ['a'] };
+    const data: FeatureData = {
+      featureKind: 'helical-sweep',
+      profile: { sketchId: SKETCH, profile },
+      axisOrigin: { x: 0, y: 0, z: 0 },
+      axisDirection: { x: 0, y: 0, z: 1 },
+      radius: 12,
+      pitch: 0.1,
+      turns: 7
+    };
+    const armed = inPlaceEditSeed(feature(data), EDIT_CTX)!;
+    expect(armed.seed.options.size).toBe('height');
+    expect(armed.seed.values.height).toBeCloseTo(0.7);
+    // 0.1 × 7 ÷ 7 is not 0.1 in floating point; the stored 0.1 goes back.
+    expect(untouched(feature(data))).toMatchObject({ pitch: 0.1, radius: 12 });
+    // A new height spreads its turns over it.
+    expect(untouched(feature(data), { height: 14 })).toMatchObject({
+      pitch: 2,
+      turns: 7
+    });
+  });
+
+  it('helical sweep: a typed or reversed pitch reopens as a pitch', () => {
+    const profile = { all: true as const, sourceEntityIds: ['a'] };
+    const base = {
+      featureKind: 'helical-sweep' as const,
+      profile: { sketchId: SKETCH, profile },
+      axisOrigin: { x: 0, y: 0, z: 0 },
+      axisDirection: { x: 0, y: 0, z: 1 },
+      radius: 12,
+      turns: 3
+    };
+    for (const pitch of ['wall', -4] as const) {
+      const data: FeatureData = { ...base, pitch };
+      expect(inPlaceEditSeed(feature(data), EDIT_CTX)!.seed.options.size).toBe(
+        'pitch'
+      );
+      expect(untouched(feature(data))).toMatchObject({ pitch });
+    }
+  });
+
   it('revolve: a profile-less revolve stays profile-less; a full turn stays 360', () => {
     const data: FeatureData = {
       featureKind: 'revolve',

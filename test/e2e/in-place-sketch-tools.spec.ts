@@ -82,6 +82,20 @@ async function projected(
   );
 }
 
+/** Each command handle's grip on screen, with its value. */
+async function commandHandles(
+  canvas: Locator
+): Promise<Record<string, { x: number; y: number; value: number }>> {
+  return canvas.evaluate((element) =>
+    element.dataset.e2eCommandHandles
+      ? (JSON.parse(element.dataset.e2eCommandHandles) as Record<
+          string,
+          { x: number; y: number; value: number }
+        >)
+      : {}
+  );
+}
+
 async function exportedDocument(page: Page): Promise<ProjectDocument> {
   const menu = page.locator('details.file-menu');
   await menu.locator('summary').click();
@@ -142,7 +156,13 @@ test('Loft runs in place: two section clicks, then Done', async ({ page }) => {
     name: 'Base',
     plane: 'XY',
     offset: 0,
-    object: { objectKind: 'rectangle', width: 20, height: 20, centerX: 30, centerY: 0 }
+    object: {
+      objectKind: 'rectangle',
+      width: 20,
+      height: 20,
+      centerX: 30,
+      centerY: 0
+    }
   }).document;
   document = addSketchFeature(document, {
     name: 'Top',
@@ -185,7 +205,13 @@ test('a picked region offers Loft, which takes it as the first section', async (
     name: 'Base',
     plane: 'XY',
     offset: 0,
-    object: { objectKind: 'rectangle', width: 20, height: 20, centerX: 30, centerY: 0 }
+    object: {
+      objectKind: 'rectangle',
+      width: 20,
+      height: 20,
+      centerX: 30,
+      centerY: 0
+    }
   }).document;
   document = addSketchFeature(document, {
     name: 'Top',
@@ -292,7 +318,7 @@ test('Sweep runs in place: profile, path curve clicks, Done', async ({
   expect(sweeps[0]!.path.entityIds).toHaveLength(2);
 });
 
-test('Helical sweep runs in place: profile, axis, turns from the keypad', async ({
+test('Helical sweep runs in place: profile, then axis, then height and turns', async ({
   page
 }) => {
   test.setTimeout(120_000);
@@ -305,25 +331,59 @@ test('Helical sweep runs in place: profile, axis, turns from the keypad', async 
     object: { objectKind: 'circle', radius: 1, centerX: 10, centerY: 0 }
   }).document;
   const { canvas, bar } = await startTool(page, document, /^Helical sweep\b/);
+  // The profile first, then the axis: the user picks both.
   await expect
     .poll(async () => {
       await pickProfile(canvas, 0);
       return bar.textContent();
     })
-    .toContain('helix axis');
+    .toContain('Pick the axis to coil around');
   await page.keyboard.press('f');
   await waitForStillViewport(page);
   const onAxis = await projected(canvas, [0, 0, 6]);
   await page.mouse.move(onAxis.x, onAxis.y);
   await page.mouse.click(onAxis.x, onAxis.y);
-  await expect(bar).toContainText('Drag radius and pitch');
-  await expect(page.getByTestId('command-handle-radius')).toContainText('10');
+  await expect(bar).toContainText('Drag the arrow to stretch');
+  // One arrow and the turns: no radius to set, the profile sets it.
+  await expect(page.getByTestId('command-handle-height')).toBeVisible();
+  await expect(page.getByTestId('command-handle-radius')).toHaveCount(0);
   await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled({
     timeout: 30_000
   });
 
+  // Drag the coil's end a quarter turn further along it: the pinned kernel
+  // starts the helix along +Y here (the climb crossed with +X), 2.5 apart,
+  // so three turns end at (0, 10, 7.5) and 3.25 at (-10, 0, 8.125).
   const turns = page.getByTestId('command-handle-turns');
   await expect(turns).toHaveText('3 turns');
+  // Framed on the coil, so its end and chip stand clear of the top bar.
+  await page.keyboard.press('f');
+  await waitForStillViewport(page);
+  // The pointer follows the coil, as a hand does, rather than cutting
+  // across its middle where every direction round the axis is near.
+  const end = (await commandHandles(canvas)).turns!;
+  await page.mouse.move(end.x, end.y);
+  await page.mouse.down();
+  for (let step = 1; step <= 8; step += 1) {
+    const turn = 3 + (0.25 * step) / 8;
+    const angle = (turn % 1) * Math.PI * 2;
+    // Start along +Y, turning right-handed about +Z toward -X.
+    const along = await projected(canvas, [
+      -10 * Math.sin(angle),
+      10 * Math.cos(angle),
+      2.5 * turn
+    ]);
+    await page.mouse.move(along.x, along.y, { steps: 2 });
+  }
+  await page.mouse.up();
+  await expect
+    .poll(async () => (await commandHandles(canvas)).turns?.value ?? 0)
+    .toBeGreaterThan(3.15);
+  expect((await commandHandles(canvas)).turns!.value).toBeLessThan(3.35);
+  await expect(turns).not.toHaveText('3 turns');
+  await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled({
+    timeout: 30_000
+  });
   await turns.click();
   const keypad = page.locator('.numeric-keypad');
   await expect(keypad).toBeVisible();

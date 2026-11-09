@@ -8,7 +8,8 @@ import type {
   BodyId,
   DatumAxisDefinition,
   FeatureId,
-  SketchId
+  SketchId,
+  Vector3
 } from '@openzcad/shared';
 import { TOOL_META } from '../tools';
 import { placementFrame } from './primitives';
@@ -842,7 +843,7 @@ describe('body tools', () => {
       ['hole', 'depth'],
       ['shell', 'thickness'],
       ['solid-offset', 'distance'],
-      ['helical-sweep', 'radius'],
+      ['helical-sweep', 'height'],
       ['helical-sweep', 'turns']
     ] as const) {
       expect(valueInRange(spec(tool, id), 0.05)).toBe(true);
@@ -1500,8 +1501,10 @@ describe('review: loft apex and guided sweeps', () => {
     const helix = IN_PLACE_TOOL_SPECS['helical-sweep'];
     expect(helix.ready(slots, {})).toBe(false);
     expect(helix.ready(slots, { axisMode: 'typed' })).toBe(true);
+    // Beside the square, which stands from x = 0 to 4: an axis through it
+    // has no coil to make.
     const numbers = {
-      axisOX: 2,
+      axisOX: 10,
       axisOY: 0,
       axisOZ: 0,
       axisDX: 0,
@@ -1533,8 +1536,89 @@ describe('review: loft apex and guided sweeps', () => {
       .handles(slots, numbers, ctx, { axisMode: 'typed' })
       .map((h) => h.valueId);
     expect(ids).toEqual(
-      expect.arrayContaining(['axisOX', 'axisDZ', 'radius', 'pitch', 'turns'])
+      expect.arrayContaining(['axisOX', 'axisDZ', 'height', 'turns'])
     );
+    // An axis through the profile is refused rather than built.
+    expect(
+      helix.request(slots, {}, { axisMode: 'typed' }, ctx, {
+        ...numbers,
+        axisOX: 2
+      })
+    ).toBeNull();
+  });
+
+  it('a helix coils round a line beside its profile, and grows up unless asked', () => {
+    // The square stands from x = 0 to 4 on the XY plane.
+    const line = (id: string, origin: Vector3, direction: Vector3) => ({
+      id,
+      label: id,
+      origin,
+      direction,
+      choice: { axis: 'vertical' as const }
+    });
+    const through = line('through', { x: 2, y: 0, z: 0 }, { x: 0, y: 1, z: 0 });
+    const near = line('near', { x: 5, y: 0, z: 0 }, { x: 0, y: 1, z: 0 });
+    const far = line('far', { x: -9, y: 0, z: 0 }, { x: 0, y: 1, z: 0 });
+    const upright = line(
+      'upright',
+      { x: -20, y: 0, z: 0 },
+      { x: 0, y: 0, z: -1 }
+    );
+    const helix = IN_PLACE_TOOL_SPECS['helical-sweep'];
+    const picked = { ...EMPTY, profiles: [pick('s1', 1)] };
+    // A line through the profile is refused by name; one beside it is not.
+    expect(helix.refuseAxis?.(picked, through, ctx)).toMatch(
+      /through the profile/
+    );
+    for (const line of [near, far, upright]) {
+      expect(helix.refuseAxis?.(picked, line, ctx)).toBeNull();
+    }
+    // Before the axis, the hint asks for it and names what will do.
+    expect(helix.hint(picked, {}, ctx)).toMatch(/axis.*edge.*cylinder/);
+    const slots = { ...picked, axis: upright };
+    const values = { height: 'h', turns: 4 };
+    // The picked line ran down; the coil grows up, and Down reverses it.
+    const up = helix.request(slots, values, {}, ctx, {});
+    expect(up).toMatchObject({
+      axisDirection: { x: 0, y: 0, z: 1 },
+      pitch: '(h) / (4)'
+    });
+    // The radius is the profile middle's distance from the line.
+    expect((up as { radius: number }).radius).toBeCloseTo(Math.hypot(22, 2));
+    expect(
+      helix.request(slots, values, { grow: 'down' }, ctx, {})
+    ).toMatchObject({ axisDirection: { x: 0, y: 0, z: -1 } });
+    // Turns wind on at the same spacing; nothing else carries anything.
+    expect(
+      helix.carries?.('turns', 6, { height: 30, turns: 3 }, slots)
+    ).toEqual({ height: 60 });
+    expect(helix.carries?.('height', 40, { height: 30, turns: 3 }, slots)).toBe(
+      null
+    );
+    // Its turns ride the coil's end, set off where the pinned kernel starts
+    // the helix: the climb crossed with world X.
+    const end = helix
+      .handles(slots, { height: 12, turns: 4 }, ctx, {})
+      .find((handle) => handle.valueId === 'turns');
+    expect(end).toMatchObject({
+      kind: 'coil',
+      params: { axis: { x: 0, y: 0, z: 1 }, pitch: 3 }
+    });
+    expect(end?.kind === 'coil' && end.params.startDirection).toEqual({
+      x: 0,
+      y: 1,
+      z: 0
+    });
+    // Options reads out the value the other two decide.
+    expect(
+      helix.summary?.({ options: {}, numbers: { height: 12, turns: 4 } }, 'mm')
+    ).toBe('Each turn climbs 3 mm');
+    expect(
+      helix.summary?.(
+        { options: { size: 'pitch' }, numbers: { pitch: 2.5, turns: 4 } },
+        'mm'
+      )
+    ).toBe('Stands 10 mm tall');
   });
 
   it('a guided sweep is always Standard', () => {

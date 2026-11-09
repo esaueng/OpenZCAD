@@ -537,25 +537,122 @@ describe('useInPlaceCommand: sweep', () => {
 });
 
 describe('useInPlaceCommand: helical sweep', () => {
-  it('suggests a radius through the profile and keeps a value the user set', async () => {
-    const { hook } = setup();
+  it('walks profile → axis → height, and coils through the profile', async () => {
+    const { hook, built } = setup();
+    act(() => hook.result.current.start('helical-sweep'));
+    expect(hook.result.current.hint).toMatch(/profile/);
+    act(() => hook.result.current.pickProfile(PICK));
+    // The axis is the user's pick: none is taken for them.
+    expect(hook.result.current.slots.axis).toBeNull();
+    expect(hook.result.current.hint).toMatch(/axis/);
+    expect(hook.result.current.canFinish).toBe(false);
+    act(() => hook.result.current.pickAxis('sketch-vertical'));
+    expect(hook.result.current.hint).toMatch(/stretch.*end.*turns/);
+    // The rectangle is 12 tall: each turn climbs 15, three turns stand 45.
+    await waitFor(() =>
+      expect(hook.result.current.values.height).toBeCloseTo(45)
+    );
+    expect(hook.result.current.handles.map((handle) => handle.valueId)).toEqual(
+      ['height', 'turns']
+    );
+    await waitFor(() =>
+      expect((built.at(-1) as { pitch: number }).pitch).toBeCloseTo(15)
+    );
+    expect(built.at(-1)).toMatchObject({
+      tool: 'helical-sweep',
+      // The coil runs through the profile: its middle is 19 off the axis.
+      radius: 19,
+      turns: 3,
+      axisDirection: { x: 0, y: 0, z: 1 }
+    });
+  });
+
+  it('winds turns on at the same spacing, stretches with the arrow, and follows a new axis', async () => {
+    const { hook, built } = setup();
     act(() => hook.result.current.start('helical-sweep', [PICK]));
     act(() => hook.result.current.pickAxis('sketch-vertical'));
-    // The rectangle's middle sits 19 from the vertical axis and it is 12 tall.
-    await waitFor(() =>
-      expect(hook.result.current.values.radius).toBeCloseTo(19)
-    );
-    expect(hook.result.current.values.pitch).toBeCloseTo(15);
-    expect(hook.result.current.handles.map((handle) => handle.valueId)).toEqual(
-      ['radius', 'pitch', 'turns']
-    );
+    // The arrow stretches three turns over 30: 10 apart.
     act(() => {
-      hook.result.current.setValue('radius', 25);
+      hook.result.current.setValue('height', 30);
     });
-    act(() =>
-      hook.result.current.pickProfile({ ...PICK, regionFingerprint: 8 })
+    // Its end dragged out to six turns keeps them 10 apart: it stands 60.
+    act(() => {
+      hook.result.current.previewValue('turns', 6);
+    });
+    expect(hook.result.current.values.height).toBeCloseTo(60);
+    await waitFor(() =>
+      expect(built.at(-1)).toMatchObject({ turns: 6, pitch: 10 })
     );
-    expect(hook.result.current.values.radius).toBe(25);
+    // The turns ride the coil's end, which starts level with the profile.
+    const end = hook.result.current.handles.find(
+      (handle) => handle.valueId === 'turns'
+    );
+    expect(end).toMatchObject({
+      kind: 'coil',
+      params: {
+        center: { x: 0, y: 0, z: 9 },
+        axis: { x: 0, y: 0, z: 1 },
+        radius: 19,
+        pitch: 10
+      }
+    });
+    expect(built.at(-1)).toMatchObject({ axisOrigin: { x: 0, y: 0, z: 9 } });
+    act(() => hook.result.current.pickAxis('sketch-horizontal'));
+    // The rectangle's middle is 9 above the horizontal axis.
+    await waitFor(() => expect(built.at(-1)).toMatchObject({ radius: 9 }));
+  });
+
+  it('offers only the axes beside the profile', () => {
+    const { hook } = setup({
+      sketchViews: [
+        {
+          sketchId: SKETCH,
+          basis: FRONT,
+          // Straddling the sketch's horizontal axis, clear of its vertical one.
+          regions: [
+            {
+              regionFingerprint: 7,
+              outer: [
+                { x: 14, y: -3 },
+                { x: 24, y: -3 },
+                { x: 24, y: 3 },
+                { x: 14, y: 3 }
+              ]
+            }
+          ]
+        }
+      ]
+    });
+    act(() => hook.result.current.start('helical-sweep', [PICK]));
+    expect(hook.result.current.axisCandidates.map((c) => c.id)).toEqual([
+      'sketch-vertical'
+    ]);
+    // Revolve keeps both: a revolve may turn about its profile's own edge.
+    act(() => {
+      void hook.result.current.cancel();
+    });
+    act(() => hook.result.current.start('revolve', [PICK]));
+    expect(hook.result.current.axisCandidates.map((c) => c.id)).toEqual([
+      'sketch-horizontal',
+      'sketch-vertical'
+    ]);
+  });
+
+  it('switches to pitch & turns without changing the coil', async () => {
+    const { hook, built } = setup();
+    act(() => hook.result.current.start('helical-sweep', [PICK]));
+    act(() => hook.result.current.pickAxis('sketch-vertical'));
+    act(() => {
+      hook.result.current.setValue('height', 30);
+    });
+    act(() => hook.result.current.setOption('size', 'pitch'));
+    expect(hook.result.current.values.pitch).toBeCloseTo(10);
+    expect(hook.result.current.handles.map((handle) => handle.valueId)).toEqual(
+      ['pitch', 'turns']
+    );
+    await waitFor(() =>
+      expect(built.at(-1)).toMatchObject({ pitch: 10, turns: 3 })
+    );
   });
 });
 

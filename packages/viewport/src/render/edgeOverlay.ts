@@ -20,7 +20,7 @@ import {
 import { shouldRenderTopologyEdge } from '../scene/objects';
 import { easeToward, fadeStepMs, hasSettled } from '../motion';
 import { boundaryEdgesOfFaces } from '../selection/boundaryEdgesOfFace';
-import { tangentEdgeIds } from './tangentEdges';
+import { FACETED_JOINT_MAX_ANGLE, tangentEdgeIds } from './tangentEdges';
 import { createSilhouetteLines, silhouetteCandidates } from './silhouette';
 import type { DisplayMode } from '../types';
 import {
@@ -354,7 +354,7 @@ export class BodyEdgeOverlay extends THREE.Group {
    */
   constructor(
     body: Pick<GeometryBodyRepresentation, 'bodyId' | 'topology'> &
-      Partial<Pick<GeometryBodyRepresentation, 'mesh'>>,
+      Partial<Pick<GeometryBodyRepresentation, 'mesh' | 'source'>>,
     resolution?: FatLineResolution
   ) {
     super();
@@ -366,10 +366,18 @@ export class BodyEdgeOverlay extends THREE.Group {
       edgePointExtent(body.topology?.edges ?? [])
     );
 
+    // A faceted coil's joints (see FACETED_JOINT_MAX_ANGLE) are measured
+    // with its wider angle and drawn like seams: in wireframe only.
+    const faceted = facetedSource(body.source);
     const tangentIds =
       body.mesh && body.topology
-        ? tangentEdgeIds(body.mesh, body.topology)
+        ? tangentEdgeIds(
+            body.mesh,
+            body.topology,
+            faceted ? FACETED_JOINT_MAX_ANGLE : undefined
+          )
         : new Set<string>();
+    let facetJoints = 0;
     const sharp: IdleBatch = { positions: [], ownership: [] };
     const tangent: IdleBatch = { positions: [], ownership: [] };
     // Seams are construction boundaries, not features, so they stay out of the
@@ -397,6 +405,15 @@ export class BodyEdgeOverlay extends THREE.Group {
       };
       const positions = segmentsFromPolyline(edge.points);
       if (positions.length === 0) {
+        continue;
+      }
+      if (
+        faceted &&
+        edge.isSmooth !== true &&
+        tangentIds.has(edge.topologyId)
+      ) {
+        seamPositions.push(...positions);
+        facetJoints += 1;
         continue;
       }
       this.entriesByKey.set(edgeKey(owner), { owner, positions });
@@ -476,7 +493,8 @@ export class BodyEdgeOverlay extends THREE.Group {
     // absent from `ownershipBySegment`, so no seam can be mistaken for a
     // feature edge by anything downstream.
     this.seamEdges =
-      this.entriesByKey.size === 0 && seamPositions.length > 0
+      (this.entriesByKey.size === 0 || facetJoints > 0) &&
+      seamPositions.length > 0
         ? createFatLineSegments(seamPositions, {
             color: EDGE_WIREFRAME_COLOR,
             linewidth: EDGE_IDLE_WIDTH,
@@ -936,6 +954,11 @@ export class BodyEdgeOverlay extends THREE.Group {
     this.selectedFaceBoundaryHiddenEdges.visible =
       this.xrayEnabled && this.faceBoundaryTier.hiddenDrawable;
   }
+}
+
+/** Whether a body's source builds curved surfaces from flat facets. */
+function facetedSource(source: string | undefined): boolean {
+  return source === 'helical-sweep';
 }
 
 export function createBodyEdgeOverlay(

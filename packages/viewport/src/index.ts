@@ -53,6 +53,7 @@ export * from './gizmo/DragRig';
 export * from './gizmo/rigs';
 export * from './gizmo/angleRig';
 export * from './gizmo/linearRig';
+export * from './gizmo/coilRig';
 export * from './gizmo/faceSweepProfile';
 export * from './gizmo/move';
 export * from './gizmo/screenDragAxis';

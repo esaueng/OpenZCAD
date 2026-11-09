@@ -1,5 +1,9 @@
 import * as THREE from 'three';
-import { VIEWPORT_RENDER_ORDER } from '@openzcad/viewport';
+import {
+  VIEWPORT_RENDER_ORDER,
+  createFatLineSegments,
+  type FatLineResolution
+} from '@openzcad/viewport';
 import type { Vector3 } from '@openzcad/shared';
 
 /**
@@ -15,6 +19,8 @@ export interface AxisPickerCandidate {
   id: string;
   origin: Vector3;
   direction: Vector3;
+  /** Its name, shown on a tag that picks it too ("Z axis"). */
+  label?: string;
 }
 
 export interface AxisPickerRig {
@@ -33,18 +39,24 @@ export interface AxisPickerRig {
   dispose(): void;
 }
 
-const IDLE_COLOR = 0xb5a8ff;
-const HOVER_COLOR = 0xffffff;
+// Strong enough to read over a world axis drawn on the same line, in
+// either theme: a wide violet dash, wider and solid once hovered.
+const IDLE_COLOR = 0x7b61ff;
+const HOVER_COLOR = 0x7b61ff;
 const SELECTED_COLOR = 0xffb547;
-const IDLE_OPACITY = 0.7;
+const IDLE_OPACITY = 0.85;
 const HOVER_OPACITY = 1;
+/** Line widths in CSS pixels: idle, and hovered or picked. */
+const IDLE_WIDTH_PX = 3;
+const ACTIVE_WIDTH_PX = 4.5;
 /** Half-length of each line, in CSS pixels at the line's origin. */
 const HALF_LENGTH_PX = 900;
 /** Hit tube radius in CSS pixels: generous, so aiming is not precision work. */
 const HIT_RADIUS_PX = 7;
 
 export function buildAxisPickerRig(
-  candidates: readonly AxisPickerCandidate[]
+  candidates: readonly AxisPickerCandidate[],
+  resolution?: FatLineResolution
 ): AxisPickerRig {
   const group = new THREE.Group();
   group.name = 'axis-picker';
@@ -62,23 +74,20 @@ export function buildAxisPickerRig(
       candidate.origin.z
     );
     holder.quaternion.setFromUnitVectors(up, direction);
-    const lineGeometry = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(0, -1, 0),
-      new THREE.Vector3(0, 1, 0)
-    ]);
-    const material = new THREE.LineDashedMaterial({
+    // A wide screen-space line, so it reads over the thin world axis it
+    // often lies on. Dashes are measured along the unit line, which the
+    // per-frame scale stretches to HALF_LENGTH_PX, so they stay ~10 px.
+    const line = createFatLineSegments([0, -1, 0, 0, 1, 0], {
       color: IDLE_COLOR,
-      transparent: true,
+      linewidth: IDLE_WIDTH_PX,
       opacity: IDLE_OPACITY,
-      // Line distances are measured in the unit line's own space, which the
-      // per-frame scale stretches to HALF_LENGTH_PX, so dashes stay ~8 px.
-      dashSize: 8 / HALF_LENGTH_PX,
-      gapSize: 5 / HALF_LENGTH_PX,
       depthTest: false,
-      depthWrite: false
+      ...(resolution ? { resolution } : {})
     });
-    const line = new THREE.Line(lineGeometry, material);
-    line.computeLineDistances();
+    const material = line.material;
+    material.dashed = true;
+    material.dashSize = 10 / HALF_LENGTH_PX;
+    material.gapSize = 6 / HALF_LENGTH_PX;
     line.raycast = () => undefined;
     line.renderOrder = VIEWPORT_RENDER_ORDER.SKETCH_CURVE;
     const hit = new THREE.Mesh(
@@ -102,9 +111,10 @@ export function buildAxisPickerRig(
       );
       part.material.opacity =
         isSelected || isHovered ? HOVER_OPACITY : IDLE_OPACITY;
-      // A picked axis reads as a solid line: one long dash.
-      part.material.dashSize = isSelected ? 2 : 8 / HALF_LENGTH_PX;
-      part.material.gapSize = isSelected ? 0 : 5 / HALF_LENGTH_PX;
+      part.material.linewidth =
+        isSelected || isHovered ? ACTIVE_WIDTH_PX : IDLE_WIDTH_PX;
+      // A picked or hovered axis reads as a solid line.
+      part.material.dashed = !(isSelected || isHovered);
     }
   };
   return {
