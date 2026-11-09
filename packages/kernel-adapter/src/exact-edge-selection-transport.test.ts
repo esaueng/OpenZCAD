@@ -34,7 +34,12 @@ describe('edge selection transport labels', () => {
       curveType: 'LINE',
       length: 1,
       closed: false,
-      endpoints: [start, end]
+      endpoints: [start, end],
+      midpoint: [
+        (start[0] + end[0]) / 2,
+        (start[1] + end[1]) / 2,
+        (start[2] + end[2]) / 2
+      ]
     });
     expect(edgeHeading(line([0, 0, 0], [0, 10, 0]))).toBe(
       edgeHeading(line([0, 10, 0], [0, 0, 0]))
