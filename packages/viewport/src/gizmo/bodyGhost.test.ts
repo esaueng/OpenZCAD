@@ -287,6 +287,8 @@ describe('the offset body ghost', () => {
       expect(fill.renderOrder).toBeLessThan(VIEWPORT_RENDER_ORDER.BODY_EDGE);
       // The old face closes the solid in the body's own finish.
       expect(cap.material).toBe(live.material);
+      // Lit like it, too: without normals a lit material shades it black.
+      expect(cap.geometry.getAttribute('normal')).toBeDefined();
 
       // A new object (an exact preview) moves the veil with it.
       const next = pulled();
@@ -301,6 +303,38 @@ describe('the offset body ghost', () => {
       expect(veilParts(ghost)).toEqual([]);
       expect(next.live.material.clippingPlanes).toBeNull();
       expect(next.highlight.material.clippingPlanes).toBeNull();
+      ghost.dispose();
+    });
+
+    it('stays out of a push, where nothing lies past the old face', () => {
+      // Pushed in, the old face stands over empty space: a cap there would
+      // draw a solid lid where the material has gone.
+      const ghost = createBodyGhost(body(), {
+        faceRange: { triangleStart: 0, triangleCount: 2 }
+      });
+      const pushed = new THREE.Mesh(
+        new THREE.BoxGeometry(1, 2, 2).translate(-0.5, 0, 0),
+        new THREE.MeshStandardMaterial()
+      );
+      ghost.veilAddedMaterial(pushed);
+      expect(veilParts(ghost)).toEqual([]);
+      expect(pushed.material.clippingPlanes ?? []).toHaveLength(0);
+
+      // The same drag carried out past the old face veils, and back in
+      // clears again; the body is reshaped in place, as a proxy does.
+      const position = pushed.geometry.getAttribute('position');
+      const shift = (dx: number) => {
+        for (let i = 0; i < position.count; i++)
+          position.setX(i, position.getX(i) + dx);
+        position.needsUpdate = true;
+      };
+      shift(1.5);
+      ghost.veilAddedMaterial(pushed);
+      expect(veilParts(ghost)).toContain('offset-body-ghost-veil-cap');
+      shift(-1.5);
+      ghost.veilAddedMaterial(pushed);
+      expect(veilParts(ghost)).toEqual([]);
+      expect(pushed.material.clippingPlanes ?? []).toHaveLength(0);
       ghost.dispose();
     });
 

@@ -163,6 +163,10 @@ export function createBodyGhost(
     for (let i = start; i < end; i++) faceIndices.push(index.getX(i));
     const faceGeometry = new THREE.BufferGeometry();
     faceGeometry.setAttribute('position', geometry.getAttribute('position'));
+    // The veil's cap shades this face in the body's lit finish; without
+    // normals it renders black.
+    const normal = geometry.getAttribute('normal');
+    if (normal) faceGeometry.setAttribute('normal', normal);
     faceGeometry.setIndex(faceIndices);
     face = new THREE.Mesh(
       faceGeometry,
@@ -312,6 +316,51 @@ export function createBodyGhost(
     }
     veil = null;
   }
+  // The old face's plane in world space, and how far past it counts.
+  let frame: { plane: THREE.Plane; margin: number } | null = null;
+  function veilFrame(plane: THREE.Plane) {
+    if (!frame) {
+      geometry.computeBoundingBox();
+      const size = geometry.boundingBox!.getSize(new THREE.Vector3()).length();
+      frame = {
+        plane: plane.clone().applyMatrix4(object.matrix),
+        margin: Math.max(size, 1e-6) * 1e-4
+      };
+    }
+    return frame;
+  }
+  // Whether the body as displayed reaches past the old face, cached on its
+  // buffer and placement: a drag frame only rescans after a reshape.
+  let reach: {
+    position: THREE.BufferAttribute | THREE.InterleavedBufferAttribute;
+    version: number;
+    matrix: THREE.Matrix4;
+    beyond: boolean;
+  } | null = null;
+  function reachesBeyond(live: THREE.Mesh, plane: THREE.Plane, margin: number) {
+    const position = live.geometry.getAttribute('position');
+    if (!position) return false;
+    live.updateMatrixWorld();
+    const version =
+      position instanceof THREE.BufferAttribute
+        ? position.version
+        : position.data.version;
+    if (
+      reach &&
+      reach.position === position &&
+      reach.version === version &&
+      reach.matrix.equals(live.matrixWorld)
+    )
+      return reach.beyond;
+    const point = new THREE.Vector3();
+    let beyond = false;
+    for (let i = 0; i < position.count && !beyond; i++) {
+      point.fromBufferAttribute(position, i).applyMatrix4(live.matrixWorld);
+      beyond = plane.distanceToPoint(point) > 2 * margin;
+    }
+    reach = { position, version, matrix: live.matrixWorld.clone(), beyond };
+    return beyond;
+  }
   function veilAddedMaterial(live: THREE.Mesh | null) {
     const liveMaterial = live?.material;
     if (
@@ -324,14 +373,17 @@ export function createBodyGhost(
       unveil();
       return;
     }
+    // Where the solid stops and the veil starts: a hair past the old face,
+    // so the old face itself always caps the solid side.
+    const { plane, margin } = veilFrame(oldPlane);
+    // Only a pull adds material to veil. Pushed in, nothing lies past the
+    // old face, and a cap there would close empty air with a solid face.
+    if (!reachesBeyond(live, plane, margin)) {
+      unveil();
+      return;
+    }
     if (veil && veil.live !== live) unveil();
     if (!veil) {
-      geometry.computeBoundingBox();
-      const size = geometry.boundingBox!.getSize(new THREE.Vector3()).length();
-      // Where the solid stops and the veil starts: a hair past the old face,
-      // so the old face itself always caps the solid side.
-      const margin = Math.max(size, 1e-6) * 1e-4;
-      const plane = oldPlane.clone().applyMatrix4(object.matrix);
       // three.js keeps what lies on a plane's positive side.
       const keep = new THREE.Plane(
         plane.normal.clone().negate(),
