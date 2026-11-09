@@ -22,7 +22,7 @@ import { shouldRenderTopologyEdge } from '../scene/objects';
 import { easeToward, fadeStepMs, hasSettled } from '../motion';
 import { boundaryEdgesOfFaces } from '../selection/boundaryEdgesOfFace';
 import { FACETED_JOINT_MAX_ANGLE, tangentEdgeIds } from './tangentEdges';
-import { createSilhouetteLines, silhouetteCandidates } from './silhouette';
+import { createSilhouetteLines, timedSilhouetteCandidates } from './silhouette';
 import type { DisplayMode } from '../types';
 import {
   createFatLineSegments,
@@ -525,7 +525,7 @@ export class BodyEdgeOverlay extends THREE.Group {
     }
     const silhouettes =
       body.mesh && body.topology?.faces.length
-        ? silhouetteCandidates(body.mesh, body.topology.faces)
+        ? timedSilhouetteCandidates(body.mesh, body.topology.faces)
         : null;
     this.silhouetteEdges = silhouettes
       ? createSilhouetteLines(silhouettes, {

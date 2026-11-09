@@ -45,21 +45,17 @@ interface FaceRange {
   triangleCount: number;
 }
 
-interface OpenEdge {
-  a: number;
-  b: number;
-  normal: number;
-  /** Set once a second triangle in the same face shares the edge. */
-  other: number;
-  /** Shared by more than two triangles: not a manifold interior edge. */
-  overused: boolean;
-}
-
 /**
  * Collects the interior edges of every curved face of `mesh`. Vertices are
  * matched by position, quantized to a millionth of the mesh's extent, so a
  * face whose tessellation splits vertices along a periodic seam still joins
  * across it.
+ *
+ * It runs on the main thread whenever a body is built (opening a part, each
+ * edit, each exact frame of a drag), so it allocates per mesh, not per
+ * vertex or edge: on a slow tablet CPU the per-vertex string keys and
+ * per-edge objects it used to create cost about a second on a 125k-triangle
+ * body (docs/plans/viewport-lookdev-plan-2026-11-08.md, frame timing).
  */
 export function silhouetteCandidates(
   mesh: Pick<MeshGeometry, 'vertices' | 'indices'>,
@@ -79,59 +75,73 @@ export function silhouetteCandidates(
     if (value < min) min = value;
     if (value > max) max = value;
   }
-  // One weld id per vertex, so edges key on two small integers rather than
-  // building a string per triangle corner.
+  // One weld id per vertex, so edges key on two small integers.
   const quantum = Math.max((max - min) * 1e-6, 1e-9);
   const vertexCount = Math.floor(vertices.length / 3);
-  const weld = new Uint32Array(vertexCount);
-  const welded = new Map<string, number>();
-  for (let v = 0; v < vertexCount; v += 1) {
-    const position = `${Math.round(vertices[v * 3]! / quantum)},${Math.round(
-      vertices[v * 3 + 1]! / quantum
-    )},${Math.round(vertices[v * 3 + 2]! / quantum)}`;
-    let id = welded.get(position);
-    if (id === undefined) {
-      id = welded.size;
-      welded.set(position, id);
-    }
-    weld[v] = id;
-  }
-  const weldCount = welded.size;
+  const weld = weldByPosition(vertices, vertexCount, quantum);
 
   const normals = new Float32Array(triangleCount * 3);
-  const a = new THREE.Vector3();
-  const b = new THREE.Vector3();
-  const c = new THREE.Vector3();
   for (let t = 0; t < triangleCount; t += 1) {
-    a.fromArray(vertices, indices[t * 3]! * 3);
-    b.fromArray(vertices, indices[t * 3 + 1]! * 3);
-    c.fromArray(vertices, indices[t * 3 + 2]! * 3);
-    c.sub(b);
-    b.sub(a);
-    b.cross(c);
-    const length = b.length();
-    if (length > 0) b.divideScalar(length);
-    normals[t * 3] = b.x;
-    normals[t * 3 + 1] = b.y;
-    normals[t * 3 + 2] = b.z;
+    const a = indices[t * 3]! * 3;
+    const b = indices[t * 3 + 1]! * 3;
+    const c = indices[t * 3 + 2]! * 3;
+    const abx = vertices[b]! - vertices[a]!;
+    const aby = vertices[b + 1]! - vertices[a + 1]!;
+    const abz = vertices[b + 2]! - vertices[a + 2]!;
+    const bcx = vertices[c]! - vertices[b]!;
+    const bcy = vertices[c + 1]! - vertices[b + 1]!;
+    const bcz = vertices[c + 2]! - vertices[b + 2]!;
+    let nx = aby * bcz - abz * bcy;
+    let ny = abz * bcx - abx * bcz;
+    let nz = abx * bcy - aby * bcx;
+    const length = Math.sqrt(nx * nx + ny * ny + nz * nz);
+    if (length > 0) {
+      // As THREE.Vector3.divideScalar does it, so the normals are unchanged
+      // to the bit.
+      const inverse = 1 / length;
+      nx *= inverse;
+      ny *= inverse;
+      nz *= inverse;
+    }
+    normals[t * 3] = nx;
+    normals[t * 3 + 1] = ny;
+    normals[t * 3 + 2] = nz;
   }
 
-  const positions: number[] = [];
-  const normalsA: number[] = [];
-  const normalsB: number[] = [];
-  const pushNormal = (target: number[], triangle: number) => {
-    target.push(
-      normals[triangle * 3]!,
-      normals[triangle * 3 + 1]!,
-      normals[triangle * 3 + 2]!
-    );
-  };
+  // Every triangle side is at most one edge, and one past the cap is enough
+  // to know the cap was passed.
+  const capacity = Math.min(triangleCount * 3, MAX_SILHOUETTE_CANDIDATES + 1);
+  const positions = new Float32Array(capacity * 6);
+  const normalsA = new Float32Array(capacity * 3);
+  const normalsB = new Float32Array(capacity * 3);
+  let count = 0;
+
+  // One face's open edges, in first-seen order; reused face to face.
+  const slots = triangleCount * 3;
+  const edgeFrom = new Uint32Array(slots);
+  const edgeTo = new Uint32Array(slots);
+  const edgeFirst = new Uint32Array(slots);
+  /** The second triangle sharing the edge, or -1 while there is none. */
+  const edgeOther = new Int32Array(slots);
+  /** Shared by more than two triangles: not a manifold interior edge. */
+  const edgeOverused = new Uint8Array(slots);
+  /** The edge's welded end ids, lower first: its key. */
+  const edgeLow = new Uint32Array(slots);
+  const edgeHigh = new Uint32Array(slots);
+  // Open-addressed slot lookup by key, sized per face and cleared per face.
+  let tableSize = 16;
+  while (tableSize < slots * 2) tableSize *= 2;
+  const table = new Int32Array(tableSize);
 
   for (const face of faces) {
     const start = Math.max(face.triangleStart, 0);
     const end = Math.min(start + face.triangleCount, triangleCount);
     if (end - start < 2 || isPlanar(normals, start, end)) continue;
-    const edges = new Map<number, OpenEdge>();
+    let faceTable = 16;
+    while (faceTable < (end - start) * 6) faceTable *= 2;
+    const mask = faceTable - 1;
+    table.fill(-1, 0, faceTable);
+    let used = 0;
     for (let t = start; t < end; t += 1) {
       for (let corner = 0; corner < 3; corner += 1) {
         const from = indices[t * 3 + corner]!;
@@ -139,48 +149,146 @@ export function silhouetteCandidates(
         const fromId = weld[from]!;
         const toId = weld[to]!;
         if (fromId === toId) continue;
-        const edgeKey =
-          fromId < toId ? fromId * weldCount + toId : toId * weldCount + fromId;
-        const open = edges.get(edgeKey);
-        if (!open) {
-          edges.set(edgeKey, {
-            a: from,
-            b: to,
-            normal: t,
-            other: -1,
-            overused: false
-          });
-        } else if (open.other === -1) {
-          open.other = t;
+        const low = fromId < toId ? fromId : toId;
+        const high = fromId < toId ? toId : fromId;
+        let h = (Math.imul(low, 73856093) ^ Math.imul(high, 19349663)) & mask;
+        let slot = table[h]!;
+        while (
+          slot !== -1 &&
+          (edgeLow[slot] !== low || edgeHigh[slot] !== high)
+        ) {
+          h = (h + 1) & mask;
+          slot = table[h]!;
+        }
+        if (slot === -1) {
+          edgeFrom[used] = from;
+          edgeTo[used] = to;
+          edgeFirst[used] = t;
+          edgeOther[used] = -1;
+          edgeOverused[used] = 0;
+          edgeLow[used] = low;
+          edgeHigh[used] = high;
+          table[h] = used;
+          used += 1;
+        } else if (edgeOther[slot] === -1) {
+          edgeOther[slot] = t;
         } else {
-          open.overused = true;
+          edgeOverused[slot] = 1;
         }
       }
     }
-    for (const edge of edges.values()) {
-      if (edge.other === -1 || edge.overused) continue;
-      if (dotNormals(normals, edge.normal, edge.other) > COPLANAR_DOT) {
-        continue;
-      }
-      positions.push(
-        vertices[edge.a * 3]!,
-        vertices[edge.a * 3 + 1]!,
-        vertices[edge.a * 3 + 2]!,
-        vertices[edge.b * 3]!,
-        vertices[edge.b * 3 + 1]!,
-        vertices[edge.b * 3 + 2]!
-      );
-      pushNormal(normalsA, edge.normal);
-      pushNormal(normalsB, edge.other);
-      if (normalsA.length / 3 > MAX_SILHOUETTE_CANDIDATES) return null;
+    for (let slot = 0; slot < used; slot += 1) {
+      const other = edgeOther[slot]!;
+      if (other === -1 || edgeOverused[slot]) continue;
+      const first = edgeFirst[slot]!;
+      if (dotNormals(normals, first, other) > COPLANAR_DOT) continue;
+      const a = edgeFrom[slot]! * 3;
+      const b = edgeTo[slot]! * 3;
+      const p = count * 6;
+      positions[p] = vertices[a]!;
+      positions[p + 1] = vertices[a + 1]!;
+      positions[p + 2] = vertices[a + 2]!;
+      positions[p + 3] = vertices[b]!;
+      positions[p + 4] = vertices[b + 1]!;
+      positions[p + 5] = vertices[b + 2]!;
+      const n = count * 3;
+      normalsA[n] = normals[first * 3]!;
+      normalsA[n + 1] = normals[first * 3 + 1]!;
+      normalsA[n + 2] = normals[first * 3 + 2]!;
+      normalsB[n] = normals[other * 3]!;
+      normalsB[n + 1] = normals[other * 3 + 1]!;
+      normalsB[n + 2] = normals[other * 3 + 2]!;
+      count += 1;
+      if (count > MAX_SILHOUETTE_CANDIDATES) return null;
     }
   }
-  if (positions.length === 0) return null;
+  if (count === 0) return null;
   return {
-    positions: Float32Array.from(positions),
-    normalsA: Float32Array.from(normalsA),
-    normalsB: Float32Array.from(normalsB)
+    positions: positions.slice(0, count * 6),
+    normalsA: normalsA.slice(0, count * 3),
+    normalsB: normalsB.slice(0, count * 3)
   };
+}
+
+/**
+ * One id per distinct quantized position, numbered in first-seen order: an
+ * open-addressed hash over the rounded coordinates, so no key is allocated
+ * per vertex.
+ */
+function weldByPosition(
+  vertices: ArrayLike<number>,
+  vertexCount: number,
+  quantum: number
+) {
+  const weld = new Uint32Array(vertexCount);
+  let size = 16;
+  while (size < vertexCount * 2) size *= 2;
+  const mask = size - 1;
+  const table = new Int32Array(size).fill(-1);
+  const welded = new Float64Array(vertexCount * 3);
+  let weldCount = 0;
+  for (let v = 0; v < vertexCount; v += 1) {
+    const x = Math.round(vertices[v * 3]! / quantum);
+    const y = Math.round(vertices[v * 3 + 1]! / quantum);
+    const z = Math.round(vertices[v * 3 + 2]! / quantum);
+    let h =
+      (Math.imul(x | 0, 73856093) ^
+        Math.imul(y | 0, 19349663) ^
+        Math.imul(z | 0, 83492791)) &
+      mask;
+    for (;;) {
+      const id = table[h]!;
+      if (id === -1) {
+        table[h] = weldCount;
+        welded[weldCount * 3] = x;
+        welded[weldCount * 3 + 1] = y;
+        welded[weldCount * 3 + 2] = z;
+        weld[v] = weldCount;
+        weldCount += 1;
+        break;
+      }
+      if (
+        welded[id * 3] === x &&
+        welded[id * 3 + 1] === y &&
+        welded[id * 3 + 2] === z
+      ) {
+        weld[v] = id;
+        break;
+      }
+      h = (h + 1) & mask;
+    }
+  }
+  return weld;
+}
+
+/** The User Timing mark each body's candidate build leaves behind. */
+export const SILHOUETTE_BUILD_MARK = 'oz:viewer.silhouettes';
+
+/**
+ * Collects `silhouetteCandidates` and leaves a User Timing mark with how long
+ * it took, so the cost shows in a browser's performance timeline (Safari's
+ * Web Inspector on an iPad included) and in the frame-timing probe
+ * (test/e2e/perf-frame-timing.spec.ts). It runs once per body build, on the
+ * main thread, and scales with the curved faces' triangles.
+ */
+export function timedSilhouetteCandidates(
+  mesh: Pick<MeshGeometry, 'vertices' | 'indices'>,
+  faces: readonly FaceRange[]
+): SilhouetteCandidates | null {
+  const started = performance.now();
+  const candidates = silhouetteCandidates(mesh, faces);
+  try {
+    performance.mark(SILHOUETTE_BUILD_MARK, {
+      detail: {
+        ms: performance.now() - started,
+        triangles: Math.floor(mesh.indices.length / 3),
+        candidates: candidates ? candidates.normalsA.length / 3 : 0
+      }
+    });
+  } catch {
+    // Instrumentation never breaks the build it measures.
+  }
+  return candidates;
 }
 
 function dotNormals(normals: Float32Array, left: number, right: number) {
