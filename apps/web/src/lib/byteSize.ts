@@ -1,8 +1,12 @@
 /**
  * A byte count in binary units, named as such (KiB, MiB, GiB), with at most
- * one decimal. Settings and Project properties label sizes the same way.
+ * one decimal, or a dash for a missing value. Settings and Project
+ * properties label sizes the same way.
  */
 export function formatByteSize(bytes: number): string {
+  // A field an older or partial response leaves out must not take the
+  // page down with it.
+  if (!Number.isFinite(bytes)) return '—';
   const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
   let value = bytes;
   let index = 0;

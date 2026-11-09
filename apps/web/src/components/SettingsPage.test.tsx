@@ -1526,6 +1526,22 @@ describe('settings privacy and data section', () => {
     ).toHaveAttribute('aria-valuetext', '2 GiB of 1 GiB · over allowance');
   });
 
+  it('keeps the Account page usable when the storage report omits fields', async () => {
+    // Older servers and the e2e stubs send only the document fields.
+    vi.mocked(api.storageUsage).mockResolvedValue({
+      projectCount: 0,
+      documentBytes: 0,
+      revisionBytes: 0,
+      revisionCount: 0,
+      documentLimitBytes: 1_500_000,
+      maxRevisionsPerProject: 50
+    } as unknown as typeof storageUsage);
+    renderSettings(readyHealth, { initialSection: 'account', session });
+
+    expect(await screen.findByText('Cloud file storage')).toBeVisible();
+    expect(screen.getByText('Account storage')).toBeVisible();
+  });
+
   it('names the diagnostic download for what it downloads', () => {
     renderSettings(readyHealth, { initialSection: 'privacy', session });
 
