@@ -338,4 +338,19 @@ describe('workspace resume acknowledgements and retries', () => {
     expect(result.current.status).toBe('saved');
     unmount();
   });
+
+  it('preserves selection order when the active body changes', async () => {
+    const props = options();
+    props.getState = () => ({ ...state, selectedBodyIds: ['a', 'b'] });
+    const { unmount } = renderHook(() => useWorkspaceResume(props));
+    await activity();
+    props.getState = () => ({ ...state, selectedBodyIds: ['b', 'a'] });
+    await activity();
+    expect(workspaceSessionApi.save).toHaveBeenCalledTimes(2);
+    expect(
+      vi.mocked(workspaceSessionApi.save).mock.calls[1]?.[0].state
+        .selectedBodyIds
+    ).toEqual(['b', 'a']);
+    unmount();
+  });
 });

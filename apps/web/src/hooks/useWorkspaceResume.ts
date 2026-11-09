@@ -137,8 +137,8 @@ export function useWorkspaceResume(options: Options) {
         documentVersion,
         state: {
           ...state,
-          hiddenBodyIds: [...new Set(state.hiddenBodyIds)].sort(),
-          selectedBodyIds: [...new Set(state.selectedBodyIds)].sort()
+          // Visibility is a set; selection order identifies the active body.
+          hiddenBodyIds: [...new Set(state.hiddenBodyIds)].sort()
         }
       });
       if (key === pending?.key) return;
