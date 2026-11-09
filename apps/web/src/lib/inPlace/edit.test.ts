@@ -801,6 +801,38 @@ describe('an untouched edit writes the feature back as stored', () => {
     });
   });
 
+  it('helical sweep: an edit keeps how the helix was built', () => {
+    const profile = { all: true as const, sourceEntityIds: ['a'] };
+    const legacy: FeatureData = {
+      featureKind: 'helical-sweep',
+      profile: { sketchId: SKETCH, profile },
+      axisOrigin: { x: 0, y: 0, z: 0 },
+      axisDirection: { x: 0, y: 0, z: 1 },
+      radius: 12,
+      pitch: 4,
+      turns: 3
+    };
+    const inPlace: FeatureData = { ...legacy, construction: 'in-place' };
+    // A faceted helix stays faceted: nothing is written that it lacked.
+    expect(untouched(feature(legacy))).not.toHaveProperty('construction');
+    // One wound in place stays so, through the request and the update.
+    const node = feature(inPlace);
+    const request = untouched(node, { turns: 5 })!;
+    expect(request).toMatchObject({ construction: 'in-place', turns: 5 });
+    const update = inPlaceFeatureUpdate(
+      { featureId: node.featureId, name: node.name, data: inPlace },
+      request as Exclude<
+        ResolvedInPlaceRequest,
+        { tool: 'modeling' | 'edge-modifier' }
+      >
+    );
+    expect(update?.data).toMatchObject({
+      featureKind: 'helical-sweep',
+      construction: 'in-place',
+      turns: 5
+    });
+  });
+
   it('helical sweep: a typed or reversed pitch reopens as a pitch', () => {
     const profile = { all: true as const, sourceEntityIds: ['a'] };
     const base = {

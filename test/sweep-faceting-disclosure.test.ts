@@ -146,4 +146,28 @@ describe('faceted sweep disclosure', { timeout: 60_000 }, () => {
       /^Feature "Spring": This helical sweep is a faceted approximation, not exact curved surfaces: its curved path is followed in straight steps, and the profile's curved edges become straight chords\. Its \d+ faces are what its volume, mass and STEP export measure\.$/
     );
   });
+
+  it('raises nothing for a spring wound in place, which stays exact', async () => {
+    const start = profileSketch(createProjectDocument('Spring', user), {
+      objectKind: 'circle',
+      radius: 2,
+      centerX: 0,
+      centerY: 0
+    });
+    const helical = helicalSweepProfile(start.document, {
+      name: 'Spring',
+      profile: start.section,
+      axisOrigin: { x: 18, y: 0, z: 0 },
+      axisDirection: { x: 0, y: 1, z: 0 },
+      radius: 18,
+      pitch: 8,
+      turns: 1,
+      construction: 'in-place'
+    });
+    const derived = await adapter.syncDocument(helical.document);
+    expect(derived.warnings).toEqual([]);
+    expect(sweepFacetingAdvisories({ ...helical.document, derived })).toEqual(
+      []
+    );
+  });
 });

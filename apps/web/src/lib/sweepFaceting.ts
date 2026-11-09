@@ -50,6 +50,11 @@ export function sweepFacetingAdvisories(
     const data = feature.data;
     if (
       (data.featureKind !== 'sweep' && data.featureKind !== 'helical-sweep') ||
+      // Wound in place as exact NURBS surfaces: no straight steps to
+      // disclose. (Those surfaces are not analytic, so the measurement
+      // below would not see it.)
+      (data.featureKind === 'helical-sweep' &&
+        data.construction === 'in-place') ||
       isFeatureSuppressed(feature) ||
       !feature.bodyId
     )

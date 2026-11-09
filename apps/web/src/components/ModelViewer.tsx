@@ -96,6 +96,7 @@ import {
   ANGLE_RIG_KIND,
   buildAngleHandle,
   buildCoilHandle,
+  COIL_RIG_KIND,
   buildLinearHandle,
   buildCylinderRadiusHandle,
   buildEdgeRadiusHandle,
@@ -810,6 +811,11 @@ const AXIS_LABEL_MARGIN_PX = 24;
  * heights: `.handle-value-chip` is drawn at translate(-50%, -130%).
  */
 const COMMAND_CHIP_LIFT = 0.8;
+/**
+ * Clearance a chip keeps from its own handle's grip, in CSS pixels: past
+ * the ball's drawn size, so the chip never takes the press meant for it.
+ */
+const COMMAND_CHIP_GRIP_CLEARANCE_PX = 14;
 
 /** One command value's handle in the viewport: its rig, if it drags, and chip. */
 interface CommandRigEntry {
@@ -4647,8 +4653,37 @@ export function ModelViewer({
         );
         const halfHeight = (chipHeights.get(valueId) ?? 0) / 2;
         const top = COMMAND_CHIP_MARGIN_PX * 2;
+        // Never over a coil's end: its anchor is set off outward from the
+        // coil, which seen along that line projects back onto the ball, and
+        // the chip would take the press. It steps just above the ball, or
+        // below it where there is no room above. (A coil rig's position is
+        // the ball itself; other rigs' positions are a base or a centre.)
+        let pointY = ((1 - ndc.y) / 2) * canvasCssHeight;
+        if (entry.rig?.kind === COIL_RIG_KIND) {
+          const grip = entry.rig.group.position.clone().project(camera);
+          const gripX = ((grip.x + 1) / 2) * canvasCssWidth;
+          const gripY = ((1 - grip.y) / 2) * canvasCssHeight;
+          const chipHeight = chipHeights.get(valueId) ?? 0;
+          const clear = COMMAND_CHIP_GRIP_CLEARANCE_PX;
+          // The box spans y − 1.3h to y − 0.3h (translate -50%, -130%).
+          const boxTop = pointY - chipHeight * (COMMAND_CHIP_LIFT + 0.5);
+          const boxBottom = pointY - chipHeight * (COMMAND_CHIP_LIFT - 0.5);
+          if (
+            chipHeight > 0 &&
+            Math.abs(gripX - x) < halfWidth + clear &&
+            gripY > boxTop - clear &&
+            gripY < boxBottom + clear
+          ) {
+            const above =
+              gripY - clear + chipHeight * (COMMAND_CHIP_LIFT - 0.5);
+            pointY =
+              above - chipHeight * (COMMAND_CHIP_LIFT + 0.5) >= top
+                ? above
+                : gripY + clear + chipHeight * (COMMAND_CHIP_LIFT + 0.5);
+          }
+        }
         const y = Math.min(
-          Math.max(((1 - ndc.y) / 2) * canvasCssHeight, top),
+          Math.max(pointY, top),
           Math.max(
             top,
             footTop === null

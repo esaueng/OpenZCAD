@@ -437,6 +437,8 @@ export type InPlaceRequest =
       radius: ParamValue;
       pitch: ParamValue;
       turns: ParamValue;
+      /** See the helical-sweep `FeatureData`; absent is the faceted helix. */
+      construction?: 'in-place';
     }
   | {
       /**
@@ -1473,11 +1475,15 @@ function helixClimb(
   return options.grow === 'down' ? reversed(along) : along;
 }
 
-/** The profile's middle and its distance from the axis line. */
+/**
+ * The profile's middle: its distance from the axis line, the unit direction
+ * from the axis toward it (null when it is on the axis), and whether the
+ * profile reaches the axis or past it.
+ */
 function profileOffAxis(
   outline: readonly Vector3[],
   axisLine: Pick<RevolveAxisCandidate, 'origin' | 'direction'>
-): { distance: number; crosses: boolean } | null {
+): { distance: number; crosses: boolean; toward: Vector3 | null } | null {
   if (outline.length === 0) return null;
   const axis = unit(axisLine.direction);
   const radial = (point: Vector3) => {
@@ -1504,11 +1510,11 @@ function profileOffAxis(
     )
   );
   const distance = Math.hypot(middle.x, middle.y, middle.z);
-  if (distance <= 1e-9) return { distance, crosses: true };
+  if (distance <= 1e-9) return { distance, crosses: true, toward: null };
   // Crossed when any point lies on the far side of the axis, or on it.
   const side = unit(middle);
   const crosses = outline.some((point) => dot(radial(point), side) <= 1e-9);
-  return { distance, crosses };
+  return { distance, crosses, toward: side };
 }
 
 /** A profile's height along an axis: what one turn must clear. */
@@ -1548,12 +1554,24 @@ function axisFoot(
 }
 
 /**
+ * How the coil is built: an edited helix keeps the construction it was made
+ * with, whatever is changed; a new one is wound in place (see the
+ * helical-sweep `FeatureData`).
+ */
+function coilConstruction(ctx: InPlaceContext): 'in-place' | undefined {
+  return ctx.saved?.featureKind === 'helical-sweep'
+    ? ctx.saved.construction
+    : 'in-place';
+}
+
+/**
  * Where the built coil runs, for the handle on its end: its start on the
- * axis, which way its first turn sets off, and its radius, as the pinned
- * kernel's `helicalSweep` builds them. That call starts the helix at
- * `origin + radius · u`, with `u` the climb crossed with world X (world Y
- * for a climb near X), whatever side of the axis the profile is on. Null
- * when the radius does not read.
+ * axis, which way its first turn sets off, and its radius. Wound in place,
+ * it starts at the profile: level with the profile's middle, toward it, at
+ * its distance. The faceted helix the kernel's `helicalSweep` builds starts
+ * at `origin + radius · u` instead, with `u` the climb crossed with world X
+ * (world Y for a climb near X), whatever side of the axis the profile is
+ * on. Null when the radius does not read.
  */
 function coilPath(
   slots: InPlaceSlots,
@@ -1568,6 +1586,16 @@ function coilPath(
   startDirection: Vector3;
   radius: number;
 } | null {
+  if (coilConstruction(ctx) === 'in-place') {
+    const off = profileOffAxis(outline, axisLine);
+    if (!off?.toward || off.crosses || !(off.distance > 0)) return null;
+    return {
+      center: axisFoot(outline, axisLine),
+      axis: climb,
+      startDirection: off.toward,
+      radius: off.distance
+    };
+  }
   const saved =
     options.axisMode !== 'typed' &&
     onSavedAxis(slots.axis, ctx) &&
@@ -1748,15 +1776,23 @@ const helicalSweep: InPlaceToolSpec = {
         ? ctx.saved
         : null;
     // The radius is the profile's distance from the axis: the coil runs
-    // through the profile. An edited helix on its own axis keeps the radius
-    // it stores (one made before, or elsewhere, may differ).
+    // through the profile. A faceted helix edited on its own axis keeps the
+    // radius it stores (one made before, or elsewhere, may differ); wound in
+    // place, the radius is only a record, so it is measured afresh (or kept
+    // when the profile cannot be read).
+    const construction = coilConstruction(ctx);
+    const off =
+      saved && construction !== 'in-place'
+        ? null
+        : profileOffAxis(profileOutline(ctx, pick), axisLine);
     let radius: ParamValue;
-    if (saved) {
+    if (off) {
+      if (off.crosses) return null;
+      radius = off.distance;
+    } else if (saved) {
       radius = saved.radius;
     } else {
-      const off = profileOffAxis(profileOutline(ctx, pick), axisLine);
-      if (!off || off.crosses) return null;
-      radius = off.distance;
+      return null;
     }
     const turns = values.turns ?? 3;
     let pitch: ParamValue;
@@ -1810,7 +1846,8 @@ const helicalSweep: InPlaceToolSpec = {
       axisDirection,
       radius,
       pitch,
-      turns
+      turns,
+      ...(construction === undefined ? {} : { construction })
     };
   },
   handles(slots, values, ctx, options) {
@@ -1825,9 +1862,12 @@ const helicalSweep: InPlaceToolSpec = {
     if (!placement) return chips;
     const { center, startDirection } = placement;
     const climb = helixClimb(axisLine, options, ctx);
-    // One arrow beside the profile, just outside it, climbing with the
-    // coil: its length is the height (or one turn's pitch). Turns sit on
-    // a chip beside it.
+    // One arrow climbing with the coil: its length is the height (or one
+    // turn's pitch). It stands on the axis, level with the coil's start,
+    // where the coil's end never comes: the end runs at the coil's radius,
+    // and at whole turns it is above the profile. Beside the profile, just
+    // outside it, when the coil's path does not read; turns then sit on a
+    // chip there.
     let reach = 0;
     for (const point of outline) {
       reach = Math.max(
@@ -1861,6 +1901,7 @@ const helicalSweep: InPlaceToolSpec = {
       ? Math.abs(values.pitch ?? 5)
       : (values.height ?? 15) / (turns > 0 ? turns : 1);
     const coil = coilPath(slots, ctx, options, outline, axisLine, climb);
+    const arrowOrigin = coil ? coil.center : origin;
     const turnsHandle: HandleSpec = coil
       ? {
           valueId: 'turns',
@@ -1882,7 +1923,7 @@ const helicalSweep: InPlaceToolSpec = {
         valueId: byPitch ? 'pitch' : 'height',
         kind: 'linear',
         key: `${base}:${byPitch ? 'pitch' : 'height'}`,
-        params: { origin, direction: climb }
+        params: { origin: arrowOrigin, direction: climb }
       },
       turnsHandle
     ];
