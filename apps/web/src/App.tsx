@@ -21468,7 +21468,10 @@ export function App() {
           axisDirection: request.axisDirection,
           radius: request.radius,
           pitch: request.pitch,
-          turns: request.turns
+          turns: request.turns,
+          ...(request.construction === undefined
+            ? {}
+            : { construction: request.construction })
         });
       case 'gear':
         // Teeth cut into a body keep that body's name; a new gear is numbered.

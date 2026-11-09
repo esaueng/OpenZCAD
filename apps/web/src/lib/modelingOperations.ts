@@ -133,6 +133,11 @@ export interface HelicalSweepFormState {
   radius: string;
   pitch: string;
   turns: string;
+  /**
+   * Carried from the helix being edited, so the card keeps how it was built
+   * (see the helical-sweep `FeatureData`); absent is the faceted helix.
+   */
+  construction?: 'in-place';
 }
 
 export interface DraftFormState {
@@ -446,7 +451,10 @@ export function modelingFormStateFromFeature(
           axisDirection: vectorText(data.axisDirection),
           radius: String(data.radius),
           pitch: String(data.pitch),
-          turns: String(data.turns)
+          turns: String(data.turns),
+          ...(data.construction === undefined
+            ? {}
+            : { construction: data.construction })
         }
       };
     case 'hole':
@@ -580,8 +588,16 @@ export function modelingFeatureUpdate(
       };
     }
     case 'helical-sweep': {
-      const { name, profile, axisOrigin, axisDirection, radius, pitch, turns } =
-        submission.input;
+      const {
+        name,
+        profile,
+        axisOrigin,
+        axisDirection,
+        radius,
+        pitch,
+        turns,
+        construction
+      } = submission.input;
       return {
         featureId,
         name,
@@ -592,7 +608,9 @@ export function modelingFeatureUpdate(
           axisDirection,
           radius,
           pitch,
-          turns
+          turns,
+          // Kept as built: an edit never changes how the helix is made.
+          ...(construction === undefined ? {} : { construction })
         }
       };
     }
@@ -1189,7 +1207,10 @@ export function buildModelingOperationSubmission(
         },
         radius: coerceParamValue(state.value.radius),
         pitch: coerceParamValue(state.value.pitch),
-        turns: coerceParamValue(state.value.turns)
+        turns: coerceParamValue(state.value.turns),
+        ...(state.value.construction === undefined
+          ? {}
+          : { construction: state.value.construction })
       }
     };
   }

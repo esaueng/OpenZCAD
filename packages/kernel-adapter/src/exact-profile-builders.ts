@@ -1979,28 +1979,50 @@ export function buildHelicalSweep(
     'turns',
     document.units
   );
+  // In place, the radius is where the profile sits; the stored one is a
+  // record, so it is not required to read as positive.
+  const inPlace = feature.data.construction === 'in-place';
   if (
-    !(radius > 0) ||
+    (!inPlace && !(radius > 0)) ||
     pitch === 0 ||
     !(turns > 0) ||
     turns > MAX_HELICAL_SWEEP_TURNS
   ) {
     throw new Error(
-      `Helical sweep requires a positive radius, no more than ${MAX_HELICAL_SWEEP_TURNS} turns, and a non-zero pitch.`
+      inPlace
+        ? `Helical sweep requires no more than ${MAX_HELICAL_SWEEP_TURNS} turns and a non-zero pitch.`
+        : `Helical sweep requires a positive radius, no more than ${MAX_HELICAL_SWEEP_TURNS} turns, and a non-zero pitch.`
     );
   }
-  const solid = kernel.helicalSweep(
-    face,
-    origin.x,
-    origin.y,
-    origin.z,
-    direction.x,
-    direction.y,
-    direction.z,
-    radius,
-    pitch,
-    turns
-  );
+  const solid = inPlace
+    ? // Exact curved surfaces, wound about the axis from where the profile
+      // sits; the kernel refuses a profile on or across the axis, and coils
+      // that would overlap, by name.
+      kernel.helicalSweepInPlace(
+        face,
+        origin.x,
+        origin.y,
+        origin.z,
+        direction.x,
+        direction.y,
+        direction.z,
+        pitch,
+        turns
+      )
+    : // Unchanged: a helix authored without a construction takes exactly
+      // the call it was built with, so it replays identically.
+      kernel.helicalSweep(
+        face,
+        origin.x,
+        origin.y,
+        origin.z,
+        direction.x,
+        direction.y,
+        direction.z,
+        radius,
+        pitch,
+        turns
+      );
   return {
     solids: [validateGeneratedSolid(kernel, solid, 'Helical sweep')],
     lineage: remusHashOnlyLineage(

@@ -197,6 +197,10 @@ const helix = {
   pitch: 'pitch / 2',
   turns: 'n'
 } satisfies EditableModelingFeatureData;
+const inPlaceHelix = {
+  ...helix,
+  construction: 'in-place'
+} satisfies EditableModelingFeatureData;
 
 function roundTrip(data: EditableModelingFeatureData, live = profiles) {
   const initial = modelingFormStateFromFeature('Authored', data, live, paths);
@@ -224,7 +228,7 @@ const CLEARED_ON_ROUND_TRIP: Partial<Record<string, readonly string[]>> = {
 };
 
 describe('profile feature editing', () => {
-  it.each([loft, apexLoft, sweep, guidedSweep, helix])(
+  it.each([loft, apexLoft, sweep, guidedSweep, helix, inPlaceHelix])(
     'round trips $featureKind without losing authored fields or references',
     (data) => {
       expect(modelingFeatureIsEditable(data.featureKind)).toBe(true);

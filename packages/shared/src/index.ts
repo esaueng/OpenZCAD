@@ -1756,9 +1756,24 @@ export type FeatureData =
       profile: SketchSectionReference;
       axisOrigin: ParametricVector3;
       axisDirection: ParametricVector3;
+      /**
+       * How far the coil runs from the axis. The `'in-place'` construction
+       * reads it from where the profile sits instead, so there it records
+       * the profile's distance when the coil was made and builds nothing.
+       */
       radius: ParamValue;
       pitch: ParamValue;
       turns: ParamValue;
+      /**
+       * `'in-place'`: the profile is wound about the axis where it sits, as
+       * exact curved surfaces (the kernel's `helicalSweepInPlace`), and the
+       * coil starts at the profile. Absent means the unchanged
+       * `helicalSweep` call every helix authored before this field existed
+       * took: the profile is moved to `axisOrigin + radius · u` (`u` the
+       * climb crossed with world X, or world Y for a climb near X) and swept
+       * as flat facets, so those documents replay identically.
+       */
+      construction?: 'in-place';
     }
   | {
       featureKind: 'boolean';
