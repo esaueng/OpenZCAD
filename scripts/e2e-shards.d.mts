@@ -48,3 +48,8 @@ export function mergeWeights(
 ): Record<string, number>;
 
 export function readWeights(path?: string): Record<string, number>;
+export function validateWeights(
+  weights: Record<string, number>,
+  specs: string[],
+  warn?: (message: string) => void
+): Record<string, number>;

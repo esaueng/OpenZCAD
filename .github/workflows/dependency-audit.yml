@@ -5,22 +5,60 @@ on:
   pull_request:
     paths:
       - pnpm-lock.yaml
+      - pnpm-workspace.yaml
       - '**/package.json'
-      - apps/desktop/src-tauri/Cargo.toml
-      - apps/desktop/src-tauri/Cargo.lock
-      - apps/desktop/src-tauri/vendor/**
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+      - '**/rust-toolchain*'
+      - .cargo/**
+      - apps/desktop/src-tauri/**
       - apps/desktop/glib-regression/**
       - apps/desktop/device-keys/**
       - .github/workflows/dependency-audit.yml
+      - scripts/dependency-audit-selection.*
+      - scripts/install-cargo-audit.sh
+      - test/ci-runtime-optimization.test.ts
   push:
     branches: [main]
+    paths:
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - '**/package.json'
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+      - '**/rust-toolchain*'
+      - .cargo/**
+      - apps/desktop/src-tauri/**
+      - apps/desktop/glib-regression/**
+      - apps/desktop/device-keys/**
+      - .github/workflows/dependency-audit.yml
+      - scripts/dependency-audit-selection.*
+      - scripts/install-cargo-audit.sh
+      - test/ci-runtime-optimization.test.ts
   schedule:
     - cron: '41 8 * * *'
   workflow_dispatch: {}
 permissions:
   contents: read
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      javascript: ${{ steps.select.outputs.javascript }}
+      rust: ${{ steps.select.outputs.rust }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: 22
+      - id: select
+        run: node scripts/dependency-audit-selection.mjs
   javascript:
+    needs: plan
+    if: needs.plan.outputs.javascript == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -35,13 +73,16 @@ jobs:
           node-version: 22
       - run: pnpm audit --audit-level=high
   rust:
+    needs: plan
+    if: needs.plan.outputs.rust == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - run: cargo install cargo-audit --locked --version 0.22.2
+      - name: Install the checksum-pinned cargo-audit release
+        run: bash scripts/install-cargo-audit.sh
       - run: cargo audit --file apps/desktop/src-tauri/Cargo.lock
       - run: cargo audit --file apps/desktop/device-keys/Cargo.lock
       - name: Verify desktop GLib backport resolution

@@ -17,6 +17,7 @@ import {
   parseShard,
   partitionSpecs,
   readWeights,
+  validateWeights,
   resolveSuite,
   shardFilters,
   SPEC_DIR,
@@ -67,7 +68,7 @@ describe('balanced e2e shards', () => {
     const smokeWeights = readWeights(SMOKE_WEIGHTS_PATH);
     expect(smoke.length).toBeGreaterThan(CI_SHARDS);
     expect(smoke.length).toBeLessThan(specs.length);
-    expect(Object.keys(smokeWeights).sort()).toEqual(smoke);
+    validateWeights(smokeWeights, smoke);
     const plans = partitionSpecs(smoke, smokeWeights, CI_SHARDS);
     expect(plans.every((plan) => plan.files.length > 0)).toBe(true);
     expect(plans.flatMap((plan) => plan.files).sort()).toEqual(smoke);
@@ -77,6 +78,30 @@ describe('balanced e2e shards', () => {
       );
     }
     expect(suiteSpecs('full')).toEqual(specs);
+  });
+
+  it('runs unmeasured specs exactly once and refuses stale or invalid timing entries', () => {
+    const specs = ['new.spec.ts', 'known.spec.ts'];
+    const warnings: string[] = [];
+    const weights = validateWeights({ 'known.spec.ts': 10 }, specs, (message) =>
+      warnings.push(message)
+    );
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('new.spec.ts');
+    const plan = partitionSpecs(specs, weights, 2);
+    expect(plan.flatMap((shard) => shard.files).sort()).toEqual(
+      [...specs].sort()
+    );
+    expect(
+      plan.find((shard) => shard.files.includes('new.spec.ts'))?.seconds
+    ).toBe(DEFAULT_WEIGHT_SECONDS);
+    expect(() => validateWeights({ 'deleted.spec.ts': 1 }, specs)).toThrow(
+      'Stale'
+    );
+    for (const value of [-1, Number.NaN, Number.POSITIVE_INFINITY])
+      expect(() => validateWeights({ 'known.spec.ts': value }, specs)).toThrow(
+        'Invalid'
+      );
   });
 
   it('adds changed untagged regressions without changing the static smoke contract', () => {

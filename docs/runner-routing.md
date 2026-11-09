@@ -35,6 +35,14 @@ Change it in two PRs, as Remus does:
 
 Old pinned commits stay on main, so earlier runs can still be re-run.
 
+`fleet-ci-v8.yml` stages the CI runtime update: independent lint/typecheck,
+two root partitions, critical plus affected selection, a kernel declaration
+inside the required preflight, and five combined-tree browser canaries.
+Application jobs require preflight success; queue-trust failure still selects
+hosted execution. Its runner authorization and isolation are unchanged from
+v7. Activate it only at its landed main commit in a separate caller PR. Runner
+group activation and the CodeQL default-setup configuration are separate work.
+
 PR #1118 staged `fleet-ci-v6.yml` with `actions/setup-node` v7.1.0 and
 `actions/upload-artifact` v7.0.2. Its only differences from v5 are those
 immutable action pins. PR #1120 activates v6 at #1118's landed squash commit

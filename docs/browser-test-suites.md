@@ -11,7 +11,7 @@ breakpoint/theme combinations and historical regressions. It is not run on
 ordinary PRs. An untagged new regression is therefore full-suite coverage only.
 Tag a representative user journey when adding a major capability; keep the
 smoke suite small instead of tagging every variant.
-The staged v7 workflow additionally selects changed regression files and
+The staged v8 workflow additionally selects changed regression files and
 runs all their cases, including untagged cases. It adds combined-tree queue
 journeys and daily full qualification; see [CI qualification](ci-qualification.md)
 for the activation sequence. The active v6 workflow retains its current
@@ -50,3 +50,15 @@ node scripts/e2e-shards.mjs --suite full --update /path/to/full-report-*.json
 Reports name their suite in `config.metadata.e2eSuite`. Updating weights from
 the other suite is refused, so short smoke timings cannot corrupt the full
 suite's balancing. Older reports without suite metadata count as full runs.
+
+Timing estimates are optional: an unmeasured selected spec uses the conservative
+60-second default and emits a warning. Inventory, exact-once assignment,
+nonempty shards and stale/invalid weight checks remain enforced. Refresh timing
+weights from successful reports for the current kernel rather than mixing
+older kernel performance into the balance.
+
+CI records a trace on the first retry and screenshots on failure. The v8 callee
+retains passing timing/bundle reports for seven days and failures for fourteen,
+including browser failure contexts. Daily qualification keeps every full-suite
+case, coverage and its single attempt; its failed artifacts also last fourteen
+days. Privacy receipts and CodeQL caches have their own retention policies.

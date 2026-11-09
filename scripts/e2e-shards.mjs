@@ -244,6 +244,23 @@ export function readWeights(path = WEIGHTS_PATH) {
   return JSON.parse(readFileSync(path, 'utf8'));
 }
 
+/** Timing samples are optional; the independently discovered inventory is not. */
+export function validateWeights(weights, specs, warn = console.warn) {
+  if (!weights || typeof weights !== 'object' || Array.isArray(weights))
+    throw new Error('Browser weights must be an object.');
+  for (const [file, seconds] of Object.entries(weights)) {
+    if (!specs.includes(file)) throw new Error(`Stale browser weight: ${file}`);
+    if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds < 0)
+      throw new Error(`Invalid browser weight: ${file}`);
+  }
+  const missing = specs.filter((file) => !(file in weights));
+  if (missing.length)
+    warn(
+      `Unmeasured browser specs use ${DEFAULT_WEIGHT_SECONDS}s: ${missing.join(', ')}`
+    );
+  return weights;
+}
+
 if (
   process.argv[1] &&
   import.meta.url === pathToFileURL(process.argv[1]).href
@@ -285,12 +302,11 @@ if (
     }
   } else {
     const { shard, total } = parseShard(command);
-    const filters = shardFilters(
-      shard,
-      total,
-      suiteSpecs(suite),
-      readWeights(weightsPath)
+    const weights = validateWeights(
+      readWeights(weightsPath),
+      suiteSpecs(suite, SPEC_DIR, {})
     );
+    const filters = shardFilters(shard, total, suiteSpecs(suite), weights);
     if (filters.length === 0) {
       throw new Error(`Shard ${shard}/${total} would run no spec files.`);
     }
