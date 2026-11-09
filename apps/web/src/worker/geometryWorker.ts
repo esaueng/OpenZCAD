@@ -15,7 +15,9 @@ import type {
 } from '@openzcad/shared';
 import type {
   BuildCancellationSignal,
+  booleanEvolutionProbeNeeded,
   createExactKernelAdapter,
+  DirectEditProfile,
   DrawingBodyTessellation,
   DrawingSectionBody,
   DrawingSectionPlane,
@@ -34,6 +36,7 @@ import {
   ExactRebuildCache,
   LatestBroadcastGate,
   geometryContentKey,
+  lineageDemandCacheKey,
   rebindSketchGeometryForContent
 } from './exactRebuildCache';
 import { GeometryWorkerQueue } from './geometryWorkerQueue';
@@ -66,10 +69,23 @@ export type GeometryBinaryExportFormat = Extract<
 
 export type GeometryWorkerRequest =
   | {
+      type: 'refine-edit-preview';
+      document: ProjectDocument;
+      requestId: string;
+      generation: number;
+      profile?: boolean;
+    }
+  | {
+      type: 'release-edit-preview';
+      document: ProjectDocument;
+      requestId: string;
+    }
+  | {
       type: 'preview-geometry';
       document: ProjectDocument;
       requestId: string;
       deferTopology?: boolean;
+      profile?: boolean;
     }
   | {
       type: 'sync';
@@ -86,6 +102,7 @@ export type GeometryWorkerRequest =
        */
       lineageDemand?: BodyId[];
       forceFull?: boolean;
+      profile?: boolean;
     }
   | {
       type: 'export';
@@ -355,6 +372,12 @@ export type GeometryRecognizeImportedFaceResult =
 
 export type GeometryWorkerResult =
   | {
+      type: 'direct-edit-profile';
+      requestId?: string;
+      operation: string;
+      profile: DirectEditProfile;
+    }
+  | {
       type: 'preview-geometry';
       ok: true;
       requestId: string;
@@ -407,6 +430,7 @@ type ExactKernel = Awaited<ReturnType<typeof createExactKernelAdapter>>;
 let exactKernelStatus: 'idle' | 'loading' | 'ready' | 'failed' = 'idle';
 let exactKernelError: unknown;
 let exactKernelPromise: Promise<ExactKernel | null> | null = null;
+let booleanProbeNeeded: typeof booleanEvolutionProbeNeeded | undefined;
 let rebuildMetrics: Record<string, number> = {};
 
 /**
@@ -421,45 +445,47 @@ function loadExactKernel(): Promise<ExactKernel | null> {
     return exactKernelPromise;
   }
   exactKernelStatus = 'loading';
-  const attempt = import('@openzcad/kernel-adapter/exact').then(
-    ({ createExactKernelAdapter }) =>
-      createExactKernelAdapter({
-        resolveSourceBytes: resolveExactSourceBytes,
-        onRebuildCacheEvent: (event) => {
-          rebuildMetrics = {
-            replayedFeatures: event.replayed,
-            restoredFeatures: event.restored,
-            reusedPrimitives: event.reusedPrimitives ?? 0,
-            measuredBodies: event.remeasured,
-            reusedMeasurements: event.reusedMeasurements,
-            ...(event.checkpointMemory
-              ? {
-                  allocatedWasmBytes:
-                    event.checkpointMemory.linearMemoryBytes ?? 0,
-                  estimatedCheckpointBytes:
-                    event.checkpointMemory.estimatedBytes,
-                  nextMutationEstimatedBytes:
-                    event.checkpointMemory.nextMutationEstimatedBytes,
-                  uniqueNurbsBytes: event.checkpointMemory.uniqueNurbsBytes,
-                  retiredSlots: event.checkpointMemory.retiredSlots
-                }
-              : {}),
-            ...(event.measurementCache
-              ? {
-                  retainedMeasurementBytes: event.measurementCache.retainedBytes
-                }
-              : {})
-          };
-          if (import.meta.env.VITE_E2E === '1')
-            console.debug('[geometry cache]', JSON.stringify(event));
-        },
-        ...(import.meta.env.VITE_E2E === '1'
-          ? {
-              measurementCacheDiagnostics: true
-            }
-          : {})
-      })
-  );
+  const attempt = import('@openzcad/kernel-adapter/exact').then((module) => {
+    booleanProbeNeeded =
+      'booleanEvolutionProbeNeeded' in module
+        ? module.booleanEvolutionProbeNeeded
+        : undefined;
+    return module.createExactKernelAdapter({
+      resolveSourceBytes: resolveExactSourceBytes,
+      onRebuildCacheEvent: (event) => {
+        rebuildMetrics = {
+          replayedFeatures: event.replayed,
+          restoredFeatures: event.restored,
+          reusedPrimitives: event.reusedPrimitives ?? 0,
+          measuredBodies: event.remeasured,
+          reusedMeasurements: event.reusedMeasurements,
+          ...(event.checkpointMemory
+            ? {
+                allocatedWasmBytes:
+                  event.checkpointMemory.linearMemoryBytes ?? 0,
+                estimatedCheckpointBytes: event.checkpointMemory.estimatedBytes,
+                nextMutationEstimatedBytes:
+                  event.checkpointMemory.nextMutationEstimatedBytes,
+                uniqueNurbsBytes: event.checkpointMemory.uniqueNurbsBytes,
+                retiredSlots: event.checkpointMemory.retiredSlots
+              }
+            : {}),
+          ...(event.measurementCache
+            ? {
+                retainedMeasurementBytes: event.measurementCache.retainedBytes
+              }
+            : {})
+        };
+        if (import.meta.env.VITE_E2E === '1')
+          console.debug('[geometry cache]', JSON.stringify(event));
+      },
+      ...(import.meta.env.VITE_E2E === '1'
+        ? {
+            measurementCacheDiagnostics: true
+          }
+        : {})
+    });
+  });
   // The budget losing the race leaves `attempt` pending; keep its eventual
   // rejection from surfacing as an unhandled one.
   attempt.catch(() => undefined);
@@ -564,6 +590,7 @@ function environmentRecovery(): void {
 self.ononline = environmentRecovery;
 
 interface GeometryWorkerJob {
+  refinementGeneration?: number;
   request: GeometryWorkerWorkRequest;
   requestId?: string;
   broadcastToken: number | null;
@@ -619,6 +646,43 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
     return; // Cancelled while queued; the caller already dropped its promise.
   }
   const request = job.request;
+  if (request.type === 'refine-edit-preview') {
+    if (request.generation !== refinementGeneration) return;
+    const exact =
+      exactKernelStatus === 'ready' ? await exactKernelPromise : null;
+    const finish = request.profile
+      ? (await import('@openzcad/kernel-adapter/exact')).profileDirectEdits()
+      : undefined;
+    const started = request.profile ? performance.now() : 0;
+    // This is mesh-cache warming only: no canonical journal or publication.
+    try {
+      if (await exact?.refineEditPreview?.(request.document))
+        refinedPreviewKey = previewRefinementKey(request.document);
+    } catch {
+      /* A speculative miss must never become a modelling refusal. */
+    } finally {
+      if (finish) {
+        performance.measure('oz:edit.refine', {
+          start: started,
+          end: performance.now()
+        });
+        self.postMessage({
+          type: 'direct-edit-profile',
+          operation: 'refine-edit-preview',
+          requestId: request.requestId,
+          profile: finish()
+        } satisfies GeometryWorkerResult);
+      }
+    }
+    return;
+  }
+  if (request.type === 'release-edit-preview') {
+    refinedPreviewKey = undefined;
+    const exact =
+      exactKernelStatus === 'ready' ? await exactKernelPromise : null;
+    exact?.releaseEditPreview?.();
+    return;
+  }
   const document = request.document;
   const workerStartedMs = performance.now();
   const queueMs = workerStartedMs - job.queuedAtMs;
@@ -626,16 +690,27 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
   let resultCacheHit = true;
   let transient = false;
   let forceFull = request.type === 'sync' && request.forceFull === true;
+  const profiling = 'profile' in request && request.profile === true;
+  let postMs = 0;
+  let postCalls = 0;
   const post = (message: GeometryWorkerResult, transfer?: Transferable[]) => {
     if (!broadcastGate.isCurrent(job.broadcastToken)) {
       return;
     }
+    const started = profiling ? performance.now() : 0;
     if (transfer && transfer.length > 0) {
       self.postMessage(message, { transfer });
     } else {
       self.postMessage(message);
     }
+    if (profiling) {
+      postMs += performance.now() - started;
+      postCalls++;
+    }
   };
+  const finishProfile = profiling
+    ? (await import('@openzcad/kernel-adapter/exact')).profileDirectEdits()
+    : undefined;
   try {
     post(stateFor('starting', request, { stale: true }));
 
@@ -690,6 +765,32 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         derivedMeshTransferables(geometry)
       );
       post(stateFor('ready', request, { stale: false }));
+      if (
+        request.deferTopology &&
+        exact.refineEditPreview &&
+        refinedPreviewKey !== previewRefinementKey(document) &&
+        job.refinementGeneration === refinementGeneration
+      ) {
+        const generation = job.refinementGeneration;
+        clearTimeout(refinementTimer);
+        refinementTimer = setTimeout(() => {
+          refinementTimer = undefined;
+          if (generation !== refinementGeneration) return;
+          const requestId = `refine:${request.requestId}`;
+          queue.enqueue({
+            request: {
+              type: 'refine-edit-preview',
+              document,
+              requestId,
+              generation,
+              profile: request.profile
+            },
+            requestId,
+            queuedAtMs: performance.now(),
+            broadcastToken: null
+          });
+        }, 150);
+      }
       return;
     }
 
@@ -1026,13 +1127,22 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
     const contentKey = isGeometryEmpty(document)
       ? null
       : geometryContentKey(document);
+    // Resolve the decision function before the first result-cache key too.
+    // The module is already resident for every subsequent drag/idle echo.
+    let exactForSync: ExactKernel | null = null;
+    if (contentKey !== null) {
+      if (exactKernelStatus !== 'ready')
+        post(stateFor('loading-remus', request, { stale: true }));
+      exactForSync = await loadExactKernel();
+    }
     const lineageDemandKey =
-      // A request carrying a demand (even an empty one) opted into the idle
-      // probe skip, so it must never share a cache entry with a full-lineage
-      // request that carries none.
-      request.type === 'sync' && request.lineageDemand !== undefined
-        ? `:lazy:${JSON.stringify([...new Set(request.lineageDemand)].sort())}`
-        : '';
+      // Preserve the eager/lazy distinction when boolean probes can enrich
+      // lineage. A model with no boolean has identical results in both modes.
+      lineageDemandCacheKey(
+        document,
+        request.type === 'sync' ? request.lineageDemand : undefined,
+        booleanProbeNeeded
+      );
     const cachedDerived =
       contentKey === null
         ? emptyDerived(document)
@@ -1045,7 +1155,7 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
               if (exactKernelStatus !== 'ready') {
                 post(stateFor('loading-remus', request, { stale: true }));
               }
-              const exact = await loadExactKernel();
+              const exact = exactForSync;
               if (!exact) {
                 throw exactKernelError instanceof Error
                   ? exactKernelError
@@ -1287,6 +1397,17 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       }
     }
   } finally {
+    if (finishProfile) {
+      const profile = finishProfile();
+      profile.stages.workerPost = { calls: postCalls, ms: postMs };
+      profile.stages.workerQueue = { calls: 1, ms: queueMs };
+      post({
+        type: 'direct-edit-profile',
+        operation: request.type,
+        ...(job.requestId ? { requestId: job.requestId } : {}),
+        profile
+      });
+    }
     // A cancel that raced a job already running leaves its entry behind;
     // sweep it so the set cannot grow across a long session.
     if (job.requestId) {
@@ -1296,8 +1417,22 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
 }
 
 const queue = new GeometryWorkerQueue<GeometryWorkerJob>(execute);
+let refinementGeneration = 0;
+let refinementTimer: ReturnType<typeof setTimeout> | undefined;
+let refinedPreviewKey: string | undefined;
+function previewRefinementKey(document: ProjectDocument): string {
+  // Candidate feature IDs can be regenerated on every pointer frame. The
+  // source history identifies the gesture; warming unchanged faces once is
+  // enough, and repeated synchronous warm-ups would stall the next pointer.
+  return `${document.projectId}:${document.featureOrder.slice(0, -1).join(',')}`;
+}
 
 self.onmessage = (event: MessageEvent<GeometryWorkerRequest>) => {
+  // Any newer input cancels a queued warm-up. A synchronous WASM tessellation
+  // already running completes; never accumulate obsolete warm-up frames.
+  clearTimeout(refinementTimer);
+  refinementTimer = undefined;
+  refinementGeneration++;
   // Unpack before anything reads the document: every consumer past this point
   // — the rebuild, the cache key, the history digest — expects plain arrays.
   const request = unpackWorkerRequest(event.data);
@@ -1321,6 +1456,7 @@ self.onmessage = (event: MessageEvent<GeometryWorkerRequest>) => {
   }
   queue.enqueue({
     request,
+    refinementGeneration,
     queuedAtMs: performance.now(),
     ...(request.requestId ? { requestId: request.requestId } : {}),
     broadcastToken: broadcastGate.issue(isBroadcast)

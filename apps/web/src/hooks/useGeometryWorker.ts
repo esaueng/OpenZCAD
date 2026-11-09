@@ -9,6 +9,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { documentForWorker, documentForRebuild } from '../lib/meshTransport';
 import {
   geometryContentKey,
+  lineageDemandCacheKey,
   rebindSketchGeometryForContent
 } from '../worker/exactRebuildCache';
 import { attachDerivedState } from '@openzcad/document-core';
@@ -109,7 +110,7 @@ function postSync(
   // Sorted and unique, as `useLineageDemand` hands it over.
   lineageDemand: readonly BodyId[] = []
 ): void {
-  const syncKey = `${document.projectId}:${document.version}:${lineageDemand.join()}`;
+  const syncKey = `${document.projectId}:${document.version}:${lineageDemandCacheKey(document, lineageDemand)}`;
   if (lastSyncedKey.current === syncKey) {
     return;
   }
@@ -184,6 +185,7 @@ export interface GeometryWorkerApi {
     document: ProjectDocument,
     options?: { signal?: AbortSignal; deferTopology?: boolean }
   ): Promise<GeometryReadyState>;
+  releaseEditPreview?(document: ProjectDocument): void;
   /**
    * `onState` receives this request's own lifecycle states (kernel load,
    * rebuild) so a dialog can narrate progress. Aborting the `signal` rejects
@@ -710,6 +712,8 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           }
           return;
         }
+        // Opt-in probes consume their diagnostics independently of geometry.
+        if (message.type === 'direct-edit-profile') return;
         if (message.type === 'preview-geometry') {
           const pending = geometryPreviewRequests.current.get(
             message.requestId
@@ -1057,7 +1061,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       const demand = lastDemandRef.current ?? [];
       if (
         lastSyncedKey.current !==
-        `${document.projectId}:${document.version}:${demand.join()}`
+        `${document.projectId}:${document.version}:${lineageDemandCacheKey(document, demand)}`
       ) {
         broadcastDocument.current = document;
         readyDocument.current = null;
@@ -1084,6 +1088,13 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       return posted.ok
         ? posted.promise
         : Promise.reject(new Error('Geometry worker unavailable.'));
+    },
+    releaseEditPreview(document) {
+      workerRef.current?.postMessage({
+        type: 'release-edit-preview',
+        requestId: crypto.randomUUID(),
+        document: documentForRebuild(document)
+      });
     },
     previewGeometry(document, options) {
       if (options?.signal?.aborted)
@@ -1358,7 +1369,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       }
       readyDocument.current = document;
       broadcastDocument.current = document;
-      lastSyncedKey.current = `${document.projectId}:${document.version}:${(lastDemandRef.current ?? []).join()}`;
+      lastSyncedKey.current = `${document.projectId}:${document.version}:${lineageDemandCacheKey(document, lastDemandRef.current ?? [])}`;
       setState((current) => ({ ...current, version: document.version }));
       return true;
     }

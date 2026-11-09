@@ -27,6 +27,30 @@ function kernelAnswering(result: unknown, legacy?: () => number): RemusKernel {
 }
 
 describe('typed cylindrical-face resize', () => {
+  it('preserves a typed diameter limit with an actionable message', () => {
+    const kernel = kernelAnswering({
+      status: 'error',
+      code: 'operation_failed',
+      category: 'nonconvergence',
+      value: null,
+      details: {
+        kernelCode: 'cylinder-diameter-unbuildable',
+        requestedDiameter: 60,
+        message: 'opaque kernel detail'
+      }
+    });
+    try {
+      resizeCylindricalFaceTyped(kernel, 1, 2, 30);
+      throw new Error('Expected refusal');
+    } catch (error) {
+      expect(error).toBeInstanceOf(DirectEditRefusal);
+      expect((error as Error).message).toContain('Try a smaller diameter');
+      expect(kernelRefusalRecordOf(error)).toMatchObject({
+        code: 'cylinder-diameter-unbuildable',
+        category: 'nonconvergence'
+      });
+    }
+  });
   it('returns the solid on success', () => {
     const kernel = kernelAnswering({
       status: 'ok',

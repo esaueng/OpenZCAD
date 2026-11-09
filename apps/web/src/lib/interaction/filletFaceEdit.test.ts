@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   addPrimitiveFeature,
   createProjectDocument,
-  filletEdges
+  filletEdges,
+  directEditBody,
+  listFeaturesInOrder
 } from '@openzcad/document-core';
 import {
   toBodyId,
@@ -19,6 +21,8 @@ import {
   canRemoveImportedBlendFace,
   editableFilletFeature,
   importedBlendSnapshot,
+  directBlendSnapshot,
+  revisableBlendResize,
   importedBlendEditNotice,
   IMPORTED_BLEND_EDITABLE_NOTICE,
   IMPORTED_BLEND_READ_ONLY_NOTICE,
@@ -81,6 +85,83 @@ function blendFace(
 }
 
 describe('fillet face editing', () => {
+  it('revises only the selected band owner at the end of history', () => {
+    const base = addPrimitiveFeature(
+      createProjectDocument('Blend edits', toUserId('test')),
+      {
+        name: 'Block',
+        primitiveKind: 'box',
+        dimensions: { width: 30, height: 18, depth: 24 }
+      }
+    );
+    const bodyId = base.bodyOrder[0]!;
+    const operation = {
+      kind: 'resize-blend' as const,
+      faceHash: 1,
+      surfaceClass: 'cylinder' as const,
+      recordedRadius: 4,
+      recordedCenter: point(0, 0, 0),
+      recordedAxis: point(1, 0, 0),
+      newRadius: 1.5
+    };
+    const edited = directEditBody(base, {
+      name: 'Resize blend',
+      targetBodyId: bodyId,
+      operation
+    }).document;
+    const owner = listFeaturesInOrder(edited).at(-1)!.featureId;
+    const reference = {
+      producingFeatureId: owner,
+      lineageName: 'direct-edit.resize-blend.band'
+    };
+    const body = {
+      topology: { faces: [blendFace('first-band')], edges: [] }
+    } as unknown as BodyRepresentation;
+    edited.derived.bodyRepresentations[bodyId] = body;
+    expect(revisableBlendResize(edited, bodyId, owner, reference)).toBeNull();
+    body.topology!.faces.push(blendFace('second-band'));
+    expect(revisableBlendResize(edited, bodyId, owner, reference)).toEqual({
+      featureId: owner,
+      operation
+    });
+    expect(
+      revisableBlendResize(edited, 'another-body', owner, reference)
+    ).toBeNull();
+    expect(
+      revisableBlendResize(edited, bodyId, undefined, reference)
+    ).toBeNull();
+    expect(
+      revisableBlendResize(edited, bodyId, 'stale-owner', reference)
+    ).toBeNull();
+    expect(revisableBlendResize(edited, bodyId, owner, undefined)).toBeNull();
+    expect(
+      revisableBlendResize(edited, bodyId, owner, {
+        ...reference,
+        lineageName: 'direct-edit.resize-blend.band.construction'
+      })
+    ).toBeNull();
+    const later = addPrimitiveFeature(edited, {
+      name: 'Later',
+      primitiveKind: 'box',
+      dimensions: { width: 1, height: 1, depth: 1 }
+    });
+    expect(revisableBlendResize(later, bodyId, owner, reference)).toBeNull();
+  });
+  it('uses a measured native band as a local edit only on the blend-group kernel', () => {
+    const face = blendFace('hash-only');
+    delete face.reference;
+    const native = { source: 'fillet' } as Pick<BodyRepresentation, 'source'>;
+    expect(directBlendSnapshot(native, face, '2026.1.124')).toBeNull();
+    expect(directBlendSnapshot(native, face, 'unknown')).toBeNull();
+    expect(directBlendSnapshot(native, face, '2026.1.125+local')).toMatchObject(
+      { radius: 2, surfaceClass: 'cylinder' }
+    );
+    expect(
+      directBlendSnapshot({ source: 'imported-step' }, face, '2026.1.124')
+    ).toMatchObject({ radius: 2 });
+    face.geometry!.featureType = undefined;
+    expect(directBlendSnapshot(native, face, '2026.1.125')).toBeNull();
+  });
   it('captures and re-resolves an imported analytic blend without using its hash', () => {
     const source = blendFace('source', point(0, 0, 0), 10);
     const resized = {
@@ -106,7 +187,11 @@ describe('fillet face editing', () => {
   it('uses the exact carrier when one direct edit produces several bands', () => {
     const source = blendFace('source', point(0, 0, 0), 10);
     const first = {
-      ...blendFace('direct-edit.resize-blend.band.import.step.face.a', point(0, 0, 0), 99),
+      ...blendFace(
+        'direct-edit.resize-blend.band.import.step.face.a',
+        point(0, 0, 0),
+        99
+      ),
       reference: {
         ...blendFace('first-reference', point(0, 0, 0)).reference!,
         producingFeatureId: toFeatureId('direct-edit-feature'),
@@ -119,7 +204,11 @@ describe('fillet face editing', () => {
       }
     };
     const second = {
-      ...blendFace('direct-edit.resize-blend.band.import.step.face.b', point(100, 0, 0), 100),
+      ...blendFace(
+        'direct-edit.resize-blend.band.import.step.face.b',
+        point(100, 0, 0),
+        100
+      ),
       reference: {
         ...blendFace('second-reference', point(100, 0, 0)).reference!,
         producingFeatureId: toFeatureId('direct-edit-feature'),

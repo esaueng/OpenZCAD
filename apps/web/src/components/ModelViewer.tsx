@@ -7721,9 +7721,12 @@ export function ModelViewer({
             true
         );
       } else if (e2eCanvasHooksEnabled && rig?.kind === 'edge-radius') {
-        // The arrow is centred on the blend point: grab its middle.
+        const scale =
+          (rig.group.userData.gizmoScale as number | undefined) ?? 1;
         const hitScreen = projectToScreen(
-          rig.group.position,
+          rig.group.position
+            .clone()
+            .addScaledVector(rig.direction, 0.4 * scale),
           context.activeCamera,
           canvasWidth(),
           canvasHeight()
@@ -7742,7 +7745,10 @@ export function ModelViewer({
             dragDirection.directionY
           );
           renderer.domElement.dataset.e2eHandlePixelsPerUnit = String(
-            dragDirection.pixelsPerUnit
+            edgeRigBuiltRef.current?.placement.travel
+              ? dragDirection.pixelsPerUnit *
+                  edgeRigBuiltRef.current.placement.travel
+              : dragDirection.fallbackPixelsPerUnit
           );
         }
       }
@@ -9554,6 +9560,10 @@ export function ModelViewer({
             // the hand at whatever rate the kernel can rebuild — no fixed
             // cadence sits between the two.
             if (value > 0 || edgeHandleRef.current?.allowRemoval) {
+              traceFaceDrag('pointer', {
+                value,
+                ms: performance.now() - event.timeStamp
+              });
               onEdgeRadiusPreviewRef.current(value);
             }
             requestRender();
@@ -9599,6 +9609,10 @@ export function ModelViewer({
           );
           if (value !== null && Math.abs(value - rig.value()) > 1e-9) {
             rig.setValue(value);
+            traceFaceDrag('pointer', {
+              value,
+              ms: performance.now() - event.timeStamp
+            });
             const usedProxy = queueCylinderRadiusProxy(value, event.timeStamp);
             onCylinderRadiusPreviewRef.current(value, !usedProxy);
             requestRender();

@@ -81,7 +81,12 @@ export function resizeCylindricalFaceTyped(
   const kernelMessage =
     kernelDetailString(details, 'message') ??
     'the exact modeling engine gave no further detail';
+  const kernelCode = kernelDetailString(details, 'kernelCode') ?? detailed.code;
   const kernelReason = kernelDetailString(details, 'reason');
+  const message =
+    kernelCode === 'cylinder-diameter-unbuildable'
+      ? 'That diameter does not fit the existing supports and fillets. Try a smaller diameter.'
+      : kernelMessage;
   const neighborSurfaceType = kernelDetailString(
     details,
     'neighborSurfaceType'
@@ -89,10 +94,11 @@ export function resizeCylindricalFaceTyped(
   throw new DirectEditRefusal({
     family: 'direct-edit',
     category: detailed.category,
-    kernelCode: kernelDetailString(details, 'kernelCode') ?? detailed.code,
+    kernelCode,
     kernelMessage,
-    reason: kernelMessage,
-    message: kernelMessage,
+    reason: message,
+    message:
+      message === kernelMessage ? message : `${message}\n${kernelMessage}`,
     ...(kernelReason ? { kernelReason } : {}),
     ...(neighborSurfaceType ? { neighborSurfaceType } : {})
   });

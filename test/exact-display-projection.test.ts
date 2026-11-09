@@ -186,3 +186,32 @@ it('keeps spline-refined scene bounds while retaining the original display mesh'
   expect(tessellate).toHaveBeenCalledTimes(2);
   expect(free).toHaveBeenCalledTimes(2);
 });
+
+it('uses disposable preview quality without changing the next completed projection', () => {
+  const { kernel } = fixture();
+  const tessellate = vi.spyOn(kernel, 'tessellateSolidGroupedBinary');
+  const completed = projectShapeMesh(kernel, { solids: [1] }, 1024);
+  const preview = projectShapeMesh(
+    kernel,
+    { solids: [2] },
+    1024,
+    completed.linearDeflections,
+    undefined,
+    false,
+    true
+  );
+  expect(preview.linearDeflections[0]).toBe(
+    completed.linearDeflections[0]! * 12
+  );
+  expect(tessellate.mock.calls[1]![2]).toBe(0.24);
+  const next = projectShapeMesh(
+    kernel,
+    { solids: [2] },
+    1024,
+    completed.linearDeflections
+  );
+  expect(next).toEqual(completed);
+  expect(tessellate.mock.calls[2]!.slice(1)).toEqual(
+    tessellate.mock.calls[0]!.slice(1)
+  );
+});

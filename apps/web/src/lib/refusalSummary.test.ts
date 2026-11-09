@@ -15,6 +15,17 @@ const structural = (
 });
 
 describe('refusalSummary', () => {
+  it('shows an explicitly classified validation cause on the control', () => {
+    expect(
+      refusalSummary(
+        {
+          message: 'Radius should be positive.',
+          headline: 'Radius should be positive.'
+        },
+        'Fillet'
+      ).headline
+    ).toBe('Radius should be positive.');
+  });
   it('offers a size only when the ladder built it', () => {
     expect(
       refusalSummary(

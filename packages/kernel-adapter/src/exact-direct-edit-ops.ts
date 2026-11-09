@@ -10,6 +10,11 @@ import {
   sameAnalyticCarrier
 } from './exact-lineage-builders';
 import type { RemusKernel } from './remus-runtime';
+import {
+  PreviewFaceGeometryCache,
+  faceContentDigestsOf
+} from './preview-face-geometry-cache';
+
 import { resizeCylindricalFaceTyped } from './exact-direct-edit-refusal';
 import { AdapterRefusal } from './adapter-refusal';
 import {
@@ -110,6 +115,11 @@ import {
   rebuildFaceDistance
 } from './exact-face-distance';
 import { preparedFaceMove } from './exact-prepared-face-move';
+import {
+  preparedGroupEdit,
+  preparedCommitNeedsEvolution,
+  releasePreparedGroupEdit
+} from './exact-prepared-group-edit';
 import { tryExactChamferedCylinderCapOffset } from './exact-chamfered-cylinder';
 import { tryExactLocalChamferCapOffset } from './exact-local-chamfer-cap';
 import { resizeChamferedThroughHole } from './exact-chamfered-hole';
@@ -119,6 +129,23 @@ import {
   resizeWallThroughBlends,
   sameBlendCarrier
 } from './exact-direct-edit-reblend';
+
+// The restored drag source is immutable. Exact face digests keep its costly
+// area/domain measurement reusable without trusting recycled handle numbers.
+const previewSources = new WeakMap<RemusKernel, PreviewFaceGeometryCache>();
+function previewSourceGeometry(kernel: RemusKernel, face: number) {
+  let cache = previewSources.get(kernel);
+  if (!cache) {
+    cache = new PreviewFaceGeometryCache();
+    previewSources.set(kernel, cache);
+  }
+  return cache.describe(
+    kernel,
+    face,
+    faceContentDigestsOf(kernel, Uint32Array.of(face))?.[0],
+    faceWitnessOf
+  ).geometry;
+}
 
 /**
  * Reference-first per ADR-013, exactly like fillet/chamfer edges: a stored
@@ -1804,7 +1831,12 @@ export function applyDirectEdit(
     return setFaceDistance(kernel, target, solid, face, operation, scope);
   }
 
-  const geometry = measureFaceGeometry(kernel, face);
+  const geometry =
+    deferOutputLineage &&
+    (operation.kind === 'resize-blend' ||
+      operation.kind === 'resize-cylindrical-face')
+      ? previewSourceGeometry(kernel, face)
+      : measureFaceGeometry(kernel, face);
 
   if (operation.kind === 'remove-face-feature') {
     return {
@@ -1992,8 +2024,36 @@ export function applyDirectEdit(
       }
       throw new Error('Blend radius must differ from its current radius.');
     }
-    const sourceCandidates = topologyCandidatesForSolid(kernel, solid);
+    const sourceCandidates = deferOutputLineage
+      ? []
+      : topologyCandidatesForSolid(kernel, solid);
+    const prepared =
+      operation.surfaceClass === 'cylinder'
+        ? preparedGroupEdit(
+            kernel,
+            solid,
+            face,
+            'blend',
+            snapshot.radius,
+            deferOutputLineage
+          )
+        : null;
+    let preparedOutput: number | undefined;
+    let needsEvolution = false;
+    if (prepared) {
+      try {
+        if (deferOutputLineage)
+          return { solids: [prepared.preview(newRadius)] };
+        // Commit rebuilds the canonical result with the authoritative journal.
+        const journal = decodeRemusMoveFacesJournal(prepared.commit(newRadius));
+        preparedOutput = journal.solid;
+        needsEvolution = preparedCommitNeedsEvolution(kernel, journal.op);
+      } catch {
+        releasePreparedGroupEdit(kernel);
+      }
+    }
     const evolution =
+      (preparedOutput === undefined || needsEvolution) &&
       operation.surfaceClass === 'cylinder'
         ? kernel.resizeBlendWithEvolution(
             solid,
@@ -2004,6 +2064,7 @@ export function applyDirectEdit(
         : null;
     const output =
       evolution?.result.solid ??
+      preparedOutput ??
       kernel.resizeBlend(solid, face, snapshot.radius, newRadius);
     requireValidSolid(
       kernel,
@@ -2011,7 +2072,10 @@ export function applyDirectEdit(
       `Resizing the blend to radius ${newRadius} does not produce a valid solid.`
     );
     let lineage: RemusLineageState | undefined;
-    if (evolution && producingFeatureId) {
+    if (
+      evolution?.evolution.provenance === 'construction' &&
+      producingFeatureId
+    ) {
       const resultCandidates = topologyCandidatesForSolid(kernel, output);
       const generatedBlendFaces = new Set(
         evolution.evolution.generated
@@ -2033,6 +2097,8 @@ export function applyDirectEdit(
         generatedBlendFaces
       });
     } else if (newRadius > GEOMETRY_EPSILON) {
+      // An inferred blend-group journal is not construction history. Only
+      // assign this edit's own semantic role to a unique measured output band.
       const candidates = topologyCandidatesForSolid(kernel, output);
       const matching = candidates.filter((candidate) => {
         if (candidate.kind !== 'face') {
@@ -2146,6 +2212,21 @@ export function applyDirectEdit(
     ? []
     : topologyCandidatesForSolid(kernel, solid);
   const sourceRadius = geometry.radius;
+  const prepared = preparedGroupEdit(
+    kernel,
+    solid,
+    face,
+    'cylinder',
+    sourceRadius,
+    deferOutputLineage
+  );
+  if (prepared && deferOutputLineage) {
+    try {
+      return { solids: [prepared.preview(newRadius)] };
+    } catch {
+      releasePreparedGroupEdit(kernel);
+    }
+  }
   const axisStart = geometry.axisStart;
   const plainResize = (
     fromSolid: number,
@@ -2163,7 +2244,9 @@ export function applyDirectEdit(
     if (journaled) {
       try {
         journal = decodeRemusMoveFacesJournal(
-          kernel.resizeCylindricalFaceJournaled(fromSolid, wall, newRadius)
+          prepared && fromSolid === solid && wall === face
+            ? prepared.commit(newRadius)
+            : kernel.resizeCylindricalFaceJournaled(fromSolid, wall, newRadius)
         );
       } catch {
         // Older or unqualified resize constructions can still use the exact
@@ -2246,6 +2329,10 @@ export function applyDirectEdit(
     // app.
     assertWallResizeAccepted(kernel, acceptance(output));
   } catch (error) {
+    // The blend-group route already tried the supported resize strategies.
+    // Keep its typed diameter limit, leaving older kernels' ladder unchanged.
+    if (kernelRefusalRecordOf(error)?.code === 'cylinder-diameter-unbuildable')
+      throw error;
     // WS6 ladder, step 2: remove the bands incident to the wall, resize the
     // sharp wall, rebuild the bands at their recognised radius. Only a wall
     // whose every curved neighbour is a proven band qualifies, and only a

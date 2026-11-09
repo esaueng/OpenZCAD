@@ -129,7 +129,8 @@ export class PreviewFaceGeometryCache {
     kernel: RemusKernel,
     face: number,
     digest: string | undefined,
-    witnessOf: (kernel: RemusKernel, face: number) => FaceWitnessV1
+    witnessOf: (kernel: RemusKernel, face: number) => FaceWitnessV1,
+    measureGeometry = true
   ): PreviewFace {
     const known = digest === undefined ? undefined : this.byDigest.get(digest);
     if (known) {
@@ -138,10 +139,14 @@ export class PreviewFaceGeometryCache {
       syncReadMemoFor(kernel)?.recordFaceWitness(face, known.witness);
       return {
         witness: known.witness,
-        geometry: structuredClone(known.geometry)
+        geometry: measureGeometry ? structuredClone(known.geometry) : undefined
       };
     }
     const witness = witnessOf(kernel, face);
+    // Prepared group frames hold picks and completion metadata pending.
+    // Only the edited dimension needs a measurement; never cache an omitted
+    // measurement as if it were a completed result for a later caller.
+    if (!measureGeometry) return { witness, geometry: undefined };
     const geometry =
       witness.surfaceType === 'bspline'
         ? undefined

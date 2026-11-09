@@ -145,6 +145,30 @@ describe('selectionCalloutVerbs', () => {
     ]);
   });
 
+  it('offers qualified tangent propagation separately from single-edge chamfer', () => {
+    const verbs = selectionCalloutVerbs({
+      kind: 'edges',
+      edgesArmed: true,
+      chamferChainAvailable: true,
+      pressedAction: 'chamfer',
+      availability: READY
+    });
+    expect(verbs.map((verb) => [verb.id, verb.pressed])).toEqual([
+      ['action:fillet', false],
+      ['action:chamfer', true],
+      ['action:chamfer-chain', false],
+      ['tool:datum-axis', false]
+    ]);
+    expect(verbs[2]?.label).toBe('Chamfer tangent chain');
+    expect(
+      selectionCalloutVerbs({
+        kind: 'edges',
+        chamferChainAvailable: true,
+        availability: READY
+      }).some((verb) => verb.id === 'action:chamfer-chain')
+    ).toBe(false);
+  });
+
   it('offers a body the tools that take one, and several bodies the booleans', () => {
     expect(
       selectionCalloutVerbs({ kind: 'body', availability: READY }).map(

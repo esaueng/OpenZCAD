@@ -1,10 +1,15 @@
-import { findFeature } from '@openzcad/document-core';
+import { findFeature, listFeaturesInOrder } from '@openzcad/document-core';
 import { geometryTolerance } from '@openzcad/geometry';
+import { supportsBlendGroupEdits } from '../kernelBuild';
 import type {
   BodyRepresentation,
+  BodyId,
+  DirectEditOperation,
   FaceGeometry,
   FaceTopology,
+  FaceTopologyReferenceV5,
   FeatureNode,
+  FeatureId,
   GeometryReadyState,
   ProjectDocument,
   TopologySelection,
@@ -12,6 +17,37 @@ import type {
 } from '@openzcad/shared';
 
 const FILLET_FACE_LINEAGE_PREFIX = 'modifier.fillet.face.band-between.';
+
+/** Re-edit only an inferred network's own latest resize, retaining its pins.
+ * An isolated band or downstream feature keeps ordinary append history.
+ */
+export function revisableBlendResize(
+  document: ProjectDocument,
+  bodyId: string,
+  featureId: string | undefined,
+  reference:
+    | Pick<FaceTopologyReferenceV5, 'producingFeatureId' | 'lineageName'>
+    | undefined
+): {
+  featureId: FeatureId;
+  operation: Extract<DirectEditOperation, { kind: 'resize-blend' }>;
+} | null {
+  const feature = listFeaturesInOrder(document).at(-1);
+  const bands = document.derived.bodyRepresentations[
+    bodyId as BodyId
+  ]?.topology?.faces.filter((f) => f.geometry?.featureType === 'blend');
+  return (bands?.length ?? 0) > 1 &&
+    reference?.lineageName === 'direct-edit.resize-blend.band' &&
+    reference.producingFeatureId === featureId &&
+    featureId &&
+    feature?.featureId === featureId &&
+    feature.data.featureKind === 'direct-edit' &&
+    feature.data.targetBodyId === bodyId &&
+    feature.data.operation.kind === 'resize-blend' &&
+    feature.data.operation.surfaceClass === 'cylinder'
+    ? { featureId: feature.featureId, operation: feature.data.operation }
+    : null;
+}
 
 function length(vector: Vector3): number {
   return Math.hypot(vector.x, vector.y, vector.z);
@@ -186,6 +222,21 @@ export function importedBlendSnapshot(
     };
   }
   return null;
+}
+
+/** A measured native band may be edited locally without inventing Fillet lineage.
+ * Older kernels retain their verified native-feature gate; imported bands keep
+ * their existing exact direct-edit path and its fail-closed validation.
+ */
+export function directBlendSnapshot(
+  body: Pick<BodyRepresentation, 'source'>,
+  face: FaceTopology,
+  kernelVersion: string
+): ImportedBlendSnapshot | null {
+  return body.source === 'imported-step' ||
+    supportsBlendGroupEdits(kernelVersion)
+    ? importedBlendSnapshot(face)
+    : null;
 }
 
 function sameBlendCarrier(

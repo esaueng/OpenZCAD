@@ -22,6 +22,7 @@ export type SelectionActionId =
   | 'sketch-on-face'
   | 'fillet'
   | 'chamfer'
+  | 'chamfer-chain'
   | 'extrude-region';
 
 export type SelectionValueKind = 'distance' | 'diameter' | 'radius';
@@ -52,7 +53,7 @@ export interface FaceCapabilityTarget {
   blendRadius?: number;
   /** Present only after lineage resolves to a live Fillet feature. */
   filletFeatureId?: FeatureId;
-  /** Analytic imported blend with the exact resize kernel available. */
+  /** Analytic local resize (imported, or a native band without feature lineage). */
   canResizeImportedBlend?: boolean;
   /** Imported defeature is exposed only when its planar gate is proven. */
   canRemoveFaceFeature?: boolean;

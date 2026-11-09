@@ -16,6 +16,7 @@
   "deep-design-polish.spec.ts": 63,
   "design-review-followups.spec.ts": 140,
   "direct-edit-ownership.spec.ts": 58,
+  "direct-edit-parity-wiring.spec.ts": 4,
   "drawing-dimensions.spec.ts": 10,
   "drawing-sections.spec.ts": 25,
   "drawings.spec.ts": 16,

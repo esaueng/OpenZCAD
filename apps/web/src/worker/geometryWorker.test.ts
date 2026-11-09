@@ -79,7 +79,8 @@ async function installWorker(
   }));
   vi.stubGlobal('self', scope);
   vi.doMock('@openzcad/kernel-adapter/exact', () => ({
-    createExactKernelAdapter
+    createExactKernelAdapter,
+    profileDirectEdits: () => () => ({ elapsedMs: 0, stages: {} })
   }));
   await import('./geometryWorker');
   return { scope, createExactKernelAdapter };
@@ -96,6 +97,176 @@ beforeEach(() => {
 });
 
 describe('geometry worker rebuild coordination', () => {
+  it('warms only the latest stable preview and cancels warm-up on release', async () => {
+    const base = createProjectDocument('Stable mesh', toUserId('user'));
+    const document = addPrimitiveFeature(base, {
+      name: 'Box',
+      primitiveKind: 'box',
+      dimensions: { width: 10, height: 8, depth: 6 }
+    });
+    const frame = {
+      bodyRepresentations: {},
+      warnings: [],
+      updatedAt: document.derived.updatedAt,
+      analysis: 'pending' as const
+    };
+    const first = deferred<typeof frame>(),
+      second = deferred<typeof frame>();
+    const previewGeometry = vi
+      .fn()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise)
+      .mockResolvedValue(frame);
+    const refineEditPreview = vi.fn(async () => true);
+    const { scope } = await installWorker(vi.fn(), {
+      previewGeometry,
+      refineEditPreview,
+      releaseEditPreview: vi.fn()
+    });
+    post(scope, {
+      type: 'preview-geometry',
+      requestId: 'first',
+      document,
+      profile: true,
+      deferTopology: true
+    });
+    await vi.waitFor(() => expect(previewGeometry).toHaveBeenCalledTimes(1));
+    post(scope, {
+      type: 'preview-geometry',
+      requestId: 'second',
+      document,
+      profile: true,
+      deferTopology: true
+    });
+    first.resolve(frame);
+    await vi.waitFor(() => expect(previewGeometry).toHaveBeenCalledTimes(2));
+    await new Promise((resolve) => setTimeout(resolve, 180));
+    expect(refineEditPreview).not.toHaveBeenCalled();
+    second.resolve(frame);
+    await vi.waitFor(() => expect(refineEditPreview).toHaveBeenCalledOnce());
+    await vi.waitFor(() =>
+      expect(
+        scope.postMessage.mock.calls.filter(
+          ([m]) =>
+            m.type === 'direct-edit-profile' &&
+            m.operation === 'refine-edit-preview'
+        )
+      ).toHaveLength(1)
+    );
+    post(scope, {
+      type: 'preview-geometry',
+      requestId: 'third',
+      // Live candidates regenerate the terminal feature ID for each value.
+      document: addPrimitiveFeature(base, {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 11, height: 8, depth: 6 }
+      }),
+      deferTopology: true
+    });
+    await vi.waitFor(() => expect(previewGeometry).toHaveBeenCalledTimes(3));
+    await new Promise((resolve) => setTimeout(resolve, 180));
+    expect(refineEditPreview).toHaveBeenCalledOnce();
+    post(scope, {
+      type: 'release-edit-preview',
+      requestId: 'cancel',
+      document
+    });
+    await new Promise((resolve) => setTimeout(resolve, 180));
+    expect(refineEditPreview).toHaveBeenCalledOnce();
+  });
+  it('reuses full validation for a selection demand and its idle echo without a boolean', async () => {
+    const document = addPrimitiveFeature(
+      createProjectDocument('Demand cache', toUserId('user')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 8, depth: 6 }
+      }
+    );
+    const syncDocument = vi.fn(async () => derived('validated'));
+    const { scope } = await installWorker(syncDocument);
+    post(scope, { type: 'sync', document, requestId: 'validation' });
+    await vi.waitFor(() =>
+      expect(
+        scope.postMessage.mock.calls.some(([m]) => m.type === 'sync')
+      ).toBe(true)
+    );
+    post(scope, {
+      type: 'sync',
+      document,
+      lineageDemand: [document.bodyOrder[0]!]
+    });
+    await vi.waitFor(() =>
+      expect(
+        scope.postMessage.mock.calls.some(
+          ([m]) => m.type === 'projection-delta'
+        )
+      ).toBe(true)
+    );
+    expect(syncDocument).toHaveBeenCalledOnce();
+  });
+  it('releases prepared edits after an in-flight frame without publishing or loading an idle kernel', async () => {
+    const document = addPrimitiveFeature(
+      createProjectDocument('Prepared cancel', toUserId('user')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 8, depth: 6 }
+      }
+    );
+    const frame = deferred<{
+      bodyRepresentations: Record<string, never>;
+      warnings: string[];
+      updatedAt: string;
+      analysis: 'pending';
+    }>();
+    const releaseEditPreview = vi.fn();
+    const previewGeometry = vi.fn(() => frame.promise);
+    const { scope, createExactKernelAdapter } = await installWorker(vi.fn(), {
+      previewGeometry,
+      releaseEditPreview
+    });
+    post(scope, {
+      type: 'release-edit-preview',
+      document,
+      requestId: 'idle-release'
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(createExactKernelAdapter).not.toHaveBeenCalled();
+    // A following queue job is the barrier proving the idle release finished.
+    post(scope, { type: 'preview-geometry', document, requestId: 'frame' });
+    await vi.waitFor(() => expect(previewGeometry).toHaveBeenCalledOnce());
+    expect(createExactKernelAdapter).toHaveBeenCalledOnce();
+    expect(releaseEditPreview).not.toHaveBeenCalled();
+    post(scope, {
+      type: 'release-edit-preview',
+      document,
+      requestId: 'cancel-release'
+    });
+    post(scope, {
+      type: 'preview-geometry',
+      document,
+      requestId: 'next-gesture'
+    });
+    expect(releaseEditPreview).not.toHaveBeenCalled();
+    frame.resolve({
+      bodyRepresentations: {},
+      warnings: [],
+      updatedAt: document.derived.updatedAt,
+      analysis: 'pending'
+    });
+    await vi.waitFor(() => expect(releaseEditPreview).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(previewGeometry).toHaveBeenCalledTimes(2));
+    expect(releaseEditPreview.mock.invocationCallOrder[0]).toBeLessThan(
+      previewGeometry.mock.invocationCallOrder[1]!
+    );
+    expect(
+      scope.postMessage.mock.calls.filter(
+        ([m]) => m.type === 'preview-geometry'
+      )
+    ).toHaveLength(2);
+  });
   it('uses geometry-only work for drag frames and full analysis for a later commit', async () => {
     const document = addPrimitiveFeature(
       createProjectDocument('Drag frames', toUserId('user')),

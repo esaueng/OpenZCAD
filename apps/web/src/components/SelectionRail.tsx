@@ -46,6 +46,7 @@ const ACTION_ICONS: Record<SelectionActionId, ReactNode> = {
   'sketch-on-face': TOOL_META.sketch.icon,
   fillet: TOOL_META.fillet.icon,
   chamfer: TOOL_META.chamfer.icon,
+  'chamfer-chain': TOOL_META.chamfer.icon,
   'extrude-region': TOOL_META.extrude.icon
 };
 
