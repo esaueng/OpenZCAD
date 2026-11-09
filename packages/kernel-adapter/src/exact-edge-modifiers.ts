@@ -7,6 +7,10 @@ import type { BlendRefusalAdvice } from '@openzcad/shared';
 import type { FaceEvolutionPayloadV1, RemusKernel } from './remus-runtime';
 import { displayOnlyBlendsActive } from './display-only-blends';
 import { certifyFilletEnvelope } from './fillet-envelope';
+import {
+  incoherentBlendEdge,
+  type BlendEdgeIncoherence
+} from './blend-edge-coherence';
 import { GEOMETRY_LINEAR_TOLERANCE } from '@openzcad/geometry';
 import { GEOMETRY_EPSILON, errorText } from './exact-math';
 import {
@@ -356,6 +360,7 @@ export function applyEdgeModifier(
   if (modified === target || kernel.validateSolidRelaxed(modified) !== 0) {
     return null;
   }
+  let resultQuality: BlendQuality | undefined;
   if (featureKind === 'fillet') {
     // A fillet rounds material inside the target envelope. Remus can return
     // a closed but severely distorted fallback for an oversized radius,
@@ -439,13 +444,65 @@ export function applyEdgeModifier(
       );
       return null;
     }
+
+    // An approximate blend's patches must agree with the seams between
+    // them. The kernel has returned an `ok`, valid, in-envelope fillet of a
+    // corner cylinder's rim whose four NURBS patches meet along straight
+    // chords 1.1 off both patches: a creased dome with a square top that
+    // every check above accepts. See `blend-edge-coherence` for what is
+    // measured and what is deliberately not.
+    //
+    // The tolerance is 1% of the fillet radius, floored at the envelope
+    // tolerance above. Measured on the pin, an approximate patch meets its
+    // genuine boundary to 8e-5 (about 480 times inside it at r3.8) and the
+    // chord defect is 0.29r (about 30 times outside it at any radius), so
+    // the bound separates the two by more than an order of magnitude either
+    // way while still meaning "visibly the wrong shape" at any scale.
+    //
+    // Exact results have no NURBS faces, so the diagnostic probes (which
+    // require an exact result) never pay for it. Like the volume envelope it
+    // is skipped on a display-only drag frame; the checked rebuild at rest
+    // and on release runs it. A measurement that cannot be made is not
+    // evidence against the result.
+    if (!displayOnlyBlendsActive()) {
+      let incoherent: BlendEdgeIncoherence | null = null;
+      let coherenceTolerance = 0;
+      try {
+        resultQuality =
+          typedQuality ??
+          blendResultQuality(kernel, target, modified, evolution);
+        if (resultQuality.approximate) {
+          coherenceTolerance = Math.max(
+            tolerance,
+            Math.max(size, variableRadius?.endRadius ?? 0) * 0.01
+          );
+          incoherent = incoherentBlendEdge(
+            kernel,
+            modified,
+            resultQuality.approximateFaces,
+            coherenceTolerance
+          );
+        }
+      } catch {
+        resultQuality = undefined;
+        incoherent = null;
+      }
+      if (incoherent) {
+        reportRefusal?.(
+          `fillet blend patches disagree with their seams: a seam between two approximate blend faces lies ${incoherent.deviation.toFixed(3)} off one of them (tolerance ${coherenceTolerance.toPrecision(3)}), so the rounded shape is wrong`
+        );
+        return null;
+      }
+    }
   }
   if (evolution) {
     reportEvolution?.(evolution);
   }
   if (reportQuality) {
     reportQuality(
-      typedQuality ?? blendResultQuality(kernel, target, modified, evolution)
+      resultQuality ??
+        typedQuality ??
+        blendResultQuality(kernel, target, modified, evolution)
     );
   }
   return modified;
