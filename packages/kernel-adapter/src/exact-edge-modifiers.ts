@@ -6,6 +6,7 @@
 import type { BlendRefusalAdvice } from '@openzcad/shared';
 import type { FaceEvolutionPayloadV1, RemusKernel } from './remus-runtime';
 import { displayOnlyBlendsActive } from './display-only-blends';
+import { certifyFilletEnvelope } from './fillet-envelope';
 import { GEOMETRY_LINEAR_TOLERANCE } from '@openzcad/geometry';
 import { GEOMETRY_EPSILON, errorText } from './exact-math';
 import {
@@ -380,7 +381,9 @@ export function applyEdgeModifier(
       modifiedBounds[4]! > targetBounds[4]! + tolerance ||
       modifiedBounds[5]! > targetBounds[5]! + tolerance
     ) {
-      return null;
+      if (!certifyFilletEnvelope(kernel, modified, targetBounds, tolerance)) {
+        return null;
+      }
     }
 
     // A valid fillet changes material only inside a neighbourhood of its
