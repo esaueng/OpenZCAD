@@ -123,6 +123,7 @@
   "save-state-history.spec.ts": 41,
   "selection-feature-ownership.spec.ts": 42,
   "selection-reads-first.spec.ts": 41,
+  "settings-reload-cover.spec.ts": 9,
   "settings.spec.ts": 57,
   "share-shelf-navigation.spec.ts": 10,
   "shoulder-cap-offset.spec.ts": 300,

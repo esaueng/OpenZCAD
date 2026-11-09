@@ -601,6 +601,7 @@ import {
 import { StartScreen } from './components/StartScreen';
 import { SharePage, type SharePageState } from './components/SharePage';
 import { StartupScreen } from './components/StartupScreen';
+import { SettingsPlaceholder } from './components/SettingsPlaceholder';
 import {
   WorkspaceAppShell,
   WorkspacePending
@@ -2663,6 +2664,15 @@ export function App() {
   // showing an empty overlay; the workspace still holds its keys meanwhile.
   const settingsShown =
     useSurfaceReady(LazySettingsPage, settingsOpen) && settingsOpen;
+  // Settings open from the first render (restored after a reload, or an
+  // invitation or desktop sign-in link) has no screen of the user's to keep
+  // on view while it loads: what lies under it is the library or workspace,
+  // still starting. It is covered by the page's empty frame instead, until
+  // the page itself is up. A later open, from a click, keeps the transparent
+  // wait above. Cleared on the first close so a reopen behaves as a click.
+  const [settingsOpenedAtBoot, setSettingsOpenedAtBoot] =
+    useState(settingsOpen);
+  if (settingsOpenedAtBoot && !settingsOpen) setSettingsOpenedAtBoot(false);
   const settingsDialogRef = useRef<HTMLDivElement | null>(null);
   useModalFocus(settingsDialogRef, {
     enabled: settingsOpen,
@@ -28658,17 +28668,23 @@ export function App() {
   // it the assistant's conversation and any request still streaming.
   // One dialog from the moment Settings is asked for: modal (focus held, the
   // background inert) and found by anything looking for it, but drawn only
-  // once its page has loaded, so an early open shows no empty overlay.
+  // once its page has loaded, so an early open shows no empty overlay. Open
+  // from boot, it covers the start-up underneath with the page's empty frame.
   const settingsOverlay = settingsOpen ? (
     <div
       ref={settingsDialogRef}
-      className={settingsShown ? 'settings-overlay' : 'settings-pending'}
+      className={
+        settingsShown || settingsOpenedAtBoot
+          ? 'settings-overlay'
+          : 'settings-pending'
+      }
       role="dialog"
       aria-modal="true"
       aria-label="Settings"
       aria-busy={settingsShown ? undefined : true}
       tabIndex={-1}
     >
+      {!settingsShown && settingsOpenedAtBoot && <SettingsPlaceholder />}
       {settingsShown && (
         <SettingsPage
           settings={appSettings}

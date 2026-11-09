@@ -1473,6 +1473,13 @@
   min-height: 30px;
 }
 
+/* The frame drawn while a restored Settings loads (SettingsPlaceholder) has
+   no field in its search box: hold the field's 30px and the box's border, so
+   a head the box wraps keeps its height when the page arrives. */
+.settings-head .settings-search:empty {
+  min-height: 32px;
+}
+
 @media (max-width: 580px) {
   .settings-nav-head {
     justify-content: center;
