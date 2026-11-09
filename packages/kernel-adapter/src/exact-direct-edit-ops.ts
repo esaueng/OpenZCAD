@@ -115,6 +115,7 @@ import {
   rebuildFaceDistance
 } from './exact-face-distance';
 import { preparedFaceMove } from './exact-prepared-face-move';
+import { offsetFaceRefusalOf } from './exact-offset-face-refusal';
 import {
   preparedGroupEdit,
   preparedCommitNeedsEvolution,
@@ -1906,18 +1907,27 @@ export function applyDirectEdit(
     // A drag preview moves the same face of the same restored source every
     // frame, so it reuses the kernel's distance-independent analysis.
     const faces = new Uint32Array([face]);
+    const moveFace = () => {
+      try {
+        return journaledMove(
+          kernel,
+          solid,
+          faces,
+          offset,
+          deferOutputLineage ? preparedFaceMove(kernel, solid, faces) : null,
+          true
+        );
+      } catch (error) {
+        // A neighbour that would collapse is a limit on the value, not an
+        // internal failure: say so, and how far the face can go.
+        throw offsetFaceRefusalOf(error, offset) ?? error;
+      }
+    };
     const moved =
       analytic === null
         ? (tryExactChamferedCylinderCapOffset(kernel, solid, face, offset) ??
           tryExactLocalChamferCapOffset(kernel, solid, face, offset) ??
-          journaledMove(
-            kernel,
-            solid,
-            faces,
-            offset,
-            deferOutputLineage ? preparedFaceMove(kernel, solid, faces) : null,
-            true
-          ))
+          moveFace())
         : { solid: analytic, relation: null };
     const output = moved.solid;
     if (kernel.validateSolidRelaxed(output) !== 0) {

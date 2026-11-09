@@ -166,6 +166,9 @@ export function validatedFeatureRejection(
         warning.kernelRefusal ?? warning.category
       ),
       ...(warning.advice ? { advice: warning.advice } : {}),
+      ...(warning.kernelRefusal?.limit !== undefined
+        ? { limit: warning.kernelRefusal.limit }
+        : {}),
       ...(input.featureId
         ? {
             culprit: {
