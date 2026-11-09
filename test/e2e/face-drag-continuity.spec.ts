@@ -432,7 +432,7 @@ test('a refused generic face drag holds its last exact preview', async ({
 });
 
 test(
-  'an exact release refusal restores the same anchor as its committed face',
+  'a stale-selection release refusal restores the committed face anchor',
   { tag: '@ci-smoke' },
   async ({ page }) => {
     test.setTimeout(120_000);
@@ -452,7 +452,7 @@ test(
                     type: 'sync',
                     ok: false,
                     requestId: request.requestId,
-                    error: 'Injected release refusal'
+                    error: 'The selected face no longer exists.'
                   }
                 })
               ),
@@ -538,7 +538,7 @@ for (const cancel of ['Escape', 'click-away', 'tool switch'] as const) {
   });
 }
 
-test('a refused release restores the committed face, handle and next pick', async ({
+test('a refused release retains the accepted face, handle and next pick', async ({
   page
 }) => {
   test.setTimeout(process.env.CI ? 240_000 : 120_000);
@@ -559,7 +559,6 @@ test('a refused release restores the committed face, handle and next pick', asyn
       Number(element.dataset.e2eChipAnchorWorldY),
       Number(element.dataset.e2eChipAnchorWorldZ)
     ]);
-  const committedAnchor = await anchor();
   await page.mouse.move(handle.x, handle.y);
   await page.mouse.down();
   await page.mouse.move(at(6).x, at(6).y, { steps: 12 });
@@ -571,8 +570,7 @@ test('a refused release restores the committed face, handle and next pick', asyn
     'data-e2e-selected-face',
     armedFace ?? ''
   );
-  // Through the back of the 18 mm box: release refuses the edit and
-  // restores the committed projection rather than retaining the preview.
+  // Through the back of the box: keep the last accepted preview (#731).
   await page.mouse.move(at(24).x, at(24).y, { steps: 12 });
   await page.mouse.up();
   const card = page.getByRole('region', { name: 'Offset Face operation' });
@@ -583,9 +581,17 @@ test('a refused release restores the committed face, handle and next pick', asyn
   ).toHaveCount(0);
   await expect(canvas).not.toHaveAttribute('data-e2e-offset-ghost');
   await expect(canvas).not.toHaveAttribute('data-e2e-height-proxy-offset');
-  await expect.poll(() => renderedMinimumY(canvas)).toBeCloseTo(0, 4);
-  await expect.poll(anchor).toEqual(committedAnchor);
-  await expect(canvas).toHaveAttribute('data-e2e-selected-face', armedFace!);
+  // Intermediate moves can build too: compare to the last shape actually
+  // retained, rather than assuming the first 6 mm preview was the last one.
+  const retainedY = await renderedMinimumY(canvas);
+  expect(retainedY).toBeGreaterThan(0);
+  expect(retainedY).toBeLessThan(18);
+  // The arrow is pinned to the retained face, not the refused -24 mm input.
+  await expect.poll(async () => (await anchor())[1]).toBeCloseTo(retainedY, 4);
+  await expect(canvas).not.toHaveAttribute(
+    'data-e2e-selected-face',
+    armedFace!
+  );
   await expect(chip).toHaveAttribute('data-state', 'warning');
   await expect(chip).toContainText('-6 mm');
   await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);

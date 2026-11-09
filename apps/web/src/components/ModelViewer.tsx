@@ -9,7 +9,6 @@ import type { FrameStatsSink } from '../lib/frameStats';
 import { ParameterPreviewController } from './viewer/parameterPreviewController';
 import {
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -502,10 +501,10 @@ export interface OffsetHandleTarget {
   topologyId: string;
   point: { x: number; y: number; z: number };
   normal: { x: number; y: number; z: number };
-  /** Live preview displacement; zero when the committed face is restored. */
+  /** Displayed displacement; zero when the committed face is restored. */
   initialValue?: number;
-  /** Refused input kept in the chip/keypad while the arrow sits on the part. */
-  refusedValue?: number;
+  /** Editable chip/keypad input, independent of the displayed displacement. */
+  inputValue?: number;
   /** Primitive height when this offset is really an overall-height edit. */
   totalBaseline?: number;
   /** -1 when a drag along the handle subtracts from that total; default +1. */
@@ -1090,6 +1089,8 @@ export interface ModelViewerProps {
   onSelectEdgeChain(selections: TopologySelection[]): void;
   /** Armed face-offset handle (selection-first direct manipulation). */
   offsetHandle: OffsetHandleTarget | null;
+  /** Semantic selection remains available while geometry temporarily withdraws the handle. */
+  offsetDragTarget: Pick<OffsetHandleTarget, 'bodyId' | 'topologyId'> | null;
   /** Streamed signed offset; App coalesces exact rebuilds. */
   onOffsetPreview(offset: number, exactGeometry?: boolean): void;
   /** Fired when an offset-handle drag releases with a non-zero offset. */
@@ -1900,7 +1901,6 @@ function sameOffsetHandleTarget(
     sameVector(a.normal, b.normal) &&
     a.totalBaseline === b.totalBaseline &&
     a.totalSense === b.totalSense &&
-    a.refusedValue === b.refusedValue &&
     !a.linearProfilePreview === !b.linearProfilePreview &&
     !a.gearHeightProfilePreview === !b.gearHeightProfilePreview &&
     !a.stepProfilePreview === !b.stepProfilePreview &&
@@ -2226,6 +2226,7 @@ export function ModelViewer({
   xrayOpacity = XRAY_OPACITY_BOUNDS.default / 100,
   tangentEdges = DEFAULT_TANGENT_EDGE_STYLE,
   offsetHandle,
+  offsetDragTarget,
   onOffsetPreview,
   onOffsetCommit,
   onOffsetCancel,
@@ -2828,7 +2829,7 @@ export function ModelViewer({
 
   // Scene, renderers, controls, and the render loop live for the component's
   // lifetime; only the body/sketch/overlay groups rebuild on data changes.
-  useLayoutEffect(() => {
+  useEffect(() => {
     const host = hostRef.current;
     if (!host) {
       return;
@@ -4033,6 +4034,7 @@ export function ModelViewer({
       clearOffsetGhost();
       restoreOffsetBodyProxy();
       onDirectManipulationChangeRef.current(false);
+      onOffsetCancelRef.current();
     };
 
     const topologyPickList = new TopologyPickList({
@@ -4493,7 +4495,7 @@ export function ModelViewer({
             : undefined;
         if (
           onOpenOffsetKeypadRef.current(
-            offsetHandleRef.current?.refusedValue ?? offsetRig.value(),
+            offsetHandleRef.current?.inputValue ?? offsetRig.value(),
             total,
             total === undefined
               ? undefined
@@ -7444,7 +7446,7 @@ export function ModelViewer({
         anchor = rig.chipAnchor(scale);
         const rawValue =
           rig === offsetRigRef.current && !offsetDragActiveRef.current
-            ? (offsetHandleRef.current?.refusedValue ?? rig.value())
+            ? (offsetHandleRef.current?.inputValue ?? rig.value())
             : rig.value();
         const value = Math.round(rawValue * 100) / 100;
         if (rig.kind === 'cylinder-radius') {
@@ -11130,8 +11132,8 @@ export function ModelViewer({
           Math.abs(finalOffset) > 1e-9
         ) {
           queueOffsetBodyProxy(finalOffset);
-          // Validation owns the candidate until its verdict. A refusal
-          // restores the committed part and retires all preview visuals.
+          // A refusal may retain the last accepted exact shape. The
+          // re-armed handle follows that projection, never the refused input.
           const outcome = onOffsetCommitRef.current(finalOffset);
           if (outcome === 'blocked') {
             rig.setValue(completed.initialOffset);
@@ -11139,7 +11141,7 @@ export function ModelViewer({
             restoreOffsetBodyProxy();
             onOffsetCancelRef.current();
           } else if (outcome === 'refused') {
-            rig.setValue(0);
+            rig.setValue(offsetHandleRef.current?.initialValue ?? 0);
             clearOffsetGhost();
             restoreOffsetBodyProxy();
           }
@@ -12560,9 +12562,9 @@ export function ModelViewer({
     context.requestRender();
   }, [measurementAnnotations]);
 
-  // Install geometry and picking together before the next rendered frame.
-  // Selection-only renders reuse meshes, materials, edge batches and shadows.
-  useLayoutEffect(() => {
+  // Body geometry is rebuilt only when the derived body projection changes.
+  // Keep this before assemble poses, parameter visibility and handle effects.
+  useEffect(() => {
     const context = contextRef.current;
     if (!context) {
       return;
@@ -13745,15 +13747,15 @@ export function ModelViewer({
 
   // Offset-face handle: built when a face is armed, torn down on deselect or
   // commit. Never rebuilt mid-drag (the drag holds offsetDragActiveRef).
-  useLayoutEffect(() => {
+  useEffect(() => {
     const context = contextRef.current;
     const builtTarget = offsetRigBuiltRef.current?.handle;
     if (
       offsetDragActiveRef.current &&
       builtTarget &&
-      (!offsetHandle ||
-        builtTarget.bodyId !== offsetHandle.bodyId ||
-        builtTarget.topologyId !== offsetHandle.topologyId)
+      (!offsetDragTarget ||
+        builtTarget.bodyId !== offsetDragTarget.bodyId ||
+        builtTarget.topologyId !== offsetDragTarget.topologyId)
     ) {
       // A tool switch or another selection can end the session while the
       // pointer is captured. Retire that drag without reselecting its face.
@@ -13804,10 +13806,13 @@ export function ModelViewer({
     const takesOver =
       previous !== null &&
       offsetHandle !== null &&
-      (built?.handle.locked === true || built?.handle.entry === true) &&
-      built.handle.bodyId === offsetHandle.bodyId;
+      (built?.handle.locked === true ||
+        built?.handle.entry === true ||
+        offsetHandle.inputValue !== undefined) &&
+      built?.handle.bodyId === offsetHandle.bodyId;
     if (previous) {
-      previous.dispose();
+      if (takesOver) previous.dispose();
+      else retireRig(previous, retiringRigsRef.current);
     }
     offsetRigRef.current = null;
     offsetRigBuiltRef.current = null;
@@ -13882,7 +13887,7 @@ export function ModelViewer({
     offsetRigRef.current = rig;
     offsetRigBuiltRef.current = { handle: offsetHandle };
     context.requestRender();
-  }, [offsetHandle, bodies]);
+  }, [offsetHandle, offsetDragTarget, bodies]);
 
   // The rig effect above retires its own rig when the handle changes; this
   // retires the last one when the viewer goes.

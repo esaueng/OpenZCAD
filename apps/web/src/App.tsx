@@ -4892,14 +4892,31 @@ export function App() {
         ...(diagnostic.detail ? { detail: diagnostic.detail } : {})
       });
       cylinderRadiusPreview.clear();
-      // Release has refused the edit: every preview now yields to the
-      // committed projection. stop() alone retains the displayed candidate.
-      offsetPreview.clear();
-      if (
+      // A refusal at release can arrive before its streamed preview. Keep
+      // the last accepted shape just as an in-drag refusal does, provided
+      // it still belongs to this source revision and face selection. stop()
+      // invalidates late frames without dropping the displayed candidate.
+      const acceptedOffset = reusableOffsetPreviewRef.current?.candidate;
+      const retainOffset =
         pending?.interaction.mode === 'face' &&
-        pending.interaction.op === 'offset-face'
-      ) {
-        setLastValidPreview(null);
+        pending.interaction.op === 'offset-face' &&
+        acceptedOffset !== undefined &&
+        pending.document.projectId === acceptedOffset.baseProjectId &&
+        pending.document.version === acceptedOffset.baseVersion &&
+        acceptedOffset.selectionKey ===
+          `${pending.interaction.op}:${pending.interaction.target.bodyId}:${pending.interaction.target.topologyId}:${Boolean(pending.interaction.target.localFaceOffset)}` &&
+        previewSelectionIsCurrent(acceptedOffset) &&
+        !isStaleSelectionError(diagnostic);
+      if (retainOffset) {
+        offsetPreview.stop();
+      } else {
+        offsetPreview.clear();
+        if (
+          pending?.interaction.mode === 'face' &&
+          pending.interaction.op === 'offset-face'
+        ) {
+          setLastValidPreview(null);
+        }
       }
       regionExtrudePreview.clear();
       setPreviewDeferred(false);
@@ -23565,8 +23582,11 @@ export function App() {
     doc,
     representations,
     interaction,
-    renderedOffsetPreview ?? offsetPreviewValueRef.current,
-    E2E_EXACT_FACE_DRAG
+    // Only a published candidate supplies a displayed displacement. The
+    // refused/hand value remains input, never an anchor for a restored face.
+    currentFaceGeometryPreview ? renderedOffsetPreview : 0,
+    E2E_EXACT_FACE_DRAG,
+    keypad?.kind === 'offset' ? offsetPreviewValueRef.current : null
   );
 
   const cylinderRadiusHandleTarget = useMemo(() => {
@@ -25533,9 +25553,6 @@ export function App() {
     // A refused value is not committed from a failed card; the value the
     // last passing preview showed is, and validation judges it again.
     if (current.phase === 'failed' && !options?.keepingLastValid) {
-      offsetPreview.clear();
-      offsetPreviewValueRef.current = null;
-      setLastValidPreview(null);
       setStatus(
         current.error?.message ?? 'The current offset preview is invalid.'
       );
@@ -25548,9 +25565,6 @@ export function App() {
       return 'blocked';
     }
     if (plan.preflightRejection) {
-      offsetPreview.clear();
-      offsetPreviewValueRef.current = null;
-      setLastValidPreview(null);
       reportPreviewFailure(plan.preflightRejection, offset);
       return 'refused';
     }
@@ -30674,6 +30688,11 @@ export function App() {
               modelingLocked || !displayedGeometryComplete
                 ? null
                 : offsetHandleTarget
+            }
+            offsetDragTarget={
+              interaction.mode === 'face' && interaction.op === 'offset-face'
+                ? interaction.target
+                : null
             }
             onOffsetPreview={handleOffsetPreview}
             onOffsetCommit={(value) => {

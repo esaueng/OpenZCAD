@@ -8,8 +8,9 @@ import {
   vi
 } from 'vitest';
 import { StrictMode, createElement } from 'react';
-import { act, render } from '@testing-library/react';
+import { act, fireEvent, render } from '@testing-library/react';
 import type * as Three from 'three';
+import type * as Viewport from '@openzcad/viewport';
 import type { ModelViewerProps } from './ModelViewer';
 import type { FrameSample } from '../lib/frameStats';
 
@@ -99,6 +100,40 @@ vi.mock('three', async (importOriginal) => {
   };
 });
 
+const rigEvents = vi.hoisted(() => [] as string[]);
+vi.mock('@openzcad/viewport', async (importOriginal) => {
+  const actual = await importOriginal<typeof Viewport>();
+  const track = (rig: ReturnType<typeof actual.buildOffsetFaceHandle>) => {
+    const exit = rig.beginExit!;
+    rig.beginExit = () => {
+      rigEvents.push(`exit:${rig.kind}`);
+      exit();
+    };
+    const dispose = rig.dispose;
+    rig.dispose = () => {
+      rigEvents.push(`dispose:${rig.kind}`);
+      dispose();
+    };
+    return rig;
+  };
+  return {
+    ...actual,
+    buildOffsetFaceHandle: (
+      ...args: Parameters<typeof actual.buildOffsetFaceHandle>
+    ) => {
+      rigEvents.push('build:offset-face');
+      return track(actual.buildOffsetFaceHandle(...args));
+    },
+    buildCylinderRadiusHandle: (
+      ...args: Parameters<typeof actual.buildCylinderRadiusHandle>
+    ) => {
+      rigEvents.push('build:cylinder-radius');
+      return track(actual.buildCylinderRadiusHandle(...args));
+    }
+  };
+});
+const THREE = await import('three');
+
 const { ModelViewer } = await import('./ModelViewer');
 
 const CALLBACKS = [
@@ -181,6 +216,7 @@ function idleProps(): ModelViewerProps {
     initialView: null,
     selectionFilter: 'any',
     offsetHandle: null,
+    offsetDragTarget: null,
     offsetPreviewInvalid: false,
     previewDeferred: false,
     cylinderRadiusHandle: null,
@@ -291,6 +327,7 @@ afterAll(() => {
 });
 
 afterEach(() => {
+  rigEvents.length = 0;
   gl.state.created = 0;
   gl.state.disposed = 0;
   gl.state.contextsLost = 0;
@@ -348,6 +385,147 @@ describe('ModelViewer lifecycle', () => {
       visibility.mockRestore();
     }
   });
+
+  it('retires the cylinder handle before building a planar handle in the same commit', () => {
+    const props = idleProps();
+    props.cylinderRadiusHandle = {
+      bodyId: 'body_1',
+      topologyId: 'wall',
+      point: { x: 10, y: 0, z: 5 },
+      radialDirection: { x: 1, y: 0, z: 0 },
+      originalRadius: 10,
+      axisStart: { x: 0, y: 0, z: 0 },
+      axisEnd: { x: 0, y: 0, z: 10 },
+      smoothPreview: false
+    };
+    const view = render(createElement(ModelViewer, props));
+    rigEvents.length = 0;
+    const planar = {
+      bodyId: 'body_1',
+      topologyId: 'cap',
+      point: { x: 0, y: 0, z: 10 },
+      normal: { x: 0, y: 0, z: 1 }
+    };
+    view.rerender(
+      createElement(ModelViewer, {
+        ...props,
+        cylinderRadiusHandle: null,
+        offsetHandle: planar,
+        offsetDragTarget: planar
+      })
+    );
+    // The exiting cylinder can fade, but it must relinquish the active slot
+    // before the planar handle claims it (and the shared chip).
+    expect(rigEvents).toEqual(['exit:cylinder-radius', 'build:offset-face']);
+    rigEvents.length = 0;
+    view.rerender(
+      createElement(ModelViewer, { ...props, cylinderRadiusHandle: null })
+    );
+    expect(rigEvents).toEqual(['exit:offset-face']);
+    view.unmount();
+  });
+
+  it('keeps the entry rig while the chip input changes, and swaps a refused validation without fading', () => {
+    const props = idleProps();
+    const handle = {
+      bodyId: 'body_1',
+      topologyId: 'cap',
+      point: { x: 0, y: 0, z: 10 },
+      normal: { x: 0, y: 0, z: 1 },
+      initialValue: 5
+    };
+    props.offsetDragTarget = handle;
+    props.offsetHandle = { ...handle, entry: true, inputValue: -40 };
+    const view = render(createElement(ModelViewer, props));
+    rigEvents.length = 0;
+    view.rerender(
+      createElement(ModelViewer, {
+        ...props,
+        offsetHandle: { ...handle, entry: true, inputValue: 3 }
+      })
+    );
+    expect(rigEvents).toEqual([]);
+    view.rerender(
+      createElement(ModelViewer, {
+        ...props,
+        offsetHandle: { ...handle, locked: true }
+      })
+    );
+    rigEvents.length = 0;
+    view.rerender(
+      createElement(ModelViewer, {
+        ...props,
+        offsetHandle: { ...handle, inputValue: -40 }
+      })
+    );
+    expect(rigEvents).toEqual(['dispose:offset-face', 'build:offset-face']);
+    view.unmount();
+  });
+
+  it.each(['body', 'face', 'deselect'] as const)(
+    'preserves a drag through a transient null handle, then cancels a changed %s',
+    (changed) => {
+      const props = idleProps();
+      const handle = {
+        bodyId: 'body_1',
+        topologyId: 'cap',
+        point: { x: 0, y: 0, z: 10 },
+        normal: { x: 0, y: 0, z: 1 }
+      };
+      props.offsetHandle = handle;
+      props.offsetDragTarget = handle;
+      const view = render(createElement(ModelViewer, props));
+      const hit = new THREE.Mesh();
+      hit.userData.directHandle = true;
+      const raycast = vi
+        .spyOn(THREE.Raycaster.prototype, 'intersectObjects')
+        .mockReturnValue([
+          { object: hit, distance: 1, point: new THREE.Vector3() }
+        ]);
+      try {
+        fireEvent.pointerDown(view.container.querySelector('canvas')!, {
+          button: 0,
+          pointerId: 7,
+          pointerType: 'mouse',
+          clientX: 400,
+          clientY: 300
+        });
+        expect(props.onDirectManipulationChange).toHaveBeenLastCalledWith(true);
+        rigEvents.length = 0;
+        view.rerender(
+          createElement(ModelViewer, { ...props, offsetHandle: null })
+        );
+        expect(props.onOffsetCancel).not.toHaveBeenCalled();
+        expect(props.onDirectManipulationChange).toHaveBeenCalledTimes(1);
+        expect(rigEvents).toEqual([]);
+        view.rerender(createElement(ModelViewer, props));
+        expect(props.onOffsetCancel).not.toHaveBeenCalled();
+        const target =
+          changed === 'deselect'
+            ? null
+            : {
+                ...handle,
+                ...(changed === 'body'
+                  ? { bodyId: 'body_2' }
+                  : { topologyId: 'other-cap' })
+              };
+        view.rerender(
+          createElement(ModelViewer, {
+            ...props,
+            offsetHandle: null,
+            offsetDragTarget: target
+          })
+        );
+        expect(props.onOffsetCancel).toHaveBeenCalledOnce();
+        expect(props.onDirectManipulationChange).toHaveBeenLastCalledWith(
+          false
+        );
+      } finally {
+        raycast.mockRestore();
+        view.unmount();
+      }
+    }
+  );
 
   it('leaves no key listener behind on the document for a retired viewer', () => {
     // OrbitControls removed its capture keydown listener from the canvas's

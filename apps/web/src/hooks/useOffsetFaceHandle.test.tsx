@@ -53,7 +53,8 @@ function inputs() {
       [bodyId]: body
     } as ProjectDocument['derived']['bodyRepresentations'],
     interaction: armed,
-    value: 0
+    value: 0,
+    entryValue: null as number | null
   };
 }
 
@@ -63,7 +64,8 @@ function useHandle(props: ReturnType<typeof inputs>) {
     props.representations,
     props.interaction,
     props.value,
-    false
+    false,
+    props.entryValue
   );
 }
 
@@ -118,7 +120,7 @@ describe('offset face handle source recognition', () => {
     expect(result.current?.initialValue).toBe(-7.5);
     rerender({
       ...props,
-      value: -7.5,
+      value: 0,
       interaction: {
         ...armed,
         phase: 'failed',
@@ -129,7 +131,7 @@ describe('offset face handle source recognition', () => {
     expect(result.current).toMatchObject({
       point: { x: 10, y: 10, z: 26 },
       initialValue: 0,
-      refusedValue: -7.5
+      inputValue: -7.5
     });
     // Reopening entry does not move the pin until the user changes the input.
     rerender({
@@ -137,9 +139,38 @@ describe('offset face handle source recognition', () => {
       interaction: { ...armed, phase: 'exact-entry', lastValue: -7.5 }
     });
     expect(result.current?.initialValue).toBe(0);
-    expect(result.current?.refusedValue).toBeUndefined();
+    expect(result.current?.inputValue).toBe(-7.5);
+    rerender({
+      ...props,
+      value: 0,
+      entryValue: 3,
+      interaction: { ...armed, phase: 'exact-entry', lastValue: -7.5 }
+    });
+    expect(result.current?.inputValue).toBe(3);
+    expect(result.current?.initialValue).toBe(0);
     rerender({ ...props, interaction: { mode: 'idle' } });
     expect(result.current).toBeNull();
+  });
+
+  it('anchors to a retained accepted displacement while editing the refused input', () => {
+    const props = inputs();
+    const { result } = renderHook(useHandle, {
+      initialProps: {
+        ...props,
+        value: 5,
+        interaction: {
+          ...armed,
+          phase: 'failed',
+          lastValue: -40,
+          error: { message: 'Offset refused' }
+        }
+      }
+    });
+    expect(result.current).toMatchObject({
+      point: { x: 10, y: 10, z: 26 },
+      initialValue: 5,
+      inputValue: -40
+    });
   });
 
   it('rechecks a replacement source and declines a pick missing from its topology', () => {
