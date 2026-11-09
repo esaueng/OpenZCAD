@@ -1,26 +1,61 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { GeometryBodyRepresentation } from '@openzcad/shared';
 import {
   preparedBodies,
   type PreparedBody
 } from '../../../../../packages/viewport/src/render/preparedBody';
-
+import { traceFaceDrag } from '../../lib/faceDragTrace';
 import { denseBodyNeedsPreparation } from './bodyPreparationPolicy';
+import { prepareBody } from './prepareBody';
 
-/** Small meshes stay synchronous; dense previews prepare without blocking input. */
-const empty: readonly GeometryBodyRepresentation[] = [];
+// A lost worker must not hold revision readiness (or a stale frame) indefinitely.
+export const BODY_PREPARATION_TIMEOUT_MS = 5_000;
+type Bodies = readonly GeometryBodyRepresentation[];
+interface Snapshot<T> {
+  id: number;
+  source: Bodies;
+  presentation: T;
+}
+interface Request<T> extends Snapshot<T> {
+  bodies: GeometryBodyRepresentation[];
+  timeout: ReturnType<typeof setTimeout>;
+}
+function sameBodySet(a: Bodies, b: Bodies) {
+  const ids = new Set(a.map((body) => body.bodyId));
+  return a.length === b.length && b.every((body) => ids.has(body.bodyId));
+}
 
-export function usePreparedBodies(
-  source: readonly GeometryBodyRepresentation[]
+/** Dense replacements prepare off-thread; displayed geometry and its props travel together. */
+export function usePreparedBodies<T = undefined>(
+  source: Bodies,
+  presentation?: T
 ) {
-  const [ready, setReady] = useState<{
-    source: readonly GeometryBodyRepresentation[];
-    bodies: readonly GeometryBodyRepresentation[];
-  }>({ source: empty, bodies: empty });
+  const [ready, setReady] = useState<Snapshot<T | undefined>>({
+    id: 0,
+    source,
+    presentation
+  });
+  const displayed = useRef({ source, presentation });
   const workerRef = useRef<Worker | null>(null);
+  const active = useRef<Request<T | undefined> | null>(null);
   const serial = useRef(0);
   const [unavailable, setUnavailable] = useState(false);
-  const pending =
+
+  // First open and structural changes cannot borrow an entire old body set.
+  // Prepare synchronously once, before the renderer sees it, rather than blanking
+  // the scene. Weak keys retain unchanged bodies across ticks without growing a
+  // separate strong index of abandoned projections or undo history.
+  useMemo(() => {
+    if (
+      unavailable ||
+      (ready.source !== source && sameBodySet(ready.source, source))
+    )
+      return;
+    for (const body of source)
+      if (denseBodyNeedsPreparation(body) && !preparedBodies.has(body))
+        preparedBodies.set(body, prepareBody(body));
+  }, [source, ready.source, unavailable]);
+  const preparing =
     !unavailable &&
     source.some(
       (body) => denseBodyNeedsPreparation(body) && !preparedBodies.has(body)
@@ -28,6 +63,8 @@ export function usePreparedBodies(
 
   useEffect(
     () => () => {
+      if (active.current) clearTimeout(active.current.timeout);
+      active.current = null;
       workerRef.current?.terminate();
       workerRef.current = null;
     },
@@ -35,10 +72,25 @@ export function usePreparedBodies(
   );
 
   useEffect(() => {
-    if (!pending) {
-      setReady({ source, bodies: source });
+    // A reply can populate the weak cache between render and this passive effect.
+    const bodies = source.filter(
+      (body) => denseBodyNeedsPreparation(body) && !preparedBodies.has(body)
+    );
+    if (!preparing || bodies.length === 0) {
+      if (ready.source !== source)
+        setReady({ id: ++serial.current, source, presentation });
       return;
     }
+    // One in-flight request, then the latest source. This bounds memory, avoids
+    // copying an unchanged dense body again, and lets fast drags make progress.
+    if (active.current) return;
+    const fail = () => {
+      if (active.current) clearTimeout(active.current.timeout);
+      active.current = null;
+      workerRef.current?.terminate();
+      workerRef.current = null;
+      setUnavailable(true);
+    };
     let worker = workerRef.current;
     if (!worker) {
       try {
@@ -46,69 +98,83 @@ export function usePreparedBodies(
           new URL('./bodyPreparationWorker.ts', import.meta.url),
           { type: 'module' }
         );
-        worker.onerror = () => setUnavailable(true);
+        worker.onerror = fail;
+        worker.onmessageerror = fail;
+        worker.onmessage = (
+          event: MessageEvent<{
+            id: number;
+            prepared?: PreparedBody[];
+            preparationMs?: number;
+          }>
+        ) => {
+          const request = active.current;
+          if (!request || event.data.id !== request.id) return;
+          if (
+            !event.data.prepared ||
+            event.data.prepared.length !== request.bodies.length
+          ) {
+            fail();
+            return;
+          }
+          clearTimeout(request.timeout);
+          active.current = null;
+          // Cache completed work even if a later source is already waiting.
+          request.bodies.forEach((body, index) =>
+            preparedBodies.set(body, event.data.prepared![index]!)
+          );
+          performance.mark?.('oz:viewer.prepared', {
+            detail: {
+              workerMs: event.data.preparationMs ?? null,
+              bodies: request.bodies.length
+            }
+          });
+          setReady((previous) =>
+            request.id > previous.id
+              ? {
+                  id: request.id,
+                  source: request.source,
+                  presentation: request.presentation
+                }
+              : { ...previous }
+          );
+        };
         workerRef.current = worker;
       } catch {
-        setUnavailable(true);
+        fail();
         return;
       }
     }
     const id = ++serial.current;
-    const bodies = source.filter(
-      (body) => denseBodyNeedsPreparation(body) && !preparedBodies.has(body)
-    );
-    const receive = (
-      event: MessageEvent<{
-        id: number;
-        prepared?: PreparedBody[];
-        error?: string;
-        preparationMs?: number;
-      }>
-    ) => {
-      if (event.data.id !== id) return;
-      if (
-        !event.data.prepared ||
-        event.data.prepared.length !== bodies.length
-      ) {
-        // Preserve the synchronous renderer when workers are unsupported or fail.
-        setUnavailable(true);
-        return;
-      }
-      for (let index = 0; index < bodies.length; index++)
-        preparedBodies.set(bodies[index]!, event.data.prepared[index]!);
-      performance.mark?.('oz:viewer.prepared', {
-        detail: {
-          workerMs: event.data.preparationMs ?? null,
-          bodies: bodies.length
-        }
-      });
-      setReady({ source, bodies: source });
+    active.current = {
+      id,
+      source,
+      presentation,
+      bodies,
+      timeout: setTimeout(fail, BODY_PREPARATION_TIMEOUT_MS)
     };
-    worker.addEventListener('message', receive);
-    // Do not transfer authoritative mesh buffers: picking, export and undo own them.
+    // Structured cloning copies authoritative mesh/topology on the main thread.
+    // Measure it separately from installation; never detach picking/undo buffers.
+    const started = performance.now();
     try {
       worker.postMessage({ id, bodies });
+      const ms = performance.now() - started;
+      performance.mark?.('oz:viewer.preparation-post', {
+        detail: { ms, bodies: bodies.length }
+      });
+      traceFaceDrag('prepare-post', { ms, detail: { bodies: bodies.length } });
     } catch {
-      setUnavailable(true);
+      fail();
     }
-    return () => worker.removeEventListener('message', receive);
-  }, [source, pending]);
+  }, [source, preparing, ready, presentation]);
 
-  useEffect(
-    () => () => {
-      // Keep preparation bounded to this input set, not the undo/history lifetime.
-      for (const body of source) preparedBodies.delete(body);
-    },
-    [source]
-  );
-
-  // Never carry geometry into another document/body set while a worker finishes.
-  const sameBodies =
-    ready.bodies.length === source.length &&
-    ready.bodies.every((body, index) => body.bodyId === source[index]?.bodyId);
-  const preparing = pending && ready.source !== source;
-  return {
-    bodies: preparing ? (sameBodies ? ready.bodies : empty) : source,
-    preparing
-  };
+  const bodies = preparing ? ready.source : source;
+  const shownPresentation = preparing
+    ? displayed.current.source === ready.source
+      ? displayed.current.presentation
+      : ready.presentation
+    : presentation;
+  useLayoutEffect(() => {
+    displayed.current = { source: bodies, presentation: shownPresentation };
+  }, [bodies, shownPresentation]);
+  return { bodies, presentation: shownPresentation, preparing };
 }

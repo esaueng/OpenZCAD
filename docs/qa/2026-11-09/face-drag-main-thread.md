@@ -19,13 +19,21 @@ its time is reported separately, not presented as main-thread work.
 
 Dense bodies (over 20,000 triangles) now prepare those same algorithms in a
 lazy viewport worker. Replies carry disposable typed render arrays; the
-source mesh buffers are never transferred or detached. Superseded replies
-cannot install. The viewport holds its previous input set while a replacement
-prepares, and withholds revision readiness until the actual replacement is
-installed. Caches retire with the input set. Installed GPU attributes are
+source mesh buffers are never transferred or detached. The hook keeps one request
+in flight and then sends the newest waiting source.
+Every completed reply is cached and can advance the displayed geometry, even if
+another tick is waiting; an older result cannot rewind a newer display. Unchanged
+body objects retain their weakly keyed preparations across ticks. First open and
+body-ID set changes (add/merge/split/delete/undo) prepare synchronously, so they
+never blank the scene for a worker round trip. Other replacements hold the most
+recent ready body set together with its selection/highlight/handle props. Revision
+readiness waits for the actual current replacement to be installed. Installed
+GPU attributes are
 separate copies, so a later in-place update cannot poison restoration.
 Large facet references retain their existing direct-upload path. A worker
-failure retains the synchronous renderer.
+error, message-deserialization error, malformed/error reply, failed post or
+five-second in-flight timeout terminates the worker and restores the synchronous
+renderer. Input churn does not restart that timeout.
 
 A second source of work was the global React preview-verdict state: every
 drag tick rendered the workspace and its panels although only the closed
@@ -63,18 +71,27 @@ settle/release. Frame interval percentiles and >25 ms hitches include only
 continuous frames, excluding intentional idle gaps. These are local,
 shared-host measurements, not the recording's device or a 90/120 Hz guarantee.
 
-## Local results
+## Historical local results (before this rework)
 
-Two runs per scenario/build, on baseline `68ffc56e` and this change. The
+Two runs per scenario/build, on baseline `68ffc56e` and the original PR
+implementation (`ed850fb7`, before the fixes described above). The
 [recorded summary](face-drag-results.json) retains **every repeat**, including
 adverse results. Times are milliseconds, and ranges span the two runs.
 
-| Measurement | Before | After |
-| --- | ---: | ---: |
+| Measurement                                      |      Before |     After |
+| ------------------------------------------------ | ----------: | --------: |
 | Inward surrogate: main-thread exact installation | 188.5–267.7 | 25.2–57.5 |
-| Inward surrogate: React commits | 132–133 | 11–13 |
-| Long history: main-thread exact installation | 281.9–430.3 | 84.4–88.7 |
-| Long history: React commits | 122 | 10–11 |
+| Inward surrogate: React commits                  |     132–133 |     11–13 |
+| Long history: main-thread exact installation     | 281.9–430.3 | 84.4–88.7 |
+| Long history: React commits                      |         122 |     10–11 |
+
+These **installation-only** timings exclude the main-thread structured clone
+performed by `Worker.postMessage`. They are not total main-thread preview costs.
+The rework instruments that call as `prepare-post` in the OZ_PERF face-drag trace
+(and `oz:viewer.preparation-post` in User Timing); `stages.preparationPostMs`
+reports it separately from `stages.installMs`. First-open/structural synchronous
+preparation also occurs before installation. Historical runs did not measure
+copy time, so it cannot be reconstructed or subtracted from these figures.
 
 A separate profiled long-history run installed in 20.2 ms, with motion-frame
 CPU p95 13.7 ms and max 24.4 ms. It is diagnostic evidence, not substituted
@@ -92,7 +109,47 @@ installation work and workspace commits, not an end-to-end responsiveness
 guarantee. The exact kernel still took 1.3–2.6 seconds in its **worker** in
 those final repeats; this change does not optimize that WASM computation.
 
-## Regression evidence
+## Rework copy-cost sample
+
+The first rework OZ_PERF sample ran once per scenario, on the same host
+and ANGLE RTX 3090 OpenGL renderer. The [rework summary](face-drag-rework-results.json)
+retains all four runs, including the adverse frame statistics. This is a single
+candidate sample, not a clean new before/after frame-timing comparison. The
+post totals include settle/release; installation statistics cover motion. Each
+run exposed a redundant empty third post, subsequently removed by rechecking
+the cache in the passive effect (covered by a hook regression).
+
+| Scenario         |  Main-thread preparation post/copy | Installation only | React commits |
+| ---------------- | ---------------------------------: | ----------------: | ------------: |
+| Inward surrogate | 6.8 ms total (3 posts; 3.6 ms max) |           22.8 ms |            13 |
+| Long history     | 5.6 ms total (3 posts; 3.1 ms max) |           19.8 ms |            10 |
+
+The final candidate was then sampled once per scenario after removing the empty
+post. Both scenarios passed; each now has two nonempty posts across motion and
+settle/release. Copy cost varied substantially under contention, so the higher
+final samples are retained too:
+
+| Scenario                 |    Main-thread preparation post/copy | Motion installation only | React commits |
+| ------------------------ | -----------------------------------: | -----------------------: | ------------: |
+| Inward surrogate (final) | 20.1 ms total (2 posts; 15.5 ms max) |                  45.1 ms |            11 |
+| Long history (final)     |   8.8 ms total (2 posts; 4.4 ms max) |                  91.7 ms |            12 |
+
+The post measurement brackets the actual `Worker.postMessage` call without a
+transfer list: it includes synchronous structured cloning and enqueueing, but
+excludes worker-side deserialization/preparation and the later render-array/GPU
+installation. Installation alone understates the main-thread work. Do not add
+these samples to historical medians: they are separate runs with different host
+contention. Host sampling during rework showed active swap I/O (about 10 MiB/s
+swap-out in one interval) and many other validation processes. **FPS, p99 and
+hitch improvement remain unproven.**
+
+```bash
+PLAYWRIGHT_PORT=24671 OZ_PERF=1 OZ_FACE_DRAG_ANGLE=gl \
+  OZ_PERF_OUT=/tmp/pr1317-copy-cost.jsonl pnpm exec playwright test \
+  perf-face-drag-trace --grep 'width from 30|long native history' --workers=1
+```
+
+## Original regression evidence (before this rework)
 
 - Web Vitest: 65 tests passed (verdict subscriptions, worker handoff/stale
   replies/fallback, shader warmup, preview shader samples, NumericKeypad).
@@ -108,3 +165,45 @@ those final repeats; this change does not optimize that WASM computation.
   worker is about 324 kB raw and stays inside the existing budget.
 - Typecheck passed. Full lint initially exited 137 under host memory pressure;
   delivery status records the recovery attempt separately.
+
+## Rework verification
+
+- Typecheck passed. Changed-file ESLint passed with the existing ModelViewer
+  `exhaustive-deps` warning (zero errors); no assertion or protection was weakened.
+- Focused web Vitest: 25 passed, including 15 preparation-hook cases covering
+  retained dense A, intermediate replies, synchronous/nonblank body-set changes,
+  displayed selection/handle snapshots, all fallback paths, cleanup, post tracing
+  and a cache fill between render and the passive effect.
+- Focused root Vitest: 74 passed, including a trace regression that keeps
+  preparation-post cost separate from installation and includes release posts.
+- `pnpm build` passed artifact provenance and bundle-size checks. The first
+  sandbox build lacked Git provenance and failed closed; host-mode serial
+  reruns passed. One overlapping probe startup was stopped and rerun serially.
+- Full relevant browser specs: **10 passed, 3 failed**. The failing cases at
+  `face-drag-continuity.spec.ts:550`, `:590`, and `:680` all time out waiting for
+  the `slowAnalysis` helper's injected `held > 0` witness, before their continuity
+  assertions. All three reproduce at the same assertions on the original
+  `20b30878b9fd731b4eca4d31b3e6d96cf548c2ad` head, exported to a separate temporary
+  tree with the same installed dependencies and one browser worker. They remain
+  existing verification limitations; this PR does not alter or weaken them.
+- Final OZ_PERF browser probe: both scenarios passed.
+- Git privacy guard and roadmap-evidence validation passed.
+
+Exact commands (from the repository root unless noted):
+
+```bash
+pnpm typecheck
+pnpm exec eslint apps/web/src/components/ModelViewer.tsx apps/web/src/components/viewer/bodyPreparationWorker.ts apps/web/src/components/viewer/prepareBody.ts apps/web/src/components/viewer/usePreparedBodies.ts apps/web/src/components/viewer/usePreparedBodies.test.tsx apps/web/src/lib/faceDragTrace.ts test/face-drag-trace-summary.test.ts test/support/faceDragTraceSummary.ts
+pnpm --filter @openzcad/web exec vitest run src/components/viewer/usePreparedBodies.test.tsx src/components/viewer/interactionShaderWarmup.test.ts src/components/viewer/previewShaderSamples.test.ts src/hooks/usePreviewVerdict.test.tsx --maxWorkers=1
+pnpm exec vitest run test/face-drag-trace-summary.test.ts packages/viewport/src/render/bodyUpdate.test.ts packages/viewport/src/render/smoothingParity.test.ts packages/viewport/src/render/edgeOverlay.test.ts packages/viewport/src/render/silhouette.test.ts packages/viewport/src/render/tangentEdges.test.ts --maxWorkers=1
+pnpm build
+CI=1 OPENZCAD_E2E_SUITE=full PLAYWRIGHT_PORT=24671 pnpm exec playwright test generic-face-drag-preview face-drag-continuity --workers=1 --retries=0 --reporter=line
+node scripts/roadmap-evidence.mjs
+~/.local/bin/git-privacy-guard verify --repo .
+```
+
+Baseline reproduction, from the unmodified exported original-head tree:
+
+```bash
+OPENZCAD_BUILD_COMMIT=20b30878b9fd731b4eca4d31b3e6d96cf548c2ad CI=1 OPENZCAD_E2E_SUITE=full PLAYWRIGHT_PORT=24672 pnpm exec playwright test face-drag-continuity --grep 'committed face stays selected|commit reads as complete|applying a fillet goes straight' --workers=1 --retries=0 --reporter=line
+```

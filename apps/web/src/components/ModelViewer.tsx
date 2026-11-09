@@ -2180,14 +2180,14 @@ export function ModelViewer({
   parameterVisualPreview = null,
   sketches,
   measurementAnnotations,
-  selectedBodyIds,
-  selectedTopology,
-  previewFaceHighlights,
-  focusFaces = NO_FOCUS_FACES,
-  selectionCallout = null,
+  selectedBodyIds: incomingSelectedBodyIds,
+  selectedTopology: incomingSelectedTopology,
+  previewFaceHighlights: incomingPreviewFaceHighlights,
+  focusFaces: incomingFocusFaces = NO_FOCUS_FACES,
+  selectionCallout: incomingSelectionCallout = null,
   pickLabel = true,
-  focusGhostBodies,
-  selectedEdges,
+  focusGhostBodies: incomingFocusGhostBodies,
+  selectedEdges: incomingSelectedEdges,
   pickListEnabled,
   settings,
   exactSection,
@@ -2222,7 +2222,7 @@ export function ModelViewer({
   fieldOfView = VIEWPORT_FIELD_OF_VIEW_BOUNDS.default,
   xrayOpacity = XRAY_OPACITY_BOUNDS.default / 100,
   tangentEdges = DEFAULT_TANGENT_EDGE_STYLE,
-  offsetHandle,
+  offsetHandle: incomingOffsetHandle,
   onOffsetPreview,
   onOffsetCommit,
   onOffsetCancel,
@@ -2231,7 +2231,7 @@ export function ModelViewer({
   onOpenOffsetKeypad,
   keypadAnchorRef,
   offsetSetterRef,
-  cylinderRadiusHandle,
+  cylinderRadiusHandle: incomingCylinderRadiusHandle,
   cylinderDimensionMode,
   onCylinderDimensionModeChange,
   cylinderRadiusLabelSetterRef,
@@ -2241,7 +2241,7 @@ export function ModelViewer({
   onOpenCylinderRadiusKeypad,
   cancelDirectManipulationRef,
   openExactEntryRef,
-  edgeHandle,
+  edgeHandle: incomingEdgeHandle,
   onEdgeRadiusPreview,
   onEdgeCommit,
   onEdgeCancel,
@@ -2312,7 +2312,32 @@ export function ModelViewer({
     drawingBodiesRef.current = result;
     return result;
   }, [suppliedBodies]);
-  const { bodies, preparing } = usePreparedBodies(renderBodies);
+  const { bodies, preparing, presentation } = usePreparedBodies(renderBodies, {
+    selectedBodyIds: incomingSelectedBodyIds,
+    selectedTopology: incomingSelectedTopology,
+    previewFaceHighlights: incomingPreviewFaceHighlights,
+    focusFaces: incomingFocusFaces,
+    selectionCallout: incomingSelectionCallout,
+    focusGhostBodies: incomingFocusGhostBodies,
+    selectedEdges: incomingSelectedEdges,
+    offsetHandle: incomingOffsetHandle,
+    cylinderRadiusHandle: incomingCylinderRadiusHandle,
+    edgeHandle: incomingEdgeHandle
+  });
+  // Selection and rigs describe the same projection as the bodies on screen,
+  // including intermediate worker replies during rapid previews.
+  const {
+    selectedBodyIds,
+    selectedTopology,
+    previewFaceHighlights,
+    focusFaces,
+    selectionCallout,
+    focusGhostBodies,
+    selectedEdges,
+    offsetHandle,
+    cylinderRadiusHandle,
+    edgeHandle
+  } = presentation!;
   const geometryTrace = preparing ? undefined : incomingGeometryTrace;
   const hostRef = useRef<HTMLDivElement | null>(null);
   const contextRef = useRef<SceneContext | null>(null);

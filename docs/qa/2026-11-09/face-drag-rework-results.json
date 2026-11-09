@@ -1,0 +1,818 @@
+{
+  "baseHead": "20b30878b9fd731b4eca4d31b3e6d96cf548c2ad",
+  "note": "Reworked candidate working tree based on baseHead. One hardware-accelerated sample per scenario before the empty-request guard and one after. Full-gesture main-thread post/structured-clone cost is separate from motion installation. All four samples retained. Shared-host swapping prevents a clean matched frame-timing claim.",
+  "runs": [
+    {
+      "label": "filleted union width 30 to 22.5 mm",
+      "at": "2026-11-09T21:56:54.421Z",
+      "gpu": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 3090/PCIe/SSE2, OpenGL 4.5.0)",
+      "devicePixelRatio": 1,
+      "reactCommits": 13,
+      "summary": {
+        "pointerEvents": 120,
+        "requests": 1,
+        "replies": 1,
+        "refusals": 0,
+        "presentedFrames": 1,
+        "proxyPresentedFrames": 120,
+        "pointerToProxyFrameMs": {
+          "n": 120,
+          "p50": 10.1,
+          "p95": 14.9,
+          "max": 27.6,
+          "mean": 10.6
+        },
+        "firstGeometryMs": 4155.4,
+        "pointerToPresentedMs": {
+          "n": 120,
+          "p50": 2566.2,
+          "p95": 3996.1,
+          "max": 4155.4,
+          "mean": 2555.2
+        },
+        "steadyPointerToPresentedMs": {
+          "n": 108,
+          "p50": 2380.1,
+          "p95": 3696.6,
+          "max": 3835,
+          "mean": 2394.7
+        },
+        "frameIntervalMs": {
+          "n": 176,
+          "p50": 18.4,
+          "p95": 24.8,
+          "max": 39.3,
+          "mean": 17.9
+        },
+        "frameWorkMs": {
+          "n": 177,
+          "p50": 7.1,
+          "p95": 10.2,
+          "max": 23.8,
+          "mean": 6.5
+        },
+        "renderMs": {
+          "n": 177,
+          "p50": 1.3,
+          "p95": 2.5,
+          "max": 9.7,
+          "mean": 1.5
+        },
+        "geometryUpdatesPerSecond": 0,
+        "stages": {
+          "buildMs": {
+            "n": 1,
+            "p50": 1.7,
+            "p95": 1.7,
+            "max": 1.7,
+            "mean": 1.7
+          },
+          "sendMs": {
+            "n": 1,
+            "p50": 0.1,
+            "p95": 0.1,
+            "max": 0.1,
+            "mean": 0.1
+          },
+          "queueMs": {
+            "n": 1,
+            "p50": 0,
+            "p95": 0,
+            "max": 0,
+            "mean": 0
+          },
+          "kernelMs": {
+            "n": 1,
+            "p50": 339.9,
+            "p95": 339.9,
+            "max": 339.9,
+            "mean": 339.9
+          },
+          "transportMs": {
+            "n": 1,
+            "p50": 1,
+            "p95": 1,
+            "max": 1,
+            "mean": 1
+          },
+          "roundTripMs": {
+            "n": 1,
+            "p50": 340.9,
+            "p95": 340.9,
+            "max": 340.9,
+            "mean": 340.9
+          },
+          "replyToPublishMs": {
+            "n": 1,
+            "p50": 0.5,
+            "p95": 0.5,
+            "max": 0.5,
+            "mean": 0.5
+          },
+          "publishToInstalledMs": {
+            "n": 1,
+            "p50": 346.5,
+            "p95": 346.5,
+            "max": 346.5,
+            "mean": 346.5
+          },
+          "installMs": {
+            "n": 1,
+            "p50": 22.8,
+            "p95": 22.8,
+            "max": 22.8,
+            "mean": 22.8
+          },
+          "preparationPostMs": {
+            "n": 3,
+            "p50": 3.2,
+            "p95": 3.6,
+            "max": 3.6,
+            "mean": 2.3
+          },
+          "installedToFrameMs": {
+            "n": 1,
+            "p50": 9.1,
+            "p95": 9.1,
+            "max": 9.1,
+            "mean": 9.1
+          }
+        },
+        "releaseToFrameMs": 853.9
+      },
+      "rendering": {
+        "motion": {
+          "intervalMs": {
+            "n": 13,
+            "p50": 16.7,
+            "p95": 66.7,
+            "max": 66.7,
+            "mean": 24.3
+          },
+          "p99Ms": 66.70000000000073,
+          "hitchesOver25Ms": 4,
+          "cpuMs": {
+            "n": 188,
+            "p50": 7.3,
+            "p95": 10.7,
+            "max": 24.5,
+            "mean": 6.9
+          },
+          "renderMs": {
+            "n": 188,
+            "p50": 1.3,
+            "p95": 2.5,
+            "max": 9.7,
+            "mean": 1.5
+          },
+          "peakDrawCalls": 32,
+          "peakTriangles": 310682
+        },
+        "settleAndRelease": {
+          "intervalMs": {
+            "n": 14,
+            "p50": 16.7,
+            "p95": 200,
+            "max": 200,
+            "mean": 40.5
+          },
+          "p99Ms": 200,
+          "hitchesOver25Ms": 4,
+          "cpuMs": {
+            "n": 36,
+            "p50": 3,
+            "p95": 17.8,
+            "max": 19.3,
+            "mean": 4.6
+          },
+          "renderMs": {
+            "n": 36,
+            "p50": 1.1,
+            "p95": 3.3,
+            "max": 7.1,
+            "mean": 1.4
+          },
+          "peakDrawCalls": 32,
+          "peakTriangles": 314310
+        }
+      },
+      "longTasks": {
+        "count": 1,
+        "totalMs": 82,
+        "maxMs": 82
+      },
+      "phase": "before-empty-request-guard",
+      "preparationPostDurationsMs": [0, 3.2000000029802322, 3.6000000089406967],
+      "preparationPostTotalMs": 6.8
+    },
+    {
+      "label": "public filleted union history",
+      "at": "2026-11-09T21:57:12.818Z",
+      "gpu": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 3090/PCIe/SSE2, OpenGL 4.5.0)",
+      "devicePixelRatio": 1,
+      "reactCommits": 10,
+      "summary": {
+        "pointerEvents": 120,
+        "requests": 1,
+        "replies": 1,
+        "refusals": 0,
+        "presentedFrames": 1,
+        "proxyPresentedFrames": 120,
+        "pointerToProxyFrameMs": {
+          "n": 120,
+          "p50": 10.2,
+          "p95": 20.7,
+          "max": 58.2,
+          "mean": 11.6
+        },
+        "firstGeometryMs": 6941.3,
+        "pointerToPresentedMs": {
+          "n": 120,
+          "p50": 4482.3,
+          "p95": 6732.4,
+          "max": 6941.3,
+          "mean": 4331.5
+        },
+        "steadyPointerToPresentedMs": {
+          "n": 110,
+          "p50": 4321.4,
+          "p95": 6392.6,
+          "max": 6607.7,
+          "mean": 4108.7
+        },
+        "frameIntervalMs": {
+          "n": 168,
+          "p50": 28.5,
+          "p95": 48.6,
+          "max": 115.3,
+          "mean": 30.7
+        },
+        "frameWorkMs": {
+          "n": 169,
+          "p50": 7.6,
+          "p95": 16.1,
+          "max": 24.3,
+          "mean": 7.9
+        },
+        "renderMs": {
+          "n": 169,
+          "p50": 1.8,
+          "p95": 4.6,
+          "max": 11.5,
+          "mean": 2.2
+        },
+        "geometryUpdatesPerSecond": 0,
+        "stages": {
+          "buildMs": {
+            "n": 1,
+            "p50": 2.2,
+            "p95": 2.2,
+            "max": 2.2,
+            "mean": 2.2
+          },
+          "sendMs": {
+            "n": 1,
+            "p50": 0.3,
+            "p95": 0.3,
+            "max": 0.3,
+            "mean": 0.3
+          },
+          "queueMs": {
+            "n": 1,
+            "p50": 0.1,
+            "p95": 0.1,
+            "max": 0.1,
+            "mean": 0.1
+          },
+          "kernelMs": {
+            "n": 1,
+            "p50": 802.7,
+            "p95": 802.7,
+            "max": 802.7,
+            "mean": 802.7
+          },
+          "transportMs": {
+            "n": 1,
+            "p50": 1.6,
+            "p95": 1.6,
+            "max": 1.6,
+            "mean": 1.6
+          },
+          "roundTripMs": {
+            "n": 1,
+            "p50": 804.4,
+            "p95": 804.4,
+            "max": 804.4,
+            "mean": 804.4
+          },
+          "replyToPublishMs": {
+            "n": 1,
+            "p50": 0.6,
+            "p95": 0.6,
+            "max": 0.6,
+            "mean": 0.6
+          },
+          "publishToInstalledMs": {
+            "n": 1,
+            "p50": 624,
+            "p95": 624,
+            "max": 624,
+            "mean": 624
+          },
+          "installMs": {
+            "n": 1,
+            "p50": 19.8,
+            "p95": 19.8,
+            "max": 19.8,
+            "mean": 19.8
+          },
+          "preparationPostMs": {
+            "n": 3,
+            "p50": 2.5,
+            "p95": 3.1,
+            "max": 3.1,
+            "mean": 1.9
+          },
+          "installedToFrameMs": {
+            "n": 1,
+            "p50": 33.8,
+            "p95": 33.8,
+            "max": 33.8,
+            "mean": 33.8
+          }
+        },
+        "releaseToFrameMs": 858.2
+      },
+      "rendering": {
+        "motion": {
+          "intervalMs": {
+            "n": 7,
+            "p50": 33.3,
+            "p95": 116.7,
+            "max": 116.7,
+            "mean": 45.2
+          },
+          "p99Ms": 116.69999999999982,
+          "hitchesOver25Ms": 6,
+          "cpuMs": {
+            "n": 177,
+            "p50": 8,
+            "p95": 17.2,
+            "max": 53.7,
+            "mean": 8.7
+          },
+          "renderMs": {
+            "n": 177,
+            "p50": 1.8,
+            "p95": 5.3,
+            "max": 11.4,
+            "mean": 2.2
+          },
+          "peakDrawCalls": 35,
+          "peakTriangles": 456113
+        },
+        "settleAndRelease": {
+          "intervalMs": {
+            "n": 5,
+            "p50": 66.6,
+            "p95": 133.3,
+            "max": 133.3,
+            "mean": 66.7
+          },
+          "p99Ms": 133.29999999999927,
+          "hitchesOver25Ms": 5,
+          "cpuMs": {
+            "n": 22,
+            "p50": 4.8,
+            "p95": 33.4,
+            "max": 34.9,
+            "mean": 12.3
+          },
+          "renderMs": {
+            "n": 22,
+            "p50": 1.6,
+            "p95": 6.3,
+            "max": 13.3,
+            "mean": 2.4
+          },
+          "peakDrawCalls": 34,
+          "peakTriangles": 381987
+        }
+      },
+      "longTasks": {
+        "count": 14,
+        "totalMs": 948,
+        "maxMs": 112
+      },
+      "phase": "before-empty-request-guard",
+      "preparationPostDurationsMs": [0, 2.5, 3.0999999940395355],
+      "preparationPostTotalMs": 5.6
+    },
+    {
+      "label": "filleted union width 30 to 22.5 mm",
+      "at": "2026-11-09T22:07:27.461Z",
+      "gpu": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 3090/PCIe/SSE2, OpenGL 4.5.0)",
+      "devicePixelRatio": 1,
+      "reactCommits": 11,
+      "summary": {
+        "pointerEvents": 120,
+        "requests": 1,
+        "replies": 1,
+        "refusals": 0,
+        "presentedFrames": 1,
+        "proxyPresentedFrames": 120,
+        "pointerToProxyFrameMs": {
+          "n": 120,
+          "p50": 10,
+          "p95": 13.4,
+          "max": 20,
+          "mean": 10
+        },
+        "firstGeometryMs": 4437.4,
+        "pointerToPresentedMs": {
+          "n": 120,
+          "p50": 2782.3,
+          "p95": 4253.6,
+          "max": 4437.4,
+          "mean": 2796.4
+        },
+        "steadyPointerToPresentedMs": {
+          "n": 109,
+          "p50": 2639.6,
+          "p95": 3984.9,
+          "max": 4120.9,
+          "mean": 2646.3
+        },
+        "frameIntervalMs": {
+          "n": 163,
+          "p50": 20.3,
+          "p95": 25.5,
+          "max": 34.8,
+          "mean": 19.7
+        },
+        "frameWorkMs": {
+          "n": 164,
+          "p50": 7.7,
+          "p95": 10.2,
+          "max": 18,
+          "mean": 7
+        },
+        "renderMs": {
+          "n": 164,
+          "p50": 1.6,
+          "p95": 2.4,
+          "max": 8.5,
+          "mean": 1.7
+        },
+        "geometryUpdatesPerSecond": 0,
+        "stages": {
+          "buildMs": {
+            "n": 1,
+            "p50": 1.3,
+            "p95": 1.3,
+            "max": 1.3,
+            "mean": 1.3
+          },
+          "sendMs": {
+            "n": 1,
+            "p50": 0.1,
+            "p95": 0.1,
+            "max": 0.1,
+            "mean": 0.1
+          },
+          "queueMs": {
+            "n": 1,
+            "p50": 0.1,
+            "p95": 0.1,
+            "max": 0.1,
+            "mean": 0.1
+          },
+          "kernelMs": {
+            "n": 1,
+            "p50": 424.1,
+            "p95": 424.1,
+            "max": 424.1,
+            "mean": 424.1
+          },
+          "transportMs": {
+            "n": 1,
+            "p50": 3.4,
+            "p95": 3.4,
+            "max": 3.4,
+            "mean": 3.4
+          },
+          "roundTripMs": {
+            "n": 1,
+            "p50": 427.6,
+            "p95": 427.6,
+            "max": 427.6,
+            "mean": 427.6
+          },
+          "replyToPublishMs": {
+            "n": 1,
+            "p50": 0.7,
+            "p95": 0.7,
+            "max": 0.7,
+            "mean": 0.7
+          },
+          "publishToInstalledMs": {
+            "n": 1,
+            "p50": 495.9,
+            "p95": 495.9,
+            "max": 495.9,
+            "mean": 495.9
+          },
+          "installMs": {
+            "n": 1,
+            "p50": 45.1,
+            "p95": 45.1,
+            "max": 45.1,
+            "mean": 45.1
+          },
+          "preparationPostMs": {
+            "n": 2,
+            "p50": 4.6,
+            "p95": 15.5,
+            "max": 15.5,
+            "mean": 10.1
+          },
+          "installedToFrameMs": {
+            "n": 1,
+            "p50": 11.2,
+            "p95": 11.2,
+            "max": 11.2,
+            "mean": 11.2
+          }
+        },
+        "releaseToFrameMs": 1098.2
+      },
+      "rendering": {
+        "motion": {
+          "intervalMs": {
+            "n": 9,
+            "p50": 33.3,
+            "p95": 116.6,
+            "max": 116.6,
+            "mean": 35.2
+          },
+          "p99Ms": 116.59999999999945,
+          "hitchesOver25Ms": 5,
+          "cpuMs": {
+            "n": 173,
+            "p50": 8.2,
+            "p95": 10.9,
+            "max": 26.7,
+            "mean": 7.6
+          },
+          "renderMs": {
+            "n": 173,
+            "p50": 1.6,
+            "p95": 2.4,
+            "max": 21.3,
+            "mean": 1.8
+          },
+          "peakDrawCalls": 32,
+          "peakTriangles": 310682
+        },
+        "settleAndRelease": {
+          "intervalMs": {
+            "n": 15,
+            "p50": 33.3,
+            "p95": 150.1,
+            "max": 150.1,
+            "mean": 41.1
+          },
+          "p99Ms": 150.10000000000036,
+          "hitchesOver25Ms": 9,
+          "cpuMs": {
+            "n": 39,
+            "p50": 4.6,
+            "p95": 23,
+            "max": 23.4,
+            "mean": 7
+          },
+          "renderMs": {
+            "n": 39,
+            "p50": 1.6,
+            "p95": 6.3,
+            "max": 8.2,
+            "mean": 2.1
+          },
+          "peakDrawCalls": 32,
+          "peakTriangles": 314310
+        }
+      },
+      "longTasks": {
+        "count": 4,
+        "totalMs": 250,
+        "maxMs": 85
+      },
+      "phase": "final-empty-request-guard",
+      "preparationPostDurationsMs": [15.5, 4.600000008940697],
+      "preparationPostTotalMs": 20.1
+    },
+    {
+      "label": "public filleted union history",
+      "at": "2026-11-09T22:07:53.912Z",
+      "gpu": "ANGLE (NVIDIA Corporation, NVIDIA GeForce RTX 3090/PCIe/SSE2, OpenGL 4.5.0)",
+      "devicePixelRatio": 1,
+      "reactCommits": 12,
+      "summary": {
+        "pointerEvents": 120,
+        "requests": 1,
+        "replies": 1,
+        "refusals": 0,
+        "presentedFrames": 1,
+        "proxyPresentedFrames": 120,
+        "pointerToProxyFrameMs": {
+          "n": 120,
+          "p50": 12.5,
+          "p95": 24.3,
+          "max": 54.2,
+          "mean": 14.8
+        },
+        "firstGeometryMs": 9716.1,
+        "pointerToPresentedMs": {
+          "n": 120,
+          "p50": 6663.1,
+          "p95": 9329.3,
+          "max": 9716.1,
+          "mean": 6488.8
+        },
+        "steadyPointerToPresentedMs": {
+          "n": 115,
+          "p50": 6538.3,
+          "p95": 9179.7,
+          "max": 9382.3,
+          "mean": 6354.8
+        },
+        "frameIntervalMs": {
+          "n": 178,
+          "p50": 35.2,
+          "p95": 55,
+          "max": 86.2,
+          "mean": 37.2
+        },
+        "frameWorkMs": {
+          "n": 179,
+          "p50": 9.9,
+          "p95": 20.3,
+          "max": 46.7,
+          "mean": 9.7
+        },
+        "renderMs": {
+          "n": 179,
+          "p50": 2.2,
+          "p95": 5.3,
+          "max": 14.5,
+          "mean": 2.7
+        },
+        "geometryUpdatesPerSecond": 0,
+        "stages": {
+          "buildMs": {
+            "n": 1,
+            "p50": 3.8,
+            "p95": 3.8,
+            "max": 3.8,
+            "mean": 3.8
+          },
+          "sendMs": {
+            "n": 1,
+            "p50": 0.8,
+            "p95": 0.8,
+            "max": 0.8,
+            "mean": 0.8
+          },
+          "queueMs": {
+            "n": 1,
+            "p50": 0.1,
+            "p95": 0.1,
+            "max": 0.1,
+            "mean": 0.1
+          },
+          "kernelMs": {
+            "n": 1,
+            "p50": 1082.6,
+            "p95": 1082.6,
+            "max": 1082.6,
+            "mean": 1082.6
+          },
+          "transportMs": {
+            "n": 1,
+            "p50": 2.6,
+            "p95": 2.6,
+            "max": 2.6,
+            "mean": 2.6
+          },
+          "roundTripMs": {
+            "n": 1,
+            "p50": 1085.3,
+            "p95": 1085.3,
+            "max": 1085.3,
+            "mean": 1085.3
+          },
+          "replyToPublishMs": {
+            "n": 1,
+            "p50": 0.8,
+            "p95": 0.8,
+            "max": 0.8,
+            "mean": 0.8
+          },
+          "publishToInstalledMs": {
+            "n": 1,
+            "p50": 1603.9,
+            "p95": 1603.9,
+            "max": 1603.9,
+            "mean": 1603.9
+          },
+          "installMs": {
+            "n": 1,
+            "p50": 91.7,
+            "p95": 91.7,
+            "max": 91.7,
+            "mean": 91.7
+          },
+          "preparationPostMs": {
+            "n": 2,
+            "p50": 4.4,
+            "p95": 4.4,
+            "max": 4.4,
+            "mean": 4.4
+          },
+          "installedToFrameMs": {
+            "n": 1,
+            "p50": 57.9,
+            "p95": 57.9,
+            "max": 57.9,
+            "mean": 57.9
+          }
+        },
+        "releaseToFrameMs": 2013.8
+      },
+      "rendering": {
+        "motion": {
+          "intervalMs": {
+            "n": 5,
+            "p50": 50,
+            "p95": 166.6,
+            "max": 166.6,
+            "mean": 70
+          },
+          "p99Ms": 166.60000000000036,
+          "hitchesOver25Ms": 5,
+          "cpuMs": {
+            "n": 186,
+            "p50": 10.6,
+            "p95": 21.2,
+            "max": 47.4,
+            "mean": 10.7
+          },
+          "renderMs": {
+            "n": 186,
+            "p50": 2.2,
+            "p95": 5.3,
+            "max": 14.5,
+            "mean": 2.7
+          },
+          "peakDrawCalls": 35,
+          "peakTriangles": 456113
+        },
+        "settleAndRelease": {
+          "intervalMs": {
+            "n": 4,
+            "p50": 116.8,
+            "p95": 233.4,
+            "max": 233.4,
+            "mean": 120.9
+          },
+          "p99Ms": 233.4459999999999,
+          "hitchesOver25Ms": 3,
+          "cpuMs": {
+            "n": 18,
+            "p50": 6.7,
+            "p95": 219,
+            "max": 219,
+            "mean": 29
+          },
+          "renderMs": {
+            "n": 18,
+            "p50": 1.8,
+            "p95": 14.8,
+            "max": 14.8,
+            "mean": 4.2
+          },
+          "peakDrawCalls": 34,
+          "peakTriangles": 381987
+        }
+      },
+      "longTasks": {
+        "count": 26,
+        "totalMs": 2434,
+        "maxMs": 333
+      },
+      "phase": "final-empty-request-guard",
+      "preparationPostDurationsMs": [4.4000000059604645, 4.399999991059303],
+      "preparationPostTotalMs": 8.8
+    }
+  ]
+}

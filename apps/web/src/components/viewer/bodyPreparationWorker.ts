@@ -1,12 +1,5 @@
 import type { GeometryBodyRepresentation } from '@openzcad/shared';
-import { prepareBodyGeometry } from '../../../../../packages/viewport/src/render/scene';
-import { silhouetteCandidates } from '../../../../../packages/viewport/src/render/silhouette';
-import { facetedSource } from '../../../../../packages/viewport/src/render/edgeOverlay';
-import {
-  FACETED_JOINT_MAX_ANGLE,
-  tangentEdgeIds
-} from '../../../../../packages/viewport/src/render/tangentEdges';
-import type { PreparedBody } from '../../../../../packages/viewport/src/render/preparedBody';
+import { prepareBody } from './prepareBody';
 
 type Request = { id: number; bodies: GeometryBodyRepresentation[] };
 let pending: Request | null = null;
@@ -27,19 +20,7 @@ self.onmessage = (event: MessageEvent<Request>) => {
 function prepare({ id, bodies }: Request) {
   try {
     const started = performance.now();
-    const prepared: PreparedBody[] = bodies.map((body) => ({
-      geometry: prepareBodyGeometry(body),
-      tangentIds: body.topology
-        ? tangentEdgeIds(
-            body.mesh,
-            body.topology,
-            facetedSource(body.source) ? FACETED_JOINT_MAX_ANGLE : undefined
-          )
-        : new Set(),
-      silhouettes: body.topology
-        ? silhouetteCandidates(body.mesh, body.topology.faces)
-        : null
-    }));
+    const prepared = bodies.map(prepareBody);
     const buffers = new Set<ArrayBuffer>();
     const collect = (value: unknown) => {
       if (ArrayBuffer.isView(value)) buffers.add(value.buffer as ArrayBuffer);
