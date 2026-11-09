@@ -712,7 +712,10 @@ import {
   SELECTION_FILTER_LABELS
 } from '@openzcad/viewport/types';
 import { closedCircleLoopSelections } from '@openzcad/viewport/edge-chain';
-import { bottomChamferChain } from './lib/interaction/chamferChain';
+import {
+  faceBoundaryEdges,
+  outlineChamferChain
+} from './lib/interaction/chamferChain';
 import { effectiveSelectionFilter } from './lib/selectionFilter';
 import {
   bodyFeature,
@@ -8759,6 +8762,20 @@ export function App() {
     }
     return null;
   })();
+  // Every edge a fillet or chamfer can take around the picked face, so the
+  // face's rail can offer them in one step. Picking edges arms the handle
+  // only under direct manipulation, so the verbs wait for it.
+  const calloutFaceEdges: TopologySelection[] =
+    calloutKind === 'face' &&
+    renderedSelectedTopology &&
+    appSettings.experiments.directManipulation
+      ? faceBoundaryEdges(
+          viewerBodies.find(
+            (body) => body.bodyId === renderedSelectedTopology.bodyId
+          ) ?? representations[renderedSelectedTopology.bodyId],
+          renderedSelectedTopology
+        )
+      : [];
   // The picked face's kind, for the verbs when the machine does not hold it.
   const calloutFaceSurface = ((): SelectionCalloutVerbInput['faceSurface'] => {
     if (calloutKind !== 'face' || !renderedSelectedTopology) return undefined;
@@ -8784,12 +8801,13 @@ export function App() {
               interaction.mode === 'edges' &&
               interaction.edges.length === 1 &&
               supportsBlendGroupEdits(KERNEL_BUILD.packageVersion) &&
-              bottomChamferChain(
+              outlineChamferChain(
                 viewerBodies.find(
                   (body) => body.bodyId === interaction.edges[0]!.bodyId
                 ) ?? representations[interaction.edges[0]!.bodyId],
                 interaction.edges[0]!
               ).length > 1,
+            faceEdgesAvailable: calloutFaceEdges.length > 0,
             resizeBody:
               interaction.mode === 'face' &&
               Boolean(interaction.target.resizeBodyFeatureId),
@@ -25407,7 +25425,7 @@ export function App() {
       supportsBlendGroupEdits(KERNEL_BUILD.packageVersion)
     ) {
       const picked = interaction.edges[0]!;
-      const chain = bottomChamferChain(
+      const chain = outlineChamferChain(
         viewerBodies.find((body) => body.bodyId === picked.bodyId) ??
           representations[picked.bodyId],
         picked
@@ -25422,6 +25440,31 @@ export function App() {
       }
     }
     if (action === 'chamfer-chain') return;
+    if (action === 'fillet-face-edges' || action === 'chamfer-face-edges') {
+      const face = renderedSelectedTopology;
+      if (face?.kind !== 'face' || !requireExactGeometryReady()) return;
+      if (interaction.mode === 'face' && interaction.phase === 'validating') {
+        return;
+      }
+      const edges = faceBoundaryEdges(
+        viewerBodies.find((body) => body.bodyId === face.bodyId) ??
+          representations[face.bodyId],
+        face
+      );
+      if (edges.length === 0) return;
+      // The face's own offset handle gives way to the edges' blend handle.
+      clearEdgePreview();
+      handleSelectEdgeChainFromViewer(edges);
+      const op: 'fillet' | 'chamfer' =
+        action === 'fillet-face-edges' ? 'fillet' : 'chamfer';
+      dispatchInteraction({ type: 'set-edge-op', op });
+      const count =
+        edges.length === 1 ? 'the edge' : `all ${edges.length} edges`;
+      setStatus(
+        `Selected ${count} around this face. Drag the arrow to ${op} ${edges.length === 1 ? 'it' : 'them'}, or type a value.`
+      );
+      return;
+    }
     if (
       (action === 'resize-body' || action === 'offset-face') &&
       interaction.mode === 'face' &&

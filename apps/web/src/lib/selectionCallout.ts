@@ -145,8 +145,17 @@ export interface SelectionCalloutVerbInput {
   faceCapabilities?: readonly SelectionCapability[] | null;
   /** The machine holds the picked edges, so Fillet/Chamfer switch its op. */
   edgesArmed?: boolean;
-  /** A single bottom-edge pick has a qualified smooth run to select. */
+  /**
+   * A single edge pick lies on a smooth outline of one flat face, so the
+   * whole outline can be taken in one step.
+   */
   chamferChainAvailable?: boolean;
+  /**
+   * The picked face is bounded by edges a fillet or chamfer can take, and
+   * picking them arms the edge handle (direct manipulation is on). Offers
+   * Fillet edges and Chamfer edges on the face itself.
+   */
+  faceEdgesAvailable?: boolean;
   /**
    * The face's body can be resized from it (a primitive's face), which is
    * the edit a face drag makes first; Offset then moves the face alone.
@@ -215,6 +224,31 @@ function toolVerb(
   };
 }
 
+/**
+ * Fillet or chamfer every edge around the picked face. Picking a face and
+ * asking for its edges is how a whole rim is taken in one step, instead of
+ * shift-clicking each line and arc a filleted outline is stored as.
+ */
+function faceEdgeVerbs(
+  input: SelectionCalloutVerbInput
+): SelectionCalloutVerb[] {
+  if (!input.faceEdgesAvailable) return [];
+  const ids = {
+    fillet: 'action:fillet-face-edges',
+    chamfer: 'action:chamfer-face-edges'
+  } as const;
+  return (['fillet', 'chamfer'] as const).map((op): SelectionCalloutVerb => {
+    const reason = toolDisabledReason(op, input.availability);
+    return {
+      id: ids[op],
+      label: `${TOOL_META[op].label} edges`,
+      title: reason ?? `${TOOL_META[op].label} every edge around this face`,
+      disabled: reason !== null,
+      pressed: false
+    };
+  });
+}
+
 function edgeVerb(
   op: 'fillet' | 'chamfer',
   input: SelectionCalloutVerbInput
@@ -257,23 +291,26 @@ export function selectionCalloutVerbs(
     case 'face': {
       const capabilities = input.faceCapabilities ?? [];
       if (capabilities.length === 0) {
-        switch (input.faceSurface) {
-          case 'planar':
-            return tools(
-              'sketch',
-              'hole',
-              'shell',
-              'draft',
-              'thicken',
-              'datum-plane'
-            );
-          case 'cylindrical':
-            return tools('datum-axis', 'shell');
-          case 'other':
-            return tools('shell');
-          default:
-            return tools('sketch', 'hole', 'shell');
-        }
+        const byKind = (() => {
+          switch (input.faceSurface) {
+            case 'planar':
+              return tools(
+                'sketch',
+                'hole',
+                'shell',
+                'draft',
+                'thicken',
+                'datum-plane'
+              );
+            case 'cylindrical':
+              return tools('datum-axis', 'shell');
+            case 'other':
+              return tools('shell');
+            default:
+              return tools('sketch', 'hole', 'shell');
+          }
+        })();
+        return [...byKind, ...faceEdgeVerbs(input)];
       }
       const verbs = capabilities.map((capability) =>
         actionVerb(capability, input.pressedAction)
@@ -289,6 +326,8 @@ export function selectionCalloutVerbs(
           pressed: input.pressedAction === 'resize-body'
         });
       }
+      // The face's own edits, then its edges, then the tools it starts.
+      verbs.push(...faceEdgeVerbs(input));
       // A face that takes a sketch is flat, and a flat face takes every tool
       // that starts from one.
       if (
@@ -318,8 +357,9 @@ export function selectionCalloutVerbs(
           ? [
               {
                 id: 'action:chamfer-chain' as const,
-                label: 'Chamfer tangent chain',
-                title: 'Chamfer the connected smooth bottom outline',
+                label: 'Chamfer whole outline',
+                title:
+                  'Take every edge of the smooth outline this edge is on, and chamfer them together',
                 disabled: false,
                 pressed: false
               }

@@ -82,13 +82,13 @@ test(
     await expect(chip).toHaveAttribute('aria-label', 'Fillet operation');
     await expect(
       chip.getByRole('button', {
-        name: 'Selection: Chamfer tangent chain',
+        name: 'Selection: Chamfer whole outline',
         exact: true
       })
     ).toBeVisible();
     await chip
       .getByRole('button', {
-        name: 'Selection: Chamfer tangent chain',
+        name: 'Selection: Chamfer whole outline',
         exact: true
       })
       .click();

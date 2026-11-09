@@ -23,6 +23,8 @@ export type SelectionActionId =
   | 'fillet'
   | 'chamfer'
   | 'chamfer-chain'
+  | 'fillet-face-edges'
+  | 'chamfer-face-edges'
   | 'extrude-region';
 
 export type SelectionValueKind = 'distance' | 'diameter' | 'radius';

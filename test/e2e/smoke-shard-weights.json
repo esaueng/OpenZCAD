@@ -32,6 +32,7 @@
   "extrude-in-place.spec.ts": 42,
   "extrude-through-all.spec.ts": 9,
   "face-drag-continuity.spec.ts": 12,
+  "face-edge-chamfer.spec.ts": 15,
   "face-offset-continuity.spec.ts": 35,
   "face-offset-rest-validation.spec.ts": 8,
   "face-offset-total.spec.ts": 54,
