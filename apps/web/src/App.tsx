@@ -1763,6 +1763,7 @@ import {
   loadSettingsViewState,
   updateSettingsViewState
 } from './lib/settingsViewState';
+import { rememberAccountShape } from './lib/accountShapeHint';
 import type { SettingsSectionId } from './lib/settingsSections';
 import {
   clampAssistantWidth,
@@ -3344,6 +3345,25 @@ export function App() {
     DISABLED_COLLABORATION_ROLLOUT
   );
   const [session, setSession] = useState<AuthSession | null>(null);
+  /**
+   * A saved session, and then its account settings, still being restored —
+   * distinct from signed out, so Settings never offers a signed-in user the
+   * sign-in form while it waits. Each restore takes a token; only the latest
+   * one may end it, so a slower superseded read cannot end a newer wait.
+   */
+  const [accountResolving, setAccountResolving] = useState(
+    () => bootCloudFunctionsEnabledRef.current
+  );
+  const accountResolutionRef = useRef(0);
+  const beginAccountResolution = useCallback(() => {
+    accountResolutionRef.current += 1;
+    setAccountResolving(true);
+    return accountResolutionRef.current;
+  }, []);
+  const endAccountResolution = useCallback((token: number | null) => {
+    if (token === null || token !== accountResolutionRef.current) return;
+    setAccountResolving(false);
+  }, []);
   const encryptedInvitationSessionRef = useRef<string | null>(null);
   useEffect(() => {
     const userId = session?.userId ?? null;
@@ -3499,6 +3519,23 @@ export function App() {
   useEffect(() => {
     lockAccountsExcept(sessionUserId);
   }, [sessionUserId]);
+  // What the next reload should expect while it restores the session: only
+  // whether one was signed in, never who. An unreachable server says nothing
+  // about the session, so it leaves the last answer standing.
+  useEffect(() => {
+    if (
+      !cloudFunctionsEnabled ||
+      accountResolving ||
+      authConfigStatus === 'unavailable'
+    )
+      return;
+    rememberAccountShape({ signedIn: sessionUserId !== null });
+  }, [
+    accountResolving,
+    authConfigStatus,
+    cloudFunctionsEnabled,
+    sessionUserId
+  ]);
   useEffect(() => {
     setAutomaticMigrationLoadError(null);
     if (!sessionUserId || !cloudFunctionsEnabled) return;
@@ -6659,6 +6696,12 @@ export function App() {
     let cancelled = false;
     let metadataTimer: ReturnType<typeof setTimeout> | undefined;
     mark('startup.begin', { rememberedProject: Boolean(startupProjectId) });
+    const accountResolution = bootCloudFunctionsEnabledRef.current
+      ? beginAccountResolution()
+      : null;
+    // The account counts as known once its settings read settles too, so the
+    // profile is not called unavailable while that read is still on its way.
+    let accountSettled: Promise<unknown> = Promise.resolve();
     void (async () => {
       try {
         const keySessionRevision = getKeySessionRevision();
@@ -6736,6 +6779,9 @@ export function App() {
           sessionPromise
         ]);
         if (!isCurrent()) return;
+        // Signed out is known now; there is no account left to wait for, so
+        // the sign-in form need not wait on the project listing below.
+        if (!activeSession) endAccountResolution(accountResolution);
         // Local cards and their account-scoped folders arrive together. Account
         // listing/decryption still proceeds progressively, with actions gated.
         void local
@@ -6776,6 +6822,7 @@ export function App() {
         const remoteSettingsPromise = activeSession
           ? api.getSettings().catch(() => null)
           : Promise.resolve(null);
+        accountSettled = remoteSettingsPromise;
         const collaborationPromise = activeSession
           ? api
               .collaborationCapabilities()
@@ -7005,6 +7052,12 @@ export function App() {
           setStatus(errorMessage(error, 'Could not restore the workspace.'));
         }
       } finally {
+        // After the session is published (or this read was superseded), and
+        // never before the settings read settles.
+        void accountSettled.then(
+          () => endAccountResolution(accountResolution),
+          () => endAccountResolution(accountResolution)
+        );
         if (!cancelled) {
           mark('startup.ready');
           measure('startup.restore', 'startup.begin', 'startup.ready');
@@ -12067,6 +12120,7 @@ export function App() {
     accountSettingsRef.current = null;
     setSession(null);
     setAccountSettings(null);
+    endAccountResolution(accountResolutionRef.current);
     setAuthConfig(null);
     setAuthConfigStatus('unavailable');
     setDeploymentHealth(null);
@@ -12123,6 +12177,31 @@ export function App() {
       ownsMode() &&
       getKeySessionRevision() === keySessionRevision;
     setAuthConfigStatus('loading');
+    // Re-enabling cloud features (or a refresh with no session yet) waits on
+    // the account as a reload does; a signed-in refresh keeps its rows.
+    const accountResolution = sessionRef.current
+      ? null
+      : beginAccountResolution();
+    try {
+      await refreshCloudAccount(
+        keySessionRevision,
+        ownsAuth,
+        ownsHealth,
+        isCurrent,
+        () => endAccountResolution(accountResolution)
+      );
+    } finally {
+      endAccountResolution(accountResolution);
+    }
+  }
+
+  async function refreshCloudAccount(
+    keySessionRevision: number,
+    ownsAuth: () => boolean,
+    ownsHealth: () => boolean,
+    isCurrent: () => boolean,
+    accountKnown: () => void
+  ) {
     void api
       .health()
       .catch(() => null)
@@ -12174,6 +12253,7 @@ export function App() {
       }
       accountSettingsRef.current = remoteSettings;
       setAccountSettings(remoteSettings);
+      accountKnown();
       setCollaborationRollout(collaborationCapabilities);
       const listed = await loadProjectSummaries(
         sessionRef.current?.userId ?? null
@@ -12187,6 +12267,7 @@ export function App() {
       setSettingsMessage('Cloud profile connected.');
       setStatus(LIBRARY_MODE_STATUS.cloudReady);
     } catch {
+      accountKnown();
       if (isCurrent()) {
         setSettingsMessage(
           'Cloud profile unavailable · device settings remain active.'
@@ -28676,6 +28757,7 @@ export function App() {
           accountState={accountSettings}
           authConfig={authConfig}
           authConfigStatus={authConfigStatus}
+          accountResolving={accountResolving}
           health={deploymentHealth}
           session={session}
           busy={settingsBusy}
