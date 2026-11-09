@@ -101,3 +101,21 @@ retains passing timing/bundle reports for seven days and failures for fourteen,
 including browser failure contexts. Daily qualification keeps every full-suite
 case, coverage, its single attempt and seven-day artifact retention. Privacy
 receipts and CodeQL caches have their own retention policies.
+
+## Face-preview main-thread timing
+
+`test/e2e/perf-face-drag-trace.spec.ts` (`OZ_PERF=1`, never a CI timing gate)
+measures pointer-to-preview and release-to-authoritative-frame latency. The
+`width from 30` case shrinks a public filleted-union surrogate to 22.5 mm;
+`long native history` stresses the same path after 25 features. A supplied
+native backup can be selected through `OZ_FACE_DRAG_PROJECT`. Model limitations,
+the exact commands and measured diagnosis are in
+[face-drag main-thread work](qa/2026-11-09/face-drag-main-thread.md).
+
+On Linux, set `OZ_FACE_DRAG_ANGLE=gl` when the machine has a working hardware
+OpenGL backend; the JSON records the actual WebGL renderer. Default headless
+Chromium may use SwiftShader, whose GPU waits obscure main-thread comparisons.
+Use one worker and serial, repeated runs. `OZ_FACE_DRAG_PROFILE` and
+`OZ_FACE_DRAG_TIMELINE` save optional CPU profiles and Chrome timelines outside
+the repo. The JSON includes raw frames/long tasks and separates motion from
+settle/release; interval p99 and >25 ms counts exclude intentional idle frames.

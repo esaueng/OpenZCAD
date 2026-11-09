@@ -45,6 +45,8 @@ export interface FaceDragTraceSummary {
     /** Publish to the end of viewer installation: React plus installation. */
     publishToInstalledMs: Distribution;
     installMs: Distribution;
+    /** Main-thread structured clone/post, including settle/release preparations. */
+    preparationPostMs: Distribution;
     installedToFrameMs: Distribution;
   };
   /** Release to the authoritative ready frame, when supplied by editTrace. */
@@ -247,6 +249,11 @@ export function summarizeFaceDragTrace(
       replyToPublishMs: distribution(replyToPublish),
       publishToInstalledMs: distribution(publishToInstalled),
       installMs: distribution(installMs),
+      preparationPostMs: distribution(
+        trace
+          .filter((event) => event.kind === 'prepare-post')
+          .map((event) => event.ms ?? NaN)
+      ),
       installedToFrameMs: distribution(installedToFrame)
     },
     releaseToFrameMs:

@@ -3,11 +3,13 @@ import * as THREE from 'three';
 import { toBodyId, type BodyRepresentation } from '@openzcad/shared';
 import {
   createBodyMaterial,
+  prepareBodyGeometry,
   createObjectForBody,
   isBodyMaterial,
   sameBodyProjection,
   updateObjectForBody
 } from './scene';
+import { preparedBodies } from './preparedBody';
 import { disposeObject } from '../scene/objects';
 import { SELECTION_SEMANTICS } from './semantics';
 import { createFaceHighlightGeometry } from '../selection/faceHighlightGeometry';
@@ -60,6 +62,67 @@ function expectSameGeometry(a: THREE.BufferGeometry, b: THREE.BufferGeometry) {
 }
 
 describe('retained exact body buffers', () => {
+  it('installs worker-prepared smoothing bit for bit without detaching source buffers', () => {
+    const body = cylinder(8, 12, 256);
+    const sourceVertices = body.mesh.vertices.slice();
+    const sourceIndices = body.mesh.indices.slice();
+    const fresh = createObjectForBody(body) as THREE.Mesh;
+    const data = prepareBodyGeometry(body);
+    expect(data.layout).toBeDefined();
+    expect(data.layout).not.toHaveProperty('normalSums');
+    // Simulate the worker transfer: preparation owns these arrays, not the document.
+    const transferred = structuredClone(data, {
+      transfer: [
+        data.positions.buffer,
+        data.normals.buffer,
+        data.depth.buffer,
+        data.indices.buffer
+      ]
+    });
+    preparedBodies.set(body, {
+      geometry: transferred,
+      tangentIds: new Set(),
+      silhouettes: null
+    });
+    const appearance = { ...body, color: '#abcdef' };
+    preparedBodies.set(appearance, preparedBodies.get(body)!);
+    const installed = createObjectForBody(body) as THREE.Mesh;
+    expect(preparedBodies.has(body)).toBe(true); // Readiness survives installation.
+    expect(preparedBodies.get(body)).not.toHaveProperty('geometry');
+    expect(preparedBodies.get(appearance)).not.toHaveProperty('geometry');
+    for (const [name, staging] of [
+      ['position', transferred.positions],
+      ['normal', transferred.normals],
+      ['coplanarDepth', transferred.depth]
+    ] as const) {
+      expect(installed.geometry.getAttribute(name).array).not.toBe(staging);
+    }
+    expectSameGeometry(installed.geometry, fresh.geometry);
+    expect(body.mesh.vertices).toEqual(sourceVertices);
+    expect(body.mesh.indices).toEqual(sourceIndices);
+    expect(updateObjectForBody(installed, cylinder(9, 13, 256))).toBe(true);
+    // Restoration rebuilds from the document, not a stale/mutated preparation.
+    const again = createObjectForBody(body) as THREE.Mesh;
+    expectSameGeometry(again.geometry, fresh.geometry);
+    disposeObject(again);
+    disposeObject(fresh);
+    disposeObject(installed);
+  });
+
+  it('releases prepared arrays when installation updates existing buffers', () => {
+    const object = createObjectForBody(cylinder()) as THREE.Mesh;
+    const next = cylinder(9);
+    preparedBodies.set(next, {
+      geometry: prepareBodyGeometry(next),
+      tangentIds: new Set(),
+      silhouettes: null
+    });
+    expect(updateObjectForBody(object, next)).toBe(true);
+    expect(preparedBodies.has(next)).toBe(true);
+    expect(preparedBodies.get(next)).not.toHaveProperty('geometry');
+    disposeObject(object);
+  });
+
   it('recognises the body material it creates, so buffer reuse stays reachable', () => {
     // updateObjectForBody reuses buffers only for a body material. If the
     // shading model changes class and the guard does not follow, nothing

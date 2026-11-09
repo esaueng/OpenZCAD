@@ -114,6 +114,32 @@ describe('InteractionShaderWarmup', () => {
     expect(borrowedDispose).not.toHaveBeenCalled();
   });
 
+  it('prepares preview variants with their normals and clipping planes, and retains them', async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    const body = new THREE.MeshPhongMaterial();
+    f.warmup.schedule(f.camera, f.faces, f.edges, body);
+    let clipped = false;
+    f.renderer.compileAsync.mockImplementation((scene: THREE.Scene) => {
+      scene.traverse((object) => {
+        if (!(object instanceof THREE.Mesh)) return;
+        const material = object.material as THREE.Material;
+        if (material.clippingPlanes?.length) clipped = true;
+        expect((object.geometry as THREE.BufferGeometry).drawRange).toEqual({
+          start: 1,
+          count: 0
+        });
+      });
+      return Promise.resolve();
+    });
+    await vi.runAllTimersAsync();
+    expect(clipped).toBe(true);
+    expect(f.renderer.render.mock.calls.length).toBeGreaterThan(6);
+    expect(body.clippingPlanes).toBeNull();
+    f.warmup.dispose();
+    body.dispose();
+  });
+
   it('retains cloned edge programs through rebuilds and releases each owner once', async () => {
     vi.useFakeTimers();
     const f = fixture();
