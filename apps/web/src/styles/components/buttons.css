@@ -225,6 +225,59 @@ button.command-rail:hover:not(:disabled, [aria-disabled='true'], .active),
 }
 
 /*
+ * Secondary buttons that still rested filled: the Measure dock's mode tabs,
+ * radial toggle, row-editor and footer actions, the inspector's and the
+ * assembly panel's tool buttons, and the pattern progress Cancel. They rest
+ * bare and become a whole button under the pointer or keyboard focus; a
+ * chosen tab keeps its accent fill.
+ */
+.measurement-mode-tabs button:not(.active):not(:hover):not(:focus-visible),
+.measurement-radial-toggle button:not(.active):not(:hover):not(:focus-visible),
+.measurement-row-editor-actions button:not(:hover):not(:focus-visible),
+.measurement-dock-foot button:not(:hover):not(:focus-visible),
+.tool-button:not(:hover):not(:focus-visible),
+.assembly-tool-button:not(:hover):not(:focus-visible),
+.pattern-progress button:not(:hover):not(:focus-visible) {
+  background: transparent;
+  border-color: transparent;
+}
+
+.measurement-row-editor-actions button:hover:not(:disabled),
+.measurement-dock-foot button:hover:not(:disabled),
+.tool-button:hover:not(:disabled),
+.assembly-tool-button:hover:not(:disabled),
+.pattern-progress button:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
+}
+
+/*
+ * Dropdowns rest bare, the native arrow alone marking them, and become a
+ * whole control under the pointer; focus keeps the accent ring. The html
+ * prefix lifts this over the component rules that only size a select. Two
+ * keep their own field look: the new-project form's sunk fields, and the
+ * object filter, whose select sits inside the filter's own box.
+ */
+html select:not([multiple]):not(.start-field *):not(.object-filter *) {
+  background-color: transparent;
+  border-color: transparent;
+  cursor: pointer;
+}
+
+html
+  select:not([multiple]):not(.start-field *):not(.object-filter *):hover:not(
+    :disabled
+  ):not(:focus) {
+  background-color: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
+}
+
+html select:not([multiple]):not(.start-field *):not(.object-filter *):focus {
+  background-color: var(--color-bg);
+  border-color: var(--color-accent);
+}
+
+/*
  * Choice chips: an unchosen chip rests bare and becomes a whole button under
  * the pointer or keyboard focus; the chosen one keeps its selected fill and
  * border. (Colour swatches keep their outline: it is part of the swatch.)
