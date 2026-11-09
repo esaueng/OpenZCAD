@@ -97,6 +97,20 @@ export const chamferGlyph = glyph(
   </>
 );
 
+/**
+ * A whole outline chamfered: every corner of the loop cut, not just one.
+ * Chamfer's own glyph is one corner, so the two verbs never share a picture
+ * on the rail.
+ */
+export const chamferOutlineGlyph = glyph(
+  <path d="M8 3h8l5 5v8l-5 5H8l-5-5V8z" />
+);
+
+/** A whole outline filleted: every corner of the loop rounded. */
+export const filletOutlineGlyph = glyph(
+  <rect x="3" y="3" width="18" height="18" rx="6" />
+);
+
 /** Teeth cut along a rim: a rack, so it is not mistaken for a whole gear. */
 export const gearTeethGlyph = glyph(
   <>
