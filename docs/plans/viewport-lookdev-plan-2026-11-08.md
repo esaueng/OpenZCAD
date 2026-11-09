@@ -128,6 +128,9 @@ viewport, and a roadmap evidence fragment.
    keep antialiasing, stencil decoration pass preserved), rendered on settled
    frames only and off on touch devices.
 
+   **Outcome (9 November).** Done without a post-processing chain; see
+   _Ambient occlusion_ under Follow-up.
+
 Slices 2 and 3 carry most of the visible change; slice 4 is the cylinder and
 sphere outline.
 
@@ -140,6 +143,48 @@ sphere outline.
   pairs (`tangentFacePairs`, the measure the tangent edge ink already used)
   now share normals across their boundary; genuine creases stay split, and a
   deferred-topology preview still outlines every face boundary.
+- **Ambient occlusion.** Slices 2–4 left concave corners (a boss meeting a
+  block, a duct's inner corners) reading flat beside the reference, so
+  `packages/viewport/src/render/ambientOcclusion.ts` adds contact shading
+  computed only on settled frames, which drops the two objections slice 6
+  anticipated:
+  - _No chain._ The occlusion is applied inside the body shader: it samples a
+    half-resolution occlusion buffer at its own pixel and scales its own
+    lighting (ambient fully, the camera key at 0.55). The canvas keeps its
+    multisampling and stencil, and edge ink, silhouettes, hover and selection
+    overlays, the grid and the backdrop are never darkened. A selected face's
+    fill is a clone without the hook.
+  - _Settled only, so touch keeps it._ A frame whose camera or solids differ
+    from the last one hides it; 150 ms after the last change one extra pass
+    computes it (normals and depth of the opaque solids into a 1.6 MP-capped
+    half-resolution target, a 12-sample spiral estimate, a separable
+    edge-aware blur) and it fades in over 180 ms. The camera check tolerates
+    last-bit float wobble: a camera at rest is re-derived every frame, and an
+    exact compare re-armed the settle forever.
+  - _Look._ The estimator counts a sample only as far as it rises above the
+    surface's tangent plane and only within the radius (5% of the solids'
+    bounding diagonal, clamped to 3–36 buffer pixels), so planar and convex
+    faces get exactly nothing — the sphere, filleted cylinder and rounded
+    block captures are pixel-identical to main — and a silhouette casts no
+    halo onto the stage or a face behind it. The body shader upsamples
+    against its own depth, so a rim never borrows another surface's shade,
+    and skips the work with one filtered fetch where nothing is occluded. At
+    the boss-on-block junction the darkest pixel drops about 36 of 255 levels.
+  - _Gates._ Off in X-ray and wireframe, in E2E builds (`RenderProfile`),
+    and for any render into a target or with another camera (thumbnails,
+    image export). `AMBIENT_OCCLUSION.enabled` is the switch;
+    `window.__ozAmbientOcclusion = false` turns it off for a capture or a
+    timing. Section views keep it: the prepass clips with the same planes,
+    and caps occlude.
+  - _Cost_ (Chromium, 1024 × 1366 at DPR 2, CPU throttled 4×, 128 bodies,
+    Intel UHD through D3D11; the machine was under heavy unrelated load, so
+    medians are noisy): orbit frames unchanged (CPU median 57–75 ms with,
+    64–66 ms without, the same range); a moving frame's check is under 1 µs and a
+    still frame's walk of 128 bodies about 150 µs unthrottled. The settle
+    compute is 7–19 ms of GPU once per rest, and a redraw at rest with the
+    occlusion shown costs the same as without it (interleaved medians 47.8
+    vs 49.1, 40.0 vs 40.9, 58.1 vs 53.0 ms). Buffers: about 14 MB at that
+    canvas (RGBA8 normals, 32-bit depth, two R8 occlusion buffers).
 - **Interaction states.** `lookdev: interaction states` captures a hovered
   face, a selected face, a selected body and X-ray on the boss-on-block
   scene. Under the studio rig all four read clearly, so their tints and

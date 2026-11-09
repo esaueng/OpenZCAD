@@ -23,7 +23,11 @@ import {
   principalFrameFor,
   type PlacementFrame
 } from '../lib/inPlace/primitives';
-import { currentRenderProfile } from './viewer/renderProfile';
+import {
+  ambientOcclusionEnabled,
+  currentRenderProfile,
+  type FullRenderScope
+} from './viewer/renderProfile';
 import { createdBodiesToFrame, type AutoFrameRequest } from '../lib/autoFrame';
 import {
   readCubePalette,
@@ -240,6 +244,8 @@ import {
   type CalloutLayoutItem,
   type DimensionGraphic,
   SELECTION_SEMANTICS,
+  AMBIENT_OCCLUSION,
+  SettledAmbientOcclusion,
   contextBodyColor,
   isBodyMaterial,
   selectedFaceColor,
@@ -2929,6 +2935,20 @@ export function ModelViewer({
       : null;
     scene.environment = environment;
     scene.environmentIntensity = STUDIO_RIG.environmentIntensity;
+    // Contact shading in concave corners, computed once the view has come
+    // to rest and faded in; nothing while it moves (viewport
+    // render/ambientOcclusion.ts). `requestRender` is hoisted below.
+    const ambientOcclusion = ambientOcclusionEnabled(
+      profile,
+      AMBIENT_OCCLUSION.enabled,
+      window as FullRenderScope
+    )
+      ? new SettledAmbientOcclusion(renderer, () => requestRender(), {
+          // Perf builds wait for the GPU so the settle cost is measurable.
+          measureGpu: import.meta.env.OZ_PERF === '1'
+        })
+      : null;
+    let ambientOcclusionState: string | null = null;
     const interactionShaderWarmup = new InteractionShaderWarmup(
       renderer,
       scene
@@ -11432,6 +11452,7 @@ export function ModelViewer({
         previous?.dispose();
       }
       refreshShadowMap();
+      ambientOcclusion?.invalidate();
       resizePending = true;
       requestRender();
     };
@@ -11542,6 +11563,11 @@ export function ModelViewer({
      * sleep sees the whole idle gap on the clock, which is not animation time.
      */
     let loopWasAnimating = false;
+    /**
+     * Whether only the ambient occlusion fade kept it awake. Those frames are
+     * drawn at rest, so they say nothing about how fast the device navigates.
+     */
+    let loopOnlyFading = false;
     const frameMeter = new FrameIntervalMeter();
     const resetAnimationContinuity = () => {
       loopWasAnimating = false;
@@ -11551,7 +11577,9 @@ export function ModelViewer({
       animationFrame = null;
       const frameStarted = performance.now();
       const continuous =
-        loopWasAnimating && document.visibilityState !== 'hidden';
+        loopWasAnimating &&
+        !loopOnlyFading &&
+        document.visibilityState !== 'hidden';
       frameMeter.sample(now, continuous);
       // The view cube's widget can remount with the chrome; follow whichever
       // link is current, and push it the camera at once so its hit layer is
@@ -11869,6 +11897,27 @@ export function ModelViewer({
         cubeLinkFresh = false;
       }
       aimCameraKey(cameraKey, context.activeCamera.quaternion);
+      // After everything above has posed the bodies and the camera: a change
+      // to either hides the occlusion until the view rests again.
+      const occlusion = ambientOcclusion?.beforeRender({
+        now,
+        camera: context.activeCamera,
+        roots: [bodyGroup],
+        enabled: !xrayRef.current && displayModeRef.current !== 'wireframe',
+        reducedMotion: reducesMotion(reducedMotionRef.current)
+      });
+      if (occlusion) {
+        if (
+          e2eCanvasHooksEnabled &&
+          occlusion.state !== ambientOcclusionState
+        ) {
+          renderer.domElement.dataset.e2eAmbientOcclusion = occlusion.state;
+        }
+        ambientOcclusionState = occlusion.state;
+        if (occlusion.computedMs !== null && import.meta.env.OZ_PERF === '1') {
+          mark('viewer.ambientOcclusion', { ms: occlusion.computedMs });
+        }
+      }
       let renderStarted = performance.now();
       // The first draw compiles every material's shaders and uploads the
       // environment map, so it costs far more than steady-state frames.
@@ -11999,7 +12048,8 @@ export function ModelViewer({
       );
 
       const hoverAnimating = selection.isSettling;
-      loopWasAnimating =
+      const occlusionFading = occlusion?.animating ?? false;
+      const sceneAnimating =
         tweening ||
         zooming ||
         controlsChanged ||
@@ -12010,6 +12060,8 @@ export function ModelViewer({
         retiringOverlaysRef.current.length > 0 ||
         inferenceAnimating ||
         context.fadeIns.size > 0;
+      loopWasAnimating = sceneAnimating || occlusionFading;
+      loopOnlyFading = occlusionFading && !sceneAnimating;
       if (loopWasAnimating) {
         requestRender();
       }
@@ -12055,6 +12107,7 @@ export function ModelViewer({
 
     return () => {
       interactionShaderWarmup.dispose();
+      ambientOcclusion?.dispose();
       document.removeEventListener(
         'visibilitychange',
         resetAnimationContinuity

@@ -12,28 +12,41 @@
  * documentation captures build with `VITE_E2E_FULL_RENDER=1`
  * (playwright.config.ts), so they measure and publish the production
  * renderer. Production always renders in full.
+ *
+ * Settled-frame ambient occlusion (`@openzcad/viewport` ambientOcclusion.ts)
+ * follows the same split: it is a render-quality pass no colour-sampling
+ * spec should have to account for, and it costs a SwiftShader runner real
+ * time at every settle.
  */
 export interface RenderProfile {
   readonly antialias: boolean;
   readonly shadows: boolean;
   readonly environment: boolean;
+  readonly ambientOcclusion: boolean;
 }
 
 export const FULL_RENDER_PROFILE: RenderProfile = Object.freeze({
   antialias: true,
   shadows: true,
-  environment: true
+  environment: true,
+  ambientOcclusion: true
 });
 
 export const E2E_RENDER_PROFILE: RenderProfile = Object.freeze({
   antialias: false,
   shadows: false,
-  environment: false
+  environment: false,
+  ambientOcclusion: false
 });
 
 /** The page-side opt-in an e2e init script sets. */
 export interface FullRenderScope {
   __ozFullRender?: unknown;
+  /**
+   * `false` turns the settled ambient occlusion off in any build, so a frame
+   * timing or capture can compare the same build with and without it.
+   */
+  __ozAmbientOcclusion?: unknown;
 }
 
 /** Which build the bundle is: production, a full-render e2e build, or e2e. */
@@ -63,5 +76,21 @@ export function currentRenderProfile(): RenderProfile {
         Boolean(import.meta.env.OZ_PERF)
     },
     typeof window === 'undefined' ? undefined : (window as FullRenderScope)
+  );
+}
+
+/**
+ * Whether the viewer computes settled-frame ambient occlusion: the profile
+ * allows it, the viewport's own switch is on, and the page has not opted out.
+ */
+export function ambientOcclusionEnabled(
+  profile: RenderProfile,
+  switchedOn: boolean,
+  scope: FullRenderScope | undefined
+): boolean {
+  return (
+    profile.ambientOcclusion &&
+    switchedOn &&
+    scope?.__ozAmbientOcclusion !== false
   );
 }

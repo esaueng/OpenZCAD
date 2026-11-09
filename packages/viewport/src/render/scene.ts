@@ -15,6 +15,7 @@ import { keepProgram } from './programRetention';
 import { SELECTION_SEMANTICS } from './semantics';
 import { COPLANAR_DEPTH_ATTRIBUTE, withCoplanarDepth } from './coplanarBodies';
 import { STUDIO_RIG } from './studio';
+import { withBodyAmbientOcclusion } from './ambientOcclusion';
 import { tangentFacePairs } from './tangentEdges';
 
 const CAD_CREASE_ANGLE = THREE.MathUtils.degToRad(30);
@@ -660,38 +661,42 @@ export function createBodyMaterial(
   // Every exact result replaces the body's object, and the old one is
   // disposed before the new one draws: without this each commit, undo or
   // redo relinked the body shader from scratch.
-  return withCoplanarDepth(
-    keepProgram(
-      new THREE.MeshStandardMaterial({
-        color: body.color,
-        roughness: STUDIO_RIG.material.roughness,
-        metalness: STUDIO_RIG.material.metalness,
-        // A planar face now carries a gentle gradient, and on 8-bit output a
-        // gradient that spans one or two levels shows as a hard contour
-        // across the face. Dithering breaks the contour up.
-        dithering: true,
-        transparent: translucent,
-        opacity,
-        // Translucent walls must not write depth or back faces and interior
-        // features hidden behind them would be culled instead of showing through.
-        depthWrite: !translucent,
-        stencilWrite: !translucent,
-        stencilRef: OPAQUE_BODY_STENCIL,
-        stencilWriteMask: OPAQUE_BODY_STENCIL,
-        stencilZPass: THREE.ReplaceStencilOp,
-        // Push only the disposable face rasterization back by the smallest
-        // practical depth-buffer bias. GL line materials ignore polygonOffset;
-        // keeping the bias on the faces lets depth-tested edge/sketch overlays
-        // sit stably on their exact model plane without moving authoritative
-        // geometry.
-        polygonOffset: true,
-        polygonOffsetFactor: 1,
-        polygonOffsetUnits: 1,
-        // Exact kernels emit consistently oriented closed faces. Keep culling on
-        // so an orientation regression remains visible instead of being hidden by
-        // a double-sided material.
-        side: THREE.FrontSide
-      })
+  // The settled ambient occlusion (ambientOcclusion.ts) wraps the coplanar
+  // depth hooks; until a viewer computes a frame it does nothing.
+  return withBodyAmbientOcclusion(
+    withCoplanarDepth(
+      keepProgram(
+        new THREE.MeshStandardMaterial({
+          color: body.color,
+          roughness: STUDIO_RIG.material.roughness,
+          metalness: STUDIO_RIG.material.metalness,
+          // A planar face now carries a gentle gradient, and on 8-bit output a
+          // gradient that spans one or two levels shows as a hard contour
+          // across the face. Dithering breaks the contour up.
+          dithering: true,
+          transparent: translucent,
+          opacity,
+          // Translucent walls must not write depth or back faces and interior
+          // features hidden behind them would be culled instead of showing through.
+          depthWrite: !translucent,
+          stencilWrite: !translucent,
+          stencilRef: OPAQUE_BODY_STENCIL,
+          stencilWriteMask: OPAQUE_BODY_STENCIL,
+          stencilZPass: THREE.ReplaceStencilOp,
+          // Push only the disposable face rasterization back by the smallest
+          // practical depth-buffer bias. GL line materials ignore polygonOffset;
+          // keeping the bias on the faces lets depth-tested edge/sketch overlays
+          // sit stably on their exact model plane without moving authoritative
+          // geometry.
+          polygonOffset: true,
+          polygonOffsetFactor: 1,
+          polygonOffsetUnits: 1,
+          // Exact kernels emit consistently oriented closed faces. Keep culling on
+          // so an orientation regression remains visible instead of being hidden by
+          // a double-sided material.
+          side: THREE.FrontSide
+        })
+      )
     )
   );
 }

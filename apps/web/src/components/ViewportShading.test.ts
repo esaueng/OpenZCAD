@@ -9,6 +9,7 @@ import {
   createObjectForBody,
   createStudioHemisphereLight,
   isBodyMaterial,
+  receivesAmbientOcclusion,
   sectionClippingPlane,
   STUDIO_RIG,
   shouldRenderTopologyEdge,
@@ -205,6 +206,10 @@ describe('CAD viewport shading', () => {
     expect(material.roughness).toBe(STUDIO_RIG.material.roughness);
     expect(material.metalness).toBe(0);
     expect(material.dithering).toBe(true);
+    // Settled-frame contact shading lives in the body shader, so edges,
+    // overlays and the stage never take it.
+    expect(receivesAmbientOcclusion(material)).toBe(true);
+    expect(material.customProgramCacheKey()).toContain('body-ao');
     expect(material.side).toBe(THREE.FrontSide);
     expect(material.polygonOffset).toBe(true);
     expect(material.polygonOffsetFactor).toBe(1);
