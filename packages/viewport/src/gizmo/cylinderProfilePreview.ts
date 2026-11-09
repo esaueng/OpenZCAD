@@ -1,5 +1,9 @@
 import * as THREE from 'three';
 import type { Vector3 } from '@openzcad/shared';
+import {
+  collectPreviewTargets,
+  type PreviewDeformation
+} from '../render/previewDeformation';
 
 export interface CylinderPreviewProfile {
   axisStart: Vector3;
@@ -15,8 +19,6 @@ export interface CylinderProfilePreview {
   readonly cachedBytes: number;
 }
 
-type PositionAttribute =
-  THREE.BufferAttribute | THREE.InterleavedBufferAttribute;
 const MAX_CACHED_BYTES = 2 * 1024 * 1024;
 
 /**
@@ -114,7 +116,12 @@ export function createBoreProfilePreview(
     },
     radius
   );
-  return preview && moving > 0 ? preview : null;
+  if (preview && moving === 0) {
+    // Nothing on the wall: let go of what the preview began.
+    preview.restore();
+    return null;
+  }
+  return preview;
 }
 
 /** The two planes bounding the straight span; material beyond them moves rigidly. */
@@ -149,26 +156,25 @@ function createProfilePreview(
   velocityAt: (point: THREE.Vector3) => void,
   span: number
 ): CylinderProfilePreview | null {
-  const attributes = new Set<PositionAttribute>();
-  const geometries = new Set<THREE.BufferGeometry>();
-  object.traverse((child) => {
-    const geometry = (child as THREE.Mesh).geometry;
-    if (!(geometry instanceof THREE.BufferGeometry)) return;
-    geometries.add(geometry);
-    // Fat lines' position describes their screen-space quad, not model points.
-    const names = geometry.hasAttribute('instanceStart')
-      ? ['instanceStart', 'instanceEnd']
-      : ['position'];
-    for (const name of names) {
-      const attribute = geometry.getAttribute(name);
-      if (attribute && attribute.itemSize === 3) attributes.add(attribute);
-    }
-  });
-  const cachedBytes = [...attributes].reduce(
+  // Only fixed buffers are edited slot by slot; the outline and highlight
+  // batches repack theirs per view or target and follow the move themselves.
+  const { attributes, geometries, deformables } = collectPreviewTargets(object);
+  const fixedBytes = [...attributes].reduce(
     (bytes, attribute) => bytes + attribute.count * 24,
     0
   );
-  if (cachedBytes === 0 || cachedBytes > MAX_CACHED_BYTES) return null;
+  if (fixedBytes === 0 || fixedBytes > MAX_CACHED_BYTES) return null;
+  const derived: PreviewDeformation[] = [];
+  let cachedBytes = fixedBytes;
+  for (const deformable of deformables) {
+    const deformation = deformable.beginPreviewDeformation(velocityAt);
+    derived.push(deformation);
+    cachedBytes += deformation.cachedBytes;
+  }
+  if (cachedBytes > MAX_CACHED_BYTES) {
+    for (const deformation of derived) deformation.restore();
+    return null;
+  }
   const point = new THREE.Vector3();
   const entries = [...attributes].map((attribute) => {
     const original = new Float32Array(attribute.count * 3);
@@ -198,6 +204,7 @@ function createProfilePreview(
       geometry.computeBoundingBox();
       geometry.computeBoundingSphere();
     }
+    for (const deformation of derived) deformation.apply(delta);
   }
   return {
     cachedBytes,
@@ -208,6 +215,7 @@ function createProfilePreview(
     },
     restore() {
       write(0);
+      for (const deformation of derived) deformation.restore();
     }
   };
 }

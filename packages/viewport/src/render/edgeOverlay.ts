@@ -24,6 +24,13 @@ import { easeToward, fadeStepMs, hasSettled } from '../motion';
 import { boundaryEdgesOfFaces } from '../selection/boundaryEdgesOfFace';
 import { FACETED_JOINT_MAX_ANGLE, tangentEdgeIds } from './tangentEdges';
 import { createSilhouetteLines, timedSilhouetteCandidates } from './silhouette';
+import {
+  markPreviewDeformable,
+  markPreviewDerived,
+  previewVelocities,
+  type PreviewDeformation,
+  type PreviewVelocity
+} from './previewDeformation';
 import type { DisplayMode } from '../types';
 import {
   createFatLineSegments,
@@ -62,6 +69,14 @@ interface IdleBatch {
 export interface BatchedEdgeTarget {
   batch: BodyEdgeOverlay;
   owner: EdgeSegmentOwner;
+}
+
+/** A drag preview's move, as the highlight tiers apply it; see `deformHighlights`. */
+interface HighlightDeformation {
+  readonly velocityAt: PreviewVelocity;
+  delta: number;
+  /** Each highlighted edge's velocities, measured the first time it draws. */
+  readonly velocities: Map<string, Float32Array>;
 }
 
 const EMPTY_SEGMENT = [0, 0, 0, 0, 0, 0] as const;
@@ -370,6 +385,8 @@ export class BodyEdgeOverlay extends THREE.Group {
   private bodySelected = false;
   /** See `fatLineDepthBiasForExtent`: these lines all lie on the body. */
   private readonly depthBias: number;
+  /** The running in-place drag preview's move, or null at rest. */
+  private deformation: HighlightDeformation | null = null;
 
   /**
    * @param body Its `mesh`, when given, is what tells tangent edges from
@@ -582,6 +599,14 @@ export class BodyEdgeOverlay extends THREE.Group {
     this.hoverTier.apply();
     this.selectedTier.apply();
     this.faceBoundaryTier.apply();
+    // The highlight batches are refilled from `entriesByKey` whenever their
+    // target changes, so a drag preview editing their slots would be undone
+    // by the next hover and would rewrite whatever the next target packed
+    // there. The preview hands the overlay its move instead.
+    for (const line of this.highlightLines()) markPreviewDerived(line);
+    markPreviewDeformable(this, {
+      beginPreviewDeformation: (velocityAt) => this.deformHighlights(velocityAt)
+    });
     this.applyIdleStyle();
     this.add(
       this.idleEdges,
@@ -797,14 +822,7 @@ export class BodyEdgeOverlay extends THREE.Group {
    * back exactly what was there, so nothing retargets or eases.
    */
   suspendHighlights(): () => void {
-    const tiers = [
-      this.hoverEdges,
-      this.hoverHiddenEdges,
-      this.selectedEdges,
-      this.selectedHiddenEdges,
-      this.selectedFaceBoundaryEdges,
-      this.selectedFaceBoundaryHiddenEdges
-    ];
+    const tiers = this.highlightLines();
     const visible = tiers.map((line) => line.visible);
     for (const line of tiers) line.visible = false;
     const idle = this.restingLines().map(({ material }) => ({
@@ -858,6 +876,84 @@ export class BodyEdgeOverlay extends THREE.Group {
     this.applyIdleStyle();
     this.refreshVisibility();
     return true;
+  }
+
+  /** The hover, selected-edge and face-rim batches with their x-ray twins. */
+  private highlightLines(): LineSegments2[] {
+    return [
+      this.hoverEdges,
+      this.hoverHiddenEdges,
+      this.selectedEdges,
+      this.selectedHiddenEdges,
+      this.selectedFaceBoundaryEdges,
+      this.selectedFaceBoundaryHiddenEdges
+    ];
+  }
+
+  /**
+   * Moves the highlights with an in-place drag preview (see
+   * `previewDeformation.ts`). The resting batches are fixed and the preview
+   * edits them directly; the highlights are rebuilt from the edges' rest
+   * positions on every hover or selection change, so until `restore` each
+   * rebuild — and each `apply` — draws them through the same move, and an
+   * edge hovered mid-drag lights where its resting line now is.
+   */
+  private deformHighlights(velocityAt: PreviewVelocity): PreviewDeformation {
+    const deformation: HighlightDeformation = {
+      velocityAt,
+      delta: 0,
+      velocities: new Map()
+    };
+    this.deformation = deformation;
+    return {
+      // Grows only with the edges actually highlighted during the drag.
+      cachedBytes: 0,
+      apply: (delta) => {
+        if (this.deformation !== deformation || !Number.isFinite(delta)) {
+          return;
+        }
+        deformation.delta = delta;
+        this.refreshLiveHighlights();
+      },
+      restore: () => {
+        if (this.deformation !== deformation) return;
+        this.deformation = null;
+        this.refreshLiveHighlights();
+      }
+    };
+  }
+
+  /**
+   * Redraws the tiers that are showing a target. A tier fading out keeps the
+   * segments it is losing, so it is left alone.
+   */
+  private refreshLiveHighlights() {
+    if (this.hoveredKeys.size > 0 && !this.hoverTier.isClearing) {
+      this.refreshHoveredPositions();
+    }
+    if (this.selectedKeys.size > 0 && !this.selectedTier.isClearing) {
+      this.refreshSelectedPositions();
+    }
+    if (
+      this.selectedFaceBoundaryKeys.size > 0 &&
+      !this.faceBoundaryTier.isClearing
+    ) {
+      this.refreshFaceBoundaryPositions();
+    }
+    this.refreshVisibility();
+  }
+
+  /** An edge's segments where the body is drawn now. */
+  private positionsOf(key: string, entry: EdgeEntry): readonly number[] {
+    const deformation = this.deformation;
+    if (!deformation || deformation.delta === 0) return entry.positions;
+    let velocity = deformation.velocities.get(key);
+    if (!velocity) {
+      velocity = previewVelocities(entry.positions, deformation.velocityAt);
+      deformation.velocities.set(key, velocity);
+    }
+    const { delta } = deformation;
+    return entry.positions.map((value, i) => value + delta * velocity[i]!);
   }
 
   /** The batches drawn at rest: sharp, tangent and outline. */
@@ -963,7 +1059,7 @@ export class BodyEdgeOverlay extends THREE.Group {
           .filter(
             ([key]) => this.hoveredKeys.has(key) && !this.selectedKeys.has(key)
           )
-          .flatMap(([, entry]) => entry.positions);
+          .flatMap(([key, entry]) => this.positionsOf(key, entry));
     replacePositions(this.hoverEdges, positions);
     replacePositions(this.hoverHiddenEdges, positions);
   }
@@ -973,7 +1069,7 @@ export class BodyEdgeOverlay extends THREE.Group {
       ? []
       : [...this.entriesByKey]
           .filter(([key]) => this.selectedKeys.has(key))
-          .flatMap(([, entry]) => entry.positions);
+          .flatMap(([key, entry]) => this.positionsOf(key, entry));
     replacePositions(this.selectedEdges, positions);
     replacePositions(this.selectedHiddenEdges, positions);
   }
@@ -983,7 +1079,7 @@ export class BodyEdgeOverlay extends THREE.Group {
       ? []
       : [...this.entriesByKey]
           .filter(([key]) => this.selectedFaceBoundaryKeys.has(key))
-          .flatMap(([, entry]) => entry.positions);
+          .flatMap(([key, entry]) => this.positionsOf(key, entry));
     replacePositions(this.selectedFaceBoundaryEdges, positions);
     replacePositions(this.selectedFaceBoundaryHiddenEdges, positions);
   }

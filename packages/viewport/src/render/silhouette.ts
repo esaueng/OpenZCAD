@@ -2,6 +2,12 @@ import type { MeshGeometry } from '@openzcad/shared';
 import type { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import * as THREE from 'three';
 import { createFatLineSegments, type FatLineOptions } from './scene';
+import {
+  markPreviewDeformable,
+  previewVelocities,
+  type PreviewDeformation,
+  type PreviewVelocity
+} from './previewDeformation';
 
 /**
  * Outlines for curved surfaces (U10 slice 4).
@@ -309,6 +315,12 @@ function isPlanar(normals: Float32Array, start: number, end: number) {
 /** What `createSilhouetteLines` keeps to pick the outline again per view. */
 interface SilhouetteState {
   readonly candidates: SilhouetteCandidates;
+  /**
+   * The candidates' segments where the body is drawn now: the candidates'
+   * own positions at rest, or a copy moved by a drag preview (see
+   * `deformSilhouette`). Picked from and copied into `drawn`.
+   */
+  positions: Float32Array;
   /** Each candidate's midpoint, where a perspective eye ray is aimed. */
   readonly midpoints: Float32Array;
   /** The drawn segments: the first `instanceCount` are this view's outline. */
@@ -352,25 +364,26 @@ export function createSilhouetteLines(
     options
   );
   const midpoints = new Float32Array(count * 3);
-  for (let i = 0; i < count; i += 1) {
-    for (let axis = 0; axis < 3; axis += 1) {
-      midpoints[i * 3 + axis] =
-        0.5 *
-        (candidates.positions[i * 6 + axis]! +
-          candidates.positions[i * 6 + 3 + axis]!);
-    }
-  }
+  writeMidpoints(candidates.positions, midpoints);
   const start = lines.geometry.getAttribute(
     'instanceStart'
   ) as THREE.InterleavedBufferAttribute;
-  lines[SILHOUETTE_STATE] = {
+  const state: SilhouetteState = {
     candidates,
+    positions: candidates.positions,
     midpoints,
     drawn: start.data.array as Float32Array,
     buffer: start.data,
     lastEye: new Float64Array(3),
     lastPerspective: null
   };
+  lines[SILHOUETTE_STATE] = state;
+  // The drawn buffer is repacked per view, so a drag preview must not edit
+  // its slots: it moves the candidates instead.
+  markPreviewDeformable(lines, {
+    beginPreviewDeformation: (velocityAt) =>
+      deformSilhouette(lines, state, velocityAt)
+  });
   // Nothing is outlined until a view has picked the outline. The bounds
   // `setPositions` measured over every candidate stay, so frustum culling
   // still sees the whole surface.
@@ -380,6 +393,110 @@ export function createSilhouetteLines(
   return lines;
 }
 
+function writeMidpoints(positions: Float32Array, midpoints: Float32Array) {
+  const count = midpoints.length / 3;
+  for (let i = 0; i < count; i += 1) {
+    for (let axis = 0; axis < 3; axis += 1) {
+      midpoints[i * 3 + axis] =
+        0.5 * (positions[i * 6 + axis]! + positions[i * 6 + 3 + axis]!);
+    }
+  }
+}
+
+/**
+ * Moves the outline with an in-place drag preview: every candidate's
+ * segment, its midpoint and the batch's bounds follow `p + delta * v(p)`,
+ * and the outline is picked again for the view it was last drawn for, so
+ * the frame drawn next is this view's outline of the moved surface.
+ *
+ * The neighbours' normals are kept. A step translates its region rigidly and
+ * a profile stretches a straight span along the span's own axis, neither of
+ * which turns a curved face's normals, so this is exact for those moves and
+ * an approximation only where a face is stretched across its curvature.
+ */
+function deformSilhouette(
+  lines: LineSegments2,
+  state: SilhouetteState,
+  velocityAt: PreviewVelocity
+): PreviewDeformation {
+  const rest = state.candidates.positions;
+  const count = rest.length / 6;
+  const allVelocities = previewVelocities(rest, velocityAt);
+  // Only the candidates with a moving end are rewritten per move: a step
+  // usually moves one face's region of a large body.
+  const movingList: number[] = [];
+  const fixedBounds = new THREE.Box3();
+  for (let i = 0; i < count; i += 1) {
+    let moves = false;
+    for (let k = 0; k < 6; k += 1) {
+      if (allVelocities[i * 6 + k] !== 0) moves = true;
+    }
+    if (moves) {
+      movingList.push(i);
+    } else {
+      expandBounds(fixedBounds, rest, i * 6, 2);
+    }
+  }
+  const moving = Uint32Array.from(movingList);
+  const velocity = new Float32Array(moving.length * 6);
+  moving.forEach((candidate, slot) => {
+    velocity.set(
+      allVelocities.subarray(candidate * 6, candidate * 6 + 6),
+      slot * 6
+    );
+  });
+  const moved = Float32Array.from(rest);
+  let active = true;
+  const write = (delta: number) => {
+    const { midpoints } = state;
+    const bounds = lines.geometry.boundingBox ?? new THREE.Box3();
+    bounds.copy(fixedBounds);
+    for (let slot = 0; slot < moving.length; slot += 1) {
+      const p = moving[slot]! * 6;
+      for (let k = 0; k < 6; k += 1) {
+        moved[p + k] = rest[p + k]! + delta * velocity[slot * 6 + k]!;
+      }
+      for (let axis = 0; axis < 3; axis += 1) {
+        midpoints[p / 2 + axis] =
+          0.5 * (moved[p + axis]! + moved[p + 3 + axis]!);
+      }
+      expandBounds(bounds, moved, p, 2);
+    }
+    state.positions = delta === 0 ? rest : moved;
+    lines.geometry.boundingBox = bounds;
+    const sphere = (lines.geometry.boundingSphere ??= new THREE.Sphere());
+    bounds.getBoundingSphere(sphere);
+    if (state.lastPerspective !== null) {
+      pickSilhouette(lines, state, state.lastPerspective);
+    }
+  };
+  return {
+    cachedBytes: velocity.byteLength + moved.byteLength + moving.byteLength,
+    apply(delta) {
+      if (active && Number.isFinite(delta)) write(delta);
+    },
+    restore() {
+      if (!active) return;
+      write(0);
+      active = false;
+    }
+  };
+}
+
+/** Grows `box` by `points` xyz points of `positions` from `offset`. */
+function expandBounds(
+  box: THREE.Box3,
+  positions: Float32Array,
+  offset: number,
+  points: number
+) {
+  for (let i = offset; i < offset + points * 3; i += 3) {
+    point.set(positions[i]!, positions[i + 1]!, positions[i + 2]);
+    box.expandByPoint(point);
+  }
+}
+
+const point = new THREE.Vector3();
 const inverseWorld = new THREE.Matrix4();
 const eye = new THREE.Vector3();
 
@@ -421,11 +538,22 @@ export function updateSilhouette(
   state.lastEye[0] = eye.x;
   state.lastEye[1] = eye.y;
   state.lastEye[2] = eye.z;
+  pickSilhouette(lines, state, perspective);
+  return true;
+}
 
-  const { positions, normalsA, normalsB } = state.candidates;
-  const { midpoints, drawn } = state;
+/** Packs the outline for the batch-space eye in `state.lastEye`. */
+function pickSilhouette(
+  lines: LineSegments2,
+  state: SilhouetteState,
+  perspective: boolean
+) {
+  const { normalsA, normalsB } = state.candidates;
+  const { positions, midpoints, drawn } = state;
   const count = midpoints.length / 3;
-  const { x, y, z } = eye;
+  const x = state.lastEye[0]!;
+  const y = state.lastEye[1]!;
+  const z = state.lastEye[2]!;
   let toX = x;
   let toY = y;
   let toZ = z;
@@ -453,7 +581,6 @@ export function updateSilhouette(
     state.buffer.addUpdateRange(0, kept * 6);
     state.buffer.needsUpdate = true;
   }
-  return true;
 }
 
 /**

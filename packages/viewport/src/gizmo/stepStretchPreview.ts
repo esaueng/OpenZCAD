@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { Vector3 } from '@openzcad/shared';
 import type { CylinderProfilePreview } from './cylinderProfilePreview';
+import { collectPreviewTargets } from '../render/previewDeformation';
 
 /** Cells per axis of the grid vertex keys are quantized on. */
 export const STEP_PREVIEW_GRID = 1 << 17;
@@ -106,21 +107,9 @@ export function createStepStretchPreview(
   const { normal, movingKeys } = profile;
   if (!(profile.span > 0) || movingKeys.size === 0) return null;
   const moves = stepPreviewMatcher(profile);
-  const attributes = new Set<PositionAttribute>();
-  const geometries = new Set<THREE.BufferGeometry>();
-  object.traverse((child) => {
-    const geometry = (child as THREE.Mesh).geometry;
-    if (!(geometry instanceof THREE.BufferGeometry)) return;
-    geometries.add(geometry);
-    // Fat lines' position describes their screen-space quad, not model points.
-    const names = geometry.hasAttribute('instanceStart')
-      ? ['instanceStart', 'instanceEnd']
-      : ['position'];
-    for (const name of names) {
-      const attribute = geometry.getAttribute(name);
-      if (attribute && attribute.itemSize === 3) attributes.add(attribute);
-    }
-  });
+  // Only fixed buffers are edited slot by slot; the outline and highlight
+  // batches repack theirs per view or target and follow the move themselves.
+  const { attributes, geometries, deformables } = collectPreviewTargets(object);
   const entries: {
     attribute: PositionAttribute;
     indices: Uint32Array;
@@ -152,6 +141,15 @@ export function createStepStretchPreview(
   if (moved === 0) return null;
   const planar = planarRetriangulations(object, profile.planarFaces ?? []);
   if (!planar) return null;
+  const derived = deformables.map((deformable) =>
+    deformable.beginPreviewDeformation((point) => {
+      if (moves(point.x, point.y, point.z)) {
+        point.set(normal.x, normal.y, normal.z);
+      } else {
+        point.set(0, 0, 0);
+      }
+    })
+  );
   function write(delta: number) {
     const dx = normal.x * delta,
       dy = normal.y * delta,
@@ -175,9 +173,15 @@ export function createStepStretchPreview(
       geometry.computeBoundingBox();
       geometry.computeBoundingSphere();
     }
+    for (const deformation of derived) deformation.apply(delta);
   }
   return {
-    cachedBytes: moved * 16,
+    cachedBytes:
+      moved * 16 +
+      derived.reduce(
+        (bytes, deformation) => bytes + deformation.cachedBytes,
+        0
+      ),
     apply(delta) {
       if (
         !Number.isFinite(delta) ||
@@ -196,6 +200,7 @@ export function createStepStretchPreview(
     restore() {
       write(0);
       planar.update(0);
+      for (const deformation of derived) deformation.restore();
     }
   };
 }
