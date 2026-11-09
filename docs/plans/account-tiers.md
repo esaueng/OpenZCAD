@@ -31,9 +31,9 @@ requests already running on an older configuration may finish under that policy.
 | Hosted AI requests per 10 minutes               | 6            | 600             |
 | Weighted AI units per 10 minutes                | 24           | 2,400           |
 | Cloud projects                                  | 100          | 10,000          |
-| Cloud project document/asset storage            | 2 GiB        | 100 GiB         |
+| Cloud project document/asset storage            | 1 GiB        | 25 GiB          |
 | Concurrent AI requests                          | 2            | 8               |
-| Cloud artifacts, including pending reservations | 2 GiB        | 100 GiB         |
+| Cloud artifacts, including pending reservations | 1 GiB        | 25 GiB          |
 
 Account buckets remain the same across tier changes so an upgrade or downgrade
 cannot reset consumption. Accounts sharing an IP have independent allowances.
@@ -76,7 +76,12 @@ provider-side billing controls remain separate.
 Migration `0022_account_tiers.sql` adds derived `users.artifact_limit_bytes`, `project_limit`,
 and `project_storage_limit_bytes`, defaulting to the existing Free ceilings. This is derived enforcement state, not a second
 membership source. The Worker refreshes the owner's value on upload creation and
-each upload operation, project creation and document/revision save. Atomic SQLite triggers enforce the value across concurrent
+each upload operation, project creation and document/revision save, and each
+isolate brings every account's stored values to the current policy once, on its
+first authenticated API request (`syncStoredAccountLimits`): encrypted saves,
+copies and migrations do not refresh the owner's row themselves. The database
+fallback for a project without a `users` row stays 2 GiB, as the triggers
+hard-code it; the in-flight reservation ceiling stays 2 GiB for every tier. Atomic SQLite triggers enforce the value across concurrent
 Workers, single-part finalization and multipart reservations. Direct database
 writers must not treat a stale derived value as a current membership lookup.
 
@@ -87,7 +92,10 @@ The API reports the current effective quota even before the next storage write.
 
 `/api/session`, browser login and desktop token responses expose only the current
 account's `entitlements`. `/api/account/storage` reports the owner's effective
-artifact allowance. Settings shows membership, AI allowances and artifact usage.
+artifact allowance and `projectStorageBytes`, project storage measured as the
+quota triggers measure it (inline D1 bytes, stored R2 objects and source assets,
+retained encrypted envelopes). Settings shows membership, AI allowances, and
+project and artifact usage against their allowances.
 Older responses without entitlements remain readable by the frontend.
 
 ## Rollout and verification

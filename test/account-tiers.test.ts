@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   accountEntitlements,
-  accountTier
+  accountTier,
+  syncStoredAccountLimits
 } from '@openzcad/cloudflare-adapters';
+import { d1Database, migratedDatabase } from './d1-sqlite';
 import { deploymentAssistantAllowed } from '../apps/web/worker/settings';
 
 const env = {
@@ -34,8 +36,8 @@ describe('server account tier policy', () => {
     expect(accountEntitlements(env, 'other@example.com')).toEqual({
       tier: 'free',
       projectLimit: 100,
-      projectStorageLimitBytes: 2 * 1024 ** 3,
-      artifactLimitBytes: 2 * 1024 ** 3,
+      projectStorageLimitBytes: 1024 ** 3,
+      artifactLimitBytes: 1024 ** 3,
       ai: {
         requestLimit: 6,
         costLimitUnits: 24,
@@ -46,8 +48,8 @@ describe('server account tier policy', () => {
     expect(accountEntitlements(env, 'first@example.com')).toEqual({
       tier: 'premium',
       projectLimit: 10_000,
-      projectStorageLimitBytes: 100 * 1024 ** 3,
-      artifactLimitBytes: 100 * 1024 ** 3,
+      projectStorageLimitBytes: 25 * 1024 ** 3,
+      artifactLimitBytes: 25 * 1024 ** 3,
       ai: {
         requestLimit: 600,
         costLimitUnits: 2400,
@@ -111,5 +113,51 @@ describe('server account tier policy', () => {
         })
       ).toBe(false);
     }
+  });
+});
+
+describe('stored account limit sync', () => {
+  it('brings every stored limit to the current tier policy, Premium by email', async () => {
+    const sqlite = migratedDatabase();
+    const insert = sqlite.prepare(
+      `INSERT INTO users (id, email, created_at, artifact_limit_bytes,
+         project_limit, project_storage_limit_bytes)
+       VALUES (?, ?, '2026-01-01T00:00:00.000Z', ?, ?, ?)`
+    );
+    // Written under the old defaults (2 GiB Free, 100 GiB Premium).
+    insert.run(
+      'user_free',
+      'other@example.com',
+      2 * 1024 ** 3,
+      100,
+      2 * 1024 ** 3
+    );
+    insert.run('user_none', null, 2 * 1024 ** 3, 100, 2 * 1024 ** 3);
+    insert.run(
+      'user_premium',
+      'Second@Example.com',
+      100 * 1024 ** 3,
+      10_000,
+      100 * 1024 ** 3
+    );
+    await syncStoredAccountLimits(env, d1Database(sqlite));
+    const limits = (id: string) =>
+      sqlite
+        .prepare(
+          'SELECT artifact_limit_bytes, project_limit, project_storage_limit_bytes FROM users WHERE id = ?'
+        )
+        .get(id);
+    const free = {
+      artifact_limit_bytes: 1024 ** 3,
+      project_limit: 100,
+      project_storage_limit_bytes: 1024 ** 3
+    };
+    expect(limits('user_free')).toEqual(free);
+    expect(limits('user_none')).toEqual(free);
+    expect(limits('user_premium')).toEqual({
+      artifact_limit_bytes: 25 * 1024 ** 3,
+      project_limit: 10_000,
+      project_storage_limit_bytes: 25 * 1024 ** 3
+    });
   });
 });

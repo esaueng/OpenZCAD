@@ -280,9 +280,10 @@ button.command-rail:hover:not(:disabled, [aria-disabled='true'], .active),
 /*
  * Dropdowns rest bare, the native arrow alone marking them, and become a
  * whole control under the pointer; focus keeps the accent ring. The html
- * prefix lifts this over the component rules that only size a select. Two
- * keep their own field look: the new-project form's sunk fields, and the
- * object filter, whose select sits inside the filter's own box.
+ * prefix lifts this over the component rules that only size a select. The
+ * new-project form's units picker has its own rule (it draws its own
+ * chevron), and the object filter's select sits bare inside the filter's
+ * own box.
  */
 html select:not([multiple]):not(.start-field *):not(.object-filter *) {
   background-color: transparent;
@@ -301,6 +302,72 @@ html
 html select:not([multiple]):not(.start-field *):not(.object-filter *):focus {
   background-color: var(--color-bg);
   border-color: var(--color-accent);
+}
+
+/*
+ * The last secondaries and options that rested filled or outlined: the
+ * conflict dialog's choices, the assembly saved-position chip, assistant
+ * suggestion chips, tool-card recovery actions, sketch constraint targets and
+ * solve feedback, text style toggles, the sketch plane tiles, the drawing
+ * sheet list, keypad units, the command flyout's More, and the start
+ * screen's demo, startup, shelf and tile-footer actions. Each rests bare and
+ * becomes a whole button under the pointer or keyboard focus; a chosen or
+ * pressed option keeps its selected look, and the plane tiles keep their
+ * plane-tinted hover.
+ */
+.conflict-dialog-actions .conflict-choice:not(:hover):not(:focus-visible),
+.assembly-position-chip:not(:hover):not(:focus-within),
+.assistant-chip:not(:hover):not(:focus-visible),
+.tool-card-recovery:not(:hover):not(:focus-visible),
+.sketch-constraint-targets
+  button:not([aria-pressed='true']):not(:hover):not(:focus-visible),
+.sketch-solve-feedback button:not(:hover):not(:focus-visible),
+.text-style-toggles .toggle:not(.active):not(:hover):not(:focus-visible),
+.sketch-plane-tile:not(:hover):not(:focus-visible),
+.sketch-plane-datum:not(:hover):not(:focus-visible),
+.drawing-sheet-list-button:not(.active):not(:hover):not(:focus-visible),
+.keypad-units button:not(.active):not(:hover):not(:focus-visible),
+.command-flyout-more:not(:hover):not(:focus-visible) > span,
+.demo-action:not(:hover):not(:focus-visible),
+.startup-card button:not(:hover):not(:focus-visible),
+.start-shelf-action:not(:hover):not(:focus-visible),
+.start-tile-footer button:not(:hover):not(:focus-visible) {
+  background: transparent;
+  border-color: transparent;
+}
+
+.conflict-dialog-actions
+  .conflict-choice:is(:hover, :focus-visible):not(:disabled):not(
+    [aria-disabled='true']
+  ),
+.assembly-position-chip:is(:hover, :focus-within),
+html .assistant-chip:is(:hover, :focus-visible):not(:disabled),
+.tool-card-recovery:is(:hover, :focus-visible),
+.sketch-constraint-targets
+  button:not([aria-pressed='true']):is(:hover, :focus-visible),
+.sketch-solve-feedback button:is(:hover, :focus-visible),
+.text-style-toggles .toggle:not(.active):is(:hover, :focus-visible),
+.drawing-sheet-list-button:not(.active):is(:hover, :focus-visible),
+.keypad-units button:not(.active):is(:hover, :focus-visible),
+.command-flyout-more:is(:hover, :focus-visible) > span,
+.demo-action:is(:hover, :focus-visible):not(:disabled),
+.startup-card button:is(:hover, :focus-visible),
+.start-shelf-action:is(:hover, :focus-visible):not(:disabled),
+.start-tile-footer button:is(:hover, :focus-visible):not(:disabled) {
+  background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
+}
+
+/* The new-project units picker rests bare like every other dropdown; its
+   drawn chevron still marks it. */
+.start-field-units select:not(:hover):not(:focus) {
+  background: transparent;
+  border-color: transparent;
+}
+
+.start-field-units select:hover:not(:focus) {
+  background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
 }
 
 /*

@@ -25,6 +25,7 @@ import type {
 } from '../lib/selectionCallout';
 import { OPERATION_PHASE_LABELS } from '../lib/selectionCalloutView';
 import { TOOL_META, type ToolId } from '../lib/tools';
+import { chamferOutlineGlyph, filletOutlineGlyph } from '../lib/toolIcons';
 import type { LabelSegment } from '../lib/topologyLabels';
 import { Tooltip } from './Tooltip';
 
@@ -46,7 +47,11 @@ const ACTION_ICONS: Record<SelectionActionId, ReactNode> = {
   'sketch-on-face': TOOL_META.sketch.icon,
   fillet: TOOL_META.fillet.icon,
   chamfer: TOOL_META.chamfer.icon,
-  'chamfer-chain': TOOL_META.chamfer.icon,
+  // Not Chamfer's glyph: the rail shows both at once, and two buttons with
+  // one picture read as one command (the outline verb went unfound).
+  'chamfer-chain': chamferOutlineGlyph,
+  'fillet-face-edges': filletOutlineGlyph,
+  'chamfer-face-edges': chamferOutlineGlyph,
   'extrude-region': TOOL_META.extrude.icon
 };
 

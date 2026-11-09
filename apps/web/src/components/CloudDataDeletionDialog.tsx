@@ -1,4 +1,5 @@
 import { countLabel } from '../lib/toasts';
+import { formatBytes } from '../lib/formatBytes';
 import { useEffect, useRef, useState } from 'react';
 import { TriangleAlert } from 'lucide-react';
 import type {
@@ -39,17 +40,6 @@ const COPY: Record<
   }
 };
 
-/** Binary units, named as such: Project properties labels the same sizes. */
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) {
-    return `${bytes} B`;
-  }
-  const mebibytes = bytes / (1024 * 1024);
-  return mebibytes >= 1
-    ? `${mebibytes.toFixed(1)} MiB`
-    : `${Math.round(bytes / 1024)} KiB`;
-}
-
 function inventory(
   scope: AccountDeletionScope,
   preview: AccountDeletionPreview
@@ -58,7 +48,7 @@ function inventory(
   if (scope === 'profile') {
     return `${countLabel(preview.projectCount, 'owned cloud project', 'owned cloud projects')} will be retained under a minimal anonymous ownership record.`;
   }
-  return `${countLabel(preview.projectCount, 'owned cloud project', 'owned cloud projects')}, ${countLabel(preview.revisionCount, 'saved revision', 'saved revisions')}, and at least ${formatBytes(totalBytes)} of document and revision data will be deleted.`;
+  return `${countLabel(preview.projectCount, 'owned cloud project', 'owned cloud projects')}, ${countLabel(preview.revisionCount, 'saved revision', 'saved revisions')}, and at least ${formatBytes(totalBytes, 'iec')} of document and revision data will be deleted.`;
 }
 
 export function CloudDataDeletionDialog({

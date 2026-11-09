@@ -817,6 +817,12 @@ test('keeps the last value that built when a drag is released on a refusal', asy
   // The model still shows the last value that built, and the card offers to
   // keep it instead of sending the hand back to find it.
   expect(await readAxisLength()).toBeCloseTo(lastValid, 4);
+  const canvas = page.locator('.viewer-host canvas');
+  await expect
+    .poll(() =>
+      canvas.evaluate((element) => Number(element.dataset.e2eChipAnchorWorldZ))
+    )
+    .toBeCloseTo(lastValid, 4);
   // The refusal and its Keep stand in the guidance row, no control open.
   await page
     .locator('.edit-refusal.is-bar')
@@ -879,6 +885,13 @@ test('retains the last accepted shape when release validation beats an invalid p
   const card = page.getByRole('region', { name: 'Offset Face operation' });
   await expect(card).toContainText('Failed', { timeout: PREVIEW_BUDGET_MS });
   expect(await readAxisLength()).toBeCloseTo(33, 4);
+  await expect
+    .poll(() =>
+      page
+        .locator('.viewer-host canvas')
+        .evaluate((element) => Number(element.dataset.e2eChipAnchorWorldZ))
+    )
+    .toBeCloseTo(33, 4);
   await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible();
   await page.evaluate(() =>
     (

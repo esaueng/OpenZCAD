@@ -6,7 +6,11 @@ import {
   normalizeDocument
 } from '@openzcad/document-core';
 import { openProjectStorageUpload } from '@openzcad/persistence';
-import type { AppSettings, ProjectDocument } from '@openzcad/shared';
+import type {
+  AccountStorageUsage,
+  AppSettings,
+  ProjectDocument
+} from '@openzcad/shared';
 import { DEFAULT_APP_SETTINGS, toUserId } from '@openzcad/shared';
 import { WORKSPACE_SESSION_STORAGE_KEY } from '../../apps/web/src/lib/workspaceSession';
 
@@ -410,9 +414,13 @@ export async function stubApi(
         documentBytes: 0,
         revisionBytes: 0,
         revisionCount: 0,
+        projectStorageBytes: 0,
         documentLimitBytes: 1_500_000,
-        maxRevisionsPerProject: 50
-      }
+        maxRevisionsPerProject: 50,
+        artifactBytes: 0,
+        artifactCount: 0,
+        artifactLimitBytes: 1024 ** 3
+      } satisfies AccountStorageUsage
     })
   );
   await page.route('**/api/exports', (route) =>

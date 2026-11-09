@@ -73,6 +73,50 @@ describe('selectionCalloutVerbs', () => {
     ]);
   });
 
+  it('offers a face Fillet edges and Chamfer edges after its own edits', () => {
+    const verbs = selectionCalloutVerbs({
+      kind: 'face',
+      faceCapabilities: planarFace,
+      faceEdgesAvailable: true,
+      availability: READY
+    });
+    expect(verbs.map((verb) => verb.id).slice(0, 4)).toEqual([
+      'action:offset-face',
+      'action:sketch-on-face',
+      'action:fillet-face-edges',
+      'action:chamfer-face-edges'
+    ]);
+    expect(verbs[3]).toMatchObject({
+      label: 'Chamfer edges',
+      title: 'Chamfer every edge around this face',
+      disabled: false,
+      pressed: false
+    });
+    // Without edges to take, or without a handle to arm, they are not offered.
+    expect(
+      selectionCalloutVerbs({
+        kind: 'face',
+        faceCapabilities: planarFace,
+        availability: READY
+      }).map((verb) => verb.id)
+    ).not.toContain('action:chamfer-face-edges');
+  });
+
+  it('disables the face edge verbs with the reason the tool gives', () => {
+    const verbs = selectionCalloutVerbs({
+      kind: 'face',
+      faceCapabilities: null,
+      faceSurface: 'planar',
+      faceEdgesAvailable: true,
+      availability: { ...READY, exactGeometryReady: false }
+    });
+    const chamfer = verbs.find(
+      (verb) => verb.id === 'action:chamfer-face-edges'
+    );
+    expect(chamfer?.disabled).toBe(true);
+    expect(chamfer?.title).not.toBe('Chamfer every edge around this face');
+  });
+
   it('offers a cylindrical face its diameter, an axis and a shell', () => {
     const verbs = selectionCalloutVerbs({
       kind: 'face',
@@ -159,7 +203,7 @@ describe('selectionCalloutVerbs', () => {
       ['action:chamfer-chain', false],
       ['tool:datum-axis', false]
     ]);
-    expect(verbs[2]?.label).toBe('Chamfer tangent chain');
+    expect(verbs[2]?.label).toBe('Chamfer whole outline');
     expect(
       selectionCalloutVerbs({
         kind: 'edges',

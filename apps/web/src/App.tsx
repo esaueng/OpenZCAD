@@ -601,6 +601,7 @@ import {
 import { StartScreen } from './components/StartScreen';
 import { SharePage, type SharePageState } from './components/SharePage';
 import { StartupScreen } from './components/StartupScreen';
+import { SettingsPlaceholder } from './components/SettingsPlaceholder';
 import {
   WorkspaceAppShell,
   WorkspacePending
@@ -712,7 +713,10 @@ import {
   SELECTION_FILTER_LABELS
 } from '@openzcad/viewport/types';
 import { closedCircleLoopSelections } from '@openzcad/viewport/edge-chain';
-import { bottomChamferChain } from './lib/interaction/chamferChain';
+import {
+  faceBoundaryEdges,
+  outlineChamferChain
+} from './lib/interaction/chamferChain';
 import { effectiveSelectionFilter } from './lib/selectionFilter';
 import {
   bodyFeature,
@@ -742,7 +746,7 @@ import {
   primitiveCylinderScale
 } from './lib/interaction/cylinderPrimitiveAncestry';
 import { commandPromptText } from './lib/interaction/prompt';
-import { edgeSelectionName } from './lib/edgeLoops';
+import { committedEdgesPhrase, edgeSelectionName } from './lib/edgeLoops';
 import {
   offsetPreviewRejection,
   resolveOffsetPreviewFace
@@ -1764,6 +1768,7 @@ import {
   loadSettingsViewState,
   updateSettingsViewState
 } from './lib/settingsViewState';
+import { rememberAccountShape } from './lib/accountShapeHint';
 import type { SettingsSectionId } from './lib/settingsSections';
 import {
   clampAssistantWidth,
@@ -2664,6 +2669,15 @@ export function App() {
   // showing an empty overlay; the workspace still holds its keys meanwhile.
   const settingsShown =
     useSurfaceReady(LazySettingsPage, settingsOpen) && settingsOpen;
+  // Settings open from the first render (restored after a reload, or an
+  // invitation or desktop sign-in link) has no screen of the user's to keep
+  // on view while it loads: what lies under it is the library or workspace,
+  // still starting. It is covered by the page's empty frame instead, until
+  // the page itself is up. A later open, from a click, keeps the transparent
+  // wait above. Cleared on the first close so a reopen behaves as a click.
+  const [settingsOpenedAtBoot, setSettingsOpenedAtBoot] =
+    useState(settingsOpen);
+  if (settingsOpenedAtBoot && !settingsOpen) setSettingsOpenedAtBoot(false);
   const settingsDialogRef = useRef<HTMLDivElement | null>(null);
   useModalFocus(settingsDialogRef, {
     enabled: settingsOpen,
@@ -3345,6 +3359,25 @@ export function App() {
     DISABLED_COLLABORATION_ROLLOUT
   );
   const [session, setSession] = useState<AuthSession | null>(null);
+  /**
+   * A saved session, and then its account settings, still being restored —
+   * distinct from signed out, so Settings never offers a signed-in user the
+   * sign-in form while it waits. Each restore takes a token; only the latest
+   * one may end it, so a slower superseded read cannot end a newer wait.
+   */
+  const [accountResolving, setAccountResolving] = useState(
+    () => bootCloudFunctionsEnabledRef.current
+  );
+  const accountResolutionRef = useRef(0);
+  const beginAccountResolution = useCallback(() => {
+    accountResolutionRef.current += 1;
+    setAccountResolving(true);
+    return accountResolutionRef.current;
+  }, []);
+  const endAccountResolution = useCallback((token: number | null) => {
+    if (token === null || token !== accountResolutionRef.current) return;
+    setAccountResolving(false);
+  }, []);
   const encryptedInvitationSessionRef = useRef<string | null>(null);
   useEffect(() => {
     const userId = session?.userId ?? null;
@@ -3500,6 +3533,23 @@ export function App() {
   useEffect(() => {
     lockAccountsExcept(sessionUserId);
   }, [sessionUserId]);
+  // What the next reload should expect while it restores the session: only
+  // whether one was signed in, never who. An unreachable server says nothing
+  // about the session, so it leaves the last answer standing.
+  useEffect(() => {
+    if (
+      !cloudFunctionsEnabled ||
+      accountResolving ||
+      authConfigStatus === 'unavailable'
+    )
+      return;
+    rememberAccountShape({ signedIn: sessionUserId !== null });
+  }, [
+    accountResolving,
+    authConfigStatus,
+    cloudFunctionsEnabled,
+    sessionUserId
+  ]);
   useEffect(() => {
     setAutomaticMigrationLoadError(null);
     if (!sessionUserId || !cloudFunctionsEnabled) return;
@@ -6668,6 +6718,12 @@ export function App() {
     let cancelled = false;
     let metadataTimer: ReturnType<typeof setTimeout> | undefined;
     mark('startup.begin', { rememberedProject: Boolean(startupProjectId) });
+    const accountResolution = bootCloudFunctionsEnabledRef.current
+      ? beginAccountResolution()
+      : null;
+    // The account counts as known once its settings read settles too, so the
+    // profile is not called unavailable while that read is still on its way.
+    let accountSettled: Promise<unknown> = Promise.resolve();
     void (async () => {
       try {
         const keySessionRevision = getKeySessionRevision();
@@ -6745,6 +6801,9 @@ export function App() {
           sessionPromise
         ]);
         if (!isCurrent()) return;
+        // Signed out is known now; there is no account left to wait for, so
+        // the sign-in form need not wait on the project listing below.
+        if (!activeSession) endAccountResolution(accountResolution);
         // Local cards and their account-scoped folders arrive together. Account
         // listing/decryption still proceeds progressively, with actions gated.
         void local
@@ -6785,6 +6844,7 @@ export function App() {
         const remoteSettingsPromise = activeSession
           ? api.getSettings().catch(() => null)
           : Promise.resolve(null);
+        accountSettled = remoteSettingsPromise;
         const collaborationPromise = activeSession
           ? api
               .collaborationCapabilities()
@@ -7014,6 +7074,12 @@ export function App() {
           setStatus(errorMessage(error, 'Could not restore the workspace.'));
         }
       } finally {
+        // After the session is published (or this read was superseded), and
+        // never before the settings read settles.
+        void accountSettled.then(
+          () => endAccountResolution(accountResolution),
+          () => endAccountResolution(accountResolution)
+        );
         if (!cancelled) {
           mark('startup.ready');
           measure('startup.restore', 'startup.begin', 'startup.ready');
@@ -8715,6 +8781,20 @@ export function App() {
     }
     return null;
   })();
+  // Every edge a fillet or chamfer can take around the picked face, so the
+  // face's rail can offer them in one step. Picking edges arms the handle
+  // only under direct manipulation, so the verbs wait for it.
+  const calloutFaceEdges: TopologySelection[] =
+    calloutKind === 'face' &&
+    renderedSelectedTopology &&
+    appSettings.experiments.directManipulation
+      ? faceBoundaryEdges(
+          viewerBodies.find(
+            (body) => body.bodyId === renderedSelectedTopology.bodyId
+          ) ?? representations[renderedSelectedTopology.bodyId],
+          renderedSelectedTopology
+        )
+      : [];
   // The picked face's kind, for the verbs when the machine does not hold it.
   const calloutFaceSurface = ((): SelectionCalloutVerbInput['faceSurface'] => {
     if (calloutKind !== 'face' || !renderedSelectedTopology) return undefined;
@@ -8740,12 +8820,13 @@ export function App() {
               interaction.mode === 'edges' &&
               interaction.edges.length === 1 &&
               supportsBlendGroupEdits(KERNEL_BUILD.packageVersion) &&
-              bottomChamferChain(
+              outlineChamferChain(
                 viewerBodies.find(
                   (body) => body.bodyId === interaction.edges[0]!.bodyId
                 ) ?? representations[interaction.edges[0]!.bodyId],
                 interaction.edges[0]!
               ).length > 1,
+            faceEdgesAvailable: calloutFaceEdges.length > 0,
             resizeBody:
               interaction.mode === 'face' &&
               Boolean(interaction.target.resizeBodyFeatureId),
@@ -12086,6 +12167,7 @@ export function App() {
     accountSettingsRef.current = null;
     setSession(null);
     setAccountSettings(null);
+    endAccountResolution(accountResolutionRef.current);
     setAuthConfig(null);
     setAuthConfigStatus('unavailable');
     setDeploymentHealth(null);
@@ -12142,6 +12224,31 @@ export function App() {
       ownsMode() &&
       getKeySessionRevision() === keySessionRevision;
     setAuthConfigStatus('loading');
+    // Re-enabling cloud features (or a refresh with no session yet) waits on
+    // the account as a reload does; a signed-in refresh keeps its rows.
+    const accountResolution = sessionRef.current
+      ? null
+      : beginAccountResolution();
+    try {
+      await refreshCloudAccount(
+        keySessionRevision,
+        ownsAuth,
+        ownsHealth,
+        isCurrent,
+        () => endAccountResolution(accountResolution)
+      );
+    } finally {
+      endAccountResolution(accountResolution);
+    }
+  }
+
+  async function refreshCloudAccount(
+    keySessionRevision: number,
+    ownsAuth: () => boolean,
+    ownsHealth: () => boolean,
+    isCurrent: () => boolean,
+    accountKnown: () => void
+  ) {
     void api
       .health()
       .catch(() => null)
@@ -12193,6 +12300,7 @@ export function App() {
       }
       accountSettingsRef.current = remoteSettings;
       setAccountSettings(remoteSettings);
+      accountKnown();
       setCollaborationRollout(collaborationCapabilities);
       const listed = await loadProjectSummaries(
         sessionRef.current?.userId ?? null
@@ -12206,6 +12314,7 @@ export function App() {
       setSettingsMessage('Cloud profile connected.');
       setStatus(LIBRARY_MODE_STATUS.cloudReady);
     } catch {
+      accountKnown();
       if (isCurrent()) {
         setSettingsMessage(
           'Cloud profile unavailable · device settings remain active.'
@@ -23601,8 +23710,11 @@ export function App() {
     doc,
     representations,
     interaction,
-    renderedOffsetPreview ?? offsetPreviewValueRef.current,
-    E2E_EXACT_FACE_DRAG
+    // Only a published candidate supplies a displayed displacement. The
+    // refused/hand value remains input, never an anchor for a restored face.
+    currentFaceGeometryPreview ? renderedOffsetPreview : 0,
+    E2E_EXACT_FACE_DRAG,
+    keypad?.kind === 'offset' ? offsetPreviewValueRef.current : null
   );
 
   const cylinderRadiusHandleTarget = useMemo(() => {
@@ -24323,7 +24435,10 @@ export function App() {
       ...(E2E_SLOW_FRAME_MS === undefined
         ? {}
         : { slowFrameMs: E2E_SLOW_FRAME_MS }),
-      onDegrade: () => setPreviewDeferred(true)
+      // A slow frame is judged after it publishes: when that frame caught up
+      // with the hand there is nothing to catch up on yet. The next size the
+      // hand moves to raises it (see `requestEdgePreview`).
+      onDegrade: () => setPreviewDeferred(edgePreview.lagging)
     })
   ).current;
   /**
@@ -24412,6 +24527,10 @@ export function App() {
     }
     // A size the preview will not judge (zero) is settled here, unchecked.
     else setPreviewVerdict({ value: size, status: 'unchecked' });
+    // A slow gesture's chip goes ready when a frame catches up; a new size
+    // puts the hand ahead again, so say so now. Publish alone left the chip
+    // ready over the previous radius's geometry until the new frame landed.
+    setPreviewDeferred(edgePreview.degraded && edgePreview.lagging);
   }
   /** Ends the drag's work; what is on screen stays until `clearEdgePreview`. */
   function stopEdgePreview() {
@@ -24671,7 +24790,7 @@ export function App() {
     void executeValidatedDirectEdit(
       command,
       resultBodyId,
-      `${op === 'fillet' ? 'Filleted' : 'Chamfered'} ${command.payload.edgeHashes.length} edge${command.payload.edgeHashes.length === 1 ? '' : 's'} at ${rounded} ${doc?.units ?? ''}.`,
+      `${op === 'fillet' ? 'Filleted' : 'Chamfered'} ${committedEdgesPhrase(command.payload.edgeHashes, 'edgeReferences' in command.payload ? command.payload.edgeReferences : undefined)} at ${rounded} ${doc?.units ?? ''}.`,
       rounded,
       () => {
         clearEdgePreview();
@@ -25353,7 +25472,7 @@ export function App() {
       supportsBlendGroupEdits(KERNEL_BUILD.packageVersion)
     ) {
       const picked = interaction.edges[0]!;
-      const chain = bottomChamferChain(
+      const chain = outlineChamferChain(
         viewerBodies.find((body) => body.bodyId === picked.bodyId) ??
           representations[picked.bodyId],
         picked
@@ -25368,6 +25487,31 @@ export function App() {
       }
     }
     if (action === 'chamfer-chain') return;
+    if (action === 'fillet-face-edges' || action === 'chamfer-face-edges') {
+      const face = renderedSelectedTopology;
+      if (face?.kind !== 'face' || !requireExactGeometryReady()) return;
+      if (interaction.mode === 'face' && interaction.phase === 'validating') {
+        return;
+      }
+      const edges = faceBoundaryEdges(
+        viewerBodies.find((body) => body.bodyId === face.bodyId) ??
+          representations[face.bodyId],
+        face
+      );
+      if (edges.length === 0) return;
+      // The face's own offset handle gives way to the edges' blend handle.
+      clearEdgePreview();
+      handleSelectEdgeChainFromViewer(edges);
+      const op: 'fillet' | 'chamfer' =
+        action === 'fillet-face-edges' ? 'fillet' : 'chamfer';
+      dispatchInteraction({ type: 'set-edge-op', op });
+      const count =
+        edges.length === 1 ? 'the edge' : `all ${edges.length} edges`;
+      setStatus(
+        `Selected ${count} around this face. Drag the arrow to ${op} ${edges.length === 1 ? 'it' : 'them'}, or type a value.`
+      );
+      return;
+    }
     if (
       (action === 'resize-body' || action === 'offset-face') &&
       interaction.mode === 'face' &&
@@ -28685,17 +28829,23 @@ export function App() {
   // it the assistant's conversation and any request still streaming.
   // One dialog from the moment Settings is asked for: modal (focus held, the
   // background inert) and found by anything looking for it, but drawn only
-  // once its page has loaded, so an early open shows no empty overlay.
+  // once its page has loaded, so an early open shows no empty overlay. Open
+  // from boot, it covers the start-up underneath with the page's empty frame.
   const settingsOverlay = settingsOpen ? (
     <div
       ref={settingsDialogRef}
-      className={settingsShown ? 'settings-overlay' : 'settings-pending'}
+      className={
+        settingsShown || settingsOpenedAtBoot
+          ? 'settings-overlay'
+          : 'settings-pending'
+      }
       role="dialog"
       aria-modal="true"
       aria-label="Settings"
       aria-busy={settingsShown ? undefined : true}
       tabIndex={-1}
     >
+      {!settingsShown && settingsOpenedAtBoot && <SettingsPlaceholder />}
       {settingsShown && (
         <SettingsPage
           settings={appSettings}
@@ -28703,6 +28853,7 @@ export function App() {
           accountState={accountSettings}
           authConfig={authConfig}
           authConfigStatus={authConfigStatus}
+          accountResolving={accountResolving}
           health={deploymentHealth}
           session={session}
           busy={settingsBusy}
@@ -30713,6 +30864,11 @@ export function App() {
               modelingLocked || !displayedGeometryComplete
                 ? null
                 : offsetHandleTarget
+            }
+            offsetDragTarget={
+              interaction.mode === 'face' && interaction.op === 'offset-face'
+                ? interaction.target
+                : null
             }
             onOffsetPreview={handleOffsetPreview}
             onOffsetCommit={(value) => {

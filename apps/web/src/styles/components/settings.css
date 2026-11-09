@@ -798,6 +798,60 @@
 /* ── Notices ──
    A full-width line inside a card for a state the user should know about,
    with its action at the end. */
+.settings-assistant-model,
+.settings-assistant-model-loading {
+  display: block;
+  height: 1lh;
+}
+
+.settings-assistant-model {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-assistant-model-loading {
+  width: min(24em, 100%);
+  color: transparent;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-2);
+}
+
+/* All provider policies share a reserved envelope, including the optional
+   free-model line. It wraps with the card rather than guessing pixel heights. */
+.settings-assistant-data {
+  display: grid;
+}
+
+.settings-assistant-data-reserve,
+.settings-assistant-data-content {
+  grid-area: 1 / 1;
+  min-width: 0;
+}
+
+.settings-assistant-data-content {
+  position: relative;
+}
+
+.settings-assistant-data-reserve {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.settings-assistant-data-reserve > div::before {
+  content: attr(data-copy);
+}
+
+.settings-assistant-data-loading {
+  position: absolute;
+  inset: 10px var(--sp-4);
+  background: repeating-linear-gradient(
+    to bottom,
+    var(--color-surface-2) 0 0.65em,
+    transparent 0.65em 1.5em
+  );
+}
+
 .settings-notice {
   display: flex;
   flex-wrap: wrap;
@@ -835,6 +889,12 @@
 .settings-notice.info {
   color: var(--color-text);
   background: var(--color-accent-dim);
+}
+
+/* An ordinary wait (the account or sign-in still loading): quiet copy, no
+   colour, since nothing is wrong. */
+.settings-notice.neutral {
+  color: var(--color-text-muted);
 }
 
 .settings-footnote {
@@ -922,6 +982,13 @@
    to hold open above the status line. */
 .settings-turnstile:empty {
   min-height: 0;
+}
+
+/* While the check is still loading, though, the widget is on its way: hold
+   its slot so the form does not grow under the pointer when it arrives. */
+.settings-turnstile-shell:has(> .settings-challenge-state.loading)
+  > .settings-turnstile:empty {
+  min-height: 65px;
 }
 
 .settings-challenge-state {
@@ -1471,6 +1538,13 @@
 .settings-head .settings-search {
   width: clamp(180px, 24vw, 300px);
   min-height: 30px;
+}
+
+/* The frame drawn while a restored Settings loads (SettingsPlaceholder) has
+   no field in its search box: hold the field's 30px and the box's border, so
+   a head the box wraps keeps its height when the page arrives. */
+.settings-head .settings-search:empty {
+  min-height: 32px;
 }
 
 @media (max-width: 580px) {

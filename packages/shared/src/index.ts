@@ -4101,12 +4101,16 @@ export const MAX_ACTIVE_ARTIFACT_UPLOAD_SESSIONS = 16;
  * owner. Uploads are otherwise unmetered R2 writes on an open-signup beta —
  * without an account ceiling, a scripted client can park unbounded storage on
  * the operator's bucket (32 MiB × 64 parts per artifact, no artifact count
- * limit). 2 GiB comfortably covers real use (the largest supported STEP
- * import is 128 MB) while bounding abuse.
+ * limit). The Free allowance, 1 GiB, covers real use (the largest supported
+ * STEP import is 128 MB) while bounding abuse; Premium raises it.
  */
-export const MAX_ACCOUNT_ARTIFACT_BYTES = 2 * 1024 * 1024 * 1024;
-/** Explicit ceiling on the unfinished portion of account artifact usage. */
-export const MAX_ACCOUNT_RESERVED_ARTIFACT_BYTES = MAX_ACCOUNT_ARTIFACT_BYTES;
+export const MAX_ACCOUNT_ARTIFACT_BYTES = 1024 * 1024 * 1024;
+/**
+ * Explicit ceiling on the unfinished portion of account artifact usage. It
+ * matches the 2 GiB that migration 0017's reservation triggers hard-code, so
+ * it stays put when the Free allowance moves.
+ */
+export const MAX_ACCOUNT_RESERVED_ARTIFACT_BYTES = 2 * 1024 * 1024 * 1024;
 /** Maximum encoded size of a shelf thumbnail that clients automatically load. */
 export const MAX_THUMBNAIL_BYTES = 512 * 1024;
 /** The thumbnail renderer publishes WebP; other image formats are not accepted. */
@@ -5089,8 +5093,11 @@ export const MAX_CLOUD_PROJECT_WRITE_BYTES =
 
 /** Account limits include projects in the recycle bin until hard deletion. */
 export const MAX_ACCOUNT_PROJECTS = 100;
-/** Stored R2 project documents and externalized source assets per owner. */
-export const MAX_ACCOUNT_PROJECT_STORAGE_BYTES = 2 * 1024 * 1024 * 1024;
+/**
+ * Free project storage per owner: stored documents, revisions and
+ * externalized source assets, plaintext or encrypted. Premium raises it.
+ */
+export const MAX_ACCOUNT_PROJECT_STORAGE_BYTES = 1024 * 1024 * 1024;
 
 /** Serialized size of `document`, measured the way the store measures it. */
 export function persistedDocumentBytes(document: ProjectDocument): number {
@@ -5133,6 +5140,14 @@ export interface AccountStorageUsage {
    * that pruning is working.
    */
   revisionCount: number;
+  /**
+   * Project storage as the account's quota measures it, against
+   * `entitlements.projectStorageLimitBytes`: inline documents and revisions,
+   * stored (compressed) R2 objects and source assets, and retained encrypted
+   * envelopes. Unlike `documentBytes + revisionBytes` (logical sizes, for the
+   * erasure preview), this is what a save is refused against.
+   */
+  projectStorageBytes: number;
   /** The per-document ceiling, so the client can name it without hardcoding. */
   documentLimitBytes: number;
   maxRevisionsPerProject: number;

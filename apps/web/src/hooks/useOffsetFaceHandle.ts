@@ -22,7 +22,8 @@ export function useOffsetFaceHandle(
   representations: ProjectDocument['derived']['bodyRepresentations'],
   interaction: InteractionState,
   previewValue: number | null | undefined,
-  exactFaceDrag: boolean
+  exactFaceDrag: boolean,
+  entryValue: number | null = null
 ) {
   const target =
     interaction.mode === 'face' &&
@@ -116,16 +117,24 @@ export function useOffsetFaceHandle(
   }, [document, target, body, exactFaceDrag]);
   const phase = interaction.mode === 'face' ? interaction.phase : null;
   const lastValue = interaction.mode === 'face' ? interaction.lastValue : null;
+  const inputValue =
+    phase === 'exact-entry' ? (entryValue ?? lastValue) : lastValue;
   return useMemo(
     () =>
       profile
         ? {
             ...profile,
-            initialValue: previewValue ?? lastValue ?? 0,
+            // previewValue describes the displayed projection; lastValue is
+            // only the editable input, which may have been refused.
+            initialValue: previewValue ?? 0,
+            ...((phase === 'failed' || phase === 'exact-entry') &&
+            inputValue !== null
+              ? { inputValue }
+              : {}),
             ...(phase === 'validating' ? { locked: true } : {}),
             ...(phase === 'exact-entry' ? { entry: true } : {})
           }
         : null,
-    [profile, previewValue, lastValue, phase]
+    [profile, previewValue, inputValue, phase]
   );
 }

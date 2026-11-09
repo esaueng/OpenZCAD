@@ -7,6 +7,9 @@ import {
 } from '@openzcad/shared';
 import type { CloudflareEnv } from './index';
 
+/** Premium project storage and cloud file storage, each: 25 GiB. */
+export const PREMIUM_STORAGE_BYTES = 25 * 1024 ** 3;
+
 /** Invalid configuration falls back to a finite operational ceiling. */
 function positiveInteger(
   value: string | undefined,
@@ -79,7 +82,7 @@ export function accountEntitlements(
       tier === 'premium'
         ? positiveInteger(
             env.PREMIUM_PROJECT_STORAGE_LIMIT_BYTES,
-            100 * 1024 ** 3,
+            PREMIUM_STORAGE_BYTES,
             1024 ** 4
           )
         : MAX_ACCOUNT_PROJECT_STORAGE_BYTES,
@@ -87,7 +90,7 @@ export function accountEntitlements(
       tier === 'premium'
         ? positiveInteger(
             env.PREMIUM_ARTIFACT_LIMIT_BYTES,
-            100 * 1024 ** 3,
+            PREMIUM_STORAGE_BYTES,
             1024 ** 4
           )
         : MAX_ACCOUNT_ARTIFACT_BYTES,
@@ -98,4 +101,73 @@ export function accountEntitlements(
       concurrencyLimit: ai.accountConcurrencyLimit
     }
   };
+}
+
+/** Databases whose stored limits already match this isolate's tier policy. */
+const syncedAccountLimits = new WeakMap<D1Database, Promise<void>>();
+
+/**
+ * Brings every account's derived limits (`users.artifact_limit_bytes`,
+ * `project_limit`, `project_storage_limit_bytes`, migration 0022) in line
+ * with this deployment's tier policy, once per isolate and database.
+ *
+ * The quota triggers read those columns. The plaintext write paths refresh
+ * the owner's row before each write, but encrypted saves, copies and
+ * migrations do not, so an account that only writes encrypted projects
+ * would otherwise keep the limits of whatever policy last touched its row,
+ * such as the column defaults. One conditional UPDATE writes only rows
+ * that differ; a failure (an older schema) is retried on a later request.
+ */
+export function syncStoredAccountLimits(
+  env: CloudflareEnv,
+  db: D1Database | undefined
+): Promise<void> {
+  if (!db) return Promise.resolve();
+  const cached = syncedAccountLimits.get(db);
+  if (cached) return cached;
+  const premiumEmails = (env.PREMIUM_USER_EMAILS ?? '')
+    .split(',')
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+  const free = accountEntitlements(env);
+  const premium = premiumEmails[0]
+    ? accountEntitlements(env, premiumEmails[0])
+    : free;
+  const isPremium = `lower(trim(email)) IN (SELECT value FROM json_each(?1))`;
+  const artifact = `CASE WHEN ${isPremium} THEN ?2 ELSE ?3 END`;
+  const projects = `CASE WHEN ${isPremium} THEN ?4 ELSE ?5 END`;
+  const storage = `CASE WHEN ${isPremium} THEN ?6 ELSE ?7 END`;
+  const sync = Promise.resolve()
+    .then(() =>
+      db
+        .prepare(
+          `UPDATE users
+       SET artifact_limit_bytes = ${artifact},
+           project_limit = ${projects},
+           project_storage_limit_bytes = ${storage}
+       WHERE artifact_limit_bytes IS NOT ${artifact}
+          OR project_limit IS NOT ${projects}
+          OR project_storage_limit_bytes IS NOT ${storage}`
+        )
+        .bind(
+          JSON.stringify(premiumEmails),
+          premium.artifactLimitBytes,
+          free.artifactLimitBytes,
+          premium.projectLimit,
+          free.projectLimit,
+          premium.projectStorageLimitBytes,
+          free.projectStorageLimitBytes
+        )
+        .run()
+    )
+    .then(() => undefined)
+    .catch((error: unknown) => {
+      // Retry a minute later, not on every request of an older schema.
+      setTimeout(() => syncedAccountLimits.delete(db), 60_000);
+      console.error('Account limit sync failed:', {
+        message: error instanceof Error ? error.message : String(error)
+      });
+    });
+  syncedAccountLimits.set(db, sync);
+  return sync;
 }

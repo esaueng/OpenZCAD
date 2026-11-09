@@ -486,6 +486,53 @@ describe('lagging', () => {
     expect(preview.lagging).toBe(false);
   });
 
+  it('turns true on the request itself after a slow gesture caught up', async () => {
+    // A consumer reads `degraded && lagging` right after request() to put the
+    // chip back into catching-up: the frame on screen still belongs to the
+    // previous value, and only the next publish would otherwise say so.
+    let clock = 0;
+    const second = deferred();
+    let call = 0;
+    const published: number[] = [];
+    const laggingAtDegrade: boolean[] = [];
+    const preview: LivePreview<Doc, string> = new LivePreview<Doc, string>({
+      build: (value) => ({ value }),
+      derive: () => {
+        call += 1;
+        clock += 500;
+        return call === 1 ? Promise.resolve('slow') : second.promise;
+      },
+      publish: (frame) => {
+        if (frame) published.push(frame.document.value);
+      },
+      now: () => clock,
+      slowFrameMs: 400,
+      continueAfterSlow: true,
+      onDegrade: () => laggingAtDegrade.push(preview.lagging)
+    });
+    preview.request(1.7);
+    await settle();
+    expect(published).toEqual([1.7]);
+    expect(preview.degraded).toBe(true);
+    expect(preview.lagging).toBe(false);
+    // The slow frame is judged after it published: at that moment the frame
+    // matched the hand, so a consumer must not latch "catching up" here.
+    expect(laggingAtDegrade).toEqual([false]);
+
+    expect(preview.request(3.6)).toBe(true);
+    expect(preview.degraded && preview.lagging).toBe(true);
+    await settle();
+    // Still in flight: the 1.7 frame is what is shown, and nothing older or
+    // newer has replaced it.
+    expect(published).toEqual([1.7]);
+    expect(preview.lagging).toBe(true);
+
+    second.resolve('caught up');
+    await settle();
+    expect(published).toEqual([1.7, 3.6]);
+    expect(preview.lagging).toBe(false);
+  });
+
   it('clears when the gesture ends', () => {
     const { preview } = makePreview({ derive: () => deferred().promise });
     preview.request(1);

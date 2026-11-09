@@ -1945,6 +1945,16 @@ export class InMemoryPersistenceService implements PersistenceService {
         0
       ),
       revisionCount: revisions.length,
+      // No R2 objects or encryption here: logical sizes are the stored ones.
+      projectStorageBytes:
+        owned.reduce(
+          (total, document) => total + persistedDocumentBytes(document),
+          0
+        ) +
+        revisions.reduce(
+          (total, revision) => total + revision.documentBytes,
+          0
+        ),
       documentLimitBytes: MAX_PERSISTED_DOCUMENT_BYTES,
       maxRevisionsPerProject: MAX_PROJECT_REVISIONS,
       artifactBytes: artifacts.bytes,

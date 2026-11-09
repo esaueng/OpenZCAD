@@ -44,7 +44,10 @@ import {
 } from './apiRateLimit';
 import { serveAssetFallback } from './assetFallback';
 import { JsonComplexityGuard } from '@openzcad/shared';
-import { accountEntitlements } from '@openzcad/cloudflare-adapters';
+import {
+  accountEntitlements,
+  syncStoredAccountLimits
+} from '@openzcad/cloudflare-adapters';
 import {
   loadWorkspaceSessions,
   parseWorkspaceSession,
@@ -1485,6 +1488,9 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)) {
         await enforceApiRateLimit(env, `api:${userId}`, 120);
         await assertAccountNotErasing(env.DB, userId);
+        // Encrypted writes never refresh the owner's stored limits, which
+        // their quota triggers read; bring every account's up to date.
+        await syncStoredAccountLimits(env, env.DB);
       }
       const response = await handleE2eeRequest(
         request,
