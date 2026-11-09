@@ -159,6 +159,7 @@ import {
   createBodyEdgeOverlay,
   DEFAULT_TANGENT_EDGE_STYLE,
   type TangentEdgeStyle,
+  installSilhouetteUpdates,
   createAnalyticCylinderGhost,
   createFaceHighlightGeometry,
   createAxesGizmo,
@@ -2834,6 +2835,9 @@ export function ModelViewer({
     const drawnBodyReport = new DrawnBodyReport();
     let lastPerfFrameAt: number | null = null;
     const scene = new THREE.Scene();
+    // Curved-surface outlines are picked per camera just before each render
+    // of this scene, for the viewport camera and any capture alike.
+    installSilhouetteUpdates(scene);
     // Solid clear colour stays behind the clip-space gradient as a safe first
     // frame/context-recovery fallback.
     scene.background = new THREE.Color(DARK_STAGE_PALETTE.backdropBottom);
