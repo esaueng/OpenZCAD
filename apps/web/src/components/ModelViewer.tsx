@@ -48,6 +48,7 @@ import {
 import { mark, measure, timed } from '../lib/perf';
 import { InteractionShaderWarmup } from './viewer/interactionShaderWarmup';
 import { usePreparedBodies } from './viewer/usePreparedBodies';
+import { releasePreparedBodyGeometry } from '../../../../packages/viewport/src/render/preparedBody';
 import { reportPresentedGeometry } from '../lib/startupReadiness';
 import { useWorkspaceFrameReady } from './WorkspaceLoading';
 import { recordEditPhase } from '../lib/editTrace';
@@ -12711,6 +12712,9 @@ export function ModelViewer({
         }
       }
       if (!object) object = createObjectForBody(body, edgeResolution);
+      // An unchanged installed geometry (e.g. a picking-only change) also
+      // consumes readiness without needing the prepared smoothing arrays.
+      releasePreparedBodyGeometry(body);
       object.userData.bodyId = body.bodyId;
       const previousSelectionOverlay = object.getObjectByName(
         'body-selection-overlay'

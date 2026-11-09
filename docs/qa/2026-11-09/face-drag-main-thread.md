@@ -23,17 +23,22 @@ source mesh buffers are never transferred or detached. The hook keeps one reques
 in flight and then sends the newest waiting source.
 Every completed reply is cached and can advance the displayed geometry, even if
 another tick is waiting; an older result cannot rewind a newer display. Unchanged
-body objects retain their weakly keyed preparations across ticks. First open and
+body objects retain their weakly keyed readiness across ticks. Appearance-only
+replacements carry the displayed body's preparation over synchronously when
+`sameBodyRenderGeometry` and `sameBodyPickingTopology` both pass. Colour/name
+changes therefore publish the new appearance, selection and handles on the same
+render without copying a dense mesh to the worker. First open and
 body-ID set changes (add/merge/split/delete/undo) prepare synchronously, so they
 never blank the scene for a worker round trip. Other replacements hold the most
 recent ready body set together with its selection/highlight/handle props. Revision
-readiness waits for the actual current replacement to be installed. Installed
-GPU attributes are
-separate copies, so a later in-place update cannot poison restoration.
+readiness waits for the actual current replacement to be installed.
 Large facet references retain their existing direct-upload path. A worker
 error, message-deserialization error, malformed/error reply, failed post or
 five-second in-flight timeout terminates the worker and restores the synchronous
-renderer. Input churn does not restart that timeout.
+renderer. Input churn does not restart that timeout. Every fallback emits
+`oz:viewer.preparation-fallback` with a `detail.reason` of `timeout`, `error`,
+`messageerror`, `bad-reply`, `post-failure`, or `construction`. The opt-in face-drag
+trace records the same reason in the `prepare-fallback` event's `message`.
 
 A second source of work was the global React preview-verdict state: every
 drag tick rendered the workspace and its panels although only the closed
@@ -47,6 +52,28 @@ warmup now includes the real ghost and clipped pull variants using tiny sample
 geometry and zero-draw reflection. Renderer-owned materials retain these
 programs until renderer disposal. No ghost pass is removed: the depth/fill/rim
 passes deliberately describe the old shape and proposed added material.
+
+## Preparation memory
+
+Installed geometry keeps separate position, normal, index and coplanar-depth
+buffers. Directly sharing a cached result is unsafe: `updateObjectForBody` rewrites
+positions/normals and `applyCoplanarBodyDepthSlots` rewrites depth values (and can
+expand the geometry). After a new mesh is installed, existing buffers are updated,
+or the viewer retains an unchanged mesh, the cached `geometry` field is deleted.
+This releases its duplicate position/normal/depth/index arrays and its outline and
+smoothing-layout references. All appearance aliases share that cache entry, so
+release applies to all of them. A later restoration rebuilds from the document
+instead of reusing mutated installed buffers.
+
+The weak entry remains as a readiness marker for appearance carry-over. Tangent
+IDs and silhouette candidates remain available to the edge overlay; the installed
+silhouette state shares those candidates rather than duplicating their cache
+storage. The cached/transferred smoothing layout no longer includes the unused
+`normalSums` Float64Array: only installed geometry owns that scratch buffer.
+Pending preparations still hold staging arrays until installation or collection;
+source mesh/topology cloning and the temporary installation copies remain. This
+is an ownership change covered by identity/cache assertions, not a measured new
+peak-RSS or frame-time claim.
 
 ## Reproduction
 

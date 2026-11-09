@@ -5,6 +5,10 @@ import {
   type PreparedBody
 } from '../../../../../packages/viewport/src/render/preparedBody';
 import { traceFaceDrag } from '../../lib/faceDragTrace';
+import {
+  sameBodyRenderGeometry,
+  sameBodyPickingTopology
+} from '../../../../../packages/viewport/src/render/scene';
 import { denseBodyNeedsPreparation } from './bodyPreparationPolicy';
 import { prepareBody } from './prepareBody';
 
@@ -46,6 +50,22 @@ export function usePreparedBodies<T = undefined>(
   // the scene. Weak keys retain unchanged bodies across ticks without growing a
   // separate strong index of abandoned projections or undo history.
   useMemo(() => {
+    const previousById = new Map(
+      displayed.current.source.map((body) => [body.bodyId, body])
+    );
+    for (const body of source) {
+      if (!denseBodyNeedsPreparation(body) || preparedBodies.has(body))
+        continue;
+      const previous = previousById.get(body.bodyId);
+      const prepared = previous && preparedBodies.get(previous);
+      if (
+        previous &&
+        prepared &&
+        sameBodyRenderGeometry(previous, body) &&
+        sameBodyPickingTopology(previous, body)
+      )
+        preparedBodies.set(body, prepared);
+    }
     if (
       unavailable ||
       (ready.source !== source && sameBodySet(ready.source, source))
@@ -84,11 +104,15 @@ export function usePreparedBodies<T = undefined>(
     // One in-flight request, then the latest source. This bounds memory, avoids
     // copying an unchanged dense body again, and lets fast drags make progress.
     if (active.current) return;
-    const fail = () => {
+    const fail = (reason: string) => {
       if (active.current) clearTimeout(active.current.timeout);
       active.current = null;
       workerRef.current?.terminate();
       workerRef.current = null;
+      performance.mark?.('oz:viewer.preparation-fallback', {
+        detail: { reason }
+      });
+      traceFaceDrag('prepare-fallback', { message: reason });
       setUnavailable(true);
     };
     let worker = workerRef.current;
@@ -98,8 +122,8 @@ export function usePreparedBodies<T = undefined>(
           new URL('./bodyPreparationWorker.ts', import.meta.url),
           { type: 'module' }
         );
-        worker.onerror = fail;
-        worker.onmessageerror = fail;
+        worker.onerror = () => fail('error');
+        worker.onmessageerror = () => fail('messageerror');
         worker.onmessage = (
           event: MessageEvent<{
             id: number;
@@ -108,12 +132,17 @@ export function usePreparedBodies<T = undefined>(
           }>
         ) => {
           const request = active.current;
-          if (!request || event.data.id !== request.id) return;
+          if (!request) return;
+          if (!event.data || typeof event.data.id !== 'number') {
+            fail('bad-reply');
+            return;
+          }
+          if (event.data.id !== request.id) return;
           if (
-            !event.data.prepared ||
+            !Array.isArray(event.data.prepared) ||
             event.data.prepared.length !== request.bodies.length
           ) {
-            fail();
+            fail('bad-reply');
             return;
           }
           clearTimeout(request.timeout);
@@ -140,7 +169,7 @@ export function usePreparedBodies<T = undefined>(
         };
         workerRef.current = worker;
       } catch {
-        fail();
+        fail('construction');
         return;
       }
     }
@@ -150,7 +179,7 @@ export function usePreparedBodies<T = undefined>(
       source,
       presentation,
       bodies,
-      timeout: setTimeout(fail, BODY_PREPARATION_TIMEOUT_MS)
+      timeout: setTimeout(() => fail('timeout'), BODY_PREPARATION_TIMEOUT_MS)
     };
     // Structured cloning copies authoritative mesh/topology on the main thread.
     // Measure it separately from installation; never detach picking/undo buffers.
@@ -163,7 +192,7 @@ export function usePreparedBodies<T = undefined>(
       });
       traceFaceDrag('prepare-post', { ms, detail: { bodies: bodies.length } });
     } catch {
-      fail();
+      fail('post-failure');
     }
   }, [source, preparing, ready, presentation]);
 

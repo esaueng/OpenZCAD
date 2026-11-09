@@ -68,6 +68,8 @@ describe('retained exact body buffers', () => {
     const sourceIndices = body.mesh.indices.slice();
     const fresh = createObjectForBody(body) as THREE.Mesh;
     const data = prepareBodyGeometry(body);
+    expect(data.layout).toBeDefined();
+    expect(data.layout).not.toHaveProperty('normalSums');
     // Simulate the worker transfer: preparation owns these arrays, not the document.
     const transferred = structuredClone(data, {
       transfer: [
@@ -82,17 +84,43 @@ describe('retained exact body buffers', () => {
       tangentIds: new Set(),
       silhouettes: null
     });
+    const appearance = { ...body, color: '#abcdef' };
+    preparedBodies.set(appearance, preparedBodies.get(body)!);
     const installed = createObjectForBody(body) as THREE.Mesh;
+    expect(preparedBodies.has(body)).toBe(true); // Readiness survives installation.
+    expect(preparedBodies.get(body)).not.toHaveProperty('geometry');
+    expect(preparedBodies.get(appearance)).not.toHaveProperty('geometry');
+    for (const [name, staging] of [
+      ['position', transferred.positions],
+      ['normal', transferred.normals],
+      ['coplanarDepth', transferred.depth]
+    ] as const) {
+      expect(installed.geometry.getAttribute(name).array).not.toBe(staging);
+    }
     expectSameGeometry(installed.geometry, fresh.geometry);
     expect(body.mesh.vertices).toEqual(sourceVertices);
     expect(body.mesh.indices).toEqual(sourceIndices);
     expect(updateObjectForBody(installed, cylinder(9, 13, 256))).toBe(true);
-    // A later reuse mutates GPU attributes, never the immutable preparation.
+    // Restoration rebuilds from the document, not a stale/mutated preparation.
     const again = createObjectForBody(body) as THREE.Mesh;
     expectSameGeometry(again.geometry, fresh.geometry);
     disposeObject(again);
     disposeObject(fresh);
     disposeObject(installed);
+  });
+
+  it('releases prepared arrays when installation updates existing buffers', () => {
+    const object = createObjectForBody(cylinder()) as THREE.Mesh;
+    const next = cylinder(9);
+    preparedBodies.set(next, {
+      geometry: prepareBodyGeometry(next),
+      tangentIds: new Set(),
+      silhouettes: null
+    });
+    expect(updateObjectForBody(object, next)).toBe(true);
+    expect(preparedBodies.has(next)).toBe(true);
+    expect(preparedBodies.get(next)).not.toHaveProperty('geometry');
+    disposeObject(object);
   });
 
   it('recognises the body material it creates, so buffer reuse stays reachable', () => {

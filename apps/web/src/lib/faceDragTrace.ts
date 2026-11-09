@@ -15,6 +15,7 @@
  *   again from the live preview's completed frame, when the drag returns to
  *   it, has no worker reply of its own and is marked `detail.cached` = 1.
  * - `prepare-post`: main-thread structured-clone/post cost for viewport preparation.
+ * - `prepare-fallback`: viewport worker lost; `message` records the reason.
  * - `install`: the viewer installed changed bodies (`ms` = installation).
  * - `frame`: a WebGL frame was rendered (`detail.presented` = 1 for the first
  *   frame after an installation).
@@ -26,6 +27,7 @@ export type FaceDragTraceKind =
   | 'reply'
   | 'publish'
   | 'prepare-post'
+  | 'prepare-fallback'
   | 'install'
   | 'frame'
   | 'refusal';
@@ -36,7 +38,7 @@ export interface FaceDragTraceEvent {
   value?: number;
   ms?: number;
   detail?: Record<string, number>;
-  /** A refusal's reason. */
+  /** A refusal or preparation fallback reason. */
   message?: string;
 }
 

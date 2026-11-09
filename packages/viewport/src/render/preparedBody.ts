@@ -6,7 +6,6 @@ export interface ExactSmoothingLayout {
   sourceVertexCount: number;
   faceRanges: number[];
   renderSources: Uint32Array;
-  normalSums: Float64Array;
 }
 
 export interface PreparedBodyGeometry {
@@ -19,7 +18,8 @@ export interface PreparedBodyGeometry {
 }
 
 export interface PreparedBody {
-  geometry: PreparedBodyGeometry;
+  /** Released after installation; the remaining entry still certifies readiness. */
+  geometry?: PreparedBodyGeometry;
   tangentIds: Set<string>;
   silhouettes: SilhouetteCandidates | null;
 }
@@ -30,3 +30,11 @@ export const preparedBodies = new WeakMap<
   GeometryBodyRepresentation,
   PreparedBody
 >();
+
+/** All appearance aliases share this entry, so release their arrays together. */
+export function releasePreparedBodyGeometry(
+  body: GeometryBodyRepresentation
+): void {
+  const prepared = preparedBodies.get(body);
+  if (prepared) delete prepared.geometry;
+}

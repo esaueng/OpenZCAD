@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { toBodyId, type GeometryBodyRepresentation } from '@openzcad/shared';
 import {
   preparedBodies,
+  releasePreparedBodyGeometry,
   type PreparedBody
 } from '../../../../../packages/viewport/src/render/preparedBody';
 import type { FaceDragTraceEvent } from '../../lib/faceDragTrace';
@@ -13,6 +14,7 @@ import {
   usePreparedBodies
 } from './usePreparedBodies';
 
+let geometryRevision = 0;
 function body(id = 'part', triangles = 20_001): GeometryBodyRepresentation {
   return {
     bodyId: toBodyId(id),
@@ -25,7 +27,7 @@ function body(id = 'part', triangles = 20_001): GeometryBodyRepresentation {
     bbox: { min: { x: 0, y: 0, z: 0 }, max: { x: 1, y: 1, z: 1 } },
     mesh: {
       kind: 'mesh',
-      vertices: new Float32Array(9),
+      vertices: Float32Array.of(++geometryRevision, 0, 0, 0, 0, 0, 0, 0, 0),
       indices: new Uint32Array(triangles * 3)
     }
   };
@@ -59,7 +61,9 @@ const preparation = {
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  delete (window as { __ozFaceDragTrace?: unknown }).__ozFaceDragTrace;
   FakeWorker.instances = [];
 });
 function start() {
@@ -74,6 +78,59 @@ function start() {
 }
 
 describe('dense body preparation', () => {
+  it.each([{ color: '#abcdef' }, { name: 'Renamed dense body' }])(
+    'carries installed preparation through appearance-only %j on the same render',
+    (appearance) => {
+      vi.stubGlobal('Worker', FakeWorker);
+      const original = body();
+      const first = { selection: 'old', handle: 'old' };
+      const renders: unknown[] = [];
+      const view = renderHook(
+        ({ source, presentation }) => {
+          const result = usePreparedBodies(source, presentation);
+          renders.push(result);
+          return result;
+        },
+        { initialProps: { source: [original], presentation: first } }
+      );
+      const cached = preparedBodies.get(original);
+      // The renderer has installed the body and released its staging arrays.
+      releasePreparedBodyGeometry(original);
+      expect(cached?.geometry).toBeUndefined();
+      const next = [{ ...structuredClone(original), ...appearance }];
+      const presentation = { selection: 'new', handle: 'new' };
+      renders.length = 0;
+      view.rerender({ source: next, presentation });
+      expect(renders[0]).toEqual({
+        bodies: next,
+        presentation,
+        preparing: false
+      });
+      expect(view.result.current.bodies[0]).toMatchObject(appearance);
+      expect(preparedBodies.get(next[0]!)).toBe(cached);
+      expect(FakeWorker.instances).toHaveLength(0);
+    }
+  );
+  it('does not carry preparation when only picking topology changes', () => {
+    vi.stubGlobal('Worker', FakeWorker);
+    const original = body();
+    original.topology = { faces: [], edges: [] };
+    const view = renderHook(({ source }) => usePreparedBodies(source), {
+      initialProps: { source: [original] }
+    });
+    const next = {
+      ...original,
+      topology: {
+        faces: [],
+        edges: [{ topologyId: 'edge', hash: 1, points: [0, 0, 0, 1, 0, 0] }]
+      }
+    };
+    view.rerender({ source: [next] });
+    expect(
+      FakeWorker.instances[0]!.postMessage.mock.lastCall![0].bodies
+    ).toEqual([next]);
+    expect(view.result.current.preparing).toBe(true);
+  });
   it('keeps small and large facet-reference bodies on their direct upload path', () => {
     expect(denseBodyNeedsPreparation(body('small', 20_000))).toBe(false);
     expect(
@@ -186,6 +243,11 @@ describe('dense body preparation', () => {
     'recovers from worker %s without withholding current or later geometry',
     (failure) => {
       vi.useFakeTimers();
+      const mark = vi.spyOn(performance, 'mark');
+      const trace: FaceDragTraceEvent[] = [];
+      (
+        window as unknown as { __ozFaceDragTrace: unknown[] }
+      ).__ozFaceDragTrace = trace;
       const { view, worker, next } = start();
       act(() => {
         if (failure === 'reply') worker.reply({ id: 1, error: 'failed' });
@@ -209,6 +271,18 @@ describe('dense body preparation', () => {
       if (failure !== 'timeout' && failure !== 'post')
         expect(view.result.current.bodies).toBe(next);
       expect(worker.terminate).toHaveBeenCalledOnce();
+      const reason =
+        failure === 'reply'
+          ? 'bad-reply'
+          : failure === 'post'
+            ? 'post-failure'
+            : failure;
+      expect(mark).toHaveBeenCalledWith('oz:viewer.preparation-fallback', {
+        detail: { reason }
+      });
+      expect(
+        trace.filter((event) => event.kind === 'prepare-fallback')
+      ).toEqual([expect.objectContaining({ message: reason })]);
       const later = [body()];
       view.rerender({ source: later });
       expect(view.result.current).toMatchObject({
