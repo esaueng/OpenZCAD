@@ -16,6 +16,10 @@ describe('workflow runner policy', () => {
         'ubuntu-24.04',
         ...Array<string>(8).fill('*fleet-runner')
       ],
+      'fleet-ci-v8.yml': [
+        'ubuntu-24.04',
+        ...Array<string>(8).fill('*fleet-runner')
+      ],
       'daily-validation.yml': Array(4).fill('ubuntu-24.04'),
       'kernel-pin.yml': ['ubuntu-24.04'],
       'cloudflare.yml': ['ubuntu-latest', 'ubuntu-latest'],
@@ -24,7 +28,7 @@ describe('workflow runner policy', () => {
       'mls-wasm.yml': ['ubuntu-latest'],
       'production-health.yml': ['ubuntu-latest'],
       'update-remus.yml': ['ubuntu-latest', 'ubuntu-latest'],
-      'dependency-audit.yml': ['ubuntu-latest', 'ubuntu-latest'],
+      'dependency-audit.yml': Array(3).fill('ubuntu-latest'),
       'dependency-review.yml': ['ubuntu-latest']
     };
     const workflowPaths = readdirSync(workflowDirectory)
