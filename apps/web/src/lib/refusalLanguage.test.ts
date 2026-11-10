@@ -307,7 +307,8 @@ describe('plainRefusal with the kernel category', () => {
       expect(plainRefusal(raw, record), record.reason).toEqual({
         message: sentence,
         detail: raw,
-        category: 'unsupported'
+        category: 'unsupported',
+        code: 'unsupported_move_face'
       });
     }
     // A cause with no sentence of its own falls back to the category.
@@ -330,7 +331,8 @@ describe('exact-only typed refusals', () => {
       message:
         'Resizing this face would require an approximate fillet. This edit only allows exact geometry.',
       detail: raw,
-      category: 'quality_refused'
+      category: 'quality_refused',
+      code: 'exact_only_unattainable'
     });
   });
   it('explains exact quality refusal without inventing a fillet cause', () => {

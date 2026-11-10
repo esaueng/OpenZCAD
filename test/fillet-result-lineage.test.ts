@@ -170,10 +170,30 @@ describe('fillet result lineage', { timeout: 60_000 }, () => {
   });
 
   it('still fails closed when the stacked fillet is hash-only', async () => {
+    // A radius edit moves every edge of this body, so no edge keeps its own
+    // hash to fix the frame a carry would be judged in
+    // (`exact-edge-selection-transport.ts`): nothing proves which edge the
+    // stale hash meant, and the named variant above is the way through.
     const chain = await stackedChain({ secondWithReference: false });
     expect((await adapter.syncDocument(chain.document)).warnings).toEqual([]);
 
     const after = await adapter.syncDocument(withRadius(chain.document, 6.4));
+    expect(after.warnings).toEqual([
+      'Feature "Fillet bottom": A selected edge no longer exists. Re-select the edges and re-create this feature.'
+    ]);
+    expect(after.bodyRepresentations[chain.bodyId]).toBeUndefined();
+    expect(after.edgeHashRepairs ?? []).toEqual([]);
+  });
+
+  it('still fails closed when no build resolved the hash-only fillet', async () => {
+    const chain = await stackedChain({ secondWithReference: false });
+    // A project this session never built at the old radius: nothing proves
+    // which edge the stale hash meant.
+    const unseen = {
+      ...withRadius(chain.document, 6.4),
+      projectId: `${chain.document.projectId}-unseen`
+    } as ProjectDocument;
+    const after = await adapter.syncDocument(unseen);
     expect(after.warnings).toEqual([
       'Feature "Fillet bottom": A selected edge no longer exists. Re-select the edges and re-create this feature.'
     ]);

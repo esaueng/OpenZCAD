@@ -231,7 +231,12 @@ function resolveDirectEditFaceInSolids(
       : { status: 'unsupported', operation: 'direct-edit' }
   );
   if (resolution.status === 'failed') {
-    throw new Error(`Direct-edit face is stale: ${resolution.message}`);
+    const message = `Direct-edit face is stale: ${resolution.message}`;
+    // A name the body no longer publishes is a lost reference, the same
+    // verdict a vanished hash gets; the card branches on the code.
+    throw resolution.reason === 'lineage-not-found'
+      ? new AdapterRefusal('reference_missing', message)
+      : new Error(message);
   }
   if (typeof resolution.candidate.value !== 'number') {
     throw new Error(
@@ -1575,11 +1580,17 @@ function resolveFaceDistanceEndpoint(
         candidate.normal[2] === analytic.normal[2]
       );
     });
+    if (matches.length === 0) {
+      // Lost, not mis-sized: typed like every other vanished reference.
+      throw new AdapterRefusal(
+        'reference_missing',
+        'Direct-edit face is stale: its exact planar carrier no longer exists after an upstream face-distance edit.',
+        error
+      );
+    }
     if (matches.length !== 1) {
       throw new Error(
-        matches.length === 0
-          ? 'Direct-edit face is stale: its exact planar carrier no longer exists after an upstream face-distance edit.'
-          : 'Direct-edit face is stale: its exact planar carrier is ambiguous after an upstream face-distance edit.',
+        'Direct-edit face is stale: its exact planar carrier is ambiguous after an upstream face-distance edit.',
         { cause: error }
       );
     }

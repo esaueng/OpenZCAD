@@ -61,6 +61,8 @@ export interface ValidatedFeatureTarget {
   /** Identifies the feature so a refusal naming it can offer to open it. */
   featureId?: FeatureId;
   resultBodyId: BodyId;
+  /** A later feature the edit only rebuilds (`AffectedFeatureTarget`). */
+  dependent?: boolean;
 }
 
 /**
@@ -361,6 +363,7 @@ export function useValidatedFeatureCommit(
         const rejection = validatedFeatureRejection({
           featureName: target.featureName,
           ...(target.featureId ? { featureId: target.featureId } : {}),
+          ...(target.dependent ? { dependent: true } : {}),
           warnings: derived.warnings,
           ...(derived.featureWarnings
             ? { featureWarnings: derived.featureWarnings }

@@ -67,6 +67,11 @@ export interface AffectedFeatureTarget {
   /** Identifies the feature so a refusal naming it can offer to open it. */
   featureId: FeatureId;
   resultBodyId: BodyId;
+  /**
+   * A later feature that only replays on the edited one's result. A refusal
+   * it raises is about what the edit did to it, not about the user's pick.
+   */
+  dependent?: true;
 }
 
 /**
@@ -284,7 +289,8 @@ export function affectedFeatureTargets(
     targets.push({
       featureName: feature.name,
       featureId: feature.featureId,
-      resultBodyId
+      resultBodyId,
+      dependent: true
     });
     // A split's second half is a result body too; downstream features
     // targeting it are just as affected as those on the primary half.
@@ -293,7 +299,8 @@ export function affectedFeatureTargets(
       targets.push({
         featureName: feature.name,
         featureId: feature.featureId,
-        resultBodyId: data.secondBodyId
+        resultBodyId: data.secondBodyId,
+        dependent: true
       });
     }
   }

@@ -72,7 +72,10 @@ import type {
   ReferenceImagePlane
 } from '@openzcad/shared';
 import type { ReferenceImageUpdateInput } from '@openzcad/document-core';
-import { topologyReferenceRepairCommand } from './lib/topologyReferenceRepairs';
+import {
+  topologyReferenceRepairCommand,
+  withCarriedSelections
+} from './lib/topologyReferenceRepairs';
 import {
   parameterMinimums,
   parameterInputError,
@@ -792,6 +795,9 @@ import {
   holdsRefusal,
   isOperationState,
   isStaleSelectionError,
+  editedFeatureIdFor,
+  faceOffsetPlanKey,
+  type FaceOffsetPlanEdit,
   pendingHistoryStepFor,
   operationSelectionKey,
   nextSketchCircleMode,
@@ -1919,6 +1925,8 @@ const DISPLAY_MODE_ORDER: DisplayMode[] = [
 interface OffsetEditPlan {
   command: AnyCommand;
   bodyId: BodyId;
+  /** The feature the plan edits in place; null when it appends a step. */
+  editedFeatureId: string | null;
   successMessage: string;
   validationTargets?: AffectedFeatureTarget[];
   preflightRejection?: string;
@@ -3835,6 +3843,9 @@ export function App() {
    * this on screen as the model's state, and the card offers to keep it.
    */
   const [lastValidPreview, setLastValidPreview] = useState<number | null>(null);
+  /** What the latest face-offset plan does to history (`editedFeatureIdFor`). */
+  const [offsetPlanEdit, setOffsetPlanEdit] =
+    useState<FaceOffsetPlanEdit | null>(null);
   /**
    * The kernel's verdict on the last value previewed, built or refused. The
    * edit control is Ready only once the value it shows has one, so Enter
@@ -4100,7 +4111,12 @@ export function App() {
     document: doc,
     currentDocument: () => managerRef.current?.document,
     warnings: attributedFeatureWarnings(),
-    rebuild: geometry.syncOnce,
+    // A user edit's check may propose carrying a later hash-only pick; the
+    // commit stores it in the edit's own revision (`withCarriedSelections`).
+    rebuild: (document, analysis, lineageDemand) =>
+      geometry.syncOnce(document, analysis, lineageDemand, {
+        proposeCarry: true
+      }),
     track: trackKernelRefusal
   });
   const { syncCandidate, syncParameterCandidate } = refusalHarvest;
@@ -4442,6 +4458,8 @@ export function App() {
       const terminal = listFeaturesInOrder(candidate.document).at(-1);
       const derived = await geometry.previewGeometry(candidate.document, {
         signal,
+        // An edit's preview, built like its release check (see `syncOnce`).
+        proposeCarry: true,
         deferTopology:
           supportsBlendGroupEdits(KERNEL_BUILD.packageVersion) &&
           terminal?.data.featureKind === 'direct-edit' &&
@@ -4468,7 +4486,8 @@ export function App() {
       errorMessage(error, 'Exact radius preview failed.'),
       value,
       diagnostic?.advice,
-      diagnostic?.headline
+      diagnostic?.headline,
+      diagnostic
     );
   }
   const cylinderRadiusPreview = useRef(
@@ -4572,6 +4591,7 @@ export function App() {
         const base = managerRef.current?.document;
         const plan = base ? buildOffsetEditPlan(offset, undefined, base) : null;
         const current = interactionRef.current;
+        notePlanEdit(current, plan);
         const candidate =
           base && plan && current.mode === 'face'
             ? plan.command.apply(base)
@@ -4610,7 +4630,9 @@ export function App() {
         }
         const derived = await geometry.previewGeometry(candidate.document, {
           signal,
-          deferTopology: true
+          deferTopology: true,
+          // Built like the release check, so preview and commit agree.
+          proposeCarry: true
         });
         const live = managerRef.current;
         const documentMoved =
@@ -9255,7 +9277,19 @@ export function App() {
       setPreviewDoc(null);
       const beforeDocument = managerRef.current.document;
       const before = beforeDocument.derived.bodyRepresentations;
-      let next = managerRef.current.execute(command);
+      // An upstream edit may have carried a later fillet's hash-only edges:
+      // store where they are now in this same revision, or do not commit.
+      const carried = derived
+        ? withCarriedSelections(beforeDocument, [command], derived)
+        : null;
+      if (carried && 'refusal' in carried) {
+        setStatus(carried.refusal);
+        return false;
+      }
+      let next =
+        carried && carried.commands.length > 1
+          ? managerRef.current.runTransaction(command.label, carried.commands)
+          : managerRef.current.execute(command);
       // A drawing-sheet edit leaves the model alone: keep the ready geometry
       // rather than posting a rebuild (and a "Rebuilding" lane) per view move.
       // Drawings, images and folders edit presentation without rebuilding.
@@ -9320,7 +9354,18 @@ export function App() {
       setPreviewDoc(null);
       const beforeDocument = managerRef.current.document;
       const before = beforeDocument.derived.bodyRepresentations;
-      let next = managerRef.current.runTransaction(label, commands);
+      // As in `executeCommand`: carried edges are stored with the edit.
+      const carried = derived
+        ? withCarriedSelections(beforeDocument, commands, derived)
+        : null;
+      if (carried && 'refusal' in carried) {
+        setStatus(carried.refusal);
+        return false;
+      }
+      let next = managerRef.current.runTransaction(
+        label,
+        carried ? carried.commands : commands
+      );
       // A batch of sheet edits leaves the model alone, as one does alone.
       if (commands.every(isDrawingCommand)) geometry.retainReadyGeometry(next);
       if (derived) {
@@ -24375,6 +24420,7 @@ export function App() {
           candidate.document,
           {
             signal,
+            proposeCarry: true,
             deferTopology:
               supportsBlendGroupEdits(KERNEL_BUILD.packageVersion) &&
               terminal?.data.featureKind === 'direct-edit' &&
@@ -25221,7 +25267,12 @@ export function App() {
     value: number,
     /** The adapter's structured verdict, when the rejection carried one. */
     advice?: CommandDiagnostic['advice'],
-    headline?: string
+    headline?: string,
+    /**
+     * The typed verdict and the feature it names, so a drag-time refusal
+     * reads and routes exactly as the same refusal does on release.
+     */
+    typed?: Pick<CommandDiagnostic, 'code' | 'category' | 'culprit'>
   ) {
     const current = interactionRef.current;
     if (!isOperationState(current)) {
@@ -25230,6 +25281,9 @@ export function App() {
     setPreviewVerdict({ value, status: 'refused' });
     const diagnostic: CommandDiagnostic = {
       ...(typeof failure === 'string' ? splitRefusal(failure) : failure),
+      ...(typed?.category ? { category: typed.category } : {}),
+      ...(typed?.code ? { code: typed.code } : {}),
+      ...(typed?.culprit ? { culprit: typed.culprit } : {}),
       ...(headline ? { headline } : {}),
       ...(advice ? { advice } : {})
     };
@@ -25615,6 +25669,24 @@ export function App() {
    * regenerates at the new rim, which is what keeping the modifier in history
    * is for. Anything unproven stays on the generic offset.
    */
+  /**
+   * Remembers whether the latest face-offset plan edits a feature or
+   * appends one, so the history marks the right row while it runs.
+   */
+  function notePlanEdit(
+    state: InteractionState,
+    plan: OffsetEditPlan | null
+  ): void {
+    const key = faceOffsetPlanKey(state);
+    if (key === null || !plan) return;
+    const editedFeatureId = plan.editedFeatureId;
+    setOffsetPlanEdit((previous) =>
+      previous?.key === key && previous.editedFeatureId === editedFeatureId
+        ? previous
+        : { key, editedFeatureId }
+    );
+  }
+
   function buildOffsetEditPlan(
     offset: number,
     exact?: ParamValue,
@@ -25678,6 +25750,7 @@ export function App() {
       return {
         command: plan.command,
         bodyId,
+        editedFeatureId: plan.primitive.featureId,
         successMessage: `${plan.primitive.name} ${primitiveDimensionLabel(
           plan.primitive.data.featureKind === 'primitive'
             ? plan.primitive.data.primitiveKind
@@ -25697,6 +25770,7 @@ export function App() {
       return {
         command: plan.command,
         bodyId,
+        editedFeatureId: plan.feature.featureId,
         successMessage: `${plan.feature.name} ${plan.kind === 'gear-width' ? 'face width' : 'distance'} set to ${formatNumber(plan.value)} ${base.units}.`,
         validationTargets: affectedFeatureTargets(base, plan.feature.featureId),
         ...(plan.preflightRejection
@@ -25707,6 +25781,7 @@ export function App() {
     return {
       command: plan.command,
       bodyId,
+      editedFeatureId: null,
       successMessage: `Offset face by ${Math.round(offset * 100) / 100} ${base.units}.`,
       ...(plan.travelHint ? { travelHint: plan.travelHint } : {})
     };
@@ -25749,6 +25824,7 @@ export function App() {
       return 'refused';
     }
     const plan = buildOffsetEditPlan(offset, exact);
+    notePlanEdit(interactionRef.current, plan);
     if (!plan) {
       setStatus('Exact face measurements are unavailable for this offset.');
       dispatchInteraction({ type: 'clear' });
@@ -30217,6 +30293,7 @@ export function App() {
       }
       warnings={diagnostics}
       pendingHistoryStep={pendingHistoryStepFor(commandSession)}
+      editingHistoryFeatureId={editedFeatureIdFor(interaction, offsetPlanEdit)}
       historyDetails={
         <FeatureHistoryPanel
           document={doc}

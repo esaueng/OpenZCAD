@@ -11,7 +11,10 @@ import {
   type RemusLineageState,
   type RemusTopologyCandidate
 } from '../packages/kernel-adapter/src/remus-lineage';
-import { topologyHashOfWitness } from '../packages/kernel-adapter/src/topology-lineage';
+import {
+  importedStepLineageName,
+  topologyHashOfWitness
+} from '../packages/kernel-adapter/src/topology-lineage';
 import {
   toUserId,
   type BodyId,
@@ -314,6 +317,53 @@ describe('face-distance dimension-edit lineage', { timeout: 120_000 }, () => {
     expect(refused.warnings).toHaveLength(1);
     expect(refused.warnings[0]).toMatch(/stale/i);
     expect(refused.bodyRepresentations[bodyId]!.volume).toBeCloseTo(44 * 20 * 8, 6);
+  });
+
+  it('types a planar carrier that no longer exists as a missing reference', async () => {
+    const { manager, bodyId } = await importedBox(adapter);
+    let derived = await synced(manager.document);
+    const widthPair = pairAlongAxis(pairsOf(derived.bodyRepresentations[bodyId]), 'x');
+    manager.execute(
+      commandFactories.directEditBody({
+        name: 'Set width',
+        targetBodyId: bodyId,
+        operation: distanceOperation(widthPair, 44)
+      })
+    );
+    derived = await synced(manager.document);
+    expect(derived.warnings).toEqual([]);
+
+    // An imported face's canonical name whose plane is nowhere on the body:
+    // after the width move only the planar carrier could still find it.
+    const depthPair = pairAlongAxis(pairsOf(derived.bodyRepresentations[bodyId]), 'y');
+    const gone = distanceOperation(depthPair, 24);
+    const original = depthPair.faceAReference.witness;
+    if (original.analytic.kind !== 'plane') throw new Error('not a plane');
+    const witness: FaceWitnessV1 = {
+      ...original,
+      analytic: { ...original.analytic, offset: original.analytic.offset + 7_000_000 }
+    };
+    const currentHash = topologyHashOfWitness('face', witness);
+    gone.faceHash = currentHash;
+    gone.faceReference = {
+      ...depthPair.faceAReference,
+      currentHash,
+      witness,
+      lineageName: importedStepLineageName('face', currentHash)
+    };
+    manager.execute(
+      commandFactories.directEditBody({
+        name: 'Set depth',
+        targetBodyId: bodyId,
+        operation: gone
+      })
+    );
+    const refused = await synced(manager.document);
+    const warning = refused.featureWarnings?.find(
+      (candidate) => candidate.featureName === 'Set depth'
+    );
+    expect(warning?.message).toMatch(/planar carrier no longer exists/);
+    expect(warning?.kernelRefusal?.code).toBe('reference_missing');
   });
 });
 

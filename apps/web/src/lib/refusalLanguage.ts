@@ -20,6 +20,11 @@ export interface PlainRefusal {
    * one. Copy may be reworded; this is the field a caller branches on.
    */
   category?: string;
+  /**
+   * The kernel's or adapter's refusal code (`reference_missing`, …), when the
+   * rebuild typed one: the specific verdict `category` groups.
+   */
+  code?: string;
 }
 
 /**
@@ -298,7 +303,10 @@ export function plainRefusal(
   const separator = text.indexOf('\n');
   const sentence = (separator < 0 ? text : text.slice(0, separator)).trim();
   const tail = separator < 0 ? '' : text.slice(separator + 1).trim();
-  const classified = category ? { category } : {};
+  const classified = {
+    ...(category ? { category } : {}),
+    ...(typed?.code ? { code: typed.code } : {})
+  };
   // A lost selection is read by the card to know that no value can help; a
   // parse error names the entity of the file that is broken. Both stay.
   if (/no longer exists|^parse error:/.test(sentence)) {

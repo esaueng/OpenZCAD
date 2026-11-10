@@ -355,7 +355,15 @@ export interface CommandDiagnostic {
    * A new fillet that cannot be built beside an older one fails as the older
    * one, and that feature is where the user has to go.
    */
-  culprit?: { featureId: string; featureName: string };
+  culprit?: {
+    featureId: string;
+    featureName: string;
+    /**
+     * A later feature the edit only rebuilt, not the feature being edited or
+     * created: its refusal is about what the change did to it.
+     */
+    dependent?: boolean;
+  };
   /**
    * The exact kernel's own classification of the refusal, when the rebuild
    * recorded one. `message` is copy and may be reworded; this is the field a
@@ -363,6 +371,12 @@ export interface CommandDiagnostic {
    * came back malformed".
    */
   category?: string;
+  /**
+   * The kernel's or adapter's refusal code, when the rebuild typed one:
+   * `reference_missing` for a saved edge or face that no longer resolves.
+   * Branch on this, never on `message`.
+   */
+  code?: string;
   /**
    * What the adapter's size ladder proved about a refused fillet or chamfer:
    * a size that builds, or that smaller ones failed too. The control's short
@@ -1479,6 +1493,66 @@ export function commandSessionFor(
 }
 
 /**
+ * Identifies the face-offset command a plan was built for: the same face,
+ * operation and local/feature mode. A plan recorded for another selection
+ * says nothing about this one.
+ */
+export function faceOffsetPlanKey(state: InteractionState): string | null {
+  if (state.mode !== 'face' || state.op !== 'offset-face') return null;
+  return `${state.op}:${state.target.bodyId}:${state.target.topologyId}:${Boolean(state.target.localFaceOffset)}`;
+}
+
+/** What the latest face-offset plan for a selection does to history. */
+export interface FaceOffsetPlanEdit {
+  /** `faceOffsetPlanKey` of the selection the plan was built for. */
+  key: string;
+  /** The feature it edits in place, or null when it appends a step. */
+  editedFeatureId: string | null;
+}
+
+/**
+ * The existing feature a running face command edits rather than adding a
+ * step after it: Resize Body changes its source Box, a cap drag its Extrude,
+ * Cylinder or Gear. Null for a command that will append its own step (Offset
+ * Face, a local push/pull), so the history can tell "editing Box" from
+ * "adding a step".
+ *
+ * The plan decides, when one was built for this selection: the same face can
+ * edit its source one way and append a local offset the other (a blended
+ * cylinder cap dragged down), and only the plan knows which. Before any plan
+ * the target's own source is the answer.
+ */
+export function editedFeatureIdFor(
+  state: InteractionState,
+  plan?: FaceOffsetPlanEdit | null
+): string | null {
+  const key = faceOffsetPlanKey(state);
+  if (key === null || state.mode !== 'face') return null;
+  if (plan && plan.key === key) return plan.editedFeatureId;
+  if (state.target.localFaceOffset) return null;
+  return (
+    state.target.extrudeFeatureId ?? state.target.resizeBodyFeatureId ?? null
+  );
+}
+
+/** Adapter codes for a saved edge or face that no longer resolves. */
+const STALE_REFERENCE_CODES: ReadonlySet<string> = new Set([
+  'reference_missing',
+  'reference_positional'
+]);
+
+/**
+ * A saved edge or face reference no longer resolves on the rebuilt body —
+ * the user's own pick, or one a later feature stored. Read from the
+ * adapter's typed code, never from the sentence.
+ */
+export function isStaleReferenceError(
+  error: CommandDiagnostic | null | undefined
+): boolean {
+  return error?.code !== undefined && STALE_REFERENCE_CODES.has(error.code);
+}
+
+/**
  * The history panel's "not built" row for the running command: only once a
  * refusal is the command's verdict. A refused frame under a held handle is
  * not one yet — the hand may still move back — so it shows no row.
@@ -1505,13 +1579,25 @@ export function holdsRefusal(state: InteractionState): boolean {
 }
 
 /**
- * A stale stored selection fails at EVERY value, so "try again" advice would
- * send the user in circles; the error text carries its own repair guidance.
+ * The command's OWN selection went stale. It fails at every value, so "try
+ * again" advice would send the user in circles; the error text carries its
+ * own repair guidance.
+ *
+ * A later feature that lost its saved pick because of this edit is not that:
+ * the user's selection is fine, and a smaller change may keep what the later
+ * feature needs (`isDependentReferenceError`).
  */
 export function isStaleSelectionError(
   error: CommandDiagnostic | null | undefined
 ): boolean {
-  return /no longer exists/.test(error?.message ?? '');
+  return isStaleReferenceError(error) && !error?.culprit?.dependent;
+}
+
+/** A later feature lost a saved pick because of this edit. */
+export function isDependentReferenceError(
+  error: CommandDiagnostic | null | undefined
+): boolean {
+  return isStaleReferenceError(error) && Boolean(error?.culprit?.dependent);
 }
 
 /**
@@ -1545,9 +1631,11 @@ function lifecycleHint(
       phase: state.phase,
       hint: isStaleSelectionError(state.error)
         ? 'Esc closes the tool.'
-        : refusalRulesOutSize(state.error)
-          ? 'Pick a different edge or face, or Esc to close the tool.'
-          : 'Adjust the value and try again.',
+        : isDependentReferenceError(state.error)
+          ? `Try a smaller change, or edit “${state.error!.culprit!.featureName}” to pick its edges or faces again.`
+          : refusalRulesOutSize(state.error)
+            ? 'Pick a different edge or face, or Esc to close the tool.'
+            : 'Adjust the value and try again.',
       error: state.error ?? {
         message: 'The exact operation was rejected.'
       }

@@ -1,4 +1,6 @@
 import { faceReferenceRepairCandidate } from './exact-reference-resolution';
+import { edgeSelectionKey } from './exact-edge-selection-transport';
+import { upstreamSnapshot } from './exact-carry-edit-gate';
 import { buildGearFeature } from './exact-gear';
 import { buildThreadFeature } from './exact-thread';
 import { requireValidSolid } from './kernel-validation';
@@ -2399,12 +2401,26 @@ function buildEdgeModifierFeature(
     throw new Error('Edge modifier target is unavailable.');
   }
   const target = collapseShape(kernel, storedTarget);
-  const { handles: selected, repairedReferences } = resolveEdgeModifierEdges(
+  const {
+    handles: selected,
+    repairedReferences,
+    carriedHashes
+  } = resolveEdgeModifierEdges(
     kernel,
     storedTarget,
     target,
     data.edgeHashes,
-    data.edgeReferences
+    data.edgeReferences,
+    ctx.edgeSelections
+      ? {
+          memory: ctx.edgeSelections,
+          key: edgeSelectionKey(document.projectId, feature.featureId),
+          propose: ctx.proposeCarry === true,
+          // The build's state so far: the frames earlier features resolved.
+          upstream: () =>
+            upstreamSnapshot(document, feature.featureId, ctx.result)
+        }
+      : undefined
   );
   const size = resolveParamValue(
     data.featureKind === 'fillet' ? data.radius : data.distance,
@@ -2606,6 +2622,12 @@ function buildEdgeModifierFeature(
     result.referenceRepairs.push({
       featureId: feature.featureId,
       edgeReferences: repairedReferences
+    });
+  }
+  if (carriedHashes) {
+    (result.edgeHashRepairs ??= []).push({
+      featureId: feature.featureId,
+      ...carriedHashes
     });
   }
 }

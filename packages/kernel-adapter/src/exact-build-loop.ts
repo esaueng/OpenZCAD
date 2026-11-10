@@ -1,3 +1,4 @@
+import type { EdgeSelectionMemory } from './exact-edge-selection-transport';
 import type { ImportedMeshStore } from './exact-imported-mesh-cache';
 import { OperationCancellationToken, type RemusKernel } from './remus-runtime';
 import {
@@ -141,6 +142,18 @@ export interface FeatureBuildContext {
    * so a directly constructed context still compiles.
    */
   cancellation?: BuildCancellation;
+  /**
+   * The adapter's memory of hash-only edge selections, which lets a fillet
+   * or chamfer follow its edges across an upstream resize
+   * (`exact-edge-selection-transport.ts`). Absent, nothing is carried.
+   */
+  edgeSelections?: EdgeSelectionMemory;
+  /**
+   * This build is an edit's preview or validation and may propose carrying
+   * a hash-only selection (reported in `edgeHashRepairs`). A plain build
+   * never carries, so its result depends on the document alone.
+   */
+  proposeCarry?: boolean;
 }
 
 /** The narrowed data payload for one feature kind (or a union of kinds). */
@@ -203,7 +216,11 @@ function* buildDocumentHistorySteps(
   /** See {@link FeatureBuildContext.heldDisplayDeflection}. */
   heldDisplayDeflection?: (bodyId: BodyId) => number | undefined,
   deferredDirectEditFeatureId?: FeatureId,
-  trackIdleLineageViews = false
+  trackIdleLineageViews = false,
+  /** See {@link FeatureBuildContext.edgeSelections}. */
+  edgeSelections?: EdgeSelectionMemory,
+  /** See {@link FeatureBuildContext.proposeCarry}. */
+  proposeCarry = false
 ): Generator<void, ExactBuildResult> {
   const { scope, errors } = getParameterScope(document);
   // F05: a feature fed a typed parameter as the wrong quantity (a length as
@@ -270,7 +287,9 @@ function* buildDocumentHistorySteps(
     importedSteps,
     strictVerdicts,
     ...(heldDisplayDeflection === undefined ? {} : { heldDisplayDeflection }),
-    ...(cancellation === undefined ? {} : { cancellation })
+    ...(cancellation === undefined ? {} : { cancellation }),
+    ...(edgeSelections === undefined ? {} : { edgeSelections }),
+    ...(proposeCarry ? { proposeCarry: true } : {})
   };
 
   try {
@@ -300,6 +319,15 @@ function* buildDocumentHistorySteps(
         const wrongQuantity = misuse.get(feature.featureId);
         if (wrongQuantity) throw new Error(wrongQuantity);
         assertFeatureSketchProjectionsValid(result, feature.data);
+        // Downstream of a manual suppression nothing the build learns is
+        // written back (`withholdReferenceRepairs`), so a hash-only pick is
+        // not carried there either: a carry it could not store would build
+        // geometry the saved document cannot rebuild.
+        if (firstSuppressed >= 0 && index > firstSuppressed) {
+          delete ctx.edgeSelections;
+        } else if (edgeSelections !== undefined) {
+          ctx.edgeSelections = edgeSelections;
+        }
         if (!primitiveReuse?.restore(index, feature, result)) {
           buildFeature(ctx, feature);
           primitiveReuse?.store(index, feature, result);

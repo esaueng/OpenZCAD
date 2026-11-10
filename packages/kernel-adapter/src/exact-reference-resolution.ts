@@ -20,6 +20,16 @@ import {
   type TopologyResolutionCandidate
 } from './topology-lineage';
 import {
+  carryEdgeSelection,
+  edgeTopologyLayout,
+  rememberEdgeSelection,
+  type EdgeSelectionMemory,
+  type EdgeTopologyLayout,
+  type LayoutEdge
+} from './exact-edge-selection-transport';
+import { AdapterRefusal } from './adapter-refusal';
+import type { UpstreamSnapshot } from './exact-carry-edit-gate';
+import {
   edgeHandlesByFingerprint,
   edgeWitnessOf,
   faceHandlesByFingerprint,
@@ -69,7 +79,10 @@ export function resolveFeatureFaces(
     if (reference) {
       const resolution = resolveTopologyReference(reference, candidates);
       if (resolution.status === 'failed') {
-        throw new Error(`${label} face is stale: ${resolution.message}`);
+        const message = `${label} face is stale: ${resolution.message}`;
+        throw resolution.reason === 'lineage-not-found'
+          ? new AdapterRefusal('reference_missing', message)
+          : new Error(message);
       }
       if (typeof resolution.candidate.value !== 'number') {
         throw new Error(
@@ -121,9 +134,32 @@ export function resolveEdgeModifierEdges(
   shape: ExactShape,
   solid: number,
   hashes: readonly number[],
-  references: readonly EdgeTopologyReferenceV5[] | undefined
+  references: readonly EdgeTopologyReferenceV5[] | undefined,
+  /**
+   * The adapter's selection memory and this feature's key in it
+   * (`exact-edge-selection-transport.ts`). Every hash-only resolution is
+   * recorded, which changes no output. Only with `propose` (an edit's
+   * preview or validation build) may a stored hash that no longer resolves
+   * be carried, and the carry is reported for the app to store; otherwise it
+   * refuses exactly as it always did, so a plain build of a document is the
+   * same on every adapter. `upstream` is the features before this one, for
+   * the dimension-edit gate.
+   */
+  carry?: {
+    memory: EdgeSelectionMemory;
+    key: string;
+    propose: boolean;
+    upstream: () => UpstreamSnapshot | null;
+  }
 ): {
   handles: number[];
+  /**
+   * Set only when a hash-only selection resolved through its recorded
+   * position because an upstream edit moved its edges: the stored hashes,
+   * deduplicated in stored order, and the current hash of each, so the app
+   * can persist the selection where it now is. Null otherwise.
+   */
+  carriedHashes: { from: number[]; to: number[] } | null;
   /**
    * Set only when a hash-only (legacy) selection resolved AND the body's
    * lineage proves a v5 reference for every selected edge — the one moment a
@@ -151,18 +187,32 @@ export function resolveEdgeModifierEdges(
         }
         return matches[0]!;
       }),
-      repairedReferences: null
+      repairedReferences: null,
+      carriedHashes: null
     };
   }
 
   const lineage = shape.solids.length === 1 ? shape.lineage : undefined;
 
-  const candidates: TopologyResolutionCandidate[] = handles.map((handle) => {
+  // Measured once: the candidates, the carried hashes and the layout all
+  // read these.
+  const measured: LayoutEdge[] = handles.map((handle) => {
     const witness = edgeWitnessOf(kernel, handle);
+    return {
+      handle,
+      witness,
+      hash: topologyHashOfWitness('edge', witness)
+    };
+  });
+  const hashOfHandle = new Map(
+    measured.map((edge) => [edge.handle, edge.hash])
+  );
+  const candidates: TopologyResolutionCandidate[] = measured.map(
+    ({ handle, witness, hash }) => {
     const lineageReference = lineage?.edgeReferences.get(handle);
     return {
       kind: 'edge',
-      currentHash: topologyHashOfWitness('edge', witness),
+      currentHash: hash,
       witnessVersion: 1,
       witness,
       ...(lineageReference
@@ -178,7 +228,8 @@ export function resolveEdgeModifierEdges(
         : {}),
       value: handle
     };
-  });
+    }
+  );
   const requestedSet = new Set(requested);
   const referencesByHash = new Map<number, EdgeTopologyReferenceV5[]>();
   for (const reference of references ?? []) {
@@ -193,7 +244,9 @@ export function resolveEdgeModifierEdges(
   }
 
   const repairCandidates: (EdgeTopologyReferenceV5 | null)[] = [];
-  const resolved = requested.map((hash) => {
+  const missing: number[] = [];
+  const direct: { storedHash: number; handle: number }[] = [];
+  const resolved = requested.map((hash): number | null => {
     const storedReferences = referencesByHash.get(hash) ?? [];
     if (storedReferences.length > 1) {
       throw new Error(
@@ -210,7 +263,12 @@ export function resolveEdgeModifierEdges(
           : { status: 'unsupported', operation: 'fillet' }
       );
       if (resolution.status === 'failed') {
-        throw new Error(`Edge modifier edge is stale: ${resolution.message}`);
+        const message = `Edge modifier edge is stale: ${resolution.message}`;
+        // A name the body no longer publishes is a lost reference, the same
+        // verdict a vanished hash gets; the card branches on the code.
+        throw resolution.reason === 'lineage-not-found'
+          ? new AdapterRefusal('reference_missing', message)
+          : new Error(message);
       }
       if (typeof resolution.candidate.value !== 'number') {
         throw new Error(
@@ -230,21 +288,86 @@ export function resolveEdgeModifierEdges(
     // its old resolver and diagnostics; a v5 failure above is terminal and
     // never reaches this fallback.
     const matches = legacyHandles.get(hash) ?? [];
-    if (matches.length === 0) {
-      throw unresolvedReferenceError('edge', hash, handles.length);
-    }
     if (matches.length > 1) {
       throw ambiguousReferenceError('edge');
     }
+    if (matches.length === 0) {
+      // The fingerprint embeds the edge's dimensions, so an upstream resize
+      // orphans it although the edge may still be there. Without a carry it
+      // refuses here; with one, the whole selection is judged below.
+      if (!carry?.propose)
+        throw unresolvedReferenceError('edge', hash, handles.length);
+      missing.push(hash);
+      repairCandidates.push(null);
+      return null;
+    }
     const handle = matches[0]!;
+    direct.push({ storedHash: hash, handle });
     repairCandidates.push(
       edgeReferenceRepairCandidate(kernel, shape, handle, hash)
     );
     return handle;
   });
-  if (new Set(resolved).size !== resolved.length) {
+  // Only a hash-only selection reaches here with `missing` entries: a named
+  // one resolves by lineage or throws above.
+  let layout: EdgeTopologyLayout | undefined;
+  let carried: Map<number, number> | null = null;
+  let upstream: UpstreamSnapshot | null | undefined;
+  const upstreamOnce = () => (upstream ??= carry?.upstream() ?? null);
+  if (carry?.propose && missing.length > 0) {
+    layout = edgeTopologyLayout(kernel, solid, measured);
+    carried = carryEdgeSelection(
+      carry.memory,
+      carry.key,
+      layout,
+      measured,
+      direct,
+      missing,
+      upstreamOnce()
+    );
+    if (!carried) {
+      throw unresolvedReferenceError('edge', missing[0]!, handles.length);
+    }
+  }
+  const handlesResolved = resolved.map(
+    (handle, index) => handle ?? carried!.get(requested[index]!)!
+  );
+  // A carried edge offers the lineage repair a build of the stored result
+  // would: the one for its own, new hash.
+  for (let index = 0; index < resolved.length; index += 1) {
+    if (resolved[index] !== null) continue;
+    const handle = handlesResolved[index]!;
+    repairCandidates[index] = edgeReferenceRepairCandidate(
+      kernel,
+      shape,
+      handle,
+      hashOfHandle.get(handle)!
+    );
+  }
+  if (new Set(handlesResolved).size !== handlesResolved.length) {
     throw new Error('Edge modifier edges do not resolve to a unique set.');
   }
+  if (carry && references === undefined) {
+    rememberEdgeSelection(
+      carry.memory,
+      carry.key,
+      kernel,
+      solid,
+      measured,
+      requested.map((storedHash, index) => ({
+        storedHash,
+        handle: handlesResolved[index]!
+      })),
+      upstreamOnce,
+      layout
+    );
+  }
+  const carriedHashes = carried
+    ? {
+        from: [...requested],
+        to: handlesResolved.map((handle) => hashOfHandle.get(handle)!)
+      }
+    : null;
   // All-or-nothing, and only for a fully hash-only selection: a partial
   // reference list would violate the persisted contract that every stored
   // reference matches a stored hash. Distinct lineage identities guard
@@ -263,7 +386,7 @@ export function resolveEdgeModifierEdges(
     ).size === verified.length
       ? verified
       : null;
-  return { handles: resolved, repairedReferences };
+  return { handles: handlesResolved, repairedReferences, carriedHashes };
 }
 
 /** A face repair cannot change the saved pick, only add its proven identity. */

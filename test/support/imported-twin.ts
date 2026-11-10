@@ -66,6 +66,8 @@ import {
   CellTimeout,
   census,
   refusal,
+  coldSync,
+  commitWithCarry,
   sameBody,
   sync,
   type CellOutcome,
@@ -1279,7 +1281,10 @@ async function apply(
   }
   const row = newFeature(before, stage.manager.document);
   const bodyId = stage.manager.document.bodyOrder.at(-1)!;
-  const derived = await sync(session, stage.manager.document, bodyId);
+  // An edit's validation, as the app checks it (see `sync`).
+  const derived = await sync(session, stage.manager.document, bodyId, {
+    proposeCarry: true
+  });
   const next: Stage = {
     ...stage,
     derived,
@@ -1289,9 +1294,23 @@ async function apply(
     notes: [...stage.notes, `${describe(edit)} via ${planned.route}`]
   };
   const refused = refusal(derived, describe(edit));
-  return refused
-    ? { stage: next, stopped: refused, reachedKernel: true }
-    : { stage: next };
+  if (refused) return { stage: next, stopped: refused, reachedKernel: true };
+  // A carried pick is committed as the app commits it, in the edit's own
+  // revision, and must rebuild cold.
+  if (derived.edgeHashRepairs?.length) {
+    const committed = await commitWithCarry(
+      session,
+      before,
+      planned.command.label,
+      [planned.command],
+      derived,
+      bodyId
+    );
+    if ('stopped' in committed)
+      return { stage: next, stopped: committed.stopped, reachedKernel: true };
+    return { stage: { ...next, manager: committed.manager } };
+  }
+  return { stage: next };
 }
 
 // ---------------------------------------------------------------- checking
@@ -1362,7 +1381,7 @@ async function reopenMatches(
       JSON.stringify(withoutDerivedProjection(stage.manager.document))
     ) as ProjectDocument
   );
-  const derived = await sync(session, reopened, stage.bodyId);
+  const derived = await coldSync(session, reopened, stage.bodyId);
   const refused = refusal(derived, 'reopen');
   if (refused) return refused;
   const after = derived.bodyRepresentations[stage.bodyId];
@@ -1448,15 +1467,28 @@ async function reResolveVerdict(
       evidence: `the first row is ${operation.kind}, not offset-face`
     };
   }
-  stage.manager.execute(
-    commandFactories.updateFeature({
-      featureId: first.featureId,
-      data: { operation: { ...operation, offset: RE_RESOLVED_CAP } }
-    })
-  );
-  const derived = await sync(session, stage.manager.document, stage.bodyId);
+  const before = stage.manager.document;
+  const edit = commandFactories.updateFeature({
+    featureId: first.featureId,
+    data: { operation: { ...operation, offset: RE_RESOLVED_CAP } }
+  });
+  stage.manager.execute(edit);
+  const derived = await sync(session, stage.manager.document, stage.bodyId, {
+    proposeCarry: true
+  });
   const refused = refusal(derived, 're-resolve');
   if (refused) return refused;
+  // Committed as the app commits it: carried hashes in the same revision.
+  const committed = await commitWithCarry(
+    session,
+    before,
+    edit.label,
+    [edit],
+    derived,
+    stage.bodyId
+  );
+  if ('stopped' in committed) return committed.stopped;
+  const persisted: Stage = { ...stage, manager: committed.manager };
   const model = {
     ...stage.model,
     post: { ...stage.model.post, height: POST.height + RE_RESOLVED_CAP }
@@ -1467,7 +1499,7 @@ async function reResolveVerdict(
     stage.notes
   );
   if (verdict.state !== 'qualified') return verdict;
-  return reopenMatches(session, { ...stage, derived, model }).then(
+  return reopenMatches(session, { ...persisted, derived, model }).then(
     (reopened) =>
       reopened ?? {
         ...verdict,

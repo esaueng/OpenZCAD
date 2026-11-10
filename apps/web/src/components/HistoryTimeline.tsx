@@ -144,6 +144,13 @@ export interface HistoryTimelineProps {
   units: UnitSystem;
   /** A refused operation, drawn after the last row until it re-arms. */
   pendingStep?: { title: string; message: string } | null;
+  /**
+   * The existing step a running command edits (Resize Body edits its Box).
+   * Its row keeps its value in view while it is selected, and a refusal is
+   * shown on it — the edit changes that step, so it never appears as a new
+   * trailing step that was "not built".
+   */
+  editingFeatureId?: string | null;
   findOpen: boolean;
   onCloseFind(): void;
   onSelectFeature(nodeId: string): void;
@@ -370,6 +377,7 @@ export function HistoryTimeline({
   parameterValues,
   units,
   pendingStep = null,
+  editingFeatureId = null,
   findOpen,
   onCloseFind,
   onSelectFeature,
@@ -1154,6 +1162,8 @@ export function HistoryTimeline({
             sketchId !== null &&
             brokenProjectionSketchIds?.has(sketchId) === true;
           const selected = selectedFeatureNodeId === feature.id;
+          const editing = editingFeatureId === feature.featureId;
+          const refusedEdit = editing && pendingStep !== null;
           const inBatch = batchIds.includes(feature.featureId);
           const value = manual
             ? 'suppressed'
@@ -1175,7 +1185,7 @@ export function HistoryTimeline({
               data-node-id={feature.id}
               data-history-index={index}
               style={{ '--history-delay': `${delay}ms` } as CSSProperties}
-              className={`feature-row${sketchId ? ' is-sketch' : ''}${selected ? ' selected' : ''}${inBatch ? ' in-batch' : ''}${consumed ? ' consumed' : ''}${hidden ? ' hidden-body' : ''}${manual ? ' suppressed' : ''}${paused ? ' paused' : ''}${failed ? ' failed' : ''}${dragFeatureId === feature.featureId ? ' is-dragging' : ''}${dropFeatureId === feature.featureId ? ' is-drop-target' : ''}${featureArrivals.has(feature.id) ? ' is-arrival' : ''}`}
+              className={`feature-row${sketchId ? ' is-sketch' : ''}${selected ? ' selected' : ''}${inBatch ? ' in-batch' : ''}${consumed ? ' consumed' : ''}${hidden ? ' hidden-body' : ''}${manual ? ' suppressed' : ''}${paused ? ' paused' : ''}${failed ? ' failed' : ''}${editing ? ' is-editing' : ''}${dragFeatureId === feature.featureId ? ' is-dragging' : ''}${dropFeatureId === feature.featureId ? ' is-drop-target' : ''}${featureArrivals.has(feature.id) ? ' is-arrival' : ''}`}
               onContextMenu={(event) => {
                 event.preventDefault();
                 onFeatureContextMenu(
@@ -1351,6 +1361,16 @@ export function HistoryTimeline({
                       <AlertTriangle size={11} aria-hidden="true" />
                     </span>
                   )}
+                  {refusedEdit && (
+                    <span
+                      className="feature-flag error history-row-refused"
+                      role="status"
+                      title={`${pendingStep.title} not applied: ${pendingStep.message}`}
+                    >
+                      <AlertTriangle size={11} aria-hidden="true" />
+                      <span>edit not applied</span>
+                    </span>
+                  )}
                   {projectionBroken && !failed && (
                     <span
                       className="feature-flag error"
@@ -1463,20 +1483,22 @@ export function HistoryTimeline({
           </div>
         )}
       </div>
-      {pendingStep && !filtering && (
-        // Outside the list: the handle, spine and keyboard walk measure
-        // `.feature-row`s, and this is not a step that can be selected,
-        // rolled back to or reordered.
-        <div
-          className="history-pending-row"
-          role="status"
-          title={pendingStep.message}
-        >
-          <AlertTriangle size={13} aria-hidden="true" />
-          <span className="history-pending-name">{pendingStep.title}</span>
-          <span className="history-pending-state">not built</span>
-        </div>
-      )}
+      {pendingStep &&
+        !filtering &&
+        !features.some((feature) => feature.featureId === editingFeatureId) && (
+          // Outside the list: the handle, spine and keyboard walk measure
+          // `.feature-row`s, and this is not a step that can be selected,
+          // rolled back to or reordered.
+          <div
+            className="history-pending-row"
+            role="status"
+            title={pendingStep.message}
+          >
+            <AlertTriangle size={13} aria-hidden="true" />
+            <span className="history-pending-name">{pendingStep.title}</span>
+            <span className="history-pending-state">not built</span>
+          </div>
+        )}
     </div>
   );
 }

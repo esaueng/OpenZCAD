@@ -451,6 +451,9 @@ export function cloneBuildState(result: ExactBuildResult): ExactBuildResult {
     ...(result.faceReferenceRepairs
       ? { faceReferenceRepairs: [...result.faceReferenceRepairs] }
       : {}),
+    ...(result.edgeHashRepairs
+      ? { edgeHashRepairs: [...result.edgeHashRepairs] }
+      : {}),
     ...(result.sketchProjections
       ? { sketchProjections: new Map(result.sketchProjections) }
       : {}),

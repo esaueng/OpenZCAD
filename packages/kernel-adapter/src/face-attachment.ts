@@ -6,6 +6,7 @@ import type {
 } from '@openzcad/shared';
 
 import { edgeEndPoint, quantizeCoordinate } from './topology-fingerprint';
+import { AdapterRefusal } from './adapter-refusal';
 import type { NativeVertexPointEvidence } from './remus-native-vertices';
 import {
   resolveTopologyReference,
@@ -115,6 +116,17 @@ function failure(
     reason,
     `${input.ownerKind ?? 'Sketch'} "${sketch}" cannot attach to source feature "${source}": ${detail} ${snapshotDiagnostic(input.snapshot)}`
   );
+}
+
+/**
+ * A reference whose entity is gone keeps its sentence and gains the typed
+ * `reference_missing` code, the same verdict a vanished fillet edge gets, so
+ * the card treats it as a lost selection rather than a value to adjust.
+ */
+function asMissingReference<E extends Error>(error: E): E {
+  return Object.assign(error, {
+    cause: new AdapterRefusal('reference_missing', error.message)
+  });
 }
 
 function mappedFailureReason(
@@ -317,7 +329,8 @@ export function resolveFaceAttachment(
       reason === 'deleted'
         ? `the attached face was deleted or no longer exists. ${resolution.message}`
         : resolution.message;
-    throw failure(input, reason, detail);
+    const error = failure(input, reason, detail);
+    throw reason === 'deleted' ? asMissingReference(error) : error;
   }
   if (resolution.via !== 'lineage') {
     throw failure(
@@ -416,11 +429,11 @@ export function resolveEdgeVertex(input: ResolveEdgeVertexInput): Vector3 {
     input.candidates
   );
   if (resolution.status === 'failed') {
-    throw fail(
-      mappedFailureReason(resolution.reason) === 'deleted'
-        ? `its edge was deleted or no longer exists. ${resolution.message}`
-        : resolution.message
-    );
+    throw mappedFailureReason(resolution.reason) === 'deleted'
+      ? asMissingReference(
+          fail(`its edge was deleted or no longer exists. ${resolution.message}`)
+        )
+      : fail(resolution.message);
   }
   if (resolution.via !== 'lineage') {
     throw fail(
@@ -468,11 +481,13 @@ function lineageCandidate<T extends TopologyResolutionCandidate>(
 ): T {
   const resolution = resolveTopologyReference(reference, candidates);
   if (resolution.status === 'failed') {
-    throw fail(
-      mappedFailureReason(resolution.reason) === 'deleted'
-        ? `its ${what} was deleted or no longer exists. ${resolution.message}`
-        : resolution.message
-    );
+    throw mappedFailureReason(resolution.reason) === 'deleted'
+      ? asMissingReference(
+          fail(
+            `its ${what} was deleted or no longer exists. ${resolution.message}`
+          )
+        )
+      : fail(resolution.message);
   }
   if (resolution.via !== 'lineage') {
     throw fail(

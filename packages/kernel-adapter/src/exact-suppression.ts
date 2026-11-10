@@ -193,6 +193,11 @@ export function withholdReferenceRepairs(
       (repair) => !own(repair)
     );
   }
+  if (result.edgeHashRepairs?.some(own)) {
+    result.edgeHashRepairs = result.edgeHashRepairs.filter(
+      (repair) => !own(repair)
+    );
+  }
   if (result.faceReferenceRepairs?.some(own)) {
     result.faceReferenceRepairs = result.faceReferenceRepairs.filter(
       (repair) => !own(repair)

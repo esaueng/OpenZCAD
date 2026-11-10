@@ -1006,6 +1006,17 @@
   font-size: var(--fs-xs);
 }
 
+/* A refused edit of an existing step (Resize Body on its Box) is said on that
+   step's own row, not as a new step under the last one. */
+.history-row-refused {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--color-error-text);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
 .history-row-actions {
   display: flex;
   gap: 1px;
@@ -1025,6 +1036,26 @@
 .history-timeline .feature-row.selected .history-row-value {
   opacity: 0;
   transform: translateX(-4px);
+}
+
+/* The step a running command is editing keeps its value in view: "Box
+   30 × 18 × 24 mm" is what the drag is changing. Hover or focus still
+   brings the row's actions forward; touch keeps its actions (below). */
+@media (hover: hover) {
+  .history-timeline
+    .feature-row.selected.is-editing:not(:hover, :focus-within)
+    .history-row-value {
+    opacity: 1;
+    transform: none;
+  }
+
+  .history-timeline
+    .feature-row.selected.is-editing:not(:hover, :focus-within)
+    .history-row-actions {
+    opacity: 0;
+    transform: translateX(4px);
+    pointer-events: none;
+  }
 }
 
 /* The end of history: a 20px knob centred on the line, with a grip across

@@ -2,6 +2,7 @@ import {
   ProjectionReceiver,
   projectionTransferables
 } from '../lib/projectionStream';
+import { GeometryWorkerError } from '../lib/workerRefusal';
 import { beginEditTrace, recordEditPhase } from '../lib/editTrace';
 import type { GeometryReadyState } from '@openzcad/shared';
 import type { EditAnalysisRequest } from '@openzcad/shared';
@@ -178,12 +179,24 @@ export interface GeometryWorkerApi {
   syncOnce(
     document: ProjectDocument,
     analysis?: EditAnalysisRequest,
-    lineageDemand?: readonly BodyId[]
+    lineageDemand?: readonly BodyId[],
+    /**
+     * `proposeCarry`: this is an edit's validation, so a later hash-only
+     * fillet/chamfer the edit stranded may be carried and reported in
+     * `edgeHashRepairs`, for the commit to store in the same revision. Every
+     * other rebuild leaves it unset and depends on the document alone.
+     */
+    options?: { proposeCarry?: boolean }
   ): Promise<DerivedState>;
   /** Exact display/validation only; cannot be used as an authoritative commit. */
   previewGeometry(
     document: ProjectDocument,
-    options?: { signal?: AbortSignal; deferTopology?: boolean }
+    options?: {
+      signal?: AbortSignal;
+      deferTopology?: boolean;
+      /** An edit's live preview: see `syncOnce`. */
+      proposeCarry?: boolean;
+    }
   ): Promise<GeometryReadyState>;
   releaseEditPreview?(document: ProjectDocument): void;
   /**
@@ -733,7 +746,10 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
             });
           }
           if (message.ok) pending.resolve(message.geometry);
-          else pending.reject(new Error(message.error));
+          else
+            pending.reject(
+              new GeometryWorkerError(message.error, message.refusal)
+            );
           return;
         }
         if (message.type === 'export') {
@@ -843,7 +859,10 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
             if (message.ok) {
               pending.resolve(message.derived);
             } else {
-              pending.reject(new Error(message.error));
+              // Keeps the refusal's code: a release refusal routes on it.
+              pending.reject(
+                new GeometryWorkerError(message.error, message.refusal)
+              );
             }
           }
           return;
@@ -1075,7 +1094,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         lastDemandRef.current ?? undefined
       );
     },
-    syncOnce(document, analysis, lineageDemand) {
+    syncOnce(document, analysis, lineageDemand, options) {
       // One-off rebuilds (previews, preflights, demo seeding, AI proposals)
       // read lineage straight from the result, so they get full lineage by
       // default. Only an explicit demand opts one into the idle skip.
@@ -1083,7 +1102,8 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         type: 'sync',
         document: documentForRebuild(document),
         ...(analysis ? { analysis } : {}),
-        ...(lineageDemand ? { lineageDemand: [...lineageDemand] } : {})
+        ...(lineageDemand ? { lineageDemand: [...lineageDemand] } : {}),
+        ...(options?.proposeCarry ? { proposeCarry: true } : {})
       });
       return posted.ok
         ? posted.promise
@@ -1128,7 +1148,8 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           type: 'preview-geometry',
           requestId,
           document: documentForRebuild(document),
-          ...(options?.deferTopology ? { deferTopology: true } : {})
+          ...(options?.deferTopology ? { deferTopology: true } : {}),
+          ...(options?.proposeCarry ? { proposeCarry: true } : {})
         });
         const entry = geometryPreviewRequests.current.get(requestId);
         if (entry) {

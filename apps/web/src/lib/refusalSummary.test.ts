@@ -144,13 +144,54 @@ describe('refusalSummary', () => {
       refusalSummary(
         {
           message:
-            'The selected edge lineage no longer exists. Re-select the edges and re-create this feature.'
+            'The selected edge lineage no longer exists. Re-select the edges and re-create this feature.',
+          category: 'invalid_input',
+          code: 'reference_missing'
         },
         'Fillet'
       )
     ).toMatchObject({
       status: 'selection-changed',
       headline: 'Pick the edge or face again'
+    });
+  });
+
+  it('reads a lost selection from its code, not its sentence', () => {
+    // The same words without the adapter's code are not a verdict.
+    expect(
+      refusalSummary(
+        { message: 'A selected edge no longer exists.' },
+        'Resize Body'
+      )
+    ).toMatchObject({
+      status: 'not-built',
+      headline: 'Can’t resize this body here'
+    });
+  });
+
+  it('blames the later feature, not the pick, when an edit strands it', () => {
+    // The report: a Box resize refused because "Chamfer" lost its saved
+    // edges. The face under the cursor never changed.
+    const summary = refusalSummary(
+      {
+        message:
+          'A selected edge no longer exists. Re-select the edges and re-create this feature.',
+        category: 'invalid_input',
+        code: 'reference_missing',
+        culprit: {
+          featureId: 'feat_chamfer',
+          featureName: 'Chamfer',
+          dependent: true
+        }
+      },
+      'Resize Body'
+    );
+    expect(summary).toEqual({
+      status: 'not-built',
+      headline: '“Chamfer” can’t follow this change',
+      cause:
+        '“Chamfer” is applied to edges or faces this change reshapes, and it can no longer tell which ones they are on the new shape. Try a smaller change, or edit “Chamfer” and pick its edges or faces again.',
+      pickAnother: false
     });
   });
 });

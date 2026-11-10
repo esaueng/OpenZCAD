@@ -37,7 +37,12 @@ test('explains a failed downstream edit and opens the exact feature for repair',
     details.getByRole('button', { name: 'Inspect Base corner fillets' })
   ).toBeVisible();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await setBarValues(page, extrudeEdit, { Distance: 'base_t + 1' });
+  // A base thicker than the fins are tall swallows them, so the corners the
+  // fillet saved belong to a different shape and it cannot follow. (A plain
+  // thickening such as `base_t + 1` carries the fillet to the same corners;
+  // test/upstream-resize-carried-edges.test.ts checks that against a fresh
+  // pick.)
+  await setBarValues(page, extrudeEdit, { Distance: 'base_t + fin_h' });
   await expect(extrudeEdit).toContainText('Base corner fillets', {
     timeout: 30_000
   });
@@ -474,7 +479,8 @@ test('a failed edit brings a closed History panel forward with its record', asyn
     'aria-pressed',
     'false'
   );
-  await setBarValues(page, edit, { Distance: 'base_t + 1' });
+  // Swallowing the fins strands the corner fillets (see the first test).
+  await setBarValues(page, edit, { Distance: 'base_t + fin_h' });
   await expect(edit).toContainText('Base corner fillets', {
     timeout: 30_000
   });

@@ -3,6 +3,11 @@ import {
   IDLE,
   commandSessionFor,
   composingTextDraft,
+  editedFeatureIdFor,
+  faceOffsetPlanKey,
+  isDependentReferenceError,
+  isStaleReferenceError,
+  isStaleSelectionError,
   sketchToolKeysSuspended,
   sketchPickArmed,
   projectionRepickHolds,
@@ -1696,6 +1701,118 @@ describe('operationSelectionKey', () => {
       expect(operationSelectionKey(other)).not.toBe(key);
     }
     expect(operationSelectionKey(IDLE)).toBeNull();
+  });
+});
+
+describe('stale reference verdicts', () => {
+  const lost = {
+    message: 'A selected edge no longer exists.',
+    category: 'invalid_input',
+    code: 'reference_missing'
+  };
+
+  it('reads a lost reference from the adapter code, never the sentence', () => {
+    expect(isStaleReferenceError(lost)).toBe(true);
+    expect(isStaleSelectionError(lost)).toBe(true);
+    expect(
+      isStaleReferenceError({ message: 'A selected edge no longer exists.' })
+    ).toBe(false);
+    expect(
+      isStaleSelectionError({
+        ...lost,
+        code: 'reference_positional'
+      })
+    ).toBe(true);
+    expect(
+      isStaleReferenceError({ ...lost, code: 'edge_modifier_refused' })
+    ).toBe(false);
+  });
+
+  it('tells a later feature stranded by the edit from a stale pick', () => {
+    const stranded = {
+      ...lost,
+      culprit: {
+        featureId: 'feat_chamfer',
+        featureName: 'Chamfer',
+        dependent: true
+      }
+    };
+    expect(isStaleSelectionError(stranded)).toBe(false);
+    expect(isDependentReferenceError(stranded)).toBe(true);
+    // The edited feature's own stale reference is still the user's pick.
+    expect(
+      isStaleSelectionError({
+        ...lost,
+        culprit: { featureId: 'feat_fillet', featureName: 'Fillet' }
+      })
+    ).toBe(true);
+
+    const resizing = interactionReducer(IDLE, {
+      type: 'select-face',
+      target: face({ resizeBodyFeatureId: 'feat_box' })
+    });
+    const refused = interactionReducer(
+      interactionReducer(resizing, { type: 'validation-start', value: -7.5 }),
+      { type: 'validation-failed', diagnostic: stranded, value: -7.5 }
+    );
+    expect(toolCardFor(refused)?.hint).toBe(
+      'Try a smaller change, or edit “Chamfer” to pick its edges or faces again.'
+    );
+  });
+});
+
+describe('editedFeatureIdFor', () => {
+  it('names the step a face command edits, and only that', () => {
+    const select = (target: FaceTarget) =>
+      interactionReducer(IDLE, { type: 'select-face', target });
+    expect(
+      editedFeatureIdFor(select(face({ resizeBodyFeatureId: 'feat_box' })))
+    ).toBe('feat_box');
+    expect(
+      editedFeatureIdFor(select(face({ extrudeFeatureId: 'feat_extrude' })))
+    ).toBe('feat_extrude');
+    // An explicit local Offset Face adds its own step.
+    expect(
+      editedFeatureIdFor(
+        select(face({ resizeBodyFeatureId: 'feat_box', localFaceOffset: true }))
+      )
+    ).toBeNull();
+    expect(editedFeatureIdFor(select(face()))).toBeNull();
+    expect(editedFeatureIdFor(IDLE)).toBeNull();
+  });
+
+  it('follows the plan: a blended cap dragged down appends a local offset', () => {
+    const select = (target: FaceTarget) =>
+      interactionReducer(IDLE, { type: 'select-face', target });
+    const cap = select(face({ extrudeFeatureId: 'feat_extrude' }));
+    const key = faceOffsetPlanKey(cap)!;
+    expect(key).not.toBeNull();
+    // Dragged down, the sampled shoulder cap is a local offset: a new step,
+    // so the history shows the pending row instead of marking the Extrude.
+    expect(editedFeatureIdFor(cap, { key, editedFeatureId: null })).toBeNull();
+    // Dragged up, the same face edits its Extrude.
+    expect(
+      editedFeatureIdFor(cap, { key, editedFeatureId: 'feat_extrude' })
+    ).toBe('feat_extrude');
+    // A cylinder or gear cap carries no source id on its target, but its
+    // plan edits the primitive or gear in place, like a Box.
+    const cylinderCap = select(face());
+    expect(
+      editedFeatureIdFor(cylinderCap, {
+        key: faceOffsetPlanKey(cylinderCap)!,
+        editedFeatureId: 'feat_cylinder'
+      })
+    ).toBe('feat_cylinder');
+    // A plan made for another selection says nothing about this one.
+    expect(
+      editedFeatureIdFor(cap, {
+        key: `${key}:other`,
+        editedFeatureId: null
+      })
+    ).toBe('feat_extrude');
+    expect(
+      editedFeatureIdFor(IDLE, { key, editedFeatureId: 'feat_extrude' })
+    ).toBeNull();
   });
 });
 

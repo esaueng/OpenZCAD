@@ -14,6 +14,7 @@ import {
   type FaceAttachmentSnapshot,
   type ResolveFaceAttachmentInput
 } from './face-attachment';
+import { kernelRefusalOf } from './kernel-refusal';
 import { topologyHashOfWitness } from './topology-lineage';
 
 const FEATURE_ID = 'feature_base_extrusion' as FeatureId;
@@ -234,6 +235,9 @@ describe('face attachment resolver', () => {
     const error = capturedError(() => resolveFaceAttachment(input([])));
 
     expect(error.reason).toBe('deleted');
+    // Typed like every other lost reference, so the card reads it as a
+    // stale pick rather than a value to adjust.
+    expect(kernelRefusalOf(error)?.kernelCode).toBe('reference_missing');
     expect(error.message).toContain('Sketch "Mounted sketch"');
     expect(error.message).toContain('source feature "Base extrusion"');
     expect(error.message).toContain('attached face was deleted');
@@ -258,6 +262,7 @@ describe('face attachment resolver', () => {
       resolveFaceAttachment(input([first, second]))
     );
     expect(error.reason).toBe('ambiguous');
+    expect(kernelRefusalOf(error)).toBeNull();
     expect(error.message).toContain('multiple compatible candidates');
   });
 

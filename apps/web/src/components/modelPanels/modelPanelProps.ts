@@ -73,6 +73,8 @@ export interface ModelPanelSource {
    * ends.
    */
   pendingHistoryStep?: PendingHistoryStep | null;
+  /** The existing feature a running command edits (`editedFeatureIdFor`). */
+  editingHistoryFeatureId?: string | null;
   checkpoints: ProjectCheckpoint[];
   projectId?: string;
   /** The open document's version, to mark the save point it sits on. */
