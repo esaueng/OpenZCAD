@@ -1,7 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { commandFactories } from '@openzcad/command-system';
 import {
+  addDatumAxis,
   addPrimitiveFeature,
+  addSketchFeature,
+  extrudeSketch,
+  findSketch,
+  setParameter,
   booleanBodies,
   chamferEdges,
   createProjectDocument,
@@ -24,6 +29,11 @@ import {
   type FaceTopology,
   type ProjectDocument
 } from '@openzcad/shared';
+import {
+  frameForPlaneRef,
+  projectEdgeToSketch,
+  projectableCurveFromTopology
+} from '@openzcad/geometry';
 import { planFaceOffset } from '../apps/web/src/lib/interaction/faceOffsetPlan';
 import {
   buildDemoDocument,
@@ -1196,6 +1206,205 @@ describe(
           ['Boss break']
         );
       });
+    });
+
+    it('refuses to carry when a datum axis through a resized body flips', async () => {
+      // Box A stands at the origin, 20 tall. A datum axis runs from a fixed
+      // point (0, 0, 10) to A's top corner (0, 0, 20), so it points up. A
+      // disk with an off-centre boss turns 90° about that axis, and a
+      // hash-only fillet breaks a boss edge. Shrinking A to 5 (a pure
+      // dimension edit) moves the corner below the fixed point: the axis
+      // points down, the boss turns the other way, while the Turn's data is
+      // unchanged. Only the x of the boss stays; its y planes move along
+      // one line and the disk's rims stay, so nothing in the solids or the
+      // document tells this from a move. The datum frame does.
+      const start = addPrimitiveFeature(
+        createProjectDocument('Datum flip', user),
+        {
+          name: 'Box A',
+          primitiveKind: 'box',
+          dimensions: { width: 10, height: 10, depth: 20 }
+        }
+      );
+      const boxA = start.bodyOrder[0]!;
+      const boxBuilt = await adapter.syncDocument(start);
+      const corner = boxBuilt.bodyRepresentations[boxA]!.topology!.edges.find(
+        (edge) => {
+          for (let i = 0; i < edge.points.length; i += 3) {
+            if (
+              Math.abs(edge.points[i]!) > 1e-6 ||
+              Math.abs(edge.points[i + 1]!) > 1e-6
+            )
+              return false;
+          }
+          return true;
+        }
+      );
+      expect(corner?.reference).toBeDefined();
+      const axis = addDatumAxis(start, {
+        name: 'Axis',
+        definition: {
+          kind: 'two-point',
+          points: [
+            { type: 'point', point: { x: 0, y: 0, z: 10 } },
+            {
+              type: 'edge-vertex',
+              bodyId: boxA,
+              edgeReference: corner!.reference!,
+              end: 1
+            }
+          ]
+        }
+      });
+      const disk = addPrimitiveFeature(axis.document, {
+        name: 'Disk',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 20, height: 10 }
+      });
+      const boss = addPrimitiveFeature(disk, {
+        name: 'Boss',
+        primitiveKind: 'box',
+        dimensions: { width: 4, height: 4, depth: 6 }
+      });
+      const placed = transformBody(boss, {
+        name: 'Place boss',
+        targetBodyId: boss.bodyOrder[2]!,
+        translation: { x: 3, y: -2, z: 10 }
+      }).document;
+      const joined = booleanBodies(placed, {
+        name: 'Union 1',
+        operation: 'union',
+        targetBodyIds: [placed.bodyOrder[1]!, placed.bodyOrder[2]!]
+      });
+      const turned = transformBody(joined.document, {
+        name: 'Turn',
+        targetBodyId: joined.bodyId,
+        translation: { x: 0, y: 0, z: 0 },
+        axisRotation: {
+          axis: { type: 'datum-axis', datumFeatureId: axis.featureId },
+          angleDeg: 90
+        }
+      }).document;
+      const base = await adapter.syncDocument(turned);
+      expect(base.warnings).toEqual([]);
+      // The boss's (7, 2) edge, turned +90° about +z, stands at (−2, 7).
+      const body = base.bodyRepresentations[joined.bodyId]!;
+      const near = (a: number, b: number) => Math.abs(a - b) < 1e-6;
+      const edge = body.topology!.edges.filter((candidate) => {
+        for (let i = 0; i < candidate.points.length; i += 3) {
+          if (
+            !near(candidate.points[i]!, -2) ||
+            !near(candidate.points[i + 1]!, 7)
+          )
+            return false;
+        }
+        return true;
+      });
+      expect(edge).toHaveLength(1);
+      const model = await settled({
+        document: filletEdges(turned, {
+          name: 'Boss break',
+          targetBodyId: joined.bodyId,
+          edgeHashes: [edge[0]!.hash],
+          size: 0.5
+        }).document,
+        bodyId: joined.bodyId
+      });
+      const shrunk = updateFeature(model.document, {
+        featureId: feature(model.document, 'Box A').featureId,
+        data: { dimensions: { width: 10, height: 10, depth: 5 } }
+      });
+      expectRefused(await validate(shrunk), 'Boss break');
+    });
+
+    it('refuses to carry past a linked projection the build re-solved', async () => {
+      // A plate drawn as a linked projection of a block's top outline. The
+      // build re-projects (and re-solves) such a sketch on every rebuild,
+      // and its new positions live only in the build, never the stored
+      // document: a block width edit, allowed on its own, moves the plate
+      // while its stored sketch data reads unchanged. A constrained
+      // neighbour can be turned the same way (a sketch hanging off a line to
+      // a projected corner), so any change in a resolved projection refuses.
+      // Two rules see it here: the edit gate reads the sketch as the build
+      // placed it, so the moved projected lines fail the sketch-object
+      // check, and the record of resolved projections differs. (A
+      // constrained sketch that the solver turns is not built here: it
+      // needs a hand-made constraint graph whose re-solve reliably flips,
+      // which the datum-axis case above exercises more directly.)
+      const plane = { type: 'canonical' as const, plane: 'XY' as const, offset: 8 };
+      const basis = frameForPlaneRef(plane, (value) => Number(value));
+      const parameterized = setParameter(
+        createProjectDocument('Linked plate', user),
+        { name: 'w', expression: '20' }
+      );
+      const block = addPrimitiveFeature(parameterized, {
+        name: 'Block',
+        primitiveKind: 'box',
+        dimensions: { width: 'w', height: 10, depth: 5 }
+      });
+      const blockId = block.bodyOrder[0]!;
+      const built = await adapter.syncDocument(block);
+      const top = built.bodyRepresentations[blockId]!.topology!.edges.filter(
+        (edge) => {
+          for (let i = 2; i < edge.points.length; i += 3) {
+            if (Math.abs(edge.points[i]! - 5) > 1e-9) return false;
+          }
+          return true;
+        }
+      );
+      expect(top).toHaveLength(4);
+      const sketched = addSketchFeature(block, {
+        name: 'Outline',
+        planeRef: plane,
+        objects: top.map((edge) => {
+          const outcome = projectEdgeToSketch(
+            projectableCurveFromTopology(edge),
+            basis
+          );
+          if (outcome.status !== 'projected') throw new Error(outcome.reason);
+          return {
+            ...outcome.data,
+            projection: {
+              mode: 'linked' as const,
+              source: { bodyId: blockId, edgeReference: edge.reference! }
+            }
+          };
+        })
+      });
+      const sketch = findSketch(sketched.document, sketched.sketchId)!;
+      const plate = extrudeSketch(sketched.document, {
+        name: 'Plate',
+        sketchId: sketched.sketchId,
+        distance: 3,
+        profiles: [{ all: true, sourceEntityIds: [...sketch.objectIds] }]
+      });
+      const plateBuilt = await adapter.syncDocument(plate.document);
+      expect(plateBuilt.warnings).toEqual([]);
+      // The plate's vertical edge at x = w, which the width edit moves.
+      const moving = plateBuilt.bodyRepresentations[
+        plate.bodyId
+      ]!.topology!.edges.filter((edge) => {
+        for (let i = 0; i < edge.points.length; i += 3) {
+          if (
+            Math.abs(edge.points[i]! - 20) > 1e-6 ||
+            Math.abs(edge.points[i + 1]!) > 1e-6
+          )
+            return false;
+        }
+        return true;
+      });
+      expect(moving).toHaveLength(1);
+      const model = await settled({
+        document: filletEdges(plate.document, {
+          name: 'Plate break',
+          targetBodyId: plate.bodyId,
+          edgeHashes: [moving[0]!.hash],
+          size: 0.5
+        }).document,
+        bodyId: plate.bodyId
+      });
+      const wider = setParameter(model.document, { name: 'w', expression: '26' });
+      expectRefused(await validate(wider), 'Plate break');
     });
 
     describe('a part with equal sides', () => {

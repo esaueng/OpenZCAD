@@ -2416,7 +2416,9 @@ function buildEdgeModifierFeature(
           memory: ctx.edgeSelections,
           key: edgeSelectionKey(document.projectId, feature.featureId),
           propose: ctx.proposeCarry === true,
-          upstream: () => upstreamSnapshot(document, feature.featureId)
+          // The build's state so far: the frames earlier features resolved.
+          upstream: () =>
+            upstreamSnapshot(document, feature.featureId, ctx.result)
         }
       : undefined
   );

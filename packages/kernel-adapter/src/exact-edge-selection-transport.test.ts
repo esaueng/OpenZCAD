@@ -61,7 +61,9 @@ describe('edge selection memory', () => {
       units: 'mm',
       features: [],
       sketches: new Map(),
-      scope: {}
+      scope: {},
+      sizes: new Map(),
+      resolved: ''
     }
   });
 

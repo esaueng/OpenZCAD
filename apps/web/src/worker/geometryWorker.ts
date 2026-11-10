@@ -1254,8 +1254,17 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
                 transientResults.add(result);
                 transient = true;
               }
-              lastExactSyncKey = contentKey;
-              lastExactSyncEpoch = exact.currentMassPropertiesEpoch();
+              // A carry proposal built a kernel state a plain build of the
+              // same content would not (a carried selection), so mass
+              // properties must not read it as that content's: they prepare
+              // again from a plain build, as after a preview.
+              if (request.type === 'sync' && request.proposeCarry) {
+                lastExactSyncKey = null;
+                lastExactSyncEpoch = null;
+              } else {
+                lastExactSyncKey = contentKey;
+                lastExactSyncEpoch = exact.currentMassPropertiesEpoch();
+              }
               return result;
             }
           );
