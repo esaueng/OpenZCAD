@@ -371,65 +371,67 @@ test('dragging the selected face itself pushes it, as the arrow does', async ({
   ).toHaveCount(1);
 });
 
-test('a refused generic face drag holds its last exact preview', async ({
-  page
-}) => {
-  test.setTimeout(process.env.CI ? 240_000 : 120_000);
-  await page.addInitScript(() => {
-    window.__openzcadE2EExactFaceDrag = true;
-  });
-  const { canvas, handle } = await armedBox(page, { hole: true });
-  await recordCanvas(canvas);
-  const to = (value: number) =>
-    page.mouse.move(
-      handle.x - handle.dx * handle.pixels * value,
-      handle.y - handle.dy * handle.pixels * value,
-      { steps: 6 }
+test(
+  'a refused generic face drag holds its last exact preview',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(process.env.CI ? 240_000 : 120_000);
+    await page.addInitScript(() => {
+      window.__openzcadE2EExactFaceDrag = true;
+    });
+    const { canvas, handle } = await armedBox(page, { hole: true });
+    await recordCanvas(canvas);
+    const to = (value: number) =>
+      page.mouse.move(
+        handle.x - handle.dx * handle.pixels * value,
+        handle.y - handle.dy * handle.pixels * value,
+        { steps: 6 }
+      );
+    await page.mouse.move(handle.x, handle.y);
+    await page.mouse.down();
+    const pressed = await now(page);
+    const front = () =>
+      canvas.evaluate(
+        (element) =>
+          new Promise<number | null>((resolve) => {
+            element.dispatchEvent(
+              new CustomEvent('openzcad:e2e-render-policy', {
+                detail: {
+                  resolve: (state: {
+                    bodyFaces: { worldBounds?: { min: number[] } }[];
+                  }) =>
+                    resolve(
+                      state.bodyFaces.find((face) => face.worldBounds)
+                        ?.worldBounds?.min[1] ?? null
+                    )
+                }
+              })
+            );
+          })
+      );
+    for (let value = 1; value <= 5; value++) await to(value);
+    await expect.poll(front).toBeCloseTo(5, 4);
+    // At 6 mm the face reaches the Ø6 hole. Generic faces deliberately use
+    // exact worker previews; an affine height proxy would distort that hole.
+    for (let value = 7; value <= 9; value++) await to(value);
+    // Total measures to the opposing plane, skipping the hole wall (#1331):
+    // the refused 9 mm push reads 18 - 9 = 9 mm, independently of the exact
+    // 5 mm preview still displayed.
+    await expect(page.getByTestId('direct-manipulation-value')).toContainText(
+      '9 mm'
     );
-  await page.mouse.move(handle.x, handle.y);
-  await page.mouse.down();
-  const pressed = await now(page);
-  const front = () =>
-    canvas.evaluate(
-      (element) =>
-        new Promise<number | null>((resolve) => {
-          element.dispatchEvent(
-            new CustomEvent('openzcad:e2e-render-policy', {
-              detail: {
-                resolve: (state: {
-                  bodyFaces: { worldBounds?: { min: number[] } }[];
-                }) =>
-                  resolve(
-                    state.bodyFaces.find((face) => face.worldBounds)
-                      ?.worldBounds?.min[1] ?? null
-                  )
-              }
-            })
-          );
-        })
+    await expect(page.getByTestId('direct-manipulation-value')).toHaveAttribute(
+      'data-state',
+      'warning'
     );
-  for (let value = 1; value <= 5; value++) await to(value);
-  await expect.poll(front).toBeCloseTo(5, 4);
-  // At 6 mm the face reaches the Ø6 hole. Generic faces deliberately use
-  // exact worker previews; an affine height proxy would distort that hole.
-  for (let value = 7; value <= 9; value++) await to(value);
-  // Total reads the line from the arrow back to where the material ends,
-  // and the arrow stands right in front of the hole: 6 mm to its wall, so
-  // a 9 mm push reads past it.
-  await expect(page.getByTestId('direct-manipulation-value')).toContainText(
-    '-3 mm'
-  );
-  await expect(page.getByTestId('direct-manipulation-value')).toHaveAttribute(
-    'data-state',
-    'warning'
-  );
-  await expect.poll(front).toBeCloseTo(5, 4);
-  await expect(canvas).toHaveAttribute('data-e2e-offset-ghost', '1');
-  expect(await removals(page, 'data-e2e-offset-ghost', pressed)).toBe(0);
-  await page.keyboard.press('Escape');
-  await page.mouse.up();
-  await expect.poll(front).toBeCloseTo(0, 4);
-});
+    await expect.poll(front).toBeCloseTo(5, 4);
+    await expect(canvas).toHaveAttribute('data-e2e-offset-ghost', '1');
+    expect(await removals(page, 'data-e2e-offset-ghost', pressed)).toBe(0);
+    await page.keyboard.press('Escape');
+    await page.mouse.up();
+    await expect.poll(front).toBeCloseTo(0, 4);
+  }
+);
 
 test(
   'a stale-selection release refusal restores the committed face anchor',
