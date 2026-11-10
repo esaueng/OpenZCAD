@@ -31,7 +31,7 @@
   "extrude-edit-in-place.spec.ts": 11,
   "extrude-in-place.spec.ts": 42,
   "extrude-through-all.spec.ts": 9,
-  "face-drag-continuity.spec.ts": 12,
+  "face-drag-continuity.spec.ts": 18,
   "face-edge-chamfer.spec.ts": 15,
   "face-offset-continuity.spec.ts": 35,
   "face-offset-rest-validation.spec.ts": 8,
@@ -82,5 +82,6 @@
   "tool-rail-pins.spec.ts": 5,
   "touch-navigation.spec.ts": 9,
   "viewport.spec.ts": 13,
-  "visual-selection-fillet-edit.spec.ts": 12
+  "visual-selection-fillet-edit.spec.ts": 12,
+  "visual-selection-live-preview.spec.ts": 12
 }
