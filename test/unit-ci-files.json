@@ -114,6 +114,7 @@
     "test/geometry.test.ts",
     "test/growing-holder-holes.test.ts",
     "test/growing-holder-units.test.ts",
+    "test/helical-coil-cap-rims.test.ts",
     "test/imported-mesh-conversion-cache.test.ts",
     "test/imported-mesh.test.ts",
     "test/io-step.test.ts",
