@@ -324,13 +324,39 @@ export function readFragments(repoRoot = REPO_ROOT) {
   return fragments;
 }
 
+/**
+ * Links to individual fragment files. The fold appends a fragment's text to
+ * its row and deletes the file, so a link to it from the ledger or from
+ * another fragment is dead after the next fold. (Four rows shipped such links
+ * before this check and lost their targets in the 2026-11-11 fold.)
+ */
+export function fragmentLinks(text) {
+  return Array.from(
+    text.matchAll(
+      /\]\((?:\.{1,2}\/)*(?:docs\/)?roadmap-evidence\/([a-z0-9][a-z0-9.-]*--[a-z0-9-]+\.md)[^)]*\)/g
+    ),
+    (match) => match[1]
+  );
+}
+
 /** Validates every fragment against the ledger without writing anything. */
 export function checkRepo(repoRoot = REPO_ROOT) {
   const fragments = readFragments(repoRoot);
-  foldEvidence(
-    readFileSync(path.join(repoRoot, ROADMAP_PATH), 'utf8'),
-    fragments
-  );
+  const ledger = readFileSync(path.join(repoRoot, ROADMAP_PATH), 'utf8');
+  const errors = [
+    ...fragmentLinks(ledger).map(
+      (name) =>
+        `${ROADMAP_PATH}: links to fragment ${name}, which the fold deletes; link a plan or test instead`
+    ),
+    ...fragments.flatMap(({ name, evidence }) =>
+      fragmentLinks(evidence).map(
+        (target) =>
+          `${name}: links to fragment ${target}, which the fold deletes; link a plan or test instead`
+      )
+    )
+  ];
+  if (errors.length) throw new Error(errors.join('\n'));
+  foldEvidence(ledger, fragments);
   return fragments;
 }
 

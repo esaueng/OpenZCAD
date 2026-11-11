@@ -15,6 +15,7 @@ import {
   FRAGMENT_DIR,
   foldEvidence,
   foldRepo,
+  fragmentLinks,
   parseFragment,
   ROADMAP_PATH,
   splitRow,
@@ -285,6 +286,41 @@ describe('roadmap evidence fragments', () => {
       }
     }
   );
+
+  it('refuses links to fragment files, which the fold deletes', () => {
+    expect(
+      fragmentLinks(
+        'See [sample](docs/roadmap-evidence/as02--scissors-sample.md), ' +
+          '[rel](../roadmap-evidence/h02--x.md#a), ' +
+          '[readme](docs/roadmap-evidence/README.md) and [plan](docs/plans/p.md).'
+      )
+    ).toEqual(['as02--scissors-sample.md', 'h02--x.md']);
+    for (const [ledger, fragmentBody, message] of [
+      [
+        `${LEDGER}\nSee [it](docs/roadmap-evidence/a01--live.md).`,
+        'Live.',
+        /ROADMAP\.md: links to fragment a01--live\.md/
+      ],
+      [
+        LEDGER,
+        'Live, see [it](docs/roadmap-evidence/a01--other.md).',
+        /a01--live\.md: links to fragment a01--other\.md/
+      ]
+    ] as const) {
+      const root = mkdtempSync(join(tmpdir(), 'roadmap-evidence-'));
+      try {
+        writeFileSync(join(root, ROADMAP_PATH), ledger);
+        mkdirSync(join(root, FRAGMENT_DIR), { recursive: true });
+        writeFileSync(
+          join(root, FRAGMENT_DIR, 'a01--live.md'),
+          `---\nrow: A01\n---\n${fragmentBody}\n`
+        );
+        expect(() => checkRepo(root)).toThrow(message);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
 
   it('accepts every pending fragment in this repository', () => {
     expect(() => checkRepo()).not.toThrow();

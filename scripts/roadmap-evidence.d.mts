@@ -29,6 +29,8 @@ export function foldEvidence(
 
 export function readFragments(repoRoot?: string): EvidenceFragment[];
 
+export function fragmentLinks(text: string): string[];
+
 export function checkRepo(repoRoot?: string): EvidenceFragment[];
 
 export function foldRepo(repoRoot?: string): EvidenceFragment[];
