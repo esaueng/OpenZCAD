@@ -6,7 +6,7 @@ import type {
   Vector3
 } from '@openzcad/shared';
 import type { AffectedFeatureTarget } from '../affectedFeatureTargets';
-import { directEditRejection } from '../directEdit';
+import { createdFeatureId, directEditRejection } from '../directEdit';
 import {
   refusingWarningDetail,
   splitRefusal,
@@ -26,6 +26,11 @@ export interface OffsetPreviewFaceTarget {
 export interface OffsetPreviewVerdictInput {
   label: string;
   bodyId: BodyId;
+  /**
+   * The command the preview applied. A command that adds one feature has its
+   * warnings attributed by that feature's id, not by the shared label.
+   */
+  command?: { readonly payload: unknown };
   validationTargets?: readonly AffectedFeatureTarget[];
   derived: {
     bodyRepresentations: Partial<Record<BodyId, unknown>>;
@@ -66,19 +71,22 @@ export function offsetPreviewRejection(
     return null;
   }
 
+  const featureId = input.command ? createdFeatureId(input.command) : undefined;
   const message = directEditRejection({
     label: input.label,
     warnings: input.derived.warnings,
     ...(input.derived.featureWarnings
       ? { featureWarnings: input.derived.featureWarnings }
       : {}),
+    ...(featureId ? { featureId } : {}),
     bodyPresent: Boolean(input.derived.bodyRepresentations[input.bodyId]),
     documentMoved: input.documentMoved
   });
   const warning = refusingWarningDetail(
     input.label,
     input.derived.warnings,
-    input.derived.featureWarnings
+    input.derived.featureWarnings,
+    featureId
   );
   if (!message) return null;
   const limit = warning?.kernelRefusal?.limit;

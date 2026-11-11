@@ -9,7 +9,7 @@
  */
 
 import { refusingWarning } from './featureValidation';
-import type { FeatureWarning } from '@openzcad/shared';
+import type { FeatureId, FeatureWarning } from '@openzcad/shared';
 
 /**
  * Said up front, on the handle, when an offset is about to be pinned by
@@ -22,12 +22,38 @@ import type { FeatureWarning } from '@openzcad/shared';
 export const UNSTABLE_FACE_OFFSET_REASON =
   'Anchored by geometry only: this face has no identity a rebuild can find again, so the offset will not follow later changes to earlier features and will need re-picking if they move it.';
 
+/**
+ * The feature a single feature-creating command adds, read from the ids it
+ * carries, so preview and commit can attribute warnings to that feature
+ * alone. Undefined for a composite or id-less command, which keeps the
+ * name-based attribution.
+ */
+export function createdFeatureId(command: {
+  readonly payload: unknown;
+}): FeatureId | undefined {
+  const payload = command.payload;
+  if (typeof payload !== 'object' || payload === null) return undefined;
+  if (Array.isArray(payload)) return undefined;
+  const ids: unknown = (payload as { ids?: unknown }).ids;
+  if (typeof ids !== 'object' || ids === null) return undefined;
+  const featureId: unknown = (ids as { featureId?: unknown }).featureId;
+  return typeof featureId === 'string' && featureId.length > 0
+    ? (featureId as FeatureId)
+    : undefined;
+}
+
 export interface DirectEditVerdictInput {
   /** The feature label, as it appears in a derived warning's prefix. */
   label: string;
   warnings: readonly string[];
   /** Attribution for `warnings`, when the rebuild supplied it. */
   featureWarnings?: readonly FeatureWarning[];
+  /**
+   * The feature this edit adds. Direct edits share their label ("Offset
+   * face"), so with attribution present only this feature's own records may
+   * refuse it — never an earlier, already failed edit of the same name.
+   */
+  featureId?: FeatureId;
   /** Whether the rebuild still produced the body the edit targets. */
   bodyPresent: boolean;
   /** Whether the document changed while the rebuild was in flight. */
@@ -48,7 +74,8 @@ export function directEditRejection(
   const warning = refusingWarning(
     input.label,
     input.warnings,
-    input.featureWarnings
+    input.featureWarnings,
+    input.featureId
   );
   if (warning) {
     return warning;

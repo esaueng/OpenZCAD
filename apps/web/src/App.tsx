@@ -4642,6 +4642,7 @@ export function App() {
         const rejection = offsetPreviewRejection({
           label: candidate.label,
           bodyId: candidate.bodyId,
+          command: candidate.command,
           ...(candidate.validationTargets
             ? { validationTargets: candidate.validationTargets }
             : {}),
@@ -4875,6 +4876,7 @@ export function App() {
         const rejection = offsetPreviewRejection({
           label: candidate.label,
           bodyId: candidate.resultBodyId,
+          command: { payload: candidate.input },
           derived,
           documentMoved
         });

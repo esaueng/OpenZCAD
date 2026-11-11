@@ -188,6 +188,90 @@ describe('Remus modeling operations', () => {
     ).toBeCloseTo(6000, 8);
   });
 
+  describe('mirror volume readings measured on the tessellation', () => {
+    // `kernel.volume` falls back to the mesh for faces outside its exact
+    // integrator and does not say so. A reflected copy's facets sit
+    // differently, so two sampled readings of congruent solids differ by a
+    // deflection-dependent amount (a periodic-spline shaft read 68912.5825
+    // against 68912.5106 at 0.024 under Remus 2026.1.130). These kernels
+    // answer with such readings: `error(d)` is the sampled reading's
+    // deflection-dependent error, which shrinks as the mesh is refined.
+    function sampledKernel(
+      volumeOf: (solid: number, deflection: number) => number,
+      mirrorTo: number
+    ) {
+      return {
+        ...kernel,
+        mirror: () => mirrorTo,
+        shell: kernel.shell.bind(kernel),
+        offsetSolidV2: kernel.offsetSolidV2.bind(kernel),
+        draft: kernel.draft.bind(kernel),
+        thicken: kernel.thicken.bind(kernel),
+        boundingBox: kernel.boundingBox.bind(kernel),
+        getSolidFaces: kernel.getSolidFaces.bind(kernel),
+        getSolidShells: kernel.getSolidShells.bind(kernel),
+        validateSolid: kernel.validateSolid.bind(kernel),
+        volume: volumeOf
+      };
+    }
+    const mirrorX = {
+      planePoint: { x: 0, y: 0, z: 0 },
+      planeNormal: { x: 1, y: 0, z: 0 }
+    };
+
+    it('accepts congruent solids whose sampled readings converge', () => {
+      const source = kernel.makeBox(10, 20, 30);
+      const reflected = kernel.makeBox(10, 20, 30);
+      // Both readings carry an error of order d^2 times the solid's size,
+      // with different constants for the two facet layouts.
+      const operations = createRemusModelingOperations(
+        sampledKernel(
+          (solid, deflection) =>
+            6000 - (solid === source ? 4e5 : 3.9e5) * deflection ** 2,
+          reflected
+        )
+      );
+
+      expect(operations.mirror({ targetSolid: source, ...mirrorX })).toBe(
+        reflected
+      );
+    });
+
+    it('refuses a wrong solid whose sampled difference does not shrink', () => {
+      const source = kernel.makeBox(10, 20, 30);
+      const wrong = kernel.makeBox(10, 20, 29);
+      const operations = createRemusModelingOperations(
+        sampledKernel(
+          (solid, deflection) =>
+            (solid === source ? 6000 : 5800) - 4e5 * deflection ** 2,
+          wrong
+        )
+      );
+
+      expect(() =>
+        operations.mirror({ targetSolid: source, ...mirrorX })
+      ).toThrow(/did not preserve exact solid volume.*sampling/);
+    });
+
+    it('keeps the refusal when the finer reading fails', () => {
+      const source = kernel.makeBox(10, 20, 30);
+      const reflected = kernel.makeBox(10, 20, 30);
+      const coarse = 30 * 1e-4;
+      const operations = createRemusModelingOperations(
+        sampledKernel((solid, deflection) => {
+          if (deflection < coarse) {
+            throw new Error('tessellation failed');
+          }
+          return solid === source ? 6000 : 5999.9;
+        }, reflected)
+      );
+
+      expect(() =>
+        operations.mirror({ targetSolid: source, ...mirrorX })
+      ).toThrow(/did not preserve exact solid volume/);
+    });
+  });
+
   it('rejects invalid mirror planes and zero or non-finite distances', () => {
     const source = kernel.makeBox(10, 20, 30);
     const operations = createRemusModelingOperations(kernel);

@@ -125,6 +125,95 @@ describe('offset preview validation', () => {
       })
     ).toBeNull();
   });
+
+  describe('a new direct edit beside an older failed one of the same name', () => {
+    // Every generic face offset is labelled "Offset face". A history that
+    // already holds a failed one (its mirrored target was lost) must not
+    // refuse a new offset that built its body: attribution is by the new
+    // feature's id, which the command carries.
+    const oldFeatureId = toFeatureId('feat_old_offset');
+    const newFeatureId = toFeatureId('feat_new_offset');
+    const oldFailure =
+      'Feature "Offset face": Direct-edit target is unavailable.';
+    const command = {
+      payload: {
+        name: 'Offset face',
+        ids: { featureId: newFeatureId, featureNodeId: 'node_new_offset' }
+      }
+    };
+    const withOldFailure = {
+      bodyRepresentations: { [bodyId]: {} },
+      warnings: [oldFailure],
+      featureWarnings: [
+        {
+          featureId: oldFeatureId,
+          featureName: 'Offset face',
+          message: oldFailure,
+          kind: 'build-failed' as const
+        }
+      ]
+    };
+
+    it('passes the new edit that built its body', () => {
+      expect(
+        offsetPreviewRejection({
+          label: 'Offset face',
+          bodyId,
+          command,
+          derived: withOldFailure,
+          documentMoved: false
+        })
+      ).toBeNull();
+      // Without the command the shared name is all there is, which is how
+      // the earlier failure used to be blamed on the new edit.
+      expect(
+        offsetPreviewRejection({
+          label: 'Offset face',
+          bodyId,
+          derived: withOldFailure,
+          documentMoved: false
+        })?.message
+      ).toMatch(/Direct-edit target is unavailable/);
+    });
+
+    it('still refuses the new edit by its own failure', () => {
+      const ownFailure =
+        'Feature "Offset face": The face cannot move that far.';
+      expect(
+        offsetPreviewRejection({
+          label: 'Offset face',
+          bodyId,
+          command,
+          derived: {
+            ...withOldFailure,
+            warnings: [oldFailure, ownFailure],
+            featureWarnings: [
+              ...withOldFailure.featureWarnings,
+              {
+                featureId: newFeatureId,
+                featureName: 'Offset face',
+                message: ownFailure,
+                kind: 'build-failed' as const
+              }
+            ]
+          },
+          documentMoved: false
+        })?.message
+      ).toMatch(/cannot move that far/);
+    });
+
+    it('still refuses a new edit that lost its body', () => {
+      expect(
+        offsetPreviewRejection({
+          label: 'Offset face',
+          bodyId,
+          command,
+          derived: { ...withOldFailure, bodyRepresentations: {} },
+          documentMoved: false
+        })?.message
+      ).toMatch(/did not produce the selected body/);
+    });
+  });
 });
 
 describe('offsetPreviewRejection for a blend preview', () => {
