@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
+  act,
   createEvent,
   fireEvent,
   render,
@@ -40,7 +41,9 @@ import {
   type ToolId
 } from '../lib/tools';
 import { PANEL_ICONS } from './modelPanels/panelMeta';
+import type { SelectionCalloutContent } from '../lib/selectionCallout';
 import { CommandCard } from './CommandCard';
+import { RELEASE_HOLD_MS } from './SelectionRail';
 
 const AVAILABILITY: ToolAvailability = {
   sketchCount: 0,
@@ -414,39 +417,240 @@ describe('CommandCard', () => {
     );
   });
 
-  it('keeps only the verb being dragged, with no fold', () => {
-    renderCard(
-      { ...NOTHING, faceSelected: true, bodyCount: 1 },
+  const offsetPick = (
+    phase: NonNullable<SelectionCalloutContent['operation']>['phase']
+  ): SelectionCalloutContent => ({
+    label: textLabelSegments('Bracket · Top face'),
+    verbs: [
       {
+        id: 'action:offset-face',
+        label: 'Offset',
+        title: 'Offset the face',
+        disabled: false,
+        pressed: true
+      },
+      {
+        id: 'tool:hole',
+        label: 'Hole',
+        title: 'Hole',
+        disabled: false,
+        pressed: false
+      }
+    ],
+    anchor: 'selection',
+    onVerb: vi.fn(),
+    onClear: vi.fn(),
+    operation: {
+      title: 'Offset Face',
+      phase,
+      onEditCulprit: vi.fn(),
+      onViewDetails: vi.fn(),
+      onKeepLastValid: vi.fn(),
+      onSelectAllEdges: vi.fn()
+    }
+  });
+  const railButtons = () =>
+    screen
+      .getAllByRole('button')
+      .map((b) => [
+        b.getAttribute('aria-label'),
+        (b as HTMLButtonElement).disabled
+      ]);
+
+  it('holds the rail in place while a verb is dragged', () => {
+    const face = { ...NOTHING, faceSelected: true, bodyCount: 1 };
+    const { rerender, onLaunchTool } = renderCard(face, {
+      pickSummary: '1 face',
+      pick: offsetPick('armed')
+    });
+    const more = `More tools (${TOOL_COUNT})`;
+    expect(railButtons()).toEqual([
+      ['Deselect all', false],
+      ['Selection: Offset', false],
+      ['Selection: Hole', false],
+      [more, false]
+    ]);
+    // Nothing leaves the rail and nothing moves: only the verb being made
+    // still acts, More tools included.
+    rerender(
+      <Harness
+        selection={face}
+        onLaunchTool={onLaunchTool}
+        pickSummary="1 face"
+        pick={offsetPick('dragging')}
+      />
+    );
+    expect(railButtons()).toEqual([
+      ['Deselect all', true],
+      ['Selection: Offset', false],
+      ['Selection: Hole', true],
+      [more, true]
+    ]);
+  });
+
+  it('never flashes the pinned tools when the pick drops out on release', () => {
+    vi.useFakeTimers();
+    try {
+      const face = { ...NOTHING, faceSelected: true, bodyCount: 1 };
+      const { rerender, container, onLaunchTool } = renderCard(face, {
         pickSummary: '1 face',
-        pick: {
-          label: textLabelSegments('Bracket · Top face'),
-          verbs: [
-            {
-              id: 'action:offset-face',
-              label: 'Offset',
-              title: 'Offset the face',
-              disabled: false,
-              pressed: true
-            }
-          ],
-          anchor: 'selection',
-          onVerb: vi.fn(),
-          onClear: vi.fn(),
-          operation: {
-            title: 'Offset Face',
-            phase: 'dragging',
-            onEditCulprit: vi.fn(),
-            onViewDetails: vi.fn(),
-            onKeepLastValid: vi.fn(),
-            onSelectAllEdges: vi.fn()
-          }
+        pick: offsetPick('dragging')
+      });
+      const view = (pick: SelectionCalloutContent | null) => (
+        <Harness
+          selection={face}
+          onLaunchTool={onLaunchTool}
+          pickSummary="1 face"
+          pick={pick}
+        />
+      );
+      // The release can lose the pick for a frame or two before the check's
+      // pick arrives: the rail stays the pick's, held, throughout.
+      rerender(view(null));
+      expect(railTools(container)).toEqual([]);
+      expect(
+        screen.getByRole('button', { name: 'Selection: Offset' })
+      ).toBeDisabled();
+      rerender(view(offsetPick('armed')));
+      expect(railTools(container)).toEqual([]);
+      expect(
+        screen.getByRole('button', { name: 'Selection: Hole' })
+      ).toBeEnabled();
+      // A pick really gone gives the rail back to the pins.
+      rerender(view(null));
+      expect(railTools(container)).toEqual(DEFAULT_PINNED_TOOLS);
+      // And so does a held pick that never comes back.
+      rerender(view(offsetPick('dragging')));
+      rerender(view(null));
+      act(() => {
+        vi.advanceTimersByTime(RELEASE_HOLD_MS);
+      });
+      expect(railTools(container)).toEqual(DEFAULT_PINNED_TOOLS);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('gives the rail back at once when Undo clears the pick mid-drag', () => {
+    vi.useFakeTimers();
+    try {
+      const face = { ...NOTHING, faceSelected: true, bodyCount: 1 };
+      const { rerender, container, onLaunchTool } = renderCard(face, {
+        pickSummary: '1 face',
+        pick: offsetPick('dragging'),
+        pickRevision: 'project:0'
+      });
+      // Undo rewinds the document and clears the pick in one batch: a
+      // deselection, not a release settling. The pins are back in that
+      // frame, never a greyed-out rail for the deleted body.
+      rerender(
+        <Harness
+          selection={NOTHING}
+          onLaunchTool={onLaunchTool}
+          pickSummary=""
+          pick={null}
+          pickRevision="project:1"
+        />
+      );
+      expect(railTools(container)).toEqual(DEFAULT_PINNED_TOOLS);
+      expect(
+        screen.queryByRole('region', { name: 'Offset Face operation' })
+      ).toBeNull();
+      expect(
+        screen.getByRole('button', { name: /^More tools/ })
+      ).toBeEnabled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('closes the drawer while a drag holds the rail and reopens it after', () => {
+    // A record of every layout observer, so one left on a drawer that has
+    // gone shows up. happy-dom has no ResizeObserver of its own.
+    const observers: { targets: Set<Element>; live: boolean }[] = [];
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        private entry = { targets: new Set<Element>(), live: true };
+        constructor() {
+          observers.push(this.entry);
+        }
+        observe(target: Element) {
+          this.entry.targets.add(target);
+        }
+        unobserve(target: Element) {
+          this.entry.targets.delete(target);
+        }
+        disconnect() {
+          this.entry.live = false;
+          this.entry.targets.clear();
         }
       }
     );
-    expect(
-      screen.getAllByRole('button').map((b) => b.getAttribute('aria-label'))
-    ).toEqual(['Selection: Offset']);
+    try {
+      const face = { ...NOTHING, faceSelected: true, bodyCount: 1 };
+      const { rerender, container, onLaunchTool } = renderCard(face, {
+        pickSummary: '1 face',
+        pick: offsetPick('armed'),
+        initialView: 'simple'
+      });
+      const view = (phase: 'armed' | 'dragging') => (
+        <Harness
+          selection={face}
+          onLaunchTool={onLaunchTool}
+          pickSummary="1 face"
+          pick={offsetPick(phase)}
+          initialView="simple"
+        />
+      );
+      const toggle = () => screen.getByRole('button', { name: /^More tools/ });
+      const observed = () =>
+        observers.filter((entry) => entry.live).flatMap((entry) => [
+          ...entry.targets
+        ]);
+      const drawerTabStops = () =>
+        Array.from(
+          container.querySelectorAll<HTMLElement>(
+            '.command-flyout button:not([disabled]), .command-flyout input'
+          )
+        ).filter((element) => element.tabIndex >= 0);
+      openDrawer();
+      expect(toggle()).toHaveAttribute('aria-expanded', 'true');
+      const firstDrawer = container.querySelector('.command-flyout')!;
+      expect(firstDrawer).not.toBeNull();
+      expect(drawerTabStops().length).toBeGreaterThan(0);
+      expect(observed()).toContain(firstDrawer);
+
+      // The handle is grabbed: the drawer goes, and nothing says it is
+      // open. The toggle stays in place, disabled, out of the tab order.
+      rerender(view('dragging'));
+      expect(container.querySelector('.command-flyout')).toBeNull();
+      expect(toggle()).toHaveAttribute('aria-expanded', 'false');
+      expect(toggle()).toBeDisabled();
+      expect(toggle()).not.toHaveClass('active');
+      expect(container.querySelector('.command-more')).not.toHaveClass('open');
+      expect(drawerTabStops()).toEqual([]);
+      // No observer is left on the drawer that went.
+      expect(observed().every((target) => target.isConnected)).toBe(true);
+      expect(observed()).not.toContain(firstDrawer);
+
+      // Released and answered: the drawer the user left open is back, and
+      // the layout hooks measure the new one, not the detached one.
+      rerender(view('armed'));
+      const secondDrawer = container.querySelector('.command-flyout')!;
+      expect(secondDrawer).not.toBeNull();
+      expect(secondDrawer).not.toBe(firstDrawer);
+      expect(toggle()).toHaveAttribute('aria-expanded', 'true');
+      expect(toggle()).toBeEnabled();
+      expect(drawerTabStops().length).toBeGreaterThan(0);
+      expect(observed()).toContain(secondDrawer);
+      expect(observed()).toContain(
+        container.querySelector('.command-flyout-list')
+      );
+      expect(observed().every((target) => target.isConnected)).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('launches a tool from the rail or from the drawer', () => {

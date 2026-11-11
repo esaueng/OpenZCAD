@@ -11,7 +11,14 @@ import {
   SquarePen,
   SquareX
 } from 'lucide-react';
-import { useLayoutEffect, useRef, type ReactNode } from 'react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode
+} from 'react';
 import { useSettledFlag } from '../hooks/useSettledFlag';
 import type { SelectionActionId } from '../lib/interaction/capabilities';
 import {
@@ -24,6 +31,10 @@ import type {
   SelectionCalloutVerb
 } from '../lib/selectionCallout';
 import { OPERATION_PHASE_LABELS } from '../lib/selectionCalloutView';
+import {
+  selectionRailHeld,
+  selectionRailVerbEnabled
+} from '../lib/selectionRailHold';
 import { TOOL_META, type ToolId } from '../lib/tools';
 import { chamferOutlineGlyph, filletOutlineGlyph } from '../lib/toolIcons';
 import type { LabelSegment } from '../lib/topologyLabels';
@@ -72,15 +83,91 @@ function verbIcon(verb: SelectionCalloutVerb): ReactNode {
 }
 
 /**
- * While the hand is on the handle, and while the exact check that follows
- * the release runs, the rail keeps only the verb being made: nothing else
- * can act on the pick until the check answers.
+ * How long a pick that leaves the rail mid-hold (its drag, or the exact
+ * check after the release) is still drawn, held, before the rail gives way.
+ * The pick can drop out for a frame or two as the release settles; drawing
+ * the pinned tools for those frames flashed the whole tool list in and
+ * straight back out.
  */
-export function selectionRailCollapsed(
-  content: SelectionCalloutContent
-): boolean {
-  const phase = content.operation?.phase;
-  return phase === 'dragging' || phase === 'validating';
+export const RELEASE_HOLD_MS = 1000;
+
+/** What ends a held pick before {@link RELEASE_HOLD_MS} runs out. */
+export interface HeldPickGuard {
+  /**
+   * The document's history position (Undo, Redo, another project). A pick
+   * that leaves because the document was rewound under it is gone, not
+   * settling: a change here gives way at once.
+   */
+  revision?: unknown;
+  /**
+   * Whether what the pick acts on (its bodies) still exists. A pick whose
+   * target was deleted or undone away gives way at once.
+   */
+  isLive?: ((pick: SelectionCalloutContent) => boolean) | undefined;
+}
+
+/**
+ * The pick the rail draws: `pick`, or, for up to {@link RELEASE_HOLD_MS}
+ * after a held pick goes null, that last held pick as a check in flight
+ * (every control disabled). A pick that returns ends the hold at once, and
+ * a pick that leaves while not held is never kept. So does a guard that
+ * fails ({@link HeldPickGuard}): the revision moved since the pick was last
+ * drawn, or its target is gone. Then the null is a real deselection (Undo
+ * mid-drag, a delete), and drawing it as a check would grey out the rail
+ * for nothing.
+ *
+ * Derived during render, as useDelayedUnmount is, so the frame the pick
+ * leaves in is already the held one, and the frame its guard fails in is
+ * already the released one.
+ */
+export function useHeldPick(
+  pick: SelectionCalloutContent | null,
+  { revision, isLive }: HeldPickGuard = {}
+): SelectionCalloutContent | null {
+  const present = pick !== null;
+  const lastHeld = useRef<{
+    pick: SelectionCalloutContent;
+    revision: unknown;
+  } | null>(pick && selectionRailHeld(pick) ? { pick, revision } : null);
+  const [wasPresent, setWasPresent] = useState(present);
+  const [holding, setHolding] = useState(false);
+  if (present !== wasPresent) {
+    setWasPresent(present);
+    setHolding(!present && lastHeld.current !== null);
+  }
+  useEffect(() => {
+    if (pick) {
+      lastHeld.current = selectionRailHeld(pick) ? { pick, revision } : null;
+    }
+  });
+  const last = !present && holding ? lastHeld.current : null;
+  const held =
+    last &&
+    Object.is(last.revision, revision) &&
+    (isLive?.(last.pick) ?? true)
+      ? last.pick
+      : null;
+  // A guard that failed ends the hold for good: the revision only moves on,
+  // and a target that comes back (Redo) is a new pick, not this one settling.
+  const released = holding && !present && held === null;
+  useEffect(() => {
+    if (!released) return;
+    lastHeld.current = null;
+    setHolding(false);
+  }, [released]);
+  useEffect(() => {
+    if (!holding) return;
+    const timer = window.setTimeout(() => {
+      lastHeld.current = null;
+      setHolding(false);
+    }, RELEASE_HOLD_MS);
+    return () => window.clearTimeout(timer);
+  }, [holding]);
+  return useMemo(() => {
+    if (pick) return pick;
+    if (!held?.operation) return null;
+    return { ...held, operation: { ...held.operation, phase: 'validating' } };
+  }, [pick, held]);
 }
 
 /**
@@ -94,6 +181,10 @@ export function selectionRailCollapsed(
  * It keeps the Selection card's classes and accessible names ("Selection:
  * Fillet", "Deselect all", the "Offset Face operation" region), so every
  * way of reaching a verb still reaches it.
+ *
+ * Within one pick the rail's buttons and height are fixed: a drag, or the
+ * check after it, disables the rest in place, and the phase mark sits in a
+ * slot the operation always keeps.
  *
  * The operation's refusal is not here: it joins the notice lane
  * ({@link SelectionRefusal}), where every other message the workspace has
@@ -119,39 +210,39 @@ export function SelectionRail({
   useLayoutEffect(() => {
     if (!validating) before.current = operation?.phase;
   });
-  const collapsed = selectionRailCollapsed(content);
-  const verbs = collapsed
-    ? content.verbs.filter((verb) => verb.pressed)
-    : content.verbs;
-  const edgeCount = collapsed ? undefined : operation?.selectAllEdgesCount;
-  const clear = collapsed ? undefined : content.onClear;
+  const held = selectionRailHeld(content);
+  // A drag, and a quick check after one, look alike: the verb being made
+  // lit and the rest dimmed. Undimming the rest for the check's frame or
+  // two read as the rail coming back and going away again.
+  const dragHold = held && phase === 'dragging';
   return (
     <section
       className="selection-rail selection-callout-chip"
       role={operation ? 'region' : 'group'}
       aria-label={operation ? `${operation.title} operation` : 'Selection'}
       aria-busy={validating ? 'true' : undefined}
-      data-busy={validating && !announced ? 'quiet' : undefined}
+      data-busy={validating && !announced && !dragHold ? 'quiet' : undefined}
+      data-hold={dragHold ? 'drag' : undefined}
     >
-      {clear && (
+      {content.onClear && (
         <>
           <Tooltip label="Deselect all" shortcut="Esc" description={summary}>
             <button
               type="button"
               className="command-rail selection-rail-clear"
               aria-label="Deselect all"
-              disabled={validating}
-              onClick={clear}
+              disabled={held}
+              onClick={content.onClear}
             >
               <SquareX size={16} aria-hidden="true" />
             </button>
           </Tooltip>
-          {verbs.length > 0 && (
+          {content.verbs.length > 0 && (
             <span className="command-rail-divider" aria-hidden="true" />
           )}
         </>
       )}
-      {verbs.map((verb) => (
+      {content.verbs.map((verb) => (
         <Tooltip key={verb.id} label={verb.label} description={verb.title}>
           <button
             type="button"
@@ -160,26 +251,27 @@ export function SelectionRail({
             // More tools tile or tool-card action of the same verb.
             aria-label={`Selection: ${verb.label}`}
             aria-pressed={verb.pressed}
-            // The exact check owns this pick until it answers: another
-            // action now would leave the old operation free to commit late.
-            disabled={verb.disabled || validating}
+            // The one rule shortcuts and the palette ask too
+            // (selectionRailToolHoldReason), so a key never launches what
+            // the rail shows greyed out.
+            disabled={!selectionRailVerbEnabled(content, verb)}
             onClick={() => content.onVerb(verb.id)}
           >
             {verbIcon(verb)}
           </button>
         </Tooltip>
       ))}
-      {edgeCount ? (
+      {operation?.selectAllEdgesCount ? (
         <Tooltip
-          label={`All ${edgeCount} edges`}
+          label={`All ${operation.selectAllEdgesCount} edges`}
           description="Add every edge of this body to the operation"
         >
           <button
             type="button"
             className="command-rail selection-rail-verb"
-            aria-label={`Select all ${edgeCount} edges`}
-            disabled={validating}
-            onClick={operation?.onSelectAllEdges}
+            aria-label={`Select all ${operation.selectAllEdgesCount} edges`}
+            disabled={held}
+            onClick={operation.onSelectAllEdges}
           >
             <ListChecks size={16} aria-hidden="true" />
           </button>
@@ -196,8 +288,14 @@ export function SelectionRail({
         </span>
       )}
       {/* Armed is the resting state, and the lit verb already says which
-          operation the pick carries; every other phase is news. */}
-      {phase && phase !== 'armed' && <PhaseMarker phase={phase} />}
+          operation the pick carries; every other phase is news. The slot
+          stays for as long as there is an operation, so a mark coming or
+          going never moves the rail. */}
+      {operation && (
+        <span className="selection-rail-phase-slot">
+          {phase && phase !== 'armed' && <PhaseMarker phase={phase} />}
+        </span>
+      )}
     </section>
   );
 }
@@ -218,7 +316,7 @@ function PhaseMarker({
 }) {
   const label = OPERATION_PHASE_LABELS[phase];
   if (phase === 'dragging') {
-    // Collapsed while the hand is on the handle: the value on the handle is
+    // Only a dot while the hand is on the handle: the value on the handle is
     // what is being read then.
     return (
       <span

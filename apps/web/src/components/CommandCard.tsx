@@ -47,7 +47,8 @@ import {
   type ToolId
 } from '../lib/tools';
 import { toolCommandId, useKeymap } from '../lib/keymap';
-import { SelectionRail, selectionRailCollapsed } from './SelectionRail';
+import { selectionRailHeld } from '../lib/selectionRailHold';
+import { SelectionRail, useHeldPick } from './SelectionRail';
 import { Tooltip } from './Tooltip';
 
 const TOOL_COUNT = Object.keys(TOOL_META).length;
@@ -68,6 +69,14 @@ interface CommandCardProps {
    * while the pick is a History row's (its card names it).
    */
   pick?: SelectionCalloutContent | null;
+  /**
+   * The document's history position: a pick that leaves the rail while it
+   * is held is drawn as a check in flight only while this stays put, so an
+   * Undo under a drag gives the rail back at once ({@link useHeldPick}).
+   */
+  pickRevision?: unknown;
+  /** Whether a held pick's target still exists in the document. */
+  isPickLive?: ((pick: SelectionCalloutContent) => boolean) | undefined;
   /** The pick, counted: "1 face", "8 edges". */
   pickSummary?: string;
   activeTool: ToolId | null;
@@ -114,9 +123,10 @@ type DragSource = 'pin' | 'suggested' | 'drawer';
  * Alt+↑/↓, and unpin by dragging them back onto the drawer.
  *
  * A pick makes the rail its own: the pins give way to Deselect all and the
- * pick's verbs, the armed one lit. While a handle is dragged the rail keeps
- * only the verb being made. More tools stays at the foot throughout, so no
- * command is ever out of reach; ⌘K reaches every one by name regardless.
+ * pick's verbs, the armed one lit. While a handle is dragged the rail holds:
+ * every button stays where it was, only the verb being made still acts. More
+ * tools stays at the foot throughout, so the rail never jumps and no command
+ * is ever more than the drag away; ⌘K reaches every one by name regardless.
  */
 export function CommandCard({
   selection,
@@ -125,7 +135,9 @@ export function CommandCard({
   onLaunchTool,
   moreOpen,
   onToggleMore,
-  pick = null,
+  pick: pickProp = null,
+  pickRevision,
+  isPickLive,
   pickSummary = '',
   pinnedTools = DEFAULT_PINNED_TOOLS,
   onPinnedToolsChange,
@@ -136,7 +148,20 @@ export function CommandCard({
   onDrawerViewChange
 }: CommandCardProps) {
   const context = commandContextFor(selection);
-  const collapsed = pick !== null && selectionRailCollapsed(pick);
+  // A pick that drops out mid-drag is still drawn, held, for a moment: the
+  // release can lose it for a frame or two, and the pins in its place
+  // flashed the whole tool list in and straight back out.
+  const pick = useHeldPick(pickProp, {
+    revision: pickRevision,
+    isLive: isPickLive
+  });
+  const held = pick !== null && selectionRailHeld(pick);
+  // The drawer as it is drawn: a held rail closes it without forgetting it
+  // was open, so it comes back once the drag is done. Everything that says
+  // or measures the drawer reads this, never the remembered flag, so the
+  // toggle never claims an open drawer that is not there and the layout
+  // hooks let go of a drawer that has gone.
+  const drawerOpen = moreOpen && !held;
   const pins = pick ? [] : pinnedTools;
   const suggested = pick
     ? []
@@ -192,7 +217,7 @@ export function CommandCard({
   const shownCount = groups.reduce((sum, group) => sum + group.tools.length, 0);
   const below = useGroupsBelowFold(
     listRef,
-    moreOpen,
+    drawerOpen,
     groups.map((group) => group.tools.join()).join('|')
   );
   const canPin = onPinnedToolsChange !== undefined;
@@ -200,16 +225,16 @@ export function CommandCard({
   const flyoutRef = useRef<HTMLDivElement>(null);
   const focusOnOpen = useRef(false);
   useLayoutEffect(() => {
-    if (!moreOpen || !focusOnOpen.current) return;
+    if (!drawerOpen || !focusOnOpen.current) return;
     focusOnOpen.current = false;
     flyoutRef.current
       ?.querySelector<HTMLElement>('input[type="search"]')
       ?.focus();
-  }, [moreOpen]);
+  }, [drawerOpen]);
   useFlyoutAtToggle(
     flyoutRef,
     moreToggleRef,
-    moreOpen && !advanced,
+    drawerOpen && !advanced,
     groups.map((group) => group.tools.join()).join('|')
   );
 
@@ -523,218 +548,215 @@ export function CommandCard({
           </section>
         </>
       )}
-      {!collapsed && (
-        <span className="command-rail-divider" aria-hidden="true" />
-      )}
-      {!collapsed && (
-        <section
-          role="group"
-          aria-label="All tools"
-          className={`command-more${moreOpen ? ' open' : ''}`}
+      <span className="command-rail-divider" aria-hidden="true" />
+      <section
+        role="group"
+        aria-label="All tools"
+        className={`command-more${drawerOpen ? ' open' : ''}`}
+      >
+        <Tooltip
+          label={drawerOpen ? 'Hide other tools' : 'More tools'}
+          description={
+            drawerOpen
+              ? 'Close the list of the other tools'
+              : `Every tool by name — ${restCount} not on the rail. Drag one onto the rail to pin it`
+          }
         >
-          <Tooltip
-            label={moreOpen ? 'Hide other tools' : 'More tools'}
-            description={
-              moreOpen
-                ? 'Close the list of the other tools'
-                : `Every tool by name — ${restCount} not on the rail. Drag one onto the rail to pin it`
-            }
+          <button
+            ref={moreToggleRef}
+            type="button"
+            className={`command-rail command-more-toggle${drawerOpen ? ' active' : ''}`}
+            aria-expanded={drawerOpen}
+            aria-label={`More tools (${restCount})`}
+            // Kept in place while a drag holds the rail, so the rail never
+            // changes height; nothing else acts on the pick until it is done.
+            disabled={held}
+            onClick={(event) => {
+              if (!drawerOpen) focusOnOpen.current = event.detail === 0;
+              onToggleMore();
+            }}
           >
-            <button
-              ref={moreToggleRef}
-              type="button"
-              className={`command-rail command-more-toggle${moreOpen ? ' active' : ''}`}
-              aria-expanded={moreOpen}
-              aria-label={`More tools (${restCount})`}
-              onClick={(event) => {
-                if (!moreOpen) focusOnOpen.current = event.detail === 0;
-                onToggleMore();
-              }}
-            >
-              <Ellipsis size={16} aria-hidden="true" />
-              <span className="command-rail-label" aria-hidden="true">
-                Tools
-              </span>
-            </button>
-          </Tooltip>
-          {moreOpen && (
-            // A drawer beside the rail: help for a rail button next to it
-            // drops its description, and a row's help opens beside the
-            // drawer rather than over the rows below it.
-            <div
-              ref={flyoutRef}
-              className={`command-flyout ${advanced ? 'is-advanced' : 'is-simple'}${below.length > 0 ? ' has-more-below' : ''}${unpinTarget ? ' is-unpin-target' : ''}`}
-              data-rail-flyout=""
-              onKeyDown={(event) => {
-                if (event.key !== 'Escape') return;
-                event.preventDefault();
-                event.stopPropagation();
-                onToggleMore();
-                moreToggleRef.current?.focus();
-              }}
-              onDragOver={(event) => {
-                if (!unpinTarget) return;
-                event.preventDefault();
-                event.dataTransfer.dropEffect = 'move';
-              }}
-              onDrop={(event) => {
-                if (!drag || drag.from !== 'pin') return;
-                event.preventDefault();
-                setPins(unpinTool(pinnedTools, drag.tool));
-                endDrag();
-              }}
-            >
-              {advanced && (
-                <div className="command-flyout-head">
-                  <label className="command-flyout-search">
-                    <Search size={13} aria-hidden="true" />
-                    <input
-                      type="search"
-                      aria-label="Find a tool"
-                      placeholder="Find a tool"
-                      value={query}
-                      onChange={(event) => setQuery(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Escape' && query) {
-                          event.stopPropagation();
-                          setQuery('');
-                        }
-                      }}
-                    />
-                  </label>
-                  {onDrawerFilterChange && (
-                    <div
-                      className="command-flyout-filter"
-                      role="group"
-                      aria-label="Show tools"
+            <Ellipsis size={16} aria-hidden="true" />
+            <span className="command-rail-label" aria-hidden="true">
+              Tools
+            </span>
+          </button>
+        </Tooltip>
+        {drawerOpen && (
+          // A drawer beside the rail: help for a rail button next to it
+          // drops its description, and a row's help opens beside the
+          // drawer rather than over the rows below it.
+          <div
+            ref={flyoutRef}
+            className={`command-flyout ${advanced ? 'is-advanced' : 'is-simple'}${below.length > 0 ? ' has-more-below' : ''}${unpinTarget ? ' is-unpin-target' : ''}`}
+            data-rail-flyout=""
+            onKeyDown={(event) => {
+              if (event.key !== 'Escape') return;
+              event.preventDefault();
+              event.stopPropagation();
+              onToggleMore();
+              moreToggleRef.current?.focus();
+            }}
+            onDragOver={(event) => {
+              if (!unpinTarget) return;
+              event.preventDefault();
+              event.dataTransfer.dropEffect = 'move';
+            }}
+            onDrop={(event) => {
+              if (!drag || drag.from !== 'pin') return;
+              event.preventDefault();
+              setPins(unpinTool(pinnedTools, drag.tool));
+              endDrag();
+            }}
+          >
+            {advanced && (
+              <div className="command-flyout-head">
+                <label className="command-flyout-search">
+                  <Search size={13} aria-hidden="true" />
+                  <input
+                    type="search"
+                    aria-label="Find a tool"
+                    placeholder="Find a tool"
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Escape' && query) {
+                        event.stopPropagation();
+                        setQuery('');
+                      }
+                    }}
+                  />
+                </label>
+                {onDrawerFilterChange && (
+                  <div
+                    className="command-flyout-filter"
+                    role="group"
+                    aria-label="Show tools"
+                  >
+                    <button
+                      type="button"
+                      aria-pressed={drawerFilter === 'fits'}
+                      onClick={() => onDrawerFilterChange('fits')}
                     >
-                      <button
-                        type="button"
-                        aria-pressed={drawerFilter === 'fits'}
-                        onClick={() => onDrawerFilterChange('fits')}
-                      >
-                        {fitsLabel}
-                      </button>
-                      <button
-                        type="button"
-                        aria-pressed={drawerFilter === 'all'}
-                        onClick={() => onDrawerFilterChange('all')}
-                      >
-                        All {TOOL_COUNT}
-                      </button>
-                    </div>
-                  )}
-                </div>
-              )}
-              <div
-                ref={listRef}
-                className="command-flyout-list"
-                data-tooltip-rail="vertical"
-              >
-                {groups.map((group) => (
-                  <Fragment key={group.label}>
-                    <span
-                      className="command-flyout-heading"
-                      data-group={group.label}
+                      {fitsLabel}
+                    </button>
+                    <button
+                      type="button"
+                      aria-pressed={drawerFilter === 'all'}
+                      onClick={() => onDrawerFilterChange('all')}
                     >
-                      {group.label}
-                    </span>
-                    {group.tools.map(drawerRow)}
-                  </Fragment>
-                ))}
-                {groups.length === 0 && (
-                  <p className="command-flyout-empty">
-                    {advanced && query
-                      ? `No tool matches “${query}”`
-                      : advanced
-                        ? 'Nothing fits this pick'
-                        : 'Everything that fits is on the rail'}
-                  </p>
+                      All {TOOL_COUNT}
+                    </button>
+                  </div>
                 )}
               </div>
-              {below.length > 0 && (
-                // A short window hides whole groups (Pattern, under
-                // Bodies) past a fold only a 10px shade marked (F017).
-                // This names them and scrolls the first into view. The
-                // keyboard needs no stop of its own: a focused row already
-                // scrolls into view.
+            )}
+            <div
+              ref={listRef}
+              className="command-flyout-list"
+              data-tooltip-rail="vertical"
+            >
+              {groups.map((group) => (
+                <Fragment key={group.label}>
+                  <span
+                    className="command-flyout-heading"
+                    data-group={group.label}
+                  >
+                    {group.label}
+                  </span>
+                  {group.tools.map(drawerRow)}
+                </Fragment>
+              ))}
+              {groups.length === 0 && (
+                <p className="command-flyout-empty">
+                  {advanced && query
+                    ? `No tool matches “${query}”`
+                    : advanced
+                      ? 'Nothing fits this pick'
+                      : 'Everything that fits is on the rail'}
+                </p>
+              )}
+            </div>
+            {below.length > 0 && (
+              // A short window hides whole groups (Pattern, under
+              // Bodies) past a fold only a 10px shade marked (F017).
+              // This names them and scrolls the first into view. The
+              // keyboard needs no stop of its own: a focused row already
+              // scrolls into view.
+              <button
+                type="button"
+                className="command-flyout-more"
+                tabIndex={-1}
+                aria-label={`Scroll to ${below.join(', ')}`}
+                onClick={() => {
+                  const list = listRef.current;
+                  const heading = Array.from(
+                    list?.querySelectorAll<HTMLElement>(
+                      '.command-flyout-heading'
+                    ) ?? []
+                  ).find((candidate) => candidate.dataset.group === below[0]);
+                  if (!list || !heading) return;
+                  list.scrollTo({
+                    top: heading.offsetTop - 4,
+                    behavior: 'smooth'
+                  });
+                }}
+              >
+                <span>
+                  More: {below[0]}
+                  {below.length > 1 && ` +${below.length - 1}`}
+                  <ChevronDown size={12} aria-hidden="true" />
+                </span>
+              </button>
+            )}
+            {/* The switch between the views stands at the foot's left in
+                  both, so it is under the pointer to switch straight back. */}
+            <div className="command-flyout-foot">
+              {onDrawerViewChange && (
                 <button
                   type="button"
-                  className="command-flyout-more"
-                  tabIndex={-1}
-                  aria-label={`Scroll to ${below.join(', ')}`}
-                  onClick={() => {
-                    const list = listRef.current;
-                    const heading = Array.from(
-                      list?.querySelectorAll<HTMLElement>(
-                        '.command-flyout-heading'
-                      ) ?? []
-                    ).find((candidate) => candidate.dataset.group === below[0]);
-                    if (!list || !heading) return;
-                    list.scrollTo({
-                      top: heading.offsetTop - 4,
-                      behavior: 'smooth'
-                    });
-                  }}
+                  className="command-flyout-view"
+                  onClick={() =>
+                    onDrawerViewChange(advanced ? 'simple' : 'advanced')
+                  }
                 >
-                  <span>
-                    More: {below[0]}
-                    {below.length > 1 && ` +${below.length - 1}`}
-                    <ChevronDown size={12} aria-hidden="true" />
-                  </span>
+                  {advanced ? (
+                    <ListCollapse size={12} aria-hidden="true" />
+                  ) : (
+                    <List size={12} aria-hidden="true" />
+                  )}
+                  {advanced ? 'Simple view' : 'All tools & pins'}
+                  {!advanced && TOOL_COUNT - shownCount > 0 && (
+                    <span className="command-flyout-count">
+                      +{TOOL_COUNT - shownCount}
+                    </span>
+                  )}
                 </button>
               )}
-              {/* The switch between the views stands at the foot's left in
-                  both, so it is under the pointer to switch straight back. */}
-              <div className="command-flyout-foot">
-                {onDrawerViewChange && (
-                  <button
-                    type="button"
-                    className="command-flyout-view"
-                    onClick={() =>
-                      onDrawerViewChange(advanced ? 'simple' : 'advanced')
-                    }
-                  >
-                    {advanced ? (
-                      <ListCollapse size={12} aria-hidden="true" />
-                    ) : (
-                      <List size={12} aria-hidden="true" />
-                    )}
-                    {advanced ? 'Simple view' : 'All tools & pins'}
-                    {!advanced && TOOL_COUNT - shownCount > 0 && (
-                      <span className="command-flyout-count">
-                        +{TOOL_COUNT - shownCount}
-                      </span>
-                    )}
-                  </button>
-                )}
-                {advanced && unpinTarget && (
-                  <span className="command-flyout-hint">
-                    <PinOff size={12} aria-hidden="true" /> Drop to unpin
-                  </span>
-                )}
-                {advanced && (
-                  <span className="command-flyout-spacer" aria-hidden="true" />
-                )}
-                {canPin && advanced && (
-                  <button
-                    type="button"
-                    className="command-flyout-reset"
-                    aria-label="Reset pinned tools"
-                    title="Reset the rail to its original tools"
-                    disabled={
-                      pinnedTools.join() === DEFAULT_PINNED_TOOLS.join()
-                    }
-                    onClick={() => setPins([...DEFAULT_PINNED_TOOLS])}
-                  >
-                    <Undo2 size={12} aria-hidden="true" />
-                  </button>
-                )}
-              </div>
+              {advanced && unpinTarget && (
+                <span className="command-flyout-hint">
+                  <PinOff size={12} aria-hidden="true" /> Drop to unpin
+                </span>
+              )}
+              {advanced && (
+                <span className="command-flyout-spacer" aria-hidden="true" />
+              )}
+              {canPin && advanced && (
+                <button
+                  type="button"
+                  className="command-flyout-reset"
+                  aria-label="Reset pinned tools"
+                  title="Reset the rail to its original tools"
+                  disabled={pinnedTools.join() === DEFAULT_PINNED_TOOLS.join()}
+                  onClick={() => setPins([...DEFAULT_PINNED_TOOLS])}
+                >
+                  <Undo2 size={12} aria-hidden="true" />
+                </button>
+              )}
             </div>
-          )}
-        </section>
-      )}
+          </div>
+        )}
+      </section>
     </nav>
   );
 }

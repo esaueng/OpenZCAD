@@ -41,6 +41,14 @@ button.command-rail.selection-rail-verb[aria-pressed='true'] {
   opacity: 1;
 }
 
+/* A drag, and a quick check after one, hold the rail as it stands: the
+   other verbs greyed in place (never removed, so the rail neither changes
+   nor jumps), the verb being made lit at full strength. */
+.selection-rail[data-hold='drag']
+  button.command-rail.selection-rail-verb[aria-pressed='true']:disabled {
+  opacity: 1;
+}
+
 .selection-rail .selection-rail-badge {
   display: grid;
   place-items: center;
@@ -48,6 +56,16 @@ button.command-rail.selection-rail-verb[aria-pressed='true'] {
   height: 22px;
   color: var(--color-text-muted);
   border-radius: var(--radius-md);
+}
+
+/* The phase mark's place, kept while the pick has an operation, even an
+   armed one with no mark: sized for the tallest mark (the refusal glyph),
+   so a drag's dot or a check's mark coming and going never moves the rail. */
+.selection-rail .selection-rail-phase-slot {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  height: 22px;
 }
 
 /* The phase, as a mark under the verbs: the rail has no room for a pill,

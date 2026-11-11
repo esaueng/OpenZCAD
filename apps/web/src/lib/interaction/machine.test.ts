@@ -29,7 +29,7 @@ import {
   sketchCurveModeTool
 } from './machine';
 import { commandPrompt } from './prompt';
-import { selectionRailCollapsed } from '../../components/SelectionRail';
+import { selectionRailHeld } from '../selectionRailHold';
 import type {
   FaceTopologyReferenceV5,
   FeatureId,
@@ -1835,8 +1835,8 @@ describe('a preview refused under a held handle', () => {
     expect(isOperationState(state) && state.phase).toBe('dragging');
     return state;
   }
-  const railCollapsed = (state: InteractionState) =>
-    selectionRailCollapsed({
+  const railHeld = (state: InteractionState) =>
+    selectionRailHeld({
       label: null,
       verbs: [],
       anchor: 'selection',
@@ -1851,7 +1851,7 @@ describe('a preview refused under a held handle', () => {
       }
     });
 
-  it('keeps the drag: phase, Escape, prompt and collapsed rail', () => {
+  it('keeps the drag: phase, Escape, prompt and held rail', () => {
     const before = draggingOffset();
     const refused = interactionReducer(before, {
       type: 'preview-refused',
@@ -1869,7 +1869,7 @@ describe('a preview refused under a held handle', () => {
     expect(commandPrompt(refused, 'radius')?.step).toBe(
       commandPrompt(before, 'radius')?.step
     );
-    expect(railCollapsed(refused)).toBe(true);
+    expect(railHeld(refused)).toBe(true);
   });
 
   it('shows no "not built" history row while the hand is down', () => {
@@ -1910,7 +1910,7 @@ describe('a preview refused under a held handle', () => {
       error: { limit: -6.4 }
     });
     expect(escapeTarget(released)).toBe('clear-selection');
-    expect(railCollapsed(released)).toBe(false);
+    expect(railHeld(released)).toBe(false);
     expect(pendingHistoryStepFor(commandSessionFor(released))).toEqual({
       title: commandSessionFor(released)!.title,
       message: refusal.message

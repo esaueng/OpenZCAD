@@ -91,6 +91,8 @@ export interface SelectionCalloutContent {
    * faces of a stepped body are both "Top face") still differ here.
    */
   pickKey?: string;
+  /** The bodies the pick acts on: a held pick gives way once one is gone. */
+  bodyIds?: readonly string[];
   /** The key measurement: area or diameter, length, or overall size. */
   detail?: string;
   /** When `detail` is a diameter, its value, so a drag can rewrite it live. */
