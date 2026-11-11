@@ -13,7 +13,11 @@ import {
   FEATURE_SUPPRESSED_METADATA_KEY
 } from '@openzcad/shared';
 import type { FeatureId, FeatureNode } from '@openzcad/shared';
-import { findRollbackMarkerIndex, HistoryTimeline } from './HistoryTimeline';
+import {
+  findRollbackMarkerIndex,
+  HistoryTimeline,
+  placeTimeline
+} from './HistoryTimeline';
 
 function feature(
   index: number,
@@ -656,19 +660,69 @@ describe('HistoryTimeline', () => {
   });
 
   it('re-measures the rows only when something it places changes', () => {
+    // A browser reports a new observation after layout, before paint; the
+    // stub delivers it on demand, as that frame would.
+    const pending: (() => void)[] = [];
+    class FrameResizeObserver {
+      constructor(private readonly callback: ResizeObserverCallback) {}
+      observe() {
+        pending.push(() => this.callback([], this));
+      }
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal('ResizeObserver', FrameResizeObserver);
+    const frame = () => pending.splice(0).forEach((report) => report());
     const setProperty = vi.spyOn(CSSStyleDeclaration.prototype, 'setProperty');
-    const { props, rerender } = renderTimeline();
-    setProperty.mockClear();
-    // The workspace re-renders the browser on every pointer move of a drag;
-    // a render that changes nothing on the line must not force a layout.
-    rerender(<HistoryTimeline {...props} hiddenBodyIds={new Set()} />);
-    expect(setProperty).not.toHaveBeenCalledWith(
-      '--spine-height',
-      expect.anything()
-    );
-    rerender(<HistoryTimeline {...props} selectedFeatureNodeId="node-2" />);
-    expect(setProperty).toHaveBeenCalledWith('--highlight-opacity', '1');
-    setProperty.mockRestore();
+    try {
+      const { props, rerender } = renderTimeline();
+      frame();
+      setProperty.mockClear();
+      // The workspace re-renders the browser on every pointer move of a drag;
+      // a render that changes nothing on the line must not force a layout.
+      rerender(<HistoryTimeline {...props} hiddenBodyIds={new Set()} />);
+      frame();
+      expect(setProperty).not.toHaveBeenCalled();
+      rerender(<HistoryTimeline {...props} selectedFeatureNodeId="node-2" />);
+      // Not inside the commit: the placement waits for the frame's layout.
+      expect(setProperty).not.toHaveBeenCalled();
+      frame();
+      expect(setProperty).toHaveBeenCalledWith('--highlight-opacity', '1');
+    } finally {
+      setProperty.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('measures every row before placing anything', () => {
+    // A placed property restyles the rows, so a read after a write would
+    // force another style and layout pass.
+    const list = document.createElement('div');
+    list.dataset.end = '1';
+    list.dataset.last = '1';
+    const events: string[] = [];
+    for (const index of [0, 1]) {
+      const row = document.createElement('div');
+      row.className = index === 1 ? 'feature-row selected' : 'feature-row';
+      row.dataset.historyIndex = String(index);
+      Object.defineProperty(row, 'offsetTop', {
+        get: () => (events.push('read'), index * 40)
+      });
+      Object.defineProperty(row, 'offsetHeight', {
+        get: () => (events.push('read'), 40)
+      });
+      list.append(row);
+    }
+    const setProperty = vi
+      .spyOn(list.style, 'setProperty')
+      .mockImplementation(() => void events.push('write'));
+    placeTimeline(list);
+    expect(events.indexOf('write')).toBeGreaterThan(events.lastIndexOf('read'));
+    expect(setProperty).toHaveBeenCalledWith('--spine-top', '20px');
+    expect(setProperty).toHaveBeenCalledWith('--spine-height', '40px');
+    expect(setProperty).toHaveBeenCalledWith('--handle-y', '80px');
+    expect(setProperty).toHaveBeenCalledWith('--fill-height', '40px');
+    expect(setProperty).toHaveBeenCalledWith('--highlight-y', '40px');
   });
 
   it('resumes when the handle is moved back to the end', () => {

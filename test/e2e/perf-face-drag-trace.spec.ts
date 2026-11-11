@@ -74,6 +74,7 @@ const MOVES = Number(process.env.OZ_FACE_DRAG_MOVES ?? 120);
 /** `x,y,z` overrides the dragged face normal of every case. */
 const NORMAL_OVERRIDE = process.env.OZ_FACE_DRAG_NORMAL?.split(',').map(Number);
 const REACH_SCALE = Number(process.env.OZ_FACE_DRAG_REACH_SCALE ?? 1);
+let traceCount = 0;
 
 interface Handle {
   x: number;
@@ -188,7 +189,9 @@ async function traceDrag(
   canvas: Locator,
   handle: Handle,
   reach: number,
-  oneWay = false
+  oneWay = false,
+  /** Also wait for the commit's save and a quiet second before stopping. */
+  settleSave = false
 ) {
   reach *= REACH_SCALE;
   const box = (await canvas.boundingBox())!;
@@ -343,7 +346,18 @@ async function traceDrag(
   );
   const committedFrameAt = await readyFrame.jsonValue();
   await readyFrame.dispose();
-  const fileName = test.info().title.replace(/\W+/g, '-');
+  if (settleSave) {
+    // The commit's device save (and any sync) runs after the ready frame.
+    // Its serialization is main-thread work the recording showed as hitches.
+    await expect(page.locator('.save-state')).not.toHaveClass(
+      /is-saving|is-syncing/,
+      { timeout: 60_000 }
+    );
+    await page.waitForTimeout(1_000);
+  }
+  // A case may trace several drags; number them so none overwrites another.
+  traceCount += 1;
+  const fileName = `${test.info().title.replace(/\W+/g, '-')}-${traceCount}`;
   if (profiler) {
     const { profile } = await profiler.send('Profiler.stop');
     mkdirSync(process.env.OZ_FACE_DRAG_PROFILE!, { recursive: true });
@@ -462,6 +476,9 @@ function record(
       ),
       settleAndRelease: renderingSummary(
         result.frames.filter((frame) => frame.t > result.motionEndedAt)
+      ),
+      afterRelease: renderingSummary(
+        result.frames.filter((frame) => frame.t > result.releaseAt)
       )
     },
     gpu: result.gpu,
@@ -469,7 +486,13 @@ function record(
     longTasks: {
       count: result.longTasks.length,
       totalMs: result.longTasks.reduce((sum, task) => sum + task.ms, 0),
-      maxMs: Math.max(0, ...result.longTasks.map((task) => task.ms))
+      maxMs: Math.max(0, ...result.longTasks.map((task) => task.ms)),
+      afterReleaseMaxMs: Math.max(
+        0,
+        ...result.longTasks
+          .filter((task) => task.t + task.ms > result.releaseAt)
+          .map((task) => task.ms)
+      )
     },
     longTaskEntries: result.longTasks,
     frames: result.frames,
@@ -533,6 +556,55 @@ test('traces a filleted union width from 30 to 22.5 mm', async ({ page }) => {
         return x;
       });
       expect(maxX).toBeCloseTo(22.5, 3);
+    }
+  } finally {
+    adapter.dispose();
+  }
+});
+
+// The recording's shape: Box ∪ Cylinder with a five-edge R2 junction fillet,
+// right face dragged 32.5 → 23 mm, committed, then 23 → 31 mm, committed.
+// Frames and long tasks run through each commit's save and a quiet second.
+test('traces two committed face resizes through save', async ({ page }) => {
+  const adapter = await createExactKernelAdapter();
+  try {
+    const { document } = await filletedUnion(adapter, {
+      width: 32.5,
+      radius: 2,
+      heightEdit: false
+    });
+    await startPage(page, false);
+    await openDocument(page, document, 180_000);
+    for (const [label, reach] of [
+      ['32.5 to 23 mm', -9.5],
+      ['23 to 31 mm', 8]
+    ] as const) {
+      const { canvas, handle } = await armPlanarFace(page, {
+        x: 1,
+        y: 0,
+        z: 0
+      });
+      const result = await traceDrag(page, canvas, handle, reach, true, true);
+      const summary = record(
+        `R2 filleted union commit ${label}`,
+        { features: document.featureOrder.length, radius: 2 },
+        result
+      );
+      expect(summary.releaseToFrameMs).not.toBeNull();
+      // OZ_FACE_DRAG_COMMIT_BUDGET_MS=<ms> turns the probe into a local
+      // regression check: no main-thread task from release through the
+      // commit's save may exceed it. Timing varies by host, so CI never sets it.
+      const budget = Number(process.env.OZ_FACE_DRAG_COMMIT_BUDGET_MS);
+      if (Number.isFinite(budget) && budget > 0) {
+        const afterRelease = result.longTasks
+          .filter((task) => task.t + task.ms > result.releaseAt)
+          .map((task) => Math.round(task.ms));
+        expect(
+          Math.max(0, ...afterRelease),
+          `long tasks after release: ${afterRelease.join(', ')} ms`
+        ).toBeLessThanOrEqual(budget);
+      }
+      await page.keyboard.press('Escape');
     }
   } finally {
     adapter.dispose();

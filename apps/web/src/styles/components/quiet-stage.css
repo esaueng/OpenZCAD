@@ -5194,8 +5194,11 @@ button.model-panel-grip[aria-expanded='true'] {
   overflow-wrap: anywhere;
 }
 
+/* A class, not `:has(.workspace-hint.is-selection)`: with the placeholder
+   pseudo-element that selector made every chip text change under the stage
+   restyle the whole workspace (about 10 ms a frame while dragging). */
 .workspace.column-layout
-  .command-bar-lane.has-guidance:has(.workspace-hint.is-selection)
+  .command-bar-lane.has-guidance.has-selection-hint
   .command-bar:not(.open)
   .command-bar-input::placeholder {
   color: var(--color-text-subtle);

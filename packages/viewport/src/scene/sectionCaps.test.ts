@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
-import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import {
+  mergeGeometries,
+  mergeVertices
+} from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { sectionCapGeometry, SECTION_CAP } from './sectionCaps';
 import {
   applyDisplayMode,
@@ -87,6 +90,39 @@ describe('display-only solid section caps', () => {
       }
     }
   );
+
+  it('sections every buffer layout identically', () => {
+    // Plain buffers take a direct scan; interleaved and normalized ones
+    // read through the attribute. Both must give the same cap.
+    const source = mergeVertices(
+      tube().deleteAttribute('normal').deleteAttribute('uv')
+    );
+    expect(source.index).not.toBeNull();
+    const plane = xy(0.25);
+    const reference = sectionCapGeometry(source, plane)!;
+    const expected = [...reference.getAttribute('position').array];
+    expect(expected.length).toBeGreaterThan(0);
+    const interleaved = new THREE.BufferGeometry();
+    const positions = source.getAttribute('position');
+    const data = new THREE.InterleavedBuffer(
+      new Float32Array(positions.count * 4),
+      4
+    );
+    const attribute = new THREE.InterleavedBufferAttribute(data, 3, 1);
+    for (let i = 0; i < positions.count; i++)
+      attribute.setXYZ(
+        i,
+        positions.getX(i),
+        positions.getY(i),
+        positions.getZ(i)
+      );
+    interleaved.setAttribute('position', attribute);
+    interleaved.setIndex(source.index);
+    for (const geometry of [interleaved, source.toNonIndexed()]) {
+      const cap = sectionCapGeometry(geometry, plane)!;
+      expect([...cap.getAttribute('position').array]).toEqual(expected);
+    }
+  });
 
   it('preserves a through hole without covering it with cap triangles', () => {
     const cap = sectionCapGeometry(tube(), xy())!;

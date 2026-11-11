@@ -63,16 +63,43 @@ export function sectionCapGeometry(
     new THREE.Vector3(),
     new THREE.Vector3()
   ];
+  // A live drag preview re-sections a dense body every frame, so the scan
+  // reads the buffers directly and allocates only for crossing triangles.
+  // The arithmetic is `Plane.distanceToPoint` on the same values.
+  const direct =
+    positions instanceof THREE.BufferAttribute &&
+    !positions.normalized &&
+    positions.itemSize === 3
+      ? positions.array
+      : null;
+  const indices = index && !index.normalized ? index.array : null;
+  const { x: nx, y: ny, z: nz } = plane.normal;
+  const constant = plane.constant;
+  const distances = [0, 0, 0];
   let minimum = Infinity;
   let maximum = -Infinity;
   for (let i = 0; i < count; i += 3) {
-    const distances = vertices.map((point, j) => {
-      point.fromBufferAttribute(positions, index ? index.getX(i + j) : i + j);
-      const distance = plane.distanceToPoint(point);
-      minimum = Math.min(minimum, distance);
-      maximum = Math.max(maximum, distance);
-      return Math.abs(distance) <= tolerance ? 0 : distance;
-    });
+    for (let j = 0; j < 3; j++) {
+      const vertex = indices
+        ? indices[i + j]!
+        : index
+          ? index.getX(i + j)
+          : i + j;
+      const point = vertices[j]!;
+      if (direct) {
+        const offset = vertex * 3;
+        point.set(direct[offset]!, direct[offset + 1]!, direct[offset + 2]);
+      } else {
+        point.fromBufferAttribute(positions, vertex);
+      }
+      const distance = nx * point.x + ny * point.y + nz * point.z + constant;
+      if (distance < minimum) minimum = distance;
+      if (distance > maximum) maximum = distance;
+      distances[j] = Math.abs(distance) <= tolerance ? 0 : distance;
+    }
+    // Wholly on one side (zero counts as below): no contour edge.
+    const above = distances[0]! > 0;
+    if (above === distances[1]! > 0 && above === distances[2]! > 0) continue;
     const intersections: THREE.Vector3[] = [];
     for (let j = 0; j < 3; j++) {
       const k = (j + 1) % 3;
