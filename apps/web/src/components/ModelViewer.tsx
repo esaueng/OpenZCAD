@@ -2170,7 +2170,7 @@ export function ModelViewer({
   previewFaceHighlights: incomingPreviewFaceHighlights,
   focusFaces: incomingFocusFaces = NO_FOCUS_FACES,
   selectionCallout: incomingSelectionCallout = null,
-  pickLabel = true,
+  pickLabel: incomingPickLabel = true,
   focusGhostBodies: incomingFocusGhostBodies,
   selectedEdges: incomingSelectedEdges,
   pickListEnabled,
@@ -2305,6 +2305,7 @@ export function ModelViewer({
     previewFaceHighlights: incomingPreviewFaceHighlights,
     focusFaces: incomingFocusFaces,
     selectionCallout: incomingSelectionCallout,
+    pickLabel: incomingPickLabel,
     focusGhostBodies: incomingFocusGhostBodies,
     selectedEdges: incomingSelectedEdges,
     offsetHandle: incomingOffsetHandle,
@@ -2312,13 +2313,17 @@ export function ModelViewer({
     edgeHandle: incomingEdgeHandle
   });
   // Selection and rigs describe the same projection as the bodies on screen,
-  // including intermediate worker replies during rapid previews.
+  // including intermediate worker replies during rapid previews. Whether the
+  // pick wears its chip rides with the chip's content: taken live while the
+  // content waited for a dense body's preparation, a commit that dropped the
+  // card lit the held frame's chip (verbs, "Validating") over the model.
   const {
     selectedBodyIds,
     selectedTopology,
     previewFaceHighlights,
     focusFaces,
     selectionCallout,
+    pickLabel,
     focusGhostBodies,
     selectedEdges,
     offsetHandle,

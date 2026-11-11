@@ -101,6 +101,8 @@ vi.mock('three', async (importOriginal) => {
 });
 
 const rigEvents = vi.hoisted(() => [] as string[]);
+/** Every label element the viewer made, in order, to find the pick chip. */
+const madeLabels = vi.hoisted(() => [] as HTMLElement[]);
 vi.mock('@openzcad/viewport', async (importOriginal) => {
   const actual = await importOriginal<typeof Viewport>();
   const track = (rig: ReturnType<typeof actual.buildOffsetFaceHandle>) => {
@@ -118,6 +120,11 @@ vi.mock('@openzcad/viewport', async (importOriginal) => {
   };
   return {
     ...actual,
+    makeLabel: (...args: Parameters<typeof actual.makeLabel>) => {
+      const label = actual.makeLabel(...args);
+      madeLabels.push(label.element);
+      return label;
+    },
     buildOffsetFaceHandle: (
       ...args: Parameters<typeof actual.buildOffsetFaceHandle>
     ) => {
@@ -135,6 +142,9 @@ vi.mock('@openzcad/viewport', async (importOriginal) => {
 const THREE = await import('three');
 
 const { ModelViewer } = await import('./ModelViewer');
+const { prepareBody } = await import('./viewer/prepareBody');
+const { BODY_PREPARATION_TRIANGLES } =
+  await import('./viewer/bodyPreparationPolicy');
 
 const CALLBACKS = [
   'onViewChange',
@@ -327,6 +337,8 @@ afterAll(() => {
 });
 
 afterEach(() => {
+  vi.unstubAllGlobals();
+  madeLabels.length = 0;
   rigEvents.length = 0;
   gl.state.created = 0;
   gl.state.disposed = 0;
@@ -526,6 +538,117 @@ describe('ModelViewer lifecycle', () => {
       }
     }
   );
+
+  it('never lights the held frame’s chip with the live frame’s label flag while a dense commit prepares', () => {
+    // The commit's dense body prepares off the main thread, so the viewer
+    // keeps drawing the validating frame: its body, its pick and its chip
+    // content. The App shows the chip only without a card (`pickLabel`).
+    // A neutral commit drops the card and the pick together, so the live
+    // flag turns on as the live chip goes away. Read live, that flag lit
+    // the held frame's chip (verbs, "Validating") over the model.
+    const workers: {
+      postMessage: ReturnType<typeof vi.fn>;
+      onmessage?: (event: MessageEvent) => void;
+    }[] = [];
+    vi.stubGlobal(
+      'Worker',
+      class {
+        postMessage = vi.fn();
+        terminate = vi.fn();
+        onmessage?: (event: MessageEvent) => void;
+        constructor() {
+          workers.push(this);
+        }
+      }
+    );
+    let revision = 0;
+    const dense = () => ({
+      bodyId: 'part',
+      name: 'Part',
+      source: 'primitive',
+      color: '#334455',
+      faceCount: 1,
+      consumed: false,
+      exportableStep: true,
+      bbox: { min: { x: 0, y: 0, z: 0 }, max: { x: 1, y: 1, z: 1 } },
+      mesh: {
+        kind: 'mesh',
+        vertices: Float32Array.of(0, 0, 0, 1, 0, 0, 0, 1, ++revision),
+        indices: Uint32Array.from(
+          { length: (BODY_PREPARATION_TRIANGLES + 1) * 3 },
+          (_, index) => index % 3
+        )
+      }
+    });
+    const chip = {
+      label: null,
+      detail: '600 mm²',
+      verbs: [],
+      anchor: 'selection' as const,
+      onVerb: vi.fn(),
+      operation: {
+        title: 'Resize Body',
+        phase: 'validating' as const,
+        onEditCulprit: vi.fn(),
+        onViewDetails: vi.fn(),
+        onKeepLastValid: vi.fn(),
+        onSelectAllEdges: vi.fn()
+      }
+    } as unknown as ModelViewerProps['selectionCallout'];
+    const chipShown = () =>
+      madeLabels.some((element) =>
+        element.classList.contains('selection-callout-chip')
+      );
+    const validating = {
+      ...idleProps(),
+      bodies: [dense()],
+      selectedBodyIds: ['part'],
+      selectedTopology: { bodyId: 'part', kind: 'body' },
+      selectionCallout: chip,
+      pickLabel: false
+    } as unknown as ModelViewerProps;
+    const view = render(createElement(ModelViewer, validating));
+    try {
+      expect(chipShown()).toBe(false);
+      const committed = [dense()];
+      view.rerender(
+        createElement(ModelViewer, {
+          ...validating,
+          bodies: committed,
+          selectedBodyIds: [],
+          selectedTopology: null,
+          selectionCallout: null,
+          pickLabel: true
+        } as unknown as ModelViewerProps)
+      );
+      // Still on the validating frame: its chip stays unlit.
+      expect(workers).toHaveLength(1);
+      expect(chipShown()).toBe(false);
+      const { id } = workers[0]!.postMessage.mock.lastCall![0] as {
+        id: number;
+      };
+      act(() =>
+        workers[0]!.onmessage?.({
+          data: {
+            id,
+            prepared: committed.map((body) => prepareBody(body as never))
+          }
+        } as MessageEvent)
+      );
+      expect(chipShown()).toBe(false);
+      // The probe does see a chip the live frame asks for.
+      view.rerender(
+        createElement(ModelViewer, {
+          ...validating,
+          bodies: committed,
+          pickLabel: true
+        } as unknown as ModelViewerProps)
+      );
+      expect(chipShown()).toBe(true);
+    } finally {
+      view.unmount();
+    }
+  });
 
   it('leaves no key listener behind on the document for a retired viewer', () => {
     // OrbitControls removed its capture keydown listener from the canvas's

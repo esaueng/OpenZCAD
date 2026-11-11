@@ -7,6 +7,7 @@ import {
 } from '@openzcad/shared';
 import {
   offsetPreviewRejection,
+  resolveCommittedOffsetFace,
   resolveOffsetPreviewFace
 } from './offsetPreview';
 
@@ -74,6 +75,44 @@ describe('offset preview face resolution', () => {
     const wrongHeight = plane('wrong-height', point(0, 0, 13));
     expect(
       resolveOffsetPreviewFace([tilted, wrongHeight], target, 4)
+    ).toBeNull();
+  });
+});
+
+describe('committed offset face resolution', () => {
+  it('finds a face the stored rounding moved off the dragged plane', () => {
+    // +1 on an 8.1234 extrusion stores 9.123: the cap lands 0.9996 away.
+    const picked = {
+      point: point(2, 3, 8.1234),
+      center: point(0, 0, 8.1234),
+      normal: point(0, 0, 1)
+    };
+    const cap = plane('cap', point(0, 0, 9.123));
+    const floor = plane('floor', point(0, 0, 0));
+    expect(resolveOffsetPreviewFace([floor, cap], picked, 1)).toBeNull();
+    const committed = resolveCommittedOffsetFace([floor, cap], picked, 1);
+    expect(committed?.face).toBe(cap);
+    expect(committed?.displacement).toBeCloseTo(0.9996, 9);
+  });
+
+  it('prefers the exact plane and measures the displacement there', () => {
+    const exact = plane('exact', point(0, 0, 12));
+    const near = plane('near', point(0, 0, 12.0004));
+    const committed = resolveCommittedOffsetFace([near, exact], target, 2);
+    expect(committed?.face).toBe(exact);
+    expect(committed?.displacement).toBeCloseTo(2, 9);
+  });
+
+  it('fails closed beyond the rounding or between indistinguishable faces', () => {
+    expect(
+      resolveCommittedOffsetFace([plane('far', point(0, 0, 11.9))], target, 2)
+    ).toBeNull();
+    expect(
+      resolveCommittedOffsetFace(
+        [plane('a', point(1, 0, 12.0003)), plane('b', point(-1, 0, 12.0003))],
+        target,
+        2
+      )
     ).toBeNull();
   });
 });

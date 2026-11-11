@@ -753,6 +753,7 @@ import { commandPromptText } from './lib/interaction/prompt';
 import { committedEdgesPhrase, edgeSelectionName } from './lib/edgeLoops';
 import {
   offsetPreviewRejection,
+  resolveCommittedOffsetFace,
   resolveOffsetPreviewFace
 } from './lib/interaction/offsetPreview';
 import {
@@ -3851,7 +3852,9 @@ export function App() {
    * edit control is Ready only once the value it shows has one, so Enter
    * never applies an earlier value's preview against newer input.
    */
-  const [previewVerdict, setPreviewVerdict] = usePreviewVerdict(keypad !== null);
+  const [previewVerdict, setPreviewVerdict] = usePreviewVerdict(
+    keypad !== null
+  );
   /** What the open edit control says, for the guidance row's key hints. */
   const [keypadUi, setKeypadUi] = useState<KeypadUiState | null>(null);
   /** New exact blend faces, computed once when an edge-fillet preview lands. */
@@ -25864,25 +25867,20 @@ export function App() {
   }
 
   function reselectOffsetFace(target: FaceTarget, offset: number): boolean {
-    // An extrude cap or a box side edits a total length, whose handle does
-    // not restart from zero on the moved face, unless the card was switched
-    // to a local Offset Face.
-    if (
-      !target.localFaceOffset &&
-      (target.extrudeFeatureId || target.resizeBodyFeatureId)
-    )
-      return false;
     const bodyId = target.bodyId as BodyId;
+    const document = managerRef.current?.document ?? null;
     const faces =
-      managerRef.current?.document.derived.bodyRepresentations[bodyId]?.topology
-        ?.faces;
+      document?.derived.bodyRepresentations[bodyId]?.topology?.faces;
     const vector = (value: [number, number, number]) => ({
       x: value[0],
       y: value[1],
       z: value[2]
     });
-    const moved = faces
-      ? resolveOffsetPreviewFace(
+    // The commit stored a rounded value, so the face is looked for within
+    // that rounding of the dragged plane, and the handle re-arms where the
+    // face actually landed rather than where the drag let go.
+    const committed = faces
+      ? resolveCommittedOffsetFace(
           faces,
           {
             point: vector(target.point),
@@ -25894,11 +25892,39 @@ export function App() {
           offset
         )
       : null;
-    if (!moved?.geometry) return false;
+    const moved = committed?.face;
+    if (!committed || !moved?.geometry) return false;
+    const { displacement } = committed;
+    // An extrude cap or a box side edits a total length: the moved face is
+    // re-armed on the same length, as a fresh click on it would arm it, so
+    // the pick, its readout and its card stay through the commit. Ending
+    // with nothing picked dropped the readout and rail at the commit, and
+    // the viewport, still showing the validating frame, drew that frame's
+    // selection chip over the model (the chip only shows without a card).
+    // A face that no longer belongs to the same length ends neutrally.
+    const totalLength =
+      !target.localFaceOffset &&
+      Boolean(target.extrudeFeatureId || target.resizeBodyFeatureId);
+    if (totalLength) {
+      const owner = faceOffsetTargetFields(
+        document,
+        bodyId,
+        moved.reference,
+        moved.hash
+      );
+      if (
+        owner.extrudeFeatureId !== target.extrudeFeatureId ||
+        owner.resizeBodyFeatureId !== target.resizeBodyFeatureId
+      )
+        return false;
+    }
     const { reference: _staleReference, ...stableTarget } = target;
+    // The displacement is measured along the unit normal.
+    const normalLength = Math.hypot(...target.normal) || 1;
     const shift = (value: [number, number, number]) =>
       value.map(
-        (component, axis) => component + target.normal[axis]! * offset
+        (component, axis) =>
+          component + (target.normal[axis]! / normalLength) * displacement
       ) as [number, number, number];
     const nextTarget: FaceTarget = {
       ...stableTarget,

@@ -146,7 +146,12 @@ function distance(left: Vector3, right: Vector3): number {
 export function resolveOffsetPreviewFace(
   faces: readonly FaceTopology[],
   target: OffsetPreviewFaceTarget,
-  offset: number
+  offset: number,
+  /**
+   * Extra distance, in model units, the face's plane may sit from the
+   * expected one: how far a stored value's rounding can move it.
+   */
+  planeSlack = 0
 ): FaceTopology | null {
   if (!Number.isFinite(offset)) {
     return null;
@@ -166,6 +171,7 @@ export function resolveOffsetPreviewFace(
     Math.abs(offset)
   );
   const linearTolerance = geometryTolerance(scale) * 8;
+  const planeTolerance = linearTolerance + Math.max(0, planeSlack);
   const angularTolerance = geometryTolerance(1) * 8;
 
   const matches = faces.flatMap((face) => {
@@ -182,7 +188,7 @@ export function resolveOffsetPreviewFace(
       y: geometry.center.y - expectedPlanePoint.y,
       z: geometry.center.z - expectedPlanePoint.z
     };
-    if (Math.abs(dot(fromExpected, targetNormal)) > linearTolerance) {
+    if (Math.abs(dot(fromExpected, targetNormal)) > planeTolerance) {
       return [];
     }
     return [{ face, score: distance(geometry.center, expectedCenter) }];
@@ -197,4 +203,47 @@ export function resolveOffsetPreviewFace(
     return null;
   }
   return closest.face;
+}
+
+/**
+ * The resolution a committed face offset is stored at (faceOffsetPlan rounds
+ * a drag, an extrude distance or a box side to 0.001 of a model unit), so a
+ * committed face can land up to half of it from the dragged plane.
+ */
+export const COMMITTED_OFFSET_RESOLUTION = 0.001;
+
+/**
+ * Finds the face a committed offset moved, and how far it actually moved.
+ *
+ * The commit stores a rounded value: a +1 mm drag on an 8.1234 mm extrusion
+ * stores 9.123 mm, so its cap lands 0.9996 mm from where it was picked. The
+ * exact plane is tried first; failing that, the plane may sit within the
+ * stored value's rounding, still failing closed on an indistinguishable
+ * pair. The returned displacement is measured on the face found, so a handle
+ * re-armed on it starts from where the face really is.
+ */
+export function resolveCommittedOffsetFace(
+  faces: readonly FaceTopology[],
+  target: OffsetPreviewFaceTarget,
+  offset: number
+): { face: FaceTopology; displacement: number } | null {
+  const face =
+    resolveOffsetPreviewFace(faces, target, offset) ??
+    resolveOffsetPreviewFace(
+      faces,
+      target,
+      offset,
+      COMMITTED_OFFSET_RESOLUTION / 2
+    );
+  const normal = normalized(target.normal);
+  if (!face?.geometry || !normal) return null;
+  const displacement = dot(
+    {
+      x: face.geometry.center.x - target.point.x,
+      y: face.geometry.center.y - target.point.y,
+      z: face.geometry.center.z - target.point.z
+    },
+    normal
+  );
+  return Number.isFinite(displacement) ? { face, displacement } : null;
 }
