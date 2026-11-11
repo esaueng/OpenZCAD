@@ -16,10 +16,15 @@ import type { ToolId } from '../lib/tools';
 import { refusalIsExpandable } from '../lib/selectionCalloutView';
 import { textLabelSegments } from '../lib/topologyLabels';
 import {
+  selectionRailToolHoldReason,
+  selectionRailVerbEnabled
+} from '../lib/selectionRailHold';
+import {
   SelectionRail,
   SelectionReadout,
   RELEASE_HOLD_MS,
   useHeldPick,
+  type HeldPickGuard,
   VALIDATING_ANNOUNCE_MS
 } from './SelectionRail';
 
@@ -382,12 +387,15 @@ describe('SelectionRail', () => {
 describe('useHeldPick', () => {
   const pickIn = (phase: SelectionCalloutOperation['phase']) =>
     content({ operation: operation({ phase }) });
-  type Props = { pick: SelectionCalloutContent | null };
-  const heldRail = (pick: SelectionCalloutContent) =>
+  type Props = { pick: SelectionCalloutContent | null } & HeldPickGuard;
+  const heldRail = (
+    pick: SelectionCalloutContent,
+    guard: HeldPickGuard = {}
+  ) =>
     renderHook<SelectionCalloutContent | null, Props>(
-      (props) => useHeldPick(props.pick),
+      ({ pick, ...guard }) => useHeldPick(pick, guard),
       {
-        initialProps: { pick }
+        initialProps: { pick, ...guard }
       }
     );
 
@@ -427,6 +435,56 @@ describe('useHeldPick', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('gives way at once when the document is rewound under the drag', () => {
+    vi.useFakeTimers();
+    try {
+      // Undo while the hand is on the handle: the document steps back and
+      // the selection is cleared in one batch. That null is a deselection,
+      // not a release settling, so the rail never draws it as a check.
+      const { result, rerender } = heldRail(pickIn('dragging'), {
+        revision: 'p:0'
+      });
+      rerender({ pick: null, revision: 'p:1' });
+      expect(result.current).toBeNull();
+      // Nothing is left to come back after the hold would have run out.
+      act(() => {
+        vi.advanceTimersByTime(RELEASE_HOLD_MS);
+      });
+      expect(result.current).toBeNull();
+      // A release on the same revision still holds as before.
+      rerender({ pick: pickIn('validating'), revision: 'p:1' });
+      rerender({ pick: null, revision: 'p:1' });
+      expect(result.current?.operation?.phase).toBe('validating');
+      // And a rewind during that hold ends it on the spot.
+      rerender({ pick: null, revision: 'p:2' });
+      expect(result.current).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('gives way at once when the held pick’s body is gone', () => {
+    const bodies = new Set(['body-1']);
+    const isLive = (pick: SelectionCalloutContent) =>
+      (pick.bodyIds ?? []).every((id) => bodies.has(id));
+    const dragging = content({
+      bodyIds: ['body-1'],
+      operation: operation({ phase: 'dragging' })
+    });
+    const { result, rerender } = heldRail(dragging, { isLive });
+    // The release settles with the body still there: held.
+    rerender({ pick: null, isLive });
+    expect(result.current?.operation?.phase).toBe('validating');
+    // The body is deleted (or undone away) while held: given way at once,
+    // and a body that comes back later does not bring this pick back.
+    bodies.delete('body-1');
+    rerender({ pick: null, isLive: (pick) => isLive(pick) });
+    expect(result.current).toBeNull();
+    bodies.add('body-1');
+    rerender({ pick: null, isLive: (pick) => isLive(pick) });
+    expect(result.current).toBeNull();
   });
 
   it('never holds a pick that was not held when it left', () => {
@@ -474,5 +532,64 @@ describe('refusalIsExpandable', () => {
     ['91 characters', 'x'.repeat(91), true]
   ])('%s', (_case, text, expected) => {
     expect(refusalIsExpandable(text)).toBe(expected);
+  });
+});
+
+describe('selectionRailToolHoldReason', () => {
+  const held = (phase: SelectionCalloutOperation['phase'], verbs = content().verbs) =>
+    content({ verbs, operation: operation({ phase }) });
+
+  it('agrees with the rail’s buttons on every tool verb', () => {
+    for (const phase of [
+      'armed',
+      'dragging',
+      'validating',
+      'failed',
+      'exact-entry'
+    ] as const) {
+      const pick = held(phase, [
+        toolVerb('hole', 'Hole'),
+        toolVerb('shell', 'Shell', true)
+      ]);
+      const { unmount } = render(
+        <SelectionRail summary="1 face" content={pick} />
+      );
+      for (const verb of pick.verbs) {
+        const tool = verb.id.slice('tool:'.length) as ToolId;
+        const button = screen.getByRole('button', {
+          name: `Selection: ${verb.label}`
+        });
+        // While held, a shortcut launches exactly what the rail leaves
+        // enabled; otherwise the rail does not stand in a launch's way.
+        if (phase === 'dragging' || phase === 'validating') {
+          expect(selectionRailToolHoldReason(pick, tool) === null).toBe(
+            !(button as HTMLButtonElement).disabled
+          );
+        } else {
+          expect(selectionRailToolHoldReason(pick, tool)).toBeNull();
+        }
+        expect(selectionRailVerbEnabled(pick, verb)).toBe(
+          !(button as HTMLButtonElement).disabled
+        );
+      }
+      unmount();
+    }
+  });
+
+  it('refuses a shortcut for a tool the held rail greys out', () => {
+    // Hole is on the rail, disabled, while Offset is dragged; a tool the
+    // rail does not carry at all is refused as well.
+    expect(selectionRailToolHoldReason(held('dragging'), 'hole')).toMatch(
+      /Offset Face is being dragged.*Esc/
+    );
+    expect(selectionRailToolHoldReason(held('dragging'), 'shell')).toMatch(
+      /being dragged/
+    );
+    expect(selectionRailToolHoldReason(held('validating'), 'hole')).toMatch(
+      /Offset Face is being checked · Hole/
+    );
+    // Not held, nothing picked: no refusal.
+    expect(selectionRailToolHoldReason(held('armed'), 'hole')).toBeNull();
+    expect(selectionRailToolHoldReason(null, 'hole')).toBeNull();
   });
 });

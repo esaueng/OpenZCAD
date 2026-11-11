@@ -552,6 +552,7 @@ import {
   type ToolAvailability,
   type ToolId
 } from './lib/tools';
+import { selectionRailToolHoldReason } from './lib/selectionRailHold';
 import {
   commandContextFor,
   commandContextLabel,
@@ -2801,6 +2802,9 @@ export function App() {
   } | null>(null);
   // Named `doc` (not `document`) so the global DOM document is never shadowed.
   const [doc, setDoc] = useState<ProjectDocument | null>(null);
+  // Counts Undo and Redo steps. A commit replaces `doc` too, so the rail's
+  // held pick tells a rewind from a commit settling by this, not by `doc`.
+  const [historyStep, setHistoryStep] = useState(0);
   const [latestLocalAppend, setLatestLocalAppend] =
     useState<LocalHistoryAppend | null>(null);
   // Exact solved geometry is a read view; commands and persistence keep doc.
@@ -8888,6 +8892,15 @@ export function App() {
     selectedEdges.map((edge) => [edge.bodyId, edge.topologyId ?? edge.hash]),
     selectedBodyIds
   ]);
+  // The bodies the pick acts on, so a pick held through a release gives way
+  // the moment one of them is gone (useHeldPick).
+  const calloutBodyIdsKey = JSON.stringify([
+    ...new Set([
+      ...(renderedSelectedTopology ? [renderedSelectedTopology.bodyId] : []),
+      ...selectedEdges.map((edge) => edge.bodyId),
+      ...selectedBodyIds
+    ])
+  ]);
   const selectionCallout = useMemo<SelectionCalloutContent | null>(() => {
     const onVerb = (id: SelectionCalloutVerbId) =>
       selectionCalloutVerbRef.current(id);
@@ -8939,6 +8952,7 @@ export function App() {
         : {}),
       verbs,
       pickKey: calloutPickKey,
+      bodyIds: JSON.parse(calloutBodyIdsKey) as string[],
       anchor: 'selection',
       onVerb,
       onClear: () => clearSelectionRef.current()
@@ -8952,6 +8966,7 @@ export function App() {
     selectedBodyIds,
     calloutVerbsKey,
     calloutPickKey,
+    calloutBodyIdsKey,
     calloutInteractive
   ]);
 
@@ -9693,6 +9708,15 @@ export function App() {
     modelingFeature?: FeatureNode,
     panelLoadSettled = false
   ) {
+    // A held rail (a handle under the hand, or the check after it) greys
+    // out every tool but the verb being made; a shortcut, the palette or a
+    // menu asks the same rule, so none of them opens a tool over the drag
+    // and cancels it. Escape is not a tool and still ends the drag.
+    const holdReason = selectionRailToolHoldReason(railPick, nextTool);
+    if (holdReason) {
+      setStatus(holdReason, { unlogged: true });
+      return;
+    }
     const launch = ++toolLaunchRef.current;
     // Move's panel takes the selection verbs' place. Before its chunk has
     // loaded (a launch that beats the idle warm-up, or Save-Data, which skips
@@ -14783,6 +14807,7 @@ export function App() {
         geometry.retainReadyGeometry(next);
       clearAutoFrame();
       setDoc(next);
+      setHistoryStep((step) => step + 1);
     } catch (error) {
       setStatus(errorMessage(error, 'Undo history could not be restored.'));
       return;
@@ -14860,6 +14885,7 @@ export function App() {
         geometry.retainReadyGeometry(next);
       clearAutoFrame();
       setDoc(next);
+      setHistoryStep((step) => step + 1);
     } catch (error) {
       setStatus(errorMessage(error, 'Redo history could not be restored.'));
       return;
@@ -30440,6 +30466,13 @@ export function App() {
           launchTool(nextTool);
         }}
         pick={railPick}
+        pickRevision={`${doc?.projectId ?? ''}:${historyStep}`}
+        isPickLive={(pick) =>
+          doc !== null &&
+          (pick.bodyIds ?? []).every(
+            (bodyId) => findBodyNode(doc, bodyId as BodyId) !== undefined
+          )
+        }
         pickSummary={commandContextLabel(commandSelection) ?? ''}
         pinnedTools={panelState.pinnedTools}
         onPinnedToolsChange={(pinnedTools) =>

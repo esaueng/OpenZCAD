@@ -29,7 +29,7 @@ import {
   sketchCurveModeTool
 } from './machine';
 import { commandPrompt } from './prompt';
-import { selectionRailHeld } from '../../components/SelectionRail';
+import { selectionRailHeld } from '../selectionRailHold';
 import type {
   FaceTopologyReferenceV5,
   FeatureId,

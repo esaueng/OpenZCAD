@@ -47,7 +47,8 @@ import {
   type ToolId
 } from '../lib/tools';
 import { toolCommandId, useKeymap } from '../lib/keymap';
-import { SelectionRail, selectionRailHeld, useHeldPick } from './SelectionRail';
+import { selectionRailHeld } from '../lib/selectionRailHold';
+import { SelectionRail, useHeldPick } from './SelectionRail';
 import { Tooltip } from './Tooltip';
 
 const TOOL_COUNT = Object.keys(TOOL_META).length;
@@ -68,6 +69,14 @@ interface CommandCardProps {
    * while the pick is a History row's (its card names it).
    */
   pick?: SelectionCalloutContent | null;
+  /**
+   * The document's history position: a pick that leaves the rail while it
+   * is held is drawn as a check in flight only while this stays put, so an
+   * Undo under a drag gives the rail back at once ({@link useHeldPick}).
+   */
+  pickRevision?: unknown;
+  /** Whether a held pick's target still exists in the document. */
+  isPickLive?: ((pick: SelectionCalloutContent) => boolean) | undefined;
   /** The pick, counted: "1 face", "8 edges". */
   pickSummary?: string;
   activeTool: ToolId | null;
@@ -127,6 +136,8 @@ export function CommandCard({
   moreOpen,
   onToggleMore,
   pick: pickProp = null,
+  pickRevision,
+  isPickLive,
   pickSummary = '',
   pinnedTools = DEFAULT_PINNED_TOOLS,
   onPinnedToolsChange,
@@ -140,8 +151,17 @@ export function CommandCard({
   // A pick that drops out mid-drag is still drawn, held, for a moment: the
   // release can lose it for a frame or two, and the pins in its place
   // flashed the whole tool list in and straight back out.
-  const pick = useHeldPick(pickProp);
+  const pick = useHeldPick(pickProp, {
+    revision: pickRevision,
+    isLive: isPickLive
+  });
   const held = pick !== null && selectionRailHeld(pick);
+  // The drawer as it is drawn: a held rail closes it without forgetting it
+  // was open, so it comes back once the drag is done. Everything that says
+  // or measures the drawer reads this, never the remembered flag, so the
+  // toggle never claims an open drawer that is not there and the layout
+  // hooks let go of a drawer that has gone.
+  const drawerOpen = moreOpen && !held;
   const pins = pick ? [] : pinnedTools;
   const suggested = pick
     ? []
@@ -197,7 +217,7 @@ export function CommandCard({
   const shownCount = groups.reduce((sum, group) => sum + group.tools.length, 0);
   const below = useGroupsBelowFold(
     listRef,
-    moreOpen,
+    drawerOpen,
     groups.map((group) => group.tools.join()).join('|')
   );
   const canPin = onPinnedToolsChange !== undefined;
@@ -205,16 +225,16 @@ export function CommandCard({
   const flyoutRef = useRef<HTMLDivElement>(null);
   const focusOnOpen = useRef(false);
   useLayoutEffect(() => {
-    if (!moreOpen || !focusOnOpen.current) return;
+    if (!drawerOpen || !focusOnOpen.current) return;
     focusOnOpen.current = false;
     flyoutRef.current
       ?.querySelector<HTMLElement>('input[type="search"]')
       ?.focus();
-  }, [moreOpen]);
+  }, [drawerOpen]);
   useFlyoutAtToggle(
     flyoutRef,
     moreToggleRef,
-    moreOpen && !advanced,
+    drawerOpen && !advanced,
     groups.map((group) => group.tools.join()).join('|')
   );
 
@@ -532,12 +552,12 @@ export function CommandCard({
       <section
         role="group"
         aria-label="All tools"
-        className={`command-more${moreOpen ? ' open' : ''}`}
+        className={`command-more${drawerOpen ? ' open' : ''}`}
       >
         <Tooltip
-          label={moreOpen ? 'Hide other tools' : 'More tools'}
+          label={drawerOpen ? 'Hide other tools' : 'More tools'}
           description={
-            moreOpen
+            drawerOpen
               ? 'Close the list of the other tools'
               : `Every tool by name — ${restCount} not on the rail. Drag one onto the rail to pin it`
           }
@@ -545,14 +565,14 @@ export function CommandCard({
           <button
             ref={moreToggleRef}
             type="button"
-            className={`command-rail command-more-toggle${moreOpen ? ' active' : ''}`}
-            aria-expanded={moreOpen}
+            className={`command-rail command-more-toggle${drawerOpen ? ' active' : ''}`}
+            aria-expanded={drawerOpen}
             aria-label={`More tools (${restCount})`}
             // Kept in place while a drag holds the rail, so the rail never
             // changes height; nothing else acts on the pick until it is done.
             disabled={held}
             onClick={(event) => {
-              if (!moreOpen) focusOnOpen.current = event.detail === 0;
+              if (!drawerOpen) focusOnOpen.current = event.detail === 0;
               onToggleMore();
             }}
           >
@@ -562,7 +582,7 @@ export function CommandCard({
             </span>
           </button>
         </Tooltip>
-        {moreOpen && !held && (
+        {drawerOpen && (
           // A drawer beside the rail: help for a rail button next to it
           // drops its description, and a row's help opens beside the
           // drawer rather than over the rows below it.

@@ -31,6 +31,10 @@ import type {
   SelectionCalloutVerb
 } from '../lib/selectionCallout';
 import { OPERATION_PHASE_LABELS } from '../lib/selectionCalloutView';
+import {
+  selectionRailHeld,
+  selectionRailVerbEnabled
+} from '../lib/selectionRailHold';
 import { TOOL_META, type ToolId } from '../lib/tools';
 import { chamferOutlineGlyph, filletOutlineGlyph } from '../lib/toolIcons';
 import type { LabelSegment } from '../lib/topologyLabels';
@@ -79,18 +83,6 @@ function verbIcon(verb: SelectionCalloutVerb): ReactNode {
 }
 
 /**
- * While the hand is on the handle, and while the exact check that follows
- * the release runs, the rail is held: nothing but the verb being made can
- * act on the pick until the check answers. The rail keeps every button it
- * had, the others disabled in place rather than taken away, so it changes
- * neither what it shows nor its height across one pick's drag.
- */
-export function selectionRailHeld(content: SelectionCalloutContent): boolean {
-  const phase = content.operation?.phase;
-  return phase === 'dragging' || phase === 'validating';
-}
-
-/**
  * How long a pick that leaves the rail mid-hold (its drag, or the exact
  * check after the release) is still drawn, held, before the rail gives way.
  * The pick can drop out for a frame or two as the release settles; drawing
@@ -99,22 +91,44 @@ export function selectionRailHeld(content: SelectionCalloutContent): boolean {
  */
 export const RELEASE_HOLD_MS = 1000;
 
+/** What ends a held pick before {@link RELEASE_HOLD_MS} runs out. */
+export interface HeldPickGuard {
+  /**
+   * The document's history position (Undo, Redo, another project). A pick
+   * that leaves because the document was rewound under it is gone, not
+   * settling: a change here gives way at once.
+   */
+  revision?: unknown;
+  /**
+   * Whether what the pick acts on (its bodies) still exists. A pick whose
+   * target was deleted or undone away gives way at once.
+   */
+  isLive?: ((pick: SelectionCalloutContent) => boolean) | undefined;
+}
+
 /**
  * The pick the rail draws: `pick`, or, for up to {@link RELEASE_HOLD_MS}
  * after a held pick goes null, that last held pick as a check in flight
  * (every control disabled). A pick that returns ends the hold at once, and
- * a pick that leaves while not held is never kept.
+ * a pick that leaves while not held is never kept. So does a guard that
+ * fails ({@link HeldPickGuard}): the revision moved since the pick was last
+ * drawn, or its target is gone. Then the null is a real deselection (Undo
+ * mid-drag, a delete), and drawing it as a check would grey out the rail
+ * for nothing.
  *
  * Derived during render, as useDelayedUnmount is, so the frame the pick
- * leaves in is already the held one.
+ * leaves in is already the held one, and the frame its guard fails in is
+ * already the released one.
  */
 export function useHeldPick(
-  pick: SelectionCalloutContent | null
+  pick: SelectionCalloutContent | null,
+  { revision, isLive }: HeldPickGuard = {}
 ): SelectionCalloutContent | null {
   const present = pick !== null;
-  const lastHeld = useRef<SelectionCalloutContent | null>(
-    pick && selectionRailHeld(pick) ? pick : null
-  );
+  const lastHeld = useRef<{
+    pick: SelectionCalloutContent;
+    revision: unknown;
+  } | null>(pick && selectionRailHeld(pick) ? { pick, revision } : null);
   const [wasPresent, setWasPresent] = useState(present);
   const [holding, setHolding] = useState(false);
   if (present !== wasPresent) {
@@ -122,8 +136,25 @@ export function useHeldPick(
     setHolding(!present && lastHeld.current !== null);
   }
   useEffect(() => {
-    if (pick) lastHeld.current = selectionRailHeld(pick) ? pick : null;
+    if (pick) {
+      lastHeld.current = selectionRailHeld(pick) ? { pick, revision } : null;
+    }
   });
+  const last = !present && holding ? lastHeld.current : null;
+  const held =
+    last &&
+    Object.is(last.revision, revision) &&
+    (isLive?.(last.pick) ?? true)
+      ? last.pick
+      : null;
+  // A guard that failed ends the hold for good: the revision only moves on,
+  // and a target that comes back (Redo) is a new pick, not this one settling.
+  const released = holding && !present && held === null;
+  useEffect(() => {
+    if (!released) return;
+    lastHeld.current = null;
+    setHolding(false);
+  }, [released]);
   useEffect(() => {
     if (!holding) return;
     const timer = window.setTimeout(() => {
@@ -132,7 +163,6 @@ export function useHeldPick(
     }, RELEASE_HOLD_MS);
     return () => window.clearTimeout(timer);
   }, [holding]);
-  const held = !present && holding ? lastHeld.current : null;
   return useMemo(() => {
     if (pick) return pick;
     if (!held?.operation) return null;
@@ -221,14 +251,10 @@ export function SelectionRail({
             // More tools tile or tool-card action of the same verb.
             aria-label={`Selection: ${verb.label}`}
             aria-pressed={verb.pressed}
-            // While the hand is on the handle only the verb being made
-            // acts. The exact check owns the pick until it answers: another
-            // action then would leave the old operation free to commit late.
-            disabled={
-              verb.disabled ||
-              validating ||
-              (operation?.phase === 'dragging' && !verb.pressed)
-            }
+            // The one rule shortcuts and the palette ask too
+            // (selectionRailToolHoldReason), so a key never launches what
+            // the rail shows greyed out.
+            disabled={!selectionRailVerbEnabled(content, verb)}
             onClick={() => content.onVerb(verb.id)}
           >
             {verbIcon(verb)}

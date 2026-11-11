@@ -193,6 +193,64 @@ test('the handle stays on screen from release through the commit', async ({
   expect(await removals(page, 'data-e2e-handle-x', released)).toBe(0);
 });
 
+test('Undo under a held handle gives the rail back at once', async ({
+  page
+}) => {
+  test.setTimeout(process.env.CI ? 240_000 : 120_000);
+  const { canvas, handle } = await armedBox(page);
+  await page.mouse.move(handle.x, handle.y);
+  await page.mouse.down();
+  await page.mouse.move(
+    handle.x + handle.dx * handle.pixels * 3,
+    handle.y + handle.dy * handle.pixels * 3,
+    { steps: 12 }
+  );
+  await expect.poll(() => renderedMinimumY(canvas)).toBeCloseTo(-3, 3);
+  const operation = page.getByRole('region', { name: 'Offset Face operation' });
+  await expect(operation).toHaveAttribute('data-hold', 'drag');
+  // Undo takes the box away with the pick. That is a deselection, not a
+  // release settling: the rail must not stand greyed out over the deleted
+  // body for the release hold's second.
+  await page.keyboard.press('Control+z');
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Box' })
+  ).toHaveCount(0);
+  await expect(operation).toHaveCount(0, { timeout: 400 });
+  await expect(page.locator('button[data-pinned-tool]').first()).toBeEnabled({
+    timeout: 400
+  });
+  await page.mouse.up();
+});
+
+test('a tool key under a held handle neither opens the tool nor drops the drag', async ({
+  page
+}) => {
+  test.setTimeout(process.env.CI ? 240_000 : 120_000);
+  const { canvas, handle } = await armedBox(page);
+  await page.mouse.move(handle.x, handle.y);
+  await page.mouse.down();
+  await page.mouse.move(
+    handle.x + handle.dx * handle.pixels * 3,
+    handle.y + handle.dy * handle.pixels * 3,
+    { steps: 12 }
+  );
+  await expect.poll(() => renderedMinimumY(canvas)).toBeCloseTo(-3, 3);
+  const operation = page.getByRole('region', { name: 'Offset Face operation' });
+  await expect(operation).toHaveAttribute('data-hold', 'drag');
+  // B is Box's key. The held rail greys every tool out; the key asks the
+  // same rule, so it is refused instead of opening Box over the drag.
+  await page.keyboard.press('b');
+  await expect(page.getByText(/Offset Face is being dragged/)).toBeVisible();
+  await expect(operation).toHaveAttribute('data-hold', 'drag');
+  await page.mouse.up();
+  await expect(page.getByText('Offset face by', { exact: false })).toBeVisible({
+    timeout: 30_000
+  });
+  await expect(
+    page.locator('.feature-row-main', { hasText: 'Offset face' })
+  ).toHaveCount(1);
+});
+
 /** Holds the worker's complete-rebuild replies, so a release stays validating. */
 async function holdValidation(page: Page) {
   await page.addInitScript(() => {
