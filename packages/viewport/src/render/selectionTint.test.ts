@@ -6,7 +6,12 @@ import {
   FEATURE_COLORS
 } from '@openzcad/shared';
 import { SELECTION_SEMANTICS } from './semantics';
-import { contextBodyColor, selectedFaceColor } from './selectionTint';
+import {
+  contextBodyColor,
+  recededBodyColor,
+  recedeLevelOf,
+  selectedFaceColor
+} from './selectionTint';
 
 type Rgb = { r: number; g: number; b: number };
 
@@ -135,5 +140,52 @@ describe('selection tint (design review F8)', () => {
     const target = new THREE.Color();
     expect(selectedFaceColor('#e1a948', target)).toBe(target);
     expect(contextBodyColor('#e1a948', false, target)).toBe(target);
+    expect(recededBodyColor('#e1a948', 0.5, target)).toBe(target);
+  });
+
+  it('eases between its own colour and the full recede, monotonically', () => {
+    const grey = DEFAULT_BODY_COLOR;
+    expect(recededBodyColor(grey, 0).getHexString()).toBe(
+      contextBodyColor(grey, true).getHexString()
+    );
+    expect(recededBodyColor(grey, 1).getHexString()).toBe(
+      contextBodyColor(grey, false).getHexString()
+    );
+    // Out-of-range levels clamp rather than over-dim or brighten.
+    expect(recededBodyColor(grey, 2).getHexString()).toBe(
+      contextBodyColor(grey, false).getHexString()
+    );
+    expect(recededBodyColor(grey, -1).getHexString()).toBe(
+      contextBodyColor(grey, true).getHexString()
+    );
+    let previous = luminance(grey);
+    for (const level of [0.25, 0.5, 0.75, 1]) {
+      const next = luminance(recededBodyColor(grey, level));
+      expect(next).toBeLessThan(previous);
+      previous = next;
+    }
+  });
+
+  it('reads the level back out of a drawn colour, and only for its own body', () => {
+    for (const [, color] of featureColors) {
+      for (const level of [0, 0.125, 0.5, 0.875, 1]) {
+        expect(
+          recedeLevelOf(color, recededBodyColor(color, level))
+        ).toBeCloseTo(level, 3);
+      }
+    }
+    // Another body's colour is no level of this one, receded or not.
+    const gold = FEATURE_COLORS.primitive;
+    expect(recedeLevelOf(DEFAULT_BODY_COLOR, new THREE.Color(gold))).toBeNull();
+    expect(
+      recedeLevelOf(gold, recededBodyColor(DEFAULT_BODY_COLOR, 0.5))
+    ).toBeNull();
+    // Nor is a colour brighter than the body or past the full recede.
+    expect(
+      recedeLevelOf(DEFAULT_BODY_COLOR, new THREE.Color('#ffffff'))
+    ).toBeNull();
+    expect(
+      recedeLevelOf(DEFAULT_BODY_COLOR, new THREE.Color('#000000'))
+    ).toBeNull();
   });
 });

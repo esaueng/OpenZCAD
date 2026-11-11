@@ -28,6 +28,11 @@ State changes cut; chrome animates. Hover and selection tints on faces, edges
 and sketch regions land in the frame the state changes, on and off, matching
 the reference CAD (decided 2026-10-04); only the x-ray pass that draws an
 occluded highlight through the solid still eases, so it does not flicker.
+The one other exception is the recede behind a selection: when it turns on
+(the first pick) or off (the pick ends, including when a commit ends it),
+every body but the pick changes brightness at once, so it eases over
+`SELECTION_RECEDE_MS` (140 ms, smoothstep) instead of popping, and cuts under
+Reduce motion. Which body is the pick while the recede stays on still cuts.
 The 60 ms dwell before hover moves to a new target (`HOVER_DWELL_MS`) is a
 separate knob and unchanged.
 
