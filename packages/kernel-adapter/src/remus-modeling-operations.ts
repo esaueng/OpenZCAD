@@ -1,6 +1,14 @@
 import { GEOMETRY_LINEAR_TOLERANCE } from '@openzcad/geometry';
 
 const VOLUME_DEFLECTION_RATIO = 1e-4;
+/**
+ * How much finer the second reading of a disputed volume is taken.
+ * `kernel.volume` integrates exactly where it can and measures the
+ * tessellation otherwise, without saying which. A reading that moves when the
+ * mesh is refined was sampled, and that movement bounds how far apart two
+ * sampled readings of congruent solids can honestly sit.
+ */
+const VOLUME_REFINEMENT = 4;
 const NORMAL_TOLERANCE = 1e-9;
 
 export interface RemusModelingPoint {
@@ -85,6 +93,8 @@ interface SolidSnapshot {
   readonly shells: readonly number[];
   readonly bounds: readonly [number, number, number, number, number, number];
   readonly volume: number;
+  /** Deflection `volume` was read at; only a sampled reading depends on it. */
+  readonly volumeDeflection: number;
   readonly scale: number;
   readonly linearTolerance: number;
   readonly volumeTolerance: number;
@@ -150,10 +160,11 @@ function inspectSolid(
   if (kernel.validateSolid(solid) !== 0) {
     throw new Error(`${label} is not a valid closed solid.`);
   }
-  const volume = kernel.volume(
-    solid,
-    Math.max(linearTolerance, scale * VOLUME_DEFLECTION_RATIO)
+  const volumeDeflection = Math.max(
+    linearTolerance,
+    scale * VOLUME_DEFLECTION_RATIO
   );
+  const volume = kernel.volume(solid, volumeDeflection);
   const volumeTolerance = Math.max(
     linearTolerance ** 3,
     Math.abs(volume) * 1e-9
@@ -166,6 +177,7 @@ function inspectSolid(
     shells,
     bounds,
     volume,
+    volumeDeflection,
     scale,
     linearTolerance,
     volumeTolerance,
@@ -224,7 +236,11 @@ function runOperation(
   operation: string,
   inputSolid: number,
   invoke: () => number,
-  validateOutput: (input: SolidSnapshot, output: SolidSnapshot) => void
+  validateOutput: (
+    input: SolidSnapshot,
+    output: SolidSnapshot,
+    outputSolid: number
+  ) => void
 ): number {
   const input = inspectSolid(kernel, inputSolid, 'Target solid');
   let outputSolid: number;
@@ -239,8 +255,89 @@ function runOperation(
   assertInputUnchanged(input, unchangedInput, operation);
   assertNewOutputHandle(inputSolid, outputSolid, operation);
   const output = inspectSolid(kernel, outputSolid, `${operation} output`);
-  validateOutput(input, output);
+  validateOutput(input, output, outputSolid);
   return outputSolid;
+}
+
+interface RefinedVolumes {
+  readonly source: number;
+  readonly output: number;
+  /** The larger move of either reading under refinement. */
+  readonly sampling: number;
+}
+
+/**
+ * Re-reads two volumes at a finer deflection. Returns `null` when either
+ * finer reading fails or is not finite, so the caller keeps its refusal.
+ */
+function refineVolumes(
+  kernel: RemusModelingKernel,
+  sourceSolid: number,
+  source: SolidSnapshot,
+  outputSolid: number,
+  output: SolidSnapshot
+): RefinedVolumes | null {
+  let fineSource: number;
+  let fineOutput: number;
+  try {
+    fineSource = kernel.volume(
+      sourceSolid,
+      source.volumeDeflection / VOLUME_REFINEMENT
+    );
+    fineOutput = kernel.volume(
+      outputSolid,
+      output.volumeDeflection / VOLUME_REFINEMENT
+    );
+  } catch {
+    return null;
+  }
+  if (!Number.isFinite(fineSource) || !Number.isFinite(fineOutput)) {
+    return null;
+  }
+  return {
+    source: fineSource,
+    output: fineOutput,
+    sampling: Math.max(
+      Math.abs(source.volume - fineSource),
+      Math.abs(output.volume - fineOutput)
+    )
+  };
+}
+
+/**
+ * Whether a rigid motion's output carries its source's volume. Exact readings
+ * must agree to `volumeTolerance`. A reading that moves under refinement was
+ * measured on the tessellation, which places a reflected copy's facets
+ * differently; such readings must agree, at the finer deflection, to within
+ * the larger move either made. A wrong solid differs by a fixed amount that
+ * refinement does not shrink, so it is still refused unless the difference
+ * is below what the sampled measurement can resolve at all.
+ */
+function rigidVolumeVerdict(
+  kernel: RemusModelingKernel,
+  sourceSolid: number,
+  source: SolidSnapshot,
+  outputSolid: number,
+  output: SolidSnapshot
+): string | null {
+  if (Math.abs(source.volume - output.volume) <= source.volumeTolerance) {
+    return null;
+  }
+  const exactDetail = `source ${source.volume}, output ${output.volume}, tolerance ${source.volumeTolerance}`;
+  const refined = refineVolumes(
+    kernel,
+    sourceSolid,
+    source,
+    outputSolid,
+    output
+  );
+  if (refined === null || refined.sampling <= source.volumeTolerance) {
+    return exactDetail;
+  }
+  if (Math.abs(refined.source - refined.output) <= refined.sampling) {
+    return null;
+  }
+  return `${exactDetail}; at deflection ${source.volumeDeflection / VOLUME_REFINEMENT} source ${refined.source}, output ${refined.output}, sampling ${refined.sampling}`;
 }
 
 function assertScaleAppropriateDistance(
@@ -308,10 +405,17 @@ function mirrorSolid(
         input.planeNormal.y,
         input.planeNormal.z
       ),
-    (source, output) => {
-      if (Math.abs(source.volume - output.volume) > source.volumeTolerance) {
+    (source, output, outputSolid) => {
+      const mismatch = rigidVolumeVerdict(
+        kernel,
+        input.targetSolid,
+        source,
+        outputSolid,
+        output
+      );
+      if (mismatch !== null) {
         throw new Error(
-          `Mirror output did not preserve exact solid volume (source ${source.volume}, output ${output.volume}, tolerance ${source.volumeTolerance}).`
+          `Mirror output did not preserve exact solid volume (${mismatch}).`
         );
       }
     }

@@ -2,7 +2,7 @@ import { useRef } from 'react';
 import { refusalOfWorkerError } from '../lib/workerRefusal';
 import type { BodyId, ProjectDocument } from '@openzcad/shared';
 import type { AnyCommand, CommandManager } from '@openzcad/command-system';
-import { directEditRejection } from '../lib/directEdit';
+import { createdFeatureId, directEditRejection } from '../lib/directEdit';
 import { errorMessage } from '../lib/errors';
 import type { CommandDiagnostic } from '../lib/interaction/machine';
 import {
@@ -155,12 +155,14 @@ export function useDirectEditCommit(
             };
           }
         } else {
+          const featureId = createdFeatureId(command);
           const message = directEditRejection({
             label: command.label,
             warnings: derived.warnings,
             ...(derived.featureWarnings
               ? { featureWarnings: derived.featureWarnings }
               : {}),
+            ...(featureId ? { featureId } : {}),
             bodyPresent: Boolean(derived.bodyRepresentations[targetBodyId]),
             documentMoved
           });
@@ -170,7 +172,8 @@ export function useDirectEditCommit(
           const warning = refusingWarningDetail(
             command.label,
             derived.warnings,
-            derived.featureWarnings
+            derived.featureWarnings,
+            featureId
           );
           rejection = message
             ? splitRefusal(message, warning?.kernelRefusal ?? warning?.category)
