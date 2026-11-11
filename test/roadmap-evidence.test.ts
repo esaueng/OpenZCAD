@@ -305,6 +305,11 @@ describe('roadmap evidence fragments', () => {
         LEDGER,
         'Live, see [it](docs/roadmap-evidence/a01--other.md).',
         /a01--live\.md: links to fragment a01--other\.md/
+      ],
+      [
+        LEDGER,
+        'Live, see [plan](../plans/p.md).',
+        /a01--live\.md: link \.\.\/plans\/p\.md is relative to the fragment/
       ]
     ] as const) {
       const root = mkdtempSync(join(tmpdir(), 'roadmap-evidence-'));

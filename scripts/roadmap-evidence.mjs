@@ -353,6 +353,15 @@ export function checkRepo(repoRoot = REPO_ROOT) {
         (target) =>
           `${name}: links to fragment ${target}, which the fold deletes; link a plan or test instead`
       )
+    ),
+    // The fold moves the text into ROADMAP.md at the repository root, where a
+    // link written relative to this directory (`../plans/x.md`) breaks.
+    ...fragments.flatMap(({ name, evidence }) =>
+      Array.from(
+        evidence.matchAll(/\]\((\.\.?\/[^)\s]*)\)/g),
+        (match) =>
+          `${name}: link ${match[1]} is relative to the fragment; write it from the repository root (docs/...), as ROADMAP.md reads it`
+      )
     )
   ];
   if (errors.length) throw new Error(errors.join('\n'));
