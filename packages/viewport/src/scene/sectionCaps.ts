@@ -5,6 +5,25 @@ import type { ViewerMesh } from '../pick/meshes';
 export const SECTION_CAP = 'viewport-section-cap';
 
 /**
+ * The raw values of a position attribute when they are its coordinates: a
+ * plain, unnormalized float32 `xyz` buffer. Half-float, normalized, other
+ * quantized and interleaved attributes return null, so a caller decodes them
+ * through the attribute's accessors (`fromBufferAttribute`, `getX`).
+ */
+export function plainFloat32Positions(
+  attribute: THREE.BufferAttribute | THREE.InterleavedBufferAttribute
+): Float32Array | null {
+  return attribute instanceof THREE.BufferAttribute &&
+    !(attribute as { isFloat16BufferAttribute?: boolean })
+      .isFloat16BufferAttribute &&
+    !attribute.normalized &&
+    attribute.itemSize === 3 &&
+    attribute.array instanceof Float32Array
+    ? attribute.array
+    : null;
+}
+
+/**
  * Intersect the disposable tessellation, weld its face seams, and triangulate
  * closed contours by nesting depth (outer material, hole, island, ...).
  * Open/branched contours are deliberately not filled: an incomplete display
@@ -63,16 +82,45 @@ export function sectionCapGeometry(
     new THREE.Vector3(),
     new THREE.Vector3()
   ];
+  // A live drag preview re-sections a dense body every frame, so the scan
+  // reads plain buffers directly and allocates only for crossing triangles.
+  // The arithmetic is `Plane.distanceToPoint` on the same values; every
+  // other encoding decodes through the attribute.
+  const direct = plainFloat32Positions(positions);
+  const indices =
+    index &&
+    !index.normalized &&
+    index.itemSize === 1 &&
+    (index.array instanceof Uint32Array || index.array instanceof Uint16Array)
+      ? index.array
+      : null;
+  const { x: nx, y: ny, z: nz } = plane.normal;
+  const constant = plane.constant;
+  const distances = [0, 0, 0];
   let minimum = Infinity;
   let maximum = -Infinity;
   for (let i = 0; i < count; i += 3) {
-    const distances = vertices.map((point, j) => {
-      point.fromBufferAttribute(positions, index ? index.getX(i + j) : i + j);
-      const distance = plane.distanceToPoint(point);
-      minimum = Math.min(minimum, distance);
-      maximum = Math.max(maximum, distance);
-      return Math.abs(distance) <= tolerance ? 0 : distance;
-    });
+    for (let j = 0; j < 3; j++) {
+      const vertex = indices
+        ? indices[i + j]!
+        : index
+          ? index.getX(i + j)
+          : i + j;
+      const point = vertices[j]!;
+      if (direct) {
+        const offset = vertex * 3;
+        point.set(direct[offset]!, direct[offset + 1]!, direct[offset + 2]);
+      } else {
+        point.fromBufferAttribute(positions, vertex);
+      }
+      const distance = nx * point.x + ny * point.y + nz * point.z + constant;
+      if (distance < minimum) minimum = distance;
+      if (distance > maximum) maximum = distance;
+      distances[j] = Math.abs(distance) <= tolerance ? 0 : distance;
+    }
+    // Wholly on one side (zero counts as below): no contour edge.
+    const above = distances[0]! > 0;
+    if (above === distances[1]! > 0 && above === distances[2]! > 0) continue;
     const intersections: THREE.Vector3[] = [];
     for (let j = 0; j < 3; j++) {
       const k = (j + 1) % 3;

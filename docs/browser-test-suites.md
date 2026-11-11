@@ -111,6 +111,12 @@ measures pointer-to-preview and release-to-authoritative-frame latency. The
 native backup can be selected through `OZ_FACE_DRAG_PROJECT`. Model limitations,
 the exact commands and measured diagnosis are in
 [face-drag main-thread work](qa/2026-11-09/face-drag-main-thread.md).
+`two committed face resizes` repeats the recording's R2 filleted-union shape:
+two drags, each traced through its commit's successful save, with an
+`afterRelease` frame summary. `OZ_FACE_DRAG_COMMIT_BUDGET_MS` turns its
+post-release main-thread tasks, measured from a Chrome trace, into a local
+budget; see
+[face-commit hitches](qa/2026-11-11/face-commit-hitches.md).
 
 On Linux, set `OZ_FACE_DRAG_ANGLE=gl` when the machine has a working hardware
 OpenGL backend; the JSON records the actual WebGL renderer. Default headless

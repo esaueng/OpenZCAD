@@ -515,6 +515,63 @@ describe('the offset body ghost', () => {
       ghost.dispose();
     });
 
+    it.each(
+      Object.keys(VEIL_LAYOUTS).flatMap((name) => [
+        [name, 'indexed'],
+        [name, 'non-indexed']
+      ])
+    )(
+      'veils the same pull, and not a push, from %s %s positions',
+      (name, indexing) => {
+        // The reach scan reads plain float32 buffers directly; every other
+        // layout must decode through the attribute and decide the same way.
+        // Normalized layouts store the box shrunk and scale the mesh back up.
+        const veil = (
+          geometry: THREE.BufferGeometry,
+          layout = VEIL_LAYOUTS[name]!
+        ) => {
+          const ghost = createBodyGhost(body(), {
+            faceRange: { triangleStart: 0, triangleCount: 2 }
+          });
+          const live = layout(
+            indexing === 'indexed' ? geometry : geometry.toNonIndexed()
+          );
+          ghost.veilAddedMaterial(live);
+          const parts = veilParts(ghost);
+          const cap = capOf(ghost);
+          const capPositions = cap
+            ? [...cap.geometry.getAttribute('position').array]
+            : null;
+          const scale = live.scale.x;
+          // The cap is built in world space, whatever the mesh's scale.
+          const area = cap ? surfaceArea(cap.geometry) : 0;
+          ghost.dispose();
+          return { parts, capPositions, area, scale };
+        };
+        const pull = veil(new THREE.BoxGeometry(4, 2, 2).translate(1, 0, 0));
+        expect(pull.parts).toEqual([
+          'offset-body-ghost-veil-depth',
+          'offset-body-ghost-veil-fill',
+          'offset-body-ghost-veil-cap'
+        ]);
+        expect(pull.area).toBeCloseTo(4, 3);
+        // Exact layouts give the float32 cap itself.
+        if (pull.scale === 1)
+          expect(pull.capPositions).toEqual(
+            veil(
+              new THREE.BoxGeometry(4, 2, 2).translate(1, 0, 0),
+              VEIL_LAYOUTS.float32
+            ).capPositions
+          );
+        // A push stops at the reach scan: it never sections the body. A raw
+        // read of encoded words would find "material" past the old face.
+        const section = vi.spyOn(sectionCaps, 'sectionCapGeometry');
+        const push = veil(new THREE.BoxGeometry(1, 2, 2).translate(-0.5, 0, 0));
+        expect(push.parts).toEqual([]);
+        expect(section).not.toHaveBeenCalled();
+      }
+    );
+
     it('re-applies its cut after the section pass rewrites the body', () => {
       const ghost = createBodyGhost(body(), {
         faceRange: { triangleStart: 0, triangleCount: 2 }
@@ -575,6 +632,61 @@ describe('the offset body ghost', () => {
     });
   });
 });
+
+type PositionAttribute =
+  THREE.BufferAttribute | THREE.InterleavedBufferAttribute;
+/**
+ * A mesh holding `geometry`'s positions in another layout. Normalized
+ * buffers hold [-1, 1], so they store the shape scaled by `1 / scale` and the
+ * mesh scales it back: the world shape is the same in every layout.
+ */
+function veilLayout(make: (count: number) => PositionAttribute, scale = 1) {
+  return (geometry: THREE.BufferGeometry) => {
+    const source = geometry.getAttribute('position');
+    const target = make(source.count);
+    for (let i = 0; i < source.count; i++)
+      target.setXYZ(
+        i,
+        source.getX(i) / scale,
+        source.getY(i) / scale,
+        source.getZ(i) / scale
+      );
+    const encoded = new THREE.BufferGeometry();
+    encoded.setAttribute('position', target);
+    encoded.setIndex(geometry.index);
+    const mesh = new THREE.Mesh(encoded, new THREE.MeshStandardMaterial());
+    mesh.scale.setScalar(scale);
+    return mesh;
+  };
+}
+const VEIL_LAYOUTS: Record<
+  string,
+  (
+    geometry: THREE.BufferGeometry
+  ) => THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial>
+> = {
+  float32: veilLayout(
+    (count) => new THREE.BufferAttribute(new Float32Array(count * 3), 3)
+  ),
+  'half-float': veilLayout(
+    (count) => new THREE.Float16BufferAttribute(new Uint16Array(count * 3), 3)
+  ),
+  'normalized int16': veilLayout(
+    (count) => new THREE.BufferAttribute(new Int16Array(count * 3), 3, true),
+    4
+  ),
+  int16: veilLayout(
+    (count) => new THREE.BufferAttribute(new Int16Array(count * 3), 3)
+  ),
+  'interleaved float32': veilLayout(
+    (count) =>
+      new THREE.InterleavedBufferAttribute(
+        new THREE.InterleavedBuffer(new Float32Array(count * 4), 4),
+        3,
+        1
+      )
+  )
+};
 
 function surfaceArea(geometry: THREE.BufferGeometry) {
   const position = geometry.getAttribute('position');

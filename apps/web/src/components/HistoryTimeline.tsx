@@ -284,39 +284,48 @@ function FeatureRenameField({
  * the rows as laid out, through custom properties on the list. Reads the end
  * of history and the last index from the list's data attributes, so it needs
  * nothing from the render that scheduled it.
+ *
+ * Every row is measured before any property is written. A custom property
+ * on the list restyles its rows, so a read after a write forced a second
+ * style and layout pass, and interleaved they cost a commit several full
+ * layouts (40–50 ms on a filleted union's face commit).
  */
-function placeTimeline(list: HTMLElement) {
+export function placeTimeline(list: HTMLElement) {
   const end = Number(list.dataset.end);
   const last = Number(list.dataset.last);
   const rows = [...list.querySelectorAll<HTMLElement>(':scope > .feature-row')];
   const first = rows[0];
   const lastRow = rows[rows.length - 1];
   const center = (row: HTMLElement) => row.offsetTop + row.offsetHeight / 2;
-  const style = list.style;
+  const properties = new Map<string, string>();
   if (!first || !lastRow) {
-    style.setProperty('--spine-height', '0px');
-    style.setProperty('--highlight-opacity', '0');
-    return;
-  }
-  style.setProperty('--spine-top', `${center(first)}px`);
-  style.setProperty('--spine-height', `${center(lastRow) - center(first)}px`);
-  const endRow = rows.find((row) => Number(row.dataset.historyIndex) === end);
-  if (endRow) {
-    const boundary = endRow.offsetTop + endRow.offsetHeight;
-    style.setProperty('--handle-y', `${boundary}px`);
-    style.setProperty(
-      '--fill-height',
-      `${(end === last ? center(endRow) : boundary) - center(first)}px`
-    );
-  }
-  const selected = rows.find((row) => row.classList.contains('selected'));
-  if (selected) {
-    style.setProperty('--highlight-y', `${selected.offsetTop}px`);
-    style.setProperty('--highlight-height', `${selected.offsetHeight}px`);
-    style.setProperty('--highlight-opacity', '1');
+    properties.set('--spine-height', '0px');
+    properties.set('--highlight-opacity', '0');
   } else {
-    style.setProperty('--highlight-opacity', '0');
+    const firstCenter = center(first);
+    properties.set('--spine-top', `${firstCenter}px`);
+    properties.set('--spine-height', `${center(lastRow) - firstCenter}px`);
+    const endRow = rows.find((row) => Number(row.dataset.historyIndex) === end);
+    if (endRow) {
+      const boundary = endRow.offsetTop + endRow.offsetHeight;
+      properties.set('--handle-y', `${boundary}px`);
+      properties.set(
+        '--fill-height',
+        `${(end === last ? center(endRow) : boundary) - firstCenter}px`
+      );
+    }
+    const selected = rows.find((row) => row.classList.contains('selected'));
+    if (selected) {
+      properties.set('--highlight-y', `${selected.offsetTop}px`);
+      properties.set('--highlight-height', `${selected.offsetHeight}px`);
+      properties.set('--highlight-opacity', '1');
+    } else {
+      properties.set('--highlight-opacity', '0');
+    }
   }
+  const style = list.style;
+  for (const [name, value] of properties)
+    if (style.getPropertyValue(name) !== value) style.setProperty(name, value);
 }
 
 /**
@@ -695,10 +704,14 @@ export function HistoryTimeline({
     if (!list) {
       return;
     }
-    placeTimeline(list);
     if (typeof ResizeObserver === 'undefined') {
+      placeTimeline(list);
       return;
     }
+    // A new observation reports the list's size after this frame's layout
+    // and before its paint, so the placement reads settled geometry instead
+    // of forcing a layout inside the commit (the whole workspace's, on an
+    // edit that adds a feature).
     const observer = new ResizeObserver(() => placeTimeline(list));
     observer.observe(list);
     return () => observer.disconnect();

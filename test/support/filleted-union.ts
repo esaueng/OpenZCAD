@@ -36,14 +36,25 @@ export function unionEndFace(body: BodyRepresentation) {
   return face;
 }
 
-/** Authored native geometry with an R5 junction blend and a later height edit. */
-export async function filletedUnion(adapter: ExactKernelAdapter) {
+/**
+ * Authored native geometry with an R5 junction blend and a later height edit.
+ * Options vary the box width, blend radius and whether the height edit is
+ * appended; the defaults are the documented public surrogate.
+ */
+export async function filletedUnion(
+  adapter: ExactKernelAdapter,
+  {
+    width = 30,
+    radius = 5,
+    heightEdit = true
+  }: { width?: number; radius?: number; heightEdit?: boolean } = {}
+) {
   const box = addPrimitiveFeature(
     createProjectDocument('Filleted union', toUserId('user_filleted_union')),
     {
       name: 'Box',
       primitiveKind: 'box',
-      dimensions: { width: 30, height: 18, depth: 26 }
+      dimensions: { width, height: 18, depth: 26 }
     }
   );
   const cylinder = addPrimitiveFeature(box, {
@@ -83,11 +94,19 @@ export async function filletedUnion(adapter: ExactKernelAdapter) {
     edgeReferences: edges.flatMap((edge) =>
       edge.reference ? [edge.reference] : []
     ),
-    size: 5
+    size: radius
   });
   const derived = await adapter.syncDocument(rounded.document);
   throwOnUnexpected(derived.warnings);
   const bodyId = rounded.bodyId;
+  if (!heightEdit) {
+    rounded.document.derived = derived;
+    return {
+      document: rounded.document,
+      bodyId,
+      body: derived.bodyRepresentations[bodyId]!
+    };
+  }
   const top = derived.bodyRepresentations[bodyId]!.topology!.faces.find(
     (face) =>
       face.reference?.lineageName ===

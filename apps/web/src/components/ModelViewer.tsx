@@ -60,6 +60,7 @@ import { buildSketchRelationGlyphs } from './viewer/sketchRelations';
 import { alreadyFacesSketch, sketchReturnUp } from './viewer/sketchCamera';
 import { createSketchCurve, SKETCH_CURVE_WIDTH } from './viewer/sketchCurve';
 import { pointerSlack } from '../lib/pointerSlack';
+import { renderChipText, setElementText } from '../lib/domText';
 import { TouchLoupe } from './viewer/touchLoupe';
 import {
   FrameIntervalMeter,
@@ -2011,38 +2012,6 @@ const CHIP_LANE_CLEARANCE_PX = 72;
 const LINE_LABEL_MIN_PX = 150;
 /** Air between the mode tag and the value pill along the line. */
 const LINE_LABEL_GAP_PX = 6;
-/**
- * Splits a chip's text into prefix, number and units so the number can carry
- * the weight and the rest can recede. The concatenated text is unchanged:
- * "Total 25.59 mm" reads back exactly as written.
- */
-function renderChipText(chip: HTMLElement, text: string): void {
-  const match = /^(.*?)(-?\d[\d.,]*)(\s\S+)?$/.exec(text);
-  if (!match) {
-    chip.textContent = text;
-    return;
-  }
-  const [, prefix = '', number = '', units = ''] = match;
-  const parts: Node[] = [];
-  if (prefix) {
-    const span = document.createElement('span');
-    span.className = 'chip-prefix';
-    span.textContent = prefix;
-    parts.push(span);
-  }
-  const value = document.createElement('span');
-  value.className = 'chip-number';
-  value.textContent = number;
-  parts.push(value);
-  if (units) {
-    const span = document.createElement('span');
-    span.className = 'chip-units';
-    span.textContent = units;
-    parts.push(span);
-  }
-  chip.replaceChildren(...parts);
-}
-
 const E2E_CANVAS_HOOKS_ENABLED =
   (
     import.meta.env as unknown as {
@@ -4273,7 +4242,7 @@ export function ModelViewer({
      * merely close.
      */
     function showSnapGlyph(resolved: SnapResolution) {
-      snapGlyph.textContent = SNAP_LABELS[resolved.candidate.kind];
+      setElementText(snapGlyph, SNAP_LABELS[resolved.candidate.kind]);
       snapGlyph.dataset.kind = resolved.candidate.kind;
       // `resolved.screen` is already host-local: it was projected against the
       // canvas size, which is what the overlay is positioned within.
@@ -4379,7 +4348,7 @@ export function ModelViewer({
         hud.hide(snapGlyph);
         return;
       }
-      snapGlyph.textContent = `◎ ${centerAlignLabel(matches)}`;
+      setElementText(snapGlyph, `◎ ${centerAlignLabel(matches)}`);
       snapGlyph.dataset.kind = 'center';
       hud.showAt(snapGlyph, screen.x, screen.y);
     }
@@ -4683,7 +4652,7 @@ export function ModelViewer({
         if (!view) continue;
         const shownValue = entry.rig ? entry.rig.value() : view.value;
         const text = view.format(shownValue);
-        if (entry.chip.textContent !== text) entry.chip.textContent = text;
+        setElementText(entry.chip, text);
         nameCommandChip(entry.chip, view.describe?.(shownValue));
         entry.chip.hidden = false;
       }
@@ -4823,7 +4792,7 @@ export function ModelViewer({
               )
             : { dx: 0, dy: 0 };
         const text = view.format(value);
-        if (entry.chip.textContent !== text) entry.chip.textContent = text;
+        setElementText(entry.chip, text);
         nameCommandChip(entry.chip, view.describe?.(value));
         shown.push({
           valueId,
@@ -7014,7 +6983,7 @@ export function ModelViewer({
           : focus.kind === 'ring'
             ? ` · ${Math.round(value * 10) / 10}°`
             : ` · ${Math.round(value * 100) / 100} ${unitLabelRef.current}`;
-      moveGizmoHud.textContent = `${baseLabel}${suffix}`;
+      setElementText(moveGizmoHud, `${baseLabel}${suffix}`);
       moveGizmoHud.dataset.kind = focus.kind;
       moveGizmoHud.dataset.axis = focus.kind === 'center' ? 'free' : focus.axis;
       moveGizmoHud.style.setProperty(
@@ -7281,7 +7250,7 @@ export function ModelViewer({
         hud.hide(measurePreviewChip);
         return;
       }
-      measurePreviewChip.textContent = label;
+      setElementText(measurePreviewChip, label);
       hud.showAtPointer(measurePreviewChip, event, 16, -28);
     }
 
@@ -7813,22 +7782,33 @@ export function ModelViewer({
       if (rig?.kind === 'cylinder-radius') {
         // Drawing-annotation typography: the units render small after the
         // number, so the chip reads "R 35ₘₘ" rather than uniform text.
-        const units = document.createElement('small');
-        units.textContent = unitLabelRef.current;
         const mode = cylinderDimensionModeRef.current;
         const displayValue =
           mode === 'diameter' ? rig.value() * 2 : rig.value();
-        dimensionPrefix.textContent = mode === 'diameter' ? 'Ø' : 'R';
+        setElementText(dimensionPrefix, mode === 'diameter' ? 'Ø' : 'R');
         dimensionPrefix.setAttribute(
           'aria-label',
           mode === 'diameter'
             ? 'Switch to radius entry'
             : 'Switch to diameter entry'
         );
-        offsetEntry.replaceChildren(
-          ` ${formatNumber(displayValue)}\u00a0`,
-          units
-        );
+        const valueText = ` ${formatNumber(displayValue)}\u00a0`;
+        const [shownValue, shownUnits] = offsetEntry.childNodes;
+        if (
+          offsetEntry.childNodes.length === 2 &&
+          shownValue?.nodeType === Node.TEXT_NODE &&
+          shownUnits?.nodeName === 'SMALL'
+        ) {
+          // Update in place: replacing nodes every frame restyles the
+          // workspace through its :has() rules (see setElementText).
+          if ((shownValue as Text).data !== valueText)
+            (shownValue as Text).data = valueText;
+          setElementText(shownUnits as Element, unitLabelRef.current);
+        } else {
+          const units = document.createElement('small');
+          units.textContent = unitLabelRef.current;
+          offsetEntry.replaceChildren(valueText, units);
+        }
         nameCommandChip(
           offsetEntry,
           `${mode === 'diameter' ? 'Diameter' : 'Radius'} ${formatNumber(displayValue)} ${unitLabelRef.current}`
@@ -7915,7 +7895,7 @@ export function ModelViewer({
           screen.y + alongY * valueReach
         );
         if (tagText !== null) {
-          radiusLabelChip.textContent = tagText;
+          setElementText(radiusLabelChip, tagText);
           const tagReach = labelWidth / 2 + half;
           place(
             radiusLabelChip,
@@ -7957,14 +7937,16 @@ export function ModelViewer({
           // Beside the pin the tag stays reachable — the Total/Offset or
           // Fillet/Chamfer switch, or the Diameter/Radius name that also
           // opens exact entry — flush against the value chip's left edge.
-          radiusLabelChip.textContent =
+          setElementText(
+            radiusLabelChip,
             rig?.kind === 'cylinder-radius'
               ? (tagText ?? '')
               : edgeTag !== null
                 ? edgeTag
                 : offsetChipModeRef.current === 'total'
                   ? 'Total ▾'
-                  : 'Offset ▾';
+                  : 'Offset ▾'
+          );
           if (pinScreenAt) {
             // The pair reads tag then value and stays clear of the pin: on
             // the pin's right it starts just past the pin, on its left it
@@ -8048,7 +8030,10 @@ export function ModelViewer({
       axis: DirectEditAxis
     ) {
       const label = axisDimensionLabel(axis);
-      dragHud.textContent = `${label} ${Math.round(value * 100) / 100} ${unitLabelRef.current}`;
+      setElementText(
+        dragHud,
+        `${label} ${Math.round(value * 100) / 100} ${unitLabelRef.current}`
+      );
       hud.showAtPointer(dragHud, event, 14, -36);
     }
 
@@ -8166,7 +8151,7 @@ export function ModelViewer({
       } else {
         sketchSnapMarker.dataset.label = label;
       }
-      sketchSnapMarker.textContent = SKETCH_SNAP_GLYPHS[kind];
+      setElementText(sketchSnapMarker, SKETCH_SNAP_GLYPHS[kind]);
       sketchSnapMarker.title = label;
       hud.showAtPointer(sketchSnapMarker, event);
     }
@@ -8213,9 +8198,10 @@ export function ModelViewer({
         renderSketchNumericHud(event);
         return;
       }
-      sketchDimLabel.textContent = appendUnits
-        ? `${text} ${unitLabelRef.current}`
-        : text;
+      setElementText(
+        sketchDimLabel,
+        appendUnits ? `${text} ${unitLabelRef.current}` : text
+      );
       hud.showAtPointer(sketchDimLabel, event, 16, -28);
     }
 
@@ -8249,7 +8235,7 @@ export function ModelViewer({
               } · Tab · Enter`;
             })()
           : `${label}: ${sketchNumericRaw || '…'} ${units} · Enter`;
-      sketchDimLabel.textContent = text;
+      setElementText(sketchDimLabel, text);
       sketchDimLabel.dataset.editing = 'true';
       hud.showAtPointer(sketchDimLabel, event, 16, -28);
     }

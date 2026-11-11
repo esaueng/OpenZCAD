@@ -280,6 +280,10 @@ export function WorkspaceReadout({
   const syncLabel = WORKSPACE_SAVE_STATE_PRESENTATION[saveState].statusBarLabel;
   const hasGuidance =
     commandRow == null && Boolean((prompt && !shown) || pick || notice);
+  // Mirrors `.workspace-hint.is-selection` below as a lane class, so the
+  // stylesheet need not ask `:has()`: that rule restyled the whole workspace
+  // on every chip update during a drag.
+  const hasSelectionHint = commandRow == null && Boolean(notice || pick);
   // Always in the tree, as the page's contentinfo landmark: what the status
   // bar used to be for assistive tech and for the specs that read it. Only
   // its visibility changes.
@@ -291,7 +295,9 @@ export function WorkspaceReadout({
           from the tree; a live status message takes its place while the
           toast is up. */}
       <div
-        className={`command-bar-lane${hasGuidance ? ' has-guidance' : ''}`}
+        className={`command-bar-lane${hasGuidance ? ' has-guidance' : ''}${
+          hasSelectionHint ? ' has-selection-hint' : ''
+        }`}
         ref={laneRef}
       >
         {commandRow ??

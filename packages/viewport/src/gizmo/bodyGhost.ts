@@ -1,6 +1,9 @@
 import * as THREE from 'three';
 import type { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
-import { sectionCapGeometry } from '../scene/sectionCaps';
+import {
+  plainFloat32Positions,
+  sectionCapGeometry
+} from '../scene/sectionCaps';
 import {
   createFatLineSegments,
   drawFatLineOncePerPixel,
@@ -354,8 +357,25 @@ export function createBodyGhost(
       return reach.beyond;
     const point = new THREE.Vector3();
     let beyond = false;
+    // A push scans every vertex on each reshape (nothing lies beyond), so
+    // read a plain float32 buffer directly; the transform is `applyMatrix4`'s.
+    // Encoded attributes decode through `fromBufferAttribute`.
+    const direct = plainFloat32Positions(position);
+    const e = live.matrixWorld.elements;
     for (let i = 0; i < position.count && !beyond; i++) {
-      point.fromBufferAttribute(position, i).applyMatrix4(live.matrixWorld);
+      if (direct) {
+        const x = direct[i * 3]!;
+        const y = direct[i * 3 + 1]!;
+        const z = direct[i * 3 + 2]!;
+        const w = 1 / (e[3] * x + e[7] * y + e[11] * z + e[15]);
+        point.set(
+          (e[0] * x + e[4] * y + e[8] * z + e[12]) * w,
+          (e[1] * x + e[5] * y + e[9] * z + e[13]) * w,
+          (e[2] * x + e[6] * y + e[10] * z + e[14]) * w
+        );
+      } else {
+        point.fromBufferAttribute(position, i).applyMatrix4(live.matrixWorld);
+      }
       beyond = plane.distanceToPoint(point) > 2 * margin;
     }
     reach = { position, version, matrix: live.matrixWorld.clone(), beyond };
