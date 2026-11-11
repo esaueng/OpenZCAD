@@ -473,7 +473,7 @@ export type InteractionEvent =
     }
   /**
    * A live preview frame refused while the hand is still on the handle. The
-   * gesture stays `dragging` — the prompt, Escape and the collapsed rail
+   * gesture stays `dragging` — the prompt, Escape and the held rail
    * all belong to the drag until it is released — and only the value chip
    * turns to its warning. Outside a drag it is a `validation-failed`.
    */

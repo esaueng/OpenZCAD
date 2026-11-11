@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
+  act,
   createEvent,
   fireEvent,
   render,
@@ -40,7 +41,9 @@ import {
   type ToolId
 } from '../lib/tools';
 import { PANEL_ICONS } from './modelPanels/panelMeta';
+import type { SelectionCalloutContent } from '../lib/selectionCallout';
 import { CommandCard } from './CommandCard';
+import { RELEASE_HOLD_MS } from './SelectionRail';
 
 const AVAILABILITY: ToolAvailability = {
   sketchCount: 0,
@@ -414,39 +417,118 @@ describe('CommandCard', () => {
     );
   });
 
-  it('keeps only the verb being dragged, with no fold', () => {
-    renderCard(
-      { ...NOTHING, faceSelected: true, bodyCount: 1 },
+  const offsetPick = (
+    phase: NonNullable<SelectionCalloutContent['operation']>['phase']
+  ): SelectionCalloutContent => ({
+    label: textLabelSegments('Bracket · Top face'),
+    verbs: [
       {
-        pickSummary: '1 face',
-        pick: {
-          label: textLabelSegments('Bracket · Top face'),
-          verbs: [
-            {
-              id: 'action:offset-face',
-              label: 'Offset',
-              title: 'Offset the face',
-              disabled: false,
-              pressed: true
-            }
-          ],
-          anchor: 'selection',
-          onVerb: vi.fn(),
-          onClear: vi.fn(),
-          operation: {
-            title: 'Offset Face',
-            phase: 'dragging',
-            onEditCulprit: vi.fn(),
-            onViewDetails: vi.fn(),
-            onKeepLastValid: vi.fn(),
-            onSelectAllEdges: vi.fn()
-          }
-        }
+        id: 'action:offset-face',
+        label: 'Offset',
+        title: 'Offset the face',
+        disabled: false,
+        pressed: true
+      },
+      {
+        id: 'tool:hole',
+        label: 'Hole',
+        title: 'Hole',
+        disabled: false,
+        pressed: false
       }
+    ],
+    anchor: 'selection',
+    onVerb: vi.fn(),
+    onClear: vi.fn(),
+    operation: {
+      title: 'Offset Face',
+      phase,
+      onEditCulprit: vi.fn(),
+      onViewDetails: vi.fn(),
+      onKeepLastValid: vi.fn(),
+      onSelectAllEdges: vi.fn()
+    }
+  });
+  const railButtons = () =>
+    screen
+      .getAllByRole('button')
+      .map((b) => [
+        b.getAttribute('aria-label'),
+        (b as HTMLButtonElement).disabled
+      ]);
+
+  it('holds the rail in place while a verb is dragged', () => {
+    const face = { ...NOTHING, faceSelected: true, bodyCount: 1 };
+    const { rerender, onLaunchTool } = renderCard(face, {
+      pickSummary: '1 face',
+      pick: offsetPick('armed')
+    });
+    const more = `More tools (${TOOL_COUNT})`;
+    expect(railButtons()).toEqual([
+      ['Deselect all', false],
+      ['Selection: Offset', false],
+      ['Selection: Hole', false],
+      [more, false]
+    ]);
+    // Nothing leaves the rail and nothing moves: only the verb being made
+    // still acts, More tools included.
+    rerender(
+      <Harness
+        selection={face}
+        onLaunchTool={onLaunchTool}
+        pickSummary="1 face"
+        pick={offsetPick('dragging')}
+      />
     );
-    expect(
-      screen.getAllByRole('button').map((b) => b.getAttribute('aria-label'))
-    ).toEqual(['Selection: Offset']);
+    expect(railButtons()).toEqual([
+      ['Deselect all', true],
+      ['Selection: Offset', false],
+      ['Selection: Hole', true],
+      [more, true]
+    ]);
+  });
+
+  it('never flashes the pinned tools when the pick drops out on release', () => {
+    vi.useFakeTimers();
+    try {
+      const face = { ...NOTHING, faceSelected: true, bodyCount: 1 };
+      const { rerender, container, onLaunchTool } = renderCard(face, {
+        pickSummary: '1 face',
+        pick: offsetPick('dragging')
+      });
+      const view = (pick: SelectionCalloutContent | null) => (
+        <Harness
+          selection={face}
+          onLaunchTool={onLaunchTool}
+          pickSummary="1 face"
+          pick={pick}
+        />
+      );
+      // The release can lose the pick for a frame or two before the check's
+      // pick arrives: the rail stays the pick's, held, throughout.
+      rerender(view(null));
+      expect(railTools(container)).toEqual([]);
+      expect(
+        screen.getByRole('button', { name: 'Selection: Offset' })
+      ).toBeDisabled();
+      rerender(view(offsetPick('armed')));
+      expect(railTools(container)).toEqual([]);
+      expect(
+        screen.getByRole('button', { name: 'Selection: Hole' })
+      ).toBeEnabled();
+      // A pick really gone gives the rail back to the pins.
+      rerender(view(null));
+      expect(railTools(container)).toEqual(DEFAULT_PINNED_TOOLS);
+      // And so does a held pick that never comes back.
+      rerender(view(offsetPick('dragging')));
+      rerender(view(null));
+      act(() => {
+        vi.advanceTimersByTime(RELEASE_HOLD_MS);
+      });
+      expect(railTools(container)).toEqual(DEFAULT_PINNED_TOOLS);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('launches a tool from the rail or from the drawer', () => {

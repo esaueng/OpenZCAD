@@ -25288,7 +25288,7 @@ export function App() {
       ...(advice ? { advice } : {})
     };
     // Under a held handle the refusal is the chip's to show: the drag keeps
-    // its prompt, its Escape and its collapsed rail until it is released.
+    // its prompt, its Escape and its held rail until it is released.
     const dragging = current.phase === 'dragging';
     dispatchInteraction({
       type: dragging ? 'preview-refused' : 'validation-failed',

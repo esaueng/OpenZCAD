@@ -1,4 +1,11 @@
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  within
+} from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type {
   SelectionCalloutContent,
@@ -11,6 +18,8 @@ import { textLabelSegments } from '../lib/topologyLabels';
 import {
   SelectionRail,
   SelectionReadout,
+  RELEASE_HOLD_MS,
+  useHeldPick,
   VALIDATING_ANNOUNCE_MS
 } from './SelectionRail';
 
@@ -112,19 +121,98 @@ describe('SelectionRail', () => {
     ).toBeNull();
   });
 
-  it('keeps only the verb being made while its handle is dragged', () => {
+  it('lets only the verb being made act while its handle is dragged', () => {
+    const onClear = vi.fn();
     render(
       <SelectionRail
         summary="1 face"
-        content={content({ operation: operation({ phase: 'dragging' }) })}
+        content={content({
+          onClear,
+          operation: operation({ phase: 'dragging', selectAllEdgesCount: 12 })
+        })}
       />
     );
     const rail = screen.getByRole('region', { name: 'Offset Face operation' });
+    // Every button stays where it was; the others are greyed in place.
     expect(
       within(rail)
         .getAllByRole('button')
-        .map((button) => button.getAttribute('aria-label'))
-    ).toEqual(['Selection: Offset']);
+        .map((button) => [
+          button.getAttribute('aria-label'),
+          (button as HTMLButtonElement).disabled
+        ])
+    ).toEqual([
+      ['Deselect all', true],
+      ['Selection: Offset', false],
+      ['Selection: Hole', true],
+      ['Select all 12 edges', true]
+    ]);
+    expect(rail).toHaveAttribute('data-hold', 'drag');
+    fireEvent.click(within(rail).getByRole('button', { name: 'Deselect all' }));
+    expect(onClear).not.toHaveBeenCalled();
+  });
+
+  it('keeps one set of buttons and one phase slot across a pick lifecycle', () => {
+    vi.useFakeTimers();
+    try {
+      const view = (phase: SelectionCalloutOperation['phase']) => (
+        <SelectionRail
+          summary="1 face"
+          content={content({ operation: operation({ phase }) })}
+        />
+      );
+      const { rerender, container } = render(view('armed'));
+      const shape = () => ({
+        buttons: Array.from(container.querySelectorAll('button')).map(
+          (button) => button.getAttribute('aria-label')
+        ),
+        slots: container.querySelectorAll('.selection-rail-phase-slot').length
+      });
+      const armed = shape();
+      expect(armed.buttons).toEqual([
+        'Deselect all',
+        'Selection: Offset',
+        'Selection: Hole'
+      ]);
+      expect(armed.slots).toBe(1);
+      for (const phase of ['dragging', 'validating', 'armed'] as const) {
+        rerender(view(phase));
+        expect(shape()).toEqual(armed);
+      }
+      // A check that takes time is announced in the same slot.
+      rerender(view('dragging'));
+      rerender(view('validating'));
+      act(() => {
+        vi.advanceTimersByTime(VALIDATING_ANNOUNCE_MS);
+      });
+      expect(shape()).toEqual(armed);
+      expect(
+        container.querySelector('.selection-rail-phase-slot')
+      ).toHaveTextContent('Validating');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the drag look through a quick check after the release', () => {
+    const view = (phase: SelectionCalloutOperation['phase']) => (
+      <SelectionRail
+        summary="1 face"
+        content={content({ operation: operation({ phase }) })}
+      />
+    );
+    const { rerender } = render(view('dragging'));
+    rerender(view('validating'));
+    const rail = screen.getByRole('region', { name: 'Offset Face operation' });
+    // Not the quiet hold, which shows every disabled verb at full strength
+    // and would undim the others for the check's frame or two.
+    expect(rail).toHaveAttribute('data-hold', 'drag');
+    expect(rail).not.toHaveAttribute('data-busy');
+    rerender(view('armed'));
+    expect(rail).not.toHaveAttribute('data-hold');
+    for (const button of within(rail).getAllByRole('button')) {
+      expect(button).toBeEnabled();
+    }
   });
 
   it('gives an imported face its own edit verb', () => {
@@ -207,18 +295,19 @@ describe('SelectionRail', () => {
       for (const button of within(card).getAllByRole('button')) {
         expect(button).toBeDisabled();
       }
-      // Still the drag's dot, held but not dimmed: most checks answer
+      // Still the drag's dot and the drag's look: most checks answer
       // within a frame or two.
       expect(card).not.toHaveTextContent('Validating');
       expect(
         container.querySelector('.selection-callout-phase-dot')
       ).not.toBeNull();
-      expect(card).toHaveAttribute('data-busy', 'quiet');
+      expect(card).toHaveAttribute('data-hold', 'drag');
       act(() => {
         vi.advanceTimersByTime(VALIDATING_ANNOUNCE_MS);
       });
       expect(card).toHaveTextContent('Validating');
       expect(card).not.toHaveAttribute('data-busy');
+      expect(card).not.toHaveAttribute('data-hold');
     } finally {
       vi.useRealTimers();
     }
@@ -238,8 +327,9 @@ describe('SelectionRail', () => {
       const card = screen.getByRole('region', {
         name: 'Offset Face operation'
       });
-      // The typed value's pill stays as it was.
+      // The typed value's pill stays as it was, its verbs not dimmed.
       expect(card).toHaveTextContent('Exact entry');
+      expect(card).toHaveAttribute('data-busy', 'quiet');
       act(() => {
         vi.advanceTimersByTime(VALIDATING_ANNOUNCE_MS - 1);
       });
@@ -286,6 +376,69 @@ describe('SelectionRail', () => {
       />
     );
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+});
+
+describe('useHeldPick', () => {
+  const pickIn = (phase: SelectionCalloutOperation['phase']) =>
+    content({ operation: operation({ phase }) });
+  type Props = { pick: SelectionCalloutContent | null };
+  const heldRail = (pick: SelectionCalloutContent) =>
+    renderHook<SelectionCalloutContent | null, Props>(
+      (props) => useHeldPick(props.pick),
+      {
+        initialProps: { pick }
+      }
+    );
+
+  it('holds a pick that drops out on release until it returns', () => {
+    vi.useFakeTimers();
+    try {
+      const dragging = pickIn('dragging');
+      const { result, rerender } = heldRail(dragging);
+      expect(result.current).toBe(dragging);
+      // The release loses the pick for a frame: the rail stays the pick's,
+      // every control held as for the check, never the pinned tools.
+      rerender({ pick: null });
+      expect(result.current?.verbs).toEqual(dragging.verbs);
+      expect(result.current?.operation?.phase).toBe('validating');
+      act(() => {
+        vi.advanceTimersByTime(RELEASE_HOLD_MS - 1);
+      });
+      expect(result.current).not.toBeNull();
+      const armed = pickIn('armed');
+      rerender({ pick: armed });
+      expect(result.current).toBe(armed);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('holds through a check too, but gives way once the hold runs out', () => {
+    vi.useFakeTimers();
+    try {
+      const { result, rerender } = heldRail(pickIn('validating'));
+      rerender({ pick: null });
+      expect(result.current?.operation?.phase).toBe('validating');
+      act(() => {
+        vi.advanceTimersByTime(RELEASE_HOLD_MS);
+      });
+      expect(result.current).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('never holds a pick that was not held when it left', () => {
+    const { result, rerender } = heldRail(pickIn('dragging'));
+    // Released and answered, then deselected: the rail gives way at once.
+    rerender({ pick: pickIn('armed') });
+    rerender({ pick: null });
+    expect(result.current).toBeNull();
+    // A pick with no operation is never held either.
+    rerender({ pick: content() });
+    rerender({ pick: null });
+    expect(result.current).toBeNull();
   });
 });
 
