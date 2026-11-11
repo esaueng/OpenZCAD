@@ -27,6 +27,7 @@ import {
   planFaceOffset,
   withFaceTravelHint
 } from './faceOffsetPlan';
+import { resolveCommittedOffsetFace } from './offsetPreview';
 
 describe('deferred mesh travel hints', () => {
   it('measures only for the exact nonadjacent-face collision refusal', () => {
@@ -259,6 +260,46 @@ describe('planFaceOffset on an extrude far cap', () => {
     expect(
       faceOffsetBaseline(document, bodyId, capFace(featureId, 1), CAP_HASH)
     ).toEqual({ total: 8, sense: 1 });
+  });
+
+  it('stores a rounded distance whose cap the commit can still re-arm', () => {
+    // A sub-thousandth baseline: +1 on 8.1234 stores 9.123, so the rebuilt
+    // cap sits 0.0004 short of the dragged plane. Searching only there
+    // ended a successful drag with nothing picked.
+    const { document, bodyId, featureId } = extrudedPlate(8.1234);
+    const picked = capFace(featureId, 1);
+    picked.geometry!.center = { x: 20, y: 12, z: 18.1234 };
+    const plan = planFaceOffset({
+      document,
+      bodyId,
+      face: picked,
+      faceHash: CAP_HASH,
+      offset: 1
+    });
+    expect(plan?.kind).toBe('extrude-distance');
+    const feature = listFeaturesInOrder(plan!.command.apply(document)).find(
+      (candidate) => candidate.featureId === featureId
+    )!;
+    const stored =
+      feature.data.featureKind === 'extrude' ? feature.data.distance : null;
+    expect(stored).toBe(9.123);
+    const rebuilt = capFace(featureId, 1);
+    rebuilt.topologyId = 'face:cap:rebuilt';
+    rebuilt.geometry!.center = { x: 20, y: 12, z: 10 + (stored as number) };
+    const plateTop = capFace(featureId, 1);
+    plateTop.topologyId = 'face:plate-top';
+    plateTop.geometry!.center = { x: 5, y: 5, z: 10 };
+    const committed = resolveCommittedOffsetFace(
+      [plateTop, rebuilt],
+      {
+        point: { x: 21, y: 13, z: 18.1234 },
+        normal: { x: 0, y: 0, z: 1 },
+        center: picked.geometry!.center
+      },
+      1
+    );
+    expect(committed?.face).toBe(rebuilt);
+    expect(committed?.displacement).toBeCloseTo(0.9996, 9);
   });
 
   it('keeps a typed expression live with the sense folded in', () => {
