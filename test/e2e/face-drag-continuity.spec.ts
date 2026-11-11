@@ -53,8 +53,14 @@ async function selectFace(canvas: Locator, normal: object) {
     .not.toBeNull();
 }
 
-/** A 30 × 18 × 24 box with its front face armed for Offset Face. */
-async function armedBox(page: Page, options: { hole?: boolean } = {}) {
+/**
+ * A 30 × 18 × 24 box with its front face armed for Offset Face, or left on
+ * the Resize Body a face pick arms by default.
+ */
+async function armedBox(
+  page: Page,
+  options: { hole?: boolean; operation?: 'offset' | 'resize' } = {}
+) {
   await stubApi(page);
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/');
@@ -81,13 +87,19 @@ async function armedBox(page: Page, options: { hole?: boolean } = {}) {
     await page.keyboard.press('Escape');
   }
   await selectFace(canvas, { x: 0, y: -1, z: 0 });
-  await page
-    .locator('.selection-rail')
-    .getByRole('button', { name: 'Selection: Offset', exact: true })
-    .click();
-  await expect(
-    page.getByRole('region', { name: 'Offset Face operation' })
-  ).toBeVisible();
+  if (options.operation === 'resize') {
+    await expect(
+      page.getByRole('region', { name: 'Resize Body operation' })
+    ).toBeVisible();
+  } else {
+    await page
+      .locator('.selection-rail')
+      .getByRole('button', { name: 'Selection: Offset', exact: true })
+      .click();
+    await expect(
+      page.getByRole('region', { name: 'Offset Face operation' })
+    ).toBeVisible();
+  }
   await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
   const handle = await canvas.evaluate((element) => ({
     x: Number(element.dataset.e2eHandleX),
@@ -724,6 +736,149 @@ test('the committed face stays selected while the follow-up rebuild analyses', a
   );
   expect(await page.evaluate(() => window.__cardlessFrames)).toBe(0);
 });
+
+/** Logs the selection recede (`data-e2e-recede-levels`) from now on. */
+async function recordRecede(canvas: Locator) {
+  await canvas.evaluate((element) => {
+    const log: { t: number; name: string; value: string | null }[] = [];
+    window.__faceDragLog = log;
+    new MutationObserver((records) => {
+      for (const record of records) {
+        const name = record.attributeName!;
+        log.push({
+          t: performance.now(),
+          name,
+          value: (record.target as Element).getAttribute(name)
+        });
+      }
+    }).observe(element, {
+      attributes: true,
+      attributeFilter: ['data-e2e-selection-recedes', 'data-e2e-recede-levels']
+    });
+  });
+}
+
+/** One body's recede level out of a `data-e2e-recede-levels` value. */
+function recedeLevel(value: string | null, bodyId: string): number | null {
+  const entry = (value ?? '')
+    .split(',')
+    .find((pair) => pair.startsWith(`${bodyId}=`));
+  return entry === undefined ? null : Number(entry.slice(bodyId.length + 1));
+}
+
+/** Every level the body was drawn at since `from`, in order. */
+async function recedeLevels(page: Page, bodyId: string, from: number) {
+  const log = await page.evaluate(
+    (from) =>
+      (window.__faceDragLog ?? []).filter(
+        (entry) => entry.t >= from && entry.name === 'data-e2e-recede-levels'
+      ),
+    from
+  );
+  return log.map((entry) => recedeLevel(entry.value, bodyId));
+}
+
+test(
+  'a face drag keeps the rest receded from release through its commit',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(process.env.CI ? 240_000 : 120_000);
+    const { canvas, handle } = await armedBox(page);
+    // The face pick recedes its own body around the lit face.
+    await expect(canvas).toHaveAttribute('data-e2e-selection-recedes', 'true');
+    const bodyId = (await canvas.getAttribute('data-e2e-selected-bodies'))!;
+    expect(bodyId).toBeTruthy();
+    await expect
+      .poll(async () =>
+        recedeLevel(await canvas.getAttribute('data-e2e-recede-levels'), bodyId)
+      )
+      .toBe(1);
+    await recordRecede(canvas);
+    const pressed = await now(page);
+    await dragAndCommit(page, canvas, handle, handle.x, handle.y, 3);
+    // Through the rebuild that follows the commit, and a little after it.
+    await page.waitForTimeout(1200);
+    await expect(canvas).toHaveAttribute('data-e2e-selected-face', /.+/);
+    // The moved face stayed the pick, so the scene never came back to full
+    // brightness around it, for a single frame, across preview, release,
+    // validation and the rebuilt geometry.
+    expect(await removals(page, 'data-e2e-selection-recedes', pressed)).toBe(0);
+    const levels = await recedeLevels(page, bodyId, pressed);
+    expect(
+      levels.filter((level) => level !== 1),
+      JSON.stringify(levels)
+    ).toEqual([]);
+  }
+);
+
+test(
+  'when a resize commit ends the pick, the scene eases back rather than popping',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(process.env.CI ? 240_000 : 120_000);
+    // A box side arms Resize Body, whose commit ends the pick (its handle
+    // measures the whole length, so it does not re-arm on the moved face).
+    const { canvas, handle } = await armedBox(page, { operation: 'resize' });
+    const bodyId = (await canvas.getAttribute('data-e2e-selected-bodies'))!;
+    expect(bodyId).toBeTruthy();
+    await expect
+      .poll(async () =>
+        recedeLevel(await canvas.getAttribute('data-e2e-recede-levels'), bodyId)
+      )
+      .toBe(1);
+    await recordRecede(canvas);
+    const pressed = await now(page);
+    await page.mouse.move(handle.x, handle.y);
+    await page.mouse.down();
+    await page.mouse.move(
+      handle.x + handle.dx * handle.pixels * 3,
+      handle.y + handle.dy * handle.pixels * 3,
+      { steps: 12 }
+    );
+    await expect.poll(() => renderedMinimumY(canvas)).toBeCloseTo(-3, 3);
+    await page.mouse.up();
+    await expect(page.getByText('depth set to', { exact: false })).toBeVisible({
+      timeout: 30_000
+    });
+    await expect(canvas).not.toHaveAttribute('data-e2e-selection-recedes');
+    await expect
+      .poll(async () =>
+        recedeLevel(await canvas.getAttribute('data-e2e-recede-levels'), bodyId)
+      )
+      .toBe(0);
+    // Every frame from the release: held at the recede until the pick ended,
+    // then down through intermediate levels, never 1 → 0 in one frame.
+    const out = await recedeLevels(page, bodyId, pressed);
+    const label = JSON.stringify(out);
+    const leaving = out.lastIndexOf(1);
+    expect(leaving, label).toBeGreaterThanOrEqual(0);
+    const easing = out.slice(leaving + 1);
+    expect(easing.at(-1), label).toBe(0);
+    expect(
+      easing.filter((level) => level !== null && level > 0 && level < 1).length,
+      label
+    ).toBeGreaterThan(0);
+    for (let index = 1; index < easing.length; index++)
+      expect(easing[index]!, label).toBeLessThanOrEqual(easing[index - 1]!);
+
+    // The next pick eases the scene back in the same way.
+    const picked = await now(page);
+    await selectFace(canvas, { x: 0, y: -1, z: 0 });
+    await expect
+      .poll(async () =>
+        recedeLevel(await canvas.getAttribute('data-e2e-recede-levels'), bodyId)
+      )
+      .toBe(1);
+    const back = await recedeLevels(page, bodyId, picked);
+    const backLabel = JSON.stringify(back);
+    expect(
+      back.filter((level) => level !== null && level > 0 && level < 1).length,
+      backLabel
+    ).toBeGreaterThan(0);
+    for (let index = 1; index < back.length; index++)
+      expect(back[index]!, backLabel).toBeGreaterThanOrEqual(back[index - 1]!);
+  }
+);
 
 test('a commit reads as complete while its follow-up rebuild analyses', async ({
   page

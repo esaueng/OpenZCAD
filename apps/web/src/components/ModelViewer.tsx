@@ -48,6 +48,7 @@ import {
 import { mark, measure, timed } from '../lib/perf';
 import { InteractionShaderWarmup } from './viewer/interactionShaderWarmup';
 import { usePreparedBodies } from './viewer/usePreparedBodies';
+import { SelectionRecede } from './viewer/selectionRecede';
 import { releasePreparedBodyGeometry } from '../../../../packages/viewport/src/render/preparedBody';
 import { reportPresentedGeometry } from '../lib/startupReadiness';
 import { useWorkspaceFrameReady } from './WorkspaceLoading';
@@ -251,6 +252,7 @@ import {
   AMBIENT_OCCLUSION,
   SettledAmbientOcclusion,
   contextBodyColor,
+  recededBodyColor,
   isBodyMaterial,
   selectedFaceColor,
   SKETCH_GLIDE_MS,
@@ -924,6 +926,22 @@ export interface BodyAppearancePreview {
   bodyId: string;
   color?: string;
   opacity?: number;
+}
+
+/**
+ * Each body's place in the selection recede, as drawn this frame
+ * (`body=0.000` its own colour … `body=1.000` the context dim), so a test can
+ * see the recede ease rather than infer it from pixels.
+ */
+function writeE2ERecedeLevels(
+  canvas: HTMLCanvasElement,
+  recede: SelectionRecede
+): void {
+  const levels = [...recede.levels()]
+    .map(([bodyId, level]) => `${bodyId}=${level.toFixed(3)}`)
+    .join(',');
+  if (levels) canvas.dataset.e2eRecedeLevels = levels;
+  else delete canvas.dataset.e2eRecedeLevels;
 }
 
 /** Runtime-only request to centre and face one exact planar face head-on. */
@@ -2454,6 +2472,15 @@ export function ModelViewer({
   showGridRef.current = settings.showGrid;
   const reducedMotionRef = useRef(settings.reducedMotion);
   reducedMotionRef.current = settings.reducedMotion;
+  /** The body a drag-phase appearance preview is recolouring, if any. */
+  const appearanceColorPreviewRef = useRef<string | null>(null);
+  appearanceColorPreviewRef.current =
+    appearancePreview?.color !== undefined ? appearancePreview.bodyId : null;
+  /** Each body's place in the recede behind a selection, eased on and off. */
+  const selectionRecedeRef = useRef<SelectionRecede | null>(null);
+  selectionRecedeRef.current ??= new SelectionRecede();
+  /** Whether the scene receded on the last bodies pass; null before one. */
+  const sceneRecededRef = useRef<boolean | null>(null);
   const zoomToCursorRef = useRef(settings.zoomToCursor);
   zoomToCursorRef.current = settings.zoomToCursor;
   const middleDragRef = useRef(settings.middleDrag);
@@ -11818,6 +11845,29 @@ export function ModelViewer({
       );
 
       selection.step(dt);
+      // The scene receding behind a selection, or coming back, eases over a
+      // few frames; the loop stays awake only while it does.
+      let recedeMoved = false;
+      const recedeAnimating = selectionRecedeRef.current!.step(
+        dt * 1000,
+        (bodyId, base, level) => {
+          recedeMoved = true;
+          // A drag-phase colour preview owns that body's colour until it ends.
+          const preview = appearanceColorPreviewRef.current;
+          if (preview === bodyId) return;
+          const object = context.objectsByBodyId.get(bodyId);
+          if (!object) return;
+          forEachMesh(object, (mesh) => {
+            recededBodyColor(base, level, mesh.material.color);
+          });
+        }
+      );
+      if (E2E_CANVAS_HOOKS_ENABLED && recedeMoved) {
+        writeE2ERecedeLevels(
+          context.renderer.domElement,
+          selectionRecedeRef.current!
+        );
+      }
       // The cube's facets fade to their hover fill like the SVG's did.
       if (cubeLink) cubeOverlay.setHighlight(cubeLink.highlight);
       const cubeAnimating = cubeOverlay.step(
@@ -12168,6 +12218,7 @@ export function ModelViewer({
         hoverAnimating ||
         cubeAnimating ||
         edgesAnimating ||
+        recedeAnimating ||
         rigsAnimating ||
         retiringOverlaysRef.current.length > 0 ||
         inferenceAnimating ||
@@ -12625,6 +12676,14 @@ export function ModelViewer({
         selectedEdges.length > 0 ||
         focusFaces.length > 0 ||
         (focusGhostBodies?.length ?? 0) > 0);
+    // The scene-wide recede eases on and off; which body is the pick cuts.
+    const recede = selectionRecedeRef.current!;
+    const easeRecede =
+      sceneRecededRef.current !== null &&
+      sceneRecededRef.current !== selectionRecedes &&
+      !reducesMotion(reducedMotionRef.current);
+    sceneRecededRef.current = selectionRecedes;
+    recede.retain(new Set(bodies.map((body) => body.bodyId)));
     // Assemble draws the bodies that are not components faint, so the parts
     // being jointed read first.
     const assemblyDimmed = new Set(
@@ -12791,6 +12850,12 @@ export function ModelViewer({
         (body.opacity ?? 1) *
         xrayFactor *
         (dimmedForAssembly ? ASSEMBLY_DIMMED_OPACITY : 1);
+      const recedeLevel = recede.set(
+        body.bodyId,
+        body.color,
+        dimmedForAssembly || (selectionRecedes && !isSelected) ? 1 : 0,
+        easeRecede
+      );
       forEachMesh(object, (mesh) => {
         if (bodyChanged || mesh.userData.appliedOpacity !== faceOpacity) {
           updateBodyMaterialOpacity(mesh.material, faceOpacity);
@@ -12800,12 +12865,8 @@ export function ModelViewer({
         mesh.material.emissive.setHex(baseEmissive);
         mesh.userData.baseEmissive = baseEmissive;
         // A colour write, not a new material: nothing recompiles when the
-        // selection changes.
-        contextBodyColor(
-          body.color,
-          !dimmedForAssembly && (!selectionRecedes || isSelected),
-          mesh.material.color
-        );
+        // selection changes. Mid-ease, the render loop carries it on.
+        recededBodyColor(body.color, recedeLevel, mesh.material.color);
         if (bodiesChanged) {
           mesh.userData.bodyId = body.bodyId;
           mesh.userData.topology = body.topology;
@@ -13301,6 +13362,7 @@ export function ModelViewer({
       } else {
         delete context.renderer.domElement.dataset.e2eSelectionRecedes;
       }
+      writeE2ERecedeLevels(context.renderer.domElement, recede);
     }
     /**
      * The selection chip: the name label of old, now also carrying the
@@ -15382,12 +15444,24 @@ export function ModelViewer({
       return;
     }
     context.requestRender();
+    const bodyId = appearancePreview.bodyId;
     return () => {
       for (const entry of patched) {
         entry.material.color.copy(entry.color);
         entry.material.opacity = entry.opacity;
         entry.material.transparent = entry.transparent;
         entry.material.depthWrite = entry.depthWrite;
+      }
+      // The colour captured above may have been mid-way through a recede
+      // that has since moved on; give the body its current one.
+      const body = context.renderedBodies?.find(
+        (candidate) => candidate.bodyId === bodyId
+      );
+      const level = selectionRecedeRef.current?.level(bodyId);
+      if (body && level !== undefined) {
+        forEachMesh(object, (mesh) => {
+          recededBodyColor(body.color, level, mesh.material.color);
+        });
       }
       context.requestRender();
     };

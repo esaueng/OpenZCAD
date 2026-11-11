@@ -46,11 +46,26 @@ export function contextBodyColor(
   emphasized: boolean,
   target = new THREE.Color()
 ): THREE.Color {
+  return recededBodyColor(base, emphasized ? 0 : 1, target);
+}
+
+/**
+ * A body's colour part of the way into the recede: `level` 0 is its own
+ * colour, 1 the full context dim of {@link contextBodyColor}. In between is
+ * what the recede shows while it eases on or off, so the whole scene never
+ * changes brightness in one frame.
+ */
+export function recededBodyColor(
+  base: THREE.ColorRepresentation,
+  level: number,
+  target = new THREE.Color()
+): THREE.Color {
   target.set(base);
-  if (emphasized) {
+  const amount = Math.min(Math.max(level, 0), 1);
+  if (amount === 0) {
     return target;
   }
-  const keep = 1 - SELECTION_SEMANTICS.selected.contextDim;
+  const keep = 1 - SELECTION_SEMANTICS.selected.contextDim * amount;
   const { r, g, b } = target.getRGB({ r: 0, g: 0, b: 0 }, SRGB);
   return target.setRGB(r * keep, g * keep, b * keep, SRGB);
 }
