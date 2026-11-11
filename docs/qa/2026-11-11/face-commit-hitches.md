@@ -124,5 +124,9 @@ OZ_PERF=1 OZ_FACE_DRAG_ANGLE=d3d11 PLAYWRIGHT_PORT=24695 \
 ```
 
 `OZ_FACE_DRAG_COMMIT_BUDGET_MS=<ms>` makes the case fail when any main-thread
-task from release through the save exceeds the budget. It is a local
-regression check only. Timing depends on the host, so CI never sets it.
+task from release through the save exceeds the budget. The tasks come from a
+Chrome trace (`RunTask` on the renderer main thread), not the Long Tasks API,
+which omits every task of 50 ms and under; any positive budget is therefore
+checked honestly. Each commit must also reach a successful save of its
+revision: a failed device write fails the case. It is a local regression check
+only. Timing depends on the host, so CI never sets it.

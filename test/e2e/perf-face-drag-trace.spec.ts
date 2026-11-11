@@ -181,6 +181,111 @@ async function armPlanarFace(
 }
 
 /**
+ * Waits until the device copy holds `version` and the save chip has settled
+ * on a successful state. A failed write (or a refused, conflicted or
+ * checkpoint-failed save) fails the case instead of counting as saved.
+ */
+async function waitForSavedRevision(page: Page, version: number) {
+  expect(Number.isFinite(version)).toBe(true);
+  let outcome = 'pending';
+  await expect
+    .poll(
+      async () =>
+        (outcome = await page.evaluate(async (version) => {
+          const chip = document.querySelector('.save-state');
+          // `is-<state>` beside the chip's `is-readout` presentation class.
+          const state = [...(chip?.classList ?? [])]
+            .find((name) => name.startsWith('is-') && name !== 'is-readout')
+            ?.slice(3);
+          if (
+            state === 'device-failed' ||
+            state === 'checkpoint-failed' ||
+            state === 'refused' ||
+            state === 'conflict' ||
+            state === 'repair'
+          )
+            return `save failed: ${state}`;
+          if (!state || state === 'saving' || state === 'syncing')
+            return 'pending';
+          const stored = await new Promise<number>((resolve, reject) => {
+            const request = indexedDB.open('openzcad-v2');
+            request.onerror = () =>
+              reject(new Error('Could not open projects.'));
+            request.onsuccess = () => {
+              const db = request.result;
+              const all = db
+                .transaction('projects', 'readonly')
+                .objectStore('projects')
+                .getAll();
+              all.onerror = () => {
+                db.close();
+                reject(new Error('Could not read projects.'));
+              };
+              all.onsuccess = () => {
+                db.close();
+                resolve(
+                  Math.max(
+                    -1,
+                    ...(all.result as { version?: number }[]).map(
+                      (project) => project.version ?? -1
+                    )
+                  )
+                );
+              };
+            };
+          });
+          return stored >= version ? `saved: ${state}` : 'pending';
+        }, version)),
+      { timeout: 60_000, intervals: [100] }
+    )
+    .not.toBe('pending');
+  expect(outcome, `revision ${version} save`).toMatch(/^saved: /);
+}
+
+const RELEASE_MARK = 'oz:face-drag-trace.release';
+interface TraceEvent {
+  name: string;
+  ph: string;
+  pid: number;
+  tid: number;
+  ts: number;
+  dur?: number;
+  args?: { data?: { startTime?: number } };
+}
+/**
+ * Every task the page's main thread ran from release on, in page time
+ * (`performance.now()` ms). The release mark's event names the renderer's
+ * main thread and carries both its trace and its page timestamp.
+ */
+function mainThreadTasksAfterRelease(events: TraceEvent[]) {
+  const mark = [...events]
+    .reverse()
+    .find(
+      (event) =>
+        event.name === RELEASE_MARK && event.args?.data?.startTime !== undefined
+    );
+  if (!mark)
+    throw new Error(
+      `The Chrome trace has no ${RELEASE_MARK} mark, so its main-thread ` +
+        'tasks cannot be placed after release.'
+    );
+  const offsetMs = mark.ts / 1000 - mark.args!.data!.startTime!;
+  return events
+    .filter(
+      (event) =>
+        event.name === 'RunTask' &&
+        event.ph === 'X' &&
+        event.pid === mark.pid &&
+        event.tid === mark.tid &&
+        event.ts + (event.dur ?? 0) > mark.ts
+    )
+    .map((event) => ({
+      t: event.ts / 1000 - offsetMs,
+      ms: (event.dur ?? 0) / 1000
+    }));
+}
+
+/**
  * Streams `MOVES` pointer moves in real time: out to `reach` and back to a
  * third of it, so the drag reverses as a hand does. Returns the trace.
  */
@@ -191,7 +296,12 @@ async function traceDrag(
   reach: number,
   oneWay = false,
   /** Also wait for the commit's save and a quiet second before stopping. */
-  settleSave = false
+  settleSave = false,
+  /**
+   * Record every main-thread task from release on, from a Chrome trace: the
+   * Long Tasks API omits tasks of 50 ms and under.
+   */
+  traceTasks = false
 ) {
   reach *= REACH_SCALE;
   const box = (await canvas.boundingBox())!;
@@ -229,9 +339,10 @@ async function traceDrag(
     ? await page.context().newCDPSession(page)
     : undefined;
   // OZ_FACE_DRAG_TIMELINE=<dir> saves a Chrome timeline trace per case.
-  const timeline = process.env.OZ_FACE_DRAG_TIMELINE
-    ? await page.context().newCDPSession(page)
-    : undefined;
+  const timeline =
+    process.env.OZ_FACE_DRAG_TIMELINE || traceTasks
+      ? await page.context().newCDPSession(page)
+      : undefined;
   const timelineEvents: unknown[] = [];
   if (timeline) {
     timeline.on('Tracing.dataCollected', ({ value }) =>
@@ -239,7 +350,7 @@ async function traceDrag(
     );
     await timeline.send('Tracing.start', {
       categories:
-        'devtools.timeline,disabled-by-default-devtools.timeline,blink.user_timing',
+        'toplevel,devtools.timeline,disabled-by-default-devtools.timeline,blink.user_timing',
       transferMode: 'ReportEvents'
     });
   }
@@ -315,7 +426,11 @@ async function traceDrag(
     undefined,
     { timeout: 120_000 }
   );
-  const releaseAt = await page.evaluate(() => performance.now());
+  // The mark places release in the trace: its event carries both clocks.
+  const releaseAt = await page.evaluate(
+    (name) => performance.mark(name).startTime,
+    RELEASE_MARK
+  );
   await page.mouse.up();
   await page.keyboard.up('Shift');
   // Disappearance of "Checking" can race its first render. Require an
@@ -349,10 +464,7 @@ async function traceDrag(
   if (settleSave) {
     // The commit's device save (and any sync) runs after the ready frame.
     // Its serialization is main-thread work the recording showed as hitches.
-    await expect(page.locator('.save-state')).not.toHaveClass(
-      /is-saving|is-syncing/,
-      { timeout: 60_000 }
-    );
+    await waitForSavedRevision(page, await revision());
     await page.waitForTimeout(1_000);
   }
   // A case may trace several drags; number them so none overwrites another.
@@ -372,13 +484,19 @@ async function traceDrag(
     );
     await timeline.send('Tracing.end');
     await done;
-    mkdirSync(process.env.OZ_FACE_DRAG_TIMELINE!, { recursive: true });
-    writeFileSync(
-      `${process.env.OZ_FACE_DRAG_TIMELINE}/${fileName}.json`,
-      JSON.stringify({ traceEvents: timelineEvents })
-    );
+    await timeline.detach();
+    if (process.env.OZ_FACE_DRAG_TIMELINE) {
+      mkdirSync(process.env.OZ_FACE_DRAG_TIMELINE, { recursive: true });
+      writeFileSync(
+        `${process.env.OZ_FACE_DRAG_TIMELINE}/${fileName}.json`,
+        JSON.stringify({ traceEvents: timelineEvents })
+      );
+    }
   }
-  return page.evaluate(
+  const tasksAfterRelease = traceTasks
+    ? mainThreadTasksAfterRelease(timelineEvents as TraceEvent[])
+    : null;
+  const result = await page.evaluate(
     ({ motionEndedAt, releaseAt, committedFrameAt }) => {
       const scope = window as typeof window & {
         __ozFaceDragTrace: FaceDragTraceEvent[];
@@ -434,6 +552,7 @@ async function traceDrag(
     },
     { motionEndedAt, releaseAt, committedFrameAt }
   );
+  return { ...result, tasksAfterRelease };
 }
 
 function record(
@@ -562,10 +681,25 @@ test('traces a filleted union width from 30 to 22.5 mm', async ({ page }) => {
   }
 });
 
+/** A positive millisecond budget, or null when none is set. */
+function commitBudgetMs(value: string | undefined): number | null {
+  if (value === undefined || value === '') return null;
+  const budget = Number(value);
+  if (!Number.isFinite(budget) || budget <= 0)
+    throw new Error(
+      `OZ_FACE_DRAG_COMMIT_BUDGET_MS=${value} is not a positive number of ms.`
+    );
+  return budget;
+}
+
 // The recording's shape: Box ∪ Cylinder with a five-edge R2 junction fillet,
 // right face dragged 32.5 → 23 mm, committed, then 23 → 31 mm, committed.
 // Frames and long tasks run through each commit's save and a quiet second.
 test('traces two committed face resizes through save', async ({ page }) => {
+  // OZ_FACE_DRAG_COMMIT_BUDGET_MS=<ms> turns the probe into a local
+  // regression check: no main-thread task from release through the commit's
+  // save may exceed it. Timing varies by host, so CI never sets it.
+  const budget = commitBudgetMs(process.env.OZ_FACE_DRAG_COMMIT_BUDGET_MS);
   const adapter = await createExactKernelAdapter();
   try {
     const { document } = await filletedUnion(adapter, {
@@ -584,24 +718,34 @@ test('traces two committed face resizes through save', async ({ page }) => {
         y: 0,
         z: 0
       });
-      const result = await traceDrag(page, canvas, handle, reach, true, true);
+      const result = await traceDrag(
+        page,
+        canvas,
+        handle,
+        reach,
+        true,
+        true,
+        budget !== null
+      );
       const summary = record(
         `R2 filleted union commit ${label}`,
         { features: document.featureOrder.length, radius: 2 },
         result
       );
       expect(summary.releaseToFrameMs).not.toBeNull();
-      // OZ_FACE_DRAG_COMMIT_BUDGET_MS=<ms> turns the probe into a local
-      // regression check: no main-thread task from release through the
-      // commit's save may exceed it. Timing varies by host, so CI never sets it.
-      const budget = Number(process.env.OZ_FACE_DRAG_COMMIT_BUDGET_MS);
-      if (Number.isFinite(budget) && budget > 0) {
-        const afterRelease = result.longTasks
-          .filter((task) => task.t + task.ms > result.releaseAt)
-          .map((task) => Math.round(task.ms));
+      if (budget !== null) {
+        // Measured from the Chrome trace, not the Long Tasks API: that one
+        // omits every task of 50 ms and under, so a lower budget would pass
+        // tasks it never saw.
+        const tasks = result.tasksAfterRelease!;
+        expect(tasks.length).toBeGreaterThan(0);
+        const longest = tasks
+          .map((task) => Math.round(task.ms * 10) / 10)
+          .sort((a, b) => b - a)
+          .slice(0, 5);
         expect(
-          Math.max(0, ...afterRelease),
-          `long tasks after release: ${afterRelease.join(', ')} ms`
+          longest[0]!,
+          `longest main-thread tasks after release: ${longest.join(', ')} ms`
         ).toBeLessThanOrEqual(budget);
       }
       await page.keyboard.press('Escape');
