@@ -4,7 +4,11 @@ import {
   mergeGeometries,
   mergeVertices
 } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { sectionCapGeometry, SECTION_CAP } from './sectionCaps';
+import {
+  plainFloat32Positions,
+  sectionCapGeometry,
+  SECTION_CAP
+} from './sectionCaps';
 import {
   applyDisplayMode,
   applySectionPlane,
@@ -50,6 +54,81 @@ function tube() {
     bevelEnabled: false
   }).translate(0, 0, -5);
 }
+type PositionAttribute =
+  THREE.BufferAttribute | THREE.InterleavedBufferAttribute;
+/** Copies decoded coordinates into `target`, encoding them as it stores. */
+function encodeInto<T extends PositionAttribute>(
+  source: PositionAttribute,
+  target: T,
+  scale = 1
+) {
+  for (let i = 0; i < source.count; i++)
+    target.setXYZ(
+      i,
+      source.getX(i) * scale,
+      source.getY(i) * scale,
+      source.getZ(i) * scale
+    );
+  return target;
+}
+/**
+ * Every position layout three.js reads through its accessors. Normalized
+ * buffers hold [-1, 1], so they store the part scaled down; the rest keep
+ * its size. Integer coordinates survive a plain int16 buffer.
+ */
+const POSITION_ENCODINGS: Record<
+  string,
+  (source: PositionAttribute) => PositionAttribute
+> = {
+  float32: (source) =>
+    encodeInto(
+      source,
+      new THREE.BufferAttribute(new Float32Array(source.count * 3), 3)
+    ),
+  'half-float': (source) =>
+    encodeInto(
+      source,
+      new THREE.Float16BufferAttribute(new Uint16Array(source.count * 3), 3)
+    ),
+  'normalized int16': (source) =>
+    encodeInto(
+      source,
+      new THREE.BufferAttribute(new Int16Array(source.count * 3), 3, true),
+      1 / 8
+    ),
+  'normalized int8': (source) =>
+    encodeInto(
+      source,
+      new THREE.BufferAttribute(new Int8Array(source.count * 3), 3, true),
+      1 / 8
+    ),
+  int16: (source) =>
+    encodeInto(
+      source,
+      new THREE.BufferAttribute(new Int16Array(source.count * 3), 3)
+    ),
+  'interleaved float32': (source) =>
+    encodeInto(
+      source,
+      new THREE.InterleavedBufferAttribute(
+        new THREE.InterleavedBuffer(new Float32Array(source.count * 4), 4),
+        3,
+        1
+      )
+    ),
+  'interleaved normalized int16': (source) =>
+    encodeInto(
+      source,
+      new THREE.InterleavedBufferAttribute(
+        new THREE.InterleavedBuffer(new Int16Array(source.count * 4), 4),
+        3,
+        1,
+        true
+      ),
+      1 / 8
+    )
+};
+
 function capOf(mesh: THREE.Object3D) {
   return mesh.getObjectByName(SECTION_CAP) as
     THREE.Mesh<THREE.BufferGeometry, THREE.MeshPhongMaterial> | undefined;
@@ -91,36 +170,74 @@ describe('display-only solid section caps', () => {
     }
   );
 
-  it('sections every buffer layout identically', () => {
-    // Plain buffers take a direct scan; interleaved and normalized ones
-    // read through the attribute. Both must give the same cap.
-    const source = mergeVertices(
-      tube().deleteAttribute('normal').deleteAttribute('uv')
-    );
-    expect(source.index).not.toBeNull();
-    const plane = xy(0.25);
-    const reference = sectionCapGeometry(source, plane)!;
-    const expected = [...reference.getAttribute('position').array];
-    expect(expected.length).toBeGreaterThan(0);
-    const interleaved = new THREE.BufferGeometry();
-    const positions = source.getAttribute('position');
-    const data = new THREE.InterleavedBuffer(
-      new Float32Array(positions.count * 4),
-      4
-    );
-    const attribute = new THREE.InterleavedBufferAttribute(data, 3, 1);
-    for (let i = 0; i < positions.count; i++)
-      attribute.setXYZ(
-        i,
-        positions.getX(i),
-        positions.getY(i),
-        positions.getZ(i)
+  it.each([
+    ['indexed', true],
+    ['non-indexed', false]
+  ] as const)(
+    'sections every %s position encoding as its decoded coordinates',
+    (_, indexed) => {
+      // Plain float32 buffers take a direct scan; every other encoding must
+      // decode through the attribute, as `fromBufferAttribute` does. The
+      // reference holds the decoded values in a float64 buffer, which the
+      // scan also reads through the attribute.
+      const welded = mergeVertices(
+        tube().deleteAttribute('normal').deleteAttribute('uv')
       );
-    interleaved.setAttribute('position', attribute);
-    interleaved.setIndex(source.index);
-    for (const geometry of [interleaved, source.toNonIndexed()]) {
-      const cap = sectionCapGeometry(geometry, plane)!;
-      expect([...cap.getAttribute('position').array]).toEqual(expected);
+      const source = indexed ? welded : welded.toNonIndexed();
+      expect(source.index !== null).toBe(indexed);
+      const plane = xy(0.25);
+      for (const [name, encode] of Object.entries(POSITION_ENCODINGS)) {
+        const attribute = encode(source.getAttribute('position'));
+        const encoded = new THREE.BufferGeometry();
+        encoded.setAttribute('position', attribute);
+        encoded.setIndex(source.index);
+        const decoded = new THREE.BufferGeometry();
+        const values = new Float64Array(attribute.count * 3);
+        for (let i = 0; i < attribute.count; i++) {
+          values[i * 3] = attribute.getX(i);
+          values[i * 3 + 1] = attribute.getY(i);
+          values[i * 3 + 2] = attribute.getZ(i);
+        }
+        decoded.setAttribute('position', new THREE.BufferAttribute(values, 3));
+        decoded.setIndex(source.index);
+        const reference = sectionCapGeometry(decoded, plane);
+        expect(reference, name).not.toBeNull();
+        const cap = sectionCapGeometry(encoded, plane);
+        expect(cap, name).not.toBeNull();
+        expect([...cap!.getAttribute('position').array], name).toEqual([
+          ...reference!.getAttribute('position').array
+        ]);
+      }
+    }
+  );
+
+  it('caps a half-float box like its float32 source', () => {
+    // A Float16BufferAttribute stores encoded 16-bit words; read raw they
+    // are no coordinates at all and the cut finds no contour.
+    const plane = xy(0.25);
+    const source = new THREE.BoxGeometry(2, 2, 2);
+    expect(source.index).not.toBeNull();
+    const expected = sectionCapGeometry(source, plane)!;
+    expect(expected.getAttribute('position').count).toBe(18);
+    const half = new THREE.BufferGeometry();
+    half.setAttribute(
+      'position',
+      POSITION_ENCODINGS['half-float']!(source.getAttribute('position'))
+    );
+    half.setIndex(source.index);
+    const cap = sectionCapGeometry(half, plane);
+    expect(cap).not.toBeNull();
+    expect([...cap!.getAttribute('position').array]).toEqual([
+      ...expected.getAttribute('position').array
+    ]);
+  });
+
+  it('reads only plain float32 positions directly', () => {
+    const plain = new THREE.Float32BufferAttribute([0, 1, 2], 3);
+    expect(plainFloat32Positions(plain)).toBe(plain.array);
+    for (const [name, encode] of Object.entries(POSITION_ENCODINGS)) {
+      if (name === 'float32') continue;
+      expect(plainFloat32Positions(encode(plain)), name).toBeNull();
     }
   });
 

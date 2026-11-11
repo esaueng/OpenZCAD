@@ -1,6 +1,9 @@
 import * as THREE from 'three';
 import type { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
-import { sectionCapGeometry } from '../scene/sectionCaps';
+import {
+  plainFloat32Positions,
+  sectionCapGeometry
+} from '../scene/sectionCaps';
 import {
   createFatLineSegments,
   drawFatLineOncePerPixel,
@@ -355,13 +358,9 @@ export function createBodyGhost(
     const point = new THREE.Vector3();
     let beyond = false;
     // A push scans every vertex on each reshape (nothing lies beyond), so
-    // read a plain buffer directly; the transform is `applyMatrix4`'s.
-    const direct =
-      position instanceof THREE.BufferAttribute &&
-      !position.normalized &&
-      position.itemSize === 3
-        ? position.array
-        : null;
+    // read a plain float32 buffer directly; the transform is `applyMatrix4`'s.
+    // Encoded attributes decode through `fromBufferAttribute`.
+    const direct = plainFloat32Positions(position);
     const e = live.matrixWorld.elements;
     for (let i = 0; i < position.count && !beyond; i++) {
       if (direct) {

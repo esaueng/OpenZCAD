@@ -5,6 +5,25 @@ import type { ViewerMesh } from '../pick/meshes';
 export const SECTION_CAP = 'viewport-section-cap';
 
 /**
+ * The raw values of a position attribute when they are its coordinates: a
+ * plain, unnormalized float32 `xyz` buffer. Half-float, normalized, other
+ * quantized and interleaved attributes return null, so a caller decodes them
+ * through the attribute's accessors (`fromBufferAttribute`, `getX`).
+ */
+export function plainFloat32Positions(
+  attribute: THREE.BufferAttribute | THREE.InterleavedBufferAttribute
+): Float32Array | null {
+  return attribute instanceof THREE.BufferAttribute &&
+    !(attribute as { isFloat16BufferAttribute?: boolean })
+      .isFloat16BufferAttribute &&
+    !attribute.normalized &&
+    attribute.itemSize === 3 &&
+    attribute.array instanceof Float32Array
+    ? attribute.array
+    : null;
+}
+
+/**
  * Intersect the disposable tessellation, weld its face seams, and triangulate
  * closed contours by nesting depth (outer material, hole, island, ...).
  * Open/branched contours are deliberately not filled: an incomplete display
@@ -64,15 +83,17 @@ export function sectionCapGeometry(
     new THREE.Vector3()
   ];
   // A live drag preview re-sections a dense body every frame, so the scan
-  // reads the buffers directly and allocates only for crossing triangles.
-  // The arithmetic is `Plane.distanceToPoint` on the same values.
-  const direct =
-    positions instanceof THREE.BufferAttribute &&
-    !positions.normalized &&
-    positions.itemSize === 3
-      ? positions.array
+  // reads plain buffers directly and allocates only for crossing triangles.
+  // The arithmetic is `Plane.distanceToPoint` on the same values; every
+  // other encoding decodes through the attribute.
+  const direct = plainFloat32Positions(positions);
+  const indices =
+    index &&
+    !index.normalized &&
+    index.itemSize === 1 &&
+    (index.array instanceof Uint32Array || index.array instanceof Uint16Array)
+      ? index.array
       : null;
-  const indices = index && !index.normalized ? index.array : null;
   const { x: nx, y: ny, z: nz } = plane.normal;
   const constant = plane.constant;
   const distances = [0, 0, 0];
