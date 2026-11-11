@@ -374,8 +374,8 @@ export function brepSmoothEdges(
  * currently built from two same-surface hemispheres, so their smooth equator
  * fragments are display seams too. Neither case is a physical feature edge.
  * Spline self-seams require RemusKernel.getSolidSmoothEdges's G1 verdict:
- * the current pin omits self-owned edges, so they stay features until Remus
- * reports them. Spline closure flags alone cannot rule out a real crease.
+ * smooth self-owned edges are seams; creases and unavailable verdicts stay
+ * features. Spline closure flags alone cannot rule out a real crease.
  */
 export function brepEdgeDisplayRole(
   kernel: RemusKernel,

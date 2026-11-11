@@ -189,16 +189,15 @@ async function importedTube(kernel: RemusKernel, solid: number) {
 }
 
 describe('published spline self-seams', () => {
-  it('pins the current Remus omission: a real smooth self-seam stays a feature', async () => {
+  it('publishes a real smooth spline self-seam as a seam while keeping both rims visible', async () => {
     const kernel = new RemusKernel();
     const adapter = await createExactKernelAdapter();
     try {
       const solid = splineTube(kernel);
       const seam = selfSeam(kernel, solid);
-      // RemusKernel.getSolidSmoothEdges currently excludes self-owned edges.
-      // These expectations flip once Remus reports their G1 verdict (#1623),
-      // so the automated pin bump must inspect this newly hidden edge.
-      expect(Array.from(kernel.getSolidSmoothEdges(solid))).not.toContain(seam);
+      // Remus reports G1 across this self-owned B-spline edge, so publication
+      // hides the longitudinal seam while preserving the two cap rims.
+      expect(Array.from(kernel.getSolidSmoothEdges(solid))).toContain(seam);
       const hash = topologyHashOfWitness('edge', edgeWitnessOf(kernel, seam));
       const imported = await importedTube(kernel, solid);
       const result = await adapter.syncDocument(imported.document);
@@ -209,11 +208,12 @@ describe('published spline self-seams', () => {
       expect(
         body.topology!.edges.find((edge) => edge.hash === hash)
       ).toMatchObject({
-        displayRole: 'feature',
-        isSmooth: false
+        displayRole: 'seam',
+        isSmooth: true
       });
-      expect(body.topology!.edges.map((edge) => edge.displayRole)).toEqual([
-        'feature',
+      const rims = body.topology!.edges.filter((edge) => edge.hash !== hash);
+      expect(rims).toHaveLength(2);
+      expect(rims.map((edge) => edge.displayRole)).toEqual([
         'feature',
         'feature'
       ]);
@@ -232,21 +232,29 @@ describe('published spline self-seams', () => {
       const seam = selfSeam(kernel, solid);
       const hash = topologyHashOfWitness('edge', edgeWitnessOf(kernel, seam));
       const imported = await importedTube(kernel, solid);
-      const before = (await beforeAdapter.syncDocument(imported.document))
-        .bodyRepresentations[imported.bodyId]!.topology!;
       const plane = { normal: { x: 0, y: 0, z: 1 }, depth: -1 };
-      const beforeDrawing = drawingSectionOfShape(
-        kernel,
-        { solids: [solid] },
-        plane
-      );
-      if (!beforeDrawing) throw new Error('The section must keep the tube.');
+      // Simulate the old omitted verdict only for the before publication.
       const continuity = vi
         .spyOn(RemusKernel.prototype, 'getSolidSmoothEdges')
-        .mockImplementation(function (this: RemusKernel, handle) {
-          return Uint32Array.of(selfSeam(this, handle));
-        });
+        .mockReturnValue(new Uint32Array());
       try {
+        const beforeResult = await beforeAdapter.syncDocument(
+          imported.document
+        );
+        expect(beforeResult.warnings).toEqual([]);
+        const before =
+          beforeResult.bodyRepresentations[imported.bodyId]!.topology!;
+        expect(before.edges.find((edge) => edge.hash === hash)).toMatchObject({
+          displayRole: 'feature',
+          isSmooth: false
+        });
+        const beforeDrawing = drawingSectionOfShape(
+          kernel,
+          { solids: [solid] },
+          plane
+        );
+        if (!beforeDrawing) throw new Error('The section must keep the tube.');
+        continuity.mockRestore();
         const result = await afterAdapter.syncDocument(imported.document);
         expect(result.warnings).toEqual([]);
         const after = result.bodyRepresentations[imported.bodyId]!.topology!;
