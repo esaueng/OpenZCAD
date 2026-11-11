@@ -1,6 +1,7 @@
 export const ROADMAP_PATH: string;
 export const FRAGMENT_DIR: string;
 export const FRAGMENT_NAME: RegExp;
+export const STATES: readonly string[];
 
 export interface EvidenceFragment {
   name: string;
@@ -27,6 +28,8 @@ export function foldEvidence(
 ): string;
 
 export function readFragments(repoRoot?: string): EvidenceFragment[];
+
+export function fragmentLinks(text: string): string[];
 
 export function checkRepo(repoRoot?: string): EvidenceFragment[];
 

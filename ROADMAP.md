@@ -39,7 +39,8 @@ the remaining findings are assigned to the master rows below; this evidence upda
 Start here to choose work. The documents in [Supporting plans](#supporting-plans)
 retain specifications, acceptance details and historical evidence; their old
 phase numbers, priorities and status tables no longer define independent queues.
-ADRs retain architecture decisions. Update delivery status here, and update a
+ADRs retain architecture decisions. Record delivery status here through
+[evidence fragments](docs/roadmap-evidence/README.md), and update a
 supporting specification only when its contract changes.
 
 ## Analytics integration
@@ -363,12 +364,21 @@ cancel a documented invariant or authorize a previously excluded operation.
    geometry or performance checks. Exact-head hosted checks are required before
    a merge decision; queued/skipped jobs are not passing. Deployment and manual
    Apple Silicon execution retain their separate authorization requirements.
-4. Update this file in the implementation PR: status, shipped subset, evidence
-   (tests plus PR/commit), remaining acceptance and changed dependencies. Add a
+4. Do not edit a row in the implementation PR. Add one
+   [evidence fragment](docs/roadmap-evidence/README.md)
+   (`docs/roadmap-evidence/<row>--<slug>.md`) with the shipped subset,
+   evidence (tests plus PR), remaining acceptance and changed dependencies,
+   and a `state` only when the status changes. A fragment merges with its
+   code, so its state is never "In review": use `Partial` or `Complete`.
+   A standalone `docs(roadmap): fold evidence` PR folds fragments into rows.
+   Edit this file directly only to add, split or restructure rows. Add a
    linked child ID for a split, never a second untracked plan. Keep detailed
    acceptance specifications linked; do not copy their status tables back here
    as multiple competing versions.
 5. Close only the scope proved. Move completed rows into the delivered baseline
-   with their stable IDs, or retain a short completion row so links survive.
+   with their stable IDs, or retain a short `Complete` row so links survive.
+   A row states the outcome and the remaining work; when its evidence outgrows
+   a few sentences, move the history into its plan or ADR and keep a summary
+   and link in the row.
    Record live acceptance separately from merged source. Revalidate old kernel
    claims upstream and old UI findings on the rendered current app before work.

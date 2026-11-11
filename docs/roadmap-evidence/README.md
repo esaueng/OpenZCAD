@@ -14,18 +14,23 @@ Name the file `<row>--<slug>.md` in lowercase, for example
 ```markdown
 ---
 row: H02
-state: In review
 ---
+
 Cached feature reuse keeps qualified lineage (`exact-history-cache.test.ts`,
 PR #805).
 ```
 
 - `row` (required): the master ID shown in the ledger (`H02`) or its anchor
   id (`h02`). It must match exactly one table row.
-- `state` (optional): replaces the row's Status cell. Only one pending
-  fragment may set the state of a given row.
+- `state` (optional): replaces the row's Status cell. Set it only when the
+  status changes, to one of the ledger's statuses: `Open`, `Partial`,
+  `Complete`, `Revalidate` or `Deferred`. Never `In review`: a fragment
+  merges with its code, so by the time the fold applies it the work has
+  merged. Only one pending fragment may set the state of a given row.
 - Body: the evidence text, written as you would have appended it to the row.
-  Line breaks are folded into spaces.
+  Line breaks are folded into spaces. Write links from the repository root
+  (`docs/plans/x.md`), as ROADMAP.md reads them, and never link to a
+  fragment file: the fold deletes it.
 
 `node scripts/roadmap-evidence.mjs` checks every fragment against the ledger;
 the root Vitest suite runs the same check.

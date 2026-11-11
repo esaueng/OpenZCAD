@@ -15,9 +15,11 @@ import {
   FRAGMENT_DIR,
   foldEvidence,
   foldRepo,
+  fragmentLinks,
   parseFragment,
   ROADMAP_PATH,
-  splitRow
+  splitRow,
+  STATES
 } from '../scripts/roadmap-evidence.mjs';
 
 /** A miniature ledger with the table shapes the real one uses. */
@@ -71,12 +73,12 @@ describe('roadmap evidence fragments', () => {
     expect(
       parseFragment(
         'h02--x.md',
-        '---\nrow: H02\nstate: Done\n---\nFirst line\nsecond line.\n'
+        '---\nrow: H02\nstate: Complete\n---\nFirst line\nsecond line.\n'
       )
     ).toEqual({
       name: 'h02--x.md',
       row: 'H02',
-      state: 'Done',
+      state: 'Complete',
       evidence: 'First line second line.'
     });
   });
@@ -94,6 +96,20 @@ describe('roadmap evidence fragments', () => {
     expect(() => parseFragment('a.md', '---\nrow: A01\n---\n  \n')).toThrow(
       /no evidence/
     );
+  });
+
+  it('refuses states outside the ledger vocabulary', () => {
+    // A fragment merges with its code, so "In review" is stale once folded.
+    for (const state of ['In review', 'Done', 'Planned', 'partial']) {
+      expect(() =>
+        parseFragment('a.md', `---\nrow: A01\nstate: ${state}\n---\ntext`)
+      ).toThrow(/is not one of Open, Partial, Complete, Revalidate, Deferred/);
+    }
+    for (const state of STATES) {
+      expect(
+        parseFragment('a.md', `---\nrow: A01\nstate: ${state}\n---\ntext`).state
+      ).toBe(state);
+    }
   });
 
   it('keeps escaped and code-span pipes inside their cell', () => {
@@ -270,6 +286,46 @@ describe('roadmap evidence fragments', () => {
       }
     }
   );
+
+  it('refuses links to fragment files, which the fold deletes', () => {
+    expect(
+      fragmentLinks(
+        'See [sample](docs/roadmap-evidence/as02--scissors-sample.md), ' +
+          '[rel](../roadmap-evidence/h02--x.md#a), ' +
+          '[readme](docs/roadmap-evidence/README.md) and [plan](docs/plans/p.md).'
+      )
+    ).toEqual(['as02--scissors-sample.md', 'h02--x.md']);
+    for (const [ledger, fragmentBody, message] of [
+      [
+        `${LEDGER}\nSee [it](docs/roadmap-evidence/a01--live.md).`,
+        'Live.',
+        /ROADMAP\.md: links to fragment a01--live\.md/
+      ],
+      [
+        LEDGER,
+        'Live, see [it](docs/roadmap-evidence/a01--other.md).',
+        /a01--live\.md: links to fragment a01--other\.md/
+      ],
+      [
+        LEDGER,
+        'Live, see [plan](../plans/p.md).',
+        /a01--live\.md: link \.\.\/plans\/p\.md is relative to the fragment/
+      ]
+    ] as const) {
+      const root = mkdtempSync(join(tmpdir(), 'roadmap-evidence-'));
+      try {
+        writeFileSync(join(root, ROADMAP_PATH), ledger);
+        mkdirSync(join(root, FRAGMENT_DIR), { recursive: true });
+        writeFileSync(
+          join(root, FRAGMENT_DIR, 'a01--live.md'),
+          `---\nrow: A01\n---\n${fragmentBody}\n`
+        );
+        expect(() => checkRepo(root)).toThrow(message);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
 
   it('accepts every pending fragment in this repository', () => {
     expect(() => checkRepo()).not.toThrow();

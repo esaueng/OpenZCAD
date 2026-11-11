@@ -19,7 +19,9 @@
  * `row` names the ledger row by its anchor id (`h02`) or its displayed ID
  * (`H02`, `PERF-N04`, `8.1`); it must match exactly one table row. `state` is
  * optional and replaces the row's status cell outright, so two fragments that
- * set the state of one row are refused rather than ordered by file name.
+ * set the state of one row are refused rather than ordered by file name. It
+ * must be one of the ledger's statuses: a fragment merges with its code, so a
+ * pre-merge state such as "In review" is already wrong when the fold applies it.
  */
 
 import {
@@ -42,6 +44,15 @@ export const FRAGMENT_DIR = 'docs/roadmap-evidence';
 export const FRAGMENT_NAME = /^[a-z0-9][a-z0-9.-]*--[a-z0-9][a-z0-9-]*\.md$/;
 
 const FRONT_MATTER_KEYS = new Set(['row', 'state']);
+
+/** The ledger's status vocabulary (ROADMAP.md, "Status vocabulary"). */
+export const STATES = Object.freeze([
+  'Open',
+  'Partial',
+  'Complete',
+  'Revalidate',
+  'Deferred'
+]);
 const EMPTY_CELLS = new Set(['', '—', '-']);
 
 /**
@@ -70,6 +81,11 @@ export function parseFragment(name, source) {
   }
   if ('state' in fields && !fields.state) {
     throw new Error(`${name}: state is empty`);
+  }
+  if (fields.state && !STATES.includes(fields.state)) {
+    throw new Error(
+      `${name}: state "${fields.state}" is not one of ${STATES.join(', ')}; a fragment merges with its code, so merged work is Partial or Complete`
+    );
   }
   const evidence = match[2].replace(/\s+/g, ' ').trim();
   if (!evidence) {
@@ -308,13 +324,48 @@ export function readFragments(repoRoot = REPO_ROOT) {
   return fragments;
 }
 
+/**
+ * Links to individual fragment files. The fold appends a fragment's text to
+ * its row and deletes the file, so a link to it from the ledger or from
+ * another fragment is dead after the next fold. (Four rows shipped such links
+ * before this check and lost their targets in the 2026-11-11 fold.)
+ */
+export function fragmentLinks(text) {
+  return Array.from(
+    text.matchAll(
+      /\]\((?:\.{1,2}\/)*(?:docs\/)?roadmap-evidence\/([a-z0-9][a-z0-9.-]*--[a-z0-9-]+\.md)[^)]*\)/g
+    ),
+    (match) => match[1]
+  );
+}
+
 /** Validates every fragment against the ledger without writing anything. */
 export function checkRepo(repoRoot = REPO_ROOT) {
   const fragments = readFragments(repoRoot);
-  foldEvidence(
-    readFileSync(path.join(repoRoot, ROADMAP_PATH), 'utf8'),
-    fragments
-  );
+  const ledger = readFileSync(path.join(repoRoot, ROADMAP_PATH), 'utf8');
+  const errors = [
+    ...fragmentLinks(ledger).map(
+      (name) =>
+        `${ROADMAP_PATH}: links to fragment ${name}, which the fold deletes; link a plan or test instead`
+    ),
+    ...fragments.flatMap(({ name, evidence }) =>
+      fragmentLinks(evidence).map(
+        (target) =>
+          `${name}: links to fragment ${target}, which the fold deletes; link a plan or test instead`
+      )
+    ),
+    // The fold moves the text into ROADMAP.md at the repository root, where a
+    // link written relative to this directory (`../plans/x.md`) breaks.
+    ...fragments.flatMap(({ name, evidence }) =>
+      Array.from(
+        evidence.matchAll(/\]\((\.\.?\/[^)\s]*)\)/g),
+        (match) =>
+          `${name}: link ${match[1]} is relative to the fragment; write it from the repository root (docs/...), as ROADMAP.md reads it`
+      )
+    )
+  ];
+  if (errors.length) throw new Error(errors.join('\n'));
+  foldEvidence(ledger, fragments);
   return fragments;
 }
 
