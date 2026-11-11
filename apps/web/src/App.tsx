@@ -25862,18 +25862,10 @@ export function App() {
   }
 
   function reselectOffsetFace(target: FaceTarget, offset: number): boolean {
-    // An extrude cap or a box side edits a total length, whose handle does
-    // not restart from zero on the moved face, unless the card was switched
-    // to a local Offset Face.
-    if (
-      !target.localFaceOffset &&
-      (target.extrudeFeatureId || target.resizeBodyFeatureId)
-    )
-      return false;
     const bodyId = target.bodyId as BodyId;
+    const document = managerRef.current?.document ?? null;
     const faces =
-      managerRef.current?.document.derived.bodyRepresentations[bodyId]?.topology
-        ?.faces;
+      document?.derived.bodyRepresentations[bodyId]?.topology?.faces;
     const vector = (value: [number, number, number]) => ({
       x: value[0],
       y: value[1],
@@ -25893,6 +25885,29 @@ export function App() {
         )
       : null;
     if (!moved?.geometry) return false;
+    // An extrude cap or a box side edits a total length: the moved face is
+    // re-armed on the same length, as a fresh click on it would arm it, so
+    // the pick, its readout and its card stay through the commit. Ending
+    // with nothing picked dropped the readout and rail at the commit, and
+    // the viewport, still showing the validating frame, drew that frame's
+    // selection chip over the model (the chip only shows without a card).
+    // A face that no longer belongs to the same length ends neutrally.
+    const totalLength =
+      !target.localFaceOffset &&
+      Boolean(target.extrudeFeatureId || target.resizeBodyFeatureId);
+    if (totalLength) {
+      const owner = faceOffsetTargetFields(
+        document,
+        bodyId,
+        moved.reference,
+        moved.hash
+      );
+      if (
+        owner.extrudeFeatureId !== target.extrudeFeatureId ||
+        owner.resizeBodyFeatureId !== target.resizeBodyFeatureId
+      )
+        return false;
+    }
     const { reference: _staleReference, ...stableTarget } = target;
     const shift = (value: [number, number, number]) =>
       value.map(

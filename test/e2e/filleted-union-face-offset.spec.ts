@@ -2,7 +2,13 @@ import { withoutDerivedProjection } from '@openzcad/document-core';
 import type { ProjectDocument } from '@openzcad/shared';
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import { filletedUnion, longFilletedUnion } from '../support/filleted-union';
-import { test, expect, stubApi, expectBodyCount } from './openzcad-fixtures';
+import {
+  test,
+  expect,
+  stubApi,
+  expectBodyCount,
+  waitForStillViewport
+} from './openzcad-fixtures';
 
 for (const longHistory of [false, true])
   test(
@@ -235,3 +241,139 @@ for (const longHistory of [false, true])
       expect(errors).toEqual([]);
     }
   );
+
+declare global {
+  interface Window {
+    __resizeCommitFrames?: { viewportChip: number; readoutless: number };
+  }
+}
+
+test(
+  'a filleted union side resized by drag keeps its pick and never lights the viewport chip',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(180_000);
+    const adapter = await createExactKernelAdapter();
+    let backup: Buffer;
+    try {
+      const { document } = await filletedUnion(adapter);
+      backup = Buffer.from(
+        JSON.stringify({
+          format: 'openzcad-project',
+          version: 1,
+          document: withoutDerivedProjection(document),
+          files: []
+        })
+      );
+    } finally {
+      adapter.dispose();
+    }
+    await stubApi(page);
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.goto('/');
+    await page.getByLabel('Project name').fill('Resize commit chip');
+    await page.getByRole('button', { name: 'New project' }).click();
+    await page.getByLabel('Import project backup').setInputFiles({
+      name: 'filleted-union.openzcad',
+      mimeType: 'application/json',
+      buffer: backup
+    });
+    const canvas = page.locator('.viewer-host canvas');
+    await expect
+      .poll(
+        () =>
+          canvas.evaluate((element) => {
+            let name: string | null = null;
+            element.dispatchEvent(
+              new CustomEvent('openzcad:e2e-select-planar-face', {
+                detail: {
+                  normal: { x: 1, y: 0, z: 0 },
+                  resolve: (pick: { lineageName?: string } | null) => {
+                    name = pick?.lineageName ?? null;
+                  }
+                }
+              })
+            );
+            return name;
+          }),
+        { timeout: 60_000 }
+      )
+      .toBe('boolean.face.operand.1.primitive.box.face.x-max');
+    const card = page.getByRole('region', { name: 'Resize Body operation' });
+    await expect(card).toBeVisible();
+    const readout = page.locator('.selection-readout');
+    await expect(readout).toContainText('Right face');
+    // The bar names the pick and the rail carries its verbs, so the viewport
+    // chip (name, verbs, phase) must not appear on any frame. A commit that
+    // dropped the pick lit the validating frame's chip over the model for
+    // the frames the dense body took to prepare, and took the readout away.
+    await page.evaluate(() => {
+      const frames = { viewportChip: 0, readoutless: 0 };
+      window.__resizeCommitFrames = frames;
+      const sample = () => {
+        if (
+          document.querySelector(
+            '.viewer-host .selection-callout.selection-callout-chip'
+          )
+        )
+          frames.viewportChip += 1;
+        if (!document.querySelector('.selection-readout'))
+          frames.readoutless += 1;
+        requestAnimationFrame(sample);
+      };
+      requestAnimationFrame(sample);
+    });
+    const value = page.getByTestId('direct-manipulation-value');
+    const readHandle = () =>
+      canvas.evaluate((element) => ({
+        x: Number(element.dataset.e2eHandleX),
+        y: Number(element.dataset.e2eHandleY),
+        dx: Number(element.dataset.e2eHandleDx),
+        dy: Number(element.dataset.e2eHandleDy),
+        scale: Number(element.dataset.e2eHandlePixelsPerUnit)
+      }));
+    const contentinfo = page.getByRole('contentinfo');
+    const drag = async (from: number, delta: number) => {
+      // The re-armed handle, on the moved side and at rest.
+      await expect(value).toContainText(String(from));
+      await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
+      await waitForStillViewport(page);
+      const handle = await readHandle();
+      const box = (await canvas.boundingBox())!;
+      await page.mouse.move(box.x + handle.x, box.y + handle.y);
+      await page.mouse.down();
+      await page.mouse.move(
+        box.x + handle.x + handle.dx * handle.scale * delta,
+        box.y + handle.y + handle.dy * handle.scale * delta,
+        { steps: 12 }
+      );
+      // Released once the drag reads its target, as a hand would.
+      await expect(value).toContainText(String(from + delta));
+      await page.mouse.up();
+    };
+    await drag(30, -7);
+    await expect(contentinfo).toContainText('width set to 23 mm', {
+      timeout: 30_000
+    });
+    await expect(contentinfo).not.toContainText('Rebuilding geometry', {
+      timeout: 30_000
+    });
+    // Still the moved side, re-armed on the same width for the next drag.
+    await expect(card).toBeVisible();
+    await expect(readout).toContainText('Right face');
+    await drag(23, -3);
+    await expect(contentinfo).toContainText('width set to 20 mm', {
+      timeout: 30_000
+    });
+    await expect(contentinfo).not.toContainText('Rebuilding geometry', {
+      timeout: 30_000
+    });
+    await page.waitForTimeout(500);
+    await expect(card).toBeVisible();
+    await expect(readout).toContainText('Right face');
+    expect(await page.evaluate(() => window.__resizeCommitFrames)).toEqual({
+      viewportChip: 0,
+      readoutless: 0
+    });
+  }
+);

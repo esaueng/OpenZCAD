@@ -397,4 +397,35 @@ describe('dense body preparation', () => {
     expect(view.result.current.bodies).toBe(latest);
     expect(view.result.current.presentation).toBe(third);
   });
+  it('holds the pick chip flag with the chip it describes while a commit prepares', () => {
+    // ModelViewer draws the viewport chip only when `pickLabel` is set and
+    // a callout is present. Read live while the callout waited here, a
+    // commit that dropped the card (live: no callout, label on) paired the
+    // flag with the held validating callout and lit the chip over the model.
+    vi.stubGlobal('Worker', FakeWorker);
+    const original = [body()];
+    const validating: {
+      selectionCallout: { label: string; phase: string } | null;
+      pickLabel: boolean;
+    } = {
+      selectionCallout: { label: 'Right face', phase: 'validating' },
+      pickLabel: false
+    };
+    const view = renderHook(
+      ({ source, props }) => usePreparedBodies(source, props),
+      { initialProps: { source: original, props: validating } }
+    );
+    const committed = [body()];
+    view.rerender({
+      source: committed,
+      props: { selectionCallout: null, pickLabel: true }
+    });
+    expect(view.result.current.presentation).toEqual(validating);
+    FakeWorker.instances[0]!.complete();
+    expect(view.result.current.bodies).toBe(committed);
+    expect(view.result.current.presentation).toEqual({
+      selectionCallout: null,
+      pickLabel: true
+    });
+  });
 });
