@@ -17,7 +17,8 @@ import {
   foldRepo,
   parseFragment,
   ROADMAP_PATH,
-  splitRow
+  splitRow,
+  STATES
 } from '../scripts/roadmap-evidence.mjs';
 
 /** A miniature ledger with the table shapes the real one uses. */
@@ -71,12 +72,12 @@ describe('roadmap evidence fragments', () => {
     expect(
       parseFragment(
         'h02--x.md',
-        '---\nrow: H02\nstate: Done\n---\nFirst line\nsecond line.\n'
+        '---\nrow: H02\nstate: Complete\n---\nFirst line\nsecond line.\n'
       )
     ).toEqual({
       name: 'h02--x.md',
       row: 'H02',
-      state: 'Done',
+      state: 'Complete',
       evidence: 'First line second line.'
     });
   });
@@ -94,6 +95,20 @@ describe('roadmap evidence fragments', () => {
     expect(() => parseFragment('a.md', '---\nrow: A01\n---\n  \n')).toThrow(
       /no evidence/
     );
+  });
+
+  it('refuses states outside the ledger vocabulary', () => {
+    // A fragment merges with its code, so "In review" is stale once folded.
+    for (const state of ['In review', 'Done', 'Planned', 'partial']) {
+      expect(() =>
+        parseFragment('a.md', `---\nrow: A01\nstate: ${state}\n---\ntext`)
+      ).toThrow(/is not one of Open, Partial, Complete, Revalidate, Deferred/);
+    }
+    for (const state of STATES) {
+      expect(
+        parseFragment('a.md', `---\nrow: A01\nstate: ${state}\n---\ntext`).state
+      ).toBe(state);
+    }
   });
 
   it('keeps escaped and code-span pipes inside their cell', () => {

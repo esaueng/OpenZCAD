@@ -19,7 +19,9 @@
  * `row` names the ledger row by its anchor id (`h02`) or its displayed ID
  * (`H02`, `PERF-N04`, `8.1`); it must match exactly one table row. `state` is
  * optional and replaces the row's status cell outright, so two fragments that
- * set the state of one row are refused rather than ordered by file name.
+ * set the state of one row are refused rather than ordered by file name. It
+ * must be one of the ledger's statuses: a fragment merges with its code, so a
+ * pre-merge state such as "In review" is already wrong when the fold applies it.
  */
 
 import {
@@ -42,6 +44,15 @@ export const FRAGMENT_DIR = 'docs/roadmap-evidence';
 export const FRAGMENT_NAME = /^[a-z0-9][a-z0-9.-]*--[a-z0-9][a-z0-9-]*\.md$/;
 
 const FRONT_MATTER_KEYS = new Set(['row', 'state']);
+
+/** The ledger's status vocabulary (ROADMAP.md, "Status vocabulary"). */
+export const STATES = Object.freeze([
+  'Open',
+  'Partial',
+  'Complete',
+  'Revalidate',
+  'Deferred'
+]);
 const EMPTY_CELLS = new Set(['', '—', '-']);
 
 /**
@@ -70,6 +81,11 @@ export function parseFragment(name, source) {
   }
   if ('state' in fields && !fields.state) {
     throw new Error(`${name}: state is empty`);
+  }
+  if (fields.state && !STATES.includes(fields.state)) {
+    throw new Error(
+      `${name}: state "${fields.state}" is not one of ${STATES.join(', ')}; a fragment merges with its code, so merged work is Partial or Complete`
+    );
   }
   const evidence = match[2].replace(/\s+/g, ' ').trim();
   if (!evidence) {

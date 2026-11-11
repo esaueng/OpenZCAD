@@ -1,6 +1,7 @@
 export const ROADMAP_PATH: string;
 export const FRAGMENT_DIR: string;
 export const FRAGMENT_NAME: RegExp;
+export const STATES: readonly string[];
 
 export interface EvidenceFragment {
   name: string;
