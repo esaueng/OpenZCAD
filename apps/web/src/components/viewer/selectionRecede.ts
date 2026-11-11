@@ -100,11 +100,6 @@ export class SelectionRecede {
     return this.bodies.get(bodyId)?.level;
   }
 
-  /** Every body's current level. */
-  *levels(): IterableIterator<[string, number]> {
-    for (const [bodyId, entry] of this.bodies) yield [bodyId, entry.level];
-  }
-
   /** Forgets bodies that are no longer drawn. */
   retain(bodyIds: ReadonlySet<string>): void {
     for (const id of this.bodies.keys()) {
@@ -120,10 +115,22 @@ export class SelectionRecede {
     return false;
   }
 
+  /** Every body's base colour and current level. */
+  *entries(): IterableIterator<
+    [string, { base: THREE.ColorRepresentation; level: number }]
+  > {
+    for (const [bodyId, entry] of this.bodies)
+      yield [bodyId, { base: entry.base, level: entry.level }];
+  }
+
   /**
    * Advances every easing body by one frame of `dtMs` and hands each one that
    * moved to `apply`. Returns whether any is still easing, which is what
    * keeps the on-demand loop drawing frames — only while it does.
+   *
+   * `reducedMotion` is read every frame, so turning Reduce motion on (in the
+   * app or the OS) while an ease is running lands every body on its target
+   * this frame instead of animating the rest of the way.
    */
   step(
     dtMs: number,
@@ -131,11 +138,20 @@ export class SelectionRecede {
       bodyId: string,
       base: THREE.ColorRepresentation,
       level: number
-    ) => void
+    ) => void,
+    reducedMotion = false
   ): boolean {
     let moving = false;
     for (const [bodyId, entry] of this.bodies) {
       if (entry.level === entry.target) continue;
+      if (reducedMotion) {
+        entry.level = entry.target;
+        entry.from = entry.target;
+        entry.elapsedMs = 0;
+        entry.durationMs = 0;
+        apply(bodyId, entry.base, entry.level);
+        continue;
+      }
       const step = entry.elapsedMs === 0 ? Math.min(dtMs, FIRST_STEP_MS) : dtMs;
       if (!(step > 0)) {
         moving = true;

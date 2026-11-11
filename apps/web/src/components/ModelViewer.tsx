@@ -253,6 +253,7 @@ import {
   SettledAmbientOcclusion,
   contextBodyColor,
   recededBodyColor,
+  recedeLevelOf,
   isBodyMaterial,
   selectedFaceColor,
   SKETCH_GLIDE_MS,
@@ -929,18 +930,33 @@ export interface BodyAppearancePreview {
 }
 
 /**
- * Each body's place in the selection recede, as drawn this frame
- * (`body=0.000` its own colour … `body=1.000` the context dim), so a test can
- * see the recede ease rather than infer it from pixels.
+ * Each body's place in the selection recede, read off the colour its mesh is
+ * about to be drawn in (`body=0.000` its own colour … `body=1.000` the
+ * context dim, `body=x` a colour that is no level of that body's own), so a
+ * test sees what the renderer draws rather than what the easer intended.
+ * Written only when it changes.
  */
 function writeE2ERecedeLevels(
   canvas: HTMLCanvasElement,
-  recede: SelectionRecede
+  recede: SelectionRecede,
+  objectsByBodyId: ReadonlyMap<string, THREE.Object3D>
 ): void {
-  const levels = [...recede.levels()]
-    .map(([bodyId, level]) => `${bodyId}=${level.toFixed(3)}`)
-    .join(',');
-  if (levels) canvas.dataset.e2eRecedeLevels = levels;
+  const levels: string[] = [];
+  for (const [bodyId, { base }] of recede.entries()) {
+    const object = objectsByBodyId.get(bodyId);
+    if (!object) continue;
+    // Every mesh of the body must agree; one left behind reads as `x`.
+    const drawn = new Set<string>();
+    forEachMesh(object, (mesh) => {
+      const level = recedeLevelOf(base, mesh.material.color);
+      drawn.add(level === null ? 'x' : level.toFixed(3));
+    });
+    if (drawn.size === 0) continue;
+    levels.push(`${bodyId}=${drawn.size === 1 ? [...drawn][0] : 'x'}`);
+  }
+  const value = levels.join(',');
+  if ((canvas.dataset.e2eRecedeLevels ?? '') === value) return;
+  if (value) canvas.dataset.e2eRecedeLevels = value;
   else delete canvas.dataset.e2eRecedeLevels;
 }
 
@@ -11846,12 +11862,11 @@ export function ModelViewer({
 
       selection.step(dt);
       // The scene receding behind a selection, or coming back, eases over a
-      // few frames; the loop stays awake only while it does.
-      let recedeMoved = false;
+      // few frames; the loop stays awake only while it does. Reduce motion is
+      // read every frame, so turning it on mid-ease lands the rest at once.
       const recedeAnimating = selectionRecedeRef.current!.step(
         dt * 1000,
         (bodyId, base, level) => {
-          recedeMoved = true;
           // A drag-phase colour preview owns that body's colour until it ends.
           const preview = appearanceColorPreviewRef.current;
           if (preview === bodyId) return;
@@ -11860,14 +11875,9 @@ export function ModelViewer({
           forEachMesh(object, (mesh) => {
             recededBodyColor(base, level, mesh.material.color);
           });
-        }
+        },
+        reducesMotion(reducedMotionRef.current)
       );
-      if (E2E_CANVAS_HOOKS_ENABLED && recedeMoved) {
-        writeE2ERecedeLevels(
-          context.renderer.domElement,
-          selectionRecedeRef.current!
-        );
-      }
       // The cube's facets fade to their hover fill like the SVG's did.
       if (cubeLink) cubeOverlay.setHighlight(cubeLink.highlight);
       const cubeAnimating = cubeOverlay.step(
@@ -12074,6 +12084,13 @@ export function ModelViewer({
         if (occlusion.computedMs !== null && import.meta.env.OZ_PERF === '1') {
           mark('viewer.ambientOcclusion', { ms: occlusion.computedMs });
         }
+      }
+      if (e2eCanvasHooksEnabled) {
+        writeE2ERecedeLevels(
+          renderer.domElement,
+          selectionRecedeRef.current!,
+          context.objectsByBodyId
+        );
       }
       let renderStarted = performance.now();
       // The first draw compiles every material's shaders and uploads the
@@ -13362,7 +13379,6 @@ export function ModelViewer({
       } else {
         delete context.renderer.domElement.dataset.e2eSelectionRecedes;
       }
-      writeE2ERecedeLevels(context.renderer.domElement, recede);
     }
     /**
      * The selection chip: the name label of old, now also carrying the

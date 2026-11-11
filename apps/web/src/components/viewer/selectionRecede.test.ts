@@ -85,6 +85,38 @@ describe('selection recede', () => {
     expect(recede.animating).toBe(true);
   });
 
+  it('lands an ease in flight on its target once Reduce motion turns on', () => {
+    // The preference is read per frame, not only when a target changes: a
+    // recede already running when it turns on (in the app or the OS) must
+    // not animate the rest of the way.
+    const recede = new SelectionRecede();
+    recede.set('a', '#cccccc', 0, false);
+    recede.set('b', '#888888', 1, false);
+    recede.set('a', '#cccccc', 1, true);
+    recede.set('b', '#888888', 0, true);
+    recede.step(FRAME_MS, () => undefined);
+    expect(recede.level('a')!).toBeGreaterThan(0);
+    expect(recede.level('a')!).toBeLessThan(1);
+    const applied: [string, number][] = [];
+    expect(
+      recede.step(
+        FRAME_MS,
+        (id, _base, level) => applied.push([id, level]),
+        true
+      )
+    ).toBe(false);
+    expect(applied).toEqual([
+      ['a', 1],
+      ['b', 0]
+    ]);
+    expect(recede.animating).toBe(false);
+    // Settled bodies are left alone, and nothing restarts once it is off.
+    const after: string[] = [];
+    expect(recede.step(FRAME_MS, (id) => after.push(id), true)).toBe(false);
+    expect(recede.step(FRAME_MS, (id) => after.push(id))).toBe(false);
+    expect(after).toEqual([]);
+  });
+
   it('turns back from wherever it is, over the remaining distance', () => {
     const recede = new SelectionRecede();
     recede.set('a', '#cccccc', 0, false);
@@ -110,6 +142,8 @@ describe('selection recede', () => {
     recede.retain(new Set(['b']));
     expect(recede.level('a')).toBeUndefined();
     expect(recede.animating).toBe(false);
-    expect([...recede.levels()]).toEqual([['b', 1]]);
+    expect([...recede.entries()]).toEqual([
+      ['b', { base: '#888888', level: 1 }]
+    ]);
   });
 });

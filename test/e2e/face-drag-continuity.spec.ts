@@ -758,7 +758,12 @@ async function recordRecede(canvas: Locator) {
   });
 }
 
-/** One body's recede level out of a `data-e2e-recede-levels` value. */
+/**
+ * One body's recede level out of a `data-e2e-recede-levels` value, which the
+ * viewer reads off the colour each body's meshes are about to be drawn in.
+ * Null when the body is not listed; NaN when its drawn colour is no level of
+ * its own colour at all.
+ */
 function recedeLevel(value: string | null, bodyId: string): number | null {
   const entry = (value ?? '')
     .split(',')
@@ -778,26 +783,107 @@ async function recedeLevels(page: Page, bodyId: string, from: number) {
   return log.map((entry) => recedeLevel(entry.value, bodyId));
 }
 
+const drawnLevel = async (canvas: Locator, bodyId: string) =>
+  recedeLevel(await canvas.getAttribute('data-e2e-recede-levels'), bodyId);
+
+/**
+ * Waits for the current revision's analysed frame (`oz:edit.frame` with
+ * analysis ready) and the frame after it: the last rebuild a commit causes
+ * has been drawn, however long it took.
+ */
+async function settledFrame(page: Page) {
+  const version = Number(
+    (
+      await page
+        .locator('.workspace-status-summary [title]')
+        .getAttribute('title')
+    )?.match(/rev (\d+)/)?.[1]
+  );
+  expect(version).toBeGreaterThan(0);
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          (version) =>
+            performance.getEntriesByName('oz:edit.frame').some((entry) => {
+              const detail = (entry as PerformanceMeasure).detail as {
+                version?: number;
+                analysis?: string;
+              } | null;
+              return (
+                detail?.version !== undefined &&
+                detail.version >= version &&
+                detail.analysis === 'ready'
+              );
+            }),
+          version
+        ),
+      { timeout: 30_000 }
+    )
+    .toBe(true);
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+      )
+  );
+}
+
+/**
+ * Checks one ease recorded from the canvas: it ends on `to`, passes through
+ * at least one level in between, never turns away from `to`, and never
+ * draws a colour that is no level of the body's own.
+ */
+function expectEase(levels: (number | null)[], to: 0 | 1) {
+  const label = JSON.stringify(levels);
+  expect(
+    levels.filter((level) => Number.isNaN(level)),
+    label
+  ).toEqual([]);
+  const drawn = levels.filter((level): level is number => level !== null);
+  expect(drawn.at(-1), label).toBe(to);
+  expect(
+    drawn.filter((level) => level > 0 && level < 1).length,
+    label
+  ).toBeGreaterThan(0);
+  for (let index = 1; index < drawn.length; index++) {
+    if (to === 0)
+      expect(drawn[index]!, label).toBeLessThanOrEqual(drawn[index - 1]!);
+    else expect(drawn[index]!, label).toBeGreaterThanOrEqual(drawn[index - 1]!);
+  }
+}
+
 test(
   'a face drag keeps the rest receded from release through its commit',
   { tag: '@ci-smoke' },
   async ({ page }) => {
     test.setTimeout(process.env.CI ? 240_000 : 120_000);
+    await slowAnalysis(page);
     const { canvas, handle } = await armedBox(page);
     // The face pick recedes its own body around the lit face.
     await expect(canvas).toHaveAttribute('data-e2e-selection-recedes', 'true');
     const bodyId = (await canvas.getAttribute('data-e2e-selected-bodies'))!;
     expect(bodyId).toBeTruthy();
-    await expect
-      .poll(async () =>
-        recedeLevel(await canvas.getAttribute('data-e2e-recede-levels'), bodyId)
-      )
-      .toBe(1);
+    await expect.poll(() => drawnLevel(canvas, bodyId)).toBe(1);
+    // Hold the commit's follow-up analysis until released, so the slow
+    // window a large model has is exercised rather than raced past.
+    await page.evaluate(() => {
+      window.__slowAnalysis!.armed = true;
+      window.__slowAnalysis!.manual = true;
+    });
     await recordRecede(canvas);
     const pressed = await now(page);
     await dragAndCommit(page, canvas, handle, handle.x, handle.y, 3);
-    // Through the rebuild that follows the commit, and a little after it.
-    await page.waitForTimeout(1200);
+    await expect
+      .poll(() => page.evaluate(() => window.__slowAnalysis!.held))
+      .toBeGreaterThan(0);
+    await page.evaluate(() => {
+      window.__slowAnalysis!.armed = false;
+      window.__slowAnalysis!.release!();
+    });
+    // Through the rebuild that follows the commit, until its analysed
+    // geometry has been drawn.
+    await settledFrame(page);
     await expect(canvas).toHaveAttribute('data-e2e-selected-face', /.+/);
     // The moved face stayed the pick, so the scene never came back to full
     // brightness around it, for a single frame, across preview, release,
@@ -808,24 +894,20 @@ test(
       levels.filter((level) => level !== 1),
       JSON.stringify(levels)
     ).toEqual([]);
+    expect(await drawnLevel(canvas, bodyId)).toBe(1);
   }
 );
 
 test(
-  'when a resize commit ends the pick, the scene eases back rather than popping',
+  'around a resize commit, the scene eases out and back in rather than popping',
   { tag: '@ci-smoke' },
   async ({ page }) => {
     test.setTimeout(process.env.CI ? 240_000 : 120_000);
-    // A box side arms Resize Body, whose commit ends the pick (its handle
-    // measures the whole length, so it does not re-arm on the moved face).
+    // A box side arms Resize Body.
     const { canvas, handle } = await armedBox(page, { operation: 'resize' });
     const bodyId = (await canvas.getAttribute('data-e2e-selected-bodies'))!;
     expect(bodyId).toBeTruthy();
-    await expect
-      .poll(async () =>
-        recedeLevel(await canvas.getAttribute('data-e2e-recede-levels'), bodyId)
-      )
-      .toBe(1);
+    await expect.poll(() => drawnLevel(canvas, bodyId)).toBe(1);
     await recordRecede(canvas);
     const pressed = await now(page);
     await page.mouse.move(handle.x, handle.y);
@@ -840,43 +922,41 @@ test(
     await expect(page.getByText('depth set to', { exact: false })).toBeVisible({
       timeout: 30_000
     });
-    await expect(canvas).not.toHaveAttribute('data-e2e-selection-recedes');
-    await expect
-      .poll(async () =>
-        recedeLevel(await canvas.getAttribute('data-e2e-recede-levels'), bodyId)
-      )
-      .toBe(0);
-    // Every frame from the release: held at the recede until the pick ended,
-    // then down through intermediate levels, never 1 → 0 in one frame.
-    const out = await recedeLevels(page, bodyId, pressed);
-    const label = JSON.stringify(out);
-    const leaving = out.lastIndexOf(1);
-    expect(leaving, label).toBeGreaterThanOrEqual(0);
-    const easing = out.slice(leaving + 1);
-    expect(easing.at(-1), label).toBe(0);
+    await settledFrame(page);
+    // Whether the commit keeps the moved side picked or ends the pick, it
+    // never pops the scene: no frame goes straight between its own colour
+    // and the full recede, or draws a colour that is neither.
+    const committed = await recedeLevels(page, bodyId, pressed);
+    const committedLabel = JSON.stringify(committed);
     expect(
-      easing.filter((level) => level !== null && level > 0 && level < 1).length,
-      label
-    ).toBeGreaterThan(0);
-    for (let index = 1; index < easing.length; index++)
-      expect(easing[index]!, label).toBeLessThanOrEqual(easing[index - 1]!);
+      committed.filter((level) => Number.isNaN(level)),
+      committedLabel
+    ).toEqual([]);
+    const drawn = committed.filter((level): level is number => level !== null);
+    for (let index = 1; index < drawn.length; index++)
+      expect(
+        Math.abs(drawn[index]! - drawn[index - 1]!),
+        committedLabel
+      ).toBeLessThan(1);
 
-    // The next pick eases the scene back in the same way.
+    // The resized side is picked (still, or again), with the scene receded.
+    await selectFace(canvas, { x: 0, y: -1, z: 0 });
+    await expect(canvas).toHaveAttribute('data-e2e-selection-recedes', 'true');
+    await expect.poll(() => drawnLevel(canvas, bodyId)).toBe(1);
+
+    // Ending the pick eases the scene back to full brightness.
+    const cleared = await now(page);
+    await page.keyboard.press('Escape');
+    await expect(canvas).not.toHaveAttribute('data-e2e-selection-recedes');
+    await expect.poll(() => drawnLevel(canvas, bodyId)).toBe(0);
+    expectEase(await recedeLevels(page, bodyId, cleared), 0);
+
+    // The next pick eases it back in the same way.
     const picked = await now(page);
     await selectFace(canvas, { x: 0, y: -1, z: 0 });
-    await expect
-      .poll(async () =>
-        recedeLevel(await canvas.getAttribute('data-e2e-recede-levels'), bodyId)
-      )
-      .toBe(1);
-    const back = await recedeLevels(page, bodyId, picked);
-    const backLabel = JSON.stringify(back);
-    expect(
-      back.filter((level) => level !== null && level > 0 && level < 1).length,
-      backLabel
-    ).toBeGreaterThan(0);
-    for (let index = 1; index < back.length; index++)
-      expect(back[index]!, backLabel).toBeGreaterThanOrEqual(back[index - 1]!);
+    await expect(canvas).toHaveAttribute('data-e2e-selection-recedes', 'true');
+    await expect.poll(() => drawnLevel(canvas, bodyId)).toBe(1);
+    expectEase(await recedeLevels(page, bodyId, picked), 1);
   }
 );
 

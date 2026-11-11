@@ -9,6 +9,7 @@ import { SELECTION_SEMANTICS } from './semantics';
 import {
   contextBodyColor,
   recededBodyColor,
+  recedeLevelOf,
   selectedFaceColor
 } from './selectionTint';
 
@@ -163,5 +164,28 @@ describe('selection tint (design review F8)', () => {
       expect(next).toBeLessThan(previous);
       previous = next;
     }
+  });
+
+  it('reads the level back out of a drawn colour, and only for its own body', () => {
+    for (const [, color] of featureColors) {
+      for (const level of [0, 0.125, 0.5, 0.875, 1]) {
+        expect(
+          recedeLevelOf(color, recededBodyColor(color, level))
+        ).toBeCloseTo(level, 3);
+      }
+    }
+    // Another body's colour is no level of this one, receded or not.
+    const gold = FEATURE_COLORS.primitive;
+    expect(recedeLevelOf(DEFAULT_BODY_COLOR, new THREE.Color(gold))).toBeNull();
+    expect(
+      recedeLevelOf(gold, recededBodyColor(DEFAULT_BODY_COLOR, 0.5))
+    ).toBeNull();
+    // Nor is a colour brighter than the body or past the full recede.
+    expect(
+      recedeLevelOf(DEFAULT_BODY_COLOR, new THREE.Color('#ffffff'))
+    ).toBeNull();
+    expect(
+      recedeLevelOf(DEFAULT_BODY_COLOR, new THREE.Color('#000000'))
+    ).toBeNull();
   });
 });

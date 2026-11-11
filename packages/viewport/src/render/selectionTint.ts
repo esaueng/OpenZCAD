@@ -69,3 +69,36 @@ export function recededBodyColor(
   const { r, g, b } = target.getRGB({ r: 0, g: 0, b: 0 }, SRGB);
   return target.setRGB(r * keep, g * keep, b * keep, SRGB);
 }
+
+/**
+ * The recede level a drawn colour shows for a body of colour `base`: the
+ * inverse of {@link recededBodyColor}. Null when `color` is not that body's
+ * colour at any level (another body's colour, a preview tint), so a check on
+ * what the renderer draws can tell a wrong write from an unfinished ease.
+ */
+export function recedeLevelOf(
+  base: THREE.ColorRepresentation,
+  color: THREE.Color,
+  tolerance = 1e-3
+): number | null {
+  const from = new THREE.Color(base).getRGB({ r: 0, g: 0, b: 0 }, SRGB);
+  const drawn = color.getRGB({ r: 0, g: 0, b: 0 }, SRGB);
+  const channels = (['r', 'g', 'b'] as const).filter(
+    (channel) => from[channel] > tolerance
+  );
+  if (channels.length === 0) return null;
+  const keeps = channels.map((channel) => drawn[channel] / from[channel]);
+  const keep = keeps.reduce((sum, value) => sum + value, 0) / keeps.length;
+  if (keeps.some((value) => Math.abs(value - keep) > tolerance)) return null;
+  // A dark channel the ratio skipped must still be (near) dark.
+  for (const channel of ['r', 'g', 'b'] as const) {
+    if (
+      !channels.includes(channel) &&
+      Math.abs(drawn[channel] - from[channel] * keep) > tolerance
+    )
+      return null;
+  }
+  const level = (1 - keep) / SELECTION_SEMANTICS.selected.contextDim;
+  if (level < -tolerance || level > 1 + tolerance) return null;
+  return Math.min(Math.max(level, 0), 1);
+}
