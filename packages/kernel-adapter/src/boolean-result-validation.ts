@@ -168,51 +168,65 @@ export function inspectDisplayMeshClosure(
   positions: ArrayLike<number>,
   indices: ArrayLike<number>
 ): TriangleMeshClosure {
-  const vertexCount = Math.floor(positions.length / 3);
-  if (Number.isSafeInteger(vertexCount * vertexCount)) {
-    // Net direction per undirected edge: +1 for low→high, -1 for high→low.
-    const balance = new Map<number, number>();
-    const uses = new Map<number, number>();
-    let triangles = 0;
-    let indexClosed = true;
-    for (let index = 0; index + 2 < indices.length; index += 3) {
-      const corners = [
-        indices[index] ?? 0,
-        indices[index + 1] ?? 0,
-        indices[index + 2] ?? 0
-      ];
-      triangles += 1;
-      for (let corner = 0; corner < 3; corner += 1) {
-        const start = corners[corner]!;
-        const end = corners[(corner + 1) % 3]!;
-        if (start === end || start >= vertexCount || end >= vertexCount) {
-          indexClosed = false;
-          continue;
-        }
-        const key =
-          start < end ? start * vertexCount + end : end * vertexCount + start;
-        balance.set(key, (balance.get(key) ?? 0) + (start < end ? 1 : -1));
-        uses.set(key, (uses.get(key) ?? 0) + 1);
-      }
-    }
-    if (indexClosed && triangles > 0) {
-      for (const [key, count] of uses) {
-        if (count !== 2 || balance.get(key) !== 0) {
-          indexClosed = false;
-          break;
-        }
-      }
-      if (indexClosed) {
-        return {
-          boundaryEdges: 0,
-          nonManifoldEdges: 0,
-          inconsistentWindingEdges: 0,
-          triangles
-        };
+  const triangles = Math.floor(indices.length / 3);
+  if (triangles > 0 && indexEdgesPairOpposite(positions.length, indices)) {
+    return {
+      boundaryEdges: 0,
+      nonManifoldEdges: 0,
+      inconsistentWindingEdges: 0,
+      triangles
+    };
+  }
+  return inspectTriangleMeshClosure(positions, indices);
+}
+
+/**
+ * Whether every undirected index edge is used exactly twice, once in each
+ * direction. Each directed edge is keyed by its (low, high) pair and filed
+ * by direction; that holds exactly when the low→high keys have no repeat
+ * and equal the high→low keys as multisets, which two native typed-array
+ * sorts decide. The key `low * vertexCount + high` is exact while
+ * `vertexCount²` is a safe integer; a larger mesh is left to the weld.
+ */
+function indexEdgesPairOpposite(
+  positionCount: number,
+  indices: ArrayLike<number>
+): boolean {
+  const vertexCount = Math.floor(positionCount / 3);
+  if (!Number.isSafeInteger(vertexCount * vertexCount)) return false;
+  const edgeCount = Math.floor(indices.length / 3) * 3;
+  // A closed mesh files exactly half of its directed edges each way.
+  if (edgeCount % 2 !== 0) return false;
+  const half = edgeCount / 2;
+  const forward = new Float64Array(half);
+  const backward = new Float64Array(half);
+  let forwardCount = 0;
+  let backwardCount = 0;
+  for (let index = 0; index + 2 < indices.length; index += 3) {
+    const a = indices[index] ?? 0;
+    const b = indices[index + 1] ?? 0;
+    const c = indices[index + 2] ?? 0;
+    if (a >= vertexCount || b >= vertexCount || c >= vertexCount) return false;
+    for (let corner = 0; corner < 3; corner += 1) {
+      const start = corner === 0 ? a : corner === 1 ? b : c;
+      const end = corner === 0 ? b : corner === 1 ? c : a;
+      if (start === end) return false;
+      if (start < end) {
+        if (forwardCount === half) return false;
+        forward[forwardCount++] = start * vertexCount + end;
+      } else {
+        if (backwardCount === half) return false;
+        backward[backwardCount++] = end * vertexCount + start;
       }
     }
   }
-  return inspectTriangleMeshClosure(positions, indices);
+  forward.sort();
+  backward.sort();
+  for (let index = 0; index < half; index += 1) {
+    if (forward[index] !== backward[index]) return false;
+    if (index > 0 && forward[index] === forward[index - 1]) return false;
+  }
+  return true;
 }
 
 export function isClosedConsistentlyOrientedMesh(

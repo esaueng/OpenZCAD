@@ -571,6 +571,12 @@ export interface MeasuredBodyCacheEntry {
   /** Owned buffers plus serialized metadata/key/witness estimate. */
   bytes: number;
   measured: MeasuredShape;
+  /**
+   * Whether `measured`'s display mesh is closed and consistently oriented,
+   * filled in the first time a hit asks. The retained buffers are never
+   * mutated, so the verdict holds for the entry's lifetime.
+   */
+  displayMeshClosed?: boolean;
 }
 
 /** What a drag preview publishes for an unchanged body. */

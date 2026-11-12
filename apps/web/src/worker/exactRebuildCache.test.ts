@@ -6,6 +6,7 @@ import {
   ExactRebuildCache,
   LatestBroadcastGate,
   canonicalProjectContentKey,
+  cloneDerivedSharingBodyGeometry,
   geometryContentKey,
   lineageDemandCacheKey,
   rebindSketchGeometryForContent
@@ -313,5 +314,47 @@ describe('content-proven cached sketch geometry', () => {
       ).sketchGeometry
     ).toBeUndefined();
     expect(derived.sketchGeometry?.documentVersion).toBe(document.version);
+  });
+});
+
+describe('derived clone sharing body geometry', () => {
+  it('shares each mesh and topology and copies everything else', () => {
+    const mesh = {
+      kind: 'mesh' as const,
+      vertices: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+      indices: new Uint32Array([0, 1, 2])
+    };
+    const topology = { faces: [], edges: [] };
+    const derived = {
+      bodyRepresentations: {
+        body_a: {
+          bodyId: 'body_a',
+          name: 'A',
+          mesh,
+          topology,
+          bbox: { min: { x: 0, y: 0, z: 0 }, max: { x: 1, y: 1, z: 0 } },
+          volume: 0
+        },
+        body_b: { bodyId: 'body_b', name: 'B', mesh, volume: 0 }
+      },
+      exportableBodyIds: ['body_a'],
+      warnings: ['w'],
+      updatedAt: 'now'
+    } as unknown as ProjectDocument['derived'];
+    const copy = cloneDerivedSharingBodyGeometry(derived);
+    expect(copy).toEqual(derived);
+    const [a, b] = ['body_a', 'body_b'].map(
+      (id) =>
+        copy.bodyRepresentations[id as keyof typeof copy.bodyRepresentations]!
+    );
+    const original =
+      derived.bodyRepresentations[
+        'body_a' as keyof typeof derived.bodyRepresentations
+      ]!;
+    expect(a!.mesh).toBe(mesh);
+    expect(a!.topology).toBe(topology);
+    expect(a!.bbox).not.toBe(original.bbox);
+    expect(copy.warnings).not.toBe(derived.warnings);
+    expect('topology' in b!).toBe(false);
   });
 });

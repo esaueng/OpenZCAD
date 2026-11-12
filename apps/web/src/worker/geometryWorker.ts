@@ -37,7 +37,8 @@ import {
   LatestBroadcastGate,
   geometryContentKey,
   lineageDemandCacheKey,
-  rebindSketchGeometryForContent
+  rebindSketchGeometryForContent,
+  cloneDerivedSharingBodyGeometry
 } from './exactRebuildCache';
 import { GeometryWorkerQueue } from './geometryWorkerQueue';
 import { geometryYield } from './geometryYield';
@@ -510,6 +511,10 @@ function loadExactKernel(): Promise<ExactKernel | null> {
         : undefined;
     return module.createExactKernelAdapter({
       resolveSourceBytes: resolveExactSourceBytes,
+      // Unchanged bodies keep their buffer identity from sync to sync, so the
+      // projection diff and the result cache skip them; see
+      // `cloneDerivedSharingBodyGeometry` for the immutability this needs.
+      shareRetainedMeasurements: true,
       onRebuildCacheEvent: (event) => {
         rebuildMetrics = {
           replayedFeatures: event.replayed,
@@ -583,6 +588,7 @@ const rebuildCache = new ExactRebuildCache<ProjectDocument['derived']>({
   maxEntries: 8,
   maxBytes: 32 * 1024 * 1024,
   maxInFlight: 4,
+  clone: cloneDerivedSharingBodyGeometry,
   // A draft display is published once and refined, never served again.
   cacheable: (derived) =>
     !transientResults.has(derived) && !hasDraftDisplay(derived)
@@ -1408,7 +1414,11 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       derived
     };
     if (request.requestId) {
-      post(result, derivedMeshTransferables(derived));
+      // The body buffers are shared with the result cache and the adapter's
+      // retained measurements: transfer a copy, made here rather than on the
+      // receiving main thread.
+      const owned = structuredClone(result);
+      post(owned, derivedMeshTransferables(owned.derived));
     } else {
       const encodingStartedMs = performance.now();
       const packet = projectionSender.encode(
@@ -1812,10 +1822,11 @@ async function refineCommittedDisplay(
       !broadcastGate.isCurrent(pending.broadcastToken)
     )
       return true;
-    const derived = rebindSketchGeometryForContent(
-      document,
-      refined,
-      contentKey
+    // Body buffers are shared with the result cache and the adapter's
+    // retained measurements (see `cloneDerivedSharingBodyGeometry`):
+    // transfer a copy, never them.
+    const derived = structuredClone(
+      rebindSketchGeometryForContent(document, refined, contentKey)
     );
     self.postMessage(
       {

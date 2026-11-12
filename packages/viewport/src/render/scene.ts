@@ -6,6 +6,7 @@ import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
 import {
   MAX_MESH_SOLID_CONVERSION_TRIANGLES,
+  sameMeshBuffer,
   type GeometryBodyRepresentation,
   type BodyTopology,
   type MeshGeometry
@@ -927,16 +928,11 @@ function equalProjectionValue(left: unknown, right: unknown): boolean {
   if (!left || !right || typeof left !== 'object' || typeof right !== 'object')
     return false;
   if (ArrayBuffer.isView(left) || ArrayBuffer.isView(right)) {
-    if (
-      !(left instanceof Float32Array || left instanceof Uint32Array) ||
-      !(right instanceof Float32Array || right instanceof Uint32Array) ||
-      left.constructor !== right.constructor ||
-      left.length !== right.length
-    )
-      return false;
-    for (let i = 0; i < left.length; i += 1)
-      if (left[i] !== right[i]) return false;
-    return true;
+    return (
+      (left instanceof Float32Array || left instanceof Uint32Array) &&
+      (right instanceof Float32Array || right instanceof Uint32Array) &&
+      sameMeshBuffer(left, right)
+    );
   }
   if (Array.isArray(left) || Array.isArray(right)) {
     return (

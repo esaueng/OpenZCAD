@@ -1,10 +1,14 @@
 import {
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
   useState,
   type CSSProperties,
+  type Dispatch,
+  type RefObject,
+  type SetStateAction,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode
@@ -51,39 +55,55 @@ import { featureNeedsRepair } from '../lib/featureRepair';
 import { featureValueSummary } from '../lib/featureSummary';
 import { FEATURE_KIND_LABELS } from '../lib/model';
 
+// Row icons are constant elements: a commit re-renders every row of a long
+// history, and React skips an element it has already reconciled only when it
+// is the same object. Building them per row per render was a measurable part
+// of each edit's main-thread time on a 200-feature history.
+const PRIMITIVE_ICONS = {
+  box: <Box size={13} aria-hidden="true" />,
+  cylinder: <Cylinder size={13} aria-hidden="true" />,
+  sphere: <Globe size={13} aria-hidden="true" />,
+  cone: <Cone size={13} aria-hidden="true" />,
+  torus: <Torus size={13} aria-hidden="true" />
+} as const;
+const SKETCH_ICON = <PenLine size={13} aria-hidden="true" />;
+const EXTRUDE_ICON = <Layers size={13} aria-hidden="true" />;
+const REVOLVE_ICON = <RotateCw size={13} aria-hidden="true" />;
+const BOOLEAN_ICON = <Combine size={13} aria-hidden="true" />;
+const TRANSFORM_ICON = <Move3d size={13} aria-hidden="true" />;
+const DATUM_PLANE_ICON = <SquareDashed size={13} aria-hidden="true" />;
+const DATUM_AXIS_ICON = <Axis3d size={13} aria-hidden="true" />;
+const OTHER_FEATURE_ICON = <FileBox size={13} aria-hidden="true" />;
+const GRIP_ICON = <GripVertical size={12} aria-hidden="true" />;
+const ROW_ALERT_ICON = <AlertTriangle size={11} aria-hidden="true" />;
+const RESUME_ICON = <CirclePlay size={12} aria-hidden="true" />;
+const SUPPRESS_ICON = <CirclePause size={12} aria-hidden="true" />;
+const ROLLBACK_ICON = <History size={12} aria-hidden="true" />;
+const MORE_ICON = <MoreHorizontal size={12} aria-hidden="true" />;
+const HIDDEN_ICON = <EyeOff size={12} aria-hidden="true" />;
+
 function featureIcon(feature: FeatureNode) {
-  const size = 13;
   if (feature.data.featureKind === 'primitive') {
-    switch (feature.data.primitiveKind) {
-      case 'box':
-        return <Box size={size} aria-hidden="true" />;
-      case 'cylinder':
-        return <Cylinder size={size} aria-hidden="true" />;
-      case 'sphere':
-        return <Globe size={size} aria-hidden="true" />;
-      case 'cone':
-        return <Cone size={size} aria-hidden="true" />;
-      case 'torus':
-        return <Torus size={size} aria-hidden="true" />;
-    }
+    const icon = PRIMITIVE_ICONS[feature.data.primitiveKind];
+    if (icon) return icon;
   }
   switch (feature.featureKind) {
     case 'sketch':
-      return <PenLine size={size} aria-hidden="true" />;
+      return SKETCH_ICON;
     case 'extrude':
-      return <Layers size={size} aria-hidden="true" />;
+      return EXTRUDE_ICON;
     case 'revolve':
-      return <RotateCw size={size} aria-hidden="true" />;
+      return REVOLVE_ICON;
     case 'boolean':
-      return <Combine size={size} aria-hidden="true" />;
+      return BOOLEAN_ICON;
     case 'transform':
-      return <Move3d size={size} aria-hidden="true" />;
+      return TRANSFORM_ICON;
     case 'datum-plane':
-      return <SquareDashed size={size} aria-hidden="true" />;
+      return DATUM_PLANE_ICON;
     case 'datum-axis':
-      return <Axis3d size={size} aria-hidden="true" />;
+      return DATUM_AXIS_ICON;
     default:
-      return <FileBox size={size} aria-hidden="true" />;
+      return OTHER_FEATURE_ICON;
   }
 }
 
@@ -280,6 +300,391 @@ function FeatureRenameField({
 }
 
 /**
+ * What a history row reads only when someone acts on it: the latest
+ * callbacks and list state, kept in a ref so that a row whose rendered
+ * props did not change can skip re-rendering. Handlers resolve the feature
+ * node by id at event time, because every document edit replaces every
+ * node object while a skipped row still holds the one it last rendered.
+ */
+interface HistoryRowContext {
+  latest(feature: FeatureNode): FeatureNode;
+  filtering: boolean;
+  reorderBusy: boolean;
+  dragFeatureId: string | null;
+  last: number;
+  batchCount: number;
+  canDelete: boolean;
+  batchAnchor: RefObject<FeatureId | null>;
+  listRef: RefObject<HTMLDivElement | null>;
+  setDragFeatureId(id: string | null): void;
+  setDropFeatureId: Dispatch<SetStateAction<string | null>>;
+  setRenamingId(id: FeatureId | null): void;
+  cancelPendingCommit(): void;
+  rowActions(feature: FeatureNode, index: number): HistoryRowActions;
+  extendBatch(feature: FeatureNode, range: boolean): void;
+  clearBatch(): void;
+  selectHistoryFeature(id: string): void;
+  rollBackAfter(feature: FeatureNode): void;
+  onFeatureContextMenu: HistoryTimelineProps['onFeatureContextMenu'];
+  onReorderFeature: HistoryTimelineProps['onReorderFeature'];
+  onRenameFeature: HistoryTimelineProps['onRenameFeature'];
+  onToggleFeatureSuppression: HistoryTimelineProps['onToggleFeatureSuppression'];
+  onToggleSketchVisibility: HistoryTimelineProps['onToggleSketchVisibility'];
+  onToggleBodyVisibility: HistoryTimelineProps['onToggleBodyVisibility'];
+}
+
+interface HistoryRowProps {
+  /** Rendered for its name, kind and ids; handlers act on the latest node. */
+  feature: FeatureNode;
+  index: number;
+  className: string;
+  delay: number;
+  value: string;
+  selected: boolean;
+  inBatch: boolean;
+  consumed: boolean;
+  failed: boolean;
+  projectionBroken: boolean;
+  refusalTitle: string | null;
+  refusalMessage: string | null;
+  suppressed: boolean;
+  rollbackActive: boolean;
+  hidden: boolean;
+  sketchId: string | null;
+  renaming: boolean;
+  needle: string;
+  filtering: boolean;
+  reorderBusy: boolean;
+  context: RefObject<HistoryRowContext | null>;
+}
+
+/** Every rendered input of a row; a new node for the same step is not one. */
+function sameHistoryRow(a: HistoryRowProps, b: HistoryRowProps): boolean {
+  for (const key of Object.keys(a) as (keyof HistoryRowProps)[]) {
+    if (key !== 'feature' && !Object.is(a[key], b[key])) return false;
+  }
+  const left = a.feature;
+  const right = b.feature;
+  return (
+    left === right ||
+    (left.id === right.id &&
+      left.featureId === right.featureId &&
+      left.name === right.name &&
+      left.featureKind === right.featureKind &&
+      left.bodyId === right.bodyId &&
+      left.data.featureKind === right.data.featureKind &&
+      (left.data.featureKind !== 'primitive' ||
+        (right.data.featureKind === 'primitive' &&
+          left.data.primitiveKind === right.data.primitiveKind)))
+  );
+}
+
+// One history step. Memoized: a long history re-rendered every row on each
+// of the several commits an edit makes, which was most of the edit's
+// main-thread time on a 200-step history.
+const HistoryRow = memo(function HistoryRow({
+  feature,
+  index,
+  className,
+  delay,
+  value,
+  selected,
+  inBatch,
+  consumed,
+  failed,
+  projectionBroken,
+  refusalTitle,
+  refusalMessage,
+  suppressed,
+  rollbackActive,
+  hidden,
+  sketchId,
+  renaming,
+  needle,
+  filtering,
+  reorderBusy,
+  context
+}: HistoryRowProps) {
+  return (
+    <div
+      key={feature.id}
+      data-node-id={feature.id}
+      data-history-index={index}
+      style={{ '--history-delay': `${delay}ms` } as CSSProperties}
+      className={className}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        const ctx = context.current!;
+        const latest = ctx.latest(feature);
+        ctx.onFeatureContextMenu(event, latest, ctx.rowActions(latest, index));
+      }}
+      onDragOver={(event) => {
+        const ctx = context.current!;
+        if (
+          ctx.filtering ||
+          !ctx.dragFeatureId ||
+          ctx.dragFeatureId === feature.featureId
+        ) {
+          return;
+        }
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+        ctx.setDropFeatureId(feature.featureId);
+      }}
+      onDragLeave={() => {
+        context.current!.setDropFeatureId((current) =>
+          current === feature.featureId ? null : current
+        );
+      }}
+      onDrop={(event) => {
+        const ctx = context.current!;
+        if (ctx.filtering || ctx.reorderBusy || !ctx.dragFeatureId) {
+          return;
+        }
+        event.preventDefault();
+        ctx.onReorderFeature(ctx.dragFeatureId as FeatureId, index);
+        ctx.setDragFeatureId(null);
+        ctx.setDropFeatureId(null);
+      }}
+    >
+      <span className="history-dot" aria-hidden="true" />
+      <button
+        type="button"
+        className="row-action feature-row-grip"
+        aria-label={`Reorder ${feature.name}. Use the arrow keys to move it.`}
+        // A filtered list hides the rows a move would pass, so a
+        // step could jump past an invisible one: reorder only the
+        // whole history.
+        title={
+          filtering
+            ? 'Clear the filter to reorder'
+            : reorderBusy
+              ? 'Reorder once the current rebuild finishes'
+              : 'Drag to reorder'
+        }
+        disabled={filtering}
+        // Not `disabled`: that would drop keyboard focus mid-press.
+        aria-disabled={reorderBusy || undefined}
+        draggable={!filtering && !reorderBusy}
+        onDragStart={(event) => {
+          event.dataTransfer.effectAllowed = 'move';
+          event.dataTransfer.setData('text/plain', feature.featureId);
+          const row = event.currentTarget.closest('.feature-row');
+          if (row instanceof HTMLElement) {
+            // Without this the drag ghost is the grip alone, which
+            // gives no clue which row is being moved.
+            event.dataTransfer.setDragImage(row, 16, 16);
+          }
+          const ctx = context.current!;
+          ctx.cancelPendingCommit();
+          ctx.setDragFeatureId(feature.featureId);
+        }}
+        onDragEnd={() => {
+          const ctx = context.current!;
+          ctx.setDragFeatureId(null);
+          ctx.setDropFeatureId(null);
+        }}
+        onKeyDown={(event) => {
+          const offset =
+            event.key === 'ArrowUp' ? -1 : event.key === 'ArrowDown' ? 1 : 0;
+          const ctx = context.current!;
+          if (offset === 0 || ctx.filtering) {
+            return;
+          }
+          event.preventDefault();
+          event.stopPropagation();
+          if (ctx.reorderBusy) {
+            return;
+          }
+          // Clamped so the ends of the list are a no-op rather than
+          // a move to -1 or past the end. The command layer refuses
+          // those too, but a keypress that cannot do anything should
+          // not travel that far to find out.
+          const target = index + offset;
+          if (target < 0 || target > ctx.last) {
+            return;
+          }
+          ctx.cancelPendingCommit();
+          ctx.onReorderFeature(feature.featureId, target);
+        }}
+      >
+        {GRIP_ICON}
+      </button>
+      {renaming ? (
+        <FeatureRenameField
+          feature={feature}
+          icon={featureIcon(feature)}
+          onCommit={(name) =>
+            context.current!.onRenameFeature?.(feature.featureId, name)
+          }
+          onDone={(refocus) => {
+            const ctx = context.current!;
+            ctx.setRenamingId(null);
+            if (!refocus) return;
+            // The field unmounts with focus in it; give it back to
+            // the row it replaced rather than dropping it on the page.
+            requestAnimationFrame(() =>
+              ctx.listRef.current
+                ?.querySelector<HTMLElement>(
+                  `[data-node-id="${CSS.escape(feature.id)}"] .feature-row-main`
+                )
+                ?.focus()
+            );
+          }}
+        />
+      ) : (
+        <button
+          type="button"
+          className="feature-row-main"
+          aria-pressed={selected || inBatch}
+          onMouseDown={(event) => {
+            // Shift-click would otherwise also select page text.
+            if (context.current!.canDelete && event.shiftKey)
+              event.preventDefault();
+          }}
+          onClick={(event) => {
+            // Ahead of the multi-click guard: quick Shift- or
+            // Ctrl-clicks down the list count up `detail` too.
+            const ctx = context.current!;
+            if (
+              ctx.canDelete &&
+              (event.shiftKey || event.metaKey || event.ctrlKey)
+            ) {
+              ctx.extendBatch(ctx.latest(feature), event.shiftKey);
+              // Safari does not focus a clicked button, and Delete
+              // has to reach the list rather than the workspace.
+              event.currentTarget.focus();
+              return;
+            }
+            if (ctx.batchCount > 0) ctx.clearBatch();
+            ctx.batchAnchor.current = feature.featureId;
+            // A pointer's first click: Enter and Space report 0.
+            if (event.detail === 1) {
+              holdMultiClickToRow(event.currentTarget);
+            }
+            // The rest of a double-click is the same gesture, not a
+            // second press: selecting a selected row clears it, so
+            // the second click closed the edit card the first had
+            // opened — whenever the row stayed under the pointer, as
+            // it does now that the card stands in its own lane.
+            if (event.detail > 1) return;
+            ctx.selectHistoryFeature(feature.id);
+          }}
+          // Every row used to announce the same generic kind label, so
+          // a history read aloud was a list of identical items. The
+          // feature's own name comes first, as on screen.
+          // The value beside the name can be cut short in a narrow
+          // panel, and fades for the row's actions on hover: the
+          // tooltip carries it whole.
+          title={`${feature.name} — ${FEATURE_KIND_LABELS[feature.featureKind]}${value ? ` (${value})` : ''}${consumed ? ', combined into a later feature' : ''}, click to edit`}
+        >
+          <span className="feature-icon">{featureIcon(feature)}</span>
+          <span className="feature-name">
+            {markedName(feature.name, needle)}
+          </span>
+          {failed && (
+            <span
+              className="feature-flag error"
+              title="Feature failed to build"
+            >
+              {ROW_ALERT_ICON}
+            </span>
+          )}
+          {refusalTitle !== null && (
+            <span
+              className="feature-flag error history-row-refused"
+              role="status"
+              title={`${refusalTitle} not applied: ${refusalMessage}`}
+            >
+              {ROW_ALERT_ICON}
+              <span>edit not applied</span>
+            </span>
+          )}
+          {projectionBroken && !failed && (
+            <span
+              className="feature-flag error"
+              title="A linked projection lost its source edge. Open the sketch to re-pick or unlink it."
+            >
+              {ROW_ALERT_ICON}
+            </span>
+          )}
+        </button>
+      )}
+      <span className="history-row-tail">
+        <span className="history-row-value mono">{value}</span>
+        <span className="history-row-actions">
+          <button
+            type="button"
+            className={`row-suppression${suppressed ? ' is-suppressed' : ''}`}
+            title={
+              suppressed ? `Resume ${feature.name}` : `Suppress ${feature.name}`
+            }
+            aria-label={
+              suppressed ? `Resume ${feature.name}` : `Suppress ${feature.name}`
+            }
+            aria-pressed={suppressed}
+            onClick={() => {
+              const ctx = context.current!;
+              ctx.onToggleFeatureSuppression(ctx.latest(feature));
+            }}
+          >
+            {suppressed ? RESUME_ICON : SUPPRESS_ICON}
+          </button>
+          <button
+            type="button"
+            className={`row-rollback${rollbackActive ? ' is-active' : ''}`}
+            title={`Roll back history after ${feature.name}`}
+            aria-label={`Roll back history after ${feature.name}`}
+            aria-pressed={rollbackActive}
+            onClick={() => {
+              const ctx = context.current!;
+              ctx.rollBackAfter(ctx.latest(feature));
+            }}
+          >
+            {ROLLBACK_ICON}
+          </button>
+          <button
+            type="button"
+            className="row-more"
+            title="More actions"
+            aria-label={`More actions for ${feature.name}`}
+            aria-haspopup="menu"
+            onClick={(event) => {
+              const box = event.currentTarget.getBoundingClientRect();
+              const ctx = context.current!;
+              const latest = ctx.latest(feature);
+              ctx.onFeatureContextMenu(
+                { clientX: box.left, clientY: box.bottom + 2 },
+                latest,
+                ctx.rowActions(latest, index)
+              );
+            }}
+          >
+            {MORE_ICON}
+          </button>
+        </span>
+      </span>
+      {hidden && (
+        <button
+          type="button"
+          className="row-visibility is-hidden"
+          title={`Show ${feature.name}`}
+          aria-label={`Show ${feature.name}`}
+          aria-pressed={true}
+          onClick={() => {
+            const ctx = context.current!;
+            if (sketchId) ctx.onToggleSketchVisibility(sketchId);
+            else if (feature.bodyId) ctx.onToggleBodyVisibility(feature.bodyId);
+          }}
+        >
+          {HIDDEN_ICON}
+        </button>
+      )}
+    </div>
+  );
+}, sameHistoryRow);
+
+/**
  * Places the line, its fill, the handle and the selection highlight against
  * the rows as laid out, through custom properties on the list. Reads the end
  * of history and the last index from the list's data attributes, so it needs
@@ -418,6 +823,7 @@ export function HistoryTimeline({
   const listRef = useRef<HTMLDivElement>(null);
   const commitTimer = useRef<number | null>(null);
   const refocusFrame = useRef<number | null>(null);
+  const selectionFrame = useRef<number | null>(null);
   const following = useRef(true);
   const programmaticScroll = useRef(false);
   const scrollResetFrame = useRef<number | null>(null);
@@ -596,6 +1002,8 @@ export function HistoryTimeline({
       if (refocusFrame.current !== null) {
         cancelAnimationFrame(refocusFrame.current);
       }
+      if (selectionFrame.current !== null)
+        cancelAnimationFrame(selectionFrame.current);
       if (scrollResetFrame.current !== null)
         cancelAnimationFrame(scrollResetFrame.current);
     },
@@ -636,13 +1044,22 @@ export function HistoryTimeline({
       // pull a user away from older rows they are reading.
       return;
     }
-    const row = listRef.current?.querySelector<HTMLElement>(
-      `[data-node-id="${CSS.escape(selectedFeatureNodeId)}"]`
-    );
-    if (row) {
-      markProgrammaticScroll();
-      row.scrollIntoView?.({ block: 'nearest' });
-    }
+    // Next frame, not here: a selection commit is followed by others (the
+    // edit card, the viewport), and scrolling now forced a layout of the
+    // whole workspace that the frame then had to repeat.
+    if (selectionFrame.current !== null)
+      cancelAnimationFrame(selectionFrame.current);
+    const id = selectedFeatureNodeId;
+    selectionFrame.current = requestAnimationFrame(() => {
+      selectionFrame.current = null;
+      const row = listRef.current?.querySelector<HTMLElement>(
+        `[data-node-id="${CSS.escape(id)}"]`
+      );
+      if (row) {
+        markProgrammaticScroll();
+        row.scrollIntoView?.({ block: 'nearest' });
+      }
+    });
   }, [selectedFeatureNodeId, markProgrammaticScroll]);
 
   useEffect(() => {
@@ -992,6 +1409,36 @@ export function HistoryTimeline({
 
   const handleFeature = features[end];
 
+  // Rows read this only from event handlers, after the commit that wrote it.
+  const rowContext = useRef<HistoryRowContext | null>(null);
+  const featureById = new Map(features.map((feature) => [feature.id, feature]));
+  rowContext.current = {
+    latest: (feature) => featureById.get(feature.id) ?? feature,
+    filtering,
+    reorderBusy,
+    dragFeatureId,
+    last,
+    batchCount: batchIds.length,
+    canDelete: onDeleteFeatures !== undefined,
+    batchAnchor,
+    listRef,
+    setDragFeatureId,
+    setDropFeatureId,
+    setRenamingId,
+    cancelPendingCommit,
+    rowActions,
+    extendBatch,
+    clearBatch,
+    selectHistoryFeature,
+    rollBackAfter,
+    onFeatureContextMenu,
+    onReorderFeature,
+    onRenameFeature,
+    onToggleFeatureSuppression,
+    onToggleSketchVisibility,
+    onToggleBodyVisibility
+  };
+
   return (
     <div className="history-timeline">
       <span className="visually-hidden" aria-live="polite" aria-atomic="true">
@@ -1193,278 +1640,33 @@ export function HistoryTimeline({
             Math.min(Math.abs(index - end), CASCADE_MAX_STEPS) *
             CASCADE_STEP_MS;
           return (
-            <div
+            <HistoryRow
               key={feature.id}
-              data-node-id={feature.id}
-              data-history-index={index}
-              style={{ '--history-delay': `${delay}ms` } as CSSProperties}
+              feature={feature}
+              index={index}
               className={`feature-row${sketchId ? ' is-sketch' : ''}${selected ? ' selected' : ''}${inBatch ? ' in-batch' : ''}${consumed ? ' consumed' : ''}${hidden ? ' hidden-body' : ''}${manual ? ' suppressed' : ''}${paused ? ' paused' : ''}${failed ? ' failed' : ''}${editing ? ' is-editing' : ''}${dragFeatureId === feature.featureId ? ' is-dragging' : ''}${dropFeatureId === feature.featureId ? ' is-drop-target' : ''}${featureArrivals.has(feature.id) ? ' is-arrival' : ''}`}
-              onContextMenu={(event) => {
-                event.preventDefault();
-                onFeatureContextMenu(
-                  event,
-                  feature,
-                  rowActions(feature, index)
-                );
-              }}
-              onDragOver={(event) => {
-                if (
-                  filtering ||
-                  !dragFeatureId ||
-                  dragFeatureId === feature.featureId
-                ) {
-                  return;
-                }
-                event.preventDefault();
-                event.dataTransfer.dropEffect = 'move';
-                setDropFeatureId(feature.featureId);
-              }}
-              onDragLeave={() => {
-                setDropFeatureId((current) =>
-                  current === feature.featureId ? null : current
-                );
-              }}
-              onDrop={(event) => {
-                if (filtering || reorderBusy || !dragFeatureId) {
-                  return;
-                }
-                event.preventDefault();
-                onReorderFeature(dragFeatureId as FeatureId, index);
-                setDragFeatureId(null);
-                setDropFeatureId(null);
-              }}
-            >
-              <span className="history-dot" aria-hidden="true" />
-              <button
-                type="button"
-                className="row-action feature-row-grip"
-                aria-label={`Reorder ${feature.name}. Use the arrow keys to move it.`}
-                // A filtered list hides the rows a move would pass, so a
-                // step could jump past an invisible one: reorder only the
-                // whole history.
-                title={
-                  filtering
-                    ? 'Clear the filter to reorder'
-                    : reorderBusy
-                      ? 'Reorder once the current rebuild finishes'
-                      : 'Drag to reorder'
-                }
-                disabled={filtering}
-                // Not `disabled`: that would drop keyboard focus mid-press.
-                aria-disabled={reorderBusy || undefined}
-                draggable={!filtering && !reorderBusy}
-                onDragStart={(event) => {
-                  event.dataTransfer.effectAllowed = 'move';
-                  event.dataTransfer.setData('text/plain', feature.featureId);
-                  const row = event.currentTarget.closest('.feature-row');
-                  if (row instanceof HTMLElement) {
-                    // Without this the drag ghost is the grip alone, which
-                    // gives no clue which row is being moved.
-                    event.dataTransfer.setDragImage(row, 16, 16);
-                  }
-                  cancelPendingCommit();
-                  setDragFeatureId(feature.featureId);
-                }}
-                onDragEnd={() => {
-                  setDragFeatureId(null);
-                  setDropFeatureId(null);
-                }}
-                onKeyDown={(event) => {
-                  const offset =
-                    event.key === 'ArrowUp'
-                      ? -1
-                      : event.key === 'ArrowDown'
-                        ? 1
-                        : 0;
-                  if (offset === 0 || filtering) {
-                    return;
-                  }
-                  event.preventDefault();
-                  event.stopPropagation();
-                  if (reorderBusy) {
-                    return;
-                  }
-                  // Clamped so the ends of the list are a no-op rather than
-                  // a move to -1 or past the end. The command layer refuses
-                  // those too, but a keypress that cannot do anything should
-                  // not travel that far to find out.
-                  const target = index + offset;
-                  if (target < 0 || target > last) {
-                    return;
-                  }
-                  cancelPendingCommit();
-                  onReorderFeature(feature.featureId, target);
-                }}
-              >
-                <GripVertical size={12} aria-hidden="true" />
-              </button>
-              {renamingId === feature.featureId && onRenameFeature ? (
-                <FeatureRenameField
-                  feature={feature}
-                  icon={featureIcon(feature)}
-                  onCommit={(name) => onRenameFeature(feature.featureId, name)}
-                  onDone={(refocus) => {
-                    setRenamingId(null);
-                    if (!refocus) return;
-                    // The field unmounts with focus in it; give it back to
-                    // the row it replaced rather than dropping it on the page.
-                    requestAnimationFrame(() =>
-                      listRef.current
-                        ?.querySelector<HTMLElement>(
-                          `[data-node-id="${CSS.escape(feature.id)}"] .feature-row-main`
-                        )
-                        ?.focus()
-                    );
-                  }}
-                />
-              ) : (
-                <button
-                  type="button"
-                  className="feature-row-main"
-                  aria-pressed={selected || inBatch}
-                  onMouseDown={(event) => {
-                    // Shift-click would otherwise also select page text.
-                    if (onDeleteFeatures && event.shiftKey)
-                      event.preventDefault();
-                  }}
-                  onClick={(event) => {
-                    // Ahead of the multi-click guard: quick Shift- or
-                    // Ctrl-clicks down the list count up `detail` too.
-                    if (
-                      onDeleteFeatures &&
-                      (event.shiftKey || event.metaKey || event.ctrlKey)
-                    ) {
-                      extendBatch(feature, event.shiftKey);
-                      // Safari does not focus a clicked button, and Delete
-                      // has to reach the list rather than the workspace.
-                      event.currentTarget.focus();
-                      return;
-                    }
-                    if (batchIds.length > 0) clearBatch();
-                    batchAnchor.current = feature.featureId;
-                    // A pointer's first click: Enter and Space report 0.
-                    if (event.detail === 1) {
-                      holdMultiClickToRow(event.currentTarget);
-                    }
-                    // The rest of a double-click is the same gesture, not a
-                    // second press: selecting a selected row clears it, so
-                    // the second click closed the edit card the first had
-                    // opened — whenever the row stayed under the pointer, as
-                    // it does now that the card stands in its own lane.
-                    if (event.detail > 1) return;
-                    selectHistoryFeature(feature.id);
-                  }}
-                  // Every row used to announce the same generic kind label, so
-                  // a history read aloud was a list of identical items. The
-                  // feature's own name comes first, as on screen.
-                  // The value beside the name can be cut short in a narrow
-                  // panel, and fades for the row's actions on hover: the
-                  // tooltip carries it whole.
-                  title={`${feature.name} — ${FEATURE_KIND_LABELS[feature.featureKind]}${value ? ` (${value})` : ''}${consumed ? ', combined into a later feature' : ''}, click to edit`}
-                >
-                  <span className="feature-icon">{featureIcon(feature)}</span>
-                  <span className="feature-name">
-                    {markedName(feature.name, needle)}
-                  </span>
-                  {failed && (
-                    <span
-                      className="feature-flag error"
-                      title="Feature failed to build"
-                    >
-                      <AlertTriangle size={11} aria-hidden="true" />
-                    </span>
-                  )}
-                  {refusedEdit && (
-                    <span
-                      className="feature-flag error history-row-refused"
-                      role="status"
-                      title={`${pendingStep.title} not applied: ${pendingStep.message}`}
-                    >
-                      <AlertTriangle size={11} aria-hidden="true" />
-                      <span>edit not applied</span>
-                    </span>
-                  )}
-                  {projectionBroken && !failed && (
-                    <span
-                      className="feature-flag error"
-                      title="A linked projection lost its source edge. Open the sketch to re-pick or unlink it."
-                    >
-                      <AlertTriangle size={11} aria-hidden="true" />
-                    </span>
-                  )}
-                </button>
-              )}
-              <span className="history-row-tail">
-                <span className="history-row-value mono">{value}</span>
-                <span className="history-row-actions">
-                  <button
-                    type="button"
-                    className={`row-suppression${suppressed ? ' is-suppressed' : ''}`}
-                    title={
-                      suppressed
-                        ? `Resume ${feature.name}`
-                        : `Suppress ${feature.name}`
-                    }
-                    aria-label={
-                      suppressed
-                        ? `Resume ${feature.name}`
-                        : `Suppress ${feature.name}`
-                    }
-                    aria-pressed={suppressed}
-                    onClick={() => onToggleFeatureSuppression(feature)}
-                  >
-                    {suppressed ? (
-                      <CirclePlay size={12} aria-hidden="true" />
-                    ) : (
-                      <CirclePause size={12} aria-hidden="true" />
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    className={`row-rollback${index === committedEnd && committedEnd < last ? ' is-active' : ''}`}
-                    title={`Roll back history after ${feature.name}`}
-                    aria-label={`Roll back history after ${feature.name}`}
-                    aria-pressed={index === committedEnd && committedEnd < last}
-                    onClick={() => rollBackAfter(feature)}
-                  >
-                    <History size={12} aria-hidden="true" />
-                  </button>
-                  <button
-                    type="button"
-                    className="row-more"
-                    title="More actions"
-                    aria-label={`More actions for ${feature.name}`}
-                    aria-haspopup="menu"
-                    onClick={(event) => {
-                      const box = event.currentTarget.getBoundingClientRect();
-                      onFeatureContextMenu(
-                        { clientX: box.left, clientY: box.bottom + 2 },
-                        feature,
-                        rowActions(feature, index)
-                      );
-                    }}
-                  >
-                    <MoreHorizontal size={12} aria-hidden="true" />
-                  </button>
-                </span>
-              </span>
-              {hidden && (
-                <button
-                  type="button"
-                  className="row-visibility is-hidden"
-                  title={`Show ${feature.name}`}
-                  aria-label={`Show ${feature.name}`}
-                  aria-pressed={true}
-                  onClick={() =>
-                    sketchId
-                      ? onToggleSketchVisibility(sketchId)
-                      : feature.bodyId && onToggleBodyVisibility(feature.bodyId)
-                  }
-                >
-                  <EyeOff size={12} aria-hidden="true" />
-                </button>
-              )}
-            </div>
+              delay={delay}
+              value={value}
+              selected={selected}
+              inBatch={inBatch}
+              consumed={consumed}
+              failed={failed}
+              projectionBroken={projectionBroken}
+              refusalTitle={refusedEdit ? pendingStep.title : null}
+              refusalMessage={refusedEdit ? pendingStep.message : null}
+              suppressed={suppressed}
+              rollbackActive={index === committedEnd && committedEnd < last}
+              hidden={hidden}
+              sketchId={sketchId}
+              renaming={
+                renamingId === feature.featureId &&
+                onRenameFeature !== undefined
+              }
+              needle={needle}
+              filtering={filtering}
+              reorderBusy={reorderBusy}
+              context={rowContext}
+            />
           );
         })}
         {features.length > 0 && !filtering && handleFeature && (

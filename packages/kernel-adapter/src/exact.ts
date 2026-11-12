@@ -997,6 +997,18 @@ export interface ExactKernelAdapterOptions {
   onRebuildCacheEvent?: (event: RebuildCacheEvent) => void;
   /** Session-local H02 benchmark counters; disabled for ordinary workers. */
   measurementCacheDiagnostics?: boolean;
+  /**
+   * Publish an unchanged body's retained measurement as is instead of a
+   * fresh copy: its mesh buffers, `bbox` and `topology` are then the same
+   * objects in every sync that reuses it, and in a sync's geometry-ready
+   * publication and its final state. Such a caller must treat body meshes
+   * and topology as immutable and copy them before transferring or editing
+   * them. Diffing callers then see unchanged bodies by identity instead of
+   * comparing every buffer, and each sync skips one copy per body. Off by
+   * default: results are otherwise caller-owned, as documented on
+   * `storeMeasuredShape`.
+   */
+  shareRetainedMeasurements?: boolean;
 }
 
 /** Bodies whose exact geometry descends from an imported STEP feature. */
@@ -3461,6 +3473,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         GeometryBodyRepresentation
       > = {};
       const finishBodies: (() => Promise<void>)[] = [];
+      /** Bodies published from a retained measurement this sync. */
+      const sharedBodies = new Set<BodyId>();
       const scheduling = new CooperativeWork(
         8,
         yieldControl
@@ -3907,6 +3921,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         );
         let measured: Omit<MeasuredShape, 'volume'>;
         let completeMeasurement: () => Promise<MeasuredShape>;
+        let displayMeshClosed = () =>
+          isClosedConsistentlyOrientedMesh(
+            inspectDisplayMeshClosure(measured.vertices, measured.indices)
+          );
         if (
           cached &&
           cached.analysisKey === analysisKey &&
@@ -3940,7 +3958,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
               'Measurement handle or validation probe failed.'
             );
           }
-          let complete = structuredClone(cached.measured);
+          let complete = this.options.shareRetainedMeasurements
+            ? cached.measured
+            : structuredClone(cached.measured);
+          sharedBodies.add(bodyId);
           // A complete sync of a drafted release keeps every exact part of
           // its measurement and swaps in the full-quality display mesh. A
           // preview frame only draws it, so it never pays for that here.
@@ -3965,6 +3986,17 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                 measuredShapeBytes(complete),
               measured: complete
             });
+          } else {
+            // The published mesh is the retained one: its closure verdict
+            // is remembered with it.
+            const entry = cached;
+            displayMeshClosed = () =>
+              (entry.displayMeshClosed ??= isClosedConsistentlyOrientedMesh(
+                inspectDisplayMeshClosure(
+                  entry.measured.vertices,
+                  entry.measured.indices
+                )
+              ));
           }
           const reused = complete;
           measured = reused;
@@ -4116,9 +4148,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           feature.featureKind !== 'imported-step' &&
           feature.featureKind !== 'imported-mesh' &&
           !hasRefusingFeatureWarning(build, feature.featureId) &&
-          !isClosedConsistentlyOrientedMesh(
-            inspectDisplayMeshClosure(measured.vertices, measured.indices)
-          )
+          !displayMeshClosed()
         ) {
           // The B-rep passed validation, so the solid is kept; only its
           // display tessellation has gaps. Say so instead of letting the
@@ -4212,16 +4242,41 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             warning.kind === 'build-failed' || warning.kind === 'refusal'
         )
       ) {
-        // Publications own buffers/topology; later analysis cannot mutate them.
-        onGeometryReady(
-          structuredClone({
-            bodyRepresentations: geometryRepresentations,
-            warnings: build.warnings,
-            featureWarnings: build.featureWarnings,
-            updatedAt: nowIso(),
-            analysis: 'pending' as const
-          })
-        );
+        // Publications own buffers/topology; later analysis cannot mutate
+        // them. A shared retained measurement is immutable and no analysis
+        // runs on it, so in sharing mode it is published as is.
+        const share = this.options.shareRetainedMeasurements === true;
+        const owned = structuredClone({
+          bodyRepresentations: share
+            ? Object.fromEntries(
+                Object.entries(geometryRepresentations).filter(
+                  ([bodyId]) => !sharedBodies.has(bodyId as BodyId)
+                )
+              )
+            : geometryRepresentations,
+          warnings: build.warnings,
+          featureWarnings: build.featureWarnings,
+          updatedAt: nowIso(),
+          analysis: 'pending' as const
+        });
+        const publication: GeometryReadyState = share
+          ? {
+              ...owned,
+              // Body order as built, shared and owned bodies interleaved.
+              bodyRepresentations: Object.fromEntries(
+                Object.entries(geometryRepresentations).map(
+                  ([bodyId, body]) => [
+                    bodyId,
+                    owned.bodyRepresentations[bodyId as BodyId] ?? {
+                      ...body,
+                      mesh: { ...body.mesh }
+                    }
+                  ]
+                )
+              )
+            }
+          : owned;
+        onGeometryReady(publication);
         await scheduling.checkpoint(true);
         throwIfBuildCancelled(cancellation);
       }

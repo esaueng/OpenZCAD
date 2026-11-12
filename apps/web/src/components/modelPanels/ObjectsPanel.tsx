@@ -144,24 +144,28 @@ function cachedPlacements(document: ProjectDocument) {
 }
 
 /** Body kind icons mirror the feature icons so the two lists read as one. */
+// Constant elements: every row of a long body list re-renders on each
+// commit, and React skips an element it has reconciled only when it is the
+// same object (see the History panel's row icons).
+const BODY_SOURCE_ICONS = {
+  primitive: <Box size={13} aria-hidden="true" />,
+  sketch: <PenLine size={13} aria-hidden="true" />,
+  extrude: <Layers size={13} aria-hidden="true" />,
+  revolve: <RotateCw size={13} aria-hidden="true" />,
+  boolean: <Combine size={13} aria-hidden="true" />,
+  transform: <Move3d size={13} aria-hidden="true" />
+} as const;
+const OTHER_BODY_ICON = <FileBox size={13} aria-hidden="true" />;
+const RENAME_ICON = <Pencil size={12} aria-hidden="true" />;
+const ISOLATE_ICON = <Scan size={12} aria-hidden="true" />;
+const SHOWN_ICON = <Eye size={12} aria-hidden="true" />;
+const HIDDEN_ICON = <EyeOff size={12} aria-hidden="true" />;
+
 function bodyIcon(body: BodyRepresentation) {
-  const size = 13;
-  switch (body.source) {
-    case 'primitive':
-      return <Box size={size} aria-hidden="true" />;
-    case 'sketch':
-      return <PenLine size={size} aria-hidden="true" />;
-    case 'extrude':
-      return <Layers size={size} aria-hidden="true" />;
-    case 'revolve':
-      return <RotateCw size={size} aria-hidden="true" />;
-    case 'boolean':
-      return <Combine size={size} aria-hidden="true" />;
-    case 'transform':
-      return <Move3d size={size} aria-hidden="true" />;
-    default:
-      return <FileBox size={size} aria-hidden="true" />;
-  }
+  return (
+    BODY_SOURCE_ICONS[body.source as keyof typeof BODY_SOURCE_ICONS] ??
+    OTHER_BODY_ICON
+  );
 }
 
 /** How long a new row keeps `.is-arrival`: its accent wash drains in 900ms. */
@@ -755,7 +759,7 @@ export function ObjectsPanel({
             aria-label={`Rename body ${body.name}`}
             onClick={() => setRenamingBodyId(body.bodyId)}
           >
-            <Pencil size={12} aria-hidden="true" />
+            {RENAME_ICON}
           </button>
         )}
         {!body.consumed && onIsolateBody && (
@@ -771,7 +775,7 @@ export function ObjectsPanel({
             aria-pressed={isolated}
             onClick={() => onIsolateBody(body.bodyId)}
           >
-            <Scan size={12} aria-hidden="true" />
+            {ISOLATE_ICON}
           </button>
         )}
         {!body.consumed && (
@@ -785,11 +789,7 @@ export function ObjectsPanel({
             aria-pressed={hidden}
             onClick={() => onToggleBodyVisibility(body.bodyId)}
           >
-            {hidden ? (
-              <EyeOff size={12} aria-hidden="true" />
-            ) : (
-              <Eye size={12} aria-hidden="true" />
-            )}
+            {hidden ? HIDDEN_ICON : SHOWN_ICON}
           </button>
         )}
         {appearanceOpen &&

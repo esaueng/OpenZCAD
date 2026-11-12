@@ -5497,3 +5497,4 @@ export function sanitizeFileName(fileName: string): string {
 }
 export * from './legacy-project-storage';
 export * from './import-limits';
+export * from './mesh-buffer-equality';

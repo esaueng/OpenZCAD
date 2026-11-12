@@ -7,6 +7,7 @@ import type {
   MeshGeometry,
   BodyTopology
 } from '@openzcad/shared';
+import { sameMeshBuffer } from '@openzcad/shared';
 
 type State = DerivedState | GeometryReadyState;
 type Body = BodyRepresentation | GeometryBodyRepresentation;
@@ -46,15 +47,11 @@ function equal(a: unknown, b: unknown): boolean {
   )
     return false;
   if (ArrayBuffer.isView(a) || ArrayBuffer.isView(b)) {
-    if (
-      !(a instanceof Float32Array || a instanceof Uint32Array) ||
-      !(b instanceof Float32Array || b instanceof Uint32Array) ||
-      a.constructor !== b.constructor ||
-      a.length !== b.length
-    )
-      return false;
-    for (let i = 0; i < a.length; i += 1) if (a[i] !== b[i]) return false;
-    return true;
+    return (
+      (a instanceof Float32Array || a instanceof Uint32Array) &&
+      (b instanceof Float32Array || b instanceof Uint32Array) &&
+      sameMeshBuffer(a, b)
+    );
   }
   if (Array.isArray(a) || Array.isArray(b)) {
     return (
