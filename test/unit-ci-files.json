@@ -173,7 +173,8 @@
     "test/typed-parameters.test.ts",
     "test/unit-global-setup.test.ts",
     "test/unit-runtime-budget.test.ts",
-    "test/unit-suites.test.ts"
+    "test/unit-suites.test.ts",
+    "test/kernel-session-snapshot.test.ts"
   ],
   "web": [
     "src/components/DrawingWorkspace.test.tsx",
@@ -294,6 +295,10 @@
     "src/theme/contrast.test.ts",
     "src/theme/tokens-defined.test.ts",
     "src/worker/geometryWorker.test.ts",
-    "worker/glimpse.test.ts"
+    "worker/glimpse.test.ts",
+    "src/lib/kernelSessionStore.test.ts",
+    "src/worker/kernelSessionPersistence.test.ts",
+    "src/worker/geometryWorkerSessions.test.ts",
+    "src/lib/kernelSessionPolicy.test.ts"
   ]
 }

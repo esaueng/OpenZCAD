@@ -699,6 +699,12 @@ export interface RebuildCacheEvent {
       | null;
   };
   kind: 'full-rebuild' | 'prefix-restore' | 'independent-reuse';
+  /**
+   * A persisted session was offered and seeded: `restored` when its
+   * projection matched and it was published, `rejected` when it did not and
+   * this sync replayed the history instead.
+   */
+  sessionRestore?: 'restored' | 'rejected';
   /** The old history kernel was retired after exhausting its replay budget. */
   recycleReason?: 'replay-budget';
   /** Features replayed by this sync (total on a full rebuild). */

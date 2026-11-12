@@ -321,6 +321,21 @@ import {
   type RebuildCacheEvent
 } from './exact-history-cache';
 import {
+  kernelSnapshotSupport,
+  projectionMatches,
+  projectionSignature,
+  restoreKernelSnapshot,
+  snapshotKernel,
+  PERSISTED_HISTORY_SESSION_FORMAT,
+  type PersistedHistorySession
+} from './exact-session-snapshot';
+export {
+  estimateStructuredBytes,
+  isPersistedHistorySession,
+  kernelSnapshotBuildId,
+  type PersistedHistorySession
+} from './exact-session-snapshot';
+import {
   ownedMeshPositions,
   ownedMeshIndices,
   ownedMeshFaceOffsets
@@ -717,8 +732,38 @@ export interface ExactKernelAdapter {
        * this sync had never run.
        */
       displayRefinement?: boolean;
+      /**
+       * A reopened project's persisted session: restored instead of
+       * replaying when it matches this document exactly, and published only
+       * once its projection matches the one it was captured with. Any
+       * mismatch or refusal replays as without it.
+       */
+      persistedSession?: PersistedHistorySession;
     }
   ): Promise<DerivedState>;
+  /** Whether the history kernel holds this project's state. */
+  hasHistoryFor?(projectId: ProjectDocument['projectId']): boolean;
+  /**
+   * The history kernel's state as a persisted session, when it is exactly
+   * the complete build of `document` the last sync published; otherwise null.
+   */
+  captureHistorySession?(
+    document: ProjectDocument
+  ): Promise<PersistedHistorySession | null>;
+  /** Whether a restored session still awaits {@link warmHistory}. */
+  needsHistoryWarmup?(projectId: ProjectDocument['projectId']): boolean;
+  /**
+   * Idle: rebuilds a restored session's checkpoint table in a second kernel
+   * and swaps it in once complete; cancellation keeps the restored kernel.
+   */
+  warmHistory?(
+    document: ProjectDocument,
+    options?: {
+      cancellation?: BuildCancellationSignal;
+      yieldControl?: () => Promise<void> | void;
+      lineageDemand?: readonly BodyId[] | ReadonlySet<BodyId>;
+    }
+  ): Promise<boolean>;
   /**
    * Whether a sync result carries a failure of this device's moment — a
    * font face or import source that had not arrived — rather than of the
@@ -1173,14 +1218,68 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   private historyReplayWork = 0;
   private readonly primitiveBuildCache = new PrimitiveBuildCache();
 
+  /**
+   * A persisted session (`exact-session-snapshot.ts`) offered to the build
+   * of the sync that carries it; the build consumes it either way.
+   */
+  private offeredSession: PersistedHistorySession | null = null;
+  /** The outcome of the last offered session, for the next cache event. */
+  private sessionRestoreOutcome: 'restored' | 'rejected' | null = null;
+  /**
+   * The history kernel came from a persisted session: it holds one
+   * checkpoint, at the last feature, so an edit of an earlier feature would
+   * replay the whole history. {@link warmHistory} rebuilds the ordinary
+   * checkpoint table in the background.
+   */
+  private sparseRestoredHistory = false;
+  /**
+   * A persisted session seeded the history kernel and its projection has
+   * not been matched yet. Nothing may build on or publish from it until it
+   * is: a cancelled or failed sync drops it, and so does any later build
+   * that finds it still unmatched.
+   */
+  private unvalidatedSeed = false;
+  /**
+   * What the last complete build left in the history kernel, recorded by
+   * `buildWithHistoryCache` when nothing about it depended on this device's
+   * moment or on an edit's proposal; `syncDocument` promotes it to
+   * {@link liveSession} with the projection it published.
+   */
+  private lastBuildRecord: {
+    kernel: RemusKernel;
+    projectId: string;
+    scopeKey: string;
+    digests: string[];
+    lineageProbeKey: string;
+    carryNeutral: boolean;
+    demand: ReadonlySet<BodyId> | undefined;
+    build: ExactBuildResult;
+  } | null = null;
+  /**
+   * The history kernel's current state, as a complete sync left it, and the
+   * projection that sync published: what {@link captureHistorySession} may
+   * snapshot. Every other history job, and any restore, clears it first.
+   */
+  private liveSession:
+    | (NonNullable<RemusKernelAdapter['lastBuildRecord']> & {
+        derived: DerivedState;
+      })
+    | null = null;
+
   /** Task yields must not let another caller restore the owned live arena. */
   private historyJobs: Promise<void> = Promise.resolve();
   private historyGeneration = 0;
   private historyCancellation: BuildCancellationSignal | undefined;
 
-  private runHistoryJob<T>(work: () => Promise<T>): Promise<T> {
+  private runHistoryJob<T>(
+    work: () => Promise<T>,
+    keepLiveSession = false
+  ): Promise<T> {
     const generation = this.historyGeneration;
     const job = this.historyJobs.then(async () => {
+      // Any job may move the history kernel away from the state the last
+      // complete sync published; only a capture reads it as it is.
+      if (!keepLiveSession) this.liveSession = null;
       const lifetime = {
         isCancelled: () => generation !== this.historyGeneration
       };
@@ -1416,6 +1515,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   }
 
   private invalidateHistoryCache(): void {
+    this.sparseRestoredHistory = false;
+    this.unvalidatedSeed = false;
+    this.liveSession = null;
+    this.lastBuildRecord = null;
     this.draftDisplaySource = null;
     if (this.historyKernel) releasePreparedGroupEdit(this.historyKernel);
     this.clearCurrentMassSnapshot();
@@ -1666,10 +1769,19 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     cacheResetReason?: 'checkpoint-ownership' | 'checkpoint-restore';
     /** A feature this sync rebuilt waited on a font or source; see below. */
     transient: boolean;
+    /**
+     * The persisted session this build restored instead of replaying; the
+     * sync must match its projection before publishing anything.
+     */
+    seededSession?: PersistedHistorySession;
   }> {
     cancellation = this.historySignal(cancellation);
     throwIfBuildCancelled(cancellation);
     this.clearCurrentMassSnapshot();
+    const offered = this.offeredSession;
+    this.offeredSession = null;
+    this.lastBuildRecord = null;
+    if (this.unvalidatedSeed) this.invalidateHistoryCache();
     const features = listFeaturesInOrder(document);
     const terminal = features.at(-1);
     const deferredDirectEditFeatureId =
@@ -1890,6 +2002,65 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         cacheResetReason = 'checkpoint-ownership';
         this.invalidateHistoryCache();
         kernel = null;
+      }
+    }
+
+    // A reopened project's persisted session (`exact-session-snapshot.ts`),
+    // seeded as one checkpoint at the last feature, and only when everything
+    // the prefix loop below checks already agrees: that loop then restores
+    // it and replays nothing. Anything else, including any refusal of the
+    // bytes, leaves the ordinary replay.
+    let seeded: PersistedHistorySession | undefined;
+    if (
+      offered &&
+      cachingEnabled &&
+      transientFrom < 0 &&
+      (!kernel || this.historyProjectId !== document.projectId) &&
+      offered.projectId === document.projectId &&
+      offered.scopeKey === scopeKey &&
+      offered.digests.length === features.length &&
+      offered.lineageProbeKey === probeKeys[features.length - 1] &&
+      offered.digests.every((digest, index) =>
+        digestMatches(digest, index, offered.carryNeutral)
+      )
+    ) {
+      let restored: RemusKernel | null = null;
+      try {
+        restored = restoreKernelSnapshot(offered);
+        const checkpointId = restored.checkpoint();
+        if (
+          !isCheckpointHandle(checkpointId) ||
+          restored.checkpointCount() !== 1
+        )
+          throw new HistoryCacheIntegrityError(
+            'Session checkpoint allocation disagrees.'
+          );
+        this.invalidateHistoryCache();
+        const entry: HistoryCheckpointEntry = {
+          featureIndex: features.length - 1,
+          digests: [...offered.digests],
+          checkpointId,
+          snapshot: offered.build,
+          ...(offered.carryNeutral ? { carryNeutral: true } : {}),
+          lineageProbeKey: offered.lineageProbeKey,
+          lineageMetadataBytes: new TextEncoder().encode(
+            offered.lineageProbeKey
+          ).byteLength
+        };
+        this.historyKernel = restored;
+        this.historyCheckpoints = [entry];
+        this.historyCheckpointOwners.set(checkpointId, entry);
+        this.historyScopeKey = scopeKey;
+        this.historyProjectId = document.projectId;
+        // The restored arena still holds what the captured kernel's replays
+        // retired: its budget continues where that kernel's stopped.
+        this.historyReplayWork = offered.replayWork;
+        kernel = restored;
+        restored = null;
+        seeded = offered;
+        this.unvalidatedSeed = true;
+      } catch {
+        restored?.free();
       }
     }
 
@@ -2238,6 +2409,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       kernel = null;
     }
 
+    // Restored in full, with nothing replayed on it, or not at all.
+    const seededSession =
+      seeded && kernel && startIndex === features.length ? seeded : undefined;
     if (!kernel) {
       kernel = new RemusKernel();
       this.historyKernel = kernel;
@@ -2583,9 +2757,32 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           executedFeatures - reusedPrimitives - reusedPreparedFeatures;
       }
     }
+    // What a persisted session of this state needs. Nothing this device's
+    // moment decided (a font or source still to come), no drag or display
+    // build, no edit's proposal: only a build any later replay reproduces.
+    this.lastBuildRecord =
+      cachingEnabled &&
+      scopeKey !== null &&
+      features.length > 0 &&
+      transientFrom < 0 &&
+      !displayOnlyBlends &&
+      !deferredDirectEditFeatureId &&
+      !proposeCarry
+        ? {
+            kernel: activeKernel,
+            projectId: document.projectId,
+            scopeKey,
+            digests: [...plainDigests],
+            lineageProbeKey: probeKeys.at(-1)!,
+            carryNeutral: !unresolvedEdgeHash,
+            demand: normalizedDemand,
+            build
+          }
+        : null;
     // The cache event is emitted by syncDocument AFTER the measure pass, so
     // it can carry the measure-reuse counts alongside the replay counts.
     return {
+      ...(seededSession ? { seededSession } : {}),
       kernel: activeKernel,
       build,
       replayed:
@@ -3249,9 +3446,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       yieldControl?: () => Promise<void> | void;
       proposeCarry?: boolean;
       displayRefinement?: boolean;
+      persistedSession?: PersistedHistorySession;
     }
   ): Promise<DerivedState> {
     return this.runHistoryJob(async () => {
+      this.offeredSession = options?.persistedSession ?? null;
       // A complete sync ends a drag's draft and coarse-frame state. An idle
       // refinement that slipped into a paused drag hands it back unless the
       // history kernel itself was dropped (a fresh kernel holds no warm drag
@@ -3281,14 +3480,205 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         );
         if ('analysis' in result)
           throw new Error('Document analysis is pending.');
+        const record = this.lastBuildRecord;
+        this.liveSession =
+          record &&
+          record.kernel === this.historyKernel &&
+          !analysis &&
+          options?.proposeCarry !== true &&
+          !this.transientResults.has(result)
+            ? { ...record, derived: result }
+            : null;
         return result;
       } finally {
+        this.offeredSession = null;
         if (drag && kernel && this.historyKernel === kernel) {
           this.draftDisplaySource = drag.draftDisplaySource;
           this.coarseFaceMoveFrame = drag.coarseFaceMoveFrame;
         }
       }
     });
+  }
+
+  hasHistoryFor(projectId: ProjectDocument['projectId']): boolean {
+    return this.historyKernel !== null && this.historyProjectId === projectId;
+  }
+
+  /**
+   * The history kernel's state as a persisted session, when it is exactly
+   * the complete build of `document` that the last sync published and the
+   * pinned kernel can snapshot it; otherwise null. Idle work: it reads the
+   * kernel and copies the build, and changes nothing.
+   */
+  captureHistorySession(
+    document: ProjectDocument
+  ): Promise<PersistedHistorySession | null> {
+    return this.runHistoryJob(async () => {
+      const live = this.liveSessionFor(document);
+      const kernel = this.historyKernel;
+      const support = kernelSnapshotSupport();
+      // A kernel past half its replay budget is not persisted: a restore
+      // would carry that arena into every later session and recycle (a full
+      // replay) a few edits after reopening. Its reopen replays into a fresh
+      // kernel instead, and that kernel is captured.
+      if (
+        !live ||
+        !kernel ||
+        !support ||
+        this.historyReplayWork * 2 >= MAX_HISTORY_REPLAY_WORK
+      )
+        return null;
+      try {
+        const kernelBytes = snapshotKernel(kernel);
+        return {
+          format: PERSISTED_HISTORY_SESSION_FORMAT,
+          kernelBuildId: support.snapshotBuildId(),
+          projectId: document.projectId,
+          scopeKey: live.scopeKey,
+          digests: [...live.digests],
+          lineageProbeKey: live.lineageProbeKey,
+          carryNeutral: live.carryNeutral,
+          build: cloneBuildState(live.build),
+          edgeSelections: this.edgeSelections.exportProject(document.projectId),
+          kernelBytes,
+          kernelDigest: support.snapshotDigest(kernelBytes),
+          projectionSignature: projectionSignature(live.derived),
+          replayWork: this.historyReplayWork
+        };
+      } catch {
+        // A refusal (`snapshot:poisoned`, `transient_state`, a limit) only
+        // means this state is not persisted; the next reopen replays.
+        return null;
+      }
+    }, true);
+  }
+
+  /**
+   * {@link liveSession} when the history kernel still holds exactly the
+   * complete build of `document` the last sync published; otherwise null.
+   */
+  private liveSessionFor(
+    document: ProjectDocument
+  ): NonNullable<RemusKernelAdapter['liveSession']> | null {
+    const live = this.liveSession;
+    if (
+      !live ||
+      live.kernel !== this.historyKernel ||
+      live.projectId !== document.projectId
+    )
+      return null;
+    const features = listFeaturesInOrder(document);
+    if (
+      features.length !== live.digests.length ||
+      historyScopeDigest(document) !== live.scopeKey
+    )
+      return null;
+    const scope = getParameterScope(document).scope;
+    for (let index = 0; index < features.length; index += 1) {
+      const feature = features[index]!;
+      if (
+        historyFeatureDigest(document, feature, index, scope, live.demand) +
+          carryProposalSalt(feature, false) +
+          displayOnlyBlendSalt(feature, false) !==
+        live.digests[index]
+      )
+        return null;
+    }
+    return live;
+  }
+
+  needsHistoryWarmup(projectId: ProjectDocument['projectId']): boolean {
+    return this.sparseRestoredHistory && this.historyProjectId === projectId;
+  }
+
+  /**
+   * Idle work after a persisted session was restored: replays `document` in
+   * a second kernel with the ordinary checkpoint schedule, and swaps it in
+   * only once complete, so a later edit of any feature restores a nearby
+   * checkpoint instead of replaying the whole history. Cancellation (any new
+   * work) keeps the restored kernel and its checkpoint as they were; only
+   * the per-body measurements, which a later sync takes again, are dropped.
+   * Resolves whether the checkpoint table was rebuilt.
+   */
+  warmHistory(
+    document: ProjectDocument,
+    options?: {
+      cancellation?: BuildCancellationSignal;
+      yieldControl?: () => Promise<void> | void;
+      lineageDemand?: readonly BodyId[] | ReadonlySet<BodyId>;
+    }
+  ): Promise<boolean> {
+    return this.runHistoryJob(async () => {
+      if (!this.needsHistoryWarmup(document.projectId)) return false;
+      // Only the state the last sync published: a stale document (an older
+      // revision than the kernel now holds) would replay superseded work and
+      // swap it in over the current kernel.
+      const live = this.liveSessionFor(document);
+      if (!live) return false;
+      this.liveSession = null;
+      const restored = {
+        kernel: this.historyKernel!,
+        checkpoints: this.historyCheckpoints,
+        owners: new Map(this.historyCheckpointOwners),
+        scopeKey: this.historyScopeKey,
+        projectId: this.historyProjectId,
+        replayWork: this.historyReplayWork
+      };
+      // Detached, so the warm build starts in a fresh kernel and nothing it
+      // invalidates on the way frees the restored one.
+      this.historyKernel = null;
+      this.historyCheckpoints = [];
+      this.historyCheckpointOwners.clear();
+      this.historyScopeKey = null;
+      this.historyProjectId = null;
+      try {
+        const cancellation = this.historySignal(options?.cancellation);
+        const { sources, pinned } = await this.prefetchImportSources(
+          document,
+          cancellation
+        );
+        if (documentNeedsTranslators(document)) await loadRemusTranslators();
+        await this.buildWithHistoryCache(
+          document,
+          sources,
+          pinned,
+          undefined,
+          undefined,
+          options?.lineageDemand,
+          cancellation,
+          options?.yieldControl
+        );
+        restored.kernel.free();
+        // The same state the live session published, in the new kernel.
+        const record = this.lastBuildRecord;
+        if (
+          live &&
+          record &&
+          record.digests.length === live.digests.length &&
+          record.digests.every(
+            (digest, index) => digest === live.digests[index]
+          )
+        )
+          this.liveSession = { ...record, derived: live.derived };
+        return true;
+      } catch (error) {
+        // Whatever the warm build made goes; the restored kernel returns.
+        this.invalidateHistoryCache();
+        this.historyKernel = restored.kernel;
+        this.historyCheckpoints = restored.checkpoints;
+        for (const [id, entry] of restored.owners)
+          this.historyCheckpointOwners.set(id, entry);
+        this.historyScopeKey = restored.scopeKey;
+        this.historyProjectId = restored.projectId;
+        this.historyReplayWork = restored.replayWork;
+        // Still exactly what the last sync published: a retry may warm it,
+        // and a capture may persist it.
+        this.liveSession = live;
+        // Only new work stops a warm-up; anything else would fail again.
+        this.sparseRestoredHistory = isBuildCancelled(error);
+        return false;
+      }
+    }, true);
   }
 
   async previewGeometry(
@@ -3400,7 +3790,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         readMemo,
         recycleReason,
         cacheResetReason,
-        transient
+        transient,
+        seededSession
       } = await this.buildWithHistoryCache(
         document,
         sources,
@@ -4236,6 +4627,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       }
       if (
         onGeometryReady &&
+        // A restored session publishes nothing before its projection is
+        // matched below; it is complete moments later anyway.
+        !seededSession &&
         geometryValid &&
         !build.featureWarnings.some(
           (warning) =>
@@ -4288,7 +4682,37 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       const pending = yieldControl?.();
       if (pending) await pending;
       throwIfBuildCancelled(cancellation);
+      if (seededSession) {
+        // Never publish or build on a restored state that differs from what
+        // the session showed when it was captured; recovery replays it.
+        if (
+          !projectionMatches(
+            seededSession.projectionSignature,
+            projectionSignature({
+              bodyRepresentations,
+              warnings: build.warnings,
+              featureWarnings: build.featureWarnings
+            })
+          )
+        ) {
+          this.sessionRestoreOutcome = 'rejected';
+          throw new HistoryCacheIntegrityError(
+            'The restored session disagrees with its captured projection.'
+          );
+        }
+        this.sessionRestoreOutcome = 'restored';
+        this.sparseRestoredHistory = true;
+        this.unvalidatedSeed = false;
+        // A replay would have resolved these again; a restore carries them.
+        this.edgeSelections.importProject(
+          document.projectId,
+          seededSession.edgeSelections
+        );
+      }
+      const sessionRestore = this.sessionRestoreOutcome;
+      this.sessionRestoreOutcome = null;
       this.options.onRebuildCacheEvent?.({
+        ...(sessionRestore ? { sessionRestore } : {}),
         kind:
           reusedPrimitives + reusedPreparedFeatures > 0
             ? 'independent-reuse'
@@ -4366,8 +4790,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       // Cancellation is not a failure to recover from: it commits nothing —
       // no measured shapes, no mass snapshot, no cache event — and rethrows
       // typed, so the last valid model stays and a stale result can never
-      // overwrite a newer one.
+      // overwrite a newer one. A seeded session it interrupted before its
+      // projection was matched is dropped with it.
       if (isBuildCancelled(error)) {
+        if (this.unvalidatedSeed) this.invalidateHistoryCache();
         throw error;
       }
       this.invalidateHistoryCache();
@@ -5414,6 +5840,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   }
 
   releaseEditPreview(): void {
+    this.liveSession = null;
     this.coarseFaceMoveFrame = false;
     this.draftDisplaySource = null;
     const kernel = this.historyKernel;

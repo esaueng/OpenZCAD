@@ -101,6 +101,80 @@ See [the design](plans/h02-private-holder-cache-design.md) and
 [current evidence](qa/2026-09-29/h02-cache-safety.md). Measurement hardening
 adds no branch record; the 8 MiB proposed branch cap has zero allocations.
 
+## Persisted sessions across reloads
+
+A new page starts with no history kernel, so a reopened project used to replay
+its whole history before it could be edited. The adapter now persists the
+history kernel itself (`packages/kernel-adapter/src/exact-session-snapshot.ts`)
+using Remus whole-kernel snapshots (`kernel.snapshot()` /
+`RemusKernel.fromSnapshot`, which keep every handle and the journal):
+
+- **Whose models.** Only the current user's own local project: the app marks
+  its broadcast `persistSession` (`apps/web/src/lib/kernelSessionPolicy.ts`)
+  when the document's owner is this device's local user or the signed-in
+  account and no shared link is open. A shared link's model (ephemeral until
+  "Make a copy", ADR-024), a collaborator's or member's project (viewer or
+  editor) and every one-off rebuild are never offered a session or captured,
+  and such a broadcast, like closing the project, drops whatever capture or
+  warm-up was scheduled; a capture already running then stores nothing.
+  When only the policy changes for geometry already live (the owner resolves,
+  a shared link of the same revision opens), the hook sends it as a
+  `session-policy` message instead of re-posting the broadcast, so it never
+  rebuilds anything; the worker applies it to the live project the same way.
+- **What is stored.** After a live, complete sync, once the worker has been
+  idle for 1.5 s and at most every 10 s per project, the adapter snapshots the
+  kernel if it still holds exactly that build (same project, scope and
+  per-feature digests, nothing transient, no drag or proposal) and pairs the
+  bytes with the last feature's JS build state, its digests and probe
+  signature, the project's hash-only edge selections and a signature of the
+  projection that sync published (`projectionSignature`: everything about the
+  exact model, nothing about display meshes).
+- **Where.** `apps/web/src/lib/kernelSessionStore.ts`: its own IndexedDB
+  database (`openzcad-kernel-sessions`), never the project database, so
+  backups, data downloads, account sync and sharing never see it. One record
+  per project, keyed by the document's `geometryContentKey` and by the app
+  commit, the Remus package version and commit, and the kernel snapshot
+  identity; at most 48 MiB each and 8 / 160 MiB in all, least recently used
+  first out. Deleting a project (or purging it from the trash) leaves a
+  byte-free _retired_ marker for 10 minutes, written in one transaction with
+  the deletion of its session, so a capture still in flight finds it in its own
+  write and stores nothing. Account erasure and sign-out keep local projects
+  on the device, and their sessions with them. Local project data is stored
+  unencrypted, and so is this cache of it, which is why only the user's own
+  local projects get one.
+- **Reopen.** The first sync of a project the worker's kernel does not hold
+  offers the stored session. The adapter seeds it as one checkpoint at the
+  last feature only when every digest, the probe signature, the scope, the
+  project and the kernel identity match; the ordinary prefix restore then
+  replays nothing and the measure pass runs as usual. Nothing is published
+  (no early geometry either) until the complete projection matches the stored
+  signature; any refusal (`snapshot:<code>`), throw or mismatch drops the
+  restored kernel and replays the history. A mismatch replaces the session
+  with a _rejected_ marker for that content and build, so the identical state
+  is not captured again only to be rejected on every reopen; an edit or
+  another build stores normally. Markers never count against the session
+  bounds and are capped at 64.
+- **Replay budget.** The session records the kernel's accumulated replay work
+  (`MAX_HISTORY_REPLAY_WORK`), since its arena still holds what those replays
+  retired, and a restore continues from it. A kernel past half the budget is
+  not captured: its reopen replays into a fresh kernel, which is.
+- **Warm-up.** A restored kernel holds that single checkpoint, so an edit of
+  an earlier feature would replay everything. Once the worker has been idle
+  for 2 s, the adapter replays the history in a second kernel with the
+  ordinary checkpoint schedule and swaps it in when complete; any new work
+  cancels it at the next feature boundary and keeps the restored kernel. It
+  warms only the document the last live result published: every such result
+  names its target (a draft release drops it until its refinement names the
+  refined one), and the adapter refuses a document the kernel no longer
+  holds.
+
+Local measurement (Linux, Node 24, Remus 2026.1.134 local build) on a private
+32-feature filleted native part: full replay 1.5–4.0 s, restore plus measure
+pass 135–176 ms; a 3.7 MB snapshot; capture 28–34 ms of idle worker time.
+`test/perf/session-restore-perf.test.ts` reproduces it for any native project
+(`SESSION_PERF_PROJECT`); `test/kernel-session-snapshot.test.ts` covers the
+round trip against a fresh replay and every fallback.
+
 ## Historical qualification: fixed-prefix policy
 
 Baseline OpenZCAD: `283c382b09732b640477b9e0010e37168035e959`. Sequential runs used

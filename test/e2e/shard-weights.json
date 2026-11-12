@@ -72,6 +72,7 @@
   "interaction-probe.spec.ts": 0,
   "invitation-dismissal-owned.spec.ts": 18,
   "keep-local-chunk-recovery.spec.ts": 11,
+  "kernel-session-privacy.spec.ts": 14,
   "keymap-remap.spec.ts": 11,
   "local-copy-source-cache.spec.ts": 12,
   "local-project-cloud-load.spec.ts": 2,

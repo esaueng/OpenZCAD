@@ -20,6 +20,7 @@ import {
 } from '@openzcad/document-core';
 import type { StoredMeasurementRecord } from './measurementRecord';
 import type { SourceBlobClaim } from './sourceBlobClaims';
+import { retireKernelSession } from './kernelSessionStore';
 import {
   LOCAL_PROJECT_BLOB_STORE,
   LOCAL_PROJECT_CHECKPOINT_STORE,
@@ -1611,7 +1612,7 @@ function deleteLocalProjectWhen(
     MEASUREMENT_STORE_NAME,
     ACCOUNT_IDENTITY_STORE_NAME
   ];
-  return scopedTransaction(
+  const deleted = scopedTransaction(
     'readwrite',
     [...storeNames, CHECKPOINT_STORE_NAME, ALIAS_STORE_NAME],
     async (store) => {
@@ -1636,6 +1637,14 @@ function deleteLocalProjectWhen(
       return true;
     }
   );
+  // The persisted kernel session is a cache in its own database: it goes
+  // with the project, and a failure to drop it never fails the deletion
+  // (eviction bounds what an orphan can hold). Retiring rather than deleting
+  // it also refuses a capture of this project still in flight.
+  return deleted.then((removed) => {
+    if (removed) void retireKernelSession(projectId).catch(() => undefined);
+    return removed;
+  });
 }
 
 /**
