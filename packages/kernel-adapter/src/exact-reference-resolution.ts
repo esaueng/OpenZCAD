@@ -414,23 +414,63 @@ export function faceReferenceRepairCandidate(
   shape: ExactShape,
   storedHash: number
 ): FaceTopologyReferenceV5 | null {
-  if (shape.solids.length !== 1) return null;
-  const matches =
-    faceHandlesByFingerprint(kernel, shape.solids[0]!).get(storedHash) ?? [];
-  if (matches.length !== 1) return null;
-  const reference = shape.lineage?.faceReferences.get(matches[0]!);
-  if (!reference || reference.currentHash !== storedHash) return null;
-  if (
-    [...(shape.lineage?.faceReferences.values() ?? [])].filter(
-      (other) =>
-        other.producingFeatureId === reference.producingFeatureId &&
-        other.lineageName === reference.lineageName
-    ).length !== 1
-  )
+  return (
+    faceSelectionRepairCandidates(kernel, shape, [storedHash])?.[0] ?? null
+  );
+}
+
+/**
+ * The v5 references a hash-only face selection can be upgraded to, all or
+ * nothing: for every stored hash, the reference the body's lineage publishes
+ * on the one face that hash names, re-verified against that face's measured
+ * witness. A hash naming no face, or several, a face without a name, a name
+ * published twice, or two hashes landing on one name refuse the whole set.
+ * `currentHash` is the stored hash itself, so the selection never moves.
+ */
+export function faceSelectionRepairCandidates(
+  kernel: RemusKernel,
+  shape: ExactShape,
+  storedHashes: readonly number[]
+): FaceTopologyReferenceV5[] | null {
+  const lineage = shape.lineage;
+  const requested = [...new Set(storedHashes)];
+  if (shape.solids.length !== 1 || !lineage || requested.length === 0)
     return null;
-  const witness = faceWitnessOf(kernel, matches[0]!);
-  return topologyHashOfWitness('face', witness) === storedHash &&
-    topologyWitnessesEqual('face', reference.witness, witness)
-    ? reference
+  // Before measuring anything: a hash no published name carries cannot be
+  // upgraded, which is every rebuild of a pick on an unnamed face.
+  const published = [...lineage.faceReferences.values()];
+  const namedHashes = new Set(
+    published.map((reference) => reference.currentHash)
+  );
+  if (requested.some((hash) => !namedHashes.has(hash))) return null;
+  const byFingerprint = faceHandlesByFingerprint(kernel, shape.solids[0]!);
+  const verified: FaceTopologyReferenceV5[] = [];
+  for (const storedHash of requested) {
+    const matches = byFingerprint.get(storedHash) ?? [];
+    if (matches.length !== 1) return null;
+    const reference = lineage.faceReferences.get(matches[0]!);
+    if (!reference || reference.currentHash !== storedHash) return null;
+    if (
+      published.filter(
+        (other) =>
+          other.producingFeatureId === reference.producingFeatureId &&
+          other.lineageName === reference.lineageName
+      ).length !== 1
+    )
+      return null;
+    const witness = faceWitnessOf(kernel, matches[0]!);
+    if (
+      topologyHashOfWitness('face', witness) !== storedHash ||
+      !topologyWitnessesEqual('face', reference.witness, witness)
+    )
+      return null;
+    verified.push(reference);
+  }
+  return new Set(
+    verified.map(
+      (reference) => `${reference.producingFeatureId}:${reference.lineageName}`
+    )
+  ).size === verified.length
+    ? verified
     : null;
 }

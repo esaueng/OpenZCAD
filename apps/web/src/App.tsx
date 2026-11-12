@@ -76,6 +76,7 @@ import {
   topologyReferenceRepairCommand,
   withCarriedSelections
 } from './lib/topologyReferenceRepairs';
+import { fragileSelectionAdvisory } from './lib/fragileSelections';
 import {
   parameterMinimums,
   parameterInputError,
@@ -9372,6 +9373,30 @@ export function App() {
     );
   }
 
+  /**
+   * Says once, as the commit lands, that it stored a pick with no lineage
+   * name: such a pick resolves only by its hash, which an upstream edit to
+   * that entity orphans. Never blocks the commit (`lib/fragileSelections`).
+   */
+  function announceFragileSelections(
+    before: ProjectDocument,
+    after: ProjectDocument,
+    derived: ProjectDocument['derived'] | undefined
+  ): void {
+    let advisory: string | null = null;
+    try {
+      advisory = fragileSelectionAdvisory(before, after, {
+        ...(derived ? { derived } : {}),
+        carried: new Set(
+          derived?.edgeHashRepairs?.map((repair) => repair.featureId) ?? []
+        )
+      });
+    } catch {
+      // Advice only: the commit has already landed.
+    }
+    if (advisory) announce(advisory);
+  }
+
   function executeCommand(
     command: AnyCommand,
     derived?: ProjectDocument['derived'],
@@ -9440,6 +9465,7 @@ export function App() {
         if (derived) trackCommittedParts(next, derived);
       }
       setStatus(commandOutcomeMessage(command.label));
+      announceFragileSelections(beforeDocument, next, derived);
       return true;
     } catch (error) {
       trackDetail('error_feature');
@@ -9509,6 +9535,7 @@ export function App() {
         if (derived) trackCommittedParts(next, derived);
       }
       setStatus(commandOutcomeMessage(label));
+      announceFragileSelections(beforeDocument, next, derived);
       return true;
     } catch (error) {
       trackDetail('error_feature');

@@ -1,5 +1,11 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
+import {
+  addPrimitiveFeature,
+  createProjectDocument,
+  filletEdges
+} from '@openzcad/document-core';
+import { toUserId } from '@openzcad/shared';
 import type { DiagnosticRow } from '../../lib/diagnosticsRows';
 import { DiagnosticsPanel, diagnosticCount } from './DiagnosticsPanel';
 
@@ -32,5 +38,35 @@ describe('DiagnosticsPanel', () => {
     expect(rows[0]).toHaveAttribute('title', 'BRepFilletAPI failed');
     expect(rows[1]?.querySelector('strong')).toBeNull();
     expect(screen.getByText('A sketch is open.')).toBeInTheDocument();
+  });
+
+  it('notes steps with fragile selections without counting them as warnings', () => {
+    const box = addPrimitiveFeature(
+      createProjectDocument('Fragile', toUserId('user_fragile_panel')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 30, height: 18, depth: 24 }
+      }
+    );
+    const { document } = filletEdges(box, {
+      name: 'Fillet 2',
+      targetBodyId: box.bodyOrder[0]!,
+      edgeHashes: [11],
+      size: 1
+    });
+    const { container } = render(
+      <DiagnosticsPanel warnings={[]} document={document} />
+    );
+    expect(container.querySelector('.diagnostic-row')).toBeNull();
+    expect(screen.getByText('No warnings in this model.')).toBeVisible();
+    expect(
+      screen.getByText('1 step uses a fragile selection.')
+    ).toHaveAttribute(
+      'title',
+      'Fillet 2: these picks have no stable name and may need re-picking if earlier steps change.'
+    );
+    render(<DiagnosticsPanel warnings={[]} document={box} />);
+    expect(screen.getAllByText(/fragile selection/)).toHaveLength(1);
   });
 });

@@ -496,6 +496,59 @@ misplaced cannot be carried. The predicted carrier is computed from the same
 measured geometry the edit validates, so a prediction that lands on the wrong
 quantum publishes nothing rather than a wrong name.
 
+## Amendment (H01, 2026-11-12): hash-only picks are upgraded wherever they resolve
+
+A pick is stored hash-only when the picked face or edge has no name at pick
+time, and step 2 of the resolution order then finds it only while its
+selection-time witness survives. On the reported box ∪ cylinder history two
+fillets, a chamfer and every face offset from the 37th step on were stored that
+way, so any upstream edit that resized their entities failed them. The
+amendment above names many such entities after the fact, but a name the body
+publishes later never reached a pick already stored.
+
+The app already wrote the name back for two kinds of pick: a fillet or
+chamfer's edges and a direct edit's own face (`referenceRepairs`,
+`faceReferenceRepairs`, written by `topologyReferenceRepairCommand`). Every
+stored face pick now takes the same upgrade: a hole, thicken, thread or
+on-body gear face, a shell's opening faces, a draft's faces and a face-distance
+edit's opposite face. The rule is unchanged and applies to each:
+
+- only a pick with no v5 reference at all; a face or edge set is upgraded all
+  or nothing, and a partial reference list is never extended;
+- the stored hash names exactly one face of a single-solid target body, as the
+  feature finds that body; the body's lineage publishes a name on that face
+  whose `currentHash` is the stored hash and whose witness equals the face's
+  measured witness; that name is published on no other face; and two members
+  of one set never take the same name;
+- the advice is offered only once the feature itself has built.
+
+The upgrade records the name of the entity the hash already resolves to and
+leaves the stored hash as it was, so it changes neither the geometry nor what
+the pick means; an ambiguous or unnamed pick stays hash-only. After it, an
+upstream edit resolves the pick by lineage (step 1).
+
+It is written as before: automatically after a committed rebuild, never from a
+preview, validation or drag build, as one atomic `Repair topology references`
+normalization that persists and syncs like an edit without an undo step of its
+own. Nothing is written for a feature after the first failed or manually
+suppressed one (ADR-017, November 2026), where the kernel withholds the advice;
+the app draws the same line at the first failed, refused or suppressed step in
+history order. Before this the app wrote nothing at all once any feature had
+failed, so a model with one unrelated late failure never upgraded its earlier
+picks.
+
+A legacy face-attached sketch or datum without a reference is not upgraded: it
+replays its stored migration frame instead of resolving a hash, and a reference
+would make it start following the face.
+
+The app also says, once per commit and without blocking it, when the commit
+stores a new hash-only pick that its own rebuild cannot name, and Diagnostics
+notes how many steps hold one. Neither is a warning: the model built as asked.
+
+Names for fillet and chamfer bands and other entities the kernel reports no
+construction history for remain the kernel's to supply (see the coverage table
+above); this amendment only carries a name the body already publishes.
+
 ## Consequences
 
 - Schema-v5 references are additive inside current schema-v6 documents, and

@@ -3306,11 +3306,19 @@ export interface ShaprMigrationRecord {
   privateDataOmitted: true;
 }
 
-/** A legacy direct-edit face proven by the successful original replay. */
+/** A legacy hash-only face pick proven by the successful original replay. */
 export interface FaceReferenceRepair {
   featureId: FeatureId;
   faceHash: number;
   faceReference: FaceTopologyReferenceV5;
+  /**
+   * Which stored selection `faceHash` belongs to. Absent is the feature's one
+   * face: a direct edit's operation face, or the face a hole, thicken, thread
+   * or gear names. `opposite` is a face-distance edit's opposite face. `set`
+   * is one member of a shell's opening faces or a draft's faces, offered only
+   * together with every other member of that set.
+   */
+  role?: 'opposite' | 'set';
 }
 
 /**
