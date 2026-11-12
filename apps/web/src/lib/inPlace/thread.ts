@@ -17,6 +17,7 @@ import type {
   InPlaceRequest,
   InPlaceSlots,
   InPlaceToolSpec,
+  InPlaceValueContext,
   OptionSpec,
   ValueSpec
 } from './tools';
@@ -146,31 +147,43 @@ export function threadIsPartial(
   numbers: Readonly<Record<string, number>>,
   ctx?: InPlaceContext
 ): boolean {
-  const saved = savedThread(ctx);
-  if (saved?.length !== undefined && values.length === saved.length) {
-    return true;
-  }
-  if (!ctx?.touched?.includes('length')) return false;
-  const geometry = threadFace(face);
-  if (!geometry) return true;
-  const reach = geometry.length - (numbers.offset ?? 0);
-  return (numbers.length ?? reach) < reach - tolerance(geometry.length);
+  return lengthIsExplicit(threadFace(face), values, numbers, {
+    ...(ctx?.touched ? { touched: ctx.touched } : {}),
+    ...(ctx?.saved ? { saved: ctx.saved } : {})
+  });
 }
 
 /**
- * Whether the user set the length short of the far end (dragged or typed),
- * rather than leaving it to run the rest of the face.
+ * Whether the thread's length is held as given, rather than following the
+ * offset to the face's far end. Held: a stored length an edit has left as
+ * stored, a length typed as an expression (kept as written, wherever it
+ * reaches), and a number dragged or typed short of the far end. Following:
+ * an untouched length, and a number set right at the far end. `held` holds
+ * a typed expression as its text.
  */
-function setShort(
-  geometry: ThreadFace,
-  values: Readonly<Record<string, number>>,
-  touched: readonly string[] | undefined
+export function lengthIsExplicit(
+  geometry: ThreadFace | null,
+  held: Readonly<Record<string, ParamValue>>,
+  numbers: Readonly<Record<string, number>>,
+  context: Pick<InPlaceValueContext, 'touched' | 'saved'>
 ): boolean {
-  if (!touched?.includes('length') || values.length === undefined) {
-    return false;
+  const saved = context.saved?.featureKind === 'thread' ? context.saved : null;
+  if (saved?.length !== undefined && held.length === saved.length) {
+    return true;
   }
-  const reach = geometry.length - Math.max(values.offset ?? 0, 0);
-  return values.length < reach - tolerance(geometry.length);
+  if (!context.touched?.includes('length')) return false;
+  if (typeof held.length === 'string') return true;
+  if (!geometry) return true;
+  const reach = geometry.length - Math.max(numbers.offset ?? 0, 0);
+  return (numbers.length ?? reach) < reach - tolerance(geometry.length);
+}
+
+/** The session's values with its typed expressions as their text. */
+function heldValues(
+  numbers: Readonly<Record<string, number>>,
+  context: InPlaceValueContext | undefined
+): Record<string, ParamValue> {
+  return { ...numbers, ...(context?.raws ?? {}) };
 }
 
 // The length has its handle, the arrow on the thread's free end; every
@@ -426,7 +439,11 @@ export function threadSummary(
     const reach = geometry.length - offset;
     const length = state.numbers.length ?? reach;
     const face = round(geometry.length);
-    partial = length < reach - tolerance(geometry.length);
+    // A length typed as an expression is kept as written, so it is stored
+    // (and the ends left plain) even where it reaches the far end.
+    partial =
+      state.raws?.length !== undefined ||
+      length < reach - tolerance(geometry.length);
     parts.push(
       partial
         ? `Threads ${round(length)} of ${face} ${units}, ends plain`
@@ -634,7 +651,7 @@ export const threadSpec: InPlaceToolSpec = {
     }
   ],
   summary: threadSummary,
-  refuseValue(valueId, value, values, slots, touched) {
+  refuseValue(valueId, value, values, slots, context) {
     // A typed length or offset that would carry the thread past the face's
     // far end is refused: only a length that reaches the end exactly runs
     // the whole face, and an offset never quietly shortens a length set.
@@ -652,23 +669,46 @@ export const threadSpec: InPlaceToolSpec = {
       if (value >= geometry.length - slack) {
         return `the face is only ${round(geometry.length)} long.`;
       }
+      // A length held as given (set short, stored by an edit, or an
+      // expression) is never quietly shortened by a larger offset.
       const length = values.length;
       if (
         length !== undefined &&
-        setShort(geometry, values, touched) &&
+        lengthIsExplicit(
+          geometry,
+          heldValues(values, context),
+          values,
+          context ?? {}
+        ) &&
         value + length > geometry.length + slack
       ) {
-        return `with the length at ${round(length)}, the offset can be at most ${round(geometry.length - length)}.`;
+        const most = round(Math.max(geometry.length - length, 0));
+        const raw = context?.raws?.length;
+        return raw !== undefined
+          ? `the length is ${raw} (${round(length)}), so the offset can be at most ${most}; change the length too.`
+          : `with the length at ${round(length)}, the offset can be at most ${most}.`;
       }
     }
     return null;
   },
-  carries(valueId, value, values, slots) {
+  carries(valueId, value, values, slots, context) {
     // A thread that runs to the far end keeps running there as its offset
-    // moves: its length follows, as an untouched one does by default.
+    // moves: its length follows, as an untouched one does by default. A
+    // length held as given stays as it is (an offset that would overshoot
+    // it is refused instead).
     if (valueId !== 'offset') return null;
     const geometry = threadFace(slots.faces[0]);
-    if (!geometry || setShort(geometry, values, ['length'])) return null;
+    if (
+      !geometry ||
+      lengthIsExplicit(
+        geometry,
+        heldValues(values, context),
+        values,
+        context ?? {}
+      )
+    ) {
+      return null;
+    }
     return { length: Math.max(geometry.length - Math.max(value, 0), 0) };
   },
   defaults(slots, _ctx, numbers): Record<string, number> {

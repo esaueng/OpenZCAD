@@ -112,6 +112,11 @@ export interface InPlaceCommandBarProps {
    * (a number or an expression) is offered here, and false refuses it.
    */
   onValueCommit?(valueId: string, text: string): boolean;
+  /**
+   * A refused entry given up: its field is back to the value held (Escape,
+   * leaving the field, or that value entered again).
+   */
+  onValueRestore?(valueId: string): void;
   /** A value scrubbed on its label, before the release commits it. */
   onValuePreview?(valueId: string, value: number): void;
   /**
@@ -141,6 +146,7 @@ export function InPlaceCommandBar({
   values = [],
   onValue,
   onValueCommit,
+  onValueRestore,
   onValuePreview,
   sections,
   summary = null,
@@ -370,6 +376,7 @@ export function InPlaceCommandBar({
                       fields={fields}
                       locked={locked}
                       onCommit={onValueCommit}
+                      onRestore={onValueRestore}
                       onPreview={onValuePreview}
                     />
                   );
@@ -624,6 +631,7 @@ function ValueRow({
   fields,
   locked,
   onCommit,
+  onRestore,
   onPreview
 }: {
   label: string;
@@ -631,6 +639,7 @@ function ValueRow({
   fields: readonly InPlaceOptionValue[];
   locked: boolean;
   onCommit(valueId: string, text: string): boolean;
+  onRestore: ((valueId: string) => void) | undefined;
   onPreview: ((valueId: string, value: number) => void) | undefined;
 }) {
   const firstId = useId();
@@ -715,6 +724,7 @@ function ValueRow({
             label={axes ? `${label} ${axes[index]}` : label}
             locked={locked}
             onCommit={onCommit}
+            onRestore={onRestore}
           />
         ))}
       </div>
@@ -728,7 +738,8 @@ function ValueField({
   axis,
   label,
   locked,
-  onCommit
+  onCommit,
+  onRestore
 }: {
   id: string | undefined;
   field: InPlaceOptionValue;
@@ -736,6 +747,7 @@ function ValueField({
   label: string;
   locked: boolean;
   onCommit(valueId: string, text: string): boolean;
+  onRestore: ((valueId: string) => void) | undefined;
 }) {
   // The text being typed, while the field has focus; else what is held.
   const [draft, setDraft] = useState<string | null>(null);
@@ -754,7 +766,10 @@ function ValueField({
         : `${label} was not applied.`;
   const commit = (text: string): boolean => {
     if (text.trim() === field.text.trim()) {
+      // The held value entered again stands: a refusal left by an entry
+      // given up goes with it, though there is nothing to set.
       setRefused(false);
+      onRestore?.(field.id);
       return true;
     }
     const accepted = onCommit(field.id, text);
@@ -798,8 +813,11 @@ function ValueField({
           setRefused(false);
         }}
         onBlur={() => {
-          // A refused entry is dropped on leaving, not kept half-applied.
-          if (draft !== null && !dropOnBlur.current) commit(draft);
+          // A refused entry is dropped on leaving, not kept half-applied:
+          // the field shows the held value again, and its refusal goes.
+          if (draft !== null && !dropOnBlur.current && !commit(draft)) {
+            onRestore?.(field.id);
+          }
           dropOnBlur.current = false;
           setDraft(null);
           setRefused(false);
@@ -819,6 +837,7 @@ function ValueField({
             dropOnBlur.current = true;
             setDraft(null);
             setRefused(false);
+            onRestore?.(field.id);
             event.currentTarget.blur();
           } else if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
             event.preventDefault();

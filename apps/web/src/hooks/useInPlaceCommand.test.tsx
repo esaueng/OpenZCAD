@@ -1,4 +1,13 @@
-import { act, renderHook, waitFor } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  waitFor
+} from '@testing-library/react';
+import { useEffect, useRef } from 'react';
+import { InPlaceCommandBar } from '../components/InPlaceCommandBar';
 import { describe, expect, it, vi } from 'vitest';
 import type { PlaneBasis } from '@openzcad/geometry';
 import type {
@@ -854,6 +863,176 @@ describe('useInPlaceCommand: thread', () => {
     expect(taken).toBe(true);
     expect(hook.result.current.refusal).toBeNull();
     await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+  });
+
+  /** The thread command wired to its Options bar, as the app wires it. */
+  function ThreadWithOptions(props: { options: UseInPlaceCommandOptions }) {
+    const command = useInPlaceCommand(props.options);
+    const started = useRef(false);
+    useEffect(() => {
+      if (started.current) return;
+      started.current = true;
+      command.start('thread', [], [BOSS]);
+    }, [command]);
+    const offset = command.values.offset ?? 0;
+    return (
+      <InPlaceCommandBar
+        title="Thread"
+        hint={command.hint}
+        refusal={command.refusal}
+        canFinish={command.canFinish}
+        values={[
+          {
+            id: 'offset',
+            label: 'Offset',
+            text: String(offset),
+            value: offset,
+            step: 0.1,
+            min: 0
+          }
+        ]}
+        onValueCommit={(id, text) => command.setValue(id, Number(text))}
+        onValueRestore={command.dropRefusal}
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+  }
+
+  it('lets a refused Options entry go when its field is put back (second re-check #1)', async () => {
+    render(<ThreadWithOptions options={setupOptions([], vi.fn())} />);
+    const done = screen.getByRole('button', { name: /Done/ });
+    await waitFor(() => expect(done).toBeEnabled());
+    const field = screen.getByRole('textbox', { name: 'Offset' });
+    const refuse = () => {
+      fireEvent.focus(field);
+      fireEvent.change(field, { target: { value: '12' } });
+      fireEvent.keyDown(field, { key: 'Enter' });
+      expect(field).toHaveAttribute('aria-invalid', 'true');
+      expect(done).toBeDisabled();
+      expect(
+        screen.getByRole('group', { name: 'Thread command' }).textContent
+      ).toContain('the face is only 12 long');
+    };
+    // Escape puts the field back to 0: Done no longer waits on the 12.
+    refuse();
+    fireEvent.keyDown(field, { key: 'Escape' });
+    fireEvent.blur(field);
+    expect(field).toHaveValue('0');
+    await waitFor(() => expect(done).toBeEnabled());
+    // Leaving the field drops the refused entry the same way.
+    refuse();
+    fireEvent.blur(field);
+    expect(field).toHaveValue('0');
+    await waitFor(() => expect(done).toBeEnabled());
+    // The held value entered again clears it too, though nothing changes.
+    refuse();
+    fireEvent.change(field, { target: { value: '0' } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+    expect(field).not.toHaveAttribute('aria-invalid');
+    await waitFor(() => expect(done).toBeEnabled());
+  });
+
+  /** A stored partial thread, 10 long from 2 up, reopened from History. */
+  const STORED: InPlaceEditSeed = {
+    featureId: 'feat_t' as FeatureId,
+    nodeId: 'node_t',
+    name: 'Thread 1',
+    data: {
+      featureKind: 'thread',
+      targetBodyId: 'body_a' as BodyId,
+      faceHash: 31,
+      profile: 'printable',
+      clearance: 0.1,
+      length: 10,
+      offset: 2
+    },
+    resultBodyId: BODY,
+    ownBodyIds: [BODY],
+    slots: {
+      profiles: [],
+      axisId: null,
+      path: [],
+      guide: [],
+      faces: [{ ...BOSS, point: undefined }],
+      bodies: [],
+      plane: null,
+      edges: []
+    },
+    values: { length: 10, offset: 2 },
+    raws: {},
+    touched: ['length', 'offset'],
+    options: {
+      profile: 'printable',
+      size: 'auto',
+      fit: 'print',
+      chamfer: 'none',
+      hand: 'right'
+    },
+    axes: [],
+    choices: {},
+    lockedOptions: [],
+    notice: null
+  };
+
+  it('keeps a stored length that reaches the face end, refusing an offset that would cut it (second re-check #2)', async () => {
+    const { hook, built } = setup();
+    act(() => hook.result.current.edit('thread', STORED));
+    // Untouched, it goes back as stored.
+    await waitFor(() =>
+      expect(built.at(-1)).toMatchObject({
+        thread: { length: 10, offset: 2 }
+      })
+    );
+    let taken = true;
+    act(() => {
+      taken = hook.result.current.setValue('offset', 3);
+    });
+    expect(taken).toBe(false);
+    expect(hook.result.current.refusal).toMatch(
+      /^3; with the length at 10, the offset can be at most 2\./
+    );
+    expect(hook.result.current.values.length).toBe(10);
+    expect(hook.result.current.values.offset).toBe(2);
+    // A smaller offset keeps the stored length as stored.
+    act(() => {
+      taken = hook.result.current.setValue('offset', 1);
+    });
+    expect(taken).toBe(true);
+    expect(hook.result.current.values.length).toBe(10);
+    await waitFor(() =>
+      expect(built.at(-1)).toMatchObject({
+        thread: { length: 10, offset: 1 }
+      })
+    );
+  });
+
+  it('refuses an offset a length expression cannot follow, and keeps the expression (second re-check #3)', async () => {
+    const { hook, built } = setup();
+    act(() => hook.result.current.start('thread', [], [BOSS]));
+    await waitFor(() => expect(hook.result.current.values.length).toBe(12));
+    let taken = false;
+    act(() => {
+      taken = hook.result.current.setValue('length', 12, 'face_h');
+    });
+    expect(taken).toBe(true);
+    // Typed as an expression, it is stored as written, even at the end.
+    await waitFor(() =>
+      expect(built.at(-1)).toMatchObject({ thread: { length: 'face_h' } })
+    );
+    act(() => {
+      taken = hook.result.current.setValue('offset', 3);
+    });
+    expect(taken).toBe(false);
+    expect(hook.result.current.refusal).toMatch(
+      /^3; the length is face_h \(12\), so the offset can be at most 0; change the length too\./
+    );
+    expect(hook.result.current.values.length).toBe(12);
+    expect(hook.result.current.raws.length).toBe('face_h');
+    expect(built.at(-1)).toMatchObject({ thread: { length: 'face_h' } });
+    expect(
+      (built.at(-1) as { thread: { offset?: number } }).thread.offset
+    ).toBeUndefined();
   });
 });
 

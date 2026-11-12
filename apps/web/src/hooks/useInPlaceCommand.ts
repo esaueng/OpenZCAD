@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   BodyId,
+  FeatureData,
   ParamValue,
   ParametricVector3,
   ProjectDocument,
@@ -24,6 +25,7 @@ import {
   type InPlaceSlots,
   type InPlaceToolId,
   type InPlaceToolSpec,
+  type InPlaceValueContext,
   type OptionSpec,
   type PlanePick,
   type ProfilePick,
@@ -339,6 +341,12 @@ export interface InPlaceCommand {
   previewValue(valueId: string, value: number): void;
   /** False when a typed expression is refused, leaving the value as it was. */
   setValue(valueId: string, value: number, raw?: string): boolean;
+  /**
+   * A refused entry of this value given up, its field put back to the value
+   * held (Escape, leaving the field, or the held value entered again): the
+   * refusal goes, and Done no longer waits on it.
+   */
+  dropRefusal(valueId: string): void;
   /** Values the user has set, which the picks' or values' defaults leave alone. */
   touched: readonly string[];
   /**
@@ -1766,7 +1774,7 @@ export function useInPlaceCommand(
               value,
               current.values,
               { faces: current.slots.faces },
-              current.touched
+              valueContext(current, savedDataRef.current)
             ) ?? null)
           : null;
       if (crossed) {
@@ -1801,7 +1809,7 @@ export function useInPlaceCommand(
           ...current,
           values: {
             ...current.values,
-            ...carriedValues(current, valueId, next),
+            ...carriedValues(current, valueId, next, savedDataRef.current),
             [valueId]: next
           },
           raws,
@@ -1814,6 +1822,11 @@ export function useInPlaceCommand(
     },
     []
   );
+  const dropRefusal = useCallback((valueId: string) => {
+    setEntryRefusal((refused) =>
+      refused?.valueId === valueId ? null : refused
+    );
+  }, []);
   const previewValue = useCallback(
     (valueId: string, value: number) =>
       writeValue(valueId, value, undefined, false),
@@ -1850,7 +1863,7 @@ export function useInPlaceCommand(
           // box's corner, with its height).
           values: {
             ...current.values,
-            ...carriedValues(current, valueId, restored),
+            ...carriedValues(current, valueId, restored, savedDataRef.current),
             [valueId]: restored
           },
           raws,
@@ -2021,6 +2034,7 @@ export function useInPlaceCommand(
     setOption,
     previewValue,
     setValue,
+    dropRefusal,
     touched: session?.touched ?? EMPTY_TOUCHED,
     restoreValue,
     done,
@@ -2047,7 +2061,8 @@ function sameBodyEdges(edges: readonly EdgePick[]): EdgePick[] {
 function carriedValues(
   session: Session,
   valueId: string,
-  value: number
+  value: number,
+  saved: FeatureData | undefined
 ): Record<string, number> {
   return Object.fromEntries(
     Object.entries(
@@ -2059,10 +2074,23 @@ function carriedValues(
           ...EMPTY_SLOTS,
           placement: session.slots.placement,
           faces: session.slots.faces
-        }
+        },
+        valueContext(session, saved)
       ) ?? {}
     ).filter(([id]) => session.raws[id] === undefined)
   );
+}
+
+/** How a session holds its values, for a tool's value checks. */
+function valueContext(
+  session: Session,
+  saved: FeatureData | undefined
+): InPlaceValueContext {
+  return {
+    touched: session.touched,
+    raws: session.raws,
+    ...(saved ? { saved } : {})
+  };
 }
 
 /**

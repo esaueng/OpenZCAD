@@ -22508,7 +22508,12 @@ export function App() {
     return {
       sections,
       values,
-      summary: inPlaceSpec.summary?.(state, inPlaceUnits, inPlace.slots) ?? null
+      summary:
+        inPlaceSpec.summary?.(
+          { ...state, raws: inPlace.raws },
+          inPlaceUnits,
+          inPlace.slots
+        ) ?? null
     };
   }, [
     inPlaceSpec,
@@ -32604,6 +32609,7 @@ export function App() {
                   summary={inPlacePanel?.summary ?? null}
                   values={inPlacePanel?.values ?? []}
                   onValueCommit={commitInPlacePanelValue}
+                  onValueRestore={inPlace.dropRefusal}
                   onValuePreview={previewInPlacePanelValue}
                   onDone={() => inPlace.done()}
                   onCancel={cancelInPlaceCommand}

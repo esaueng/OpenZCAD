@@ -290,6 +290,22 @@ export interface InPlacePanelState {
   options: Readonly<Record<string, string>>;
   /** Each value as a number, its initial one where none is set. */
   numbers: Readonly<Record<string, number>>;
+  /** Values held as typed expressions, where the reader is given them. */
+  raws?: Readonly<Record<string, string>>;
+}
+
+/**
+ * How the session holds its values, for a check that depends on more than
+ * the numbers: which the user set, which are expressions, and the stored
+ * feature an edit started from.
+ */
+export interface InPlaceValueContext {
+  /** The values the user has set (an edit's stored ones among them). */
+  touched?: readonly string[];
+  /** Values held as typed expressions. */
+  raws?: Readonly<Record<string, string>>;
+  /** The edited feature's stored data; absent when creating. */
+  saved?: FeatureData;
 }
 
 export type ValueUnit = 'angle' | 'length' | 'count';
@@ -787,7 +803,8 @@ export interface InPlaceToolSpec {
     valueId: string,
     value: number,
     values: Readonly<Record<string, number>>,
-    slots: InPlaceSlots
+    slots: InPlaceSlots,
+    context?: InPlaceValueContext
   ): Record<string, number> | null;
   /**
    * Why `value` cannot stand beside the other values, when each alone is in
@@ -800,10 +817,11 @@ export interface InPlaceToolSpec {
     /** The picks, for a bound they set (a thread's length, its face's). */
     slots?: Pick<InPlaceSlots, 'faces'>,
     /**
-     * The values the user has set: one they set is held to, one they did
-     * not follows the picks (a thread's untouched length).
+     * How the values are held: one the user set (or an edit stored, or an
+     * expression) is held to, one they did not follows the picks (a
+     * thread's untouched length).
      */
-    touched?: readonly string[]
+    context?: InPlaceValueContext
   ): string | null;
   hint(
     slots: InPlaceSlots,
