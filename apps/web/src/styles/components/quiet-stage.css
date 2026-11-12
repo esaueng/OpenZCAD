@@ -69,6 +69,38 @@
      window, not the viewer area: the stream stands outside that container. */
   --command-bar-w: min(clamp(520px, 38vw, 760px), var(--command-bar-cap));
   --command-bar-fs: var(--fs-base);
+  /* A running command's card is wider than the bar it stands on, and the
+     cube stands in the same band: at 1440px with both docks the card's
+     right edge ran 16px into the cube's box, and at 1280px over half the
+     cube. The card keeps left of the cube with the corner's 12px of
+     clearance: no wider than the room between the lane's start and that
+     line, and moved left only as far as its centred place would cross it.
+     Measured from the right dock's inner edge, as the corner is. Where
+     that room is under 320px (a 768px window with a panel docked) the card
+     cannot be drawn in it and keeps the lane, as it always has. */
+  --command-card-clear: calc(var(--stage-corner-w) - 32px);
+  --command-lane-end: calc(var(--lane-right) - var(--right-dock-w, 0px));
+  --command-lane-w: calc(
+    var(--stage-between-docks) - var(--lane-start) - var(--command-lane-end)
+  );
+  --command-card-w: min(
+    max(calc(var(--command-bar-w) + 120px), 520px),
+    max(
+      calc(
+        var(--command-lane-w) -
+          max(0px, var(--command-card-clear) - var(--command-lane-end))
+      ),
+      min(var(--command-lane-w), 320px)
+    )
+  );
+  --command-card-shift: clamp(
+    0px,
+    calc(
+      var(--command-card-clear) - var(--command-lane-end) -
+        var(--command-lane-w) / 2 + var(--command-card-w) / 2
+    ),
+    max(0px, calc((var(--command-lane-w) - var(--command-card-w)) / 2))
+  );
 }
 
 /* A wide stage gives the line more height and a size more type to fill
@@ -4360,11 +4392,20 @@ button.model-panel-grip[aria-expanded='true'] {
   /* Options open above the bar from its own left edge: grown leftward from
      the ⋯ button they ran under the tool rail on a narrow window. */
   position: relative;
+  /* Left of the cube in the corner (--command-card-shift above); zero
+     wherever the centred card already clears it. */
+  left: calc(-1 * var(--command-card-shift, 0px));
   display: flex;
   align-items: center;
   flex-wrap: wrap;
+  /* Where the card is too narrow for one row, Cancel and Done wrap to the
+     right, under where they stand on a wide one. */
+  justify-content: flex-end;
   gap: 8px;
-  max-width: min(max(calc(var(--command-bar-w) + 120px), 520px), 100%);
+  max-width: min(
+    var(--command-card-w, max(calc(var(--command-bar-w) + 120px), 520px)),
+    100%
+  );
   padding: 4px 4px 4px 12px;
   color: var(--color-text);
   background: var(--color-surface);
@@ -4496,7 +4537,11 @@ button.model-panel-grip[aria-expanded='true'] {
   }
 
   .in-place-command {
+    /* The phone's lane runs edge to edge under a lifted cube: the card
+       fills it, unmoved. */
+    left: 0;
     width: 100%;
+    max-width: 100%;
     display: grid;
     grid-template-columns: 1fr 1fr;
   }

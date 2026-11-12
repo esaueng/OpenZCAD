@@ -160,6 +160,7 @@ interface ViewerShellProps {
   settings: ViewerSettings;
   fitSignal: number;
   autoFrame?: AutoFrameRequest | null;
+  creationFrame?: AutoFrameRequest | null;
   viewRequest: { view: ViewRequestTarget; nonce: number } | null;
   normalToFaceRequest: NormalToFaceRequest | null;
   units: string;
@@ -443,6 +444,7 @@ export function ViewerShell({
   settings,
   fitSignal,
   autoFrame = null,
+  creationFrame = null,
   viewRequest,
   normalToFaceRequest,
   units,
@@ -771,6 +773,7 @@ export function ViewerShell({
         exactSection={exactSection}
         fitSignal={fitSignal}
         autoFrame={autoFrame}
+        creationFrame={creationFrame}
         viewRequest={viewRequest}
         normalToFaceRequest={normalToFaceRequest}
         units={units}

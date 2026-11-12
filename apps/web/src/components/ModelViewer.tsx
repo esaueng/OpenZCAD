@@ -302,6 +302,8 @@ import {
   SELECTION_CALLOUT_CHIP_CLASS
 } from '../lib/selectionCalloutView';
 import {
+  cornersWithinFrame,
+  measureCreationFrame,
   measureFitFrame,
   measurePickFrame,
   shiftIntoFrame
@@ -1021,6 +1023,12 @@ export interface ModelViewerProps {
    * body outside the view may be framed; edits preserve the user's camera.
    */
   autoFrame?: AutoFrameRequest | null;
+  /**
+   * A value typed for a command that is creating a body, with the preview
+   * it built: a preview that left the clear stage is reframed into it. Never
+   * set for an edit, whose camera is the user's.
+   */
+  creationFrame?: AutoFrameRequest | null;
   /** Set to move the camera to a view target; nonce forces re-runs. */
   viewRequest: { view: ViewRequestTarget; nonce: number } | null;
   /** Set to centre and frame an exact planar face; nonce forces re-runs. */
@@ -2094,6 +2102,12 @@ const SKETCH_COLOR = 0x6798ff;
  * cut off.
  */
 const AUTO_FRAME_MARGIN_NDC = 0.04;
+/**
+ * The band a creation preview keeps clear inside the stage it is framed
+ * into, as a share of the stage's half-size per side: room for the arrows
+ * that stand off its faces and the value chips at their tips.
+ */
+const CREATION_FRAME_MARGIN = 0.16;
 const SKETCH_SELECTED_COLOR = 0x9eb8ff;
 const RIGHT_PAN_TARGET_EPSILON = 1e-9;
 /**
@@ -2204,6 +2218,7 @@ export function ModelViewer({
   exactSection,
   fitSignal,
   autoFrame = null,
+  creationFrame = null,
   viewRequest,
   normalToFaceRequest,
   units,
@@ -16015,6 +16030,78 @@ export function ModelViewer({
       { ease: viewJumpEase }
     );
   }, [autoFrame]);
+
+  // A creation preview sized by a typed value keeps to the clear stage: a
+  // box typed 100 wide ran under the instrument rail and the docked panel,
+  // its chips piled at the lane's edge. Only the bodies the command is
+  // creating are measured and framed, only when they have left the stage
+  // (the canvas less the panels, the rails and the bottom lane), and only on
+  // a typed value: a drag stays under the hand that makes it, and an edit of
+  // an existing body never moves the camera. The view keeps its direction.
+  useEffect(() => {
+    const context = contextRef.current;
+    if (!context || !creationFrame || !context.hasFitCamera) {
+      return;
+    }
+    // Two frames: the preview's meshes and the panels' layout are in place.
+    let frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => {
+        if (
+          commandDragRef.current ||
+          moveDragActiveRef.current ||
+          edgeDragActiveRef.current ||
+          offsetDragActiveRef.current ||
+          cylinderRadiusDragActiveRef.current
+        ) {
+          return;
+        }
+        const created = createdBodiesToFrame(
+          creationFrame.before,
+          creationFrame.after,
+          creationFrame.features
+        ).flatMap((bodyId) => {
+          const object = context.objectsByBodyId.get(bodyId);
+          return object?.visible ? [object] : [];
+        });
+        const reached = new THREE.Box3();
+        for (const object of created) reached.expandByObject(object);
+        if (reached.isEmpty()) {
+          return;
+        }
+        const stage = measureCreationFrame(context.renderer.domElement);
+        const camera = context.activeCamera;
+        camera.updateMatrixWorld();
+        const corners = Array.from({ length: 8 }, (_, index) =>
+          new THREE.Vector3(
+            index & 1 ? reached.max.x : reached.min.x,
+            index & 2 ? reached.max.y : reached.min.y,
+            index & 4 ? reached.max.z : reached.min.z
+          ).project(camera)
+        );
+        if (cornersWithinFrame(corners, stage)) {
+          return;
+        }
+        const pose = computeFitPose(
+          context.camera,
+          created,
+          context.viewDirection(),
+          CREATION_FRAME_MARGIN,
+          stage
+        );
+        // The same glide a fit makes; reduced motion lands it at once.
+        context.startCameraTween(
+          pose,
+          () => {
+            if (context.projection === 'orthographic') {
+              context.syncOrthographic(true);
+            }
+          },
+          { ease: viewJumpEase }
+        );
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [creationFrame]);
 
   // View requests keep the current zoom and glide the camera to the axis —
   // named standard views and the cube's corner diagonals alike.
