@@ -13,9 +13,13 @@
   gap: var(--sp-3);
 }
 
+/* A column whose last item, the call to action, is pushed to the foot. As
+   three grid rows (head, walk, action) a demo with no revision walk put its
+   action in the stretching middle row, so "Open demo" floated mid-card
+   beside three that had it at the bottom. */
 .demo-card {
-  display: grid;
-  grid-template-rows: auto 1fr auto;
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   gap: var(--sp-3);
   padding: var(--sp-3) var(--sp-4);
@@ -137,7 +141,10 @@
 .demo-card-cta {
   display: inline-flex;
   align-items: center;
+  align-self: flex-start;
   gap: 5px;
+  /* The card's foot, whatever stands above it. */
+  margin-top: auto;
   color: var(--color-accent);
   font-size: var(--fs-sm);
   font-weight: var(--fw-medium);
@@ -175,7 +182,6 @@
   }
 
   .start-screen:not(.is-fresh) .demo-card {
-    grid-template-rows: auto;
     gap: 0;
     padding: 6px 8px;
     background: none;

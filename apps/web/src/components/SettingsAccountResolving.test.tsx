@@ -89,6 +89,8 @@ function settingsElement(
       onDeleteCloudData={vi.fn()}
       onReset={vi.fn()}
       onApplyViewportDefaults={vi.fn()}
+      onExportDiagnostics={vi.fn()}
+      onExportInteractionLog={vi.fn()}
       onDismissProjectInvitation={vi.fn()}
       onClose={vi.fn()}
       {...overrides}

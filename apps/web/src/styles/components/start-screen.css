@@ -565,10 +565,11 @@
   line-height: 1.4;
 }
 
-/* In the column a once-a-session action should not take a third of it. The
-   fields keep their accessible names; the labels and hint step aside. */
+/* In the column a once-a-session action should not take a third of it, so
+   the hint steps aside. The labels stay: the name arrives filled in with a
+   suggestion, and an unlabelled filled field beside a button read as a
+   search box rather than as the new project's name. */
 @media (min-width: 901px) {
-  .start-launch-form .start-field-label,
   .start-launch-hint {
     display: none;
   }
@@ -2330,10 +2331,15 @@
     padding-bottom: 0;
   }
 
-  /* The shelf's own inset, so the cards line up with the shelf above. */
+  /* The shelf's own edges, so the cards line up with the shelf above: the
+     stage's left gutter (.start-stage), and on the right its gutter plus
+     the shelf's inset (.start-body's --start-shelf-inset, 8px). With the
+     island gap on both sides the cards started 14px left of the shelf and
+     ended 8px right of it. */
   .start-screen.is-fresh .start-learn {
     gap: var(--sp-3);
-    padding: var(--sp-4) var(--island-gap) var(--island-gap);
+    padding: var(--sp-4) calc(var(--island-gap) + 8px) var(--island-gap)
+      var(--sp-5);
     overflow: visible;
   }
 }
@@ -2365,10 +2371,9 @@
     display: none;
   }
 
-  /* The launch card is two rows — New project, then name and units — so it
-     costs the shelf little height. The fields keep their accessible names
-     (aria-label), so their visible labels and the hint can go; an error
-     still takes its own row. */
+  /* The launch card is two rows — New project, then name and units under
+     their labels — so it costs the shelf little height. The hint can go; an
+     error still takes its own row. */
   .start-launch {
     padding: var(--sp-3) var(--sp-3) 0;
   }
@@ -2377,7 +2382,6 @@
     padding: 8px;
   }
 
-  .start-field-label,
   .start-launch-hint {
     display: none;
   }

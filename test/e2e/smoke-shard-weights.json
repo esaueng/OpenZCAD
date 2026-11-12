@@ -85,5 +85,6 @@
   "touch-navigation.spec.ts": 9,
   "viewport.spec.ts": 13,
   "visual-selection-fillet-edit.spec.ts": 12,
-  "visual-selection-live-preview.spec.ts": 12
+  "visual-selection-live-preview.spec.ts": 12,
+  "workspace-empty-state.spec.ts": 8
 }

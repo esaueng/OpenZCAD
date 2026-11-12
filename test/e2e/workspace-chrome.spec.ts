@@ -10,7 +10,7 @@ import {
 /*
   Menus whose geometry outlived the layout they were written for. Both are
   correct CSS that lands in the wrong place, so no type or unit test sees
-  them: the File menu kept a 320px cap after it grew to ~470px of content,
+  them: the File menu kept a 320px cap after it grew past it,
   and View mode's standard-views panel still opened upward after its bar
   moved to the top of the viewport.
 */
@@ -32,9 +32,12 @@ test('the File menu shows every section on a desktop window', async ({
     scrollHeight: element.scrollHeight
   }));
   expect(scrollHeight).toBeLessThanOrEqual(clientHeight);
+  // Stored files closes the menu now that the support exports live in
+  // Settings › Advanced; its last line is the menu's last.
   await expect(
-    panel.getByRole('button', { name: /Export interaction log/ })
+    panel.getByText('No archived imports or exports yet.')
   ).toBeInViewport();
+  await expect(panel.getByText('Troubleshooting')).toHaveCount(0);
 });
 
 test('View mode opens its standard views inside the window', async ({

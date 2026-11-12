@@ -122,8 +122,8 @@ and timings.
 
 - Storage is a ring buffer in its own IndexedDB database
   (`openzcad-interaction-diagnostics`), bounded to 40 entries and 8 MiB. It
-  never leaves the device; **File → Export interaction log** downloads it as
-  one JSON bundle. Documents with imported geometry are recorded without the
+  never leaves the device; **Settings › Advanced › Export interaction log**
+  (also in the command palette, Ctrl+K) downloads it as one JSON bundle. Documents with imported geometry are recorded without the
   document (`documentOmitted: 'imported-source'`), the same rule the existing
   diagnostic export applies.
 - Recording is fire-and-forget and never throws into the gesture; a storage

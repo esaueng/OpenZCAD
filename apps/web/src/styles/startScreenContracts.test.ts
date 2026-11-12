@@ -243,3 +243,49 @@ describe('start screen review follow-ups', () => {
     expect(rule(css, '.start-folder-link-pin')).toMatch(/margin-left:\s*auto/);
   });
 });
+
+describe('start screen first-run polish', () => {
+  // UI review, 12 Nov 2026, at 1440 x 900 with no projects.
+  const demos = readFileSync(
+    join(resolve(__dirname, 'components'), 'start-screen-demos.css'),
+    'utf8'
+  ).replace(/\/\*[\s\S]*?\*\//g, '');
+
+  it("puts the demo cards on the shelf's own edges", () => {
+    // The cards started 14px left of the Projects block and ended 8px right
+    // of it: the island gap on both sides, where the shelf has the stage's
+    // gutter on the left and its own inset inside the gap on the right.
+    const stageLeft =
+      /padding:\s*0\s+var\(--island-gap\)\s+0\s+(var\(--sp-\d\))/.exec(
+        rule(css, '.start-stage')
+      )?.[1];
+    expect(stageLeft).toBeDefined();
+    const inset = /--start-shelf-inset:\s*(\d+px)/.exec(
+      rule(css, '.start-body')
+    )?.[1];
+    expect(inset).toBeDefined();
+    const padding = /padding:\s*([^;]+);/.exec(
+      rule(css, '.start-screen.is-fresh .start-learn')
+    )?.[1];
+    expect(padding?.replace(/\s+/g, ' ')).toBe(
+      `var(--sp-4) calc(var(--island-gap) + ${inset}) var(--island-gap) ${stageLeft}`
+    );
+  });
+
+  it('pins Open demo to the foot of every card', () => {
+    // Scissors has no revision walk, so in a three-row grid its action sat
+    // in the stretching middle row, mid-card.
+    const card = rule(demos, '.demo-card');
+    expect(card).toMatch(/display:\s*flex/);
+    expect(card).toMatch(/flex-direction:\s*column/);
+    expect(rule(demos, '.demo-card-cta')).toMatch(/margin-top:\s*auto/);
+  });
+
+  it('shows the launch fields their labels at every width', () => {
+    // Hidden in both layouts, the pre-filled name read as a search box.
+    expect(css).not.toMatch(/\.start-field-label[^{}]*\{[^}]*display:\s*none/);
+    expect(css).not.toMatch(
+      /\.start-field-label\s*,[^{}]*\{[^}]*display:\s*none/
+    );
+  });
+});
