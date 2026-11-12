@@ -1,97 +1,12 @@
+import { featureReplacedInputBody } from '@openzcad/document-core';
 import {
   isFeatureManuallySuppressed,
   isFeatureRollbackSuppressed,
   type BodyId,
-  type FeatureData,
   type FeatureNode
 } from '@openzcad/shared';
 import type { ExactBuildResult, ExactShape } from './exact-types';
 import { inheritMeshOrigin } from './exact-shape-utils';
-
-/**
- * The body a suppressed feature hands through to its dependents, or null.
- * A failed feature hands through the same body (`passFailedFeatureThrough`).
- *
- * A feature that REPLACES one input body — consumes it and leaves its own
- * result in its place — has an obvious answer to "what is there without it":
- * the input, as it stood before the feature. Every other kind keeps the old
- * behaviour, where a suppressed feature leaves nothing under its result id:
- *
- * - Hole, shell, solid offset, draft, fillet, chamfer and pattern consume
- *   `targetBodyId` and replace it, so they pass it through. A suppressed
- *   pattern leaves its seed.
- * - An add, cut or intersect extrude consumes `targetBodyId`; its tool comes from a
- *   sketch, so no other body is involved. A new-body extrude has no input.
- * - A boolean passes its first operand through — the target of a subtract,
- *   the first body of a union or intersect — and leaves the tool operands
- *   unconsumed, so they are back on screen as they were before it ran. This
- *   is deliberately not `activeWhen = 0`, which consumes the tools too: that
- *   switch is a modelled configuration whose tools are construction, while
- *   suppressing a step should show the model as if the step were not there.
- *   A boolean that keeps its target (M11 `keepOriginals` all or target)
- *   passes nothing through: the target is already live under its own id, so
- *   standing it in for the result would show it twice, as for mirror.
- * - Transform and direct edit rewrite their target in place under the same
- *   id, so a skipped one already leaves the input where dependents look.
- * - Mirror and thicken create an additional body and leave their input live;
- *   standing the input in for the copy would show the same material twice.
- * - Split consumes its input but yields two halves, and neither is the
- *   input; handing the whole body to both would double it.
- * - Primitives, sketches, revolves, lofts, sweeps and imports make a body
- *   from nothing, so there is nothing to pass on.
- *
- * Pass-through supplies a BODY only. Dependents still resolve their face and
- * edge references against that body's verified lineage (ADR-011), so a
- * reference to topology the suppressed feature itself made — its blend, its
- * bore — finds nothing and refuses exactly as a missing face always has.
- */
-export function suppressedFeaturePassThroughSource(
-  data: FeatureData
-): BodyId | null {
-  switch (data.featureKind) {
-    case 'hole':
-    case 'shell':
-    case 'solid-offset':
-    case 'draft':
-    case 'fillet':
-    case 'chamfer':
-    case 'pattern':
-    case 'thread':
-      return data.targetBodyId;
-    case 'gear':
-      // Teeth cut into a body replace it; a new gear has no input body.
-      return data.targetBodyId ?? null;
-    case 'extrude':
-      return (data.operation ?? 'new-body') === 'new-body'
-        ? null
-        : (data.targetBodyId ?? null);
-    case 'boolean':
-      return data.keepOriginals === 'all' || data.keepOriginals === 'target'
-        ? null
-        : (data.targetBodyIds[0] ?? null);
-    case 'transform':
-    case 'direct-edit':
-    case 'mirror':
-    case 'thicken':
-    case 'split':
-    case 'primitive':
-    case 'sketch':
-    case 'revolve':
-    case 'loft':
-    case 'sweep':
-    case 'helical-sweep':
-    case 'imported-mesh':
-    case 'imported-step':
-    case 'datum-plane':
-    case 'datum-axis':
-      return null;
-    default: {
-      const unhandled: never = data;
-      void unhandled;
-      return null;
-    }
-  }
-}
 
 /**
  * The body this feature, as the document stands, would pass through to its
@@ -112,12 +27,11 @@ export function suppressedPassThroughBody(feature: FeatureNode): BodyId | null {
 /**
  * The separate input body this feature replaces, whatever its state: the
  * body a skipped or failed run of it hands through. Null for a kind with no
- * such input (see {@link suppressedFeaturePassThroughSource}).
+ * such input. The per-kind rule lives in document-core
+ * (`replacedInputBodyId`), where the history fork check reads the same table.
  */
 function passThroughSource(feature: FeatureNode): BodyId | null {
-  if (!feature.bodyId) return null;
-  const source = suppressedFeaturePassThroughSource(feature.data);
-  return source === feature.bodyId ? null : source;
+  return featureReplacedInputBody(feature);
 }
 
 /**

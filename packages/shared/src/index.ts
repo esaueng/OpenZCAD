@@ -3376,13 +3376,20 @@ export interface FeatureWarning {
    *   The user asked for this and got it; refusing would destroy work that
    *   succeeded.
    * - `suppressed`: a status. The feature was deliberately skipped.
+   * - `history-fork`: a diagnostic about the history, not the geometry. The
+   *   feature built (or failed, reported separately) on a body an earlier
+   *   active feature had already replaced, so two branches of the same part
+   *   are on screen (ADR-025). It is a real, listed warning, counted in
+   *   Diagnostics like an advisory, but it never refuses a commit: a stored
+   *   forked history must stay editable, and new forks are refused where
+   *   they are created, by the command layer.
    *
    * Only the first two refuse a commit. The distinction is NOT derivable from
    * whether a shape was produced — the gate rebuilds a throwaway candidate, so
    * every non-throwing builder sets a shape by construction. It is a judgement
    * about the result, and it belongs where the kernel makes it.
    */
-  kind: 'build-failed' | 'refusal' | 'advisory' | 'suppressed';
+  kind: 'build-failed' | 'refusal' | 'advisory' | 'suppressed' | 'history-fork';
   /**
    * The exact kernel's own classification, present only when this warning
    * came from an operation the kernel refused with a category.

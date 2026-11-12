@@ -216,3 +216,37 @@ redo of a marker move, command replay and collaboration snapshots are
 unchanged, so stored states with failing resumed features still load as they
 are. No stored format, exactness, reference-resolution or kernel-refusal rule
 changes.
+
+## Amendment (November 2026): forked histories are reported, new forks refused
+
+Two active features that both replace the same body fork the history: both
+build, and two overlapping solids of one part are on screen. The reported
+history held one such fork, five features attached to a failed fillet's
+input. The failed-feature pass-through above stops new ones arising that
+way, but older documents, merges, assistant patches and reorders can still
+hold them. [ADR-025](ADR-025-stable-body-lineage-identity.md) proposes making
+them unrepresentable; until then:
+
+- The build reports each fork on the later feature as an attributed
+  `history-fork` warning: "Builds on an earlier state of “Body” that
+  “Fillet 3” already replaced; this branches the history." The detector
+  (`historyForks`, document-core) reads the document only and uses the same
+  per-kind table as pass-through, now `replacedInputBodyId` in document-core.
+  A manually suppressed consumer counts, because its pass-through replaces
+  the body. A rolled-back one does not, because it passes nothing through,
+  and a suppressed or rolled-back later feature is never reported. Two
+  consumers whose results a later boolean combines again leave one body and
+  are not a fork (the imported-opening recipe builds exactly that). The
+  warning is listed and counted in Diagnostics, but no commit gate reads it,
+  so a stored fork stays editable and nothing about the geometry changes.
+- `CommandManager.execute` and `runTransaction` refuse an edit that adds a
+  fork on a feature it creates or retargets. The check runs after rollback
+  placement, so a feature added while rolled back lands at the marker, ahead
+  of the paused consumer, and is accepted; that consumer then reports the
+  fork once History resumes. Resume, suppression, unrelated edits and
+  `replayCommands` never run into the refusal, so stored logs load and
+  replay exactly as before.
+- Duplicate no longer offers Pattern: the copy patterned the same seed again
+  beside the original.
+
+No stored format or schema version changes.

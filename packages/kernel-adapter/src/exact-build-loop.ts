@@ -9,8 +9,11 @@ import {
 } from './exact-cancellation';
 import {
   getParameterScope,
+  historyForkMessage,
+  historyForks,
   typedParameterMisuse,
-  listFeaturesInOrder
+  listFeaturesInOrder,
+  type HistoryFork
 } from '@openzcad/document-core';
 import {
   isFeatureSuppressed,
@@ -266,6 +269,13 @@ function* buildDocumentHistorySteps(
   let downstreamOfFailure = result.featureWarnings.some(
     (warning) => warning.kind === 'build-failed'
   );
+  // ADR-025: a feature that builds on a body an earlier step already
+  // replaced says so. Read from the document, so a prefix-restored build
+  // reports the same branches as a full one; geometry is untouched.
+  const forks = new Map<FeatureId, HistoryFork[]>();
+  for (const fork of historyForks(document)) {
+    forks.set(fork.featureId, [...(forks.get(fork.featureId) ?? []), fork]);
+  }
   const normalizedDemand =
     lineageDemand === undefined
       ? undefined
@@ -395,6 +405,11 @@ function* buildDocumentHistorySteps(
         // as a suppressed one does — instead of failing every one of them.
         passFailedFeatureThrough(result, feature, entry);
         downstreamOfFailure = true;
+      }
+      for (const fork of forks.get(feature.featureId) ?? []) {
+        const message = `Feature "${feature.name}": ${historyForkMessage(document, fork)}`;
+        result.warnings.push(message);
+        attribute(result, feature, message, 'history-fork');
       }
       onFeature?.(index, result, idleLineageView?.finish(feature, result));
       yield;

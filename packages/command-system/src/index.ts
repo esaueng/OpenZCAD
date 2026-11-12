@@ -106,6 +106,7 @@ import {
   archiveHistorySources,
   type ImportedSourceArchiveIdentity,
   applyDocumentChanges,
+  assertNoNewHistoryFork,
   booleanConsumedBodyIds,
   recordDocumentEdit,
   normalizeDocumentHistory,
@@ -5268,6 +5269,9 @@ export class CommandManager {
     next = applyRollbackPlacement(previous, next, serialized);
     assertDocumentTextBudget(next);
     assertNoNewTypedParameterMisuse(previous, next);
+    // ADR-025: judged after rollback placement, where the feature lands.
+    // `replayCommands` never runs it, so a stored forked log still replays.
+    assertNoNewHistoryFork(previous, next);
     next.commandLog.push(...serialized);
     next = appendRevision(next, command.label);
     const recorded = recordDocumentEdit(
@@ -5369,6 +5373,7 @@ export class CommandManager {
     // Judged on the transaction's end state: a proposal may type a parameter
     // and use it in either order.
     assertNoNewTypedParameterMisuse(previous, next);
+    assertNoNewHistoryFork(previous, next);
     next.commandLog.push(...serialized);
     next = appendRevision(next, label);
     const recorded = recordDocumentEdit(
@@ -5843,13 +5848,20 @@ export function replayCommands(
 }
 
 /** History steps Duplicate supports (U06, ZC-104). */
-const DUPLICABLE_KINDS = ['transform', 'mirror', 'pattern'] as const;
+const DUPLICABLE_KINDS = ['transform', 'mirror'] as const;
+
+const DUPLICABLE_KINDS_REFUSAL = 'Duplicate covers Move and Mirror steps only.';
 
 /**
  * Why a history step cannot be duplicated, or null when it can. Duplicate
- * covers the steps that repeat cleanly — a transform, a mirror, a pattern —
- * and every other kind says so rather than offering a copy that would fight
- * over the same faces or sketch.
+ * covers the steps that repeat cleanly — a transform, a mirror — and every
+ * other kind says so rather than offering a copy that would fight over the
+ * same faces or sketch.
+ *
+ * A Pattern was covered until ADR-025: it replaces its seed, so a copy read
+ * the same seed and built a second patterned body over the first, a fork the
+ * command layer now refuses (`assertNoNewHistoryFork`). It says so here, so
+ * the menu item explains itself instead of failing on click.
  */
 export function duplicateFeatureRefusal(
   document: ProjectDocument,
@@ -5857,10 +5869,13 @@ export function duplicateFeatureRefusal(
 ): string | null {
   const feature = findFeature(document, featureId);
   if (!feature) return `Feature ${featureId} not found.`;
+  if (feature.data.featureKind === 'pattern') {
+    return 'A copy of a Pattern would pattern the same body again beside it, which branches the history. Add a Pattern to the patterned body instead.';
+  }
   if (
     !(DUPLICABLE_KINDS as readonly string[]).includes(feature.data.featureKind)
   ) {
-    return 'Duplicate covers Move, Mirror and Pattern steps only.';
+    return DUPLICABLE_KINDS_REFUSAL;
   }
   // A copy lands right after its source. Past the end of history it would
   // build active inside the paused tail, change the rolled-back model and
@@ -5916,15 +5931,8 @@ export function duplicateFeatureCommands(
       });
       break;
     }
-    case 'pattern': {
-      const ids = createBodyFeatureIds();
-      copyId = ids.featureId;
-      const { featureKind: _kind, ...pattern } = data;
-      create = commandFactories.patternBody({ ...pattern, name, ids });
-      break;
-    }
     default:
-      throw new Error('Duplicate covers Move, Mirror and Pattern steps only.');
+      throw new Error(DUPLICABLE_KINDS_REFUSAL);
   }
   const ordered = listFeaturesInOrder(document).map((entry) => entry.featureId);
   const after = ordered.indexOf(featureId) + 1;
