@@ -65,8 +65,8 @@ test('mobile measurement actions stay clear of the viewport ruler', async ({
     await expect(
       workbench.getByRole('button', { name: 'Copy all' })
     ).toBeVisible();
-    // The ruler lives in the viewport dock under the workbench's sheet; what
-    // has to hold is that neither covers the other.
+    // The ruler stands in the corner under the workbench's sheet; what has
+    // to hold is that neither covers the other.
     await expect
       .poll(async () => {
         const scale = await ruler.boundingBox();
@@ -253,44 +253,48 @@ test('a hover on an edge snaps to a named point', async ({ page }) => {
   await expect(glyph).toHaveText(/Endpoint|Midpoint|Center/);
 });
 
-test('a measurement survives a reload', { tag: '@ci-smoke' }, async ({ page }) => {
-  // The whole promise of persisting them. Measurements belong to the project,
-  // not to the tab: someone who measures a part, closes the laptop and comes
-  // back to check a figure should find it.
-  //
-  // They are stored in their own per-project IndexedDB record rather than in
-  // the document, because anything written into a ProjectDocument that no user
-  // typed makes an untouched project read `diverged` and invalidates the exact
-  // rebuild cache.
-  await createBox(page, 'Measure Durability');
+test(
+  'a measurement survives a reload',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    // The whole promise of persisting them. Measurements belong to the project,
+    // not to the tab: someone who measures a part, closes the laptop and comes
+    // back to check a figure should find it.
+    //
+    // They are stored in their own per-project IndexedDB record rather than in
+    // the document, because anything written into a ProjectDocument that no user
+    // typed makes an untouched project read `diverged` and invalidates the exact
+    // rebuild cache.
+    await createBox(page, 'Measure Durability');
 
-  await switchWorkspace(page, 'View');
-  await armMeasure(page);
-  await setSelectionFilter(page, 'Edge');
+    await switchWorkspace(page, 'View');
+    await armMeasure(page);
+    await setSelectionFilter(page, 'Edge');
 
-  const edge = await locateEdge(page);
-  await page.mouse.click(edge.x, edge.y);
+    const edge = await locateEdge(page);
+    await page.mouse.click(edge.x, edge.y);
 
-  const workbench = page.getByLabel('Measurement workbench');
-  await expect(workbench.getByRole('listitem')).toHaveCount(1);
-  const recorded = await workbench.getByRole('listitem').textContent();
-  expect(recorded).toBeTruthy();
+    const workbench = page.getByLabel('Measurement workbench');
+    await expect(workbench.getByRole('listitem')).toHaveCount(1);
+    const recorded = await workbench.getByRole('listitem').textContent();
+    expect(recorded).toBeTruthy();
 
-  // The write is debounced, so give it the chance the app gives it.
-  await page.waitForTimeout(700);
-  await page.reload();
+    // The write is debounced, so give it the chance the app gives it.
+    await page.waitForTimeout(700);
+    await page.reload();
 
-  // Back in View mode with the measurement still listed. Measure has to be
-  // re-armed — that is session state, and arming a tool is not a measurement.
-  await switchWorkspace(page, 'View');
-  await armMeasure(page);
-  await expect(
-    page.getByLabel('Measurement workbench').getByRole('listitem')
-  ).toHaveCount(1);
-  await expect(
-    page.getByLabel('Measurement workbench').getByRole('listitem')
-  ).toHaveText(recorded!);
-});
+    // Back in View mode with the measurement still listed. Measure has to be
+    // re-armed — that is session state, and arming a tool is not a measurement.
+    await switchWorkspace(page, 'View');
+    await armMeasure(page);
+    await expect(
+      page.getByLabel('Measurement workbench').getByRole('listitem')
+    ).toHaveCount(1);
+    await expect(
+      page.getByLabel('Measurement workbench').getByRole('listitem')
+    ).toHaveText(recorded!);
+  }
+);
 
 test('measurements stay with their own project across a switch', async ({
   page

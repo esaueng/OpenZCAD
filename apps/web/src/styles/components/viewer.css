@@ -71,15 +71,20 @@
   bottom: 38px;
   left: 18px;
   z-index: var(--z-viewer-overlay);
-  /* The rule lies along the foot with its value beside it, as a scale bar
-     reads on a drawing; ViewportScaleIndicator ends it short of the bar. */
+  /* The rule stands upright in the corner with its value at its foot.
+     ViewportScaleIndicator measures the rail above and the bar beside it and
+     moves the rule by these offsets, so it keeps the corner at every size. */
   display: flex;
   flex-direction: row;
   align-items: flex-end;
-  gap: 8px;
+  gap: 6px;
   color: var(--color-stage-ink);
   pointer-events: none;
   user-select: none;
+  transform: translate(
+    var(--viewport-scale-dx, 0px),
+    var(--viewport-scale-dy, 0px)
+  );
 }
 
 .viewport-scale-indicator[hidden] {
@@ -89,14 +94,12 @@
 .viewer-shell canvas.viewport-scale-rule {
   display: block;
   flex: 0 0 auto;
-  width: var(--viewport-scale-length, 1px) !important;
-  height: 18px !important;
+  width: 18px !important;
+  height: var(--viewport-scale-length, 1px) !important;
 }
 
 .viewport-scale-value {
   min-width: max-content;
-  /* Level with the rule's baseline, 2px above the canvas foot. */
-  padding-bottom: 1px;
   color: var(--color-stage-ink);
   font-family: var(--font-mono);
   font-size: 13px;

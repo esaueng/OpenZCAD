@@ -71,9 +71,10 @@ describe('the instrument rail over the cube', () => {
     const rail = rules(css, '.workspace.column-layout .instrument-rail')[0]!;
     expect(rail).toMatch(/--rail-band-room:[^;]*var\(--stage-corner-h\)/);
     // Centred while it fits (-50%), lifted past that, never above the top
-    // islands (the max() clamp on the stage's top).
+    // islands (the max() clamp on the stage's top) or the sketch readout
+    // that stands over the rail's head.
     expect(rail).toMatch(
-      /transform:\s*translateY\(\s*max\(\s*calc\(\(var\(--stage-top\)[\s\S]*min\(-50%,\s*calc\(var\(--rail-band-room\) - 100%\)\)/
+      /transform:\s*translateY\(\s*max\(\s*calc\(\s*\(var\(--stage-top\)[^;]*var\(--rail-head, 0px\)[\s\S]*min\(-50%,\s*calc\(var\(--rail-band-room\) - 100%\)\)/
     );
   });
 

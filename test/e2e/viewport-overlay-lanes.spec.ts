@@ -95,7 +95,7 @@ test('search bar and toast clear the column at phone width', async ({
   page
 }) => {
   // 390px sits inside the <=520px branch, where the bottom lanes run from the
-  // column to the window's right edge and the scale bar gives way.
+  // column to the window's right edge, clear of the scale bar in the corner.
   await page.setViewportSize({ width: 390, height: 844 });
   await stubApi(page);
   await seedDismissedWorkspaceTour(page);
@@ -127,13 +127,16 @@ test('search bar and toast clear the column at phone width', async ({
   expect(clearsColumn(toastBox!)).toBe(true);
 
   // Outside a sketch the readout has nothing to say and does not draw; the
-  // ruler lies in the bottom-left corner above the search row.
+  // ruler stands in the bottom-left corner, beside the search row.
   const readout = page.locator('.viewport-readout');
   await expect(readout).toBeHidden();
   const ruler = page.getByTestId('viewport-scale-indicator');
   await expect(ruler).toBeVisible();
   const rulerBox = (await ruler.boundingBox())!;
-  expect(rulerBox.y + rulerBox.height).toBeLessThanOrEqual(barBox!.y);
+  expect(
+    rulerBox.x + rulerBox.width <= barBox!.x ||
+      rulerBox.y + rulerBox.height <= barBox!.y
+  ).toBe(true);
   const covered = await readout.evaluate((el) =>
     [...el.querySelectorAll('button')]
       .filter((button) => {
@@ -149,18 +152,17 @@ test('search bar and toast clear the column at phone width', async ({
   expect(covered).toEqual([]);
 });
 
-// Below 1160px the sketch readout trades its words for glyphs, so the search
-// row beside it keeps its full width (520px: the bar and Ask) instead of the
-// readout wrapping or squeezing it. Narrower still, the lane stops mirroring
-// the readout on the right (at 960px and below it runs to the edge, the cube
-// standing above it), and below 664px the bar drops its ⌘K glyph as on a
-// phone, so the field keeps room.
-for (const { width, compact, minLane, phoneBar } of [
-  { width: 1440, compact: false, minLane: 520, phoneBar: false },
-  { width: 1024, compact: true, minLane: 520, phoneBar: false },
-  { width: 600, compact: true, minLane: 320, phoneBar: true }
+// The sketch readout stands at the head of the right-hand rails, snap over
+// grid, each led by its glyph: over both rails where one column of
+// instruments fits under it, over the relations alone at 960px and narrower. It no longer
+// takes the bottom-left corner, so the search lane keeps its width, and
+// below 664px the bar drops its ⌘K glyph as on a phone.
+for (const { width, above, minLane, phoneBar } of [
+  { width: 1440, above: true, minLane: 520, phoneBar: false },
+  { width: 1024, above: true, minLane: 520, phoneBar: false },
+  { width: 600, above: false, minLane: 320, phoneBar: true }
 ]) {
-  test(`sketch readout keeps its segments on one row at ${width}px`, async ({
+  test(`sketch readout stands at the head of the rails at ${width}px`, async ({
     page
   }) => {
     await page.setViewportSize({ width, height: 900 });
@@ -179,7 +181,7 @@ for (const { width, compact, minLane, phoneBar } of [
     const icons = readout.locator('.viewport-readout-icon');
     await expect(icons).toHaveCount(2);
     for (const icon of await icons.all()) {
-      await (compact ? expect(icon).toBeVisible() : expect(icon).toBeHidden());
+      await expect(icon).toBeVisible();
     }
     // Hidden words stay in the accessibility tree: 1px and clipped, never
     // display: none.
@@ -189,40 +191,60 @@ for (const { width, compact, minLane, phoneBar } of [
     const wordWidth = await snapWord.evaluate(
       (el) => el.getBoundingClientRect().width
     );
-    if (compact) {
-      expect(wordWidth).toBeLessThanOrEqual(1);
-    } else {
-      expect(wordWidth).toBeGreaterThan(10);
-    }
+    expect(wordWidth).toBeLessThanOrEqual(1);
 
-    // Snap and grid (and the selection filter, before it left) used to
-    // outgrow the width a sketch reserves and wrap the grid onto a second
-    // row, led by a stray separator.
-    const tops = await readout.evaluate((el) =>
+    // Snap stands over grid, both inside the island.
+    const segments = await readout.evaluate((el) =>
       [...el.querySelectorAll('.viewport-dock-snap, .viewport-dock-grid')].map(
-        (segment) => segment.getBoundingClientRect().top
+        (segment) => {
+          const { top, left, right } = segment.getBoundingClientRect();
+          return { top, left, right };
+        }
       )
     );
-    expect(tops).toHaveLength(2);
-    for (const top of tops) {
-      expect(Math.abs(top - tops[0]!)).toBeLessThan(1);
-    }
+    expect(segments).toHaveLength(2);
+    expect(segments[1]!.top).toBeGreaterThan(segments[0]!.top + 20);
+    expect(Math.abs(segments[1]!.left - segments[0]!.left)).toBeLessThan(1);
 
-    // The reserve that keeps it on one row also moves the search lane, so
-    // the readout still ends before the search bar starts.
+    // Under the top islands, and clear of both rails it stands by.
     const readoutBox = await readout.boundingBox();
+    const topbarBox = await page.locator('.topbar').boundingBox();
+    const railBox = await page
+      .locator('.instrument-rail > .viewer-rail')
+      .first()
+      .boundingBox();
+    const relationsBox = await page.locator('.sketch-relations').boundingBox();
     const barBox = await page.locator('.command-bar').boundingBox();
     expect(readoutBox).not.toBeNull();
+    expect(topbarBox).not.toBeNull();
+    expect(railBox).not.toBeNull();
+    expect(relationsBox).not.toBeNull();
     expect(barBox).not.toBeNull();
-    expect(
-      readoutBox!.x + readoutBox!.width <= barBox!.x ||
-        barBox!.y + barBox!.height <= readoutBox!.y
-    ).toBe(true);
+    expect(readoutBox!.y).toBeGreaterThanOrEqual(
+      topbarBox!.y + topbarBox!.height
+    );
+    for (const segment of segments) {
+      expect(segment.right).toBeLessThanOrEqual(
+        readoutBox!.x + readoutBox!.width
+      );
+    }
+    const bottom = readoutBox!.y + readoutBox!.height;
+    expect(bottom).toBeLessThanOrEqual(relationsBox!.y);
+    if (above) {
+      expect(bottom).toBeLessThanOrEqual(railBox!.y);
+      expect(
+        Math.abs(
+          readoutBox!.x + readoutBox!.width - (railBox!.x + railBox!.width)
+        )
+      ).toBeLessThan(2);
+    } else {
+      // Over the relations alone, beside the instruments.
+      expect(readoutBox!.x + readoutBox!.width).toBeLessThanOrEqual(railBox!.x);
+    }
     const laneBox = await page.locator('.command-bar-lane').boundingBox();
     expect(laneBox).not.toBeNull();
     expect(laneBox!.width).toBeGreaterThanOrEqual(minLane);
-    // The ruler never sits under the search row (below 1160px it steps up
-    // to the bottom-left, as on a phone).
+    // The ruler never sits under the search row.
     const ruler = page.locator('.viewport-scale-indicator');
     if (await ruler.isVisible()) {
       const rulerBox = await ruler.boundingBox();
