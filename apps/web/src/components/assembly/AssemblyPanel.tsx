@@ -1,5 +1,12 @@
-import { useMemo, useState, type MouseEvent, type ReactNode } from 'react';
 import {
+  Suspense,
+  useMemo,
+  useState,
+  type MouseEvent,
+  type ReactNode
+} from 'react';
+import {
+  Cog,
   Download,
   Link2,
   MoveVertical,
@@ -35,6 +42,7 @@ import {
 } from '../../lib/assembly/assemblyUi';
 import { downloadText, exportFileStem } from '../../lib/model';
 import { ContextMenu, type ContextMenuState } from '../ContextMenu';
+import { lazyWithStaleChunkNotice } from '../../lib/staleChunk';
 import {
   AssemblyFirstRunCard,
   assemblyCandidateBodies
@@ -47,9 +55,16 @@ import {
 } from './AssemblyStudiesSection';
 import { JointKindIcon } from './JointKindIcon';
 import { JointToolCard } from './JointToolCard';
+import { assemblyGearCount, openGearMesh } from './gearMeshEntry';
 import { MotionSetupCard, openMotionSetup } from './MotionSetupCard';
 import type { MotionSetupBounds } from '../../lib/assembly/motionSetup';
 import { useAssemblyModel } from './useAssemblyModel';
+
+// Mesh gears and its pair math load when the card first opens; the entry
+// chunk runs at its budget and keeps only the gear check.
+const GearMeshCard = lazyWithStaleChunkNotice(() =>
+  import('./GearMeshCard').then((module) => ({ default: module.GearMeshCard }))
+);
 
 export interface AssemblyPanelProps {
   document: ProjectDocument;
@@ -81,6 +96,7 @@ export function AssemblyPanel(props: AssemblyPanelProps) {
   const { document, execute, onStatus, onAnnounce } = props;
   const tool = useAssemblyRuntime((s) => s.jointTool !== null);
   const setup = useAssemblyRuntime((s) => s.motionSetup !== null);
+  const gearMesh = useAssemblyRuntime((s) => s.gearMesh !== null);
   const hasParts = (document.assembly?.components.length ?? 0) > 0;
   return (
     <aside className="assembly-panel" aria-label="Assembly">
@@ -93,6 +109,14 @@ export function AssemblyPanel(props: AssemblyPanelProps) {
           onStatus={onStatus}
           {...(props.bodyBounds ? { bounds: props.bodyBounds } : {})}
         />
+      ) : gearMesh ? (
+        <Suspense fallback={null}>
+          <GearMeshCard
+            document={document}
+            execute={execute}
+            onStatus={onStatus}
+          />
+        </Suspense>
       ) : hasParts ? (
         <AssemblyLists {...props} />
       ) : (
@@ -154,6 +178,7 @@ function AssemblyLists({
     () => assemblyCandidateBodies(document),
     [document]
   );
+  const gearCount = useMemo(() => assemblyGearCount(document), [document]);
   if (!model) return null;
   const { set, solution, bodyByComponent } = model;
   const app = { document, execute, onStatus };
@@ -211,6 +236,11 @@ function AssemblyLists({
       })
     )
       onStatus('Set up motion · choose what moves and how.');
+  };
+
+  const startGearMesh = () => {
+    if (openGearMesh(document))
+      onStatus('Mesh gears · choose the gear that stays put and its mate.');
   };
 
   const openJointTool = () => {
@@ -308,6 +338,17 @@ function AssemblyLists({
           >
             <MoveVertical size={13} aria-hidden="true" />
             Motion
+          </button>
+        ) : null}
+        {gearCount >= 2 ? (
+          <button
+            type="button"
+            className="assembly-tool-button"
+            title="Place one gear in mesh with another"
+            onClick={startGearMesh}
+          >
+            <Cog size={13} aria-hidden="true" />
+            Gears
           </button>
         ) : null}
         <button

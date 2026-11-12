@@ -885,6 +885,32 @@
   margin-bottom: var(--sp-2);
 }
 
+/* ── Mesh gears: the pair's working values ───────────────── */
+
+.assembly-gear-readout {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: var(--sp-1) var(--sp-2);
+  font-size: var(--fs-xs);
+}
+
+.assembly-gear-readout > div {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.assembly-gear-readout dt {
+  color: var(--color-text-muted);
+}
+
+.assembly-gear-readout dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
 /* ── Set up motion (takes the sidebar while open) ────────── */
 
 .assembly-setup-field {

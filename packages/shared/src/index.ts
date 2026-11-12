@@ -16,6 +16,8 @@ export * from './drawings';
 export * from './object-folders';
 export * from './assembly';
 export * from './assembly-kinematics';
+export * from './gear-mesh-types';
+export * from './gear-mesh';
 import type { DocumentHistory } from './document-history';
 import type { KeymapOverrides } from './keymap-settings';
 import type { DrawingSet } from './drawings';
