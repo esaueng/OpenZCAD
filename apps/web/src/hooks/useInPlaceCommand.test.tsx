@@ -8,6 +8,7 @@ import {
 } from '@testing-library/react';
 import { useEffect, useRef } from 'react';
 import { InPlaceCommandBar } from '../components/InPlaceCommandBar';
+import { cancelCommandChipEntry } from '../lib/inPlace/chipCancel';
 import { describe, expect, it, vi } from 'vitest';
 import type { PlaneBasis } from '@openzcad/geometry';
 import type {
@@ -973,6 +974,46 @@ describe('useInPlaceCommand: thread', () => {
     fireEvent.keyDown(field, { key: 'Enter' });
     expect(field).not.toHaveAttribute('aria-invalid');
     await waitFor(() => expect(done).toBeEnabled());
+  });
+
+  it('drops the refusal of a chip when it is reopened and canceled, and only then (fourth re-check)', async () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('thread', [], [BOSS]));
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    // Length 13 entered on its chip: refused. The app then puts the chip's
+    // baseline back, which leaves the refusal standing.
+    act(() => {
+      hook.result.current.setValue('length', 13);
+    });
+    act(() => {
+      hook.result.current.restoreValue('length', 12, undefined, false);
+    });
+    expect(hook.result.current.refusal).toMatch(/^13; a thread here runs/);
+    expect(hook.result.current.canFinish).toBe(false);
+    // An offset refused in Options as well: its refusal is its own.
+    act(() => {
+      hook.result.current.setValue('offset', 12);
+    });
+    expect(hook.result.current.refusal).toMatch(/^12; the face is only/);
+    // The length chip reopened and canceled (Escape, untyped): its refusal
+    // goes, and only its own; the offset's still holds Done.
+    act(() => {
+      cancelCommandChipEntry(
+        hook.result.current,
+        'length',
+        12,
+        undefined,
+        false
+      );
+    });
+    expect(hook.result.current.refusal).toMatch(/^12; the face is only/);
+    expect(hook.result.current.canFinish).toBe(false);
+    expect(hook.result.current.values.length).toBe(12);
+    act(() => {
+      hook.result.current.dropRefusal('offset');
+    });
+    expect(hook.result.current.refusal).toBeNull();
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
   });
 
   /** A stored partial thread, 10 long from 2 up, reopened from History. */

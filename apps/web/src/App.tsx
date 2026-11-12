@@ -398,6 +398,7 @@ import { watchBuildVersion } from './lib/buildVersionWatch';
 import { commandOutcomeMessage } from './lib/commandOutcome';
 import { tintPreviewResultBodies } from './lib/previewBodyTint';
 import { remappedBlendEdge } from './lib/inPlace/blendEdgeRemap';
+import { cancelCommandChipEntry } from './lib/inPlace/chipCancel';
 import { commandChipName } from './lib/inPlace/chipNames';
 import {
   presentedDiagnostics,
@@ -25622,7 +25623,9 @@ export function App() {
       const baseline = open.baseline ?? inPlaceRef.current.values[valueId] ?? 0;
       commandSetterRef.current?.(valueId, baseline);
       // Unset stays unset: a step that followed its bore still follows it.
-      inPlaceRef.current.restoreValue(
+      // A refused entry of it (the chip reopened on a refusal) goes too.
+      cancelCommandChipEntry(
+        inPlaceRef.current,
         valueId,
         baseline,
         open.baselineRaw,
