@@ -76,6 +76,62 @@ export function measurePickFrame(canvas: HTMLElement): NdcFrame | undefined {
   );
 }
 
+/**
+ * The stage a creation preview is kept in: what Fit frames into, less the
+ * bottom lane too, where the command's own bar (its Done) and the search
+ * row stand over the model. A preview sized past it is reframed into it.
+ * Always a frame, the whole canvas when nothing covers it.
+ */
+export function measureCreationFrame(canvas: HTMLElement): NdcFrame {
+  const frame = measureFitFrame(canvas) ?? {
+    minX: -1,
+    maxX: 1,
+    minY: -1,
+    maxY: 1
+  };
+  const bounds = canvas.getBoundingClientRect();
+  if (!(bounds.height > 0)) return frame;
+  const lanes = [
+    ...(canvas
+      .closest('.workspace')
+      ?.querySelectorAll<HTMLElement>('.command-bar-lane') ?? [])
+  ]
+    .map((lane) => lane.getBoundingClientRect())
+    .filter((rect) => rect.width > 0 && rect.height > 0);
+  if (lanes.length === 0) return frame;
+  const laneTop = Math.min(...lanes.map((rect) => rect.top));
+  const minY =
+    1 - ((laneTop - STAGE_FRAME_GAP_PX - bounds.top) / bounds.height) * 2;
+  // A lane that leaves less than a third of the frame's height is not a
+  // band to frame above (a phone's sheet): the frame stays as it was.
+  return minY > frame.minY && frame.maxY - minY >= (frame.maxY - frame.minY) / 3
+    ? { ...frame, minY }
+    : frame;
+}
+
+/**
+ * Whether every projected corner (normalized device coordinates, +Y up, `z`
+ * the clip depth) lies inside `frame`, inset by `margin` of the frame's own
+ * half-size on each side, and between the near and far planes.
+ */
+export function cornersWithinFrame(
+  corners: readonly { x: number; y: number; z: number }[],
+  frame: NdcFrame,
+  margin = 0
+): boolean {
+  const insetX = ((frame.maxX - frame.minX) / 2) * margin;
+  const insetY = ((frame.maxY - frame.minY) / 2) * margin;
+  return corners.every(
+    (corner) =>
+      corner.x >= frame.minX + insetX &&
+      corner.x <= frame.maxX - insetX &&
+      corner.y >= frame.minY + insetY &&
+      corner.y <= frame.maxY - insetY &&
+      corner.z >= -1 &&
+      corner.z <= 1
+  );
+}
+
 function panelsOver(canvas: HTMLElement, selector: string): DOMRect[] {
   return [
     ...(canvas
