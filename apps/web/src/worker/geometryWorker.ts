@@ -1822,10 +1822,11 @@ async function refineCommittedDisplay(
       !broadcastGate.isCurrent(pending.broadcastToken)
     )
       return true;
-    const derived = rebindSketchGeometryForContent(
-      document,
-      refined,
-      contentKey
+    // Body buffers are shared with the result cache and the adapter's
+    // retained measurements (see `cloneDerivedSharingBodyGeometry`):
+    // transfer a copy, never them.
+    const derived = structuredClone(
+      rebindSketchGeometryForContent(document, refined, contentKey)
     );
     self.postMessage(
       {

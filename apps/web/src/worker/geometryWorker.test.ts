@@ -670,6 +670,100 @@ describe('geometry worker rebuild coordination', () => {
     expect(mesh.indices.byteLength).toBe(12);
   });
 
+  it('never transfers the buffers it shares with retained measurements', async () => {
+    // The adapter runs with `shareRetainedMeasurements`: what it returns may
+    // be the very buffers it keeps for the next sync. A transfer of those
+    // detached them, and the next clone of the cache failed outright.
+    const bodyId = toBodyId('body_retained');
+    const body = (vertices: number[], displayQuality?: 'draft') => ({
+      bodyId,
+      name: 'Released',
+      source: 'direct-edit' as const,
+      mesh: {
+        kind: 'mesh' as const,
+        vertices: new Float32Array(vertices),
+        indices: new Uint32Array([0, 1, 2])
+      },
+      faceCount: 1,
+      color: '#ffffff',
+      exportableStep: true,
+      consumed: false,
+      volume: 1,
+      bbox: { min: { x: 0, y: 0, z: 0 }, max: { x: 1, y: 1, z: 0 } },
+      ...(displayQuality ? { displayQuality } : {})
+    });
+    const draft: ProjectDocument['derived'] = {
+      ...derived('released'),
+      bodyRepresentations: {
+        [bodyId]: body([0, 0, 0, 1, 0, 0, 0, 1, 0], 'draft')
+      }
+    };
+    const refined: ProjectDocument['derived'] = {
+      ...derived('released'),
+      bodyRepresentations: { [bodyId]: body([0, 0, 0, 2, 0, 0, 0, 2, 0]) }
+    };
+    const retained = refined.bodyRepresentations[bodyId]!.mesh;
+    const syncDocument = vi
+      .fn()
+      .mockResolvedValueOnce(draft)
+      .mockResolvedValue(refined);
+    const { scope } = await installWorker(syncDocument);
+    // Deliver as postMessage would: transferred buffers leave the worker.
+    scope.postMessage.mockImplementation((message, options) => {
+      structuredClone(message, options);
+    });
+    const document = addPrimitiveFeature(
+      createProjectDocument('Shared release', toUserId('user')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 1, height: 1, depth: 1 }
+      }
+    );
+    post(scope, {
+      type: 'sync',
+      document,
+      requestId: 'commit',
+      proposeCarry: true
+    });
+    await vi.waitFor(() =>
+      expect(
+        scope.postMessage.mock.calls.some(
+          ([message]) =>
+            message.type === 'sync' && message.requestId === 'commit'
+        )
+      ).toBe(true)
+    );
+    adopt(scope, document);
+    await vi.waitFor(() =>
+      expect(
+        scope.postMessage.mock.calls.some(
+          ([message]) => message.type === 'display-refined'
+        )
+      ).toBe(true)
+    );
+    expect(retained.vertices.byteLength).toBe(36);
+    expect(retained.indices.byteLength).toBe(12);
+    // The cached refined result still serves a request.
+    post(scope, {
+      type: 'sync',
+      document,
+      requestId: 'again',
+      proposeCarry: true
+    });
+    await vi.waitFor(() =>
+      expect(
+        scope.postMessage.mock.calls.some(
+          ([message]) =>
+            message.type === 'sync' &&
+            message.requestId === 'again' &&
+            message.ok
+        )
+      ).toBe(true)
+    );
+    expect(retained.vertices.byteLength).toBe(36);
+  });
+
   it('posts a draft release once, then its full-quality display, and never caches the draft', async () => {
     const bodyId = toBodyId('body_draft');
     const body = (vertices: number[], displayQuality?: 'draft') => ({
