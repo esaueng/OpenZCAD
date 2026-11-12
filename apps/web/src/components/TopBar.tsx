@@ -82,6 +82,13 @@ interface TopBarProps {
   editRefusal?: string | null;
   onReviewEditFailure?(): void;
   /**
+   * How many warnings the model carries. Nonzero, with `onShowWarnings`,
+   * shows the count beside the save status; the Diagnostics button on the
+   * instrument rail carries the same number.
+   */
+  warningCount?: number;
+  onShowWarnings?(): void;
+  /**
    * Import sources that exist only in this browser because their cloud
    * archival failed. Nonzero shows the File-menu action that retries the
    * upload without reimporting.
@@ -247,6 +254,8 @@ export function TopBar({
   editPending = false,
   editRefusal: proposedEditRefusal = null,
   onReviewEditFailure,
+  warningCount = 0,
+  onShowWarnings,
   localOnlySourceCount,
   artifacts: storedArtifacts,
   meshCleanup,
@@ -685,6 +694,23 @@ export function TopBar({
             {saveChipContent}
           </span>
         )}
+        {/* Warnings are a fact about the document, so they read beside its
+            status rather than only on a button far down the right rail. The
+            name gives way for the chip as it does for the status. */}
+        {projectName && warningCount > 0 && onShowWarnings ? (
+          <button
+            className="topbar-warnings topbar-action"
+            type="button"
+            onClick={onShowWarnings}
+            aria-label={`${warningCount} ${warningCount === 1 ? 'warning' : 'warnings'}: show Diagnostics`}
+            title={`${warningCount} ${warningCount === 1 ? 'warning' : 'warnings'} on this model. Show Diagnostics.`}
+          >
+            <TriangleAlert size={14} aria-hidden="true" />
+            <span aria-hidden="true">
+              {warningCount > 99 ? '99+' : warningCount}
+            </span>
+          </button>
+        ) : null}
       </div>
       <div
         className="mode-switch topbar-island"

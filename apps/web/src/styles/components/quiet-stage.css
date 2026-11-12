@@ -2885,6 +2885,51 @@ button.command-rail.is-suggested {
   }
 }
 
+/* With a mouse and room for one column, the rail is three islands rather
+   than one strip of fifteen buttons: what changes the document (undo,
+   redo), how it is looked at, and the model panels. The group hairline and
+   the one before the views give way to the 6px between islands, so the
+   column is no taller than the single surface was. Touch-sized rails
+   and the two-column fold at 600px and under keep the one surface: their
+   grids lay the groups' buttons out as the bar's own. */
+@media (pointer: fine) and (min-height: 601px) {
+  .instrument-rail:has(> .viewer-rail) {
+    gap: 6px;
+    background: none;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .instrument-rail > .viewer-rail {
+    width: var(--rail-w);
+    padding: 0;
+    gap: 6px;
+  }
+
+  .instrument-rail > .viewer-rail > .rail-group,
+  .instrument-rail > .viewer-rail.rail-panels {
+    width: var(--rail-w);
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    /* 3px, not the strip's 4px: three islands have six ends, and the
+       column must not outgrow the single surface the breakpoints fit. */
+    padding: 3px 0;
+    background: var(--color-surface);
+    border: var(--border-thin);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-2);
+  }
+
+  .instrument-rail > .viewer-rail > .rail-group-break,
+  .instrument-rail > .viewer-rail .rail-views-break {
+    display: none;
+  }
+}
+
 /* Revisions and Diagnostics made one column of both islands 522px tall,
    past a 541–600px window. Rather than stand the islands side by side
    there too (which took 50px more of a phone's width and squeezed the

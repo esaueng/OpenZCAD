@@ -29464,11 +29464,14 @@ export function App() {
     );
   };
   /**
-   * Brings History, Parameters or Revisions into view by name, as the
-   * palette's feature and parameter results and the undo-floor notice do:
-   * unpinned if it was closed, forward if it was open.
+   * Brings History, Parameters, Revisions or Diagnostics into view by name,
+   * as the palette's feature and parameter results, the undo-floor notice
+   * and the top bar's warning count do: unpinned if it was closed, forward
+   * if it was open.
    */
-  const showModelPanel = (id: 'history' | 'parameters' | 'revisions') => {
+  const showModelPanel = (
+    id: 'history' | 'parameters' | 'revisions' | 'diagnostics'
+  ) => {
     setPanelLayout((current) =>
       presentPanel(current, id, panelStageOrUndefined)
     );
@@ -30719,6 +30722,9 @@ export function App() {
       }
       topBar={
         <TopBar
+          // The model panels (Diagnostics among them) exist while modeling.
+          warningCount={modelingLocked ? 0 : diagnostics.length}
+          onShowWarnings={() => showModelPanel('diagnostics')}
           editPending={
             isOperationState(interaction) && interaction.phase === 'validating'
           }
