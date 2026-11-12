@@ -1727,3 +1727,203 @@ it('requalifies live solved neighbors only after no-rebuild geometry equality an
     })
   ).toBe(false);
 });
+
+describe('adopting a validated edit result as the live result', () => {
+  /**
+   * A two-box union shown with a lineage demand, then a validated edit that
+   * appends a third box. Returns what each case needs to commit it.
+   */
+  function validatedEdit() {
+    installWorker();
+    let base = createProjectDocument('Adopted edit', toUserId('user'));
+    for (const name of ['A', 'B'])
+      base = addPrimitiveFeature(base, {
+        name,
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 8, depth: 6 }
+      });
+    base = booleanBodies(base, {
+      name: 'Union',
+      operation: 'union',
+      targetBodyIds: [...base.bodyOrder]
+    }).document;
+    const demand = [base.bodyOrder.at(-1)!];
+    const manager = { document: base } as CommandManager;
+    const host = {
+      manager: () => manager,
+      onDerived: vi.fn(),
+      onError: vi.fn()
+    };
+    const { result } = renderHook(() => useGeometryWorker(host));
+    const worker = FakeWorker.instances[0]!;
+    const finishLive = () =>
+      act(() => {
+        worker.emit({
+          type: 'sync',
+          ok: true,
+          projectId: base.projectId,
+          version: base.version,
+          derived: base.derived
+        });
+        worker.emit({
+          type: 'state',
+          phase: 'ready',
+          projectId: base.projectId,
+          version: base.version,
+          stale: false
+        });
+      });
+    act(() => result.current.sync(base, demand));
+    const candidate = addPrimitiveFeature(base, {
+      name: 'C',
+      primitiveKind: 'box',
+      dimensions: { width: 4, height: 4, depth: 4 }
+    });
+    // The commit appends its revision: bookkeeping the rebuild never reads.
+    const committed = {
+      ...candidate,
+      version: candidate.version + 1,
+      revisions: [...candidate.revisions]
+    };
+    const validate = async (
+      options: {
+        lineageDemand?: readonly (typeof demand)[number][];
+        transient?: boolean;
+        derived?: typeof candidate.derived;
+      } = {}
+    ) => {
+      const derived = options.derived ?? {
+        ...candidate.derived,
+        warnings: []
+      };
+      const pending = result.current.syncOnce(
+        candidate,
+        undefined,
+        'lineageDemand' in options
+          ? options.lineageDemand
+          : result.current.liveLineageDemand(),
+        { proposeCarry: true }
+      );
+      const request = worker.postMessage.mock.calls.at(-1)![0] as {
+        requestId: string;
+      };
+      act(() =>
+        worker.emit({
+          type: 'sync',
+          ok: true,
+          requestId: request.requestId,
+          projectId: candidate.projectId,
+          version: candidate.version,
+          ...(options.transient ? { transient: true } : {}),
+          derived
+        })
+      );
+      return pending;
+    };
+    return {
+      base,
+      committed,
+      demand,
+      host,
+      manager,
+      result,
+      worker,
+      finishLive,
+      validate
+    };
+  }
+
+  it('answers the commit broadcast with the validation result instead of rebuilding it', async () => {
+    const edit = validatedEdit();
+    edit.finishLive();
+    expect(edit.result.current.liveLineageDemand()).toEqual(edit.demand);
+    const derived = await edit.validate();
+    const posted = edit.worker.postMessage.mock.calls.length;
+    act(() => {
+      edit.manager.document = edit.committed;
+      expect(
+        edit.result.current.adoptValidatedResult(edit.committed, derived)
+      ).toBe(true);
+    });
+    // Delivered exactly as a broadcast reply would be.
+    expect(edit.host.onDerived).toHaveBeenLastCalledWith(derived);
+    expect(edit.result.current.isReadyFor(edit.committed)).toBe(true);
+    // The commit's own sync finds the result already live: nothing is posted.
+    act(() => edit.result.current.sync(edit.committed, edit.demand));
+    expect(edit.worker.postMessage).toHaveBeenCalledTimes(posted);
+    // A wider demand still asks the worker for its lineage.
+    act(() =>
+      edit.result.current.sync(edit.committed, [
+        ...edit.demand,
+        edit.base.bodyOrder[0]!
+      ])
+    );
+    expect(edit.worker.postMessage).toHaveBeenCalledTimes(posted + 1);
+  });
+
+  it.each([
+    ['was validated with full lineage, not the live demand', 'eager'],
+    ['proposed carrying a later selection', 'carry'],
+    ['waited on a font or source', 'transient'],
+    ['was committed with different geometry content', 'content'],
+    ['arrives while the live broadcast is still running', 'running'],
+    ['came from somewhere other than a validation sync', 'foreign'],
+    ['is for a document the commit already moved past', 'moved']
+  ] as const)(
+    'rebuilds normally when the result %s',
+    async (_label, reason) => {
+      const edit = validatedEdit();
+      if (reason !== 'running') edit.finishLive();
+      const derived =
+        reason === 'foreign'
+          ? { ...edit.committed.derived, warnings: [] }
+          : await edit.validate(
+              reason === 'eager'
+                ? { lineageDemand: undefined }
+                : reason === 'transient'
+                  ? { transient: true }
+                  : reason === 'carry'
+                    ? {
+                        derived: {
+                          ...edit.committed.derived,
+                          warnings: [],
+                          edgeHashRepairs: [
+                            {
+                              featureId: edit.committed.featureOrder[0]!,
+                              index: 0,
+                              hash: 7
+                            }
+                          ] as unknown as NonNullable<
+                            typeof edit.committed.derived.edgeHashRepairs
+                          >
+                        }
+                      }
+                    : {}
+            );
+      const committed =
+        reason === 'content'
+          ? { ...edit.committed, name: 'Renamed while validating' }
+          : edit.committed;
+      const posted = edit.worker.postMessage.mock.calls.length;
+      const delivered = edit.host.onDerived.mock.calls.length;
+      act(() => {
+        // A normalization written by the commit (a projection write-back)
+        // already replaced the committed document.
+        edit.manager.document =
+          reason === 'moved'
+            ? { ...committed, version: committed.version + 1 }
+            : committed;
+        expect(
+          edit.result.current.adoptValidatedResult(committed, derived)
+        ).toBe(false);
+      });
+      expect(edit.host.onDerived).toHaveBeenCalledTimes(delivered);
+      expect(edit.result.current.isReadyFor(committed)).toBe(false);
+      act(() => edit.result.current.sync(committed, edit.demand));
+      expect(edit.worker.postMessage).toHaveBeenCalledTimes(posted + 1);
+      expect(edit.worker.postMessage).toHaveBeenLastCalledWith(
+        expect.objectContaining({ type: 'sync' })
+      );
+    }
+  );
+});

@@ -245,6 +245,11 @@ for (const longHistory of [false, true])
 declare global {
   interface Window {
     __resizeCommitFrames?: { viewportChip: number; readoutless: number };
+    /** Live-document syncs posted to the geometry worker (no request id). */
+    __liveSyncs?: number;
+    /** While set, edit validations (tagged syncs) wait in `__heldChecks`. */
+    __holdChecks?: boolean;
+    __heldChecks?: (() => void)[];
   }
 }
 
@@ -269,6 +274,16 @@ test(
       adapter.dispose();
     }
     await stubApi(page);
+    await page.addInitScript(() => {
+      window.__liveSyncs = 0;
+      const send = Worker.prototype.postMessage;
+      Worker.prototype.postMessage = function (message, transfer) {
+        const posted = message as { type?: string; requestId?: string } | null;
+        if (posted?.type === 'sync' && posted.requestId === undefined)
+          window.__liveSyncs! += 1;
+        return send.call(this, message, transfer as StructuredSerializeOptions);
+      };
+    });
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.goto('/');
     await page.getByLabel('Project name').fill('Resize commit chip');
@@ -349,19 +364,26 @@ test(
       );
       // Released once the drag reads its target, as a hand would.
       await expect(value).toContainText(String(from + delta));
+      const liveSyncs = await page.evaluate(() => window.__liveSyncs);
       await page.mouse.up();
+      return liveSyncs;
     };
-    await drag(30, -7);
+    // The release check builds exactly what the live document needs, so the
+    // commit adopts it: no second rebuild of the same edit follows it.
+    const expectNoRebuildAfter = async (liveSyncs: number | undefined) =>
+      expect(await page.evaluate(() => window.__liveSyncs)).toBe(liveSyncs);
+    const firstRelease = await drag(30, -7);
     await expect(contentinfo).toContainText('width set to 23 mm', {
       timeout: 30_000
     });
     await expect(contentinfo).not.toContainText('Rebuilding geometry', {
       timeout: 30_000
     });
+    await expectNoRebuildAfter(firstRelease);
     // Still the moved side, re-armed on the same width for the next drag.
     await expect(card).toBeVisible();
     await expect(readout).toContainText('Right face');
-    await drag(23, -3);
+    const secondRelease = await drag(23, -3);
     await expect(contentinfo).toContainText('width set to 20 mm', {
       timeout: 30_000
     });
@@ -369,11 +391,241 @@ test(
       timeout: 30_000
     });
     await page.waitForTimeout(500);
+    await expectNoRebuildAfter(secondRelease);
     await expect(card).toBeVisible();
     await expect(readout).toContainText('Right face');
     expect(await page.evaluate(() => window.__resizeCommitFrames)).toEqual({
       viewportChip: 0,
       readoutless: 0
     });
+  }
+);
+
+test(
+  'a side taken again while its release validates lands once, where the hand last let go',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(180_000);
+    const adapter = await createExactKernelAdapter();
+    let backup: Buffer;
+    try {
+      const { document } = await filletedUnion(adapter);
+      backup = Buffer.from(
+        JSON.stringify({
+          format: 'openzcad-project',
+          version: 1,
+          document: withoutDerivedProjection(document),
+          files: []
+        })
+      );
+    } finally {
+      adapter.dispose();
+    }
+    await stubApi(page);
+    // Holds each release's exact check in the page, so the hand provably
+    // takes the handle again before that check has answered.
+    await page.addInitScript(() => {
+      window.__heldChecks = [];
+      const send = Worker.prototype.postMessage;
+      Worker.prototype.postMessage = function (message, transfer) {
+        const posted = message as { type?: string; requestId?: string } | null;
+        const forward = () =>
+          send.call(this, message, transfer as StructuredSerializeOptions);
+        if (
+          window.__holdChecks &&
+          posted?.type === 'sync' &&
+          posted.requestId !== undefined
+        ) {
+          window.__heldChecks!.push(forward);
+          return;
+        }
+        return forward();
+      };
+    });
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.goto('/');
+    await page.getByLabel('Project name').fill('Retaken release');
+    await page.getByRole('button', { name: 'New project' }).click();
+    await page.getByLabel('Import project backup').setInputFiles({
+      name: 'filleted-union.openzcad',
+      mimeType: 'application/json',
+      buffer: backup
+    });
+    const canvas = page.locator('.viewer-host canvas');
+    const endX = () =>
+      canvas.evaluate((element) => {
+        let x: number | null = null;
+        element.dispatchEvent(
+          new CustomEvent('openzcad:e2e-render-policy', {
+            detail: {
+              resolve: (state: {
+                bodyFaces: {
+                  visible: boolean;
+                  worldBounds?: { max: number[] };
+                }[];
+              }) => {
+                const bounds = state.bodyFaces.filter(
+                  (f) => f.visible && f.worldBounds
+                );
+                if (bounds.length)
+                  x = Math.max(...bounds.map((f) => f.worldBounds!.max[0]!));
+              }
+            }
+          })
+        );
+        return x;
+      });
+    const pickSide = () =>
+      expect
+        .poll(
+          () =>
+            canvas.evaluate((element) => {
+              let name: string | null = null;
+              element.dispatchEvent(
+                new CustomEvent('openzcad:e2e-select-planar-face', {
+                  detail: {
+                    normal: { x: 1, y: 0, z: 0 },
+                    resolve: (pick: { lineageName?: string } | null) => {
+                      name = pick?.lineageName ?? null;
+                    }
+                  }
+                })
+              );
+              return name;
+            }),
+          { timeout: 60_000 }
+        )
+        .toBe('boolean.face.operand.1.primitive.box.face.x-max');
+    await expect.poll(endX, { timeout: 30_000 }).toBeCloseTo(30, 4);
+    await pickSide();
+    const value = page.getByTestId('direct-manipulation-value');
+    const contentinfo = page.getByRole('contentinfo');
+    const heldChecks = () => page.evaluate(() => window.__heldChecks!.length);
+    const answerChecks = () =>
+      page.evaluate(() => {
+        window.__holdChecks = false;
+        for (const forward of window.__heldChecks!.splice(0)) forward();
+      });
+    /**
+     * Presses the handle where it is drawn and drags it by `delta`. A handle
+     * whose release is still being checked is pressed where it was let go:
+     * the viewport keeps drawing that check, so it is never still.
+     */
+    const press = async (from: number, delta: number, checking = false) => {
+      await expect(value).toContainText(String(from));
+      await expect(canvas).toHaveAttribute('data-e2e-handle-x', /.+/);
+      if (!checking) await waitForStillViewport(page);
+      const handle = await canvas.evaluate((element) => ({
+        x: Number(element.dataset.e2eHandleX),
+        y: Number(element.dataset.e2eHandleY),
+        dx: Number(element.dataset.e2eHandleDx),
+        dy: Number(element.dataset.e2eHandleDy),
+        scale: Number(element.dataset.e2eHandlePixelsPerUnit)
+      }));
+      const box = (await canvas.boundingBox())!;
+      const start = { x: box.x + handle.x, y: box.y + handle.y };
+      await page.mouse.move(start.x, start.y);
+      await page.mouse.down();
+      await page.mouse.move(
+        start.x + handle.dx * handle.scale * delta,
+        start.y + handle.dy * handle.scale * delta,
+        { steps: 12 }
+      );
+      if (from + delta > 0)
+        await expect(value).toContainText(String(from + delta));
+      return start;
+    };
+
+    // Let go at 23 while its check is held, then take the handle again
+    // before that check answers, and let go at 20.
+    await page.evaluate(() => {
+      window.__holdChecks = true;
+    });
+    await press(30, -7);
+    await page.mouse.up();
+    await expect.poll(heldChecks).toBe(1);
+    await press(23, -3, true);
+    await page.mouse.up();
+    await expect.poll(heldChecks).toBe(2);
+    await answerChecks();
+    await expect(contentinfo).toContainText('width set to 20 mm', {
+      timeout: 30_000
+    });
+    await expect.poll(endX, { timeout: 30_000 }).toBeCloseTo(20, 4);
+    // One edit, not 23 then 20: a single undo returns to the start.
+    await page.getByRole('button', { name: 'Undo', exact: true }).click();
+    await expect.poll(endX, { timeout: 30_000 }).toBeCloseTo(30, 4);
+    await expect(
+      page.getByRole('button', { name: 'Undo', exact: true })
+    ).toBeDisabled();
+
+    // Abandoning the retaken drag lands the release it set aside, from that
+    // release's own check: no second one is asked for.
+    await pickSide();
+    await page.evaluate(() => {
+      window.__holdChecks = true;
+    });
+    await press(30, -7);
+    await page.mouse.up();
+    await expect.poll(heldChecks).toBe(1);
+    await press(23, -3, true);
+    await page.keyboard.press('Escape');
+    await page.mouse.up();
+    await answerChecks();
+    await expect(contentinfo).toContainText('width set to 23 mm', {
+      timeout: 30_000
+    });
+    await expect.poll(endX, { timeout: 30_000 }).toBeCloseTo(23, 4);
+    expect(await heldChecks()).toBe(0);
+    const undo = page.getByRole('button', { name: 'Undo', exact: true });
+    await undo.click();
+    await expect.poll(endX, { timeout: 30_000 }).toBeCloseTo(30, 4);
+
+    // Let go again where the release was: it lands from the check already
+    // running for it, and no second check is asked for.
+    await pickSide();
+    await page.evaluate(() => {
+      window.__holdChecks = true;
+    });
+    await press(30, -7);
+    await page.mouse.up();
+    await expect.poll(heldChecks).toBe(1);
+    const grabbed = await press(23, -3, true);
+    await page.mouse.move(grabbed.x, grabbed.y, { steps: 12 });
+    await expect(value).toContainText('23');
+    await page.mouse.up();
+    await page.waitForTimeout(500);
+    expect(await heldChecks()).toBe(1);
+    await answerChecks();
+    await expect(contentinfo).toContainText('width set to 23 mm', {
+      timeout: 30_000
+    });
+    await expect.poll(endX, { timeout: 30_000 }).toBeCloseTo(23, 4);
+    await undo.click();
+    await expect.poll(endX, { timeout: 30_000 }).toBeCloseTo(30, 4);
+    await expect(undo).toBeDisabled();
+
+    // Let go on a value that cannot be built (the end pushed through the
+    // cylinder it is fused to and out past the far side): no refusal takes
+    // the release away. It lands as it was let go, from its own check.
+    await pickSide();
+    await page.evaluate(() => {
+      window.__holdChecks = true;
+    });
+    await press(30, -7);
+    await page.mouse.up();
+    await expect.poll(heldChecks).toBe(1);
+    await press(23, -40, true);
+    await page.mouse.up();
+    await page.waitForTimeout(500);
+    expect(await heldChecks()).toBe(1);
+    await answerChecks();
+    await expect(contentinfo).toContainText('width set to 23 mm', {
+      timeout: 30_000
+    });
+    await expect.poll(endX, { timeout: 30_000 }).toBeCloseTo(23, 4);
+    await undo.click();
+    await expect.poll(endX, { timeout: 30_000 }).toBeCloseTo(30, 4);
+    await expect(undo).toBeDisabled();
   }
 );

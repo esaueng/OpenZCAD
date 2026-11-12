@@ -20,6 +20,16 @@
  * - `frame`: a WebGL frame was rendered (`detail.presented` = 1 for the first
  *   frame after an installation).
  * - `refusal`: the preview for `value` was refused.
+ *
+ * Release stages, for a direct edit's commit after the hand lets go:
+ * - `release`: the commit for `value` started (validation requested).
+ * - `validated`: its exact rebuild answered (`ms` = wait since `release`).
+ * - `committed`: the edit landed in the document (`ms` since `release`).
+ * - `superseded`: the hand took the handle again before it landed; the
+ *   release was set aside for the new gesture (`ms` since `release`).
+ * - `settled`: the live document's result was accepted, from a broadcast
+ *   rebuild (`detail.adopted` = 0) or by adopting the commit's validation
+ *   (`detail.adopted` = 1).
  */
 export type FaceDragTraceKind =
   | 'pointer'
@@ -30,7 +40,12 @@ export type FaceDragTraceKind =
   | 'prepare-fallback'
   | 'install'
   | 'frame'
-  | 'refusal';
+  | 'refusal'
+  | 'release'
+  | 'validated'
+  | 'committed'
+  | 'superseded'
+  | 'settled';
 
 export interface FaceDragTraceEvent {
   kind: FaceDragTraceKind;

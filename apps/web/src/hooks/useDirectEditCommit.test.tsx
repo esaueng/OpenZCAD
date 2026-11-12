@@ -785,3 +785,231 @@ describe('releasing a slow live preview', () => {
     await expect(applied).resolves.toBe(true);
   });
 });
+
+describe('taking a handle again while its release validates', () => {
+  /** A radius release whose exact rebuild answers only when told to. */
+  function validatingRelease() {
+    const { sourceBodyId, sourceFeature, fillet } = filletedCylinder();
+    const manager = new CommandManager(fillet.document);
+    const commandFor = (radius: number) =>
+      commandFactories.updateFeature(
+        {
+          featureId: sourceFeature.featureId,
+          data: { dimensions: { radius } }
+        },
+        'Resize Cylinder Radius'
+      );
+    const answers: {
+      resolve(warnings?: string[]): void;
+      reject(error: Error): void;
+    }[] = [];
+    const derive = vi.fn(
+      (candidate: ProjectDocument) =>
+        new Promise<ProjectDocument['derived']>((resolve, reject) => {
+          answers.push({
+            resolve: (warnings = []) =>
+              resolve({
+                bodyRepresentations: {
+                  [sourceBodyId]: body(sourceBodyId, 'Cylinder'),
+                  [fillet.bodyId]: body(fillet.bodyId, 'Two rim fillet')
+                },
+                exportableBodyIds: [fillet.bodyId],
+                warnings,
+                updatedAt: candidate.derived.updatedAt
+              }),
+            reject
+          });
+        })
+    );
+    const host = {
+      manager: () => manager,
+      derive,
+      commit: vi.fn((command: AnyCommand) => {
+        manager.execute(command);
+        return true;
+      }),
+      onValidationStart: vi.fn(),
+      onValidationFailed: vi.fn(),
+      onCommitted: vi.fn(),
+      onBusy: vi.fn(),
+      onStatus: vi.fn()
+    };
+    const { result } = renderHook(() => useDirectEditCommit(host));
+    const release = (radius: number, precomputed?: unknown) =>
+      result.current.run(
+        commandFor(radius),
+        fillet.bodyId,
+        `Adjusted cylinder radius to ${radius}.`,
+        radius,
+        undefined,
+        [
+          { featureName: 'Cylinder', resultBodyId: sourceBodyId },
+          { featureName: 'Two rim fillet', resultBodyId: fillet.bodyId }
+        ],
+        precomputed as Parameters<typeof result.current.run>[6]
+      );
+    return { manager, derive, answers, host, result, release };
+  }
+
+  it('sets the release aside: it never lands, refuses or holds the next one back', async () => {
+    const edit = validatingRelease();
+    const version = edit.manager.document.version;
+    let first: Promise<boolean> = Promise.resolve(true);
+    act(() => {
+      first = edit.release(6.4);
+    });
+    expect(edit.host.onBusy).toHaveBeenLastCalledWith(true);
+    let set: ReturnType<typeof edit.result.current.supersede> = null;
+    act(() => {
+      set = edit.result.current.supersede();
+    });
+    expect(set).toMatchObject({
+      submittedValue: 6.4,
+      precomputed: {
+        baseProjectId: edit.manager.document.projectId,
+        baseVersion: version
+      }
+    });
+    // Still pending, so nothing else starts meanwhile: busy stays raised
+    // for the drag that set it aside.
+    expect(edit.host.onBusy).toHaveBeenCalledTimes(1);
+    expect(edit.host.onBusy).toHaveBeenLastCalledWith(true);
+    expect(edit.result.current.idle()).toBe(true);
+    // Nothing else is validating now.
+    expect(edit.result.current.supersede()).toBeNull();
+
+    // The next release starts at once, behind nothing on the main thread.
+    let second: Promise<boolean> = Promise.resolve(false);
+    act(() => {
+      second = edit.release(7);
+    });
+    expect(edit.derive).toHaveBeenCalledTimes(2);
+
+    // The set-aside release answers, even with a refusal: no trace of it.
+    await act(async () => {
+      edit.answers[0]!.resolve(['Feature "Two rim fillet": failed.']);
+    });
+    await expect(first).resolves.toBe(false);
+    expect(edit.host.onValidationFailed).not.toHaveBeenCalled();
+    expect(edit.host.commit).not.toHaveBeenCalled();
+    expect(edit.manager.document.version).toBe(version);
+    // Its run no longer owns the busy flag the second release raised.
+    expect(edit.host.onBusy).toHaveBeenLastCalledWith(true);
+
+    await act(async () => {
+      edit.answers[1]!.resolve();
+    });
+    await expect(second).resolves.toBe(true);
+    expect(edit.host.commit).toHaveBeenCalledTimes(1);
+    expect(edit.host.onStatus).toHaveBeenLastCalledWith(
+      'Adjusted cylinder radius to 7.'
+    );
+    expect(edit.host.onBusy).toHaveBeenLastCalledWith(false);
+  });
+
+  it('commits a set-aside release later from its own rebuild, never a second one', async () => {
+    const edit = validatingRelease();
+    act(() => {
+      void edit.release(6.4);
+    });
+    let set: ReturnType<typeof edit.result.current.supersede> = null;
+    act(() => {
+      set = edit.result.current.supersede();
+    });
+    await act(async () => {
+      edit.answers[0]!.resolve();
+    });
+    // The new gesture was let go where the old one was (or abandoned): the
+    // release lands from the rebuild that already answered.
+    let applied = false;
+    await act(async () => {
+      applied = await edit.release(6.4, set!.precomputed);
+    });
+    expect(applied).toBe(true);
+    expect(edit.derive).toHaveBeenCalledTimes(1);
+    expect(edit.host.commit).toHaveBeenCalledTimes(1);
+  });
+
+  it('still reports a set-aside refusal when that release is committed after all', async () => {
+    const edit = validatingRelease();
+    act(() => {
+      void edit.release(6.4);
+    });
+    let set: ReturnType<typeof edit.result.current.supersede> = null;
+    act(() => {
+      set = edit.result.current.supersede();
+    });
+    let applied = true;
+    await act(async () => {
+      const landing = edit.release(6.4, set!.precomputed);
+      edit.answers[0]!.resolve(['Feature "Two rim fillet": failed.']);
+      applied = await landing;
+    });
+    expect(applied).toBe(false);
+    expect(edit.derive).toHaveBeenCalledTimes(1);
+    expect(edit.host.commit).not.toHaveBeenCalled();
+    expect(edit.host.onValidationFailed).toHaveBeenCalledTimes(1);
+  });
+
+  it('lowers the busy flag a set-aside release kept raised once it is dropped', async () => {
+    const edit = validatingRelease();
+    act(() => {
+      void edit.release(6.4);
+    });
+    act(() => {
+      edit.result.current.supersede();
+    });
+    expect(edit.host.onBusy).toHaveBeenLastCalledWith(true);
+    act(() => {
+      edit.result.current.discard();
+    });
+    expect(edit.host.onBusy).toHaveBeenLastCalledWith(false);
+    expect(edit.host.onBusy).toHaveBeenCalledTimes(2);
+    // Only once.
+    act(() => {
+      edit.result.current.discard();
+    });
+    expect(edit.host.onBusy).toHaveBeenCalledTimes(2);
+  });
+
+  it('leaves the busy flag to a later run that took it over', async () => {
+    const edit = validatingRelease();
+    act(() => {
+      void edit.release(6.4);
+    });
+    act(() => {
+      edit.result.current.supersede();
+    });
+    let second: Promise<boolean> = Promise.resolve(false);
+    act(() => {
+      second = edit.release(7);
+    });
+    expect(edit.result.current.idle()).toBe(false);
+    // The new run owns the flag: a late discard does not lower it.
+    act(() => {
+      edit.result.current.discard();
+    });
+    expect(edit.host.onBusy).toHaveBeenLastCalledWith(true);
+    await act(async () => {
+      edit.answers[1]!.resolve();
+    });
+    await expect(second).resolves.toBe(true);
+    expect(edit.host.onBusy).toHaveBeenLastCalledWith(false);
+    expect(edit.result.current.idle()).toBe(true);
+  });
+
+  it('cannot set aside an edit that is not validating', async () => {
+    const edit = validatingRelease();
+    expect(edit.result.current.supersede()).toBeNull();
+    let applied: Promise<boolean> = Promise.resolve(false);
+    act(() => {
+      applied = edit.release(6.4);
+    });
+    await act(async () => {
+      edit.answers[0]!.resolve();
+    });
+    await expect(applied).resolves.toBe(true);
+    // Answered and committed: there is nothing left to set aside.
+    expect(edit.result.current.supersede()).toBeNull();
+  });
+});

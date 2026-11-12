@@ -5,7 +5,6 @@ import type {
 } from '@openzcad/shared';
 import {
   stepPreviewKey,
-  stepPreviewNeighbourKeys,
   STEP_PREVIEW_GRID,
   type StepPreviewPlanarFace,
   type StepPreviewProfile
@@ -311,29 +310,70 @@ function prepare(body: BodyRepresentation): Prepared | null {
   const tolerance = Math.max(1, size) * 1e-5;
   const quantum = Math.max(size, 1) / (STEP_PREVIEW_GRID - 16);
   const origin = { x: min[0]!, y: min[1]!, z: min[2]! };
-  const welded = new Map<number, number>();
-  const seen = new Map<number, number>();
+  // Each vertex's welded key, NaN until first asked. Keys are integers
+  // below 2^53, so a Float64Array holds them exactly. This runs over every
+  // display vertex of a freshly committed body, inside the render that
+  // re-arms the handle; with a Map keyed by these (non-Smi) numbers it was
+  // the largest part of that render on a filleted part.
+  const welded = new Float64Array(vertexCount).fill(Number.NaN);
+  const seen = new CellTable(vertexCount);
+  const grid = STEP_PREVIEW_GRID;
+  const nearCell = (
+    a: number,
+    b: number,
+    c: number,
+    x: number,
+    y: number,
+    z: number
+  ) => {
+    const other = seen.get(a, b, c);
+    return (
+      other >= 0 &&
+      Math.abs(vertices[other * 3]! - x) <= quantum &&
+      Math.abs(vertices[other * 3 + 1]! - y) <= quantum &&
+      Math.abs(vertices[other * 3 + 2]! - z) <= quantum
+    );
+  };
   const keyOf = (index: number) => {
-    const known = welded.get(index);
-    if (known !== undefined) return known;
+    const known = welded[index]!;
+    if (!Number.isNaN(known)) return known;
     const x = vertices[index * 3]!,
       y = vertices[index * 3 + 1]!,
       z = vertices[index * 3 + 2]!;
-    let key = stepPreviewKey(x, y, z, origin, quantum);
-    found: for (const neighbour of stepPreviewNeighbourKeys(key)) {
-      const other = seen.get(neighbour);
-      if (other === undefined) continue;
-      if (
-        Math.abs(vertices[other * 3]! - x) <= quantum &&
-        Math.abs(vertices[other * 3 + 1]! - y) <= quantum &&
-        Math.abs(vertices[other * 3 + 2]! - z) <= quantum
-      ) {
-        key = neighbour;
-        break found;
-      }
+    const own = stepPreviewKey(x, y, z, origin, quantum);
+    if (own < 0) {
+      welded[index] = own;
+      return own;
     }
-    if (!seen.has(key)) seen.set(key, index);
-    welded.set(index, key);
+    const i = own % grid,
+      j = Math.floor(own / grid) % grid,
+      k = Math.floor(own / (grid * grid));
+    let ci = i,
+      cj = j,
+      ck = k;
+    // The cell itself first, then the 26 around it, in the order
+    // `stepPreviewNeighbourKeys` lists them; the first near vertex wins.
+    if (!nearCell(i, j, k, x, y, z)) {
+      search: for (let dk = -1; dk <= 1; dk++)
+        for (let dj = -1; dj <= 1; dj++)
+          for (let di = -1; di <= 1; di++) {
+            if (!di && !dj && !dk) continue;
+            const a = i + di,
+              b = j + dj,
+              c = k + dk;
+            if (a < 0 || b < 0 || c < 0 || a >= grid || b >= grid || c >= grid)
+              continue;
+            if (nearCell(a, b, c, x, y, z)) {
+              ci = a;
+              cj = b;
+              ck = c;
+              break search;
+            }
+          }
+    }
+    seen.add(ci, cj, ck, index);
+    const key = ci + cj * grid + ck * grid * grid;
+    welded[index] = key;
     return key;
   };
   const infos: FaceInfo[] = [];
@@ -632,4 +672,58 @@ function ruledAlong(
       return false;
   }
   return true;
+}
+
+/**
+ * The first vertex index recorded per grid cell: what a `Map` from
+ * `stepPreviewKey` to index holds, without hashing keys past 2^31 as heap
+ * numbers. Open addressing over typed arrays sized for `capacity` cells.
+ */
+class CellTable {
+  private readonly cells: Int32Array;
+  private readonly values: Int32Array;
+  private readonly mask: number;
+
+  constructor(capacity: number) {
+    let size = 16;
+    while (size < capacity * 2) size *= 2;
+    this.mask = size - 1;
+    // Three coordinates per slot; -1 marks an empty slot.
+    this.cells = new Int32Array(size * 3).fill(-1);
+    this.values = new Int32Array(size);
+  }
+
+  private slot(i: number, j: number, k: number): number {
+    let slot =
+      (Math.imul(i, 73856093) ^
+        Math.imul(j, 19349663) ^
+        Math.imul(k, 83492791)) &
+      this.mask;
+    for (;;) {
+      const at = slot * 3;
+      const ci = this.cells[at]!;
+      if (
+        ci === -1 ||
+        (ci === i && this.cells[at + 1] === j && this.cells[at + 2] === k)
+      )
+        return slot;
+      slot = (slot + 1) & this.mask;
+    }
+  }
+
+  /** The cell's first vertex, or -1. */
+  get(i: number, j: number, k: number): number {
+    const slot = this.slot(i, j, k);
+    return this.cells[slot * 3] === -1 ? -1 : this.values[slot]!;
+  }
+
+  /** Records `index` unless the cell already has a vertex. */
+  add(i: number, j: number, k: number, index: number): void {
+    const slot = this.slot(i, j, k);
+    if (this.cells[slot * 3] !== -1) return;
+    this.cells[slot * 3] = i;
+    this.cells[slot * 3 + 1] = j;
+    this.cells[slot * 3 + 2] = k;
+    this.values[slot] = index;
+  }
 }

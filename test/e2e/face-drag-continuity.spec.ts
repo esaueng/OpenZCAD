@@ -157,7 +157,9 @@ async function dragAndCommit(
   handle: { dx: number; dy: number; pixels: number },
   x: number,
   y: number,
-  value: number
+  value: number,
+  /** Runs once the hand has let go, before the commit is awaited. */
+  whileChecking?: () => Promise<void>
 ) {
   await page.mouse.move(x, y);
   await page.mouse.down();
@@ -169,6 +171,7 @@ async function dragAndCommit(
   await expect.poll(() => renderedMinimumY(canvas)).toBeCloseTo(-value, 3);
   const released = await now(page);
   await page.mouse.up();
+  await whileChecking?.();
   await expect(page.getByText('Offset face by', { exact: false })).toBeVisible({
     timeout: 30_000
   });
@@ -698,13 +701,41 @@ test('a refused release retains the accepted face, handle and next pick', async 
 });
 
 /**
- * Once armed, lets a rebuild's early meshes through and holds everything the
- * worker sends after them for 700 ms, in order: the analysis of a large
- * model takes that long, while a small one finishes inside the same frame.
+ * Once armed, holds the slow part of an edit's exact rebuild for 700 ms (or
+ * until `release()`), together with everything the worker sends after it, in
+ * order: on a large model that part takes that long, while a small one
+ * finishes inside the same frame.
+ *
+ * A validated edit's slow part is its commit check: the complete exact
+ * rebuild (`sync` with `proposeCarry`) it commits from and the live view then
+ * adopts (`adoptValidatedResult`), so no follow-up rebuild re-analyses it.
+ * Its reply is held. A commit that is not adopted still posts the live
+ * broadcast, whose early meshes are let through and whose analysis is held.
  */
 async function slowAnalysis(page: Page) {
   await page.addInitScript(() => {
     const flushes: (() => void)[] = [];
+    // The ids of the exact checks a user edit asked for.
+    const checks = new Set<string>();
+    const post = Worker.prototype.postMessage;
+    Worker.prototype.postMessage = function (
+      this: Worker,
+      message: unknown,
+      ...rest: unknown[]
+    ) {
+      const request = message as {
+        type?: string;
+        requestId?: string;
+        proposeCarry?: boolean;
+      } | null;
+      if (request?.type === 'sync' && request.requestId && request.proposeCarry)
+        checks.add(request.requestId);
+      return (post as (...args: unknown[]) => void).call(
+        this,
+        message,
+        ...rest
+      );
+    };
     window.__slowAnalysis = {
       armed: false,
       held: 0,
@@ -728,27 +759,40 @@ async function slowAnalysis(page: Page) {
           holdingUntil = 0;
           for (const event of due) listener.call(this, event);
         };
+        const hold = () => {
+          const gate = window.__slowAnalysis!;
+          gate.held += 1;
+          holdingUntil = performance.now() + 700;
+          if (gate.manual) flushes.push(flush);
+          else setTimeout(flush, 700);
+        };
         descriptor.set!.call(this, (event: MessageEvent) => {
           const gate = window.__slowAnalysis!;
           if (holdingUntil) {
             queue.push(event);
             return;
           }
-          listener.call(this, event);
           const data = event.data as {
             type?: string;
+            requestId?: string;
             packet?: { state?: { analysis?: string } };
           };
+          const check =
+            data.type === 'sync' &&
+            data.requestId !== undefined &&
+            checks.delete(data.requestId);
+          if (gate.armed && check) {
+            queue.push(event);
+            hold();
+            return;
+          }
+          listener.call(this, event);
           if (
             gate.armed &&
             data.type === 'projection-delta' &&
             data.packet?.state?.analysis === 'pending'
-          ) {
-            gate.held += 1;
-            holdingUntil = performance.now() + 700;
-            if (gate.manual) flushes.push(flush);
-            else setTimeout(flush, 700);
-          }
+          )
+            hold();
         });
       }
     });
@@ -923,24 +967,36 @@ test(
     const bodyId = (await canvas.getAttribute('data-e2e-selected-bodies'))!;
     expect(bodyId).toBeTruthy();
     await expect.poll(() => drawnLevel(canvas, bodyId)).toBe(1);
-    // Hold the commit's follow-up analysis until released, so the slow
-    // window a large model has is exercised rather than raced past.
+    // Hold the commit's exact check until released, so the slow window a
+    // large model has between release and commit is exercised rather than
+    // raced past.
     await page.evaluate(() => {
       window.__slowAnalysis!.armed = true;
       window.__slowAnalysis!.manual = true;
     });
     await recordRecede(canvas);
     const pressed = await now(page);
-    await dragAndCommit(page, canvas, handle, handle.x, handle.y, 3);
-    await expect
-      .poll(() => page.evaluate(() => window.__slowAnalysis!.held))
-      .toBeGreaterThan(0);
-    await page.evaluate(() => {
-      window.__slowAnalysis!.armed = false;
-      window.__slowAnalysis!.release!();
-    });
-    // Through the rebuild that follows the commit, until its analysed
-    // geometry has been drawn.
+    await dragAndCommit(
+      page,
+      canvas,
+      handle,
+      handle.x,
+      handle.y,
+      3,
+      async () => {
+        await expect
+          .poll(() => page.evaluate(() => window.__slowAnalysis!.held))
+          .toBeGreaterThan(0);
+        // Long enough for a dropped pick or a restored scene to be drawn.
+        await page.waitForTimeout(500);
+        await page.evaluate(() => {
+          window.__slowAnalysis!.armed = false;
+          window.__slowAnalysis!.release!();
+        });
+      }
+    );
+    // Through the commit and any rebuild that follows it, until its
+    // analysed geometry has been drawn.
     await settledFrame(page);
     await expect(canvas).toHaveAttribute('data-e2e-selected-face', /.+/);
     // The moved face stayed the pick, so the scene never came back to full
@@ -1046,7 +1102,8 @@ test('a commit reads as complete while its follow-up rebuild analyses', async ({
   await expect(
     page.locator('.feature-row-main', { hasText: 'Offset face' })
   ).toHaveCount(1, { timeout: 30_000 });
-  // From here the follow-up rebuild's analysis is held for 700 ms.
+  // From here each release's exact check (the analysis its commit adopts)
+  // is held for 700 ms.
   await page.evaluate(() => {
     window.__slowAnalysis!.armed = true;
     window.__afterCommit = { waiting: 0, unselectedRows: 0 };
@@ -1073,13 +1130,16 @@ test('a commit reads as complete while its follow-up rebuild analyses', async ({
   await expect
     .poll(() => page.evaluate(() => window.__slowAnalysis!.held))
     .toBeGreaterThan(0);
-  // Through the held analysis: no tool waits, the History row stays picked.
+  // Through the held check and the commit: no tool waits, the History row
+  // stays picked.
   await page.waitForTimeout(900);
   expect(await page.evaluate(() => window.__afterCommit)).toEqual({
     waiting: 0,
     unselectedRows: 0
   });
-  // A drag released inside a held window is not refused either.
+  // A drag released inside a held window is not refused either: it takes
+  // the release still being checked again, and let go back where that
+  // release started, nothing is committed at all.
   await page.evaluate(() => {
     window.__slowAnalysis!.manual = true;
   });
@@ -1090,21 +1150,26 @@ test('a commit reads as complete while its follow-up rebuild analyses', async ({
     .toBeGreaterThan(held);
   await expect(
     page.locator('.feature-row-main', { hasText: 'Offset face' })
-  ).toHaveCount(3, { timeout: 30_000 });
+  ).toHaveCount(2);
+  await drag(-1);
   await expect(
     page.getByRole('region', { name: 'Offset Face operation' })
   ).not.toContainText('Validating');
-  await drag(-1);
   await page.evaluate(() => {
     window.__slowAnalysis!.armed = false;
     window.__slowAnalysis!.release!();
   });
+  // The set-aside check answers into nothing.
+  await page.waitForTimeout(1000);
   await expect(
     page.locator('.feature-row-main', { hasText: 'Offset face' })
-  ).toHaveCount(4, { timeout: 30_000 });
+  ).toHaveCount(2);
   await expect.poll(() => renderedMinimumY(canvas)).toBeCloseTo(-5, 3);
   await expect(
     page.getByText('still rebuilding', { exact: false })
+  ).toHaveCount(0);
+  await expect(
+    page.getByText('The document changed', { exact: false })
   ).toHaveCount(0);
 });
 

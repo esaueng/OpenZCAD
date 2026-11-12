@@ -238,6 +238,148 @@ test('rounded cylinder rapid bottom, top, and radius edits survive reload', asyn
   expect(errors).toEqual([]);
 });
 
+test('a radius taken again while its release validates lands once, and Escape keeps the let-go radius', async ({
+  page
+}) => {
+  test.setTimeout(180_000);
+  // Holds each exact check (a tagged sync) in the page, so the hand provably
+  // takes the handle again before the release's check has answered.
+  await page.addInitScript(() => {
+    const scope = window as typeof window & {
+      holdChecks: boolean;
+      heldChecks: (() => void)[];
+    };
+    scope.holdChecks = false;
+    scope.heldChecks = [];
+    const send = Worker.prototype.postMessage;
+    Worker.prototype.postMessage = function (message, transfer) {
+      const posted = message as { type?: string; requestId?: string } | null;
+      const forward = () =>
+        send.call(this, message, transfer as StructuredSerializeOptions);
+      if (
+        scope.holdChecks &&
+        posted?.type === 'sync' &&
+        posted.requestId !== undefined
+      ) {
+        scope.heldChecks.push(forward);
+        return;
+      }
+      return forward();
+    };
+  });
+  // A plain wall: the viewport draws its radius proxy (a rounded one is
+  // drawn by the exact preview instead).
+  await stubApi(page, { commandFoldClosed: true });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Retaken cylinder radius');
+  await page.getByRole('button', { name: 'New project' }).click();
+  await createPrimitiveInPlace(page, 'cylinder', {
+    sizes: { radius: '70', height: '22' }
+  });
+  const canvas = page.locator('.viewer-host canvas');
+  const select = () =>
+    selectHandle(canvas, 'openzcad:e2e-select-cylinder', { surface: 'wall' });
+  await select();
+  await fitClearOfCard(page, canvas);
+  const contentinfo = page.getByRole('contentinfo');
+  const proxyRadius = async () =>
+    Number(await canvas.getAttribute('data-e2e-cylinder-proxy-radius'));
+  const wallRadius = async () => (await rendered(canvas)).max[0]!;
+  const holdChecks = () =>
+    page.evaluate(() => {
+      (window as typeof window & { holdChecks: boolean }).holdChecks = true;
+    });
+  const heldChecks = () =>
+    page.evaluate(
+      () =>
+        (window as typeof window & { heldChecks: unknown[] }).heldChecks.length
+    );
+  const answerChecks = () =>
+    page.evaluate(() => {
+      const scope = window as typeof window & {
+        holdChecks: boolean;
+        heldChecks: (() => void)[];
+      };
+      scope.holdChecks = false;
+      for (const forward of scope.heldChecks.splice(0)) forward();
+    });
+  /** The handle where it is drawn now, locked or not. */
+  const drawnHandle = () =>
+    canvas.evaluate((element) => {
+      const data = element.dataset;
+      return {
+        x: Number(data.e2eHandleX),
+        y: Number(data.e2eHandleY),
+        dx: Number(data.e2eHandleDx),
+        dy: Number(data.e2eHandleDy),
+        scale: Number(data.e2eHandlePixelsPerUnit)
+      };
+    });
+  /** Presses `handle` and drags it out by `change`, returning the radius. */
+  const pull = async (handle: Handle, change: number) => {
+    const bounds = (await canvas.boundingBox())!;
+    await page.mouse.move(bounds.x + handle.x, bounds.y + handle.y);
+    await page.mouse.down();
+    await page.mouse.move(
+      bounds.x + handle.x + handle.dx * handle.scale * change,
+      bounds.y + handle.y + handle.dy * handle.scale * change,
+      { steps: 4 }
+    );
+    await expect(canvas).toHaveAttribute(
+      'data-e2e-cylinder-proxy-radius',
+      /.+/
+    );
+    return proxyRadius();
+  };
+
+  // Let go at one radius while its check is held, take the handle again
+  // before that check answers, and let go further out: one edit.
+  await holdChecks();
+  const first = await pull(await select(), 4);
+  await page.mouse.up();
+  await expect.poll(heldChecks).toBeGreaterThan(0);
+  const second = await pull(await drawnHandle(), 4);
+  expect(second).toBeGreaterThan(first);
+  await page.mouse.up();
+  await answerChecks();
+  await expect(contentinfo).toContainText('Adjusted cylinder diameter', {
+    timeout: 30_000
+  });
+  await expect.poll(wallRadius, { timeout: 30_000 }).toBeCloseTo(second, 3);
+  await page
+    .getByRole('button', { name: 'Undo', exact: true })
+    .evaluate((element) => (element as HTMLButtonElement).click());
+  await expect.poll(wallRadius, { timeout: 30_000 }).toBeCloseTo(70, 3);
+
+  // Escape on the retaken drag: the let-go radius stays drawn while its own
+  // check finishes, then lands, and no second check is asked for.
+  await holdChecks();
+  const letGo = await pull(await select(), 4);
+  await page.mouse.up();
+  await expect.poll(heldChecks).toBeGreaterThan(0);
+  const checks = await heldChecks();
+  await pull(await drawnHandle(), 4);
+  await page.keyboard.press('Escape');
+  await page.mouse.up();
+  await expect.poll(proxyRadius).toBeCloseTo(letGo, 3);
+  await page.waitForTimeout(300);
+  expect(await proxyRadius()).toBeCloseTo(letGo, 3);
+  expect(await heldChecks()).toBe(checks);
+  await answerChecks();
+  await expect(contentinfo).toContainText('Adjusted cylinder diameter', {
+    timeout: 30_000
+  });
+  await expect.poll(wallRadius, { timeout: 30_000 }).toBeCloseTo(letGo, 3);
+  await page
+    .getByRole('button', { name: 'Undo', exact: true })
+    .evaluate((element) => (element as HTMLButtonElement).click());
+  await expect.poll(wallRadius, { timeout: 30_000 }).toBeCloseTo(70, 3);
+  expect(errors).toEqual([]);
+});
+
 async function setupRoundedCylinder(page: Page, bottomView: boolean) {
   // Fit (`fitClearOfCard`) frames the model between the left column and the
   // right lane, and the open "More tools" fold reaches past the column over

@@ -459,6 +459,13 @@ export type InteractionEvent =
     }
   | { type: 'set-extrude-choice'; choice: ExtrudeChoice }
   | { type: 'drag-engage' }
+  /**
+   * The hand took a face's offset or radius handle again while its release
+   * was still validating. The host set that release aside first (it neither
+   * commits nor reports a refusal), so the gesture resumes from the value it
+   * was let go at, against the same target.
+   */
+  | { type: 'drag-retake' }
   | { type: 'drag-release' }
   | { type: 'set-face-offset-mode'; local: boolean }
   | { type: 'set-edge-op'; op: 'fillet' | 'chamfer' }
@@ -868,6 +875,12 @@ function reduceInteraction(
         : state;
     case 'drag-engage':
       return isOperationState(state) && state.phase !== 'validating'
+        ? { ...state, phase: 'dragging', error: null }
+        : state;
+    case 'drag-retake':
+      return state.mode === 'face' &&
+        (state.op === 'offset-face' || state.op === 'resize-cylinder-radius') &&
+        state.phase === 'validating'
         ? { ...state, phase: 'dragging', error: null }
         : state;
     case 'drag-release':
