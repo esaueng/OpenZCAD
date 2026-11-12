@@ -422,6 +422,12 @@ function buildDirectEditFeature(
   const producer = listFeaturesInOrder(document).find(
     (candidate) => candidate.bodyId === targetBodyId
   );
+  if (edited.lineageByPredictedCarrier) {
+    delete edited.lineageByPredictedCarrier;
+    edited.lineage =
+      rederivePrimitiveDirectEditLineage(kernel, edited, producer) ??
+      edited.lineage;
+  }
   edited.lineage ??=
     rederivePrimitiveDirectEditLineage(kernel, edited, producer) ??
     remusHashOnlyLineage(

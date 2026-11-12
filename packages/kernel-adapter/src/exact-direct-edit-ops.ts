@@ -36,6 +36,7 @@ import { topologyCandidatesForSolid } from './exact-lineage-builders';
 import {
   blendCarrierSnapshot,
   classifyThroughHoleFace,
+  measureBlendRegion,
   measureFaceGeometry,
   measureOwnedFaceGeometry,
   requireBlendRegion,
@@ -91,6 +92,7 @@ import {
 } from './kernel-validation';
 import {
   ambiguousReferenceError,
+  quantizeCoordinate,
   unresolvedReferenceError
 } from './topology-fingerprint';
 import {
@@ -98,10 +100,12 @@ import {
   createRemusModifierEvolutionLineage,
   decodeRemusMoveFacesJournal,
   deriveRemusMoveFacesDirectEditLineage,
+  deriveRemusPredictedCarrierDirectEditLineage,
   mergeRemusLineageStates,
   propagateRemusUnchangedDirectEditLineage,
   type RemusMoveFacesJournal,
-  type RemusLineageState
+  type RemusLineageState,
+  type RemusTopologyCandidate
 } from './remus-lineage';
 import {
   importedStepLineageName,
@@ -324,10 +328,17 @@ function offsetCompoundFace(
     target.solids.filter((_, index) => index !== ownerIndex),
     false
   );
-  const changed = propagateRemusUnchangedDirectEditLineage(
-    ownerLineage,
-    edited.solids.flatMap((solid) => topologyCandidatesForSolid(kernel, solid))
-  );
+  // An edit with no construction history names its output by predicted
+  // carrier even without a producing feature; otherwise only unchanged
+  // witnesses cross.
+  const changed = edited.lineageByPredictedCarrier
+    ? edited.lineage
+    : propagateRemusUnchangedDirectEditLineage(
+        ownerLineage,
+        edited.solids.flatMap((solid) =>
+          topologyCandidatesForSolid(kernel, solid)
+        )
+      );
   return {
     solids,
     lineage: mergeRemusLineageStates([preserved, ...(changed ? [changed] : [])])
@@ -1831,6 +1842,9 @@ export function applyDirectEdit(
     operation.kind === 'resize-imported-counterbore' ||
     operation.kind === 'resize-imported-countersink'
   ) {
+    const sourceCandidates = target.lineage
+      ? topologyCandidatesForSolid(kernel, solid)
+      : [];
     const resized = applyImportedHoleEdit(
       kernel,
       solid,
@@ -1838,7 +1852,36 @@ export function applyDirectEdit(
       operation,
       scope
     );
-    return resized.changed ? { solids: [resized.solid] } : target;
+    if (!resized.changed) return target;
+    // The re-drilled blind bore is constructed on the recorded axis at the
+    // new diameter; the hole's other faces keep or vacate their carriers.
+    const selected = sourceCandidates.find(
+      (candidate) => candidate.kind === 'face' && candidate.handle === face
+    )?.witness as FaceWitnessV1 | undefined;
+    return predictedCarrierEdit(
+      kernel,
+      target,
+      sourceCandidates,
+      resized.solid,
+      new Map([
+        [
+          face,
+          operation.kind === 'resize-imported-blind-hole' &&
+          selected?.analytic.kind === 'cylinder'
+            ? cylinderCarrier(
+                operation.sourceOpeningPoint,
+                operation.sourceAxisDirection,
+                resolveParamValue(
+                  operation.diameter,
+                  scope,
+                  'imported blind-hole diameter'
+                ) / 2
+              )
+            : null
+        ]
+      ]),
+      producingFeatureId
+    );
   }
   if (operation.kind === 'set-face-distance') {
     return setFaceDistance(kernel, target, solid, face, operation, scope);
@@ -1851,13 +1894,27 @@ export function applyDirectEdit(
       ? previewSourceGeometry(kernel, face)
       : measureFaceGeometry(kernel, face);
 
-  if (operation.kind === 'remove-face-feature') {
-    return {
-      solids: [removeFaceFeature(kernel, solid, face, geometry, operation)]
-    };
-  }
-  if (operation.kind === 'remove-blends') {
-    return { solids: [removeBlends(kernel, solid, face, operation)] };
+  if (
+    operation.kind === 'remove-face-feature' ||
+    operation.kind === 'remove-blends'
+  ) {
+    // A removal deletes the feature's faces and only re-limits the faces
+    // around it, which keep their carriers.
+    const sourceCandidates = target.lineage
+      ? topologyCandidatesForSolid(kernel, solid)
+      : [];
+    const output =
+      operation.kind === 'remove-blends'
+        ? removeBlends(kernel, solid, face, operation)
+        : removeFaceFeature(kernel, solid, face, geometry, operation);
+    return predictedCarrierEdit(
+      kernel,
+      target,
+      sourceCandidates,
+      output,
+      new Map(),
+      producingFeatureId
+    );
   }
 
   if (operation.kind === 'offset-face') {
@@ -1964,14 +2021,35 @@ export function applyDirectEdit(
     // The exact operation, recorded-face guards, validation and analytic
     // carrier census above still run. Only naming the disposable output waits.
     if (deferOutputLineage) return { solids: [output] };
-    const lineage = moved.relation
-      ? deriveRemusMoveFacesDirectEditLineage({
-          source: target.lineage,
-          sourceCandidates,
-          resultCandidates: topologyCandidatesForSolid(kernel, output),
-          relation: moved.relation
-        })
-      : undefined;
+    if (!moved.relation || moved.relation.inferred) {
+      // The face moves along its recorded outward normal by the offset.
+      const direction = normalized(operation.sourceNormal);
+      return predictedCarrierEdit(
+        kernel,
+        target,
+        sourceCandidates,
+        output,
+        new Map([
+          [
+            face,
+            direction
+              ? planeCarrier(
+                  geometry.normal,
+                  add(geometry.center, scale(direction, offset))
+                )
+              : null
+          ]
+        ]),
+        producingFeatureId,
+        moved.relation?.retiredPlacements
+      );
+    }
+    const lineage = deriveRemusMoveFacesDirectEditLineage({
+      source: target.lineage,
+      sourceCandidates,
+      resultCandidates: topologyCandidatesForSolid(kernel, output),
+      relation: moved.relation
+    });
     return {
       solids: [output],
       ...(lineage && producingFeatureId
@@ -2157,6 +2235,30 @@ export function applyDirectEdit(
           ]
         );
       }
+    }
+    if (
+      !deferOutputLineage &&
+      !(
+        evolution?.evolution.provenance === 'construction' && producingFeatureId
+      )
+    ) {
+      // The band's own faces get no carried name; the faces it rests on keep
+      // their carriers, so their names cross by exact predicted carrier.
+      const carried = predictedCarrierLineage(
+        kernel,
+        target,
+        sourceCandidates,
+        output,
+        new Map(
+          blendRegionFaces(kernel, solid, face).map((band) => [band, null])
+        ),
+        producingFeatureId
+      );
+      if (carried)
+        lineage = mergeRemusLineageStates([
+          carried,
+          ...(lineage ? [lineage] : [])
+        ]);
     }
     return { solids: [output], ...(lineage ? { lineage } : {}) };
   }
@@ -2360,8 +2462,8 @@ export function applyDirectEdit(
     // whose every curved neighbour is a proven band qualifies, and only a
     // result that passes every gate is accepted; otherwise the plain
     // route's refusal stands. The three kernel steps carry no single
-    // construction journal, so the result claims no output lineage and a
-    // later edit resolves its faces by fingerprint.
+    // construction journal, so names cross only by exact predicted carrier;
+    // the rebuilt bands are constructed afresh and stay unnamed.
     const blends = recognizeWallBlends(kernel, solid, face);
     if (!blends) throw error;
     let rebuilt: number;
@@ -2384,28 +2486,53 @@ export function applyDirectEdit(
     } catch {
       throw error;
     }
-    return { solids: [rebuilt] };
+    if (deferOutputLineage) return { solids: [rebuilt] };
+    const predicted = resizedWallCarrier(sourceCandidates, face, newRadius);
+    for (const band of curvedNeighbours(kernel, solid, face))
+      predicted.set(band, null);
+    return predictedCarrierEdit(
+      kernel,
+      target,
+      sourceCandidates,
+      rebuilt,
+      predicted,
+      producingFeatureId
+    );
   }
   if (approximate) {
     // The owner's rule (kernel robustness plan, 2026-11-06): a re-fillet may
     // keep the approximate quality its band already had, disclosed.
     onAdvisory?.(APPROXIMATE_REBLEND_ADVISORY);
   }
-  if (deferOutputLineage || !journal) return { solids: [output] };
-  const relation = moveFacesJournalFaceMap(
-    kernel,
-    journal.op,
-    Array.from(kernel.getSolidFaces(solid)),
-    Array.from(kernel.getSolidFaces(output))
-  );
-  const lineage = relation
-    ? deriveRemusMoveFacesDirectEditLineage({
-        source: target.lineage,
-        sourceCandidates,
-        resultCandidates: topologyCandidatesForSolid(kernel, output),
-        relation
-      })
-    : undefined;
+  if (deferOutputLineage) return { solids: [output] };
+  const relation = journal
+    ? moveFacesJournalFaceMap(
+        kernel,
+        journal.op,
+        Array.from(kernel.getSolidFaces(solid)),
+        Array.from(kernel.getSolidFaces(output))
+      )
+    : null;
+  // The exact sleeve route has no journal, and a boss resize is journaled
+  // from geometry only: neither is construction history (ADR-013, M07), so
+  // both carry names by the carrier the resize constructs.
+  if (!relation || relation.inferred) {
+    return predictedCarrierEdit(
+      kernel,
+      target,
+      sourceCandidates,
+      output,
+      resizedWallCarrier(sourceCandidates, face, newRadius),
+      producingFeatureId,
+      relation?.retiredPlacements
+    );
+  }
+  const lineage = deriveRemusMoveFacesDirectEditLineage({
+    source: target.lineage,
+    sourceCandidates,
+    resultCandidates: topologyCandidatesForSolid(kernel, output),
+    relation
+  });
   return {
     solids: [output],
     ...(lineage && producingFeatureId
@@ -2418,6 +2545,102 @@ export function applyDirectEdit(
           )
         }
       : {})
+  };
+}
+
+/** The resized wall stays on its own axis, at the commanded radius. */
+function resizedWallCarrier(
+  sourceCandidates: readonly RemusTopologyCandidate[],
+  wall: number,
+  radius: number
+): Map<number, FaceWitnessV1['analytic'] | null> {
+  const source = sourceCandidates.find(
+    (candidate) => candidate.kind === 'face' && candidate.handle === wall
+  );
+  const analytic = (source?.witness as FaceWitnessV1 | undefined)?.analytic;
+  return new Map([
+    [
+      wall,
+      analytic?.kind === 'cylinder'
+        ? { ...analytic, radius: quantizeCoordinate(radius) }
+        : null
+    ]
+  ]);
+}
+
+/** Non-planar faces sharing an edge with `face`: the bands a ladder rebuilds. */
+function curvedNeighbours(
+  kernel: RemusKernel,
+  solid: number,
+  face: number
+): number[] {
+  const edges = new Set(kernel.getFaceEdges(face));
+  return Array.from(kernel.getSolidFaces(solid)).filter(
+    (other) =>
+      other !== face &&
+      surfaceTypeOf(kernel, other) !== 'plane' &&
+      kernel.getFaceEdges(other).some((edge) => edges.has(edge))
+  );
+}
+
+/** The faces of the proven blend region `seed` belongs to. */
+function blendRegionFaces(
+  kernel: RemusKernel,
+  solid: number,
+  seed: number
+): number[] {
+  return measureBlendRegion(kernel, solid, seed)?.faces ?? [seed];
+}
+
+/**
+ * Names for an edit with no construction history, by the carrier the command
+ * constructs each face on (ADR-013, H01/M07 amendment): see
+ * {@link deriveRemusPredictedCarrierDirectEditLineage}.
+ */
+function predictedCarrierLineage(
+  kernel: RemusKernel,
+  target: ExactShape,
+  sourceCandidates: readonly RemusTopologyCandidate[],
+  output: number,
+  predicted: ReadonlyMap<number, FaceWitnessV1['analytic'] | null>,
+  producingFeatureId: FeatureId | undefined,
+  retiredPlacements?: ReadonlyMap<number, number>
+): RemusLineageState | undefined {
+  const lineage = deriveRemusPredictedCarrierDirectEditLineage({
+    source: target.lineage,
+    sourceCandidates,
+    resultCandidates: topologyCandidatesForSolid(kernel, output),
+    predicted,
+    ...(retiredPlacements ? { retiredPlacements } : {})
+  });
+  return lineage && producingFeatureId
+    ? withBoundaryEdgeLineage(kernel, output, producingFeatureId, lineage)
+    : lineage;
+}
+
+function predictedCarrierEdit(
+  kernel: RemusKernel,
+  target: ExactShape,
+  sourceCandidates: readonly RemusTopologyCandidate[],
+  output: number,
+  predicted: ReadonlyMap<number, FaceWitnessV1['analytic'] | null>,
+  producingFeatureId: FeatureId | undefined,
+  retiredPlacements?: ReadonlyMap<number, number>
+): ExactShape {
+  const lineage = predictedCarrierLineage(
+    kernel,
+    target,
+    sourceCandidates,
+    output,
+    predicted,
+    producingFeatureId,
+    retiredPlacements
+  );
+  if (!lineage) return { solids: [output] };
+  return {
+    solids: [output],
+    lineage,
+    ...(retiredPlacements ? {} : { lineageByPredictedCarrier: true as const })
   };
 }
 
