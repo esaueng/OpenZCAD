@@ -135,6 +135,11 @@ interface StartScreenProps {
   onCreate(name: string, units: UnitSystem): void;
   onOpen(projectId: string): void;
   onOpenDemo(definition: DemoDefinition): void;
+  /**
+   * A pointer or keyboard focus reached a project tile or demo card: an open
+   * is likely, so the workspace may start loading what it will need.
+   */
+  onOpenIntent?(): void;
   onOpenSettings(): void;
   /** Settings at its Account section; falls back to plain Settings. */
   onSignIn?(): void;
@@ -487,6 +492,7 @@ export function StartScreen({
   onCreate,
   onOpen,
   onOpenDemo,
+  onOpenIntent,
   onOpenSettings,
   onSignIn,
   onDuplicate,
@@ -1925,6 +1931,8 @@ export function StartScreen({
             className="start-tile-open"
             data-tile-drag=""
             disabled={busy}
+            onPointerEnter={onOpenIntent}
+            onFocus={onOpenIntent}
             aria-keyshortcuts={canReorder ? REORDER_KEYS : undefined}
             onClick={(event) => {
               if (picks(event)) {
@@ -3318,6 +3326,8 @@ export function StartScreen({
                   // name was otherwise assembled from its heading, its tagline
                   // and three loose revision chips read in sequence.
                   aria-label={`Open demo: ${demo.name.replace('Demo · ', '')} — ${demo.tagline}`}
+                  onPointerEnter={onOpenIntent}
+                  onFocus={onOpenIntent}
                   onClick={() => onOpenDemo(demo)}
                 >
                   <span className="demo-card-head">

@@ -41,6 +41,39 @@ afterEach(() => {
 });
 
 describe('useGeometryWorker', () => {
+  it('asks each worker to prepare the kernel once, and never when saving data', () => {
+    installWorker();
+    const { result } = renderHook(() =>
+      useGeometryWorker({
+        manager: () => null,
+        onDerived: vi.fn(),
+        onError: vi.fn()
+      })
+    );
+    const worker = FakeWorker.instances[0]!;
+    act(() => {
+      result.current.prepareKernel?.();
+      result.current.prepareKernel?.();
+    });
+    expect(worker.postMessage).toHaveBeenCalledOnce();
+    expect(worker.postMessage).toHaveBeenCalledWith({ type: 'prepare-kernel' });
+
+    installWorker();
+    vi.stubGlobal('navigator', {
+      ...navigator,
+      connection: { saveData: true }
+    });
+    const saving = renderHook(() =>
+      useGeometryWorker({
+        manager: () => null,
+        onDerived: vi.fn(),
+        onError: vi.fn()
+      })
+    );
+    act(() => saving.result.current.prepareKernel?.());
+    expect(FakeWorker.instances[0]!.postMessage).not.toHaveBeenCalled();
+  });
+
   it('waits for the accepted live projection even when the worker already reports ready', () => {
     installWorker();
     const document = createProjectDocument('Restored model', toUserId('user'));

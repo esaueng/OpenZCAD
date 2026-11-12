@@ -1354,3 +1354,101 @@ notice transitions and sustained gesture frames before choosing a fix. Repeat
 on other GPUs/DPR settings and imported assemblies, and measure refused direct
 edits before extending the variable-scope change to other notice heights. H02's
 broader geometry/cache acceptance remains Partial.
+
+## Kernel compile and warm-up on the first rebuild (2026-11-12, W01)
+
+The question: on a reload, how much of the first exact rebuild is WebAssembly
+compilation and tier-up (V8 Liftoff baseline code, then TurboFan) rather than
+geometry? A private 32-feature filleted part rebuilds in 6.1–6.9 s with the
+first adapter in a Node process. A second fresh adapter in the same process
+rebuilds it in 3.1–3.9 s, which looked like ~3 s of compile cost.
+**Little of that gap is compilation**, and Chromium already caches the
+compiled kernel across reloads.
+
+### Node: compile is at most about 1 s of the gap
+
+Same process, fresh adapter per round, one sync of the same document,
+12-thread Linux desktop:
+
+| V8 flags                                                        |  First sync | Later syncs |
+| --------------------------------------------------------------- | ----------: | ----------: |
+| default (lazy Liftoff, dynamic tier-up)                         |   6.1–6.9 s |   3.1–3.9 s |
+| `--no-liftoff` (lazy TurboFan on first call)                    |      12.2 s |   3.4–3.6 s |
+| `--liftoff-only`                                                |      14.7 s | 10.1–10.5 s |
+| `--max-opt=1` / `--max-opt=2` (JavaScript tiers capped)         | 6.6 / 6.3 s |   3.1–3.4 s |
+| `--no-wasm-lazy-compilation --no-liftoff`, 40 s to finish first |   5.8–6.0 s |   3.1–3.2 s |
+
+TurboFan code is about three times faster than Liftoff here, so tier-up
+matters. But with the whole module compiled by TurboFan before the first sync,
+that sync still takes 5.8 s against 3.1 s. Compilation accounts for 0.3–1 s of
+the first-build excess, and capping JavaScript optimization changes nothing.
+The rest sits in a few kernel calls that are much faster the second time in the
+same WASM instance, even across `RemusKernel` instances (fully compiled run,
+first vs second sync): `faceArea` 161 → 4 ms over 237 calls,
+`tessellateSolidGroupedBinary` 642 → 61 ms, `moveFacesJournaledWithQuality`
+538 → 66 ms, `resizeCylindricalFaceJournaled` 3,259 → 2,285 ms. That is
+state the kernel keeps inside its linear memory (memoized results or warm
+allocator state), not compiled code. It is lost on every reload, and only the
+kernel can address it, so this comparison is not a measure of compile cost.
+
+### Chromium: the code cache already covers reloads
+
+The geometry worker imports the kernel through `vite-plugin-wasm`, which uses
+`WebAssembly.instantiateStreaming` for an `application/wasm` response, and
+`/assets/*` is served `immutable`. Headless Chromium against a local
+production build (gzip, the `_headers` cache policy), with `v8.wasm` tracing:
+
+- **First visit:** the streaming compile finishes ~400 ms after the kernel
+  load starts. Lazy Liftoff compilation then takes ~0.5 s on the worker thread
+  (2,898 functions), and ~5.6 s of TurboFan runs on background threads.
+  Chromium writes a 19.6 MB WASM code cache, which grows to 27.4 MB after the
+  next load.
+- **Reload:** `wasm.Deserialize` takes 10 ms and the kernel is ready about
+  70 ms after the worker starts. Only ~0.5 s of compilation remains, off the
+  critical path. The worker is still busy for ~6.7 s, all of it in the build.
+- The private part takes 7.3–7.4 s from first open to input-ready, against
+  6.5–8.3 s across reloads. Compilation is not what makes the reload slow.
+
+A `WebAssembly.Module` cached in IndexedDB would add nothing: Chromium no longer
+stores modules there, and its code cache already holds the optimized code.
+The worker already outlives project switches (it is spawned once per app
+mount), so a second project reuses the compiled module. Compile cost remains
+only on a profile's first visit, and again after each deploy that changes the
+kernel, since the asset is renamed. WebKit (Safari and the desktop host's
+WKWebView) was not measured. JavaScriptCore keeps no persistent WASM code
+cache, so there every launch should behave like a first visit.
+
+### Change: load the kernel on open intent
+
+That first-visit cost now overlaps the user's own move to open a project. A
+pointer entering, or keyboard focus reaching, a library project tile or demo
+card posts `prepare-kernel` to the geometry worker
+(`GeometryWorkerApi.prepareKernel`). The worker then fetches and compiles the
+kernel without queuing or reporting anything; a failed load is retried by the
+next job. It runs once per worker and is skipped under Save-Data. Rendering
+the library alone still fetches nothing, which keeps the start-screen rule of
+[Lazy-chunk prefetch](#lazy-chunk-prefetch-f023). When the prepare finished
+first, the rebuild never enters `loading-remus`, so `oz:kernel.ready` is not
+recorded for that open.
+
+Measured on a cold profile per run (first visit, empty HTTP and code caches):
+open the Heat Sink demo after 1.5 s on the library. Ten runs per cell,
+baseline and candidate alternated, headless Chromium on a shared 12-thread
+Linux host (load average 5–9):
+
+| Click → `oz:model-visible`                    | Baseline median (range) | Candidate median (range) | Kernel request vs click |
+| --------------------------------------------- | ----------------------: | -----------------------: | ----------------------: |
+| Pointer rests on the card 300 ms, then clicks |  1,318 ms (1,255–1,405) |       973 ms (923–1,061) |        +90 ms → −255 ms |
+| Scripted click, no pointer or focus (control) |  1,294 ms (1,250–1,349) |   1,260 ms (1,184–1,342) |         +80 ms → +40 ms |
+
+With 300 ms of intent, the kernel download and streaming compile are off the
+critical path (−345 ms, −26%) on an unthrottled local link. A slow network
+hides less of the transfer; the head start is the hover time.
+Reloads and warm opens are unchanged: they reach the worker's first sync
+before an intent could help, and the code cache already makes the kernel
+ready in ~70 ms.
+
+`scripts/measure-startup.mjs --backup <file>` opens a project backup through
+the library's import input instead of a demo. `--browser-arg` passes Chromium
+switches, and warm mode now also reports the first open as `firstOpen`. Keep
+backups of private models outside the repository.

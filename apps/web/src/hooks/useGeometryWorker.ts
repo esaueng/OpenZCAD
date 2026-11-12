@@ -15,6 +15,7 @@ import {
 } from '../worker/exactRebuildCache';
 import { attachDerivedState } from '@openzcad/document-core';
 import { describeWorkerFailure } from '../lib/workerFailure';
+import { prefersSavingData } from '../lib/saveData';
 import type {
   BodyId,
   FaceRecognitionSummary,
@@ -159,6 +160,12 @@ export interface GeometryWorkerHost {
 export interface GeometryWorkerApi {
   /** Lifecycle for the broadcast document currently shown in the workspace. */
   state: GeometryWorkerState;
+  /**
+   * The user is about to open a project: the worker starts loading the exact
+   * kernel now rather than on the first rebuild. Once per worker, and never
+   * when the browser asks to save data (a hover is not yet an open).
+   */
+  prepareKernel?(): void;
   isReadyFor(document: ProjectDocument | null): boolean;
   /**
    * Posts a rebuild for the live document, at most once per model version
@@ -331,6 +338,7 @@ export interface GeometryWorkerApi {
  */
 export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
   const workerRef = useRef<Worker | null>(null);
+  const kernelPreparedFor = useRef<Worker | null>(null);
   const exportRequests = useRef(
     new Map<string, PendingRequest<ExportSuccess>>()
   );
@@ -1040,6 +1048,17 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
 
   return {
     state,
+    prepareKernel() {
+      const worker = workerRef.current;
+      if (
+        !worker ||
+        kernelPreparedFor.current === worker ||
+        prefersSavingData()
+      )
+        return;
+      kernelPreparedFor.current = worker;
+      worker.postMessage({ type: 'prepare-kernel' });
+    },
     isReadyFor(document) {
       // A worker status reports its own progress, not receipt of its result.
       // Until the live projection is accepted, the displayed model may still

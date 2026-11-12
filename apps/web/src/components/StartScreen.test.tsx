@@ -2070,3 +2070,26 @@ describe('StartScreen sidebar and shelf edge', () => {
     expect(importButton).toHaveTextContent(/^Import$/);
   });
 });
+
+describe('StartScreen open intent', () => {
+  it('reports an open intent when a pointer or focus reaches a project tile or demo card', () => {
+    const onOpenIntent = vi.fn();
+    const { container } = renderStartScreen({
+      demos: DEMO_DEFINITIONS,
+      signedIn: false,
+      onOpenIntent
+    });
+    // Rendering the library is not an intent: nothing loads speculatively.
+    expect(onOpenIntent).not.toHaveBeenCalled();
+    const tile = container.querySelector<HTMLButtonElement>(
+      'button.start-tile-open'
+    );
+    expect(tile).not.toBeNull();
+    fireEvent.pointerEnter(tile!);
+    expect(onOpenIntent).toHaveBeenCalledTimes(1);
+    fireEvent.focus(
+      screen.getByRole('button', { name: /^Open demo: Scissors/ })
+    );
+    expect(onOpenIntent).toHaveBeenCalledTimes(2);
+  });
+});
