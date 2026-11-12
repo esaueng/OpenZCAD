@@ -188,7 +188,8 @@ export interface HistoryTimelineProps {
   /**
    * An exact operation is still running. A reorder started now would be
    * refused as busy, and repeated arrow presses would leave an order nobody
-   * chose, so the grips hold still until it finishes.
+   * chose, so the grips hold still until it finishes. Resume waits too: its
+   * own check of the paused features is one of those operations.
    */
   reorderBusy?: boolean;
   /** Renames a feature in place. Without it the row offers no rename. */
@@ -1485,6 +1486,7 @@ export function HistoryTimeline({
             className="history-resume"
             aria-label="Resume full history"
             title="Resume every feature paused by rollback. Features you suppressed stay suppressed."
+            disabled={reorderBusy}
             onClick={resumeNow}
           >
             Resume

@@ -532,6 +532,17 @@ describe('HistoryTimeline', () => {
     expect(props.onResumeHistory).toHaveBeenCalledTimes(1);
   });
 
+  it('holds Resume while an exact check is running', () => {
+    const { props } = renderTimeline({
+      features: [feature(1), feature(2, undefined, rolledBack)],
+      reorderBusy: true
+    });
+    const resume = screen.getByRole('button', { name: 'Resume full history' });
+    expect(resume).toBeDisabled();
+    fireEvent.click(resume);
+    expect(props.onResumeHistory).not.toHaveBeenCalled();
+  });
+
   it('has no status line while the history is complete', () => {
     renderTimeline();
     expect(screen.queryByRole('status')).toBeNull();

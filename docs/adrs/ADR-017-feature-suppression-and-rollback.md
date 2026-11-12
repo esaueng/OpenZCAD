@@ -122,3 +122,39 @@ the normal reorder validation; one it refuses (the new feature reads something
 only the tail produces) leaves that feature at the end, as before. Edits made
 with nothing rolled back are unchanged, and Duplicate keeps refusing a step
 inside the paused tail.
+
+## Amendment (November 2026): preflight resume
+
+An edit made while History is rolled back is checked only against the
+features that are building; the paused tail is skipped, so nothing judged it.
+Resuming then committed the marker move unchecked. Rolling back to a fillet,
+changing its radius and resuming turned twenty later features red at once,
+with no chance to keep the rollback and change the edit first.
+
+A rollback marker move that resumes features (Resume full history, or moving
+the marker later) now rebuilds the candidate through the validated-commit path
+before committing. It reports each resumed feature that would not rebuild:
+its own refusing warning, or a result body the rebuild did not produce, the
+same test the suppression preflight applies to dependents. Only resumed
+features are judged; features before the old marker, and features the user
+also suppressed by hand (which stay out of the build), are not. A resumed
+feature that was already failing when a rollback in this session paused it is
+not blamed on the resume either; after a reload that memory is gone and every
+resumed failure is reported.
+
+With no failure the move commits as before, as one transaction, with the
+checked rebuild attached. With failures a dialog names each failing feature
+and its reason and offers **Keep rolled back** (nothing changes) or **Resume
+anyway**. Unlike a refused suppression it offers to proceed, because resuming
+is how the full model comes back and the user may mean to repair the failures
+in place; Resume anyway commits the same single transaction as an unchecked
+resume did. The answer is valid only for the document version it was checked
+against: any later edit, undo or project switch drops the dialog, and Resume
+anyway on a moved document commits nothing. Resume is disabled while any exact
+check runs, its own included.
+
+Moving the marker earlier only pauses features and needs no check. Undo and
+redo of a marker move, command replay and collaboration snapshots are
+unchanged, so stored states with failing resumed features still load as they
+are. No stored format, exactness, reference-resolution or kernel-refusal rule
+changes.

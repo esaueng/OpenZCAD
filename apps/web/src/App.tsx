@@ -288,7 +288,6 @@ import {
   duplicateProjectName,
   FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY,
   FEATURE_SUPPRESSED_METADATA_KEY,
-  isFeatureRollbackSuppressed,
   isFeatureSuppressed,
   projectBranchPoint,
   projectOrganization,
@@ -1273,6 +1272,11 @@ const LazySuppressFeatureDialog = lazyWithStaleChunkNotice(() =>
     default: module.SuppressFeatureDialog
   }))
 );
+const LazyResumeHistoryDialog = lazyWithStaleChunkNotice(() =>
+  import('./components/ResumeHistoryDialog').then((module) => ({
+    default: module.ResumeHistoryDialog
+  }))
+);
 const LazyUnappliedCardDialog = lazyWithStaleChunkNotice(() =>
   import('./components/UnappliedCardDialog').then((module) => ({
     default: module.UnappliedCardDialog
@@ -1438,6 +1442,8 @@ const SaveRevisionDialog = withSuspense(LazySaveRevisionDialog);
 const DeleteFeatureDialog = withSuspense(LazyDeleteFeatureDialog);
 
 const SuppressFeatureDialog = withSuspense(LazySuppressFeatureDialog);
+
+const ResumeHistoryDialog = withSuspense(LazyResumeHistoryDialog);
 
 const UnappliedCardDialog = withSuspense(LazyUnappliedCardDialog);
 
@@ -1681,8 +1687,17 @@ import {
   suppressBranchLabel,
   suppressCommands,
   suppressedBranchMessage,
-  suppressionRefusal
+  suppressionRefusal,
+  type RefusedDependent
 } from './lib/featureSuppression';
+import {
+  activeResumePrompt,
+  failingFeatureIds,
+  HistoryResumeRefusal,
+  rollbackMarkerMove,
+  validateHistoryResume,
+  type RollbackMarkerMove
+} from './lib/historyResume';
 import type { HistoryRowActions } from './components/HistoryTimeline';
 import {
   moveHasFiniteValues,
@@ -2819,6 +2834,28 @@ export function App() {
     featureId: FeatureId;
     name: string;
     dependents: { featureId: FeatureId; name: string }[];
+  } | null>(null);
+  /**
+   * A rollback marker move whose exact rebuild would leave resumed features
+   * failing, asking whether to resume anyway. Valid for one version only.
+   */
+  const [pendingResume, setPendingResume] = useState<{
+    projectId: ProjectDocument['projectId'];
+    version: number;
+    label: string;
+    message: string;
+    commands: AnyCommand[];
+    failures: readonly RefusedDependent[];
+    derived: ProjectDocument['derived'];
+  } | null>(null);
+  /**
+   * Features that were already failing when a rollback paused them, so a
+   * later resume does not blame itself for them. Session memory only: after
+   * a reload every resumed failure is reported.
+   */
+  const rollbackFailingRef = useRef<{
+    projectId: ProjectDocument['projectId'];
+    featureIds: Set<FeatureId>;
   } | null>(null);
   // Named `doc` (not `document`) so the global DOM document is never shadowed.
   const [doc, setDoc] = useState<ProjectDocument | null>(null);
@@ -6525,6 +6562,7 @@ export function App() {
     dispatchInteraction({ type: 'clear' });
     setPendingFeatureDelete(null);
     setPendingSuppression(null);
+    setPendingResume(null);
     setPendingToolSwitch(null);
   }, [doc?.projectId]);
 
@@ -27349,70 +27387,157 @@ export function App() {
     });
   }
 
-  function handleResumeHistory() {
-    const commands = features
-      .filter(isFeatureRollbackSuppressed)
-      .map((feature) =>
-        commandFactories.setNodeMetadata(
-          {
-            nodeId: feature.id,
-            metadata: { [FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY]: null }
-          },
-          `Resume ${feature.name}`
-        )
+  /**
+   * Moves the rollback marker. Pausing more needs no check: the paused steps
+   * simply stop building. A move that resumes steps first rebuilds the
+   * candidate, because an edit made while rolled back was checked only
+   * against the steps that were building (ADR-017, November 2026). When a
+   * resumed step would not rebuild, a dialog names it and its reason and
+   * offers to resume anyway or keep the rollback.
+   */
+  function moveRollbackMarker(
+    move: RollbackMarkerMove,
+    label: string,
+    message: string
+  ) {
+    const owner = managerRef.current;
+    if (!owner || move.commands.length === 0) return;
+    const document = owner.document;
+    setPendingResume(null);
+    if (move.paused.length > 0) {
+      // Remember what the model already could not build before the pause,
+      // judged on the rebuild of this very version only.
+      const failing = geometry.isReadyFor(document)
+        ? new Set(failingFeatureIds(move.paused, document.derived))
+        : new Set<FeatureId>();
+      const known =
+        rollbackFailingRef.current?.projectId === document.projectId
+          ? rollbackFailingRef.current.featureIds
+          : new Set<FeatureId>();
+      for (const feature of move.paused) {
+        if (failing.has(feature.featureId)) known.add(feature.featureId);
+        else known.delete(feature.featureId);
+      }
+      rollbackFailingRef.current = {
+        projectId: document.projectId,
+        featureIds: known
+      };
+    }
+    const announceMove = () =>
+      announce(message, undefined, {
+        repeatsStatusAt: lastStatusAtRef.current
+      });
+    if (move.resumed.length === 0) {
+      if (executeTransaction(label, move.commands)) announceMove();
+      return;
+    }
+    if (!ensureCanExecute(move.commands, 'resume history')) return;
+    const alreadyFailing =
+      rollbackFailingRef.current?.projectId === document.projectId
+        ? rollbackFailingRef.current.featureIds
+        : undefined;
+    let refusal: HistoryResumeRefusal | null = null;
+    let candidate: ProjectDocument['derived'] | null = null;
+    void validatedFeature
+      .runTransaction(move.commands, {
+        label,
+        targets: [],
+        validateDerived: (derived) => {
+          try {
+            validateHistoryResume(move.resumed, derived, alreadyFailing);
+          } catch (error) {
+            if (error instanceof HistoryResumeRefusal) {
+              refusal = error;
+              candidate = derived;
+            }
+            throw error;
+          }
+        },
+        validatingMessage: 'Checking the features to resume…',
+        successMessage: message,
+        onFailure: (failure) => {
+          const refused: HistoryResumeRefusal | null = refusal;
+          const derived: ProjectDocument['derived'] | null = candidate;
+          if (
+            !refused ||
+            !derived ||
+            managerRef.current !== owner ||
+            owner.document.version !== document.version
+          ) {
+            announce(failure);
+            return;
+          }
+          setPendingResume({
+            projectId: document.projectId,
+            version: document.version,
+            label,
+            message,
+            commands: move.commands,
+            failures: refused.failures,
+            derived
+          });
+        },
+        onSuccess: () => queueMicrotask(announceMove)
+      })
+      .then((outcome) => {
+        if (outcome === 'busy')
+          announce(`${label} not applied. ${VALIDATED_FEATURE_BUSY_STATUS}`);
+      });
+  }
+
+  /** "Resume anyway": the checked move, committed only on the version checked. */
+  function resumeDespiteFailures() {
+    const pending = pendingResume;
+    setPendingResume(null);
+    if (!pending) return;
+    if (!activeResumePrompt(pending, managerRef.current?.document)) {
+      setStatus(
+        'The document changed after Resume was checked. Resume again to check the current model.'
       );
-    if (
-      commands.length &&
-      executeTransaction('Resume full history', commands)
-    ) {
+      return;
+    }
+    if (executeTransaction(pending.label, pending.commands, pending.derived)) {
       announce(
-        'Full history resumed. Manually suppressed features remain suppressed.',
-        undefined,
+        `${pending.message} ${pending.failures.length} ${pending.failures.length === 1 ? 'feature needs' : 'features need'} repair.`,
+        { label: 'Undo', run: handleUndo },
         { repeatsStatusAt: lastStatusAtRef.current }
       );
     }
   }
 
+  /** History as the manager holds it now, which the move is built against. */
+  function liveFeatures(): FeatureNode[] {
+    const current = managerRef.current?.document;
+    return current ? listFeaturesInOrder(current) : [];
+  }
+
+  function handleResumeHistory() {
+    moveRollbackMarker(
+      rollbackMarkerMove(liveFeatures(), null),
+      'Resume full history',
+      'Full history resumed. Manually suppressed features remain suppressed.'
+    );
+  }
+
   function handleRollbackAfterFeature(featureId: FeatureId, name: string) {
-    const markerIndex = features.findIndex(
+    const history = liveFeatures();
+    const markerIndex = history.findIndex(
       (feature) => feature.featureId === featureId
     );
     if (markerIndex < 0) {
       setStatus('The rollback feature is no longer in this document.');
       return;
     }
-    const commands = features.flatMap((feature, index) => {
-      const rollbackSuppressed = index > markerIndex;
-      if (isFeatureRollbackSuppressed(feature) === rollbackSuppressed) {
-        return [];
-      }
-      return [
-        commandFactories.setNodeMetadata(
-          {
-            nodeId: feature.id,
-            metadata: {
-              [FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY]: rollbackSuppressed
-                ? true
-                : null
-            }
-          },
-          rollbackSuppressed
-            ? `Roll back ${feature.name}`
-            : `Resume ${feature.name}`
-        )
-      ];
-    });
-    if (commands.length === 0) {
+    const move = rollbackMarkerMove(history, markerIndex);
+    if (move.commands.length === 0) {
       setStatus(`History is already rolled back after ${name}.`);
       return;
     }
-    if (executeTransaction(`Roll back after ${name}`, commands)) {
-      announce(
-        `History rolled back after ${name}. Later features are paused.`,
-        undefined,
-        { repeatsStatusAt: lastStatusAtRef.current }
-      );
-    }
+    moveRollbackMarker(
+      move,
+      `Roll back after ${name}`,
+      `History rolled back after ${name}. Later features are paused.`
+    );
   }
 
   function openContextMenu(
@@ -28336,6 +28461,7 @@ export function App() {
     !importUnitsPrompt &&
     !pendingFeatureDelete &&
     !activeSuppressionPrompt(pendingSuppression, doc?.projectId) &&
+    !activeResumePrompt(pendingResume, doc) &&
     !pendingToolSwitch;
   exactEntryInputEnabledRef.current =
     workspaceInputEnabled && !paletteOpen && !shortcutsOpen && !namingSave;
@@ -33096,6 +33222,17 @@ export function App() {
                 }}
               />
             )}
+          {pendingResume && activeResumePrompt(pendingResume, doc) && (
+            <ResumeHistoryDialog
+              action={pendingResume.label}
+              failures={pendingResume.failures}
+              onKeep={() => {
+                setPendingResume(null);
+                setStatus('History stays rolled back.');
+              }}
+              onResume={resumeDespiteFailures}
+            />
+          )}
           {pendingToolSwitch && doc && (
             <UnappliedCardDialog
               card="Move"

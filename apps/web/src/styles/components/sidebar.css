@@ -615,8 +615,14 @@
   font-size: var(--fs-mini);
 }
 
-.history-resume:hover {
+.history-resume:hover:not(:disabled) {
   background: var(--color-accent-dim);
+}
+
+/* Held while an exact check runs, Resume's own included. */
+.history-resume:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .history-latest[data-pending='true'] {
