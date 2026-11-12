@@ -65,7 +65,7 @@ import {
   referenceImageInsertPlane,
   referenceImagePlaneBasis
 } from './lib/referenceImageDisplay';
-import { referenceImagesWithHistory } from '@openzcad/shared';
+import { hasDraftDisplay, referenceImagesWithHistory } from '@openzcad/shared';
 import type {
   ReferenceImage,
   ReferenceImageId,
@@ -4132,12 +4132,7 @@ export function App() {
       Boolean(doc && geometry.state.phase !== 'ready') ||
       // A released edit's draft display mesh is refined in the background;
       // the idle capture draws the refined one.
-      Boolean(
-        doc &&
-        Object.values(doc.derived.bodyRepresentations).some(
-          (body) => body.displayQuality === 'draft'
-        )
-      )
+      Boolean(doc && hasDraftDisplay(doc.derived.bodyRepresentations))
   );
   // Only user edit attempts are harvested. Copies, baseline/lineage builds
   // and assistant analysis stay on the unobserved geometry API.

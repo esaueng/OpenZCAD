@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   addPrimitiveFeature,
   booleanBodies,
@@ -15,8 +15,11 @@ import {
   type BodyRepresentation,
   type DerivedState,
   type FaceTopology,
+  type FeatureWarning,
   type ProjectDocument
 } from '@openzcad/shared';
+import { previewDisplayTessellation } from '../packages/kernel-adapter/src/display-tessellation';
+import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
 import { filletedUnion } from './support/filleted-union';
 
 /**
@@ -79,6 +82,48 @@ function exactParts(derived: DerivedState) {
       })
     )
   };
+}
+
+const gapAdvisories = (warnings: readonly FeatureWarning[] | undefined) =>
+  (warnings ?? []).filter(
+    (warning) =>
+      warning.kind === 'advisory' &&
+      warning.message.includes('display mesh has gaps')
+  );
+
+/** The drag tessellation's angular deflection, distinct from full quality. */
+const DRAG_ANGULAR = previewDisplayTessellation({
+  linearDeflection: 1,
+  angularDeflection: 0
+}).angularDeflection;
+
+/**
+ * Leaves the last face's triangles out of every grouped mesh at the drag
+ * tessellation (`gapsAt: 'drag'`) or at any other one (`'full'`), as the
+ * Remus defect behind the display-gap advisory does at some deflections.
+ */
+function stubDisplayGaps(gapsAt: 'drag' | 'full') {
+  const original = RemusKernel.prototype.tessellateSolidGroupedBinary;
+  return vi
+    .spyOn(RemusKernel.prototype, 'tessellateSolidGroupedBinary')
+    .mockImplementation(function (this: RemusKernel, ...args) {
+      const mesh = original.apply(this, args);
+      if ((args[2] === DRAG_ANGULAR) !== (gapsAt === 'drag')) return mesh;
+      try {
+        const offsets = mesh.faceOffsets.slice();
+        const last = offsets.length - 1;
+        const indices = mesh.indices.slice(0, offsets[last - 1]);
+        offsets[last] = offsets[last - 1]!;
+        return {
+          positions: mesh.positions.slice(),
+          indices,
+          faceOffsets: offsets,
+          free() {}
+        } as unknown as ReturnType<typeof original>;
+      } finally {
+        mesh.free();
+      }
+    });
 }
 
 function withoutClock(derived: DerivedState) {
@@ -152,6 +197,78 @@ describe('draft display on a released direct edit', () => {
     });
   }, 120_000);
 
+  it('never raises the display-gap advisory from a draft mesh', async () => {
+    // A draft whose drag mesh has gaps while the full-quality one is closed:
+    // the accepted commit's warnings are the full-quality commit's.
+    await withAdapters(async (dragged, plain) => {
+      const model = await filletedUnion(dragged, { heightEdit: false });
+      const top = faceNamed(model.body, TOP);
+      const released = offsetTop(model.document, model.bodyId, top, -3);
+      await plain.syncDocument(model.document);
+      const reference = await plain.syncDocument(released);
+      for (const offset of [-2, -3])
+        await dragged.previewGeometry(
+          offsetTop(model.document, model.bodyId, top, offset),
+          { deferTopology: true }
+        );
+      const spy = stubDisplayGaps('drag');
+      try {
+        const draft = await dragged.syncDocument(released);
+        expect(draft.bodyRepresentations[model.bodyId]!.displayQuality).toBe(
+          'draft'
+        );
+        expect(gapAdvisories(reference.featureWarnings)).toEqual([]);
+        expect(draft.featureWarnings).toEqual(reference.featureWarnings);
+        expect(draft.warnings).toEqual(reference.warnings);
+        const refined = await dragged.syncDocument(released);
+        expect(refined.featureWarnings).toEqual(reference.featureWarnings);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  }, 120_000);
+
+  it('raises a full-quality mesh gap with the refinement', async () => {
+    // The opposite: only the full-quality mesh has gaps. The draft commit
+    // cannot know that without the tessellation it exists to skip, so the
+    // advisory arrives with the refinement, which equals a full commit.
+    await withAdapters(async (dragged, plain) => {
+      const model = await filletedUnion(dragged, { heightEdit: false });
+      const top = faceNamed(model.body, TOP);
+      const released = offsetTop(model.document, model.bodyId, top, -3);
+      await plain.syncDocument(model.document);
+      for (const offset of [-2, -3])
+        await dragged.previewGeometry(
+          offsetTop(model.document, model.bodyId, top, offset),
+          { deferTopology: true }
+        );
+      const spy = stubDisplayGaps('full');
+      try {
+        const reference = await plain.syncDocument(released);
+        expect(gapAdvisories(reference.featureWarnings)).toHaveLength(1);
+        const draft = await dragged.syncDocument(released);
+        expect(draft.bodyRepresentations[model.bodyId]!.displayQuality).toBe(
+          'draft'
+        );
+        expect(gapAdvisories(draft.featureWarnings)).toEqual([]);
+        // Every other warning is already the full commit's.
+        expect(draft.featureWarnings).toEqual(
+          (reference.featureWarnings ?? []).filter(
+            (warning) => !gapAdvisories([warning]).length
+          )
+        );
+        const refined = await dragged.syncDocument(released);
+        expect(refined.bodyRepresentations[model.bodyId]!.displayQuality).toBe(
+          undefined
+        );
+        expect(refined.featureWarnings).toEqual(reference.featureWarnings);
+        expect(refined.warnings).toEqual(reference.warnings);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  }, 120_000);
+
   it('draws a cylinder resize release with its drag mesh too', async () => {
     await withAdapters(async (dragged, plain) => {
       const model = await filletedUnion(dragged, { heightEdit: false });
@@ -188,6 +305,49 @@ describe('draft display on a released direct edit', () => {
       const refined = await dragged.syncDocument(released);
       expect(withoutClock(refined)).toEqual(withoutClock(reference));
     });
+  }, 120_000);
+
+  it('keeps a paused drag drafted through an idle refinement of the last release', async () => {
+    const adapter = await createExactKernelAdapter();
+    try {
+      const model = await filletedUnion(adapter, { heightEdit: false });
+      const top = faceNamed(model.body, TOP);
+      const first = offsetTop(model.document, model.bodyId, top, -2);
+      await adapter.previewGeometry(
+        offsetTop(model.document, model.bodyId, top, -1),
+        { deferTopology: true }
+      );
+      await adapter.previewGeometry(first, { deferTopology: true });
+      const draft = await adapter.syncDocument(first);
+      expect(draft.bodyRepresentations[model.bodyId]!.displayQuality).toBe(
+        'draft'
+      );
+      // The next drag starts before the worker refined that release.
+      const nextTop = faceNamed(draft.bodyRepresentations[model.bodyId]!, TOP);
+      const next = (offset: number) =>
+        offsetTop(first, model.bodyId, nextTop, offset);
+      await adapter.previewGeometry(next(-1), { deferTopology: true });
+      // The hand pauses; the idle refinement of the first release runs.
+      const refined = await adapter.syncDocument(
+        first,
+        undefined,
+        undefined,
+        undefined,
+        {
+          displayRefinement: true
+        }
+      );
+      expect(
+        refined.bodyRepresentations[model.bodyId]!.displayQuality
+      ).toBeUndefined();
+      // Released where it paused: still accepted with its drag mesh.
+      const released = await adapter.syncDocument(next(-1));
+      expect(released.bodyRepresentations[model.bodyId]!.displayQuality).toBe(
+        'draft'
+      );
+    } finally {
+      adapter.dispose();
+    }
   }, 120_000);
 
   it('keeps full quality without a drag mesh to commit, or for a strict union', async () => {

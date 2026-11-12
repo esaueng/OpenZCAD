@@ -710,6 +710,13 @@ export interface ExactKernelAdapter {
        * build depends on the document alone.
        */
       proposeCarry?: boolean;
+      /**
+       * The idle refinement of a draft display (see
+       * `exact-display-refinement.ts`): a drag that is still under way
+       * keeps what its frames recorded, so its release is drafted as if
+       * this sync had never run.
+       */
+      displayRefinement?: boolean;
     }
   ): Promise<DerivedState>;
   /**
@@ -1343,8 +1350,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
    * The edit whose last preview frame was meshed at the drag tessellation:
    * the source history before it and the body it moves. The complete sync
    * that follows it for the same edit — its release — draws that body with
-   * a draft display mesh (see `exact-display-refinement.ts`); every check
-   * still runs. Any complete sync consumes it; a full-quality preview frame,
+   * a draft display mesh (see `exact-display-refinement.ts`). Every gating
+   * check still runs on the commit; only the display-gap advisory, which
+   * describes the full-quality mesh, waits for the refinement. Any complete sync consumes it; a full-quality preview frame,
    * a released preview and a dropped history cache clear it.
    */
   private draftDisplaySource: {
@@ -3209,27 +3217,46 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       onGeometryReady?: (geometry: GeometryReadyState) => void;
       yieldControl?: () => Promise<void> | void;
       proposeCarry?: boolean;
+      displayRefinement?: boolean;
     }
   ): Promise<DerivedState> {
     return this.runHistoryJob(async () => {
-      const result = await this.syncMeasuredDocument(
-        document,
-        onProgress,
-        onProjection,
-        analysis,
-        true,
-        options?.lineageDemand,
-        options?.cancellation,
-        options?.onGeometryReady,
-        options?.yieldControl,
-        false,
-        false,
-        false,
-        options?.proposeCarry === true
-      );
-      if ('analysis' in result)
-        throw new Error('Document analysis is pending.');
-      return result;
+      // A complete sync ends a drag's draft and coarse-frame state. An idle
+      // refinement that slipped into a paused drag hands it back unless the
+      // history kernel itself was dropped (a fresh kernel holds no warm drag
+      // meshes, and nothing the drag recorded applies to it).
+      const kernel = this.historyKernel;
+      const drag = options?.displayRefinement
+        ? {
+            draftDisplaySource: this.draftDisplaySource,
+            coarseFaceMoveFrame: this.coarseFaceMoveFrame
+          }
+        : null;
+      try {
+        const result = await this.syncMeasuredDocument(
+          document,
+          onProgress,
+          onProjection,
+          analysis,
+          true,
+          options?.lineageDemand,
+          options?.cancellation,
+          options?.onGeometryReady,
+          options?.yieldControl,
+          false,
+          false,
+          false,
+          options?.proposeCarry === true
+        );
+        if ('analysis' in result)
+          throw new Error('Document analysis is pending.');
+        return result;
+      } finally {
+        if (drag && kernel && this.historyKernel === kernel) {
+          this.draftDisplaySource = drag.draftDisplaySource;
+          this.coarseFaceMoveFrame = drag.coarseFaceMoveFrame;
+        }
+      }
     });
   }
 
@@ -4060,6 +4087,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           !consumed &&
           !hiddenBodies.has(bodyId) &&
           measured.valid &&
+          // A draft mesh is not the display this advisory describes: the
+          // refinement that swaps in the full-quality mesh (about 0.3 s
+          // later) raises it, so it never flips with the draft.
+          !measured.draftDisplay &&
           feature !== undefined &&
           // Imports report their own source-file diagnostics, and an imported
           // sheet or single facet is legitimately open.

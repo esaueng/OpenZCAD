@@ -19,6 +19,7 @@ import type {
   GeometryWorkerResult
 } from './geometryWorker';
 import type { ExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
+import { geometryContentKey } from './exactRebuildCache';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -89,6 +90,55 @@ async function installWorker(
 function post(scope: FakeWorkerScope, request: GeometryWorkerRequest): void {
   scope.onmessage?.({ data: request } as MessageEvent<GeometryWorkerRequest>);
 }
+
+/** What the main thread posts once it adopts a checked result. */
+function adopt(scope: FakeWorkerScope, document: ProjectDocument): void {
+  post(scope, {
+    type: 'live-content',
+    projectId: document.projectId,
+    contentKey: geometryContentKey(document)
+  });
+}
+
+/** A one-body result, drawn with a draft display mesh or at full quality. */
+function releasedBody(
+  bodyId: BodyId,
+  label: string,
+  displayQuality?: 'draft'
+): ProjectDocument['derived'] {
+  return {
+    ...derived(label),
+    bodyRepresentations: {
+      [bodyId]: {
+        bodyId,
+        name: 'Released',
+        source: 'direct-edit' as const,
+        mesh: {
+          kind: 'mesh' as const,
+          vertices: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+          indices: new Uint32Array([0, 1, 2])
+        },
+        faceCount: 1,
+        color: '#ffffff',
+        exportableStep: true,
+        consumed: false,
+        volume: 1,
+        bbox: { min: { x: 0, y: 0, z: 0 }, max: { x: 1, y: 1, z: 0 } },
+        ...(displayQuality ? { displayQuality } : {})
+      }
+    }
+  };
+}
+
+function boxDocument(name: string, width = 1): ProjectDocument {
+  return addPrimitiveFeature(createProjectDocument(name, toUserId('user')), {
+    name: 'Box',
+    primitiveKind: 'box',
+    dimensions: { width, height: 1, depth: 1 }
+  });
+}
+
+const settle = (ms = 250) => new Promise((resolve) => setTimeout(resolve, ms));
 
 beforeEach(() => {
   vi.resetModules();
@@ -671,6 +721,19 @@ describe('geometry worker rebuild coordination', () => {
     await vi.waitFor(() =>
       expect(
         scope.postMessage.mock.calls.some(
+          ([message]) =>
+            message.type === 'sync' && message.requestId === 'commit'
+        )
+      ).toBe(true)
+    );
+    // Not refined before the main thread shows it: re-syncing a result it
+    // never adopted would rewind the kernel away from what is on screen.
+    await settle();
+    expect(syncDocument).toHaveBeenCalledOnce();
+    adopt(scope, document);
+    await vi.waitFor(() =>
+      expect(
+        scope.postMessage.mock.calls.some(
           ([message]) => message.type === 'display-refined'
         )
       ).toBe(true)
@@ -699,7 +762,8 @@ describe('geometry worker rebuild coordination', () => {
     // The refinement re-ran the same request: same carry proposal.
     expect(syncDocument).toHaveBeenCalledTimes(2);
     expect(syncDocument.mock.calls[1]![4]).toMatchObject({
-      proposeCarry: true
+      proposeCarry: true,
+      displayRefinement: true
     });
     // The same request again is served the refined result from the cache.
     post(scope, {
@@ -788,8 +852,10 @@ describe('geometry worker rebuild coordination', () => {
         )
       ).toBe(true)
     );
+    adopt(scope, document);
     // The hand takes the handle again at once: its frames hold the
-    // refinement back for as long as the gesture lasts.
+    // refinement back for as long as the gesture lasts, a pause and a
+    // dropped frame included.
     post(scope, {
       type: 'preview-geometry',
       requestId: 'frame',
@@ -797,13 +863,112 @@ describe('geometry worker rebuild coordination', () => {
       deferTopology: true
     });
     await vi.waitFor(() => expect(previewGeometry).toHaveBeenCalledOnce());
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    post(scope, { type: 'cancel', requestId: 'dropped-frame' });
+    await settle();
     expect(syncDocument).toHaveBeenCalledOnce();
     expect(refinedPosts()).toBe(0);
     // The gesture ends without an edit: the release it left is refined.
     post(scope, { type: 'release-edit-preview', requestId: 'end', document });
     await vi.waitFor(() => expect(refinedPosts()).toBe(1));
     expect(syncDocument).toHaveBeenCalledTimes(2);
+  });
+
+  it('drops a draft refinement once a later commit is live, and holds it while that commit awaits adoption', async () => {
+    const bodyId = toBodyId('body_retired_draft');
+    const first = boxDocument('First release');
+    const second = boxDocument('Second release', 2);
+    let firstSyncs = 0;
+    const syncDocument = vi.fn(async (document: ProjectDocument) =>
+      document === first
+        ? releasedBody(
+            bodyId,
+            'first',
+            firstSyncs++ === 0 ? 'draft' : undefined
+          )
+        : releasedBody(bodyId, 'second')
+    );
+    const { scope } = await installWorker(syncDocument);
+    const synced = (requestId: string) =>
+      vi.waitFor(() =>
+        expect(
+          scope.postMessage.mock.calls.some(
+            ([message]) =>
+              message.type === 'sync' && message.requestId === requestId
+          )
+        ).toBe(true)
+      );
+    post(scope, { type: 'sync', document: first, requestId: 'first' });
+    await synced('first');
+    adopt(scope, first);
+    // The next release is checked at once and lands at full quality.
+    post(scope, { type: 'sync', document: second, requestId: 'second' });
+    await synced('second');
+    // Until the main thread adopts it, the first draft is not re-synced.
+    await settle();
+    expect(syncDocument).toHaveBeenCalledTimes(2);
+    adopt(scope, second);
+    await settle(1_300);
+    // Retired: never re-synced, so the kernel keeps the live commit.
+    expect(syncDocument).toHaveBeenCalledTimes(2);
+    expect(
+      scope.postMessage.mock.calls.some(
+        ([message]) => message.type === 'display-refined'
+      )
+    ).toBe(false);
+  });
+
+  it('refines a live draft once a checked sync nobody adopts stops holding it', async () => {
+    const bodyId = toBodyId('body_held_draft');
+    const live = boxDocument('Live release');
+    const copy = boxDocument('Copied part', 3);
+    let liveSyncs = 0;
+    const syncDocument = vi.fn(async (document: ProjectDocument) =>
+      document === live
+        ? releasedBody(bodyId, 'live', liveSyncs++ === 0 ? 'draft' : undefined)
+        : releasedBody(bodyId, 'copy')
+    );
+    const { scope } = await installWorker(syncDocument);
+    post(scope, { type: 'sync', document: live, requestId: 'live' });
+    await vi.waitFor(() => expect(syncDocument).toHaveBeenCalledOnce());
+    await settle(0);
+    adopt(scope, live);
+    post(scope, { type: 'sync', document: copy, requestId: 'copy' });
+    await vi.waitFor(
+      () =>
+        expect(
+          scope.postMessage.mock.calls.some(
+            ([message]) => message.type === 'display-refined'
+          )
+        ).toBe(true),
+      { timeout: 3_000 }
+    );
+    expect(syncDocument).toHaveBeenCalledTimes(3);
+    expect(syncDocument.mock.calls[2]![0]).toBe(live);
+  });
+
+  it('retries a refinement that failed, so a draft never stays on screen', async () => {
+    const bodyId = toBodyId('body_retried_draft');
+    const document = boxDocument('Retried release');
+    const syncDocument = vi
+      .fn()
+      .mockResolvedValueOnce(releasedBody(bodyId, 'draft', 'draft'))
+      .mockRejectedValueOnce(new Error('Draft display refinement failed.'))
+      .mockResolvedValue(releasedBody(bodyId, 'refined'));
+    const { scope } = await installWorker(syncDocument);
+    post(scope, { type: 'sync', document, requestId: 'commit' });
+    await vi.waitFor(() => expect(syncDocument).toHaveBeenCalledOnce());
+    await settle(0);
+    adopt(scope, document);
+    await vi.waitFor(
+      () =>
+        expect(
+          scope.postMessage.mock.calls.some(
+            ([message]) => message.type === 'display-refined'
+          )
+        ).toBe(true),
+      { timeout: 3_000 }
+    );
+    expect(syncDocument).toHaveBeenCalledTimes(3);
   });
 
   it('does not load the exact-kernel chunk for an empty project', async () => {

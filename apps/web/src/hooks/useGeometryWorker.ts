@@ -6,6 +6,7 @@ import { GeometryWorkerError } from '../lib/workerRefusal';
 import { beginEditTrace, recordEditPhase } from '../lib/editTrace';
 import type { GeometryReadyState } from '@openzcad/shared';
 import type { EditAnalysisRequest } from '@openzcad/shared';
+import { hasDraftDisplay as hasDraftBodies } from '@openzcad/shared';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { documentForWorker, documentForRebuild } from '../lib/meshTransport';
 import {
@@ -44,6 +45,7 @@ import type {
   GeometryExportFormat,
   GeometryExportResult,
   GeometryWorkerPhase,
+  GeometryWorkerRequest,
   GeometryWorkerState,
   GeometryWorkerResult
 } from '../worker/geometryWorker';
@@ -1560,6 +1562,13 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       readyDocument.current = document;
       readyDerived.current = adopted;
       lastSyncedKey.current = `${document.projectId}:${document.version}:${lineageDemandCacheKey(document, demand)}`;
+      // No broadcast follows: tell the worker what is live, so it refines
+      // only a draft of this content and drops an older one.
+      workerRef.current.postMessage({
+        type: 'live-content',
+        projectId: document.projectId,
+        contentKey
+      } satisfies GeometryWorkerRequest);
       setState({
         type: 'state',
         phase: 'ready',
@@ -1577,7 +1586,5 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
 }
 
 function hasDraftDisplay(derived: DerivedState): boolean {
-  return Object.values(derived.bodyRepresentations).some(
-    (body) => body.displayQuality === 'draft'
-  );
+  return hasDraftBodies(derived.bodyRepresentations);
 }

@@ -1849,9 +1849,17 @@ describe('adopting a validated edit result as the live result', () => {
     // Delivered exactly as a broadcast reply would be.
     expect(edit.host.onDerived).toHaveBeenLastCalledWith(derived);
     expect(edit.result.current.isReadyFor(edit.committed)).toBe(true);
+    // No broadcast follows, so the worker is told what is live: only a
+    // draft display of this content may still be refined.
+    expect(edit.worker.postMessage).toHaveBeenCalledTimes(posted + 1);
+    expect(edit.worker.postMessage).toHaveBeenLastCalledWith({
+      type: 'live-content',
+      projectId: edit.committed.projectId,
+      contentKey: geometryContentKey(edit.committed)
+    });
     // The commit's own sync finds the result already live: nothing is posted.
     act(() => edit.result.current.sync(edit.committed, edit.demand));
-    expect(edit.worker.postMessage).toHaveBeenCalledTimes(posted);
+    expect(edit.worker.postMessage).toHaveBeenCalledTimes(posted + 1);
     // A wider demand still asks the worker for its lineage.
     act(() =>
       edit.result.current.sync(edit.committed, [
@@ -1859,7 +1867,7 @@ describe('adopting a validated edit result as the live result', () => {
         edit.base.bodyOrder[0]!
       ])
     );
-    expect(edit.worker.postMessage).toHaveBeenCalledTimes(posted + 1);
+    expect(edit.worker.postMessage).toHaveBeenCalledTimes(posted + 2);
   });
 
   /** A one-body result; `draft` marks the released edit's display mesh. */

@@ -92,28 +92,47 @@ A released face drag or cylinder resize whose last frame was a drag mesh is
 accepted with a draft display (`BodyRepresentation.displayQuality: 'draft'`,
 see `exact-display-refinement.ts`). That commit's sync draws the moved body
 with the drag tessellation it was just shown at, whose per-face meshes the
-kernel still holds. It keeps every other part of a complete sync: replay and
+kernel still holds. It keeps every gating part of a complete sync: replay and
 the edit's kernel guards, relaxed and strict validation, exact face and edge
-measurements, full-quality edge polylines, volume, warnings and refusals. A
-body a union produced is never drafted, because its strict closure check
-reads the display mesh. Nor is a refused release or an analysis request.
-The draft box is tightened to the draft mesh with the draft deflection as
-slack, so it is still a valid bound. Once the worker has been idle for
-100 ms, it re-runs the same sync. The adapter then keeps the draft's exact
-measurement and swaps in the full-quality mesh, face triangle ranges and
-certified box, so the result equals what a full-quality commit publishes.
-The worker sends it as `display-refined`. The hook replaces the live result
-only while that result is still the draft of the same content; a refinement
-that overtook its adoption is adopted instead. Any new request cancels the
-refinement at the next build boundary, and drag frames hold it back, so the
-next gesture never waits behind it. The worker's result cache never stores a
-draft. Exports, mass properties, drawings, sections and mesh-quality reports
-build their own tessellations and never read a display mesh. The local store
-may hold a draft projection until the derived-only save that follows the
-refinement; a reopen rebuilds anyway. Idle thumbnail capture waits for the
-refined display. The at-rest warm-up (`refineEditPreview`) is skipped for a
-drafted release, because it only existed to make a full-quality commit
-cheap, and when a release arrived during it the commit queued behind it.
+measurements, full-quality edge polylines, volume, warnings and refusals. The
+one exception is the "display mesh has gaps" advisory. It is never a refusal
+and describes the full-quality mesh, so a drafted body does not evaluate it
+on its draft. The refinement evaluates it on the refined mesh, so a body
+whose full-quality mesh has gaps shows that advisory about 0.3 s after
+acceptance instead of with it, and the final warnings equal a full commit's.
+A body a union produced is never drafted, because its strict closure check
+(a refusal) reads the display mesh. Nor is a refused release or an analysis
+request. The draft box is tightened to the draft mesh with the draft
+deflection as slack, so it is still a valid bound.
+
+The worker refines only a draft the main thread shows: a broadcast's result,
+or a checked release once `adoptValidatedResult` posts `live-content`. A
+newer live content (that message, or a broadcast) retires any other draft,
+and a completed checked sync of other content holds the live draft back for
+up to a second, so a release awaiting adoption never sees its history kernel
+rewound to the previous edit. Once the worker has been idle for 100 ms, and
+no drag has sent a frame for a second (a released or cancelled cylinder drag
+ends that hold at once), it re-runs the same sync with `displayRefinement`.
+The adapter then keeps the draft's exact measurement and swaps in the
+full-quality mesh, face triangle ranges and certified box, so the result
+equals what a full-quality commit publishes. A refinement that lands in a
+paused drag hands that drag's draft and coarse-frame state back, so its
+release is still drafted. A refinement that fails other than by cancellation
+is retried once (after a dropped history cache that is a full rebuild). The
+worker sends the result as `display-refined`. The hook replaces the live
+result only while that result is still the draft of the same content; a
+refinement that overtook its adoption is adopted instead. Any new request
+cancels the refinement at the next build boundary, so the next gesture never
+waits behind it. The worker's result cache never stores a draft. Exports,
+mass properties, sections and mesh-quality reports build their own
+tessellations and never read a display mesh. Drawings treat a draft as
+geometry still pending: a sheet's stored fingerprint hashes the box, and
+view layout estimates read the display mesh. The local store may hold a
+draft projection until the derived-only save that follows the refinement; a
+reopen rebuilds anyway. Idle thumbnail capture waits for the refined display.
+The at-rest warm-up (`refineEditPreview`) is skipped for a drafted release,
+because it only existed to make a full-quality commit cheap, and when a
+release arrived during it the commit queued behind it.
 
 With `window.__ozFaceDragTrace` enabled, each release records `release`,
 `validated`, `committed`, `superseded` and `settled` (`detail.adopted`) in
@@ -189,12 +208,12 @@ advance adds through-all extrusion; this fixture uses finite distances.
 Numbers below are worker median / p95 milliseconds, excluding UI transport
 and rendering. Cold recycling samples remain included.
 
-| Workflow | Baseline median / p95 | Candidate median / p95 | Median reduction |
-| --- | ---: | ---: | ---: |
-| Face drag: exact display | 142 / 197 | 88 / 148 | 38% |
-| Face edit: completed analysis | 765 / 805 | 758 / 766 | 1% |
-| Parameter edit: exact display | 1963 / 2269 | 1264 / 1404 | 36% |
-| Parameter edit: completed analysis | 2971 / 3280 | 2556 / 2865 | 14% |
+| Workflow                           | Baseline median / p95 | Candidate median / p95 | Median reduction |
+| ---------------------------------- | --------------------: | ---------------------: | ---------------: |
+| Face drag: exact display           |             142 / 197 |               88 / 148 |              38% |
+| Face edit: completed analysis      |             765 / 805 |              758 / 766 |               1% |
+| Parameter edit: exact display      |           1963 / 2269 |            1264 / 1404 |              36% |
+| Parameter edit: completed analysis |           2971 / 3280 |            2556 / 2865 |              14% |
 
 All 240 paired geometry comparisons match live face counts, triangle counts
 and bounds. Completed volumes also match (numerical tolerance 1e-6), with no

@@ -94,7 +94,9 @@ export function drawingSourceFingerprint(
   const parts: string[] = [];
   for (const bodyId of [...bodyIds].sort()) {
     const body = bodies[bodyId];
-    if (!body?.topology) return null;
+    // A draft display's box is refined a moment later: a fingerprint is
+    // stored with the sheet, so it waits for the refined one.
+    if (!body?.topology || body.displayQuality === 'draft') return null;
     const faces = body.topology.faces
       .map((face) => face.hash)
       .sort((a, b) => a - b);
@@ -123,6 +125,9 @@ export function estimateViewExtent(
   bodyIds: readonly BodyId[],
   orientation: DrawingViewOrientation
 ): ViewExtent | null {
+  // A draft display mesh is not the model's settled shape; lay out from the
+  // refined one.
+  if (bodyIds.some((id) => bodies[id]?.displayQuality === 'draft')) return null;
   const meshes = bodyIds
     .map((id) => bodies[id]?.mesh.vertices)
     .filter((vertices): vertices is Float32Array => vertices !== undefined);

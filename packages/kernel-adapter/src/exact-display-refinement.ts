@@ -3,12 +3,15 @@
  *
  * A face drag already meshes its frames at the drag tessellation
  * (`previewDisplayTessellation`). The commit that accepts the release keeps
- * every check it always ran — kernel validation, the edit's own guards,
- * strict-union closure — and its exact topology, face/edge measurements and
- * volume, but may draw the edited body with that same drag tessellation, so
- * the full-quality display mesh (the largest single cost of a warm commit)
- * is not on the path to "accepted". The next complete sync of the same
- * shape swaps in the full-quality mesh here, keeping everything else.
+ * every gating check it always ran — kernel validation, the edit's own
+ * guards, strict-union closure — its refusals and warnings, and its exact
+ * topology, face/edge measurements and volume, but may draw the edited body
+ * with that same drag tessellation, so the full-quality display mesh (the
+ * largest single cost of a warm commit) is not on the path to "accepted".
+ * The next complete sync of the same shape swaps in the full-quality mesh
+ * here, keeping everything else. One advisory waits for it: "display mesh
+ * has gaps" describes the full-quality mesh, so a drafted body never raises
+ * it from its draft; the refining sync evaluates it on the refined mesh.
  *
  * Both paths publish the box through {@link publishedSolidBounds}, so a
  * refined body is exactly what a full-quality measurement would publish.

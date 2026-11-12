@@ -251,6 +251,18 @@ export type GeometryWorkerRequest =
        * reply; a failed load is retried by the next job that needs the kernel.
        */
       type: 'prepare-kernel';
+    }
+  | {
+      /**
+       * The main thread adopted a checked result as the live state without
+       * a broadcast (`adoptValidatedResult`): only a draft display of this
+       * content may still be refined. Handled outside the queue, with no
+       * reply, and never cancels idle work of the same content.
+       */
+      type: 'live-content';
+      projectId: ProjectId;
+      /** `geometryContentKey` of the adopted document. */
+      contentKey: string;
     };
 
 export type GeometryWorkerPhase =
@@ -586,7 +598,7 @@ let lastExactSyncEpoch: number | null = null;
  */
 type GeometryWorkerWorkRequest = Exclude<
   GeometryWorkerRequest,
-  { type: 'cancel' } | { type: 'prepare-kernel' }
+  { type: 'cancel' } | { type: 'prepare-kernel' } | { type: 'live-content' }
 >;
 
 /**
@@ -763,8 +775,7 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
   }
   const request = job.request;
   if (request.type === 'refine-committed-display') {
-    await refineCommittedDisplay(request);
-    armDisplayRefinement();
+    if (await refineCommittedDisplay(request)) armDisplayRefinement();
     return;
   }
   if (request.type === 'refine-edit-preview') {
@@ -1570,24 +1581,59 @@ function hasDraftDisplay(derived: ProjectDocument['derived']): boolean {
 }
 
 /**
- * The newest result that drew a released edit's body with its draft display
- * mesh (see `exact-display-refinement.ts`), still waiting for its
- * full-quality display. A newer draft replaces it; a live broadcast settles
- * it, since a broadcast's own build is never a draft (the adapter refines
- * the measured body, or the document moved on).
- *
- * Refinement is idle work. It is queued only once the worker has been idle
- * for {@link DISPLAY_REFINEMENT_IDLE_MS}, never as a broadcast (the live
- * state stays ready), and any new request cancels it at the next build
- * boundary; it then waits for the next idle moment. The release it refines
- * was accepted already, so nothing the user does next waits behind it.
+ * A result that drew a released edit's body with its draft display mesh
+ * (see `exact-display-refinement.ts`), still waiting for its full-quality
+ * display.
  */
-let pendingDisplayRefinement: {
+interface PendingDisplayRefinement {
   sync: Extract<GeometryWorkerRequest, { type: 'sync' }>;
   broadcastToken: number | null;
-} | null = null;
+  projectId: ProjectId;
+  contentKey: string;
+  /**
+   * Whether the main thread shows it: a broadcast's result always, a checked
+   * release's once the main thread adopts it (`live-content`). Only a live
+   * draft is refined; re-syncing anything else would rewind the history
+   * kernel away from what is on screen.
+   */
+  live: boolean;
+  /** Not before then: a different checked result awaits its adoption. */
+  heldUntilMs: number;
+  /** Refinements that failed other than by cancellation; one retry. */
+  failures: number;
+}
+
+/**
+ * Drafts waiting for refinement, newest first: at most the live one and a
+ * newer release not adopted yet. Whatever the main thread reports live
+ * (`live-content`, a broadcast) keeps only the draft of that content; a
+ * broadcast's own result, never a draft, settles them all.
+ *
+ * Refinement is idle work. It is queued only once the worker has been idle
+ * for {@link DISPLAY_REFINEMENT_IDLE_MS} and no drag is under way, never as
+ * a broadcast (the live state stays ready), and any new request cancels it
+ * at the next build boundary; it then waits for the next idle moment. The
+ * release it refines was accepted already, so nothing the user does next
+ * waits behind it.
+ */
+let pendingDisplayRefinements: PendingDisplayRefinement[] = [];
 const DISPLAY_REFINEMENT_IDLE_MS = 100;
+/**
+ * How long a completed checked sync of other content holds a live draft's
+ * refinement back: the main thread adopts a release within a frame or two,
+ * and that adoption retires the draft. Anything else (a copy, an analysis)
+ * is never adopted, and the draft is refined once the hold lapses.
+ */
+const DISPLAY_REFINEMENT_ADOPTION_HOLD_MS = 1_000;
+/**
+ * How long after its last frame a drag still holds refinement back. A
+ * released or cancelled cylinder drag says it ended; a cancelled face drag
+ * does not, so the hold lapses on its own.
+ */
+const DISPLAY_REFINEMENT_GESTURE_HOLD_MS = 1_000;
 let displayRefinementTimer: ReturnType<typeof setTimeout> | undefined;
+/** When the drag under way last sent a frame; null once it has ended. */
+let previewGestureFrameAtMs: number | null = null;
 /** Counts work requests, so idle work can tell it has been overtaken. */
 let workRequestSerial = 0;
 
@@ -1596,49 +1642,131 @@ function noteDisplayRefinement(
   derived: ProjectDocument['derived'],
   broadcastToken: number | null
 ): void {
-  if (hasDraftDisplay(derived))
-    pendingDisplayRefinement = { sync, broadcastToken };
-  else if (!sync.requestId) pendingDisplayRefinement = null;
+  const projectId = sync.document.projectId;
+  if (hasDraftDisplay(derived)) {
+    const contentKey = geometryContentKey(sync.document);
+    pendingDisplayRefinements = [
+      {
+        sync,
+        broadcastToken,
+        projectId,
+        contentKey,
+        live: !sync.requestId,
+        heldUntilMs: 0,
+        failures: 0
+      },
+      ...pendingDisplayRefinements.filter(
+        (entry) =>
+          entry.live &&
+          !(entry.projectId === projectId && entry.contentKey === contentKey)
+      )
+    ].slice(0, 2);
+  } else if (!sync.requestId) {
+    // A broadcast's build is never a draft: the adapter refined the measured
+    // body, or the document moved on.
+    pendingDisplayRefinements = [];
+  } else if (pendingDisplayRefinements.length > 0) {
+    // A checked result of other content may be adopted next, which would
+    // retire every draft here; refining one now would rewind the history
+    // kernel away from it.
+    const contentKey = geometryContentKey(sync.document);
+    const heldUntilMs = performance.now() + DISPLAY_REFINEMENT_ADOPTION_HOLD_MS;
+    for (const entry of pendingDisplayRefinements)
+      if (entry.projectId !== projectId || entry.contentKey !== contentKey)
+        entry.heldUntilMs = heldUntilMs;
+  }
+}
+
+/** The main thread shows this content now (null: nothing). */
+function noteLiveContent(
+  live: { projectId: ProjectId; contentKey: string } | null
+): void {
+  pendingDisplayRefinements = pendingDisplayRefinements.filter((entry) => {
+    const current =
+      live !== null &&
+      entry.projectId === live.projectId &&
+      entry.contentKey === live.contentKey;
+    if (current) {
+      entry.live = true;
+      entry.heldUntilMs = 0;
+    }
+    return current;
+  });
+}
+
+function nextDisplayRefinement(): PendingDisplayRefinement | undefined {
+  return pendingDisplayRefinements.find((entry) => entry.live);
 }
 
 function armDisplayRefinement(): void {
-  if (!pendingDisplayRefinement || displayRefinementTimer !== undefined) return;
+  const pending = nextDisplayRefinement();
+  if (!pending || displayRefinementTimer !== undefined) return;
+  const now = performance.now();
+  const delay = Math.max(
+    DISPLAY_REFINEMENT_IDLE_MS,
+    pending.heldUntilMs - now,
+    previewGestureFrameAtMs === null
+      ? 0
+      : previewGestureFrameAtMs + DISPLAY_REFINEMENT_GESTURE_HOLD_MS - now
+  );
   const serial = workRequestSerial;
   displayRefinementTimer = setTimeout(() => {
     displayRefinementTimer = undefined;
-    const pending = pendingDisplayRefinement;
     // Overtaken: the job that just arrived re-arms when it finishes.
-    if (!pending || serial !== workRequestSerial) return;
-    if (!broadcastGate.isCurrent(pending.broadcastToken)) {
-      pendingDisplayRefinement = null;
+    if (serial !== workRequestSerial) return;
+    const next = nextDisplayRefinement();
+    if (!next) return;
+    if (!broadcastGate.isCurrent(next.broadcastToken)) {
+      pendingDisplayRefinements = pendingDisplayRefinements.filter(
+        (entry) => entry !== next
+      );
+      armDisplayRefinement();
       return;
     }
+    const at = performance.now();
+    if (
+      next.heldUntilMs > at ||
+      (previewGestureFrameAtMs !== null &&
+        previewGestureFrameAtMs + DISPLAY_REFINEMENT_GESTURE_HOLD_MS > at)
+    ) {
+      armDisplayRefinement();
+      return;
+    }
+    previewGestureFrameAtMs = null;
     const requestId = `refine-display:${crypto.randomUUID()}`;
     queue.enqueue({
       request: {
         type: 'refine-committed-display',
-        document: pending.sync.document,
+        document: next.sync.document,
         requestId,
-        sync: pending.sync
+        sync: next.sync
       },
       requestId,
       queuedAtMs: performance.now(),
       broadcastToken: null
     });
-  }, DISPLAY_REFINEMENT_IDLE_MS);
+  }, delay);
 }
 
+/**
+ * Runs one refinement. Resolves whether to arm the next idle moment: not
+ * after a cancellation nothing new caused (the draft was retired), since
+ * that would only spin.
+ */
 async function refineCommittedDisplay(
   request: Extract<GeometryWorkerRequest, { type: 'refine-committed-display' }>
-): Promise<void> {
-  const pending = pendingDisplayRefinement;
-  if (pending?.sync !== request.sync) return;
+): Promise<boolean> {
+  const pending = pendingDisplayRefinements.find(
+    (entry) => entry.sync === request.sync
+  );
+  if (!pending?.live) return true;
   const exact = exactKernelStatus === 'ready' ? await exactKernelPromise : null;
-  if (!exact) return;
+  if (!exact) return false;
   const { sync } = request;
   const document = sync.document;
-  const contentKey = geometryContentKey(document);
+  const contentKey = pending.contentKey;
   const serial = workRequestSerial;
+  const retired = () => !pendingDisplayRefinements.includes(pending);
   try {
     const refined = await rebuildCache.get(
       rebuildResultKey(sync, contentKey),
@@ -1652,9 +1780,11 @@ async function refineCommittedDisplay(
             cancellation: {
               isCancelled: () =>
                 serial !== workRequestSerial ||
+                retired() ||
                 !broadcastGate.isCurrent(pending.broadcastToken)
             },
             yieldControl: geometryYield(),
+            displayRefinement: true,
             ...(sync.lineageDemand
               ? { lineageDemand: sync.lineageDemand }
               : {}),
@@ -1673,13 +1803,15 @@ async function refineCommittedDisplay(
         return result;
       }
     );
-    if (pendingDisplayRefinement !== pending) return;
-    pendingDisplayRefinement = null;
+    if (retired()) return true;
+    pendingDisplayRefinements = pendingDisplayRefinements.filter(
+      (entry) => entry !== pending
+    );
     if (
       hasDraftDisplay(refined) ||
       !broadcastGate.isCurrent(pending.broadcastToken)
     )
-      return;
+      return true;
     const derived = rebindSketchGeometryForContent(
       document,
       refined,
@@ -1695,15 +1827,20 @@ async function refineCommittedDisplay(
       } satisfies GeometryWorkerResult,
       { transfer: derivedMeshTransferables(derived) }
     );
+    return true;
   } catch (error) {
-    // Overtaken: retried at the next idle moment. Anything else is dropped:
-    // a refinement is never a modelling refusal, and the next complete sync
-    // of this content refines it anyway.
-    if (
-      (error as { category?: unknown } | null)?.category !== 'cancelled' &&
-      pendingDisplayRefinement === pending
-    )
-      pendingDisplayRefinement = null;
+    if ((error as { category?: unknown } | null)?.category === 'cancelled')
+      // Overtaken: retried at the next idle moment.
+      return serial !== workRequestSerial;
+    // A refinement is never a modelling refusal. A failed one is retried
+    // once, which after a dropped history cache is a full rebuild, so a
+    // draft never stays on screen for want of a second attempt.
+    pending.failures += 1;
+    if (pending.failures > 1)
+      pendingDisplayRefinements = pendingDisplayRefinements.filter(
+        (entry) => entry !== pending
+      );
+    return true;
   }
 }
 
@@ -1722,6 +1859,12 @@ self.onmessage = (event: MessageEvent<GeometryWorkerRequest>) => {
   // Not input: preparing the kernel must not cancel a queued warm-up.
   if (event.data.type === 'prepare-kernel') {
     void loadExactKernel();
+    return;
+  }
+  // Not input either: it only says which draft display is on screen.
+  if (event.data.type === 'live-content') {
+    noteLiveContent(event.data);
+    armDisplayRefinement();
     return;
   }
   // Any newer input cancels a queued warm-up. A synchronous WASM tessellation
@@ -1744,12 +1887,26 @@ self.onmessage = (event: MessageEvent<GeometryWorkerRequest>) => {
       latestBroadcast = null;
       broadcastAwaitsEnvironment = environmentRecovered = false;
       broadcastGate.issue(true);
+      // Nothing is live: no draft is left to refine.
+      noteLiveContent(null);
     }
-    // A dropped drag frame may end the gesture that held refinement back.
+    // Idle again unless a drag is under way, which holds refinement back
+    // until it ends or goes quiet.
     armDisplayRefinement();
     return;
   }
+  if (request.type === 'preview-geometry')
+    previewGestureFrameAtMs = performance.now();
+  else if (request.type === 'sync' || request.type === 'release-edit-preview')
+    previewGestureFrameAtMs = null;
   const isBroadcast = request.type === 'sync' && !request.requestId;
+  // A broadcast is what the main thread shows next: only a draft of that
+  // content is still worth refining.
+  if (isBroadcast && pendingDisplayRefinements.length > 0)
+    noteLiveContent({
+      projectId: request.document.projectId,
+      contentKey: geometryContentKey(request.document)
+    });
   if (isBroadcast && joinsRunningBroadcast(request)) {
     // The running build answers this request; its retry bookkeeping stays
     // with it, and a retry re-runs the newest (equivalent) request.
