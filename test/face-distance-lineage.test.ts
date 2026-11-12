@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
-import { createProjectDocument } from '@openzcad/document-core';
+import { createProjectDocument, filletEdges } from '@openzcad/document-core';
 import {
   createExactKernelAdapter,
   type ExactKernelAdapter
@@ -364,6 +364,89 @@ describe('face-distance dimension-edit lineage', { timeout: 120_000 }, () => {
     );
     expect(warning?.message).toMatch(/planar carrier no longer exists/);
     expect(warning?.kernelRefusal?.code).toBe('reference_missing');
+  });
+
+  it('keeps each rounded corner’s name on its own corner', async () => {
+    // A block with its four vertical edges rounded. Moving its x faces
+    // rebuilds the corner bands in another order than the source's, and the
+    // journal lists its outputs in result order: read as "output i is what
+    // source face i became", the corner names were swapped across the part.
+    const source = new CommandManager(createProjectDocument('Rounded source', user));
+    source.execute(
+      commandFactories.addPrimitive({
+        name: 'Block',
+        primitiveKind: 'box',
+        dimensions: { width: 20, height: 10, depth: 20 }
+      })
+    );
+    const blockId = source.document.bodyOrder.at(-1)!;
+    const block = (await synced(source.document)).bodyRepresentations[blockId]!;
+    const faceOf = (hash: number) =>
+      block.topology!.faces.find((face) => face.hash === hash)!;
+    const vertical = block.topology!.edges.filter((edge) =>
+      (edge.adjacentFaceHashes ?? []).every(
+        (hash) => Math.abs(faceOf(hash).geometry!.normal!.z) < 1e-9
+      )
+    );
+    expect(vertical).toHaveLength(4);
+    const rounded = filletEdges(source.document, {
+      name: 'Round corners',
+      targetBodyId: blockId,
+      edgeHashes: vertical.map((edge) => edge.hash),
+      size: 3
+    });
+    expect((await synced(rounded.document)).warnings).toEqual([]);
+    const stepText = await adapter.exportStep(rounded.document, [rounded.bodyId]);
+    const manager = new CommandManager(createProjectDocument('Rounded block', user));
+    manager.execute(
+      commandFactories.importStep({
+        name: 'Rounded block',
+        artifactId: 'artifact_face_distance_rounded_block',
+        sourceName: 'synthetic-rounded-block.step',
+        stepText
+      })
+    );
+    const bodyId = manager.document.bodyOrder.at(-1)!;
+    const corners = (body: BodyRepresentation) =>
+      new Map(
+        body
+          .topology!.faces.filter(
+            (face) => face.geometry?.surfaceType === 'cylinder' && face.reference
+          )
+          .map((face) => [
+            face.reference!.lineageName,
+            [face.geometry!.axisStart!.x, face.geometry!.axisStart!.y]
+          ])
+      );
+    const baseline = await synced(manager.document);
+    expect(baseline.warnings).toEqual([]);
+    const before = corners(baseline.bodyRepresentations[bodyId]!);
+    expect(before.size).toBe(4);
+
+    const pair = pairAlongAxis(pairsOf(baseline.bodyRepresentations[bodyId]), 'x');
+    expect(pair.moveMode).toBe('symmetric');
+    manager.execute(
+      commandFactories.directEditBody({
+        name: 'Set width',
+        targetBodyId: bodyId,
+        operation: distanceOperation(pair, pair.distance + 1)
+      })
+    );
+    const after = await synced(manager.document);
+    expect(after.warnings).toEqual([]);
+    const body = after.bodyRepresentations[bodyId]!;
+    expect(referenceNames(body)).toEqual(
+      referenceNames(baseline.bodyRepresentations[bodyId])
+    );
+    // Each corner moves half a millimetre outward with its own side, and no
+    // corner takes another's name.
+    const moved = corners(body);
+    expect(moved.size).toBe(4);
+    for (const [name, [x, y]] of before) {
+      const [movedX, movedY] = moved.get(name)!;
+      expect(movedX).toBeCloseTo(x! + (x! < 10 ? -0.5 : 0.5), 6);
+      expect(movedY).toBeCloseTo(y!, 6);
+    }
   });
 });
 
