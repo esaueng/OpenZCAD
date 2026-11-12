@@ -286,6 +286,103 @@ describe('geometry worker persisted sessions', { timeout: 15_000 }, () => {
     expect(store.save).not.toHaveBeenCalled();
   });
 
+  it('applies a policy-only change to the live project without a rebuild', async () => {
+    const { scope, adapter } = await installWorker();
+    // Not known to be the user's own yet (the owner resolves later).
+    post(scope, { type: 'sync', document, lineageDemand: [] });
+    await vi.waitFor(() =>
+      expect(published(scope, document.version)).toBe(true)
+    );
+    post(scope, {
+      type: 'session-policy',
+      projectId: document.projectId,
+      persistSession: true
+    });
+    await vi.waitFor(() => expect(store.save).toHaveBeenCalledOnce(), {
+      timeout: KERNEL_SESSION_IDLE_MS + 2_000
+    });
+    // Told, not rebuilt.
+    expect(adapter.syncDocument).toHaveBeenCalledOnce();
+    expect(store.save).toHaveBeenCalledWith(
+      expect.objectContaining({ projectId: document.projectId })
+    );
+  });
+
+  it('a policy turned off drops the scheduled capture and warm-up', async () => {
+    const { scope, adapter } = await installWorker();
+    post(scope, {
+      type: 'sync',
+      document,
+      lineageDemand: [],
+      persistSession: true
+    });
+    await vi.waitFor(() =>
+      expect(published(scope, document.version)).toBe(true)
+    );
+    post(scope, {
+      type: 'session-policy',
+      projectId: document.projectId,
+      persistSession: false
+    });
+    await settle();
+    expect(adapter.syncDocument).toHaveBeenCalledOnce();
+    expect(adapter.captureHistorySession).not.toHaveBeenCalled();
+    expect(adapter.warmHistory).not.toHaveBeenCalled();
+    expect(store.save).not.toHaveBeenCalled();
+  });
+
+  it('a policy turned off fences a capture already running', async () => {
+    let finishCapture: (value: PersistedHistorySession) => void = () => {};
+    const { scope, adapter } = await installWorker();
+    adapter.captureHistorySession.mockImplementation(
+      () =>
+        new Promise<PersistedHistorySession>((resolve) => {
+          finishCapture = resolve;
+        })
+    );
+    post(scope, {
+      type: 'sync',
+      document,
+      lineageDemand: [],
+      persistSession: true
+    });
+    await vi.waitFor(
+      () => expect(adapter.captureHistorySession).toHaveBeenCalled(),
+      {
+        timeout: KERNEL_SESSION_IDLE_MS + 2_000
+      }
+    );
+    post(scope, {
+      type: 'session-policy',
+      projectId: document.projectId,
+      persistSession: false
+    });
+    finishCapture(SESSION);
+    await settle();
+    expect(store.save).not.toHaveBeenCalled();
+  });
+
+  it('never offers a stored session once the policy is off', async () => {
+    store.load.mockResolvedValue(SESSION);
+    const { scope } = await installWorker();
+    // The policy flips before the queued broadcast starts.
+    post(scope, {
+      type: 'sync',
+      document,
+      lineageDemand: [],
+      persistSession: true
+    });
+    post(scope, {
+      type: 'session-policy',
+      projectId: document.projectId,
+      persistSession: false
+    });
+    await vi.waitFor(() =>
+      expect(published(scope, document.version)).toBe(true)
+    );
+    expect(store.load).not.toHaveBeenCalled();
+  });
+
   it('warms the refined release, never the reopen-time document', async () => {
     let draftNext = false;
     const { scope, adapter } = await installWorker(async (...args) => {

@@ -114,10 +114,10 @@ function postSync(
   // Sorted and unique, as `useLineageDemand` hands it over.
   lineageDemand: readonly BodyId[] = [],
   persistSession = false
-): void {
-  const syncKey = broadcastSyncKey(document, lineageDemand, persistSession);
+): boolean {
+  const syncKey = broadcastSyncKey(document, lineageDemand);
   if (lastSyncedKey.current === syncKey) {
-    return;
+    return false;
   }
   lastSyncedKey.current = syncKey;
   armed.current = true;
@@ -132,6 +132,7 @@ function postSync(
     lineageDemand: [...lineageDemand],
     ...(persistSession ? { persistSession: true } : {})
   });
+  return true;
 }
 
 /** The `persistSession` the app last gave a broadcast of this project. */
@@ -143,16 +144,16 @@ function persistSessionFor(
 }
 
 /**
- * What a broadcast is deduplicated by. A change of `persistSession` alone
- * (the same version opened from a shared link) posts again, so the worker
- * learns not to persist it.
+ * What a broadcast is deduplicated by: the geometry it asks for. Not
+ * `persistSession`, whose change alone (the owner resolved, a shared link
+ * of the same revision opened) rebuilds nothing; `sync` tells the worker
+ * with a `session-policy` message instead.
  */
 function broadcastSyncKey(
   document: ProjectDocument,
-  lineageDemand: readonly BodyId[],
-  persistSession: boolean
+  lineageDemand: readonly BodyId[]
 ): string {
-  return `${document.projectId}:${document.version}:${lineageDemandCacheKey(document, lineageDemand)}${persistSession ? ':persist' : ''}`;
+  return `${document.projectId}:${document.version}:${lineageDemandCacheKey(document, lineageDemand)}`;
 }
 
 /** Cancellation rejection, named so callers can tell it from a failure. */
@@ -440,8 +441,9 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
   const readyDocument = useRef<ProjectDocument | null>(null);
   const readyDerived = useRef<DerivedState | null>(null);
   const lastDemandRef = useRef<readonly BodyId[] | null>(null);
-  // The last broadcast's `persistSession`, by project, for the re-posts a
-  // respawn or projection recovery makes on the app's behalf.
+  // The `persistSession` the app last gave `sync`, by project: what the
+  // worker was told (with a broadcast or a `session-policy` message), and
+  // what the re-posts a respawn or projection recovery make carry.
   const persistSessionRef = useRef<{
     projectId: string;
     persist: boolean;
@@ -1222,19 +1224,19 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       }
       const demand = lastDemandRef.current ?? [];
       const persistSession = options?.persistSession === true;
+      // What the worker was told for this project: every change of it is
+      // either carried by a broadcast below or sent on its own.
+      const told = persistSessionRef.current;
       persistSessionRef.current = {
         projectId: document.projectId,
         persist: persistSession
       };
-      if (
-        lastSyncedKey.current !==
-        broadcastSyncKey(document, demand, persistSession)
-      ) {
+      if (lastSyncedKey.current !== broadcastSyncKey(document, demand)) {
         broadcastDocument.current = document;
         readyDocument.current = null;
         readyDerived.current = null;
       }
-      postSync(
+      const posted = postSync(
         worker,
         document,
         lastSyncedKey,
@@ -1242,6 +1244,18 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         lastDemandRef.current ?? undefined,
         persistSession
       );
+      // The geometry is already live (or on its way): a policy change alone
+      // must not rebuild it, so it travels as its own message.
+      if (
+        !posted &&
+        (told?.projectId !== document.projectId ||
+          told.persist !== persistSession)
+      )
+        worker.postMessage({
+          type: 'session-policy',
+          projectId: document.projectId,
+          persistSession
+        } satisfies GeometryWorkerRequest);
     },
     syncOnce(document, analysis, lineageDemand, options) {
       // One-off rebuilds (previews, preflights, demo seeding, AI proposals)
@@ -1546,7 +1560,10 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       }
       readyDocument.current = document;
       broadcastDocument.current = document;
-      lastSyncedKey.current = `${document.projectId}:${document.version}:${lineageDemandCacheKey(document, lastDemandRef.current ?? [])}`;
+      lastSyncedKey.current = broadcastSyncKey(
+        document,
+        lastDemandRef.current ?? []
+      );
       setState((current) => ({ ...current, version: document.version }));
       return true;
     },
@@ -1609,7 +1626,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       broadcastDocument.current = document;
       readyDocument.current = document;
       readyDerived.current = adopted;
-      lastSyncedKey.current = `${document.projectId}:${document.version}:${lineageDemandCacheKey(document, demand)}`;
+      lastSyncedKey.current = broadcastSyncKey(document, demand);
       // No broadcast follows: tell the worker what is live, so it refines
       // only a draft of this content and drops an older one.
       workerRef.current.postMessage({

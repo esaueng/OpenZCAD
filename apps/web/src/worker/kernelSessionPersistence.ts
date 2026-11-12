@@ -7,7 +7,8 @@
  *   class only for syncs the app marks `persistSession`: a document this
  *   device keeps as the current user's own project. A shared link's model,
  *   someone else's project and one-off rebuilds never offer or capture, and
- *   such a sync {@link KernelSessionPersistence.forget}s whatever was
+ *   such a sync (or a `session-policy` turning it off for the live
+ *   project) {@link KernelSessionPersistence.forget}s whatever was
  *   scheduled, as closing the project does.
  * - **Offer**: the first sync of a project this worker's history kernel does
  *   not hold reads the stored session for that exact content and build, and

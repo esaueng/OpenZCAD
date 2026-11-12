@@ -117,6 +117,10 @@ using Remus whole-kernel snapshots (`kernel.snapshot()` /
   editor) and every one-off rebuild are never offered a session or captured,
   and such a broadcast, like closing the project, drops whatever capture or
   warm-up was scheduled; a capture already running then stores nothing.
+  When only the policy changes for geometry already live (the owner resolves,
+  a shared link of the same revision opens), the hook sends it as a
+  `session-policy` message instead of re-posting the broadcast, so it never
+  rebuilds anything; the worker applies it to the live project the same way.
 - **What is stored.** After a live, complete sync, once the worker has been
   idle for 1.5 s and at most every 10 s per project, the adapter snapshots the
   kernel if it still holds exactly that build (same project, scope and
