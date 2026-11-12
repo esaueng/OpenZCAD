@@ -153,6 +153,24 @@ commit sync fell from 273 to 96–101 ms (full-quality tessellation 157 ms → t
 draft's 17 ms); the background refinement sync took 196–212 ms. These are
 local measurements, not target-device results.
 
+A boss diameter release commits the resize its drag prepared
+(`commitPreparedGroupEditJournaled`) rather than resizing the wall again,
+because it restores the checkpoint that drag prepared on. A drag preview
+builds only the dragged edit display-only. When the live build kept the
+previous edit's source but not its result (a full checkpoint schedule), the
+first frame replays that result checked, under the digests a checked release
+restores. Replayed display-only, its checkpoint was salted, so the release
+went back further, replayed the prefix and called
+`resizeCylindricalFaceJournaled` afresh (`test/prepared-resize-release.test.ts`).
+On the private part above (local Chromium, against main `a98f52cf`), the first
+diameter release fell from 773/780 to 609/609 ms release → accepted. The
+kernel commit is 530–535 ms of it; its own trace attributes almost all of that
+to the commit checks (material guard about 220 ms, volume guard about 185 ms,
+final watertight mesh about 130 ms), not to building the geometry, which the
+preview already made. A face-offset release that follows another edit drops
+its prefix replay the same way (Node: 103 → 74 ms), for 2–4 ms more on that
+drag's first frame.
+
 ## Qualification
 
 The baseline and candidate use the same paired Remus `2026.1.65` packages at

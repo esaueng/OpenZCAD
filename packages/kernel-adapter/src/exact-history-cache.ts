@@ -138,8 +138,10 @@ export function tailCheckpointIndices(
  * A complete (checked) build of a terminal face edit keeps its result as
  * well as its source: `indices` (ending at the source) plus `terminal`, when
  * that is free. The next drag, which appends another edit, then restores the
- * result instead of replaying it display-only, and the follow-up sync of the
- * same document restores it instead of replaying it checked again.
+ * result instead of replaying it, and the follow-up sync of the same document
+ * restores it instead of replaying it checked again. Without that slot the
+ * drag's first frame replays the result checked (only the dragged edit is
+ * built display-only), so its release still restores what the drag built.
  *
  * Only where it can never cost a restore: a slot must be free, so a full
  * schedule keeps the source (the next value of the same edit restores it),

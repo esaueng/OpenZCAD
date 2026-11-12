@@ -14,6 +14,10 @@ import type { FeatureNode } from '@openzcad/shared';
  * The adapter's own volume envelope on a blend result is skipped the same
  * way (`displayOnlyBlendsActive`).
  *
+ * A drag preview of a direct edit builds only that edit display-only: a
+ * feature before it that the frame has to replay is built checked, so the
+ * release can restore it (and the edit the preview prepared on it).
+ *
  * A display-only result must never be served to a checked build. The
  * history cache keys every checkpoint by its features' digests, so a
  * feature that may run a kernel blend gets a salted digest in display-only
