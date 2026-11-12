@@ -801,6 +801,83 @@ describe('an untouched edit writes the feature back as stored', () => {
     });
   });
 
+  it('thread: whole-face and partial threads go back as stored, and its end drags', () => {
+    // The boss as the edit finds it: a cylinder 12 long up +Z, not clicked.
+    const boss: FacePick = {
+      bodyId: BODY,
+      hash: 31,
+      topologyId: 'f31',
+      surfaceType: 'cylinder',
+      cylinder: {
+        axisStart: { x: 0, y: 0, z: 0 },
+        axisEnd: { x: 0, y: 0, z: 12 },
+        radius: 3
+      }
+    };
+    const ctx: InPlaceEditContext = {
+      ...EDIT_CTX,
+      face: (bodyId, hash) => (hash === 31 ? { ...boss, bodyId } : null)
+    };
+    const whole: FeatureData = {
+      featureKind: 'thread',
+      targetBodyId: BODY,
+      faceHash: 31,
+      profile: 'printable',
+      clearance: 0.1,
+      chamferStart: true,
+      chamferEnd: true
+    };
+    const { featureKind: _w, ...wholeFields } = whole;
+    expect(untouched(feature(whole), {}, ctx)).toEqual({
+      tool: 'thread',
+      thread: wholeFields
+    });
+    // Its end dragged 4 up from the bottom: a partial thread from the start.
+    expect(untouched(feature(whole), { length: 4 }, ctx)).toEqual({
+      tool: 'thread',
+      thread: {
+        targetBodyId: BODY,
+        faceHash: 31,
+        profile: 'printable',
+        clearance: 0.1,
+        length: 4
+      }
+    });
+    // A partial thread from the far end, its length an expression: it goes
+    // back as written, from that end.
+    const partial: FeatureData = {
+      featureKind: 'thread',
+      targetBodyId: BODY,
+      faceHash: 31,
+      profile: 'iso-metric',
+      majorDiameter: 6,
+      pitch: 1,
+      length: 'wall',
+      offset: 2,
+      anchor: 'end'
+    };
+    const armed = inPlaceEditSeed(feature(partial), ctx)!;
+    expect(armed.seed.options.span).toBeUndefined();
+    const { featureKind: _p, ...partialFields } = partial;
+    expect(untouched(feature(partial), {}, ctx)).toEqual({
+      tool: 'thread',
+      thread: partialFields
+    });
+    // Dragged out to the face's end, it runs the rest of it from its offset.
+    expect(untouched(feature(partial), { length: 10 }, ctx)).toEqual({
+      tool: 'thread',
+      thread: {
+        targetBodyId: BODY,
+        faceHash: 31,
+        profile: 'iso-metric',
+        majorDiameter: 6,
+        pitch: 1,
+        offset: 2,
+        anchor: 'end'
+      }
+    });
+  });
+
   it('helical sweep: an edit keeps how the helix was built', () => {
     const profile = { all: true as const, sourceEntityIds: ['a'] };
     const legacy: FeatureData = {

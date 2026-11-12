@@ -4,10 +4,13 @@ import {
   isoMetricThreadLabel,
   type FeatureData,
   type ParamValue,
+  type ThreadAnchor,
   type ThreadProfile,
-  type UnitSystem
+  type UnitSystem,
+  type Vector3
 } from '@openzcad/shared';
 import type {
+  FacePick,
   HandleSpec,
   InPlaceContext,
   InPlacePanelState,
@@ -44,13 +47,119 @@ function isoSize(option: string | undefined) {
 const custom = (state: InPlacePanelState) => state.options.profile === 'custom';
 const customSize = (state: InPlacePanelState) =>
   state.options.size === 'custom';
-const band = (state: InPlacePanelState) => state.options.span === 'band';
-/** A chamfer needs the thread to reach the face's ends: the whole face only. */
 const chamfered = (state: InPlacePanelState) =>
-  !band(state) && (state.options.chamfer ?? 'both') !== 'none';
+  (state.options.chamfer ?? 'both') !== 'none';
 
-// Only the band's length has a handle: every other number is typed in the
-// Options panel, so each must be `inOptions` or its row never shows.
+/**
+ * A picked cylinder as a thread reads it: its two ends on the axis, the unit
+ * axis from start to end, its length and radius, and a direction across the
+ * axis toward where it was clicked (any one, unclicked). Null when the face
+ * published no cylinder.
+ */
+export interface ThreadFace {
+  start: Vector3;
+  end: Vector3;
+  axis: Vector3;
+  length: number;
+  radius: number;
+  radial: Vector3;
+}
+
+const sub = (a: Vector3, b: Vector3): Vector3 => ({
+  x: a.x - b.x,
+  y: a.y - b.y,
+  z: a.z - b.z
+});
+const along = (a: Vector3, d: Vector3, t: number): Vector3 => ({
+  x: a.x + d.x * t,
+  y: a.y + d.y * t,
+  z: a.z + d.z * t
+});
+const dot = (a: Vector3, b: Vector3) => a.x * b.x + a.y * b.y + a.z * b.z;
+
+export function threadFace(face: FacePick | undefined): ThreadFace | null {
+  const cylinder = face?.cylinder;
+  if (!cylinder || !(cylinder.radius > 0)) return null;
+  const span = sub(cylinder.axisEnd, cylinder.axisStart);
+  const length = Math.hypot(span.x, span.y, span.z);
+  if (!(length > 0)) return null;
+  const axis = { x: span.x / length, y: span.y / length, z: span.z / length };
+  const across = (direction: Vector3): Vector3 | null => {
+    const off = along(direction, axis, -dot(direction, axis));
+    const size = Math.hypot(off.x, off.y, off.z);
+    return size > 1e-9
+      ? { x: off.x / size, y: off.y / size, z: off.z / size }
+      : null;
+  };
+  const clicked = face.point
+    ? across(sub(face.point, cylinder.axisStart))
+    : null;
+  // Unclicked (an edit), any direction across the axis.
+  const radial =
+    clicked ??
+    across(
+      Math.abs(axis.x) < 0.9 ? { x: 1, y: 0, z: 0 } : { x: 0, y: 1, z: 0 }
+    )!;
+  return {
+    start: cylinder.axisStart,
+    end: cylinder.axisEnd,
+    axis,
+    length,
+    radius: cylinder.radius,
+    radial
+  };
+}
+
+/** The stored thread being edited, if this command edits one. */
+function savedThread(ctx: InPlaceContext | undefined) {
+  return ctx?.saved?.featureKind === 'thread' ? ctx.saved : null;
+}
+
+/**
+ * Which end of the face the thread starts at: the end nearer the click on
+ * it. An edit not clicked again keeps the end it stores.
+ */
+export function threadAnchor(
+  face: FacePick | undefined,
+  ctx?: InPlaceContext
+): ThreadAnchor {
+  const geometry = threadFace(face);
+  if (geometry && face?.point && !face.savedPosition) {
+    const t = dot(sub(face.point, geometry.start), geometry.axis);
+    return t > geometry.length / 2 ? 'end' : 'start';
+  }
+  return savedThread(ctx)?.anchor ?? 'start';
+}
+
+/** Lengths this close to the face's are the whole face. */
+const tolerance = (length: number) => 1e-6 * Math.max(1, length);
+
+/**
+ * Whether the thread stops short of the face: its dragged (or typed) end
+ * falls short of the face's far end. Until its end is moved it runs the
+ * whole face, from its offset; a stored partial thread whose length is
+ * untouched stays one, even where it happens to reach the end.
+ */
+export function threadIsPartial(
+  face: FacePick | undefined,
+  values: Readonly<Record<string, ParamValue>>,
+  numbers: Readonly<Record<string, number>>,
+  ctx?: InPlaceContext
+): boolean {
+  const saved = savedThread(ctx);
+  if (saved?.length !== undefined && values.length === saved.length) {
+    return true;
+  }
+  if (!ctx?.touched?.includes('length')) return false;
+  const geometry = threadFace(face);
+  if (!geometry) return true;
+  const reach = geometry.length - (numbers.offset ?? 0);
+  return (numbers.length ?? reach) < reach - tolerance(geometry.length);
+}
+
+// The length has its handle, the arrow on the thread's free end; every
+// other number is typed in the Options panel, so each must be `inOptions`
+// or its row never shows.
 const THREAD_VALUES: readonly ValueSpec[] = [
   {
     id: 'majorDiameter',
@@ -134,7 +243,7 @@ const THREAD_VALUES: readonly ValueSpec[] = [
     initial: 5,
     min: 0,
     exclusive: true,
-    when: band
+    note: 'Drag the arrow short of the face’s end for a partial thread'
   },
   {
     id: 'offset',
@@ -142,9 +251,8 @@ const THREAD_VALUES: readonly ValueSpec[] = [
     unit: 'length',
     initial: 0,
     min: 0,
-    note: 'From the chosen end',
-    inOptions: true,
-    when: band
+    note: 'Gap before the thread, from the end it starts at',
+    inOptions: true
   },
   {
     id: 'starts',
@@ -243,32 +351,9 @@ const THREAD_OPTIONS: readonly OptionSpec[] = [
     initial: 'print'
   },
   {
-    id: 'span',
-    label: 'Extent',
-    choices: [
-      { value: 'face', label: 'Full', tip: 'The whole face' },
-      {
-        value: 'band',
-        label: 'Partial',
-        tip: 'Part of the face; the rest stays plain'
-      }
-    ],
-    initial: 'face'
-  },
-  {
-    id: 'anchor',
-    label: 'From',
-    when: band,
-    choices: [
-      { value: 'start', label: 'Start' },
-      { value: 'end', label: 'End' }
-    ],
-    initial: 'start'
-  },
-  {
     id: 'chamfer',
     label: 'Chamfer',
-    when: (state) => !band(state),
+    // Kept only at an end the thread runs to: a partial thread's are plain.
     choices: [
       {
         value: 'both',
@@ -304,17 +389,42 @@ function fitClearance(fit: string | undefined, units: UnitSystem): number {
 }
 
 /**
- * What the folded More rows come to, where they leave their defaults: the
- * rows in view already say the rest.
+ * The Options readout: what the picked face and the dragged end decide (the
+ * size the face gives, how much of it is threaded), then what the folded
+ * More rows come to where they leave their defaults.
  */
-export function threadSummary(state: InPlacePanelState): string | null {
+export function threadSummary(
+  state: InPlacePanelState,
+  units: UnitSystem = 'mm',
+  slots?: Pick<InPlaceSlots, 'faces'>
+): string | null {
   const parts: string[] = [];
+  const geometry = threadFace(slots?.faces[0]);
+  const round = (value: number) => Math.round(value * 1000) / 1000;
+  let partial = false;
+  if (geometry) {
+    if ((state.options.size ?? 'auto') === 'auto') {
+      parts.push(`Sized from the Ø${round(2 * geometry.radius)} ${units} face`);
+    }
+    const offset = state.numbers.offset ?? 0;
+    const reach = geometry.length - offset;
+    const length = state.numbers.length ?? reach;
+    const face = round(geometry.length);
+    partial = length < reach - tolerance(geometry.length);
+    parts.push(
+      partial
+        ? `Threads ${round(length)} of ${face} ${units}, ends plain`
+        : offset > 0
+          ? `Threads ${round(reach)} of ${face} ${units}`
+          : `Threads the full ${face} ${units}`
+    );
+  }
   if (state.options.hand === 'left') parts.push('Left hand');
   const starts = Math.round(state.numbers.starts ?? 1);
   if (starts > 1) parts.push(`${starts} starts`);
   const phase = Math.round((state.numbers.phaseDeg ?? 0) * 100) / 100;
   if (phase !== 0) parts.push(`Rotated ${phase}°`);
-  if (chamfered(state)) {
+  if (chamfered(state) && !partial) {
     const angle = Math.round((state.numbers.chamferAngleDeg ?? 45) * 100) / 100;
     if (angle !== 45) parts.push(`Chamfer ${angle}°`);
   }
@@ -324,7 +434,7 @@ export function threadSummary(state: InPlacePanelState): string | null {
 /**
  * The Options a stored thread reads back as: an ISO size whose stored
  * diameter and pitch are that size's, a fit whose clearance is one of the
- * presets, a band when it stores a length.
+ * presets.
  */
 export function threadEditOptions(
   data: ThreadRequest,
@@ -359,12 +469,8 @@ export function threadEditOptions(
     data.clearance !== undefined && typeof data.clearance !== 'number'
       ? 'custom'
       : (preset ?? 'custom');
-  if (data.length !== undefined) {
-    options.span = 'band';
-    options.anchor = data.anchor ?? 'start';
-  } else {
-    options.span = 'face';
-  }
+  // Its extent and end are not options: the stored length and anchor go
+  // back as values and the face's end (see `threadIsPartial`).
   options.hand = data.hand ?? 'right';
   options.chamfer =
     data.chamferStart && data.chamferEnd
@@ -377,11 +483,27 @@ export function threadEditOptions(
   return options;
 }
 
+/**
+ * How much of the face a thread runs and from where, as the picks and the
+ * dragged end decide (see {@link threadIsPartial}, {@link threadAnchor}).
+ */
+export interface ThreadExtent {
+  /** It stops short of the face's far end: it stores its length. */
+  partial?: boolean;
+  /** The end of the face it starts at; absent is the start. */
+  from?: ThreadAnchor;
+  /** An edit's stored `anchor: 'end'` goes back even where it is moot. */
+  keepAnchor?: boolean;
+  /** The offset as a number, where it resolves. */
+  offset?: number;
+}
+
 /** The feature fields an in-place thread command stores. */
 export function threadRequestFields(
   values: Readonly<Record<string, ParamValue>>,
   options: Readonly<Record<string, string>>,
-  units: UnitSystem
+  units: UnitSystem,
+  extent: ThreadExtent = {}
 ): Omit<ThreadRequest, 'targetBodyId' | 'faceHash' | 'faceReference'> {
   const profile: ThreadProfile =
     options.profile === 'iso-metric' || options.profile === 'custom'
@@ -416,21 +538,34 @@ export function threadRequestFields(
   const starts = values.starts;
   if (starts !== undefined && starts !== 1) fields.starts = starts;
   if (options.hand === 'left') fields.hand = 'left';
-  if (options.span === 'band') {
-    fields.length = values.length ?? 5 / mm;
-    const offset = values.offset;
-    if (offset !== undefined && offset !== 0) fields.offset = offset;
-    if (options.anchor === 'end') fields.anchor = 'end';
+  const partial = extent.partial === true;
+  if (partial) fields.length = values.length ?? 5 / mm;
+  const offset = values.offset;
+  const offsetStored = offset !== undefined && offset !== 0;
+  if (offsetStored) fields.offset = offset;
+  const from = extent.from ?? 'start';
+  if (from === 'end' && (partial || offsetStored || extent.keepAnchor)) {
+    fields.anchor = 'end';
   }
   const phase = values.phaseDeg;
   if (phase !== undefined && phase !== 0) fields.phaseDeg = phase;
-  // A chamfered end must reach the end of the face, so only a thread along
-  // the whole face takes one.
-  const chamfer =
-    options.span === 'band' ? 'none' : (options.chamfer ?? 'both');
-  if (chamfer === 'both' || chamfer === 'start') fields.chamferStart = true;
-  if (chamfer === 'both' || chamfer === 'end') fields.chamferEnd = true;
-  if (chamfer !== 'none') {
+  // A chamfered end must reach the end of the face: a partial thread takes
+  // none, and one set off from its starting end none there.
+  const chamfer = partial ? 'none' : (options.chamfer ?? 'both');
+  const setOff = offsetStored && (extent.offset ?? 1) !== 0;
+  if (
+    (chamfer === 'both' || chamfer === 'start') &&
+    !(setOff && from === 'start')
+  ) {
+    fields.chamferStart = true;
+  }
+  if (
+    (chamfer === 'both' || chamfer === 'end') &&
+    !(setOff && from === 'end')
+  ) {
+    fields.chamferEnd = true;
+  }
+  if (fields.chamferStart || fields.chamferEnd) {
     const angle = values.chamferAngleDeg;
     if (angle !== undefined && angle !== 45) fields.chamferAngleDeg = angle;
   }
@@ -459,7 +594,7 @@ export const threadSpec: InPlaceToolSpec = {
       label: 'Length',
       compact: true,
       boxed: true,
-      items: ['span', 'anchor', 'length', 'offset', 'chamfer']
+      items: ['length', 'offset', 'chamfer']
     },
     {
       label: 'Form',
@@ -475,10 +610,19 @@ export const threadSpec: InPlaceToolSpec = {
     }
   ],
   summary: threadSummary,
-  hint(slots: InPlaceSlots, options?: Record<string, string>) {
-    if (slots.faces.length === 0) return 'Pick a cylindrical face or hole';
-    return options?.span === 'band'
-      ? 'Drag or tap the length · Enter to finish'
+  defaults(slots, _ctx, numbers): Record<string, number> {
+    // Until its end is dragged, the thread runs the rest of the face.
+    const geometry = threadFace(slots.faces[0]);
+    if (!geometry) return {};
+    return { length: Math.max(geometry.length - (numbers.offset ?? 0), 0) };
+  },
+  hint(slots: InPlaceSlots) {
+    const face = slots.faces[0];
+    if (!face) {
+      return 'Pick a cylindrical face or hole, near the end the thread starts at';
+    }
+    return threadFace(face)
+      ? 'Drag the arrow to stop the thread short · Enter to finish'
       : 'Enter to finish';
   },
   ready: (slots: InPlaceSlots) => slots.faces.length > 0,
@@ -486,35 +630,99 @@ export const threadSpec: InPlaceToolSpec = {
     slots: InPlaceSlots,
     values: Record<string, ParamValue>,
     options: Record<string, string>,
-    ctx: InPlaceContext
+    ctx: InPlaceContext,
+    numbers?: Record<string, number>
   ): InPlaceRequest | null {
     const face = slots.faces[0];
     if (!face) return null;
+    const resolved = (id: string) => {
+      const number = numbers?.[id];
+      if (number !== undefined) return number;
+      const value = values[id];
+      return typeof value === 'number'
+        ? value
+        : value === undefined
+          ? undefined
+          : (ctx.evaluate?.(value) ?? undefined);
+    };
+    const all: Record<string, number> = {};
+    for (const id of ['length', 'offset']) {
+      const number = resolved(id);
+      if (number !== undefined) all[id] = number;
+    }
+    const from = threadAnchor(face, ctx);
     return {
       tool: 'thread',
       thread: {
         targetBodyId: face.bodyId,
         faceHash: face.hash,
         ...(face.reference ? { faceReference: face.reference } : {}),
-        ...threadRequestFields(values, options, ctx.units ?? 'mm')
+        ...threadRequestFields(values, options, ctx.units ?? 'mm', {
+          partial: threadIsPartial(face, values, all, ctx),
+          from,
+          keepAnchor: savedThread(ctx)?.anchor === 'end',
+          ...(all.offset === undefined ? {} : { offset: all.offset })
+        })
       }
     };
   },
   handles(
     slots: InPlaceSlots,
-    _values: Record<string, number>,
-    _ctx: InPlaceContext,
-    options: Record<string, string>
+    values: Record<string, number>,
+    ctx: InPlaceContext
   ): HandleSpec[] {
     const face = slots.faces[0];
-    const anchor = face?.point ?? face?.centroid ?? face?.center;
-    if (!face || !anchor || options.span !== 'band') return [];
+    if (!face) return [];
+    const geometry = threadFace(face);
+    if (!geometry) {
+      // No cylinder to stand an arrow on: a stored partial thread's length
+      // is still a chip on the face.
+      const anchor = face.point ?? face.centroid ?? face.center;
+      return anchor && savedThread(ctx)?.length !== undefined
+        ? [
+            {
+              valueId: 'length',
+              kind: 'chip',
+              key: `thread:${face.bodyId}:${face.hash}:length`,
+              params: { anchor }
+            }
+          ]
+        : [];
+    }
+    // One arrow on the thread's free end, sliding along the face from the
+    // end it starts at: drag it short of the far end for a partial thread.
+    const from = threadAnchor(face, ctx);
+    const direction =
+      from === 'end'
+        ? { x: -geometry.axis.x, y: -geometry.axis.y, z: -geometry.axis.z }
+        : geometry.axis;
+    const offset = Math.max(values.offset ?? 0, 0);
+    const reach = Math.max(geometry.length - offset, 0);
+    const base = from === 'end' ? geometry.end : geometry.start;
+    const origin = along(
+      along(base, direction, offset),
+      geometry.radial,
+      geometry.radius
+    );
+    const round = (value: number) => Math.round(value * 1e6) / 1e6;
     return [
       {
         valueId: 'length',
-        kind: 'chip',
-        key: `thread:${face.bodyId}:${face.hash}:length`,
-        params: { anchor }
+        kind: 'linear',
+        key: [
+          'thread',
+          face.bodyId,
+          face.hash,
+          'length',
+          from,
+          round(offset),
+          round(geometry.length),
+          round(geometry.radial.x),
+          round(geometry.radial.y),
+          round(geometry.radial.z)
+        ].join(':'),
+        params: { origin, direction },
+        max: reach
       }
     ];
   }

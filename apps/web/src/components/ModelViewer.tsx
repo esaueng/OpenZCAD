@@ -105,6 +105,7 @@ import {
   buildAngleHandle,
   buildCoilHandle,
   COIL_RIG_KIND,
+  LINEAR_RIG_KIND,
   buildLinearHandle,
   buildCylinderRadiusHandle,
   buildEdgeRadiusHandle,
@@ -4833,13 +4834,22 @@ export function ModelViewer({
         );
         const halfHeight = (chipHeights.get(valueId) ?? 0) / 2;
         const top = COMMAND_CHIP_MARGIN_PX * 2;
-        // Never over a coil's end: its anchor is set off outward from the
-        // coil, which seen along that line projects back onto the ball, and
-        // the chip would take the press. It steps just above the ball, or
-        // below it where there is no room above. (A coil rig's position is
-        // the ball itself; other rigs' positions are a base or a centre.)
+        // Never over a coil's end or a length arrow's head: a coil's anchor
+        // is set off outward from the coil, which seen along that line
+        // projects back onto the ball, and an arrow pointing down the screen
+        // (a thread's end, run down a boss) has its chip lifted back over
+        // the head; either way the chip would take the press. A coil's chip
+        // steps just above the ball, or below it where there is no room
+        // above; an arrow's hangs just below its head, past it as the arrow
+        // points (above it is the line, and often the chip of an arrow from
+        // the same base), or above where there is no room below. (A coil
+        // rig's position is the ball, a length rig's its arrow's head; other
+        // rigs' positions are a base or a centre.)
         let pointY = ((1 - ndc.y) / 2) * canvasCssHeight;
-        if (entry.rig?.kind === COIL_RIG_KIND) {
+        if (
+          entry.rig?.kind === COIL_RIG_KIND ||
+          entry.rig?.kind === LINEAR_RIG_KIND
+        ) {
           const grip = entry.rig.group.position.clone().project(camera);
           const gripX = ((grip.x + 1) / 2) * canvasCssWidth;
           const gripY = ((1 - grip.y) / 2) * canvasCssHeight;
@@ -4856,10 +4866,25 @@ export function ModelViewer({
           ) {
             const above =
               gripY - clear + chipHeight * (COMMAND_CHIP_LIFT - 0.5);
+            const below =
+              gripY + clear + chipHeight * (COMMAND_CHIP_LIFT + 0.5);
+            const fitsAbove =
+              above - chipHeight * (COMMAND_CHIP_LIFT + 0.5) >= top;
+            const lowest =
+              footTop === null
+                ? canvasCssHeight - COMMAND_CHIP_MARGIN_PX * 2
+                : Math.min(
+                    canvasCssHeight - COMMAND_CHIP_MARGIN_PX * 2,
+                    footTop - COMMAND_CHIP_MARGIN_PX - halfHeight
+                  );
             pointY =
-              above - chipHeight * (COMMAND_CHIP_LIFT + 0.5) >= top
-                ? above
-                : gripY + clear + chipHeight * (COMMAND_CHIP_LIFT + 0.5);
+              entry.rig.kind === LINEAR_RIG_KIND
+                ? below <= lowest || !fitsAbove
+                  ? below
+                  : above
+                : fitsAbove
+                  ? above
+                  : below;
           }
         }
         const y = Math.min(

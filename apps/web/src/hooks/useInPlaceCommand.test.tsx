@@ -656,6 +656,84 @@ describe('useInPlaceCommand: helical sweep', () => {
   });
 });
 
+describe('useInPlaceCommand: thread', () => {
+  // An M6 boss 12 tall up +Z, clicked on its side near the top.
+  const BOSS: FacePick = {
+    bodyId: 'body_a' as BodyId,
+    hash: 31,
+    topologyId: 'f31',
+    surfaceType: 'cylinder',
+    cylinder: {
+      axisStart: { x: 0, y: 0, z: 0 },
+      axisEnd: { x: 0, y: 0, z: 12 },
+      radius: 3
+    },
+    point: { x: 0, y: -3, z: 10 }
+  };
+
+  it('takes the face, runs it whole, and stops short where its end is dragged', async () => {
+    const { hook, built } = setup();
+    act(() => hook.result.current.start('thread'));
+    expect(hook.result.current.hint).toMatch(/cylindrical face/);
+    let taken = false;
+    act(() => {
+      taken = hook.result.current.pickFace(BOSS);
+    });
+    expect(taken).toBe(true);
+    expect(hook.result.current.hint).toMatch(/Drag the arrow/);
+    // The face gives the length: the whole of it, until the end moves.
+    await waitFor(() => expect(hook.result.current.values.length).toBe(12));
+    expect(hook.result.current.handles).toEqual([
+      expect.objectContaining({
+        valueId: 'length',
+        kind: 'linear',
+        params: {
+          origin: { x: 0, y: -3, z: 12 },
+          direction: { x: -0, y: -0, z: -1 }
+        },
+        max: 12
+      })
+    ]);
+    await waitFor(() =>
+      expect(built.at(-1)).toEqual({
+        tool: 'thread',
+        thread: {
+          targetBodyId: 'body_a',
+          faceHash: 31,
+          profile: 'printable',
+          clearance: 0.1,
+          chamferStart: true,
+          chamferEnd: true
+        }
+      })
+    );
+    // The arrow dragged 4 up from the bottom: 8 threaded down from the top.
+    act(() => {
+      hook.result.current.previewValue('length', 8);
+    });
+    await waitFor(() =>
+      expect(built.at(-1)).toMatchObject({
+        thread: { length: 8, anchor: 'end' }
+      })
+    );
+    expect(
+      (built.at(-1) as { thread: { chamferStart?: true } }).thread.chamferStart
+    ).toBeUndefined();
+    // And back out to the end: whole again.
+    act(() => {
+      hook.result.current.previewValue('length', 12);
+    });
+    await waitFor(() =>
+      expect(built.at(-1)).toMatchObject({
+        thread: { chamferStart: true, chamferEnd: true }
+      })
+    );
+    expect(
+      (built.at(-1) as { thread: { length?: number } }).thread.length
+    ).toBeUndefined();
+  });
+});
+
 describe('useInPlaceCommand: hole step chips', () => {
   const FACE: FacePick = {
     bodyId: 'body_a' as BodyId,

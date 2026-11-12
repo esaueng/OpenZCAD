@@ -10701,6 +10701,18 @@ export function App() {
       ...(geometry?.normal ? { normal: geometry.normal } : {}),
       ...(geometry?.centroid ? { centroid: geometry.centroid } : {}),
       ...(geometry?.center ? { center: geometry.center } : {}),
+      ...(geometry?.surfaceType === 'cylinder' &&
+      geometry.axisStart &&
+      geometry.axisEnd &&
+      geometry.radius !== undefined
+        ? {
+            cylinder: {
+              axisStart: geometry.axisStart,
+              axisEnd: geometry.axisEnd,
+              radius: geometry.radius
+            }
+          }
+        : {}),
       ...(point ? { point } : {})
     };
   }
@@ -22496,10 +22508,11 @@ export function App() {
     return {
       sections,
       values,
-      summary: inPlaceSpec.summary?.(state, inPlaceUnits) ?? null
+      summary: inPlaceSpec.summary?.(state, inPlaceUnits, inPlace.slots) ?? null
     };
   }, [
     inPlaceSpec,
+    inPlace.slots,
     inPlace.options,
     inPlace.values,
     inPlace.raws,
@@ -22595,7 +22608,9 @@ export function App() {
           ...handle,
           value: inPlace.values[handle.valueId] ?? valueSpec?.initial ?? 0,
           ...(valueSpec?.min === undefined ? {} : { min: valueSpec.min }),
-          ...(valueSpec?.max === undefined ? {} : { max: valueSpec.max }),
+          ...(handle.max === undefined && valueSpec?.max === undefined
+            ? {}
+            : { max: handle.max ?? valueSpec!.max! }),
           format,
           describe: (value: number) =>
             commandChipName(label, round(value), valueSpec?.unit, inPlaceUnits)
