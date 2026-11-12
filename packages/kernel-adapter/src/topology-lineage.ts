@@ -1220,6 +1220,18 @@ export type TopologyResolutionCandidate =
 
 export type LineageAvailability =
   | { readonly status: 'available' }
+  /**
+   * The body publishes lineage, but not for every entity: some transition in
+   * its history published no name for some faces or edges (ADR-013
+   * "explicitly marked no lineage"). A name the body still publishes resolves
+   * exactly as under `available`, and its ambiguity or unverified evidence is
+   * still terminal. A name the body no longer publishes anywhere may be
+   * lineage that was never carried rather than an entity that is gone, so it
+   * takes ADR-013 step 2 — the stored hash plus the exact stored witness,
+   * unique — restricted to entities the body publishes no name for. It can
+   * never move a reference onto an entity that carries a different name.
+   */
+  | { readonly status: 'partial' }
   | {
       readonly status: 'unsupported';
       readonly operation: TopologyLineageOperation;
@@ -1453,9 +1465,36 @@ export function resolveTopologyReference(
       message: `The selected ${reference.kind} lineage has no witness-verified candidate.`
     };
   }
+  if (lineageAvailability.status === 'partial') {
+    const fallback = resolveByHash(
+      reference,
+      candidates.filter((candidate) => !candidate.lineage),
+      'hash-fallback'
+    );
+    if (fallback.status === 'resolved') {
+      return fallback;
+    }
+  }
   return {
     status: 'failed',
     reason: 'lineage-not-found',
     message: `The selected ${reference.kind} lineage no longer exists.`
   };
+}
+
+/**
+ * The availability a caller with a lineage state passes for one kind of
+ * entity: `partial` when some candidate of that kind carries no name, so a
+ * stored name the body lost may still take the exact-witness fallback onto
+ * one of those unnamed entities; `available` when the body names them all.
+ */
+export function lineageAvailabilityFor(
+  kind: TopologyKind,
+  candidates: readonly TopologyResolutionCandidate[]
+): LineageAvailability {
+  return candidates.some(
+    (candidate) => candidate.kind === kind && !candidate.lineage
+  )
+    ? { status: 'partial' }
+    : { status: 'available' };
 }

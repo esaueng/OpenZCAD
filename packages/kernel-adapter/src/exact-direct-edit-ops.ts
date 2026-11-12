@@ -105,6 +105,7 @@ import {
 } from './remus-lineage';
 import {
   importedStepLineageName,
+  lineageAvailabilityFor,
   resolveTopologyReference,
   topologyHashOfWitness,
   type TopologyResolutionCandidate
@@ -227,7 +228,7 @@ function resolveDirectEditFaceInSolids(
     reference,
     candidates,
     lineage
-      ? { status: 'available' }
+      ? lineageAvailabilityFor('face', candidates)
       : { status: 'unsupported', operation: 'direct-edit' }
   );
   if (resolution.status === 'failed') {
