@@ -73,8 +73,6 @@ function renderTopBar(
       buildModeDisabledReason={options.buildModeDisabledReason ?? null}
       tweakModeDisabledReason={null}
       onArchiveLocalSources={vi.fn()}
-      onExportDiagnostics={vi.fn()}
-      onExportInteractionLog={vi.fn()}
       onGoHome={vi.fn()}
       onOpenSettings={vi.fn()}
       encryption={options.encryption ?? null}
@@ -578,20 +576,27 @@ describe('TopBar File menu', () => {
   it('closes when focus tabs out of it', () => {
     renderTopBar();
     fileMenu().open = true;
-    const last = screen.getByRole('button', {
-      name: /^Export interaction log/
-    });
+    const last = screen.getByRole('button', { name: /^Export mesh…/ });
     const settings = screen.getByRole('button', { name: 'Open settings' });
     last.focus();
     // Moving between its own items keeps it open.
     fireEvent.blur(last, {
-      relatedTarget: screen.getByRole('button', {
-        name: /^Export diagnostics/
-      })
+      relatedTarget: screen.getByRole('button', { name: /^Export STEP/ })
     });
     expect(fileMenu().open).toBe(true);
     fireEvent.blur(last, { relatedTarget: settings });
     expect(fileMenu().open).toBe(false);
+  });
+
+  it('leaves the support exports to Settings and the palette', () => {
+    // Export diagnostics and Export interaction log closed the menu as a
+    // Troubleshooting group; they are support tools, not file work.
+    renderTopBar({ canExport: true });
+    fileMenu().open = true;
+    expect(screen.queryByText('Troubleshooting')).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /diagnostics|interaction log/i })
+    ).not.toBeInTheDocument();
   });
 });
 

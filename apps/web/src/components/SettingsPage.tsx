@@ -23,6 +23,7 @@ import {
   CloudOff,
   Cpu,
   Database,
+  Download,
   Eye,
   EyeOff,
   ExternalLink,
@@ -190,6 +191,12 @@ interface SettingsPageProps {
   ): Promise<void>;
   onReset(): void;
   onApplyViewportDefaults(): void;
+  /**
+   * Support exports, kept out of the File menu: a sanitized snapshot of the
+   * open project, and this device's log of direct-edit attempts.
+   */
+  onExportDiagnostics(): void;
+  onExportInteractionLog(): void;
   onDismissProjectInvitation(): void;
   onClose(): void;
 }
@@ -724,6 +731,8 @@ export function SettingsPage({
   onDeleteCloudData,
   onReset,
   onApplyViewportDefaults,
+  onExportDiagnostics,
+  onExportInteractionLog,
   onDismissProjectInvitation,
   onClose
 }: SettingsPageProps) {
@@ -2705,6 +2714,37 @@ export function SettingsPage({
                       })
                     }
                   />
+                </SettingRow>
+                <SettingRow
+                  title="Export diagnostics"
+                  hint={
+                    workspaceOpen
+                      ? "A sanitized snapshot of the open project's feature history, to send with a problem report."
+                      : 'Open a project to export a sanitized snapshot of its feature history.'
+                  }
+                >
+                  <button
+                    className="secondary"
+                    type="button"
+                    disabled={!workspaceOpen}
+                    onClick={onExportDiagnostics}
+                  >
+                    <Download size={14} aria-hidden="true" />
+                    Export diagnostics
+                  </button>
+                </SettingRow>
+                <SettingRow
+                  title="Export interaction log"
+                  hint="This device's log of direct-edit attempts and refusals. It stays here unless you export it."
+                >
+                  <button
+                    className="secondary"
+                    type="button"
+                    onClick={onExportInteractionLog}
+                  >
+                    <Download size={14} aria-hidden="true" />
+                    Export interaction log
+                  </button>
                 </SettingRow>
               </Group>
               <Group title="About this build">

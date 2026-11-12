@@ -464,6 +464,7 @@ import {
 import { rebuildImportInDisposableWorker } from './lib/importRebuildWorkerClient';
 import { shaprMigrationDraft } from './lib/shaprMigration';
 import { presentedWorkspaceSaveState } from './lib/workspaceSaveStatePresentation';
+import { showsWorkspaceEmptyState } from './lib/workspaceEmptyState';
 import {
   CheckpointSaveError,
   failedCheckpointSaveState
@@ -560,6 +561,7 @@ import {
   type CommandSelection
 } from './lib/commandContext';
 import { WorkspaceColumn } from './components/WorkspaceColumn';
+import { WorkspaceEmptyState } from './components/WorkspaceEmptyState';
 import {
   ActivityLogButton,
   ViewportDockExtras,
@@ -17289,9 +17291,21 @@ export function App() {
     );
   }
 
+  /**
+   * The support exports are asked for from Settings › Advanced or the
+   * palette. Settings covers the workspace's status line, so the outcome is
+   * said on the Settings head too while it is open.
+   */
+  function reportSupportExport(text: string) {
+    setStatus(text);
+    if (settingsOpen) {
+      setSettingsMessage(text);
+    }
+  }
+
   function handleExportDiagnostics() {
     if (!doc) {
-      setStatus('Open a project before exporting diagnostics.');
+      reportSupportExport('Open a project before exporting diagnostics.');
       return;
     }
     try {
@@ -17305,9 +17319,9 @@ export function App() {
         `${JSON.stringify(bundle, null, 2)}\n`,
         'application/json'
       );
-      setStatus(`Exported sanitized diagnostics to ${fileName}.`);
+      reportSupportExport(`Exported sanitized diagnostics to ${fileName}.`);
     } catch (error) {
-      setStatus(errorMessage(error, 'Diagnostic export failed.'));
+      reportSupportExport(errorMessage(error, 'Diagnostic export failed.'));
     }
   }
 
@@ -17315,7 +17329,7 @@ export function App() {
     try {
       const entries = await listInteractionDiagnostics();
       if (entries.length === 0) {
-        setStatus(
+        reportSupportExport(
           'No direct-edit attempts have been recorded on this device yet.'
         );
         return;
@@ -17327,11 +17341,13 @@ export function App() {
         `${JSON.stringify(bundle, null, 2)}\n`,
         'application/json'
       );
-      setStatus(
+      reportSupportExport(
         `Exported ${bundle.summary.total} recorded direct-edit attempts (${bundle.summary.byOutcome.refused} refused) to ${fileName}.`
       );
     } catch (error) {
-      setStatus(errorMessage(error, 'Interaction log export failed.'));
+      reportSupportExport(
+        errorMessage(error, 'Interaction log export failed.')
+      );
     }
   }
 
@@ -29197,6 +29213,8 @@ export function App() {
           onDeleteCloudData={handleDeleteCloudData}
           onReset={handleResetAppSettings}
           onApplyViewportDefaults={applyViewportDefaults}
+          onExportDiagnostics={handleExportDiagnostics}
+          onExportInteractionLog={() => void handleExportInteractionLog()}
           onDismissProjectInvitation={dismissProjectInvitation}
           onClose={closeSettings}
         />
@@ -29869,6 +29887,30 @@ export function App() {
       keywords: ['png', 'svg', 'image', 'screenshot', 'picture', 'sketch'],
       icon: <Download size={16} aria-hidden="true" />,
       run: openImageExport
+    },
+    {
+      // The support exports left the File menu for Settings › Advanced; the
+      // palette is the other way to them, found by what they are for.
+      id: 'file-export-diagnostics',
+      label: 'Export diagnostics',
+      group: 'File',
+      keywords: ['troubleshooting', 'support', 'sanitized', 'json', 'report'],
+      icon: <Download size={16} aria-hidden="true" />,
+      run: handleExportDiagnostics
+    },
+    {
+      id: 'file-export-interaction-log',
+      label: 'Export interaction log',
+      group: 'File',
+      keywords: [
+        'troubleshooting',
+        'support',
+        'direct edit',
+        'refusal',
+        'json'
+      ],
+      icon: <Download size={16} aria-hidden="true" />,
+      run: () => void handleExportInteractionLog()
     },
     {
       id: 'file-import',
@@ -30815,8 +30857,6 @@ export function App() {
           onOpenMeshExport={() => setMeshExportOpen(true)}
           onOpenImageExport={openImageExport}
           onArchiveLocalSources={() => void handleArchiveLocalSources()}
-          onExportDiagnostics={handleExportDiagnostics}
-          onExportInteractionLog={() => void handleExportInteractionLog()}
           onRenameProject={(name) =>
             executeCommand(
               commandFactories.renameNode({ nodeId: doc.rootNodeId, name }),
@@ -31932,6 +31972,7 @@ export function App() {
                   selectedEdges.length > 0 ||
                   selectedBodyIds.length > 0
                 }
+                historyOpen={panelShowing('history')}
                 exportSeen={tourExportSeen}
                 onDismiss={() =>
                   setPanelState((current) => ({
@@ -31941,6 +31982,31 @@ export function App() {
                 }
               />
             )}
+          {showsWorkspaceEmptyState({
+            buildMode: resolvedWorkspaceMode === 'build',
+            featureCount: features.length,
+            bodyCount: viewerBodies.length,
+            commandActive: Boolean(
+              inPlace.active ||
+              measuring ||
+              faceRepair ||
+              datumRepair ||
+              toFacePick ||
+              tool ||
+              interaction.mode === 'sketch'
+            ),
+            editDisabledReason: shownAvailability.editDisabledReason ?? null
+          }) && (
+            <WorkspaceEmptyState
+              boxIcon={TOOL_META.box.icon}
+              sketchIcon={TOOL_META.sketch.icon}
+              boxKey={keymap.label(toolCommandId('box'))}
+              sketchKey={keymap.label(toolCommandId('sketch'))}
+              onBox={() => launchTool('box')}
+              onSketch={() => launchTool('sketch')}
+              onImport={() => importInputRef.current?.click()}
+            />
+          )}
           <ToastHost toast={toast} onDismiss={dismissToast} />
         </ErrorBoundary>
       }
