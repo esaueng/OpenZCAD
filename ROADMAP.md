@@ -99,43 +99,62 @@ with referenced evidence; production acceptance is recorded separately.
 ## Delivery order
 
 Finish useful workflows before adding a second way to do the same action.
-Use the ordered product milestones below; kernel/reliability work runs alongside
-only where dependencies and touched files are disjoint. Each row is an outcome,
-not necessarily one PR. Split a large row into named, bounded slices under the
-same ID before coding; never treat a partial slice as the whole row's completion.
+Re-baselined 2026-11-11 with the owner to match where the work has actually
+gone since 21 October: the workspace and tool-interaction overhaul, end-to-end
+encryption, assemblies, iPad/touch and printable mechanical features are the
+active lanes and come first. Milestones 0–3 stay the queue behind them and the
+place to work when an active lane is blocked on an owner or outside input.
+Kernel/reliability work (K-, W- and O-rows, with [K10](#k10) the current
+campaign) runs alongside only where dependencies and touched files are
+disjoint. Each row is an outcome, not necessarily one PR. Split a large row
+into named, bounded slices under the same ID before coding; never treat a
+partial slice as the whole row's completion.
 
-| Order | Milestone | Exit signal |
+| Order | Lane or milestone | Exit signal |
 | --- | --- | --- |
+| Active | Workspace and tool interaction ([U08](#u08)–[U11](#u11)) | U08 and U09 are complete. U11 carries the helical-sweep interaction (ordered picks, at most two handles on the result, rare choices behind Options) to thread, gear, booleans and patterns, one PR per tool with an e2e driven only by picks and drags. U10's lookdev slices are judged against its fixed captures in the production renderer. |
+| Active | End-to-end encryption ([L11](#l11)) | Written outside-review clearance with no open P0/P1, then default-on, the plaintext freeze and the deletion PR, each under [ADR-024](docs/adrs/ADR-024-end-to-end-encrypted-projects.md) and its own authorization. Until then, remaining acceptance and migration/legacy-reader qualification. |
+| Active | Assemblies ([AS01](#as01)–[AS09](#as09)) | AS01/AS02/AS06/AS07 meet their contracts (offline save/reopen, saved transforms and conflict behavior), then AS03 BOM and exploded views; AS04/AS05/AS08/AS09 follow only when their dependencies qualify. |
+| Active | iPad, touch and Apple Pencil ([L02](#l02)) | All eight slices have merged source; each closes only with real-iPad evidence for its device-only behavior and measured rendering budgets. Mouse and trackpad input stays unchanged. |
+| Active | Printable mechanical features ([M14](#m14), [M15](#m15), [D06](#d06)) | M14 the meshing-pair helper and partial-span teeth (bevel, worm and enveloping gears have merged); M15 tapered threads and chamfers on a thread that stops short of its face (cosmetic threads and callouts stay with M01); D06 auto-dimensioning through its design slices. |
 | 0 | Close the shipped workflow gaps | H01 has an explicit acceptance matrix; H02 has measured cold/warm behavior; U01/U02 resolve reproduced command/value/feedback disagreements; L01 records outstanding live checks. |
 | 1 | Complete the modeling foundation | S01–S08, R01, F01–F05 and U05–U07 meet their row contracts: durable dimensions, understandable constraints, editable sketch geometry, useful reference/parameter surfaces, and the keyboard, history/items and viewing conventions of a mainstream tool. |
 | 2 | Deepen part modeling and inspection | Selected M01–M13, I01, I04–I08 slices work through creation, revision and export with their kernel prerequisites proved. |
 | 3 | Drawings MVP | D01 then a bounded D02 slice: aligned scaled views plus a useful dimension, explicit revision update/invalidation, offline reopen and PDF handoff. D03/D04 add sections and DXF; the milestone is a dimensioned shop handoff, not outlines alone. |
-| 4 | Assemblies MVP | AS01 then AS02/AS06/AS07, then AS03; AS04/AS05/AS08/AS09 follow only when their dependencies qualify. |
-| Later | Reach, automation and new body types | Select L02–L09, L12, D05, K09, M12 or I09–I20 from a measured use case; do not expand every lane at once. |
+| Later | Reach, automation and new body types | Select L03–L09, L12, D05, K09, M12 or I09–I20 from a measured use case; do not expand every lane at once. |
 
-**Next bounded picks, in order (reviewed 2026-10-21):** [H02](#h02)
-remaining sustained publication-equivalence, branch lifetime, quiet target-device
-timing and whole-worker retention evidence; [H01](#h01) remaining live acceptance from its matrix; then
-[S02](#s02) remaining reference-distance variants and qualified composite/datum
-targets, and [S04](#s04) shared composite target identity and explicit
-legacy conversion (follow-ups #800/#801 are in review). [S03](#s03) actionable constraint inspection and first-picked
-anchoring are delivered; per-entity freedom still requires qualified solver
-evidence. [R01](#r01) offset/point planes and axes and their AI operations are
-delivered; qualify the vertex-source recovery slice (#802) before adding the
-remaining reference constructors. [U05](#u05)
-keyboard/command coherence and the [F05](#f05) expression-field regression audit
-can run independently; use their current row evidence to select a remainder. [S01](#s01) saved driving-label placement is complete. Current
-open implementations already own U05/U06 search and folders (#780), I01
-projection (#781) and I05 reference images (#782); refresh their heads and
-ownership before assigning overlapping work. U01/U02 and L01 can
-proceed when ownership permits. Live acceptance needing credentials/source data
-stays pending without blocking independent foundation work. This sequence
-replaces the conflicting next lists in older plans.
+Assemblies were milestone 4; they moved to the active lanes when AS01, AS02,
+AS06 and AS07 merged (#1182). L02 moved from Later when it was selected on
+2026-11-05.
+
+**Next bounded picks (reviewed 2026-11-11; no implementation PR was open):**
+
+1. [U11](#u11): the next tool after helical sweep, thread ([M15](#m15)), in
+   the shared pick-and-drag interaction; then gear, booleans and patterns.
+2. [AS03](#as03): deterministic BOM and stored exploded-view offsets, after
+   recording the AS01/AS02 offline save/reopen and conflict cases that remain.
+3. [M14](#m14) the meshing-pair helper that places a joint at the right center
+   distance (joins the M14 and AS02 work), then partial-span teeth.
+4. [L11](#l11) remaining acceptance and migration/legacy-reader qualification.
+   Outside-review clearance, default-on and deletion wait on the owner and
+   the reviewer, not on an agent.
+5. [L02](#l02) and [U10](#u10): only device or capture evidence remains;
+   these need an iPad or the lookdev captures, so record that evidence when
+   it is available rather than adding slices.
+
+When every active pick is blocked on owner or outside input, take milestone 0–1
+remainders: [H02](#h02) quiet-host and target-device timing and whole-worker
+retention, [H01](#h01) live acceptance from its matrix, [S02](#s02) and
+[S04](#s04) remaining targets, [S08](#s08) inference while drawing, and
+[F01](#f01)/[F03](#f03). Refresh `main`, the kernel pin and open PRs before
+choosing; live acceptance needing credentials or source data stays pending
+without blocking independent work. This list replaces the 2026-10-21 picks and
+the conflicting next lists in older plans.
 
 These milestones are not a global gate: independent foundation work can run
-while live acceptance is pending, and drawing/assembly design can start before
-every part-modeling row is complete. No calendar estimates are carried forward
-from audits of earlier interfaces.
+while live acceptance is pending, and drawing design can start before every
+part-modeling row is complete. No calendar estimates are carried forward from
+audits of earlier interfaces.
 
 ## 0. Close the shipped workflow gaps
 
