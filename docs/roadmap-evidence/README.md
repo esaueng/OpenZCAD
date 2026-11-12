@@ -28,9 +28,11 @@ PR #805).
   merges with its code, so by the time the fold applies it the work has
   merged. Only one pending fragment may set the state of a given row.
 - Body: the evidence text, written as you would have appended it to the row.
-  Line breaks are folded into spaces. Write links from the repository root
-  (`docs/plans/x.md`), as ROADMAP.md reads them, and never link to a
-  fragment file: the fold deletes it.
+  Line breaks are folded into spaces. Write links inline (no `[x]: url`
+  reference definitions, which cannot work in a table cell) and from the
+  repository root (`docs/plans/x.md`), as ROADMAP.md reads them, and never
+  link to a fragment file: the fold deletes it. `--fold` refuses whatever
+  the check refuses and writes nothing.
 
 `node scripts/roadmap-evidence.mjs` checks every fragment against the ledger;
 the root Vitest suite runs the same check.

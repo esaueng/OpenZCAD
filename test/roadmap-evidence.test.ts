@@ -295,6 +295,13 @@ describe('roadmap evidence fragments', () => {
           '[readme](docs/roadmap-evidence/README.md) and [plan](docs/plans/p.md).'
       )
     ).toEqual(['as02--scissors-sample.md', 'h02--x.md']);
+    expect(
+      fragmentLinks(
+        'See [angle](<docs/roadmap-evidence/a01--x.md>) and [ref][r].\n\n' +
+          '[r]: roadmap-evidence/h02--y.md "title"\n' +
+          '[s]: <docs/plans/p.md>\n'
+      )
+    ).toEqual(['a01--x.md', 'h02--y.md']);
     for (const [ledger, fragmentBody, message] of [
       [
         `${LEDGER}\nSee [it](docs/roadmap-evidence/a01--live.md).`,
@@ -310,17 +317,31 @@ describe('roadmap evidence fragments', () => {
         LEDGER,
         'Live, see [plan](../plans/p.md).',
         /a01--live\.md: link \.\.\/plans\/p\.md is relative to the fragment/
+      ],
+      [
+        LEDGER,
+        'Live, see [plan](<../plans/p.md>).',
+        /a01--live\.md: link \.\.\/plans\/p\.md is relative to the fragment/
+      ],
+      [
+        LEDGER,
+        'Live, see [plan][p].\n\n[p]: ./p.md',
+        /a01--live\.md: reference definition \[p\]: cannot work inside a table cell/
       ]
     ] as const) {
       const root = mkdtempSync(join(tmpdir(), 'roadmap-evidence-'));
       try {
         writeFileSync(join(root, ROADMAP_PATH), ledger);
         mkdirSync(join(root, FRAGMENT_DIR), { recursive: true });
-        writeFileSync(
-          join(root, FRAGMENT_DIR, 'a01--live.md'),
-          `---\nrow: A01\n---\n${fragmentBody}\n`
-        );
+        const body = `---\nrow: A01\n---\n${fragmentBody}\n`;
+        writeFileSync(join(root, FRAGMENT_DIR, 'a01--live.md'), body);
         expect(() => checkRepo(root)).toThrow(message);
+        // The fold refuses the same links and writes nothing.
+        expect(() => foldRepo(root)).toThrow(message);
+        expect(readFileSync(join(root, ROADMAP_PATH), 'utf8')).toBe(ledger);
+        expect(
+          readFileSync(join(root, FRAGMENT_DIR, 'a01--live.md'), 'utf8')
+        ).toBe(body);
       } finally {
         rmSync(root, { recursive: true, force: true });
       }
