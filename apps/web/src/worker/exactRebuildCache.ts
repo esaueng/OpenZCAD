@@ -138,6 +138,35 @@ export function rebindSketchGeometryForContent(
 }
 
 /**
+ * A copy of a derived state that shares each body's `mesh` and `topology`
+ * with the original and copies everything else. For a cache whose loader
+ * publishes immutable body geometry (the exact adapter with
+ * `shareRetainedMeasurements`), a mesh is the same object in every state
+ * that holds it, so diffing a publication against the last one skips
+ * unchanged bodies by identity, and caching a result does not copy every
+ * buffer twice. Whoever transfers or edits a body's geometry must copy it.
+ */
+export function cloneDerivedSharingBodyGeometry(
+  derived: ProjectDocument['derived']
+): ProjectDocument['derived'] {
+  const { bodyRepresentations, ...rest } = derived;
+  const bodies: Record<string, unknown> = {};
+  for (const [bodyId, body] of Object.entries(bodyRepresentations)) {
+    const { mesh, topology, ...metadata } = body;
+    bodies[bodyId] = {
+      ...structuredClone(metadata),
+      mesh,
+      ...('topology' in body ? { topology } : {})
+    };
+  }
+  return {
+    ...structuredClone(rest),
+    bodyRepresentations:
+      bodies as ProjectDocument['derived']['bodyRepresentations']
+  };
+}
+
+/**
  * Approximate retained size, counted by walking the value rather than
  * serialising it. The previous measure built a stable JSON string purely to
  * take its length — for a derived projection holding a few hundred thousand
