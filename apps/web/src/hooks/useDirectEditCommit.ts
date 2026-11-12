@@ -11,6 +11,7 @@ import {
   validatedFeatureRejection
 } from '../lib/featureValidation';
 import type { ValidatedFeatureTarget } from './useValidatedFeatureCommit';
+import { faceDragTraceEnabled, traceFaceDrag } from '../lib/faceDragTrace';
 
 export interface DirectEditCommitOptions {
   manager(): CommandManager | null;
@@ -53,6 +54,24 @@ export interface PrecomputedDirectEditDerived {
   derived: ProjectDocument['derived'] | Promise<ProjectDocument['derived']>;
 }
 
+/**
+ * A release set aside by {@link DirectEditCommit.supersede}: everything its
+ * `run` was given, with its exact rebuild (running or done) as `precomputed`
+ * for the document it was validating against. Committing it later is one
+ * more `run` with these arguments; nothing of it reached the document.
+ */
+export interface SupersededDirectEdit {
+  command: AnyCommand;
+  targetBodyId: BodyId;
+  successMessage: string;
+  submittedValue: number;
+  onSuccess?: () => void;
+  validationTargets?: readonly ValidatedFeatureTarget[];
+  precomputed: PrecomputedDirectEditDerived & {
+    derived: Promise<ProjectDocument['derived']>;
+  };
+}
+
 export interface DirectEditCommit {
   /**
    * Validates a direct edit against the exact kernel and commits it only if
@@ -67,6 +86,18 @@ export interface DirectEditCommit {
     validationTargets?: readonly ValidatedFeatureTarget[],
     precomputed?: PrecomputedDirectEditDerived
   ): Promise<boolean>;
+  /**
+   * Sets aside the edit still validating, so the hand can take its handle
+   * again without waiting for the exact kernel: the edit will neither
+   * commit nor report a refusal, and the next `run` may start at once. Its
+   * rebuild keeps running in the worker and is handed back, so a later
+   * `run` of the same edit (the hand let go where it was, or the new
+   * gesture was cancelled) commits from it instead of rebuilding it.
+   *
+   * Null when nothing is validating, or when the validation has already
+   * answered and the edit is committing.
+   */
+  supersede(): SupersededDirectEdit | null;
 }
 
 /**
@@ -80,16 +111,37 @@ export interface DirectEditCommit {
  * the handle re-armed at its last good value.
  *
  * One edit at a time. Two overlapping validations would race to commit
- * against documents neither of them measured.
+ * against documents neither of them measured; a newer gesture on the same
+ * handle sets the older one aside first (`supersede`), so it never lands.
  */
 export function useDirectEditCommit(
   options: DirectEditCommitOptions
 ): DirectEditCommit {
   const optionsRef = useRef(options);
   optionsRef.current = options;
-  const inFlight = useRef(false);
+  // The edit validating, until it answers. `supersede` takes it out of here,
+  // which is how its `run` learns, when the rebuild answers, that it no
+  // longer owns the commit, the busy flag or the refusal.
+  const inFlight = useRef<{
+    edit: SupersededDirectEdit | null;
+    startedAt: number;
+  } | null>(null);
+  // Set while a validated edit is being committed: too late to set aside.
+  const committing = useRef(false);
 
   return {
+    supersede() {
+      const active = inFlight.current;
+      if (!active?.edit || committing.current) return null;
+      inFlight.current = null;
+      optionsRef.current.onBusy(false);
+      if (faceDragTraceEnabled())
+        traceFaceDrag('superseded', {
+          value: active.edit.submittedValue,
+          ms: performance.now() - active.startedAt
+        });
+      return active.edit;
+    },
     async run(
       command,
       targetBodyId,
@@ -101,10 +153,19 @@ export function useDirectEditCommit(
     ) {
       const host = optionsRef.current;
       const manager = host.manager();
-      if (!manager || inFlight.current) {
+      if (!manager || inFlight.current || committing.current) {
         return false;
       }
-      inFlight.current = true;
+      const startedAt = performance.now();
+      if (faceDragTraceEnabled())
+        traceFaceDrag('release', { value: submittedValue });
+      const record: {
+        edit: SupersededDirectEdit | null;
+        startedAt: number;
+      } = { edit: null, startedAt };
+      inFlight.current = record;
+      // Whether this run still owns its edit. Read after every await.
+      const owned = () => inFlight.current === record;
       host.onValidationStart(submittedValue);
       const current = manager.document;
       host.onBusy(true);
@@ -116,14 +177,36 @@ export function useDirectEditCommit(
           precomputed !== undefined &&
           precomputed.baseProjectId === current.projectId &&
           precomputed.baseVersion === current.version;
-        const derived = !reusable
-          ? await host.derive(preview)
+        const pending = !reusable
+          ? host.derive(preview)
           : precomputed.derived instanceof Promise
             ? // A shared rebuild that failed outright (worker or kernel error,
               // not a refusal) says nothing about this command: derive it
               // afresh, exactly as a commit without a preview would.
-              await precomputed.derived.catch(() => host.derive(preview))
-            : precomputed.derived;
+              precomputed.derived.catch(() => host.derive(preview))
+            : Promise.resolve(precomputed.derived);
+        // Never an unhandled rejection: a set-aside edit is awaited by no one.
+        pending.catch(() => undefined);
+        record.edit = {
+          command,
+          targetBodyId,
+          successMessage,
+          submittedValue,
+          ...(onSuccess ? { onSuccess } : {}),
+          ...(validationTargets ? { validationTargets } : {}),
+          precomputed: {
+            baseProjectId: current.projectId,
+            baseVersion: current.version,
+            derived: pending
+          }
+        };
+        const derived = await pending;
+        if (!owned()) return false;
+        if (faceDragTraceEnabled())
+          traceFaceDrag('validated', {
+            value: submittedValue,
+            ms: performance.now() - startedAt
+          });
         const live = host.manager();
         const documentMoved =
           live !== manager ||
@@ -186,14 +269,22 @@ export function useDirectEditCommit(
           host.onValidationFailed(rejection, submittedValue);
           return false;
         }
+        committing.current = true;
         if (!host.commit(command, derived)) {
           throw new Error('The validated edit could not be committed.');
         }
+        if (faceDragTraceEnabled())
+          traceFaceDrag('committed', {
+            value: submittedValue,
+            ms: performance.now() - startedAt
+          });
         host.onCommitted(targetBodyId);
         onSuccess?.();
         host.onStatus(successMessage);
         return true;
       } catch (error) {
+        // Set aside meanwhile: its refusal is no longer anyone's to show.
+        if (!owned()) return false;
         const message = errorMessage(error, 'Operation was not applied.');
         // One owner per diagnostic. `onValidationFailed` hands the rejection to
         // the command that caused it, which shows it at the handle the user is
@@ -206,8 +297,11 @@ export function useDirectEditCommit(
         );
         return false;
       } finally {
-        inFlight.current = false;
-        host.onBusy(false);
+        committing.current = false;
+        if (owned()) {
+          inFlight.current = null;
+          host.onBusy(false);
+        }
       }
     }
   };

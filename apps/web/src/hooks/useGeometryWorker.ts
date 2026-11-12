@@ -318,6 +318,31 @@ export interface GeometryWorkerApi {
   invalidate(): void;
   /** Retains a completed exact result across a bookkeeping-only adoption. */
   retainReadyGeometry(document: ProjectDocument): boolean;
+  /**
+   * The lineage demand the live document is built with. A validation that
+   * passes it to `syncOnce` builds exactly what the broadcast that follows
+   * its commit would, so `adoptValidatedResult` can answer that broadcast.
+   */
+  liveLineageDemand(): readonly BodyId[];
+  /**
+   * Accepts a `syncOnce` result as the live result for `document`, the
+   * committed document it validated, instead of posting a broadcast that
+   * would only rebuild and re-mesh the same exact result. That broadcast
+   * re-ran the edit when its result was not checkpointed (a cylinder resize
+   * took a second 1.2 s on a 34-feature part) and re-measured the edited
+   * body, while the next edit's preview queued behind it.
+   *
+   * Only a result the broadcast would reproduce is adopted: the same
+   * geometry content, the live lineage demand, no analysis request, no carry
+   * proposed, no result that waited on a font or source, and a worker that
+   * has finished the live document before it. Anything else returns false
+   * and the ordinary broadcast runs. Adoption delivers the result through
+   * the host's `onDerived`, exactly as a broadcast reply would.
+   */
+  adoptValidatedResult(
+    document: ProjectDocument,
+    derived: DerivedState
+  ): boolean;
 }
 
 /**
@@ -373,6 +398,21 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
   const readyDocument = useRef<ProjectDocument | null>(null);
   const readyDerived = useRef<DerivedState | null>(null);
   const lastDemandRef = useRef<readonly BodyId[] | null>(null);
+  // What built each `syncOnce` result, for `adoptValidatedResult`. Keyed by
+  // the resolved object itself, so a copy or a different result never matches.
+  const syncOrigins = useRef(
+    new WeakMap<
+      DerivedState,
+      {
+        document: ProjectDocument;
+        lineageDemand: readonly BodyId[] | undefined;
+        analysis: boolean;
+      }
+    >()
+  );
+  // `syncOnce` results that waited on a font face or source: never cached by
+  // the worker, so never adopted either.
+  const transientSyncResults = useRef(new WeakSet<DerivedState>());
   const firstReadyMarkedRef = useRef(false);
   // True while work has been posted whose terminal state has not arrived.
   // An unarmed worker is legitimately idle and must never be judged silent
@@ -857,6 +897,8 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           if (pending) {
             syncRequests.current.delete(message.requestId);
             if (message.ok) {
+              if (message.transient)
+                transientSyncResults.current.add(message.derived);
               pending.resolve(message.derived);
             } else {
               // Keeps the refusal's code: a release refusal routes on it.
@@ -887,6 +929,8 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           return;
         }
         recordEditPhase(result, 'analysis-ready');
+        if (faceDragTraceEnabled())
+          traceFaceDrag('settled', { detail: { adopted: 0 } });
         const submitted = broadcastDocument.current;
         readyDocument.current =
           !result.transient &&
@@ -1106,7 +1150,14 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         ...(options?.proposeCarry ? { proposeCarry: true } : {})
       });
       return posted.ok
-        ? posted.promise
+        ? posted.promise.then((derived) => {
+            syncOrigins.current.set(derived, {
+              document,
+              lineageDemand,
+              analysis: analysis !== undefined
+            });
+            return derived;
+          })
         : Promise.reject(new Error('Geometry worker unavailable.'));
     },
     releaseEditPreview(document) {
@@ -1392,6 +1443,71 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       broadcastDocument.current = document;
       lastSyncedKey.current = `${document.projectId}:${document.version}:${lineageDemandCacheKey(document, lastDemandRef.current ?? [])}`;
       setState((current) => ({ ...current, version: document.version }));
+      return true;
+    },
+    liveLineageDemand() {
+      return lastDemandRef.current ?? [];
+    },
+    adoptValidatedResult(document, derived) {
+      const origin = syncOrigins.current.get(derived);
+      const completed = readyDocument.current;
+      if (
+        !origin ||
+        origin.analysis ||
+        transientSyncResults.current.has(derived) ||
+        // A carry rewrote a later feature's selection in the commit, and its
+        // build state is not the plain build's.
+        (derived.edgeHashRepairs?.length ?? 0) > 0 ||
+        !workerRef.current ||
+        // Still the document on screen: a normalization the commit wrote
+        // (a projection write-back) moved it on, and a broadcast reply for
+        // `document` would be dropped as stale too.
+        hostRef.current.manager()?.document !== document ||
+        // The worker must have finished the live document, with no newer
+        // broadcast still running: its result would land after this one.
+        !completed ||
+        !readyDerived.current ||
+        broadcastDocument.current !== completed ||
+        state.phase !== 'ready' ||
+        state.stale ||
+        state.projectId !== completed.projectId ||
+        state.version !== completed.version ||
+        completed.projectId !== document.projectId ||
+        origin.document.projectId !== document.projectId
+      ) {
+        return false;
+      }
+      const demand = lastDemandRef.current ?? [];
+      const contentKey = geometryContentKey(origin.document);
+      // The same canonical inputs the worker's own result cache keys by:
+      // the broadcast would be answered by this very result.
+      if (
+        contentKey !== geometryContentKey(document) ||
+        lineageDemandCacheKey(origin.document, origin.lineageDemand) !==
+          lineageDemandCacheKey(document, demand)
+      ) {
+        return false;
+      }
+      const adopted = rebindSketchGeometryForContent(
+        document,
+        derived,
+        contentKey
+      );
+      broadcastDocument.current = document;
+      readyDocument.current = document;
+      readyDerived.current = adopted;
+      lastSyncedKey.current = `${document.projectId}:${document.version}:${lineageDemandCacheKey(document, demand)}`;
+      setState({
+        type: 'state',
+        phase: 'ready',
+        stale: false,
+        projectId: document.projectId,
+        version: document.version
+      });
+      recordEditPhase(document, 'analysis-ready', { adopted: 1 });
+      hostRef.current.onDerived(adopted);
+      if (faceDragTraceEnabled())
+        traceFaceDrag('settled', { detail: { adopted: 1 } });
       return true;
     }
   };

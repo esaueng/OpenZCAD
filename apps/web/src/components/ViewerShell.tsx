@@ -255,7 +255,7 @@ interface ViewerShellProps {
   offsetDragTarget: Pick<OffsetHandleTarget, 'bodyId' | 'topologyId'> | null;
   onOffsetPreview(offset: number, exactGeometry?: boolean): void;
   onOffsetCommit: ModelViewerProps['onOffsetCommit'];
-  onOffsetCancel(): void;
+  onOffsetCancel(atOriginal?: boolean): void;
   offsetPreviewInvalid: boolean;
   offsetPreviewLimit?: ModelViewerProps['offsetPreviewLimit'];
   previewDeferred: boolean;
@@ -283,7 +283,9 @@ interface ViewerShellProps {
   onCylinderDimensionModeChange(mode: DimensionMode): void;
   onCylinderRadiusPreview(radius: number, exactGeometry: boolean): void;
   onCylinderRadiusCommit(radius: number): boolean;
-  onCylinderRadiusCancel(): void;
+  onCylinderRadiusCancel(atOriginal?: boolean): void;
+  /** See `ModelViewer` `onRetakeLockedHandle`. */
+  onRetakeLockedHandle?(): boolean;
   onOpenCylinderRadiusKeypad(
     radius: number,
     dimensionMode: DimensionMode
@@ -500,6 +502,7 @@ export function ViewerShell({
   onCylinderRadiusPreview,
   onCylinderRadiusCommit,
   onCylinderRadiusCancel,
+  onRetakeLockedHandle,
   onOpenCylinderRadiusKeypad,
   cancelDirectManipulationRef,
   openExactEntryRef,
@@ -816,10 +819,10 @@ export function ViewerShell({
             ? 'started'
             : 'blocked';
         }}
-        onOffsetCancel={() => {
+        onOffsetCancel={(atOriginal) => {
           setDatumDrag(null);
           setDatumGesture((gesture) => gesture + 1);
-          onOffsetCancel();
+          onOffsetCancel(atOriginal);
         }}
         offsetPreviewInvalid={offsetPreviewInvalid}
         offsetPreviewLimit={offsetPreviewLimit}
@@ -840,6 +843,7 @@ export function ViewerShell({
         onCylinderRadiusPreview={onCylinderRadiusPreview}
         onCylinderRadiusCommit={onCylinderRadiusCommit}
         onCylinderRadiusCancel={onCylinderRadiusCancel}
+        {...(onRetakeLockedHandle ? { onRetakeLockedHandle } : {})}
         onOpenCylinderRadiusKeypad={onOpenCylinderRadiusKeypad}
         cancelDirectManipulationRef={cancelDirectManipulationRef}
         openExactEntryRef={openExactEntryRef}

@@ -804,6 +804,41 @@ describe('escape chain', () => {
     }
   });
 
+  it('retakes a validating offset or radius handle from the value let go at', () => {
+    for (const target of [
+      face(),
+      face({ surfaceType: 'cylindrical', radius: 4 })
+    ]) {
+      let state = interactionReducer(IDLE, { type: 'select-face', target });
+      state = interactionReducer(state, { type: 'drag-engage' });
+      state = interactionReducer(state, { type: 'drag-release' });
+      state = interactionReducer(state, { type: 'validation-start', value: 6 });
+      // An ordinary engage still waits for the validation to answer.
+      expect(interactionReducer(state, { type: 'drag-engage' })).toBe(state);
+      const retaken = interactionReducer(state, { type: 'drag-retake' });
+      expect(retaken).toMatchObject({
+        mode: 'face',
+        target,
+        phase: 'dragging',
+        lastValue: 6,
+        error: null
+      });
+      // The engage the viewport sends next changes nothing more.
+      expect(interactionReducer(retaken, { type: 'drag-engage' })).toEqual(
+        retaken
+      );
+    }
+  });
+
+  it('retakes nothing that is not a validating face handle', () => {
+    const armed = interactionReducer(IDLE, {
+      type: 'select-face',
+      target: face()
+    });
+    expect(interactionReducer(armed, { type: 'drag-retake' })).toBe(armed);
+    expect(interactionReducer(IDLE, { type: 'drag-retake' })).toBe(IDLE);
+  });
+
   it('cancels a held drag in place, forgetting its value and refusal', () => {
     let state = interactionReducer(IDLE, {
       type: 'select-face',

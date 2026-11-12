@@ -519,7 +519,8 @@ export interface OffsetHandleTarget {
   totalSense?: 1 | -1;
   /**
    * The released value is being validated: the handle stays where it was
-   * let go, but cannot be grabbed until the edit commits or is refused.
+   * let go, and takes no exact entry until the edit commits or is refused.
+   * A press takes it again only through `onRetakeLockedHandle`.
    */
   locked?: boolean;
   /**
@@ -573,7 +574,8 @@ export interface CylinderRadiusHandleTarget {
   smoothPreview: boolean;
   /**
    * The released radius is being validated: the handle stays where it was
-   * let go, but cannot be grabbed until the edit commits or is refused.
+   * let go, and takes no exact entry until the edit commits or is refused.
+   * A press takes it again only through `onRetakeLockedHandle`.
    */
   locked?: boolean;
 }
@@ -1134,8 +1136,12 @@ export interface ModelViewerProps {
   onOffsetPreview(offset: number, exactGeometry?: boolean): void;
   /** Fired when an offset-handle drag releases with a non-zero offset. */
   onOffsetCommit(offset: number): OffsetCommitOutcome;
-  /** Clears exact preview geometry and restores the original reference. */
-  onOffsetCancel(): void;
+  /**
+   * Clears exact preview geometry and restores the original reference.
+   * `atOriginal`: the hand let go back on the face's original position,
+   * rather than abandoning the drag (Escape, a press that stayed put).
+   */
+  onOffsetCancel(atOriginal?: boolean): void;
   /** Current exact preview or release validation refused this offset. */
   offsetPreviewInvalid: boolean;
   /**
@@ -1174,8 +1180,20 @@ export interface ModelViewerProps {
   onCylinderRadiusPreview(radius: number, exactGeometry: boolean): void;
   /** Fired once on release with the absolute radius. */
   onCylinderRadiusCommit(radius: number): boolean;
-  /** Clears transient exact geometry without creating history. */
-  onCylinderRadiusCancel(): void;
+  /**
+   * Clears transient exact geometry without creating history. `atOriginal`:
+   * the hand let go back on the wall's original radius, rather than
+   * abandoning the drag (Escape, a press that stayed put).
+   */
+  onCylinderRadiusCancel(atOriginal?: boolean): void;
+  /**
+   * A press on an offset or radius handle locked while its release
+   * validates. True when the host set that release aside for a new gesture
+   * (see `useDirectEditCommit` `supersede`): the press then drags the handle
+   * from where it was let go. Without it, or on false, a locked handle
+   * ignores the press as before.
+   */
+  onRetakeLockedHandle?(): boolean;
   /** Value chip tapped: open exact entry for the absolute radius. */
   onOpenCylinderRadiusKeypad(
     radius: number,
@@ -2228,6 +2246,7 @@ export function ModelViewer({
   onCylinderRadiusPreview,
   onCylinderRadiusCommit,
   onCylinderRadiusCancel,
+  onRetakeLockedHandle,
   onOpenCylinderRadiusKeypad,
   cancelDirectManipulationRef,
   openExactEntryRef,
@@ -2531,6 +2550,8 @@ export function ModelViewer({
   onCylinderRadiusCommitRef.current = onCylinderRadiusCommit;
   const onCylinderRadiusCancelRef = useRef(onCylinderRadiusCancel);
   onCylinderRadiusCancelRef.current = onCylinderRadiusCancel;
+  const onRetakeLockedHandleRef = useRef(onRetakeLockedHandle);
+  onRetakeLockedHandleRef.current = onRetakeLockedHandle;
   const onOpenCylinderRadiusKeypadRef = useRef(onOpenCylinderRadiusKeypad);
   onOpenCylinderRadiusKeypadRef.current = onOpenCylinderRadiusKeypad;
   const onCylinderDimensionModeChangeRef = useRef(
@@ -10302,7 +10323,11 @@ export function ModelViewer({
         const handleHits = context.raycaster
           .intersectObjects(armedCylinderRig.group.children, true)
           .filter((hit) => hit.object.userData.directHandle === true);
-        if (handleHits.length > 0 && cylinderTarget.locked) {
+        if (
+          handleHits.length > 0 &&
+          cylinderTarget.locked &&
+          onRetakeLockedHandleRef.current?.() !== true
+        ) {
           lockedHandlePointerId = event.pointerId;
           gestures.capture(event, null);
           event.preventDefault();
@@ -10433,7 +10458,10 @@ export function ModelViewer({
         const follower =
           handleHits.length > 0 ? null : regionFollowerUnderRay();
         if (handleHits.length > 0 || follower) {
-          if (offsetHandleRef.current?.locked) {
+          if (
+            offsetHandleRef.current?.locked &&
+            (follower || onRetakeLockedHandleRef.current?.() !== true)
+          ) {
             lockedHandlePointerId = event.pointerId;
             gestures.capture(event, null);
             event.preventDefault();
@@ -11153,7 +11181,7 @@ export function ModelViewer({
           }
         } else {
           restoreCylinderRadiusProxy();
-          onCylinderRadiusCancelRef.current();
+          onCylinderRadiusCancelRef.current(true);
         }
         return;
       }
@@ -11204,7 +11232,7 @@ export function ModelViewer({
         } else {
           clearOffsetGhost();
           restoreOffsetBodyProxy();
-          onOffsetCancelRef.current();
+          onOffsetCancelRef.current(Math.abs(finalOffset) <= 1e-9);
         }
         return;
       }

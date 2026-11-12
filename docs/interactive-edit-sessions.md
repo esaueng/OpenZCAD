@@ -55,6 +55,45 @@ budgets are unchanged. Admission estimates and allocated WASM pages are not a
 process-memory ceiling. A cold rebuild after recycling remains visible in
 tail latency.
 
+## Release path
+
+A face-offset or cylinder-radius release is validated by one complete exact
+sync of the candidate (`useDirectEditCommit`), built with the live document's
+lineage demand. When the commit stores exactly that content, the geometry
+worker hook adopts the validation result as the live result
+(`adoptValidatedResult`) instead of posting the broadcast that would only
+rebuild and re-mesh it. Adoption is refused, and the ordinary broadcast runs,
+for anything that broadcast would not reproduce: different geometry content
+(a carried selection, a normalization written by the commit), another lineage
+demand, an analysis request, a carry proposal, a transient font/source
+result, or a live broadcast still running. The committed result is therefore
+measured and meshed once, at full display quality, and the next gesture's
+preview no longer queues behind a duplicate rebuild.
+
+The validation stays authoritative: nothing reaches the document, its undo
+history, local or cloud storage, or export until it passes. While it runs,
+the released handle stays drawn where it was let go and may be taken again.
+That press sets the release aside (`supersede`): it will neither commit nor
+report a refusal, and its rebuild keeps running in the worker. Letting go at
+the same value commits from that rebuild; letting go elsewhere validates the
+new value against the same base document (one edit, one undo step); an
+abandoned drag (Escape, a press that stays put) commits the set-aside release
+as it was let go; letting go back on the original face or radius drops it.
+Exact entry stays locked while a release validates.
+
+With `window.__ozFaceDragTrace` enabled, `oz.drag.release`, `validated`,
+`committed`, `superseded` and `settled` (`detail.adopted`) User Timing marks
+time each release. On a private 32-feature filleted box ∪ cylinder
+reproduction part in local Chromium (Linux, Vulkan ANGLE; three releases each,
+release → live result accepted): top-face offset 488/337/356 → 293/119/137 ms,
+side-face −32 mm 602/445/386 → 381/277/156 ms, cylinder diameter 1413/906 →
+1366/1088 ms, where the cylinder's exact resize dominates and only its
+post-validation tail (about 130 ms → 5 ms) changed. Main-thread work after a
+side release fell from about 970 to 420 ms in a profiled build, mostly the
+re-armed handle's step profile (136 → 28 ms). A retaken handle answers within
+one input event regardless of the validation's length. These are local
+measurements, not target-device results.
+
 ## Qualification
 
 The baseline and candidate use the same paired Remus `2026.1.65` packages at

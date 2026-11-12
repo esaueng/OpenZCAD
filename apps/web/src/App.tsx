@@ -1624,7 +1624,10 @@ import { describeSyncFailure, type SyncEntry } from './lib/syncRun';
 import { useGeometryWorker } from './hooks/useGeometryWorker';
 import { useProjectView } from './hooks/useProjectView';
 import { useAppSettingsSync } from './hooks/useAppSettingsSync';
-import { useDirectEditCommit } from './hooks/useDirectEditCommit';
+import {
+  useDirectEditCommit,
+  type SupersededDirectEdit
+} from './hooks/useDirectEditCommit';
 import { useSettledFlag } from './hooks/useSettledFlag';
 import { useSteadySaveState } from './hooks/useSteadySaveState';
 import { useLocalProjectAutosaveSchedule } from './hooks/useLocalProjectAutosaveSchedule';
@@ -4541,7 +4544,11 @@ export function App() {
       // answer a release; a display-only snapshot cannot author a commit.
       derive: async (candidate) => {
         const derived = await radiusRestRebuilds.start(candidate, () =>
-          syncCandidate(candidate.document)
+          syncCandidate(
+            candidate.document,
+            undefined,
+            geometry.liveLineageDemand()
+          )
         );
         const rejection = offsetPreviewRejection({
           ...candidate,
@@ -4956,9 +4963,15 @@ export function App() {
     })
   ).current;
 
-  const { run: executeValidatedDirectEdit } = useDirectEditCommit({
+  const {
+    run: executeValidatedDirectEdit,
+    supersede: supersedeValidatingDirectEdit
+  } = useDirectEditCommit({
     manager: () => managerRef.current,
-    derive: (document) => syncCandidate(document),
+    // Built with the live lineage demand: the commit then adopts this result
+    // as the live one (`adoptValidatedResult`) rather than rebuilding it.
+    derive: (document) =>
+      syncCandidate(document, undefined, geometry.liveLineageDemand()),
     commit: (command, derived) => executeCommand(command, derived),
     onValidationStart: (value) => {
       stopCylinderRadiusRestCheck();
@@ -9333,7 +9346,11 @@ export function App() {
       const appended = localHistoryAppend(beforeDocument, next);
       if (appended) setLatestLocalAppend(appended);
       setDoc(next);
-      if (derived) applyProjectionWriteBack(derived);
+      if (derived) {
+        applyProjectionWriteBack(derived);
+        // The broadcast this commit would post rebuilds the same result.
+        geometry.adoptValidatedResult(next, derived);
+      }
       if (isAnalyticsEnabled()) {
         trackUsage('feature_used');
         trackDetail('feature_operation', command.kind);
@@ -9398,7 +9415,10 @@ export function App() {
       const appended = localHistoryAppend(beforeDocument, next);
       if (appended) setLatestLocalAppend(appended);
       setDoc(next);
-      if (derived) applyProjectionWriteBack(derived);
+      if (derived) {
+        applyProjectionWriteBack(derived);
+        geometry.adoptValidatedResult(next, derived);
+      }
       if (isAnalyticsEnabled()) {
         trackUsage('feature_used');
         for (const command of commands)
@@ -24269,6 +24289,8 @@ export function App() {
   }
 
   function handleCylinderRadiusCommit(radius: number, exact?: ParamValue) {
+    // A drag that retook a validating release ends here; see the offset.
+    const retaken = takeRetakenRelease('resize-cylinder-radius');
     if (!requireDisplayedGeometryComplete()) {
       return false;
     }
@@ -24301,6 +24323,10 @@ export function App() {
     ) {
       setStatus('Radius is too small to form valid geometry at this scale.');
       return false;
+    }
+    if (exact === undefined && retaken?.submittedValue === radius) {
+      commitRetakenRelease(retaken);
+      return true;
     }
     const restReuse =
       exact === undefined
@@ -25818,6 +25844,94 @@ export function App() {
     };
   }
 
+  /** The release a drag that retook its handle set aside; see below. */
+  const retakenReleaseRef = useRef<{
+    edit: SupersededDirectEdit;
+    op: 'offset-face' | 'resize-cylinder-radius';
+    target: FaceTarget;
+  } | null>(null);
+  /**
+   * A press on the offset or radius handle while its release validates. The
+   * release is set aside instead of waiting for it (nothing of it has reached
+   * the document, its undo history or storage), and the hand drags on from
+   * the value it let go at. Its exact rebuild keeps running: the next release
+   * at that value commits from it, and a cancelled drag commits it as it was
+   * let go (`takeRetakenRelease`).
+   */
+  function retakeLockedHandle(): boolean {
+    const current = interactionRef.current;
+    const base = managerRef.current?.document;
+    if (
+      !base ||
+      current.mode !== 'face' ||
+      (current.op !== 'offset-face' &&
+        current.op !== 'resize-cylinder-radius') ||
+      current.phase !== 'validating'
+    )
+      return false;
+    const edit = supersedeValidatingDirectEdit();
+    if (!edit) return false;
+    pendingDirectEditRef.current = null;
+    retakenReleaseRef.current = {
+      edit,
+      op: current.op,
+      target: current.target
+    };
+    dispatchInteraction({ type: 'drag-retake' });
+    return true;
+  }
+  /**
+   * The release a retaken drag set aside, once that drag ends, if it still
+   * applies: the same handle, against the document it was validated for.
+   * Consumed either way; a drag ends once.
+   */
+  function takeRetakenRelease(
+    op: 'offset-face' | 'resize-cylinder-radius'
+  ): SupersededDirectEdit | null {
+    const retaken = retakenReleaseRef.current;
+    retakenReleaseRef.current = null;
+    const current = interactionRef.current;
+    const base = managerRef.current?.document;
+    return retaken &&
+      retaken.op === op &&
+      current.mode === 'face' &&
+      current.op === op &&
+      current.target.bodyId === retaken.target.bodyId &&
+      current.target.topologyId === retaken.target.topologyId &&
+      base?.projectId === retaken.edit.precomputed.baseProjectId &&
+      base.version === retaken.edit.precomputed.baseVersion
+      ? retaken.edit
+      : null;
+  }
+  /** Commits a set-aside release as it was let go, from its own rebuild. */
+  function commitRetakenRelease(edit: SupersededDirectEdit): void {
+    void executeValidatedDirectEdit(
+      edit.command,
+      edit.targetBodyId,
+      edit.successMessage,
+      edit.submittedValue,
+      edit.onSuccess,
+      edit.validationTargets,
+      edit.precomputed
+    );
+  }
+  /**
+   * The viewport ended an offset drag without a value to commit. Abandoned
+   * (Escape, a press that stayed put), a retaken release lands as it was let
+   * go; let go back on the original face, it is dropped with the drag.
+   */
+  function handleViewerOffsetCancel(atOriginal?: boolean) {
+    const retaken = takeRetakenRelease('offset-face');
+    handleOffsetCancel();
+    if (retaken && !atOriginal) commitRetakenRelease(retaken);
+  }
+  /** The same for a radius drag; see {@link handleViewerOffsetCancel}. */
+  function handleViewerCylinderRadiusCancel(atOriginal?: boolean) {
+    const retaken = takeRetakenRelease('resize-cylinder-radius');
+    handleCylinderRadiusCancel();
+    if (retaken && !atOriginal) commitRetakenRelease(retaken);
+  }
+
   /**
    * Face-offset commit as a validated direct edit. `exact` preserves a typed
    * expression as the stored parametric value; plain drags store the number.
@@ -25833,6 +25947,9 @@ export function App() {
       handleRegionExtrudeCommit(offset, exact);
       return 'started';
     }
+    // A drag that retook a validating release ends here: let go where that
+    // release was, it commits from the rebuild already running for it.
+    const retaken = takeRetakenRelease('offset-face');
     const current = interactionRef.current;
     if (
       current.mode !== 'face' ||
@@ -25881,6 +25998,10 @@ export function App() {
         : null;
     offsetPreview.stop();
     offsetPreviewValueRef.current = null;
+    if (exact === undefined && retaken?.submittedValue === offset) {
+      commitRetakenRelease(retaken);
+      return 'started';
+    }
     void executeValidatedDirectEdit(
       reuse ? reuse.command : plan.command,
       reuse ? reuse.bodyId : plan.bodyId,
@@ -31043,7 +31164,7 @@ export function App() {
               }
               return handleOffsetCommit(value);
             }}
-            onOffsetCancel={handleOffsetCancel}
+            onOffsetCancel={handleViewerOffsetCancel}
             offsetPreviewInvalid={holdsRefusal(interaction)}
             offsetPreviewLimit={
               holdsRefusal(interaction) &&
@@ -31065,7 +31186,8 @@ export function App() {
             onCylinderDimensionModeChange={setCylinderDimensionMode}
             onCylinderRadiusPreview={handleCylinderRadiusPreview}
             onCylinderRadiusCommit={handleCylinderRadiusCommit}
-            onCylinderRadiusCancel={handleCylinderRadiusCancel}
+            onCylinderRadiusCancel={handleViewerCylinderRadiusCancel}
+            onRetakeLockedHandle={retakeLockedHandle}
             onOpenCylinderRadiusKeypad={handleOpenCylinderRadiusKeypad}
             cancelDirectManipulationRef={cancelDirectManipulationRef}
             openExactEntryRef={openExactEntryRef}
