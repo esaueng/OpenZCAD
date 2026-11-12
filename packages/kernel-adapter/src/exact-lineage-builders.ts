@@ -154,8 +154,22 @@ export function faceCandidatesForSolid(
   }));
 }
 
-/** One `resolveOperationOutput` reply, reduced to the face it binds. */
-function boundFaceOutput(kernel: RemusKernel, op: number, index: number) {
+/**
+ * One `resolveOperationOutput` reply, reduced to the face it binds.
+ *
+ * With `constructionOnly`, a binding the kernel marks `provenance:
+ * "inferred"` reads as unbound: the kernel did not record that source face
+ * becoming that result face, it paired them up after the fact. A boss
+ * cylinder resize rebuilds the solid in a different face order and infers
+ * its bindings positionally, so every source face lands on an unrelated
+ * result face (a side plane named as the top, the top as the bottom).
+ */
+function boundFaceOutput(
+  kernel: RemusKernel,
+  op: number,
+  index: number,
+  constructionOnly = false
+) {
   const decoded: unknown = JSON.parse(
     kernel.resolveOperationOutput(op, 'face', index)
   );
@@ -164,6 +178,9 @@ function boundFaceOutput(kernel: RemusKernel, op: number, index: number) {
   }
   const record = decoded as Record<string, unknown>;
   if (record.status !== 'bound' || !Array.isArray(record.entities)) {
+    return null;
+  }
+  if (constructionOnly && record.provenance !== 'construction') {
     return null;
   }
   const entities = record.entities as Record<string, unknown>[];
@@ -485,8 +502,11 @@ export function patternJournalBoundaryOutputsForSources(
  * the legacy unchanged-witness fallback rather than inheriting a dangling
  * handle. Two sources bound to one result face is a merge conflict both are
  * excluded for, and a source with no clean binding keeps the fallback the
- * same way. Anything the map cannot prove stays hash-only downstream; nothing
- * is placed by proximity or traversal order.
+ * same way. Only bindings the kernel recorded as construction count: an
+ * `inferred` binding is the kernel's after-the-fact pairing, which for a boss
+ * cylinder resize is positional and wrong, so its source keeps the fallback
+ * too. Anything the map cannot prove stays hash-only downstream; nothing is
+ * placed by proximity or traversal order.
  */
 export function moveFacesJournalFaceMap(
   kernel: RemusKernel,
@@ -512,7 +532,7 @@ export function moveFacesJournalFaceMap(
     const results = new Set(resultFaces);
     const claimants = new Map<number, number[]>();
     for (let index = 0; index < sourceFaces.length; index += 1) {
-      const handle = boundFaceOutput(kernel, op, index);
+      const handle = boundFaceOutput(kernel, op, index, true);
       if (handle === null || !results.has(handle)) {
         continue;
       }

@@ -14,6 +14,7 @@ import {
   unresolvedReferenceError
 } from './topology-fingerprint';
 import {
+  lineageAvailabilityFor,
   resolveTopologyReference,
   topologyHashOfWitness,
   topologyWitnessesEqual,
@@ -77,7 +78,13 @@ export function resolveFeatureFaces(
   const resolved = hashes.map((hash) => {
     const reference = referenceByHash.get(hash);
     if (reference) {
-      const resolution = resolveTopologyReference(reference, candidates);
+      const resolution = resolveTopologyReference(
+        reference,
+        candidates,
+        shape.lineage
+          ? lineageAvailabilityFor('face', candidates)
+          : { status: 'available' }
+      );
       if (resolution.status === 'failed') {
         const message = `${label} face is stale: ${resolution.message}`;
         throw resolution.reason === 'lineage-not-found'
@@ -267,9 +274,11 @@ export function resolveEdgeModifierEdges(
       const resolution = resolveTopologyReference(
         reference,
         candidates,
-        shape.solids.length === 1
-          ? { status: 'available' }
-          : { status: 'unsupported', operation: 'fillet' }
+        shape.solids.length !== 1
+          ? { status: 'unsupported', operation: 'fillet' }
+          : lineage
+            ? lineageAvailabilityFor('edge', candidates)
+            : { status: 'available' }
       );
       if (resolution.status === 'failed') {
         const message = `Edge modifier edge is stale: ${resolution.message}`;

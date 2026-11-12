@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { fingerprintOfSignature } from './topology-fingerprint';
 import {
   inspectTopologyWitness,
+  lineageAvailabilityFor,
   resolveTopologyReference,
   topologyHashOfWitness,
   topologyLineageCapability,
@@ -430,6 +431,84 @@ describe('ADR-013 resolution order', () => {
         { status: 'unsupported', operation: 'direct-edit' }
       )
     ).toMatchObject({ status: 'failed', reason: 'ambiguous-hash' });
+  });
+
+  describe('on a body whose lineage leaves some faces unnamed', () => {
+    const OTHER: TopologyLineageIdentity = {
+      producingFeatureId: FEATURE_ID,
+      lineageName: 'box.face.side'
+    };
+
+    it('finds a name the body lost on an unnamed face with the exact witness', () => {
+      const unnamed = faceCandidate(SOURCE_FACE, null);
+      const candidates = [
+        unnamed,
+        faceCandidate(EVOLVED_FACE, { source: 'semantic', identity: OTHER })
+      ];
+      expect(lineageAvailabilityFor('face', candidates)).toEqual({
+        status: 'partial'
+      });
+      expect(
+        resolveTopologyReference(faceReference(), candidates, {
+          status: 'partial'
+        })
+      ).toEqual({
+        status: 'resolved',
+        via: 'hash-fallback',
+        candidate: unnamed
+      });
+    });
+
+    it('never moves the reference onto a face that carries another name', () => {
+      expect(
+        resolveTopologyReference(
+          faceReference(),
+          [faceCandidate(SOURCE_FACE, { source: 'semantic', identity: OTHER })],
+          { status: 'partial' }
+        )
+      ).toMatchObject({ status: 'failed', reason: 'lineage-not-found' });
+    });
+
+    it('still refuses a witness that changed, and two exact matches', () => {
+      expect(
+        resolveTopologyReference(
+          faceReference(),
+          [faceCandidate(EVOLVED_FACE, null)],
+          { status: 'partial' }
+        )
+      ).toMatchObject({ status: 'failed', reason: 'lineage-not-found' });
+      expect(
+        resolveTopologyReference(
+          faceReference(),
+          [faceCandidate(SOURCE_FACE, null), faceCandidate(SOURCE_FACE, null)],
+          { status: 'partial' }
+        )
+      ).toMatchObject({ status: 'failed', reason: 'lineage-not-found' });
+    });
+
+    it('keeps a name the body still publishes authoritative', () => {
+      expect(
+        resolveTopologyReference(
+          faceReference(),
+          [faceCandidate(), faceCandidate(), faceCandidate(SOURCE_FACE, null)],
+          { status: 'partial' }
+        )
+      ).toMatchObject({ status: 'failed', reason: 'ambiguous-lineage' });
+      const named = faceCandidate(EVOLVED_FACE);
+      expect(
+        resolveTopologyReference(
+          faceReference(),
+          [named, faceCandidate(SOURCE_FACE, null)],
+          { status: 'partial' }
+        )
+      ).toEqual({ status: 'resolved', via: 'lineage', candidate: named });
+    });
+
+    it('is only partial while some face of that kind is unnamed', () => {
+      expect(lineageAvailabilityFor('face', [faceCandidate()])).toEqual({
+        status: 'available'
+      });
+    });
   });
 
   it('preserves unique ADR-011 legacy hash fallback and fails on collision', () => {

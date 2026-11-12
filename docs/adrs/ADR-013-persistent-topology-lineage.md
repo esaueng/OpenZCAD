@@ -364,6 +364,35 @@ Two things this amendment does **not** loosen:
 Reversing this needs an arc-capable edge witness and a piece-aware face role.
 It must not be reversed by matching a wedge's faces geometrically.
 
+## Amendment (M07, 2026-11-12): inferred journal bindings are not history
+
+A journaled operation's `resolveOperationOutput` record carries a
+`provenance`. `construction` is the kernel's record of what a source entity
+became; `inferred` is a pairing it made afterwards. The kernel's boss
+cylinder resize rebuilds the solid in a different face order and infers its
+bindings positionally, and the move-face reader took them as construction
+history: a side plane's name was published on the top face, the top's on the
+bottom, and one name on two faces. The move-face reader now accepts only
+`construction` bindings. A source the journal only inferred keeps the
+unchanged-witness carry, and otherwise stays hash-only.
+
+That leaves a body whose lineage is **partial**: it names some faces and
+deliberately leaves others unnamed. Step 2 of the resolution order applies to
+exactly those entities ("an operation explicitly marked no lineage"), so
+direct-edit, edge-modifier and face-set resolution pass the `partial`
+availability while some candidate of the kind is unnamed:
+
+- a name the body still publishes resolves by lineage alone, and its
+  ambiguity or unverified evidence stays terminal;
+- a name the body no longer publishes anywhere may resolve by the stored hash
+  plus the exact stored witness, unique, and **only onto an entity the body
+  publishes no name for**. It can never move a reference onto a named entity.
+
+This is what keeps documents saved while inferred bindings were consumed
+replaying: their later features stored the misplaced names together with the
+exact witness of the face they actually picked. The default availability is
+unchanged; a matching hash is still never a silent v5 rebind there.
+
 ## Consequences
 
 - Schema-v5 references are additive inside current schema-v6 documents, and
