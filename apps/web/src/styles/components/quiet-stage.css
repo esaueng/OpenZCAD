@@ -24,12 +24,10 @@
      phone. The docks run the window's full height, so the lanes keep
      between them. */
   --lane-right: calc(var(--lane-start) + var(--right-dock-w, 0px));
-  /* The readout under the column, and what the column leaves it. */
+  /* A row of the bottom chrome, which a phone's rail leaves the scale bar. */
   --readout-h: 32px;
-  /* The bottom-left corner under the left rail: the scale bar lying in the
-     search bar's row, or stepped up over it where that row is too short
-     (18px, a gap) and, in a sketch, the readout's rows under that. The rail
-     stands on what they take. */
+  /* The bottom-left corner under the left rail: the upright scale bar. The
+     rail lifts by this much to leave the bar room in the corner. */
   --scale-rule-reserve: calc(var(--command-bar-h) + 18px + var(--island-gap));
   --readout-rows: 0px;
   --readout-reserve: calc(var(--readout-rows) + var(--scale-rule-reserve));
@@ -81,22 +79,6 @@
     --command-bar-h: 38px;
     --command-bar-fs: var(--fs-md);
   }
-}
-
-/* A sketch is the only time the readout draws (its snap segment says so),
-   and the column keeps one row for it. */
-.workspace.column-layout:has(.viewport-readout .viewport-dock-snap) {
-  --readout-rows: calc(var(--readout-h) + var(--island-gap));
-}
-
-/* Sketching adds the snap and grid spacing to the readout. The island hugs
-   its segments and wraps them once they outgrow the column, so the height
-   the column and the resizer reserve above it allows for two rows there. */
-.workspace.column-layout:has(
-    .viewport-readout .viewport-dock-grid:not([hidden])
-  ) {
-  --readout-h: 32px;
-  --readout-rows: calc(60px + var(--island-gap));
 }
 
 /* ── The top islands ─────────────────────────────────────── */
@@ -278,10 +260,6 @@
   transform: none;
 }
 
-.workspace:has(.rail-section-panel) .viewport-scale-indicator {
-  visibility: hidden;
-}
-
 @media (max-height: 600px) {
   .workspace-column-float .workspace-column-tools {
     scrollbar-width: thin;
@@ -409,37 +387,67 @@
   width: auto;
 }
 
-/* ── The bottom-left readout and the corner ──────────────── */
+/* ── The sketch readout and the bottom-left corner ────── */
 
-/* The readout is as wide as what it says: the filter chip alone in Build,
-   the snap and grid segments beside it in a sketch. It used to span the
-   column, which drew a column-wide island around one chip and one icon (the
-   activity log, now on the instrument rail with the other panels). It still
-   never grows past the column, so the search lane beside it keeps its
-   start. */
+/* The sketch snap and grid spacing, one over the other in an island as
+   wide as two rails, hung from the instrument rail so it follows wherever
+   the rail is centred. It lived in the bottom-left corner, which the scale
+   bar now keeps. Here it stands over the head of the relations, which
+   start its two rows and a gap lower (--readout-head) and are the shorter
+   rail, so they have that to give; a window with the room puts it over
+   both rails instead (below). */
+.workspace.column-layout:has(.viewport-readout .viewport-dock-snap) {
+  --readout-head: calc(60px + var(--island-gap));
+}
+
 .viewport-readout {
   position: absolute;
-  /* At the left dock's inner edge: the dock runs the window's height. */
-  left: calc(var(--island-gap) + var(--left-dock-w, 0px));
-  bottom: var(--island-gap);
+  top: 0;
+  right: calc(100% + var(--island-gap));
   z-index: var(--z-viewer-overlay);
-  width: max-content;
-  max-width: min(
-    max(var(--column-w), var(--readout-min-w)),
-    calc(100% - var(--island-gap) * 2)
-  );
-  min-height: var(--readout-h);
+  width: calc(var(--rail-w) * 2 + var(--island-gap));
   box-sizing: border-box;
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  align-content: center;
+  flex-direction: column;
+  align-items: stretch;
   gap: 4px;
   padding: 3px;
   background: var(--color-surface);
   border: var(--border-thin);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-1);
+}
+
+/* Over the head of both rails, which start lower instead. Only where one
+   column of instruments still fits under it: a mouse-sized rail is 554px,
+   so from 720px tall, or at 600px and under where the rail folds to two
+   columns. Not at 960px and narrower, where the cube stands under the
+   rail, and not with touch-sized buttons, which are taller. */
+@media (min-width: 961px) and (pointer: fine) and (min-height: 720px),
+  (min-width: 961px) and (pointer: fine) and (max-height: 600px) {
+  .workspace.column-layout:has(.viewport-readout .viewport-dock-snap) {
+    --rail-head: calc(60px + var(--island-gap));
+    --readout-head: 0px;
+  }
+
+  .viewport-readout {
+    top: auto;
+    right: 0;
+    bottom: calc(100% + var(--island-gap));
+  }
+}
+
+/* Over the relations it is a rail wider than they are and would stand in
+   the right lane of a wide window, so the lane and the cube step left of
+   it. (A narrower window's cards are sheets at the foot.) */
+@media (min-width: 961px) and (min-height: 601px) and (max-height: 719px),
+  (min-width: 961px) and (pointer: coarse) {
+  .workspace.column-layout
+    .viewer-area:has(.viewport-readout .viewport-dock-snap) {
+    --lane-end: calc(
+      var(--rail-w) * 3 + var(--island-gap) * 4 + var(--right-panels-w)
+    );
+  }
 }
 
 .viewport-readout > .viewport-dock-divider {
@@ -454,40 +462,42 @@
 }
 
 /* The island is the only frame: its segments are flat text, so a chip
-   inside it never draws a second box. A hairline centred in the gap before
-   the snap and grid segments tells them apart in a sketch; only the filter,
-   which is a button, answers the pointer. */
-.viewport-readout:has(.viewport-dock-snap) {
-  column-gap: 9px;
-  /* A segment that wraps to the start of a row puts its hairline 1px past
-     the island's left border, so clipping to the padding box drops it;
-     focus rings (2px + 1px offset) stay inside the 3px padding. */
-  overflow: clip;
-}
-
+   inside it never draws a second box. A hairline centred in the gap over
+   the grid segment tells the two apart. */
 .viewport-readout .viewport-dock-snap,
 .viewport-readout .viewport-dock-grid {
+  position: relative;
   height: 24px;
   padding: 0 5px;
   background: transparent;
   border: 0;
 }
 
-.viewport-readout .viewport-dock-snap,
-.viewport-readout .viewport-dock-grid {
-  position: relative;
-}
-
-/* -5px centres the 1px line in the 9px gap. The snap leads the island now,
-   so only the grid has a segment before it. */
 .viewport-readout .viewport-dock-grid::before {
   content: '';
   position: absolute;
-  top: 5px;
-  bottom: 5px;
-  left: -5px;
-  width: 1px;
+  top: -3px;
+  left: 5px;
+  right: 5px;
+  height: 1px;
   background: var(--color-border);
+}
+
+/* Two rails are too narrow for "Snap 0.25 mm": each segment leads with its
+   glyph. The words stay for screen readers, and each segment's tooltip
+   names it. */
+.viewport-readout .viewport-readout-icon {
+  display: block;
+}
+
+.viewport-readout .viewport-readout-word {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 /* The cube is the model's bottom-right corner: inside the instrument rail (and the relations, sketching), which
@@ -500,63 +510,47 @@
   right: calc(var(--lane-end) - var(--right-peek-w, 0px));
 }
 
-/* The scale bar lies in the search bar's row at the model's left edge —
-   the window's, or the left dock's inner edge when a panel is docked there —
-   centred on the bar's height, and ends short of the bar
-   (ViewportScaleIndicator measures the room). Where the row is too short
-   for a readable rule it steps up over the bar instead. */
+/* The scale bar stands upright in the model's far bottom-left corner — the
+   window's, or the left dock's inner edge when a panel is docked there —
+   It never leaves that corner:
+   ViewportScaleIndicator measures the rail above it and scales the rule to
+   the room, and lifts its foot only onto a search bar that reaches the
+   corner. */
 .workspace.column-layout .viewport-scale-indicator {
   left: calc(var(--island-gap) + var(--left-dock-w, 0px));
   right: auto;
-  bottom: calc(
-    var(--island-gap) + (var(--command-bar-h) - 18px) / 2 + var(--readout-rows)
-  );
+  bottom: calc(var(--island-gap) + var(--readout-rows));
 }
 
-/* Stepped up, it stands on the lane's foot: over the bar and over the
-   pick's guidance card when one is up, which would otherwise cover it. */
-.workspace.column-layout .viewport-scale-indicator.is-raised {
-  bottom: calc(var(--lane-base) + var(--readout-rows));
-}
-
-/* The sketch rail is the tall one, with Finish at its foot: it keeps the
-   whole band, and the bar stands beside it, on the readout, instead. */
+/* The sketch rail is the tall one, with Finish at its foot: it gives up
+   only the least the bar can be drawn in (40px and the gap under the rail
+   leave the rule the 32px ViewportScaleIndicator never goes below). */
 .workspace.column-layout:has(.viewport-readout .viewport-dock-snap) {
-  --scale-rule-reserve: 0px;
+  --scale-rule-reserve: 40px;
 }
 
-.workspace.column-layout:has(.viewport-readout .viewport-dock-snap)
-  .viewport-scale-indicator {
-  left: calc(var(--island-gap) * 2 + var(--rail-w) + var(--left-dock-w, 0px));
-}
-
-/* Up to 860px tall the left rail has no room to lift for the bar: a
-   pick's verbs make it taller (selection-rail.css), and lifted it ran off
-   the top bar. There the bar stands beside the rail instead, as in a
-   sketch, and the rail keeps its centre. */
+/* Up to 860px tall the left rail has no room to lift far for the bar: a
+   pick's verbs make it taller (selection-rail.css), and lifted by the full
+   reserve it ran off the top bar. It keeps the same least room. */
 @media (max-height: 860px) {
   .workspace.column-layout {
-    --scale-rule-reserve: 0px;
-  }
-
-  .workspace.column-layout .viewport-scale-indicator {
-    left: calc(var(--island-gap) * 2 + var(--rail-w) + var(--left-dock-w, 0px));
+    --scale-rule-reserve: 40px;
   }
 }
 
-/* A phone has no room beside the rail: the rule lies along the foot in the
-   bottom-left corner, above the search row and under the measurement
-   sheet's foot (ViewportScaleIndicator draws it lying at this width). */
+/* 540px and under the rail folds to columns that fill the stage's height
+   (a rotated phone's touch rail has no 40px to spare without scrolling its
+   last row away), so it keeps the band and the bar stands beside it. */
+@media (max-height: 540px) {
+  .workspace.column-layout,
+  .workspace.column-layout:has(.viewport-readout .viewport-dock-snap) {
+    --scale-rule-reserve: 0px;
+  }
+}
+
 @media (max-width: 620px) {
   .workspace.column-layout {
     --scale-rule-reserve: var(--readout-h);
-  }
-
-  .workspace.column-layout .viewport-scale-indicator,
-  .workspace.column-layout:has(.viewport-readout .viewport-dock-snap)
-    .viewport-scale-indicator {
-    left: var(--island-gap);
-    bottom: calc(var(--island-gap) * 2 + var(--command-bar-h));
   }
 }
 
@@ -1627,39 +1621,6 @@
   --readout-min-w: 96px;
 }
 
-/* Sketching adds the snap and grid segments: room for all three on one
-   row with four-character values in both ("Snap 0.25 mm", "Grid 1000 mm").
-   The grid label follows the zoom, so sizing for the defaults wrapped as
-   soon as it read "Grid 10 mm". Anything longer wraps to a second row. */
-.workspace.column-layout:has(.workspace-column-float .sketch-rail) {
-  --readout-min-w: 300px;
-}
-
-/* Narrower than 2 × (300 + 2 × 10) + 520 = 1160px, the full sketch readout
-   would squeeze the search row beside it (the bar and Ask, 520px at least).
-   The readout trades its words for glyphs instead and reserves 240px, which
-   still fits four-character snap and grid values on one row. The words stay
-   for screen readers, and each segment's tooltip names it. */
-@media (max-width: 1159px) {
-  .workspace.column-layout:has(.workspace-column-float .sketch-rail) {
-    --readout-min-w: 240px;
-  }
-
-  .viewport-readout:has(.viewport-dock-snap) .viewport-readout-icon {
-    display: block;
-  }
-
-  .viewport-readout:has(.viewport-dock-snap) .viewport-readout-word {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    margin: 0;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
-  }
-}
-
 /* In the same range the search lane stops mirroring the readout's reserve on
    the right, which left it W − 520px wide (80px at a 600px window). Above
    960px it only has to clear the orientation cube in the corner, the width
@@ -1764,13 +1725,16 @@
      stays centred while it fits above the bottom-right corner; past that it
      lifts so its foot stands a gap above the corner, as the right lane's
      does (the translate's percentages are its own height), and never past
-     the top islands. */
+     the top islands or, in a sketch, the readout over its head. */
   --rail-band-room: calc(
     (100dvh - var(--stage-top) - var(--island-gap)) / 2 - var(--stage-corner-h)
   );
   transform: translateY(
     max(
-      calc((var(--stage-top) + var(--island-gap) - 100dvh) / 2),
+      calc(
+        (var(--stage-top) + var(--island-gap) - 100dvh) / 2 +
+          var(--rail-head, 0px)
+      ),
       min(-50%, calc(var(--rail-band-room) - 100%))
     )
   );
@@ -1993,13 +1957,6 @@ button.command-more-toggle {
 @media (pointer: coarse) and (max-height: 540px) {
   .workspace.column-layout:has(.command-rail) {
     --tool-rail-columns: 3;
-  }
-}
-
-@media (max-height: 540px) {
-  .workspace.column-layout:has(.command-rail) .viewport-scale-indicator {
-    left: calc(var(--column-w) + var(--island-gap) * 2);
-    bottom: calc(var(--command-bar-h) + var(--island-gap) * 3 + 40px);
   }
 }
 
@@ -4103,7 +4060,8 @@ button.model-panel-grip[aria-expanded='true'] {
 
 .instrument-rail > .sketch-relations {
   position: absolute;
-  top: 0;
+  /* Under the sketch readout where that stands over this rail. */
+  top: var(--readout-head, 0px);
   right: calc(100% + var(--island-gap));
   width: var(--rail-w);
   box-sizing: border-box;
@@ -4198,7 +4156,8 @@ button.model-panel-grip[aria-expanded='true'] {
     padding: 5px 4px;
     direction: rtl;
     max-height: calc(
-      (100dvh - var(--stage-top) - var(--island-gap) + 100%) / 2
+      (100dvh - var(--stage-top) - var(--island-gap) + 100%) / 2 -
+        var(--readout-head, 0px) - var(--rail-head, 0px)
     );
   }
 
@@ -5225,12 +5184,12 @@ button.model-panel-grip[aria-expanded='true'] {
   .workspace.column-layout:has(.tweak-flyouts.is-open)
     .viewport-scale-indicator,
   .workspace.column-layout:has(.panel-lane-float) .viewport-scale-indicator {
+    /* The sheet takes the foot of a phone: the rule hangs from the top
+       beside the rail, and the component leaves it where this puts it. */
+    --viewport-scale-pinned: 1;
     top: var(--stage-top);
     bottom: auto;
     left: calc(var(--island-gap) * 2 + var(--rail-w));
-    flex-direction: row;
-    align-items: flex-end;
-    gap: 6px;
   }
 
   .command-bar-lane:has(.workspace-hint-help)
@@ -5283,22 +5242,20 @@ button.model-panel-grip[aria-expanded='true'] {
   z-index: var(--z-popover);
 }
 
-/* Sketch input and feedback each get a whole row above Snap/Grid. Three
-   icon rails cannot also share the narrow strip beside that readout. */
+/* Sketch input and feedback each get a whole row: three icon rails cannot
+   also share a phone's width with them. */
 @media (max-width: 600px) {
   .workspace.column-layout:has(.sketch-rail) .command-bar-lane {
     left: var(--island-gap);
     right: var(--island-gap);
-    bottom: calc(var(--readout-h) + var(--island-gap) * 2);
+    bottom: var(--island-gap);
   }
 
   .workspace.column-layout:has(.sketch-rail) .workspace-toast,
   .workspace.column-layout:has(.sketch-rail) .activity-lane {
     left: var(--island-gap);
     right: var(--island-gap);
-    bottom: calc(
-      var(--readout-h) + var(--command-bar-h) + var(--island-gap) * 3 + 8px
-    );
+    bottom: calc(var(--command-bar-h) + var(--island-gap) * 2 + 8px);
     z-index: var(--z-popover);
   }
 
@@ -5308,21 +5265,17 @@ button.model-panel-grip[aria-expanded='true'] {
        none would anchor their 100% left offset to the whole viewport. */
     transform: translateY(0);
     max-height: calc(
-      100dvh - var(--stage-top) - var(--readout-h) - var(--command-bar-h) -
-        var(--island-gap) * 4 - 64px
+      100dvh - var(--stage-top) - var(--command-bar-h) - var(--island-gap) * 3 -
+        64px
     );
-  }
-
-  .workspace.column-layout:has(.sketch-rail) .viewport-scale-indicator {
-    visibility: hidden;
   }
 
   .workspace.column-layout:has(.sketch-rail)
     .instrument-rail
     > .sketch-relations {
     max-height: calc(
-      100dvh - var(--stage-top) - var(--readout-h) - var(--command-bar-h) -
-        var(--island-gap) * 4 - 64px
+      100dvh - var(--stage-top) - var(--command-bar-h) - var(--island-gap) * 3 -
+        64px - var(--readout-head, 0px)
     );
   }
 }

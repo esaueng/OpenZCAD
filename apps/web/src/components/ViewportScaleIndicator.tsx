@@ -8,46 +8,97 @@ import {
 } from '@openzcad/viewport';
 import { watchStageTheme } from '../lib/stagePalette';
 
-const BAR_HEIGHT_PX = 18;
+/** The rule's width across its length: the baseline and its longest tick. */
+const RULE_ACROSS_PX = 18;
 const DIVISIONS = 10;
 /**
- * Room kept for the value beside the rule ("1000 mm" in the 13px mono label
- * is about 55px) and the gaps on either side of it.
+ * Room kept for the value at the rule's foot ("1000 mm" in the 13px mono
+ * label is about 55px) and the gap between the two.
  */
-const LABEL_RESERVE_PX = 72;
-/** Clearance between the label and the search bar. */
-const BAR_CLEARANCE_PX = 12;
+const LABEL_RESERVE_PX = 64;
+/** Clearance kept from the rail above the rule and the bar beside its foot. */
+const CLEARANCE_PX = 8;
 /**
- * The shortest rule worth drawing beside the search bar. With less room the
- * rule steps up over the bar instead (`is-raised`), where it has the width.
+ * The notice lane's status row over the bar (a 28px toast and its gaps),
+ * which spans the bar's width: a rule standing on the bar clears it too.
  */
-const MIN_BESIDE_BAR_PX = 60;
+const STATUS_ROW_PX = 40;
+/**
+ * The shortest room the rule is ever given. The stylesheet's
+ * --scale-rule-reserve keeps the rail at least this far off the corner,
+ * except in a window too short to spare it (540px and under).
+ */
+const MIN_RULE_ROOM_PX = 32;
+/** The gap between the rail and a rule that has to stand beside it. */
+const RAIL_GAP_PX = 10;
+/** Below this length ten divisions run together; only the centre is ticked. */
+const MIN_TICKED_LENGTH_PX = 60;
+
+interface Box {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+export interface ScaleRulePlacement {
+  /** Where the rule's left edge and foot stand, in viewport pixels. */
+  left: number;
+  bottom: number;
+  maxLengthPx: number;
+}
 
 /**
- * How long the rule may be where it stands: its full length unless it shares
- * the search bar's row, where it ends short of the bar. Returns `raise` when
- * that row has too little room for a readable rule.
- *
- * The rule used to stand upright against the window's left edge, its value
- * in the corner under it, where it read as a clipped vertical tick strip.
- * Lying down beside the bar it reads as a scale bar does on a drawing.
+ * Where the upright rule stands and how long it may be. It keeps the far
+ * bottom-left corner of the stage and is scaled to the room above it: the
+ * tool rail, or a sheet docked across the foot (a phone's measurement
+ * workbench), caps its length. Where the search bar runs into the corner (a
+ * phone with a panel open) its foot lifts onto the bar and its status row.
+ * Only where the rail reaches the corner itself, leaving no room at all (a
+ * window 540px tall or less), does it stand beside the rail.
  */
-export function scaleRuleRoom(
-  rule: { left: number; top: number; bottom: number },
-  bar: { left: number; top: number; bottom: number } | null
-): { maxWidthPx: number; raise: boolean } {
-  const sharesRow =
-    bar !== null && rule.top < bar.bottom && bar.top < rule.bottom;
-  if (!sharesRow || bar.left <= rule.left) {
-    return { maxWidthPx: DEFAULT_SCALE_BAR_MAX_WIDTH_PX, raise: false };
+export function scaleRulePlacement(
+  corner: { left: number; bottom: number },
+  stageTop: number,
+  rail: Box | null,
+  bar: Box | null,
+  sheet: Box | null = null
+): ScaleRulePlacement {
+  const place = (left: number): ScaleRulePlacement => {
+    const footRight = left + RULE_ACROSS_PX + LABEL_RESERVE_PX;
+    const onBar =
+      bar !== null &&
+      bar.left < footRight + CLEARANCE_PX &&
+      bar.right > left &&
+      bar.top < corner.bottom;
+    const bottom = onBar
+      ? Math.min(corner.bottom, bar.top - CLEARANCE_PX - STATUS_ROW_PX)
+      : corner.bottom;
+    let ceiling = stageTop;
+    for (const above of [rail, sheet]) {
+      if (
+        above !== null &&
+        above.left < left + RULE_ACROSS_PX &&
+        above.right > left &&
+        above.top < bottom
+      ) {
+        ceiling = Math.max(ceiling, above.bottom + CLEARANCE_PX);
+      }
+    }
+    return { left, bottom, maxLengthPx: bottom - ceiling };
+  };
+  let placement = place(corner.left);
+  if (rail !== null && placement.maxLengthPx < MIN_RULE_ROOM_PX) {
+    const beside = place(rail.right + RAIL_GAP_PX);
+    if (beside.maxLengthPx > placement.maxLengthPx) placement = beside;
   }
-  const room = bar.left - rule.left - LABEL_RESERVE_PX - BAR_CLEARANCE_PX;
-  return room < MIN_BESIDE_BAR_PX
-    ? { maxWidthPx: DEFAULT_SCALE_BAR_MAX_WIDTH_PX, raise: true }
-    : {
-        maxWidthPx: Math.min(DEFAULT_SCALE_BAR_MAX_WIDTH_PX, room),
-        raise: false
-      };
+  return {
+    ...placement,
+    maxLengthPx: Math.min(
+      DEFAULT_SCALE_BAR_MAX_WIDTH_PX,
+      Math.max(MIN_RULE_ROOM_PX, placement.maxLengthPx)
+    )
+  };
 }
 
 export type ViewportScaleSink = (scale: ViewportScale | null) => void;
@@ -79,19 +130,22 @@ function readRuleColors(canvas: HTMLCanvasElement): RuleColors {
   };
 }
 
-/** Draws the rule `lengthPx` long, its ticks rising from the baseline. */
+/**
+ * Draws the rule `lengthPx` tall: the baseline up its left edge, the ticks
+ * reaching right from it toward the model.
+ */
 function drawRule(
   canvas: HTMLCanvasElement,
   lengthPx: number,
   { primary, secondary, accent }: RuleColors
 ) {
-  const cssWidth = Math.max(lengthPx, 1);
+  const cssLength = Math.max(lengthPx, 1);
   const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
-  canvas.style.setProperty('--viewport-scale-length', `${cssWidth}px`);
-  const along = Math.max(1, Math.round(cssWidth * pixelRatio));
-  const across = Math.round(BAR_HEIGHT_PX * pixelRatio);
-  if (canvas.width !== along) canvas.width = along;
-  if (canvas.height !== across) canvas.height = across;
+  canvas.style.setProperty('--viewport-scale-length', `${cssLength}px`);
+  const across = Math.round(RULE_ACROSS_PX * pixelRatio);
+  const along = Math.max(1, Math.round(cssLength * pixelRatio));
+  if (canvas.width !== across) canvas.width = across;
+  if (canvas.height !== along) canvas.height = along;
 
   const context = canvas.getContext('2d');
   if (!context) {
@@ -101,34 +155,36 @@ function drawRule(
   context.clearRect(0, 0, canvas.width, canvas.height);
   context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
 
-  const left = 1;
-  const right = Math.max(cssWidth - 1, left);
-  const baselineY = 16;
+  const top = 1;
+  const bottom = Math.max(cssLength - 1, top);
+  const baselineX = 2;
+  const capX = RULE_ACROSS_PX - 2;
 
   context.lineCap = 'square';
   context.strokeStyle = primary;
   context.lineWidth = 1.5;
   context.beginPath();
-  context.moveTo(left, baselineY);
-  context.lineTo(right, baselineY);
-  context.moveTo(left, 2);
-  context.lineTo(left, baselineY);
-  context.moveTo(right, 2);
-  context.lineTo(right, baselineY);
+  context.moveTo(baselineX, top);
+  context.lineTo(baselineX, bottom);
+  context.moveTo(baselineX, top);
+  context.lineTo(capX, top);
+  context.moveTo(baselineX, bottom);
+  context.lineTo(capX, bottom);
   context.stroke();
 
-  for (let index = 1; index < DIVISIONS; index += 1) {
-    const ratio = index / DIVISIONS;
-    const x = left + (right - left) * ratio;
-    const isCenter = index === DIVISIONS / 2;
-    const isQuarter = index === 3 || index === 7;
-    const tickHeight = isCenter ? 12 : isQuarter ? 9 : 6;
+  const divisions = cssLength >= MIN_TICKED_LENGTH_PX ? DIVISIONS : 2;
+  for (let index = 1; index < divisions; index += 1) {
+    const ratio = index / divisions;
+    const y = bottom - (bottom - top) * ratio;
+    const isCenter = index * 2 === divisions;
+    const isQuarter = divisions === DIVISIONS && (index === 3 || index === 7);
+    const tickLength = isCenter ? 12 : isQuarter ? 9 : 6;
 
     context.strokeStyle = isCenter ? accent : secondary;
     context.lineWidth = isCenter ? 2 : 1;
     context.beginPath();
-    context.moveTo(x, baselineY - tickHeight);
-    context.lineTo(x, baselineY);
+    context.moveTo(baselineX, y);
+    context.lineTo(baselineX + tickLength, y);
     context.stroke();
   }
 }
@@ -153,45 +209,88 @@ export function ViewportScaleIndicator({
   const colorsRef = useRef<RuleColors | null>(null);
   // Layout is read only when something around the rule resizes, never per
   // frame: the bar redraws on every frame of a zoom.
-  const maxWidthRef = useRef(DEFAULT_SCALE_BAR_MAX_WIDTH_PX);
+  const maxLengthRef = useRef(DEFAULT_SCALE_BAR_MAX_WIDTH_PX);
   const [measureTick, setMeasureTick] = useState(0);
   const measureRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     const root = rootRef.current;
-    const area = root?.closest('.viewer-area');
+    const area = root?.closest<HTMLElement>('.viewer-area');
     if (!root) return;
+    const box = (selector: string): Box | null => {
+      const rect = area?.querySelector(selector)?.getBoundingClientRect();
+      return rect && rect.width > 0 && rect.height > 0 ? rect : null;
+    };
+    // The offset now applied, which the corner is read back through.
+    const offset = { dx: 0, dy: 0 };
     const measure = () => {
-      if (root.hidden) return;
-      const raised = root.classList.contains('is-raised');
-      if (raised) root.classList.remove('is-raised');
-      const rule = root.getBoundingClientRect();
-      const bar = area
-        ?.querySelector<HTMLElement>('.command-bar-row')
-        ?.getBoundingClientRect();
-      const room = scaleRuleRoom(rule, bar && bar.width > 0 ? bar : null);
-      root.classList.toggle('is-raised', room.raise);
-      if (room.maxWidthPx !== maxWidthRef.current || room.raise !== raised) {
-        maxWidthRef.current = room.maxWidthPx;
+      const stage = area?.getBoundingClientRect();
+      // No layout (hidden, or no stage to stand in): keep the full rule.
+      if (root.hidden || !stage || stage.height <= 0) return;
+      const rect = root.getBoundingClientRect();
+      const corner = {
+        left: rect.left - offset.dx,
+        bottom: rect.bottom - offset.dy
+      };
+      // A stylesheet that places the rule itself says so with this flag.
+      const pinned =
+        window
+          .getComputedStyle(root)
+          .getPropertyValue('--viewport-scale-pinned')
+          .trim() === '1';
+      const placement = pinned
+        ? { ...corner, maxLengthPx: DEFAULT_SCALE_BAR_MAX_WIDTH_PX }
+        : scaleRulePlacement(
+            corner,
+            box('.instrument-rail')?.top ?? stage.top,
+            box('.workspace-column-float'),
+            box('.command-bar-row'),
+            box('.measurement-dock')
+          );
+      const dx = Math.round(placement.left - corner.left);
+      const dy = Math.round(placement.bottom - corner.bottom);
+      if (dx !== offset.dx || dy !== offset.dy) {
+        offset.dx = dx;
+        offset.dy = dy;
+        root.style.setProperty('--viewport-scale-dx', `${dx}px`);
+        root.style.setProperty('--viewport-scale-dy', `${dy}px`);
+      }
+      const maxLengthPx = Math.floor(placement.maxLengthPx);
+      if (maxLengthPx !== maxLengthRef.current) {
+        maxLengthRef.current = maxLengthPx;
         setMeasureTick((tick) => tick + 1);
       }
     };
     measureRef.current = measure;
-    measure();
-    const observer =
+    const resizes =
       typeof ResizeObserver === 'undefined'
         ? null
         : new ResizeObserver(measure);
-    for (const target of [
-      area,
-      area?.querySelector('.command-bar-lane'),
-      area?.querySelector('.command-bar-row')
-    ]) {
-      if (target) observer?.observe(target);
-    }
+    const watch = () => {
+      // Observing an element twice is a no-op; a remounted rail is new.
+      for (const target of [
+        area,
+        area?.querySelector('.command-bar-lane'),
+        area?.querySelector('.command-bar-row'),
+        area?.querySelector('.workspace-column-float'),
+        area?.querySelector('.measurement-dock')
+      ]) {
+        if (target) resizes?.observe(target);
+      }
+      measure();
+    };
+    watch();
+    // The tool rail and the command float (the measurement workbench's)
+    // mount and unmount beside the viewer.
+    const mounts =
+      area && typeof MutationObserver !== 'undefined'
+        ? new MutationObserver(watch)
+        : null;
+    if (area) mounts?.observe(area, { childList: true });
     window.addEventListener('resize', measure);
     return () => {
-      observer?.disconnect();
+      resizes?.disconnect();
+      mounts?.disconnect();
       window.removeEventListener('resize', measure);
       if (measureRef.current === measure) measureRef.current = null;
     };
@@ -203,10 +302,10 @@ export function ViewportScaleIndicator({
       // The viewer offers the longest rule (200px); where the rule stands
       // may have less room, so the step is chosen again under that cap.
       const scale =
-        offered && offered.widthPx > maxWidthRef.current
+        offered && offered.widthPx > maxLengthRef.current
           ? chooseViewportScale(
               offered.value / offered.widthPx,
-              maxWidthRef.current
+              maxLengthRef.current
             )
           : offered;
       const root = rootRef.current;
@@ -301,9 +400,9 @@ export function ViewportScaleIndicator({
 export type SketchGridReadoutSink = (spacing: string | null) => void;
 
 /**
- * The sketch grid spacing as a segment of the bottom-left viewport readout.
- * Floating on its own it sat on whatever shared the bottom edge (the old
- * dock, then the search bar at narrower windows). The render loop pushes the
+ * The sketch grid spacing as a segment of the viewport readout over the
+ * right-hand rails. Floating on its own it sat on whatever shared the bottom
+ * edge (the old dock, then the search bar at narrower windows). The render loop pushes the
  * spacing every frame; the node is only touched when it changes. The word
  * and the icon are markup, so the compact readout can trade one for the
  * other.

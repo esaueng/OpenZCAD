@@ -71,7 +71,8 @@ import {
   type DrawingViewId,
   type DrawingViewOrientation,
   type ProjectDocument,
-  type Vector3
+  type Vector3,
+  hasDraftDisplay
 } from '@openzcad/shared';
 import { DrawingSheetTabs } from './DrawingSheetTabs';
 import { pruneProjectionCache } from '../lib/drawing/projectionCache';
@@ -1773,6 +1774,10 @@ const NO_SHEETS: readonly DrawingSheet[] = [];
 
 export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   const { document, bodies, editDisabledReason } = props;
+  // A released edit's draft display (`BodyRepresentation.displayQuality`) is
+  // geometry still on its way: its box and mesh are refined a moment later,
+  // and a sheet's fingerprint and layout must never read them.
+  const geometryPending = props.geometryPending || hasDraftDisplay(bodies);
   const sheets = document.drawings?.sheets ?? NO_SHEETS;
   const [selectedSheetId, setSelectedSheetId] = useState<DrawingSheetId | null>(
     () => retainedFor(document.projectId).selectedSheetId ?? null
@@ -1782,7 +1787,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   const initialSheet = useMemo(() => {
     const visible = new Set(props.defaultBodyIds);
     const matching =
-      !props.geometryPending && visible.size > 0
+      !geometryPending && visible.size > 0
         ? sheets.filter((entry) => {
             const ids = sheetBodyIds(entry);
             return (
@@ -1791,16 +1796,16 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
           })
         : [];
     return (matching.length === 1 ? matching[0] : sheets[0]) ?? null;
-  }, [sheets, props.defaultBodyIds, props.geometryPending]);
+  }, [sheets, props.defaultBodyIds, geometryPending]);
   const sheet =
     sheets.find((entry) => entry.sheetId === selectedSheetId) ?? initialSheet;
   // Draw unmounts in Build. Keep the chosen sheet with its projections so
   // returning does not silently open a different body's sheet and draw it.
   useEffect(() => {
-    if (props.geometryPending || !sheet) return;
+    if (geometryPending || !sheet) return;
     retainedFor(document.projectId).selectedSheetId = sheet.sheetId;
     if (selectedSheetId !== sheet.sheetId) setSelectedSheetId(sheet.sheetId);
-  }, [document.projectId, props.geometryPending, selectedSheetId, sheet]);
+  }, [document.projectId, geometryPending, selectedSheetId, sheet]);
   const [selectedViewId, setSelectedViewId] = useState<DrawingViewId | null>(
     null
   );
@@ -1994,7 +1999,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     const { byBodySet } = fingerprintCache.current;
     return new Map(
       sheets.map((entry) => {
-        if (props.geometryPending) return [entry.sheetId, null];
+        if (geometryPending) return [entry.sheetId, null];
         const ids = sheetBodyIds(entry);
         const key = [...ids].sort().join(',');
         if (!byBodySet.has(key))
@@ -2002,7 +2007,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
         return [entry.sheetId, byBodySet.get(key)!];
       })
     );
-  }, [sheets, bodies, props.geometryPending]);
+  }, [sheets, bodies, geometryPending]);
   const wanted = useMemo(() => {
     const keys = new Set<string>();
     for (const entry of sheets) {
@@ -2020,11 +2025,11 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
             document,
             sheet,
             bodies,
-            props.geometryPending,
+            geometryPending,
             fingerprints.get(sheet.sheetId) ?? null
           )
         : null,
-    [document, sheet, bodies, props.geometryPending, fingerprints]
+    [document, sheet, bodies, geometryPending, fingerprints]
   );
   const liveProjections = useViewProjections(
     sheet,
@@ -2193,7 +2198,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     sheetReady &&
     sheet !== null &&
     drawnViews.length === sheet.views.length &&
-    !props.geometryPending;
+    !geometryPending;
   useEffect(() => {
     if (!onAssistantSource) return;
     if (!sheet) {
@@ -2284,7 +2289,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
   const canDeleteBroken =
     editable &&
     sheetReady &&
-    !props.geometryPending &&
+    !geometryPending &&
     drawnViews.length === sheet?.views.length &&
     props.previewAnnotations?.sheetId !== sheet?.sheetId;
   // Dimensions measure a view's geometry; a note on the paper needs none,
@@ -2437,7 +2442,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
       return;
     }
     const fingerprint = drawingSourceFingerprint(bodies, bodyIds);
-    if (!fingerprint || props.geometryPending) {
+    if (!fingerprint || geometryPending) {
       props.onStatus(
         'Wait for the model to finish updating, then make the drawing.'
       );
@@ -3399,10 +3404,10 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
             type="button"
             className="primary"
             onClick={createSheet}
-            disabled={!editable || props.geometryPending}
+            disabled={!editable || geometryPending}
             title={
               editDisabledReason ??
-              (props.geometryPending
+              (geometryPending
                 ? 'Waiting for the model to finish updating.'
                 : undefined)
             }
@@ -3652,10 +3657,10 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
             activeId={sheet.sheetId}
             onSelect={selectSheet}
             onCreate={createSheet}
-            createDisabled={!editable || props.geometryPending}
+            createDisabled={!editable || geometryPending}
             createTitle={
               editDisabledReason ??
-              (props.geometryPending
+              (geometryPending
                 ? 'Waiting for the model to finish updating.'
                 : 'New sheet with the four standard views')
             }
@@ -4423,7 +4428,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                       !editable ||
                       // Not offered for removal until the rebuild says
                       // whether it is really gone.
-                      (props.geometryPending && !liveBodies.includes(id)) ||
+                      (geometryPending && !liveBodies.includes(id)) ||
                       (selectedView.bodyIds.length === 1 &&
                         selectedView.bodyIds[0] === id)
                     }
@@ -4443,7 +4448,7 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
                   />
                   {liveBodies.includes(id)
                     ? (bodies[id]?.name ?? id)
-                    : props.geometryPending
+                    : geometryPending
                       ? `${bodies[id]?.name ?? 'Body'} (updating…)`
                       : `${bodies[id]?.name ?? 'Deleted body'} (no longer in the model)`}
                 </label>

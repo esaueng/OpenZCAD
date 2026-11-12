@@ -6,6 +6,7 @@ import { GeometryWorkerError } from '../lib/workerRefusal';
 import { beginEditTrace, recordEditPhase } from '../lib/editTrace';
 import type { GeometryReadyState } from '@openzcad/shared';
 import type { EditAnalysisRequest } from '@openzcad/shared';
+import { hasDraftDisplay as hasDraftBodies } from '@openzcad/shared';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { documentForWorker, documentForRebuild } from '../lib/meshTransport';
 import {
@@ -44,6 +45,7 @@ import type {
   GeometryExportFormat,
   GeometryExportResult,
   GeometryWorkerPhase,
+  GeometryWorkerRequest,
   GeometryWorkerState,
   GeometryWorkerResult
 } from '../worker/geometryWorker';
@@ -418,6 +420,13 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       }
     >()
   );
+  // The full-quality display of a draft result that arrived before that
+  // result became live; the adoption that makes it live uses this instead.
+  const refinedDisplay = useRef<{
+    projectId: string;
+    contentKey: string;
+    derived: DerivedState;
+  } | null>(null);
   // `syncOnce` results that waited on a font face or source: never cached by
   // the worker, so never adopted either.
   const transientSyncResults = useRef(new WeakSet<DerivedState>());
@@ -666,6 +675,35 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
                 };
         }
         lastWorkerMessageAt = Date.now();
+        if (message.type === 'display-refined') {
+          // The full-quality display of a draft result (see
+          // `BodyRepresentation.displayQuality`). It replaces only what is on
+          // screen and still a draft of the same content; otherwise it waits
+          // for the adoption that makes that draft live.
+          const document = hostRef.current.manager()?.document;
+          if (
+            document?.projectId === message.projectId &&
+            hasDraftDisplay(document.derived) &&
+            geometryContentKey(document) === message.contentKey
+          ) {
+            refinedDisplay.current = null;
+            const refined = rebindSketchGeometryForContent(
+              document,
+              message.derived,
+              message.contentKey
+            );
+            if (readyDerived.current && hasDraftDisplay(readyDerived.current))
+              readyDerived.current = refined;
+            hostRef.current.onDerived(refined);
+          } else {
+            refinedDisplay.current = {
+              projectId: message.projectId,
+              contentKey: message.contentKey,
+              derived: message.derived
+            };
+          }
+          return;
+        }
         if (message.type === 'geometry-ready') {
           const document = hostRef.current.manager()?.document;
           if (
@@ -1507,15 +1545,30 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       ) {
         return false;
       }
+      // A refinement that overtook this adoption is the same result at full
+      // display quality.
+      const refined = refinedDisplay.current;
+      refinedDisplay.current = null;
       const adopted = rebindSketchGeometryForContent(
         document,
-        derived,
+        hasDraftDisplay(derived) &&
+          refined?.projectId === document.projectId &&
+          refined.contentKey === contentKey
+          ? refined.derived
+          : derived,
         contentKey
       );
       broadcastDocument.current = document;
       readyDocument.current = document;
       readyDerived.current = adopted;
       lastSyncedKey.current = `${document.projectId}:${document.version}:${lineageDemandCacheKey(document, demand)}`;
+      // No broadcast follows: tell the worker what is live, so it refines
+      // only a draft of this content and drops an older one.
+      workerRef.current.postMessage({
+        type: 'live-content',
+        projectId: document.projectId,
+        contentKey
+      } satisfies GeometryWorkerRequest);
       setState({
         type: 'state',
         phase: 'ready',
@@ -1530,4 +1583,8 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       return true;
     }
   };
+}
+
+function hasDraftDisplay(derived: DerivedState): boolean {
+  return hasDraftBodies(derived.bodyRepresentations);
 }

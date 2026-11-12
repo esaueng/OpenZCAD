@@ -120,17 +120,26 @@ describe('validated geometry before analysis', () => {
           expect(previewBody.bbox).toEqual(result.bbox);
           if (deferTopology) {
             // A face drag's frame is meshed at the disposable drag
-            // tessellation; the release below is meshed at full quality.
+            // tessellation, and so is the release it commits (a draft
+            // display, see exact-display-refinement.ts) unless refused.
             expect(previewBody.mesh.indices.length).toBeGreaterThan(0);
-            expect(previewBody.mesh.indices.length).toBeLessThanOrEqual(
-              result.mesh.indices.length
-            );
+            expect(result.displayQuality).toBe(supported ? 'draft' : undefined);
           } else {
             expect(previewBody.mesh).toEqual(result.mesh);
+            expect(result.displayQuality).toBeUndefined();
           }
           expect(result.volume).toBe(reference.volume);
           expect(result.bbox).toEqual(reference.bbox);
-          expect(result.mesh).toEqual(reference.mesh);
+          // The next complete sync of the release draws it at full quality.
+          const shown =
+            result.displayQuality === 'draft'
+              ? (await adapter.syncDocument(candidate)).bodyRepresentations[
+                  imported.bodyId
+                ]!
+              : result;
+          expect(shown.displayQuality).toBeUndefined();
+          expect(shown.bbox).toEqual(reference.bbox);
+          expect(shown.mesh).toEqual(reference.mesh);
         } finally {
           recognition.mockRestore();
         }

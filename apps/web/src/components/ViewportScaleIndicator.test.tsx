@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   ViewportGridReadout,
   ViewportScaleIndicator,
-  scaleRuleRoom,
+  scaleRulePlacement,
   type SketchGridReadoutSink,
   type ViewportScaleSink
 } from './ViewportScaleIndicator';
@@ -71,7 +71,7 @@ describe('ViewportScaleIndicator', () => {
       );
     });
 
-    it('draws the rule lying along the foot at every width', () => {
+    it('draws the rule upright: its length is its height', () => {
       const transforms: number[][] = [];
       vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
         setTransform: (...args: number[]) => transforms.push(args),
@@ -87,16 +87,14 @@ describe('ViewportScaleIndicator', () => {
       render(<ViewportScaleIndicator scaleSinkRef={sinkRef} units="mm" />);
       act(() => sinkRef.current?.({ value: 10, widthPx: 120 }));
 
-      const root = screen.getByTestId('viewport-scale-indicator');
       const canvas = screen.getByTestId<HTMLCanvasElement>(
         'viewport-scale-rule'
       );
-      expect(root.classList.contains('is-upright')).toBe(false);
-      // 120px along the rule, 18px across it.
+      // 18px across the rule, 120px along it.
       const ratio = Math.min(window.devicePixelRatio || 1, 2);
       expect([canvas.width, canvas.height]).toEqual([
-        Math.round(120 * ratio),
-        Math.round(18 * ratio)
+        Math.round(18 * ratio),
+        Math.round(120 * ratio)
       ]);
       expect(canvas.style.getPropertyValue('--viewport-scale-length')).toBe(
         '120px'
@@ -105,32 +103,67 @@ describe('ViewportScaleIndicator', () => {
     });
   }
 
-  it('ends the rule short of the search bar it shares a row with', () => {
-    const rule = { left: 10, top: 960, bottom: 978 };
-    // A wide stage: the bar starts far enough right for the full rule.
-    expect(scaleRuleRoom(rule, { left: 346, top: 952, bottom: 990 })).toEqual({
-      maxWidthPx: 200,
-      raise: false
+  it('keeps the far bottom-left corner and scales to the room under the rail', () => {
+    const corner = { left: 10, bottom: 832 };
+    const bar = { left: 190, top: 798, right: 710, bottom: 832 };
+    // No rail: the full rule in the corner.
+    expect(scaleRulePlacement(corner, 60, null, bar)).toEqual({
+      left: 10,
+      bottom: 832,
+      maxLengthPx: 200
     });
-    // 1280px: the bar starts at 230, so the rule and its value end before it.
-    expect(scaleRuleRoom(rule, { left: 230, top: 756, bottom: 790 })).toEqual({
-      maxWidthPx: 200,
-      raise: false
+    // 1000 x 842: the rail ends at 640 and the rule takes the room under it.
+    const rail = { left: 10, top: 253, right: 50, bottom: 640 };
+    expect(scaleRulePlacement(corner, 60, rail, bar)).toEqual({
+      left: 10,
+      bottom: 832,
+      maxLengthPx: 184
     });
-    expect(scaleRuleRoom(rule, { left: 230, top: 952, bottom: 990 })).toEqual({
-      maxWidthPx: 136,
-      raise: false
-    });
-    // Too little room for a readable rule: it steps up over the bar.
-    expect(scaleRuleRoom(rule, { left: 116, top: 952, bottom: 990 })).toEqual({
-      maxWidthPx: 200,
-      raise: true
-    });
-    // No bar, or one in another row: the full rule.
-    expect(scaleRuleRoom(rule, null)).toEqual({
-      maxWidthPx: 200,
-      raise: false
-    });
+    // A taller rail shortens the rule; it never steps out of the corner.
+    expect(
+      scaleRulePlacement(corner, 60, { ...rail, bottom: 780 }, bar)
+    ).toEqual({ left: 10, bottom: 832, maxLengthPx: 44 });
+    // With exactly the least room it still keeps the corner.
+    expect(
+      scaleRulePlacement(corner, 60, { ...rail, bottom: 792 }, bar)
+    ).toEqual({ left: 10, bottom: 832, maxLengthPx: 32 });
+    // A rail that reaches the corner (a window 540px tall or less) leaves
+    // no room at all: only then does the rule stand beside it.
+    expect(
+      scaleRulePlacement(
+        { left: 10, bottom: 380 },
+        60,
+        { left: 10, top: 60, right: 154, bottom: 370 },
+        { left: 260, top: 346, right: 744, bottom: 380 }
+      )
+    ).toEqual({ left: 164, bottom: 380, maxLengthPx: 200 });
+    // A short window caps the rule at the stage's height.
+    expect(
+      scaleRulePlacement({ left: 10, bottom: 150 }, 60, null, null)
+    ).toEqual({ left: 10, bottom: 150, maxLengthPx: 90 });
+  });
+
+  it('lifts its foot onto a search bar that reaches the corner', () => {
+    // A phone sketch: the bar spans the window over the readout.
+    const rail = { left: 10, top: 112, right: 50, bottom: 600 };
+    const bar = { left: 10, top: 758, right: 380, bottom: 792 };
+    expect(
+      scaleRulePlacement({ left: 10, bottom: 794 }, 110, rail, bar)
+    ).toEqual({ left: 10, bottom: 710, maxLengthPx: 102 });
+    // A sheet docked across the foot caps the rule as the rail does.
+    const beside = { left: 116, top: 800, right: 380, bottom: 834 };
+    expect(
+      scaleRulePlacement({ left: 10, bottom: 834 }, 110, null, beside, {
+        left: 10,
+        top: 520,
+        right: 380,
+        bottom: 744
+      })
+    ).toEqual({ left: 10, bottom: 834, maxLengthPx: 82 });
+    // The bar clear of the corner leaves the rule on the stage's foot.
+    expect(
+      scaleRulePlacement({ left: 10, bottom: 834 }, 110, null, beside)
+    ).toEqual({ left: 10, bottom: 834, maxLengthPx: 200 });
   });
 
   it('strokes the rule in the stage ink, not the chrome text colours', () => {

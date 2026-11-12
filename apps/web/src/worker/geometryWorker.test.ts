@@ -19,6 +19,7 @@ import type {
   GeometryWorkerResult
 } from './geometryWorker';
 import type { ExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
+import { geometryContentKey } from './exactRebuildCache';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -89,6 +90,55 @@ async function installWorker(
 function post(scope: FakeWorkerScope, request: GeometryWorkerRequest): void {
   scope.onmessage?.({ data: request } as MessageEvent<GeometryWorkerRequest>);
 }
+
+/** What the main thread posts once it adopts a checked result. */
+function adopt(scope: FakeWorkerScope, document: ProjectDocument): void {
+  post(scope, {
+    type: 'live-content',
+    projectId: document.projectId,
+    contentKey: geometryContentKey(document)
+  });
+}
+
+/** A one-body result, drawn with a draft display mesh or at full quality. */
+function releasedBody(
+  bodyId: BodyId,
+  label: string,
+  displayQuality?: 'draft'
+): ProjectDocument['derived'] {
+  return {
+    ...derived(label),
+    bodyRepresentations: {
+      [bodyId]: {
+        bodyId,
+        name: 'Released',
+        source: 'direct-edit' as const,
+        mesh: {
+          kind: 'mesh' as const,
+          vertices: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+          indices: new Uint32Array([0, 1, 2])
+        },
+        faceCount: 1,
+        color: '#ffffff',
+        exportableStep: true,
+        consumed: false,
+        volume: 1,
+        bbox: { min: { x: 0, y: 0, z: 0 }, max: { x: 1, y: 1, z: 0 } },
+        ...(displayQuality ? { displayQuality } : {})
+      }
+    }
+  };
+}
+
+function boxDocument(name: string, width = 1): ProjectDocument {
+  return addPrimitiveFeature(createProjectDocument(name, toUserId('user')), {
+    name: 'Box',
+    primitiveKind: 'box',
+    dimensions: { width, height: 1, depth: 1 }
+  });
+}
+
+const settle = (ms = 250) => new Promise((resolve) => setTimeout(resolve, ms));
 
 beforeEach(() => {
   vi.resetModules();
@@ -618,6 +668,307 @@ describe('geometry worker rebuild coordination', () => {
     }
     expect(mesh.vertices.byteLength).toBe(36);
     expect(mesh.indices.byteLength).toBe(12);
+  });
+
+  it('posts a draft release once, then its full-quality display, and never caches the draft', async () => {
+    const bodyId = toBodyId('body_draft');
+    const body = (vertices: number[], displayQuality?: 'draft') => ({
+      bodyId,
+      name: 'Released',
+      source: 'direct-edit' as const,
+      mesh: {
+        kind: 'mesh' as const,
+        vertices: new Float32Array(vertices),
+        indices: new Uint32Array([0, 1, 2])
+      },
+      faceCount: 1,
+      color: '#ffffff',
+      exportableStep: true,
+      consumed: false,
+      volume: 1,
+      bbox: { min: { x: 0, y: 0, z: 0 }, max: { x: 1, y: 1, z: 0 } },
+      ...(displayQuality ? { displayQuality } : {})
+    });
+    const draft: ProjectDocument['derived'] = {
+      ...derived('released'),
+      bodyRepresentations: {
+        [bodyId]: body([0, 0, 0, 1, 0, 0, 0, 1, 0], 'draft')
+      }
+    };
+    const refined: ProjectDocument['derived'] = {
+      ...derived('released'),
+      bodyRepresentations: { [bodyId]: body([0, 0, 0, 2, 0, 0, 0, 2, 0]) }
+    };
+    const syncDocument = vi
+      .fn()
+      .mockResolvedValueOnce(draft)
+      .mockResolvedValue(refined);
+    const { scope } = await installWorker(syncDocument);
+    const document = addPrimitiveFeature(
+      createProjectDocument('Draft release', toUserId('user')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 1, height: 1, depth: 1 }
+      }
+    );
+    post(scope, {
+      type: 'sync',
+      document,
+      requestId: 'commit',
+      proposeCarry: true
+    });
+    await vi.waitFor(() =>
+      expect(
+        scope.postMessage.mock.calls.some(
+          ([message]) =>
+            message.type === 'sync' && message.requestId === 'commit'
+        )
+      ).toBe(true)
+    );
+    // Not refined before the main thread shows it: re-syncing a result it
+    // never adopted would rewind the kernel away from what is on screen.
+    await settle();
+    expect(syncDocument).toHaveBeenCalledOnce();
+    adopt(scope, document);
+    await vi.waitFor(() =>
+      expect(
+        scope.postMessage.mock.calls.some(
+          ([message]) => message.type === 'display-refined'
+        )
+      ).toBe(true)
+    );
+    const messages = scope.postMessage.mock.calls.map(([message]) => message);
+    const commit = messages.find(
+      (message) => message.type === 'sync' && message.requestId === 'commit'
+    ) as Extract<GeometryWorkerResult, { type: 'sync'; ok: true }>;
+    expect(commit.derived.bodyRepresentations[bodyId]!.displayQuality).toBe(
+      'draft'
+    );
+    // Accepted first; the refinement follows it as quiet explicit work.
+    expect(messages.indexOf(commit)).toBeLessThan(
+      messages.findIndex((message) => message.type === 'display-refined')
+    );
+    const refinedMessage = messages.find(
+      (message) => message.type === 'display-refined'
+    ) as Extract<GeometryWorkerResult, { type: 'display-refined' }>;
+    expect(refinedMessage).toMatchObject({
+      projectId: document.projectId,
+      version: document.version
+    });
+    expect(
+      refinedMessage.derived.bodyRepresentations[bodyId]!.displayQuality
+    ).toBeUndefined();
+    // The refinement re-ran the same request: same carry proposal.
+    expect(syncDocument).toHaveBeenCalledTimes(2);
+    expect(syncDocument.mock.calls[1]![4]).toMatchObject({
+      proposeCarry: true,
+      displayRefinement: true
+    });
+    // The same request again is served the refined result from the cache.
+    post(scope, {
+      type: 'sync',
+      document,
+      requestId: 'again',
+      proposeCarry: true
+    });
+    await vi.waitFor(() =>
+      expect(
+        scope.postMessage.mock.calls.some(
+          ([message]) =>
+            message.type === 'sync' && message.requestId === 'again'
+        )
+      ).toBe(true)
+    );
+    expect(syncDocument).toHaveBeenCalledTimes(2);
+    const again = scope.postMessage.mock.calls
+      .map(([message]) => message)
+      .find(
+        (message) => message.type === 'sync' && message.requestId === 'again'
+      ) as Extract<GeometryWorkerResult, { type: 'sync'; ok: true }>;
+    expect(
+      again.derived.bodyRepresentations[bodyId]!.displayQuality
+    ).toBeUndefined();
+  });
+
+  it('refines a draft release only while idle, after a gesture that took the worker ends', async () => {
+    const bodyId = toBodyId('body_idle_draft');
+    const body = (displayQuality?: 'draft') => ({
+      bodyId,
+      name: 'Released',
+      source: 'direct-edit' as const,
+      mesh: {
+        kind: 'mesh' as const,
+        vertices: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+        indices: new Uint32Array([0, 1, 2])
+      },
+      faceCount: 1,
+      color: '#ffffff',
+      exportableStep: true,
+      consumed: false,
+      volume: 1,
+      bbox: { min: { x: 0, y: 0, z: 0 }, max: { x: 1, y: 1, z: 0 } },
+      ...(displayQuality ? { displayQuality } : {})
+    });
+    const syncDocument = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ...derived('released'),
+        bodyRepresentations: { [bodyId]: body('draft') }
+      })
+      .mockResolvedValue({
+        ...derived('released'),
+        bodyRepresentations: { [bodyId]: body() }
+      });
+    const frame = {
+      bodyRepresentations: {},
+      warnings: [],
+      updatedAt: '2026-08-01T00:00:00.000Z',
+      analysis: 'pending' as const
+    };
+    const previewGeometry = vi.fn(async () => frame);
+    const { scope } = await installWorker(syncDocument, {
+      previewGeometry,
+      releaseEditPreview: vi.fn()
+    });
+    const document = addPrimitiveFeature(
+      createProjectDocument('Idle refinement', toUserId('user')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 1, height: 1, depth: 1 }
+      }
+    );
+    const refinedPosts = () =>
+      scope.postMessage.mock.calls.filter(
+        ([message]) => message.type === 'display-refined'
+      ).length;
+    post(scope, { type: 'sync', document, requestId: 'commit' });
+    await vi.waitFor(() =>
+      expect(
+        scope.postMessage.mock.calls.some(
+          ([message]) =>
+            message.type === 'sync' && message.requestId === 'commit'
+        )
+      ).toBe(true)
+    );
+    adopt(scope, document);
+    // The hand takes the handle again at once: its frames hold the
+    // refinement back for as long as the gesture lasts, a pause and a
+    // dropped frame included.
+    post(scope, {
+      type: 'preview-geometry',
+      requestId: 'frame',
+      document,
+      deferTopology: true
+    });
+    await vi.waitFor(() => expect(previewGeometry).toHaveBeenCalledOnce());
+    post(scope, { type: 'cancel', requestId: 'dropped-frame' });
+    await settle();
+    expect(syncDocument).toHaveBeenCalledOnce();
+    expect(refinedPosts()).toBe(0);
+    // The gesture ends without an edit: the release it left is refined.
+    post(scope, { type: 'release-edit-preview', requestId: 'end', document });
+    await vi.waitFor(() => expect(refinedPosts()).toBe(1));
+    expect(syncDocument).toHaveBeenCalledTimes(2);
+  });
+
+  it('drops a draft refinement once a later commit is live, and holds it while that commit awaits adoption', async () => {
+    const bodyId = toBodyId('body_retired_draft');
+    const first = boxDocument('First release');
+    const second = boxDocument('Second release', 2);
+    let firstSyncs = 0;
+    const syncDocument = vi.fn(async (document: ProjectDocument) =>
+      document === first
+        ? releasedBody(
+            bodyId,
+            'first',
+            firstSyncs++ === 0 ? 'draft' : undefined
+          )
+        : releasedBody(bodyId, 'second')
+    );
+    const { scope } = await installWorker(syncDocument);
+    const synced = (requestId: string) =>
+      vi.waitFor(() =>
+        expect(
+          scope.postMessage.mock.calls.some(
+            ([message]) =>
+              message.type === 'sync' && message.requestId === requestId
+          )
+        ).toBe(true)
+      );
+    post(scope, { type: 'sync', document: first, requestId: 'first' });
+    await synced('first');
+    adopt(scope, first);
+    // The next release is checked at once and lands at full quality.
+    post(scope, { type: 'sync', document: second, requestId: 'second' });
+    await synced('second');
+    // Until the main thread adopts it, the first draft is not re-synced.
+    await settle();
+    expect(syncDocument).toHaveBeenCalledTimes(2);
+    adopt(scope, second);
+    await settle(1_300);
+    // Retired: never re-synced, so the kernel keeps the live commit.
+    expect(syncDocument).toHaveBeenCalledTimes(2);
+    expect(
+      scope.postMessage.mock.calls.some(
+        ([message]) => message.type === 'display-refined'
+      )
+    ).toBe(false);
+  });
+
+  it('refines a live draft once a checked sync nobody adopts stops holding it', async () => {
+    const bodyId = toBodyId('body_held_draft');
+    const live = boxDocument('Live release');
+    const copy = boxDocument('Copied part', 3);
+    let liveSyncs = 0;
+    const syncDocument = vi.fn(async (document: ProjectDocument) =>
+      document === live
+        ? releasedBody(bodyId, 'live', liveSyncs++ === 0 ? 'draft' : undefined)
+        : releasedBody(bodyId, 'copy')
+    );
+    const { scope } = await installWorker(syncDocument);
+    post(scope, { type: 'sync', document: live, requestId: 'live' });
+    await vi.waitFor(() => expect(syncDocument).toHaveBeenCalledOnce());
+    await settle(0);
+    adopt(scope, live);
+    post(scope, { type: 'sync', document: copy, requestId: 'copy' });
+    await vi.waitFor(
+      () =>
+        expect(
+          scope.postMessage.mock.calls.some(
+            ([message]) => message.type === 'display-refined'
+          )
+        ).toBe(true),
+      { timeout: 3_000 }
+    );
+    expect(syncDocument).toHaveBeenCalledTimes(3);
+    expect(syncDocument.mock.calls[2]![0]).toBe(live);
+  });
+
+  it('retries a refinement that failed, so a draft never stays on screen', async () => {
+    const bodyId = toBodyId('body_retried_draft');
+    const document = boxDocument('Retried release');
+    const syncDocument = vi
+      .fn()
+      .mockResolvedValueOnce(releasedBody(bodyId, 'draft', 'draft'))
+      .mockRejectedValueOnce(new Error('Draft display refinement failed.'))
+      .mockResolvedValue(releasedBody(bodyId, 'refined'));
+    const { scope } = await installWorker(syncDocument);
+    post(scope, { type: 'sync', document, requestId: 'commit' });
+    await vi.waitFor(() => expect(syncDocument).toHaveBeenCalledOnce());
+    await settle(0);
+    adopt(scope, document);
+    await vi.waitFor(
+      () =>
+        expect(
+          scope.postMessage.mock.calls.some(
+            ([message]) => message.type === 'display-refined'
+          )
+        ).toBe(true),
+      { timeout: 3_000 }
+    );
+    expect(syncDocument).toHaveBeenCalledTimes(3);
   });
 
   it('does not load the exact-kernel chunk for an empty project', async () => {

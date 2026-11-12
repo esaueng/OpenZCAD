@@ -411,15 +411,17 @@ test(
     expect(sidebarBounds!.x + sidebarBounds!.width).toBeLessThan(
       viewerBounds!.x + viewerBounds!.width - 100
     );
-    // The bottom chrome is the scale bar in the corner above the search bar
-    // (the readout draws only in a sketch); on a phone they must not overlap.
+    // The bottom chrome is the scale bar upright in the corner beside the
+    // search bar (the readout draws only in a sketch); on a phone they must
+    // not overlap.
     const rulerBounds = await page
       .locator('.viewport-scale-indicator')
       .boundingBox();
     const barBounds = await page.locator('.command-bar').boundingBox();
-    expect(rulerBounds!.y + rulerBounds!.height).toBeLessThanOrEqual(
-      barBounds!.y + 0.5
-    );
+    expect(
+      rulerBounds!.x + rulerBounds!.width <= barBounds!.x + 0.5 ||
+        rulerBounds!.y + rulerBounds!.height <= barBounds!.y + 0.5
+    ).toBe(true);
     await expect(page.locator('.viewer-rail-stack')).toBeVisible();
 
     // The three top islands keep to themselves: with equal-width flanks the
