@@ -127,9 +127,12 @@ export function buildLinearHandle(params: LinearRigParams): DragRig {
     value() {
       return current;
     },
-    valueFromRay(ray: THREE.Ray) {
+    valueFromRay(ray: THREE.Ray, _previous?: number, snap?: number) {
       const t = linearValueFromRay(ray, origin, direction);
-      return t === null ? null : clamp(t / scale);
+      if (t === null) return null;
+      const free = t / scale;
+      // Snapped first, then clamped: an end of the range is reached exactly.
+      return clamp(snap && snap > 0 ? Math.round(free / snap) * snap : free);
     },
     setWarning(warning: boolean) {
       headMaterial.color.set(

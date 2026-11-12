@@ -55,7 +55,16 @@ export interface DragRig {
    * Null when the ray names nothing (parallel to the rig's plane). Linear
    * rigs omit it and the viewport projects the pointer onto `direction`.
    */
-  valueFromRay?(ray: THREE.Ray, previous: number): number | null;
+  valueFromRay?(
+    ray: THREE.Ray,
+    previous: number,
+    /**
+     * A step to snap to, before the range clamps: a drag past an end that
+     * is no multiple of the step (a 12.04 face) still reaches that end.
+     * Rigs that omit it are snapped by the viewport after their clamp.
+     */
+    snap?: number
+  ): number | null;
   /**
    * Hides the rig's reference/sweep ghost while the body preview shows the
    * geometry change itself.

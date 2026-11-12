@@ -432,7 +432,8 @@ describe('in-place thread: picks and the dragged end (U11)', () => {
         anchor: 'end'
       }
     });
-    // Dragged back to the face's end, it is whole again, chamfers and all.
+    // Dragged back to the face's end, it is whole again, chamfers and all,
+    // and still starts at the top it was picked at.
     expect(
       threadSpec.request(
         { ...SLOTS, faces: [face] },
@@ -448,10 +449,102 @@ describe('in-place thread: picks and the dragged end (U11)', () => {
         faceHash: 9,
         profile: 'printable',
         clearance: 0.1,
+        anchor: 'end',
         chamferStart: true,
         chamferEnd: true
       }
     });
+  });
+
+  it('stores the far starting end of a new whole-face thread (review #3)', () => {
+    const values = initialValues({ length: 12, offset: 0 });
+    const request = (face: FacePick) =>
+      (
+        threadSpec.request(
+          { ...SLOTS, faces: [face] },
+          values,
+          defaults(),
+          CTX,
+          numbersOf(values)
+        ) as { thread: ThreadRequest }
+      ).thread;
+    // Picked near the top and never shortened: reopened, it still starts
+    // there, so its arrow and any shortening do too.
+    const top = request({ ...BOSS, point: { x: 3, y: 0, z: 10 } });
+    expect(top.anchor).toBe('end');
+    expect(top.length).toBeUndefined();
+    // Near the bottom, the start is the default and is left unwritten.
+    expect(
+      request({ ...BOSS, point: { x: 3, y: 0, z: 2 } }).anchor
+    ).toBeUndefined();
+  });
+
+  it('refuses a typed length or offset past the face end, and takes its end exactly (review #1)', () => {
+    const faces = { faces: [{ ...BOSS, point: { x: 3, y: 0, z: 10 } }] };
+    const refuse = threadSpec.refuseValue!;
+    // A 20 on a 12 face is refused, never quietly made the whole face.
+    expect(refuse('length', 20, { offset: 0 }, faces)).toMatch(
+      /at most 12, to the face's far end/
+    );
+    expect(refuse('length', 12.001, { offset: 0 }, faces)).not.toBeNull();
+    // Only the far end itself runs the whole face.
+    expect(refuse('length', 12, { offset: 0 }, faces)).toBeNull();
+    expect(refuse('length', 8, { offset: 0 }, faces)).toBeNull();
+    // Past an offset, less of the face is left.
+    expect(refuse('length', 10.5, { offset: 2 }, faces)).toMatch(/at most 10/);
+    expect(refuse('length', 10, { offset: 2 }, faces)).toBeNull();
+    expect(refuse('offset', 12, { length: 5 }, faces)).toMatch(/only 12 long/);
+    expect(refuse('offset', 3, { length: 5 }, faces)).toBeNull();
+    // Without a cylinder to measure, nothing is refused here.
+    expect(refuse('length', 20, {}, { faces: [] })).toBeNull();
+  });
+
+  it('works the same on a hole in an inch document, at a length that is no tenth', () => {
+    // A 1/4-20 tapped hole 0.53 in deep, its axis down from the plate's top.
+    const hole: FacePick = {
+      bodyId: 'body_p' as BodyId,
+      hash: 4,
+      topologyId: 'h',
+      surfaceType: 'cylinder',
+      cylinder: {
+        axisStart: { x: 1, y: 1, z: 0.53 },
+        axisEnd: { x: 1, y: 1, z: 0 },
+        radius: 0.1015
+      },
+      // Clicked inside the bore, near the plate's top (the axis start).
+      point: { x: 1, y: 1.1015, z: 0.5 }
+    };
+    expect(threadAnchor(hole)).toBe('start');
+    const handle = threadSpec.handles(
+      { ...SLOTS, faces: [hole] },
+      { length: 0.53, offset: 0 },
+      { ...CTX, units: 'inch' },
+      defaults()
+    )[0]!;
+    expect(handle).toMatchObject({ kind: 'linear', max: 0.53 });
+    if (handle.kind !== 'linear') throw new Error('expected an arrow');
+    const { params } = handle;
+    expect(params.origin.x).toBeCloseTo(1, 9);
+    expect(params.origin.y).toBeCloseTo(1.1015, 9);
+    expect(params.origin.z).toBeCloseTo(0.53, 9);
+    expect(
+      threadSummary(
+        inPlacePanelState(threadSpec, {}, { length: 0.53 }),
+        'inch',
+        { faces: [hole] }
+      )
+    ).toBe('Sized from the Ø0.203 inch face · Threads the full 0.53 inch');
+    // Its exact end is the whole face; a tenth short of it is partial.
+    const dragged = { ...CTX, units: 'inch' as const, touched: ['length'] };
+    const at = (length: number) => {
+      const values = initialValues({ length, offset: 0 });
+      return threadIsPartial(hole, values, numbersOf(values), dragged);
+    };
+    expect(at(0.53)).toBe(false);
+    expect(at(0.5)).toBe(true);
+    expect(
+      threadSpec.refuseValue!('length', 0.6, { offset: 0 }, { faces: [hole] })
+    ).toMatch(/at most 0.53/);
   });
 
   it('keeps no chamfer where an offset sets the thread off the face end', () => {
@@ -525,6 +618,36 @@ describe('in-place thread edits', () => {
     );
     const { featureKind: _kind, ...fields } = saved;
     expect(request).toEqual({ tool: 'thread', thread: fields });
+  });
+
+  it('writes a stored starting end back as stored, and none where none was', () => {
+    const base = {
+      featureKind: 'thread' as const,
+      targetBodyId: 'body_a' as BodyId,
+      faceHash: 9,
+      profile: 'printable' as const,
+      clearance: 0.1,
+      chamferStart: true,
+      chamferEnd: true
+    };
+    const values = initialValues({ length: 12 });
+    const cases: ThreadRequest[] = [
+      base,
+      { ...base, anchor: 'start' as const },
+      { ...base, anchor: 'end' as const }
+    ].map(({ featureKind: _kind, ...fields }) => fields);
+    for (const fields of cases) {
+      const saved = { featureKind: 'thread' as const, ...fields };
+      expect(
+        threadSpec.request(
+          { ...SLOTS, faces: [BOSS] },
+          values,
+          threadEditOptions(saved, evaluate, 'mm'),
+          { ...CTX, saved, touched: [] },
+          numbersOf(values)
+        )
+      ).toEqual({ tool: 'thread', thread: fields });
+    }
   });
 
   it('writes an untouched whole-face thread back exactly', () => {

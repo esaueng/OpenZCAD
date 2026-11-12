@@ -702,6 +702,8 @@ describe('useInPlaceCommand: thread', () => {
           faceHash: 31,
           profile: 'printable',
           clearance: 0.1,
+          // Picked near the top: it starts there, whole or not.
+          anchor: 'end',
           chamferStart: true,
           chamferEnd: true
         }
@@ -726,6 +728,44 @@ describe('useInPlaceCommand: thread', () => {
     await waitFor(() =>
       expect(built.at(-1)).toMatchObject({
         thread: { chamferStart: true, chamferEnd: true }
+      })
+    );
+    expect(
+      (built.at(-1) as { thread: { length?: number } }).thread.length
+    ).toBeUndefined();
+    // Whole, it still starts at the top it was picked near.
+    expect(built.at(-1)).toMatchObject({ thread: { anchor: 'end' } });
+  });
+
+  it('refuses a typed length past the face end instead of threading the whole face', async () => {
+    const { hook, built } = setup();
+    act(() => hook.result.current.start('thread', [], [BOSS]));
+    await waitFor(() => expect(hook.result.current.values.length).toBe(12));
+    let taken = true;
+    act(() => {
+      taken = hook.result.current.setValue('length', 20);
+    });
+    expect(taken).toBe(false);
+    expect(hook.result.current.refusal).toMatch(
+      /^20; a thread here runs at most 12/
+    );
+    expect(hook.result.current.canFinish).toBe(false);
+    expect(hook.result.current.values.length).toBe(12);
+    // As an expression too.
+    act(() => {
+      taken = hook.result.current.setValue('length', 15, 'boss_h + 3');
+    });
+    expect(taken).toBe(false);
+    expect(hook.result.current.refusal).toMatch(/^boss_h \+ 3 is 15; /);
+    // The far end itself is taken, and runs the whole face.
+    act(() => {
+      taken = hook.result.current.setValue('length', 12);
+    });
+    expect(taken).toBe(true);
+    expect(hook.result.current.refusal).toBeNull();
+    await waitFor(() =>
+      expect(built.at(-1)).toMatchObject({
+        thread: { chamferStart: true, chamferEnd: true, anchor: 'end' }
       })
     );
     expect(

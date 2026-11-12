@@ -796,7 +796,9 @@ export interface InPlaceToolSpec {
   refuseValue?(
     valueId: string,
     value: number,
-    values: Readonly<Record<string, number>>
+    values: Readonly<Record<string, number>>,
+    /** The picks, for a bound they set (a thread's length, its face's). */
+    slots?: Pick<InPlaceSlots, 'faces'>
   ): string | null;
   hint(
     slots: InPlaceSlots,

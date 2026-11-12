@@ -1764,7 +1764,8 @@ export function useInPlaceCommand(
           ? (IN_PLACE_TOOL_SPECS[current.tool].refuseValue?.(
               valueId,
               value,
-              current.values
+              current.values,
+              { faces: current.slots.faces }
             ) ?? null)
           : null;
       if (crossed) {

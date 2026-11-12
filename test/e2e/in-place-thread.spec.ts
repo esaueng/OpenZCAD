@@ -131,92 +131,94 @@ async function storedThreads(page: Page) {
   );
 }
 
-test('Thread in place: pick the boss near its top, drag the end short, edit it back unchanged', async ({
-  page
-}) => {
-  test.setTimeout(300_000);
-  await stubApi(page, { panelLayout: MODEL_ONLY });
-  const canvas = await openDocument(page, boss());
-  const moreTools = page.getByRole('button', { name: /^More tools/ });
-  if ((await moreTools.getAttribute('aria-expanded')) !== 'true') {
-    await moreTools.click();
+test(
+  'Thread in place: pick the boss near its top, drag the end short, edit it back unchanged',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(300_000);
+    await stubApi(page, { panelLayout: MODEL_ONLY });
+    const canvas = await openDocument(page, boss());
+    const moreTools = page.getByRole('button', { name: /^More tools/ });
+    if ((await moreTools.getAttribute('aria-expanded')) !== 'true') {
+      await moreTools.click();
+    }
+    await page.getByRole('button', { name: /^Thread\b/ }).click();
+    const bar = page.getByRole('group', { name: 'Thread command' });
+    await expect(bar).toBeVisible();
+    await expect(page.locator('form.feature-form')).toHaveCount(0);
+    await expect(bar).toContainText('near the end the thread starts at');
+
+    // One pick: the boss's side, near its top. Its diameter, its length and
+    // where the thread starts all come from that face.
+    await setSelectionFilter(page, 'Face');
+    await clickWorldPoint(page, [0, -6, 10]);
+    await expect(bar).toContainText('Drag the arrow');
+    const length = page.getByTestId('command-handle-length');
+    await expect(length).toHaveText('Length 12 mm');
+    // Options reads out what the pick decided.
+    await bar.locator('summary').click();
+    await expect(bar).toContainText('Sized from the Ø12 mm face');
+    await expect(bar).toContainText('Threads the full 12 mm');
+    await bar.locator('summary').click();
+    await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled({
+      timeout: 60_000
+    });
+
+    // Drag the arrow (at the bottom: the thread runs down from the top) up
+    // the face to 4 above the bottom: 8 threaded.
+    await waitForStillViewport(page);
+    const grip = (await commandHandles(canvas)).length!;
+    expect(grip.value).toBeCloseTo(12, 6);
+    await page.mouse.move(grip.x, grip.y);
+    await page.mouse.down();
+    for (let step = 1; step <= 8; step += 1) {
+      const at = await projected(canvas, [0, -6, (4 * step) / 8]);
+      await page.mouse.move(at.x, at.y, { steps: 2 });
+    }
+    await page.mouse.up();
+    await expect
+      .poll(async () => (await commandHandles(canvas)).length?.value ?? 0)
+      .toBeLessThan(8.5);
+    const dragged = (await commandHandles(canvas)).length!.value;
+    expect(dragged).toBeGreaterThan(7.5);
+    await bar.locator('summary').click();
+    await expect(bar).toContainText(/Threads [\d.]+ of 12 mm, ends plain/);
+    await bar.locator('summary').click();
+    // A thread is slow to build and mesh: give the dragged frame its time.
+    await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled({
+      timeout: 120_000
+    });
+    await finishInPlaceCommand(page, 'Thread');
+    await setSelectionFilter(page, 'Any');
+
+    const [created, ...others] = await storedThreads(page);
+    expect(others).toHaveLength(0);
+    expect(created).toMatchObject({
+      profile: 'printable',
+      clearance: 0.1,
+      anchor: 'end'
+    });
+    expect(Number(created!.length)).toBeCloseTo(dragged, 6);
+    expect(created!.majorDiameter).toBeUndefined();
+    expect(created!.chamferStart).toBeUndefined();
+    expect(created!.chamferEnd).toBeUndefined();
+
+    // Re-armed from History and finished untouched, it is stored as it was.
+    await revealModelPanel(page, 'History');
+    await page
+      .locator('.feature-row', { hasText: 'Thread' })
+      .locator('.feature-row-main')
+      .click();
+    const edit = page.getByRole('group', { name: 'Edit Thread command' });
+    await expect(edit).toBeVisible();
+    await expect(page.getByTestId('command-handle-length')).toBeVisible();
+    await expect(edit.getByRole('button', { name: /Done/ })).toBeEnabled({
+      timeout: 120_000
+    });
+    await finishInPlaceCommand(page, 'Edit Thread');
+    await expect(page.getByRole('contentinfo')).toContainText('Edited Thread', {
+      timeout: 30_000
+    });
+    expect(await storedThreads(page)).toEqual([created]);
   }
-  await page.getByRole('button', { name: /^Thread\b/ }).click();
-  const bar = page.getByRole('group', { name: 'Thread command' });
-  await expect(bar).toBeVisible();
-  await expect(page.locator('form.feature-form')).toHaveCount(0);
-  await expect(bar).toContainText('near the end the thread starts at');
-
-  // One pick: the boss's side, near its top. Its diameter, its length and
-  // where the thread starts all come from that face.
-  await setSelectionFilter(page, 'Face');
-  await clickWorldPoint(page, [0, -6, 10]);
-  await expect(bar).toContainText('Drag the arrow');
-  const length = page.getByTestId('command-handle-length');
-  await expect(length).toHaveText('Length 12 mm');
-  // Options reads out what the pick decided.
-  await bar.locator('summary').click();
-  await expect(bar).toContainText('Sized from the Ø12 mm face');
-  await expect(bar).toContainText('Threads the full 12 mm');
-  await bar.locator('summary').click();
-  await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled({
-    timeout: 60_000
-  });
-
-  // Drag the arrow (at the bottom: the thread runs down from the top) up
-  // the face to 4 above the bottom: 8 threaded.
-  await waitForStillViewport(page);
-  const grip = (await commandHandles(canvas)).length!;
-  expect(grip.value).toBeCloseTo(12, 6);
-  await page.mouse.move(grip.x, grip.y);
-  await page.mouse.down();
-  for (let step = 1; step <= 8; step += 1) {
-    const at = await projected(canvas, [0, -6, (4 * step) / 8]);
-    await page.mouse.move(at.x, at.y, { steps: 2 });
-  }
-  await page.mouse.up();
-  await expect
-    .poll(async () => (await commandHandles(canvas)).length?.value ?? 0)
-    .toBeLessThan(8.5);
-  const dragged = (await commandHandles(canvas)).length!.value;
-  expect(dragged).toBeGreaterThan(7.5);
-  await bar.locator('summary').click();
-  await expect(bar).toContainText(/Threads [\d.]+ of 12 mm, ends plain/);
-  await bar.locator('summary').click();
-  // A thread is slow to build and mesh: give the dragged frame its time.
-  await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled({
-    timeout: 120_000
-  });
-  await finishInPlaceCommand(page, 'Thread');
-  await setSelectionFilter(page, 'Any');
-
-  const [created, ...others] = await storedThreads(page);
-  expect(others).toHaveLength(0);
-  expect(created).toMatchObject({
-    profile: 'printable',
-    clearance: 0.1,
-    anchor: 'end'
-  });
-  expect(Number(created!.length)).toBeCloseTo(dragged, 6);
-  expect(created!.majorDiameter).toBeUndefined();
-  expect(created!.chamferStart).toBeUndefined();
-  expect(created!.chamferEnd).toBeUndefined();
-
-  // Re-armed from History and finished untouched, it is stored as it was.
-  await revealModelPanel(page, 'History');
-  await page
-    .locator('.feature-row', { hasText: 'Thread' })
-    .locator('.feature-row-main')
-    .click();
-  const edit = page.getByRole('group', { name: 'Edit Thread command' });
-  await expect(edit).toBeVisible();
-  await expect(page.getByTestId('command-handle-length')).toBeVisible();
-  await expect(edit.getByRole('button', { name: /Done/ })).toBeEnabled({
-    timeout: 120_000
-  });
-  await finishInPlaceCommand(page, 'Edit Thread');
-  await expect(page.getByRole('contentinfo')).toContainText('Edited Thread', {
-    timeout: 30_000
-  });
-  expect(await storedThreads(page)).toEqual([created]);
-});
+);

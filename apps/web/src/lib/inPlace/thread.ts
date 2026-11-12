@@ -492,8 +492,12 @@ export interface ThreadExtent {
   partial?: boolean;
   /** The end of the face it starts at; absent is the start. */
   from?: ThreadAnchor;
-  /** An edit's stored `anchor: 'end'` goes back even where it is moot. */
-  keepAnchor?: boolean;
+  /**
+   * The edited thread's stored `anchor`: written back as stored while the
+   * thread still starts there, so an untouched edit keeps a stored `'start'`
+   * and a legacy thread without one keeps the field absent.
+   */
+  storedAnchor?: ThreadAnchor;
   /** The offset as a number, where it resolves. */
   offset?: number;
 }
@@ -544,7 +548,11 @@ export function threadRequestFields(
   const offsetStored = offset !== undefined && offset !== 0;
   if (offsetStored) fields.offset = offset;
   const from = extent.from ?? 'start';
-  if (from === 'end' && (partial || offsetStored || extent.keepAnchor)) {
+  // The end it starts at is stored whenever it is the far one, a whole-face
+  // thread's included: reopened, its arrow and any shortening start there.
+  if (extent.storedAnchor !== undefined && extent.storedAnchor === from) {
+    fields.anchor = from;
+  } else if (from === 'end') {
     fields.anchor = 'end';
   }
   const phase = values.phaseDeg;
@@ -610,6 +618,26 @@ export const threadSpec: InPlaceToolSpec = {
     }
   ],
   summary: threadSummary,
+  refuseValue(valueId, value, values, slots) {
+    // A typed length or offset past the face's far end is refused: only a
+    // length that reaches the end exactly runs the whole face.
+    const geometry = threadFace(slots?.faces[0]);
+    if (!geometry) return null;
+    const round = (number: number) => Math.round(number * 1e6) / 1e6;
+    const slack = tolerance(geometry.length);
+    if (valueId === 'length') {
+      const reach = geometry.length - Math.max(values.offset ?? 0, 0);
+      return value > reach + slack
+        ? `a thread here runs at most ${round(reach)}, to the face's far end.`
+        : null;
+    }
+    if (valueId === 'offset') {
+      return value >= geometry.length - slack
+        ? `the face is only ${round(geometry.length)} long.`
+        : null;
+    }
+    return null;
+  },
   defaults(slots, _ctx, numbers): Record<string, number> {
     // Until its end is dragged, the thread runs the rest of the face.
     const geometry = threadFace(slots.faces[0]);
@@ -660,7 +688,9 @@ export const threadSpec: InPlaceToolSpec = {
         ...threadRequestFields(values, options, ctx.units ?? 'mm', {
           partial: threadIsPartial(face, values, all, ctx),
           from,
-          keepAnchor: savedThread(ctx)?.anchor === 'end',
+          ...(savedThread(ctx)?.anchor === undefined
+            ? {}
+            : { storedAnchor: savedThread(ctx)!.anchor! }),
           ...(all.offset === undefined ? {} : { offset: all.offset })
         })
       }

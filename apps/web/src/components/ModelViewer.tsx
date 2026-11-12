@@ -9894,17 +9894,20 @@ export function ModelViewer({
       ) {
         event.preventDefault();
         setRayFromEvent(event);
+        // Angles in whole degrees and lengths in tenths, unless Shift asks
+        // for the free value. A length rig snaps before it clamps, so a drag
+        // past an end that is no tenth (a thread's 12.04 face) reaches it.
+        const step = draggedRig.kind === ANGLE_RIG_KIND ? 1 : 0.1;
+        const free = freeValue(event);
+        const snapsItself = draggedRig.kind === LINEAR_RIG_KIND;
         const next = draggedRig.valueFromRay?.(
           context.raycaster.ray,
-          draggedRig.value()
+          draggedRig.value(),
+          snapsItself && !free ? step : undefined
         );
         if (next !== null && next !== undefined) {
-          // Angles in whole degrees and lengths in tenths, unless Shift asks
-          // for the free value.
-          const step = draggedRig.kind === ANGLE_RIG_KIND ? 1 : 0.1;
-          const value = freeValue(event)
-            ? next
-            : Math.round(next / step) * step;
+          const value =
+            free || snapsItself ? next : Math.round(next / step) * step;
           if (value !== draggedRig.value()) {
             draggedRig.setValue(value);
             onCommandHandlePreviewRef.current?.(
