@@ -393,6 +393,42 @@ replaying: their later features stored the misplaced names together with the
 exact witness of the face they actually picked. The default availability is
 unchanged; a matching hash is still never a silent v5 rebind there.
 
+## Amendment (M07, 2026-11-12): journal outputs are not source-indexed
+
+The amendment above attributed the wrong names to positional inference. The
+kernel's boss-resize bindings are geometrically correct; the reader misread
+them. `resolveOperationOutput(op, kind, i)` is the op's `i`-th output in
+journal event order, which is result order, and it reports no source. The
+move-face reader read output `i` as what source face `i` became. That is right
+only while the kernel rebuilds faces in source order, and construction moves
+do not always: on a body with rounded corners a face-distance edit swapped the
+corner bands' names across the part.
+
+Move-face journals are now read by the kernel's own events. Each source face
+gets a unique scratch face name, `propagateAttributesForOp` carries the names
+along the journaled `Preserved`/`Modified` events, and the result faces' names
+are read back and restored. A split source, and every unbound source of a
+journal that merged sources, publishes no name and takes no fallback.
+Pattern face claims keep their checked layout reading: the kernel journals
+copies as `Generated`, which propagation does not follow, and a claim there can
+only withhold a name the transformed witness already proves.
+
+Correctly paired `inferred` history is still refused. Trusting it would
+publish each name on the face that really owns it, and a document saved while
+the old reader named faces stores some of those names for a different face.
+Lineage resolution treats a published name as authoritative, so such a
+reference would resolve to the name's real owner: replaying the legacy case in
+`test/cylinder-resize-face-lineage.test.ts` with inferred history trusted
+resolves the wall resize onto a plane ("The selected face is no longer
+cylindrical"), and a plane-to-plane push would move the wrong face without an
+error. Refused, those names are not published, and step 2 above finds the
+picked face by its exact stored witness.
+
+Fixing the construction reader has the same edge for documents that stored a
+name the old reader misplaced after a construction move: their reference now
+resolves to the face that owns the name. The reader cannot tell those documents
+apart, and keeping the defect would misname every new edit of that kind.
+
 ## Consequences
 
 - Schema-v5 references are additive inside current schema-v6 documents, and
