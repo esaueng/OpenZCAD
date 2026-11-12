@@ -89,10 +89,10 @@ export function parseFragment(name, source) {
   }
   // The body becomes part of one table cell, where a reference definition is
   // plain text and its links never resolve.
-  const reference = /^ {0,3}(\[[^\]\n]+\]:)/m.exec(match[2]);
+  const [reference] = referenceDefinitions(match[2].replace(/\r\n/g, '\n'));
   if (reference) {
     throw new Error(
-      `${name}: reference definition ${reference[1]} cannot work inside a table cell; write the link inline`
+      `${name}: reference definition ${reference} cannot work inside a table cell; write the link inline`
     );
   }
   const evidence = match[2].replace(/\s+/g, ' ').trim();
@@ -340,26 +340,61 @@ export function readFragments(repoRoot = REPO_ROOT) {
  */
 export function fragmentLinks(text) {
   return linkDestinations(text).flatMap((destination) => {
+    // Compare the path a reader would follow, so `./`, `x/../` and
+    // percent-encoding cannot hide a fragment link.
+    let target = destination.replace(/[#?].*$/, '');
+    try {
+      target = decodeURIComponent(target);
+    } catch {
+      // A malformed escape is compared as written.
+    }
     const match =
-      /^(?:\.{1,2}\/)*(?:docs\/)?roadmap-evidence\/([a-z0-9][a-z0-9.-]*--[a-z0-9-]+\.md)(?:[#?].*)?$/.exec(
-        destination
+      /^\/?(?:\.\.\/)*(?:docs\/)?roadmap-evidence\/([a-z0-9][a-z0-9.-]*--[a-z0-9-]+\.md)$/.exec(
+        path.posix.normalize(target.replace(/\\/g, '/'))
       );
     return match ? [match[1]] : [];
   });
 }
 
 /**
- * Every Markdown link destination in `text`: inline links, bare or in angle
- * brackets (`[x](a.md)`, `[x](<a.md>)`), and reference definitions
- * (`[x]: a.md`).
+ * A reference definition (`[x]: a.md`, `[x]: <a.md> "title"`), whose
+ * destination may sit on the next line. The destination must end the line or
+ * be followed only by a quoted title, so prose such as `[x]: was the marker`
+ * is not one.
+ */
+const REFERENCE_DEFINITION =
+  /^ {0,3}(\[[^\]\n]+\]:)[ \t]*(?:\n[ \t]*)?(?:<([^>\n]*)>|([^\s<][^\s]*))(?:[ \t]+(?:"[^"\n]*"|'[^'\n]*'|\([^)\n]*\)))?[ \t]*$/gm;
+
+/** `text` with fenced code blocks and code spans blanked out. */
+function withoutCode(text) {
+  return text
+    .replace(/^ {0,3}(```|~~~)[\s\S]*?^ {0,3}\1/gm, ' ')
+    .replace(/(`+)(?:(?!\n[ \t]*\n)[\s\S])*?\1/g, ' ');
+}
+
+/** Reference definitions in `text`, outside code, as written (`[x]:`). */
+export function referenceDefinitions(text) {
+  return Array.from(
+    withoutCode(text).matchAll(REFERENCE_DEFINITION),
+    (match) => match[1]
+  );
+}
+
+/**
+ * Every Markdown link destination in `text` outside code: inline links, bare
+ * or in angle brackets (`[x](a.md)`, `[x](<a.md>)`), and reference
+ * definitions, including a destination on the line after the label.
  */
 export function linkDestinations(text) {
-  const pick = (match) => match[1] ?? match[2];
+  const prose = withoutCode(text);
   return [
-    ...Array.from(text.matchAll(/\]\(\s*(?:<([^>\n]*)>|([^)\s]+))/g), pick),
     ...Array.from(
-      text.matchAll(/^ {0,3}\[[^\]\n]+\]:[ \t]*(?:<([^>\n]*)>|(\S+))/gm),
-      pick
+      prose.matchAll(/\]\(\s*(?:<([^>\n]*)>|([^)\s]+))/g),
+      (match) => match[1] ?? match[2]
+    ),
+    ...Array.from(
+      prose.matchAll(REFERENCE_DEFINITION),
+      (match) => match[2] ?? match[3]
     )
   ];
 }

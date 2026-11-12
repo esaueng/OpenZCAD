@@ -17,6 +17,7 @@ import {
   foldRepo,
   fragmentLinks,
   parseFragment,
+  referenceDefinitions,
   ROADMAP_PATH,
   splitRow,
   STATES
@@ -302,9 +303,47 @@ describe('roadmap evidence fragments', () => {
           '[s]: <docs/plans/p.md>\n'
       )
     ).toEqual(['a01--x.md', 'h02--y.md']);
+    // A destination on the line after its label, and paths that resolve to a
+    // fragment only once normalized or decoded.
+    expect(
+      fragmentLinks(
+        '[r]:\n    docs/roadmap-evidence/a01--x.md\n\n' +
+          '[e](docs/roadmap-evidence/./a01--y.md), ' +
+          '[u](docs/plans/../roadmap-evidence/a01--z.md), ' +
+          '[p](docs/roadmap%2Devidence/a01--w.md#top) and ' +
+          '[s](/docs/roadmap-evidence/a01--v.md).'
+      )
+    ).toEqual([
+      'a01--y.md',
+      'a01--z.md',
+      'a01--w.md',
+      'a01--v.md',
+      'a01--x.md'
+    ]);
+    // Code and prose that only look like links are not links.
+    expect(
+      fragmentLinks(
+        '`[a](docs/roadmap-evidence/a01--x.md)` and\n' +
+          '```\n[r]: docs/roadmap-evidence/a01--y.md\n```\n'
+      )
+    ).toEqual([]);
+    expect(
+      referenceDefinitions(
+        '[x]: was the literal marker in the test.\n' +
+          'A span `that wraps\n[y]: value` here.\n'
+      )
+    ).toEqual([]);
+    expect(
+      referenceDefinitions('[a]: docs/a.md "Title"\n[b]:\n  <docs/b.md>\n')
+    ).toEqual(['[a]:', '[b]:']);
     for (const [ledger, fragmentBody, message] of [
       [
         `${LEDGER}\nSee [it](docs/roadmap-evidence/a01--live.md).`,
+        'Live.',
+        /ROADMAP\.md: links to fragment a01--live\.md/
+      ],
+      [
+        `${LEDGER}\n\n[it]:\n    docs/roadmap-evidence/./a01--live.md\n`,
         'Live.',
         /ROADMAP\.md: links to fragment a01--live\.md/
       ],
