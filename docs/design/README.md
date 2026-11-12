@@ -83,11 +83,11 @@ All visible controls and text are code-native. The concept image is a visual spe
 Parameters, Objects, History, Revisions and Diagnostics are independent panels (U08). The contract is the [dockable model panels plan](../plans/dockable-panels-plan-2026-10-20.md); the [roadmap row](../../ROADMAP.md#u08) records what shipped.
 
 - **Header.** Drag grip (also the keyboard **Move** menu), icon, title and count, **Pin**, **Pop out** and **Close**. Panels never fold; room comes from resizing, closing or moving them.
-- **Unpinned.** A rail press opens a panel beside the rail's inner edge. One panel is unpinned at a time, the next one replaces it, and clicking the model leaves it open; its footer offers Pin.
+- **Unpinned.** A rail press opens a panel beside the rail's inner edge. One panel is unpinned at a time, the next one replaces it, and clicking the model leaves it open; its header's Pin says it is temporary and docks it. Where the stage has no room for another column it stands under the panels pinned in the first right column (or the left one, with no right dock), which stay in view.
 - **Docked.** Pin docks a panel. The right dock holds up to three columns and the left up to two, each dock's rail on its inner edge. Columns stack panels, and the gap between two resizes them (90 px minimum) or, on a double-click, splits them evenly. Close remembers where a panel was, and its rail button reopens it there.
 - **Floating.** Pop out, or a drop on the model, floats a panel as a window that moves by its header and resizes from its corner (260–600 px wide, at least 160 px tall). Dropping a panel on a window stacks the two; a press, focus, rail press or ⌘K brings a window to the front.
 - **Dragging.** A header or a rail icon dragged 4 px or more lifts the panel to a title chip, and a slot preview shows where it will land: a column, a new column past either rail, a window, or a new window. The Move menu (Dock left/right, New column left/right, Float, Move to, Move up/down, Close) and `Alt+↑`/`Alt+↓` reach every slot from the keyboard.
-- **View options.** The rail's View options menu picks a preset — **Essentials** (Objects left, Parameters right, a new device's layout), Full workspace, Modeling, Review or Model only — and holds Hide all panels (`Ctrl+\`, `⌘\` on macOS), Lock layout, Compact rows and Panel width S/M/L (256/296/360 px).
+- **Panel layout.** The rail's Panel layout menu picks a preset — **Essentials** (Objects left, Parameters right, a new device's layout), Full workspace, Modeling, Review or Model only — and holds Hide all panels (`Ctrl+\`, `⌘\` on macOS), Lock layout, Compact rows and Panel width S/M/L (256/296/360 px).
 - **Narrow stages.** The docks take at most 60% of the stage width; columns that do not fit are parked (left before right, outermost first) and open from their rail buttons. At 720 px and below nothing docks or floats: one panel shows at a time in the phone lane.
 - **Persistence.** The layout is per device, in `openzcad-panel-layout:v1`, beside the older `openzcad-panel-state:v1`, which it migrated from.
 
@@ -95,7 +95,7 @@ Parameters, Objects, History, Revisions and Diagnostics are independent panels (
 
 ![History and Revisions stacked in one floating window over the model](./readme-panels-floating-window.png)
 
-![The View options menu, with Essentials checked](./readme-panels-view-options.png)
+![The Panel layout menu, with Essentials checked](./readme-panels-view-options.png)
 
 The captures are 1600 × 1000 and come from `test/e2e/docs-captures.spec.ts`, which seeds each layout and runs only with `OZ_CAPTURE=1` (`OZ_CAPTURE=1 pnpm exec playwright test test/e2e/docs-captures.spec.ts`); the committed PNGs were then re-saved with lossless optimisation.
 

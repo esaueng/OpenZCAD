@@ -1776,7 +1776,6 @@ import {
   applyPreset,
   closePanel,
   computePanelGeometry,
-  isPanelCoveredByInspection,
   isPanelOpen,
   loadPanelLayout,
   matchingPreset,
@@ -29459,10 +29458,6 @@ export function App() {
   const panelShowing = (id: PanelId) =>
     !panelsHidden &&
     isPanelOpen(panelLayout, id) &&
-    !(
-      panelGeometry &&
-      isPanelCoveredByInspection(panelLayout, id, panelGeometry)
-    ) &&
     (panelGeometry === null ||
       (panelGeometry.phone
         ? phonePanel === id

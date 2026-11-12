@@ -61,9 +61,42 @@ export interface ViewOptionsMenuProps {
   onWidth(width: PanelWidth): void;
 }
 
+/** The menu keeps this far from the window's top and foot. */
+export const PANEL_LAYOUT_MENU_MARGIN = 16;
+
 /**
- * The panel rail's View options button and its menu: the presets, Hide all,
- * Lock, Compact rows and the column width. Picking an item keeps the menu
+ * Where the Panel layout menu opens: to the rail's left, hanging from the
+ * button's top. Where that would run past the window's foot it rises from
+ * the button's foot instead, so it reads as the button's menu rather than
+ * something pressed against the window's edge (it used to stop 8px short of
+ * it, lower than every island on the stage). Taller than the window allows,
+ * it is held `PANEL_LAYOUT_MENU_MARGIN` from the top and scrolls inside
+ * (CSS caps its height by the same margin).
+ */
+export function placePanelLayoutMenu(
+  anchor: { left: number; top: number; bottom: number },
+  menu: { width: number; height: number },
+  viewport: { width: number; height: number }
+): { x: number; y: number } {
+  const margin = PANEL_LAYOUT_MENU_MARGIN;
+  // Sideways it keeps the 8px it always has: a phone has none to spare.
+  const x = Math.max(
+    8,
+    Math.min(anchor.left - 10 - menu.width, viewport.width - 8)
+  );
+  const foot = viewport.height - margin;
+  const hanging = anchor.top - 4;
+  const y =
+    hanging + menu.height <= foot
+      ? hanging
+      : Math.min(anchor.bottom + 4, foot) - menu.height;
+  return { x, y: Math.max(margin, y) };
+}
+
+/**
+ * The panel rail's Panel layout button and its menu: the presets, Hide all,
+ * Lock, Compact rows and the column width. (Once "View options", though it
+ * holds no view option: those are the rail's own buttons.) Picking an item keeps the menu
  * open, so a setting reads back at once; Escape, a press outside, the button
  * again or Tab close it. A locked layout disables the presets and the width,
  * which would rearrange or resize every panel, and says why.
@@ -74,14 +107,14 @@ export function ViewOptionsMenu(props: ViewOptionsMenuProps) {
   return (
     <>
       <Tooltip
-        label="View options"
+        label="Panel layout"
         description="Presets, Hide all, Lock, Compact and Width"
       >
         <button
           ref={buttonRef}
           type="button"
           className={`rail-button${open ? ' active' : ''}`}
-          aria-label="View options"
+          aria-label="Panel layout"
           aria-haspopup="menu"
           aria-expanded={open}
           onClick={() => setOpen((current) => !current)}
@@ -122,8 +155,9 @@ function ViewOptionsList({
   );
   useMenuKeyboard(ref);
 
-  // To the rail's left, level with the button, and inside the window. It
-  // follows the button every frame while open: Hide all, Model only or a
+  // To the rail's left, beside the button, and inside the window with a
+  // margin (`placePanelLayoutMenu`). It follows the button every frame
+  // while open: Hide all, Model only or a
   // width change moves the rail, which slides to its new place.
   useLayoutEffect(() => {
     let frame = 0;
@@ -132,14 +166,10 @@ function ViewOptionsList({
       const menu = ref.current?.getBoundingClientRect();
       const anchor = anchorRef.current?.getBoundingClientRect();
       if (menu && anchor) {
-        const x = Math.max(
-          8,
-          Math.min(anchor.left - 10 - menu.width, window.innerWidth - 8)
-        );
-        const y = Math.max(
-          8,
-          Math.min(anchor.top - 4, window.innerHeight - menu.height - 8)
-        );
+        const { x, y } = placePanelLayoutMenu(anchor, menu, {
+          width: window.innerWidth,
+          height: window.innerHeight
+        });
         if (`${x},${y}` !== placed) {
           placed = `${x},${y}`;
           setPosition({ x, y });
@@ -203,7 +233,7 @@ function ViewOptionsList({
       onKeyDown={onMenuKeyDown}
     >
       <div id={`${id}-heading`} className="context-menu-heading">
-        View options
+        Panel layout
       </div>
       <div role="group" aria-labelledby={`${id}-layouts`}>
         <div id={`${id}-layouts`} className="view-options-group-label">

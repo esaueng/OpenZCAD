@@ -420,7 +420,7 @@ for (const width of [1440, 390]) {
 }
 
 test(
-  'temporary inspection preserves the model lane and restores the dock',
+  'a temporary panel shares the pinned column, which stays open, and gives the room back',
   { tag: '@ci-smoke' },
   async ({ page }) => {
     test.setTimeout(90_000);
@@ -434,7 +434,7 @@ test(
       page.getByRole('button', { name: 'Build', exact: true })
     ).toBeVisible({ timeout: 30_000 });
     await page
-      .getByRole('button', { name: 'View options', exact: true })
+      .getByRole('button', { name: 'Panel layout', exact: true })
       .click();
     await page.getByRole('menuitemradio', { name: /^Essentials/ }).click();
     await page.keyboard.press('Escape');
@@ -446,45 +446,88 @@ test(
       name: 'Parameters',
       exact: true
     });
+    const parametersRail = page.getByRole('button', {
+      name: 'Parameters panel',
+      exact: true
+    });
+    const historyRail = page.getByRole('button', {
+      name: 'History panel',
+      exact: true
+    });
     const before = await parameters.boundingBox();
     expect(before).not.toBeNull();
-    await page
-      .getByRole('button', { name: 'History panel', exact: true })
-      .click();
-    const history = page.getByRole('region', { name: 'History', exact: true });
-    await expect(history).toBeVisible();
-    await expect(history).toBeFocused();
-    await expect(
-      page.getByRole('button', { name: 'Parameters panel', exact: true })
-    ).toHaveAttribute('aria-pressed', 'false');
-    await expect
-      .poll(async () => Math.abs((await history.boundingBox())!.x - before!.x))
-      .toBeLessThan(0.5);
-    await expect(
-      page.locator('.panel-column[data-side="right"]')
-    ).toHaveAttribute('inert', '');
-    await expect(
-      page.getByRole('region', { name: 'Parameters', exact: true })
-    ).toHaveCount(0);
-    await page
-      .getByRole('button', { name: 'Close History', exact: true })
-      .click();
-    await expect(parameters).toBeVisible();
-    await expect(
-      page.locator('.panel-column[data-side="right"]')
-    ).not.toHaveAttribute('inert');
-    await expect(
-      page.getByRole('button', { name: 'History panel', exact: true })
-    ).toBeFocused();
-    await page
-      .getByRole('button', { name: 'History panel', exact: true })
-      .click();
-    await expect(history).toBeFocused();
-    await page.keyboard.press('Escape');
-    await expect(history).not.toBeVisible();
-    await expect(parameters).toBeVisible();
-    await expect(
-      page.getByRole('button', { name: 'History panel', exact: true })
-    ).toBeFocused();
+    await expect(parametersRail).toHaveAttribute('aria-pressed', 'true');
+
+    for (const dismiss of ['close', 'escape'] as const) {
+      await historyRail.click();
+      const history = page.getByRole('region', {
+        name: 'History',
+        exact: true
+      });
+      await expect(history).toBeVisible();
+      await expect(history).toBeFocused();
+      // Essentials at 1440px has no room for a third column. The temporary
+      // panel used to cover Parameters, pinned or not, and its rail button
+      // read as closed; it stands under it now, in the same column.
+      await expect(parameters).toBeVisible();
+      await expect(parametersRail).toHaveAttribute('aria-pressed', 'true');
+      await expect(
+        parameters.getByRole('button', { name: 'Pin Parameters', exact: true })
+      ).toHaveAttribute('aria-pressed', 'true');
+      await expect(
+        page.locator('.panel-column[data-side="right"]')
+      ).not.toHaveAttribute('inert');
+      await expect
+        .poll(async () => {
+          const pinned = (await parameters.boundingBox())!;
+          const temporary = (await history.boundingBox())!;
+          return (
+            Math.abs(temporary.x - before!.x) < 0.5 &&
+            Math.abs(pinned.x - before!.x) < 0.5 &&
+            Math.abs(pinned.y - before!.y) < 0.5 &&
+            pinned.y + pinned.height <= temporary.y &&
+            // A one-row History takes little: Parameters keeps most of it.
+            temporary.height < pinned.height
+          );
+        })
+        .toBe(true);
+      // Stated once, on the header's own Pin.
+      await expect(history.locator('footer')).toHaveCount(0);
+      await expect(history.getByRole('button', { name: /^Pin/ })).toHaveCount(
+        1
+      );
+      // Parameters still takes input beside it.
+      await parameters
+        .getByRole('textbox', { name: 'New parameter name' })
+        .fill('gap');
+      await expect(
+        parameters.getByRole('textbox', { name: 'New parameter name' })
+      ).toHaveValue('gap');
+      await parameters
+        .getByRole('textbox', { name: 'New parameter name' })
+        .fill('');
+
+      if (dismiss === 'close') {
+        await page
+          .getByRole('button', { name: 'Close History', exact: true })
+          .click();
+      } else {
+        await history.focus();
+        await page.keyboard.press('Escape');
+      }
+      await expect(history).toHaveCount(0);
+      await expect(historyRail).toBeFocused();
+      // The room comes back: Parameters is where and as tall as it was.
+      await expect
+        .poll(async () => {
+          const pinned = (await parameters.boundingBox())!;
+          return (
+            Math.abs(pinned.y - before!.y) < 0.5 &&
+            Math.abs(pinned.height - before!.height) < 0.5
+          );
+        })
+        .toBe(true);
+      await expect(parametersRail).toHaveAttribute('aria-pressed', 'true');
+    }
   }
 );

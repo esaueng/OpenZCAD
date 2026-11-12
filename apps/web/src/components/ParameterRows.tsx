@@ -1,5 +1,5 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
-import { Eye, EyeOff, Pencil, Plus, Trash2 } from 'lucide-react';
+import { ChevronDown, Eye, EyeOff, Pencil, Plus, Trash2 } from 'lucide-react';
 import type { BodyId, ParameterKind, ParameterNode } from '@openzcad/shared';
 import { formatNumber } from '../lib/model';
 import { parameterDisplayName } from '../lib/parameterDisplayName';
@@ -7,6 +7,7 @@ import {
   SAVE_REPRODUCTION_HINT,
   SAVE_REPRODUCTION_LABEL
 } from '../lib/selectionCalloutView';
+import { Tooltip } from './Tooltip';
 
 /**
  * The parameter table rows, shared between the Build sidebar and the Tweak
@@ -90,12 +91,23 @@ const QUANTITY_LABELS: Record<ParameterKind | 'unitless', string> = {
   number: 'Number',
   unitless: 'Unitless'
 };
+/**
+ * What the picker shows at rest, in the three characters its cell has. A
+ * unitless parameter read "—", which looked like an empty value or a minus
+ * button rather than a type: it fits any field, so it says "any".
+ */
 const QUANTITY_GLYPHS: Record<ParameterKind | 'unitless', string> = {
   length: 'len',
   angle: '°',
   number: '#',
-  unitless: '—'
+  unitless: 'any'
 };
+const QUANTITY_PHRASES: Record<ParameterKind, string> = {
+  length: 'a length',
+  angle: 'an angle',
+  number: 'a number'
+};
+const QUANTITY_OPTIONS = ['unitless', 'length', 'angle', 'number'] as const;
 
 /**
  * Every name, type and expression in a parameter table, for
@@ -113,7 +125,34 @@ export function parameterTable(parameters: readonly ParameterNode[]): string {
 
 /** A label for a stored type; an unknown one (the loader refuses it) reads as itself. */
 function quantityLabel(quantity: string): string {
-  return (QUANTITY_LABELS[quantity as ParameterKind] ?? quantity).toLowerCase();
+  return QUANTITY_LABELS[quantity as ParameterKind] ?? quantity;
+}
+
+/**
+ * What the type picker says of a parameter: its type, and what that means
+ * for it. The one explanation of the amber state, a unitless parameter
+ * whose uses all expect one quantity (`suggestParameterQuantities`): it is
+ * the picker's tooltip and its accessible description, and the suggested
+ * option says so in the list.
+ */
+export function parameterTypeHint(
+  quantity: string | undefined,
+  suggested: ParameterKind | null
+): { label: string; detail: string } {
+  if (quantity) {
+    return {
+      label: quantityLabel(quantity),
+      detail: `Its uses are checked as ${
+        QUANTITY_PHRASES[quantity as ParameterKind] ?? `a ${quantity}`
+      }.`
+    };
+  }
+  return {
+    label: QUANTITY_LABELS.unitless,
+    detail: suggested
+      ? `Its uses expect ${QUANTITY_PHRASES[suggested]}. Choose ${QUANTITY_LABELS[suggested]} to make it one.`
+      : 'A plain number: it takes the unit of each field that uses it.'
+  };
 }
 
 export function ParameterRow({
@@ -295,6 +334,7 @@ export function ParameterRow({
     }
   }
 
+  const typeHint = parameterTypeHint(parameter.quantity, suggestedQuantity);
   const saveReproduction = error ? reproductionFor?.(error.message) : undefined;
   const describable = onDescribe && parameter.exposed === true;
   const formattedValue = value === undefined ? 'err' : formatNumber(value);
@@ -431,71 +471,95 @@ export function ParameterRow({
           >
             {showValue ? formattedValue : ''}
             {onSetQuantity && (
-              <select
-                className={`param-quantity${suggestedQuantity ? ' suggested' : ''}`}
-                aria-label={`Type of ${parameter.name}`}
-                title={
-                  parameter.quantity
-                    ? `${parameter.name} is a ${quantityLabel(parameter.quantity)}`
-                    : suggestedQuantity
-                      ? `${parameter.name} is unitless; its uses suggest a ${quantityLabel(suggestedQuantity)}`
-                      : `${parameter.name} is unitless`
-                }
-                value={parameter.quantity ?? 'unitless'}
-                onChange={(event) => {
-                  const next = event.target.value as ParameterKind | 'unitless';
-                  // Each choice supersedes the last: its refusal clears now,
-                  // and a slower answer to an earlier choice is ignored.
-                  const token = ++quantitySubmission.current;
-                  // Choosing a type blurs the expression first, starting its
-                  // commit; the retype would supersede it with the stored
-                  // expression. It carries the draft instead, and the
-                  // expression commit's own answer is dropped.
-                  const draft =
-                    submittingExpression.current ??
-                    (changedByUser.current &&
-                    expression.trim() &&
-                    expression.trim() !== parameter.expression
-                      ? expression.trim()
-                      : undefined);
-                  if (draft !== undefined) {
-                    ++submission.current;
-                    submittingExpression.current = null;
-                    changedByUser.current = false;
-                    setPending(false);
-                  }
-                  setError(null);
-                  void (async () => {
-                    const refusal = await onSetQuantity(
-                      parameter.name,
-                      next === 'unitless' ? null : next,
-                      ...(draft !== undefined ? [draft] : [])
-                    );
-                    if (token !== quantitySubmission.current) return;
-                    setError(
-                      refusal
-                        ? { message: refusal, detailsAvailable: false }
-                        : null
-                    );
-                  })();
-                }}
+              <span
+                className={`param-quantity-chip${suggestedQuantity && !parameter.quantity ? ' suggested' : ''}`}
               >
-                {(['unitless', 'length', 'angle', 'number'] as const).map(
-                  (option) => (
-                    // Glyphs only: a select is as wide as its longest option,
-                    // and the name track gives way to it. The full word is
-                    // the option's accessible name; a suggestion is shown by
-                    // colour and the picker's title.
-                    <option
-                      key={option}
-                      value={option}
-                      aria-label={QUANTITY_LABELS[option]}
-                    >
-                      {QUANTITY_GLYPHS[option]}
-                    </option>
-                  )
-                )}
-              </select>
+                {/* What shows: the type's glyph and a chevron, so the cell
+                    reads as a picker. The select lies over them, unseen, and
+                    lists the types by their full names. */}
+                <span className="param-quantity-glyph" aria-hidden="true">
+                  {QUANTITY_GLYPHS[
+                    (parameter.quantity ?? 'unitless') as ParameterKind
+                  ] ?? parameter.quantity}
+                </span>
+                <ChevronDown size={9} aria-hidden="true" />
+                <Tooltip
+                  label={`Type · ${typeHint.label}`}
+                  description={typeHint.detail}
+                  multiline
+                >
+                  <select
+                    className={`param-quantity${suggestedQuantity && !parameter.quantity ? ' suggested' : ''}`}
+                    aria-label={`Type of ${parameter.name}`}
+                    // Always there for a screen reader; the tooltip's own
+                    // description takes over while it shows.
+                    aria-description={`${typeHint.label}. ${typeHint.detail}`}
+                    // Empty, so the row's own title ("width = 80") does not
+                    // show under the tooltip.
+                    title=""
+                    value={parameter.quantity ?? 'unitless'}
+                    onChange={(event) => {
+                      const next = event.target.value as
+                        ParameterKind | 'unitless';
+                      // Each choice supersedes the last: its refusal clears now,
+                      // and a slower answer to an earlier choice is ignored.
+                      const token = ++quantitySubmission.current;
+                      // Choosing a type blurs the expression first, starting its
+                      // commit; the retype would supersede it with the stored
+                      // expression. It carries the draft instead, and the
+                      // expression commit's own answer is dropped.
+                      const draft =
+                        submittingExpression.current ??
+                        (changedByUser.current &&
+                        expression.trim() &&
+                        expression.trim() !== parameter.expression
+                          ? expression.trim()
+                          : undefined);
+                      if (draft !== undefined) {
+                        ++submission.current;
+                        submittingExpression.current = null;
+                        changedByUser.current = false;
+                        setPending(false);
+                      }
+                      setError(null);
+                      void (async () => {
+                        const refusal = await onSetQuantity(
+                          parameter.name,
+                          next === 'unitless' ? null : next,
+                          ...(draft !== undefined ? [draft] : [])
+                        );
+                        if (token !== quantitySubmission.current) return;
+                        setError(
+                          refusal
+                            ? { message: refusal, detailsAvailable: false }
+                            : null
+                        );
+                      })();
+                    }}
+                  >
+                    {QUANTITY_OPTIONS.map((option) => (
+                      <option key={option} value={option}>
+                        {QUANTITY_LABELS[option]}
+                        {option === 'unitless'
+                          ? ' (any use)'
+                          : option === suggestedQuantity && !parameter.quantity
+                            ? ' · suggested'
+                            : ''}
+                      </option>
+                    ))}
+                    {parameter.quantity &&
+                      !(QUANTITY_OPTIONS as readonly string[]).includes(
+                        parameter.quantity
+                      ) && (
+                        // A stored type this build does not know still
+                        // shows as the chosen one.
+                        <option value={parameter.quantity}>
+                          {parameter.quantity}
+                        </option>
+                      )}
+                  </select>
+                </Tooltip>
+              </span>
             )}
           </span>
         )}
