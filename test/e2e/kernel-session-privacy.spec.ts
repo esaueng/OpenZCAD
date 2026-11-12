@@ -34,7 +34,10 @@ function storedSessions(page: Page) {
     return new Promise<{ projectId: string; marker?: string }[]>(
       (resolve, reject) => {
         const opening = indexedDB.open(name);
-        opening.onerror = () => reject(opening.error);
+        opening.onerror = () =>
+          reject(
+            opening.error ?? new Error('Could not open the session database.')
+          );
         opening.onsuccess = () => {
           const database = opening.result;
           if (!database.objectStoreNames.contains('sessionIndex')) {
@@ -46,7 +49,10 @@ function storedSessions(page: Page) {
             .transaction('sessionIndex', 'readonly')
             .objectStore('sessionIndex')
             .getAll();
-          read.onerror = () => reject(read.error);
+          read.onerror = () =>
+            reject(
+              read.error ?? new Error('Could not read the session index.')
+            );
           read.onsuccess = () => {
             database.close();
             resolve(read.result as { projectId: string; marker?: string }[]);
