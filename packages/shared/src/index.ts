@@ -3032,6 +3032,15 @@ export interface BodyRepresentation {
    */
   massProperties?: BodyMassProperties;
   topology?: BodyTopology;
+  /**
+   * `'draft'`: the display mesh, its face triangle ranges and the mesh-
+   * tightened `bbox` are the drag tessellation a released direct edit was
+   * accepted with; a full-quality refinement of the same result replaces
+   * them. Exact topology, face/edge measurements, volume and every commit
+   * check are already complete. Exports, mass properties and analysis never
+   * read this mesh. Absent: full display quality.
+   */
+  displayQuality?: 'draft';
   /** Worker-session projection identity; never substitutes for B-rep witnesses. */
   projectionRevision?: {
     session: string;

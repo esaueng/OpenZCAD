@@ -87,6 +87,7 @@
     "test/direct-edit-corpus/corpus.test.ts",
     "test/display-only-blend-preview.test.ts",
     "test/document-core.test.ts",
+    "test/draft-display-release.test.ts",
     "test/drawing-assistant-operations.test.ts",
     "test/drawing-auto-dimension.test.ts",
     "test/drawing-dimension-audit.test.ts",

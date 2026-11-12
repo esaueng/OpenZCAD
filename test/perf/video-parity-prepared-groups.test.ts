@@ -145,10 +145,11 @@ for (const kind of ['blend', 'cylinder'] as const) {
         ).toHaveLength(3);
         // Stable-value mesh refinement is speculative: it must neither commit
         // a journal nor replace the prepared source. Canonical output below
-        // still has to equal an independent replay byte for byte.
+        // still has to equal an independent replay byte for byte. A diameter
+        // release commits a draft display instead, so it warms nothing.
         expect(
           await adapter.refineEditPreview?.(next(kind === 'blend' ? 1.9 : 7.3))
-        ).toBe(true);
+        ).toBe(kind === 'blend');
         expect(
           calls.filter((c) => c.method === 'commitPreparedGroupEditJournaled')
         ).toHaveLength(0);
@@ -181,6 +182,12 @@ for (const kind of ['blend', 'cylinder'] as const) {
               ) < 1e-6
           )
         ).toBe(true);
+        expect(canonical.bodyRepresentations[id]!.displayQuality).toBe(
+          kind === 'blend' ? undefined : 'draft'
+        );
+        // The next complete sync draws a draft release at full quality.
+        const shown =
+          kind === 'blend' ? canonical : await adapter.syncDocument(next(7.3));
         // Drag quality is disposable. A fresh replay (no preview history or
         // held display deflection) must publish identical canonical buffers.
         const fresh = await createExactKernelAdapter();
@@ -210,7 +217,7 @@ for (const kind of ['blend', 'cylinder'] as const) {
               )
               .digest('hex');
           expect(digest(replayed.bodyRepresentations[id]!.mesh)).toBe(
-            digest(canonical.bodyRepresentations[id]!.mesh)
+            digest(shown.bodyRepresentations[id]!.mesh)
           );
           expect(replayed.bodyRepresentations[id]!.volume).toEqual(
             canonical.bodyRepresentations[id]!.volume

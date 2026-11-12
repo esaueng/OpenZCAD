@@ -67,8 +67,9 @@ for anything that broadcast would not reproduce: different geometry content
 (a carried selection, a normalization written by the commit), another lineage
 demand, an analysis request, a carry proposal, a transient font/source
 result, or a live broadcast still running. The committed result is therefore
-measured and meshed once, at full display quality, and the next gesture's
-preview no longer queues behind a duplicate rebuild.
+measured once and meshed at full display quality once (by its refinement, for
+a draft display; see below), and the next gesture's preview no longer queues
+behind a duplicate rebuild.
 
 The validation stays authoritative: nothing reaches the document, its undo
 history, local or cloud storage, or export until it passes. While it runs,
@@ -87,6 +88,33 @@ still lands its release, a document that moved on drops it with the same
 (`onBusy`) stays held until the release is committed or dropped. Exact entry
 stays locked while a release validates.
 
+A released face drag or cylinder resize whose last frame was a drag mesh is
+accepted with a draft display (`BodyRepresentation.displayQuality: 'draft'`,
+see `exact-display-refinement.ts`). That commit's sync draws the moved body
+with the drag tessellation it was just shown at, whose per-face meshes the
+kernel still holds. It keeps every other part of a complete sync: replay and
+the edit's kernel guards, relaxed and strict validation, exact face and edge
+measurements, full-quality edge polylines, volume, warnings and refusals. A
+body a union produced is never drafted, because its strict closure check
+reads the display mesh. Nor is a refused release or an analysis request.
+The draft box is tightened to the draft mesh with the draft deflection as
+slack, so it is still a valid bound. Once the worker has been idle for
+100 ms, it re-runs the same sync. The adapter then keeps the draft's exact
+measurement and swaps in the full-quality mesh, face triangle ranges and
+certified box, so the result equals what a full-quality commit publishes.
+The worker sends it as `display-refined`. The hook replaces the live result
+only while that result is still the draft of the same content; a refinement
+that overtook its adoption is adopted instead. Any new request cancels the
+refinement at the next build boundary, and drag frames hold it back, so the
+next gesture never waits behind it. The worker's result cache never stores a
+draft. Exports, mass properties, drawings, sections and mesh-quality reports
+build their own tessellations and never read a display mesh. The local store
+may hold a draft projection until the derived-only save that follows the
+refinement; a reopen rebuilds anyway. Idle thumbnail capture waits for the
+refined display. The at-rest warm-up (`refineEditPreview`) is skipped for a
+drafted release, because it only existed to make a full-quality commit
+cheap, and when a release arrived during it the commit queued behind it.
+
 With `window.__ozFaceDragTrace` enabled, each release records `release`,
 `validated`, `committed`, `superseded` and `settled` (`detail.adopted`) in
 that array and as `performance.mark('oz.drag.<stage>')` User Timing marks. On a private 32-feature filleted box ∪ cylinder
@@ -97,8 +125,14 @@ side-face −32 mm 602/445/386 → 381/277/156 ms, cylinder diameter 1413/906 �
 post-validation tail (about 130 ms → 5 ms) changed. Main-thread work after a
 side release fell from about 970 to 420 ms in a profiled build, mostly the
 re-armed handle's step profile (136 → 28 ms). A retaken handle answers within
-one input event regardless of the validation's length. These are local
-measurements, not target-device results.
+one input event regardless of the validation's length. With the draft display
+(same part and setup, three top-face releases per run, two runs, against main
+`f7a1a1ca`), release → accepted fell from 291/282/292 and 317/286/530 ms to
+117/85/92 and 119/92/98 ms. The full-quality mesh replaced the draft about
+320–350 ms after acceptance, with no empty frame. In the Node harness the
+commit sync fell from 273 to 96–101 ms (full-quality tessellation 157 ms → the
+draft's 17 ms); the background refinement sync took 196–212 ms. These are
+local measurements, not target-device results.
 
 ## Qualification
 

@@ -10,6 +10,7 @@ import { CommandManager } from '@openzcad/command-system';
 import type { GeometryWorkerResult } from '../worker/geometryWorker';
 import { useGeometryWorker } from './useGeometryWorker';
 import { ProjectionSender } from '../lib/projectionStream';
+import { geometryContentKey } from '../worker/exactRebuildCache';
 
 class FakeWorker {
   static instances: FakeWorker[] = [];
@@ -1859,6 +1860,107 @@ describe('adopting a validated edit result as the live result', () => {
       ])
     );
     expect(edit.worker.postMessage).toHaveBeenCalledTimes(posted + 1);
+  });
+
+  /** A one-body result; `draft` marks the released edit's display mesh. */
+  function releasedResult(
+    edit: ReturnType<typeof validatedEdit>,
+    scale: number,
+    draft: boolean
+  ) {
+    const bodyId = edit.committed.bodyOrder.at(-1)!;
+    return {
+      ...edit.committed.derived,
+      warnings: [],
+      bodyRepresentations: {
+        [bodyId]: {
+          bodyId,
+          name: 'C',
+          source: 'primitive' as const,
+          mesh: {
+            kind: 'mesh' as const,
+            vertices: new Float32Array([0, 0, 0, scale, 0, 0, 0, scale, 0]),
+            indices: new Uint32Array([0, 1, 2])
+          },
+          faceCount: 1,
+          color: '#ffffff',
+          exportableStep: true,
+          consumed: false,
+          volume: 64,
+          bbox: { min: { x: 0, y: 0, z: 0 }, max: { x: 4, y: 4, z: 4 } },
+          ...(draft ? { displayQuality: 'draft' as const } : {})
+        }
+      }
+    };
+  }
+
+  it('replaces a live draft display with its full-quality refinement', async () => {
+    const edit = validatedEdit();
+    edit.finishLive();
+    const draft = await edit.validate({
+      derived: releasedResult(edit, 1, true)
+    });
+    act(() => {
+      edit.manager.document = edit.committed;
+      expect(
+        edit.result.current.adoptValidatedResult(edit.committed, draft)
+      ).toBe(true);
+    });
+    // What the host's commitDerivedState made live.
+    edit.manager.document = { ...edit.committed, derived: draft };
+    const refined = releasedResult(edit, 2, false);
+    const delivered = edit.host.onDerived.mock.calls.length;
+    const refine = (projectId = edit.committed.projectId) =>
+      act(() =>
+        edit.worker.emit({
+          type: 'display-refined',
+          projectId,
+          version: edit.committed.version,
+          contentKey: geometryContentKey(edit.committed),
+          derived: refined
+        })
+      );
+    // Another project's refinement is never shown.
+    refine('project_other' as typeof edit.committed.projectId);
+    expect(edit.host.onDerived).toHaveBeenCalledTimes(delivered);
+    refine();
+    expect(edit.host.onDerived).toHaveBeenCalledTimes(delivered + 1);
+    const shown = edit.host.onDerived.mock.calls.at(-1)![0] as typeof refined;
+    expect(shown.bodyRepresentations).toEqual(refined.bodyRepresentations);
+    expect(edit.result.current.isReadyFor(edit.committed)).toBe(true);
+    // Once full quality is live, a repeat changes nothing.
+    edit.manager.document = { ...edit.committed, derived: shown };
+    refine();
+    expect(edit.host.onDerived).toHaveBeenCalledTimes(delivered + 1);
+  });
+
+  it('adopts a refinement that arrived before its draft became live', async () => {
+    const edit = validatedEdit();
+    edit.finishLive();
+    const draft = await edit.validate({
+      derived: releasedResult(edit, 1, true)
+    });
+    const refined = releasedResult(edit, 2, false);
+    const delivered = edit.host.onDerived.mock.calls.length;
+    act(() =>
+      edit.worker.emit({
+        type: 'display-refined',
+        projectId: edit.committed.projectId,
+        version: edit.committed.version,
+        contentKey: geometryContentKey(edit.committed),
+        derived: refined
+      })
+    );
+    // The base on screen is not a draft: nothing is replaced yet.
+    expect(edit.host.onDerived).toHaveBeenCalledTimes(delivered);
+    act(() => {
+      edit.manager.document = edit.committed;
+      expect(
+        edit.result.current.adoptValidatedResult(edit.committed, draft)
+      ).toBe(true);
+    });
+    const shown = edit.host.onDerived.mock.calls.at(-1)![0] as typeof refined;
+    expect(shown.bodyRepresentations).toEqual(refined.bodyRepresentations);
   });
 
   it.each([
