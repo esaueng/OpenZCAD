@@ -231,6 +231,15 @@ export type GeometryWorkerRequest =
        */
       type: 'cancel';
       requestId?: string;
+    }
+  | {
+      /**
+       * The user is about to open a project: start fetching and compiling the
+       * exact kernel now, so a cold start's download and compile overlap the
+       * click instead of following it. Handled outside the queue, with no
+       * reply; a failed load is retried by the next job that needs the kernel.
+       */
+      type: 'prepare-kernel';
     };
 
 export type GeometryWorkerPhase =
@@ -545,10 +554,13 @@ const projectionSender = new ProjectionSender();
 let lastExactSyncKey: string | null = null;
 let lastExactSyncEpoch: number | null = null;
 
-/** Every request that carries work; `cancel` is handled before the queue. */
+/**
+ * Every request that carries work; `cancel` and `prepare-kernel` are handled
+ * before the queue.
+ */
 type GeometryWorkerWorkRequest = Exclude<
   GeometryWorkerRequest,
-  { type: 'cancel' }
+  { type: 'cancel' } | { type: 'prepare-kernel' }
 >;
 
 /**
@@ -1526,6 +1538,11 @@ function previewRefinementKey(document: ProjectDocument): string {
 }
 
 self.onmessage = (event: MessageEvent<GeometryWorkerRequest>) => {
+  // Not input: preparing the kernel must not cancel a queued warm-up.
+  if (event.data.type === 'prepare-kernel') {
+    void loadExactKernel();
+    return;
+  }
   // Any newer input cancels a queued warm-up. A synchronous WASM tessellation
   // already running completes; never accumulate obsolete warm-up frames.
   clearTimeout(refinementTimer);

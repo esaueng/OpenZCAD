@@ -104,6 +104,8 @@ export function parseArgs(argv) {
     runs: 5,
     mode: 'warm',
     demo: 'Heat Sink',
+    backup: null,
+    browserArgs: [],
     headed: false,
     channel: null,
     cpu: 1,
@@ -123,6 +125,8 @@ export function parseArgs(argv) {
     else if (flag === '--runs') args.runs = Number(value());
     else if (flag === '--mode') args.mode = value();
     else if (flag === '--demo') args.demo = value();
+    else if (flag === '--backup') args.backup = path.resolve(value());
+    else if (flag === '--browser-arg') args.browserArgs.push(value());
     else if (flag === '--headed') args.headed = true;
     else if (flag === '--channel') args.channel = value();
     else if (flag === '--cpu') args.cpu = Number(value());
@@ -497,6 +501,15 @@ async function throttle(cdp, args) {
     await cdp.send('Emulation.setCPUThrottlingRate', { rate: args.cpu });
 }
 
+async function openProject(page, args) {
+  if (!args.backup) return openDemo(page, args.demo);
+  // A project backup file, kept outside the repository: imported through the
+  // library's own input, so it opens exactly as a user's import does.
+  await page
+    .getByLabel('Import project backup')
+    .setInputFiles(args.backup, { timeout: 60_000 });
+}
+
 async function openDemo(page, demo) {
   await page
     // A plain substring match: the demo name comes from the command line.
@@ -510,7 +523,8 @@ async function launch(args, profileDir) {
     headless: !args.headed,
     ...(args.channel ? { channel: args.channel } : {}),
     viewport: { width: 1440, height: 900 },
-    colorScheme: 'dark'
+    colorScheme: 'dark',
+    ...(args.browserArgs.length > 0 ? { args: args.browserArgs } : {})
   });
 }
 
@@ -586,6 +600,7 @@ export async function run(args) {
   const server = await serve(args.dist);
   const base = `http://127.0.0.1:${server.address().port}/`;
   const samples = [];
+  let firstOpen = null;
   const profiles = [];
   try {
     if (args.mode === 'warm') {
@@ -594,12 +609,13 @@ export async function run(args) {
       const context = await launch(args, profile);
       await context.addInitScript(installObservers);
       const page = context.pages()[0] ?? (await context.newPage());
-      await page.goto(base);
-      await openDemo(page, args.demo);
-      await waitForReady(page);
-      await page.waitForTimeout(args.settleMs);
       const cdp = await context.newCDPSession(page);
       await throttle(cdp, args);
+      // The first open is a first visit: no HTTP or compiled-code cache.
+      firstOpen = await measureRun(page, cdp, args, -1, async () => {
+        await page.goto(base);
+        await openProject(page, args);
+      });
       for (let index = 0; index < args.runs; index += 1) {
         samples.push(
           await measureRun(page, cdp, args, index, () => page.reload())
@@ -619,7 +635,7 @@ export async function run(args) {
         samples.push(
           await measureRun(page, cdp, args, index, async () => {
             await page.goto(base);
-            await openDemo(page, args.demo);
+            await openProject(page, args);
           })
         );
         await context.close();
@@ -633,7 +649,9 @@ export async function run(args) {
   }
   return {
     mode: args.mode,
-    demo: args.demo,
+    demo: args.backup ? null : args.demo,
+    backup: args.backup ? path.basename(args.backup) : null,
+    browserArgs: args.browserArgs,
     runs: args.runs,
     headed: args.headed,
     channel: args.channel,
@@ -641,6 +659,7 @@ export async function run(args) {
     network: args.network,
     renderer: samples[0]?.renderer ?? null,
     summary: summarize(samples),
+    ...(firstOpen ? { firstOpen } : {}),
     samples
   };
 }

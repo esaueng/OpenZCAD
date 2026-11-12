@@ -757,6 +757,90 @@ describe('geometry worker rebuild coordination', () => {
     expect(results[0]!.derived).not.toBe(results[1]!.derived);
   });
 
+  it('loads the kernel on a prepare without queuing or reporting anything', async () => {
+    const syncDocument = vi.fn(async () => derived('prepared'));
+    const { scope, createExactKernelAdapter } =
+      await installWorker(syncDocument);
+
+    post(scope, { type: 'prepare-kernel' });
+    await vi.waitFor(() =>
+      expect(createExactKernelAdapter).toHaveBeenCalledOnce()
+    );
+    expect(scope.postMessage).not.toHaveBeenCalled();
+    expect(syncDocument).not.toHaveBeenCalled();
+
+    // The rebuild that follows takes the kernel the prepare loaded.
+    const document = addPrimitiveFeature(
+      createProjectDocument('Prepared', toUserId('user')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 20, depth: 30 }
+      }
+    );
+    post(scope, { type: 'sync', document, requestId: 'after-prepare' });
+    await vi.waitFor(() =>
+      expect(scope.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'sync',
+          ok: true,
+          requestId: 'after-prepare'
+        })
+      )
+    );
+    expect(createExactKernelAdapter).toHaveBeenCalledOnce();
+  });
+
+  it('retries a failed prepare on the next rebuild', async () => {
+    const scope: FakeWorkerScope = {
+      postMessage: vi.fn(),
+      onmessage: null
+    };
+    const syncDocument = vi.fn(async () => derived('recovered'));
+    const createExactKernelAdapter = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('WASM chunk fetch failed'))
+      .mockResolvedValue({
+        syncDocument,
+        currentMassPropertiesEpoch: vi.fn(() => 1),
+        hasTransientFailures: vi.fn(() => false),
+        dispose: vi.fn()
+      });
+    vi.stubGlobal('self', scope);
+    vi.doMock('@openzcad/kernel-adapter/exact', () => ({
+      createExactKernelAdapter
+    }));
+    await import('./geometryWorker');
+
+    post(scope, { type: 'prepare-kernel' });
+    await vi.waitFor(() =>
+      expect(createExactKernelAdapter).toHaveBeenCalledOnce()
+    );
+    // The failure is the prepare's alone: nothing reaches the main thread.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(scope.postMessage).not.toHaveBeenCalled();
+
+    const document = addPrimitiveFeature(
+      createProjectDocument('Retry', toUserId('user')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 20, depth: 30 }
+      }
+    );
+    post(scope, { type: 'sync', document, requestId: 'after-failure' });
+    await vi.waitFor(() =>
+      expect(scope.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'sync',
+          ok: true,
+          requestId: 'after-failure'
+        })
+      )
+    );
+    expect(createExactKernelAdapter).toHaveBeenCalledTimes(2);
+  });
+
   it('retries the exact-kernel load after a failed fetch instead of staying bricked', async () => {
     const scope: FakeWorkerScope = {
       postMessage: vi.fn(),

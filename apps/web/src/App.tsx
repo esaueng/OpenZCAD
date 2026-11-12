@@ -29089,6 +29089,7 @@ export function App() {
           onCreate={(name, units) => void handleCreateProject(name, units)}
           onOpen={(projectId) => void handleOpenProject(projectId)}
           onOpenDemo={(definition) => void handleOpenDemo(definition)}
+          onOpenIntent={() => geometry.prepareKernel?.()}
           onOpenSettings={openSettings}
           onSignIn={() => openSettingsAt('account')}
           onDuplicate={(project) => void handleDuplicateProject(project)}
