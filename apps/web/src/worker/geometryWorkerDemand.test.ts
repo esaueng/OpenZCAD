@@ -195,4 +195,124 @@ describe('geometry worker lineage demand', () => {
     );
     expect(syncDocument).toHaveBeenCalledOnce();
   });
+
+  describe('a pick during a running live rebuild', () => {
+    function deferred<T>() {
+      let resolve!: (value: T) => void;
+      const promise = new Promise<T>((done) => {
+        resolve = done;
+      });
+      return { promise, resolve };
+    }
+
+    function unionDocument(): { document: ProjectDocument; bodyId: BodyId } {
+      let document = addPrimitiveFeature(
+        createProjectDocument('Reopened', toUserId('user')),
+        {
+          name: 'Box',
+          primitiveKind: 'box',
+          dimensions: { width: 10, height: 20, depth: 30 }
+        }
+      );
+      document = addPrimitiveFeature(document, {
+        name: 'Second',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 20, depth: 30 }
+      });
+      const union = booleanBodies(document, {
+        name: 'Union',
+        operation: 'union',
+        targetBodyIds: [...document.bodyOrder]
+      });
+      return { document: union.document, bodyId: union.bodyId };
+    }
+
+    type CancellationOptions = {
+      cancellation: { isCancelled(): boolean };
+    };
+
+    async function runningReopen(
+      probeNeeded: (
+        document: ProjectDocument,
+        feature: FeatureNode,
+        demand?: readonly BodyId[]
+      ) => boolean
+    ) {
+      const first = deferred<ProjectDocument['derived']>();
+      const syncDocument = vi
+        .fn<(...args: unknown[]) => Promise<ProjectDocument['derived']>>()
+        .mockImplementationOnce(() => first.promise)
+        .mockImplementation(async () => derived('restarted'));
+      const { scope } = await installWorker(syncDocument, probeNeeded);
+      const { document, bodyId } = unionDocument();
+      // The reopen broadcast: the sticky demand is still empty.
+      post(scope, { type: 'sync', document, lineageDemand: [] });
+      await vi.waitFor(() => expect(syncDocument).toHaveBeenCalledOnce());
+      const cancellation = (
+        syncDocument.mock.calls[0]![4] as CancellationOptions
+      ).cancellation;
+      return { scope, syncDocument, first, document, bodyId, cancellation };
+    }
+
+    function published(scope: FakeWorkerScope) {
+      return scope.postMessage.mock.calls
+        .map(([message]) => message as { type: string; version?: number })
+        .filter((message) => message.type === 'projection-delta');
+    }
+
+    it('joins the running build when the pick cannot enrich lineage', async () => {
+      // The probe runs regardless of demand (a downstream fillet needs it).
+      const { scope, syncDocument, first, document, bodyId, cancellation } =
+        await runningReopen(() => true);
+      // Picking a face on the saved projection demands its body.
+      post(scope, { type: 'sync', document, lineageDemand: [bodyId] });
+      expect(cancellation.isCancelled()).toBe(false);
+      first.resolve(derived('reopened'));
+      await vi.waitFor(() => expect(published(scope)).toHaveLength(1));
+      await vi.waitFor(() =>
+        expect(scope.postMessage).toHaveBeenCalledWith(
+          expect.objectContaining({ type: 'state', phase: 'ready' })
+        )
+      );
+      expect(published(scope)[0]).toMatchObject({
+        version: document.version
+      });
+      expect(cancellation.isCancelled()).toBe(false);
+      expect(syncDocument).toHaveBeenCalledOnce();
+    });
+
+    it('supersedes the running build when the pick needs a boolean probe', async () => {
+      const { scope, syncDocument, first, document, bodyId, cancellation } =
+        await runningReopen(
+          (_, feature, demand) => demand?.includes(feature.bodyId!) ?? false
+        );
+      post(scope, { type: 'sync', document, lineageDemand: [bodyId] });
+      expect(cancellation.isCancelled()).toBe(true);
+      first.resolve(derived('without lineage'));
+      await vi.waitFor(() => expect(syncDocument).toHaveBeenCalledTimes(2));
+      expect(syncDocument.mock.calls[1]?.[4]).toEqual(
+        expect.objectContaining({ lineageDemand: [bodyId] })
+      );
+      await vi.waitFor(() => expect(published(scope)).toHaveLength(1));
+    });
+
+    it('supersedes the running build for a newer version', async () => {
+      const { scope, syncDocument, first, document, bodyId, cancellation } =
+        await runningReopen(() => true);
+      post(scope, {
+        type: 'sync',
+        document: { ...document, version: document.version + 1 },
+        lineageDemand: [bodyId]
+      });
+      expect(cancellation.isCancelled()).toBe(true);
+      first.resolve(derived('older'));
+      // Same content: the newer version reuses the finished result, but is
+      // published as its own version, never as the superseded one.
+      await vi.waitFor(() => expect(published(scope)).toHaveLength(1));
+      expect(syncDocument).toHaveBeenCalledOnce();
+      expect(published(scope)[0]).toMatchObject({
+        version: document.version + 1
+      });
+    });
+  });
 });
