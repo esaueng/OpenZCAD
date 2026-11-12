@@ -81,7 +81,7 @@ describe('model panels', () => {
     expect(layer).toMatch(/padding-bottom:\s*var\(--island-gap\)/);
     // So nothing in the bottom corners is ever under a docked panel: the
     // cube (with the ruler on it) stands inside the instrument rail at the
-    // right dock's edge, and the readout at the left dock's.
+    // right dock's edge, and the sketch readout hangs from that rail.
     expect(
       rule(
         stage,
@@ -91,7 +91,7 @@ describe('model panels', () => {
       /right:\s*calc\(var\(--lane-end\) - var\(--right-peek-w, 0px\)\)/
     );
     expect(rule(stage, '\n.viewport-readout')).toMatch(
-      /left:\s*calc\(var\(--island-gap\) \+ var\(--left-dock-w, 0px\)\)/
+      /right:\s*calc\(100% \+ var\(--rail-w\) \+ var\(--island-gap\) \* 2\)/
     );
     // The unpinned slot still stops above the corner, as the right lane does.
     expect(rule(stage, '\n.panel-unpinned')).toMatch(

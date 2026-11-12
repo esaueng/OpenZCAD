@@ -946,20 +946,19 @@ export function ViewerShell({
             <div className="instrument-rail">
               {viewerToolbar}
               {railExtras}
+              {/* The sketch snap and grid spacing: one quiet readout over
+                  the head of the rails, which it hangs from. Last in the
+                  rail so the rails' sibling selectors never see it. */}
+              <div
+                className="viewport-readout"
+                role="group"
+                aria-label="Viewport readout"
+              >
+                {dockExtras}
+                <ViewportGridReadout sinkRef={sketchGridReadoutRef} />
+              </div>
             </div>
           )}
-          {/* How picks and snaps behave, and the activity log: one quiet
-              readout in the bottom-left corner, under the column. */}
-          <div
-            className="viewport-readout"
-            role="group"
-            aria-label="Viewport readout"
-          >
-            {dockExtras}
-            {/* The sketch grid spacing reads beside the snap segment; the
-                scale bar itself sits by the orientation cube. */}
-            <ViewportGridReadout sinkRef={sketchGridReadoutRef} />
-          </div>
         </>
       )}
       {/* After the rail and the readout in the document, though it is drawn

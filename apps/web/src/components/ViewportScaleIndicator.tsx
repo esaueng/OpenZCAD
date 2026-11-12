@@ -218,14 +218,10 @@ export function ViewportScaleIndicator({
       // No layout (hidden, or no stage to stand in): keep the full rule.
       if (root.hidden || !stage || stage.height <= 0) return;
       const rect = root.getBoundingClientRect();
-      // The stylesheet's corner allows the sketch readout two rows; the
-      // rule stands on the rows it has.
-      const readout = box('.viewport-readout');
       const corner = {
         left: rect.left - offset.dx,
-        bottom: readout ? readout.top - CLEARANCE_PX : rect.bottom - offset.dy
+        bottom: rect.bottom - offset.dy
       };
-      const cssBottom = rect.bottom - offset.dy;
       // A stylesheet that places the rule itself says so with this flag.
       const pinned =
         window
@@ -233,11 +229,7 @@ export function ViewportScaleIndicator({
           .getPropertyValue('--viewport-scale-pinned')
           .trim() === '1';
       const placement = pinned
-        ? {
-            left: corner.left,
-            bottom: cssBottom,
-            maxLengthPx: DEFAULT_SCALE_BAR_MAX_WIDTH_PX
-          }
+        ? { ...corner, maxLengthPx: DEFAULT_SCALE_BAR_MAX_WIDTH_PX }
         : scaleRulePlacement(
             corner,
             box('.instrument-rail')?.top ?? stage.top,
@@ -246,7 +238,7 @@ export function ViewportScaleIndicator({
             box('.measurement-dock')
           );
       const dx = Math.round(placement.left - corner.left);
-      const dy = Math.round(placement.bottom - cssBottom);
+      const dy = Math.round(placement.bottom - corner.bottom);
       if (dx !== offset.dx || dy !== offset.dy) {
         offset.dx = dx;
         offset.dy = dy;
@@ -271,8 +263,7 @@ export function ViewportScaleIndicator({
         area?.querySelector('.command-bar-lane'),
         area?.querySelector('.command-bar-row'),
         area?.querySelector('.workspace-column-float'),
-        area?.querySelector('.measurement-dock'),
-        area?.querySelector('.viewport-readout')
+        area?.querySelector('.measurement-dock')
       ]) {
         if (target) resizes?.observe(target);
       }
@@ -399,9 +390,9 @@ export function ViewportScaleIndicator({
 export type SketchGridReadoutSink = (spacing: string | null) => void;
 
 /**
- * The sketch grid spacing as a segment of the bottom-left viewport readout.
- * Floating on its own it sat on whatever shared the bottom edge (the old
- * dock, then the search bar at narrower windows). The render loop pushes the
+ * The sketch grid spacing as a segment of the viewport readout over the
+ * right-hand rails. Floating on its own it sat on whatever shared the bottom
+ * edge (the old dock, then the search bar at narrower windows). The render loop pushes the
  * spacing every frame; the node is only touched when it changes. The word
  * and the icon are markup, so the compact readout can trade one for the
  * other.
