@@ -49,7 +49,7 @@ import { JointKindIcon } from './JointKindIcon';
 import { JointToolCard } from './JointToolCard';
 import { MotionSetupCard, openMotionSetup } from './MotionSetupCard';
 import type { MotionSetupBounds } from '../../lib/assembly/motionSetup';
-import { isLiveBody, useAssemblyModel } from './useAssemblyModel';
+import { useAssemblyModel } from './useAssemblyModel';
 
 export interface AssemblyPanelProps {
   document: ProjectDocument;
@@ -165,9 +165,7 @@ function AssemblyLists({
     ...[...bodyByComponent.values()].filter((id): id is BodyId => id !== null)
   ]);
   const addable = candidates.filter((body) => !used.has(body.bodyId));
-  const bom = deriveAssemblyBom(document, (bodyId) =>
-    isLiveBody(document, bodyId)
-  );
+  const bom = deriveAssemblyBom(document);
 
   const downloadBom = () => {
     const fileName = `${exportFileStem(document.name)}.bom.csv`;

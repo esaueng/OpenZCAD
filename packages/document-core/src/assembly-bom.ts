@@ -42,9 +42,24 @@ export interface AssemblyBom {
   totalQuantity: number;
 }
 
+/**
+ * A body is live while it has a representation that no later feature
+ * consumed: the rule the viewport and the Assemble panels use. It reads
+ * `derived`, so it needs a rebuilt document; on one never rebuilt every
+ * component's own body counts as missing until the rebuild lands.
+ */
+export function isLiveAssemblyBody(
+  document: ProjectDocument,
+  bodyId: BodyId
+): boolean {
+  const body = document.derived.bodyRepresentations[bodyId];
+  return Boolean(body && !body.consumed);
+}
+
 export function deriveAssemblyBom(
   document: ProjectDocument,
-  isLive?: (bodyId: BodyId) => boolean
+  isLive: (bodyId: BodyId) => boolean = (bodyId) =>
+    isLiveAssemblyBody(document, bodyId)
 ): AssemblyBom {
   const components = document.assembly?.components ?? [];
   if (components.length === 0) return { rows: [], totalQuantity: 0 };

@@ -6,6 +6,7 @@ import {
   assemblyBomToCsv,
   createProjectDocument,
   deriveAssemblyBom,
+  isLiveAssemblyBody,
   normalizeDocument
 } from '@openzcad/document-core';
 import {
@@ -22,6 +23,8 @@ import {
  * and their bodies, with a stable order and grouping and a CSV form.
  */
 const owner = toUserId('user_bom');
+/** Every listed body counts as live: the derivation without a rebuild. */
+const allLive = () => true;
 
 function bodies(names: string[]) {
   const manager = new CommandManager(createProjectDocument('Rig', owner));
@@ -108,7 +111,7 @@ describe('deriveAssemblyBom (AS03)', () => {
         ]
       })
     );
-    const bom = deriveAssemblyBom(manager.document);
+    const bom = deriveAssemblyBom(manager.document, allLive);
     // Display order, not body order or alphabetical.
     expect(bom.rows.map((row) => [row.item, row.name, row.quantity])).toEqual([
       [1, 'Pin Body', 1],
@@ -178,6 +181,19 @@ describe('deriveAssemblyBom (AS03)', () => {
       }
     ]);
     expect(bom.totalQuantity).toBe(3);
+    // Without a predicate the BOM uses the viewport's rule: a body is live
+    // while its rebuilt representation is not consumed, so the consumed pin
+    // gives way to its remade body here too.
+    const rebuilt = structuredClone(document);
+    rebuilt.derived.bodyRepresentations = Object.fromEntries(
+      rebuilt.bodyOrder.map((bodyId) => [
+        bodyId,
+        { name: 'Derived', consumed: bodyId === pin }
+      ])
+    ) as unknown as ProjectDocument['derived']['bodyRepresentations'];
+    expect(deriveAssemblyBom(rebuilt)).toEqual(bom);
+    expect(isLiveAssemblyBody(rebuilt, pin)).toBe(false);
+    expect(isLiveAssemblyBody(rebuilt, pin2)).toBe(true);
     // A deleted body has no part to list.
     expect(
       deriveAssemblyBom(document, (bodyId) => bodyId === plate).rows.map(
@@ -213,7 +229,7 @@ describe('deriveAssemblyBom (AS03)', () => {
         name: 'Plate (left)'
       })
     );
-    const [row] = deriveAssemblyBom(manager.document).rows;
+    const [row] = deriveAssemblyBom(manager.document, allLive).rows;
     expect(row).toMatchObject({
       name: 'Base plate',
       bodyId: plate,
@@ -233,12 +249,13 @@ describe('deriveAssemblyBom (AS03)', () => {
         }))
       })
     );
-    const before = deriveAssemblyBom(manager.document);
+    const before = deriveAssemblyBom(manager.document, allLive);
+    expect(before.rows).toHaveLength(2);
     const reopened = normalizeDocument(
       JSON.parse(JSON.stringify(manager.document)) as ProjectDocument
     );
-    expect(deriveAssemblyBom(reopened)).toEqual(before);
-    expect(assemblyBomToCsv(deriveAssemblyBom(reopened))).toBe(
+    expect(deriveAssemblyBom(reopened, allLive)).toEqual(before);
+    expect(assemblyBomToCsv(deriveAssemblyBom(reopened, allLive))).toBe(
       assemblyBomToCsv(before)
     );
   });
