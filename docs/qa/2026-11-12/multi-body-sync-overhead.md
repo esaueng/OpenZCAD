@@ -84,6 +84,65 @@ The worker change does not alter main-thread work. Its effect in the browser
 therefore depends on frames that are cheaper than this host's, and remains to
 be measured on hardware with a GPU.
 
+## Main thread
+
+A Chrome trace (`devtools.timeline` with invalidation tracking) of the same
+Inspector width edit on 100 boxes splits each edit's main-thread time by
+kind. `Commit` (the compositor waiting on SwiftShader) is left out: it is this
+host's software GPU, not the app. Before the changes below, each edit cost
+about 536 ms of other main-thread work in the 2.5 s after Apply, and the
+History panel's 200 rows were most of the avoidable part:
+
+- every commit of an edit (about nine) re-rendered every History row, and
+  each row rebuilt its five Lucide icons;
+- `placeTimeline` writes the spine, fill, highlight and handle geometry as
+  custom properties on the list. Inherited, each write restyled all 7,143
+  elements under it, four to five times per edit (about 23 ms each);
+- selecting a row scrolled it into view inside the commit, forcing a layout
+  of the whole workspace that the frame then repeated.
+
+Changes:
+
+- `HistoryRow` is memoized on its rendered inputs. Its handlers read the
+  latest callbacks and list state from a ref and resolve the feature node
+  by id when they run, because an edit replaces every node object while a
+  skipped row keeps the one it rendered (`HistoryTimeline.test.tsx` checks
+  the handlers receive the new object).
+- History and Objects row icons are constant elements.
+- The timeline's custom properties are registered with `@property` as
+  non-inherited; the four elements that draw them inherit them explicitly.
+  Browsers without `@property` inherit them as before.
+- The selection scroll runs in the next animation frame, as
+  `revealOperation` already did.
+
+Means of two interleaved runs of four (Apply) or six (select) interactions, ms each:
+
+| Interaction (100 boxes) | Before main-thread | After main-thread | Script before → after | Style before → after |
+| ----------------------- | -----------------: | ----------------: | --------------------: | -------------------: |
+| Inspector width Apply   |                536 |               430 |             200 → 131 |              48 → 29 |
+| Select a History step   |                208 |               153 |               60 → 43 |               34 → 8 |
+
+Tried and not kept: `content-visibility: auto` on rows (layout 94 → 70 ms
+but 13 ms of intersection work, and paint containment would clip row
+popovers and focus rings); a flex or block list instead of the grid (no
+change); measuring the command lane only from its ResizeObserver (each write
+of its inherited custom property restyles the whole workspace, so moving the
+write added recalculations).
+
+What remains is mostly the Inspector card and command rail mounting and
+unmounting on Apply (layout), the top-level `App` re-render (about 17 ms per
+edit), the Inspector's deliberate focus hand-off and `ExitingFloat`'s blur,
+and the render loop's own frames.
+
+## Shared buffers and transfers
+
+With `shareRetainedMeasurements`, a derived state's body buffers can be the
+adapter's retained ones. The worker posts a copy wherever it transfers them:
+the request-scoped sync reply and the full-quality `display-refined` result.
+A transfer of the shared buffers detached the retained measurement, and the
+next clone of the result cache failed (`geometryWorker.test.ts` delivers
+messages with their transfers to check).
+
 ## Reproduction
 
 ```bash

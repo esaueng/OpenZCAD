@@ -3,6 +3,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
   waitFor
 } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -87,6 +88,47 @@ function scrollListAwayFromLatest() {
 function row(name: string): HTMLElement {
   return screen.getByText(name).closest('.feature-row') as HTMLElement;
 }
+
+it('acts on the latest node of a row that skipped re-rendering', () => {
+  const { props, rerender } = renderTimeline();
+  const grip = within(row('Feature 2')).getByRole('button', {
+    name: 'Reorder Feature 2. Use the arrow keys to move it.'
+  });
+  // An edit replaces every node object; rows whose rendered inputs are
+  // unchanged keep their DOM, and their handlers must still see the new node.
+  const next = props.features.map((node) => structuredClone(node));
+  rerender(<HistoryTimeline {...props} features={next} />);
+  expect(
+    within(row('Feature 2')).getByRole('button', {
+      name: 'Reorder Feature 2. Use the arrow keys to move it.'
+    })
+  ).toBe(grip);
+  fireEvent.click(screen.getByRole('button', { name: 'Suppress Feature 2' }));
+  // The very object, not an equal one: a clone of the old node would pass
+  // a deep comparison.
+  expect(vi.mocked(props.onToggleFeatureSuppression).mock.calls[0]![0]).toBe(
+    next[1]
+  );
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Roll back history after Feature 2' })
+  );
+  expect(props.onRollbackAfterFeature).toHaveBeenCalledWith(
+    'feature-2',
+    'Feature 2'
+  );
+  fireEvent.contextMenu(row('Feature 3'));
+  expect(vi.mocked(props.onFeatureContextMenu).mock.lastCall![1]).toBe(next[2]);
+});
+
+it('re-renders a row whose name changed under the same node id', () => {
+  const { props, rerender } = renderTimeline();
+  const renamed = props.features.map((node, index) =>
+    index === 1 ? { ...node, name: 'Renamed step' } : node
+  );
+  rerender(<HistoryTimeline {...props} features={renamed} />);
+  expect(screen.getByText('Renamed step')).toBeInTheDocument();
+  expect(screen.queryByText('Feature 2')).toBeNull();
+});
 
 it('shows preparation instead of repair while accepted geometry awaits analysis', () => {
   const pending = feature(1);

@@ -805,8 +805,51 @@
   opacity: 0.5;
 }
 
+/* placeTimeline() writes the spine, fill, highlight and handle geometry on
+   the list. Inherited, every write restyled every row under it, several
+   times per edit on a long history; registered as non-inherited, only the
+   four elements that draw them take them, explicitly. Without @property they
+   inherit as before. */
+@property --spine-top {
+  syntax: '*';
+  inherits: false;
+}
+
+@property --spine-height {
+  syntax: '*';
+  inherits: false;
+}
+
+@property --fill-height {
+  syntax: '*';
+  inherits: false;
+}
+
+@property --highlight-y {
+  syntax: '*';
+  inherits: false;
+}
+
+@property --highlight-height {
+  syntax: '*';
+  inherits: false;
+}
+
+@property --highlight-opacity {
+  syntax: '*';
+  inherits: false;
+}
+
+@property --handle-y {
+  syntax: '*';
+  inherits: false;
+}
+
 .history-spine,
 .history-spine-fill {
+  --spine-top: inherit;
+  --spine-height: inherit;
+  --fill-height: inherit;
   position: absolute;
   left: 9px;
   width: 2px;
@@ -839,6 +882,9 @@
 }
 
 .history-highlight {
+  --highlight-y: inherit;
+  --highlight-height: inherit;
+  --highlight-opacity: inherit;
   position: absolute;
   left: 0;
   right: 0;
@@ -1063,6 +1109,7 @@
    dash under the last row. The knob is drawn by ::before; ::after is the
    invisible 24px reach (target-size.css). */
 .history-handle {
+  --handle-y: inherit;
   position: absolute;
   z-index: 2;
   left: 0;
