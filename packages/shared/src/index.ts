@@ -3032,6 +3032,17 @@ export interface BodyRepresentation {
    */
   massProperties?: BodyMassProperties;
   topology?: BodyTopology;
+  /**
+   * `'draft'`: the display mesh, its face triangle ranges and the mesh-
+   * tightened `bbox` are the drag tessellation a released direct edit was
+   * accepted with; a full-quality refinement of the same result replaces
+   * them. Exact topology, face/edge measurements, volume and every commit
+   * check are already complete; only the display-gap advisory, which
+   * describes the full-quality mesh, arrives with the refinement. Exports,
+   * mass properties, drawings and analysis never read this mesh. Absent:
+   * full display quality.
+   */
+  displayQuality?: 'draft';
   /** Worker-session projection identity; never substitutes for B-rep witnesses. */
   projectionRevision?: {
     session: string;
@@ -3039,6 +3050,15 @@ export interface BodyRepresentation {
     topology: number;
     metadata: number;
   };
+}
+
+/** Whether any of these bodies draws a draft display (`displayQuality`). */
+export function hasDraftDisplay(
+  bodies: Readonly<
+    Record<string, Pick<BodyRepresentation, 'displayQuality'> | undefined>
+  >
+): boolean {
+  return Object.values(bodies).some((body) => body?.displayQuality === 'draft');
 }
 
 /** Validated display geometry; quantities and optional analysis are absent. */

@@ -33,6 +33,7 @@ import { DrawingProjectionClient } from '../lib/drawing/projectionClient';
 import {
   createStarterSheet,
   drawingSourceFingerprint,
+  estimateViewExtent,
   projectionBodyInput,
   type SectionBodyInput
 } from '../lib/drawing/sheetSources';
@@ -223,6 +224,58 @@ describe('DrawingWorkspace', () => {
       'Waiting for the model to finish updating.'
     );
     await userEvent.click(create);
+    expect(onCommand).not.toHaveBeenCalled();
+  });
+  it('treats a draft display as geometry still pending', async () => {
+    // A released edit's draft mesh and box are refined a moment later: a
+    // stored fingerprint and a laid-out view never read them.
+    const refined = cube();
+    // Its mesh-tightened box is a valid bound, a little looser than refined.
+    const draft: BodyRepresentation = {
+      ...refined,
+      bbox: { ...refined.bbox, max: { ...refined.bbox.max, z: 10.05 } },
+      displayQuality: 'draft'
+    };
+    expect(drawingSourceFingerprint({ [bodyId]: draft }, [bodyId])).toBeNull();
+    expect(
+      estimateViewExtent({ [bodyId]: draft }, [bodyId], 'front')
+    ).toBeNull();
+    const fingerprint = drawingSourceFingerprint({ [bodyId]: refined }, [
+      bodyId
+    ])!;
+    const document: ProjectDocument = {
+      ...createProjectDocument('Bracket', toUserId('test')),
+      bodyOrder: [bodyId],
+      drawings: { sheets: [starter(fingerprint)] }
+    };
+    const onCommand = vi.fn((_command: AnyCommand) => true);
+    const workspace = (body: BodyRepresentation) => (
+      <DrawingWorkspace
+        document={document}
+        bodies={{ [bodyId]: body }}
+        geometryPending={false}
+        defaultBodyIds={[bodyId]}
+        requestTessellation={displayTessellation({ [bodyId]: refined })}
+        editDisabledReason={null}
+        onCommand={onCommand}
+        onStatus={vi.fn()}
+      />
+    );
+    const { rerender } = render(workspace(draft));
+    // Pending, not stale: no Update offers to rebind the sheet to the draft.
+    expect(screen.queryByRole('button', { name: /Update/ })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Export PDF' })).toBeDisabled();
+    rerender(workspace(refined));
+    const canvas = screen.getByRole('application', { name: 'Sheet Sheet 1' });
+    await waitFor(() =>
+      expect(
+        canvas.querySelectorAll('.drawing-view.is-placeholder')
+      ).toHaveLength(0)
+    );
+    expect(
+      screen.getByRole<HTMLButtonElement>('button', { name: 'Export PDF' })
+        .disabled
+    ).toBe(false);
     expect(onCommand).not.toHaveBeenCalled();
   });
   it('offers an explicit body succession Update instead of a dead-end missing-body warning', async () => {

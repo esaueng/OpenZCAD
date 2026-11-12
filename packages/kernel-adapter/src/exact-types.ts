@@ -158,6 +158,12 @@ export interface MeasuredShape {
    * the kernel to re-mesh every face (see `heldDisplayTessellation`).
    */
   displayLinearDeflections?: readonly number[];
+  /**
+   * The face mesh (and the bbox tightened to it) is the drag tessellation of
+   * a released edit; `displayLinearDeflections` still names the full display
+   * quality the refinement meshes at. Everything else is complete.
+   */
+  draftDisplay?: true;
 }
 
 /** Geometry gates complete before optional recognition or quantities run. */

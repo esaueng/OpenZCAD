@@ -275,7 +275,6 @@ export {
   type ExportUnitOptions,
   type MeshExportTolerances
 } from './export-units';
-import { refineBoundsAtSplineFaces, tightenBoundsToMesh } from './exact-bounds';
 import {
   readMeshQuality,
   type BodyMeshQuality,
@@ -289,10 +288,12 @@ export {
   type MeshQualityReport
 };
 import { dot, length, subtract, uniformScaleMatrix } from './exact-math';
+import { previewDisplayTessellation } from './display-tessellation';
 import {
-  displayTessellationForExtents,
-  heldDisplayTessellation
-} from './display-tessellation';
+  publishedSolidBounds,
+  refineDraftDisplay,
+  solidDisplayTessellation
+} from './exact-display-refinement';
 import {
   displayOnlyBlendSalt,
   displayOnlyBlendsSupported,
@@ -709,6 +710,13 @@ export interface ExactKernelAdapter {
        * build depends on the document alone.
        */
       proposeCarry?: boolean;
+      /**
+       * The idle refinement of a draft display (see
+       * `exact-display-refinement.ts`): a drag that is still under way
+       * keeps what its frames recorded, so its release is drafted as if
+       * this sync had never run.
+       */
+      displayRefinement?: boolean;
     }
   ): Promise<DerivedState>;
   /**
@@ -1339,6 +1347,20 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
    */
   private coarseFaceMoveFrame = false;
   /**
+   * The edit whose last preview frame was meshed at the drag tessellation:
+   * the source history before it and the body it moves. The complete sync
+   * that follows it for the same edit — its release — draws that body with
+   * a draft display mesh (see `exact-display-refinement.ts`). Every gating
+   * check still runs on the commit; only the display-gap advisory, which
+   * describes the full-quality mesh, waits for the refinement. Any complete sync consumes it; a full-quality preview frame,
+   * a released preview and a dropped history cache clear it.
+   */
+  private draftDisplaySource: {
+    projectId: ProjectDocument['projectId'];
+    source: string;
+    bodyId: BodyId;
+  } | null = null;
+  /**
    * Per body, the linear display deflection each of its solids was last
    * meshed at (see `heldDisplayTessellation`). A display policy, not a
    * geometry cache: it survives history-cache invalidation (a sync whose
@@ -1382,6 +1404,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   }
 
   private invalidateHistoryCache(): void {
+    this.draftDisplaySource = null;
     if (this.historyKernel) releasePreparedGroupEdit(this.historyKernel);
     this.clearCurrentMassSnapshot();
     this.historyCheckpoints = [];
@@ -2659,7 +2682,13 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
      * last time, in solid order; held while the body's size stays close.
      */
     heldDisplayDeflections?: readonly number[],
-    provePlanarPairs = true
+    provePlanarPairs = true,
+    /**
+     * Mesh the faces at the drag tessellation (see
+     * `exact-display-refinement.ts`). Validation, measurement, edges and
+     * volume are unchanged; edges keep the full display deflection.
+     */
+    draftDisplay = false
   ): PreparedShapeMeasurement {
     if (shape.solids.length === 0) {
       throw new Error('Exact body contains no solids.');
@@ -2702,15 +2731,15 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       // Hold the previous deflection while the body's size stays close: a
       // nudged bounding box must not re-mesh every face (the kernel reuses
       // per-face meshes only at the same deflection).
-      const displayTessellation = heldDisplayTessellation(
-        displayTessellationForExtents(
-          bounds[3]! - bounds[0]!,
-          bounds[4]! - bounds[1]!,
-          bounds[5]! - bounds[2]!
-        ),
+      const displayTessellation = solidDisplayTessellation(
+        bounds,
         heldDisplayDeflections?.[displayLinearDeflections.length]
       );
+      // The held value stays the full display quality a draft refines to.
       displayLinearDeflections.push(displayTessellation.linearDeflection);
+      const meshTessellation = draftDisplay
+        ? previewDisplayTessellation(displayTessellation)
+        : displayTessellation;
       const faceHandles = Array.from(kernel.getSolidFaces(solid));
       const edgeToFaces = edgeToFaceMapOf(kernel, solid);
       // The edit that produced this solid usually measured its witnesses
@@ -2793,13 +2822,13 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           strictVerdicts?.get(solid),
           kernel,
           solid,
-          displayTessellation.linearDeflection,
-          displayTessellation.angularDeflection
+          meshTessellation.linearDeflection,
+          meshTessellation.angularDeflection
         ) ??
         kernel.tessellateSolidGroupedBinary(
           solid,
-          displayTessellation.linearDeflection,
-          displayTessellation.angularDeflection
+          meshTessellation.linearDeflection,
+          meshTessellation.angularDeflection
         );
       try {
         const faceOffsets = Array.from(ownedMeshFaceOffsets(mesh));
@@ -2808,11 +2837,6 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         // wasm-bindgen returns caller-owned arrays, independent of mesh.free().
         // Only nonzero body offsets require another index allocation.
         const positions = ownedMeshPositions(mesh);
-        publishedBounds = tightenBoundsToMesh(
-          bounds,
-          positions,
-          displayTessellation.linearDeflection
-        );
         const meshIndices = ownedMeshIndices(mesh);
         const shifted =
           vertexOffset === 0
@@ -2877,30 +2901,17 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           faceTopologyByHandle.set(handle, publishedFace);
           topology.faces.push(publishedFace);
         }
-        publishedBounds = refineBoundsAtSplineFaces(
-          publishedBounds,
+        publishedBounds = publishedSolidBounds(
+          kernel,
+          solid,
+          bounds,
           { positions, indices: meshIndices, faceOffsets },
-          faceHandles.map((handle) => ({
-            surfaceType:
+          faceHandles.map(
+            (handle) =>
               faceTopologyByHandle.get(handle)?.geometry?.surfaceType ?? ''
-          })),
-          displayTessellation.linearDeflection,
-          (deflection) => {
-            const fine = kernel.tessellateSolidGroupedBinary(
-              solid,
-              deflection,
-              displayTessellation.angularDeflection
-            );
-            try {
-              return {
-                positions: ownedMeshPositions(fine),
-                indices: ownedMeshIndices(fine),
-                faceOffsets: Array.from(ownedMeshFaceOffsets(fine))
-              };
-            } finally {
-              fine.free();
-            }
-          }
+          ),
+          meshTessellation,
+          !draftDisplay
         );
       } finally {
         mesh.free();
@@ -3181,7 +3192,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       strictValid,
       meshClosure,
       bbox,
-      displayLinearDeflections
+      displayLinearDeflections,
+      ...(draftDisplay ? { draftDisplay: true as const } : {})
     };
     return {
       geometry,
@@ -3205,27 +3217,46 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       onGeometryReady?: (geometry: GeometryReadyState) => void;
       yieldControl?: () => Promise<void> | void;
       proposeCarry?: boolean;
+      displayRefinement?: boolean;
     }
   ): Promise<DerivedState> {
     return this.runHistoryJob(async () => {
-      const result = await this.syncMeasuredDocument(
-        document,
-        onProgress,
-        onProjection,
-        analysis,
-        true,
-        options?.lineageDemand,
-        options?.cancellation,
-        options?.onGeometryReady,
-        options?.yieldControl,
-        false,
-        false,
-        false,
-        options?.proposeCarry === true
-      );
-      if ('analysis' in result)
-        throw new Error('Document analysis is pending.');
-      return result;
+      // A complete sync ends a drag's draft and coarse-frame state. An idle
+      // refinement that slipped into a paused drag hands it back unless the
+      // history kernel itself was dropped (a fresh kernel holds no warm drag
+      // meshes, and nothing the drag recorded applies to it).
+      const kernel = this.historyKernel;
+      const drag = options?.displayRefinement
+        ? {
+            draftDisplaySource: this.draftDisplaySource,
+            coarseFaceMoveFrame: this.coarseFaceMoveFrame
+          }
+        : null;
+      try {
+        const result = await this.syncMeasuredDocument(
+          document,
+          onProgress,
+          onProjection,
+          analysis,
+          true,
+          options?.lineageDemand,
+          options?.cancellation,
+          options?.onGeometryReady,
+          options?.yieldControl,
+          false,
+          false,
+          false,
+          options?.proposeCarry === true
+        );
+        if ('analysis' in result)
+          throw new Error('Document analysis is pending.');
+        return result;
+      } finally {
+        if (drag && kernel && this.historyKernel === kernel) {
+          this.draftDisplaySource = drag.draftDisplaySource;
+          this.coarseFaceMoveFrame = drag.coarseFaceMoveFrame;
+        }
+      }
     });
   }
 
@@ -3265,7 +3296,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   async refineEditPreview(document: ProjectDocument): Promise<boolean> {
     if (
       !this.historyKernel ||
-      !(hasPreparedGroupEdit(this.historyKernel) || this.coarseFaceMoveFrame)
+      !(hasPreparedGroupEdit(this.historyKernel) || this.coarseFaceMoveFrame) ||
+      // A release of this frame commits a draft display and refines it
+      // after acceptance; warming full-quality meshes now would only hold
+      // that commit behind a tessellation it no longer needs.
+      this.draftDisplaySource
     )
       return false;
     await this.previewGeometry(document, {
@@ -3352,7 +3387,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       // A face drag's frames are as disposable as a prepared group edit's:
       // they mesh at the drag tessellation, and the worker's at-rest
       // refinement (`refineEditPreview`) meshes the resting frame at full
-      // quality. Committed and complete syncs always mesh at full quality.
+      // quality, except where the release commits a draft display (below).
+      // Every other complete sync meshes at full quality.
       const terminalEdit = listFeaturesInOrder(document).at(-1)?.data;
       const faceMoveFrame =
         geometryOnly &&
@@ -3363,6 +3399,35 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       this.coarseFaceMoveFrame = faceMoveFrame;
       const dragMesh =
         faceMoveFrame || (hasPreparedGroupEdit(kernel) && !fullDisplayQuality);
+      // A release commits what its last drag frame showed. When that frame
+      // was a drag mesh, the commit draws the moved body with the same drag
+      // tessellation (the kernel's per-face meshes of it are warm) and a
+      // later complete sync refines it; see `exact-display-refinement.ts`.
+      const draftCandidate = draftDisplayCandidate(document);
+      let draftBodyId: BodyId | undefined;
+      if (geometryOnly) {
+        this.draftDisplaySource =
+          dragMesh && draftCandidate
+            ? { projectId: document.projectId, ...draftCandidate }
+            : null;
+      } else {
+        const source = this.draftDisplaySource;
+        this.draftDisplaySource = null;
+        // A refused or failed release is never accepted: nothing to draw.
+        if (
+          source &&
+          draftCandidate &&
+          !analysis &&
+          !build.featureWarnings.some(
+            (warning) =>
+              warning.kind === 'build-failed' || warning.kind === 'refusal'
+          ) &&
+          source.projectId === document.projectId &&
+          source.source === draftCandidate.source &&
+          source.bodyId === draftCandidate.bodyId
+        )
+          draftBodyId = draftCandidate.bodyId;
+      }
       const bodies = listNodesByKind(document, 'body');
       const features = new Map(
         listNodesByKind(document, 'feature').map((feature) => [
@@ -3763,6 +3828,13 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           !isFeatureSuppressed(feature) &&
           feature.data.featureKind === 'boolean' &&
           feature.data.operation === 'union';
+        // A strict union's closure verdict is read from its display mesh, so
+        // that body is never drafted: the check keeps its full-quality input.
+        const draftThisBody =
+          bodyId === draftBodyId &&
+          !requiresStrictUnionValidation &&
+          !consumed &&
+          !shape.referenceMesh;
         const recognizeImportedFeatures =
           !consumed && importedBodyIds.has(bodyId);
         // The opening is measured only where it can be grown. Its one
@@ -3849,9 +3921,35 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
               'Measurement handle or validation probe failed.'
             );
           }
-          const complete = structuredClone(cached.measured);
-          measured = complete;
-          completeMeasurement = async () => complete;
+          let complete = structuredClone(cached.measured);
+          // A complete sync of a drafted release keeps every exact part of
+          // its measurement and swaps in the full-quality display mesh. A
+          // preview frame only draws it, so it never pays for that here.
+          if (complete.draftDisplay && !draftThisBody && !geometryOnly) {
+            const draft = complete;
+            try {
+              complete = withSyncReadMemo(readMemo, () =>
+                profileDirectEditStage('draftRefinement', () =>
+                  refineDraftDisplay(kernel, shape, draft)
+                )
+              );
+            } catch {
+              throw new HistoryCacheIntegrityError(
+                'Draft display refinement failed.'
+              );
+            }
+            this.storeMeasuredShape(bodyId, {
+              ...cached,
+              bytes:
+                cached.bytes -
+                measuredShapeBytes(cached.measured) +
+                measuredShapeBytes(complete),
+              measured: complete
+            });
+          }
+          const reused = complete;
+          measured = reused;
+          completeMeasurement = async () => reused;
           reusedMeasurements += 1;
         } else {
           const reason = !cached
@@ -3899,7 +3997,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
               strictVerdicts,
               measureOpening,
               this.heldDisplayDeflections.get(bodyId),
-              !deferPlanarProofs
+              !deferPlanarProofs,
+              draftThisBody
             )
           );
           measured = prepared.geometry;
@@ -3988,6 +4087,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           !consumed &&
           !hiddenBodies.has(bodyId) &&
           measured.valid &&
+          // A draft mesh is not the display this advisory describes: the
+          // refinement that swaps in the full-quality mesh (about 0.3 s
+          // later) raises it, so it never flips with the draft.
+          !measured.draftDisplay &&
           feature !== undefined &&
           // Imports report their own source-file diagnostics, and an imported
           // sheet or single facet is legitimately open.
@@ -4037,7 +4140,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             ? { importedStepDeclaredSolidCount: imported.declaredSolidCount }
             : {}),
           bbox: measured.bbox,
-          topology: measured.topology
+          topology: measured.topology,
+          ...(measured.draftDisplay ? { displayQuality: 'draft' as const } : {})
         };
         geometryValid =
           geometryValid &&
@@ -5237,6 +5341,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
 
   releaseEditPreview(): void {
     this.coarseFaceMoveFrame = false;
+    this.draftDisplaySource = null;
     const kernel = this.historyKernel;
     if (!kernel) return;
     if (hasPreparedGroupEdit(kernel)) {
@@ -5398,4 +5503,45 @@ export async function createExactKernelAdapter(
   options: ExactKernelAdapterOptions = {}
 ): Promise<ExactKernelAdapter> {
   return new RemusKernelAdapter(options);
+}
+
+/**
+ * The released edit a complete sync may draw with a draft display mesh: a
+ * face move or cylinder resize, identified by the history before it (feature
+ * ids of a candidate edit are regenerated per pointer frame) and its body.
+ * A body a union produced is excluded: its strict closure check reads the
+ * display mesh, so it is always meshed at full quality.
+ */
+function draftDisplayCandidate(
+  document: ProjectDocument
+): { source: string; bodyId: BodyId } | null {
+  const terminal = listFeaturesInOrder(document).at(-1);
+  const data = terminal?.data;
+  if (
+    !terminal ||
+    isFeatureSuppressed(terminal) ||
+    data?.featureKind !== 'direct-edit' ||
+    (data.operation.kind !== 'offset-face' &&
+      data.operation.kind !== 'resize-cylindrical-face')
+  )
+    return null;
+  const body = listNodesByKind(document, 'body').find(
+    (candidate) => candidate.bodyId === data.targetBodyId
+  );
+  const producer = body
+    ? listNodesByKind(document, 'feature').find(
+        (feature) => feature.featureId === body.featureId
+      )
+    : undefined;
+  if (
+    !body ||
+    (producer?.data.featureKind === 'boolean' &&
+      producer.data.operation === 'union' &&
+      !isFeatureSuppressed(producer))
+  )
+    return null;
+  return {
+    source: document.featureOrder.slice(0, -1).join(','),
+    bodyId: data.targetBodyId
+  };
 }
