@@ -1,13 +1,17 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
-import { createProjectDocument } from '@openzcad/document-core';
+import { createProjectDocument, directEditBody } from '@openzcad/document-core';
 import {
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
 import { toUserId, type BodyId, type ProjectDocument } from '@openzcad/shared';
 import { planFaceOffset } from '../apps/web/src/lib/interaction/faceOffsetPlan';
-import { displayTessellationForExtents } from '../packages/kernel-adapter/src/display-tessellation';
+import {
+  DISPLAY_ANGULAR_DEFLECTION,
+  displayTessellationForExtents,
+  previewDisplayTessellation
+} from '../packages/kernel-adapter/src/display-tessellation';
 import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
 
 /**
@@ -246,4 +250,104 @@ describe('the union gate meshes at the held deflection', () => {
       adapter.dispose();
     }
   }, 90_000);
+});
+
+describe('a face drag meshes its frames at the drag tessellation', () => {
+  it('keeps full quality for the resting refinement, the commit and the held value', async () => {
+    const calls: { linear: number; angular: number }[] = [];
+    const underlying = RemusKernel.prototype.tessellateSolidGroupedBinary;
+    const spy = vi
+      .spyOn(RemusKernel.prototype, 'tessellateSolidGroupedBinary')
+      .mockImplementation(function (
+        this: RemusKernel,
+        ...args: Parameters<RemusKernel['tessellateSolidGroupedBinary']>
+      ) {
+        calls.push({ linear: args[1], angular: args[2] ?? Number.NaN });
+        return underlying.apply(this, args);
+      });
+    const adapter = await createExactKernelAdapter();
+    try {
+      const manager = new CommandManager(
+        createProjectDocument('Drag mesh', toUserId('user_drag_mesh'))
+      );
+      manager.execute(
+        commandFactories.addPrimitive({
+          name: 'Block',
+          primitiveKind: 'box',
+          dimensions: { width: 50, height: 20, depth: 30 }
+        })
+      );
+      const base: ProjectDocument = {
+        ...manager.document,
+        derived: await adapter.syncDocument(manager.document)
+      };
+      const bodyId = base.bodyOrder[0] as BodyId;
+      const held = (
+        adapter as unknown as { heldDisplayDeflections: Map<string, number[]> }
+      ).heldDisplayDeflections;
+      const sourceHeld = [...held.get(bodyId)!];
+      const full = {
+        linear: sourceHeld[0]!,
+        angular: DISPLAY_ANGULAR_DEFLECTION
+      };
+      const coarse = previewDisplayTessellation({
+        linearDeflection: full.linear,
+        angularDeflection: full.angular
+      });
+      const top = base.derived.bodyRepresentations[
+        bodyId
+      ]!.topology!.faces.find(
+        (face) => (face.geometry?.normal?.z ?? 0) > 0.99
+      )!;
+      const offsetBy = (offset: number) =>
+        directEditBody(base, {
+          name: 'Offset',
+          targetBodyId: bodyId,
+          operation: {
+            kind: 'offset-face',
+            faceHash: top.hash,
+            ...(top.reference ? { faceReference: top.reference } : {}),
+            sourceSurfaceType: 'plane',
+            sourceArea: top.geometry!.area,
+            sourceCenter: top.geometry!.center,
+            sourceNormal: top.geometry!.normal!,
+            offset
+          }
+        }).document;
+
+      // Every drag frame, the first included, is meshed coarse, and none of
+      // them lowers the completed display's held deflection.
+      const resting = offsetBy(1.5);
+      for (const document of [offsetBy(0.5), offsetBy(1), resting]) {
+        calls.length = 0;
+        const frame = await adapter.previewGeometry(document, {
+          deferTopology: true
+        });
+        expect(frame.warnings).toEqual([]);
+        expect(calls).toEqual([
+          { linear: coarse.linearDeflection, angular: coarse.angularDeflection }
+        ]);
+        expect(held.get(bodyId)).toEqual(sourceHeld);
+      }
+
+      // At rest the worker's refinement meshes the same frame at full
+      // quality instead of reusing the cached drag mesh.
+      calls.length = 0;
+      expect(await adapter.refineEditPreview?.(resting)).toBe(true);
+      expect(calls).toEqual([full]);
+      // Once refined, there is nothing coarse left to refine.
+      expect(await adapter.refineEditPreview?.(resting)).toBe(false);
+
+      // The commit is a complete sync: full quality, as before.
+      calls.length = 0;
+      const committed = await adapter.syncDocument(resting);
+      expect(committed.warnings).toEqual([]);
+      expect(calls.length).toBeGreaterThan(0);
+      expect(calls.every((call) => call.angular === full.angular)).toBe(true);
+      expect(calls.at(-1)).toEqual(full);
+    } finally {
+      spy.mockRestore();
+      adapter.dispose();
+    }
+  }, 60_000);
 });

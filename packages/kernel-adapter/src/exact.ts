@@ -311,6 +311,7 @@ import {
   measurementWitness,
   measurementProvenanceKey,
   tailCheckpointIndices,
+  withTerminalResultCheckpoint,
   type HistoryCheckpointEntry,
   type MeasuredBodyCacheEntry,
   type PreviewDisplay,
@@ -1062,6 +1063,13 @@ function checkpointMemoryStats(
  * a plain build in the history cache: only a hash-only fillet or chamfer can
  * resolve differently between the two, and salting its digest invalidates
  * every checkpoint from it on.
+ *
+ * The salt is only needed once the two builds actually diverge, which they
+ * do only where a stored hash fails to resolve (a carry proposes, a plain
+ * build refuses). A checkpoint whose whole prefix resolved every hash-only
+ * pick as stored is stored under its plain digests and marked
+ * `carryNeutral`, so either kind of build may restore it; see
+ * `buildWithHistoryCache`.
  */
 function carryProposalSalt(
   feature: { data: { featureKind: string; edgeReferences?: unknown } },
@@ -1325,6 +1333,12 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   >();
   private previewDisplayCacheBytes = 0;
   /**
+   * The last preview showed a face drag's coarse frame, so the at-rest
+   * refinement has a full-quality mesh to warm. A complete sync, a refined
+   * preview and a released drag clear it.
+   */
+  private coarseFaceMoveFrame = false;
+  /**
    * Per body, the linear display deflection each of its solids was last
    * meshed at (see `heldDisplayTessellation`). A display policy, not a
    * geometry cache: it survives history-cache invalidation (a sync whose
@@ -1403,7 +1417,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     bodyId: BodyId,
     shape: ExactShape,
     strict: boolean,
-    imported: ImportedStepDiagnostics | undefined
+    imported: ImportedStepDiagnostics | undefined,
+    /** A drag frame, which may show a cached drag-quality mesh. */
+    allowCoarse: boolean
   ): PreviewDisplay | null {
     const solidKey = shape.solids.join(',');
     const provenanceKey = measurementProvenanceKey(shape, imported);
@@ -1420,7 +1436,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       complete !== undefined &&
       complete.analysisKey === undefined &&
       keyed(complete);
-    const previewed = this.previewDisplayCache.get(bodyId);
+    const cached = this.previewDisplayCache.get(bodyId);
+    const previewed =
+      cached && (allowCoarse || cached.coarse !== true) ? cached : undefined;
     if (!completeKeyed && !(previewed && keyed(previewed))) return null;
     let witness: string;
     try {
@@ -1467,7 +1485,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     shape: ExactShape,
     strict: boolean,
     imported: ImportedStepDiagnostics | undefined,
-    display: PreviewDisplay
+    display: PreviewDisplay,
+    coarse: boolean
   ): void {
     this.evictPreviewDisplay(bodyId);
     const handles = (values: Uint32Array) =>
@@ -1505,7 +1524,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       solidKey,
       strict,
       bytes,
-      display
+      display,
+      ...(coarse ? { coarse: true } : {})
     });
     this.previewDisplayCacheBytes += bytes;
     for (const [key, existing] of this.previewDisplayCache) {
@@ -1658,11 +1678,24 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       ['offset-face', 'resize-blend', 'resize-cylindrical-face'].includes(
         terminal.data.operation.kind
       );
-    const checkpointIndices = tailCheckpointIndices(
+    const sourceCheckpointIndices = tailCheckpointIndices(
       historyCheckpointIndices(features.length, this.maxHistoryCheckpoints),
       features.length - (terminalOffset ? 2 : 1),
       this.maxHistoryCheckpoints
     );
+    // The tail the byte budget protects: the source, never the result.
+    const sourceTail = sourceCheckpointIndices.at(-1);
+    // A checked build of the edit also keeps its result, so neither the
+    // next drag's first frame nor the follow-up sync replays it. A display
+    // build's result is never restored by a checked one, so it is skipped.
+    const checkpointIndices =
+      terminalOffset && !displayOnlyBlends && !deferredDirectEditFeatureId
+        ? withTerminalResultCheckpoint(
+            sourceCheckpointIndices,
+            features.length - 1,
+            this.maxHistoryCheckpoints
+          )
+        : sourceCheckpointIndices;
     const checkpointIndexSet = new Set(checkpointIndices);
     const cachingEnabled = checkpointIndices.length > 0;
     const scopeKey = cachingEnabled ? historyScopeDigest(document) : null;
@@ -1675,32 +1708,47 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         : lineageDemand instanceof Set
           ? lineageDemand
           : new Set(lineageDemand);
-    const digests = cachingEnabled
-      ? features.map(
-          (feature, index) =>
-            historyFeatureDigest(
-              document,
-              feature,
-              index,
-              scope,
-              normalizedDemand
-            ) +
-            (feature.featureId === deferredDirectEditFeatureId
-              ? '|display-output'
-              : '') +
-            carryProposalSalt(feature, proposeCarry) +
-            displayOnlyBlendSalt(feature, displayOnlyBlends)
+    const salted = (bases: readonly string[], carry: boolean) =>
+      bases.map(
+        (base, index) =>
+          base +
+          (features[index]!.featureId === deferredDirectEditFeatureId
+            ? '|display-output'
+            : '') +
+          carryProposalSalt(features[index]!, carry) +
+          displayOnlyBlendSalt(features[index]!, displayOnlyBlends)
+      );
+    const demandBases = cachingEnabled
+      ? features.map((feature, index) =>
+          historyFeatureDigest(
+            document,
+            feature,
+            index,
+            scope,
+            normalizedDemand
+          )
         )
       : [];
+    const digests = salted(demandBases, proposeCarry);
+    // What a plain build of this document stores. A carry-proposing build
+    // may restore a checkpoint under these only when it is `carryNeutral`
+    // (no hash-only pick missed up to it), and stores under them while it
+    // has not missed one either: until then both builds ran the same calls.
+    const plainDigests = proposeCarry ? salted(demandBases, false) : digests;
     // A display-only build salts its blending features' digests so that a
     // checked build never restores what it stores, but it may restore what a
     // checked build stored: checked geometry is good for display too.
-    const checkedDigests = displayOnlyBlends
-      ? digests.map((digest, index) => {
-          const salt = displayOnlyBlendSalt(features[index]!, true);
-          return salt ? digest.slice(0, -salt.length) : digest;
-        })
-      : digests;
+    const unsaltDisplayOnly = (spellings: readonly string[]) =>
+      displayOnlyBlends
+        ? spellings.map((digest, index) => {
+            const salt = displayOnlyBlendSalt(features[index]!, true);
+            return salt ? digest.slice(0, -salt.length) : digest;
+          })
+        : [...spellings];
+    const checkedDigests = unsaltDisplayOnly(digests);
+    const plainCheckedDigests = proposeCarry
+      ? unsaltDisplayOnly(plainDigests)
+      : checkedDigests;
     // A request that may skip a boolean's probe can still restore a
     // checkpoint where the probe ran: it adds lineage to the same geometry.
     // Previews and exports pass no demand, so without this every switch back
@@ -1712,20 +1760,35 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             : undefined
         )
       : [];
-    const idleDigests =
+    const idleBases =
       normalizedDemand?.size === 0
-        ? digests
+        ? demandBases
         : cachingEnabled
-          ? features.map(
-              (feature, index) =>
-                historyFeatureDigest(document, feature, index, scope, []) +
-                (feature.featureId === deferredDirectEditFeatureId
-                  ? '|display-output'
-                  : '') +
-                carryProposalSalt(feature, proposeCarry) +
-                displayOnlyBlendSalt(feature, displayOnlyBlends)
+          ? features.map((feature, index) =>
+              historyFeatureDigest(document, feature, index, scope, [])
             )
           : [];
+    const idleDigests = salted(idleBases, proposeCarry);
+    const plainIdleDigests = proposeCarry
+      ? salted(idleBases, false)
+      : idleDigests;
+    // One stored digest against this request's spellings. A carry-neutral
+    // entry was stored under plain digests, which a carry build accepts too.
+    const digestMatches = (
+      digest: string,
+      index: number,
+      carryNeutral: boolean
+    ) =>
+      digest === digests[index] ||
+      digest === probedDigests[index] ||
+      digest === checkedDigests[index] ||
+      (carryNeutral &&
+        (digest === plainDigests[index] ||
+          digest === plainCheckedDigests[index]));
+    // Whether a hash-only pick has failed to resolve as stored in this build
+    // or the prefix it restores. From then on a carry build's state may
+    // differ from a plain build's, so its checkpoints keep the salt.
+    let unresolvedEdgeHash = false;
     const probePrefix: [string, boolean][] = [];
     const probeKeys = cachingEnabled
       ? features.map((feature) => {
@@ -1949,13 +2012,12 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           index === 0
             ? 0
             : this.historyCheckpoints[index - 1]!.featureIndex + 1;
+        const carryNeutral = entry.carryNeutral === true;
         if (
           entry.digests.length !== entry.featureIndex - from + 1 ||
           entry.digests.some(
             (digest, offset) =>
-              digest !== digests[from + offset] &&
-              digest !== probedDigests[from + offset] &&
-              digest !== checkedDigests[from + offset]
+              !digestMatches(digest, from + offset, carryNeutral)
           )
         ) {
           break;
@@ -1970,7 +2032,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                 .slice(0, index + 1)
                 .flatMap((prior) => prior.digests)
                 .every(
-                  (digest, featureIndex) => digest === digests[featureIndex]
+                  (digest, featureIndex) =>
+                    digest === digests[featureIndex] ||
+                    (carryNeutral && digest === plainDigests[featureIndex])
                 );
         const needsIdleView = !primaryMatches;
         if (needsIdleView) {
@@ -1981,7 +2045,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           if (
             !view ||
             view.digests.length !== entry.featureIndex + 1 ||
-            view.digests.some((digest, index) => digest !== digests[index])
+            view.digests.some(
+              (digest, index) =>
+                digest !== digests[index] &&
+                !(carryNeutral && digest === plainDigests[index])
+            )
           ) {
             unavailableModeView = true;
             break;
@@ -2059,6 +2127,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             ? cloneBuildState(restoredEntry.snapshot)
             : null;
           initialAxialExtent = restoredEntry?.axialExtent;
+          // An entry not proven carry-neutral may hold a miss (a plain
+          // refusal or a carry); everything built on it inherits that.
+          unresolvedEdgeHash =
+            restoredEntry !== undefined && restoredEntry.carryNeutral !== true;
           if (restoredEntry && initial) {
             const view = restoredEntry.idleLineageView;
             if (view) {
@@ -2106,6 +2178,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           initialIdleLineageView = undefined;
           initialLineageIsIdle = false;
           initialAxialExtent = undefined;
+          unresolvedEdgeHash = false;
         }
       } else {
         this.invalidateHistoryCache();
@@ -2210,6 +2283,16 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         (transientFrom >= 0 && index >= transientFrom)
       )
         return;
+      // Qualified axial reuse resizes from the last checkpoint and expects
+      // it to be the edit's source; a result checkpoint after a certified
+      // source would turn that reuse off, so such a history keeps only the
+      // source, as before.
+      if (
+        index !== sourceTail &&
+        index > (sourceTail ?? -1) &&
+        this.historyCheckpoints.at(-1)?.axialExtent !== undefined
+      )
+        return;
       // A checkpoint is cheap to create but makes the next mutation copy the
       // arena. Admit against that projected cost, including retired slots.
       let memory = checkpointMemoryStats(activeKernel);
@@ -2232,7 +2315,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       // it through the ordinary provenance/ownership checks.
       if (
         memory &&
-        index === checkpointIndices.at(-1) &&
+        index === sourceTail &&
         this.historyCheckpoints.length > 0 &&
         memory.nextMutationEstimatedBytes +
           retainedLineageBytes +
@@ -2273,11 +2356,19 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         );
       }
       const previous = this.historyCheckpoints.at(-1);
+      // Until a hash-only pick misses, this build ran exactly what a plain
+      // build of the document runs: store the plain spelling so either kind
+      // of build restores it. After a miss a carry build keeps its salt.
+      const carryNeutral = !unresolvedEdgeHash;
       const entry: HistoryCheckpointEntry = {
         featureIndex: index,
-        digests: digests.slice((previous?.featureIndex ?? -1) + 1, index + 1),
+        digests: (carryNeutral ? plainDigests : digests).slice(
+          (previous?.featureIndex ?? -1) + 1,
+          index + 1
+        ),
         checkpointId,
         snapshot: cloneBuildState(result),
+        ...(carryNeutral ? { carryNeutral: true } : {}),
         ...(axialCertificate ? { axialExtent: axialCertificate } : {}),
         ...(memory
           ? { lineageProbeKey: probeKey, lineageMetadataBytes: probeKeyBytes }
@@ -2296,7 +2387,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             .some((digest, featureIndex) => digest !== digests[featureIndex]))
       ) {
         try {
-          const viewDigests = idleDigests.slice(0, index + 1);
+          const viewDigests = (
+            carryNeutral ? plainIdleDigests : idleDigests
+          ).slice(0, index + 1);
           const bytes = idleLineageViewBytes(idleView, viewDigests);
           if (
             memory.nextMutationEstimatedBytes +
@@ -2408,7 +2501,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           (this.options.historyCheckpointEstimatedBytes ??
             MAX_HISTORY_CHECKPOINT_ESTIMATED_BYTES) > 0,
         this.edgeSelections,
-        proposeCarry
+        proposeCarry,
+        () => {
+          unresolvedEdgeHash = true;
+        }
       );
     } catch (error) {
       // A cancelled build keeps the retained prefix: the checkpoints pushed
@@ -3167,7 +3263,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   }
 
   async refineEditPreview(document: ProjectDocument): Promise<boolean> {
-    if (!this.historyKernel || !hasPreparedGroupEdit(this.historyKernel))
+    if (
+      !this.historyKernel ||
+      !(hasPreparedGroupEdit(this.historyKernel) || this.coarseFaceMoveFrame)
+    )
       return false;
     await this.previewGeometry(document, {
       deferTopology: true,
@@ -3250,6 +3349,20 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         proposeCarry
       );
       historyDone();
+      // A face drag's frames are as disposable as a prepared group edit's:
+      // they mesh at the drag tessellation, and the worker's at-rest
+      // refinement (`refineEditPreview`) meshes the resting frame at full
+      // quality. Committed and complete syncs always mesh at full quality.
+      const terminalEdit = listFeaturesInOrder(document).at(-1)?.data;
+      const faceMoveFrame =
+        geometryOnly &&
+        deferTopology &&
+        !fullDisplayQuality &&
+        terminalEdit?.featureKind === 'direct-edit' &&
+        terminalEdit.operation.kind === 'offset-face';
+      this.coarseFaceMoveFrame = faceMoveFrame;
+      const dragMesh =
+        faceMoveFrame || (hasPreparedGroupEdit(kernel) && !fullDisplayQuality);
       const bodies = listNodesByKind(document, 'body');
       const features = new Map(
         listNodesByKind(document, 'feature').map((feature) => [
@@ -3388,7 +3501,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
               bodyId,
               shape,
               strict,
-              imported
+              imported,
+              dragMesh
             );
             if (reused) {
               publishImportDiagnostics();
@@ -3478,7 +3592,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                   this.heldDisplayDeflections.get(bodyId),
                   strict ? strictVerdicts : undefined,
                   true,
-                  hasPreparedGroupEdit(kernel) && !fullDisplayQuality
+                  dragMesh
                 )
               )
             );
@@ -3488,7 +3602,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           }
           // A disposable drag mesh must never lower the completed display's
           // held quality, including when the next sync restores this source.
-          if (!hasPreparedGroupEdit(kernel))
+          if (!dragMesh && !hasPreparedGroupEdit(kernel))
             this.heldDisplayDeflections.set(
               bodyId,
               projection.linearDeflections
@@ -3621,13 +3735,21 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             bbox: projection.bbox,
             topology: { faces, edges: [] }
           };
-          this.storePreviewDisplay(kernel, bodyId, shape, strict, imported, {
-            vertices: projection.mesh.vertices,
-            indices: projection.mesh.indices,
-            bbox: projection.bbox,
-            faceCount: metadata.faceCount,
-            faces
-          });
+          this.storePreviewDisplay(
+            kernel,
+            bodyId,
+            shape,
+            strict,
+            imported,
+            {
+              vertices: projection.mesh.vertices,
+              indices: projection.mesh.indices,
+              bbox: projection.bbox,
+              faceCount: metadata.faceCount,
+              faces
+            },
+            dragMesh
+          );
           measurementDone();
           await scheduling.checkpoint();
           throwIfBuildCancelled(cancellation);
@@ -5114,6 +5236,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   }
 
   releaseEditPreview(): void {
+    this.coarseFaceMoveFrame = false;
     const kernel = this.historyKernel;
     if (!kernel) return;
     if (hasPreparedGroupEdit(kernel)) {

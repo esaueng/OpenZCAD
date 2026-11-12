@@ -2420,7 +2420,8 @@ function buildEdgeModifierFeature(
           upstream: () =>
             upstreamSnapshot(document, feature.featureId, ctx.result)
         }
-      : undefined
+      : undefined,
+    ctx.onUnresolvedEdgeHash
   );
   const size = resolveParamValue(
     data.featureKind === 'fillet' ? data.radius : data.distance,

@@ -135,6 +135,36 @@ export function tailCheckpointIndices(
 }
 
 /**
+ * A complete (checked) build of a terminal face edit keeps its result as
+ * well as its source: `indices` (ending at the source) plus `terminal`, when
+ * that is free. The next drag, which appends another edit, then restores the
+ * result instead of replaying it display-only, and the follow-up sync of the
+ * same document restores it instead of replaying it checked again.
+ *
+ * Only where it can never cost a restore: a slot must be free, so a full
+ * schedule keeps the source (the next value of the same edit restores it),
+ * and the source must stay a stable position once one more feature is
+ * appended. Checkpoints form a stack and a sync restores past an unscheduled
+ * one only when it is the last, so a source the next schedule drops would
+ * otherwise sit under the result and block the restore it used to give. The
+ * entry is admitted against the byte budget like any other, and is never
+ * preferred over the source when the budget is short.
+ */
+export function withTerminalResultCheckpoint(
+  indices: readonly number[],
+  terminal: number,
+  limit: number
+): number[] {
+  const last = indices.at(-1);
+  return last === undefined ||
+    last >= terminal ||
+    indices.length >= Math.floor(limit) ||
+    !historyCheckpointIndices(terminal + 2, limit).includes(last)
+    ? [...indices]
+    : [...indices, terminal];
+}
+
+/**
  * Deterministic serializer for history-cache digests: keys sorted,
  * `undefined`-valued properties dropped. The same canonical form the
  * worker's whole-document rebuild cache uses, with the same accepted
@@ -477,6 +507,14 @@ export interface HistoryCheckpointEntry {
   checkpointId: number;
   /** Post-feature JS state, isolated from later in-place mutation. */
   snapshot: ExactBuildResult;
+  /**
+   * Every hash-only edge pick up to and including this entry resolved as
+   * stored, in this build and the prefix it restored, so a carry-proposing
+   * build and a plain build of the document produce the same state here.
+   * The digests are then the plain spelling and either build may restore
+   * it. Absent, only an exact digest match restores it.
+   */
+  carryNeutral?: boolean;
   /** Probe signature actually represented by this snapshot's JS lineage. */
   lineageProbeKey?: string;
   /** Accounted probe key plus optional alternate provenance metadata. */
@@ -557,6 +595,11 @@ export interface PreviewDisplayCacheEntry {
   /** Owned buffers plus serialized faces/witness estimate. */
   bytes: number;
   display: PreviewDisplay;
+  /**
+   * Meshed at the disposable drag tessellation. Only another drag frame may
+   * reuse it; a full-quality preview (the at-rest refinement) meshes again.
+   */
+  coarse?: boolean;
 }
 
 /** No hash or traversal-position substitution: compare the complete record. */

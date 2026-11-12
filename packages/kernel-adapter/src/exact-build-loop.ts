@@ -154,6 +154,12 @@ export interface FeatureBuildContext {
    * never carries, so its result depends on the document alone.
    */
   proposeCarry?: boolean;
+  /**
+   * Told when a hash-only edge pick no longer resolves as stored: the only
+   * point at which a carry-proposing build and a plain build of the same
+   * document can differ. Observation only.
+   */
+  onUnresolvedEdgeHash?: () => void;
 }
 
 /** The narrowed data payload for one feature kind (or a union of kinds). */
@@ -220,7 +226,9 @@ function* buildDocumentHistorySteps(
   /** See {@link FeatureBuildContext.edgeSelections}. */
   edgeSelections?: EdgeSelectionMemory,
   /** See {@link FeatureBuildContext.proposeCarry}. */
-  proposeCarry = false
+  proposeCarry = false,
+  /** See {@link FeatureBuildContext.onUnresolvedEdgeHash}. */
+  onUnresolvedEdgeHash?: () => void
 ): Generator<void, ExactBuildResult> {
   const { scope, errors } = getParameterScope(document);
   // F05: a feature fed a typed parameter as the wrong quantity (a length as
@@ -289,7 +297,8 @@ function* buildDocumentHistorySteps(
     ...(heldDisplayDeflection === undefined ? {} : { heldDisplayDeflection }),
     ...(cancellation === undefined ? {} : { cancellation }),
     ...(edgeSelections === undefined ? {} : { edgeSelections }),
-    ...(proposeCarry ? { proposeCarry: true } : {})
+    ...(proposeCarry ? { proposeCarry: true } : {}),
+    ...(onUnresolvedEdgeHash ? { onUnresolvedEdgeHash } : {})
   };
 
   try {
