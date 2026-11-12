@@ -87,6 +87,14 @@ export function parseFragment(name, source) {
       `${name}: state "${fields.state}" is not one of ${STATES.join(', ')}; a fragment merges with its code, so merged work is Partial or Complete`
     );
   }
+  // The body becomes part of one table cell, where a reference definition is
+  // plain text and its links never resolve.
+  const reference = /^ {0,3}(\[[^\]\n]+\]:)/m.exec(match[2]);
+  if (reference) {
+    throw new Error(
+      `${name}: reference definition ${reference[1]} cannot work inside a table cell; write the link inline`
+    );
+  }
   const evidence = match[2].replace(/\s+/g, ' ').trim();
   if (!evidence) {
     throw new Error(`${name}: no evidence text`);
@@ -331,18 +339,37 @@ export function readFragments(repoRoot = REPO_ROOT) {
  * before this check and lost their targets in the 2026-11-11 fold.)
  */
 export function fragmentLinks(text) {
-  return Array.from(
-    text.matchAll(
-      /\]\((?:\.{1,2}\/)*(?:docs\/)?roadmap-evidence\/([a-z0-9][a-z0-9.-]*--[a-z0-9-]+\.md)[^)]*\)/g
-    ),
-    (match) => match[1]
-  );
+  return linkDestinations(text).flatMap((destination) => {
+    const match =
+      /^(?:\.{1,2}\/)*(?:docs\/)?roadmap-evidence\/([a-z0-9][a-z0-9.-]*--[a-z0-9-]+\.md)(?:[#?].*)?$/.exec(
+        destination
+      );
+    return match ? [match[1]] : [];
+  });
 }
 
-/** Validates every fragment against the ledger without writing anything. */
-export function checkRepo(repoRoot = REPO_ROOT) {
-  const fragments = readFragments(repoRoot);
-  const ledger = readFileSync(path.join(repoRoot, ROADMAP_PATH), 'utf8');
+/**
+ * Every Markdown link destination in `text`: inline links, bare or in angle
+ * brackets (`[x](a.md)`, `[x](<a.md>)`), and reference definitions
+ * (`[x]: a.md`).
+ */
+export function linkDestinations(text) {
+  const pick = (match) => match[1] ?? match[2];
+  return [
+    ...Array.from(text.matchAll(/\]\(\s*(?:<([^>\n]*)>|([^)\s]+))/g), pick),
+    ...Array.from(
+      text.matchAll(/^ {0,3}\[[^\]\n]+\]:[ \t]*(?:<([^>\n]*)>|(\S+))/gm),
+      pick
+    )
+  ];
+}
+
+/**
+ * Refuses links the fold would break, then folds in memory; nothing is
+ * written. Shared by the check and the fold so `--fold` never writes what the
+ * check refuses.
+ */
+function validate(ledger, fragments) {
   const errors = [
     ...fragmentLinks(ledger).map(
       (name) =>
@@ -357,26 +384,33 @@ export function checkRepo(repoRoot = REPO_ROOT) {
     // The fold moves the text into ROADMAP.md at the repository root, where a
     // link written relative to this directory (`../plans/x.md`) breaks.
     ...fragments.flatMap(({ name, evidence }) =>
-      Array.from(
-        evidence.matchAll(/\]\((\.\.?\/[^)\s]*)\)/g),
-        (match) =>
-          `${name}: link ${match[1]} is relative to the fragment; write it from the repository root (docs/...), as ROADMAP.md reads it`
-      )
+      linkDestinations(evidence)
+        .filter((destination) => /^\.\.?\//.test(destination))
+        .map(
+          (destination) =>
+            `${name}: link ${destination} is relative to the fragment; write it from the repository root (docs/...), as ROADMAP.md reads it`
+        )
     )
   ];
   if (errors.length) throw new Error(errors.join('\n'));
-  foldEvidence(ledger, fragments);
+  return foldEvidence(ledger, fragments);
+}
+
+/** Validates every fragment against the ledger without writing anything. */
+export function checkRepo(repoRoot = REPO_ROOT) {
+  const fragments = readFragments(repoRoot);
+  validate(readFileSync(path.join(repoRoot, ROADMAP_PATH), 'utf8'), fragments);
   return fragments;
 }
 
-/** Folds every fragment into the ledger and deletes the folded files. */
+/**
+ * Folds every fragment into the ledger and deletes the folded files. Refuses,
+ * writing nothing, whatever the check refuses.
+ */
 export function foldRepo(repoRoot = REPO_ROOT) {
   const fragments = readFragments(repoRoot);
   const roadmap = path.join(repoRoot, ROADMAP_PATH);
-  writeFileSync(
-    roadmap,
-    foldEvidence(readFileSync(roadmap, 'utf8'), fragments)
-  );
+  writeFileSync(roadmap, validate(readFileSync(roadmap, 'utf8'), fragments));
   for (const { name } of fragments)
     rmSync(path.join(repoRoot, FRAGMENT_DIR, name));
   return fragments;
