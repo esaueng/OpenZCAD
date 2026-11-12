@@ -199,6 +199,12 @@ function sessionFromSeed(
   };
 }
 
+/** A typed entry refused, and why, held against its value. */
+interface EntryRefusal {
+  valueId: string;
+  message: string;
+}
+
 interface Session {
   /** Which start this is: a new one each time a command starts. */
   id: number;
@@ -435,10 +441,31 @@ export function useInPlaceCommand(
     options: Record<string, string>;
     slots: InPlaceEditSeed['slots'];
   } | null>(null);
-  const [entryRefusal, setEntryRefusal] = useState<{
-    valueId: string;
-    message: string;
-  } | null>(null);
+  /**
+   * Refused entries, one per value, oldest first: each holds Done until that
+   * value is taken, put back, or no longer applies. The bar shows the last.
+   */
+  const [entryRefusals, setEntryRefusals] = useState<readonly EntryRefusal[]>(
+    []
+  );
+  const entryRefusal = entryRefusals.at(-1) ?? null;
+  /** Refuses an entry of one value, replacing only that value's refusal. */
+  const refuseEntry = useCallback((refused: EntryRefusal) => {
+    setEntryRefusals((current) => [
+      ...current.filter((other) => other.valueId !== refused.valueId),
+      refused
+    ]);
+  }, []);
+  /** Lets go of the refusals of these values, and no other. */
+  const clearEntryRefusals = useCallback(
+    (cleared: (valueId: string) => boolean) => {
+      setEntryRefusals((current) => {
+        const kept = current.filter((refused) => !cleared(refused.valueId));
+        return kept.length === current.length ? current : kept;
+      });
+    },
+    []
+  );
   const [previewValid, setPreviewValid] = useState(false);
   const optionsRef = useRef(options);
   optionsRef.current = options;
@@ -803,7 +830,7 @@ export function useInPlaceCommand(
   // A refused entry belongs to the edit it was typed in: one re-armed from
   // a changed feature (a Linear pattern made Grid) starts without it.
   useEffect(() => {
-    setEntryRefusal(null);
+    setEntryRefusals([]);
   }, [editIdentity]);
   const instant = spec?.instant === true;
   useEffect(() => {
@@ -1065,7 +1092,7 @@ export function useInPlaceCommand(
     setSession(null);
     setCommitting(false);
     setRefusal(null);
-    setEntryRefusal(null);
+    setEntryRefusals([]);
     setPreviewValid(false);
     optionsRef.current.publishPreview(null);
   }, [preview, setCommitting]);
@@ -1096,7 +1123,7 @@ export function useInPlaceCommand(
       preview.clear();
       optionsRef.current.publishPreview(null);
       setRefusal(null);
-      setEntryRefusal(null);
+      setEntryRefusals([]);
       setCommitting(false);
       setPreviewValid(false);
       sessionCount.current += 1;
@@ -1161,7 +1188,7 @@ export function useInPlaceCommand(
       preview.clear();
       optionsRef.current.publishPreview(null);
       setRefusal(null);
-      setEntryRefusal(null);
+      setEntryRefusals([]);
       setCommitting(false);
       setPreviewValid(false);
       sessionCount.current += 1;
@@ -1522,9 +1549,7 @@ export function useInPlaceCommand(
       const toolSpec = current ? IN_PLACE_TOOL_SPECS[current.tool] : null;
       if (!current || !toolSpec?.footprint) return false;
       // A drawn value replaces a refused typed one, and its refusal with it.
-      setEntryRefusal((refused) =>
-        refused && refused.valueId in placed ? null : refused
-      );
+      clearEntryRefusals((valueId) => valueId in placed);
       setSession((latest) => {
         if (!latest) return latest;
         const specs = IN_PLACE_TOOL_SPECS[latest.tool].values;
@@ -1549,7 +1574,7 @@ export function useInPlaceCommand(
       });
       return true;
     },
-    []
+    [clearEntryRefusals]
   );
 
   const pickRef = useCallback((ref: RefPick) => {
@@ -1592,9 +1617,7 @@ export function useInPlaceCommand(
       // New picks are measured afresh: a distance refused for the old
       // pair no longer stands.
       const linked = IN_PLACE_TOOL_SPECS[current.tool].linked ?? {};
-      setEntryRefusal((refused) =>
-        refused && refused.valueId in linked ? null : refused
-      );
+      clearEntryRefusals((valueId) => valueId in linked);
       setSession((latest) => {
         const image = latest?.slots.image;
         if (!latest || !image) return latest;
@@ -1626,7 +1649,7 @@ export function useInPlaceCommand(
       });
       return true;
     },
-    [ctx]
+    [ctx, clearEntryRefusals]
   );
 
   const setOption = useCallback((optionId: string, value: string) => {
@@ -1707,15 +1730,13 @@ export function useInPlaceCommand(
         if (!written) {
           // An entry refusal, so Done waits: the value shown was refused,
           // and the width it would have set is not what was asked for.
-          setEntryRefusal({
+          refuseEntry({
             valueId,
             message: `${IN_PLACE_TOOL_SPECS[current.tool].title} cannot take ${raw ?? value} for its ${valueSpec?.label.toLowerCase() ?? 'value'}.`
           });
           return false;
         }
-        setEntryRefusal((refused) =>
-          refused?.valueId === valueId ? null : refused
-        );
+        clearEntryRefusals((refused) => refused === valueId);
         setSession((latestSession) => {
           if (!latestSession) return latestSession;
           const specs = IN_PLACE_TOOL_SPECS[latestSession.tool].values;
@@ -1759,7 +1780,7 @@ export function useInPlaceCommand(
           : valueSpec.max === undefined
             ? `${whole ? `${whole}of ` : ''}at least ${valueSpec.min ?? 0}`
             : `${whole}${valueSpec.min ?? 0} to ${valueSpec.max}`;
-        setEntryRefusal({
+        refuseEntry({
           valueId,
           message: `${raw === undefined ? value : `${raw} is ${value}`}; ${IN_PLACE_TOOL_SPECS[current.tool].title} ${valueSpec.label.toLowerCase()} takes ${range}.`
         });
@@ -1779,7 +1800,7 @@ export function useInPlaceCommand(
           : null;
       if (crossed) {
         if (typed) {
-          setEntryRefusal({
+          refuseEntry({
             valueId,
             message: `${raw === undefined ? value : `${raw} is ${value}`}; ${crossed}`
           });
@@ -1788,9 +1809,7 @@ export function useInPlaceCommand(
       }
       // Only the refused value, taken now, lifts its refusal: another value
       // changing leaves the refused one still not what was typed.
-      setEntryRefusal((refused) =>
-        refused?.valueId === valueId ? null : refused
-      );
+      clearEntryRefusals((refused) => refused === valueId);
       setSession((current) => {
         if (!current) return current;
         const valueSpec = IN_PLACE_TOOL_SPECS[current.tool].values.find(
@@ -1820,13 +1839,14 @@ export function useInPlaceCommand(
       });
       return true;
     },
-    []
+    [clearEntryRefusals, refuseEntry]
   );
-  const dropRefusal = useCallback((valueId: string) => {
-    setEntryRefusal((refused) =>
-      refused?.valueId === valueId ? null : refused
-    );
-  }, []);
+  const dropRefusal = useCallback(
+    (valueId: string) => {
+      clearEntryRefusals((refused) => refused === valueId);
+    },
+    [clearEntryRefusals]
+  );
   const previewValue = useCallback(
     (valueId: string, value: number) =>
       writeValue(valueId, value, undefined, false),
@@ -1878,7 +1898,7 @@ export function useInPlaceCommand(
   // that changed the request since the last frame has not been shown yet.
   const canFinish = Boolean(
     !committing &&
-    !entryRefusal &&
+    entryRefusals.length === 0 &&
     request &&
     (instant ||
       (previewValid && previewedKey !== null && previewedKey === requestKey))
@@ -1970,19 +1990,21 @@ export function useInPlaceCommand(
   // no longer applies: a choice (a hole's style) that hides its chip, or its
   // Options row (a value typed only there, a thread's offset).
   useEffect(() => {
-    if (!entryRefusal) return;
-    if (handles.some((handle) => handle.valueId === entryRefusal.valueId)) {
-      return;
-    }
-    const valueSpec = spec?.values.find(
-      (candidate) => candidate.id === entryRefusal.valueId
-    );
-    const inOptions =
-      spec !== null &&
-      valueSpec?.inOptions === true &&
-      (valueSpec.when?.(inPlacePanelState(spec, chosen, heldValues)) ?? true);
-    if (!inOptions) setEntryRefusal(null);
-  }, [entryRefusal, handles, spec, chosen, heldValues]);
+    if (entryRefusals.length === 0) return;
+    const state = spec ? inPlacePanelState(spec, chosen, heldValues) : null;
+    const applies = (valueId: string) => {
+      if (handles.some((handle) => handle.valueId === valueId)) return true;
+      const valueSpec = spec?.values.find(
+        (candidate) => candidate.id === valueId
+      );
+      return (
+        state !== null &&
+        valueSpec?.inOptions === true &&
+        (valueSpec.when?.(state) ?? true)
+      );
+    };
+    clearEntryRefusals((valueId) => !applies(valueId));
+  }, [entryRefusals, handles, spec, chosen, heldValues, clearEntryRefusals]);
   const optionSpecs = useMemo(
     () =>
       (spec?.options ?? [])

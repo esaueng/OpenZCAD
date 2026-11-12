@@ -876,28 +876,70 @@ describe('useInPlaceCommand: thread', () => {
     }, [command]);
     const offset = command.values.offset ?? 0;
     return (
-      <InPlaceCommandBar
-        title="Thread"
-        hint={command.hint}
-        refusal={command.refusal}
-        canFinish={command.canFinish}
-        values={[
-          {
-            id: 'offset',
-            label: 'Offset',
-            text: String(offset),
-            value: offset,
-            step: 0.1,
-            min: 0
-          }
-        ]}
-        onValueCommit={(id, text) => command.setValue(id, Number(text))}
-        onValueRestore={command.dropRefusal}
-        onDone={vi.fn()}
-        onCancel={vi.fn()}
-      />
+      <>
+        {/* The length's chip keypad, as the app routes a typed entry. */}
+        {[13, 8].map((length) => (
+          <button
+            key={length}
+            type="button"
+            onClick={() => command.setValue('length', length)}
+          >
+            {`Chip length ${length}`}
+          </button>
+        ))}
+        <InPlaceCommandBar
+          title="Thread"
+          hint={command.hint}
+          refusal={command.refusal}
+          canFinish={command.canFinish}
+          values={[
+            {
+              id: 'offset',
+              label: 'Offset',
+              text: String(offset),
+              value: offset,
+              step: 0.1,
+              min: 0
+            }
+          ]}
+          onValueCommit={(id, text) => command.setValue(id, Number(text))}
+          onValueRestore={command.dropRefusal}
+          onDone={vi.fn()}
+          onCancel={vi.fn()}
+        />
+      </>
     );
   }
+
+  it('keeps a chip refusal when another Options entry is abandoned (third re-check)', async () => {
+    render(<ThreadWithOptions options={setupOptions([], vi.fn())} />);
+    const done = screen.getByRole('button', { name: /Done/ });
+    const bar = () =>
+      screen.getByRole('group', { name: 'Thread command' }).textContent ?? '';
+    await waitFor(() => expect(done).toBeEnabled());
+    // 1. Length 13 on its chip: refused, Done held.
+    fireEvent.click(screen.getByRole('button', { name: 'Chip length 13' }));
+    await waitFor(() => expect(done).toBeDisabled());
+    expect(bar()).toContain('a thread here runs at most 12');
+    // 2. Offset 12 typed in Options, refused, then abandoned by leaving.
+    const field = screen.getByRole('textbox', { name: 'Offset' });
+    fireEvent.focus(field);
+    fireEvent.change(field, { target: { value: '12' } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+    expect(bar()).toContain('the face is only 12 long');
+    fireEvent.blur(field);
+    expect(field).toHaveValue('0');
+    // 3. The length's refusal still stands: shown, and Done held.
+    await waitFor(() =>
+      expect(bar()).toContain('a thread here runs at most 12')
+    );
+    expect(bar()).not.toContain('the face is only 12 long');
+    expect(done).toBeDisabled();
+    // The length fixed on its chip: nothing refused, Done back.
+    fireEvent.click(screen.getByRole('button', { name: 'Chip length 8' }));
+    await waitFor(() => expect(done).toBeEnabled());
+    expect(bar()).not.toContain('runs at most');
+  });
 
   it('lets a refused Options entry go when its field is put back (second re-check #1)', async () => {
     render(<ThreadWithOptions options={setupOptions([], vi.fn())} />);
