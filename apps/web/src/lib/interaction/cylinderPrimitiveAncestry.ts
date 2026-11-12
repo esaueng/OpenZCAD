@@ -432,6 +432,38 @@ export function primitiveCylinderRadiusAncestor(
   );
 }
 
+/**
+ * The source edit a cylindrical wall's radius drag makes, when it makes one.
+ *
+ * `localBlendGroup` says the kernel can resize this wall in place, carrying
+ * the blends it touches as one group (a filleted boss on a kernel with blend
+ * group edits). That local edit then owns a wall that reaches its primitive
+ * only across a boolean: the boss's seam blends are the body's, not the
+ * cylinder's, and a source replay at a new radius can lose their edge
+ * lineage where the group edit refuses cleanly with a size to try. A
+ * cylinder whose own chain of fillets and chamfers is all that stands
+ * between the wall and its primitive keeps the source edit: replaying the
+ * rim blends on the resized primitive is exact, history stays parametric,
+ * and the drag keeps its viewport projection instead of a kernel rebuild
+ * per frame.
+ */
+export function primitiveCylinderRadiusEdit(
+  document: ProjectDocument,
+  selectedBodyId: BodyId,
+  faceReference: FaceTopologyReferenceV5 | undefined,
+  faceHash: number | undefined,
+  options: { localBlendGroup?: boolean } = {}
+): { primitive: FeatureNode; scale: number } | null {
+  const chain = cylinderRadiusChain(
+    document,
+    selectedBodyId,
+    faceReference,
+    faceHash
+  );
+  if (!chain || (options.localBlendGroup && chain.crossed)) return null;
+  return { primitive: chain.primitive, scale: chain.scale };
+}
+
 export interface CylinderCapAncestor {
   primitive: FeatureNode;
   side: 'start' | 'end';

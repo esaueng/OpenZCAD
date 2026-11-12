@@ -747,8 +747,7 @@ import {
 } from './lib/interaction/cylinderRadius';
 import {
   primitiveBoxFaceAncestor,
-  primitiveCylinderRadiusAncestor,
-  primitiveCylinderScale
+  primitiveCylinderRadiusEdit
 } from './lib/interaction/cylinderPrimitiveAncestry';
 import { commandPromptText } from './lib/interaction/prompt';
 import { committedEdgesPhrase, edgeSelectionName } from './lib/edgeLoops';
@@ -974,6 +973,24 @@ function faceOffsetTargetFields(
     ? primitiveBoxFaceAncestor(document, bodyId as BodyId, reference, faceHash)
     : null;
   return box ? { resizeBodyFeatureId: box.primitive.featureId } : {};
+}
+
+/**
+ * A boss wall on a blended body, which a kernel with blend group edits can
+ * resize in place carrying those blends (see `primitiveCylinderRadiusEdit`
+ * for when that local edit wins over the source primitive's radius).
+ */
+function localBlendGroupBoss(
+  body: BodyRepresentation | undefined,
+  concavity: 'hole' | 'boss' | undefined
+): boolean {
+  return (
+    supportsBlendGroupEdits(KERNEL_BUILD.packageVersion) &&
+    concavity === 'boss' &&
+    Boolean(
+      body?.topology?.faces.some((f) => f.geometry?.featureType === 'blend')
+    )
+  );
 }
 
 /** The interaction machine's view of one picked region. */
@@ -23843,20 +23860,21 @@ export function App() {
     ) {
       return null;
     }
+    // The commit's own choice (`buildCylinderRadiusCommand`): only a source
+    // edit projects in the viewport; a local wall resize previews exactly.
     const profile =
       doc &&
-      !(
-        supportsBlendGroupEdits(KERNEL_BUILD.packageVersion) &&
-        target.concavity === 'boss' &&
-        representations[target.bodyId as BodyId]?.topology?.faces.some(
-          (f) => f.geometry?.featureType === 'blend'
-        )
-      ) &&
-      primitiveCylinderRadiusAncestor(
+      primitiveCylinderRadiusEdit(
         doc,
         target.bodyId as BodyId,
         target.reference,
-        target.hash
+        target.hash,
+        {
+          localBlendGroup: localBlendGroupBoss(
+            representations[target.bodyId as BodyId],
+            target.concavity
+          )
+        }
       )
         ? cylinderPreviewProfile(representations[target.bodyId as BodyId])
         : null;
@@ -24058,28 +24076,23 @@ export function App() {
     // consumed the cylinder. Their stored lineage regenerates the exact
     // downstream B-reps; arbitrary result features and direct edits remain on
     // the strict generic cylindrical-face path.
-    const localBlendBoss =
-      supportsBlendGroupEdits(KERNEL_BUILD.packageVersion) &&
-      target.concavity === 'boss' &&
-      base.derived.bodyRepresentations[
-        target.bodyId as BodyId
-      ]?.topology?.faces.some((f) => f.geometry?.featureType === 'blend');
-    const primitive = localBlendBoss
-      ? null
-      : primitiveCylinderRadiusAncestor(
-          base,
-          target.bodyId as BodyId,
-          target.reference,
-          target.hash
-        );
+    // A filleted boss that reaches its cylinder only across a boolean is
+    // resized locally instead, carrying its blends as one kernel group.
+    const source = primitiveCylinderRadiusEdit(
+      base,
+      target.bodyId as BodyId,
+      target.reference,
+      target.hash,
+      {
+        localBlendGroup: localBlendGroupBoss(
+          base.derived.bodyRepresentations[target.bodyId as BodyId],
+          target.concavity
+        )
+      }
+    );
+    const primitive = source?.primitive;
     if (primitive?.data.featureKind === 'primitive') {
-      const scale =
-        primitiveCylinderScale(
-          base,
-          target.bodyId as BodyId,
-          target.reference,
-          target.hash
-        ) ?? 1;
+      const scale = source!.scale;
       const localRadius =
         typeof radius === 'number'
           ? radius / scale
