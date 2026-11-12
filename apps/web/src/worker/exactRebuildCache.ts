@@ -266,17 +266,6 @@ export class ExactRebuildCache<T> {
     return this.withLifecycle(work.then((value) => this.clone(value)));
   }
 
-  /**
-   * Records `value` under `key` as if a `get` had loaded it there: the caller
-   * vouches that loading `key` would produce the same result. Uncacheable
-   * values and a terminated cache store nothing.
-   */
-  put(key: string, value: T): void {
-    if (this.terminatedError || !(this.options.cacheable?.(value) ?? true))
-      return;
-    this.store(key, this.clone(value));
-  }
-
   terminate(error = new Error('Exact rebuild cache terminated.')): void {
     if (this.terminatedError) {
       return;

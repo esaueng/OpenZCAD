@@ -1157,16 +1157,11 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         request.type === 'sync' ? request.lineageDemand : undefined,
         booleanProbeNeeded
       );
-    const proposeCarry =
-      request.type === 'sync' && request.proposeCarry === true;
-    const plainResultKey = `${contentKey}${request.type === 'sync' && request.analysis ? `:analysis:${JSON.stringify(request.analysis)}` : ''}${lineageDemandKey}`;
-    // Set when this carry proposal's rebuild ran exactly what a plain one runs.
-    let carryNeutralResult = false;
     const cachedDerived =
       contentKey === null
         ? emptyDerived(document)
         : await rebuildCache.get(
-            `${plainResultKey}${proposeCarry ? ':carry-proposal' : ''}`,
+            `${contentKey}${request.type === 'sync' && request.analysis ? `:analysis:${JSON.stringify(request.analysis)}` : ''}${lineageDemandKey}${request.type === 'sync' && request.proposeCarry ? ':carry-proposal' : ''}`,
             async () => {
               resultCacheHit = false;
               // 'failed' retries on the next load call, so it counts as a
@@ -1259,17 +1254,11 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
                 transientResults.add(result);
                 transient = true;
               }
-              // A carry proposal may build a kernel state a plain build of
-              // the same content would not (a carried selection), so mass
+              // A carry proposal built a kernel state a plain build of the
+              // same content would not (a carried selection), so mass
               // properties must not read it as that content's: they prepare
-              // again from a plain build, as after a preview. One the adapter
-              // vouches for resolved every pick as stored, so its state and
-              // result are the plain build's.
-              carryNeutralResult =
-                proposeCarry &&
-                !transient &&
-                exact.isCarryNeutral?.(result) === true;
-              if (proposeCarry && !carryNeutralResult) {
+              // again from a plain build, as after a preview.
+              if (request.type === 'sync' && request.proposeCarry) {
                 lastExactSyncKey = null;
                 lastExactSyncEpoch = null;
               } else {
@@ -1279,10 +1268,6 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
               return result;
             }
           );
-    // An edit's commit check and the broadcast of the committed document
-    // rebuild the same content; when the check carried nothing, the
-    // broadcast reads its result instead of rebuilding it.
-    if (carryNeutralResult) rebuildCache.put(plainResultKey, cachedDerived);
     const derived =
       contentKey === null
         ? cachedDerived

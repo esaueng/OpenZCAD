@@ -170,7 +170,6 @@ describe('carry-neutral history checkpoints', { timeout: 240_000 }, () => {
     expect(chamfers.count()).toBe(chamfersBefore);
     expect(commit.warnings).toEqual([]);
     expect(commit.edgeHashRepairs ?? []).toEqual([]);
-    expect(adapter.isCarryNeutral?.(commit)).toBe(true);
 
     // The broadcast of the committed document is a plain sync. It restores
     // the commit's checkpoints, the edit's result included: nothing replays.
@@ -186,8 +185,6 @@ describe('carry-neutral history checkpoints', { timeout: 240_000 }, () => {
       replayed: 0
     });
     expect(chamfers.count()).toBe(chamfersBefore);
-    // A plain sync's result is never vouched for as a carry proposal's.
-    expect(adapter.isCarryNeutral?.(broadcast)).toBe(false);
 
     // Both agree exactly with a cold plain build of the committed document.
     const cold = await createExactKernelAdapter();
@@ -243,7 +240,6 @@ describe('carry-neutral history checkpoints', { timeout: 240_000 }, () => {
     expect(refused(await plain())).toBe(true);
     const first = await carry();
     expect(carried(first)).toBe(true);
-    expect(adapter.isCarryNeutral?.(first)).toBe(false);
     // Then the carry's checkpoints must not answer a plain sync, in either
     // order, however often the two alternate.
     expect(refused(await plain())).toBe(true);

@@ -156,28 +156,6 @@ describe('bounded exact rebuild cache', () => {
     expect(load).toHaveBeenCalledOnce();
   });
 
-  it('serves a put result as a load of its key, never sharing it', async () => {
-    const cache = new ExactRebuildCache<{ values: number[] }>({
-      maxEntries: 2,
-      maxBytes: 1024,
-      maxInFlight: 1,
-      cacheable: (value) => value.values[0] !== -1
-    });
-    const value = { values: [1] };
-    cache.put('vouched', value);
-    value.values.push(2);
-    const load = vi.fn(async () => ({ values: [0] }));
-    expect(await cache.get('vouched', load)).toEqual({ values: [1] });
-    expect(load).not.toHaveBeenCalled();
-    // Values the cache would not keep from a load are not kept from a put.
-    cache.put('uncacheable', { values: [-1] });
-    expect(await cache.get('uncacheable', load)).toEqual({ values: [0] });
-    expect(load).toHaveBeenCalledOnce();
-    cache.terminate();
-    cache.put('late', { values: [3] });
-    expect(cache.entryCount).toBe(0);
-  });
-
   it('evicts least-recently-used results within entry and byte limits', async () => {
     const loads = new Map<string, number>();
     const cache = new ExactRebuildCache<{ value: string }>({

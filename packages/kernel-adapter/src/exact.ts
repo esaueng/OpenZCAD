@@ -717,14 +717,6 @@ export interface ExactKernelAdapter {
    * document. Such a result must not be cached by content.
    */
   hasTransientFailures(result: object): boolean;
-  /**
-   * Whether a `proposeCarry` sync result is exactly what a plain sync of the
-   * same document and lineage demand returns: no hash-only edge pick failed
-   * to resolve as stored, so nothing was carried and nothing refused
-   * differently. Always false for a plain sync's result. Optional so older
-   * adapters simply never vouch for one.
-   */
-  isCarryNeutral?(result: object): boolean;
   /** Epoch of the most recent live sync, or null after its handles were retired. */
   currentMassPropertiesEpoch(): number | null;
   /** Reads one live body's optional properties without replaying document history. */
@@ -1139,12 +1131,6 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
 
   hasTransientFailures(result: object): boolean {
     return this.transientResults.has(result);
-  }
-
-  private readonly carryNeutralResults = new WeakSet<object>();
-
-  isCarryNeutral(result: object): boolean {
-    return this.carryNeutralResults.has(result);
   }
 
   /**
@@ -1645,8 +1631,6 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     cacheResetReason?: 'checkpoint-ownership' | 'checkpoint-restore';
     /** A feature this sync rebuilt waited on a font or source; see below. */
     transient: boolean;
-    /** Every hash-only pick resolved as stored; see `carryNeutral` entries. */
-    carryNeutral: boolean;
   }> {
     cancellation = this.historySignal(cancellation);
     throwIfBuildCancelled(cancellation);
@@ -2563,8 +2547,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       ...(recycled ? { recycleReason: 'replay-budget' as const } : {}),
       strictVerdicts,
       readMemo,
-      transient: transientFrom >= startIndex,
-      carryNeutral: !unresolvedEdgeHash
+      transient: transientFrom >= startIndex
     };
   }
 
@@ -3351,8 +3334,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         readMemo,
         recycleReason,
         cacheResetReason,
-        transient,
-        carryNeutral
+        transient
       } = await this.buildWithHistoryCache(
         document,
         sources,
@@ -4201,7 +4183,6 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         featureWarnings: build.featureWarnings
       };
       if (transient) this.transientResults.add(derived);
-      if (proposeCarry && carryNeutral) this.carryNeutralResults.add(derived);
       return derived;
     } catch (error) {
       // Cancellation is not a failure to recover from: it commits nothing —
