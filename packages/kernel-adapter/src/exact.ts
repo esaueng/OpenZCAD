@@ -1668,6 +1668,17 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       )
         ? terminal.featureId
         : undefined;
+    // A drag preview builds display-only from the edit it drags on. A
+    // feature before that edit which the preview has to replay (its source
+    // was not checkpointed) is built checked, so its checkpoint is one the
+    // release's checked sync restores, together with the edit the preview
+    // prepared on it, instead of replaying that prefix and the edit afresh.
+    const displayOnlyFrom = !displayOnlyBlends
+      ? features.length
+      : deferredDirectEditFeatureId
+        ? features.length - 1
+        : 0;
+    const displayOnlyAt = (index: number) => index >= displayOnlyFrom;
     // Only a drag preview keeps a prepared face move; any other sync ends it.
     if (!deferredDirectEditFeatureId && this.historyKernel) {
       releasePreparedFaceMove(this.historyKernel);
@@ -1739,7 +1750,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             ? '|display-output'
             : '') +
           carryProposalSalt(features[index]!, carry) +
-          displayOnlyBlendSalt(features[index]!, displayOnlyBlends)
+          displayOnlyBlendSalt(features[index]!, displayOnlyAt(index))
       );
     const demandBases = cachingEnabled
       ? features.map((feature, index) =>
@@ -1764,7 +1775,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     const unsaltDisplayOnly = (spellings: readonly string[]) =>
       displayOnlyBlends
         ? spellings.map((digest, index) => {
-            const salt = displayOnlyBlendSalt(features[index]!, true);
+            const salt = displayOnlyBlendSalt(
+              features[index]!,
+              displayOnlyAt(index)
+            );
             return salt ? digest.slice(0, -salt.length) : digest;
           })
         : [...spellings];
@@ -1943,7 +1957,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             .map((digest, index) => {
               const salt = displayOnlyBlendSalt(
                 features[index]!,
-                displayOnlyBlends
+                displayOnlyAt(index)
               );
               return salt ? digest.slice(0, -salt.length) : digest;
             });
@@ -2232,6 +2246,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     const report = rebuildReporter(onProgress);
     let featureDone: (() => void) | undefined;
     let executedFeatures = 0;
+    // The feature the next build step runs: each step builds one.
+    let nextBuildIndex = startIndex;
     const onFeatureStart = (index: number) => {
       executedFeatures += 1;
       featureDone = report(
@@ -2247,6 +2263,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       idleView?: IdleLineageView
     ) => {
       featureDone?.();
+      nextBuildIndex = index + 1;
       if (index <= checkpointIndices.at(-1)!)
         axialExtent.observe(index, result);
       // Publish only a disposable mesh projection before an expensive pattern.
@@ -2467,8 +2484,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       build = await buildDocumentHistoryCooperatively(
         {
           run: (work) =>
-            withDisplayOnlyBlends(activeKernel, displayOnlyBlends, () =>
-              withSyncReadMemo(readMemo, work)
+            withDisplayOnlyBlends(
+              activeKernel,
+              displayOnlyAt(nextBuildIndex),
+              () => withSyncReadMemo(readMemo, work)
             ),
           checkpoint: () =>
             yieldControl
