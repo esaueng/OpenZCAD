@@ -114,15 +114,18 @@ describe(
           kind: 'build-failed'
         })
       ]);
-      expect(failed.derived.bodyRepresentations[shellBodyId]).toBeUndefined();
-      // The hazard itself: the solid loft is unconsumed and exportable.
+      // The hazard itself: the failed shell hands the solid loft through
+      // under its own id (ADR-017, November 2026), where it is exportable.
+      expect(failed.derived.bodyRepresentations[loftBodyId]?.consumed).toBe(
+        true
+      );
       expect(
-        failed.derived.bodyRepresentations[loftBodyId]?.volume
+        failed.derived.bodyRepresentations[shellBodyId]?.volume
       ).toBeCloseTo(NARROWED_LOFT_VOLUME, 1);
-      expect(failed.derived.exportableBodyIds).toContain(loftBodyId);
+      expect(failed.derived.exportableBodyIds).toContain(shellBodyId);
 
       const withheld = failedHistoryExportBodies(failed);
-      expect([...withheld.keys()]).toEqual([loftBodyId]);
+      expect([...withheld.keys()]).toEqual([shellBodyId]);
       expect(withheld.has(blockBodyId!)).toBe(false);
       expect(
         withheldExportMessage([...withheld.values()], () => 'Duct loft 1')
@@ -135,7 +138,7 @@ describe(
         JSON.parse(JSON.stringify(manager.document)) as ProjectDocument
       );
       expect([...failedHistoryExportBodies(reloaded).keys()]).toEqual([
-        loftBodyId
+        shellBodyId
       ]);
 
       manager.undo();
@@ -148,7 +151,7 @@ describe(
       manager.redo();
       const redone = await rebuild(manager.document);
       expect([...failedHistoryExportBodies(redone).keys()]).toEqual([
-        loftBodyId
+        shellBodyId
       ]);
     });
 

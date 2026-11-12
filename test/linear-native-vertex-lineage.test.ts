@@ -11,6 +11,7 @@ import {
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
+import { expectPassedThrough } from './support/failed-pass-through';
 import {
   toUserId,
   type BodyId,
@@ -47,6 +48,7 @@ function linear(axis: 'x' | 'y' | 'z' = 'x', spacing = 30, count = 3) {
   }).document;
   return {
     document,
+    blockId: block.bodyOrder.at(-1)!,
     bodyId: document.bodyOrder.at(-1)!,
     featureId: listFeaturesInOrder(document).at(-1)!.featureId
   };
@@ -257,13 +259,13 @@ describe(
     });
 
     it('keeps the existing product count minimum and performs no invalid count scans', async () => {
-      const { document, bodyId, featureId } = linear();
+      const { document, bodyId, featureId, blockId } = linear();
       const output = vi.spyOn(RemusKernel.prototype, 'resolveOperationOutput');
       try {
         const derived = await adapter.syncDocument(
           updateFeature(document, { featureId, data: { count: 1 } })
         );
-        expect(derived.bodyRepresentations[bodyId]).toBeUndefined();
+        expectPassedThrough(derived, bodyId, blockId);
         expect(derived.warnings.join('\n')).toMatch(/Row.*between 2 and 100/);
         expect(
           output.mock.calls.filter(

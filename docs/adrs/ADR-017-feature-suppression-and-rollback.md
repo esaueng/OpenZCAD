@@ -123,6 +123,64 @@ only the tail produces) leaves that feature at the end, as before. Edits made
 with nothing rolled back are unchanged, and Duplicate keeps refusing a step
 inside the paused tail.
 
+## Amendment (November 2026): a failed feature passes its body through
+
+A reported history changed an early seam fillet from 2 to 3 mm. A later
+fillet on the same chain stopped resolving its edge and left no body under
+its result id, so the fillet after it and every direct edit after that
+reported "target is unavailable": 9 of the 20 failures in that rebuild. The
+failed fillet's input also stayed unconsumed and on screen, and new features
+were attached to it, forking the history.
+
+A feature whose build throws now passes its input through by the same rule
+and the same function as the October 2026 amendment: the kinds that pass
+there pass here, a boolean passes its first operand and leaves its tools
+unconsumed, mirror, thicken and split pass nothing, transform and direct edit
+already leave their target in place, and body-creating features have no
+input. It fails closed the same way when the input is missing or already
+consumed. Before passing, `exact-build-loop.ts` restores the body containers
+(shapes, consumed bodies, mesh and partial-revolve origins) it captured on
+entry to that feature, so the pass-through starts from the feature never
+having run; a builder that wrote part of its result before throwing leaves
+nothing behind. Cancellation is still rethrown and is not a failure.
+
+The failure is reported exactly as before: the same warning, `build-failed`
+attribution, kernel refusal category and blend advice, and the History row
+stays "needs repair" although a body now exists under its id. Pass-through
+supplies a body, never a reference, so a dependent naming topology the
+failed feature would have created (its blend, its bore) still refuses with
+its existing message.
+
+Each feature that builds downstream of a failed step, through the stored
+dependency graph and across suppressed steps, says so: "after failed step" on
+its History row and "Built on a failed step" in History details, naming the
+earliest failed upstream step. Failed in-place transforms and direct edits,
+whose dependents always built on the unedited body, are flagged the same way.
+The app derives the flag from the typed failure record and the graph; it is
+not a warning, so warning counts and commit gates do not change.
+
+From the first failed feature onward the build withholds reference repairs
+and hash-only edge carries from every later feature, as it does after a
+manual suppression: a name learned on the passed-through body stops resolving
+once the failed step is repaired. A prefix-restored build reads the earlier
+failures from the restored attribution, so it withholds from the same point.
+This also applies after a failed in-place edit, whose dependents previously
+offered repairs.
+
+Commit gates keep their rule: any new `build-failed` or `refusal` record
+refuses the candidate, and the failure record is read before body presence,
+so a passed-through body never makes a gate accept an edit that breaks a
+feature. The places that took a result body's presence as proof it built
+now read the failure record too: extrude operation inference, which would
+otherwise accept a refused add or cut, and the count of steps a suppression
+broke. Export already withholds a failed feature's inputs, its own result
+and everything downstream of it; it now skips bodies that are consumed, so
+it names the passed-through result rather than the input behind it.
+New features target the chain tip because the failed feature's input is
+consumed, which prevents the fork at its source. A history that already
+forked now shows both branches, because the main chain is no longer missing.
+No stored format or schema version changes.
+
 ## Amendment (November 2026): preflight resume
 
 An edit made while History is rolled back is checked only against the

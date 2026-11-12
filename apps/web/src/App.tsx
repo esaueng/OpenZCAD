@@ -27285,7 +27285,8 @@ export function App() {
     // itself breaks. An earlier toggle may still own the rendered geometry.
     const before = suppressionRepairSnapshot(
       owner,
-      geometry.isReadyFor(owner.document)
+      geometry.isReadyFor(owner.document),
+      attributedFeatureWarnings()
     );
     const toggled = executeCommand(
       commandFactories.setNodeMetadata(
@@ -30631,6 +30632,7 @@ export function App() {
           document={doc}
           scope={parameterScope.scope}
           selectedId={selectedFeatureNodeId}
+          failedFeatureIds={failedHistoryFeatureIds}
           failure={
             historyFailure?.projectId === doc.projectId &&
             historyFailure.version === doc.version

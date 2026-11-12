@@ -144,6 +144,11 @@ export interface HistoryTimelineProps {
   /** Features the current rebuild reported as failed or refused. */
   failedFeatureIds?: ReadonlySet<FeatureId>;
   /**
+   * Features that built on a history with a failed step upstream, each with
+   * that step (`builtOnFailedFeatures`). Their rows say so beside the name.
+   */
+  builtOnFailedFeatures?: ReadonlyMap<FeatureId, FeatureNode>;
+  /**
    * The steps related to the current selection, or null with nothing
    * selected. The find bar's Related toggle keeps only these rows.
    */
@@ -345,6 +350,8 @@ interface HistoryRowProps {
   inBatch: boolean;
   consumed: boolean;
   failed: boolean;
+  /** The failed step this one builds on, or null. */
+  upstreamFailure: string | null;
   projectionBroken: boolean;
   refusalTitle: string | null;
   refusalMessage: string | null;
@@ -393,6 +400,7 @@ const HistoryRow = memo(function HistoryRow({
   inBatch,
   consumed,
   failed,
+  upstreamFailure,
   projectionBroken,
   refusalTitle,
   refusalMessage,
@@ -591,6 +599,14 @@ const HistoryRow = memo(function HistoryRow({
               {ROW_ALERT_ICON}
             </span>
           )}
+          {upstreamFailure !== null && (
+            <span
+              className="feature-flag history-row-upstream-failed"
+              title={`Built on “${upstreamFailure}”, which failed to build: this step uses that step's input unchanged.`}
+            >
+              after failed step
+            </span>
+          )}
           {refusalTitle !== null && (
             <span
               className="feature-flag error history-row-refused"
@@ -782,6 +798,7 @@ export function HistoryTimeline({
   localAppend = null,
   representations,
   failedFeatureIds,
+  builtOnFailedFeatures,
   relatedFeatureIds = null,
   geometryPending = false,
   geometryPendingShown = geometryPending,
@@ -1619,6 +1636,10 @@ export function HistoryTimeline({
           const failed =
             !geometryPending &&
             featureNeedsRepair(feature, representations, failedFeatureIds);
+          const upstreamFailure =
+            geometryPending || failed || suppressed || paused
+              ? null
+              : (builtOnFailedFeatures?.get(feature.featureId)?.name ?? null);
           const projectionBroken =
             !geometryPending &&
             sketchId !== null &&
@@ -1653,6 +1674,7 @@ export function HistoryTimeline({
               inBatch={inBatch}
               consumed={consumed}
               failed={failed}
+              upstreamFailure={upstreamFailure}
               projectionBroken={projectionBroken}
               refusalTitle={refusedEdit ? pendingStep.title : null}
               refusalMessage={refusedEdit ? pendingStep.message : null}

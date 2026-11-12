@@ -3363,7 +3363,10 @@ export interface FeatureWarning {
   /**
    * What the warning means for the operation that raised it.
    *
-   * - `build-failed`: the builder threw and produced no shape at all.
+   * - `build-failed`: the builder threw and produced no shape of its own. A
+   *   feature that replaces one input body passes that input through under
+   *   its result id unchanged (ADR-017, November 2026), so a body there does
+   *   not mean it built.
    * - `refusal`: a shape WAS produced, and it is the wrong one. A union that
    *   silently dropped an operand, or came back open and non-manifold, still
    *   yields a solid — it just is not the solid the user asked for, and the

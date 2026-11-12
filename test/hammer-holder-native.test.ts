@@ -12,6 +12,7 @@ import {
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
+import { expectPassedThrough } from './support/failed-pass-through';
 import type {
   BodyRepresentation,
   DerivedState,
@@ -320,14 +321,21 @@ describe(
           'Fillet could not be created on 1 selected edge with radius 100.'
         )
       ]);
-      expect(result.bodyRepresentations[fillet.bodyId]).toBeUndefined();
+      // The input stands, unchanged, in for the refused fillet (ADR-017,
+      // November 2026): one copy, under the fillet's id.
+      expectPassedThrough(result, fillet.bodyId, stage.bodyId);
       expect(bodyOf(result, stage)).toMatchObject({
-        consumed: false,
+        consumed: true,
         faceCount: body.faceCount,
         volume: body.volume,
         topology: body.topology
       });
-      expect(result.exportableBodyIds).toContain(stage.bodyId);
+      expect(
+        result.bodyRepresentations[fillet.bodyId]!.topology!.faces.map(
+          (face) => face.hash
+        )
+      ).toEqual(body.topology!.faces.map((face) => face.hash));
+      expect(result.exportableBodyIds).toContain(fillet.bodyId);
     });
 
     it('fillets the plate and drills it with simple and countersunk holes', async () => {

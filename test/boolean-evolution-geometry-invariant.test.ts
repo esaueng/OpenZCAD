@@ -11,6 +11,7 @@ import {
 } from '@openzcad/kernel-adapter/exact';
 import { toUserId } from '@openzcad/shared';
 import type { BodyId, ProjectDocument } from '@openzcad/shared';
+import { expectPassedThrough } from './support/failed-pass-through';
 
 /**
  * The invariant this file exists to pin: adopting the kernel's boolean
@@ -51,7 +52,7 @@ function operandDocument(
   title: string,
   operands: readonly Operand[],
   operation: 'union' | 'subtract' | 'intersect'
-): { document: ProjectDocument; bodyId: BodyId } {
+): { document: ProjectDocument; bodyId: BodyId; operandIds: BodyId[] } {
   let document = createProjectDocument(title, user);
   const bodyIds: BodyId[] = [];
   for (const operand of operands) {
@@ -87,7 +88,11 @@ function operandDocument(
     operation,
     targetBodyIds: bodyIds
   });
-  return { document: combined.document, bodyId: combined.bodyId };
+  return {
+    document: combined.document,
+    bodyId: combined.bodyId,
+    operandIds: bodyIds
+  };
 }
 
 describe('boolean geometry is the plain pipeline, not the evolution one', () => {
@@ -166,7 +171,7 @@ describe('boolean geometry is the plain pipeline, not the evolution one', () => 
       // policy, while `intersectWithEntityEvolution` returns a two-face body of
       // 1946.740248 mm^3. Shipping that body is the fail-closed violation this
       // case exists to prevent.
-      const { document, bodyId } = operandDocument(
+      const { document, bodyId, operandIds } = operandDocument(
         'Cylinder meets sphere',
         [
           { name: 'Cylinder', primitive: { kind: 'cylinder', radius: 10, height: 20 } },
@@ -179,7 +184,9 @@ describe('boolean geometry is the plain pipeline, not the evolution one', () => 
         'intersect'
       );
       const derived = await adapter.syncDocument(document);
-      expect(derived.bodyRepresentations[bodyId]).toBeUndefined();
+      // Refused, so no boolean geometry ships: the first operand is passed
+      // through unchanged (ADR-017, November 2026).
+      expectPassedThrough(derived, bodyId, operandIds[0]!);
       expect(derived.warnings.join('\n')).toMatch(/exact-only policy/);
     },
     120_000
@@ -190,7 +197,7 @@ describe('boolean geometry is the plain pipeline, not the evolution one', () => 
     async () => {
       // `fuseWithEntityEvolution` answers this with the sphere alone —
       // 4188.790205 mm^3, the cylinder gone.
-      const { document, bodyId } = operandDocument(
+      const { document, bodyId, operandIds } = operandDocument(
         'Cylinder and ball',
         [
           { name: 'Cylinder', primitive: { kind: 'cylinder', radius: 10, height: 20 } },
@@ -203,7 +210,9 @@ describe('boolean geometry is the plain pipeline, not the evolution one', () => 
         'union'
       );
       const derived = await adapter.syncDocument(document);
-      expect(derived.bodyRepresentations[bodyId]).toBeUndefined();
+      // Refused, so no boolean geometry ships: the first operand is passed
+      // through unchanged (ADR-017, November 2026).
+      expectPassedThrough(derived, bodyId, operandIds[0]!);
       expect(derived.warnings.join('\n')).toMatch(/exact-only policy/);
     },
     120_000
@@ -215,7 +224,7 @@ describe('boolean geometry is the plain pipeline, not the evolution one', () => 
       // The canonical curved-curved case: two spheres offset by a quarter of
       // their diameter. The plain fuse refuses; `fuseWithEntityEvolution`
       // answers with a four-face body of 5726.7768 mm^3.
-      const { document, bodyId } = operandDocument(
+      const { document, bodyId, operandIds } = operandDocument(
         'Two balls',
         [
           { name: 'Left', primitive: { kind: 'sphere', radius: 10 } },
@@ -228,7 +237,9 @@ describe('boolean geometry is the plain pipeline, not the evolution one', () => 
         'union'
       );
       const derived = await adapter.syncDocument(document);
-      expect(derived.bodyRepresentations[bodyId]).toBeUndefined();
+      // Refused, so no boolean geometry ships: the first operand is passed
+      // through unchanged (ADR-017, November 2026).
+      expectPassedThrough(derived, bodyId, operandIds[0]!);
       const warnings = derived.warnings.join('\n');
       expect(warnings).toMatch(/exact-only policy/);
       // The evolution cut surfaces `copied face Id(...) does not contain
@@ -247,7 +258,7 @@ describe('boolean geometry is the plain pipeline, not the evolution one', () => 
       // throws `algo: assembly failed: copied face Id(49) does not contain
       // exactly one reverse use of edge Id(276)` — an internal assertion that
       // must never reach a warning.
-      const { document, bodyId } = operandDocument(
+      const { document, bodyId, operandIds } = operandDocument(
         'Box with a corner ball',
         [
           {
@@ -263,7 +274,9 @@ describe('boolean geometry is the plain pipeline, not the evolution one', () => 
         'subtract'
       );
       const derived = await adapter.syncDocument(document);
-      expect(derived.bodyRepresentations[bodyId]).toBeUndefined();
+      // Refused, so no boolean geometry ships: the first operand is passed
+      // through unchanged (ADR-017, November 2026).
+      expectPassedThrough(derived, bodyId, operandIds[0]!);
       const warnings = derived.warnings.join('\n');
       expect(warnings).toMatch(/exact-only policy/);
       expect(warnings).not.toMatch(/reverse use of edge/);

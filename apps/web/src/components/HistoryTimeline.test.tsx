@@ -501,6 +501,28 @@ describe('HistoryTimeline', () => {
     expect(featureReads).toBeLessThanOrEqual(items.length);
   });
 
+  it('notes a step built on a failed step, beside its value, on that row only', () => {
+    const features = [feature(1), feature(2), feature(3), feature(4)];
+    renderTimeline({
+      features,
+      failedFeatureIds: new Set([features[1]!.featureId]),
+      builtOnFailedFeatures: new Map([
+        [features[2]!.featureId, features[1]!],
+        // A failed row is red, never also "after failed step".
+        [features[1]!.featureId, features[0]!]
+      ])
+    });
+    const note = within(row('Feature 3')).getByTitle(
+      "Built on “Feature 2”, which failed to build: this step uses that step's input unchanged."
+    );
+    expect(note).toHaveTextContent('after failed step');
+    expect(note).toHaveClass('history-row-upstream-failed');
+    expect(row('Feature 3')).toHaveTextContent('3 mm');
+    expect(row('Feature 2')).toHaveClass('failed');
+    expect(row('Feature 2')).not.toHaveTextContent('after failed step');
+    expect(row('Feature 4')).not.toHaveTextContent('after failed step');
+  });
+
   it('shows one value per row in document units', () => {
     renderTimeline({ units: 'inch' });
     expect(row('Feature 3')).toHaveTextContent('3 in');

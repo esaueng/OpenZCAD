@@ -21,6 +21,7 @@ import {
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
+import { expectPassedThrough } from './support/failed-pass-through';
 import {
   toUserId,
   type BodyId,
@@ -436,9 +437,7 @@ describe('kernel seam correctness', { timeout: 30_000 }, () => {
     expect(derived.warnings).toEqual([
       'Feature "Pre-flip fillet": A selected edge no longer exists. Re-select the edges and re-create this feature.'
     ]);
-    expect(
-      derived.bodyRepresentations[stale.bodyOrder.at(-1)!]
-    ).toBeUndefined();
+    expectPassedThrough(derived, stale.bodyOrder.at(-1)!, bodyId);
     // The import itself is untouched: pi * 10^2 * 10 / 3.
     expect(derived.bodyRepresentations[bodyId]?.volume).toBeCloseTo(
       (Math.PI * 1000) / 3,
@@ -505,9 +504,8 @@ describe('kernel seam correctness', { timeout: 30_000 }, () => {
       const body = derived.bodyRepresentations[resultBodyId];
       expect(body?.volume).toBeCloseTo(originalVolume, 3);
       expect(edgeOnVerticalLine(body, 30, 18)).toBeTruthy();
-      expect(derived.bodyRepresentations[bogus.bodyOrder.at(-1)!]).toBe(
-        undefined
-      );
+      // It stands in for the ghost fillet, unchanged (ADR-017).
+      expectPassedThrough(derived, bogus.bodyOrder.at(-1)!, resultBodyId);
     }
   });
 

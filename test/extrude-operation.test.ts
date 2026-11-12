@@ -17,6 +17,7 @@ import {
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
+import { expectPassedThrough } from './support/failed-pass-through';
 import {
   classifyExtrudeOperation,
   type ExtrudeInferenceBody
@@ -576,10 +577,14 @@ describe('stored extrude operations', { timeout: 30_000 }, () => {
     });
     const derived = await kernel.syncDocument(edited);
 
-    expect(derived.bodyRepresentations[extrudeFeature.bodyId!]).toBeUndefined();
-    expect(derived.bodyRepresentations[created.targetBodyId]?.consumed).toBe(
-      false
-    );
+    // ADR-017 (November 2026): the failed add hands its target through
+    // unchanged, so nothing the extrusion would have added is there.
+    expectPassedThrough(derived, extrudeFeature.bodyId!, created.targetBodyId);
+    expect(
+      derived.featureWarnings?.find(
+        (entry) => entry.featureId === extrudeFeature.featureId
+      )?.kind
+    ).toBe('build-failed');
     expect(derived.warnings).toContain(
       'Feature "Extrude": Stored add extrusion no longer overlaps Base Body; operation was not re-inferred.'
     );

@@ -1,9 +1,11 @@
+import { useMemo } from 'react';
 import { Search } from 'lucide-react';
 import type { FeatureNode } from '@openzcad/shared';
 import { HistoryTimeline } from '../HistoryTimeline';
 import type { ModelPanelSource } from './modelPanelProps';
 import type { HistoryFind } from './panelViews';
 import { sketchesWithBrokenProjections } from '../../lib/sketch/projection';
+import { builtOnFailedFeatures } from '../../lib/featureRepair';
 
 /** The header's Find toggle, shown while the list has something to find. */
 export function HistoryFindToggle({ find }: { find: HistoryFind }) {
@@ -88,6 +90,13 @@ export function HistoryPanel({
   onDeleteFeatures,
   find
 }: HistoryPanelProps) {
+  const builtOnFailed = useMemo(
+    () =>
+      document && failedFeatureIds
+        ? builtOnFailedFeatures(document, failedFeatureIds)
+        : undefined,
+    [document, failedFeatureIds]
+  );
   return (
     <>
       <HistoryTimeline
@@ -96,6 +105,7 @@ export function HistoryPanel({
         localAppend={localAppend}
         representations={representations}
         failedFeatureIds={failedFeatureIds}
+        builtOnFailedFeatures={builtOnFailed}
         relatedFeatureIds={relatedFeatureIds}
         geometryPending={geometryPending}
         geometryPendingShown={geometryPendingShown}

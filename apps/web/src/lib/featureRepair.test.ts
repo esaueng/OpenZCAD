@@ -1,10 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import {
+  addPrimitiveFeature,
+  chamferEdges,
+  createProjectDocument,
+  filletEdges,
+  listFeaturesInOrder
+} from '@openzcad/document-core';
+import {
   FEATURE_SUPPRESSED_METADATA_KEY,
+  toUserId,
+  type FeatureId,
   type FeatureNode
 } from '@openzcad/shared';
 import type { FeatureWarning } from '@openzcad/shared';
 import {
+  builtOnFailedFeatures,
   failedFeatureIds,
   featureNeedsRepair,
   featuresNeedingRepair
@@ -112,5 +122,106 @@ describe('featuresNeedingRepair', () => {
         { b0: {} }
       )
     ]).toEqual(['Hole', 'Fillet']);
+  });
+
+  it('counts a failed feature whose input stands in under its id', () => {
+    // ADR-017 (November 2026): the failed Fillet has a body, its input.
+    expect([
+      ...featuresNeedingRepair(
+        [
+          feature('Base', { bodyId: 'b0' }),
+          feature('Fillet', { bodyId: 'b1' })
+        ],
+        { b0: {}, b1: {} },
+        [
+          {
+            featureId: 'Fillet',
+            featureName: 'Fillet',
+            message: 'Feature "Fillet": radius too large',
+            kind: 'build-failed'
+          } as FeatureWarning
+        ]
+      )
+    ]).toEqual(['Fillet']);
+  });
+});
+
+describe('builtOnFailedFeatures', () => {
+  /** Block → Fillet → Chamfer → Paused → Last, and an unrelated branch. */
+  function history() {
+    let document = addPrimitiveFeature(
+      createProjectDocument('Failed upstream', toUserId('user_repair')),
+      {
+        name: 'Block',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 10, depth: 10 }
+      }
+    );
+    let body = document.bodyOrder.at(-1)!;
+    for (const name of ['Fillet', 'Chamfer', 'Paused', 'Last']) {
+      const modify = name === 'Fillet' ? filletEdges : chamferEdges;
+      ({ document, bodyId: body } = modify(document, {
+        name,
+        targetBodyId: body,
+        edgeHashes: [1],
+        size: 1
+      }));
+    }
+    document = addPrimitiveFeature(document, {
+      name: 'Other',
+      primitiveKind: 'box',
+      dimensions: { width: 5, height: 5, depth: 5 }
+    });
+    ({ document } = chamferEdges(document, {
+      name: 'Other chamfer',
+      targetBodyId: document.bodyOrder.at(-1)!,
+      edgeHashes: [1],
+      size: 1
+    }));
+    const features = listFeaturesInOrder(document);
+    const paused = features.find((node) => node.name === 'Paused')!;
+    document = {
+      ...document,
+      nodes: {
+        ...document.nodes,
+        [paused.id]: {
+          ...paused,
+          metadata: { [FEATURE_SUPPRESSED_METADATA_KEY]: true }
+        }
+      }
+    };
+    const id = (name: string) =>
+      features.find((node) => node.name === name)!.featureId;
+    return { document, id, features };
+  }
+
+  const named = (
+    map: Map<FeatureId, FeatureNode>,
+    features: readonly FeatureNode[]
+  ) =>
+    [...map].map(([featureId, origin]) => [
+      features.find((node) => node.featureId === featureId)!.name,
+      origin.name
+    ]);
+
+  it('flags every later step on the failed branch, through a suppressed one, and nothing else', () => {
+    const { document, id, features } = history();
+    expect(
+      named(builtOnFailedFeatures(document, new Set([id('Fillet')])), features)
+    ).toEqual([
+      ['Chamfer', 'Fillet'],
+      ['Last', 'Fillet']
+    ]);
+  });
+
+  it('names the earliest failure and leaves failed steps to their own flag', () => {
+    const { document, id, features } = history();
+    expect(
+      named(
+        builtOnFailedFeatures(document, new Set([id('Fillet'), id('Chamfer')])),
+        features
+      )
+    ).toEqual([['Last', 'Fillet']]);
+    expect(builtOnFailedFeatures(document, new Set()).size).toBe(0);
   });
 });

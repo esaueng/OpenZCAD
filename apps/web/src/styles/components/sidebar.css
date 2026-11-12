@@ -1058,6 +1058,14 @@
   font-size: var(--fs-xs);
 }
 
+/* A step that built, but on the unchanged input of a failed step before it
+   (ADR-017): a quiet note, since the failure itself is flagged on its row. */
+.history-row-upstream-failed {
+  font-family: inherit;
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
 /* A refused edit of an existing step (Resize Body on its Box) is said on that
    step's own row, not as a new step under the last one. */
 .history-row-refused {

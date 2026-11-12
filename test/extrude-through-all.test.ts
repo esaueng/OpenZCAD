@@ -19,6 +19,7 @@ import {
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
+import { expectPassedThrough } from './support/failed-pass-through';
 import {
   toUserId,
   type BodyId,
@@ -400,7 +401,7 @@ describe('F01 through-all: exact build', () => {
     });
     const derived = await adapter.syncDocument(result.document);
     expect(derived.warnings.join('\n')).toMatch(/no longer overlaps/);
-    expect(derived.bodyRepresentations[result.bodyId]).toBeUndefined();
+    expectPassedThrough(derived, result.bodyId, blockId);
   });
 
   it('refuses a side that misses the target, naming it', async () => {
@@ -410,7 +411,7 @@ describe('F01 through-all: exact build', () => {
     expect(derived.warnings.join('\n')).toMatch(
       /no target in the selected direction \(target Block Body, side backward\)\./
     );
-    expect(derived.bodyRepresentations[result.bodyId]).toBeUndefined();
+    expectPassedThrough(derived, result.bodyId, blockId);
   });
 
   it('fails closed on a malformed stored extent instead of building blind', async () => {
@@ -435,7 +436,7 @@ describe('F01 through-all: exact build', () => {
     ] as const) {
       const derived = await adapter.syncDocument(forged(patch));
       expect(derived.warnings.join('\n')).toMatch(message);
-      expect(derived.bodyRepresentations[result.bodyId]).toBeUndefined();
+      expectPassedThrough(derived, result.bodyId, blockId);
     }
   });
 
