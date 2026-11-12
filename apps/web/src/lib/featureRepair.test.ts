@@ -16,8 +16,11 @@ import type { FeatureWarning } from '@openzcad/shared';
 import {
   builtOnFailedFeatures,
   failedFeatureIds,
+  failedStepsInRepairOrder,
+  failureLineage,
   featureNeedsRepair,
-  featuresNeedingRepair
+  featuresNeedingRepair,
+  historyFailureTier
 } from './featureRepair';
 
 function feature(
@@ -223,5 +226,38 @@ describe('builtOnFailedFeatures', () => {
       )
     ).toEqual([['Last', 'Fillet']]);
     expect(builtOnFailedFeatures(document, new Set()).size).toBe(0);
+  });
+
+  it('maps every step after a failure to the earliest one, failed steps included', () => {
+    const { document, id, features } = history();
+    const failed = new Set([id('Fillet'), id('Chamfer'), id('Other chamfer')]);
+    const lineage = failureLineage(document, failed);
+    // Chamfer failed after Fillet; Paused passes Fillet's failure on to
+    // Last; Other chamfer is its own first failure on another body.
+    expect(named(lineage, features)).toEqual([
+      ['Chamfer', 'Fillet'],
+      ['Paused', 'Fillet'],
+      ['Last', 'Fillet']
+    ]);
+    const tier = (name: string) =>
+      historyFailureTier(id(name), failed.has(id(name)), lineage);
+    expect(tier('Block')).toBeNull();
+    expect(tier('Fillet')).toBe('root');
+    expect(tier('Chamfer')).toBe('downstream');
+    expect(tier('Last')).toBe('built-on-failed');
+    expect(tier('Other')).toBeNull();
+    expect(tier('Other chamfer')).toBe('root');
+    // The chip visits the first failures, then the rest, each in order.
+    expect(
+      failedStepsInRepairOrder(features, failed, lineage).map(
+        (node) => node.name
+      )
+    ).toEqual(['Fillet', 'Other chamfer', 'Chamfer']);
+  });
+
+  it('does not start a chain at a suppressed step, even when reported', () => {
+    const { document, id } = history();
+    expect(failureLineage(document, new Set([id('Paused')])).size).toBe(0);
+    expect(failureLineage(document, new Set()).size).toBe(0);
   });
 });

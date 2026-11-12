@@ -73,31 +73,41 @@ export function featuresNeedingRepair(
 }
 
 /**
- * Features that built, but on a history with a failed step upstream of them,
- * each mapped to the earliest such failed step.
+ * Every feature with a failed step upstream of it, each mapped to the
+ * earliest such step: the failure to fix first.
  *
  * A failed step hands its input on unchanged (ADR-017, November 2026), and a
- * failed in-place edit leaves its target as it was, so what builds after it
- * builds on a model the document does not describe. Those steps are not
- * failures; this says which ones stand on one. Read from the stored
- * dependency graph — a branch on another body is not affected — and the
- * typed failure record, so it adds no warning.
+ * failed in-place edit leaves its target as it was, so what follows it builds
+ * on a model the document does not describe. Read from the stored dependency
+ * graph — a branch on another body is not affected — and the typed failure
+ * record, so it adds no warning. A suppressed step is no failure of its own,
+ * but one built on a failure passes that failure on.
+ *
+ * A failed step with an entry failed after an earlier failure; a failed step
+ * without one is a first failure (`historyFailureTier`).
  */
-export function builtOnFailedFeatures(
+export function failureLineage(
   document: ProjectDocument,
   failed: ReadonlySet<FeatureId>
 ): Map<FeatureId, FeatureNode> {
-  const dependents = new Map<FeatureId, FeatureNode>();
-  if (failed.size === 0) return dependents;
+  return walkFailureLineage(document, failed).lineage;
+}
+
+function walkFailureLineage(
+  document: ProjectDocument,
+  failed: ReadonlySet<FeatureId>
+): { features: FeatureNode[]; lineage: Map<FeatureId, FeatureNode> } {
+  const lineage = new Map<FeatureId, FeatureNode>();
+  if (failed.size === 0) return { features: [], lineage };
   const { features, parents } = featureHistory(document);
   const position = new Map(
     features.map((feature, index) => [feature.featureId, index])
   );
-  // The earliest failed step each feature's inputs descend from.
+  // The earliest failed step each feature's inputs descend from, or the
+  // feature itself when it is a first failure.
   const origin = new Map<FeatureId, FeatureNode>();
   for (const feature of features) {
-    const suppressed = isFeatureSuppressed(feature);
-    const own = failed.has(feature.featureId) && !suppressed;
+    const own = failed.has(feature.featureId) && !isFeatureSuppressed(feature);
     let earliest: FeatureNode | undefined;
     for (const parent of parents.get(feature.featureId) ?? []) {
       const source = origin.get(parent);
@@ -111,10 +121,72 @@ export function builtOnFailedFeatures(
     }
     if (earliest) {
       origin.set(feature.featureId, earliest);
-      if (!own && !suppressed) dependents.set(feature.featureId, earliest);
+      lineage.set(feature.featureId, earliest);
     } else if (own) {
       origin.set(feature.featureId, feature);
     }
   }
+  return { features, lineage };
+}
+
+/**
+ * Features that built, but on a history with a failed step upstream of them,
+ * each mapped to the earliest such failed step (`failureLineage` without the
+ * failed and suppressed steps). Those steps are not failures; this says which
+ * ones stand on one.
+ */
+export function builtOnFailedFeatures(
+  document: ProjectDocument,
+  failed: ReadonlySet<FeatureId>
+): Map<FeatureId, FeatureNode> {
+  const { features, lineage } = walkFailureLineage(document, failed);
+  const dependents = new Map<FeatureId, FeatureNode>();
+  for (const feature of features) {
+    const root = lineage.get(feature.featureId);
+    if (
+      root &&
+      !failed.has(feature.featureId) &&
+      !isFeatureSuppressed(feature)
+    ) {
+      dependents.set(feature.featureId, root);
+    }
+  }
   return dependents;
+}
+
+/**
+ * How a History row reads a failure: `root`, the first failure in its chain
+ * and the one to fix; `downstream`, a step that failed after an earlier
+ * failure; `built-on-failed`, a step that built, on a failed step's input.
+ */
+export type HistoryFailureTier = 'root' | 'downstream' | 'built-on-failed';
+
+export function historyFailureTier(
+  featureId: FeatureId,
+  needsRepair: boolean,
+  lineage: ReadonlyMap<FeatureId, FeatureNode>
+): HistoryFailureTier | null {
+  const root = lineage.has(featureId);
+  if (needsRepair) return root ? 'downstream' : 'root';
+  return root ? 'built-on-failed' : null;
+}
+
+/**
+ * The steps that need repair in the order to visit them: the first failures,
+ * then the steps that failed after them, each in history order.
+ */
+export function failedStepsInRepairOrder<
+  T extends Pick<FeatureNode, 'featureId'>
+>(
+  features: readonly T[],
+  needsRepair: ReadonlySet<FeatureId>,
+  lineage: ReadonlyMap<FeatureId, FeatureNode>
+): T[] {
+  const failed = features.filter((feature) =>
+    needsRepair.has(feature.featureId)
+  );
+  return [
+    ...failed.filter((feature) => !lineage.has(feature.featureId)),
+    ...failed.filter((feature) => lineage.has(feature.featureId))
+  ];
 }
