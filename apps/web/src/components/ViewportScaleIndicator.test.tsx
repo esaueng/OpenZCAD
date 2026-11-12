@@ -123,10 +123,20 @@ describe('ViewportScaleIndicator', () => {
     expect(
       scaleRulePlacement(corner, 60, { ...rail, bottom: 780 }, bar)
     ).toEqual({ left: 10, bottom: 832, maxLengthPx: 44 });
-    // Never below 32px of room, however crowded.
+    // With exactly the least room it still keeps the corner.
     expect(
-      scaleRulePlacement(corner, 60, { ...rail, bottom: 810 }, bar)
+      scaleRulePlacement(corner, 60, { ...rail, bottom: 792 }, bar)
     ).toEqual({ left: 10, bottom: 832, maxLengthPx: 32 });
+    // A rail that reaches the corner (a window 540px tall or less) leaves
+    // no room at all: only then does the rule stand beside it.
+    expect(
+      scaleRulePlacement(
+        { left: 10, bottom: 380 },
+        60,
+        { left: 10, top: 60, right: 154, bottom: 370 },
+        { left: 260, top: 346, right: 744, bottom: 380 }
+      )
+    ).toEqual({ left: 164, bottom: 380, maxLengthPx: 200 });
     // A short window caps the rule at the stage's height.
     expect(
       scaleRulePlacement({ left: 10, bottom: 150 }, 60, null, null)

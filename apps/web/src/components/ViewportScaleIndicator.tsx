@@ -25,9 +25,12 @@ const CLEARANCE_PX = 8;
 const STATUS_ROW_PX = 40;
 /**
  * The shortest room the rule is ever given. The stylesheet's
- * --scale-rule-reserve keeps the rail at least this far off the corner.
+ * --scale-rule-reserve keeps the rail at least this far off the corner,
+ * except in a window too short to spare it (540px and under).
  */
 const MIN_RULE_ROOM_PX = 32;
+/** The gap between the rail and a rule that has to stand beside it. */
+const RAIL_GAP_PX = 10;
 /** Below this length ten divisions run together; only the centre is ticked. */
 const MIN_TICKED_LENGTH_PX = 60;
 
@@ -47,11 +50,12 @@ export interface ScaleRulePlacement {
 
 /**
  * Where the upright rule stands and how long it may be. It keeps the far
- * bottom-left corner of the stage at every window size and is scaled to
- * the room above it: the tool rail, or a sheet docked across the foot (a
- * phone's measurement workbench), caps its length. Only where the search
- * bar runs into the corner (a phone with a panel open) does its foot lift,
- * onto the bar and its status row.
+ * bottom-left corner of the stage and is scaled to the room above it: the
+ * tool rail, or a sheet docked across the foot (a phone's measurement
+ * workbench), caps its length. Where the search bar runs into the corner (a
+ * phone with a panel open) its foot lifts onto the bar and its status row.
+ * Only where the rail reaches the corner itself, leaving no room at all (a
+ * window 540px tall or less), does it stand beside the rail.
  */
 export function scaleRulePlacement(
   corner: { left: number; bottom: number },
@@ -60,33 +64,39 @@ export function scaleRulePlacement(
   bar: Box | null,
   sheet: Box | null = null
 ): ScaleRulePlacement {
-  const { left } = corner;
-  const footRight = left + RULE_ACROSS_PX + LABEL_RESERVE_PX;
-  const onBar =
-    bar !== null &&
-    bar.left < footRight + CLEARANCE_PX &&
-    bar.right > left &&
-    bar.top < corner.bottom;
-  const bottom = onBar
-    ? Math.min(corner.bottom, bar.top - CLEARANCE_PX - STATUS_ROW_PX)
-    : corner.bottom;
-  let ceiling = stageTop;
-  for (const above of [rail, sheet]) {
-    if (
-      above !== null &&
-      above.left < left + RULE_ACROSS_PX &&
-      above.right > left &&
-      above.top < bottom
-    ) {
-      ceiling = Math.max(ceiling, above.bottom + CLEARANCE_PX);
+  const place = (left: number): ScaleRulePlacement => {
+    const footRight = left + RULE_ACROSS_PX + LABEL_RESERVE_PX;
+    const onBar =
+      bar !== null &&
+      bar.left < footRight + CLEARANCE_PX &&
+      bar.right > left &&
+      bar.top < corner.bottom;
+    const bottom = onBar
+      ? Math.min(corner.bottom, bar.top - CLEARANCE_PX - STATUS_ROW_PX)
+      : corner.bottom;
+    let ceiling = stageTop;
+    for (const above of [rail, sheet]) {
+      if (
+        above !== null &&
+        above.left < left + RULE_ACROSS_PX &&
+        above.right > left &&
+        above.top < bottom
+      ) {
+        ceiling = Math.max(ceiling, above.bottom + CLEARANCE_PX);
+      }
     }
+    return { left, bottom, maxLengthPx: bottom - ceiling };
+  };
+  let placement = place(corner.left);
+  if (rail !== null && placement.maxLengthPx < MIN_RULE_ROOM_PX) {
+    const beside = place(rail.right + RAIL_GAP_PX);
+    if (beside.maxLengthPx > placement.maxLengthPx) placement = beside;
   }
   return {
-    left,
-    bottom,
+    ...placement,
     maxLengthPx: Math.min(
       DEFAULT_SCALE_BAR_MAX_WIDTH_PX,
-      Math.max(MIN_RULE_ROOM_PX, bottom - ceiling)
+      Math.max(MIN_RULE_ROOM_PX, placement.maxLengthPx)
     )
   };
 }

@@ -531,6 +531,16 @@
   }
 }
 
+/* 540px and under the rail folds to columns that fill the stage's height
+   (a rotated phone's touch rail has no 40px to spare without scrolling its
+   last row away), so it keeps the band and the bar stands beside it. */
+@media (max-height: 540px) {
+  .workspace.column-layout,
+  .workspace.column-layout:has(.viewport-readout .viewport-dock-snap) {
+    --scale-rule-reserve: 0px;
+  }
+}
+
 @media (max-width: 620px) {
   .workspace.column-layout {
     --scale-rule-reserve: var(--readout-h);
