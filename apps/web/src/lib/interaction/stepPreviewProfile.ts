@@ -27,12 +27,14 @@ const PARALLEL_COSINE = 2e-3;
  * face that is ruled along the drag, a side wall or a cylinder whose axis
  * follows the drag, because every one of its triangles stays on its surface.
  *
- * It declines when a blend reaches past the picked face's plane (the move
- * would have to trim something this cannot), when a stretching face is not
- * ruled along the drag, when the region is most of the body, or on an
- * imported compound. `span` and
- * `reach` bound the push and pull before a stretched curved triangle would
- * fold; a stretched planar face is triangulated afresh past its own folds.
+ * A proven blend that rises past the picked face's plane into such a wall
+ * (a box top rounded into a taller cylinder) moves too. It declines when any
+ * other face reaches past that plane (the move would have to trim something
+ * this cannot), when a stretching face is not ruled along the drag, when the
+ * region is most of the body, or on an imported compound. `span` and `reach`
+ * bound the push and pull before a stretched curved wall's moving outline
+ * would cross its fixed one (see `wallStretchBounds`); a stretched planar
+ * face is triangulated afresh past its own folds.
  * This is display recognition only: it never authorizes an edit, and the
  * exact kernel still decides the result on release.
  */
@@ -128,13 +130,19 @@ export function stepPreviewProfile(
           stretching.add(neighbour);
           continue;
         }
-        // A blend that reaches past the face's plane meets something the
-        // move would trim, and one deeper than the band would be stretched
-        // off its own surface.
+        // A blend deeper than the band would be stretched off its own
+        // surface. Only a proven rolling-ball blend may rise past the face's
+        // plane: a concave round into a wall the drag runs along (a box top
+        // filleted into a taller cylinder) rides with the face while that
+        // wall stretches, and anything it would reach instead is either
+        // another rising face checked here or a fold `reach` stops short of.
+        // A rising plane or unrecognized surface is something the move would
+        // trim.
         const { low, high } = depthOf(neighbour);
+        if (low < level - band - tolerance * 10) return null;
         if (
-          high > level + tolerance * 10 ||
-          low < level - band - tolerance * 10
+          high > level + tolerance * 10 &&
+          neighbour.face.geometry?.featureType !== 'blend'
         )
           return null;
         moving.add(neighbour);
@@ -156,13 +164,29 @@ export function stepPreviewProfile(
     return null;
   // Each stretching triangle's normal is linear in the drag distance d:
   // N(d) = N0 + d·N1. It folds where N(d)·N0 reaches zero, which bounds the
-  // push (`span`) and the pull (`reach`) the preview can show.
+  // push (`span`) and the pull (`reach`) the preview can show; a curved
+  // wall is bounded by its outline instead (`wallStretchBounds`).
   const { indices } = body.mesh;
   const moves = (index: number) => (movingKeys.has(keyOf(index)) ? 1 : 0);
   let span = Infinity,
     reach = Infinity;
   const planarFaces: StepPreviewPlanarFace[] = [];
   for (const info of stretching) {
+    const plane = info.face.geometry;
+    if (plane?.surfaceType !== 'plane' || !plane.normal) {
+      const wall = wallStretchBounds(
+        body,
+        info,
+        keyOf,
+        movingKeys,
+        normal,
+        along,
+        tolerance
+      );
+      span = Math.min(span, wall.push);
+      reach = Math.min(reach, wall.pull);
+      continue;
+    }
     let push = Infinity,
       pull = Infinity;
     const end = (info.face.triangleStart + info.face.triangleCount) * 3;
@@ -203,22 +227,16 @@ export function stepPreviewProfile(
       if (fold > 0) pull = Math.min(pull, fold);
       else push = Math.min(push, -fold);
     }
-    const plane = info.face.geometry;
-    if (plane?.surfaceType === 'plane' && plane.normal) {
-      // A planar face can be triangulated afresh from its moved outline, so
-      // its own folds only say when the viewport has to do that.
-      if (push < Infinity || pull < Infinity)
-        planarFaces.push({
-          triangleStart: info.face.triangleStart,
-          triangleCount: info.face.triangleCount,
-          normal: plane.normal,
-          push,
-          pull
-        });
-    } else {
-      span = Math.min(span, push);
-      reach = Math.min(reach, pull);
-    }
+    // A planar face can be triangulated afresh from its moved outline, so
+    // its own folds only say when the viewport has to do that.
+    if (push < Infinity || pull < Infinity)
+      planarFaces.push({
+        triangleStart: info.face.triangleStart,
+        triangleCount: info.face.triangleCount,
+        normal: plane.normal,
+        push,
+        pull
+      });
   }
   if (!(span > tolerance) || !(reach > tolerance)) return null;
   // Edge polylines and face triangles sample curved boundaries independently.
@@ -358,6 +376,196 @@ function prepare(body: BodyRepresentation): Prepared | null {
   };
   preparedByMesh.set(body.mesh, prepared);
   return prepared;
+}
+
+/**
+ * How far a curved wall ruled along the drag can stretch each way before
+ * its moving outline crosses its fixed outline on some ruling. Every point
+ * of such a wall stays on its surface wherever it slides along the drag, and
+ * so does its normal, so a triangle inside the wall that folds is only a
+ * culled back face over a wall its neighbours still cover; the wall itself
+ * fails only where the moved seam would pass the wall's other boundary (a
+ * concave round lifted past the cylinder's rim). Faces sample the curve they
+ * share independently, so per-triangle folds would also stop the preview at
+ * the first sliver beside the seam.
+ *
+ * Projected along the drag, each outline sample is compared with the
+ * outline segments of the other kind that span its ruling. A chord of a
+ * curved outline lies off the curve by its sag, so a segment counts when the
+ * sample is within half the segment's length of it: generous, which only
+ * ever finds a crossing that is not there and shortens the preview.
+ */
+function wallStretchBounds(
+  body: BodyRepresentation,
+  info: FaceInfo,
+  keyOf: (index: number) => number,
+  movingKeys: ReadonlySet<number>,
+  normal: Vector3,
+  along: (index: number) => number,
+  tolerance: number
+): { push: number; pull: number } {
+  const { vertices, indices } = body.mesh;
+  const end = (info.face.triangleStart + info.face.triangleCount) * 3;
+  // Count each welded side of the face's triangles; a side used once is
+  // on its outline. Local ids keep the side keys small integers.
+  const local = new Map<number, number>();
+  const idOf = (key: number) => {
+    let id = local.get(key);
+    if (id === undefined) local.set(key, (id = local.size));
+    return id;
+  };
+  const stride = info.face.triangleCount * 3 + 1;
+  const sides = new Map<number, [number, number, number]>();
+  for (let t = info.face.triangleStart * 3; t < end; t += 3) {
+    for (let k = 0; k < 3; k++) {
+      const a = indices[t + k]!,
+        b = indices[t + ((k + 1) % 3)]!;
+      const ia = idOf(keyOf(a)),
+        ib = idOf(keyOf(b));
+      if (ia === ib) continue;
+      const side = ia < ib ? ia * stride + ib : ib * stride + ia;
+      const known = sides.get(side);
+      if (known) known[2] += 1;
+      else sides.set(side, [a, b, 1]);
+    }
+  }
+  // A basis across the drag; every ruling projects to one point.
+  const helper =
+    Math.abs(normal.x) < 0.9 ? { x: 1, y: 0, z: 0 } : { x: 0, y: 1, z: 0 };
+  const dot = (u: Vector3, v: Vector3) => u.x * v.x + u.y * v.y + u.z * v.z;
+  const e1x = helper.y * normal.z - helper.z * normal.y,
+    e1y = helper.z * normal.x - helper.x * normal.z,
+    e1z = helper.x * normal.y - helper.y * normal.x;
+  const e1Length = Math.hypot(e1x, e1y, e1z);
+  const e1 = { x: e1x / e1Length, y: e1y / e1Length, z: e1z / e1Length };
+  const e2 = {
+    x: normal.y * e1.z - normal.z * e1.y,
+    y: normal.z * e1.x - normal.x * e1.z,
+    z: normal.x * e1.y - normal.y * e1.x
+  };
+  const point = (index: number) => {
+    const p = {
+      x: vertices[index * 3]!,
+      y: vertices[index * 3 + 1]!,
+      z: vertices[index * 3 + 2]!
+    };
+    return { u: dot(p, e1), v: dot(p, e2), s: along(index) };
+  };
+  type Sample = ReturnType<typeof point>;
+  const samples: [Sample[], Sample[]] = [[], []];
+  const segments: [[Sample, Sample][], [Sample, Sample][]] = [[], []];
+  const seen = new Set<number>();
+  for (const [a, b, count] of sides.values()) {
+    if (count !== 1) continue;
+    const ma = movingKeys.has(keyOf(a)) ? 1 : 0,
+      mb = movingKeys.has(keyOf(b)) ? 1 : 0;
+    const pa = point(a),
+      pb = point(b);
+    for (const [index, p, m] of [
+      [a, pa, ma],
+      [b, pb, mb]
+    ] as const) {
+      const key = keyOf(index);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      samples[m].push(p);
+    }
+    if (ma === mb) segments[ma].push([pa, pb]);
+  }
+  const near = tolerance * 10;
+  let push = Infinity,
+    pull = Infinity;
+  const gap = (fixed: number, moved: number) => {
+    const difference = fixed - moved;
+    if (difference >= 0) pull = Math.min(pull, difference);
+    else push = Math.min(push, -difference);
+  };
+  for (const kind of [0, 1] as const) {
+    const candidates = segmentGrid(segments[1 - kind]!, near);
+    for (const sample of samples[kind]) {
+      for (const [a, b] of candidates(sample.u, sample.v)) {
+        const du = b.u - a.u,
+          dv = b.v - a.v;
+        const length2 = du * du + dv * dv;
+        if (length2 <= near * near) {
+          // A segment along the ruling itself: each end is on it.
+          if (Math.hypot(sample.u - a.u, sample.v - a.v) > near) continue;
+          for (const end of [a, b])
+            if (kind === 1) gap(end.s, sample.s);
+            else gap(sample.s, end.s);
+          continue;
+        }
+        const t = ((sample.u - a.u) * du + (sample.v - a.v) * dv) / length2;
+        if (t < 0 || t > 1) continue;
+        const off = Math.hypot(
+          sample.u - (a.u + t * du),
+          sample.v - (a.v + t * dv)
+        );
+        if (off > Math.max(near, Math.sqrt(length2) / 2)) continue;
+        const s = a.s + t * (b.s - a.s);
+        if (kind === 1) gap(s, sample.s);
+        else gap(sample.s, s);
+      }
+    }
+  }
+  return { push, pull };
+}
+
+/**
+ * Buckets projected segments by the cells their reach covers (their own
+ * extent grown by half their length, the sag allowance), so each sample is
+ * tested against nearby segments only.
+ */
+function segmentGrid<T extends { u: number; v: number }>(
+  segments: readonly [T, T][],
+  near: number
+): (u: number, v: number) => readonly [T, T][] {
+  if (segments.length < 64) return () => segments;
+  let minU = Infinity,
+    minV = Infinity,
+    maxU = -Infinity,
+    maxV = -Infinity;
+  for (const [a, b] of segments)
+    for (const p of [a, b]) {
+      minU = Math.min(minU, p.u);
+      minV = Math.min(minV, p.v);
+      maxU = Math.max(maxU, p.u);
+      maxV = Math.max(maxV, p.v);
+    }
+  const cells = Math.max(
+    1,
+    Math.min(256, Math.ceil(Math.sqrt(segments.length)))
+  );
+  const size = Math.max(maxU - minU, maxV - minV, near) / cells;
+  const cell = (value: number, min: number) =>
+    Math.min(cells - 1, Math.max(0, Math.floor((value - min) / size)));
+  const buckets = new Map<number, [T, T][]>();
+  for (const segment of segments) {
+    const [a, b] = segment;
+    const grow = Math.max(near, Math.hypot(b.u - a.u, b.v - a.v) / 2) + near;
+    const u0 = cell(Math.min(a.u, b.u) - grow, minU),
+      u1 = cell(Math.max(a.u, b.u) + grow, minU),
+      v0 = cell(Math.min(a.v, b.v) - grow, minV),
+      v1 = cell(Math.max(a.v, b.v) + grow, minV);
+    for (let i = u0; i <= u1; i++)
+      for (let j = v0; j <= v1; j++) {
+        const key = i * cells + j;
+        const bucket = buckets.get(key);
+        if (bucket) bucket.push(segment);
+        else buckets.set(key, [segment]);
+      }
+  }
+  const empty: [T, T][] = [];
+  return (u, v) => {
+    if (
+      u < minU - size ||
+      v < minV - size ||
+      u > maxU + size ||
+      v > maxV + size
+    )
+      return empty;
+    return buckets.get(cell(u, minU) * cells + cell(v, minV)) ?? empty;
+  };
 }
 
 /** The face's carrier contains the drag direction. */

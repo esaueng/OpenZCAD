@@ -171,6 +171,124 @@ describe('whole-body step previews for planar face offsets', () => {
     }
   }, 60_000);
 
+  it.each([false, true])(
+    'carries a top rounded into a taller cylinder up the wall it meets (height edit %s)',
+    async (heightEdit) => {
+      const adapter = await createExactKernelAdapter();
+      try {
+        const { document, body, bodyId } = await filletedUnion(adapter, {
+          heightEdit
+        });
+        const top = body.topology!.faces.find(
+          (face) =>
+            face.reference?.lineageName ===
+            'boolean.face.operand.1.primitive.box.face.z-max'
+        )!;
+        const level = top.geometry!.center.z;
+        // The R5 junction round rises above the top into the cylinder wall.
+        // It used to decline the whole preview; the round now rides with the
+        // top while the wall stretches. The wall's own samples beside the
+        // seam fold at once, so only the seam passing the cylinder's rim
+        // (z 35) or the corner bands reaching the floor bounds the drag.
+        const profile = stepPreviewProfile(body, top);
+        expect(profile).not.toBeNull();
+        expect(profile!.reach).toBeCloseTo(35 - (level + 5), 3);
+        expect(profile!.span).toBeCloseTo(level - 5, 3);
+        for (const delta of [-6, 1, 3.5]) {
+          const preview = stretched(body, profile!, delta);
+          const plan = planFaceOffset({
+            document,
+            bodyId,
+            face: top,
+            faceHash: top.hash,
+            offset: delta
+          })!;
+          const after = await adapter.syncDocument(
+            plan.command.apply(document)
+          );
+          expect(after.warnings).toEqual([JUNCTION_FILLET_DISCLOSURE]);
+          const exact = after.bodyRepresentations[bodyId]!;
+          expect(bounds(preview).max[2]).toBeCloseTo(exact.bbox.max.z, 4);
+          expect(bounds(preview).min[2]).toBeCloseTo(exact.bbox.min.z, 4);
+          // Folded slivers inside the wall cancel in the signed volume, so
+          // the preview gains what the kernel gains up to tessellation error.
+          expect(
+            meshVolume(preview, body.mesh.indices) -
+              meshVolume(body.mesh.vertices, body.mesh.indices)
+          ).toBeCloseTo(exact.volume - body.volume, 0);
+        }
+      } finally {
+        adapter.dispose();
+      }
+    },
+    60_000
+  );
+
+  it('still declines a top whose rise is a plane rather than a blend', () => {
+    // A unit cube whose top's +x neighbour is a plane tilted up past it: a
+    // wall the move would have to trim, not a round riding along.
+    const vertices = [
+      0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1, 2,
+      0, 2, 2, 1, 2
+    ];
+    const triangles = [
+      // top
+      4, 5, 6, 4, 6, 7,
+      // tilted +x face rising from the top's edge
+      5, 8, 9, 5, 9, 6,
+      // remaining sides close enough for adjacency
+      0, 1, 5, 0, 5, 4, 3, 7, 6, 3, 6, 2, 0, 4, 7, 0, 7, 3, 0, 3, 2, 0, 2, 1
+    ];
+    const plane = (normal: { x: number; y: number; z: number }) => ({
+      surfaceType: 'plane',
+      area: 1,
+      center: { x: 0, y: 0, z: 0 },
+      normal
+    });
+    const tilt = Math.SQRT1_2;
+    const geometries = [
+      plane({ x: 0, y: 0, z: 1 }),
+      plane({ x: tilt, y: 0, z: -tilt }),
+      plane({ x: 0, y: -1, z: 0 }),
+      plane({ x: 0, y: 1, z: 0 }),
+      plane({ x: -1, y: 0, z: 0 }),
+      plane({ x: 0, y: 0, z: -1 })
+    ];
+    const faces = geometries.map((geometry, index) => ({
+      topologyId: `face-${index}`,
+      hash: index,
+      triangleStart: index * 2,
+      triangleCount: 2,
+      geometry
+    }));
+    const body = {
+      mesh: { vertices, indices: triangles },
+      topology: { faces, edges: [] }
+    } as unknown as BodyRepresentation;
+    expect(
+      stepPreviewProfile(body, faces[0] as unknown as FaceTopology)
+    ).toBeNull();
+    // The same rise proven to be a rolling-ball blend rides with the top.
+    // A fresh mesh: preparation is cached per mesh with its face records.
+    const blended = {
+      mesh: { vertices: [...vertices], indices: [...triangles] },
+      topology: {
+        faces: faces.map((face, index) =>
+          index === 1
+            ? { ...face, geometry: { ...face.geometry, featureType: 'blend' } }
+            : face
+        ),
+        edges: []
+      }
+    } as unknown as BodyRepresentation;
+    expect(
+      stepPreviewProfile(
+        blended,
+        blended.topology!.faces[0] as unknown as FaceTopology
+      )
+    ).not.toBeNull();
+  });
+
   it.each([
     { axis: 'x' as const, sense: 1 as const, delta: 15 },
     { axis: 'x' as const, sense: -1 as const, delta: 6 },
