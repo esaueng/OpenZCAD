@@ -31,6 +31,7 @@ export function readFragments(repoRoot?: string): EvidenceFragment[];
 
 export function fragmentLinks(text: string): string[];
 export function linkDestinations(text: string): string[];
+export function referenceDefinitions(text: string): string[];
 
 export function checkRepo(repoRoot?: string): EvidenceFragment[];
 
