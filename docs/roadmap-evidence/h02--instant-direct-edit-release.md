@@ -10,4 +10,4 @@ unvalidated, reused when the hand lands on the same value
 (`useDirectEditCommit.test.tsx`, `machine.test.ts`, retake e2e). Local release
 → live result on a private 32-feature filleted-union reproduction: top 488 →
 293 ms, side −32 mm 602 → 381 ms; cylinder remains bound by the exact resize
-([edit sessions](docs/interactive-edit-sessions.md)).
+([edit sessions](docs/interactive-edit-sessions.md), PR #1356).
