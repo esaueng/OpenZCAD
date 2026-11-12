@@ -368,11 +368,18 @@
   background: var(--color-surface-hover);
 }
 
+/* Suppressed is a choice, not a defect: the name is struck through in the
+   dim text colour, never the warning hue, and the value stays. The word
+   "suppressed" is spoken (HistoryTimeline), and a pause glyph stands in for
+   it on screen. Design QA, suppression addendum, revised 12 November 2026. */
 .feature-row.suppressed .feature-name {
-  color: var(--color-text-subtle);
-  font-style: italic;
+  color: var(--color-text-dim);
   text-decoration: line-through;
-  text-decoration-color: var(--color-warning);
+  text-decoration-color: var(--color-text-dim);
+}
+
+.feature-row.suppressed .history-row-value {
+  color: var(--color-text-dim);
 }
 
 .feature-row-main,
@@ -502,16 +509,12 @@
 
 /* ── History drag-to-reorder ─────────────────────────────── */
 
-/* The grip only appears on hover/focus so the timeline stays quiet; it is
-   still keyboard-reachable, and focus reveals it for arrow-key moves. */
+/* The grip shares its 24px slot with the step's icon (HistoryTimeline): the
+   icon at rest, the grip glyph under the pointer or keyboard focus. The
+   button itself is always there, so reaching it never covers the adjacent
+   feature-selection button. */
 .feature-row-grip {
   cursor: grab;
-  opacity: 0;
-}
-
-.feature-row:hover .feature-row-grip,
-.feature-row-grip:focus-visible {
-  opacity: 1;
 }
 
 .feature-row.is-dragging {
@@ -537,12 +540,11 @@
  * Showing them is the right answer rather than `pointer-events: none`, because
  * a touch user needs to reach them at all — there is no hover to reveal them
  * with. Same fix, and the same reasoning, as `.sharing-row-action` in
- * modals.css.
+ * modals.css. History rows follow the rule below, in their own section.
  */
 @media (hover: none) {
   .row-delete,
-  .param-expose,
-  .feature-row-grip {
+  .param-expose {
     opacity: 1;
   }
 
@@ -556,12 +558,15 @@
 }
 
 /* ── History timeline ────────────────────────────────────────
-   Features on one vertical line. Each row carries a dot on the line, its
-   name and one short value; the selected or hovered row swaps the value for
-   its actions. One handle on the line marks the end of history. The line,
-   its fill, the handle and the selection highlight are placed from the laid
-   out rows (HistoryTimeline sets the custom properties), so they stay on the
-   rows whatever their height. */
+   Features on one vertical line, one 26px line each: the step's icon, its
+   name, its value and, when it has one, a status glyph. The value is never
+   replaced by a status; the rail dot's shape and the glyph carry the state,
+   and the words are spoken after the name. The row's actions take no room
+   at rest and open over the value on hover or keyboard focus. One handle on
+   the line marks the end of history. The line, its solid part, the handle,
+   the marker and the selection highlight are placed from the laid out rows
+   (HistoryTimeline sets the custom properties), so they stay on the rows
+   whatever their height. */
 
 .history-timeline {
   display: grid;
@@ -588,15 +593,68 @@
   background: var(--color-accent-dim);
 }
 
+/* The header's repair summary (HistoryRepairChip). Only while a step needs
+   repair; in a narrow panel it is the glyph and the count. */
+.model-panel-header:has(> .history-repair-chip) {
+  container-type: inline-size;
+}
+
+.history-repair-chip {
+  flex: 0 1 auto;
+  min-width: 0;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 2px;
+  padding: 0 6px;
+  overflow: hidden;
+  white-space: nowrap;
+  color: var(--color-warning);
+  background: color-mix(
+    in srgb,
+    var(--color-warning) 13%,
+    var(--color-surface)
+  );
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-mini);
+  font-weight: var(--fw-medium);
+}
+
+.history-repair-chip svg {
+  flex: 0 0 auto;
+}
+
+.history-repair-chip:hover {
+  box-shadow: inset 0 0 0 1px
+    color-mix(in srgb, var(--color-warning) 55%, transparent);
+}
+
+@container (max-width: 319px) {
+  .history-repair-chip-label {
+    display: none;
+  }
+}
+
+/* What is paused, and the way back. Not sticky: pinned over the list it
+   covered the row scrolled beneath it, controls included (the 24px target
+   audit in control-names.spec caught it); the marker rule says in the list
+   where history ends. */
 .history-rollback {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 5px 6px 5px 10px;
+  padding: 5px 6px 5px 8px;
   border-radius: var(--radius-md);
   background: var(--color-accent-dim);
+  color: var(--color-text);
   font-size: var(--fs-xs);
   animation: oz-rise var(--dur-base) var(--ease-out);
+}
+
+.history-rollback > svg {
+  flex: 0 0 auto;
+  color: var(--color-accent);
 }
 
 .history-rollback > span {
@@ -622,18 +680,49 @@
 /* Held while an exact check runs, Resume's own included. */
 .history-resume:disabled {
   opacity: 0.5;
-  cursor: not-allowed;
+  cursor: progress;
+}
+
+/* Back to the end: a small button floating at the foot of the panel while
+   the end is out of view. The negative margin keeps it from adding a row of
+   its own under the list. */
+.history-latest {
+  position: sticky;
+  bottom: 12px;
+  z-index: 4;
+  justify-self: center;
+  max-width: calc(100% - 24px);
+  min-height: 24px;
+  margin-top: -32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 10px 0 8px;
+  color: var(--color-text-muted);
+  background: var(--color-surface-2);
+  border: var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-1);
+  font-size: var(--fs-mini);
+  animation: oz-rise var(--dur-fast) var(--ease-out);
+}
+
+.history-latest:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
 }
 
 .history-latest[data-pending='true'] {
-  position: sticky;
-  top: 0;
-  z-index: 4;
-  background: var(--color-surface);
+  color: var(--color-selected-text);
+  background: color-mix(in srgb, var(--color-accent) 22%, var(--color-surface));
+  border-color: var(--color-accent-border);
 }
 
-.history-timeline .feature-row {
-  scroll-margin-top: calc(2em + 16px);
+.history-latest-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .history-find {
@@ -673,8 +762,9 @@
   font-size: var(--fs-mini);
 }
 
-/* A pressed chip, not a checkbox: it narrows the same list the field does. */
-.history-find-related {
+/* Pressed chips, not checkboxes: they narrow the same list the field does. */
+.history-find-related,
+.history-find-problems {
   flex: 0 0 auto;
   height: 20px;
   padding: 0 7px;
@@ -685,13 +775,15 @@
   font-size: var(--fs-mini);
 }
 
-.history-find-related[aria-pressed='true'] {
+.history-find-related[aria-pressed='true'],
+.history-find-problems[aria-pressed='true'] {
   color: var(--color-accent);
   background: var(--color-accent-dim);
   border-color: var(--color-accent);
 }
 
-.history-find-related:disabled {
+.history-find-related:disabled,
+.history-find-problems:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
@@ -704,11 +796,20 @@
 
 .history-timeline .feature-list {
   position: relative;
+  gap: 0;
 }
 
 .history-timeline .feature-row {
+  /* Three 24px actions and the 1px between them. */
+  --history-actions-w: 74px;
   position: relative;
-  padding-left: 20px;
+  min-height: 26px;
+  /* Scrolled into view clear of the sticky batch bar above and the
+     Latest button below. */
+  scroll-margin-top: calc(2em + 16px);
+  scroll-margin-bottom: 44px;
+  padding: 0 6px 0 20px;
+  white-space: nowrap;
   /* Paused rows dim one after another away from the handle; the delay is
      per row (--history-delay) and collapses with the other motion tokens. */
   transition:
@@ -735,10 +836,6 @@
 
 .history-timeline .feature-row.in-batch .feature-icon {
   color: var(--color-accent);
-}
-
-.history-timeline .feature-row.in-batch .history-dot {
-  background: var(--color-accent);
 }
 
 .history-batch {
@@ -795,8 +892,7 @@
   background: var(--color-surface-hover);
 }
 
-/* The grip only shows on hover, but reserves its whole pointer target so
-   reaching it never covers the adjacent feature-selection button. */
+/* The icon and the grip glyph share one cell and cross-fade. */
 .history-timeline .feature-row-grip {
   width: 24px;
   height: 24px;
@@ -805,16 +901,50 @@
   place-items: center;
   flex: 0 0 auto;
   color: var(--color-text-subtle);
+  border-radius: var(--radius-sm);
 }
 
-.history-timeline .feature-row.paused {
-  opacity: 0.5;
+.history-timeline .feature-row-grip > * {
+  grid-area: 1 / 1;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+.history-timeline .feature-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.feature-row-grip-glyph {
+  display: inline-grid;
+  place-items: center;
+  opacity: 0;
+}
+
+@media (hover: hover) {
+  .history-timeline .feature-row:hover .feature-row-grip .feature-icon,
+  .history-timeline .feature-row-grip:focus-visible .feature-icon {
+    opacity: 0;
+  }
+
+  .history-timeline .feature-row:hover .feature-row-grip-glyph,
+  .history-timeline .feature-row-grip:focus-visible .feature-row-grip-glyph {
+    opacity: 1;
+  }
+}
+
+/* Keyboard focus shows the grip on touch screens too. */
+.history-timeline .feature-row-grip:focus-visible .feature-icon {
+  opacity: 0;
+}
+
+.history-timeline .feature-row-grip:focus-visible .feature-row-grip-glyph {
+  opacity: 1;
 }
 
 /* placeTimeline() writes the spine, fill, highlight and handle geometry on
    the list. Inherited, every write restyled every row under it, several
    times per edit on a long history; registered as non-inherited, only the
-   four elements that draw them take them, explicitly. Without @property they
+   elements that draw them take them, explicitly. Without @property they
    inherit as before. */
 @property --spine-top {
   syntax: '*';
@@ -851,29 +981,35 @@
   inherits: false;
 }
 
+/* A quiet 1px line: dashed through the whole history, drawn solid by the
+   fill up to the end of history, so the paused tail reads as out of the
+   build. Neutral: the signal colour is kept for the selection. */
 .history-spine,
 .history-spine-fill {
   --spine-top: inherit;
   --spine-height: inherit;
   --fill-height: inherit;
   position: absolute;
-  left: 9px;
-  width: 2px;
+  left: 10px;
+  width: 1px;
   top: var(--spine-top, 0);
-  border-radius: 1px;
   pointer-events: none;
 }
 
 .history-spine {
   height: var(--spine-height, 0);
-  background: var(--color-border-strong);
+  background: repeating-linear-gradient(
+    to bottom,
+    var(--color-border-strong) 0 3px,
+    transparent 3px 7px
+  );
   transition: opacity var(--dur-base) var(--ease-out);
 }
 
-/* On the handle's duration, so the fill and the knob land together. */
+/* On the handle's duration, so the solid part and the knob land together. */
 .history-spine-fill {
   height: var(--fill-height, 0);
-  background: var(--color-accent);
+  background: var(--color-border-strong);
   transition:
     height var(--dur-base) var(--ease-out),
     opacity var(--dur-base) var(--ease-out);
@@ -907,77 +1043,129 @@
     opacity var(--dur-fast) var(--ease-out);
 }
 
+/* The rail dot. Filled: this step's own state; hollow: inherited, or out
+   of the build. Size and shape carry the state, colour reinforces it. The
+   dot is centred on the 1px line at 10px. */
 .history-dot {
   position: absolute;
-  left: 4px;
+  /* 10.5px from the list, past the row's 2px leading border. */
+  left: 8.5px;
   top: 50%;
-  width: 8px;
-  height: 8px;
-  /* Half the height: border-box sizing, so the border is inside the 8px. */
-  margin-top: -4px;
-  border: 2px solid var(--color-accent);
+  width: 5px;
+  height: 5px;
+  box-sizing: border-box;
+  border: 0 solid transparent;
   border-radius: 50%;
-  background: var(--color-surface);
+  background: var(--color-text-dim);
+  transform: translate(-50%, -50%);
   transition:
-    transform var(--dur-fast) var(--ease-out),
+    width var(--dur-fast) var(--ease-out),
+    height var(--dur-fast) var(--ease-out),
     background-color var(--dur-base) var(--ease-out),
     border-color var(--dur-base) var(--ease-out);
 }
 
 .feature-row.is-sketch .history-dot {
-  /* A 4px dot (border only) centred on the 2px line at left 9px, as the
-     8px dot at left 4px is. */
-  left: 6px;
   width: 4px;
   height: 4px;
-  margin-top: -2px;
+  border-width: 1px;
   border-color: var(--color-text-subtle);
+  background: var(--color-surface);
 }
 
 .feature-row.is-sketch .feature-name {
   color: var(--color-text-subtle);
 }
 
-.history-timeline .feature-row:hover .history-dot {
-  transform: scale(1.2);
-}
-
-.feature-row.selected .history-dot {
+.history-timeline .feature-row:is(.selected, .in-batch) .history-dot {
+  width: 8px;
+  height: 8px;
+  border-width: 0;
   background: var(--color-accent);
-  transform: scale(1.25);
 }
 
-.feature-row.failed .history-dot {
+.history-timeline .feature-row.is-built-on-failed .history-dot {
+  width: 7px;
+  height: 7px;
+  border-width: 1.5px;
+  border-color: color-mix(in srgb, var(--color-warning) 80%, transparent);
+  background: var(--color-surface);
+}
+
+.history-timeline .feature-row.is-failure-downstream .history-dot {
+  width: 6px;
+  height: 6px;
+  border-width: 0;
   background: var(--color-warning);
-  border-color: var(--color-warning);
 }
 
-.feature-row.suppressed .history-dot {
+.history-timeline .feature-row.is-failure-root .history-dot {
+  width: 8px;
+  height: 8px;
+  border-width: 0;
+  background: var(--color-warning);
+}
+
+.history-timeline .feature-row.suppressed .history-dot {
+  width: 7px;
+  height: 7px;
+  border-width: 1px;
   border-style: dashed;
-  border-color: var(--color-text-subtle);
+  border-color: var(--color-text-dim);
   background: var(--color-surface);
 }
 
-.feature-row.paused .history-dot {
-  border-color: var(--color-border-strong);
+.history-timeline .feature-row.paused .history-dot {
+  width: 6px;
+  height: 6px;
+  border-width: 1px;
+  border-style: solid;
+  border-color: var(--color-text-dim);
   background: var(--color-surface);
 }
 
-/* Value and actions share one cell: at rest the value, on hover, focus or
-   selection the actions. Only opacity changes, so the actions stay where a
-   pointer or a test expects them; the value never takes a click. */
+/* The first failure, the one to fix, is the one loud row: a warm tint and a
+   bar at its leading edge (a shape cue, not colour alone). */
+.history-timeline .feature-row.is-failure-root {
+  background: color-mix(in srgb, var(--color-warning) 9%, var(--color-surface));
+  border-left-color: var(--color-warning);
+}
+
+.history-timeline .feature-row.is-failure-root .feature-row-main {
+  color: var(--color-text);
+}
+
+.history-timeline .feature-row.is-failure-root .history-row-value {
+  color: var(--color-text-muted);
+}
+
+/* Rolled back: the tail dims; its values stay legible. */
+.history-timeline .feature-row.paused {
+  opacity: 0.45;
+}
+
+/* Name and value share the line: the name keeps its length (the main
+   button grows into the room between them, so it is all one target), and
+   the value gives way first. The tooltip carries both whole. */
 .history-timeline .feature-row-main {
-  /* The name is the row's identity: it keeps its length, up to most of the
-     row, and the value gives way first. */
-  flex: 1 1 auto;
+  /* Never shrunk for the value: only capped short of the grip and the
+     actions' lane, past which the name ends in an ellipsis. */
+  flex: 1 0 auto;
   min-width: 0;
-  max-width: none;
+  min-height: 24px;
+  max-width: calc(100% - 24px - var(--history-actions-w));
+  padding: 0 6px;
+  gap: 6px;
+}
+
+/* A hidden step's Show button takes its own 24px at the row's end. */
+.history-timeline .feature-row.hidden-body .feature-row-main {
+  max-width: calc(100% - 48px - var(--history-actions-w));
 }
 
 .history-timeline .feature-name {
-  white-space: normal;
-  overflow-wrap: anywhere;
-  line-height: var(--lh-normal);
+  flex: 0 1 auto;
+  white-space: nowrap;
 }
 
 .parameter-feedback .activity-log-link {
@@ -988,43 +1176,58 @@
   text-align: left;
 }
 
+/* At least as wide as the actions that open over it, so the name's button
+   always ends short of them: a control under another control's target is
+   what the 24px target audit (control-names.spec) refuses. */
 .history-row-tail {
-  display: grid;
-  grid-template-columns: minmax(0, auto);
   flex: 0 1 auto;
-  min-width: 0;
-  justify-items: end;
+  margin-left: auto;
+  min-width: var(--history-actions-w);
+  display: flex;
   align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  overflow: hidden;
+  pointer-events: none;
 }
 
-.history-row-tail > * {
-  grid-area: 1 / 1;
-  transition:
-    opacity var(--dur-base) var(--ease-out),
-    transform var(--dur-base) var(--ease-out);
-}
-
-/* No cap of its own: the value takes whatever the name leaves. The old
-   10rem cap was 130px at the app's root size and cut "⌀ 12 × 1.75 mm,
-   printable" beside a short name with room to spare. What still does not
-   fit is cut here, and the row's tooltip carries it whole. */
+/* The value takes whatever the name leaves; what still does not fit is cut
+   here, and the row's tooltip carries it whole. */
 .history-row-value {
-  /* A grid item's automatic minimum is its unwrapped text, which pushed a
-     long value out over the name instead of ending it in an ellipsis. */
   min-width: 0;
-  max-width: 100%;
-  padding-right: 4px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--color-text-subtle);
   font-size: var(--fs-mini);
-  pointer-events: none;
+  transition: opacity var(--dur-fast) var(--ease-out);
 }
 
-.feature-row.failed .history-row-value {
-  color: var(--color-warning);
-  font-family: var(--font-ui);
+.history-timeline .feature-row.is-editing .history-row-value {
+  color: var(--color-accent-hi);
+}
+
+/* A status glyph after the value: at most one, in a 16px slot. */
+.history-row-status {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  display: inline-grid;
+  place-items: center;
+  color: var(--color-text-dim);
+}
+
+.history-row-status.is-downstream {
+  opacity: 0.6;
+}
+
+.history-row-spinner {
+  width: 11px;
+  height: 11px;
+  box-sizing: border-box;
+  border: 1.5px solid var(--color-border-strong);
+  border-top-color: var(--color-text-subtle);
+  border-radius: 50%;
 }
 
 /* A refused operation that never became a step: dashed and in the error
@@ -1058,14 +1261,6 @@
   font-size: var(--fs-xs);
 }
 
-/* A step that built, but on the unchanged input of a failed step before it
-   (ADR-017): a quiet note, since the failure itself is flagged on its row. */
-.history-row-upstream-failed {
-  font-family: inherit;
-  font-size: var(--fs-xs);
-  white-space: nowrap;
-}
-
 /* A refused edit of an existing step (Resize Body on its Box) is said on that
    step's own row, not as a new step under the last one. */
 .history-row-refused {
@@ -1077,45 +1272,61 @@
   white-space: nowrap;
 }
 
+/* The row's actions open over the value's end on hover or keyboard focus
+   and take no room of their own; the value fades for them. They stay laid
+   out at rest (only transparent), so a pointer or a test finds them where
+   they open. A mouse click on the name is not a reveal, so the selected row
+   keeps its value in view. */
 .history-row-actions {
+  position: absolute;
+  z-index: 1;
+  top: 50%;
+  right: 6px;
+  /* Half its 24px buttons: centred on the row without a transform, which
+     the reveal below animates on its own. */
+  margin-top: -12px;
   display: flex;
   gap: 1px;
   opacity: 0;
   transform: translateX(4px);
+  transition:
+    opacity var(--dur-base) var(--ease-out),
+    transform var(--dur-base) var(--ease-out);
 }
 
-.history-timeline .feature-row:hover .history-row-actions,
-.history-timeline .feature-row:focus-within .history-row-actions,
-.history-timeline .feature-row.selected .history-row-actions {
+/* Left of a hidden step's Show button, which stays at the row's end. */
+.history-timeline .feature-row.hidden-body .history-row-actions {
+  right: 30px;
+}
+
+.history-timeline
+  .feature-row:is(
+    :hover,
+    :has(:focus-visible),
+    :has(.history-row-actions :focus)
+  )
+  .history-row-actions {
   opacity: 1;
   transform: none;
 }
 
-.history-timeline .feature-row:hover .history-row-value,
-.history-timeline .feature-row:focus-within .history-row-value,
-.history-timeline .feature-row.selected .history-row-value {
-  opacity: 0;
-  transform: translateX(-4px);
+/* Only where the actions cover it: on touch and on a phone they take their
+   own room beside it (below). */
+@media (hover: hover) and (min-width: 381px) {
+  .history-timeline
+    .feature-row:is(
+      :hover,
+      :has(:focus-visible),
+      :has(.history-row-actions :focus)
+    )
+    .history-row-value {
+    opacity: 0;
+  }
 }
 
-/* The step a running command is editing keeps its value in view: "Box
-   30 × 18 × 24 mm" is what the drag is changing. Hover or focus still
-   brings the row's actions forward; touch keeps its actions (below). */
-@media (hover: hover) {
-  .history-timeline
-    .feature-row.selected.is-editing:not(:hover, :focus-within)
-    .history-row-value {
-    opacity: 1;
-    transform: none;
-  }
-
-  .history-timeline
-    .feature-row.selected.is-editing:not(:hover, :focus-within)
-    .history-row-actions {
-    opacity: 0;
-    transform: translateX(4px);
-    pointer-events: none;
-  }
+.history-timeline .feature-row-rename {
+  min-height: 24px;
+  padding-block: 0;
 }
 
 /* The end of history: a 20px knob centred on the line, with a grip across
@@ -1182,9 +1393,33 @@
   cursor: grabbing;
 }
 
-/* While dragging, the handle and fill follow the pointer instead of easing
-   after it. */
+/* An exact check is running (Resume's own among them). */
+.history-handle.is-busy {
+  cursor: progress;
+}
+
+/* Rolled back: an accent rule across the list at the end of history, from
+   the knob to the row's far edge. Drawn only; the knob is the target. */
+.history-marker {
+  --handle-y: inherit;
+  position: absolute;
+  z-index: 1;
+  left: 10px;
+  right: 0;
+  top: 0;
+  height: 2px;
+  margin-top: -1px;
+  transform: translateY(var(--handle-y, 0));
+  background: var(--color-accent);
+  border-radius: 1px;
+  pointer-events: none;
+  transition: transform var(--dur-base) var(--ease-out);
+}
+
+/* While dragging, the handle and the line follow the pointer instead of
+   easing after it. */
 .feature-list.is-scrubbing .history-handle,
+.feature-list.is-scrubbing .history-marker,
 .feature-list.is-scrubbing .history-spine-fill {
   transition-duration: var(--dur-fast);
 }
@@ -1220,17 +1455,19 @@
   transform: translate(0, -50%);
 }
 
-/* Touch: nothing hovers, so a row's actions show at rest instead of its
-   value, for the reason in the row-controls note above. Declared after the
-   rules it overrides, and more specific than them. */
+/* Touch: nothing hovers, so a row's actions show at rest, for the reason
+   in the row-controls note above. They take their own room in the row there
+   rather than covering the value, which gives way to them. */
 @media (hover: none) {
   .history-timeline .history-row-actions {
+    position: static;
+    margin-top: 0;
     opacity: 1;
     transform: none;
   }
 
-  .history-timeline .history-row-value {
-    opacity: 0;
+  .history-timeline .history-row-tail {
+    min-width: 0;
   }
 }
 
@@ -1238,18 +1475,24 @@
    menu visible on a narrow phone instead of reserving three action targets
    beside a name, a reorder grip and the hidden-sketch visibility control. */
 @media (max-width: 380px) {
-  .history-timeline .history-row-actions :is(.row-suppression, .row-rollback),
-  .history-timeline .history-row-value {
+  .history-timeline .history-row-actions :is(.row-suppression, .row-rollback) {
     display: none;
   }
 
+  /* Only More is left. */
+  .history-timeline .feature-row {
+    --history-actions-w: 24px;
+  }
+
   .history-timeline .history-row-actions {
+    position: static;
+    margin-top: 0;
     opacity: 1;
     transform: none;
   }
 
   .history-timeline .history-row-tail {
-    flex-shrink: 0;
+    min-width: 0;
   }
 
   .history-timeline .feature-row-main {

@@ -202,9 +202,23 @@ test('asks before resuming a rollback whose edit breaks a paused feature', async
   await rollback.getByRole('button', { name: 'Resume full history' }).click();
   await dialog.getByRole('button', { name: 'Resume anyway' }).click();
   await expect(rollback).toBeHidden();
-  await expect(
-    page.locator('.feature-row', { hasText: /^Base corner fillets/ })
-  ).toHaveClass(/\b(failed|needs-repair)\b/, { timeout: 30_000 });
+  const fillets = page.locator('.feature-row', {
+    hasText: /^Base corner fillets/
+  });
+  await expect(fillets).toHaveClass(/\b(failed|needs-repair)\b/, {
+    timeout: 30_000
+  });
+  // The fillet is the first failure: the one loud row, and the one the
+  // header's repair chip shows first. Its value stays beside its name.
+  await expect(page.locator('.feature-row.is-failure-root')).toHaveCount(1);
+  await expect(fillets).toHaveClass(/\bis-failure-root\b/);
+  await expect(fillets.locator('.history-row-value')).not.toHaveText('');
+  await page
+    .getByRole('button', {
+      name: /need(s)? repair\. Show Base corner fillets$/
+    })
+    .click();
+  await expect(fillets).toHaveClass(/\bselected\b/);
   expect(errors).toEqual([]);
 });
 

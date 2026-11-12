@@ -45,6 +45,18 @@ export function contrastRatio(a: string, b: string): number {
   return (hi + 0.05) / (lo + 0.05);
 }
 
+/** `color-mix(in srgb, a weight, b)`: a straight blend of the encoded channels. */
+function mix(a: string, b: string, weight: number): string {
+  return `#${[1, 3, 5]
+    .map((i) => {
+      const value =
+        Number.parseInt(a.slice(i, i + 2), 16) * weight +
+        Number.parseInt(b.slice(i, i + 2), 16) * (1 - weight);
+      return Math.round(value).toString(16).padStart(2, '0');
+    })
+    .join('')}`;
+}
+
 const SURFACES = [
   '--color-bg',
   '--color-surface',
@@ -94,6 +106,28 @@ describe.each([
       ).toBeGreaterThanOrEqual(3);
     }
   });
+  it('keeps the History repair chip and the first-failure row legible on their warning tints', () => {
+    // sidebar.css: the chip is --color-warning on a 13% warning mix of the
+    // surface (its hover adds an edge, not a deeper tint, which the light
+    // theme's warning would not clear); the first failure's row is a 9% mix
+    // under its name and value.
+    for (const [fg, weight] of [
+      ['--color-warning', 0.13],
+      ['--color-text', 0.09],
+      ['--color-text-muted', 0.09]
+    ] as const) {
+      const tint = mix(
+        palette['--color-warning']!,
+        palette['--color-surface']!,
+        weight
+      );
+      expect(
+        contrastRatio(palette[fg]!, tint),
+        `${fg} on ${weight * 100}% warning`
+      ).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
   it('keeps numeric-entry and viewport labels legible on their actual surfaces', () => {
     expect(
       contrastRatio(

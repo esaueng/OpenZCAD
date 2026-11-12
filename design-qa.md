@@ -65,6 +65,10 @@ Passed. The requested sketch-to-bidirectional-extrusion journey is implemented, 
   hover or keyboard focus; an active pause remains visible without hover.
 - Suppressed rows use muted italic text, a warning-colored strike, and an
   explicit `suppressed` label. They are not styled as failed geometry.
+  _Revised 12 November 2026 (History one-line rows):_ suppressed rows are
+  dimmed and struck through in the dim text colour, keep their value, and
+  show a pause glyph; `suppressed` is spoken after the name rather than
+  shown, so a deliberate choice no longer reads as a warning.
 - The active rollback boundary is a persistent accent rule after the selected
   row, while every later row shows its suppressed state.
 - Pause and rollback buttons expose accessible names and `aria-pressed` state.
