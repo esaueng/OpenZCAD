@@ -116,7 +116,7 @@ partial slice as the whole row's completion.
 | Active | End-to-end encryption ([L11](#l11)) | Written outside-review clearance with no open P0/P1, then default-on, the plaintext freeze and the deletion PR, each under [ADR-024](docs/adrs/ADR-024-end-to-end-encrypted-projects.md) and its own authorization. Until then, remaining acceptance and migration/legacy-reader qualification. |
 | Active | Assemblies ([AS01](#as01)–[AS09](#as09)) | AS01/AS02/AS06/AS07 meet their contracts (offline save/reopen, saved transforms and conflict behavior), then AS03 BOM and exploded views; AS04/AS05/AS08/AS09 follow only when their dependencies qualify. |
 | Active | iPad, touch and Apple Pencil ([L02](#l02)) | All eight slices have merged source; each closes only with real-iPad evidence for its device-only behavior and measured rendering budgets. Mouse and trackpad input stays unchanged. |
-| Active | Printable mechanical features ([M14](#m14), [M15](#m15), [D06](#d06)) | M14 bevel and worm gears, the meshing-pair helper and partial-span teeth; M15 tapered threads and chamfers on a thread that stops short of its face (cosmetic threads and callouts stay with M01); D06 auto-dimensioning through its design slices. |
+| Active | Printable mechanical features ([M14](#m14), [M15](#m15), [D06](#d06)) | M14 the meshing-pair helper and partial-span teeth (bevel, worm and enveloping gears have merged); M15 tapered threads and chamfers on a thread that stops short of its face (cosmetic threads and callouts stay with M01); D06 auto-dimensioning through its design slices. |
 | 0 | Close the shipped workflow gaps | H01 has an explicit acceptance matrix; H02 has measured cold/warm behavior; U01/U02 resolve reproduced command/value/feedback disagreements; L01 records outstanding live checks. |
 | 1 | Complete the modeling foundation | S01–S08, R01, F01–F05 and U05–U07 meet their row contracts: durable dimensions, understandable constraints, editable sketch geometry, useful reference/parameter surfaces, and the keyboard, history/items and viewing conventions of a mainstream tool. |
 | 2 | Deepen part modeling and inspection | Selected M01–M13, I01, I04–I08 slices work through creation, revision and export with their kernel prerequisites proved. |
@@ -133,8 +133,8 @@ AS06 and AS07 merged (#1182). L02 moved from Later when it was selected on
    the shared pick-and-drag interaction; then gear, booleans and patterns.
 2. [AS03](#as03): deterministic BOM and stored exploded-view offsets, after
    recording the AS01/AS02 offline save/reopen and conflict cases that remain.
-3. [M14](#m14) bevel or worm gears, or the meshing-pair helper that places a
-   joint at the right center distance (joins the M14 and AS02 work).
+3. [M14](#m14) the meshing-pair helper that places a joint at the right center
+   distance (joins the M14 and AS02 work), then partial-span teeth.
 4. [L11](#l11) remaining acceptance and migration/legacy-reader qualification.
    Outside-review clearance, default-on and deletion wait on the owner and
    the reviewer, not on an agent.
