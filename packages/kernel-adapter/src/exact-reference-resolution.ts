@@ -150,7 +150,15 @@ export function resolveEdgeModifierEdges(
     key: string;
     propose: boolean;
     upstream: () => UpstreamSnapshot | null;
-  }
+  },
+  /**
+   * Told whenever a stored hash-only pick no longer resolves as stored, the
+   * one place a carry-proposing build can diverge from a plain build of the
+   * same document (it carries where the plain build refuses). The history
+   * cache reads it to decide whether the two builds' checkpoints are
+   * interchangeable. Called before the refusal or carry; changes nothing.
+   */
+  onUnresolvedHash?: () => void
 ): {
   handles: number[];
   /**
@@ -180,6 +188,7 @@ export function resolveEdgeModifierEdges(
       handles: requested.map((hash) => {
         const matches = legacyHandles.get(hash) ?? [];
         if (matches.length === 0) {
+          onUnresolvedHash?.();
           throw unresolvedReferenceError('edge', hash, handles.length);
         }
         if (matches.length > 1) {
@@ -295,6 +304,7 @@ export function resolveEdgeModifierEdges(
       // The fingerprint embeds the edge's dimensions, so an upstream resize
       // orphans it although the edge may still be there. Without a carry it
       // refuses here; with one, the whole selection is judged below.
+      onUnresolvedHash?.();
       if (!carry?.propose)
         throw unresolvedReferenceError('edge', hash, handles.length);
       missing.push(hash);

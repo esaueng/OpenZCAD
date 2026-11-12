@@ -118,7 +118,16 @@ describe('validated geometry before analysis', () => {
           const result = full.bodyRepresentations[imported.bodyId]!;
           const reference = independent.bodyRepresentations[imported.bodyId]!;
           expect(previewBody.bbox).toEqual(result.bbox);
-          expect(previewBody.mesh).toEqual(result.mesh);
+          if (deferTopology) {
+            // A face drag's frame is meshed at the disposable drag
+            // tessellation; the release below is meshed at full quality.
+            expect(previewBody.mesh.indices.length).toBeGreaterThan(0);
+            expect(previewBody.mesh.indices.length).toBeLessThanOrEqual(
+              result.mesh.indices.length
+            );
+          } else {
+            expect(previewBody.mesh).toEqual(result.mesh);
+          }
           expect(result.volume).toBe(reference.volume);
           expect(result.bbox).toEqual(reference.bbox);
           expect(result.mesh).toEqual(reference.mesh);

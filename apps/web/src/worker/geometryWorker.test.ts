@@ -206,6 +206,88 @@ describe('geometry worker rebuild coordination', () => {
     );
     expect(syncDocument).toHaveBeenCalledOnce();
   });
+  it('serves the broadcast of a committed edit from its carry-neutral check', async () => {
+    const document = addPrimitiveFeature(
+      createProjectDocument('Carry neutral', toUserId('user')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 8, depth: 6 }
+      }
+    );
+    const results: ProjectDocument['derived'][] = [];
+    const syncDocument = vi.fn(async () => {
+      const result = derived(`build ${results.length}`);
+      results.push(result);
+      return result;
+    });
+    const isCarryNeutral = vi.fn((result: object) => result === results[0]);
+    const prepareMassPropertiesForDocument = vi.fn(async () => 2);
+    const readCurrentMassProperties = vi.fn(() => ({
+      status: 'unavailable',
+      reason: 'No live solid is available.',
+      epoch: 1
+    }));
+    const { scope } = await installWorker(syncDocument, {
+      isCarryNeutral,
+      prepareMassPropertiesForDocument,
+      readCurrentMassProperties
+    });
+    // The commit check proposes carrying; the adapter vouches it carried
+    // nothing, so its result is the plain build's.
+    post(scope, {
+      type: 'sync',
+      document,
+      requestId: 'commit',
+      proposeCarry: true
+    });
+    await vi.waitFor(() => expect(syncDocument).toHaveBeenCalledOnce());
+    post(scope, { type: 'sync', document });
+    await vi.waitFor(() =>
+      expect(
+        scope.postMessage.mock.calls.some(
+          ([m]) => m.type === 'projection-delta'
+        )
+      ).toBe(true)
+    );
+    expect(syncDocument).toHaveBeenCalledOnce();
+    // Mass properties read the live kernel state the commit left.
+    post(scope, {
+      type: 'mass-properties',
+      document,
+      bodyId: document.bodyOrder[0]!,
+      requestId: 'mass'
+    });
+    await vi.waitFor(() =>
+      expect(readCurrentMassProperties).toHaveBeenCalledOnce()
+    );
+    expect(prepareMassPropertiesForDocument).not.toHaveBeenCalled();
+  });
+
+  it('rebuilds the broadcast after a check that carried a selection', async () => {
+    const document = addPrimitiveFeature(
+      createProjectDocument('Carry', toUserId('user')),
+      {
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 8, depth: 6 }
+      }
+    );
+    const syncDocument = vi.fn(async () => derived('built'));
+    const { scope } = await installWorker(syncDocument, {
+      isCarryNeutral: vi.fn(() => false)
+    });
+    post(scope, {
+      type: 'sync',
+      document,
+      requestId: 'commit',
+      proposeCarry: true
+    });
+    await vi.waitFor(() => expect(syncDocument).toHaveBeenCalledOnce());
+    post(scope, { type: 'sync', document });
+    await vi.waitFor(() => expect(syncDocument).toHaveBeenCalledTimes(2));
+  });
+
   it('releases prepared edits after an in-flight frame without publishing or loading an idle kernel', async () => {
     const document = addPrimitiveFeature(
       createProjectDocument('Prepared cancel', toUserId('user')),

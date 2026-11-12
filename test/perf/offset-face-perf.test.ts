@@ -37,6 +37,10 @@
  *                         kernel's slot and linear-memory growth.
  *   OFFSET_PERF_DEFER_TOPOLOGY=1 Use the drag path with display faces and
  *                         deferred edge topology/recognition/output naming.
+ *   OFFSET_PERF_PROPOSE_CARRY=1 Build previews and the edited sync as the
+ *                         app does, proposing hash-only selection carries.
+ *   OFFSET_PERF_MONOTONIC=1 Walk drag ticks 0.137 apart in one direction,
+ *                         so no tick revisits an earlier value.
  *   OFFSET_PERF_BACKGROUND_BODIES  Unrelated box bodies created before the
  *                         import (default 0), to expose work that grows with
  *                         the document rather than with the edit.
@@ -412,7 +416,8 @@ async function timedSync(
   document: ProjectDocument,
   label: string,
   stages: ReturnType<typeof stageRecorder>,
-  lineageDemand?: readonly BodyId[]
+  lineageDemand?: readonly BodyId[],
+  proposeCarry = false
 ): Promise<DerivedState> {
   resetTallies();
   stages.reset();
@@ -425,6 +430,7 @@ async function timedSync(
     undefined,
     {
       ...(lineageDemand ? { lineageDemand } : {}),
+      ...(proposeCarry ? { proposeCarry: true } : {}),
       onGeometryReady: (geometry) => {
         geometryReadyMs = performance.now() - start;
         console.log(
@@ -480,7 +486,10 @@ async function timedFacePreview(
   const result =
     typeof adapter.previewGeometry === 'function'
       ? await adapter.previewGeometry(document, {
-          deferTopology: process.env.OFFSET_PERF_DEFER_TOPOLOGY === '1'
+          deferTopology: process.env.OFFSET_PERF_DEFER_TOPOLOGY === '1',
+          ...(process.env.OFFSET_PERF_PROPOSE_CARRY === '1'
+            ? { proposeCarry: true }
+            : {})
         })
       : await adapter.syncDocument(document, stages.listener);
   const elapsed = performance.now() - start;
@@ -566,6 +575,8 @@ function summarizeDrag(
 
 /** Distance of warm tick `index`: away from `offset` and back every 20. */
 function dragDistance(index: number): number {
+  if (process.env.OFFSET_PERF_MONOTONIC === '1')
+    return offset - 0.137 * (index + 1);
   const phase = (index + 1) % 20;
   return offset - 0.2 * (phase <= 10 ? phase : 20 - phase);
 }
@@ -767,7 +778,9 @@ it.skipIf(!stepPath && !projectPath)(
         adapter,
         edited,
         `offset ${offset} sync`,
-        stages
+        stages,
+        undefined,
+        process.env.OFFSET_PERF_PROPOSE_CARRY === '1'
       );
       if (process.env.OFFSET_PERF_BROADCAST === '1') {
         // The app commits with a full-lineage sync, then the new document
