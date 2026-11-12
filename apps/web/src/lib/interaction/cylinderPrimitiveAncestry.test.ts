@@ -27,6 +27,7 @@ import {
   primitiveCylinderCapAncestor,
   primitiveCylinderHeightAncestor,
   primitiveCylinderRadiusAncestor,
+  primitiveCylinderRadiusEdit,
   primitiveCylinderScale
 } from './cylinderPrimitiveAncestry';
 
@@ -67,6 +68,35 @@ describe('cylinder radius ancestry', () => {
       primitiveCylinderRadiusAncestor(chamfer.document, chamfer.bodyId)
         ?.featureId
     ).toBe(listFeaturesInOrder(cylinder)[0]!.featureId);
+  });
+
+  it('keeps the source edit for rim blends even where a local group edit could run', () => {
+    // A cylinder rounded on both rims: replaying the rims on the resized
+    // primitive is exact, keeps history parametric and lets the drag
+    // project in the viewport. Routing it to a local wall resize appended a
+    // "Resize Cylinder" step per drag and rebuilt the body every frame.
+    const cylinder = cylinderDocument();
+    const fillet = filletEdges(cylinder, {
+      name: 'Rim fillet',
+      targetBodyId: cylinder.bodyOrder[0]!,
+      edgeHashes: [101, 102],
+      size: 1
+    });
+    for (const localBlendGroup of [false, true]) {
+      expect(
+        primitiveCylinderRadiusEdit(
+          fillet.document,
+          fillet.bodyId,
+          undefined,
+          undefined,
+          { localBlendGroup }
+        ),
+        String(localBlendGroup)
+      ).toEqual({
+        primitive: listFeaturesInOrder(cylinder)[0],
+        scale: 1
+      });
+    }
   });
 
   it('stops at direct edits and other body-producing feature boundaries', () => {
@@ -704,6 +734,17 @@ describe('cylinder radius across a boolean', () => {
       primitiveCylinderRadiusAncestor(named.document, named.bodyId, wall, 321)
         ?.featureId
     ).toBe(cylinderFeatureId);
+    expect(
+      primitiveCylinderRadiusEdit(named.document, named.bodyId, wall, 321)
+        ?.primitive.featureId
+    ).toBe(cylinderFeatureId);
+    // A kernel that resizes the blended boss in place, seam blend and all,
+    // owns this wall: the seam belongs to the body, not to the cylinder.
+    expect(
+      primitiveCylinderRadiusEdit(named.document, named.bodyId, wall, 321, {
+        localBlendGroup: true
+      })
+    ).toBeNull();
   });
 
   it('keeps a hash-only seam fillet on the local wall resize', () => {

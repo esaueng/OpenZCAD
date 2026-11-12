@@ -19,7 +19,17 @@ export interface CylinderProfilePreview {
   readonly cachedBytes: number;
 }
 
-const MAX_CACHED_BYTES = 2 * 1024 * 1024;
+/**
+ * The most a profile preview caches: rest and velocity per fixed vertex
+ * (24 bytes), plus what each refilled batch keeps to follow the move. The
+ * curved-surface outline (`body-edge-silhouette`) is the large one: about
+ * 52 bytes per candidate, and a curved body carries about two candidates per
+ * mesh vertex. A Ø140 rounded cylinder's 17.6k vertices and 35k candidates
+ * need 2.3 MB, past the 2 MB that bounded the mesh alone before the outline
+ * existed, and its drags fell back to an exact rebuild per frame. Every
+ * byte here is cheaper than that fallback.
+ */
+const MAX_CACHED_BYTES = 8 * 1024 * 1024;
 
 /**
  * Deforms the installed mesh and line endpoints without tessellation, normal

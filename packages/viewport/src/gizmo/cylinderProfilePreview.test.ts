@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
+import { toBodyId, type BodyRepresentation } from '@openzcad/shared';
 import { createFatLineSegments } from '../render/scene';
+import { createBodyEdgeOverlay } from '../render/edgeOverlay';
 import {
   createBoreProfilePreview,
   createCylinderProfilePreview,
@@ -130,7 +132,8 @@ describe('cylinder profile preview', () => {
   );
 
   it('refuses oversized preview caches without changing the installed geometry', () => {
-    const object = objectAtPoints(Array.from({ length: 300_000 }, () => 28));
+    // 400k vertices: 9.6 MB of rest and velocity, past the 8 MB cap.
+    const object = objectAtPoints(Array.from({ length: 1_200_000 }, () => 28));
     const version = (
       object.geometry.getAttribute('position') as THREE.BufferAttribute
     ).version;
@@ -139,6 +142,100 @@ describe('cylinder profile preview', () => {
       (object.geometry.getAttribute('position') as THREE.BufferAttribute)
         .version
     ).toBe(version);
+  });
+});
+
+describe('rounded cylinder with its curved outline installed', () => {
+  /**
+   * The e2e's Ø140 × 22 cylinder with R2 rims, as the viewer installs it: a
+   * lathed mesh with the edge overlay and its curved-surface outline, sized
+   * so the preview caches about what the kernel's mesh needs (2.3 MB). The
+   * outline's share pushed that radius preview past the old 2 MB cap, so the
+   * drag rebuilt the body on every frame instead.
+   */
+  function roundedCylinder() {
+    const profilePoints: THREE.Vector2[] = [];
+    for (let i = 0; i <= 8; i += 1)
+      profilePoints.push(new THREE.Vector2((68 * i) / 8, 0));
+    const arc = (cy: number, from: number) => {
+      for (let i = 1; i <= 16; i += 1) {
+        const angle = from + (Math.PI / 2) * (i / 16);
+        profilePoints.push(
+          new THREE.Vector2(68 + 2 * Math.cos(angle), cy + 2 * Math.sin(angle))
+        );
+      }
+    };
+    arc(2, -Math.PI / 2);
+    for (let i = 1; i < 20; i += 1)
+      profilePoints.push(new THREE.Vector2(70, 2 + (18 * i) / 20));
+    arc(20, 0);
+    for (let i = 7; i >= 0; i -= 1)
+      profilePoints.push(new THREE.Vector2((68 * i) / 8, 22));
+    // Lathe turns about +y; the cylinder's axis is +z, as the kernel's is.
+    const lathe = new THREE.LatheGeometry(profilePoints, 400).rotateX(
+      Math.PI / 2
+    );
+    const vertices = Float32Array.from(lathe.getAttribute('position').array);
+    const indices = Uint32Array.from(lathe.getIndex()!.array);
+    lathe.dispose();
+    const body: BodyRepresentation = {
+      bodyId: toBodyId('body_rounded_cylinder'),
+      name: 'Cylinder 1',
+      source: 'primitive',
+      mesh: { kind: 'mesh', vertices, indices },
+      faceCount: 1,
+      color: '#99a0b2',
+      consumed: false,
+      exportableStep: true,
+      volume: 1,
+      bbox: { min: { x: -70, y: -70, z: 0 }, max: { x: 70, y: 70, z: 22 } },
+      topology: {
+        faces: [
+          {
+            topologyId: 'face:1',
+            hash: 1,
+            triangleStart: 0,
+            triangleCount: indices.length / 3
+          }
+        ],
+        edges: []
+      }
+    };
+    const mesh = new THREE.Mesh(
+      new THREE.BufferGeometry()
+        .setAttribute('position', new THREE.BufferAttribute(vertices, 3))
+        .setIndex(new THREE.BufferAttribute(indices, 1))
+    );
+    const overlay = createBodyEdgeOverlay(body, { width: 800, height: 600 });
+    mesh.add(overlay);
+    return { mesh, silhouette: overlay.silhouetteEdges! };
+  }
+
+  it('previews the radius instead of refusing the outline cache', () => {
+    const { mesh, silhouette } = roundedCylinder();
+    expect(silhouette).toBeTruthy();
+    const rounded = {
+      axisStart: { x: 0, y: 0, z: 2 },
+      axisEnd: { x: 0, y: 0, z: 20 },
+      radius: 70,
+      coreRadius: 68
+    };
+    const preview = createCylinderProfilePreview(mesh, rounded, 'radius');
+    expect(preview).not.toBeNull();
+    // The case the old cap refused: more than 2 MB once the outline counts.
+    expect(preview!.cachedBytes).toBeGreaterThan(2 * 1024 * 1024);
+    const position = mesh.geometry.getAttribute('position');
+    const radial = (index: number) =>
+      Math.hypot(position.getX(index), position.getY(index));
+    const rest = Array.from({ length: position.count }, (_, index) =>
+      radial(index)
+    );
+    const wall = rest.findIndex((value) => Math.abs(value - 70) < 1e-4);
+    expect(wall).toBeGreaterThanOrEqual(0);
+    expect(preview!.apply(5)).toBe(true);
+    expect(radial(wall)).toBeCloseTo(75, 3);
+    preview!.restore();
+    rest.forEach((value, index) => expect(radial(index)).toBeCloseTo(value, 4));
   });
 });
 

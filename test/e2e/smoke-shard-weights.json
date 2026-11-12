@@ -13,6 +13,7 @@
   "collaboration-lease-recovery.spec.ts": 19,
   "collaboration.spec.ts": 20,
   "coplanar-bodies.spec.ts": 55,
+  "cylinder-preview.spec.ts": 23,
   "deep-design-polish.spec.ts": 63,
   "design-review-followups.spec.ts": 140,
   "direct-edit-ownership.spec.ts": 58,
