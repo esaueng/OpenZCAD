@@ -91,7 +91,7 @@ describe('model panels', () => {
       /right:\s*calc\(var\(--lane-end\) - var\(--right-peek-w, 0px\)\)/
     );
     expect(rule(stage, '\n.viewport-readout')).toMatch(
-      /right:\s*calc\(100% \+ var\(--rail-w\) \+ var\(--island-gap\) \* 2\)/
+      /right:\s*calc\(100% \+ var\(--island-gap\)\)/
     );
     // The unpinned slot still stops above the corner, as the right lane does.
     expect(rule(stage, '\n.panel-unpinned')).toMatch(

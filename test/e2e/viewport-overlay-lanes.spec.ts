@@ -153,8 +153,8 @@ test('search bar and toast clear the column at phone width', async ({
 });
 
 // The sketch readout stands at the head of the right-hand rails, snap over
-// grid, each led by its glyph: over the rails where one column of
-// instruments fits under it, beside them at 960px and narrower. It no longer
+// grid, each led by its glyph: over both rails where one column of
+// instruments fits under it, over the relations alone at 960px and narrower. It no longer
 // takes the bottom-left corner, so the search lane keeps its width, and
 // below 664px the bar drops its ⌘K glyph as on a phone.
 for (const { width, above, minLane, phoneBar } of [
@@ -206,8 +206,7 @@ for (const { width, above, minLane, phoneBar } of [
     expect(segments[1]!.top).toBeGreaterThan(segments[0]!.top + 20);
     expect(Math.abs(segments[1]!.left - segments[0]!.left)).toBeLessThan(1);
 
-    // Under the top islands, and clear of both rails it stands by: over
-    // their heads, or beside the relations.
+    // Under the top islands, and clear of both rails it stands by.
     const readoutBox = await readout.boundingBox();
     const topbarBox = await page.locator('.topbar').boundingBox();
     const railBox = await page
@@ -229,19 +228,18 @@ for (const { width, above, minLane, phoneBar } of [
         readoutBox!.x + readoutBox!.width
       );
     }
+    const bottom = readoutBox!.y + readoutBox!.height;
+    expect(bottom).toBeLessThanOrEqual(relationsBox!.y);
     if (above) {
-      const bottom = readoutBox!.y + readoutBox!.height;
       expect(bottom).toBeLessThanOrEqual(railBox!.y);
-      expect(bottom).toBeLessThanOrEqual(relationsBox!.y);
       expect(
         Math.abs(
           readoutBox!.x + readoutBox!.width - (railBox!.x + railBox!.width)
         )
       ).toBeLessThan(2);
     } else {
-      expect(readoutBox!.x + readoutBox!.width).toBeLessThanOrEqual(
-        relationsBox!.x
-      );
+      // Over the relations alone, beside the instruments.
+      expect(readoutBox!.x + readoutBox!.width).toBeLessThanOrEqual(railBox!.x);
     }
     const laneBox = await page.locator('.command-bar-lane').boundingBox();
     expect(laneBox).not.toBeNull();

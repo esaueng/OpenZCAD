@@ -392,12 +392,18 @@
 /* The sketch snap and grid spacing, one over the other in an island as
    wide as two rails, hung from the instrument rail so it follows wherever
    the rail is centred. It lived in the bottom-left corner, which the scale
-   bar now keeps. Here it stands beside the head of the rails, past the
-   relations; a window with the room puts it over them (below). */
+   bar now keeps. Here it stands over the head of the relations, which
+   start its two rows and a gap lower (--readout-head) and are the shorter
+   rail, so they have that to give; a window with the room puts it over
+   both rails instead (below). */
+.workspace.column-layout:has(.viewport-readout .viewport-dock-snap) {
+  --readout-head: calc(60px + var(--island-gap));
+}
+
 .viewport-readout {
   position: absolute;
   top: 0;
-  right: calc(100% + var(--rail-w) + var(--island-gap) * 2);
+  right: calc(100% + var(--island-gap));
   z-index: var(--z-viewer-overlay);
   width: calc(var(--rail-w) * 2 + var(--island-gap));
   box-sizing: border-box;
@@ -412,15 +418,16 @@
   box-shadow: var(--shadow-1);
 }
 
-/* Over the head of the rails, which start its two rows and a gap lower.
-   Only where one column of instruments still fits under it: a mouse-sized
-   rail is 554px, so from 720px tall, or at 600px and under where the rail
-   folds to two columns. Not at 960px and narrower, where the cube stands
-   under the rail, and not with touch-sized buttons, which are taller. */
+/* Over the head of both rails, which start lower instead. Only where one
+   column of instruments still fits under it: a mouse-sized rail is 554px,
+   so from 720px tall, or at 600px and under where the rail folds to two
+   columns. Not at 960px and narrower, where the cube stands under the
+   rail, and not with touch-sized buttons, which are taller. */
 @media (min-width: 961px) and (pointer: fine) and (min-height: 720px),
   (min-width: 961px) and (pointer: fine) and (max-height: 600px) {
   .workspace.column-layout:has(.viewport-readout .viewport-dock-snap) {
     --rail-head: calc(60px + var(--island-gap));
+    --readout-head: 0px;
   }
 
   .viewport-readout {
@@ -430,15 +437,15 @@
   }
 }
 
-/* Beside the rails in a wide window it would stand in the right lane, so
-   the lane and the cube step left of it. (A narrower window's cards are
-   sheets at the foot.) */
+/* Over the relations it is a rail wider than they are and would stand in
+   the right lane of a wide window, so the lane and the cube step left of
+   it. (A narrower window's cards are sheets at the foot.) */
 @media (min-width: 961px) and (min-height: 601px) and (max-height: 719px),
   (min-width: 961px) and (pointer: coarse) {
   .workspace.column-layout
     .viewer-area:has(.viewport-readout .viewport-dock-snap) {
     --lane-end: calc(
-      var(--rail-w) * 4 + var(--island-gap) * 5 + var(--right-panels-w)
+      var(--rail-w) * 3 + var(--island-gap) * 4 + var(--right-panels-w)
     );
   }
 }
@@ -4053,7 +4060,8 @@ button.model-panel-grip[aria-expanded='true'] {
 
 .instrument-rail > .sketch-relations {
   position: absolute;
-  top: 0;
+  /* Under the sketch readout where that stands over this rail. */
+  top: var(--readout-head, 0px);
   right: calc(100% + var(--island-gap));
   width: var(--rail-w);
   box-sizing: border-box;
@@ -4148,7 +4156,8 @@ button.model-panel-grip[aria-expanded='true'] {
     padding: 5px 4px;
     direction: rtl;
     max-height: calc(
-      (100dvh - var(--stage-top) - var(--island-gap) + 100%) / 2
+      (100dvh - var(--stage-top) - var(--island-gap) + 100%) / 2 -
+        var(--readout-head, 0px) - var(--rail-head, 0px)
     );
   }
 
@@ -5266,7 +5275,7 @@ button.model-panel-grip[aria-expanded='true'] {
     > .sketch-relations {
     max-height: calc(
       100dvh - var(--stage-top) - var(--command-bar-h) - var(--island-gap) * 3 -
-        64px
+        64px - var(--readout-head, 0px)
     );
   }
 }
