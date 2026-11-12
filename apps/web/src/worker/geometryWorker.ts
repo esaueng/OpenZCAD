@@ -22,9 +22,13 @@ import type {
   DrawingSectionBody,
   DrawingSectionPlane,
   DxfFaceSelector,
+  estimateStructuredBytes,
   ExactSectionPlane,
+  isPersistedHistorySession,
+  kernelSnapshotBuildId,
   MeshQualityReport,
   MassPropertiesRead,
+  PersistedHistorySession,
   RebuildProgress,
   SectionOutlineReport,
   SketchPlanarOperation,
@@ -49,6 +53,15 @@ import {
 import { resolveExactSourceBytes } from '../lib/exactSourceResolver';
 import { workerRefusalOf, type WorkerRefusal } from '../lib/workerRefusal';
 import { documentFontsArrived, preloadDocumentFonts } from '../lib/textFonts';
+import { KERNEL_BUILD } from '../lib/kernelBuild';
+import {
+  deleteKernelSession,
+  kernelSessionIdentity,
+  loadKernelSession,
+  saveKernelSession,
+  touchKernelSession
+} from '../lib/kernelSessionStore';
+import { KernelSessionPersistence } from './kernelSessionPersistence';
 
 /**
  * `step`, `stl`, and `dxf` produce text (STEP data, ASCII STL, DXF R12);
@@ -490,6 +503,16 @@ let exactKernelError: unknown;
 let exactKernelPromise: Promise<ExactKernel | null> | null = null;
 let booleanProbeNeeded: typeof booleanEvolutionProbeNeeded | undefined;
 let rebuildMetrics: Record<string, number> = {};
+/** Persisted-session helpers from the loaded adapter module. */
+let sessionModule:
+  | {
+      estimateStructuredBytes: typeof estimateStructuredBytes;
+      isPersistedHistorySession: typeof isPersistedHistorySession;
+      kernelSnapshotBuildId: typeof kernelSnapshotBuildId;
+    }
+  | undefined;
+/** What the adapter made of the session offered to the running sync. */
+let lastSessionRestore: 'restored' | 'rejected' | undefined;
 
 /**
  * The kernel is a multi-megabyte wasm fetch plus compile; a stalled fetch
@@ -508,9 +531,11 @@ function loadExactKernel(): Promise<ExactKernel | null> {
       'booleanEvolutionProbeNeeded' in module
         ? module.booleanEvolutionProbeNeeded
         : undefined;
+    sessionModule = module;
     return module.createExactKernelAdapter({
       resolveSourceBytes: resolveExactSourceBytes,
       onRebuildCacheEvent: (event) => {
+        if (event.sessionRestore) lastSessionRestore = event.sessionRestore;
         rebuildMetrics = {
           replayedFeatures: event.replayed,
           restoredFeatures: event.restored,
@@ -589,6 +614,43 @@ const rebuildCache = new ExactRebuildCache<ProjectDocument['derived']>({
 });
 const broadcastGate = new LatestBroadcastGate();
 const projectionSender = new ProjectionSender();
+
+/**
+ * Persisted kernel sessions: a reopened project restores its history kernel
+ * instead of replaying it (see `kernelSessionPersistence.ts`). Off in dev
+ * servers, whose app commit does not name the code that is running.
+ */
+const kernelSessions = new KernelSessionPersistence({
+  identity: () =>
+    import.meta.env.DEV || !sessionModule
+      ? null
+      : kernelSessionIdentity({
+          appCommit: import.meta.env.OZ_BUILD_COMMIT,
+          remusVersion: KERNEL_BUILD.packageVersion,
+          remusCommit: KERNEL_BUILD.sourceCommit,
+          kernelBuildId: sessionModule.kernelSnapshotBuildId()
+        }),
+  load: loadKernelSession,
+  save: saveKernelSession,
+  remove: deleteKernelSession,
+  touch: touchKernelSession,
+  isSession: (value): value is PersistedHistorySession =>
+    sessionModule?.isPersistedHistorySession(value) ?? false,
+  estimateBytes: (session) =>
+    sessionModule?.estimateStructuredBytes(session) ?? Number.POSITIVE_INFINITY,
+  workSerial: () => workRequestSerial,
+  yieldControl: () => geometryYield(),
+  now: () => performance.now(),
+  setTimer: (callback, ms) => setTimeout(callback, ms),
+  clearTimer: (timer) =>
+    clearTimeout(timer as ReturnType<typeof setTimeout> | undefined),
+  ...(import.meta.env.VITE_E2E === '1'
+    ? {
+        report: (event) =>
+          console.debug('[kernel session]', JSON.stringify(event))
+      }
+    : {})
+});
 let lastExactSyncKey: string | null = null;
 let lastExactSyncEpoch: number | null = null;
 
@@ -1302,6 +1364,15 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
             if (!broadcastGate.isCurrent(job.broadcastToken)) {
               throw new Error('Superseded geometry broadcast.');
             }
+            // A reopened project's stored session, when this worker's
+            // history kernel does not hold the project yet.
+            const persistedSession =
+              request.type === 'sync' &&
+              !request.analysis &&
+              !request.proposeCarry
+                ? await kernelSessions.offer(exact, document, contentKey!)
+                : undefined;
+            lastSessionRestore = undefined;
             post(stateFor('rebuilding', request, { stale: true }));
             // A superseded rebuild stops at the next feature boundary (a
             // running WASM call still completes); the adapter rejects typed
@@ -1371,9 +1442,15 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
                   : {}),
                 ...(request.type === 'sync' && request.proposeCarry
                   ? { proposeCarry: true }
-                  : {})
+                  : {}),
+                ...(persistedSession ? { persistedSession } : {})
               }
             );
+            if (persistedSession)
+              kernelSessions.noteOutcome(
+                document.projectId,
+                lastSessionRestore
+              );
             if (exact.hasTransientFailures(result)) {
               transientResults.add(result);
               transient = true;
@@ -1442,6 +1519,23 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
     post(stateFor('ready', request, { stale: transient }));
     if (request.type === 'sync')
       noteDisplayRefinement(request, derived, job.broadcastToken);
+    // The live model at rest: persist its kernel session once idle. A draft
+    // waits for its refinement, which schedules the same.
+    if (
+      request.type === 'sync' &&
+      !request.requestId &&
+      !transient &&
+      contentKey !== null &&
+      exactForSync &&
+      !hasDraftDisplay(cachedDerived)
+    ) {
+      kernelSessions.schedule(exactForSync, document, contentKey);
+      kernelSessions.scheduleWarmup(
+        exactForSync,
+        document,
+        request.lineageDemand
+      );
+    }
   } catch (error) {
     if (!broadcastGate.isCurrent(job.broadcastToken)) {
       return;
@@ -1827,6 +1921,8 @@ async function refineCommittedDisplay(
       } satisfies GeometryWorkerResult,
       { transfer: derivedMeshTransferables(derived) }
     );
+    if (!sync.analysis && !sync.proposeCarry && !transientResults.has(refined))
+      kernelSessions.schedule(exact, document, contentKey);
     return true;
   } catch (error) {
     if ((error as { category?: unknown } | null)?.category === 'cancelled')
