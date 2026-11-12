@@ -264,9 +264,9 @@ test('the viewport scale indicator tracks zoom in document units', async ({
     expect(await control.boundingBox()).toEqual(initialControl);
   };
   // Upright, the rule's length is its height; it stays 18px across. The
-  // room under the rail caps it (72px at the least), and a 1/2/5 step draws
+  // room under the rail caps it (32px at the least), and a 1/2/5 step draws
   // it at 40% of its cap or more.
-  const MIN_RULE_LENGTH = 28;
+  const MIN_RULE_LENGTH = 12;
   const ruleLength = () =>
     rule.evaluate((element) => {
       const bounds = element.getBoundingClientRect();

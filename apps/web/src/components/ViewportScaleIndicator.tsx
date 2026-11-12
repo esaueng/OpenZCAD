@@ -23,15 +23,10 @@ const CLEARANCE_PX = 8;
  * which spans the bar's width: a rule standing on the bar clears it too.
  */
 const STATUS_ROW_PX = 40;
-/** The gap between the rail and a rule standing beside it. */
-const RAIL_GAP_PX = 10;
 /**
- * The least room under the rail worth standing the rule in. The 1/2/5 steps
- * draw it at 40% to 100% of its room, so less than this leaves a stub; the
- * rule stands beside the rail instead, where it has the stage's height.
+ * The shortest room the rule is ever given. The stylesheet's
+ * --scale-rule-reserve keeps the rail at least this far off the corner.
  */
-const MIN_UNDER_RAIL_PX = 72;
-/** The shortest room the rule is ever given, however crowded the corner. */
 const MIN_RULE_ROOM_PX = 32;
 /** Below this length ten divisions run together; only the centre is ticked. */
 const MIN_TICKED_LENGTH_PX = 60;
@@ -51,13 +46,12 @@ export interface ScaleRulePlacement {
 }
 
 /**
- * Where the upright rule stands and how long it may be. It keeps the
- * bottom-left corner of the stage at every window size: under the tool rail
- * while the rail leaves it room, beside the rail when it does not, and on
- * top of the search bar where the bar runs into the corner (a phone with a
- * panel open). A sheet docked across the foot (a phone's measurement
- * workbench) caps it as the rail does. Its length is capped by the room
- * above it rather than the rule being hidden.
+ * Where the upright rule stands and how long it may be. It keeps the far
+ * bottom-left corner of the stage at every window size and is scaled to
+ * the room above it: the tool rail, or a sheet docked across the foot (a
+ * phone's measurement workbench), caps its length. Only where the search
+ * bar runs into the corner (a phone with a panel open) does its foot lift,
+ * onto the bar and its status row.
  */
 export function scaleRulePlacement(
   corner: { left: number; bottom: number },
@@ -66,39 +60,33 @@ export function scaleRulePlacement(
   bar: Box | null,
   sheet: Box | null = null
 ): ScaleRulePlacement {
-  const place = (left: number): ScaleRulePlacement => {
-    const footRight = left + RULE_ACROSS_PX + LABEL_RESERVE_PX;
-    const onBar =
-      bar !== null &&
-      bar.left < footRight + CLEARANCE_PX &&
-      bar.right > left &&
-      bar.top < corner.bottom;
-    const bottom = onBar
-      ? Math.min(corner.bottom, bar.top - CLEARANCE_PX - STATUS_ROW_PX)
-      : corner.bottom;
-    let ceiling = stageTop;
-    for (const above of [rail, sheet]) {
-      if (
-        above !== null &&
-        above.left < left + RULE_ACROSS_PX &&
-        above.right > left &&
-        above.top < bottom
-      ) {
-        ceiling = Math.max(ceiling, above.bottom + CLEARANCE_PX);
-      }
+  const { left } = corner;
+  const footRight = left + RULE_ACROSS_PX + LABEL_RESERVE_PX;
+  const onBar =
+    bar !== null &&
+    bar.left < footRight + CLEARANCE_PX &&
+    bar.right > left &&
+    bar.top < corner.bottom;
+  const bottom = onBar
+    ? Math.min(corner.bottom, bar.top - CLEARANCE_PX - STATUS_ROW_PX)
+    : corner.bottom;
+  let ceiling = stageTop;
+  for (const above of [rail, sheet]) {
+    if (
+      above !== null &&
+      above.left < left + RULE_ACROSS_PX &&
+      above.right > left &&
+      above.top < bottom
+    ) {
+      ceiling = Math.max(ceiling, above.bottom + CLEARANCE_PX);
     }
-    return { left, bottom, maxLengthPx: bottom - ceiling };
-  };
-  let placement = place(corner.left);
-  if (rail !== null && placement.maxLengthPx < MIN_UNDER_RAIL_PX) {
-    const beside = place(rail.right + RAIL_GAP_PX);
-    if (beside.maxLengthPx > placement.maxLengthPx) placement = beside;
   }
   return {
-    ...placement,
+    left,
+    bottom,
     maxLengthPx: Math.min(
       DEFAULT_SCALE_BAR_MAX_WIDTH_PX,
-      Math.max(MIN_RULE_ROOM_PX, placement.maxLengthPx)
+      Math.max(MIN_RULE_ROOM_PX, bottom - ceiling)
     )
   };
 }
@@ -230,10 +218,14 @@ export function ViewportScaleIndicator({
       // No layout (hidden, or no stage to stand in): keep the full rule.
       if (root.hidden || !stage || stage.height <= 0) return;
       const rect = root.getBoundingClientRect();
+      // The stylesheet's corner allows the sketch readout two rows; the
+      // rule stands on the rows it has.
+      const readout = box('.viewport-readout');
       const corner = {
         left: rect.left - offset.dx,
-        bottom: rect.bottom - offset.dy
+        bottom: readout ? readout.top - CLEARANCE_PX : rect.bottom - offset.dy
       };
+      const cssBottom = rect.bottom - offset.dy;
       // A stylesheet that places the rule itself says so with this flag.
       const pinned =
         window
@@ -241,7 +233,11 @@ export function ViewportScaleIndicator({
           .getPropertyValue('--viewport-scale-pinned')
           .trim() === '1';
       const placement = pinned
-        ? { ...corner, maxLengthPx: DEFAULT_SCALE_BAR_MAX_WIDTH_PX }
+        ? {
+            left: corner.left,
+            bottom: cssBottom,
+            maxLengthPx: DEFAULT_SCALE_BAR_MAX_WIDTH_PX
+          }
         : scaleRulePlacement(
             corner,
             box('.instrument-rail')?.top ?? stage.top,
@@ -250,7 +246,7 @@ export function ViewportScaleIndicator({
             box('.measurement-dock')
           );
       const dx = Math.round(placement.left - corner.left);
-      const dy = Math.round(placement.bottom - corner.bottom);
+      const dy = Math.round(placement.bottom - cssBottom);
       if (dx !== offset.dx || dy !== offset.dy) {
         offset.dx = dx;
         offset.dy = dy;
@@ -275,7 +271,8 @@ export function ViewportScaleIndicator({
         area?.querySelector('.command-bar-lane'),
         area?.querySelector('.command-bar-row'),
         area?.querySelector('.workspace-column-float'),
-        area?.querySelector('.measurement-dock')
+        area?.querySelector('.measurement-dock'),
+        area?.querySelector('.viewport-readout')
       ]) {
         if (target) resizes?.observe(target);
       }

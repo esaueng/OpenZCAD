@@ -495,31 +495,31 @@
   right: calc(var(--lane-end) - var(--right-peek-w, 0px));
 }
 
-/* The scale bar stands upright in the model's bottom-left corner — the
+/* The scale bar stands upright in the model's far bottom-left corner — the
    window's, or the left dock's inner edge when a panel is docked there —
-   above the readout's rows in a sketch. ViewportScaleIndicator measures the
-   rail and the search bar and offsets it from here: under the rail while
-   that leaves it room, beside the rail otherwise, and it shortens rather
-   than hides. */
+   above the readout's rows in a sketch. It never leaves that corner:
+   ViewportScaleIndicator measures the rail above it and scales the rule to
+   the room, and lifts its foot only onto a search bar that reaches the
+   corner. */
 .workspace.column-layout .viewport-scale-indicator {
   left: calc(var(--island-gap) + var(--left-dock-w, 0px));
   right: auto;
   bottom: calc(var(--island-gap) + var(--readout-rows));
 }
 
-/* The sketch rail is the tall one, with Finish at its foot: it keeps the
-   whole band, and the bar stands beside it instead. */
+/* The sketch rail is the tall one, with Finish at its foot: it gives up
+   only the least the bar can be drawn in (40px and the gap under the rail
+   leave the rule the 32px ViewportScaleIndicator never goes below). */
 .workspace.column-layout:has(.viewport-readout .viewport-dock-snap) {
-  --scale-rule-reserve: 0px;
+  --scale-rule-reserve: 40px;
 }
 
-/* Up to 860px tall the left rail has no room to lift for the bar: a
-   pick's verbs make it taller (selection-rail.css), and lifted it ran off
-   the top bar. The rail keeps its centre and the bar takes what is left
-   under it, or stands beside it. */
+/* Up to 860px tall the left rail has no room to lift far for the bar: a
+   pick's verbs make it taller (selection-rail.css), and lifted by the full
+   reserve it ran off the top bar. It keeps the same least room. */
 @media (max-height: 860px) {
   .workspace.column-layout {
-    --scale-rule-reserve: 0px;
+    --scale-rule-reserve: 40px;
   }
 }
 

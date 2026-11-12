@@ -103,7 +103,7 @@ describe('ViewportScaleIndicator', () => {
     });
   }
 
-  it('keeps the bottom-left corner, shortening or stepping aside for the rail', () => {
+  it('keeps the far bottom-left corner and scales to the room under the rail', () => {
     const corner = { left: 10, bottom: 832 };
     const bar = { left: 190, top: 798, right: 710, bottom: 832 };
     // No rail: the full rule in the corner.
@@ -119,29 +119,31 @@ describe('ViewportScaleIndicator', () => {
       bottom: 832,
       maxLengthPx: 184
     });
-    // A taller rail leaves a stub's worth: the rule stands beside it.
+    // A taller rail shortens the rule; it never steps out of the corner.
     expect(
       scaleRulePlacement(corner, 60, { ...rail, bottom: 780 }, bar)
-    ).toEqual({ left: 60, bottom: 832, maxLengthPx: 200 });
-    // A short window caps the rule at the stage's height, never below 32px.
+    ).toEqual({ left: 10, bottom: 832, maxLengthPx: 44 });
+    // Never below 32px of room, however crowded.
+    expect(
+      scaleRulePlacement(corner, 60, { ...rail, bottom: 810 }, bar)
+    ).toEqual({ left: 10, bottom: 832, maxLengthPx: 32 });
+    // A short window caps the rule at the stage's height.
     expect(
       scaleRulePlacement({ left: 10, bottom: 150 }, 60, null, null)
     ).toEqual({ left: 10, bottom: 150, maxLengthPx: 90 });
-    expect(
-      scaleRulePlacement({ left: 10, bottom: 70 }, 60, null, null)
-    ).toEqual({ left: 10, bottom: 70, maxLengthPx: 32 });
   });
 
-  it('stands on the search bar and its status row where the bar reaches the corner', () => {
-    // A phone: beside the rail the value would run under the bar at 116.
-    const rail = { left: 10, top: 178, right: 50, bottom: 565 };
-    const bar = { left: 116, top: 596, right: 310, bottom: 630 };
+  it('lifts its foot onto a search bar that reaches the corner', () => {
+    // A phone sketch: the bar spans the window over the readout.
+    const rail = { left: 10, top: 112, right: 50, bottom: 600 };
+    const bar = { left: 10, top: 758, right: 380, bottom: 792 };
     expect(
-      scaleRulePlacement({ left: 10, bottom: 630 }, 110, rail, bar)
-    ).toEqual({ left: 60, bottom: 548, maxLengthPx: 200 });
+      scaleRulePlacement({ left: 10, bottom: 794 }, 110, rail, bar)
+    ).toEqual({ left: 10, bottom: 710, maxLengthPx: 102 });
     // A sheet docked across the foot caps the rule as the rail does.
+    const beside = { left: 116, top: 800, right: 380, bottom: 834 };
     expect(
-      scaleRulePlacement({ left: 10, bottom: 834 }, 110, null, bar, {
+      scaleRulePlacement({ left: 10, bottom: 834 }, 110, null, beside, {
         left: 10,
         top: 520,
         right: 380,
@@ -150,8 +152,8 @@ describe('ViewportScaleIndicator', () => {
     ).toEqual({ left: 10, bottom: 834, maxLengthPx: 82 });
     // The bar clear of the corner leaves the rule on the stage's foot.
     expect(
-      scaleRulePlacement({ left: 10, bottom: 630 }, 110, null, bar)
-    ).toEqual({ left: 10, bottom: 630, maxLengthPx: 200 });
+      scaleRulePlacement({ left: 10, bottom: 834 }, 110, null, beside)
+    ).toEqual({ left: 10, bottom: 834, maxLengthPx: 200 });
   });
 
   it('strokes the rule in the stage ink, not the chrome text colours', () => {
