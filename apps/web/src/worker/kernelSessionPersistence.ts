@@ -3,11 +3,18 @@
  * `lib/kernelSessionStore.ts` and the adapter's
  * `exact-session-snapshot.ts`).
  *
+ * - **Only the user's own local projects.** The worker calls into this
+ *   class only for syncs the app marks `persistSession`: a document this
+ *   device keeps as the current user's own project. A shared link's model,
+ *   someone else's project and one-off rebuilds never offer or capture, and
+ *   such a sync {@link KernelSessionPersistence.forget}s whatever was
+ *   scheduled, as closing the project does.
  * - **Offer**: the first sync of a project this worker's history kernel does
  *   not hold reads the stored session for that exact content and build, and
  *   hands it to the adapter, which restores it only if it matches and
  *   publishes it only once its projection does. A refused session is
- *   forgotten, so it is never offered again.
+ *   replaced by a rejection marker for that content and build, so the same
+ *   state is neither offered nor written again.
  * - **Capture**: off the critical path. After a live, complete result
  *   (never a draft display or a transient one) the worker waits until it
  *   has been idle for {@link KERNEL_SESSION_IDLE_MS}, at most once per
@@ -20,7 +27,9 @@
  *   {@link KERNEL_SESSION_WARMUP_IDLE_MS}, the adapter replays the history in
  *   a second kernel and swaps it in when complete, so later edits of earlier
  *   features restore a nearby checkpoint. Any new work cancels it at the
- *   next feature boundary and it waits for the next idle moment.
+ *   next feature boundary and it waits for the next idle moment. Every live
+ *   result names the document it warms (a draft drops it until its
+ *   refinement), so it never replays a superseded revision.
  */
 import type {
   ExactKernelAdapter,
@@ -57,7 +66,12 @@ export interface KernelSessionPersistenceDeps {
     bytes: number;
     session: PersistedHistorySession;
   }): Promise<boolean>;
-  remove(projectId: string): Promise<void>;
+  /** That content and build failed to restore: never store it again. */
+  reject(
+    projectId: string,
+    contentKey: string,
+    identity: string
+  ): Promise<void>;
   touch(projectId: string): Promise<void>;
   isSession(value: unknown): value is PersistedHistorySession;
   estimateBytes(session: PersistedHistorySession): number;
@@ -96,6 +110,8 @@ export class KernelSessionPersistence {
   } | null = null;
   private warmupTimer: unknown;
   private warming = false;
+  /** Bumped by {@link forget}: a capture in flight then stores nothing. */
+  private generation = 0;
 
   constructor(private readonly deps: KernelSessionPersistenceDeps) {}
 
@@ -134,17 +150,36 @@ export class KernelSessionPersistence {
     }
   }
 
-  /** What the adapter made of an offered session. */
+  /** What the adapter made of the session offered for `contentKey`. */
   noteOutcome(
     projectId: string,
+    contentKey: string,
     outcome: 'restored' | 'rejected' | undefined
   ): void {
     if (outcome === 'restored') {
       void this.deps.touch(projectId).catch(() => undefined);
     } else if (outcome === 'rejected') {
-      this.stored.delete(projectId);
-      void this.deps.remove(projectId).catch(() => undefined);
+      // The same content would be captured, stored and rejected again on
+      // every reopen: mark it instead, here and in the store.
+      this.stored.set(projectId, contentKey);
+      if (this.pending?.document.projectId === projectId) this.cancel();
+      const identity = this.deps.identity();
+      if (identity !== null)
+        void this.deps
+          .reject(projectId, contentKey, identity)
+          .catch(() => undefined);
     }
+  }
+
+  /**
+   * The project closed, or the live document is not one to persist (a
+   * shared link's model, someone else's project): drops the scheduled
+   * capture and warm-up, and a capture already running stores nothing.
+   */
+  forget(): void {
+    this.generation += 1;
+    this.cancel();
+    this.dropWarmup();
   }
 
   /** A live, complete result of this content: capture it once idle. */
@@ -175,10 +210,23 @@ export class KernelSessionPersistence {
     if (
       !adapter.warmHistory ||
       !adapter.needsHistoryWarmup?.(document.projectId)
-    )
+    ) {
+      this.dropWarmup();
       return;
+    }
     this.warmup = { adapter, document, lineageDemand };
     this.armWarmup();
+  }
+
+  /**
+   * Forgets the warm-up target: a live result that is not the one to warm
+   * (a draft, whose refinement schedules again; a transient result) must not
+   * leave an older revision to be replayed and swapped in.
+   */
+  dropWarmup(): void {
+    this.warmup = null;
+    if (this.warmupTimer !== undefined) this.deps.clearTimer(this.warmupTimer);
+    this.warmupTimer = undefined;
   }
 
   private armWarmup(): void {
@@ -216,9 +264,16 @@ export class KernelSessionPersistence {
         warmed,
         ms: Math.round(this.deps.now() - started)
       });
-      if (warmed && this.warmup === warmup) this.warmup = null;
+      // Done, or refused without new work (the kernel no longer holds this
+      // document, a failure): nothing left to retry for this target.
+      if (
+        this.warmup === warmup &&
+        (warmed || serial === this.deps.workSerial())
+      )
+        this.warmup = null;
     } catch {
       // Idle work: a failure leaves the restored kernel as it was.
+      if (this.warmup === warmup) this.warmup = null;
     } finally {
       this.warming = false;
     }
@@ -264,12 +319,14 @@ export class KernelSessionPersistence {
     const identity = this.deps.identity();
     if (identity === null) return;
     const { adapter, document, contentKey } = pending;
+    const generation = this.generation;
     this.capturing = true;
     try {
       const session = await adapter.captureHistorySession!(document);
       // Not the kernel's current state any more, or not snapshotable: the
-      // next complete result schedules again.
-      if (!session) return;
+      // next complete result schedules again. Forgotten meanwhile (closed,
+      // or no longer a document to persist): nothing is stored.
+      if (!session || generation !== this.generation) return;
       this.lastWriteAt.set(document.projectId, this.deps.now());
       const bytes = this.deps.estimateBytes(session);
       const started = this.deps.now();

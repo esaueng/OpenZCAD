@@ -26,6 +26,7 @@ import {
   projectionMatches,
   projectionSignature
 } from '../packages/kernel-adapter/src/exact-session-snapshot';
+import { MAX_HISTORY_REPLAY_WORK } from '../packages/kernel-adapter/src/exact-history-cache';
 
 /**
  * Persisted history sessions: a reopened project restores its whole kernel
@@ -335,6 +336,95 @@ describe.skipIf(!supported)('persisted history sessions', () => {
     });
     expect(comparable(editedDerived)).toEqual(
       comparable(await freshReplay(edited))
+    );
+  });
+
+  it('warms only the revision the kernel holds now', async () => {
+    const document = await filletedPart();
+    const session = await capturedSession(document);
+    const { reopened, events } = await reopen(document, session);
+    // A cancelled warm-up leaves the restored state capturable.
+    expect(
+      await reopened.warmHistory!(document, {
+        ...IDLE,
+        cancellation: { isCancelled: () => true }
+      })
+    ).toBe(false);
+    expect(await reopened.captureHistorySession!(document)).not.toBeNull();
+
+    const appended = addPrimitiveFeature(document, {
+      name: 'Spacer',
+      primitiveKind: 'box',
+      dimensions: { width: 3, height: 3, depth: 3 }
+    });
+    await reopened.syncDocument(
+      appended,
+      undefined,
+      undefined,
+      undefined,
+      IDLE
+    );
+    expect(reopened.needsHistoryWarmup!(document.projectId)).toBe(true);
+    // The reopen-time revision is superseded: warming it would replay old
+    // work, swap it in over the current kernel and drop its measurements.
+    expect(await reopened.warmHistory!(document, IDLE)).toBe(false);
+    expect(reopened.needsHistoryWarmup!(document.projectId)).toBe(true);
+    expect(await reopened.captureHistorySession!(appended)).not.toBeNull();
+    const before = events.length;
+    await reopened.syncDocument(
+      appended,
+      undefined,
+      undefined,
+      undefined,
+      IDLE
+    );
+    expect(events.slice(before)).toEqual([
+      expect.objectContaining({ replayed: 0 })
+    ]);
+
+    expect(await reopened.warmHistory!(appended, IDLE)).toBe(true);
+    expect(reopened.needsHistoryWarmup!(document.projectId)).toBe(false);
+  });
+
+  it('carries the replay budget across a restore, and never persists a worn kernel', async () => {
+    let document = await filletedPart();
+    const source = await adapter();
+    await source.syncDocument(document, undefined, undefined, undefined, IDLE);
+    const last = listFeaturesInOrder(document).at(-1)!;
+    for (const radius of [0.6, 0.7, 0.8]) {
+      document = updateFeature(document, {
+        featureId: last.featureId,
+        data: { radius }
+      });
+      await source.syncDocument(
+        document,
+        undefined,
+        undefined,
+        undefined,
+        IDLE
+      );
+    }
+    const session = structuredClone(
+      (await source.captureHistorySession!(document))!
+    );
+    expect(isPersistedHistorySession(session)).toBe(true);
+    expect(session.replayWork).toBeGreaterThan(0);
+
+    // The restored arena holds what those replays retired: its budget
+    // continues where the captured kernel's stopped, not at zero.
+    const { reopened } = await reopen(document, session);
+    expect((await reopened.captureHistorySession!(document))?.replayWork).toBe(
+      session.replayWork
+    );
+
+    // Past half the budget it is not persisted: the next reopen replays into
+    // a fresh kernel, and that one is captured instead.
+    const worn = { ...session, replayWork: MAX_HISTORY_REPLAY_WORK / 2 };
+    const { reopened: wornReopen, events } = await reopen(document, worn);
+    expect(events[0]!.sessionRestore).toBe('restored');
+    expect(await wornReopen.captureHistorySession!(document)).toBeNull();
+    expect(isPersistedHistorySession({ ...session, replayWork: -1 })).toBe(
+      false
     );
   });
 

@@ -19,7 +19,7 @@ function harness(overrides: Partial<KernelSessionPersistenceDeps> = {}) {
     identity: vi.fn(() => 'identity'),
     load: vi.fn(async () => SESSION),
     save: vi.fn(async () => true),
-    remove: vi.fn(async () => undefined),
+    reject: vi.fn(async () => undefined),
     touch: vi.fn(async () => undefined),
     isSession: (value: unknown): value is PersistedHistorySession =>
       value === SESSION,
@@ -107,12 +107,31 @@ describe('offer', () => {
     expect(await offered).toBeUndefined();
   });
 
-  it('forgets a rejected session and refreshes a restored one', async () => {
+  it('refreshes a restored session and marks a rejected one', async () => {
     const { persistence, deps } = harness();
-    persistence.noteOutcome(document.projectId, 'restored');
+    persistence.noteOutcome(document.projectId, 'key', 'restored');
     expect(deps.touch).toHaveBeenCalledWith(document.projectId);
-    persistence.noteOutcome(document.projectId, 'rejected');
-    expect(deps.remove).toHaveBeenCalledWith(document.projectId);
+    persistence.noteOutcome(document.projectId, 'key', 'rejected');
+    expect(deps.reject).toHaveBeenCalledWith(
+      document.projectId,
+      'key',
+      'identity'
+    );
+  });
+
+  it('never captures again the content whose session was rejected', async () => {
+    const { persistence, adapter, deps } = harness();
+    // The rejected restore's sync replays and publishes the same content:
+    // its live result schedules a capture of the identical state.
+    persistence.noteOutcome(document.projectId, 'key', 'rejected');
+    persistence.schedule(adapter, document, 'key');
+    await vi.advanceTimersByTimeAsync(KERNEL_SESSION_MIN_INTERVAL_MS * 2);
+    expect(adapter.captureHistorySession).not.toHaveBeenCalled();
+    expect(deps.save).not.toHaveBeenCalled();
+    // An edit is other content, which may restore.
+    persistence.schedule(adapter, document, 'edited');
+    await vi.advanceTimersByTimeAsync(KERNEL_SESSION_IDLE_MS);
+    expect(deps.save).toHaveBeenCalledOnce();
   });
 });
 
@@ -155,6 +174,30 @@ describe('capture', () => {
     expect(deps.save).toHaveBeenCalledTimes(2);
   });
 
+  it('drops a scheduled capture when forgotten (closed, not persistable)', async () => {
+    const { persistence, adapter, deps } = harness();
+    persistence.schedule(adapter, document, 'key');
+    persistence.forget();
+    await vi.advanceTimersByTimeAsync(KERNEL_SESSION_MIN_INTERVAL_MS * 2);
+    expect(adapter.captureHistorySession).not.toHaveBeenCalled();
+    expect(deps.save).not.toHaveBeenCalled();
+  });
+
+  it('stores nothing from a capture forgotten while it ran', async () => {
+    const { persistence, adapter, deps } = harness();
+    let finish!: (session: PersistedHistorySession) => void;
+    adapter.captureHistorySession.mockImplementationOnce(
+      () => new Promise((resolve) => (finish = resolve))
+    );
+    persistence.schedule(adapter, document, 'key');
+    await vi.advanceTimersByTimeAsync(KERNEL_SESSION_IDLE_MS);
+    expect(adapter.captureHistorySession).toHaveBeenCalledOnce();
+    persistence.forget();
+    finish(SESSION);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(deps.save).not.toHaveBeenCalled();
+  });
+
   it('stores nothing the adapter does not vouch for', async () => {
     const { persistence, adapter, deps } = harness();
     adapter.captureHistorySession.mockResolvedValue(null);
@@ -181,6 +224,40 @@ describe('warm-up', () => {
     expect(adapter.warmHistory).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(KERNEL_SESSION_WARMUP_IDLE_MS * 3);
     expect(adapter.warmHistory).toHaveBeenCalledTimes(2);
+  });
+
+  it('warms only the latest live document, and drops a draft target', async () => {
+    const { persistence, adapter, work } = harness();
+    const later = { ...document, version: document.version + 1 };
+    persistence.scheduleWarmup(adapter, document, []);
+    work();
+    // A drafted release: its result drops the reopen-time target, and the
+    // refinement names the current document.
+    persistence.dropWarmup();
+    await vi.advanceTimersByTimeAsync(KERNEL_SESSION_WARMUP_IDLE_MS * 3);
+    expect(adapter.warmHistory).not.toHaveBeenCalled();
+    persistence.scheduleWarmup(adapter, later, []);
+    await vi.advanceTimersByTimeAsync(KERNEL_SESSION_WARMUP_IDLE_MS);
+    expect(adapter.warmHistory).toHaveBeenCalledOnce();
+    expect(adapter.warmHistory.mock.calls[0]![0]).toBe(later);
+  });
+
+  it('drops a target the adapter refuses without new work', async () => {
+    const { persistence, adapter } = harness();
+    adapter.warmHistory.mockResolvedValue(false);
+    persistence.scheduleWarmup(adapter, document, []);
+    await vi.advanceTimersByTimeAsync(KERNEL_SESSION_WARMUP_IDLE_MS * 4);
+    expect(adapter.warmHistory).toHaveBeenCalledOnce();
+  });
+
+  it('forgets the target once the kernel needs no warm-up', async () => {
+    const { persistence, adapter } = harness();
+    persistence.scheduleWarmup(adapter, document, []);
+    adapter.needsHistoryWarmup.mockReturnValue(false);
+    persistence.scheduleWarmup(adapter, document, []);
+    adapter.needsHistoryWarmup.mockReturnValue(true);
+    await vi.advanceTimersByTimeAsync(KERNEL_SESSION_WARMUP_IDLE_MS * 2);
+    expect(adapter.warmHistory).not.toHaveBeenCalled();
   });
 
   it('does nothing for a kernel that needs no warm-up', async () => {

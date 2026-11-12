@@ -112,9 +112,10 @@ function postSync(
   lastSyncedKey: { current: string | null },
   armed: { current: boolean },
   // Sorted and unique, as `useLineageDemand` hands it over.
-  lineageDemand: readonly BodyId[] = []
+  lineageDemand: readonly BodyId[] = [],
+  persistSession = false
 ): void {
-  const syncKey = `${document.projectId}:${document.version}:${lineageDemandCacheKey(document, lineageDemand)}`;
+  const syncKey = broadcastSyncKey(document, lineageDemand, persistSession);
   if (lastSyncedKey.current === syncKey) {
     return;
   }
@@ -128,8 +129,30 @@ function postSync(
   worker.postMessage({
     type: 'sync',
     document: input,
-    lineageDemand: [...lineageDemand]
+    lineageDemand: [...lineageDemand],
+    ...(persistSession ? { persistSession: true } : {})
   });
+}
+
+/** The `persistSession` the app last gave a broadcast of this project. */
+function persistSessionFor(
+  last: { current: { projectId: string; persist: boolean } | null },
+  document: ProjectDocument
+): boolean {
+  return last.current?.projectId === document.projectId && last.current.persist;
+}
+
+/**
+ * What a broadcast is deduplicated by. A change of `persistSession` alone
+ * (the same version opened from a shared link) posts again, so the worker
+ * learns not to persist it.
+ */
+function broadcastSyncKey(
+  document: ProjectDocument,
+  lineageDemand: readonly BodyId[],
+  persistSession: boolean
+): string {
+  return `${document.projectId}:${document.version}:${lineageDemandCacheKey(document, lineageDemand)}${persistSession ? ':persist' : ''}`;
 }
 
 /** Cancellation rejection, named so callers can tell it from a failure. */
@@ -178,7 +201,16 @@ export interface GeometryWorkerApi {
    */
   sync(
     document: ProjectDocument | null,
-    lineageDemand?: readonly BodyId[]
+    lineageDemand?: readonly BodyId[],
+    options?: {
+      /**
+       * The document is the current user's own local project, kept on this
+       * device: only then may the worker persist its kernel session and
+       * offer the stored one on reopen. Never for a shared link's model or
+       * someone else's project. Unset means false.
+       */
+      persistSession?: boolean;
+    }
   ): void;
   /**
    * One-off exact rebuild resolved by request id — used for seeding demo
@@ -408,6 +440,12 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
   const readyDocument = useRef<ProjectDocument | null>(null);
   const readyDerived = useRef<DerivedState | null>(null);
   const lastDemandRef = useRef<readonly BodyId[] | null>(null);
+  // The last broadcast's `persistSession`, by project, for the re-posts a
+  // respawn or projection recovery makes on the app's behalf.
+  const persistSessionRef = useRef<{
+    projectId: string;
+    persist: boolean;
+  } | null>(null);
   // What built each `syncOnce` result, for `adoptValidatedResult`. Keyed by
   // the resolved object itself, so a copy or a different result never matches.
   const syncOrigins = useRef(
@@ -547,7 +585,8 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
             manager.document,
             lastSyncedKey,
             armedRef,
-            lastDemandRef.current ?? undefined
+            lastDemandRef.current ?? undefined,
+            persistSessionFor(persistSessionRef, manager.document)
           );
         }
       } else {
@@ -643,7 +682,10 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
                 type: 'sync',
                 document: documentForRebuild(document),
                 lineageDemand: [...(lastDemandRef.current ?? [])],
-                forceFull: true
+                forceFull: true,
+                ...(persistSessionFor(persistSessionRef, document)
+                  ? { persistSession: true }
+                  : {})
               });
             }
             return;
@@ -1158,7 +1200,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         state.version === document.version
       );
     },
-    sync(document, lineageDemand) {
+    sync(document, lineageDemand, options) {
       const worker = workerRef.current;
       if (!worker) {
         return;
@@ -1179,9 +1221,14 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         lastDemandRef.current = lineageDemand;
       }
       const demand = lastDemandRef.current ?? [];
+      const persistSession = options?.persistSession === true;
+      persistSessionRef.current = {
+        projectId: document.projectId,
+        persist: persistSession
+      };
       if (
         lastSyncedKey.current !==
-        `${document.projectId}:${document.version}:${lineageDemandCacheKey(document, demand)}`
+        broadcastSyncKey(document, demand, persistSession)
       ) {
         broadcastDocument.current = document;
         readyDocument.current = null;
@@ -1192,7 +1239,8 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         document,
         lastSyncedKey,
         armedRef,
-        lastDemandRef.current ?? undefined
+        lastDemandRef.current ?? undefined,
+        persistSession
       );
     },
     syncOnce(document, analysis, lineageDemand, options) {

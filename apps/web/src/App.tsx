@@ -871,6 +871,7 @@ import {
   resolveFace
 } from './lib/topologyResolution';
 import { useLineageDemand } from './lib/lineageDemand';
+import { persistsKernelSession } from './lib/kernelSessionPolicy';
 import {
   objectPolylines,
   displayObjectsWithTextBudget
@@ -7316,12 +7317,21 @@ export function App() {
       selections: lineageDemandSelections,
       interaction
     });
+  // Only the user's own local project persists its kernel session: never a
+  // shared link's model (ephemeral until "Make a copy", ADR-024) and never a
+  // collaborator's project. The ref is set before a share's document lands.
+  const persistSession = persistsKernelSession({
+    document: doc,
+    shareSession: Boolean(shareSession || shareSessionRef.current),
+    localUserId,
+    accountUserId: session?.userId
+  });
   useEffect(() => {
-    geometry.sync(doc, lineageDemand);
+    geometry.sync(doc, lineageDemand, { persistSession });
     // `geometry` is stable across renders; re-sync when the demanded set
     // grows so the probe runs without waiting for the next edit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc, lineageDemand]);
+  }, [doc, lineageDemand, persistSession]);
 
   const features = useMemo<FeatureNode[]>(
     () => (doc ? listFeaturesInOrder(doc) : []),

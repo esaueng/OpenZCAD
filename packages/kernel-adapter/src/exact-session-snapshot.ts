@@ -49,6 +49,12 @@ export interface PersistedHistorySession {
   kernelDigest: string;
   /** {@link projectionSignature} of the projection this session published. */
   projectionSignature: string;
+  /**
+   * The captured kernel's accumulated replay work (see
+   * `MAX_HISTORY_REPLAY_WORK`): its arena still holds what those replays
+   * retired, so a restore carries the count on instead of starting at zero.
+   */
+  replayWork: number;
 }
 
 interface SnapshotKernelStatics {
@@ -128,6 +134,9 @@ export function isPersistedHistorySession(
     session.kernelBytes instanceof Uint8Array &&
     typeof session.kernelDigest === 'string' &&
     typeof session.projectionSignature === 'string' &&
+    typeof session.replayWork === 'number' &&
+    Number.isSafeInteger(session.replayWork) &&
+    session.replayWork >= 0 &&
     Array.isArray(session.edgeSelections) &&
     !!build &&
     build.shapes instanceof Map &&

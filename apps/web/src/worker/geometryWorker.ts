@@ -55,8 +55,8 @@ import { workerRefusalOf, type WorkerRefusal } from '../lib/workerRefusal';
 import { documentFontsArrived, preloadDocumentFonts } from '../lib/textFonts';
 import { KERNEL_BUILD } from '../lib/kernelBuild';
 import {
-  deleteKernelSession,
   kernelSessionIdentity,
+  rejectKernelSession,
   loadKernelSession,
   saveKernelSession,
   touchKernelSession
@@ -136,6 +136,14 @@ export type GeometryWorkerRequest =
        * the result cache, so a plain rebuild never receives a carried result.
        */
       proposeCarry?: boolean;
+      /**
+       * The live broadcast of a document this device keeps as the current
+       * user's own local project: only then does the worker offer it a
+       * persisted kernel session or capture one of it. Unset (a shared
+       * link's model, someone else's project, any one-off rebuild) means
+       * neither, and a broadcast without it drops any scheduled capture.
+       */
+      persistSession?: boolean;
     }
   | {
       type: 'export';
@@ -632,7 +640,7 @@ const kernelSessions = new KernelSessionPersistence({
         }),
   load: loadKernelSession,
   save: saveKernelSession,
-  remove: deleteKernelSession,
+  reject: rejectKernelSession,
   touch: touchKernelSession,
   isSession: (value): value is PersistedHistorySession =>
     sessionModule?.isPersistedHistorySession(value) ?? false,
@@ -762,6 +770,8 @@ let runningBroadcast: {
   projectId: string;
   version: number;
   key: string;
+  /** Its `persistSession`: a joining request must ask the same. */
+  persistSession: boolean;
 } | null = null;
 
 /**
@@ -789,6 +799,7 @@ function joinsRunningBroadcast(request: GeometryWorkerWorkRequest): boolean {
   return (
     document.projectId === running.projectId &&
     document.version === running.version &&
+    (request.persistSession === true) === running.persistSession &&
     !isGeometryEmpty(document) &&
     rebuildResultKey(request, geometryContentKey(document)) === running.key
   );
@@ -1343,7 +1354,8 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         token: job.broadcastToken,
         projectId: document.projectId,
         version: document.version,
-        key: resultKey
+        key: resultKey,
+        persistSession: request.persistSession === true
       };
     const cachedDerived =
       resultKey === null
@@ -1368,6 +1380,8 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
             // history kernel does not hold the project yet.
             const persistedSession =
               request.type === 'sync' &&
+              request.persistSession === true &&
+              !request.requestId &&
               !request.analysis &&
               !request.proposeCarry
                 ? await kernelSessions.offer(exact, document, contentKey!)
@@ -1449,6 +1463,7 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
             if (persistedSession)
               kernelSessions.noteOutcome(
                 document.projectId,
+                contentKey!,
                 lastSessionRestore
               );
             if (exact.hasTransientFailures(result)) {
@@ -1519,22 +1534,28 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
     post(stateFor('ready', request, { stale: transient }));
     if (request.type === 'sync')
       noteDisplayRefinement(request, derived, job.broadcastToken);
-    // The live model at rest: persist its kernel session once idle. A draft
-    // waits for its refinement, which schedules the same.
+    // The live model at rest: persist its kernel session once idle, and
+    // warm a restored kernel with this document. A draft waits for its
+    // refinement, which schedules both; it, and a transient result, drop the
+    // warm-up target so an older revision is never replayed in its place.
     if (
       request.type === 'sync' &&
       !request.requestId &&
-      !transient &&
-      contentKey !== null &&
-      exactForSync &&
-      !hasDraftDisplay(cachedDerived)
+      request.persistSession === true
     ) {
-      kernelSessions.schedule(exactForSync, document, contentKey);
-      kernelSessions.scheduleWarmup(
-        exactForSync,
-        document,
-        request.lineageDemand
-      );
+      if (
+        !transient &&
+        contentKey !== null &&
+        exactForSync &&
+        !hasDraftDisplay(cachedDerived)
+      ) {
+        kernelSessions.schedule(exactForSync, document, contentKey);
+        kernelSessions.scheduleWarmup(
+          exactForSync,
+          document,
+          request.lineageDemand
+        );
+      } else kernelSessions.dropWarmup();
     }
   } catch (error) {
     if (!broadcastGate.isCurrent(job.broadcastToken)) {
@@ -1921,8 +1942,16 @@ async function refineCommittedDisplay(
       } satisfies GeometryWorkerResult,
       { transfer: derivedMeshTransferables(derived) }
     );
-    if (!sync.analysis && !sync.proposeCarry && !transientResults.has(refined))
+    if (
+      sync.persistSession === true &&
+      !sync.requestId &&
+      !sync.analysis &&
+      !sync.proposeCarry &&
+      !transientResults.has(refined)
+    ) {
       kernelSessions.schedule(exact, document, contentKey);
+      kernelSessions.scheduleWarmup(exact, document, sync.lineageDemand);
+    }
     return true;
   } catch (error) {
     if ((error as { category?: unknown } | null)?.category === 'cancelled')
@@ -1985,6 +2014,9 @@ self.onmessage = (event: MessageEvent<GeometryWorkerRequest>) => {
       broadcastGate.issue(true);
       // Nothing is live: no draft is left to refine.
       noteLiveContent(null);
+      // The project closed: nothing of it is captured or warmed any more,
+      // so deleting it right after cannot be undone by a late write.
+      kernelSessions.forget();
     }
     // Idle again unless a drag is under way, which holds refinement back
     // until it ends or goes quiet.
@@ -1996,6 +2028,10 @@ self.onmessage = (event: MessageEvent<GeometryWorkerRequest>) => {
   else if (request.type === 'sync' || request.type === 'release-edit-preview')
     previewGestureFrameAtMs = null;
   const isBroadcast = request.type === 'sync' && !request.requestId;
+  // A live document that is not the user's own local project (a shared
+  // link's model, a collaborator's): nothing scheduled for an earlier one
+  // may write, and nothing of this one is captured.
+  if (isBroadcast && request.persistSession !== true) kernelSessions.forget();
   // A broadcast is what the main thread shows next: only a draft of that
   // content is still worth refining.
   if (isBroadcast && pendingDisplayRefinements.length > 0)

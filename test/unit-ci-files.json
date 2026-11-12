@@ -297,6 +297,8 @@
     "src/worker/geometryWorker.test.ts",
     "worker/glimpse.test.ts",
     "src/lib/kernelSessionStore.test.ts",
-    "src/worker/kernelSessionPersistence.test.ts"
+    "src/worker/kernelSessionPersistence.test.ts",
+    "src/worker/geometryWorkerSessions.test.ts",
+    "src/lib/kernelSessionPolicy.test.ts"
   ]
 }

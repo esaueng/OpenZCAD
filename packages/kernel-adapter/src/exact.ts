@@ -2026,6 +2026,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         this.historyCheckpointOwners.set(checkpointId, entry);
         this.historyScopeKey = scopeKey;
         this.historyProjectId = document.projectId;
+        // The restored arena still holds what the captured kernel's replays
+        // retired: its budget continues where that kernel's stopped.
+        this.historyReplayWork = offered.replayWork;
         kernel = restored;
         restored = null;
         seeded = offered;
@@ -3480,34 +3483,20 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     document: ProjectDocument
   ): Promise<PersistedHistorySession | null> {
     return this.runHistoryJob(async () => {
-      const live = this.liveSession;
+      const live = this.liveSessionFor(document);
       const kernel = this.historyKernel;
       const support = kernelSnapshotSupport();
+      // A kernel past half its replay budget is not persisted: a restore
+      // would carry that arena into every later session and recycle (a full
+      // replay) a few edits after reopening. Its reopen replays into a fresh
+      // kernel instead, and that kernel is captured.
       if (
         !live ||
         !kernel ||
         !support ||
-        live.kernel !== kernel ||
-        live.projectId !== document.projectId
+        this.historyReplayWork * 2 >= MAX_HISTORY_REPLAY_WORK
       )
         return null;
-      const features = listFeaturesInOrder(document);
-      if (
-        features.length !== live.digests.length ||
-        historyScopeDigest(document) !== live.scopeKey
-      )
-        return null;
-      const scope = getParameterScope(document).scope;
-      for (let index = 0; index < features.length; index += 1) {
-        const feature = features[index]!;
-        if (
-          historyFeatureDigest(document, feature, index, scope, live.demand) +
-            carryProposalSalt(feature, false) +
-            displayOnlyBlendSalt(feature, false) !==
-          live.digests[index]
-        )
-          return null;
-      }
       try {
         const kernelBytes = snapshotKernel(kernel);
         return {
@@ -3522,7 +3511,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           edgeSelections: this.edgeSelections.exportProject(document.projectId),
           kernelBytes,
           kernelDigest: support.snapshotDigest(kernelBytes),
-          projectionSignature: projectionSignature(live.derived)
+          projectionSignature: projectionSignature(live.derived),
+          replayWork: this.historyReplayWork
         };
       } catch {
         // A refusal (`snapshot:poisoned`, `transient_state`, a limit) only
@@ -3530,6 +3520,40 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         return null;
       }
     }, true);
+  }
+
+  /**
+   * {@link liveSession} when the history kernel still holds exactly the
+   * complete build of `document` the last sync published; otherwise null.
+   */
+  private liveSessionFor(
+    document: ProjectDocument
+  ): NonNullable<RemusKernelAdapter['liveSession']> | null {
+    const live = this.liveSession;
+    if (
+      !live ||
+      live.kernel !== this.historyKernel ||
+      live.projectId !== document.projectId
+    )
+      return null;
+    const features = listFeaturesInOrder(document);
+    if (
+      features.length !== live.digests.length ||
+      historyScopeDigest(document) !== live.scopeKey
+    )
+      return null;
+    const scope = getParameterScope(document).scope;
+    for (let index = 0; index < features.length; index += 1) {
+      const feature = features[index]!;
+      if (
+        historyFeatureDigest(document, feature, index, scope, live.demand) +
+          carryProposalSalt(feature, false) +
+          displayOnlyBlendSalt(feature, false) !==
+        live.digests[index]
+      )
+        return null;
+    }
+    return live;
   }
 
   needsHistoryWarmup(projectId: ProjectDocument['projectId']): boolean {
@@ -3555,7 +3579,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   ): Promise<boolean> {
     return this.runHistoryJob(async () => {
       if (!this.needsHistoryWarmup(document.projectId)) return false;
-      const live = this.liveSession;
+      // Only the state the last sync published: a stale document (an older
+      // revision than the kernel now holds) would replay superseded work and
+      // swap it in over the current kernel.
+      const live = this.liveSessionFor(document);
+      if (!live) return false;
       this.liveSession = null;
       const restored = {
         kernel: this.historyKernel!,
@@ -3612,6 +3640,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         this.historyScopeKey = restored.scopeKey;
         this.historyProjectId = restored.projectId;
         this.historyReplayWork = restored.replayWork;
+        // Still exactly what the last sync published: a retry may warm it,
+        // and a capture may persist it.
+        this.liveSession = live;
         // Only new work stops a warm-up; anything else would fail again.
         this.sparseRestoredHistory = isBuildCancelled(error);
         return false;

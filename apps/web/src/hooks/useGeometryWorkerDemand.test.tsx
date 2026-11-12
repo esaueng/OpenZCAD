@@ -109,3 +109,54 @@ describe('useGeometryWorker lineage demand', () => {
     await expect(pending).resolves.toEqual(document.derived);
   });
 });
+
+describe('useGeometryWorker persisted kernel sessions', () => {
+  const persistOf = (worker: FakeWorker) =>
+    (worker.postMessage.mock.calls.at(-1)![0] as { persistSession?: unknown })
+      .persistSession;
+
+  it('marks only the broadcasts the app says to persist', () => {
+    installWorker();
+    const document = createProjectDocument('Own project', toUserId('user'));
+    const host = { manager: () => null, onDerived: vi.fn(), onError: vi.fn() };
+    const { result } = renderHook(() => useGeometryWorker(host));
+    const worker = FakeWorker.instances[0]!;
+
+    // Unset is false: a shared link's model or someone else's project.
+    result.current.sync(document, []);
+    expect(persistOf(worker)).toBeUndefined();
+    const calls = worker.postMessage.mock.calls.length;
+    result.current.sync(document, [], { persistSession: true });
+    // The same version posts again, so the worker learns the change.
+    expect(worker.postMessage.mock.calls.length).toBe(calls + 1);
+    expect(persistOf(worker)).toBe(true);
+    result.current.sync(document, [], { persistSession: true });
+    expect(worker.postMessage.mock.calls.length).toBe(calls + 1);
+    result.current.sync(document, [], { persistSession: false });
+    expect(persistOf(worker)).toBeUndefined();
+
+    // A one-off rebuild never persists.
+    result.current.sync(document, [], { persistSession: true });
+    result.current.syncOnce(document).catch(() => undefined);
+    expect(persistOf(worker)).toBeUndefined();
+  });
+
+  it('keeps the flag for the rebuild a respawned worker owes', async () => {
+    installWorker();
+    const document = createProjectDocument('Respawned', toUserId('user'));
+    const host = {
+      manager: () => ({ document }) as never,
+      onDerived: vi.fn(),
+      onError: vi.fn()
+    };
+    const { result } = renderHook(() => useGeometryWorker(host));
+    result.current.sync(document, [], { persistSession: true });
+    await act(async () => {
+      FakeWorker.instances[0]!.onerror?.({} as ErrorEvent);
+    });
+    const replacement = FakeWorker.instances[1]!;
+    expect(replacement.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'sync', persistSession: true })
+    );
+  });
+});
