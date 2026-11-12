@@ -24,6 +24,7 @@ function renderTopBar(
     projectName?: string;
     encryption?: EncryptionIndicatorProps | null;
     buildModeDisabledReason?: string;
+    warningCount?: number;
   } = {}
 ) {
   const handlers = {
@@ -36,6 +37,7 @@ function renderTopBar(
     onExportStep: vi.fn(),
     onRenameProject: vi.fn(),
     onReviewEditFailure: vi.fn(),
+    onShowWarnings: vi.fn(),
     onWorkspaceMode: vi.fn()
   };
   render(
@@ -51,6 +53,7 @@ function renderTopBar(
       geometryFailed={options.geometryFailed}
       editPending={options.editPending}
       editRefusal={options.editRefusal}
+      warningCount={options.warningCount}
       saveToAccount={options.saveToAccount ?? false}
       knownDeviceOnly={options.knownDeviceOnly ?? false}
       localOnlySourceCount={0}
@@ -103,6 +106,30 @@ describe('TopBar workspace mode help', () => {
       expect(onWorkspaceMode).toHaveBeenCalledWith(mode);
     }
   );
+
+  it("counts the model's warnings beside the save status and opens Diagnostics", () => {
+    // With none there is no chip: the bar never spends the name's room on
+    // a zero.
+    renderTopBar();
+    expect(
+      screen.queryByRole('button', { name: /show Diagnostics/ })
+    ).toBeNull();
+    cleanup();
+
+    const { onShowWarnings } = renderTopBar({ warningCount: 1 });
+    const one = screen.getByRole('button', {
+      name: '1 warning: show Diagnostics'
+    });
+    expect(one).toHaveTextContent('1');
+    fireEvent.click(one);
+    expect(onShowWarnings).toHaveBeenCalledTimes(1);
+    cleanup();
+
+    renderTopBar({ warningCount: 240 });
+    expect(
+      screen.getByRole('button', { name: '240 warnings: show Diagnostics' })
+    ).toHaveTextContent('99+');
+  });
 
   it('explains a mode on hover and hides the help when the pointer leaves', async () => {
     renderTopBar();
