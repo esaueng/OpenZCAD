@@ -95,7 +95,7 @@ test('search bar and toast clear the column at phone width', async ({
   page
 }) => {
   // 390px sits inside the <=520px branch, where the bottom lanes run from the
-  // column to the window's right edge and the scale bar gives way.
+  // column to the window's right edge, clear of the scale bar in the corner.
   await page.setViewportSize({ width: 390, height: 844 });
   await stubApi(page);
   await seedDismissedWorkspaceTour(page);
@@ -127,13 +127,16 @@ test('search bar and toast clear the column at phone width', async ({
   expect(clearsColumn(toastBox!)).toBe(true);
 
   // Outside a sketch the readout has nothing to say and does not draw; the
-  // ruler lies in the bottom-left corner above the search row.
+  // ruler stands in the bottom-left corner, beside the search row.
   const readout = page.locator('.viewport-readout');
   await expect(readout).toBeHidden();
   const ruler = page.getByTestId('viewport-scale-indicator');
   await expect(ruler).toBeVisible();
   const rulerBox = (await ruler.boundingBox())!;
-  expect(rulerBox.y + rulerBox.height).toBeLessThanOrEqual(barBox!.y);
+  expect(
+    rulerBox.x + rulerBox.width <= barBox!.x ||
+      rulerBox.y + rulerBox.height <= barBox!.y
+  ).toBe(true);
   const covered = await readout.evaluate((el) =>
     [...el.querySelectorAll('button')]
       .filter((button) => {

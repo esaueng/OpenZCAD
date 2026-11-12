@@ -1005,7 +1005,7 @@ export function ViewerShell({
         </>
       )}
       {modeOverlay}
-      {/* Upright at the model's left edge, or along the foot on a phone. */}
+      {/* Upright in the stage's bottom-left corner at every window size. */}
       <ViewportScaleIndicator scaleSinkRef={scaleIndicatorRef} units={units} />
       {frameRateOverlay && (
         <ViewportFrameStats

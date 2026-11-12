@@ -26,10 +26,9 @@
   --lane-right: calc(var(--lane-start) + var(--right-dock-w, 0px));
   /* The readout under the column, and what the column leaves it. */
   --readout-h: 32px;
-  /* The bottom-left corner under the left rail: the scale bar lying in the
-     search bar's row, or stepped up over it where that row is too short
-     (18px, a gap) and, in a sketch, the readout's rows under that. The rail
-     stands on what they take. */
+  /* The bottom-left corner under the left rail: the upright scale bar and,
+     in a sketch, the readout's rows under it. The rail lifts by this much
+     to leave the bar room in the corner. */
   --scale-rule-reserve: calc(var(--command-bar-h) + 18px + var(--island-gap));
   --readout-rows: 0px;
   --readout-reserve: calc(var(--readout-rows) + var(--scale-rule-reserve));
@@ -278,10 +277,6 @@
   transform: none;
 }
 
-.workspace:has(.rail-section-panel) .viewport-scale-indicator {
-  visibility: hidden;
-}
-
 @media (max-height: 600px) {
   .workspace-column-float .workspace-column-tools {
     scrollbar-width: thin;
@@ -500,63 +495,37 @@
   right: calc(var(--lane-end) - var(--right-peek-w, 0px));
 }
 
-/* The scale bar lies in the search bar's row at the model's left edge —
-   the window's, or the left dock's inner edge when a panel is docked there —
-   centred on the bar's height, and ends short of the bar
-   (ViewportScaleIndicator measures the room). Where the row is too short
-   for a readable rule it steps up over the bar instead. */
+/* The scale bar stands upright in the model's bottom-left corner — the
+   window's, or the left dock's inner edge when a panel is docked there —
+   above the readout's rows in a sketch. ViewportScaleIndicator measures the
+   rail and the search bar and offsets it from here: under the rail while
+   that leaves it room, beside the rail otherwise, and it shortens rather
+   than hides. */
 .workspace.column-layout .viewport-scale-indicator {
   left: calc(var(--island-gap) + var(--left-dock-w, 0px));
   right: auto;
-  bottom: calc(
-    var(--island-gap) + (var(--command-bar-h) - 18px) / 2 + var(--readout-rows)
-  );
-}
-
-/* Stepped up, it stands on the lane's foot: over the bar and over the
-   pick's guidance card when one is up, which would otherwise cover it. */
-.workspace.column-layout .viewport-scale-indicator.is-raised {
-  bottom: calc(var(--lane-base) + var(--readout-rows));
+  bottom: calc(var(--island-gap) + var(--readout-rows));
 }
 
 /* The sketch rail is the tall one, with Finish at its foot: it keeps the
-   whole band, and the bar stands beside it, on the readout, instead. */
+   whole band, and the bar stands beside it instead. */
 .workspace.column-layout:has(.viewport-readout .viewport-dock-snap) {
   --scale-rule-reserve: 0px;
 }
 
-.workspace.column-layout:has(.viewport-readout .viewport-dock-snap)
-  .viewport-scale-indicator {
-  left: calc(var(--island-gap) * 2 + var(--rail-w) + var(--left-dock-w, 0px));
-}
-
 /* Up to 860px tall the left rail has no room to lift for the bar: a
    pick's verbs make it taller (selection-rail.css), and lifted it ran off
-   the top bar. There the bar stands beside the rail instead, as in a
-   sketch, and the rail keeps its centre. */
+   the top bar. The rail keeps its centre and the bar takes what is left
+   under it, or stands beside it. */
 @media (max-height: 860px) {
   .workspace.column-layout {
     --scale-rule-reserve: 0px;
   }
-
-  .workspace.column-layout .viewport-scale-indicator {
-    left: calc(var(--island-gap) * 2 + var(--rail-w) + var(--left-dock-w, 0px));
-  }
 }
 
-/* A phone has no room beside the rail: the rule lies along the foot in the
-   bottom-left corner, above the search row and under the measurement
-   sheet's foot (ViewportScaleIndicator draws it lying at this width). */
 @media (max-width: 620px) {
   .workspace.column-layout {
     --scale-rule-reserve: var(--readout-h);
-  }
-
-  .workspace.column-layout .viewport-scale-indicator,
-  .workspace.column-layout:has(.viewport-readout .viewport-dock-snap)
-    .viewport-scale-indicator {
-    left: var(--island-gap);
-    bottom: calc(var(--island-gap) * 2 + var(--command-bar-h));
   }
 }
 
@@ -1993,13 +1962,6 @@ button.command-more-toggle {
 @media (pointer: coarse) and (max-height: 540px) {
   .workspace.column-layout:has(.command-rail) {
     --tool-rail-columns: 3;
-  }
-}
-
-@media (max-height: 540px) {
-  .workspace.column-layout:has(.command-rail) .viewport-scale-indicator {
-    left: calc(var(--column-w) + var(--island-gap) * 2);
-    bottom: calc(var(--command-bar-h) + var(--island-gap) * 3 + 40px);
   }
 }
 
@@ -5225,12 +5187,12 @@ button.model-panel-grip[aria-expanded='true'] {
   .workspace.column-layout:has(.tweak-flyouts.is-open)
     .viewport-scale-indicator,
   .workspace.column-layout:has(.panel-lane-float) .viewport-scale-indicator {
+    /* The sheet takes the foot of a phone: the rule hangs from the top
+       beside the rail, and the component leaves it where this puts it. */
+    --viewport-scale-pinned: 1;
     top: var(--stage-top);
     bottom: auto;
     left: calc(var(--island-gap) * 2 + var(--rail-w));
-    flex-direction: row;
-    align-items: flex-end;
-    gap: 6px;
   }
 
   .command-bar-lane:has(.workspace-hint-help)
@@ -5311,10 +5273,6 @@ button.model-panel-grip[aria-expanded='true'] {
       100dvh - var(--stage-top) - var(--readout-h) - var(--command-bar-h) -
         var(--island-gap) * 4 - 64px
     );
-  }
-
-  .workspace.column-layout:has(.sketch-rail) .viewport-scale-indicator {
-    visibility: hidden;
   }
 
   .workspace.column-layout:has(.sketch-rail)

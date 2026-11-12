@@ -53,43 +53,47 @@ async function selectRailView(page: Page, name: RegExp | string) {
   await page.getByRole('button', { name }).click();
 }
 
-test('keeps undo and redo in the quick-actions rail', { tag: '@ci-smoke' }, async ({ page }) => {
-  await stubApi(page);
-  await page.goto('/');
-  await page.getByLabel('Project name').fill('History Rail Part');
-  await page.getByRole('button', { name: 'New project' }).click();
+test(
+  'keeps undo and redo in the quick-actions rail',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await stubApi(page);
+    await page.goto('/');
+    await page.getByLabel('Project name').fill('History Rail Part');
+    await page.getByRole('button', { name: 'New project' }).click();
 
-  // The rail rides in the lazily-loaded viewer chunk, so it lands long after
-  // the rest of the workspace: the tool palette is up inside 100 ms, the rail
-  // nearer two seconds, and slower still on a loaded machine. Wait for the
-  // toolbar itself on a budget sized for a chunk load; every assertion after
-  // this keeps the strict default, and a rail that never arrives fails as a
-  // missing rail rather than as an enabled-versus-disabled mismatch.
-  const rail = page.getByRole('toolbar', { name: 'Viewer bar' });
-  await expect(rail).toBeVisible({ timeout: 30_000 });
+    // The rail rides in the lazily-loaded viewer chunk, so it lands long after
+    // the rest of the workspace: the tool palette is up inside 100 ms, the rail
+    // nearer two seconds, and slower still on a loaded machine. Wait for the
+    // toolbar itself on a budget sized for a chunk load; every assertion after
+    // this keeps the strict default, and a rail that never arrives fails as a
+    // missing rail rather than as an enabled-versus-disabled mismatch.
+    const rail = page.getByRole('toolbar', { name: 'Viewer bar' });
+    await expect(rail).toBeVisible({ timeout: 30_000 });
 
-  // Worth asserting only once the workspace is up — before that the top bar
-  // has not rendered at all, so its emptiness proves nothing.
-  const topbar = page.locator('.topbar');
-  await expect(topbar.getByRole('button', { name: 'Undo' })).toHaveCount(0);
-  await expect(topbar.getByRole('button', { name: 'Redo' })).toHaveCount(0);
+    // Worth asserting only once the workspace is up — before that the top bar
+    // has not rendered at all, so its emptiness proves nothing.
+    const topbar = page.locator('.topbar');
+    await expect(topbar.getByRole('button', { name: 'Undo' })).toHaveCount(0);
+    await expect(topbar.getByRole('button', { name: 'Redo' })).toHaveCount(0);
 
-  const undo = rail.getByRole('button', { name: 'Undo' });
-  const redo = rail.getByRole('button', { name: 'Redo' });
-  await expect(undo).toBeDisabled();
-  await expect(redo).toBeDisabled();
+    const undo = rail.getByRole('button', { name: 'Undo' });
+    const redo = rail.getByRole('button', { name: 'Redo' });
+    await expect(undo).toBeDisabled();
+    await expect(redo).toBeDisabled();
 
-  await createPrimitiveInPlace(page, 'box');
-  await expectBodyCount(page, 1);
-  await expect(undo).toBeEnabled();
+    await createPrimitiveInPlace(page, 'box');
+    await expectBodyCount(page, 1);
+    await expect(undo).toBeEnabled();
 
-  await undo.click();
-  await expectBodyCount(page, 0);
-  await expect(redo).toBeEnabled();
+    await undo.click();
+    await expectBodyCount(page, 0);
+    await expect(redo).toBeEnabled();
 
-  await redo.click();
-  await expectBodyCount(page, 1);
-});
+    await redo.click();
+    await expectBodyCount(page, 1);
+  }
+);
 
 test('viewport context menu isolates or hides a body and the sidebar eye restores it', async ({
   page
@@ -193,33 +197,37 @@ test('choosing Move from an edge right-click disarms the fillet handle it just a
   ).toHaveCount(0);
 });
 
-test('P toggles the camera projection', { tag: '@ci-smoke' }, async ({ page }) => {
-  await stubApi(page);
-  await page.goto('/');
-  await page.getByLabel('Project name').fill('Projection Part');
-  await page.getByRole('button', { name: 'New project' }).click();
+test(
+  'P toggles the camera projection',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await stubApi(page);
+    await page.goto('/');
+    await page.getByLabel('Project name').fill('Projection Part');
+    await page.getByRole('button', { name: 'New project' }).click();
 
-  // The projection control ships inside the lazily imported viewer shell, so
-  // wait for the viewport rather than for the workspace around it. The feature
-  // rail renders while `Loading 3D viewport…` is still standing in for the
-  // shell, which makes it a gate that lets this test through too early: on a
-  // loaded runner the chunk can still be arriving, and the failure then reads
-  // as "the ortho button says nothing about its projection" when the button
-  // does not exist yet. Waiting on the canvas waits for the thing under test.
-  await expect(page.locator('.viewer-host canvas')).toBeVisible({
-    timeout: 15_000
-  });
+    // The projection control ships inside the lazily imported viewer shell, so
+    // wait for the viewport rather than for the workspace around it. The feature
+    // rail renders while `Loading 3D viewport…` is still standing in for the
+    // shell, which makes it a gate that lets this test through too early: on a
+    // loaded runner the chunk can still be arriving, and the failure then reads
+    // as "the ortho button says nothing about its projection" when the button
+    // does not exist yet. Waiting on the canvas waits for the thing under test.
+    await expect(page.locator('.viewer-host canvas')).toBeVisible({
+      timeout: 15_000
+    });
 
-  const orthoButton = page.getByRole('button', { name: /Ortho/ });
-  await expect(orthoButton).toHaveAttribute('aria-pressed', 'false');
-  await page.keyboard.press('p');
-  await expect(orthoButton).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByRole('contentinfo')).toContainText(
-    'Projection: orthographic'
-  );
-  await orthoButton.click();
-  await expect(orthoButton).toHaveAttribute('aria-pressed', 'false');
-});
+    const orthoButton = page.getByRole('button', { name: /Ortho/ });
+    await expect(orthoButton).toHaveAttribute('aria-pressed', 'false');
+    await page.keyboard.press('p');
+    await expect(orthoButton).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByRole('contentinfo')).toContainText(
+      'Projection: orthographic'
+    );
+    await orthoButton.click();
+    await expect(orthoButton).toHaveAttribute('aria-pressed', 'false');
+  }
+);
 
 test('the viewport scale indicator tracks zoom in document units', async ({
   page
@@ -243,8 +251,8 @@ test('the viewport scale indicator tracks zoom in document units', async ({
   const canvas = page.locator('.viewer-host canvas');
   await expect(canvas).toHaveAttribute('data-e2e-camera-distance', /.+/);
   const initialLabel = await indicator.textContent();
-  // The scale bar resizes with zoom; nothing around it may move. It lies in
-  // the search bar's row under the verb rail, the nearest chrome.
+  // The scale bar resizes with zoom; nothing around it may move. It stands
+  // in the bottom-left corner under the verb rail, the nearest chrome.
   const dock = page.locator('.workspace-column-float');
   const control = dock.getByRole('button').first();
   const initialDock = await dock.boundingBox();
@@ -255,16 +263,18 @@ test('the viewport scale indicator tracks zoom in document units', async ({
     expect(await dock.boundingBox()).toEqual(initialDock);
     expect(await control.boundingBox()).toEqual(initialControl);
   };
-  // Lying down, the rule's length is its width; it stays 18px across. It
-  // ends short of the search bar, so a narrower window may cap it below 200.
+  // Upright, the rule's length is its height; it stays 18px across. The
+  // room under the rail caps it (72px at the least), and a 1/2/5 step draws
+  // it at 40% of its cap or more.
+  const MIN_RULE_LENGTH = 28;
   const ruleLength = () =>
     rule.evaluate((element) => {
       const bounds = element.getBoundingClientRect();
-      return { length: bounds.width, across: bounds.height };
+      return { length: bounds.height, across: bounds.width };
     });
   const initial = await ruleLength();
   expect(initial.across).toBeCloseTo(18, 0);
-  expect(initial.length).toBeGreaterThanOrEqual(48);
+  expect(initial.length).toBeGreaterThanOrEqual(MIN_RULE_LENGTH);
   expect(initial.length).toBeLessThanOrEqual(200.1);
 
   // Dispatch explicit wheel notches to the canvas so this layout regression
@@ -283,7 +293,7 @@ test('the viewport scale indicator tracks zoom in document units', async ({
     )
     .not.toBe(initialLabel);
   const zoomed = await ruleLength();
-  expect(zoomed.length).toBeGreaterThanOrEqual(48);
+  expect(zoomed.length).toBeGreaterThanOrEqual(MIN_RULE_LENGTH);
   expect(zoomed.length).toBeLessThanOrEqual(200.1);
   const zoomedLabel = await indicator.textContent();
   await expect
@@ -301,90 +311,94 @@ test('the viewport scale indicator tracks zoom in document units', async ({
     .not.toBe(zoomedLabel);
 });
 
-test('Space centres and faces an exact planar selection head-on', { tag: '@ci-smoke' }, async ({
-  page
-}) => {
-  await stubApi(page);
-  await page.goto('/');
-  await page.getByLabel('Project name').fill('Normal Face View');
-  await page.getByRole('button', { name: 'New project' }).click();
+test(
+  'Space centres and faces an exact planar selection head-on',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await stubApi(page);
+    await page.goto('/');
+    await page.getByLabel('Project name').fill('Normal Face View');
+    await page.getByRole('button', { name: 'New project' }).click();
 
-  const inspector = page.getByRole('region', { name: 'Feature inspector' });
-  await createPrimitiveInPlace(page, 'cylinder', {
-    sizes: { radius: '14', height: '28' }
-  });
-  const cylinderFeature = page.locator('.feature-row-main', {
-    hasText: 'Cylinder'
-  });
-  await expect(cylinderFeature).toBeVisible();
-  await cylinderFeature.click();
-  const radiusInput = inspector.getByLabel('Radius', { exact: true });
-  await radiusInput.click();
-  await expect(radiusInput).toBeFocused();
+    const inspector = page.getByRole('region', { name: 'Feature inspector' });
+    await createPrimitiveInPlace(page, 'cylinder', {
+      sizes: { radius: '14', height: '28' }
+    });
+    const cylinderFeature = page.locator('.feature-row-main', {
+      hasText: 'Cylinder'
+    });
+    await expect(cylinderFeature).toBeVisible();
+    await cylinderFeature.click();
+    const radiusInput = inspector.getByLabel('Radius', { exact: true });
+    await radiusInput.click();
+    await expect(radiusInput).toBeFocused();
 
-  const canvas = page.locator('.viewer-host canvas');
-  await canvas.evaluate((element) => {
-    element.dispatchEvent(
-      new CustomEvent('openzcad:e2e-select-cylinder', {
-        detail: { surface: 'cap' }
-      })
+    const canvas = page.locator('.viewer-host canvas');
+    await canvas.evaluate((element) => {
+      element.dispatchEvent(
+        new CustomEvent('openzcad:e2e-select-cylinder', {
+          detail: { surface: 'cap' }
+        })
+      );
+    });
+    const faceOperation = page.getByRole('region', {
+      name: 'Offset Face operation'
+    });
+    await expect(faceOperation).toBeVisible();
+    await expect(
+      faceOperation.getByRole('button', { name: 'Selection: Sketch' })
+    ).toBeVisible();
+    // A viewport pick opens no card; the Selection card names the face. Space
+    // still belongs to the selected face without an editable field retaining it.
+    await expect(radiusInput).toHaveCount(0);
+    await expect(inspector).toHaveCount(0);
+    await expect(
+      page.locator('.selection-readout .selection-callout-name')
+    ).toContainText('Bottom face');
+
+    const cameraPose = async () =>
+      page.evaluate((storageKey) => {
+        const raw = localStorage.getItem(storageKey);
+        const views = raw
+          ? (
+              JSON.parse(raw) as {
+                views?: Record<
+                  string,
+                  { camera: { position: number[]; target: number[] } }
+                >;
+              }
+            ).views
+          : undefined;
+        return views ? (Object.values(views)[0]?.camera ?? null) : null;
+      }, WORKSPACE_SESSION_STORAGE_KEY);
+
+    await expect.poll(cameraPose).not.toBeNull();
+    await page.keyboard.press('Space');
+    await expect(page.getByRole('contentinfo')).toContainText(
+      'viewing normal to face'
     );
-  });
-  const faceOperation = page.getByRole('region', {
-    name: 'Offset Face operation'
-  });
-  await expect(faceOperation).toBeVisible();
-  await expect(
-    faceOperation.getByRole('button', { name: 'Selection: Sketch' })
-  ).toBeVisible();
-  // A viewport pick opens no card; the Selection card names the face. Space
-  // still belongs to the selected face without an editable field retaining it.
-  await expect(radiusInput).toHaveCount(0);
-  await expect(inspector).toHaveCount(0);
-  await expect(
-    page.locator('.selection-readout .selection-callout-name')
-  ).toContainText('Bottom face');
+    await page.waitForTimeout(900);
 
-  const cameraPose = async () =>
-    page.evaluate((storageKey) => {
-      const raw = localStorage.getItem(storageKey);
-      const views = raw
-        ? (
-            JSON.parse(raw) as {
-              views?: Record<
-                string,
-                { camera: { position: number[]; target: number[] } }
-              >;
-            }
-          ).views
-        : undefined;
-      return views ? (Object.values(views)[0]?.camera ?? null) : null;
-    }, WORKSPACE_SESSION_STORAGE_KEY);
+    const pose = await cameraPose();
+    expect(pose).not.toBeNull();
+    const direction = pose!.position.map(
+      (value, axis) => value - pose!.target[axis]!
+    );
+    const distance = Math.hypot(...direction);
+    expect(Math.abs(direction[2]! / distance)).toBeGreaterThan(0.999999);
+    expect(Math.abs(direction[0]! / distance)).toBeLessThan(0.001);
+    expect(Math.abs(direction[1]! / distance)).toBeLessThan(0.001);
 
-  await expect.poll(cameraPose).not.toBeNull();
-  await page.keyboard.press('Space');
-  await expect(page.getByRole('contentinfo')).toContainText(
-    'viewing normal to face'
-  );
-  await page.waitForTimeout(900);
-
-  const pose = await cameraPose();
-  expect(pose).not.toBeNull();
-  const direction = pose!.position.map(
-    (value, axis) => value - pose!.target[axis]!
-  );
-  const distance = Math.hypot(...direction);
-  expect(Math.abs(direction[2]! / distance)).toBeGreaterThan(0.999999);
-  expect(Math.abs(direction[0]! / distance)).toBeLessThan(0.001);
-  expect(Math.abs(direction[1]! / distance)).toBeLessThan(0.001);
-
-  await expect(faceOperation).toBeVisible();
-  await expect(page.locator('.selection-readout')).toContainText(/face/i);
-  await expect(
-    page.getByRole('button', { name: /projection \(P\).*perspective/i })
-  ).toHaveAttribute('aria-pressed', 'false');
-  await expect(page.getByRole('heading', { name: 'History 1' })).toBeVisible();
-});
+    await expect(faceOperation).toBeVisible();
+    await expect(page.locator('.selection-readout')).toContainText(/face/i);
+    await expect(
+      page.getByRole('button', { name: /projection \(P\).*perspective/i })
+    ).toHaveAttribute('aria-pressed', 'false');
+    await expect(
+      page.getByRole('heading', { name: 'History 1' })
+    ).toBeVisible();
+  }
+);
 
 test('the wheel zooms toward the pointer, and the preference turns it off', async ({
   page
@@ -2203,7 +2217,10 @@ test('the control reference shows the mouse bindings, not just the keys', async 
   await expect(page.locator('.viewer-host canvas')).toBeVisible();
 
   await page.keyboard.press('?');
-  const sheet = page.getByRole('dialog', { name: 'Help & controls', exact: true });
+  const sheet = page.getByRole('dialog', {
+    name: 'Help & controls',
+    exact: true
+  });
   await expect(sheet).toBeVisible();
 
   // Orbit is Shift+drag and pan is right-drag. Neither is guessable, and the
