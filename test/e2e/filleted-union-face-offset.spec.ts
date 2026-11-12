@@ -523,14 +523,17 @@ test(
         scale: Number(element.dataset.e2eHandlePixelsPerUnit)
       }));
       const box = (await canvas.boundingBox())!;
-      await page.mouse.move(box.x + handle.x, box.y + handle.y);
+      const start = { x: box.x + handle.x, y: box.y + handle.y };
+      await page.mouse.move(start.x, start.y);
       await page.mouse.down();
       await page.mouse.move(
-        box.x + handle.x + handle.dx * handle.scale * delta,
-        box.y + handle.y + handle.dy * handle.scale * delta,
+        start.x + handle.dx * handle.scale * delta,
+        start.y + handle.dy * handle.scale * delta,
         { steps: 12 }
       );
-      await expect(value).toContainText(String(from + delta));
+      if (from + delta > 0)
+        await expect(value).toContainText(String(from + delta));
+      return start;
     };
 
     // Let go at 23 while its check is held, then take the handle again
@@ -567,11 +570,62 @@ test(
     await expect.poll(heldChecks).toBe(1);
     await press(23, -3, true);
     await page.keyboard.press('Escape');
+    await page.mouse.up();
     await answerChecks();
     await expect(contentinfo).toContainText('width set to 23 mm', {
       timeout: 30_000
     });
     await expect.poll(endX, { timeout: 30_000 }).toBeCloseTo(23, 4);
     expect(await heldChecks()).toBe(0);
+    const undo = page.getByRole('button', { name: 'Undo', exact: true });
+    await undo.click();
+    await expect.poll(endX, { timeout: 30_000 }).toBeCloseTo(30, 4);
+
+    // Let go again where the release was: it lands from the check already
+    // running for it, and no second check is asked for.
+    await pickSide();
+    await page.evaluate(() => {
+      window.__holdChecks = true;
+    });
+    await press(30, -7);
+    await page.mouse.up();
+    await expect.poll(heldChecks).toBe(1);
+    const grabbed = await press(23, -3, true);
+    await page.mouse.move(grabbed.x, grabbed.y, { steps: 12 });
+    await expect(value).toContainText('23');
+    await page.mouse.up();
+    await page.waitForTimeout(500);
+    expect(await heldChecks()).toBe(1);
+    await answerChecks();
+    await expect(contentinfo).toContainText('width set to 23 mm', {
+      timeout: 30_000
+    });
+    await expect.poll(endX, { timeout: 30_000 }).toBeCloseTo(23, 4);
+    await undo.click();
+    await expect.poll(endX, { timeout: 30_000 }).toBeCloseTo(30, 4);
+    await expect(undo).toBeDisabled();
+
+    // Let go on a value that cannot be built (the end pushed through the
+    // cylinder it is fused to and out past the far side): no refusal takes
+    // the release away. It lands as it was let go, from its own check.
+    await pickSide();
+    await page.evaluate(() => {
+      window.__holdChecks = true;
+    });
+    await press(30, -7);
+    await page.mouse.up();
+    await expect.poll(heldChecks).toBe(1);
+    await press(23, -40, true);
+    await page.mouse.up();
+    await page.waitForTimeout(500);
+    expect(await heldChecks()).toBe(1);
+    await answerChecks();
+    await expect(contentinfo).toContainText('width set to 23 mm', {
+      timeout: 30_000
+    });
+    await expect.poll(endX, { timeout: 30_000 }).toBeCloseTo(23, 4);
+    await undo.click();
+    await expect.poll(endX, { timeout: 30_000 }).toBeCloseTo(30, 4);
+    await expect(undo).toBeDisabled();
   }
 );

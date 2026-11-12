@@ -66,23 +66,54 @@ async function importUnvalidatedPrimitive(
   });
 }
 
+/**
+ * Holds the worker's completed (analysed) live projections while
+ * `holdAnalysis` is set, counting them in `heldAnalysis`. With `holdChecks`
+ * also set, a user edit's exact commit check (`sync` with `proposeCarry`) is
+ * held and counted the same way: a validated edit commits that result and
+ * the live view adopts it, so the check is where its analysis waits.
+ */
 async function installAnalysisGate(page: Page) {
   await page.addInitScript(() => {
     const scope = window as typeof window & {
       holdAnalysis: boolean;
+      holdChecks: boolean;
       heldAnalysis: number;
       readyWhileAnalysisHeld: number;
       warningOverride: string[] | null;
       releaseAnalysis: () => void;
     };
     scope.holdAnalysis = false;
+    scope.holdChecks = false;
     scope.heldAnalysis = 0;
     scope.readyWhileAnalysisHeld = 0;
     scope.warningOverride = null;
     const pending: (() => void)[] = [];
     scope.releaseAnalysis = () => {
       scope.holdAnalysis = false;
+      scope.holdChecks = false;
       for (const release of pending.splice(0)) release();
+    };
+    // The ids of the exact checks a user edit asked for.
+    const checks = new Set<string>();
+    const post = Worker.prototype.postMessage;
+    Worker.prototype.postMessage = function (
+      this: Worker,
+      message: unknown,
+      ...rest: unknown[]
+    ) {
+      const request = message as {
+        type?: string;
+        requestId?: string;
+        proposeCarry?: boolean;
+      } | null;
+      if (request?.type === 'sync' && request.requestId && request.proposeCarry)
+        checks.add(request.requestId);
+      return (post as (...args: unknown[]) => void).call(
+        this,
+        message,
+        ...rest
+      );
     };
     const descriptor = Object.getOwnPropertyDescriptor(
       Worker.prototype,
@@ -113,10 +144,15 @@ async function installAnalysisGate(page: Page) {
           ) {
             result.packet.state.warnings = [...scope.warningOverride];
           }
+          const check =
+            result.type === 'sync' &&
+            result.requestId !== undefined &&
+            checks.delete(result.requestId);
           if (
-            scope.holdAnalysis &&
-            result.type === 'projection-delta' &&
-            result.packet?.state?.analysis !== 'pending'
+            (scope.holdChecks && scope.holdAnalysis && check) ||
+            (scope.holdAnalysis &&
+              result.type === 'projection-delta' &&
+              result.packet?.state?.analysis !== 'pending')
           ) {
             scope.heldAnalysis += 1;
             pending.push(() => listener.call(this, event));
@@ -146,17 +182,16 @@ test('Delete accepts the complete displayed fillet while its worker analysis cat
   await bar.locator('summary').click();
   await enterCommandValue(page, 'radius', '1');
   await expect(bar.getByRole('button', { name: 'Done' })).toBeEnabled();
+  // Any live rebuild's analysis after Done is held. The validated commit
+  // installs its checked result, analysis included, so the complete fillet
+  // is there at once and nothing is left to catch up.
   await page.evaluate(() => {
     (window as typeof window & { holdAnalysis: boolean }).holdAnalysis = true;
   });
   await finishInPlaceCommand(page, 'Fillet');
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () => (window as typeof window & { heldAnalysis: number }).heldAnalysis
-      )
-    )
-    .toBeGreaterThan(0);
+  await expect(page.getByRole('heading', { name: 'History 2' })).toBeVisible({
+    timeout: 30_000
+  });
   const canvas = page.locator('.viewer-host canvas');
   const pickBlend = () =>
     canvas.evaluate(
@@ -179,6 +214,11 @@ test('Delete accepts the complete displayed fillet while its worker analysis cat
   await page.keyboard.press('Delete');
   await expect(page.locator('.toast')).toContainText('Deleted Fillet');
   await expect(page.getByRole('heading', { name: 'History 1' })).toBeVisible();
+  expect(
+    await page.evaluate(
+      () => (window as typeof window & { heldAnalysis: number }).heldAnalysis
+    )
+  ).toBe(0);
   await page.evaluate(() =>
     (
       window as typeof window & { releaseAnalysis: () => void }
@@ -225,16 +265,35 @@ test('suspends saved measurements while a resized body waits for analysis', asyn
   const previousValue = await workbench
     .locator('.measurement-row-value')
     .innerText();
-  await modes.getByRole('button', { name: 'Build', exact: true }).click();
-  await page.locator('.feature-row-main').first().click();
-  for (const label of ['Width (X)', 'Depth (Y)', 'Height (Z)']) {
-    const field = inspector.getByLabel(label);
-    await field.fill(String(Number(await field.inputValue()) * 2));
-  }
+  const measureInView = async () => {
+    await modes.getByRole('button', { name: 'View', exact: true }).click();
+    await page
+      .getByRole('toolbar', { name: 'View tools' })
+      .getByRole('button', { name: 'Measure', exact: true })
+      .click();
+  };
+  const resize = async () => {
+    await modes.getByRole('button', { name: 'Build', exact: true }).click();
+    await page.locator('.feature-row-main').first().click();
+    for (const label of ['Width (X)', 'Depth (Y)', 'Height (Z)']) {
+      const field = inspector.getByLabel(label);
+      await field.fill(String(Number(await field.inputValue()) * 2));
+    }
+    await inspector.getByRole('button', { name: 'Apply', exact: true }).click();
+  };
+  // A validated commit installs its checked result at once, so the resize's
+  // wait for analysis is its exact check: hold that (or the live rebuild's
+  // analysis, should the commit not be adopted) and look at the saved
+  // measurement meanwhile.
   await page.evaluate(() => {
-    (window as typeof window & { holdAnalysis: boolean }).holdAnalysis = true;
+    const scope = window as typeof window & {
+      holdAnalysis: boolean;
+      holdChecks: boolean;
+    };
+    scope.holdAnalysis = true;
+    scope.holdChecks = true;
   });
-  await inspector.getByRole('button', { name: 'Apply', exact: true }).click();
+  await resize();
   await expect
     .poll(() =>
       page.evaluate(
@@ -242,11 +301,7 @@ test('suspends saved measurements while a resized body waits for analysis', asyn
       )
     )
     .toBeGreaterThan(0);
-  await modes.getByRole('button', { name: 'View', exact: true }).click();
-  await page
-    .getByRole('toolbar', { name: 'View tools' })
-    .getByRole('button', { name: 'Measure', exact: true })
-    .click();
+  await measureInView();
   await expect(workbench.getByText('updating', { exact: true })).toBeVisible();
   await expect(workbench.locator('.measurement-row-value')).toHaveText(
     'Updating…'
@@ -263,9 +318,17 @@ test('suspends saved measurements while a resized body waits for analysis', asyn
     ).releaseAnalysis()
   );
   await expect(workbench.getByText('updating', { exact: true })).toHaveCount(0);
+  // Leaving its edit card for View withdrew that resize once its check
+  // answered; applied and left in place, it lands and the row follows it.
+  await resize();
+  await expect(
+    page.locator('.feature-row', { hasText: '60 × 36 × 48 mm' })
+  ).toHaveCount(1, { timeout: 30_000 });
+  await measureInView();
   await expect(workbench.locator('.measurement-row-value')).not.toHaveText(
     previousValue
   );
+  await expect(workbench.getByText('updating', { exact: true })).toHaveCount(0);
   await expect(
     workbench.getByRole('button', { name: 'Copy all' })
   ).toBeEnabled();

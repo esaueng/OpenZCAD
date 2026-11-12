@@ -870,7 +870,11 @@ describe('taking a handle again while its release validates', () => {
         baseVersion: version
       }
     });
-    expect(edit.host.onBusy).toHaveBeenLastCalledWith(false);
+    // Still pending, so nothing else starts meanwhile: busy stays raised
+    // for the drag that set it aside.
+    expect(edit.host.onBusy).toHaveBeenCalledTimes(1);
+    expect(edit.host.onBusy).toHaveBeenLastCalledWith(true);
+    expect(edit.result.current.idle()).toBe(true);
     // Nothing else is validating now.
     expect(edit.result.current.supersede()).toBeNull();
 
@@ -945,6 +949,53 @@ describe('taking a handle again while its release validates', () => {
     expect(edit.derive).toHaveBeenCalledTimes(1);
     expect(edit.host.commit).not.toHaveBeenCalled();
     expect(edit.host.onValidationFailed).toHaveBeenCalledTimes(1);
+  });
+
+  it('lowers the busy flag a set-aside release kept raised once it is dropped', async () => {
+    const edit = validatingRelease();
+    act(() => {
+      void edit.release(6.4);
+    });
+    act(() => {
+      edit.result.current.supersede();
+    });
+    expect(edit.host.onBusy).toHaveBeenLastCalledWith(true);
+    act(() => {
+      edit.result.current.discard();
+    });
+    expect(edit.host.onBusy).toHaveBeenLastCalledWith(false);
+    expect(edit.host.onBusy).toHaveBeenCalledTimes(2);
+    // Only once.
+    act(() => {
+      edit.result.current.discard();
+    });
+    expect(edit.host.onBusy).toHaveBeenCalledTimes(2);
+  });
+
+  it('leaves the busy flag to a later run that took it over', async () => {
+    const edit = validatingRelease();
+    act(() => {
+      void edit.release(6.4);
+    });
+    act(() => {
+      edit.result.current.supersede();
+    });
+    let second: Promise<boolean> = Promise.resolve(false);
+    act(() => {
+      second = edit.release(7);
+    });
+    expect(edit.result.current.idle()).toBe(false);
+    // The new run owns the flag: a late discard does not lower it.
+    act(() => {
+      edit.result.current.discard();
+    });
+    expect(edit.host.onBusy).toHaveBeenLastCalledWith(true);
+    await act(async () => {
+      edit.answers[1]!.resolve();
+    });
+    await expect(second).resolves.toBe(true);
+    expect(edit.host.onBusy).toHaveBeenLastCalledWith(false);
+    expect(edit.result.current.idle()).toBe(true);
   });
 
   it('cannot set aside an edit that is not validating', async () => {

@@ -255,7 +255,7 @@ interface ViewerShellProps {
   offsetDragTarget: Pick<OffsetHandleTarget, 'bodyId' | 'topologyId'> | null;
   onOffsetPreview(offset: number, exactGeometry?: boolean): void;
   onOffsetCommit: ModelViewerProps['onOffsetCommit'];
-  onOffsetCancel(atOriginal?: boolean): void;
+  onOffsetCancel: ModelViewerProps['onOffsetCancel'];
   offsetPreviewInvalid: boolean;
   offsetPreviewLimit?: ModelViewerProps['offsetPreviewLimit'];
   previewDeferred: boolean;
@@ -283,7 +283,7 @@ interface ViewerShellProps {
   onCylinderDimensionModeChange(mode: DimensionMode): void;
   onCylinderRadiusPreview(radius: number, exactGeometry: boolean): void;
   onCylinderRadiusCommit(radius: number): boolean;
-  onCylinderRadiusCancel(atOriginal?: boolean): void;
+  onCylinderRadiusCancel: ModelViewerProps['onCylinderRadiusCancel'];
   /** See `ModelViewer` `onRetakeLockedHandle`. */
   onRetakeLockedHandle?(): boolean;
   onOpenCylinderRadiusKeypad(
@@ -822,7 +822,7 @@ export function ViewerShell({
         onOffsetCancel={(atOriginal) => {
           setDatumDrag(null);
           setDatumGesture((gesture) => gesture + 1);
-          onOffsetCancel(atOriginal);
+          return onOffsetCancel(atOriginal);
         }}
         offsetPreviewInvalid={offsetPreviewInvalid}
         offsetPreviewLimit={offsetPreviewLimit}

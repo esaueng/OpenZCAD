@@ -76,14 +76,20 @@ the released handle stays drawn where it was let go and may be taken again.
 That press sets the release aside (`supersede`): it will neither commit nor
 report a refusal, and its rebuild keeps running in the worker. Letting go at
 the same value commits from that rebuild; letting go elsewhere validates the
-new value against the same base document (one edit, one undo step); an
-abandoned drag (Escape, a press that stays put) commits the set-aside release
-as it was let go; letting go back on the original face or radius drops it.
-Exact entry stays locked while a release validates.
+new value against the same base document (one edit, one undo step); a drag
+that starts no edit of its own (Escape, a press that stays put, a refused or
+blocked value) commits the set-aside release as it was let go, with the
+handle and preview kept at that value meanwhile; letting go back on the
+original face or radius drops it. `useRetakenRelease` owns that hand-off: a
+drag that ends without telling (the selection or tool changed under it)
+still lands its release, a document that moved on drops it with the same
+"document changed" report a validating release gives, and the edit lock
+(`onBusy`) stays held until the release is committed or dropped. Exact entry
+stays locked while a release validates.
 
-With `window.__ozFaceDragTrace` enabled, `oz.drag.release`, `validated`,
-`committed`, `superseded` and `settled` (`detail.adopted`) User Timing marks
-time each release. On a private 32-feature filleted box ∪ cylinder
+With `window.__ozFaceDragTrace` enabled, each release records `release`,
+`validated`, `committed`, `superseded` and `settled` (`detail.adopted`) in
+that array and as `performance.mark('oz.drag.<stage>')` User Timing marks. On a private 32-feature filleted box ∪ cylinder
 reproduction part in local Chromium (Linux, Vulkan ANGLE; three releases each,
 release → live result accepted): top-face offset 488/337/356 → 293/119/137 ms,
 side-face −32 mm 602/445/386 → 381/277/156 ms, cylinder diameter 1413/906 →

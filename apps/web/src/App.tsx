@@ -1624,10 +1624,8 @@ import { describeSyncFailure, type SyncEntry } from './lib/syncRun';
 import { useGeometryWorker } from './hooks/useGeometryWorker';
 import { useProjectView } from './hooks/useProjectView';
 import { useAppSettingsSync } from './hooks/useAppSettingsSync';
-import {
-  useDirectEditCommit,
-  type SupersededDirectEdit
-} from './hooks/useDirectEditCommit';
+import { useDirectEditCommit } from './hooks/useDirectEditCommit';
+import { useRetakenRelease } from './hooks/useRetakenRelease';
 import { useSettledFlag } from './hooks/useSettledFlag';
 import { useSteadySaveState } from './hooks/useSteadySaveState';
 import { useLocalProjectAutosaveSchedule } from './hooks/useLocalProjectAutosaveSchedule';
@@ -4963,10 +4961,7 @@ export function App() {
     })
   ).current;
 
-  const {
-    run: executeValidatedDirectEdit,
-    supersede: supersedeValidatingDirectEdit
-  } = useDirectEditCommit({
+  const directEditCommit = useDirectEditCommit({
     manager: () => managerRef.current,
     // Built with the live lineage demand: the commit then adopts this result
     // as the live one (`adoptValidatedResult`) rather than rebuilding it.
@@ -5110,6 +5105,12 @@ export function App() {
       inferFeatureNodeFor(bodyId);
     },
     onBusy: setBusy,
+    onStatus: setStatus
+  });
+  const executeValidatedDirectEdit = directEditCommit.run;
+  const retakenRelease = useRetakenRelease({
+    directEdit: directEditCommit,
+    document: () => managerRef.current?.document,
     onStatus: setStatus
   });
   // Held whole rather than destructured, because the STEP import hands the
@@ -7593,6 +7594,16 @@ export function App() {
   // down every History row. A held one is still disclosed.
   const panelGeometryPending =
     currentGeometrySnapshot !== null || currentFaceGeometryPreview !== null;
+  // Saved measurements read the model on screen. While an edit's exact check
+  // runs, that model is the one the edit is about to replace: a validated
+  // commit installs its checked result at once, with no analysis window of
+  // its own after it, so the check is where its measurements wait (the dock
+  // says so only once that takes visible time).
+  const measurementGeometryPending =
+    analysisPendingSnapshot !== null ||
+    currentFaceGeometryPreview !== null ||
+    validatedBusy ||
+    (isOperationState(interaction) && interaction.phase === 'validating');
   const panelGeometryPendingShown = useSettledFlag(
     panelGeometryPending,
     PANEL_PENDING_DELAY_MS
@@ -8422,8 +8433,7 @@ export function App() {
     doc,
     modelingLocked,
     exactGeometryReady,
-    geometryPending:
-      analysisPendingSnapshot !== null || currentFaceGeometryPreview !== null,
+    geometryPending: measurementGeometryPending,
     representations,
     renderedRepresentations,
     viewerBodies: completedViewerBodies,
@@ -24289,8 +24299,9 @@ export function App() {
   }
 
   function handleCylinderRadiusCommit(radius: number, exact?: ParamValue) {
-    // A drag that retook a validating release ends here; see the offset.
-    const retaken = takeRetakenRelease('resize-cylinder-radius');
+    // A drag that retook a validating release ends here. As for the offset,
+    // its set-aside release is taken only once a commit starts: on false the
+    // viewport cancels the retaken drag, which lands that release.
     if (!requireDisplayedGeometryComplete()) {
       return false;
     }
@@ -24313,6 +24324,8 @@ export function App() {
       plan &&
       isUnchangedCylinderRadius(radius, sourceRadius, plan.edit)
     ) {
+      // Back on the original wall: a retaken release is dropped with it.
+      retakenRelease.drop('resize-cylinder-radius');
       handleCylinderRadiusCancel();
       return true;
     }
@@ -24324,10 +24337,9 @@ export function App() {
       setStatus('Radius is too small to form valid geometry at this scale.');
       return false;
     }
-    if (exact === undefined && retaken?.submittedValue === radius) {
-      commitRetakenRelease(retaken);
-      return true;
-    }
+    const retaken = retakenRelease.take('resize-cylinder-radius');
+    if (exact === undefined && retaken?.submittedValue === radius)
+      return retakenRelease.commit(retaken);
     const restReuse =
       exact === undefined
         ? radiusRestRebuilds.reusable(
@@ -25453,17 +25465,23 @@ export function App() {
     setPreviewDeferred(offsetPreview.degraded && offsetPreview.lagging);
   }
 
-  function handleOffsetCancel() {
+  function handleOffsetCancel(options?: { keepShown?: boolean }) {
     stopOffsetRestCheck();
     regionExtrudePreview.clear();
-    offsetPreview.clear();
+    if (options?.keepShown) {
+      // A set-aside release lands at the value already on screen: keep its
+      // exact frame up until the commit replaces it, as after a release.
+      offsetPreview.stop();
+    } else {
+      offsetPreview.clear();
+      setRenderedOffsetPreview(null);
+      setLastValidPreview(null);
+    }
     // clear() re-arms the slow-frame guard, so the chip must stop reporting a
     // paused preview too. Commit and validation failure already do this; a
     // canceled gesture left it latched until the next one of those.
     setPreviewDeferred(false);
     offsetPreviewValueRef.current = null;
-    setRenderedOffsetPreview(null);
-    setLastValidPreview(null);
     const current = interactionRef.current;
     if (current.mode === 'face' && current.op === 'offset-face') {
       // Re-selecting the same semantic target resets the existing lifecycle
@@ -25844,92 +25862,67 @@ export function App() {
     };
   }
 
-  /** The release a drag that retook its handle set aside; see below. */
-  const retakenReleaseRef = useRef<{
-    edit: SupersededDirectEdit;
-    op: 'offset-face' | 'resize-cylinder-radius';
-    target: FaceTarget;
-  } | null>(null);
   /**
    * A press on the offset or radius handle while its release validates. The
    * release is set aside instead of waiting for it (nothing of it has reached
    * the document, its undo history or storage), and the hand drags on from
    * the value it let go at. Its exact rebuild keeps running: the next release
-   * at that value commits from it, and a cancelled drag commits it as it was
-   * let go (`takeRetakenRelease`).
+   * at that value commits from it, and a drag that ends without an edit of
+   * its own (abandoned, refused, blocked) lands it as it was let go
+   * (`useRetakenRelease`).
    */
   function retakeLockedHandle(): boolean {
     const current = interactionRef.current;
-    const base = managerRef.current?.document;
     if (
-      !base ||
+      !managerRef.current?.document ||
       current.mode !== 'face' ||
       (current.op !== 'offset-face' &&
         current.op !== 'resize-cylinder-radius') ||
-      current.phase !== 'validating'
+      current.phase !== 'validating' ||
+      !retakenRelease.retake(current.op, current.target)
     )
       return false;
-    const edit = supersedeValidatingDirectEdit();
-    if (!edit) return false;
     pendingDirectEditRef.current = null;
-    retakenReleaseRef.current = {
-      edit,
-      op: current.op,
-      target: current.target
-    };
     dispatchInteraction({ type: 'drag-retake' });
     return true;
   }
-  /**
-   * The release a retaken drag set aside, once that drag ends, if it still
-   * applies: the same handle, against the document it was validated for.
-   * Consumed either way; a drag ends once.
-   */
-  function takeRetakenRelease(
-    op: 'offset-face' | 'resize-cylinder-radius'
-  ): SupersededDirectEdit | null {
-    const retaken = retakenReleaseRef.current;
-    retakenReleaseRef.current = null;
-    const current = interactionRef.current;
-    const base = managerRef.current?.document;
-    return retaken &&
-      retaken.op === op &&
-      current.mode === 'face' &&
-      current.op === op &&
-      current.target.bodyId === retaken.target.bodyId &&
-      current.target.topologyId === retaken.target.topologyId &&
-      base?.projectId === retaken.edit.precomputed.baseProjectId &&
-      base.version === retaken.edit.precomputed.baseVersion
-      ? retaken.edit
-      : null;
-  }
-  /** Commits a set-aside release as it was let go, from its own rebuild. */
-  function commitRetakenRelease(edit: SupersededDirectEdit): void {
-    void executeValidatedDirectEdit(
-      edit.command,
-      edit.targetBodyId,
-      edit.successMessage,
-      edit.submittedValue,
-      edit.onSuccess,
-      edit.validationTargets,
-      edit.precomputed
+  // A retaken drag that ends without reaching its handlers (the selection,
+  // the tool or the project changed under it) still settles its release.
+  useEffect(() => {
+    retakenRelease.follow(
+      interaction.mode === 'face'
+        ? {
+            mode: interaction.mode,
+            op: interaction.op,
+            phase: interaction.phase,
+            target: interaction.target
+          }
+        : { mode: interaction.mode }
     );
-  }
+  }, [interaction, doc, retakenRelease]);
   /**
    * The viewport ended an offset drag without a value to commit. Abandoned
-   * (Escape, a press that stayed put), a retaken release lands as it was let
-   * go; let go back on the original face, it is dropped with the drag.
+   * (Escape, a press that stayed put) or blocked, a retaken release lands as
+   * it was let go, and true tells the viewport to keep showing it there; let
+   * go back on the original face, it is dropped with the drag.
    */
-  function handleViewerOffsetCancel(atOriginal?: boolean) {
-    const retaken = takeRetakenRelease('offset-face');
-    handleOffsetCancel();
-    if (retaken && !atOriginal) commitRetakenRelease(retaken);
+  function handleViewerOffsetCancel(atOriginal?: boolean): boolean {
+    if (atOriginal) retakenRelease.drop('offset-face');
+    const retaken = retakenRelease.take('offset-face');
+    handleOffsetCancel({
+      keepShown:
+        retaken !== null &&
+        currentFaceGeometryPreview !== null &&
+        renderedOffsetPreview === retaken.submittedValue
+    });
+    return retaken ? retakenRelease.commit(retaken) : false;
   }
   /** The same for a radius drag; see {@link handleViewerOffsetCancel}. */
-  function handleViewerCylinderRadiusCancel(atOriginal?: boolean) {
-    const retaken = takeRetakenRelease('resize-cylinder-radius');
+  function handleViewerCylinderRadiusCancel(atOriginal?: boolean): boolean {
+    if (atOriginal) retakenRelease.drop('resize-cylinder-radius');
+    const retaken = retakenRelease.take('resize-cylinder-radius');
     handleCylinderRadiusCancel();
-    if (retaken && !atOriginal) commitRetakenRelease(retaken);
+    return retaken ? retakenRelease.commit(retaken) : false;
   }
 
   /**
@@ -25947,9 +25940,11 @@ export function App() {
       handleRegionExtrudeCommit(offset, exact);
       return 'started';
     }
-    // A drag that retook a validating release ends here: let go where that
-    // release was, it commits from the rebuild already running for it.
-    const retaken = takeRetakenRelease('offset-face');
+    // A drag that retook a validating release ends here. Its set-aside
+    // release is taken only once a commit starts: a value that cannot be
+    // committed answers 'blocked', and the viewport's cancel then lands that
+    // release as it was let go (`handleViewerOffsetCancel`).
+    const retaking = retakenRelease.holds('offset-face');
     const current = interactionRef.current;
     if (
       current.mode !== 'face' ||
@@ -25969,7 +25964,7 @@ export function App() {
       setStatus(
         current.error?.message ?? 'The current offset preview is invalid.'
       );
-      return 'refused';
+      return retaking ? 'blocked' : 'refused';
     }
     const plan = buildOffsetEditPlan(offset, exact);
     notePlanEdit(interactionRef.current, plan);
@@ -25979,6 +25974,10 @@ export function App() {
       return 'blocked';
     }
     if (plan.preflightRejection) {
+      if (retaking) {
+        setStatus(plan.preflightRejection);
+        return 'blocked';
+      }
       reportPreviewFailure(plan.preflightRejection, offset);
       return 'refused';
     }
@@ -25998,8 +25997,11 @@ export function App() {
         : null;
     offsetPreview.stop();
     offsetPreviewValueRef.current = null;
+    // Let go where the set-aside release was, it commits from the rebuild
+    // already running for it; anywhere else, the new value replaces it.
+    const retaken = retakenRelease.take('offset-face');
     if (exact === undefined && retaken?.submittedValue === offset) {
-      commitRetakenRelease(retaken);
+      if (!retakenRelease.commit(retaken)) return 'blocked';
       return 'started';
     }
     void executeValidatedDirectEdit(
@@ -29340,9 +29342,7 @@ export function App() {
       measurements={measurements}
       formattedMeasurements={formattedMeasurements}
       enabled={measuring}
-      geometryPending={
-        analysisPendingSnapshot !== null || currentFaceGeometryPreview !== null
-      }
+      geometryPending={measurementGeometryPending}
       activeMeasurementId={activeMeasurementId}
       mode={measurementMode}
       draftTargetLabel={measurementDraft?.label ?? null}

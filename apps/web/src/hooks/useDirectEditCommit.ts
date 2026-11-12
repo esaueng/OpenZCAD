@@ -94,10 +94,21 @@ export interface DirectEditCommit {
    * `run` of the same edit (the hand let go where it was, or the new
    * gesture was cancelled) commits from it instead of rebuilding it.
    *
+   * The busy flag stays raised while the set-aside edit is pending: the
+   * next `run` takes it over, and `discard` lowers it when the edit is
+   * dropped instead, so no other edit starts in between.
+   *
    * Null when nothing is validating, or when the validation has already
    * answered and the edit is committing.
    */
   supersede(): SupersededDirectEdit | null;
+  /**
+   * Drops the edit `supersede` set aside without committing it, lowering
+   * the busy flag it kept raised unless a `run` has taken that over since.
+   */
+  discard(): void;
+  /** Whether a `run` would start now: nothing validating or committing. */
+  idle(): boolean;
 }
 
 /**
@@ -128,19 +139,32 @@ export function useDirectEditCommit(
   } | null>(null);
   // Set while a validated edit is being committed: too late to set aside.
   const committing = useRef(false);
+  // An edit `supersede` set aside, still holding the busy flag up for the
+  // `run` that commits it, or until `discard` drops it.
+  const setAside = useRef(false);
+  const discard = () => {
+    if (!setAside.current) return;
+    setAside.current = false;
+    if (!inFlight.current && !committing.current)
+      optionsRef.current.onBusy(false);
+  };
 
   return {
     supersede() {
       const active = inFlight.current;
       if (!active?.edit || committing.current) return null;
       inFlight.current = null;
-      optionsRef.current.onBusy(false);
+      setAside.current = true;
       if (faceDragTraceEnabled())
         traceFaceDrag('superseded', {
           value: active.edit.submittedValue,
           ms: performance.now() - active.startedAt
         });
       return active.edit;
+    },
+    discard,
+    idle() {
+      return !inFlight.current && !committing.current;
     },
     async run(
       command,
@@ -154,8 +178,12 @@ export function useDirectEditCommit(
       const host = optionsRef.current;
       const manager = host.manager();
       if (!manager || inFlight.current || committing.current) {
+        // No document left to commit a set-aside edit to: it is dropped.
+        if (!manager) discard();
         return false;
       }
+      // Takes over the busy flag a set-aside edit kept raised.
+      setAside.current = false;
       const startedAt = performance.now();
       if (faceDragTraceEnabled())
         traceFaceDrag('release', { value: submittedValue });
