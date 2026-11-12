@@ -969,6 +969,32 @@ button.save-state:focus-visible,
   margin-inline: -5px;
 }
 
+/* The warning count follows the status: a glyph and a number in the
+   warning ink, never wider than that, so it costs the name 30px only while
+   there is something to say. */
+.topbar-identity > .topbar-warnings {
+  flex: none;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-inline: -3px -5px;
+  padding: 0 5px;
+  color: var(--color-warning);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+}
+
+.topbar-identity > .topbar-warnings:hover,
+.topbar-identity > .topbar-warnings:focus-visible {
+  background: var(--color-surface-hover);
+}
+
 /* The lock is a fact about the project, so it sits close to the name
    (10px from the units); the status then keeps its usual 14px. */
 .topbar-identity > .encryption-menu {

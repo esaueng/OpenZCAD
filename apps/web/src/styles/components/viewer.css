@@ -403,6 +403,14 @@
   background: var(--color-border);
 }
 
+/* The viewer bar's groups (ViewerToolbar.tsx) take no box of their own:
+   their buttons lay out as the bar's children, in a column or a grid, and
+   the hairline between them is the grouping. A roomy stage makes each an
+   island instead (quiet-stage.css). */
+.rail-group {
+  display: contents;
+}
+
 .rail-views-anchor {
   position: relative;
 }

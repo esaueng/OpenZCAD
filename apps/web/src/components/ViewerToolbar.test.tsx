@@ -782,3 +782,25 @@ describe('touch modifier toggles', () => {
     }
   });
 });
+
+describe("the viewer bar's groups", () => {
+  it('keeps every button in the bar, undo and redo apart from the view controls', () => {
+    renderToolbar({ kind: 'clipping' });
+    const bar = screen.getByRole('toolbar', { name: 'Viewer bar' });
+    const edit = within(bar).getByRole('group', { name: 'Edit' });
+    const view = within(bar).getByRole('group', { name: 'View' });
+    expect(
+      within(edit)
+        .getAllByRole('button')
+        .map((button) => button.getAttribute('aria-label'))
+    ).toEqual(['Undo', 'Redo']);
+    expect(within(view).queryByRole('button', { name: 'Undo' })).toBeNull();
+    expect(
+      within(view).getByRole('button', { name: 'Standard views' })
+    ).toBeTruthy();
+    // The hairline between the groups stays for the layouts that draw the
+    // bar as one surface.
+    expect(edit.nextElementSibling).toHaveClass('rail-group-break');
+    expect(edit.nextElementSibling?.nextElementSibling).toBe(view);
+  });
+});
