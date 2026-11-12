@@ -772,6 +772,117 @@ describe('useInPlaceCommand: thread', () => {
       (built.at(-1) as { thread: { length?: number } }).thread.length
     ).toBeUndefined();
   });
+
+  it('refuses an offset that would push a set length past the face end (re-check #1)', async () => {
+    const { hook, built } = setup();
+    act(() => hook.result.current.start('thread', [], [BOSS]));
+    await waitFor(() => expect(hook.result.current.values.length).toBe(12));
+    let taken = false;
+    act(() => {
+      taken = hook.result.current.setValue('length', 10);
+    });
+    expect(taken).toBe(true);
+    // 3 + 10 overshoots the 12 face: refused, never a quiet 9 mm thread.
+    act(() => {
+      taken = hook.result.current.setValue('offset', 3);
+    });
+    expect(taken).toBe(false);
+    expect(hook.result.current.refusal).toMatch(
+      /^3; with the length at 10, the offset can be at most 2\./
+    );
+    expect(hook.result.current.values.offset).toBe(0);
+    expect(hook.result.current.values.length).toBe(10);
+    // An offset that fits is taken, and the length kept as set.
+    act(() => {
+      taken = hook.result.current.setValue('offset', 1);
+    });
+    expect(taken).toBe(true);
+    await waitFor(() =>
+      expect(built.at(-1)).toMatchObject({
+        thread: { length: 10, offset: 1, anchor: 'end' }
+      })
+    );
+  });
+
+  it('runs a whole-face thread on to the far end as its offset moves', async () => {
+    const { hook, built } = setup();
+    act(() => hook.result.current.start('thread', [], [BOSS]));
+    await waitFor(() => expect(hook.result.current.values.length).toBe(12));
+    // Untouched, the length follows the offset.
+    act(() => {
+      hook.result.current.setValue('offset', 3);
+    });
+    await waitFor(() => expect(hook.result.current.values.length).toBe(9));
+    expect(hook.result.current.refusal).toBeNull();
+    // Dragged back out to the end, it still runs there when the offset moves.
+    act(() => {
+      hook.result.current.previewValue('length', 9);
+    });
+    act(() => {
+      hook.result.current.setValue('offset', 5);
+    });
+    expect(hook.result.current.values.length).toBe(7);
+    expect(hook.result.current.refusal).toBeNull();
+    await waitFor(() =>
+      expect(built.at(-1)).toMatchObject({ thread: { offset: 5 } })
+    );
+    expect(
+      (built.at(-1) as { thread: { length?: number } }).thread.length
+    ).toBeUndefined();
+  });
+
+  it('keeps an Options refusal and holds Done while the row applies (re-check #2)', async () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('thread', [], [BOSS]));
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    let taken = true;
+    act(() => {
+      taken = hook.result.current.setValue('offset', 12);
+    });
+    expect(taken).toBe(false);
+    // The offset has no handle, only its Options row: the reason stays.
+    expect(hook.result.current.handles.map((h) => h.valueId)).toEqual([
+      'length'
+    ]);
+    expect(hook.result.current.refusal).toMatch(
+      /^12; the face is only 12 long\./
+    );
+    expect(hook.result.current.canFinish).toBe(false);
+    act(() => {
+      taken = hook.result.current.setValue('offset', 2);
+    });
+    expect(taken).toBe(true);
+    expect(hook.result.current.refusal).toBeNull();
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+  });
+});
+
+describe('Options-only refusals in another tool (gear)', () => {
+  it('keeps a refused Options value until it is taken or its row hides', () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('gear'));
+    act(() => hook.result.current.setOption('gearType', 'worm'));
+    let taken = true;
+    act(() => {
+      taken = hook.result.current.setValue('starts', 20);
+    });
+    expect(taken).toBe(false);
+    expect(hook.result.current.refusal).toMatch(/^20; /);
+    // A choice that hides the row lets the refusal go, as a hidden chip's.
+    act(() => hook.result.current.setOption('gearType', 'spur'));
+    expect(hook.result.current.refusal).toBeNull();
+    // A row that stays shown keeps it until a value is taken.
+    act(() => {
+      taken = hook.result.current.setValue('pressureAngleDeg', 60);
+    });
+    expect(taken).toBe(false);
+    expect(hook.result.current.refusal).toMatch(/^60; /);
+    act(() => {
+      taken = hook.result.current.setValue('pressureAngleDeg', 25);
+    });
+    expect(taken).toBe(true);
+    expect(hook.result.current.refusal).toBeNull();
+  });
 });
 
 describe('useInPlaceCommand: hole step chips', () => {

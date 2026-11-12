@@ -798,7 +798,12 @@ export interface InPlaceToolSpec {
     value: number,
     values: Readonly<Record<string, number>>,
     /** The picks, for a bound they set (a thread's length, its face's). */
-    slots?: Pick<InPlaceSlots, 'faces'>
+    slots?: Pick<InPlaceSlots, 'faces'>,
+    /**
+     * The values the user has set: one they set is held to, one they did
+     * not follows the picks (a thread's untouched length).
+     */
+    touched?: readonly string[]
   ): string | null;
   hint(
     slots: InPlaceSlots,

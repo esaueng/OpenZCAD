@@ -157,6 +157,22 @@ export function threadIsPartial(
   return (numbers.length ?? reach) < reach - tolerance(geometry.length);
 }
 
+/**
+ * Whether the user set the length short of the far end (dragged or typed),
+ * rather than leaving it to run the rest of the face.
+ */
+function setShort(
+  geometry: ThreadFace,
+  values: Readonly<Record<string, number>>,
+  touched: readonly string[] | undefined
+): boolean {
+  if (!touched?.includes('length') || values.length === undefined) {
+    return false;
+  }
+  const reach = geometry.length - Math.max(values.offset ?? 0, 0);
+  return values.length < reach - tolerance(geometry.length);
+}
+
 // The length has its handle, the arrow on the thread's free end; every
 // other number is typed in the Options panel, so each must be `inOptions`
 // or its row never shows.
@@ -618,9 +634,10 @@ export const threadSpec: InPlaceToolSpec = {
     }
   ],
   summary: threadSummary,
-  refuseValue(valueId, value, values, slots) {
-    // A typed length or offset past the face's far end is refused: only a
-    // length that reaches the end exactly runs the whole face.
+  refuseValue(valueId, value, values, slots, touched) {
+    // A typed length or offset that would carry the thread past the face's
+    // far end is refused: only a length that reaches the end exactly runs
+    // the whole face, and an offset never quietly shortens a length set.
     const geometry = threadFace(slots?.faces[0]);
     if (!geometry) return null;
     const round = (number: number) => Math.round(number * 1e6) / 1e6;
@@ -632,11 +649,27 @@ export const threadSpec: InPlaceToolSpec = {
         : null;
     }
     if (valueId === 'offset') {
-      return value >= geometry.length - slack
-        ? `the face is only ${round(geometry.length)} long.`
-        : null;
+      if (value >= geometry.length - slack) {
+        return `the face is only ${round(geometry.length)} long.`;
+      }
+      const length = values.length;
+      if (
+        length !== undefined &&
+        setShort(geometry, values, touched) &&
+        value + length > geometry.length + slack
+      ) {
+        return `with the length at ${round(length)}, the offset can be at most ${round(geometry.length - length)}.`;
+      }
     }
     return null;
+  },
+  carries(valueId, value, values, slots) {
+    // A thread that runs to the far end keeps running there as its offset
+    // moves: its length follows, as an untouched one does by default.
+    if (valueId !== 'offset') return null;
+    const geometry = threadFace(slots.faces[0]);
+    if (!geometry || setShort(geometry, values, ['length'])) return null;
+    return { length: Math.max(geometry.length - Math.max(value, 0), 0) };
   },
   defaults(slots, _ctx, numbers): Record<string, number> {
     // Until its end is dragged, the thread runs the rest of the face.

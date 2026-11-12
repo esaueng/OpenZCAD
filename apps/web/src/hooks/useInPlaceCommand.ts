@@ -1765,7 +1765,8 @@ export function useInPlaceCommand(
               valueId,
               value,
               current.values,
-              { faces: current.slots.faces }
+              { faces: current.slots.faces },
+              current.touched
             ) ?? null)
           : null;
       if (crossed) {
@@ -1953,15 +1954,22 @@ export function useInPlaceCommand(
     [spec, slots, values, ctx, chosen]
   );
   // A refused entry holds Done until its value is taken, or until the value
-  // no longer applies: a choice (a hole's style) that hides its chip.
+  // no longer applies: a choice (a hole's style) that hides its chip, or its
+  // Options row (a value typed only there, a thread's offset).
   useEffect(() => {
-    if (
-      entryRefusal &&
-      !handles.some((handle) => handle.valueId === entryRefusal.valueId)
-    ) {
-      setEntryRefusal(null);
+    if (!entryRefusal) return;
+    if (handles.some((handle) => handle.valueId === entryRefusal.valueId)) {
+      return;
     }
-  }, [entryRefusal, handles]);
+    const valueSpec = spec?.values.find(
+      (candidate) => candidate.id === entryRefusal.valueId
+    );
+    const inOptions =
+      spec !== null &&
+      valueSpec?.inOptions === true &&
+      (valueSpec.when?.(inPlacePanelState(spec, chosen, heldValues)) ?? true);
+    if (!inOptions) setEntryRefusal(null);
+  }, [entryRefusal, handles, spec, chosen, heldValues]);
   const optionSpecs = useMemo(
     () =>
       (spec?.options ?? [])
@@ -2047,7 +2055,11 @@ function carriedValues(
         valueId,
         value,
         session.values,
-        { ...EMPTY_SLOTS, placement: session.slots.placement }
+        {
+          ...EMPTY_SLOTS,
+          placement: session.slots.placement,
+          faces: session.slots.faces
+        }
       ) ?? {}
     ).filter(([id]) => session.raws[id] === undefined)
   );
