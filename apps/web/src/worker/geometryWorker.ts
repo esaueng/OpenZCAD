@@ -617,6 +617,71 @@ interface GeometryWorkerJob {
  */
 const cancelledRequests = new Set<string>();
 
+/**
+ * The rebuild-cache key a request's exact result is stored under. Two
+ * requests with the same key receive the same derived state: the demand part
+ * is the adapter's own boolean-probe decisions once the kernel module has
+ * loaded (and the stricter raw demand before), so a demand that cannot
+ * enrich lineage does not change it.
+ */
+function rebuildResultKey(
+  request: GeometryWorkerWorkRequest,
+  contentKey: string
+): string {
+  const sync = request.type === 'sync' ? request : undefined;
+  return `${contentKey}${sync?.analysis ? `:analysis:${JSON.stringify(sync.analysis)}` : ''}${
+    // Preserve the eager/lazy distinction when boolean probes can enrich
+    // lineage. A model with no boolean has identical results in both modes.
+    lineageDemandCacheKey(
+      request.document,
+      sync?.lineageDemand,
+      booleanProbeNeeded
+    )
+  }${sync?.proposeCarry ? ':carry-proposal' : ''}`;
+}
+
+/**
+ * The live broadcast rebuild in progress, by the result key it will fill.
+ * Set once its key is known (after the kernel module loaded) and cleared when
+ * the job ends.
+ */
+let runningBroadcast: {
+  token: number;
+  projectId: string;
+  version: number;
+  key: string;
+} | null = null;
+
+/**
+ * Whether a newer broadcast asks for exactly the result the running live
+ * rebuild will publish: same project version, same result key, no projection
+ * recovery. Picking a face on the saved projection while a reopened project
+ * is still replaying its history adds lineage demand for that body; when the
+ * boolean probe decisions already cover it, superseding the build would
+ * stop it at the next feature boundary and replay again from the last
+ * history checkpoint, for an identical result. The newer request joins
+ * the running build instead, which keeps its broadcast token and publishes
+ * under the same project version the newer request names.
+ */
+function joinsRunningBroadcast(request: GeometryWorkerWorkRequest): boolean {
+  const running = runningBroadcast;
+  if (
+    !running ||
+    request.type !== 'sync' ||
+    request.requestId ||
+    request.forceFull ||
+    !broadcastGate.isCurrent(running.token)
+  )
+    return false;
+  const { document } = request;
+  return (
+    document.projectId === running.projectId &&
+    document.version === running.version &&
+    !isGeometryEmpty(document) &&
+    rebuildResultKey(request, geometryContentKey(document)) === running.key
+  );
+}
+
 function isGeometryEmpty(document: ProjectDocument): boolean {
   return document.featureOrder.length === 0 && document.bodyOrder.length === 0;
 }
@@ -1149,125 +1214,127 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         post(stateFor('loading-remus', request, { stale: true }));
       exactForSync = await loadExactKernel();
     }
-    const lineageDemandKey =
-      // Preserve the eager/lazy distinction when boolean probes can enrich
-      // lineage. A model with no boolean has identical results in both modes.
-      lineageDemandCacheKey(
-        document,
-        request.type === 'sync' ? request.lineageDemand : undefined,
-        booleanProbeNeeded
-      );
+    const resultKey =
+      contentKey === null ? null : rebuildResultKey(request, contentKey);
+    if (
+      resultKey !== null &&
+      request.type === 'sync' &&
+      job.broadcastToken !== null
+    )
+      runningBroadcast = {
+        token: job.broadcastToken,
+        projectId: document.projectId,
+        version: document.version,
+        key: resultKey
+      };
     const cachedDerived =
-      contentKey === null
+      resultKey === null
         ? emptyDerived(document)
-        : await rebuildCache.get(
-            `${contentKey}${request.type === 'sync' && request.analysis ? `:analysis:${JSON.stringify(request.analysis)}` : ''}${lineageDemandKey}${request.type === 'sync' && request.proposeCarry ? ':carry-proposal' : ''}`,
-            async () => {
-              resultCacheHit = false;
-              // 'failed' retries on the next load call, so it counts as a
-              // loading state here too.
-              if (exactKernelStatus !== 'ready') {
-                post(stateFor('loading-remus', request, { stale: true }));
-              }
-              const exact = exactForSync;
-              if (!exact) {
-                throw exactKernelError instanceof Error
-                  ? exactKernelError
-                  : new Error('The exact Remus kernel failed to load.');
-              }
-              if (!broadcastGate.isCurrent(job.broadcastToken)) {
-                throw new Error('Superseded geometry broadcast.');
-              }
-              post(stateFor('rebuilding', request, { stale: true }));
-              // A superseded rebuild stops at the next feature boundary (a
-              // running WASM call still completes); the adapter rejects typed
-              // and commits nothing, and the gate below drops anything stale.
-              const cancellation: BuildCancellationSignal = {
-                isCancelled: () =>
-                  (job.requestId
-                    ? cancelledRequests.has(job.requestId)
-                    : false) || !broadcastGate.isCurrent(job.broadcastToken)
-              };
-              const result = await exact.syncDocument(
-                document,
-                geometryProgress((progress) => {
-                  if (!broadcastGate.isCurrent(job.broadcastToken)) return;
-                  post({
-                    ...stateFor('rebuilding', request, { stale: true }),
-                    progress
-                  });
-                }),
-                request.requestId
-                  ? undefined
-                  : (projection) => {
-                      if (!broadcastGate.isCurrent(job.broadcastToken)) return;
-                      post({
-                        type: 'projection',
-                        projectId: document.projectId,
-                        version: document.version,
-                        derived: projection
-                      });
-                    },
-                request.type === 'sync' ? request.analysis : undefined,
-                {
-                  cancellation,
-                  ...(!request.requestId
-                    ? {
-                        onGeometryReady: (geometry: GeometryReadyState) => {
-                          if (!broadcastGate.isCurrent(job.broadcastToken))
-                            return;
-                          const encodingStartedMs = performance.now();
-                          const packet = projectionSender.encode(
-                            document.projectId,
-                            geometry,
-                            forceFull
-                          );
-                          forceFull = false;
-                          packet.metrics = {
-                            queueMs,
-                            resultCacheHit: 0,
-                            encodingMs: performance.now() - encodingStartedMs,
-                            workerMs: performance.now() - workerStartedMs
-                          };
-                          post(
-                            {
-                              type: 'projection-delta',
-                              projectId: document.projectId,
-                              version: document.version,
-                              packet
-                            },
-                            projectionTransferables(packet)
-                          );
-                        }
-                      }
-                    : {}),
-                  yieldControl: geometryYield(),
-                  ...(request.type === 'sync' && request.lineageDemand
-                    ? { lineageDemand: request.lineageDemand }
-                    : {}),
-                  ...(request.type === 'sync' && request.proposeCarry
-                    ? { proposeCarry: true }
-                    : {})
-                }
-              );
-              if (exact.hasTransientFailures(result)) {
-                transientResults.add(result);
-                transient = true;
-              }
-              // A carry proposal built a kernel state a plain build of the
-              // same content would not (a carried selection), so mass
-              // properties must not read it as that content's: they prepare
-              // again from a plain build, as after a preview.
-              if (request.type === 'sync' && request.proposeCarry) {
-                lastExactSyncKey = null;
-                lastExactSyncEpoch = null;
-              } else {
-                lastExactSyncKey = contentKey;
-                lastExactSyncEpoch = exact.currentMassPropertiesEpoch();
-              }
-              return result;
+        : await rebuildCache.get(resultKey, async () => {
+            resultCacheHit = false;
+            // 'failed' retries on the next load call, so it counts as a
+            // loading state here too.
+            if (exactKernelStatus !== 'ready') {
+              post(stateFor('loading-remus', request, { stale: true }));
             }
-          );
+            const exact = exactForSync;
+            if (!exact) {
+              throw exactKernelError instanceof Error
+                ? exactKernelError
+                : new Error('The exact Remus kernel failed to load.');
+            }
+            if (!broadcastGate.isCurrent(job.broadcastToken)) {
+              throw new Error('Superseded geometry broadcast.');
+            }
+            post(stateFor('rebuilding', request, { stale: true }));
+            // A superseded rebuild stops at the next feature boundary (a
+            // running WASM call still completes); the adapter rejects typed
+            // and commits nothing, and the gate below drops anything stale.
+            const cancellation: BuildCancellationSignal = {
+              isCancelled: () =>
+                (job.requestId
+                  ? cancelledRequests.has(job.requestId)
+                  : false) || !broadcastGate.isCurrent(job.broadcastToken)
+            };
+            const result = await exact.syncDocument(
+              document,
+              geometryProgress((progress) => {
+                if (!broadcastGate.isCurrent(job.broadcastToken)) return;
+                post({
+                  ...stateFor('rebuilding', request, { stale: true }),
+                  progress
+                });
+              }),
+              request.requestId
+                ? undefined
+                : (projection) => {
+                    if (!broadcastGate.isCurrent(job.broadcastToken)) return;
+                    post({
+                      type: 'projection',
+                      projectId: document.projectId,
+                      version: document.version,
+                      derived: projection
+                    });
+                  },
+              request.type === 'sync' ? request.analysis : undefined,
+              {
+                cancellation,
+                ...(!request.requestId
+                  ? {
+                      onGeometryReady: (geometry: GeometryReadyState) => {
+                        if (!broadcastGate.isCurrent(job.broadcastToken))
+                          return;
+                        const encodingStartedMs = performance.now();
+                        const packet = projectionSender.encode(
+                          document.projectId,
+                          geometry,
+                          forceFull
+                        );
+                        forceFull = false;
+                        packet.metrics = {
+                          queueMs,
+                          resultCacheHit: 0,
+                          encodingMs: performance.now() - encodingStartedMs,
+                          workerMs: performance.now() - workerStartedMs
+                        };
+                        post(
+                          {
+                            type: 'projection-delta',
+                            projectId: document.projectId,
+                            version: document.version,
+                            packet
+                          },
+                          projectionTransferables(packet)
+                        );
+                      }
+                    }
+                  : {}),
+                yieldControl: geometryYield(),
+                ...(request.type === 'sync' && request.lineageDemand
+                  ? { lineageDemand: request.lineageDemand }
+                  : {}),
+                ...(request.type === 'sync' && request.proposeCarry
+                  ? { proposeCarry: true }
+                  : {})
+              }
+            );
+            if (exact.hasTransientFailures(result)) {
+              transientResults.add(result);
+              transient = true;
+            }
+            // A carry proposal built a kernel state a plain build of the
+            // same content would not (a carried selection), so mass
+            // properties must not read it as that content's: they prepare
+            // again from a plain build, as after a preview.
+            if (request.type === 'sync' && request.proposeCarry) {
+              lastExactSyncKey = null;
+              lastExactSyncEpoch = null;
+            } else {
+              lastExactSyncKey = contentKey;
+              lastExactSyncEpoch = exact.currentMassPropertiesEpoch();
+            }
+            return result;
+          });
     const derived =
       contentKey === null
         ? cachedDerived
@@ -1427,6 +1494,7 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       }
     }
   } finally {
+    if (runningBroadcast?.token === job.broadcastToken) runningBroadcast = null;
     if (finishProfile) {
       const profile = finishProfile();
       profile.stages.workerPost = { calls: postCalls, ms: postMs };
@@ -1478,6 +1546,22 @@ self.onmessage = (event: MessageEvent<GeometryWorkerRequest>) => {
     return;
   }
   const isBroadcast = request.type === 'sync' && !request.requestId;
+  if (isBroadcast && joinsRunningBroadcast(request)) {
+    // The running build answers this request; its retry bookkeeping stays
+    // with it, and a retry re-runs the newest (equivalent) request.
+    latestBroadcast = request;
+    // Session-local diagnostic beside the host's `[geometry rebuild]` lines;
+    // identifiers only, no document contents.
+    console.debug(
+      '[geometry broadcast]',
+      JSON.stringify({
+        projectId: request.document.projectId,
+        version: request.document.version,
+        joinedRunningRebuild: true
+      })
+    );
+    return;
+  }
   if (isBroadcast) {
     clearEnvironmentRetry();
     environmentRetry = 0;
