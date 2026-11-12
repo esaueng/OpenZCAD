@@ -12,4 +12,4 @@ schedule allows (`test/drag-source-checkpoint.test.ts`); the worker serves the
 committed document's broadcast from a carry-neutral commit check
 (`geometryWorker.test.ts`); and face-move drag frames mesh at the disposable
 drag tessellation with full quality at rest and on commit
-(`test/display-deflection-hold.test.ts`).
+(`test/display-deflection-hold.test.ts`, PR #1350).
