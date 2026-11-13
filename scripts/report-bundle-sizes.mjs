@@ -43,6 +43,12 @@ const CHECK = process.argv.includes('--check');
 // 500 KiB edge, failing the queue on 81 bytes. 1 MiB stays a tripwire for a
 // runaway (an accidental large dependency, the kernel in the launcher)
 // rather than a reason to split UI; the kernel WASM keeps its own policy.
+//
+// 2026-11-13: main was down to about 29 KiB of headroom, and feature PRs were
+// spending it fast. Instead of a raise, code that only a particular gesture
+// reaches now loads on it: the assembly player (View), the AI patch
+// preflight, the direct-edit attempt log, the refusal reproduction export
+// and the library folder sync engine. Entry chunk 1,019,300 → 994,564 bytes.
 const DEFAULT_RAW_BUDGET = 1024 * 1024;
 const APPROVED_LAZY_ASSETS = [
   {

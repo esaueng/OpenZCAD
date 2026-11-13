@@ -36,10 +36,6 @@ import {
 import type { RefusalCapture } from './lib/refusalHarvest';
 import { useRefusalHarvest } from './hooks/useRefusalHarvest';
 import {
-  buildRefusalReproduction,
-  reproductionFileName
-} from './lib/refusalReproduction';
-import {
   PROJECT_MIGRATING_CODE,
   type DrawingAnnotation,
   type DrawingSheetId,
@@ -535,12 +531,7 @@ import { countClosedProfileSketches } from './lib/sketch/profileAvailability';
 import { useDocumentFonts } from './lib/textFonts';
 import { createProjectDiagnosticBundle } from './lib/projectDiagnostics';
 import type { DirectEditFixtureOutcome } from './lib/directEditFixture';
-import {
-  buildDirectEditFixture,
-  createInteractionDiagnosticBundle,
-  listInteractionDiagnostics,
-  recordInteractionDiagnostic
-} from './lib/interactionDiagnostics';
+import type * as InteractionDiagnostics from './lib/interactionDiagnostics';
 import { KERNEL_BUILD, supportsBlendGroupEdits } from './lib/kernelBuild';
 import {
   chordFromEvent,
@@ -1062,6 +1053,24 @@ const stepImportRun = () => import('./lib/stepImportRun');
  * kernel adapter's inference helpers stay out of the launcher chunk.
  */
 const extrudeInference = () => import('./lib/extrudeInference');
+/**
+ * The exact check of an assistant proposal runs only from the lazy
+ * Assistant, and each call already awaits the geometry worker, so the
+ * command replay behind it loads with its first proposal.
+ */
+const preflightCadPatch: typeof AiPatchPreflight.preflightCadPatch = (
+  ...args
+) =>
+  import('./lib/aiPatchPreflight').then((module) =>
+    module.preflightCadPatch(...args)
+  );
+/**
+ * The device's direct-edit attempt log: written after an attempt settles and
+ * read only for its Settings export, neither of which waits on the result.
+ */
+const interactionDiagnostics = () => import('./lib/interactionDiagnostics');
+/** A refused rebuild saved as a corpus fixture, on its Save reproduction. */
+const refusalReproduction = () => import('./lib/refusalReproduction');
 
 // The touch keypad is needed only when a numeric field requests it.
 /**
@@ -1750,7 +1759,7 @@ import {
 import { PreviewRefusalError, splitRefusal } from './lib/featureValidation';
 import { keptOffsetValue } from './lib/offsetChip';
 import { useCollaboration } from './lib/useCollaboration';
-import { preflightCadPatch } from './lib/aiPatchPreflight';
+import type * as AiPatchPreflight from './lib/aiPatchPreflight';
 import type {
   AssistantActivity,
   AssistantPreviewOutcome
@@ -1868,7 +1877,15 @@ function preloadWorkspaceMode(mode: WorkspaceMode) {
 import { AssemblyPanelPending } from './components/assembly/AssemblyPanelPending';
 import { meshBoundsLookup } from './lib/assembly/motionSetup';
 import { MotionStudyTimeline } from './components/assembly/MotionStudyTimeline';
-import { AssemblyPlayer } from './components/assembly/AssemblyPlayer';
+// The View-mode playback bar draws only for an assembly with something to
+// play, so a part-only session never downloads it. Its slot keeps a failure
+// local and retries on the next project.
+const AssemblyPlayer = createAssemblyPlayer(() =>
+  import('./components/assembly/AssemblyPlayer').then((module) => ({
+    default: module.AssemblyPlayer
+  }))
+);
+import { createAssemblyPlayer } from './components/assembly/AssemblyPlayerSlot';
 import {
   assembleKeyFor,
   runAssembleKey,
@@ -3934,24 +3951,34 @@ export function App() {
     if (!pick) {
       return;
     }
-    void recordInteractionDiagnostic(
-      buildDirectEditFixture({
-        document,
-        derived: document.derived,
-        ...pick,
-        value: input.value,
-        outcome,
-        ...(input.message ? { message: input.message } : {}),
-        ...(input.detail ? { detail: input.detail } : {}),
-        timings: {
-          degraded: previewDeferredRef.current,
-          ...(input.validateMs !== undefined
-            ? { validateMs: input.validateMs }
-            : {})
-        },
-        kernel: KERNEL_BUILD
-      })
-    );
+    // Read now: the log's module loads on the first attempt, and the time and
+    // timing flag describe this attempt, not whatever runs once it arrives.
+    const fixture: Parameters<
+      typeof InteractionDiagnostics.buildDirectEditFixture
+    >[0] = {
+      document,
+      derived: document.derived,
+      ...pick,
+      value: input.value,
+      outcome,
+      ...(input.message ? { message: input.message } : {}),
+      ...(input.detail ? { detail: input.detail } : {}),
+      timings: {
+        degraded: previewDeferredRef.current,
+        ...(input.validateMs !== undefined
+          ? { validateMs: input.validateMs }
+          : {})
+      },
+      kernel: KERNEL_BUILD,
+      capturedAt: new Date().toISOString()
+    };
+    void interactionDiagnostics()
+      .then((diagnostics) =>
+        diagnostics.recordInteractionDiagnostic(
+          diagnostics.buildDirectEditFixture(fixture)
+        )
+      )
+      .catch(() => false);
   }
   /** Signed offset represented by the currently published previewDoc. */
   const [renderedOffsetPreview, setRenderedOffsetPreview] = useState<
@@ -17409,26 +17436,30 @@ export function App() {
       setStatus('There is no refused rebuild to save in this session.');
       return;
     }
-    try {
-      const fixture = buildRefusalReproduction({
-        document: capture.document,
-        warning: capture.warning,
-        kernel: KERNEL_BUILD
-      });
-      const fileName = reproductionFileName(fixture);
-      downloadText(
-        fileName,
-        `${JSON.stringify(fixture, null, 2)}\n`,
-        'application/json'
-      );
-      setStatus(
-        fixture.document
-          ? `Saved a sanitized reproduction to ${fileName}. Nothing was uploaded.`
-          : `Saved ${fileName} without the model: imported geometry is not sanitized. Nothing was uploaded.`
-      );
-    } catch (error) {
+    const failed = (error: unknown) =>
       setStatus(errorMessage(error, 'Saving the reproduction failed.'));
-    }
+    void refusalReproduction().then((reproduction) => {
+      try {
+        const fixture = reproduction.buildRefusalReproduction({
+          document: capture.document,
+          warning: capture.warning,
+          kernel: KERNEL_BUILD
+        });
+        const fileName = reproduction.reproductionFileName(fixture);
+        downloadText(
+          fileName,
+          `${JSON.stringify(fixture, null, 2)}\n`,
+          'application/json'
+        );
+        setStatus(
+          fixture.document
+            ? `Saved a sanitized reproduction to ${fileName}. Nothing was uploaded.`
+            : `Saved ${fileName} without the model: imported geometry is not sanitized. Nothing was uploaded.`
+        );
+      } catch (error) {
+        failed(error);
+      }
+    }, failed);
   }
   function saveRefusalReproduction(
     owner: string,
@@ -17477,14 +17508,18 @@ export function App() {
 
   async function handleExportInteractionLog() {
     try {
-      const entries = await listInteractionDiagnostics();
+      const diagnostics = await interactionDiagnostics();
+      const entries = await diagnostics.listInteractionDiagnostics();
       if (entries.length === 0) {
         reportSupportExport(
           'No direct-edit attempts have been recorded on this device yet.'
         );
         return;
       }
-      const bundle = createInteractionDiagnosticBundle(entries, KERNEL_BUILD);
+      const bundle = diagnostics.createInteractionDiagnosticBundle(
+        entries,
+        KERNEL_BUILD
+      );
       const fileName = `openzcad-interaction-log-${bundle.capturedAt.slice(0, 10)}.json`;
       downloadText(
         fileName,
@@ -32242,7 +32277,12 @@ export function App() {
                         : {})}
                     />
                   )}
-                  {viewMode && <AssemblyPlayer assembly={doc.assembly} />}
+                  {viewMode && (
+                    <AssemblyPlayer
+                      projectId={doc.projectId}
+                      assembly={doc.assembly}
+                    />
+                  )}
                   {assembleMode && (
                     <MotionStudyTimeline
                       floating
