@@ -553,8 +553,10 @@ export function CommandBar({
                 // One press leaves. Clearing the text but keeping the focus
                 // made the next "?" type into the field rather than open the
                 // shortcuts. Only an empty field offers the press to the
-                // stream first, whose proposal it rejects and nothing else.
-                if (!empty || !sendAssistantPromptKey('reject')) {
+                // stream first, which takes it to hide a proposal's preview
+                // and for nothing else: it once rejected the proposal, for
+                // good, on a press meant to leave the field.
+                if (!empty || !sendAssistantPromptKey('escape')) {
                   dismiss();
                 }
               } else if (meta && event.key === 'ArrowUp') {
