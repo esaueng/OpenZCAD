@@ -64,6 +64,34 @@ export interface ViewportCameraState {
    * whatever field of view is current.
    */
   fieldOfView?: number;
+  /**
+   * The up vector the camera held: world −Z for a view an orbit carried over
+   * a pole (upside down), a sketch's roll, or the screen up of a view looking
+   * straight up or down. Absent when it held world +Z — every pose saved
+   * before it was recorded — which restores right way up.
+   */
+  up?: THREE.Vector3Tuple;
+}
+
+/** A recorded up as a unit vector, or null when absent or unusable. */
+function recordedUp(value: unknown): THREE.Vector3 | null {
+  if (!Array.isArray(value) || value.length !== 3) {
+    return null;
+  }
+  const parts: unknown[] = value;
+  if (
+    !parts.every(
+      (part): part is number =>
+        typeof part === 'number' && Number.isFinite(part)
+    )
+  ) {
+    return null;
+  }
+  const up = new THREE.Vector3().fromArray(parts);
+  const length = up.length();
+  return length > 1e-9 && Number.isFinite(length)
+    ? up.divideScalar(length)
+    : null;
 }
 
 /**
@@ -1189,12 +1217,17 @@ export class CameraController {
   capture(): ViewportCameraState {
     const position = this.active.position;
     const target = this.orbit.target;
+    const up = this.active.up;
+    // World up is the default a restore falls back to, so it is left out:
+    // a right-way-up pose records exactly what it did before.
+    const holdsWorldUp = up.x === 0 && up.y === 0 && up.z === 1;
     return {
       position: [position.x, position.y, position.z],
       target: [target.x, target.y, target.z],
       orthographicZoom: this.orthographic.zoom,
       orthographicHalfHeight: Math.abs(this.orthographic.top),
-      fieldOfView: this.perspective.fov
+      fieldOfView: this.perspective.fov,
+      ...(holdsWorldUp ? {} : { up: [up.x, up.y, up.z] })
     };
   }
 
@@ -1243,6 +1276,7 @@ export class CameraController {
       );
       this.perspective.updateProjectionMatrix();
     }
+    this.holdRecordedUp(state.up);
     this.perspective.lookAt(this.orbit.target);
     this.perspective.updateMatrixWorld(true);
     this.orbit.update();
@@ -1263,6 +1297,25 @@ export class CameraController {
     this.orbit.update();
     this.emitViewChange();
     this.scheduleSettledViewChange();
+  }
+
+  /**
+   * Puts a restored pose back on the up it was saved holding, so a view left
+   * upside down reopens upside down. An up along the view axis fixes no roll,
+   * and an absent or malformed one is a pose saved right way up: both stay
+   * on world up.
+   */
+  private holdRecordedUp(value: unknown) {
+    const up = recordedUp(value);
+    if (!up) {
+      return;
+    }
+    const offset = this.perspective.position.clone().sub(this.orbit.target);
+    const length = offset.length();
+    if (!(length > 0) || Math.abs(up.dot(offset) / length) > 1 - 1e-9) {
+      return;
+    }
+    this.holdUp(up);
   }
 
   /**

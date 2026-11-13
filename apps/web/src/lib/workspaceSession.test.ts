@@ -229,6 +229,26 @@ describe('workspace session persistence', () => {
     expect(reloaded?.camera).not.toHaveProperty('fieldOfView');
   });
 
+  it('keeps the up an upside-down view held, and drops an unusable one', () => {
+    const storage = new MemoryStorage();
+    saveProjectView(
+      'project-1',
+      { ...view, camera: { ...view.camera, up: [0, 0, -1] } },
+      storage
+    );
+    expect(loadProjectView('project-1', storage)?.camera?.up).toEqual([
+      0, 0, -1
+    ]);
+    saveProjectView(
+      'project-1',
+      { ...view, camera: { ...view.camera, up: [0, 0, 0] } },
+      storage
+    );
+    const reloaded = loadProjectView('project-1', storage);
+    expect(reloaded?.camera?.position).toEqual(view.camera.position);
+    expect(reloaded?.camera).not.toHaveProperty('up');
+  });
+
   it('keeps a project view while an explicit return home clears auto-open', () => {
     const storage = new MemoryStorage();
     rememberActiveProject('project-1', storage);

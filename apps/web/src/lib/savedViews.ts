@@ -68,6 +68,11 @@ const isFieldOfView = (value: unknown): boolean =>
     value >= VIEWPORT_FIELD_OF_VIEW_BOUNDS.min &&
     value <= VIEWPORT_FIELD_OF_VIEW_BOUNDS.max);
 
+/** Absent (right way up), or a finite direction the camera held as up. */
+const isUp = (value: unknown): boolean =>
+  value === undefined ||
+  (isVector(value) && Math.hypot(...(value as number[])) > 1e-9);
+
 const DISPLAY_MODES: readonly unknown[] = [
   'shaded-edges',
   'shaded',
@@ -109,7 +114,8 @@ function isSavedView(value: unknown): value is SavedView {
     isSection(view.sectionView) &&
     (view.xray === undefined || typeof view.xray === 'boolean') &&
     isFieldOfView(view.fieldOfView) &&
-    isFieldOfView(view.camera.fieldOfView)
+    isFieldOfView(view.camera.fieldOfView) &&
+    isUp(view.camera.up)
   );
 }
 
