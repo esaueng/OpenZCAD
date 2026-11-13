@@ -3306,11 +3306,19 @@ export interface ShaprMigrationRecord {
   privateDataOmitted: true;
 }
 
-/** A legacy direct-edit face proven by the successful original replay. */
+/** A legacy hash-only face pick proven by the successful original replay. */
 export interface FaceReferenceRepair {
   featureId: FeatureId;
   faceHash: number;
   faceReference: FaceTopologyReferenceV5;
+  /**
+   * Which stored selection `faceHash` belongs to. Absent is the feature's one
+   * face: a direct edit's operation face, or the face a hole, thicken, thread
+   * or gear names. `opposite` is a face-distance edit's opposite face. `set`
+   * is one member of a shell's opening faces or a draft's faces, offered only
+   * together with every other member of that set.
+   */
+  role?: 'opposite' | 'set';
 }
 
 /**
@@ -3363,7 +3371,10 @@ export interface FeatureWarning {
   /**
    * What the warning means for the operation that raised it.
    *
-   * - `build-failed`: the builder threw and produced no shape at all.
+   * - `build-failed`: the builder threw and produced no shape of its own. A
+   *   feature that replaces one input body passes that input through under
+   *   its result id unchanged (ADR-017, November 2026), so a body there does
+   *   not mean it built.
    * - `refusal`: a shape WAS produced, and it is the wrong one. A union that
    *   silently dropped an operand, or came back open and non-manifold, still
    *   yields a solid — it just is not the solid the user asked for, and the
@@ -3373,13 +3384,20 @@ export interface FeatureWarning {
    *   The user asked for this and got it; refusing would destroy work that
    *   succeeded.
    * - `suppressed`: a status. The feature was deliberately skipped.
+   * - `history-fork`: a diagnostic about the history, not the geometry. The
+   *   feature built (or failed, reported separately) on a body an earlier
+   *   active feature had already replaced, so two branches of the same part
+   *   are on screen (ADR-025). It is a real, listed warning, counted in
+   *   Diagnostics like an advisory, but it never refuses a commit: a stored
+   *   forked history must stay editable, and new forks are refused where
+   *   they are created, by the command layer.
    *
    * Only the first two refuse a commit. The distinction is NOT derivable from
    * whether a shape was produced — the gate rebuilds a throwaway candidate, so
    * every non-throwing builder sets a shape by construction. It is a judgement
    * about the result, and it belongs where the kernel makes it.
    */
-  kind: 'build-failed' | 'refusal' | 'advisory' | 'suppressed';
+  kind: 'build-failed' | 'refusal' | 'advisory' | 'suppressed' | 'history-fork';
   /**
    * The exact kernel's own classification, present only when this warning
    * came from an operation the kernel refused with a category.

@@ -1208,6 +1208,20 @@ export async function seedOpenCommandFold(page: Page) {
 }
 
 /** The instrument rail's button for a panel. */
+/**
+ * Opens the Tools drawer again if it has been closed. The drawer is docked
+ * and remembered, but Escape closes it once nothing is armed or picked, so a
+ * spec that presses Escape to clear the stage and then clicks a tool only
+ * the drawer lists calls this first.
+ */
+export async function ensureToolsDrawerOpen(page: Page) {
+  const moreTools = page.getByRole('button', { name: /^More tools/ });
+  if ((await moreTools.getAttribute('aria-expanded')) === 'false') {
+    await moreTools.click();
+  }
+  await expect(page.getByRole('group', { name: 'Tools drawer' })).toBeVisible();
+}
+
 export function railPanelButton(page: Page, title: PanelTitle) {
   return page
     .getByRole('toolbar', { name: 'Model panels' })

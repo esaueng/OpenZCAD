@@ -118,12 +118,12 @@ export function failedHistoryExportBodies(
       )
     ];
     for (const bodyId of bodies) {
-      // A failed feature's own result is usually absent; only a body that
-      // was actually built can be offered for export and so be withheld.
-      if (
-        !withheld.has(bodyId) &&
-        document.derived.bodyRepresentations[bodyId]
-      ) {
+      // Only a body on screen can be offered for export and so be withheld.
+      // A failed feature that replaces its input now hands that input
+      // through under its own id (ADR-017, November 2026): the input is
+      // consumed and the stand-in under the result id is what is withheld.
+      const body = document.derived.bodyRepresentations[bodyId];
+      if (!withheld.has(bodyId) && body && !body.consumed) {
         withheld.set(bodyId, { bodyId, ...reason });
       }
     }

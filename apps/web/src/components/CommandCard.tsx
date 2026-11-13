@@ -6,10 +6,12 @@ import {
   Pin,
   PinOff,
   Search,
-  Undo2
+  Undo2,
+  X
 } from 'lucide-react';
 import {
   Fragment,
+  useId,
   useLayoutEffect,
   useRef,
   useState,
@@ -20,6 +22,7 @@ import {
   commandContextFor,
   commandContextLabel,
   toolApplies,
+  type CommandContextKind,
   type CommandSelection
 } from '../lib/commandContext';
 import type {
@@ -48,10 +51,36 @@ import {
 } from '../lib/tools';
 import { toolCommandId, useKeymap } from '../lib/keymap';
 import { selectionRailHeld } from '../lib/selectionRailHold';
+import { useRovingToolbar } from '../hooks/useRovingToolbar';
 import { SelectionRail, useHeldPick } from './SelectionRail';
 import { Tooltip } from './Tooltip';
 
 const TOOL_COUNT = Object.keys(TOOL_META).length;
+
+/**
+ * The rail's stops for the arrow keys: its tools, the pick's verbs and the
+ * Tools button, with the two marks under a pick's verbs that carry help of
+ * their own. The drawer beside the rail is not one of them: it is a list
+ * with a search field, and Tab walks it.
+ */
+const RAIL_STOPS =
+  'button.command-rail, .selection-rail-badge, .selection-rail-phase.has-icon';
+const RAIL_STOPS_EXCEPT = '.command-flyout';
+
+/** What the heading over a pick's verbs calls each kind of pick. */
+const PICK_KINDS: Partial<Record<CommandContextKind, string>> = {
+  edges: 'Edge',
+  face: 'Face',
+  region: 'Region',
+  body: 'Body',
+  bodies: 'Body'
+};
+
+/**
+ * What a suggested tool says of itself, in its help and after its name: why
+ * it is on the rail today and may not be tomorrow, and how to keep it.
+ */
+const SUGGESTED_HELP = 'Suggested for this step — drag up to pin';
 
 interface CommandCardProps {
   selection: CommandSelection;
@@ -122,11 +151,23 @@ type DragSource = 'pin' | 'suggested' | 'drawer';
  * suggestions) onto the rail, or with its pin; pins reorder by dragging or
  * Alt+↑/↓, and unpin by dragging them back onto the drawer.
  *
- * A pick makes the rail its own: the pins give way to Deselect all and the
- * pick's verbs, the armed one lit. While a handle is dragged the rail holds:
- * every button stays where it was, only the verb being made still acts. More
- * tools stays at the foot throughout, so the rail never jumps and no command
- * is ever more than the drag away; ⌘K reaches every one by name regardless.
+ * The drawer is docked, not a popover: it is remembered open, and a click on
+ * the model or a pick leaves it where it is, the way a model panel stays.
+ * So it is drawn as part of the rail (joined to its edge, with a panel's
+ * header), it has a close button of its own, and Escape closes it from
+ * inside, from its button, and from the idle workspace once nothing is left
+ * to cancel or clear (App's Escape ladder). It stands under every popover
+ * and the command bar's results, which are the temporary surfaces.
+ *
+ * A pick makes the rail its own: the pins give way to a heading naming the
+ * pick, Deselect all and the pick's verbs, the armed one lit. While a handle
+ * is dragged the rail holds: every button stays where it was, only the verb
+ * being made still acts. More tools stays at the foot throughout, so the
+ * rail never jumps and no command is ever more than the drag away; ⌘K
+ * reaches every one by name regardless.
+ *
+ * The rail is one tab stop (useRovingToolbar): the arrow keys move between
+ * its tools, greyed ones included, so Tab passes it in one press.
  */
 export function CommandCard({
   selection,
@@ -223,7 +264,20 @@ export function CommandCard({
   const canPin = onPinnedToolsChange !== undefined;
   const moreToggleRef = useRef<HTMLButtonElement>(null);
   const flyoutRef = useRef<HTMLDivElement>(null);
+  const toolbarRef = useRef<HTMLDivElement>(null);
+  useRovingToolbar(toolbarRef, {
+    items: RAIL_STOPS,
+    except: RAIL_STOPS_EXCEPT,
+    // A pick's rail is entered at its head, not on the Tools button the
+    // Build rail was last left on.
+    resetOn: pick !== null
+  });
+  const closeDrawer = () => {
+    onToggleMore();
+    moreToggleRef.current?.focus();
+  };
   const focusOnOpen = useRef(false);
+  const drawerId = useId();
   useLayoutEffect(() => {
     if (!drawerOpen || !focusOnOpen.current) return;
     focusOnOpen.current = false;
@@ -366,9 +420,7 @@ export function CommandCard({
         shortcut={shortcut}
         description={
           disabledReason ??
-          (from === 'suggested'
-            ? `${meta.hint}. Suggested now — drag up to pin`
-            : meta.hint)
+          (from === 'suggested' ? `${meta.hint}. ${SUGGESTED_HELP}` : meta.hint)
         }
       >
         <button
@@ -378,7 +430,14 @@ export function CommandCard({
           // drag, and a greyed pin must still move and a greyed tool still
           // pin. The press is refused here instead.
           aria-disabled={disabledReason !== null}
-          aria-label={toolTitle(tool, availability, shortcut ?? null)}
+          // A suggestion says so after its name: the dot on it is the only
+          // other mark, and a name that still starts with the tool's is
+          // found by everything that looks the tool up.
+          aria-label={
+            from === 'suggested'
+              ? `${toolTitle(tool, availability, shortcut ?? null)}. ${SUGGESTED_HELP}`
+              : toolTitle(tool, availability, shortcut ?? null)
+          }
           aria-pressed={active}
           data-applies={applies ? 'true' : 'false'}
           data-pinned-tool={from === 'pin' ? tool : undefined}
@@ -489,16 +548,26 @@ export function CommandCard({
   const sections = railSections(pins);
 
   return (
-    // A navigation landmark rather than a toolbar, so the tooltips are told
-    // it is a rail: they open beside it instead of over the next tool.
-    <nav
+    // A vertical toolbar: one tab stop, the arrow keys inside it. Marked as
+    // a rail for the tooltips as well, which open beside it instead of over
+    // the next tool whatever the layout a short window gives it.
+    <div
+      ref={toolbarRef}
+      role="toolbar"
+      aria-orientation="vertical"
       className="tool-palette command-rail"
       aria-label="Feature tools"
       data-context={context.kind}
+      data-rail={pick ? 'selection' : 'build'}
       data-tooltip-rail=""
     >
       {pick ? (
-        <SelectionRail content={pick} summary={pickSummary} />
+        <SelectionRail
+          content={pick}
+          summary={pickSummary}
+          kind={PICK_KINDS[context.kind]}
+          count={pickCount(selection, context.kind)}
+        />
       ) : (
         <div
           ref={railRef}
@@ -553,13 +622,23 @@ export function CommandCard({
         role="group"
         aria-label="All tools"
         className={`command-more${drawerOpen ? ' open' : ''}`}
+        // Escape closes the drawer from its button as well as from inside
+        // it, and hands the keyboard back to the button.
+        onKeyDown={(event) => {
+          if (event.key !== 'Escape' || !drawerOpen) return;
+          event.preventDefault();
+          event.stopPropagation();
+          closeDrawer();
+        }}
       >
         <Tooltip
           label={drawerOpen ? 'Hide other tools' : 'More tools'}
           description={
-            drawerOpen
-              ? 'Close the list of the other tools'
-              : `Every tool by name — ${restCount} not on the rail. Drag one onto the rail to pin it`
+            held
+              ? 'Available once the drag is done'
+              : drawerOpen
+                ? 'Close the list of the other tools'
+                : `Every tool by name — ${restCount} not on the rail. Drag one onto the rail to pin it`
           }
         >
           <button
@@ -567,11 +646,15 @@ export function CommandCard({
             type="button"
             className={`command-rail command-more-toggle${drawerOpen ? ' active' : ''}`}
             aria-expanded={drawerOpen}
+            aria-controls={drawerOpen ? drawerId : undefined}
             aria-label={`More tools (${restCount})`}
             // Kept in place while a drag holds the rail, so the rail never
             // changes height; nothing else acts on the pick until it is done.
-            disabled={held}
+            // Greyed by aria, as the tools are: a disabled button drops the
+            // keyboard's focus, and the arrow keys could not reach it.
+            aria-disabled={held}
             onClick={(event) => {
+              if (held) return;
               if (!drawerOpen) focusOnOpen.current = event.detail === 0;
               onToggleMore();
             }}
@@ -583,20 +666,16 @@ export function CommandCard({
           </button>
         </Tooltip>
         {drawerOpen && (
-          // A drawer beside the rail: help for a rail button next to it
+          // A drawer docked to the rail: help for a rail button next to it
           // drops its description, and a row's help opens beside the
           // drawer rather than over the rows below it.
           <div
             ref={flyoutRef}
+            id={drawerId}
+            role="group"
+            aria-label="Tools drawer"
             className={`command-flyout ${advanced ? 'is-advanced' : 'is-simple'}${below.length > 0 ? ' has-more-below' : ''}${unpinTarget ? ' is-unpin-target' : ''}`}
             data-rail-flyout=""
-            onKeyDown={(event) => {
-              if (event.key !== 'Escape') return;
-              event.preventDefault();
-              event.stopPropagation();
-              onToggleMore();
-              moreToggleRef.current?.focus();
-            }}
             onDragOver={(event) => {
               if (!unpinTarget) return;
               event.preventDefault();
@@ -609,6 +688,21 @@ export function CommandCard({
               endDrag();
             }}
           >
+            {/* Its name and its way out, at the head in both views: a
+                drawer that stays through clicks elsewhere needs a close
+                button on itself, not only the button that opened it. */}
+            <div className="command-flyout-title">
+              <span>Tools</span>
+              <button
+                type="button"
+                className="command-flyout-close"
+                aria-label="Close tools drawer"
+                title="Close (Esc)"
+                onClick={closeDrawer}
+              >
+                <X size={13} aria-hidden="true" />
+              </button>
+            </div>
             {advanced && (
               <div className="command-flyout-head">
                 <label className="command-flyout-search">
@@ -757,8 +851,26 @@ export function CommandCard({
           </div>
         )}
       </section>
-    </nav>
+    </div>
   );
+}
+
+/** How many of its kind the pick holds, for the rail's heading. */
+function pickCount(
+  selection: CommandSelection,
+  kind: CommandContextKind
+): number {
+  switch (kind) {
+    case 'edges':
+      return selection.edgeCount;
+    case 'region':
+      return selection.regionCount;
+    case 'body':
+    case 'bodies':
+      return selection.bodyCount;
+    default:
+      return 1;
+  }
 }
 
 /**
@@ -831,7 +943,7 @@ function useFlyoutAtToggle(
       flyout.style.setProperty('--flyout-lift', `${lift}px`);
     };
     measure();
-    const rail = toggle.closest<HTMLElement>('nav') ?? toggle;
+    const rail = toggle.closest<HTMLElement>('.tool-palette') ?? toggle;
     const observer =
       typeof ResizeObserver === 'undefined'
         ? null

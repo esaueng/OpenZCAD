@@ -195,7 +195,10 @@ export function createRemusSemanticLineage(
 
 /** The quantized analytic surface a face lies on, as a comparable key. */
 function analyticCarrierKey(witness: FaceWitnessV1): string | null {
-  const analytic = witness.analytic;
+  return carrierKeyOf(witness.analytic);
+}
+
+function carrierKeyOf(analytic: FaceWitnessV1['analytic']): string | null {
   if (analytic.kind === 'plane') {
     return `plane:${analytic.normal.join(',')}:${analytic.offset}`;
   }
@@ -884,6 +887,13 @@ export interface RemusMoveFacesRelation {
    * original, so publishing either would be a guess.
    */
   readonly conflictedSources: ReadonlySet<number>;
+  /**
+   * The kernel journaled the op from geometry, not construction, so the map
+   * is empty by refusal rather than because nothing was bound.
+   */
+  readonly inferred?: true;
+  /** For an inferred journal, the retired positional reading of it. */
+  readonly retiredPlacements?: ReadonlyMap<number, number>;
 }
 
 /**
@@ -1152,6 +1162,226 @@ export function deriveRemusMoveFacesDirectEditLineage(input: {
       code: 'hash-only',
       operation: 'direct-edit',
       message: `Direct-edit carried ${publishedIdentities.size} semantic references through move-faces construction history (${carriedJournal} journal-mapped, ${carriedUnchanged} unchanged); ${omitted} changed, conflicting or ambiguous references remain hash-only.`
+    });
+  }
+  return output;
+}
+
+/**
+ * Direct-edit lineage by exact predicted carrier, for an edit that leaves no
+ * construction history: the exact sleeve and blend-ladder wall resizes, the
+ * analytic cap offsets, blend resizes and removals, and every move the kernel
+ * journaled only by inference (ADR-013, H01/M07 amendment of 2026-11-12).
+ *
+ * The command determines where each analytic face ends up. A face it does
+ * not touch stays on its own quantized plane or cylinder; a face it edits is
+ * listed in `predicted` with the carrier the command constructs it on, or
+ * with `null` when the command does not determine its surface. A named source
+ * face's identity crosses only when
+ *
+ * 1. its reference re-verifies against the source solid's measured witness;
+ * 2. no other source face, named or not, predicts the same carrier; and
+ * 3. exactly one result face lies on that carrier.
+ *
+ * The carried reference records the result face's measured witness, never the
+ * predicted one. Faces and edges whose exact witness survives unchanged and
+ * unique keep the plain unchanged carry alongside; a result face the two
+ * routes name differently, or one identity landing on two faces, publishes
+ * nothing. Non-analytic surfaces have no carrier and cross only unchanged.
+ * Nothing is matched by proximity or traversal order.
+ */
+export function deriveRemusPredictedCarrierDirectEditLineage(input: {
+  readonly source: RemusLineageState | undefined;
+  readonly sourceCandidates: readonly RemusTopologyCandidate[];
+  readonly resultCandidates: readonly RemusTopologyCandidate[];
+  readonly predicted: ReadonlyMap<number, FaceWitnessV1['analytic'] | null>;
+  /**
+   * For an inferred journal: where the retired positional reader placed each
+   * source face's name. A name is withheld from a face unless that reading
+   * agrees, so a saved reference to a misplaced name keeps its exact-witness
+   * fallback instead of resolving onto the name's real owner.
+   */
+  readonly retiredPlacements?: ReadonlyMap<number, number>;
+}): RemusLineageState | undefined {
+  const { source } = input;
+  if (!source) {
+    return undefined;
+  }
+  const output = emptyLineageState();
+  output.diagnostics.push(...source.diagnostics);
+  const sourceFaces = new Map<number, RemusTopologyCandidate>();
+  const predictedKeys = new Map<number, string>();
+  const sourcesOnKey = new Map<string, number>();
+  for (const candidate of input.sourceCandidates) {
+    if (candidate.kind !== 'face') {
+      continue;
+    }
+    sourceFaces.set(candidate.handle, candidate);
+    const analytic = input.predicted.has(candidate.handle)
+      ? input.predicted.get(candidate.handle)
+      : (candidate.witness as FaceWitnessV1).analytic;
+    const key = analytic ? carrierKeyOf(analytic) : null;
+    if (key === null) {
+      continue;
+    }
+    predictedKeys.set(candidate.handle, key);
+    sourcesOnKey.set(key, (sourcesOnKey.get(key) ?? 0) + 1);
+  }
+  const resultFaces = new Map<number, RemusTopologyCandidate>();
+  const resultEdges: RemusTopologyCandidate[] = [];
+  const resultsOnKey = new Map<string, number[]>();
+  for (const candidate of input.resultCandidates) {
+    if (candidate.kind === 'edge') {
+      resultEdges.push(candidate);
+      continue;
+    }
+    resultFaces.set(candidate.handle, candidate);
+    const key = analyticCarrierKey(candidate.witness as FaceWitnessV1);
+    if (key !== null) {
+      resultsOnKey.set(key, [
+        ...(resultsOnKey.get(key) ?? []),
+        candidate.handle
+      ]);
+    }
+  }
+  const identityKey = (reference: TopologyReferenceV5) =>
+    `${reference.kind}:${reference.producingFeatureId}:${reference.lineageName}`;
+  const identityCounts = new Map<string, number>();
+  for (const reference of source.faceReferences.values()) {
+    const key = identityKey(reference);
+    identityCounts.set(key, (identityCounts.get(key) ?? 0) + 1);
+  }
+
+  const claims = new Map<number, FaceTopologyReferenceV5[]>();
+  const claim = (handle: number, reference: FaceTopologyReferenceV5) => {
+    const existing = claims.get(handle) ?? [];
+    if (!existing.some((other) => sameLineageName(other, reference))) {
+      claims.set(handle, [...existing, reference]);
+    }
+  };
+  let carrierClaims = 0;
+  for (const [handle, reference] of source.faceReferences) {
+    if (
+      identityCounts.get(identityKey(reference)) !== 1 ||
+      !referenceMatchesCandidate(reference, sourceFaces.get(handle))
+    ) {
+      continue;
+    }
+    const key = predictedKeys.get(handle);
+    const results = key === undefined ? undefined : resultsOnKey.get(key);
+    if (key === undefined || sourcesOnKey.get(key) !== 1) {
+      continue;
+    }
+    if (results?.length !== 1) {
+      continue;
+    }
+    claim(results[0]!, reference);
+    carrierClaims += 1;
+  }
+  const resultFacesMatching = witnessMatcher('face', resultFaces.values());
+  const unchanged = new Set<string>();
+  for (const reference of source.faceReferences.values()) {
+    if (identityCounts.get(identityKey(reference)) !== 1) {
+      continue;
+    }
+    const matches = resultFacesMatching(reference.witness);
+    if (matches.length === 1) {
+      claim(matches[0]!.handle, reference);
+      unchanged.add(`${matches[0]!.handle}:${identityKey(reference)}`);
+    }
+  }
+
+  const handlesByIdentity = new Map<string, Set<number>>();
+  for (const [handle, references] of claims) {
+    for (const reference of references) {
+      const key = identityKey(reference);
+      handlesByIdentity.set(
+        key,
+        new Set([...(handlesByIdentity.get(key) ?? []), handle])
+      );
+    }
+  }
+  const sourceOfIdentity = new Map<string, number>();
+  for (const [handle, reference] of source.faceReferences)
+    sourceOfIdentity.set(identityKey(reference), handle);
+  const retired = input.retiredPlacements;
+  const retiredTargets = new Map<number, number>();
+  for (const [sourceHandle, resultHandle] of retired ?? []) {
+    if (source.faceReferences.has(sourceHandle))
+      retiredTargets.set(resultHandle, sourceHandle);
+  }
+  const vetoedByRetiredReader = (
+    handle: number,
+    reference: FaceTopologyReferenceV5
+  ): boolean => {
+    // An unchanged witness proves its face whatever any journal says.
+    if (!retired || unchanged.has(`${handle}:${identityKey(reference)}`))
+      return false;
+    const sourceHandle = sourceOfIdentity.get(identityKey(reference));
+    const placed =
+      sourceHandle === undefined ? undefined : retired.get(sourceHandle);
+    const claimant = retiredTargets.get(handle);
+    return (
+      (placed !== undefined && placed !== handle) ||
+      (claimant !== undefined && claimant !== sourceHandle)
+    );
+  };
+  const published = new Set<string>();
+  let vetoed = 0;
+  for (const [handle, references] of claims) {
+    const reference = references[0]!;
+    if (references.length === 1 && vetoedByRetiredReader(handle, reference)) {
+      vetoed += 1;
+      continue;
+    }
+    if (
+      references.length !== 1 ||
+      handlesByIdentity.get(identityKey(reference))?.size !== 1
+    ) {
+      output.diagnostics.push({
+        code: 'hash-only',
+        operation: 'direct-edit',
+        topologyKind: 'face',
+        lineageName: reference.lineageName,
+        resultHandles: [handle],
+        message: `Direct-edit carrier and witness evidence disagree about ${references
+          .map((other) => other.lineageName)
+          .join(', ')}; none is published.`
+      });
+      continue;
+    }
+    output.faceReferences.set(
+      handle,
+      transformedFaceReference(
+        reference,
+        resultFaces.get(handle)!.witness as FaceWitnessV1
+      )
+    );
+    published.add(identityKey(reference));
+  }
+  // Edges have no carrier rule: an edge whose exact witness survived, unique,
+  // is the same edge by measurement.
+  const claimedEdges = new Set<number>();
+  const resultEdgesMatching = witnessMatcher('edge', resultEdges);
+  for (const reference of source.edgeReferences.values()) {
+    const matches = resultEdgesMatching(reference.witness);
+    if (matches.length !== 1 || claimedEdges.has(matches[0]!.handle)) {
+      continue;
+    }
+    const inherited = transformedReference(reference, matches[0]!.witness);
+    if (inherited.kind !== 'edge') {
+      continue;
+    }
+    claimedEdges.add(matches[0]!.handle);
+    output.edgeReferences.set(matches[0]!.handle, inherited);
+    published.add(identityKey(inherited));
+  }
+  const total = source.faceReferences.size + source.edgeReferences.size;
+  if (published.size < total) {
+    output.diagnostics.push({
+      code: 'hash-only',
+      operation: 'direct-edit',
+      message: `Direct-edit has no construction history; it carried ${published.size} semantic references (${carrierClaims} face claims by exact predicted carrier, ${vetoed} withheld where the retired positional reader placed them differently), and ${total - published.size} changed, ambiguous or non-analytic references remain hash-only.`
     });
   }
   return output;

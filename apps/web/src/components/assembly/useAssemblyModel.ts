@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { isLiveAssemblyBody } from '@openzcad/document-core';
 import type { BodyId, ProjectDocument } from '@openzcad/shared';
 import { useAssemblyRuntime } from '../../lib/assembly/assemblyRuntime';
 import {
@@ -8,8 +9,7 @@ import {
 
 /** A body is live while it is listed and no later feature consumed it. */
 export function isLiveBody(document: ProjectDocument, bodyId: BodyId): boolean {
-  const body = document.derived.bodyRepresentations[bodyId];
-  return Boolean(body && !body.consumed);
+  return isLiveAssemblyBody(document, bodyId);
 }
 
 /**

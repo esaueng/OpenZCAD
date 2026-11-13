@@ -61,6 +61,74 @@ function renderToolbar(
   );
 }
 
+describe('the viewer bar as one tab stop', () => {
+  const stops = () =>
+    screen
+      .getAllByRole('button')
+      .filter((button) => button.getAttribute('tabindex') === '0')
+      .map((button) => button.getAttribute('aria-label'));
+
+  it('leaves one stop, on the first control that acts', () => {
+    renderToolbar({ kind: 'clipping' });
+    // Undo and Redo are greyed (nothing to undo): the bar is entered on Fit.
+    expect(stops()).toEqual([expect.stringMatching(/^Fit view/)]);
+  });
+
+  it('reaches greyed Undo with the arrows, where its reason is read', () => {
+    renderToolbar({ kind: 'clipping' });
+    const undo = screen.getByRole('button', { name: 'Undo' });
+    // Greyed by aria: a disabled button could not take the keyboard.
+    expect(undo).not.toBeDisabled();
+    expect(undo).toHaveAttribute('aria-disabled', 'true');
+    const fit = screen.getByRole('button', { name: /^Fit view/ });
+    fit.focus();
+    fireEvent.keyDown(fit, { key: 'Home' });
+    expect(undo).toHaveFocus();
+    expect(stops()).toEqual(['Undo']);
+  });
+
+  it('refuses the press of a greyed Undo or Redo', () => {
+    const onUndo = vi.fn();
+    const onRedo = vi.fn();
+    const noop = () => undefined;
+    render(
+      <ViewerToolbar
+        settings={settings}
+        projection="perspective"
+        canUndo={false}
+        canRedo={false}
+        sectionRange={{ min: 0, max: 6 }}
+        onUndo={onUndo}
+        onRedo={onRedo}
+        onToggleGrid={noop}
+        onFit={noop}
+        onView={noop}
+        onCycleDisplayMode={noop}
+        onToggleProjection={noop}
+        onToggleSection={noop}
+        onSectionPlane={noop}
+        onSectionOffset={noop}
+        onSectionCommit={noop}
+        onExportSectionDxf={noop}
+        sectionOutline={{ kind: 'clipping' }}
+        units="mm"
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Redo' }));
+    expect(onUndo).not.toHaveBeenCalled();
+    expect(onRedo).not.toHaveBeenCalled();
+  });
+
+  it('keeps the section controls it opens in the tab order', () => {
+    renderToolbar({ kind: 'clipping' });
+    // The panel's own controls are not the bar's stops.
+    expect(screen.getByLabelText('Cut position')).not.toHaveAttribute(
+      'tabindex'
+    );
+  });
+});
+
 describe('the section panel', () => {
   it('names the clipped preview and refuses to export it', () => {
     renderToolbar({ kind: 'clipping' });

@@ -429,6 +429,126 @@ name the old reader misplaced after a construction move: their reference now
 resolves to the face that owns the name. The reader cannot tell those documents
 apart, and keeping the defect would misname every new edit of that kind.
 
+## Amendment (H01/M07, 2026-11-12): predicted-carrier carry for unjournaled direct edits
+
+The coverage table lists direct edits as `no lineage - hash fallback only`
+wherever the kernel exposes no output relation, and the M07 amendments keep
+that for a boss resize the kernel journals only by inference. Losing every
+name on such an edit is not fail-closed in practice: each later reference to
+the body falls back to its selection-time witness, which any upstream edit
+invalidates. On a reported box ∪ cylinder history one boss resize dropped the
+body from 8 named faces to 2, and changing an upstream seam fillet's radius
+then failed 20 later features as "lineage no longer exists".
+
+A direct edit, unlike a fillet, is defined by its command: the command
+determines the carrier each analytic face ends on. A direct edit with no
+verified construction relation — the exact sleeve and blend-ladder wall
+resizes, the analytic cap offset, a face move the kernel could not journal,
+a blend resize the kernel journaled only by inference, a blend or face-feature
+removal, an imported hole resize, and a move or wall resize the kernel
+journaled only by inference — now carries names by **exact predicted
+carrier** (`deriveRemusPredictedCarrierDirectEditLineage`):
+
+- a face the command does not touch is predicted on its own quantized plane
+  or cylinder; the edited face on the carrier the command constructs (a planar
+  offset: the same normal, the offset shifted by the commanded distance along
+  the recorded outward normal; a wall resize: the same axis and foot, the
+  commanded radius; an imported blind-hole resize: the recorded axis, the
+  commanded radius); a face whose surface the command does not determine (a
+  resized or re-blended band) is predicted on nothing;
+- a named source face's identity crosses only when its reference re-verifies
+  against the source solid's measured witness, no other source face, named or
+  not, predicts the same carrier, and exactly one result face lies on it.
+  Coplanar or coaxial twins, splits and merges therefore publish nothing,
+  which is check 4 above with the command, not kernel history, supplying the
+  claim;
+- the result face's complete witness is measured independently and recorded;
+  names on non-analytic surfaces cross only by an unchanged exact witness, as
+  do edges, and boundary edges between carried faces are then named as for
+  the other operation-level builders;
+- a result face the carrier and the unchanged witness name differently, or an
+  identity landing on two faces, publishes neither.
+
+All comparisons are the frozen ADR-011 integers. Nothing is matched by
+proximity, normal angle, centroid distance or traversal order.
+
+The rule does not override history. A construction relation, where the
+kernel supplies one, is read exactly as before. For a body whose producer is a
+primitive, the primitive's semantic re-derivation still outranks a carried
+name after an edit that ran no journal, as it did before.
+
+**Inferred journals keep the M07 protection.** From 2026-11-03 to 2026-11-12
+the move-face reader published each name where the kernel's positional,
+inferred binding put it, and documents saved then store some names together
+with another face's witness. A carried name is therefore withheld wherever
+that retired positional reading of the same journal put the name on a
+different face, or put another name on its face
+(`retiredPositionalFaceMap`). The retired reading is never a source of names;
+it can only withhold one, and an unchanged exact witness is not affected by
+it. Those withheld names stay hash-only — the documented M07 trade-off — so a
+saved reference to one still resolves only by its exact stored witness, and a
+later upstream edit that changes that witness still fails visibly. Remus
+emitting construction provenance for boss resizes remains the complete fix.
+
+Limits: free-form bands get no name from this rule; a carrier the edit leaves
+shared between faces publishes no name; and a name the retired reader
+misplaced cannot be carried. The predicted carrier is computed from the same
+measured geometry the edit validates, so a prediction that lands on the wrong
+quantum publishes nothing rather than a wrong name.
+
+## Amendment (H01, 2026-11-12): hash-only picks are upgraded wherever they resolve
+
+A pick is stored hash-only when the picked face or edge has no name at pick
+time, and step 2 of the resolution order then finds it only while its
+selection-time witness survives. On the reported box ∪ cylinder history two
+fillets, a chamfer and every face offset from the 37th step on were stored that
+way, so any upstream edit that resized their entities failed them. The
+amendment above names many such entities after the fact, but a name the body
+publishes later never reached a pick already stored.
+
+The app already wrote the name back for two kinds of pick: a fillet or
+chamfer's edges and a direct edit's own face (`referenceRepairs`,
+`faceReferenceRepairs`, written by `topologyReferenceRepairCommand`). Every
+stored face pick now takes the same upgrade: a hole, thicken, thread or
+on-body gear face, a shell's opening faces, a draft's faces and a face-distance
+edit's opposite face. The rule is unchanged and applies to each:
+
+- only a pick with no v5 reference at all; a face or edge set is upgraded all
+  or nothing, and a partial reference list is never extended;
+- the stored hash names exactly one face of a single-solid target body, as the
+  feature finds that body; the body's lineage publishes a name on that face
+  whose `currentHash` is the stored hash and whose witness equals the face's
+  measured witness; that name is published on no other face; and two members
+  of one set never take the same name;
+- the advice is offered only once the feature itself has built.
+
+The upgrade records the name of the entity the hash already resolves to and
+leaves the stored hash as it was, so it changes neither the geometry nor what
+the pick means; an ambiguous or unnamed pick stays hash-only. After it, an
+upstream edit resolves the pick by lineage (step 1).
+
+It is written as before: automatically after a committed rebuild, never from a
+preview, validation or drag build, as one atomic `Repair topology references`
+normalization that persists and syncs like an edit without an undo step of its
+own. Nothing is written for a feature after the first failed or manually
+suppressed one (ADR-017, November 2026), where the kernel withholds the advice;
+the app draws the same line at the first failed, refused or suppressed step in
+history order. Before this the app wrote nothing at all once any feature had
+failed, so a model with one unrelated late failure never upgraded its earlier
+picks.
+
+A legacy face-attached sketch or datum without a reference is not upgraded: it
+replays its stored migration frame instead of resolving a hash, and a reference
+would make it start following the face.
+
+The app also says, once per commit and without blocking it, when the commit
+stores a new hash-only pick that its own rebuild cannot name, and Diagnostics
+notes how many steps hold one. Neither is a warning: the model built as asked.
+
+Names for fillet and chamfer bands and other entities the kernel reports no
+construction history for remain the kernel's to supply (see the coverage table
+above); this amendment only carries a name the body already publishes.
+
 ## Consequences
 
 - Schema-v5 references are additive inside current schema-v6 documents, and

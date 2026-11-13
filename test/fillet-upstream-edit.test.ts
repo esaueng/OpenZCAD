@@ -11,6 +11,7 @@ import {
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
+import { expectPassedThrough } from './support/failed-pass-through';
 import {
   toUserId,
   type BodyId,
@@ -264,8 +265,8 @@ describe('edge modifiers across cylinder radius edits', { timeout: 60_000 }, () 
     expect(after.warnings).toEqual([
       'Feature "Legacy fillet": A selected edge no longer exists. Re-select the edges and re-create this feature.'
     ]);
-    expect(after.bodyRepresentations[filleted.bodyId]).toBeUndefined();
-    // The resized cylinder itself is intact.
+    // The resized cylinder itself is intact, and stands in for the fillet.
+    expectPassedThrough(after, filleted.bodyId, bodyId);
     expect(after.bodyRepresentations[bodyId]?.volume).toBeCloseTo(
       Math.PI * 6.4 ** 2 * 28,
       3
