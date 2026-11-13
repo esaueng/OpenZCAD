@@ -4764,7 +4764,9 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'targetBodyId',
     'faceHash',
     'faceReference',
-    'fit'
+    'fit',
+    'offset',
+    'anchor'
   ],
   'direct-edit': ['targetBodyId', 'operation'],
   'imported-step': [
@@ -4837,9 +4839,13 @@ const FEATURE_DATA_CLEARABLE_KEYS: Partial<
   // `pitch` may go only where the gear keeps a cylinder's diameter, and
   // `mateTeeth` and `diameterFactor` only off the gear kinds that need them,
   // and `outsideDiameter` only with `throated`, and `wormLength` only off an
-  // enveloping wheel, which the gear validation enforces.
+  // enveloping wheel, which the gear validation enforces. Teeth on a body
+  // return to the whole face by clearing `faceWidth`, `offset` and `anchor`.
   gear: [
     'pitch',
+    'faceWidth',
+    'offset',
+    'anchor',
     'pressureAngleDeg',
     'profileShift',
     'backlash',

@@ -381,6 +381,68 @@ describe('gear command validation', () => {
   });
 });
 
+describe('partial-span teeth validation (schema v55)', () => {
+  const base = addPrimitiveFeature(
+    createProjectDocument('Shaft', toUserId('user_gear')),
+    {
+      name: 'Blank',
+      primitiveKind: 'cylinder',
+      dimensions: { radius: 11, height: 12 }
+    }
+  );
+  const teeth: GearInput = {
+    name: 'Teeth',
+    gearType: 'external',
+    sizing: 'module',
+    teeth: 20,
+    targetBodyId: base.bodyOrder[0]!,
+    faceHash: 1
+  };
+  const validate = (input: GearInput, document = base) =>
+    commandFactories.gearBody(input).validate(document);
+
+  it('accepts teeth over part of a face, from either end', () => {
+    // An older client would cut them along the whole face.
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(55);
+    expect(() => validate({ ...teeth, faceWidth: 6, offset: 3 })).not.toThrow();
+    expect(() =>
+      validate({ ...teeth, offset: 4, anchor: 'end' })
+    ).not.toThrow();
+  });
+
+  it.each([
+    ['a zero length', { faceWidth: 0 }, /face width must be greater than zero/],
+    ['a negative offset', { offset: -1 }, /offset must not be negative/],
+    [
+      'an unknown anchor',
+      { anchor: 'middle' as never },
+      /anchor must be start or end/
+    ]
+  ])('refuses %s', (_label, overrides, message) => {
+    expect(() => validate({ ...teeth, ...overrides })).toThrow(message);
+  });
+
+  it('refuses an offset or anchor on a new gear', () => {
+    const document = createProjectDocument('Gear', toUserId('user_gear'));
+    const gear: GearInput = {
+      name: 'Gear 1',
+      gearType: 'external',
+      sizing: 'module',
+      pitch: 2,
+      teeth: 20,
+      faceWidth: 5,
+      origin: { x: 0, y: 0, z: 0 },
+      axis: { x: 0, y: 0, z: 1 }
+    };
+    expect(() => validate({ ...gear, offset: 1 }, document)).toThrow(
+      /Only teeth on a body take an offset/
+    );
+    expect(() => validate({ ...gear, anchor: 'end' }, document)).toThrow(
+      /Only teeth on a body take an offset/
+    );
+  });
+});
+
 describe('gear features on the exact kernel', { timeout: 60_000 }, () => {
   let adapter: ExactKernelAdapter;
 
@@ -972,5 +1034,162 @@ describe('gear features on the exact kernel', { timeout: 60_000 }, () => {
       (warning) => warning.kind === 'build-failed'
     );
     expect(refusal?.kernelRefusal?.code).toBe('gear:cylinder-too-small');
+  });
+
+  /** Teeth on a Ø22 boss 12 tall, with any span fields. */
+  async function teethOnBoss(span: Partial<GearInput>) {
+    const base = addPrimitiveFeature(
+      createProjectDocument('Shaft', toUserId('user_gear')),
+      {
+        name: 'Blank',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 11, height: 12 }
+      }
+    );
+    const blankId = base.bodyOrder[0]!;
+    const blank = (await adapter.syncDocument(base)).bodyRepresentations[
+      blankId
+    ]!;
+    const side = blank.topology!.faces.find(
+      (face) => face.geometry?.surfaceType === 'cylinder'
+    )!;
+    const cut = gearBody(base, {
+      name: 'Teeth',
+      gearType: 'external',
+      sizing: 'module',
+      teeth: 20,
+      targetBodyId: blankId,
+      faceHash: side.hash,
+      ...(side.reference ? { faceReference: side.reference } : {}),
+      ...span
+    });
+    const derived = await adapter.syncDocument(cut.document);
+    return { derived, body: derived.bodyRepresentations[cut.bodyId] };
+  }
+
+  /** The standalone m 1, 20-tooth gear's volume per unit of face width. */
+  async function gearVolumePerWidth(): Promise<number> {
+    const reference = newGear({ pitch: 1, faceWidth: 6 });
+    const standalone = (await adapter.syncDocument(reference.document))
+      .bodyRepresentations[reference.bodyId]!;
+    return standalone.volume / 6;
+  }
+
+  it('cuts teeth over the middle of a boss, leaving named collars and shoulders (v55)', async () => {
+    const { derived, body } = await teethOnBoss({ faceWidth: 6, offset: 3 });
+    expect(derived.warnings).toEqual([]);
+    expect(derived.featureWarnings ?? []).toEqual([]);
+    // Six of the m 1 gear (Ø22 kept, so m 1) between two Ø22 collars 3 long.
+    const volume = 6 * (await gearVolumePerWidth()) + Math.PI * 11 ** 2 * 6;
+    expect(body!.volume).toBeCloseTo(volume, 6);
+    expect(body!.bbox.max.x - body!.bbox.min.x).toBeLessThan(22 + 1e-6);
+    const faces = body!.topology!.faces;
+    const names = faces.map((face) => face.reference?.lineageName);
+    expect(names).not.toContain(undefined);
+    expect(new Set(names).size).toBe(names.length);
+    expect(names.filter((name) => name?.includes('.flank.'))).toHaveLength(40);
+    // The tips stand on the collars, so each shoulder splits per tooth space.
+    for (const [end, z] of [
+      ['start', 3],
+      ['end', 9]
+    ] as const) {
+      const shoulders = faces.filter((face) =>
+        face.reference?.lineageName?.startsWith(`gear.face.shoulder.${end}[`)
+      );
+      expect(shoulders).toHaveLength(20);
+      for (const face of shoulders) {
+        expect(face.geometry?.surfaceType).toBe('plane');
+        expect(face.geometry?.center.z).toBeCloseTo(z, 9);
+      }
+    }
+    for (const [end, z] of [
+      ['start', 1.5],
+      ['end', 10.5]
+    ] as const) {
+      const collar = faces.find(
+        (face) => face.reference?.lineageName === `gear.face.collar.${end}`
+      );
+      expect(collar?.geometry?.surfaceType).toBe('cylinder');
+      expect(collar?.geometry?.radius).toBeCloseTo(11, 9);
+      expect(
+        (collar!.geometry!.axisStart!.z + collar!.geometry!.axisEnd!.z) / 2
+      ).toBeCloseTo(z, 6);
+    }
+    // The body's own end caps keep their names.
+    expect(names).toContain(
+      'boolean.face.target.primitive.cylinder.face.cap.start'
+    );
+    expect(names).toContain(
+      'boolean.face.target.primitive.cylinder.face.cap.end'
+    );
+  });
+
+  it('measures an offset from the far end when anchored there (v55)', async () => {
+    const { body } = await teethOnBoss({
+      faceWidth: 6,
+      offset: 1,
+      anchor: 'end'
+    });
+    const faces = body!.topology!.faces;
+    const at = (name: string) =>
+      faces.find((face) => face.reference?.lineageName === name)!.geometry!
+        .center.z;
+    // 6 long ending 1 below the top: from 5 to 11.
+    expect(at('gear.face.shoulder.start[0]')).toBeCloseTo(5, 9);
+    expect(at('gear.face.shoulder.end[0]')).toBeCloseTo(11, 9);
+  });
+
+  it('names both parts of the cap where the teeth reach a face end (v55)', async () => {
+    const { body } = await teethOnBoss({ faceWidth: 8 });
+    // Eight of the gear from the bottom, a Ø22 collar 4 long above.
+    const volume = 8 * (await gearVolumePerWidth()) + Math.PI * 11 ** 2 * 4;
+    expect(body!.volume).toBeCloseTo(volume, 6);
+    const names = body!.topology!.faces.map(
+      (face) => face.reference?.lineageName
+    );
+    expect(names).not.toContain(undefined);
+    expect(new Set(names).size).toBe(names.length);
+    for (const name of [
+      'gear.face.cap.start',
+      'gear.face.cap.start.body',
+      'gear.face.collar.end',
+      'gear.face.shoulder.end[0]'
+    ]) {
+      expect(names).toContain(name);
+    }
+    expect(names.filter((name) => name?.includes('shoulder.start'))).toEqual(
+      []
+    );
+  });
+
+  it('turns down only the span with a set module, one shoulder per end (v55)', async () => {
+    const { derived, body } = await teethOnBoss({
+      faceWidth: 6,
+      offset: 3,
+      fit: 'module',
+      pitch: 0.9
+    });
+    expect(derived.featureWarnings ?? []).toEqual([]);
+    const names = body!.topology!.faces.map(
+      (face) => face.reference?.lineageName
+    );
+    expect(names).not.toContain(undefined);
+    expect(new Set(names).size).toBe(names.length);
+    expect(names).toContain('gear.face.shoulder.start');
+    expect(names).toContain('gear.face.shoulder.end');
+    // The collars keep the boss's Ø22 beside the Ø19.8 tips.
+    expect(body!.bbox.max.x - body!.bbox.min.x).toBeCloseTo(22, 6);
+  });
+
+  it('refuses teeth that run past the face (v55)', async () => {
+    const { derived } = await teethOnBoss({ faceWidth: 10, offset: 4 });
+    const refusal = derived.featureWarnings!.find(
+      (warning) => warning.kind === 'build-failed'
+    );
+    expect(refusal?.kernelRefusal).toMatchObject({
+      family: 'gear',
+      code: 'gear:span-outside-face'
+    });
+    expect(refusal?.message).toMatch(/run past an end of the cylindrical face/);
   });
 });

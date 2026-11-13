@@ -1528,8 +1528,22 @@ function validateGearInput(document: ProjectDocument, input: GearInput): void {
     if (input.gearType === 'rack') {
       throw new Error('A rack cannot be cut into a cylinder.');
     }
+    // Schema v55: the teeth may cover part of the face. Whether they stay
+    // on it needs the face's length, which is the build's check.
+    if (input.faceWidth !== undefined) {
+      positive('face width', input.faceWidth);
+    }
+    if (input.offset !== undefined && value('offset', input.offset) < 0) {
+      throw new Error('Gear teeth offset must not be negative.');
+    }
+    if (
+      input.anchor !== undefined &&
+      input.anchor !== 'start' &&
+      input.anchor !== 'end'
+    ) {
+      throw new Error('Gear teeth anchor must be start or end.');
+    }
     for (const [label, present] of [
-      ['face width', input.faceWidth],
       ['origin', input.origin],
       ['axis', input.axis],
       ['x direction', input.xDirection],
@@ -1558,6 +1572,9 @@ function validateGearInput(document: ProjectDocument, input: GearInput): void {
 
   if (input.fit !== undefined) {
     throw new Error('Only teeth on a body choose a fit.');
+  }
+  if (input.offset !== undefined || input.anchor !== undefined) {
+    throw new Error('Only teeth on a body take an offset along the face.');
   }
   if (input.pitch === undefined) {
     throw new Error('A new gear needs a pitch.');

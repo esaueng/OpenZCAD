@@ -140,3 +140,61 @@ describe('teeth cut along a cylinder', { timeout: 60_000 }, () => {
     expect(primitiveCylinderRadiusAncestor(document, gearBodyId)).toBeNull();
   });
 });
+
+describe('teeth over part of a cylinder (v55)', { timeout: 60_000 }, () => {
+  let adapter: ExactKernelAdapter;
+
+  beforeAll(async () => {
+    adapter = await createExactKernelAdapter();
+  }, 60_000);
+
+  afterAll(() => adapter.dispose());
+
+  it('keeps a cap drag off the cylinder’s height: the teeth end at shoulders', async () => {
+    const base = addPrimitiveFeature(
+      createProjectDocument('Shaft', toUserId('user_gear')),
+      {
+        name: 'Blank',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 11, height: 12 }
+      }
+    );
+    const blankId = base.bodyOrder[0]!;
+    const blank = (await adapter.syncDocument(base)).bodyRepresentations[
+      blankId
+    ]!;
+    const wall = blank.topology!.faces.find(
+      (face) => face.geometry?.surfaceType === 'cylinder'
+    )!;
+    // Teeth over the bottom 4 of the 12: the bottom cap is the gear's.
+    const cut = gearBody(base, {
+      name: 'Teeth',
+      gearType: 'external',
+      sizing: 'module',
+      teeth: 20,
+      faceWidth: 4,
+      targetBodyId: blankId,
+      faceHash: wall.hash,
+      ...(wall.reference ? { faceReference: wall.reference } : {})
+    });
+    const document = cut.document;
+    const derived = await adapter.syncDocument(document);
+    expect(derived.warnings).toEqual([]);
+    document.derived = derived;
+    const body = derived.bodyRepresentations[cut.bodyId]!;
+    const ring = body.topology!.faces.find(
+      (face) => face.reference?.lineageName === 'gear.face.cap.start'
+    )!;
+    expect(ring).toBeDefined();
+    // Growing the cylinder from this end would slide the stored span along
+    // it, so the drag is not read as the cylinder's height.
+    const plan = planFaceOffset({
+      document,
+      bodyId: cut.bodyId,
+      face: ring,
+      faceHash: ring.hash,
+      offset: 2
+    });
+    expect(plan?.kind).not.toBe('primitive-dimension');
+  });
+});

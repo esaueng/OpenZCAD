@@ -174,8 +174,12 @@ function primitiveChain(
         ? data.targetBodyId
         : // Teeth cut along a cylinder span its whole wall and regenerate at
           // any height, so a cap drag on the gear still means the cylinder's
-          // height. Its radius is the gear's to own.
-          data.featureKind === 'gear' && source.throughGear
+          // height. Its radius is the gear's to own. Teeth over part of the
+          // wall (schema v55) end at shoulders, not at the cylinder's caps.
+          data.featureKind === 'gear' &&
+            source.throughGear &&
+            data.faceWidth === undefined &&
+            data.offset === undefined
           ? data.targetBodyId
           : undefined;
     if (targetBodyId === undefined) {
