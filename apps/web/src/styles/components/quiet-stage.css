@@ -69,6 +69,38 @@
      window, not the viewer area: the stream stands outside that container. */
   --command-bar-w: min(clamp(520px, 38vw, 760px), var(--command-bar-cap));
   --command-bar-fs: var(--fs-base);
+  /* A running command's card is wider than the bar it stands on, and the
+     cube stands in the same band: at 1440px with both docks the card's
+     right edge ran 16px into the cube's box, and at 1280px over half the
+     cube. The card keeps left of the cube with the corner's 12px of
+     clearance: no wider than the room between the lane's start and that
+     line, and moved left only as far as its centred place would cross it.
+     Measured from the right dock's inner edge, as the corner is. Where
+     that room is under 320px (a 768px window with a panel docked) the card
+     cannot be drawn in it and keeps the lane, as it always has. */
+  --command-card-clear: calc(var(--stage-corner-w) - 32px);
+  --command-lane-end: calc(var(--lane-right) - var(--right-dock-w, 0px));
+  --command-lane-w: calc(
+    var(--stage-between-docks) - var(--lane-start) - var(--command-lane-end)
+  );
+  --command-card-w: min(
+    max(calc(var(--command-bar-w) + 120px), 520px),
+    max(
+      calc(
+        var(--command-lane-w) -
+          max(0px, var(--command-card-clear) - var(--command-lane-end))
+      ),
+      min(var(--command-lane-w), 320px)
+    )
+  );
+  --command-card-shift: clamp(
+    0px,
+    calc(
+      var(--command-card-clear) - var(--command-lane-end) -
+        var(--command-lane-w) / 2 + var(--command-card-w) / 2
+    ),
+    max(0px, calc((var(--command-lane-w) - var(--command-card-w)) / 2))
+  );
 }
 
 /* A wide stage gives the line more height and a size more type to fill
@@ -1059,8 +1091,13 @@
    on a box of its own above it. Pressing the bar puts the placeholder back.
    It stays out of the tree (the summary carries it) and never takes the
    pointer, so a press on it lands on the field. Clear of the glyph on the
-   left and the key on the right. */
-.workspace-hint {
+   left and the key on the right.
+   Only while it fits: guidance wider than the field stands on the card over
+   the bar instead (`.is-raised`, below), where a pick's guidance already
+   reads, rather than ending in an ellipsis. The probe is this same line laid
+   out and never drawn, which is how the readout knows (WorkspaceReadout). */
+.workspace-hint,
+.workspace-hint-probe {
   position: absolute;
   bottom: 0;
   left: 50%;
@@ -1078,6 +1115,10 @@
   white-space: nowrap;
   pointer-events: none;
   transform: translateX(-50%);
+}
+
+.workspace-hint-probe {
+  visibility: hidden;
 }
 
 .command-bar-lane:has(.command-bar.open) > .workspace-hint {
@@ -1104,8 +1145,8 @@
 /* ── The notice lane ──
    Everything that talks above the search bar shares one centred lane,
    stacked from the bar up: the status row (the status toast or the
-   activity pill; the guidance reads inside the bar), then the action toast
-   (Undo).
+   activity pill; the guidance reads inside the bar, or on its card when it
+   is too long for the field), then the action toast (Undo).
    Each row that is showing lifts the rows above it. The rows used to carry
    fixed offsets of their own, so the Undo toast and the status toast landed
    on the same pixels whenever both were up at once. The selection is named
@@ -1148,7 +1189,8 @@
 }
 
 /* The status row holds a 28px toast or the 58px activity pill. The hint
-   reads inside the bar and takes no row. */
+   takes no row here: it reads inside the bar, or on the card over it, whose
+   height is already in the lane's foot (--workspace-guidance-h). */
 .viewer-area:has(.workspace-toast:not(.hidden)) .toast {
   --lane-status: 40px;
 }
@@ -1818,7 +1860,7 @@
 
 .viewer-area
   .workspace-column-float:has(:is(.command-rail, .sketch-rail))
-  nav.command-rail {
+  div.command-rail {
   position: static;
 }
 
@@ -1930,17 +1972,17 @@ button.command-more-toggle {
     --column-w: calc(var(--rail-w) * var(--tool-rail-columns, 2));
   }
 
-  .viewer-area .workspace-column-float nav.command-rail {
+  .viewer-area .workspace-column-float div.command-rail {
     display: grid;
     grid-template-columns: repeat(var(--tool-rail-columns, 2), minmax(0, 1fr));
     justify-items: center;
   }
 
-  nav.command-rail .command-rail-group {
+  div.command-rail .command-rail-group {
     display: contents;
   }
 
-  nav.command-rail .command-rail-pins {
+  div.command-rail .command-rail-pins {
     display: grid;
     grid-column: 1 / -1;
     grid-template-columns: subgrid;
@@ -1948,8 +1990,8 @@ button.command-more-toggle {
     width: 100%;
   }
 
-  nav.command-rail .command-rail-divider,
-  nav.command-rail .command-more {
+  div.command-rail .command-rail-divider,
+  div.command-rail .command-more {
     grid-column: 1 / -1;
   }
 }
@@ -2098,21 +2140,30 @@ button.command-rail.is-suggested {
   );
 }
 
-/* Every tool by name, beside the rail: one tall column — search and the
-   fits/all switch at the head, the list under the palette's own headings,
-   and the pin hint or the hidden count at the foot. */
+/* Every tool by name, docked to the rail: one tall column — its name and
+   close button, search and the fits/all switch at the head, the list under
+   the palette's own headings, and the pin hint or the hidden count at the
+   foot.
+
+   Docked, not floating: the drawer is remembered open and stays through a
+   click on the model, as a model panel does, so it is drawn as part of the
+   rail rather than as a popover standing off it. It shares the rail's edge
+   (their borders overlap), its corners on that side are square, and it has
+   no gap for the stage to show through. The rail keeps its own island
+   corners: the simple list meets only part of its edge. A popover's look with a panel's
+   behaviour was the defect: it read as something a click outside closes. */
 .command-flyout {
   position: absolute;
   top: 0;
-  left: calc(100% + var(--island-gap));
+  left: calc(100% - 1px);
   width: 236px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
   background: var(--color-surface);
   border: var(--border-thin);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-2);
+  border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
+  box-shadow: var(--shadow-1);
   animation: oz-fade var(--dur-fast) var(--ease-out);
 }
 
@@ -2153,12 +2204,24 @@ button.command-rail.is-suggested {
   max-height: var(--sheet-h);
 }
 
-/* The catalog is a temporary surface, above both instrument rails. Its
+/* The drawer stands above both instrument rails and a floating panel: its
    search and filters must remain usable when a phone has no gap between
-   the two rails; a child's z-index cannot escape its column's stacking
-   context. Restore the column's normal layer when the catalog closes. */
+   the two rails, and a child's z-index cannot escape its column's stacking
+   context. It stands under every temporary surface, though: the tooltips,
+   the command bar's results and the popovers (--z-popover). At the popover
+   layer itself, where it used to be, a drawer left open lay across the
+   search results and whatever opened after it. Restore the column's normal
+   layer when the drawer closes. */
 .viewer-area .workspace-column-float:has(.command-flyout) {
-  z-index: var(--z-popover);
+  z-index: calc(var(--z-panel-float) + 9);
+}
+
+/* A popover the instrument rail opens (the standard views, the section
+   controls) is the more temporary of the two, so it stands over the drawer
+   where a phone lays one across the other. Only while both are open: the
+   rail otherwise stays under a floating panel dragged onto it. */
+.viewer-area:has(.command-flyout) .instrument-rail:has([data-rail-flyout]) {
+  z-index: calc(var(--z-panel-float) + 10);
 }
 
 /* The simple list stands on the stage's foot, lifted until its own foot is
@@ -2213,6 +2276,42 @@ button.command-rail.is-suggested {
   border-color: var(--color-accent-border);
 }
 
+/* The drawer's name and its close button, as a model panel's header: what
+   says this is a docked surface with a way out of its own. */
+.command-flyout-title {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 3px 4px 0 9px;
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  font-weight: var(--fw-regular);
+  letter-spacing: var(--ls-eyebrow);
+  text-transform: uppercase;
+}
+
+.command-flyout-close {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  min-height: 0;
+  padding: 0;
+  color: var(--color-text-subtle);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+}
+
+.command-flyout-close:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
 .command-flyout-head {
   flex: 0 0 auto;
   display: flex;
@@ -2220,6 +2319,40 @@ button.command-rail.is-suggested {
   gap: 4px;
   padding: 6px 6px 4px;
   border-bottom: var(--border-thin);
+}
+
+/* A short stage (a phone on its side) has no row to spare for the drawer's
+   name: with it, the catalogue's list was left about 70px, less than one
+   three-line tile, so the last tool could not be brought fully into view.
+   There the close button stands beside the search and filters instead of
+   over them, and the name is dropped from view (the group keeps its
+   accessible name). The simple list has no search row and keeps its title. */
+@media (max-height: 540px) {
+  .command-flyout.is-advanced {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .command-flyout.is-advanced > * {
+    grid-column: 1 / -1;
+  }
+
+  .command-flyout.is-advanced > .command-flyout-head {
+    grid-area: 1 / 1;
+    padding-right: 2px;
+  }
+
+  .command-flyout.is-advanced > .command-flyout-title {
+    grid-area: 1 / 2;
+    align-items: flex-start;
+    padding: 6px 4px 0 0;
+    border-bottom: var(--border-thin);
+  }
+
+  .command-flyout.is-advanced > .command-flyout-title > span {
+    display: none;
+  }
 }
 
 .command-flyout-search {
@@ -3104,13 +3237,6 @@ button.command-rail.is-suggested {
   pointer-events: none;
 }
 
-/* A temporary inspection borrows an existing column, preserving its state.
-   Inert and aria-hidden in PanelDock also remove the covered controls. */
-.panel-column.is-inspecting {
-  visibility: hidden;
-  pointer-events: none;
-}
-
 .model-panel:focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: -2px;
@@ -3542,10 +3668,13 @@ button.model-panel-grip[aria-expanded='true'] {
   pointer-events: none;
 }
 
-/* View options' menu, opened to the rail's left: its groups are named,
-   and a check marks each chosen radio and each setting that is on. */
+/* The Panel layout menu, opened to the rail's left: its groups are named,
+   and a check marks each chosen radio and each setting that is on. It keeps
+   16px from the window's top and foot (PANEL_LAYOUT_MENU_MARGIN) and scrolls
+   inside where a short window cannot hold it. */
 .view-options-menu {
   min-width: 240px;
+  max-height: calc(100dvh - 32px);
 }
 
 .view-options-group-label {
@@ -4360,11 +4489,20 @@ button.model-panel-grip[aria-expanded='true'] {
   /* Options open above the bar from its own left edge: grown leftward from
      the ⋯ button they ran under the tool rail on a narrow window. */
   position: relative;
+  /* Left of the cube in the corner (--command-card-shift above); zero
+     wherever the centred card already clears it. */
+  left: calc(-1 * var(--command-card-shift, 0px));
   display: flex;
   align-items: center;
   flex-wrap: wrap;
+  /* Where the card is too narrow for one row, Cancel and Done wrap to the
+     right, under where they stand on a wide one. */
+  justify-content: flex-end;
   gap: 8px;
-  max-width: min(max(calc(var(--command-bar-w) + 120px), 520px), 100%);
+  max-width: min(
+    var(--command-card-w, max(calc(var(--command-bar-w) + 120px), 520px)),
+    100%
+  );
   padding: 4px 4px 4px 12px;
   color: var(--color-text);
   background: var(--color-surface);
@@ -4496,7 +4634,11 @@ button.model-panel-grip[aria-expanded='true'] {
   }
 
   .in-place-command {
+    /* The phone's lane runs edge to edge under a lifted cube: the card
+       fills it, unmoved. */
+    left: 0;
     width: 100%;
+    max-width: 100%;
     display: grid;
     grid-template-columns: 1fr 1fr;
   }
@@ -5163,8 +5305,27 @@ button.model-panel-grip[aria-expanded='true'] {
 .command-bar-lane:has(.command-bar.open) > .workspace-hint-help {
   display: none;
 }
-.workspace-hint {
-  padding-right: 116px;
+/* Clear of the help glyph, and of the key badge while the bar shows one.
+   The badge leaves a bar under 360px (the row's container query above) and
+   its room goes back to the line: held at 116px, a 290px bar at a 1024px
+   window kept 137px for words and cut every line it had. 279px of line is
+   that 360px bar less the two paddings. */
+.workspace-hint,
+.workspace-hint-probe {
+  padding-right: 44px;
+}
+
+.workspace-hint:not(.is-selection):not(.is-raised),
+.workspace-hint-probe {
+  container: workspace-hint / inline-size;
+}
+
+@media (min-width: 521px) {
+  @container workspace-hint (min-width: 279px) {
+    .workspace-hint-text {
+      margin-right: 72px;
+    }
+  }
 }
 
 /* Instructions have their own hit area after the shortcut badge. */
@@ -5172,7 +5333,10 @@ button.model-panel-grip[aria-expanded='true'] {
   padding-right: 40px;
 }
 
-.workspace-hint.is-selection {
+/* The card over the bar: a pick's name and guidance, or guidance alone
+   that the field is too narrow for. It wraps rather than cuts. */
+.workspace-hint.is-selection,
+.workspace-hint.is-raised {
   position: static;
   width: 100%;
   max-width: var(--command-bar-w);
@@ -5192,7 +5356,8 @@ button.model-panel-grip[aria-expanded='true'] {
   transform: none;
 }
 
-.workspace-hint.is-selection .workspace-hint-text {
+.workspace-hint.is-selection .workspace-hint-text,
+.workspace-hint.is-raised .workspace-hint-text {
   flex: 1 0 100%;
   white-space: normal;
   overflow-wrap: anywhere;

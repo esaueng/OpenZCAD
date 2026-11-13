@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { measureFitFrame, measurePickFrame, shiftIntoFrame } from './fitFrame';
+import {
+  cornersWithinFrame,
+  measureCreationFrame,
+  measureFitFrame,
+  measurePickFrame,
+  shiftIntoFrame
+} from './fitFrame';
 
 function placed(
   element: HTMLElement,
@@ -183,5 +189,81 @@ describe('shiftIntoFrame', () => {
     );
     // Its arrow already clear, nothing moves.
     expect(shiftIntoFrame(at(0, 900), canvas, frame, at(300, 400))).toBe(0);
+  });
+});
+
+describe('measureCreationFrame', () => {
+  function withLane(canvas: HTMLElement, top: number) {
+    const workspace = document.createElement('div');
+    workspace.className = 'workspace';
+    workspace.append(canvas.closest('.viewer-area')!);
+    const lane = placed(document.createElement('div'), 300, top, 700, 758);
+    lane.className = 'command-bar-lane';
+    workspace.append(lane);
+    document.body.append(workspace);
+    return canvas;
+  }
+
+  it('keeps a creation preview above the command bar as well as inside the panels', () => {
+    const frame = measureCreationFrame(withLane(stage('docked'), 650));
+    expect(frame.minX).toBe(-1);
+    expect(frame.maxX).toBeCloseTo(((668 - 12) / 1024) * 2 - 1, 12);
+    expect(frame.maxY).toBe(1);
+    expect(frame.minY).toBeCloseTo(1 - ((650 - 12) / 768) * 2, 12);
+  });
+
+  it('is the fit frame where no bottom lane is drawn', () => {
+    const canvas = stage('docked');
+    expect(measureCreationFrame(canvas)).toEqual(measureFitFrame(canvas));
+  });
+
+  it('is the whole canvas outside the workspace', () => {
+    const canvas = placed(document.createElement('canvas'), 0, 0, 800, 600);
+    document.body.append(canvas);
+    expect(measureCreationFrame(canvas)).toEqual({
+      minX: -1,
+      maxX: 1,
+      minY: -1,
+      maxY: 1
+    });
+  });
+
+  it('does not frame above a lane that takes most of the stage', () => {
+    // A phone's sheet: framing into the sliver above it would shrink the
+    // preview to nothing.
+    const canvas = stage();
+    const frame = measureCreationFrame(withLane(canvas, 120));
+    expect(frame.minY).toBe(-1);
+  });
+});
+
+describe('cornersWithinFrame', () => {
+  const frame = { minX: -0.4, maxX: 0.6, minY: -0.5, maxY: 1 };
+  const corner = (x: number, y: number, z = 0) => ({ x, y, z });
+
+  it('holds a box whose corners are all inside the clear stage', () => {
+    expect(
+      cornersWithinFrame([corner(-0.4, -0.5), corner(0.6, 1)], frame)
+    ).toBe(true);
+  });
+
+  it('reports a box that runs under a panel, the bar or past the canvas', () => {
+    expect(cornersWithinFrame([corner(0, 0), corner(0.7, 0)], frame)).toBe(
+      false
+    );
+    expect(cornersWithinFrame([corner(0, -0.6)], frame)).toBe(false);
+    expect(cornersWithinFrame([corner(-0.5, 0)], frame)).toBe(false);
+  });
+
+  it('counts a corner behind the camera or past the far plane as outside', () => {
+    expect(cornersWithinFrame([corner(0, 0, 1.2)], frame)).toBe(false);
+    expect(cornersWithinFrame([corner(0, 0, -1.2)], frame)).toBe(false);
+  });
+
+  it('insets by a share of the frame, so a margin asks for more room', () => {
+    // Half-sizes 0.5 and 0.75: a 0.2 margin insets 0.1 and 0.15.
+    expect(cornersWithinFrame([corner(0.55, 0)], frame, 0.2)).toBe(false);
+    expect(cornersWithinFrame([corner(0.5, 0.85)], frame, 0.2)).toBe(true);
+    expect(cornersWithinFrame([corner(0, 0.9)], frame, 0.2)).toBe(false);
   });
 });

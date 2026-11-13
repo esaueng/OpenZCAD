@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { exactEntryShortcut, isTypingTarget } from './exactEntryShortcut';
+import {
+  exactEntryShortcut,
+  inPlaceTypedEntryKey,
+  isTypingTarget
+} from './exactEntryShortcut';
 import { IDLE, interactionReducer } from './interaction/machine';
 
 const armed = interactionReducer(IDLE, {
@@ -81,5 +85,32 @@ describe('exact entry shortcut ownership', () => {
     child.contentEditable = 'false';
     expect(isTypingTarget(child)).toBe(false);
     expect(isTypingTarget(document.createElement('canvas'))).toBe(false);
+  });
+});
+
+describe('a key typed at a running in-place command', () => {
+  it.each(['0', '1', '5', '9', '-', '.'])(
+    'takes %s as the first size rather than a view shortcut',
+    (value) => {
+      expect(inPlaceTypedEntryKey(key(value), false)).toBe(value);
+    }
+  );
+
+  it('leaves a focused field, a chord and every other key alone', () => {
+    // A field is typed in; the keypad takes its own keys.
+    expect(inPlaceTypedEntryKey(key('1'), true)).toBeNull();
+    for (const modifier of ['ctrlKey', 'metaKey', 'altKey'] as const) {
+      expect(
+        inPlaceTypedEntryKey(
+          new KeyboardEvent('keydown', { key: '1', [modifier]: true }),
+          false
+        )
+      ).toBeNull();
+    }
+    for (const other of ['b', 'Enter', 'Tab', 'Escape', ' ', 'F1', '10'])
+      expect(inPlaceTypedEntryKey(key(other), false)).toBeNull();
+    const handled = key('1');
+    Object.defineProperty(handled, 'defaultPrevented', { value: true });
+    expect(inPlaceTypedEntryKey(handled, false)).toBeNull();
   });
 });

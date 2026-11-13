@@ -1,0 +1,27 @@
+---
+row: U03
+---
+
+12 November UI/UX review, rails and Tools drawer: the Build rail, the rail a
+pick takes, the instrument rail and the view cube are one tab stop each with
+arrow-key, Home and End movement (`useRovingToolbar`), greyed tools stay
+reachable with their reason as the description, and the Build rail precedes
+the instrument rail in the tab sequence, where Sketch was twenty-one presses
+in; the rail a pick takes is headed by what its verbs act on ("Face",
+"Edge ×8") and the tour's first step says so; the Tools drawer is docked to
+the rail with a close button, closes on Escape from the idle workspace and
+stands under the command bar's results and every popover
+(`rail-keyboard-and-drawer.spec.ts`, `useRovingToolbar.test.tsx`,
+`CommandCard.test.tsx`, PR #1378).
+
+Review repair: the instrument rail keeps its arrow-key handling after a
+Build → View → Build round trip and when it first mounts after its host.
+The hook follows the committed rail element and releases listeners and
+observers from the old one without reinstalling them on every render.
+Two hook regressions fail before the fix and pass after it; the tagged rail
+keyboard browser case also exercises the workspace-mode round trip. The
+coplanar-body browser regression now finds the cube by its toolbar role.
+On a short stage, the advanced drawer puts its close button beside search
+and filters so its last catalog tile fits in the scrolling area. The tagged
+phone-rotation regression verifies search, close and the last tile remain
+reachable at 390 × 844 and 844 × 390.

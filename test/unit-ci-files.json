@@ -212,6 +212,7 @@
     "src/hooks/useGeometryWorkerDemand.test.tsx",
     "src/hooks/useProjectView.test.tsx",
     "src/hooks/useRefusalHarvest.test.tsx",
+    "src/hooks/useRovingToolbar.test.tsx",
     "src/hooks/useLocalProjectAutosaveSchedule.test.tsx",
     "src/hooks/useScrollMemory.test.tsx",
     "src/hooks/useWorkspaceResume.test.tsx",

@@ -14,12 +14,14 @@ import {
   type ContextMenuItem,
   type ContextMenuState
 } from '../ContextMenu';
+import { Tooltip } from '../Tooltip';
 import { PANEL_ICONS, PANEL_TITLES } from './panelMeta';
 
 /**
  * Where a panel is drawn: in a docked column, in a floating window, in the
- * unpinned slot beside the rail (`revealed` is a parked docked panel shown
- * there), or alone in the phone lane.
+ * temporary slot (`unpinned`; `revealed` is a parked docked panel shown
+ * there), which stands beside the rail or under a docked column's own
+ * panels, or alone in the phone lane.
  */
 export type PanelPlacement =
   'docked' | 'floating' | 'unpinned' | 'revealed' | 'phone';
@@ -49,12 +51,17 @@ export interface PanelDockControls {
   onNaturalHeight?: (height: number) => void;
 }
 
+/** What the Pin button's tooltip says of a panel in each state. */
+export const TEMPORARY_HINT = 'Temporary: the next panel you open replaces it';
+export const PINNED_HINT = 'Pinned: it stays open beside your other panels';
+export const FLOATING_HINT = 'Dock it in the right column';
+
 /** What a panel's frame needs from the layout, and what it can ask of it. */
 export interface PanelControls {
   placement: PanelPlacement;
   /** The panel's state in the stored layout, whatever the placement. */
   status: PanelStatus;
-  /** View options' Compact rows: tighter rows, the same controls. */
+  /** Panel layout' Compact rows: tighter rows, the same controls. */
   compact?: boolean;
   /** The workspace command handles Escape before a temporary panel closes. */
   commandActive?: boolean;
@@ -71,8 +78,10 @@ export interface PanelControls {
 /**
  * Every panel's frame: a header with the grip (the Move menu), the icon, the
  * title and count as a heading, any panel controls, Pin, Pop out and Close;
- * the body, which scrolls; and, while the panel is unpinned, a footer
- * saying so. There is no fold: an open panel is fully open.
+ * and the body, which scrolls. An unpinned panel says it is temporary once,
+ * on its Pin button: a footer repeating that, with a second Pin, stood
+ * taller than a one-row History. The phone lane, where nothing pins, keeps
+ * a footer for Hide panels. There is no fold: an open panel is fully open.
  */
 export function PanelFrame({
   id,
@@ -152,11 +161,10 @@ export function PanelFrame({
     ) {
       const active = document.activeElement;
       const fromRail = active?.matches(`[data-model-panel-rail="${id}"]`);
-      const fromCoveredColumn = active?.closest('.panel-column.is-inspecting');
       const lostFocus =
         active === document.body &&
         !document.querySelector('.in-place-command');
-      if (fromRail || fromCoveredColumn || lostFocus)
+      if (fromRail || lostFocus)
         sectionRef.current?.focus({ preventScroll: true });
     }
   }, [id, controls.placement]);
@@ -242,43 +250,60 @@ export function PanelFrame({
         </h2>
         {actions}
         {controls.placement !== 'phone' && (
-          <button
-            type="button"
-            className={`model-panel-action model-panel-pin${pinned ? ' is-pinned' : ''}`}
-            aria-label={`Pin ${title}`}
-            aria-pressed={pinned}
-            title={
-              pinned ? `Pinned · unpin ${title}` : `Pin ${title} · keep it open`
+          // The one place a temporary panel says so, and the one Pin: the
+          // tooltip opens on hover and on keyboard focus, and describes the
+          // button while it shows.
+          <Tooltip
+            label={pinned ? `Unpin ${title}` : `Pin ${title}`}
+            description={
+              pinned
+                ? PINNED_HINT
+                : controls.status === 'unpinned'
+                  ? TEMPORARY_HINT
+                  : FLOATING_HINT
             }
-            onClick={pinned ? controls.onUnpin : controls.onPin}
+            multiline
           >
-            <Pin
-              size={14}
-              fill={pinned ? 'currentColor' : 'none'}
-              aria-hidden="true"
-            />
-          </button>
+            <button
+              type="button"
+              className={`model-panel-action model-panel-pin${pinned ? ' is-pinned' : ''}`}
+              aria-label={`Pin ${title}`}
+              aria-pressed={pinned}
+              onClick={pinned ? controls.onUnpin : controls.onPin}
+            >
+              <Pin
+                size={14}
+                fill={pinned ? 'currentColor' : 'none'}
+                aria-hidden="true"
+              />
+            </button>
+          </Tooltip>
         )}
         {dock?.onPopOut && (
+          <Tooltip
+            label={`Pop out ${title}`}
+            description="Float it over the model"
+          >
+            <button
+              type="button"
+              className="model-panel-action"
+              aria-label={`Pop out ${title}`}
+              onClick={dock.onPopOut}
+            >
+              <ExternalLink size={14} aria-hidden="true" />
+            </button>
+          </Tooltip>
+        )}
+        <Tooltip label={`Close ${title}`}>
           <button
             type="button"
             className="model-panel-action"
-            aria-label={`Pop out ${title}`}
-            title={`Pop out ${title} · float it over the model`}
-            onClick={dock.onPopOut}
+            aria-label={`Close ${title}`}
+            onClick={controls.onClose}
           >
-            <ExternalLink size={14} aria-hidden="true" />
+            <X size={14} aria-hidden="true" />
           </button>
-        )}
-        <button
-          type="button"
-          className="model-panel-action"
-          aria-label={`Close ${title}`}
-          title={`Close ${title}`}
-          onClick={controls.onClose}
-        >
-          <X size={14} aria-hidden="true" />
-        </button>
+        </Tooltip>
       </header>
       <div className="model-panel-body" ref={bodyRef}>
         {/* Its own height, never the body's: what the panel hugs. */}
@@ -286,23 +311,10 @@ export function PanelFrame({
           {children}
         </div>
       </div>
-      {(controls.status === 'unpinned' || controls.placement === 'phone') && (
+      {controls.placement === 'phone' && (
         <footer className="model-panel-footer">
-          <span>
-            {controls.placement === 'phone'
-              ? 'Panels share this space.'
-              : 'Temporary panel. Pin to keep it alongside your other panels.'}
-          </span>
-          {controls.placement !== 'phone' && (
-            <button
-              type="button"
-              className="model-panel-footer-pin"
-              onClick={controls.onPin}
-            >
-              Pin
-            </button>
-          )}
-          {controls.placement === 'phone' && controls.onHidePanels && (
+          <span>Panels share this space.</span>
+          {controls.onHidePanels && (
             <button
               type="button"
               className="model-panel-footer-pin"

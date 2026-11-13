@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
 import { frameForPlaneRef, newCanonicalPlaneRef } from '@openzcad/geometry';
 import type { PlaneId } from '@openzcad/shared';
@@ -172,6 +172,73 @@ describe('ghost plane borders', () => {
       expect(sum(material.color)).toBeLessThan((sum(backdrop) + full) / 2);
     }
     rig.dispose();
+  });
+});
+
+describe('plane picker labels', () => {
+  it('names each panel on a camera-facing sprite at its outer corner', () => {
+    // The test DOM has no 2D canvas, so the rig would draw no labels at all.
+    const context = {
+      clearRect: vi.fn(),
+      strokeText: vi.fn(),
+      fillText: vi.fn(),
+      measureText: () => ({
+        width: 106,
+        actualBoundingBoxLeft: 0,
+        actualBoundingBoxRight: 106,
+        actualBoundingBoxAscent: 64,
+        actualBoundingBoxDescent: 0
+      })
+    };
+    const getContext = vi
+      .spyOn(HTMLCanvasElement.prototype, 'getContext')
+      .mockReturnValue(context as unknown as CanvasRenderingContext2D);
+    try {
+      const rig = buildPlanePickerRig();
+      rig.setScale(0.1);
+      rig.group.updateMatrixWorld(true);
+      for (const plane of PLANE_PICKER_ORDER) {
+        const labels: THREE.Object3D[] = [];
+        rig.group.traverse((object) => {
+          if (object.name === `plane-picker-label-${plane}`) {
+            labels.push(object);
+          }
+        });
+        // One label, and a sprite: three.js draws a sprite facing the camera
+        // and upright whatever its parent's rotation. Lying flat in the
+        // panel, "XY" was sheared along the floor from the default view
+        // until it read as mirrored, and "XZ" was a sliver.
+        expect(labels).toHaveLength(1);
+        const label = labels[0] as THREE.Sprite;
+        expect(label.isSprite).toBe(true);
+        // Sprites refuse a raycast without a camera; the panels are the
+        // only pick targets.
+        expect(() => label.raycast(new THREE.Raycaster(), [])).not.toThrow();
+        // In the panel's own plane, toward the corner away from the axes.
+        const panel = rig.group.getObjectByName(`plane-picker-panel-${plane}`)!;
+        const local = panel.worldToLocal(
+          label.getWorldPosition(new THREE.Vector3())
+        );
+        expect(local.z).toBeCloseTo(0, 9);
+        expect(local.x).toBeGreaterThan(75);
+        expect(local.x).toBeLessThan(150);
+        expect(local.y).toBeGreaterThan(75);
+        expect(local.y).toBeLessThan(150);
+      }
+      // Hovering one panel still dims the other two names.
+      rig.setHover('XY');
+      const opacity = (plane: PlaneId) =>
+        (
+          rig.group.getObjectByName(
+            `plane-picker-label-${plane}`
+          ) as THREE.Sprite
+        ).material.opacity;
+      expect(opacity('XY')).toBeGreaterThan(opacity('XZ'));
+      expect(opacity('XZ')).toBe(opacity('YZ'));
+      rig.dispose();
+    } finally {
+      getContext.mockRestore();
+    }
   });
 });
 

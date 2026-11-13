@@ -106,6 +106,8 @@ function settingsElement(
       onDeleteCloudData={vi.fn()}
       onReset={vi.fn()}
       onApplyViewportDefaults={vi.fn()}
+      onExportDiagnostics={vi.fn()}
+      onExportInteractionLog={vi.fn()}
       onDismissProjectInvitation={vi.fn()}
       onClose={vi.fn()}
       {...overrides}
@@ -351,6 +353,8 @@ function renderStatefulSettings(
         onDeleteCloudData={vi.fn()}
         onReset={vi.fn()}
         onApplyViewportDefaults={vi.fn()}
+        onExportDiagnostics={vi.fn()}
+        onExportInteractionLog={vi.fn()}
         onDismissProjectInvitation={vi.fn()}
         onClose={vi.fn()}
         {...overrides}
@@ -1280,6 +1284,61 @@ describe('settings advanced section', () => {
     expect(next.experiments.frameRateOverlay).toBe(true);
     // The neighbouring switch in the same group is carried, not reset.
     expect(next.experiments.directManipulation).toBe(true);
+  });
+
+  it('offers the support exports that left the File menu', async () => {
+    const user = userEvent.setup();
+    const onExportDiagnostics = vi.fn();
+    const onExportInteractionLog = vi.fn();
+    renderSettings(null, { onExportDiagnostics, onExportInteractionLog });
+
+    await user.click(screen.getByRole('button', { name: 'Advanced' }));
+    await user.click(
+      screen.getByRole('button', { name: 'Export diagnostics' })
+    );
+    await user.click(
+      screen.getByRole('button', { name: 'Export interaction log' })
+    );
+
+    expect(onExportDiagnostics).toHaveBeenCalledOnce();
+    expect(onExportInteractionLog).toHaveBeenCalledOnce();
+  });
+
+  it('exports diagnostics only with a project open, the log always', async () => {
+    // From the start screen there is no project to take a snapshot of; the
+    // interaction log is the device's, and needs none.
+    const user = userEvent.setup();
+    renderSettings(null, { workspaceOpen: false });
+
+    await user.click(screen.getByRole('button', { name: 'Advanced' }));
+
+    expect(
+      screen.getByRole('button', { name: 'Export diagnostics' })
+    ).toBeDisabled();
+    expect(
+      screen.getByText(/^Open a project to export a sanitized snapshot/)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Export interaction log' })
+    ).toBeEnabled();
+  });
+
+  it('finds the support exports by searching for troubleshooting', async () => {
+    const user = userEvent.setup();
+    renderSettings();
+
+    const field = screen.getByLabelText('Find a setting');
+    await user.type(field, 'troubleshooting');
+
+    expect(screen.getByRole('button', { name: 'Advanced' })).toHaveAttribute(
+      'aria-current',
+      'page'
+    );
+    expect(
+      screen.getByRole('button', { name: 'Export diagnostics' })
+    ).toBeInTheDocument();
+    // Settings restores the last search; leave none for the next test.
+    await user.clear(field);
   });
 
   it('finds the frame rate overlay by searching for fps', async () => {

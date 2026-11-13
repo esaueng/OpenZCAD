@@ -3,6 +3,7 @@ import {
   clickGhostPlane,
   clickWorldPoint,
   createPrimitiveInPlace,
+  ensureToolsDrawerOpen,
   enterCommandValue,
   expect,
   expectBodyCount,
@@ -270,7 +271,10 @@ test('datum axes drive a revolve, a rotate about axis and a circular pattern', a
     sizes: { width: '2', depth: '2', height: '2' }
   });
   await expectBodyCount(page, 2);
+  // Nothing is armed or picked here, so this Escape is the Tools drawer's:
+  // it closes it, and Axis is a tool only the drawer lists.
   await page.keyboard.press('Escape');
+  await ensureToolsDrawerOpen(page);
   await page.getByRole('button', { name: /^Axis — / }).click();
   await expect(axisBar).toContainText('Pick an edge, cylinder');
   await setSelectionFilter(page, 'Edge');

@@ -188,9 +188,10 @@
   color: var(--color-error);
 }
 
-/* F05: the parameter's type, a compact picker trailing its value. It shows a
-   glyph (len, °, #, —) so the 290px column keeps its name track; the full
-   word is in the option labels' title and the accessible name. */
+/* F05: the parameter's type, a compact picker trailing its value. It shows
+   the type's glyph (any, len, °, #) and a chevron, so the 290px column keeps
+   its name track; the full words are the options, the tooltip and the
+   accessible description. */
 .param-value {
   display: inline-flex;
   align-items: center;
@@ -198,33 +199,81 @@
   gap: 4px;
 }
 
-.param-quantity {
-  /* The 24 px minimum pointer target; the row's inputs are 26 px. */
+/* The chip is what shows; the select lies over it, unseen, so its width is
+   the glyph's rather than its longest option's ("Unitless (any use)" would
+   take the name track). A bare "—" here read as an empty value: the glyph
+   and the chevron together say "a type, and you can change it". */
+.param-quantity-chip {
+  position: relative;
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  /* The 24 px minimum pointer target; the row's inputs are 26 px. One width
+     for every glyph, so the rows' expression fields stay in one line. */
   height: 24px;
-  min-width: 24px;
-  padding: 0 2px;
-  /* The glyph alone: the native arrow took a third of the cell and made
-     every row read "– ⌄". The border on hover marks it as a picker. */
-  appearance: none;
-  text-align: center;
-  text-align-last: center;
+  min-width: 34px;
+  padding: 0 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--color-text-subtle);
+  color: var(--color-text-muted);
   font-size: var(--fs-mini);
+}
+
+/* The glyph never wraps or gives way: the chip is as wide as it reads. */
+.param-quantity-glyph {
+  flex: 0 0 auto;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.param-quantity-chip > svg {
+  flex: 0 0 auto;
+  color: var(--color-text-subtle);
+}
+
+.param-quantity-chip:hover,
+.param-quantity-chip:focus-within {
+  border-color: var(--color-accent-dim);
+  color: var(--color-text);
+}
+
+.param-quantity-chip:has(.param-quantity:focus-visible) {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+.param-quantity {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  appearance: none;
+  opacity: 0;
   cursor: pointer;
 }
 
-.param-quantity:hover,
-.param-quantity:focus-visible {
-  border-color: var(--color-accent-dim);
-  color: var(--color-text-muted);
+/* A unitless parameter whose uses agree on a quantity: offered, not set.
+   Amber, with a dot so the state is not carried by colour alone; the
+   tooltip, the option list and the description say what it means. */
+.param-quantity-chip.suggested {
+  color: var(--color-warning);
 }
 
-/* A unitless parameter whose uses agree on a quantity: offered, not set. */
-.param-quantity.suggested {
-  color: var(--color-warning);
+.param-quantity-chip.suggested::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--color-warning);
 }
 
 .param-expose {

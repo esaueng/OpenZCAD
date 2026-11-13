@@ -212,10 +212,12 @@ export function AppShell({
               inspector && inspectorOwnsLane ? ' inspector-owns-lane' : ''
             }${command ? ' has-command' : ''}${panelLane ? ' has-panel-lane' : ''}`}
           >
-            {viewer}
-            {/* Over the viewer, under the toast lane: a takeover still
-              reports through the same status readout. */}
-            {stage && <div className="stage-takeover">{stage}</div>}
+            {/* Ahead of the viewer in the document, though it floats over it:
+              Tab reaches the modeling tools before the instrument rail and
+              the view cube the viewer carries, which are how the model is
+              looked at, not how it is made. Every island here is placed
+              absolutely with its own stacking, so the order moves nothing
+              on screen. */}
             {columnExit.rendered && (
               <ExitingFloat
                 className={`workspace-column-float${columnExit.closing ? ' closing' : ''}`}
@@ -224,6 +226,10 @@ export function AppShell({
                 {columnExit.rendered}
               </ExitingFloat>
             )}
+            {viewer}
+            {/* Over the viewer, under the toast lane: a takeover still
+              reports through the same status readout. */}
+            {stage && <div className="stage-takeover">{stage}</div>}
             {sidebar && sidebarResizer}
             {stripExit.rendered && (
               <ExitingFloat

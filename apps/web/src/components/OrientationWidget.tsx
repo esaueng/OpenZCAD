@@ -23,6 +23,7 @@ import {
   type CubePoint,
   type OrientationLink
 } from './viewer/orientationCube';
+import { useRovingToolbar } from '../hooks/useRovingToolbar';
 
 const AXIS_COLORS = {
   x: 'var(--color-handle-x)',
@@ -32,6 +33,9 @@ const AXIS_COLORS = {
 
 /** Preserve facet clicks through normal pointer wobble, then commit to orbit. */
 const DRAG_THRESHOLD_PX = 4;
+
+/** The cube's stops for the arrow keys: its faces and its corners. */
+const CUBE_STOPS = '.cube-face, .cube-corner-hit';
 
 /**
  * How long the camera must rest before the unpainted hit layer catches up
@@ -171,6 +175,21 @@ export function OrientationWidget({
     apply: null
   });
 
+  // The cube is one tab stop: the arrow keys move between the facets in
+  // view, where each of the seven was a stop of its own. The facets say
+  // when they show and hide (apply, below), so nothing watches the SVG the
+  // camera rewrites every frame. Rooted on the widget's div, not the SVG: a
+  // focus listener on an SVG element makes the element itself a tab stop.
+  const widgetRef = useRef<HTMLDivElement | null>(null);
+  const syncStops = useRovingToolbar(widgetRef, {
+    items: CUBE_STOPS,
+    observe: false
+  });
+  const syncStopsRef = useRef(syncStops);
+  useEffect(() => {
+    syncStopsRef.current = syncStops;
+  }, [syncStops]);
+
   useEffect(() => {
     onDragEndRef.current = onDragEnd;
   }, [onDragEnd]);
@@ -232,6 +251,9 @@ export function OrientationWidget({
     const state = hitLayer.current;
     const apply = (axes: AxisProjection) => {
       const projection = projectCube(axes);
+      // A facet turning into or out of view is a stop coming or going: the
+      // cube's one tab stop must never be left on a facet that is hidden.
+      let stopsChanged = false;
       const outline = (points: readonly CubePoint[]) =>
         points.map((point) => `${point.x},${point.y}`).join(' ');
 
@@ -243,10 +265,12 @@ export function OrientationWidget({
         }
         const face = projection.faces[index];
         if (!face) {
+          if (polygon.style.display !== 'none') stopsChanged = true;
           polygon.style.display = 'none';
           label.style.display = 'none';
           return;
         }
+        if (polygon.style.display === 'none') stopsChanged = true;
         polygon.style.display = '';
         label.style.display = '';
         polygon.setAttribute('points', outline(face.outline));
@@ -270,6 +294,7 @@ export function OrientationWidget({
         }
         const corner = projection.corners[index];
         if (!corner) {
+          if (hit.style.display !== 'none') stopsChanged = true;
           polygon.style.display = 'none';
           // The target hides with its facet: an invisible triangle over a
           // corner that has turned away would swallow clicks meant for the
@@ -277,6 +302,7 @@ export function OrientationWidget({
           hit.style.display = 'none';
           return;
         }
+        if (hit.style.display === 'none') stopsChanged = true;
         polygon.style.display = '';
         hit.style.display = '';
         polygon.setAttribute('points', outline(corner.outline));
@@ -307,6 +333,7 @@ export function OrientationWidget({
         line.setAttribute('opacity', String(arm.opacity));
         label.setAttribute('opacity', String(arm.opacity));
       }
+      if (stopsChanged) syncStopsRef.current();
     };
     state.apply = apply;
 
@@ -467,16 +494,18 @@ export function OrientationWidget({
   }
   return (
     <div
+      ref={widgetRef}
       className="orientation-widget"
       role="group"
       aria-label="View orientation"
     >
-      {/* A group, not the img an SVG with a title is by default: an img's
+      {/* A toolbar, not the img an SVG with a title is by default: an img's
           children are presentational, which hid the face and corner buttons
-          inside it from some screen readers. */}
+          inside it from some screen readers. One tab stop, the arrow keys
+          between the facets (useRovingToolbar). */}
       <svg
         ref={svgRef}
-        role="group"
+        role="toolbar"
         className="orientation-cube"
         viewBox={`0 0 ${CUBE_SIZE} ${CUBE_SIZE}`}
         width={CUBE_SIZE}
@@ -542,7 +571,7 @@ export function OrientationWidget({
               data-facet={`face:${index}`}
               style={{ display: 'none' }}
               role="button"
-              tabIndex={0}
+              tabIndex={-1}
               aria-label={`${VIEW_LABELS[face.view]} view`}
               onClick={() => {
                 selectFacet(faceActions.current[index] ?? face.view);
@@ -597,7 +626,7 @@ export function OrientationWidget({
               className="cube-corner-hit"
               style={{ display: 'none' }}
               role="button"
-              tabIndex={0}
+              tabIndex={-1}
               aria-label={corner.label}
               onKeyDown={(event) => {
                 if (event.key === 'Enter' || event.key === ' ') {

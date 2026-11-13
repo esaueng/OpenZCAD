@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  advanceOnSignals,
   advanceThroughCompleted,
   tourStepBody,
   WORKSPACE_TOUR_STEPS,
@@ -11,6 +12,7 @@ const signals = (
 ): WorkspaceTourSignals => ({
   featureCount: 0,
   hasSelection: false,
+  historyOpen: false,
   exportSeen: false,
   ...over
 });
@@ -47,15 +49,43 @@ describe('workspace tour', () => {
     ).toBe(2);
   });
 
-  it('never leapfrogs the manual history step', () => {
-    // Export progress cannot carry the tour past the step the app cannot
-    // observe: the user still gets told about the history.
+  it('never leapfrogs the history step', () => {
+    // Neither export progress nor a History panel left open earlier carries
+    // the tour past it: the user still gets told about the history.
     expect(
       advanceThroughCompleted(
         0,
-        signals({ featureCount: 1, hasSelection: true, exportSeen: true })
+        signals({
+          featureCount: 1,
+          hasSelection: true,
+          historyOpen: true,
+          exportSeen: true
+        })
       )
     ).toBe(2);
+  });
+
+  it('moves on from the history step when History is opened from it', () => {
+    // The step stayed put while the user did exactly what it asked.
+    const shown = signals({ featureCount: 1, hasSelection: true });
+    expect(advanceOnSignals(2, shown, { ...shown, historyOpen: true })).toBe(3);
+    // Opened and the export dialog already seen: nothing is left to teach.
+    expect(
+      advanceOnSignals(
+        2,
+        { ...shown, exportSeen: true },
+        { ...shown, exportSeen: true, historyOpen: true }
+      )
+    ).toBe(WORKSPACE_TOUR_STEPS.length);
+  });
+
+  it("reads opening History as the history step's action only", () => {
+    const open = signals({ featureCount: 1, historyOpen: true });
+    // Opened during an earlier step: that step is still the one to do.
+    expect(advanceOnSignals(1, signals({ featureCount: 1 }), open)).toBe(1);
+    // Already open when the step comes up, or closed from it: it stays.
+    expect(advanceOnSignals(2, open, { ...open, hasSelection: true })).toBe(2);
+    expect(advanceOnSignals(2, open, signals({ featureCount: 1 }))).toBe(2);
   });
 
   it('finishes from the export step once the dialog was seen', () => {

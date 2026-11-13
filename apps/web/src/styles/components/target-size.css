@@ -127,6 +127,11 @@
     opacity: 1;
   }
 
+  .command-flyout-close {
+    width: 44px;
+    height: 44px;
+  }
+
   .in-place-command-cancel,
   .in-place-command-done,
   .in-place-command-options > summary {
