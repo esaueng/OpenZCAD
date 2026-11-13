@@ -1,4 +1,4 @@
-import type { BrowserContext, Page } from '@playwright/test';
+import type { BrowserContext, Page, Request } from '@playwright/test';
 import { withEncryptedProjectInfo } from '../../apps/web/worker/e2eeProjectDocuments';
 import { d1Database } from '../d1-sqlite';
 import {
@@ -216,7 +216,7 @@ test('invites to an encrypted project, verifies both ways and opens it as the in
   // and suspected a plaintext sharing call. The dialog reads only the
   // metadata route the gate lets through; every other call is encrypted.
   const plaintextCalls: string[] = [];
-  const recordPlaintext = (request: import('@playwright/test').Request) => {
+  const recordPlaintext = (request: Request) => {
     const path = new URL(request.url()).pathname;
     if (/^\/api\/(projects\/proj_|share)/.test(path)) {
       plaintextCalls.push(`${request.method()} ${path}`);
