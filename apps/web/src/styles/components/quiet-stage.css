@@ -2330,7 +2330,11 @@ button.command-rail.is-suggested {
    three-line tile, so the last tool could not be brought fully into view.
    There the close button stands beside the search and filters instead of
    over them, and the name is dropped from view (the group keeps its
-   accessible name). The simple list has no search row and keeps its title. */
+   accessible name). The simple list has no search row and keeps its title.
+   CommandCard moves the title after the head in the markup at this same
+   height (SHORT_STAGE_QUERY), so the keyboard reaches the close button after
+   the search and filters it is drawn beside; both are placed by name here,
+   so nothing in this layout depends on that order. */
 @media (max-height: 540px) {
   .command-flyout.is-advanced {
     display: grid;

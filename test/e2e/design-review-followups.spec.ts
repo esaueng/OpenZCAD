@@ -1401,3 +1401,193 @@ test.describe('touch review followups', () => {
     }
   );
 });
+
+// A stage 540px tall or less lays the advanced Tools drawer out as a grid:
+// the close button stands beside the search and filters rather than over
+// them (quiet-stage.css). Two stages reach it, a phone on its side and a
+// short desktop window.
+for (const stage of [
+  {
+    name: 'a phone on its side',
+    short: { width: 844, height: 390 },
+    tall: { width: 390, height: 844 },
+    touch: true
+  },
+  {
+    name: 'a short desktop window',
+    short: { width: 1280, height: 520 },
+    tall: { width: 1280, height: 800 },
+    touch: false
+  }
+]) {
+  test.describe(`the Tools drawer on ${stage.name}`, () => {
+    test.use(
+      stage.touch
+        ? { hasTouch: true, isMobile: true, colorScheme: 'dark' }
+        : { colorScheme: 'dark' }
+    );
+
+    const openDrawer = async (page: Page) => {
+      const more = page.getByRole('button', { name: /^More tools/ });
+      await (stage.touch ? more.tap() : more.click());
+      const drawer = page.getByRole('group', { name: 'Tools drawer' });
+      await expect(drawer).toBeVisible();
+      return { more, drawer };
+    };
+
+    test(
+      'the keyboard reaches the drawer head in the order it is drawn',
+      { tag: '@ci-smoke' },
+      async ({ page }) => {
+        await page.setViewportSize(stage.tall);
+        await openPart(page);
+        const { more, drawer } = await openDrawer(page);
+        const search = drawer.getByRole('searchbox', { name: 'Find a tool' });
+        const close = drawer.getByRole('button', {
+          name: 'Close tools drawer',
+          exact: true
+        });
+        // The stops Tab makes from the Tools button through the drawer's
+        // head, by name, up to the first tool.
+        const headStops = async () => {
+          await more.focus();
+          const stops: string[] = [];
+          for (let step = 0; step < 8; step += 1) {
+            await page.keyboard.press('Tab');
+            const stop = await drawer.evaluate((element) => {
+              const active = document.activeElement;
+              if (!active || !element.contains(active)) return null;
+              return active.closest('.command-flyout-list')
+                ? 'list'
+                : (active.getAttribute('aria-label') ??
+                    active.textContent ??
+                    '');
+            });
+            if (stop === null || stop === 'list') break;
+            stops.push(stop);
+          }
+          return stops;
+        };
+        const box = async (control: Locator) => (await control.boundingBox())!;
+
+        // Tall: the title row, with the close button, stands over the search.
+        expect((await box(close)).y + (await box(close)).height).toBeLessThan(
+          (await box(search)).y + 1
+        );
+        const tall = await headStops();
+        expect(tall[0]).toBe('Close tools drawer');
+        expect(tall[1]).toBe('Find a tool');
+        expect(tall.at(-1)).toMatch(/^All \d+$/);
+        expect(tall).toHaveLength(4);
+
+        // Short: the close button stands to the right of the search and the
+        // filters, so it is the last of the head's stops (WCAG 2.4.3). The
+        // button keeps the focus it had through the change.
+        await close.focus();
+        await page.setViewportSize(stage.short);
+        await expect(drawer).toBeVisible();
+        await expect(close).toBeFocused();
+        const searchBox = await box(search);
+        const closeBox = await box(close);
+        expect(closeBox.x).toBeGreaterThanOrEqual(
+          searchBox.x + searchBox.width - 1
+        );
+        expect(closeBox.y).toBeLessThan(searchBox.y + searchBox.height);
+        if (stage.touch) {
+          expect(closeBox.width).toBeGreaterThanOrEqual(44);
+          expect(closeBox.height).toBeGreaterThanOrEqual(44);
+        }
+        const short = await headStops();
+        expect(short[0]).toBe('Find a tool');
+        expect(short.at(-2)).toMatch(/^All \d+$/);
+        expect(short.at(-1)).toBe('Close tools drawer');
+        expect(short).toHaveLength(4);
+
+        // The group keeps its name, and Escape still closes it and hands
+        // the keyboard back to the button that opened it.
+        await close.focus();
+        await page.keyboard.press('Escape');
+        await expect(drawer).toHaveCount(0);
+        await expect(more).toBeFocused();
+
+        // Back on a tall stage the order is the title's again.
+        await page.setViewportSize(stage.tall);
+        await openDrawer(page);
+        expect((await headStops())[0]).toBe('Close tools drawer');
+      }
+    );
+
+    test(
+      'a search keeps its results scrolling inside the drawer',
+      { tag: '@ci-smoke' },
+      async ({ page }, testInfo) => {
+        await page.setViewportSize(stage.short);
+        await openPart(page);
+        const { drawer } = await openDrawer(page);
+        const search = drawer.getByRole('searchbox', { name: 'Find a tool' });
+        const tiles = drawer.locator('.command-tile');
+        const foot = drawer.getByRole('button', { name: 'Simple view' });
+        const frame = async () =>
+          drawer.evaluate((element) => {
+            const box = element.getBoundingClientRect();
+            const area = element
+              .closest('.viewer-area')!
+              .getBoundingClientRect();
+            const rows = element.querySelector('.command-flyout-list')!;
+            return {
+              top: box.top,
+              bottom: box.bottom,
+              stageTop: area.top,
+              stageBottom: Math.min(area.bottom, innerHeight),
+              listHeight: rows.clientHeight,
+              listScroll: rows.scrollHeight
+            };
+          });
+        // The sheet with nothing typed: the frame a search may shrink from
+        // and must never outgrow.
+        await expect(tiles).toHaveCount(35);
+        const full = await frame();
+        expect(full.top).toBeGreaterThanOrEqual(full.stageTop - 1);
+        expect(full.bottom).toBeLessThanOrEqual(full.stageBottom + 1);
+
+        // "e" is in most tools' names; "fillet" in a few.
+        for (const [query, many] of [
+          ['e', true],
+          ['fillet', false]
+        ] as const) {
+          await search.fill(query);
+          await expect(search).toHaveValue(query);
+          const count = await tiles.count();
+          if (many) expect(count).toBeGreaterThan(15);
+          else {
+            expect(count).toBeGreaterThan(0);
+            expect(count).toBeLessThan(6);
+          }
+          const typed = await frame();
+          expect(typed.top, query).toBeGreaterThanOrEqual(full.top - 1);
+          expect(typed.bottom, query).toBeLessThanOrEqual(full.bottom + 1);
+          // More results than the sheet holds scroll in the list: the sheet
+          // does not grow past its frame to show them.
+          if (many)
+            expect(typed.listScroll, query).toBeGreaterThan(typed.listHeight);
+          await reachable(search);
+          await reachable(foot);
+          await tiles.first().scrollIntoViewIfNeeded();
+          await reachable(tiles.first());
+          await tiles.last().scrollIntoViewIfNeeded();
+          await reachable(tiles.last());
+          await reachable(foot);
+          await capture(
+            page,
+            testInfo,
+            `short-drawer-search-${query}-${stage.short.width}x${stage.short.height}`
+          );
+        }
+        // Cleared, the sheet is its fixed frame again.
+        await search.fill('');
+        await expect(tiles).toHaveCount(35);
+        expect((await frame()).bottom).toBeCloseTo(full.bottom, 0);
+      }
+    );
+  });
+}

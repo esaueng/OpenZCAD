@@ -51,6 +51,7 @@ import {
 } from '../lib/tools';
 import { toolCommandId, useKeymap } from '../lib/keymap';
 import { selectionRailHeld } from '../lib/selectionRailHold';
+import { useMediaQuery } from '../hooks/useMediaQuery';
 import { useRovingToolbar } from '../hooks/useRovingToolbar';
 import { SelectionRail, useHeldPick } from './SelectionRail';
 import { Tooltip } from './Tooltip';
@@ -66,6 +67,12 @@ const TOOL_COUNT = Object.keys(TOOL_META).length;
 const RAIL_STOPS =
   'button.command-rail, .selection-rail-badge, .selection-rail-phase.has-icon';
 const RAIL_STOPS_EXCEPT = '.command-flyout';
+/**
+ * The stage height at which quiet-stage.css lays the advanced drawer out as
+ * a grid with the close button beside the search rather than over it. The
+ * two must agree: the markup's order follows the layout this names.
+ */
+const SHORT_STAGE_QUERY = '(max-height: 540px)';
 
 /** What the heading over a pick's verbs calls each kind of pick. */
 const PICK_KINDS: Partial<Record<CommandContextKind, string>> = {
@@ -276,6 +283,40 @@ export function CommandCard({
     onToggleMore();
     moreToggleRef.current?.focus();
   };
+  // The drawer's name and its way out, at the head in both views: a drawer
+  // that stays through clicks elsewhere needs a close button on itself, not
+  // only the button that opened it. On a short stage the advanced sheet
+  // draws this to the right of its search and filters, so it follows them
+  // in the markup there: Tab then meets the head's controls in the order
+  // they are drawn (WCAG 2.4.3). The stylesheet places both by name, so
+  // only the keyboard's order depends on where this stands.
+  const closeAfterHead = useMediaQuery(SHORT_STAGE_QUERY) && advanced;
+  // Moving the title takes its button out of the document and back, which
+  // drops the keyboard's focus if it was there (a phone turned on its side
+  // with the close button focused): hand it back.
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const closeFocused = useRef(false);
+  useLayoutEffect(() => {
+    if (closeFocused.current && !closeRef.current?.matches(':focus'))
+      closeRef.current?.focus();
+  }, [closeAfterHead]);
+  const drawerTitle = (
+    <div className="command-flyout-title">
+      <span>Tools</span>
+      <button
+        ref={closeRef}
+        type="button"
+        className="command-flyout-close"
+        onFocus={() => (closeFocused.current = true)}
+        onBlur={() => (closeFocused.current = false)}
+        aria-label="Close tools drawer"
+        title="Close (Esc)"
+        onClick={closeDrawer}
+      >
+        <X size={13} aria-hidden="true" />
+      </button>
+    </div>
+  );
   const focusOnOpen = useRef(false);
   const drawerId = useId();
   useLayoutEffect(() => {
@@ -688,21 +729,7 @@ export function CommandCard({
               endDrag();
             }}
           >
-            {/* Its name and its way out, at the head in both views: a
-                drawer that stays through clicks elsewhere needs a close
-                button on itself, not only the button that opened it. */}
-            <div className="command-flyout-title">
-              <span>Tools</span>
-              <button
-                type="button"
-                className="command-flyout-close"
-                aria-label="Close tools drawer"
-                title="Close (Esc)"
-                onClick={closeDrawer}
-              >
-                <X size={13} aria-hidden="true" />
-              </button>
-            </div>
+            {!closeAfterHead && drawerTitle}
             {advanced && (
               <div className="command-flyout-head">
                 <label className="command-flyout-search">
@@ -745,6 +772,7 @@ export function CommandCard({
                 )}
               </div>
             )}
+            {closeAfterHead && drawerTitle}
             <div
               ref={listRef}
               className="command-flyout-list"

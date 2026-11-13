@@ -21,7 +21,7 @@ import {
   RotateCw
 } from 'lucide-react';
 import { useState } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   RAIL_GROUPS,
   RAIL_TOOLS,
@@ -1289,6 +1289,100 @@ describe('CommandCard', () => {
       expect(toggle).toHaveAttribute('aria-expanded', 'false');
       // The keyboard goes back to the button that opens it.
       expect(toggle).toHaveFocus();
+    });
+
+    describe('on a short stage', () => {
+      // The stylesheet draws the close button beside the search at this
+      // height; the markup's order is what Tab follows.
+      let short = false;
+      const listeners = new Set<() => void>();
+      const setShort = (next: boolean) => {
+        short = next;
+        act(() => listeners.forEach((listener) => listener()));
+      };
+      beforeEach(() => {
+        short = false;
+        listeners.clear();
+        vi.stubGlobal(
+          'matchMedia',
+          (query: string) =>
+            ({
+              get matches() {
+                return short && query === '(max-height: 540px)';
+              },
+              media: query,
+              addEventListener: (_: string, listener: () => void) =>
+                listeners.add(listener),
+              removeEventListener: (_: string, listener: () => void) =>
+                listeners.delete(listener)
+            }) as unknown as MediaQueryList
+        );
+      });
+      afterEach(() => vi.unstubAllGlobals());
+
+      const closeFollowsSearch = () => {
+        const close = screen.getByRole('button', {
+          name: 'Close tools drawer'
+        });
+        const search = screen.getByRole('searchbox', { name: 'Find a tool' });
+        return Boolean(
+          search.compareDocumentPosition(close) &
+          Node.DOCUMENT_POSITION_FOLLOWING
+        );
+      };
+
+      it('puts the close button after the search and filters it is drawn beside', () => {
+        renderCard();
+        openDrawer();
+        expect(closeFollowsSearch()).toBe(false);
+        setShort(true);
+        expect(closeFollowsSearch()).toBe(true);
+        const close = screen.getByRole('button', {
+          name: 'Close tools drawer'
+        });
+        const filters = within(
+          screen.getByRole('group', { name: 'Show tools' })
+        ).getAllByRole('button');
+        expect(
+          filters.at(-1)!.compareDocumentPosition(close) &
+            Node.DOCUMENT_POSITION_FOLLOWING
+        ).toBeTruthy();
+        // Before the tools, though: it is the head's last stop.
+        expect(
+          close.compareDocumentPosition(
+            document.querySelector('.command-flyout-list')!
+          ) & Node.DOCUMENT_POSITION_FOLLOWING
+        ).toBeTruthy();
+        setShort(false);
+        expect(closeFollowsSearch()).toBe(false);
+      });
+
+      it('keeps the focus on the close button when the stage changes height', () => {
+        renderCard();
+        openDrawer();
+        screen.getByRole('button', { name: 'Close tools drawer' }).focus();
+        setShort(true);
+        expect(
+          screen.getByRole('button', { name: 'Close tools drawer' })
+        ).toHaveFocus();
+        setShort(false);
+        expect(
+          screen.getByRole('button', { name: 'Close tools drawer' })
+        ).toHaveFocus();
+        // The search's focus is its own: the move does not take it.
+        const search = screen.getByRole('searchbox', { name: 'Find a tool' });
+        search.focus();
+        setShort(true);
+        expect(search).toHaveFocus();
+      });
+
+      it('leaves the simple view its title at the head', () => {
+        short = true;
+        renderCard(NOTHING, { initialView: 'simple' });
+        openDrawer();
+        const drawer = screen.getByRole('group', { name: 'Tools drawer' });
+        expect(drawer.firstElementChild).toHaveClass('command-flyout-title');
+      });
     });
 
     it('has its close button in the simple view too', () => {
