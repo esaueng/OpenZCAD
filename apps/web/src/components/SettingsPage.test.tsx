@@ -2025,6 +2025,11 @@ describe('settings privacy and data section', () => {
     expect(confirm).toBeDisabled();
     expect(dialog.innerHTML).not.toContain(session.email);
     const confirmation = within(dialog).getByLabelText('Deletion confirmation');
+    // Masked only while it is not being typed in (design review I78): the
+    // field shows what is typed while focused and masks again on blur.
+    act(() => confirmation.focus());
+    expect(confirmation).toHaveAttribute('type', 'text');
+    act(() => confirmation.blur());
     expect(confirmation).toHaveAttribute('type', 'password');
     await user.click(
       within(dialog).getByRole('button', { name: 'Show personal info' })
