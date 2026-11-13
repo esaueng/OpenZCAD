@@ -1480,7 +1480,7 @@ export function resolveTopologyReference(
     reason: 'lineage-not-found',
     message:
       reference.kind === 'face' && splitGearCapPart(identity.lineageName)
-        ? `The selected part of the gear's end cap no longer exists: the teeth no longer split that cap (they now cover the whole face or stop short of that end), so it is one face again. Re-pick the face.`
+        ? "The selected part of the gear's end cap no longer exists. Re-pick the face."
         : `The selected ${reference.kind} lineage no longer exists.`
   };
 }

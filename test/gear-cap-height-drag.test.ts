@@ -387,7 +387,7 @@ describe('end caps across whole-face and partial teeth (v55)', { timeout: 300_00
           // Refused by name, never moved onto the ring or the rejoined cap.
           expect(derived.datumFrames?.[planed.featureId]).toBeUndefined();
           expect(derived.warnings.join(' ')).toMatch(
-            /part of the gear's end cap no longer exists.*Re-pick the face/
+            /The selected part of the gear's end cap no longer exists\. Re-pick the face\./
           );
         }
       }
