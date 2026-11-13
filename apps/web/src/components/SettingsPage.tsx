@@ -2863,6 +2863,17 @@ export function SettingsPage({
             setDeletionScope(null);
           }}
           onClose={() => setDeletionScope(null)}
+          onDownloadFirst={() => {
+            setDeletionScope(null);
+            // To the control that keeps a copy (design review I84).
+            requestAnimationFrame(() => {
+              const download = document.querySelector<HTMLElement>(
+                '[data-download-all-data]'
+              );
+              download?.scrollIntoView({ block: 'center' });
+              download?.focus();
+            });
+          }}
         />
       ) : null}
     </div>
