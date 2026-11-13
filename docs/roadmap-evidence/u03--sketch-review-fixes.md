@@ -21,4 +21,4 @@ Rectangle 1", "end of Line 3"), labels length fields in document units and
 the text size "Em size (mm)" (I10, I11). Coverage:
 `test/e2e/sketch-review-fixes.spec.ts`, `objectLabels.test.ts`,
 `extrudePreselect.test.ts`, `SketchToolRail.test.tsx`,
-`HistoryTimeline.test.tsx`, `machine.test.ts`, `prompt.test.ts`.
+`HistoryTimeline.test.tsx`, `machine.test.ts`, `prompt.test.ts` (PR #1425).
