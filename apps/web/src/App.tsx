@@ -1721,6 +1721,7 @@ import {
   activeResumePrompt,
   failingFeatureIds,
   HistoryResumeRefusal,
+  resumeHistoryMessage,
   rollbackMarkerMove,
   rowResume,
   rowResumeAlreadyFailing,
@@ -28024,10 +28025,11 @@ export function App() {
   }
 
   function handleResumeHistory() {
+    const history = liveFeatures();
     moveRollbackMarker(
-      rollbackMarkerMove(liveFeatures(), null),
+      rollbackMarkerMove(history, null),
       'Resume full history',
-      'Full history resumed. Manually suppressed features remain suppressed.'
+      resumeHistoryMessage(history)
     );
   }
 

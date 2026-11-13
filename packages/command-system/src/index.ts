@@ -61,6 +61,7 @@ import {
   toEntityId,
   toShaprImportId,
   type BodyId,
+  type BodyNode,
   type DatumAxisDefinition,
   type DatumPlaneDefinition,
   type DatumPlaneSource,
@@ -721,10 +722,12 @@ function validateFeatureReorder(
     }
   });
   const bodyProducerPosition = new Map<string, number>();
+  const bodies = new Map<string, BodyNode>();
   for (const body of listNodesByKind(document, 'body')) {
     const producer = featurePosition.get(body.featureId);
     if (producer !== undefined) {
       bodyProducerPosition.set(body.bodyId, producer);
+      bodies.set(body.bodyId, body);
     }
   }
 
@@ -738,7 +741,12 @@ function validateFeatureReorder(
         featurePosition.get(feature.featureId) !== producedAt
       ) {
         throw new Error(
-          `Cannot reorder: "${feature.name}" would run before the body it uses exists.`
+          bodyOrderRefusal(
+            document,
+            feature,
+            bodies.get(id)!,
+            reordered[producedAt]!
+          )
         );
       }
       const featureAt = featurePosition.get(id);
@@ -758,6 +766,31 @@ function validateFeatureReorder(
       }
     }
   });
+}
+
+/**
+ * Why a feature cannot run before the feature that produced a body it
+ * uses. With Box → Fillet → Hole, moving Hole above Fillet was refused as
+ * running "before the body it uses exists", though the box had stood since
+ * the first step: the hole is on the body the fillet leaves. A producer that
+ * reads another body (a fillet, a hole, a boolean) changes a body that was
+ * already there, so the sentence names that change and the feature behind it.
+ */
+function bodyOrderRefusal(
+  document: ProjectDocument,
+  feature: FeatureNode,
+  body: BodyNode,
+  producer: FeatureNode
+): string {
+  const bodyIds = new Set(
+    listNodesByKind(document, 'body').map((node) => node.bodyId as string)
+  );
+  const changes = [...featureReferences(document, producer)].some((id) =>
+    bodyIds.has(id)
+  );
+  return changes
+    ? `Cannot reorder: "${feature.name}" uses ${body.name} as "${producer.name}" leaves it, so it must stay after "${producer.name}".`
+    : `Cannot reorder: "${feature.name}" would run before the body it uses exists ("${producer.name}" makes ${body.name}).`;
 }
 
 /**
