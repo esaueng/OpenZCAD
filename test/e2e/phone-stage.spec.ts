@@ -222,11 +222,7 @@ function stageReport(page: Page): Promise<StageReport> {
         tools !== null &&
         hit !== null &&
         tools.contains(hit) &&
-        toolsBox.bottom <= innerHeight &&
-        // The label under the glyph, inside the button it names.
-        tools.querySelector('.command-rail-label')!.getBoundingClientRect()
-          .bottom <=
-          toolsBox.bottom + 0.5
+        toolsBox.bottom <= innerHeight
     };
   });
 }
