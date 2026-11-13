@@ -48,7 +48,8 @@ function renderToolbar(
       onToggleGrid={noop}
       onFit={noop}
       onView={noop}
-      onCycleDisplayMode={noop}
+      onDisplayMode={noop}
+      onToggleXray={noop}
       onToggleProjection={noop}
       onToggleSection={noop}
       onSectionPlane={noop}
@@ -103,7 +104,8 @@ describe('the viewer bar as one tab stop', () => {
         onToggleGrid={noop}
         onFit={noop}
         onView={noop}
-        onCycleDisplayMode={noop}
+        onDisplayMode={noop}
+        onToggleXray={noop}
         onToggleProjection={noop}
         onToggleSection={noop}
         onSectionPlane={noop}
@@ -247,7 +249,8 @@ describe('Measure on the viewer bar', () => {
         measuring={measuring}
         {...(onMeasure ? { onMeasure } : {})}
         onView={noop}
-        onCycleDisplayMode={noop}
+        onDisplayMode={noop}
+        onToggleXray={noop}
         onToggleProjection={noop}
         onToggleSection={noop}
         onSectionPlane={noop}
@@ -302,7 +305,8 @@ describe('Section with nothing to cut', () => {
         onToggleGrid={noop}
         onFit={noop}
         onView={noop}
-        onCycleDisplayMode={noop}
+        onDisplayMode={noop}
+        onToggleXray={noop}
         onToggleProjection={noop}
         onToggleSection={onToggleSection}
         nothingToSection
@@ -345,7 +349,8 @@ describe('Orbit mode on the viewer bar', () => {
         onToggleGrid={noop}
         onFit={noop}
         onView={noop}
-        onCycleDisplayMode={noop}
+        onDisplayMode={noop}
+        onToggleXray={noop}
         onToggleProjection={noop}
         {...(onToggleOrbitMode ? { onToggleOrbitMode } : {})}
         onToggleSection={noop}
@@ -407,7 +412,8 @@ describe('Undo at the oldest kept step', () => {
           onToggleGrid={noop}
           onFit={noop}
           onView={noop}
-          onCycleDisplayMode={noop}
+          onDisplayMode={noop}
+          onToggleXray={noop}
           onToggleProjection={noop}
           onToggleSection={noop}
           onSectionPlane={noop}
@@ -464,7 +470,8 @@ describe('the section button and its panel', () => {
       onToggleGrid: noop,
       onFit: noop,
       onView: noop,
-      onCycleDisplayMode: noop,
+      onDisplayMode: noop,
+      onToggleXray: noop,
       onToggleProjection: noop,
       onToggleSection: handlers.onToggleSection ?? noop,
       onSectionPlane: handlers.onSectionPlane ?? noop,
@@ -766,7 +773,8 @@ describe('the standard views flyout', () => {
         onToggleGrid={noop}
         onFit={noop}
         onView={noop}
-        onCycleDisplayMode={noop}
+        onDisplayMode={noop}
+        onToggleXray={noop}
         onToggleProjection={noop}
         onToggleSection={noop}
         onSectionPlane={noop}
@@ -831,7 +839,8 @@ describe('the standard views flyout', () => {
         onToggleGrid={noop}
         onFit={noop}
         onView={onView}
-        onCycleDisplayMode={noop}
+        onDisplayMode={noop}
+        onToggleXray={noop}
         onToggleProjection={noop}
         onToggleSection={noop}
         onSectionPlane={noop}
@@ -871,7 +880,8 @@ describe('the section view help', () => {
         onToggleGrid={noop}
         onFit={noop}
         onView={noop}
-        onCycleDisplayMode={noop}
+        onDisplayMode={noop}
+        onToggleXray={noop}
         onToggleProjection={noop}
         onToggleSection={noop}
         onSectionPlane={noop}
@@ -921,7 +931,8 @@ describe('touch modifier toggles', () => {
         onToggleGrid={noop}
         onFit={noop}
         onView={noop}
-        onCycleDisplayMode={noop}
+        onDisplayMode={noop}
+        onToggleXray={noop}
         onToggleProjection={noop}
         onToggleSection={noop}
         onSectionPlane={noop}
@@ -1003,7 +1014,8 @@ describe('the phone rail’s More view tools', () => {
             onToggleGrid={noop}
             onFit={noop}
             onView={noop}
-            onCycleDisplayMode={noop}
+            onDisplayMode={noop}
+            onToggleXray={noop}
             onToggleProjection={noop}
             onToggleSection={noop}
             onSectionPlane={noop}

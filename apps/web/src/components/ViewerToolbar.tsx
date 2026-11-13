@@ -18,15 +18,17 @@ import {
 } from './SavedViewsSection';
 import { VIEW_LABELS } from '@openzcad/viewport';
 import type {
+  DisplayMode,
   ProjectionMode,
   SectionPlaneId,
   StandardView,
   ViewerSettings
 } from '@openzcad/viewport';
-import { AxisTriadIcon, DisplayModeIcon } from './ViewerRailIcons';
+import { AxisTriadIcon } from './ViewerRailIcons';
+import { DisplayModeMenu, isWorkspaceShortcutKey } from './DisplayModeMenu';
 import type { SectionOutlineState } from '../lib/sectionOutline';
 import { SectionToolbox } from './SectionToolbox';
-import { DISPLAY_MODE_LABELS } from '../lib/displayMode';
+import { SECTION_PLANE_LABELS } from '../lib/sectionPlaneLabels';
 import { UNDO_FLOOR_TRIMMED_REASON } from '../lib/toasts';
 import { Tooltip } from './Tooltip';
 import { labelWithKey, useKeymap, type Keymap } from '../lib/keymap';
@@ -103,7 +105,10 @@ interface ViewerToolbarProps {
   onView(view: StandardView): void;
   /** The project's saved views, listed under the standard view tiles. */
   savedViews?: SavedViewsSectionProps;
-  onCycleDisplayMode(): void;
+  /** Shows the model in a display mode, from the Display menu. */
+  onDisplayMode(mode: DisplayMode): void;
+  /** Turns X-ray on or off (Shift+X), from the Display menu. */
+  onToggleXray(): void;
   onToggleProjection(): void;
   /**
    * Flips orbiting between Free and Turntable, the account preference
@@ -154,11 +159,7 @@ interface ViewerToolbarProps {
   roving?: boolean;
 }
 
-export const SECTION_PLANE_LABELS: Record<SectionPlaneId, string> = {
-  XY: 'XY plane',
-  XZ: 'XZ plane',
-  YZ: 'YZ plane'
-};
+export { SECTION_PLANE_LABELS };
 
 /** Cased like the display modes the rail's other "Now:" lines name. */
 const ORBIT_MODE_LABELS = {
@@ -199,7 +200,8 @@ export function ViewerToolbar({
   onMeasure,
   onView,
   savedViews,
-  onCycleDisplayMode,
+  onDisplayMode,
+  onToggleXray,
   onToggleProjection,
   onToggleOrbitMode,
   onToggleSection,
@@ -341,15 +343,10 @@ export function ViewerToolbar({
     !sectionCovered &&
     (sectionOn ? sectionPanelOpen : heldOff);
   const panelId = useId();
-  // X-ray rides over the display mode, so the mode button says when it is
-  // on. It has no rail button of its own: the rail is sized to centre on the
+  // X-ray rides over the display mode, so it lives in the Display menu
+  // rather than on a button of its own: the rail is sized to centre on the
   // stage (and to fit beside the cube) down to a phone's height, and another
-  // 38px lifted it off centre there. Shift+X, the command bar and the view
-  // menu reach it, and View mode's bar has room for its button.
-  const displayModeLabel = `${DISPLAY_MODE_LABELS[settings.displayMode]}${
-    settings.xray ? ' · X-ray' : ''
-  }`;
-  const xrayKey = keymap.label('view-xray');
+  // 38px lifted it off centre there (I52).
   const sectionLabel = settings.sectionView
     ? SECTION_PLANE_LABELS[settings.sectionView.plane]
     : 'Off';
@@ -373,7 +370,11 @@ export function ViewerToolbar({
         event.stopPropagation();
         setViewsOpen(false);
         triggerRef.current?.focus();
+        return;
       }
+      // A shortcut goes on to arm its tool; the flyout steps aside rather
+      // than stand over it (I54). A saved view's name field keeps its keys.
+      if (isWorkspaceShortcutKey(event)) setViewsOpen(false);
     }
     window.addEventListener('pointerdown', onPointerDown);
     window.addEventListener('keydown', onKeyDown, true);
@@ -708,22 +709,18 @@ export function ViewerToolbar({
             />
           )}
         </div>
-        <Tooltip
-          label="Display mode"
-          shortcut={keymap.label('view-display')}
-          description={`Now: ${displayModeLabel}${
-            xrayKey ? ` · ${platformShortcutLabel(xrayKey)} for X-ray` : ''
-          }`}
-        >
-          <button
-            type="button"
-            className="rail-button"
-            onClick={onCycleDisplayMode}
-            aria-label={`${labelWithKey('Display mode', keymap.label('view-display'))} — now: ${displayModeLabel}`}
-          >
-            <DisplayModeIcon mode={settings.displayMode} />
-          </button>
-        </Tooltip>
+        <DisplayModeMenu
+          variant="rail"
+          settings={settings}
+          onDisplayMode={onDisplayMode}
+          onToggleXray={onToggleXray}
+          onOpenChange={(open) => {
+            if (!open) return;
+            // Its panel opens where the others do: one at a time.
+            setViewsOpen(false);
+            setSectionCovered(true);
+          }}
+        />
         <span className="rail-divider rail-views-break" aria-hidden="true" />
         <div className="rail-views-anchor" ref={anchorRef}>
           <Tooltip label="Standard views">

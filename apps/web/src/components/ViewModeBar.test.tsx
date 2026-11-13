@@ -22,7 +22,8 @@ function renderBar(
       onFit={noop}
       onToggleGrid={noop}
       onView={noop}
-      onCycleDisplayMode={noop}
+      onDisplayMode={noop}
+      onToggleXray={noop}
       onToggleProjection={noop}
       {...(onToggleOrbitMode ? { onToggleOrbitMode } : {})}
     />

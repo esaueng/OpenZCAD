@@ -5,7 +5,7 @@ import {
   Maximize2,
   Orbit,
   Ruler,
-  ScanEye
+  SquareSplitVertical
 } from 'lucide-react';
 import {
   SavedViewsSection,
@@ -13,12 +13,14 @@ import {
 } from './SavedViewsSection';
 import { VIEW_LABELS } from '@openzcad/viewport';
 import type {
+  DisplayMode,
   ProjectionMode,
   StandardView,
   ViewerSettings
 } from '@openzcad/viewport';
-import { AxisTriadIcon, DisplayModeIcon } from './ViewerRailIcons';
-import { DISPLAY_MODE_LABELS } from '../lib/displayMode';
+import { AxisTriadIcon } from './ViewerRailIcons';
+import { DisplayModeMenu, isWorkspaceShortcutKey } from './DisplayModeMenu';
+import { SECTION_PLANE_LABELS } from '../lib/sectionPlaneLabels';
 import { Tooltip } from './Tooltip';
 import { labelWithKey, useKeymap } from '../lib/keymap';
 import { platformShortcutLabel } from '../lib/platformShortcut';
@@ -61,15 +63,23 @@ interface ViewModeBarProps {
   onView(view: StandardView): void;
   /** The project's saved views, listed under the standard view tiles. */
   savedViews?: SavedViewsSectionProps;
-  onCycleDisplayMode(): void;
+  /** Shows the model in a display mode, from the Display menu. */
+  onDisplayMode(mode: DisplayMode): void;
+  /** Turns X-ray on or off (Shift+X), from the Display menu. */
+  onToggleXray(): void;
   onToggleProjection(): void;
   /**
    * Flips orbiting between Free and Turntable, the account preference
    * `settings.orbitMode` reports. Absent, no orbit button is drawn.
    */
   onToggleOrbitMode?(): void;
-  /** Turns X-ray on or off (Shift+X). Absent, no X-ray button is drawn. */
-  onToggleXray?(): void;
+  /**
+   * Turns the section cut on or off. Its plane and offset are Build's to
+   * set; here the cut's chip names it. Absent, no Section button is drawn.
+   */
+  onToggleSection?(): void;
+  /** No body on screen to cut; Section is greyed. */
+  nothingToSection?: boolean;
 }
 
 /**
@@ -77,10 +87,10 @@ interface ViewModeBarProps {
  * bottom of the viewport, where the modeling tool palette would otherwise be.
  *
  * It carries what someone reading a model needs — measure, fit, grid,
- * projection, orbit mode, display mode, X-ray, standard views: the order
- * Build's viewer bar keeps, so a control stands in the same place in every
- * mode (I52) — and nothing that writes to the document. Build mode keeps its own right-hand `ViewerToolbar`; the
- * two never render together.
+ * projection, orbit mode, section, display (with X-ray), standard views: the
+ * order Build's viewer bar keeps, so a control stands in the same place in
+ * every mode (I52) — and nothing that writes to the document. Build mode
+ * keeps its own right-hand `ViewerToolbar`; the two never render together.
  */
 export function ViewModeBar({
   settings,
@@ -91,22 +101,22 @@ export function ViewModeBar({
   onToggleGrid,
   onView,
   savedViews,
-  onCycleDisplayMode,
+  onDisplayMode,
+  onToggleXray,
   onToggleProjection,
   onToggleOrbitMode,
-  onToggleXray
+  onToggleSection,
+  nothingToSection = false
 }: ViewModeBarProps) {
   const keymap = useKeymap();
   const [viewsOpen, setViewsOpen] = useState(false);
   const anchorRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const panelId = useId();
-  // X-ray rides over the display mode, and has its own button beside it,
-  // as on Build's rail: Shift+X alone was a shortcut nothing on screen
-  // named (I52).
-  const displayModeLabel = `${DISPLAY_MODE_LABELS[settings.displayMode]}${
-    settings.xray ? ' · X-ray' : ''
-  }`;
+  const sectionOn = Boolean(settings.sectionView);
+  const sectionLabel = settings.sectionView
+    ? SECTION_PLANE_LABELS[settings.sectionView.plane]
+    : 'Off';
   const projectionLabel = PROJECTION_LABELS[projection];
   // Saved views from before the preference existed carry none: free.
   const orbitMode = settings.orbitMode ?? 'free';
@@ -126,7 +136,11 @@ export function ViewModeBar({
         event.stopPropagation();
         setViewsOpen(false);
         triggerRef.current?.focus();
+        return;
       }
+      // A shortcut goes on to arm its tool; the flyout steps aside rather
+      // than stand over it (I54). A saved view's name field keeps its keys.
+      if (isWorkspaceShortcutKey(event)) setViewsOpen(false);
     }
     window.addEventListener('pointerdown', onPointerDown);
     window.addEventListener('keydown', onKeyDown, true);
@@ -215,37 +229,43 @@ export function ViewModeBar({
           </button>
         </Tooltip>
       )}
-      <Tooltip
-        label="Display mode"
-        shortcut={keymap.label('view-display')}
-        description={`Now: ${displayModeLabel}`}
-      >
-        <button
-          type="button"
-          className="view-mode-button"
-          onClick={onCycleDisplayMode}
-          aria-label={`${labelWithKey('Display mode', keymap.label('view-display'))} — now: ${displayModeLabel}`}
-        >
-          <DisplayModeIcon mode={settings.displayMode} />
-        </button>
-      </Tooltip>
-      {onToggleXray && (
+      {onToggleSection && (
         <Tooltip
-          label="X-ray"
-          shortcut={keymap.label('view-xray')}
-          description="See and pick through faces"
+          label="Section view"
+          description={`Now: ${sectionLabel} · ${
+            sectionOn
+              ? 'click to turn off'
+              : nothingToSection
+                ? 'nothing to cut yet'
+                : 'cuts the display only'
+          }`}
         >
           <button
             type="button"
-            className={`view-mode-button${settings.xray ? ' active' : ''}`}
-            onClick={onToggleXray}
-            aria-label={labelWithKey('X-ray', keymap.label('view-xray'))}
-            aria-pressed={settings.xray === true}
+            className={`view-mode-button${sectionOn ? ' active' : ''}`}
+            onClick={() => {
+              // Greyed by aria, as on Build's rail: a disabled button
+              // cannot take focus or show the tooltip that says why.
+              if (!sectionOn && nothingToSection) return;
+              onToggleSection();
+            }}
+            aria-label={`Section view — now: ${sectionLabel}`}
+            aria-pressed={sectionOn}
+            aria-disabled={!sectionOn && nothingToSection ? true : undefined}
           >
-            <ScanEye size={16} aria-hidden="true" />
+            <SquareSplitVertical size={16} aria-hidden="true" />
           </button>
         </Tooltip>
       )}
+      <DisplayModeMenu
+        variant="bar"
+        settings={settings}
+        onDisplayMode={onDisplayMode}
+        onToggleXray={onToggleXray}
+        onOpenChange={(open) => {
+          if (open) setViewsOpen(false);
+        }}
+      />
       <div className="view-mode-views-anchor" ref={anchorRef}>
         <Tooltip label="Standard views">
           <button

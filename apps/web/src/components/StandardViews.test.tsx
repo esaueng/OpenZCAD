@@ -12,7 +12,8 @@ function renderViews(mode: 'Build' | 'View', onView = vi.fn()) {
     onToggleGrid: noop,
     onFit: noop,
     onView,
-    onCycleDisplayMode: noop,
+    onDisplayMode: noop,
+    onToggleXray: noop,
     onToggleProjection: noop
   };
   render(

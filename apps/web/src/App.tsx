@@ -908,7 +908,7 @@ import { useBuildToolNavigation } from './hooks/useBuildToolNavigation';
 import { useResponsiveFraming } from './hooks/useResponsiveFraming';
 import { parameterDisplayName } from './lib/parameterDisplayName';
 import { featurePaletteLabel, withDistinctLabels } from './lib/paletteLabels';
-import { DISPLAY_MODE_LABELS } from './lib/displayMode';
+import { DISPLAY_MODE_LABELS, DISPLAY_MODE_ORDER } from './lib/displayMode';
 import { ContextMenu, type ContextMenuState } from './components/ContextMenu';
 import type {
   ResolveExtrudeOptions,
@@ -2038,11 +2038,6 @@ const DISABLED_COLLABORATION_ROLLOUT: ProjectCollaborationCapabilitiesResponse =
   };
 const projectSharingClient = createProjectSharingClient();
 const localUserId = toUserId('user_local_browser');
-const DISPLAY_MODE_ORDER: DisplayMode[] = [
-  'shaded-edges',
-  'shaded',
-  'wireframe'
-];
 
 interface OffsetEditPlan {
   command: AnyCommand;
@@ -11874,22 +11869,30 @@ export function App() {
     setStatus(`${normalToFaceTarget.label}: viewing normal to face.`);
   }
 
+  /**
+   * Shows the model in `mode`. The toast names it at once rather than after
+   * the last message's dwell: paced, W pressed three times left "Wireframe"
+   * up while the model already showed Shaded + edges (I54).
+   */
+  function setDisplayMode(mode: DisplayMode) {
+    viewerSettingsRef.current = {
+      ...viewerSettingsRef.current,
+      displayMode: mode
+    };
+    setViewerSettings((current) => ({ ...current, displayMode: mode }));
+    setStatus(`Display: ${DISPLAY_MODE_LABELS[mode]}.`, { immediate: true });
+  }
+
   function cycleDisplayMode() {
-    // From the latest mode, not this render's: W pressed three times before
-    // a render cycled from a stale mode, and the toast named one mode while
-    // the model showed another (I54).
+    // From the latest mode, not this render's: two presses before a render
+    // would otherwise both step from the same mode.
     const index = DISPLAY_MODE_ORDER.indexOf(
       viewerSettingsRef.current.displayMode
     );
-    const next =
+    setDisplayMode(
       DISPLAY_MODE_ORDER[(index + 1) % DISPLAY_MODE_ORDER.length] ??
-      'shaded-edges';
-    viewerSettingsRef.current = {
-      ...viewerSettingsRef.current,
-      displayMode: next
-    };
-    setViewerSettings((current) => ({ ...current, displayMode: next }));
-    setStatus(`Display: ${DISPLAY_MODE_LABELS[next]}.`);
+        'shaded-edges'
+    );
   }
 
   function toggleProjection() {
@@ -11928,11 +11931,15 @@ export function App() {
 
   function toggleXray() {
     const next = !viewerSettingsRef.current.xray;
+    viewerSettingsRef.current = { ...viewerSettingsRef.current, xray: next };
     setViewerSettings((current) => ({ ...current, xray: next }));
+    // At once, like the display mode it rides over: the Display menu's
+    // X-ray switch and its toast must not disagree.
     setStatus(
       next
         ? `X-ray on · faces at ${appSettings.viewport.xrayOpacity}% · picks and box selection go through them.`
-        : 'X-ray off.'
+        : 'X-ray off.',
+      { immediate: true }
     );
   }
 
@@ -32221,10 +32228,12 @@ export function App() {
             }
             onView={requestView}
             {...(savedViewsControl ? { savedViews: savedViewsControl } : {})}
-            onCycleDisplayMode={cycleDisplayMode}
+            onDisplayMode={setDisplayMode}
+            onToggleXray={toggleXray}
             onToggleProjection={toggleProjection}
             onToggleOrbitMode={toggleOrbitMode}
-            onToggleXray={toggleXray}
+            onToggleSection={toggleSectionView}
+            nothingToSection={!viewerBodies.some((body) => !body.consumed)}
           />
         ) : // The sketch session brings its own tool rail. Before it, while
         // the plane is being picked, the plane chooser in the command slot
@@ -33285,7 +33294,8 @@ export function App() {
             onMeasure={toggleMeasure}
             onView={requestView}
             {...(savedViewsControl ? { savedViews: savedViewsControl } : {})}
-            onCycleDisplayMode={cycleDisplayMode}
+            onDisplayMode={setDisplayMode}
+            onToggleXray={toggleXray}
             onToggleProjection={toggleProjection}
             onToggleOrbitMode={toggleOrbitMode}
             sectionRange={
