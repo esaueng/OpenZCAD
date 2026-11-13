@@ -258,9 +258,9 @@ export const KEYBOARD_CONTROL_GROUPS = [
       {
         id: 'workspace-mode',
         ...bound('workspace-mode-cycle'),
-        action: 'Cycle View, Tweak and Build',
+        action: 'Next workspace mode',
         detail:
-          'A shared project you can only read stays in View, and says why.'
+          'Steps through View, Tweak, Build, Assemble and Draw, skipping any that are unavailable. A shared project you can only read stays in View, and says why.'
       },
       {
         id: 'measure',
@@ -463,7 +463,7 @@ export const POINTER_CONTROL_GROUPS = [
     items: [
       {
         id: 'orbit',
-        keys: ['Shift + left-drag'],
+        keys: ['Shift+Left-drag'],
         action: 'Orbit',
         detail: 'Rotate around the most recently selected point.'
       },
@@ -512,7 +512,7 @@ export const POINTER_CONTROL_GROUPS = [
       },
       {
         id: 'add-selection',
-        keys: ['Shift + click'],
+        keys: ['Shift+Click'],
         action: 'Toggle in the selection',
         detail: 'Adds an unselected item or removes a selected item.'
       },
