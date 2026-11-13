@@ -170,6 +170,32 @@ describe('saved view upkeep', () => {
     ]);
   });
 
+  it('keeps a view saved upside down and drops one with a malformed up', () => {
+    const storage = memoryStorage();
+    const valid = { ...pose(1), name: 'View 1', savedAt: 1 };
+    storage.setItem(
+      SAVED_VIEWS_STORAGE_KEY,
+      JSON.stringify({
+        p1: [
+          {
+            ...valid,
+            id: 'upside-down',
+            camera: { ...valid.camera, up: [0, 0, -1] }
+          },
+          { ...valid, id: 'legacy' },
+          ...[[0, 0, 0], [0, 1], [0, null, 1], 'down'].map((up, index) => ({
+            ...valid,
+            id: `invalid-${index}`,
+            camera: { ...valid.camera, up }
+          }))
+        ]
+      })
+    );
+    const views = loadSavedViews('p1', storage);
+    expect(views.map((view) => view.id)).toEqual(['upside-down', 'legacy']);
+    expect(views[0]?.camera.up).toEqual([0, 0, -1]);
+  });
+
   it('drops entries with an unknown display mode or a malformed section', () => {
     const storage = memoryStorage();
     const valid = { ...pose(1), name: 'View 1', savedAt: 1 };

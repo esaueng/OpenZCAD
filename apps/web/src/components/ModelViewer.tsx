@@ -2177,12 +2177,17 @@ function startRequestedView(
     // zoom the glide does not carry.
     const [px, py, pz] = target.pose.position;
     const [tx, ty, tz] = target.pose.target;
+    // Glide onto the roll the view was saved holding (upside down, say), so
+    // the closing restore lands where the glide already is instead of
+    // turning the picture over at the end.
+    const savedUp = target.pose.up;
     context.startCameraTween(
       {
         position: new THREE.Vector3(px, py, pz),
         target: new THREE.Vector3(tx, ty, tz),
         near: camera.near,
-        far: camera.far
+        far: camera.far,
+        ...(savedUp ? { up: new THREE.Vector3(...savedUp) } : {})
       },
       () => context.restoreView(target.pose, target.projection),
       { ease: viewJumpEase }
