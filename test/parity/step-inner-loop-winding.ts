@@ -24,7 +24,7 @@
  */
 
 /** One entity: its type keyword and its raw, comma-separated argument text. */
-type Entity = { readonly type: string; readonly args: string };
+export type Entity = { readonly type: string; readonly args: string };
 
 export interface InnerLoopFinding {
   /** `#id` of the offending ADVANCED_FACE. */
@@ -46,7 +46,7 @@ export interface StepInnerLoopScreen {
 const ENTITY = /^#(\d+)\s*=\s*([A-Z_0-9]+)\s*\((.*)\)$/s;
 
 /** Splits an argument list on top-level commas, ignoring nested parentheses. */
-function splitArgs(text: string): string[] {
+export function splitArgs(text: string): string[] {
   const out: string[] = [];
   let depth = 0;
   let current = '';
@@ -64,18 +64,18 @@ function splitArgs(text: string): string[] {
   return out;
 }
 
-function entityRefs(text: string): number[] {
+export function entityRefs(text: string): number[] {
   return [...text.matchAll(/#(\d+)/g)].map((match) => Number(match[1]));
 }
 
 /** `.T.` / `.F.` as +1 / -1; null for anything else, including `.U.`. */
-function sense(token: string): number | null {
+export function sense(token: string): number | null {
   if (token.includes('.T.')) return 1;
   if (token.includes('.F.')) return -1;
   return null;
 }
 
-function parse(text: string): Map<number, Entity> {
+export function parseStepEntities(text: string): Map<number, Entity> {
   const entities = new Map<number, Entity>();
   const start = text.indexOf('DATA;');
   if (start < 0) return entities;
@@ -122,7 +122,7 @@ function dot(
 }
 
 export function screenStepInnerLoops(text: string): StepInnerLoopScreen {
-  const entities = parse(text);
+  const entities = parseStepEntities(text);
   const findings: InnerLoopFinding[] = [];
   let screened = 0;
   let unscreened = 0;
