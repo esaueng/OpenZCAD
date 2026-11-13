@@ -12,4 +12,4 @@ in; the rail a pick takes is headed by what its verbs act on ("Face",
 the rail with a close button, closes on Escape from the idle workspace and
 stands under the command bar's results and every popover
 (`rail-keyboard-and-drawer.spec.ts`, `useRovingToolbar.test.tsx`,
-`CommandCard.test.tsx`).
+`CommandCard.test.tsx`, PR #1378).
