@@ -259,3 +259,74 @@ test(
     await expect(toggle).toBeFocused();
   }
 );
+
+test(
+  'the Tools drawer opens on the section it was scrolled to, after a reload too',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await stubApi(page);
+    // Short enough that the list scrolls.
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await createProject(page, 'Remembered section');
+
+    const drawer = page.getByRole('group', { name: 'Tools drawer' });
+    const toggle = page.getByRole('button', { name: /^More tools/ });
+    const list = drawer.locator('.command-flyout-list');
+    const pattern = drawer.locator('.command-flyout-heading', {
+      hasText: 'Pattern'
+    });
+    await expect(drawer).toBeVisible();
+    await expect(list).toHaveJSProperty('scrollTop', 0);
+
+    const remembered = () =>
+      page.evaluate(
+        () =>
+          (
+            JSON.parse(
+              window.localStorage.getItem('openzcad-panel-state:v1') ?? '{}'
+            ) as { toolDrawerSection?: string }
+          ).toolDrawerSection
+      );
+
+    // Wheeled down to Pattern: remembered as the list moves.
+    const box = (await list.boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    for (let step = 0; step < 30; step += 1) {
+      await page.mouse.wheel(0, 200);
+      if ((await remembered()) === 'pattern') break;
+    }
+    await expect.poll(remembered).toBe('pattern');
+
+    /** Pattern stands at the top of the list, or the list is at its end. */
+    const openOnPattern = () =>
+      expect
+        .poll(() =>
+          pattern.evaluate((heading) => {
+            const scroller = heading.closest<HTMLElement>(
+              '.command-flyout-list'
+            )!;
+            const atEnd =
+              scroller.scrollTop + scroller.clientHeight >=
+              scroller.scrollHeight - 1;
+            const fromTop =
+              heading.getBoundingClientRect().top -
+              scroller.getBoundingClientRect().top;
+            return scroller.scrollTop > 0 && (atEnd || fromTop < 12);
+          })
+        )
+        .toBe(true);
+
+    // Closed and opened again, it opens where it was left.
+    await drawer.getByRole('button', { name: 'Close tools drawer' }).click();
+    await expect(drawer).toHaveCount(0);
+    await toggle.click();
+    await expect(drawer).toBeVisible();
+    await openOnPattern();
+
+    // And after a reload.
+    await page.reload();
+    await expect(drawer).toBeVisible({ timeout: 30_000 });
+    await openOnPattern();
+    expect(await remembered()).toBe('pattern');
+  }
+);

@@ -132,6 +132,11 @@ export interface PanelState {
    */
   toolDrawerView: ToolDrawerView;
   /**
+   * The drawer's section last scrolled to the top of its list, which the
+   * drawer opens on again. None to begin with: the list opens at its head.
+   */
+  toolDrawerSection: ToolGroup | null;
+  /**
    * The sketch palette flyout (overview, snapping, grid, constraints)
    * beside the sketch rail. Closed to begin with, and remembered across
    * sketch sessions: leaving a sketch and editing it again should not fold
@@ -179,6 +184,7 @@ export const DEFAULT_PANEL_STATE: PanelState = {
   recentTools: [],
   toolDrawerFilter: 'all',
   toolDrawerView: 'advanced',
+  toolDrawerSection: null,
   sketchPaletteOpen: false,
   tweakPanelOpen: true,
   sectionPanelOpen: true
@@ -203,6 +209,7 @@ function copyDefaults(): PanelState {
     recentTools: [...DEFAULT_PANEL_STATE.recentTools],
     toolDrawerFilter: DEFAULT_PANEL_STATE.toolDrawerFilter,
     toolDrawerView: DEFAULT_PANEL_STATE.toolDrawerView,
+    toolDrawerSection: DEFAULT_PANEL_STATE.toolDrawerSection,
     sketchPaletteOpen: DEFAULT_PANEL_STATE.sketchPaletteOpen,
     tweakPanelOpen: DEFAULT_PANEL_STATE.tweakPanelOpen,
     sectionPanelOpen: DEFAULT_PANEL_STATE.sectionPanelOpen
@@ -251,6 +258,9 @@ export function normalizePanelState(value: unknown): PanelState {
   }
   if (root.toolDrawerView === 'simple' || root.toolDrawerView === 'advanced') {
     state.toolDrawerView = root.toolDrawerView;
+  }
+  if (TOOL_GROUP_KEYS.includes(root.toolDrawerSection as ToolGroup)) {
+    state.toolDrawerSection = root.toolDrawerSection as ToolGroup;
   }
   if (typeof root.sketchPaletteOpen === 'boolean') {
     state.sketchPaletteOpen = root.sketchPaletteOpen;
