@@ -1,4 +1,5 @@
 import {
+  ownEntry,
   createSketchReferenceAnnotationId,
   deepClone,
   documentNodesWithHistory,
@@ -190,7 +191,7 @@ function prepareReferenceDimension(
   );
   const objects = new Map(
     sketch.objectIds.flatMap((id) => {
-      const node = document.nodes[id];
+      const node = ownEntry(document.nodes, id);
       return node?.kind === 'sketch-object' ? [[id, node.data] as const] : [];
     })
   );
@@ -233,7 +234,7 @@ export function addSketchReferenceDimension(
       ? prepared.objects
       : new Map(
           sketch.objectIds.flatMap((id) => {
-            const node = view.nodes[id];
+            const node = ownEntry(view.nodes, id);
             return node?.kind === 'sketch-object'
               ? [[id, node.data] as const]
               : [];

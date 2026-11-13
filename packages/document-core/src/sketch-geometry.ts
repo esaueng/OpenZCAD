@@ -1,4 +1,4 @@
-import { deepClone, type ProjectDocument } from '@openzcad/shared';
+import { deepClone, ownEntry, type ProjectDocument } from '@openzcad/shared';
 
 type Geometry = NonNullable<ProjectDocument['derived']['sketchGeometry']>;
 const views = new WeakMap<
@@ -25,7 +25,7 @@ export function resolvedSketchDocument(
   if (cached?.geometry === geometry) return cached.view;
   let nodes: ProjectDocument['nodes'] | undefined;
   for (const [objectId, data] of Object.entries(geometry.objects)) {
-    const node = document.nodes[objectId];
+    const node = ownEntry(document.nodes, objectId);
     if (
       node?.kind !== 'sketch-object' ||
       node.data.objectKind !== data.objectKind

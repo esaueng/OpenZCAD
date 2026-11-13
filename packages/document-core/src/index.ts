@@ -71,7 +71,11 @@ export {
   recordDocumentEdit,
   normalizeDocumentHistory
 } from './document-history';
-import { isDocumentHistory } from '@openzcad/shared';
+import {
+  isDocumentHistory,
+  isReservedRecordKey,
+  ownEntry
+} from '@openzcad/shared';
 import {
   BODY_COLOR_CHOSEN_METADATA_KEY,
   BODY_COLOR_METADATA_KEY,
@@ -1033,6 +1037,12 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
         ]
       : [];
   let nodes = document.nodes;
+  // Node ids are record keys; a reserved one would be written to the
+  // prototype instead of the map below.
+  const reservedNodeId = Object.keys(document.nodes).find(isReservedRecordKey);
+  if (reservedNodeId !== undefined) {
+    throw new Error(`Project uses the reserved node id "${reservedNodeId}".`);
+  }
   // Schema v3 -> v4: sketches gain planeRef; the legacy plane/offset pair
   // becomes a canonical reference. Additive, so a missed migration degrades
   // (old fields linger) rather than corrupts.
@@ -1130,7 +1140,7 @@ export function duplicateProjectDocument(
   );
   delete copy.editHistory;
   const projectId = toProjectId(createId('proj'));
-  const rootNode = copy.nodes[copy.rootNodeId];
+  const rootNode = getNode(copy, copy.rootNodeId);
   if (rootNode?.kind === 'project') {
     copy.nodes[copy.rootNodeId] = { ...rootNode, projectId, name };
   }
@@ -1178,7 +1188,7 @@ export function duplicateSaveStateDocument(
     branchedFrom: _branchedFrom,
     ...model
   } = cloneDocument(normalizeDocument(snapshot));
-  const rootNode = model.nodes[model.rootNodeId];
+  const rootNode = getNode(model, model.rootNodeId);
   if (rootNode?.kind === 'project') {
     model.nodes[model.rootNodeId] = {
       ...rootNode,
@@ -1271,7 +1281,7 @@ export function adoptProjectDocument(
   const copy = localizeImportedSourceArtifacts(
     cloneDocument(normalizeDocument(source))
   );
-  const rootNode = copy.nodes[copy.rootNodeId];
+  const rootNode = getNode(copy, copy.rootNodeId);
   if (rootNode?.kind === 'project') {
     copy.nodes[copy.rootNodeId] = { ...rootNode, name };
   }
@@ -1293,11 +1303,12 @@ export function adoptProjectDocument(
     : createCheckpoint(adopted, 'Saved to account');
 }
 
+/** The document's own node by id; never an inherited or reserved member. */
 export function getNode<TNode extends DocumentNode>(
-  document: ProjectDocument,
+  document: Pick<ProjectDocument, 'nodes'>,
   nodeId: string
 ): TNode | undefined {
-  return document.nodes[nodeId] as TNode | undefined;
+  return ownEntry(document.nodes, nodeId) as TNode | undefined;
 }
 
 export function listNodesByKind<TNode extends DocumentNode['kind']>(
@@ -1602,7 +1613,7 @@ export function updateSketch(
   }
   if (input.object !== undefined) {
     const objectId = sketch.objectIds[0];
-    const objectNode = objectId ? next.nodes[objectId] : undefined;
+    const objectNode = objectId ? getNode(next, objectId) : undefined;
     if (!objectNode || objectNode.kind !== 'sketch-object') {
       throw new Error(`Sketch ${input.sketchId} has no profile object.`);
     }
@@ -1692,7 +1703,7 @@ export function translateSketch(
         ? value
         : resolveParamValue(value, scope, label, next.units) + delta;
     for (const objectId of sketch.objectIds) {
-      const node = next.nodes[objectId];
+      const node = getNode(next, objectId);
       // A linked projection belongs to its model edge, not to the sketch's
       // placement: the next rebuild would project it back regardless.
       if (
@@ -1790,7 +1801,7 @@ function requireSketchObject(
     throw new Error(`Sketch ${sketchId} not found.`);
   }
   const objectNode = sketch.objectIds.includes(objectId)
-    ? document.nodes[objectId]
+    ? getNode(document, objectId)
     : undefined;
   if (!objectNode || objectNode.kind !== 'sketch-object') {
     throw new Error(`Sketch ${sketchId} has no object ${objectId}.`);
@@ -1898,7 +1909,7 @@ function requireConstrainableObject(
   allowed: readonly ConstrainableKind[]
 ): ConstrainableKind {
   const node = sketch.objectIds.includes(objectId)
-    ? document.nodes[objectId]
+    ? getNode(document, objectId)
     : undefined;
   if (!node || node.kind !== 'sketch-object') {
     throw new Error(`Sketch ${sketch.sketchId} has no object ${objectId}.`);
@@ -1929,7 +1940,7 @@ function requireConstraintPoint(
   // I01: an ellipse (or elliptical arc) is held by its centre; an open
   // spline by its two end points, which the curve passes through. A closed
   // spline has no end to hold.
-  const node = document.nodes[ref.objectId];
+  const node = getNode(document, ref.objectId);
   const closedSpline =
     node?.kind === 'sketch-object' &&
     node.data.objectKind === 'spline' &&
@@ -5464,7 +5475,7 @@ export function renameNode(
     throw new Error('Name must not be empty.');
   }
   const next = cloneDocument(document);
-  const node = next.nodes[input.nodeId];
+  const node = getNode(next, input.nodeId);
   if (!node) {
     throw new Error(`Node ${input.nodeId} not found.`);
   }
@@ -5488,7 +5499,7 @@ export function setNodeMetadata(
   input: NodeMetadataInput
 ): ProjectDocument {
   const next = cloneDocument(document);
-  const node = next.nodes[input.nodeId];
+  const node = getNode(next, input.nodeId);
   if (!node) {
     throw new Error(`Node ${input.nodeId} not found.`);
   }
@@ -6967,7 +6978,9 @@ export function typedParameterMisuse(
     if (node.kind === 'sketch')
       return sketchFeature.get(String(node.sketchId)) ?? null;
     if (node.kind === 'sketch-object') {
-      const parent = node.parentId ? document.nodes[node.parentId] : undefined;
+      const parent = node.parentId
+        ? getNode(document, node.parentId)
+        : undefined;
       return parent?.kind === 'sketch'
         ? (sketchFeature.get(String(parent.sketchId)) ?? null)
         : null;

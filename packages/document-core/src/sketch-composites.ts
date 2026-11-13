@@ -1,4 +1,5 @@
 import {
+  ownEntry,
   createSketchCompositeId,
   isSketchComposite,
   sketchCompositeHelperKinds,
@@ -72,7 +73,7 @@ export function addSketchComposite(
   });
   for (const [index, member] of sketchCompositeMemberIds(composite).entries()) {
     const node = sketch.objectIds.includes(member)
-      ? document.nodes[member]
+      ? ownEntry(document.nodes, member)
       : undefined;
     if (!node || node.kind !== 'sketch-object') {
       throw new Error(`Sketch ${input.sketchId} has no object ${member}.`);

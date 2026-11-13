@@ -85,6 +85,74 @@ export function isDocumentRecord(
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+/**
+ * Keys a document record never uses as an id: every member of
+ * `Object.prototype`, plus `prototype`. Plain-object property access resolves
+ * them through the prototype, so a lookup by one finds a member that is not
+ * part of the document, and assigning `__proto__` changes the prototype.
+ */
+const RESERVED_RECORD_KEYS: ReadonlySet<string> = new Set([
+  '__proto__',
+  'constructor',
+  'prototype',
+  'hasOwnProperty',
+  'isPrototypeOf',
+  'propertyIsEnumerable',
+  'toLocaleString',
+  'toString',
+  'valueOf',
+  '__defineGetter__',
+  '__defineSetter__',
+  '__lookupGetter__',
+  '__lookupSetter__'
+]);
+
+export function isReservedRecordKey(key: unknown): boolean {
+  return typeof key === 'string' && RESERVED_RECORD_KEYS.has(key);
+}
+
+/** A key the record holds itself: never an inherited member or a reserved name. */
+export function isOwnRecordKey(
+  record: Record<string, unknown>,
+  key: unknown
+): key is string {
+  return (
+    typeof key === 'string' &&
+    !RESERVED_RECORD_KEYS.has(key) &&
+    Object.hasOwn(record, key)
+  );
+}
+
+/** `record[key]` limited to the record's own, non-reserved entries. */
+export function ownEntry<T>(
+  record: Readonly<Record<string, T>>,
+  key: unknown
+): T | undefined {
+  return isOwnRecordKey(record, key)
+    ? record[key]
+    : undefined;
+}
+
+/**
+ * Node ids are the keys of `nodes`. A node map with a reserved key, or with a
+ * node whose own id is reserved or not a string, is refused.
+ */
+export function nodeMapKeyError(nodes: unknown): string | null {
+  if (!isDocumentRecord(nodes)) return null;
+  for (const key of Object.keys(nodes)) {
+    if (RESERVED_RECORD_KEYS.has(key))
+      return `Project document uses the reserved node id "${key}".`;
+    const node = nodes[key];
+    if (
+      isDocumentRecord(node) &&
+      node.id !== undefined &&
+      (typeof node.id !== 'string' || RESERVED_RECORD_KEYS.has(node.id))
+    )
+      return `Project document node "${key}" has an invalid id.`;
+  }
+  return null;
+}
+
 /** The envelope read by all persistence and collaboration entry points. */
 export function documentEnvelopeError(value: unknown): string | null {
   if (
@@ -105,7 +173,7 @@ export function documentEnvelopeError(value: unknown): string | null {
   ) {
     return 'Project document is missing required collections or a valid identity/version.';
   }
-  return null;
+  return nodeMapKeyError(value.nodes);
 }
 
 /**

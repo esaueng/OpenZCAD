@@ -8,6 +8,8 @@ import {
   drawingSetError,
   hasValidImportedMeshSources,
   hasValidImportedStepSources,
+  isOwnRecordKey,
+  isReservedRecordKey,
   isProjectCheckpoint,
   isRevisionRecord,
   objectFolderSetError,
@@ -40,6 +42,47 @@ function storedProjection(value: object): object {
     ...value,
     derived: { ...derived, bodyRepresentations: {}, exportableBodyIds: [] }
   };
+}
+
+/**
+ * Node references never name a reserved or inherited member: ids are looked
+ * up as `nodes[id]`, where such a name resolves to a prototype member instead
+ * of a node. The project's root, root assembly and active part must also be
+ * nodes it holds. Other references (`parentId`, `childIds`) may name a node
+ * that is gone, as older edits could leave them, and lookups treat that as
+ * missing.
+ */
+function nodeReferenceError(record: Record<string, unknown>): string | null {
+  const nodes = record.nodes as Record<string, unknown>;
+  const own = (id: unknown) => isOwnRecordKey(nodes, id);
+  const safe = (id: unknown) =>
+    typeof id === 'string' && !isReservedRecordKey(id);
+  for (const field of ['rootNodeId', 'rootAssemblyId', 'activePartId']) {
+    if (record[field] !== undefined && !own(record[field]))
+      return `"document.${field}" does not name a node in the project.`;
+  }
+  for (const [nodeId, node] of Object.entries(nodes)) {
+    const fields = node as Record<string, unknown>;
+    if (
+      fields.parentId !== undefined &&
+      fields.parentId !== null &&
+      !safe(fields.parentId)
+    )
+      return `Node "${nodeId}" has an invalid parent id.`;
+    if (
+      fields.kind === 'project' &&
+      fields.activePartId !== undefined &&
+      !own(fields.activePartId)
+    )
+      return `Node "${nodeId}" names an active part that is not in the project.`;
+    if (
+      (fields.kind === 'part' || fields.kind === 'assembly') &&
+      fields.childIds !== undefined &&
+      (!Array.isArray(fields.childIds) || !fields.childIds.every(safe))
+    )
+      return `Node "${nodeId}" has an invalid child id.`;
+  }
+  return null;
 }
 
 function check(condition: unknown, message: string): void {
@@ -85,6 +128,8 @@ export function assertStorableDocument(value: unknown): ProjectDocument {
   const envelope = documentEnvelopeError(stored);
   if (envelope) throw new UnstorableDocumentError(envelope);
   const record = value as Record<string, unknown>;
+  const references = nodeReferenceError(record);
+  if (references) throw new UnstorableDocumentError(references);
   check(
     typeof record.schemaVersion !== 'number' ||
       record.schemaVersion <= PROJECT_DOCUMENT_SCHEMA_VERSION,
