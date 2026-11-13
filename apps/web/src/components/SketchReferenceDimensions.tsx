@@ -65,6 +65,8 @@ export function SketchReferenceDimensions({
   const selectableComposites = compositeOptionsLimited ? [] : namedComposites;
   const nameOfComposite = (id: (typeof composites)[number]['compositeId']) =>
     compositeNames.get(id) ?? 'Composite';
+  // A side's own end stays a target beside the shape's logical corner (the
+  // two survive edits differently); both read as words, not "line.start".
   const points = namedObjects.flatMap((object) => {
     const roles: SketchPointRef['point'][] =
       object.data.objectKind === 'line'
@@ -76,7 +78,7 @@ export function SketchReferenceDimensions({
             : [];
     return roles.map((point) => ({
       key: JSON.stringify({ objectId: object.id, point }),
-      label: `${object.label}.${point}`
+      label: `${point.charAt(0).toUpperCase()}${point.slice(1)} of ${object.label}`
     }));
   });
   points.push(

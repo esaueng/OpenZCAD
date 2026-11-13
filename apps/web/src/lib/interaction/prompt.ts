@@ -74,7 +74,19 @@ const SKETCH_TOOL_STEPS: Record<string, string> = {
   line: 'Click to start a line, then click each point',
   arc: 'Click the centre, then the start and end of the arc',
   circle: 'Drag from the centre to set the radius',
-  rectangle: 'Drag from one corner to the other'
+  rectangle: 'Click or drag from one corner to the other'
+};
+
+/**
+ * The step while a shape is half drawn. Only a line or spline is a chain;
+ * the rectangle used to show the line's "Esc ends the chain" (I46).
+ */
+const SKETCH_DRAWING_STEPS: Record<string, string> = {
+  rectangle: 'Click the opposite corner · type a width, Tab, a height',
+  polygon: 'Click to set the size',
+  circle: 'Click to set the size',
+  ellipse: 'Click to set the next radius',
+  arc: 'Click the next point of the arc'
 };
 
 /** The armed step for an operation, before any drag has begun. */
@@ -161,7 +173,10 @@ export function commandPrompt(
       };
     }
     if (state.session.drawing) {
-      return { step: 'Click the next point · Enter finishes', escape };
+      const shapeStep = SKETCH_DRAWING_STEPS[state.session.tool];
+      return shapeStep
+        ? { step: shapeStep, escape: 'cancels the shape' }
+        : { step: 'Click the next point · Enter finishes', escape };
     }
     if (state.session.pendingConstraint) {
       return { step: 'Pick geometry for the constraint', escape };

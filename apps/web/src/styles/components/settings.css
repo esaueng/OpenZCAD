@@ -346,7 +346,13 @@
 }
 
 .data-download-feedback[role='alert'] {
+  display: grid;
+  gap: var(--sp-1);
   color: var(--color-error-text);
+}
+
+.data-download-feedback p {
+  margin: 0;
 }
 
 .data-download-omissions {
@@ -1866,4 +1872,12 @@
   .activity-log-copy {
     grid-column: 2;
   }
+}
+
+/* An error said at the field it is about (a refused sign-in code, a wrong
+   recovery key), rather than in the page's status line. */
+.settings-field-error {
+  color: var(--color-error-text);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
 }

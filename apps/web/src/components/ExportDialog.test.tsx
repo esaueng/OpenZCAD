@@ -365,6 +365,30 @@ describe('ExportDialog', () => {
     expect(screen.getByRole('combobox', { name: 'Units' })).toBeDisabled();
   });
 
+  it('says a failed check left the export alone, with the kernel text under Details', async () => {
+    // 13 November review I3: "check: distance computation failed: circular
+    // trim ray-event endpoint is unresolved" was the whole message, in red.
+    const user = userEvent.setup();
+    renderDialog({
+      onCheckQuality: vi.fn(async () => {
+        throw new Error(
+          'check: distance computation failed: circular trim ray-event endpoint is unresolved'
+        );
+      })
+    });
+
+    await user.click(
+      screen.getByRole('button', { name: /Check watertightness/ })
+    );
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(
+      'The watertightness check could not run on this model. The export is unaffected.'
+    );
+    expect(screen.getByText('Details')).toBeVisible();
+    expect(alert).toHaveTextContent(/ray-event endpoint is unresolved/);
+    expect(screen.getByRole('button', { name: /^Export / })).toBeEnabled();
+  });
+
   it('marks a report stale when the quality changes', async () => {
     const user = userEvent.setup();
     const props = renderDialog();

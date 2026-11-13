@@ -418,10 +418,13 @@
 }
 
 /* ── Delete or suppress a feature other features build on ── */
-/* The unapplied-card question (F15) is the same small alertdialog. */
+/* The unapplied-card question (F15) and the shared destructive confirm
+   (ConfirmDialog: library deletes, resets, clears) are the same small
+   alertdialog. */
 
 .delete-feature-dialog,
-.unapplied-card-dialog {
+.unapplied-card-dialog,
+.confirm-dialog {
   width: min(420px, 100%);
   display: grid;
   gap: var(--sp-3);
@@ -434,7 +437,8 @@
 }
 
 .delete-feature-dialog h2,
-.unapplied-card-dialog h2 {
+.unapplied-card-dialog h2,
+.confirm-dialog h2 {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
@@ -444,14 +448,16 @@
 }
 
 .delete-feature-dialog p,
-.unapplied-card-dialog p {
+.unapplied-card-dialog p,
+.confirm-dialog p {
   margin: 0;
   color: var(--color-text-muted);
   font-size: var(--fs-sm);
   line-height: 1.5;
 }
 
-.delete-feature-body {
+.delete-feature-body,
+.confirm-dialog-body {
   display: grid;
   gap: var(--sp-2);
 }
@@ -465,13 +471,15 @@
 }
 
 .delete-feature-actions,
-.unapplied-card-actions {
+.unapplied-card-actions,
+.confirm-dialog-actions {
   display: flex;
   justify-content: flex-end;
   gap: var(--sp-2);
 }
 
-.delete-feature-confirm {
+.delete-feature-confirm,
+.confirm-dialog-danger {
   min-height: 32px;
   padding: 6px 11px;
   color: var(--color-on-danger);
@@ -482,7 +490,8 @@
   font-weight: var(--fw-medium);
 }
 
-.delete-feature-confirm:hover {
+.delete-feature-confirm:hover,
+.confirm-dialog-danger:hover {
   filter: brightness(1.08);
 }
 
@@ -714,6 +723,17 @@
   font-size: var(--fs-sm);
 }
 
+.export-dialog-check-failed {
+  display: grid;
+  gap: var(--sp-1);
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+}
+
+.export-dialog-check-failed p {
+  margin: 0;
+}
+
 .export-dialog-progress {
   margin: 0;
   display: flex;
@@ -795,7 +815,14 @@
 }
 
 .shapr-import-error {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--sp-1);
   color: var(--color-error);
+}
+
+.shapr-import-error p {
+  margin: 0;
 }
 
 .shapr-import-exact {

@@ -30,8 +30,8 @@ const READ_TIMEOUT = { timeout: 30_000 };
 const SAVED_ON_DEVICE = /\bis-(?:local|synced)(?:\s|$)/;
 const SKETCH_NAME = 'Constraint inspection outline';
 const OBJECT_NAME = 'Driven edge';
-const DISTANCE_10 = `Distance 10 · ${OBJECT_NAME}.start ↔ ${OBJECT_NAME}.end`;
-const DISTANCE_20 = `Distance 20 · ${OBJECT_NAME}.start ↔ ${OBJECT_NAME}.end`;
+const DISTANCE_10 = `Distance 10 · start of ${OBJECT_NAME} ↔ end of ${OBJECT_NAME}`;
+const DISTANCE_20 = `Distance 20 · start of ${OBJECT_NAME} ↔ end of ${OBJECT_NAME}`;
 
 async function sketchObjects(canvas: Locator) {
   return canvas.evaluate(

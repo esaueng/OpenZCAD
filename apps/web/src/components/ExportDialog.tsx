@@ -16,6 +16,8 @@ import { countLabel } from '../lib/toasts';
 import { submitOnEnter } from '../lib/submitOnEnter';
 import { useModalFocus } from '../lib/useModalFocus';
 import { StableLabel } from './StableLabel';
+import { describeFailure, type PlainFailure } from '../lib/plainFailure';
+import { FailureDetails } from './FailureDetails';
 
 /** Worker export formats this dialog can request; `stl` is ASCII. */
 export type MeshExportDialogFormat =
@@ -205,7 +207,9 @@ export function ExportDialog({
   const [angle, setAngle] = useState<AngleOption>(20);
   const [phase, setPhase] = useState<'idle' | 'checking'>('idle');
   const [progress, setProgress] = useState<ExportProgress | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // A failed check is not a failed export: it says so, and keeps the
+  // kernel's own words under Details rather than as the message.
+  const [error, setError] = useState<PlainFailure | null>(null);
   const [report, setReport] = useState<{
     deflection: number;
     angle: AngleOption;
@@ -299,9 +303,11 @@ export function ExportDialog({
     } catch (checkError) {
       setReport(null);
       setError(
-        checkError instanceof Error
-          ? checkError.message
-          : 'The printability check failed.'
+        describeFailure(checkError, {
+          fallback:
+            'The watertightness check could not run on this model. The export is unaffected.',
+          technical: true
+        })
       );
     } finally {
       setPhase('idle');
@@ -561,9 +567,10 @@ export function ExportDialog({
             appeared here pushed the buttons down under the pointer. */}
         <div className="export-dialog-status">
           {error ? (
-            <p className="export-dialog-error" role="alert">
-              {error}
-            </p>
+            <div className="export-dialog-check-failed" role="alert">
+              <p>{error.message}</p>
+              <FailureDetails detail={error.detail} />
+            </div>
           ) : phase !== 'idle' && progress ? (
             <p className="export-dialog-progress" role="status">
               <LoaderCircle size={13} className="spin" aria-hidden="true" />
