@@ -1030,15 +1030,10 @@ export function StartScreen({
     });
     if (chosen.length === 0) return;
     setSelected(new Set());
+    // The app answers a move to Trash or Archive with a toast that carries
+    // Undo; a notice here as well said the same thing twice.
     if (onMoveManyToShelf) onMoveManyToShelf(chosen, status);
     else chosen.forEach((project) => onMoveToShelf(project, status));
-    const what =
-      chosen.length === 1 ? chosen[0]!.name : `${chosen.length} projects`;
-    setNotice(
-      status === 'deleted'
-        ? `Moved ${what} to the trash. Restore it from Trash.`
-        : `Archived ${what}.`
-    );
   }
 
   function fileProjects(projectIds: string[], folderId: string | null) {

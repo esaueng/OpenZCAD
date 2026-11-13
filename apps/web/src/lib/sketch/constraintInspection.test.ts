@@ -64,7 +64,7 @@ describe('constraintInspectionTargets', () => {
     document.nodes[circle]!.name = '';
     store({ constraintKind: 'radius', objectId: circle, value: 3 });
     expect(constraintInspectionTargets(document, sketch, constraintId)).toEqual(
-      [{ objectId: circle, label: 'circle' }]
+      [{ objectId: circle, label: 'Circle' }]
     );
   });
 

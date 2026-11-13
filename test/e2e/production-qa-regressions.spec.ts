@@ -7,7 +7,6 @@ import {
   clickWorldPoint,
   enterCommandValue,
   finishInPlaceCommand,
-  pickObjectsBody,
   revealModelPanel,
   createPrimitiveInPlace
 } from './openzcad-fixtures';
@@ -154,8 +153,8 @@ for (const [width, height] of [
     // below it, the count from its chip's keypad. A short one previews at
     // once; the long rebuild this spec terminates is the edit below.
     const bar = page.getByRole('group', { name: 'Circular pattern command' });
-    await expect(bar).toContainText('Click the body to repeat');
-    await pickObjectsBody(page, 'Box 1');
+    // The model's only body is the pattern's body, as it is a Move's: it
+    // no longer asks to "Click the body to repeat" (13 November review).
     await expect(bar).toContainText('Pick an axis');
     // The More tools fold is seeded open, and at narrow widths it covers
     // the stage the axis is clicked on.

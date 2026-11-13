@@ -3,6 +3,7 @@ import {
   useEffect,
   useMemo,
   useRef,
+  useId,
   useState,
   useSyncExternalStore,
   type ReactNode
@@ -1602,6 +1603,12 @@ function RecoveryKeyFlow({
   );
 }
 
+function isWrongRecoveryKey(error: unknown): error is EncryptionFlowError {
+  return (
+    error instanceof EncryptionFlowError && error.code === 'wrong-recovery-key'
+  );
+}
+
 /** Asks for the recovery key to authorize one action. */
 function RecoveryKeyEntry({
   title,
@@ -1621,6 +1628,10 @@ function RecoveryKeyEntry({
 }) {
   const { busy, run, setFlow } = shared;
   const [text, setText] = useState('');
+  // A wrong key is said under the field it was typed in. It used to land in
+  // the page's alert at the top, hundreds of pixels above (review I4).
+  const [keyError, setKeyError] = useState<string | null>(null);
+  const errorId = useId();
   return (
     <Group title={title} tone={danger ? 'danger' : undefined}>
       {intro ? <Notice tone="info">{intro}</Notice> : null}
@@ -1632,11 +1643,21 @@ function RecoveryKeyEntry({
           className="settings-text-wide"
           value={text}
           aria-label="Recovery key"
+          aria-invalid={keyError ? true : undefined}
+          aria-describedby={keyError ? errorId : undefined}
           autoComplete="off"
           spellCheck={false}
           placeholder="XXXX-XXXX-…"
-          onChange={(event) => setText(event.target.value)}
+          onChange={(event) => {
+            setKeyError(null);
+            setText(event.target.value);
+          }}
         />
+        {keyError ? (
+          <small id={errorId} className="settings-field-error" role="alert">
+            {keyError}
+          </small>
+        ) : null}
       </SettingRow>
       <div className="settings-button-row">
         <button
@@ -1645,12 +1666,28 @@ function RecoveryKeyEntry({
           disabled={busy || text.trim() === ''}
           onClick={() =>
             void run(async () => {
-              const secret = await readRecoveryKey(text);
+              setKeyError(null);
+              let secret: Bytes;
+              try {
+                secret = await readRecoveryKey(text);
+              } catch (error) {
+                if (isWrongRecoveryKey(error)) {
+                  setKeyError(error.message);
+                  return;
+                }
+                throw error;
+              }
               try {
                 const next = await onSubmit(secret);
                 setText('');
                 setFlow(null);
                 return next;
+              } catch (error) {
+                if (isWrongRecoveryKey(error)) {
+                  setKeyError(error.message);
+                  return;
+                }
+                throw error;
               } finally {
                 secret.fill(0);
               }

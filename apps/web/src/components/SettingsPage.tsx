@@ -110,6 +110,7 @@ import {
   type SegmentOption
 } from './settingsControls';
 import { CloudDataDeletionDialog } from './CloudDataDeletionDialog';
+import { describeFailure } from '../lib/plainFailure';
 import { DataDownload } from './DataDownload';
 import { ActivityLogSettings } from './ActivityLogSettings';
 import {
@@ -768,6 +769,9 @@ export function SettingsPage({
   const [loginEmail, setLoginEmail] = useState('');
   const personalInfoVisible = usePersonalInfoVisible();
   const [loginCode, setLoginCode] = useState('');
+  // A refused code is said at the field, not only in the page's status
+  // line beside the title (13 November review I4).
+  const [loginCodeError, setLoginCodeError] = useState<string | null>(null);
   const [loginChallengeId, setLoginChallengeId] = useState<string | null>(null);
   const [turnstileToken, setTurnstileToken] = useState('');
   const [turnstileReset, setTurnstileReset] = useState(0);
@@ -2373,10 +2377,18 @@ export function SettingsPage({
                           className="settings-auth-form"
                           onSubmit={(event) => {
                             event.preventDefault();
+                            setLoginCodeError(null);
                             void onVerifyLoginCode(
                               loginChallengeId,
                               loginCode.trim()
-                            ).catch(() => undefined);
+                            ).catch((error: unknown) =>
+                              setLoginCodeError(
+                                describeFailure(error, {
+                                  fallback:
+                                    'That code did not work. Check it and try again.'
+                                }).message
+                              )
+                            );
                           }}
                         >
                           <span>
@@ -2397,17 +2409,33 @@ export function SettingsPage({
                               autoComplete="one-time-code"
                               pattern="[0-9]{6}"
                               aria-label="Email sign-in code"
+                              aria-invalid={loginCodeError ? true : undefined}
+                              aria-describedby={
+                                loginCodeError
+                                  ? 'settings-login-code-error'
+                                  : undefined
+                              }
                               placeholder="000000"
                               // No maxLength: it cuts a pasted " 730418" before
                               // the digit filter runs and drops the last digit.
-                              onChange={(event) =>
+                              onChange={(event) => {
+                                setLoginCodeError(null);
                                 setLoginCode(
                                   event.target.value
                                     .replace(/\D/g, '')
                                     .slice(0, 6)
-                                )
-                              }
+                                );
+                              }}
                             />
+                            {loginCodeError ? (
+                              <small
+                                id="settings-login-code-error"
+                                className="settings-field-error"
+                                role="alert"
+                              >
+                                {loginCodeError}
+                              </small>
+                            ) : null}
                             <span className="settings-button-row">
                               <button
                                 className="primary"
@@ -2424,6 +2452,7 @@ export function SettingsPage({
                                 onClick={() => {
                                   setLoginChallengeId(null);
                                   setLoginCode('');
+                                  setLoginCodeError(null);
                                 }}
                               >
                                 Use another email
@@ -2691,7 +2720,11 @@ export function SettingsPage({
             </Section>
           )}
 
-          {active === 'activity' && anyMatch && <ActivityLogSettings />}
+          {active === 'activity' && anyMatch && (
+            <ActivityLogSettings
+              confirmDestructive={settings.general.confirmDestructiveActions}
+            />
+          )}
 
           {active === 'advanced' && anyMatch && (
             <Section

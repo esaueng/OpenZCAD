@@ -25,6 +25,7 @@ import {
   resolveNewAxis,
   stepTotal,
   valueInRange,
+  valueRangeSentence,
   type BodyPick,
   type EdgePick,
   type FacePick,
@@ -83,6 +84,43 @@ describe('the in-place tool table', () => {
     expect(isInPlaceTool('torus')).toBe(true);
     expect(isInPlaceTool('fillet')).toBe(true);
     expect(isInPlaceTool('chamfer')).toBe(true);
+  });
+
+  it('says the range a typed value fell outside, with its unit', () => {
+    const width = IN_PLACE_TOOL_SPECS.box.values.find(
+      (value) => value.id === 'width'
+    )!;
+    expect(valueRangeSentence(width, 'mm')).toMatch(
+      /^Width must be (?:at least|more than) [\d.]+ mm\.$/
+    );
+    expect(
+      valueRangeSentence(
+        {
+          id: 'a',
+          label: 'Angle',
+          unit: 'angle',
+          initial: 90,
+          min: 0,
+          max: 180,
+          exclusive: true
+        },
+        '°'
+      )
+    ).toBe('Angle must be more than 0° and less than 180°.');
+    expect(
+      valueRangeSentence(
+        {
+          id: 'n',
+          label: 'Count',
+          unit: 'count',
+          initial: 3,
+          min: 2,
+          max: 100,
+          integer: true
+        },
+        ''
+      )
+    ).toBe('Count must be a whole number from 2 to 100.');
   });
 
   it('takes a typed value inside its range, strictly for an open one', () => {
@@ -280,7 +318,9 @@ describe('face tools build the card state', () => {
       'the face is only 12 long.'
     );
     // An offset alone keeps them running to the far end.
-    expect(spec.carries!('offset', 3, { teeth: 20, faceWidth: 12 }, slots, {})).toEqual({
+    expect(
+      spec.carries!('offset', 3, { teeth: 20, faceWidth: 12 }, slots, {})
+    ).toEqual({
       faceWidth: 9
     });
   });
@@ -2207,5 +2247,21 @@ describe('axes and directions picked in the model', () => {
         CTX
       )
     ).toMatchObject({ direction: { x: tilted!.values.dirX, z: 0 } });
+  });
+});
+
+describe('a new primitive over a model that has bodies', () => {
+  it('says Done adds a separate body where it previews', () => {
+    // 13 November review: Cylinder, Sphere, Cone and Torus previewed at the
+    // origin inside an existing box, and nothing said what Done would make.
+    const cylinder = IN_PLACE_TOOL_SPECS.cylinder;
+    const ctx = (ids: string[]) =>
+      ({ liveBodyIds: () => ids as BodyId[] }) as never;
+    expect(cylinder.hint(EMPTY, {}, ctx([]))).toBe(
+      'Drag a footprint on the ground or a face'
+    );
+    expect(cylinder.hint(EMPTY, {}, ctx(['box']))).toBe(
+      'Drag a footprint on the ground or a face · Done adds it as a separate body where it shows'
+    );
   });
 });
