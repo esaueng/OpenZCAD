@@ -14,6 +14,7 @@ export function Section({
 }: {
   title: string;
   intro: string;
+  /** A page that is one wide table (the activity log) runs the frame. */
   wide?: boolean;
   children: ReactNode;
 }) {
@@ -212,6 +213,14 @@ export function Meter({
   );
 }
 
+/** A bound as the field's note writes it: grouped digits, then the unit. */
+function formatBound(value: number, unit: string): string {
+  const number = value.toLocaleString('en-US', { maximumFractionDigits: 6 });
+  return unit === '' || unit === '°' || unit === '%'
+    ? `${number}${unit}`
+    : `${number} ${unit}`;
+}
+
 /**
  * A number field that lets the user type through values it would refuse.
  *
@@ -222,6 +231,10 @@ export function Meter({
  * in-range value as it is typed, and on blur pulls anything else to the
  * nearest bound: the bounds storage normalizes to, so what the field shows is
  * what is kept rather than a value later swapped for the default.
+ *
+ * The range is printed under the field, and a pull to a bound says so, in
+ * a status line, until the next keystroke: field of view 500 used to turn
+ * into 90 with nothing to say why.
  */
 export function NumberSetting({
   value,
@@ -245,6 +258,8 @@ export function NumberSetting({
   onCommit(value: number): void;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
+  const [clamped, setClamped] = useState<string | null>(null);
+  const rangeId = useId();
   const settle = (typed: number) => (integer ? Math.round(typed) : typed);
   // The step grid starts at `min` when there is one. A floor off that grid
   // (0.001 with step 0.1, 1024 with step 1000) made the default itself a step
@@ -252,37 +267,53 @@ export function NumberSetting({
   // clamp alone holds the floor.
   const minOnStepGrid = Math.abs(min / step - Math.round(min / step)) < 1e-9;
   return (
-    <div className="settings-unit-input">
-      <input
-        className="settings-number"
-        type="number"
-        min={minOnStepGrid ? min : undefined}
-        max={max}
-        step={step}
-        disabled={disabled}
-        aria-label={label}
-        value={draft ?? String(value)}
-        onChange={(event) => {
-          const typed = event.currentTarget.valueAsNumber;
-          setDraft(event.currentTarget.value);
-          if (Number.isFinite(typed) && typed >= min && typed <= max) {
-            onCommit(settle(typed));
-          }
-        }}
-        onBlur={(event) => {
-          const typed = event.currentTarget.valueAsNumber;
-          setDraft(null);
-          if (!Number.isFinite(typed)) {
-            return;
-          }
-          const clamped = Math.min(max, Math.max(min, settle(typed)));
-          if (clamped !== value) {
-            onCommit(clamped);
-          }
-        }}
-      />
-      {/* Present even without a unit so every field's right edge lines up. */}
-      <span aria-hidden={unit ? undefined : true}>{unit}</span>
+    <div className="settings-number-setting">
+      <div className="settings-unit-input">
+        <input
+          className="settings-number"
+          type="number"
+          min={minOnStepGrid ? min : undefined}
+          max={max}
+          step={step}
+          disabled={disabled}
+          aria-label={label}
+          aria-describedby={rangeId}
+          value={draft ?? String(value)}
+          onChange={(event) => {
+            const typed = event.currentTarget.valueAsNumber;
+            setDraft(event.currentTarget.value);
+            setClamped(null);
+            if (Number.isFinite(typed) && typed >= min && typed <= max) {
+              onCommit(settle(typed));
+            }
+          }}
+          onBlur={(event) => {
+            const typed = event.currentTarget.valueAsNumber;
+            setDraft(null);
+            if (!Number.isFinite(typed)) {
+              return;
+            }
+            const settled = settle(typed);
+            const kept = Math.min(max, Math.max(min, settled));
+            if (kept !== settled) {
+              setClamped(
+                `${formatBound(settled, unit)} is ${settled > max ? 'above the maximum' : 'below the minimum'}, so it is set to ${formatBound(kept, unit)}.`
+              );
+            }
+            if (kept !== value) {
+              onCommit(kept);
+            }
+          }}
+        />
+        {/* Present even without a unit so every field's right edge lines up. */}
+        <span aria-hidden={unit ? undefined : true}>{unit}</span>
+      </div>
+      <small id={rangeId} className="settings-number-range">
+        {formatBound(min, unit)} – {formatBound(max, unit)}
+      </small>
+      <small className="settings-number-clamped" role="status">
+        {clamped}
+      </small>
     </div>
   );
 }
