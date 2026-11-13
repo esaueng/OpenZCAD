@@ -9,7 +9,8 @@ import {
   PANEL_STATE_STORAGE_KEY,
   savePanelState,
   SIDEBAR_SECTION_IDS,
-  toggleToolGroup
+  toggleToolGroup,
+  TOOL_DRAWER_QUERY_MAX_LENGTH
 } from '../apps/web/src/lib/panelState';
 
 function installLocalStorage(): void {
@@ -146,6 +147,19 @@ describe('workspace panel state', () => {
     expect(
       normalizePanelState({ toolDrawerSection: 3 }).toolDrawerSection
     ).toBeNull();
+  });
+
+  it('opens the drawer on the search it was left with', () => {
+    expect(defaultPanelState().toolDrawerQuery).toBe('');
+    expect(
+      normalizePanelState({ toolDrawerQuery: 'fil' }).toolDrawerQuery
+    ).toBe('fil');
+    expect(normalizePanelState({ toolDrawerQuery: 3 }).toolDrawerQuery).toBe(
+      ''
+    );
+    expect(
+      normalizePanelState({ toolDrawerQuery: 'x'.repeat(500) }).toolDrawerQuery
+    ).toHaveLength(TOOL_DRAWER_QUERY_MAX_LENGTH);
   });
 
   it('returns independent pin lists', () => {

@@ -330,3 +330,42 @@ test(
     expect(await remembered()).toBe('pattern');
   }
 );
+
+test(
+  'the Tools drawer opens with the search it was left with, after a reload too',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await stubApi(page);
+    await createProject(page, 'Remembered search');
+
+    const drawer = page.getByRole('group', { name: 'Tools drawer' });
+    const toggle = page.getByRole('button', { name: /^More tools/ });
+    const search = drawer.getByRole('searchbox', { name: 'Find a tool' });
+    const tiles = drawer.locator('.command-tile');
+    await expect(drawer).toBeVisible();
+    const everyTool = await tiles.count();
+
+    await search.fill('Loft');
+    await expect(tiles).toHaveCount(1);
+
+    // Closed and opened again, it still searches for Loft.
+    await drawer.getByRole('button', { name: 'Close tools drawer' }).click();
+    await expect(drawer).toHaveCount(0);
+    await toggle.click();
+    await expect(search).toHaveValue('Loft');
+    await expect(tiles).toHaveCount(1);
+
+    // And after a reload.
+    await page.reload();
+    await expect(search).toHaveValue('Loft', { timeout: 30_000 });
+    await expect(tiles).toHaveCount(1);
+
+    // A cleared search is remembered as cleared.
+    await search.fill('');
+    await expect(tiles).toHaveCount(everyTool);
+    await page.reload();
+    await expect(drawer).toBeVisible({ timeout: 30_000 });
+    await expect(search).toHaveValue('');
+    await expect(tiles).toHaveCount(everyTool);
+  }
+);

@@ -770,6 +770,35 @@ describe('CommandCard', () => {
       scrollTo(sizeList(), 510);
       expect(onDrawerSectionChange).not.toHaveBeenCalled();
     });
+
+    it('opens a remembered search on its matches, not the remembered section', () => {
+      renderCard(NOTHING, {
+        drawerSection: 'pattern',
+        drawerQuery: 'pattern',
+        onDrawerQueryChange: vi.fn()
+      });
+      openDrawer();
+      expect(sizeList().scrollTop).toBe(0);
+    });
+  });
+
+  it('opens with the search it was left with, selected so typing replaces it', () => {
+    const onDrawerQueryChange = vi.fn();
+    renderCard(NOTHING, { drawerQuery: 'pattern', onDrawerQueryChange });
+    openDrawer();
+    const search = screen.getByRole<HTMLInputElement>('searchbox', {
+      name: 'Find a tool'
+    });
+    expect(search.value).toBe('pattern');
+    expect(search).toHaveFocus();
+    expect([search.selectionStart, search.selectionEnd]).toEqual([0, 7]);
+    expect(screen.queryByRole('button', { name: /^Sphere/ })).toBeNull();
+    fireEvent.change(search, { target: { value: 'sph' } });
+    expect(onDrawerQueryChange).toHaveBeenLastCalledWith('sph');
+    // Escape clears the search before it closes anything, and the clear is
+    // remembered too.
+    fireEvent.keyDown(search, { key: 'Escape' });
+    expect(onDrawerQueryChange).toHaveBeenLastCalledWith('');
   });
 
   it('hands the keyboard back to the drawer button when a launch does not take it', async () => {
