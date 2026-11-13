@@ -120,6 +120,8 @@ interface TopBarProps {
   /** Why Assemble is locked (AS01): it edits the document's assembly. */
   assembleModeDisabledReason?: string | null;
   onWorkspaceMode(mode: WorkspaceMode): void;
+  /** The pointer or focus reached a mode's switch: warm what it opens. */
+  onWorkspaceModeIntent?(mode: WorkspaceMode): void;
   saveToAccount?: boolean;
   /**
    * The account's project list was read and this project is not on it. Only
@@ -270,6 +272,7 @@ export function TopBar({
   drawingModeDisabledReason = null,
   assembleModeDisabledReason = null,
   onWorkspaceMode,
+  onWorkspaceModeIntent,
   saveToAccount = false,
   knownDeviceOnly = false,
   onSave,
@@ -741,6 +744,8 @@ export function TopBar({
                 disabled={disabledReason !== null}
                 title={disabledReason ?? undefined}
                 onClick={() => onWorkspaceMode(mode)}
+                onPointerEnter={() => onWorkspaceModeIntent?.(mode)}
+                onFocus={() => onWorkspaceModeIntent?.(mode)}
               >
                 <Icon size={13} aria-hidden="true" />
                 <span className="mode-switch-label">
