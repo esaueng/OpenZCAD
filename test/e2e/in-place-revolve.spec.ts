@@ -13,7 +13,8 @@ import {
   expectBodyCount,
   MODEL_ONLY,
   waitForStillViewport,
-  openMoveOptions
+  openMoveOptions,
+  pressTool
 } from './openzcad-fixtures';
 
 /**
@@ -334,7 +335,7 @@ test('an unapplied Move is asked about before Revolve starts', async ({
   if ((await moreTools.getAttribute('aria-expanded')) !== 'true') {
     await moreTools.click();
   }
-  await page.getByRole('button', { name: /^Revolve \(R\)/ }).click();
+  await pressTool(page, /^Revolve \(R\)/);
   const ask = page.getByRole('alertdialog', { name: 'Apply the Move first?' });
   await expect(ask).toBeVisible();
   await expect(

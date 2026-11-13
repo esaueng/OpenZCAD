@@ -16,7 +16,8 @@ import {
   test,
   createPrimitiveInPlace,
   finishInPlaceCommand,
-  openMoveOptions
+  openMoveOptions,
+  ensureToolsDrawerOpen
 } from './openzcad-fixtures';
 
 async function makePart(page: Page, name: string) {
@@ -318,6 +319,9 @@ test('a right-click waits for the Move answer and retains its requested menu', a
   await page.keyboard.press('Escape');
 
   await startMove(page);
+  // Move was taken from the Tools drawer, which put it away; the Fillet
+  // the retained menu waits on below is listed only there.
+  await ensureToolsDrawerOpen(page);
   await rightClick();
   await expect(menu).toBeHidden();
   await ask.getByRole('button', { name: 'Apply' }).click();

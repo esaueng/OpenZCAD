@@ -1,4 +1,4 @@
-import { revealModelPanel } from './openzcad-fixtures';
+import { revealModelPanel, pressTool } from './openzcad-fixtures';
 import { deflateSync } from 'node:zlib';
 import type { Locator, Page } from '@playwright/test';
 import {
@@ -229,7 +229,7 @@ async function forgetSourceBlobs(page: Page) {
 
 async function insertImage(page: Page) {
   const chooser = page.waitForEvent('filechooser');
-  await page.getByRole('button', { name: /^Image — / }).click();
+  await pressTool(page, /^Image — /);
   await (
     await chooser
   ).setFiles({
@@ -341,7 +341,7 @@ test('a reference image is placed, scaled from two points, moved, faded and hidd
   ).toBeVisible();
 
   // A datum plane carries it: 8 above Top, it follows the plane.
-  await page.getByRole('button', { name: /^Plane — / }).click();
+  await pressTool(page, /^Plane — /);
   await clickGhostPlane(page, 'XY');
   await enterCommandValue(page, 'offset', '8');
   await finishInPlaceCommand(page, 'Plane');

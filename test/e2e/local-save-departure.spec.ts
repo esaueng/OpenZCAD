@@ -6,7 +6,8 @@ import {
   expect,
   expectBodyCount,
   stubApi,
-  test
+  test,
+  pressTool
 } from './openzcad-fixtures';
 
 const SAVE_BUDGET_MS = process.env.CI ? 30_000 : 10_000;
@@ -139,7 +140,7 @@ for (const connectivity of ['online', 'offline edit'] as const) {
     await prepareLocalBox(page, `Local departure ${connectivity}`);
     // Open the Sphere command before disconnecting: this isolates device
     // saving from fetching its lazy UI chunk and building its preview.
-    await page.getByRole('button', { name: /^Sphere/ }).click();
+    await pressTool(page, /^Sphere/);
     const create = page
       .getByRole('group', { name: 'Sphere command' })
       .getByRole('button', { name: /Done/ });
@@ -266,7 +267,7 @@ for (const connectivity of ['online', 'offline edit'] as const) {
       await page.bringToFront();
       // Open the command before disconnecting so the offline case exercises
       // saving and departure, independently of fetching the tool's UI chunk.
-      await page.getByRole('button', { name: /^Sphere/ }).click();
+      await pressTool(page, /^Sphere/);
       const done = page
         .getByRole('group', { name: 'Sphere command' })
         .getByRole('button', { name: /Done/ });

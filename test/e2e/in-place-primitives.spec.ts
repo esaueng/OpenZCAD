@@ -20,7 +20,8 @@ import {
   revealModelPanel,
   setInPlaceOptionValues,
   setSelectionFilter,
-  waitForStillViewport
+  waitForStillViewport,
+  pressTool
 } from './openzcad-fixtures';
 
 /**
@@ -259,7 +260,7 @@ test('a cone drawn on a side face turns to stand out of it', async ({
   if ((await moreTools.getAttribute('aria-expanded')) !== 'true') {
     await moreTools.click();
   }
-  await page.getByRole('button', { name: /^Cone/ }).click();
+  await pressTool(page, /^Cone/);
   await expect(page.getByRole('group', { name: 'Cone command' })).toBeVisible();
   if ((await moreTools.getAttribute('aria-expanded')) === 'true') {
     await moreTools.click();

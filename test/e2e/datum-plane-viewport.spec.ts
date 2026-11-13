@@ -5,7 +5,13 @@ import {
 } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
 import type { Locator } from '@playwright/test';
-import { test, expect, stubApi, revealModelPanel } from './openzcad-fixtures';
+import {
+  test,
+  expect,
+  stubApi,
+  revealModelPanel,
+  pressTool
+} from './openzcad-fixtures';
 
 /**
  * R01: a datum plane is a viewport object. Selecting it arms the same pin a
@@ -216,7 +222,7 @@ test('drags a selected datum plane along its normal and picks it in the viewport
   const moreTools = page.getByRole('button', { name: /^More tools/ });
   if ((await moreTools.getAttribute('aria-expanded')) === 'false')
     await moreTools.click();
-  await page.getByRole('button', { name: /^Plane — / }).click();
+  await pressTool(page, /^Plane — /);
   const planeBar = page.getByRole('group', { name: 'Plane command' });
   await expect(planeBar).toBeVisible();
   await expect(canvas).not.toHaveAttribute('data-e2e-handle-x', /\d/);

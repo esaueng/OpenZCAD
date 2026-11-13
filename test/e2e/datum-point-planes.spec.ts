@@ -12,7 +12,8 @@ import {
   test,
   finishInPlaceCommand,
   pickDatumRow,
-  pickObjectsBody
+  pickObjectsBody,
+  pressTool
 } from './openzcad-fixtures';
 
 /**
@@ -154,7 +155,7 @@ test('three-point and parallel-at-point planes: picked vertices, typed points an
   // U09: in place, parallel to Top (XY) through the end of an edge picked
   // on the block: the Top ghost plane clicked through the box, then the
   // top right edge clicked near its back end, the corner (20, 20, 20).
-  await page.getByRole('button', { name: /^Plane — / }).click();
+  await pressTool(page, /^Plane — /);
   const planeBar = page.getByRole('group', { name: 'Plane command' });
   await expect(planeBar).toContainText('Pick a plane');
   await clickGhostPlane(page, 'XY');
@@ -185,7 +186,7 @@ test('three-point and parallel-at-point planes: picked vertices, typed points an
 
   // Three edge ends on the back face, (20, 20, 20), (0, 20, 20) and
   // (20, 20, 0), make the plane y = 20, facing front by the right-hand rule.
-  await page.getByRole('button', { name: /^Plane — / }).click();
+  await pressTool(page, /^Plane — /);
   await expect(planeBar).toContainText('Pick a plane');
   await clickWorldPoint(page, [20, 18, 20]);
   await expect(planeBar).toContainText('Point 1 of 3');
@@ -217,7 +218,7 @@ test('three-point and parallel-at-point planes: picked vertices, typed points an
 
   // One corner reached through three edges is three coincident points: the
   // exact check refuses them in the bar, Done stays off, nothing is created.
-  await page.getByRole('button', { name: /^Plane — / }).click();
+  await pressTool(page, /^Plane — /);
   await expect(planeBar).toContainText('Pick a plane');
   await clickWorldPoint(page, [20, 18, 20]);
   await clickWorldPoint(page, [18, 20, 20]);
@@ -256,7 +257,7 @@ test('three-point and parallel-at-point planes: picked vertices, typed points an
 
   // Split on it: the halves meet at z = 5.
   // U09: Split runs in place: the body, then Plane 2 from its row.
-  await page.getByRole('button', { name: /^Split — / }).click();
+  await pressTool(page, /^Split — /);
   await pickObjectsBody(page, /./);
   await pickDatumRow(page, 'Plane 2');
   await finishInPlaceCommand(page, 'Split');
@@ -292,7 +293,7 @@ test('three-point and parallel-at-point planes: picked vertices, typed points an
 
   // A split half's edges carry no identity a rebuild can find: refused, and
   // the pick says why.
-  await page.getByRole('button', { name: /^Plane — / }).click();
+  await pressTool(page, /^Plane — /);
   await expect(planeBar).toContainText('Pick a plane');
   await setSelectionFilter(page, 'Edge');
   const halfEdge = await locateEdge(page);

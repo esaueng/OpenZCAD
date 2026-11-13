@@ -30,7 +30,8 @@ import {
   openMoveOptions,
   barChoice,
   editExtrudeFromHistory,
-  setBarValues
+  setBarValues,
+  pressTool
 } from './openzcad-fixtures';
 
 test('suppresses features and rolls the timeline back as one undoable edit', { tag: '@ci-smoke' }, async ({
@@ -1645,7 +1646,7 @@ test('preflights and splits a box into two live half bodies', async ({
   // U09: Split runs in place. The body, then the Right (YZ) ghost plane
   // (clicked through the box), which lies on the box's x = 0 face where
   // the kernel refuses a split; sliding it 5 along +X crosses the interior.
-  await page.getByRole('button', { name: /^Split/ }).click();
+  await pressTool(page, /^Split/);
   await pickObjectsBody(page, 'Box 1');
   const splitBar = page.getByRole('group', { name: 'Split command' });
   await expect(splitBar).toContainText('Pick a plane or flat face');
@@ -3042,7 +3043,7 @@ test('models a parametric part and exports a true STEP file', { tag: '@ci-smoke'
   ).toBeVisible();
 
   // U09: Subtract runs in place: the base, then the tool, then Done.
-  await page.getByRole('button', { name: /^Subtract \(X\)/ }).click();
+  await pressTool(page, /^Subtract \(X\)/);
   await pickObjectsBody(page, 'Box 1');
   await pickObjectsBody(page, 'Cylinder 1');
   await finishInPlaceCommand(page, 'Subtract');
@@ -3517,10 +3518,10 @@ test('opening a tool over an unapplied Move asks once and never stacks two cards
   const unionCard = page.getByRole('group', { name: 'Union command' });
   const moveRows = page.locator('.feature-row', { hasText: 'Move' });
   const openPendingMove = async () => {
-    await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+    await pressTool(page, /^Move \(M\)/);
     await openMoveOptions(move);
     await move.getByLabel('Move X in mm').fill('60');
-    await page.getByRole('button', { name: /^Union \(U\)/ }).click();
+    await pressTool(page, /^Union \(U\)/);
     await expect(ask).toBeVisible();
     await expect(ask).toContainText('before Union opens');
   };
@@ -3534,7 +3535,7 @@ test('opening a tool over an unapplied Move asks once and never stacks two cards
   await expect(inspector).toHaveCount(0);
 
   // Discard closes the Move uncommitted and Union opens alone.
-  await page.getByRole('button', { name: /^Union \(U\)/ }).click();
+  await pressTool(page, /^Union \(U\)/);
   await ask.getByRole('button', { name: 'Discard' }).click();
   await expect(move).toHaveCount(0);
   await expect(unionCard).toBeVisible();
@@ -3554,9 +3555,9 @@ test('opening a tool over an unapplied Move asks once and never stacks two cards
   await expect(unionCard).toHaveCount(0);
 
   // A Move with nothing to apply asks nothing: it just gives way.
-  await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+  await pressTool(page, /^Move \(M\)/);
   await expect(move).toBeVisible();
-  await page.getByRole('button', { name: /^Union \(U\)/ }).click();
+  await pressTool(page, /^Union \(U\)/);
   await expect(unionCard).toBeVisible();
   await expect(move).toHaveCount(0);
   await expect(ask).toHaveCount(0);
@@ -3575,7 +3576,7 @@ test('opening a history editor preserves an unapplied Move until its choice is s
   await createPrimitiveInPlace(page, 'box');
   // U09: the split is made in place (Right ghost plane slid to x = 5) and
   // keeps its default name, "Split".
-  await page.getByRole('button', { name: /^Split/ }).click();
+  await pressTool(page, /^Split/);
   await pickObjectsBody(page, 'Box 1');
   await clickGhostPlane(page, 'YZ');
   await enterCommandValue(page, 'offset', '5');

@@ -283,6 +283,13 @@ export function CommandCard({
     onToggleMore();
     moreToggleRef.current?.focus();
   };
+  /** Back to the drawer's button, unless something else took the keyboard. */
+  const restoreFocusToToggle = () => {
+    const toggle = moreToggleRef.current;
+    const active = toggle?.ownerDocument.activeElement;
+    if (toggle && (!active || active === toggle.ownerDocument.body))
+      toggle.focus();
+  };
   // The drawer's name and its way out, at the head in both views: a drawer
   // that stays through clicks elsewhere needs a close button on itself, not
   // only the button that opened it. On a short stage the advanced sheet
@@ -541,8 +548,23 @@ export function CommandCard({
           draggable={canPin}
           onDragStart={(event) => startDrag(event, tool, 'drawer')}
           onDragEnd={endDrag}
-          onClick={() => {
-            if (disabledReason === null) onLaunchTool(tool);
+          onClick={(event) => {
+            if (disabledReason !== null) return;
+            const hadFocus =
+              event.currentTarget.ownerDocument.activeElement ===
+              event.currentTarget;
+            onLaunchTool(tool);
+            if (!drawerOpen) return;
+            // A tool taken from the drawer ends the browsing: the drawer
+            // goes away rather than waiting out the command and coming
+            // back over the stage. A greyed row leaves it open, as its
+            // reason is what the reader came for.
+            onToggleMore();
+            // The row goes with the drawer. A command that takes the
+            // keyboard (its bar, its panel) has it by the next frame; one
+            // that does not (Move) would leave it on the page, so it goes
+            // back to the button that opens the drawer again.
+            if (hadFocus) requestAnimationFrame(restoreFocusToToggle);
           }}
         >
           {meta.icon}

@@ -16,7 +16,8 @@ import {
   barChoice,
   chooseBarOption,
   editExtrudeFromHistory,
-  expectFeatureMeasurement
+  expectFeatureMeasurement,
+  pressTool
 } from './openzcad-fixtures';
 
 /**
@@ -73,7 +74,7 @@ test('subtracts while keeping the base body, then reopens the choice', async ({
 
   // U09: Subtract runs in place; keeping the base is a rare choice behind
   // the bar's Options menu.
-  await page.getByRole('button', { name: /^Subtract \(X\)/ }).click();
+  await pressTool(page, /^Subtract \(X\)/);
   await pickObjectsBody(page, 'Left');
   await pickObjectsBody(page, 'Right');
   const subtractBar = page.getByRole('group', { name: 'Subtract command' });
