@@ -415,7 +415,9 @@ export function encryptedProjectPinsUnavailable(): boolean {
   return encryptedProjectPins().degraded;
 }
 
-export function pinStorageUnavailable(details?: unknown): ApiError {
+export function pinStorageUnavailable(
+  details?: Record<string, unknown>
+): ApiError {
   return new ApiError(
     409,
     'This browser’s site storage is blocked or full, or once could not save which projects are end-to-end encrypted, so this device treats every project as encrypted and sent nothing without encryption. Allow site storage, or free up space and clear this site’s stored data, then reload.',
