@@ -7,7 +7,7 @@ import {
   test
 } from './openzcad-fixtures';
 
-/** Read the painted text, including opacity, against the actual button. */
+/** Read the painted text, including opacity, against what is painted behind it. */
 async function expectReadableActions(bar: Locator) {
   // Enabling the action animates its opacity; measure the settled paint.
   for (const button of await bar.locator('button[aria-keyshortcuts]').all()) {
@@ -16,11 +16,40 @@ async function expectReadableActions(bar: Locator) {
   const readings = await bar
     .locator('button[aria-keyshortcuts]')
     .evaluateAll((buttons) => {
-      const rgb = (color: string) =>
-        color
-          .match(/[\d.]+/g)!
-          .slice(0, 3)
-          .map(Number);
+      const rgba = (color: string) => {
+        const [r, g, b, a = 1] = color.match(/[\d.]+/g)!.map(Number);
+        return { channels: [r!, g!, b!], alpha: a };
+      };
+      const rgb = (color: string) => rgba(color).channels;
+      // What is painted behind the label. Cancel rests bare (a transparent
+      // fill), so its own background-color is not a surface: reading it as
+      // one measured the label against black in both themes, which passed
+      // the dark bar by accident and failed the light one. Composite each
+      // translucent layer over the first opaque ancestor instead.
+      const backdrop = (element: Element) => {
+        const layers: { channels: number[]; alpha: number }[] = [];
+        for (
+          let node: Element | null = element;
+          node;
+          node = node.parentElement
+        ) {
+          const layer = rgba(getComputedStyle(node).backgroundColor);
+          if (layer.alpha === 0) continue;
+          layers.push(layer);
+          if (layer.alpha === 1) break;
+        }
+        if (layers.at(-1)?.alpha !== 1) {
+          throw new Error('No opaque surface behind the action.');
+        }
+        return layers.reduceRight<number[]>(
+          (under, layer) =>
+            layer.channels.map(
+              (value, index) =>
+                value * layer.alpha + under[index]! * (1 - layer.alpha)
+            ),
+          [0, 0, 0]
+        );
+      };
       const luminance = (channels: number[]) => {
         const linear = channels.map((value) => {
           const c = value / 255;
@@ -29,7 +58,7 @@ async function expectReadableActions(bar: Locator) {
         return linear[0]! * 0.2126 + linear[1]! * 0.7152 + linear[2]! * 0.0722;
       };
       return buttons.flatMap((button) => {
-        const background = rgb(getComputedStyle(button).backgroundColor);
+        const background = backdrop(button);
         return [button, button.querySelector('kbd')!].map((element) => {
           const style = getComputedStyle(element);
           const alpha = Number(style.opacity);

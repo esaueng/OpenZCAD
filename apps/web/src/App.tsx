@@ -30271,7 +30271,6 @@ export function App() {
   // disarmed, and "drag the radial handle" is a promise View mode cannot keep.
   const idleHint = idleWorkspaceHint(
     undefined,
-    keymap.label('command-palette') ?? null,
     keymap.label('shortcut-reference') ?? null
   );
   const measureKey = keymap.label('view-measure')
@@ -30316,15 +30315,41 @@ export function App() {
       : 'This model has no parameters · Build mode is where they are defined';
   // Measuring writes the lane in Build too: it is the command of the moment.
   const readingHints = viewMode || measuring;
+  // Draw's guidance follows what is on the sheet. With no sheet the stage is
+  // the "Drawings" start and its New drawing sheet button, and "Drag a view
+  // to place it" pointed at views that do not exist; the same once a sheet's
+  // views are all removed. There the lane rests, as it does on an empty model.
+  const drawingHasViews = Boolean(
+    doc?.drawings?.sheets.some((sheet) => sheet.views.length > 0)
+  );
+  // The plane chooser is the Sketch tool's whole first step and says so
+  // itself, in its card: the lane neither repeats it nor runs ahead to the
+  // drawing keys ("Drag to draw · R rectangle…"), which mean nothing until a
+  // plane is chosen. Null only while that card is the one that is up.
+  const sketchPlaneCardShown =
+    tool === 'sketch' &&
+    !modelingLocked &&
+    !measurementDock &&
+    !contextualToolCard &&
+    !revertPill &&
+    !movePreview;
+  // Assemble's guidance is its panel's: the first run, the parts and the
+  // joint tool each say their own next step. The lane used to fall through
+  // to Build's lines there, so it read "Click a body, face, or edge" over
+  // "Tick the bodies that are parts", and "Drag the arrow to set the fillet
+  // on edge" once a part was clicked, with no arrow to drag. It rests.
+  const panelModeHint = assembleMode ? idleHint : tweakModeHint;
   const workspacePrompt =
     !displayedGeometryComplete && !drawingMode
       ? 'Preparing model · viewing is available; editing waits until it is ready'
       : drawingMode
-        ? 'Drag a view to place it · arrow keys nudge it · Update redraws a stale sheet'
+        ? drawingHasViews
+          ? 'Drag a view to place it · arrow keys nudge it · Update redraws a stale sheet'
+          : idleHint
         : readingHints
           ? viewModeHint
-          : tweakMode
-            ? tweakModeHint
+          : tweakMode || assembleMode
+            ? panelModeHint
             : (commandPromptText(interaction, cylinderDimensionMode, {
                 refusalShown: Boolean(calloutWithOperation?.operation?.error),
                 ...(keypad && keypadUi ? { editor: keypadUi } : {}),
@@ -30333,15 +30358,9 @@ export function App() {
                   : {})
               }) ??
               (tool === 'sketch'
-                ? [
-                    'Drag to draw',
-                    keyHint(keymap, 'sketch-rectangle', 'rectangle'),
-                    keyHint(keymap, 'sketch-circle', 'circle'),
-                    'P polygon',
-                    'Enter finishes'
-                  ]
-                    .filter(Boolean)
-                    .join(' · ')
+                ? sketchPlaneCardShown
+                  ? null
+                  : 'Pick a plane or a flat face to sketch on · Esc cancels'
                 : tool
                   ? 'Enter creates · Esc cancels'
                   : selectedBodyIds.length >= 2
@@ -32754,9 +32773,16 @@ export function App() {
             }
             geometryStatus={geometryStatus}
             tone={tone}
-            muted={contextualToolCard !== null && !hideSketchToolCard}
+            // The plane chooser carries the Sketch tool's instruction too:
+            // the toast under it said the same sentence a second time. The
+            // status is still set, for the log and for assistive tech.
+            muted={
+              (contextualToolCard !== null && !hideSketchToolCard) ||
+              sketchPlaneCardShown
+            }
             onOpenLog={openActivityLog}
             prompt={workspacePrompt}
+            promptResting={workspacePrompt === idleHint}
             instructionDetails={
               displayedGeometryComplete && offsetHandleTarget
                 ? offsetHandleTarget.totalBaseline === undefined

@@ -115,7 +115,8 @@ button.command-rail.selection-rail-verb[aria-pressed='true'] {
    Its name and measurement lead the line, as one quiet chip; the guidance
    follows it. The line never takes the pointer, so neither does the chip. */
 
-.workspace-hint {
+.workspace-hint,
+.workspace-hint-probe {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -165,11 +166,23 @@ button.command-rail.selection-rail-verb[aria-pressed='true'] {
   white-space: nowrap;
 }
 
+/* The name has the row: the chip is capped at the card's width (above) and
+   the measurement keeps its own, so the name gives way only when the two
+   fill the row. A fixed 180px cut "Mounting Bracket · Front face" with a
+   hundred pixels of the row unused. */
 .selection-readout .selection-callout-name {
+  flex: 0 1 auto;
   min-width: 0;
-  max-width: 180px;
+  /* Not the viewport chip's 260px (viewer.css), which shares the class. */
+  max-width: none;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Cut, the whole name is its tooltip (SelectionReadout), so the name takes
+   the pointer then and only then: the rest of the line never does. */
+.selection-readout .selection-callout-name[data-cut] {
+  pointer-events: auto;
 }
 
 .selection-readout .selection-callout-detail {

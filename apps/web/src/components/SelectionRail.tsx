@@ -12,6 +12,7 @@ import {
   SquareX
 } from 'lucide-react';
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -367,14 +368,48 @@ export function SelectionReadout({
   detailDiameter?: { diameter: number; units: string } | undefined;
 }) {
   const nameRef = useRef<HTMLSpanElement>(null);
+  // The name ends in an ellipsis only when it and the measurement fill the
+  // row. Cut, the whole of it is the name's tooltip; assistive tech reads
+  // the full text either way, since the cut is drawn, not made.
+  const [cut, setCut] = useState(false);
+  const measureCut = useCallback(() => {
+    const name = nameRef.current;
+    if (!name) return;
+    const isCut = name.scrollWidth > name.clientWidth;
+    setCut(isCut);
+    if (isCut) name.title = name.textContent ?? '';
+    else name.removeAttribute('title');
+  }, []);
   // Segmented like every other spelling of a pick, so a cylinder-radius drag
   // can rewrite the diameter node in place (setLiveDiameter).
   useLayoutEffect(() => {
-    if (nameRef.current) renderLabelSegments(nameRef.current, label ?? []);
-  }, [label]);
+    if (!nameRef.current) return;
+    renderLabelSegments(nameRef.current, label ?? []);
+    measureCut();
+  }, [label, measureCut]);
+  // The row widens and narrows with the window and the docks, and a name
+  // that grows into the row's end changes its own box on the way.
+  useLayoutEffect(() => {
+    const name = nameRef.current;
+    if (!name || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measureCut);
+    observer.observe(name);
+    return () => observer.disconnect();
+  }, [measureCut]);
   return (
     <span className="selection-readout" role="group" aria-label="Picked">
-      <span className="selection-callout-name" ref={nameRef} />
+      <span
+        className="selection-callout-name"
+        ref={nameRef}
+        data-cut={cut ? '' : undefined}
+        // A radius drag rewrites the name in place without a render: the
+        // tooltip is read from the text as the pointer arrives.
+        onPointerEnter={(event) => {
+          if (cut) {
+            event.currentTarget.title = event.currentTarget.textContent ?? '';
+          }
+        }}
+      />
       {detail && (
         <span
           className="selection-callout-detail"
