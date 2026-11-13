@@ -1657,12 +1657,105 @@ describe('settings desktop account section', () => {
       expect(codeField).toHaveAccessibleDescription(
         'That sign-in code is invalid.'
       );
-      await user.type(codeField, '{Backspace}');
+      // The refused code is cleared (I81), so the next digit is the edit.
+      await user.type(codeField, '1');
       expect(codeField).not.toHaveAttribute('aria-invalid');
       expect(codeField).not.toHaveAccessibleDescription();
     } finally {
       script.remove();
       delete (window as Window & { turnstile?: unknown }).turnstile;
+    }
+  });
+
+  // Design review I81: no Resend, a placeholder that looked typed, and a
+  // wrong code left in the field.
+  it('clears a wrong code, uses a neutral placeholder and offers a new code after a wait', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const onVerifyLoginCode = vi
+      .fn()
+      .mockRejectedValue(new Error('That sign-in code is invalid.'));
+    const onRequestLoginCode = vi
+      .fn()
+      .mockResolvedValueOnce({
+        challengeId: 'challenge-1',
+        expiresInSeconds: 600
+      })
+      .mockResolvedValueOnce({
+        challengeId: 'challenge-2',
+        expiresInSeconds: 600
+      });
+    Object.defineProperty(window, 'turnstile', {
+      configurable: true,
+      value: {
+        render: vi.fn(
+          (
+            _container: HTMLElement,
+            options: { callback(token: string): void }
+          ) => {
+            options.callback('turnstile-token');
+            return 'widget-1';
+          }
+        ),
+        remove: vi.fn(),
+        reset: vi.fn()
+      }
+    });
+    const script = document.createElement('script');
+    script.dataset.openzcadTurnstile = 'true';
+    document.head.append(script);
+    try {
+      renderSettings(null, {
+        initialSection: 'account',
+        authConfig: {
+          mode: 'email-code',
+          emailCodeEnabled: true,
+          turnstileSiteKey: 'site-key'
+        },
+        authConfigStatus: 'ready',
+        onRequestLoginCode,
+        onVerifyLoginCode
+      });
+      await user.type(
+        screen.getByLabelText('Email address'),
+        'person@example.com'
+      );
+      await user.click(screen.getByRole('button', { name: 'Email me a code' }));
+      const codeField = await screen.findByLabelText('Email sign-in code');
+      expect(codeField).toHaveAttribute('placeholder', '6-digit code');
+      await user.type(codeField, '123456');
+      await user.click(screen.getByRole('button', { name: 'Sign in' }));
+      await waitFor(() => expect(codeField).toHaveValue(''));
+      expect(codeField).toHaveFocus();
+
+      expect(
+        screen.getByRole('button', { name: /^Send a new code/ })
+      ).toBeDisabled();
+      await act(async () => {
+        vi.advanceTimersByTime(30_000);
+      });
+      const resend = await screen.findByRole('button', {
+        name: 'Send a new code'
+      });
+      await waitFor(() => expect(resend).toBeEnabled());
+      await user.click(resend);
+      expect(onRequestLoginCode).toHaveBeenLastCalledWith(
+        'person@example.com',
+        'turnstile-token'
+      );
+      await user.type(
+        await screen.findByLabelText('Email sign-in code'),
+        '654321'
+      );
+      await user.click(screen.getByRole('button', { name: 'Sign in' }));
+      expect(onVerifyLoginCode).toHaveBeenLastCalledWith(
+        'challenge-2',
+        '654321'
+      );
+    } finally {
+      script.remove();
+      delete (window as Window & { turnstile?: unknown }).turnstile;
+      vi.useRealTimers();
     }
   });
 
