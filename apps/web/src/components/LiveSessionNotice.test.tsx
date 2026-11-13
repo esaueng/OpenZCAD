@@ -18,7 +18,9 @@ describe('LiveSessionNotice', () => {
     expect(notice).toHaveTextContent(LIVE_SESSION_CONNECTING);
     expect(notice).not.toHaveTextContent(/lease/i);
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
-    act(() => vi.advanceTimersByTime(8_000));
+    act(() => {
+      vi.advanceTimersByTime(8_000);
+    });
     expect(notice).toHaveTextContent('Still connecting');
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(onRetry).toHaveBeenCalledOnce();
@@ -28,7 +30,9 @@ describe('LiveSessionNotice', () => {
 
   it('offers no Retry when no retry can help', () => {
     render(<LiveSessionNotice stallMs={10} />);
-    act(() => vi.advanceTimersByTime(10));
+    act(() => {
+      vi.advanceTimersByTime(10);
+    });
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
   });
 });

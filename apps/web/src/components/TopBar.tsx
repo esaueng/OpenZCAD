@@ -566,8 +566,8 @@ export function TopBar({
     : readOnlySeat
       ? 'Read-only'
       : collaborationStatus === 'live'
-      ? `${collaboratorCount} live`
-      : COLLABORATION_LABELS[collaborationStatus];
+        ? `${collaboratorCount} live`
+        : COLLABORATION_LABELS[collaborationStatus];
   const accountLabel =
     accountState === 'checking'
       ? 'Checking'
@@ -872,32 +872,35 @@ export function TopBar({
               }
               multiline
             >
-            <button
-              type="button"
-              className={`collaboration-state ${collaborationStatus}${readOnlySeat ? ' is-read-only' : ''}`}
-              // Each name carries the label the chip shows (WCAG 2.5.3).
-              aria-label={
-                session
-                  ? `Open project sharing · ${collaborationLabel}`
-                  : `${collaborationLabel} · Sign in to share`
-              }
-              disabled={!projectName}
-              onClick={session ? onOpenSharing : onSignIn}
-            >
-              <PresenceGlyph
-                status={knownDeviceOnly ? 'not-shared' : collaborationStatus}
-              />
-              {collaborationStatus === 'live' ? (
-                // Only drawn once the row has collapsed to icons; the label
-                // carries the count everywhere else.
-                <span className="live-badge" aria-hidden="true">
-                  {collaboratorCount}
-                </span>
-              ) : null}
-              <StableLabel reserve={COLLABORATION_LABEL_RESERVE} align="center">
-                {collaborationLabel}
-              </StableLabel>
-            </button>
+              <button
+                type="button"
+                className={`collaboration-state ${collaborationStatus}${readOnlySeat ? ' is-read-only' : ''}`}
+                // Each name carries the label the chip shows (WCAG 2.5.3).
+                aria-label={
+                  session
+                    ? `Open project sharing · ${collaborationLabel}`
+                    : `${collaborationLabel} · Sign in to share`
+                }
+                disabled={!projectName}
+                onClick={session ? onOpenSharing : onSignIn}
+              >
+                <PresenceGlyph
+                  status={knownDeviceOnly ? 'not-shared' : collaborationStatus}
+                />
+                {collaborationStatus === 'live' ? (
+                  // Only drawn once the row has collapsed to icons; the label
+                  // carries the count everywhere else.
+                  <span className="live-badge" aria-hidden="true">
+                    {collaboratorCount}
+                  </span>
+                ) : null}
+                <StableLabel
+                  reserve={COLLABORATION_LABEL_RESERVE}
+                  align="center"
+                >
+                  {collaborationLabel}
+                </StableLabel>
+              </button>
             </Tooltip>
           ) : null}
           <details
