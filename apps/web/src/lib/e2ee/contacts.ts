@@ -558,7 +558,8 @@ export async function inspectContact(
     status: trusted ? 'verified' : 'seen',
     keyChanged,
     keyChangeUnsigned: replacedVerified,
-    list,
+    // The chain does not carry its identity generation; the lookup does.
+    list: { ...list, generation: response.identity.generation },
     code,
     codeHash: hash,
     fingerprint

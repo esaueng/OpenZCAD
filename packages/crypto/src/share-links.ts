@@ -154,6 +154,12 @@ export type ShareLinkFailure =
   | 'snapshot-signature'
   /** The snapshot is not a share snapshot of the statement's project. */
   | 'snapshot-mismatch'
+  /**
+   * The snapshot was signed before the statement that vouches for it was
+   * issued (beyond the clock skew): an older snapshot under a newer
+   * statement.
+   */
+  | 'snapshot-predates-authority'
   /** A grant or tombstone signer the owner's keys do not include. */
   | 'unknown-signer'
   /** A link grant's signature is not valid. */
@@ -182,6 +188,7 @@ const FAILURE_CODES: Record<ShareLinkFailure, E2eeErrorCode> = {
   'author-not-named': 'authentication-failed',
   'snapshot-signature': 'authentication-failed',
   'snapshot-mismatch': 'context-mismatch',
+  'snapshot-predates-authority': 'context-mismatch',
   'unknown-signer': 'authentication-failed',
   'grant-signature': 'authentication-failed',
   'tombstone-signature': 'authentication-failed',
@@ -827,8 +834,22 @@ export interface VerifiedSharedSnapshot {
  * device is named in it; the statement's signature and expiry (and that it
  * is for the link whose share key the visitor holds); then that the
  * snapshot's signing credential is one the statement names, its signature,
- * and that it is a share snapshot of the statement's project. The author's
- * own device list is not consulted: a visitor has no pin for it.
+ * that it is a share snapshot of the statement's project, and that it was
+ * signed no earlier than the statement was issued (`SHARE_CLOCK_SKEW_MS`
+ * allowed, since author and owner clocks differ). The author's own device
+ * list is not consulted: a visitor has no pin for it.
+ *
+ * Freshness: a visitor keeps no pins, so the ordering check is all it can
+ * tell about freshness. It stops a newer statement from vouching for an
+ * older snapshot, which is why the owner's browser republishes a link's
+ * snapshot whenever it issues the link a new statement. It cannot stop a
+ * server from serving an older statement that has not expired yet, with a
+ * snapshot signed after that statement by an author it names: an author
+ * dropped from the link (a removed editor, a revoked device) can keep such
+ * a snapshot visitor-visible until that older statement expires, at most
+ * `MAX_SHARE_AUTHORITY_LIFETIME_MS` (7 days) after it was issued. The
+ * statement does not name the latest snapshot: editors publish snapshots
+ * after the statement is signed, so it could not, without a new format.
  *
  * Accept the snapshot only if this returns; then open its version key with
  * the share key (`share-version-key`) and decrypt it with
@@ -914,6 +935,13 @@ export async function verifySharedSnapshot(
     refuse(
       'snapshot-mismatch',
       "The envelope is not a share snapshot of the statement's project"
+    );
+  }
+  // 6. Not older than the statement vouching for it (see Freshness above).
+  if (verified.signedAt + SHARE_CLOCK_SKEW_MS < authority.issuedAt) {
+    refuse(
+      'snapshot-predates-authority',
+      'The snapshot was signed before the statement that vouches for it'
     );
   }
   return {

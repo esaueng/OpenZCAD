@@ -44,6 +44,12 @@ import {
   generateSigningKeyPair
 } from './keys';
 import { generateSymmetricKey } from './primitives';
+import { toBase64Url, toHex } from './bytes';
+import {
+  mlsAuthorityResetHash,
+  verifyMlsAuthorityReset,
+  type MlsAuthorityManifest
+} from './mls-authority';
 
 async function rejectsWith(
   promise: Promise<unknown>,
@@ -1304,6 +1310,63 @@ describe('group resets', () => {
         ),
       'malformed'
     );
+  });
+
+  it('checks an MLS root reset against the owner list’s generation, not its own', async () => {
+    const { f, list, value } = await resetFixture();
+    const first = { generation: 0, keyEpochBase: 0, groupInfo: 'AA' };
+    const base: MlsAuthorityManifest = {
+      projectId: value.projectId,
+      ownerUserId: USER,
+      ownerIdentityKeyHash: toHex(list.identityKeyHash),
+      roots: [first],
+      checkpoint: null,
+      signerDeviceId: 'dev_owner'
+    };
+    const authorityHash = await mlsAuthorityResetHash(base, 5, 'Aw');
+    const manifestFor = async (generation: number) => {
+      const signed = await signGroupReset(f.identity.privateKey, {
+        ...value,
+        generation,
+        authorityHash
+      });
+      return {
+        ...base,
+        roots: [
+          first,
+          {
+            generation: 1,
+            keyEpochBase: 6,
+            groupInfo: 'AQ',
+            previousGroupInfo: 'Aw',
+            resetAuthority: {
+              statement: toBase64Url(signed.statement),
+              signature: toBase64Url(signed.signature)
+            }
+          }
+        ]
+      };
+    };
+    const honest = await manifestFor(1);
+    await expect(
+      verifyMlsAuthorityReset(honest, 1, list, 1)
+    ).resolves.toMatchObject({ generation: 1, priorKeyEpoch: 5 });
+    await expect(
+      verifyMlsAuthorityReset(honest, 1, { ...list, generation: 1 })
+    ).resolves.toMatchObject({ generation: 1 });
+    // A reset naming a generation the owner's list is not at is refused,
+    // although the same identity signed it.
+    const mislabelled = await manifestFor(2);
+    await rejectsWith(
+      verifyMlsAuthorityReset(mislabelled, 1, list, 1),
+      'context-mismatch'
+    );
+    await rejectsWith(
+      verifyMlsAuthorityReset(honest, 1, { ...list, generation: 2 }),
+      'context-mismatch'
+    );
+    // Without a generation for the list there is nothing to check against.
+    await rejectsWith(verifyMlsAuthorityReset(honest, 1, list), 'malformed');
   });
 
   it('refuses another signer, user, generation, entry or malformed bytes', async () => {

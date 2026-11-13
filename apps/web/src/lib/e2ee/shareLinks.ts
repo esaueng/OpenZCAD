@@ -2,7 +2,9 @@
  * Share links of end-to-end encrypted projects in the browser (ADR-024
  * Phase 5, slice 5-10; roadmap L11): the owner creates and revokes links,
  * keeps their share-authority statements and the share delegation current,
- * and every editor republishes each active link's snapshot when it saves.
+ * and every editor republishes each active link's snapshot when it saves
+ * (the owner also after each new statement: visitors refuse a snapshot
+ * older than the statement vouching for it).
  *
  * - **Create** (owner). A fresh share key and link id; the owner device
  *   signs a grant ("OZL") at the current key epoch and the store writes a
@@ -50,6 +52,7 @@
  */
 import {
   EnvelopeKey,
+  SHARE_CLOCK_SKEW_MS,
   decodeShareAuthority,
   decodeShareDelegation,
   encodeEncryptedDocumentBody,
@@ -789,7 +792,53 @@ export async function issueShareAuthorities(
       failed.push({ shareId: link.shareId, reason: describe(error) });
     }
   }
+  // Visitors refuse a snapshot signed before the statement vouching for it
+  // (`snapshot-predates-authority`): a new statement takes a new snapshot.
+  const stale = links
+    .filter((link) => {
+      if (issued.includes(link.shareId)) return true;
+      const record = listed.links.find((l) => l.shareId === link.shareId);
+      return !!record && snapshotPredatesAuthority(record);
+    })
+    .map((link) => link.shareId);
+  if (stale.length) {
+    const shown = await publishShareSnapshots(ctx, projectId, head, {
+      only: stale
+    }).catch(
+      (error: unknown): PublishOutcome => ({
+        published: [],
+        failed: stale.map((shareId) => ({ shareId, reason: describe(error) }))
+      })
+    );
+    for (const failure of shown.failed) {
+      failed.push({
+        shareId: failure.shareId,
+        reason: `The snapshot for the new statement was not published: ${failure.reason}`
+      });
+    }
+  }
   return outcome();
+}
+
+/**
+ * Whether a link's stored snapshot was stored before its statement was
+ * issued, so visitors would refuse it (`snapshot-predates-authority`) and
+ * it is republished even at the same version. The server's storage time
+ * against the statement's `issuedAt` is only a hint for when to republish;
+ * visitors check the snapshot's signed time.
+ */
+function snapshotPredatesAuthority(record: E2eeShareLinkRecord): boolean {
+  if (!record.snapshot || !record.authority) return false;
+  let issuedAt: number;
+  try {
+    issuedAt = decodeShareAuthority(
+      fromBase64Url(record.authority.statement)
+    ).issuedAt;
+  } catch {
+    return false;
+  }
+  const storedAt = Date.parse(record.snapshot.updatedAt);
+  return Number.isFinite(storedAt) && storedAt + SHARE_CLOCK_SKEW_MS < issuedAt;
 }
 
 // --- Snapshots ---------------------------------------------------------------------
@@ -845,7 +894,8 @@ export async function publishShareSnapshots(
       stored &&
       (stored.documentVersion > current.version ||
         (stored.documentVersion === current.version &&
-          stored.keyEpoch === keyEpoch))
+          stored.keyEpoch === keyEpoch &&
+          !snapshotPredatesAuthority(record)))
     ) {
       continue;
     }
