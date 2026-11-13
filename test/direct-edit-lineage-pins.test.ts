@@ -409,7 +409,23 @@ describe('resize-blend under lineage', { timeout: 120_000 }, () => {
       )
     ).toBe(false);
 
-    const pair = resizedTopology?.opposingPlanarFacePairs?.find(
+    // A sync that ends on a radius/diameter edit defers the planar-distance
+    // proofs (#1276); the assistant's foreground analysis requests them on
+    // the resulting body before it proposes a face-distance edit.
+    const analyzed = await adapter.syncDocument(
+      document,
+      undefined,
+      undefined,
+      { bodyId, faceHashes: [] }
+    );
+    expect(analyzed.warnings).toEqual([]);
+    expect(analyzed.bodyRepresentations[bodyId]!.volume).toBeCloseTo(
+      resizedVolume,
+      9
+    );
+    const pair = analyzed.bodyRepresentations[
+      bodyId
+    ]!.topology?.opposingPlanarFacePairs?.find(
       (candidate) => Math.abs(candidate.normal.x) > 1 - 1e-6
     );
     expect(pair).toBeDefined();

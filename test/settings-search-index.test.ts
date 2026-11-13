@@ -65,6 +65,7 @@ function componentTitles(name: string): Map<string, string[]> {
 
 const SPLICED = new Map([
   ...componentTitles('AnalyticsConsent.tsx'),
+  ...componentTitles('AssistantConnectionSettings.tsx'),
   ...componentTitles('DataDownload.tsx'),
   ...componentTitles('EncryptionSettings.tsx')
 ]);
@@ -119,6 +120,13 @@ describe('settings search index', () => {
     ]);
     expect(SPLICED.get('CloudStatisticsConsent')).toEqual([
       'Cloud account statistics'
+    ]);
+    // The assistant's toggle and credential rows come from its connection
+    // component, rendered ahead of the personal-key rows in SettingsPage.
+    expect(SPLICED.get('AssistantConnectionSettings')).toEqual([
+      'AI assistant',
+      'Credential source',
+      'Built-in assistant'
     ]);
     // The Encryption rows come from its lazy component.
     expect(SPLICED.get('EncryptionSettings')).toContain('Your fingerprint');

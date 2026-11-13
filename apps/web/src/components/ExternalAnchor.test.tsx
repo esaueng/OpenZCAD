@@ -78,14 +78,19 @@ describe('desktop external link allowlist', () => {
 
   it('covers every external link the desktop app opens', () => {
     (window as TauriWindow).__TAURI_INTERNALS__ = {};
-    const settings = readFileSync(
-      resolve(__dirname, 'SettingsPage.tsx'),
-      'utf8'
-    );
+    // The AI provider data-policy links live in the assistant's connection
+    // settings (moved out of SettingsPage); scan both so a link added to
+    // either one must be approved.
+    const settings = ['SettingsPage.tsx', 'AssistantConnectionSettings.tsx']
+      .map((name) => readFileSync(resolve(__dirname, name), 'utf8'))
+      .join('\n');
     const providerLinks = [
       ...settings.matchAll(/href: '(https:\/\/[^']+)'/g)
     ].map((match) => match[1]);
-    expect(providerLinks.length).toBeGreaterThan(0);
+    expect(providerLinks).toEqual([
+      'https://openrouter.ai/docs/guides/privacy/provider-logging',
+      'https://developers.openai.com/api/docs/guides/your-data'
+    ]);
     for (const url of [privacyPolicyHref(), ...providerLinks]) {
       expect(approved).toContain(url);
     }
