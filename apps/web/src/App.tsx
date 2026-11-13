@@ -31522,6 +31522,9 @@ export function App() {
           : null
       }
       onDropFiles={(files) => void handleDroppedFiles(files)}
+      onRefuseDroppedFiles={() =>
+        setStatus('Finish or cancel the open dialog, then drop the file again.')
+      }
       sidebarWidth={sidebarWidth}
       assistantWidth={assistantWidth}
       sidebarResizer={
@@ -33688,6 +33691,7 @@ export function App() {
             warningCount={diagnostics.length}
             documentVersion={doc.version}
             saveState={presentedSaveState}
+            orbitMode={appSettings.viewport.orbitMode}
             repeatingToast={statusRepeatedByToast(toast)}
             searchBar={
               <CommandBar
