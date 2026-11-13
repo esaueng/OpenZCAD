@@ -5,6 +5,7 @@ import {
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
+import { expectPassedThrough } from './support/failed-pass-through';
 import type { BodyRepresentation, ProjectDocument } from '@openzcad/shared';
 import { planFaceOffset } from '../apps/web/src/lib/interaction/faceOffsetPlan';
 import { staleGearReferenceDocument } from './support/stale-gear-reference';
@@ -113,7 +114,7 @@ describe(
         const rebuilt = await adapter.syncDocument(broken);
         expect(rebuilt.warnings).toHaveLength(1);
         expect(rebuilt.warnings[0]).toContain('Gear face is stale:');
-        expect(rebuilt.bodyRepresentations[gear.bodyId!]).toBeUndefined();
+        expectPassedThrough(rebuilt, gear.bodyId!, gear.data.targetBodyId!);
       }
     );
 
@@ -132,7 +133,7 @@ describe(
       );
       expect(rebuilt.warnings).toHaveLength(1);
       expect(rebuilt.warnings[0]).toContain('A selected face no longer exists');
-      expect(rebuilt.bodyRepresentations[gear.bodyId!]).toBeUndefined();
+      expectPassedThrough(rebuilt, gear.bodyId!, gear.data.targetBodyId!);
     });
   }
 );

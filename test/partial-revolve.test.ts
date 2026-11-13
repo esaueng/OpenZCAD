@@ -12,6 +12,7 @@ import {
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
+import { expectPassedThrough } from './support/failed-pass-through';
 import { inspectTriangleMeshClosure } from '../packages/kernel-adapter/src/boolean-result-validation';
 import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
 import { buildDocumentHistory } from '../packages/kernel-adapter/src/exact-build-loop';
@@ -673,9 +674,9 @@ describe('partial revolve and edge modifiers', () => {
         expect(derived.warnings[0]).toContain('This body is a partial revolve');
         expect(derived.warnings[0]).not.toContain('Try a smaller radius');
         expect(derived.warnings[0]).not.toContain('no longer exists');
-        expect(derived.bodyRepresentations[candidate.bodyId]).toBeUndefined();
+        // The refused fillet hands the wedge through unchanged (ADR-017).
+        expectPassedThrough(derived, candidate.bodyId, bodyId);
         const original = derived.bodyRepresentations[bodyId]!;
-        expect(original.consumed).toBe(false);
         expect(
           Math.abs(original.volume - partialRevolveVolume(90, 1))
         ).toBeLessThan(1e-9);
@@ -710,9 +711,10 @@ describe('partial revolve and edge modifiers', () => {
         refused += 1;
         expect(derived.warnings).toHaveLength(1);
         expect(derived.warnings[0]).toContain('This body is a partial revolve');
-        expect(derived.bodyRepresentations[resultId]).toBeUndefined();
-        expect(derived.bodyRepresentations[bodyId]!.consumed).toBe(false);
-        expect(derived.bodyRepresentations[bodyId]!.volume).toBeCloseTo(
+        // Never a doubled wedge: the refused fillet's result is the wedge
+        // itself, once, standing in for it (ADR-017, November 2026).
+        expectPassedThrough(derived, resultId, bodyId);
+        expect(derived.bodyRepresentations[resultId]!.volume).toBeCloseTo(
           WEDGE,
           9
         );

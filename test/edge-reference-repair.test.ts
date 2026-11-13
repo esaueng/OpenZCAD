@@ -12,6 +12,7 @@ import {
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
+import { expectPassedThrough } from './support/failed-pass-through';
 import {
   toUserId,
   type BodyId,
@@ -82,6 +83,7 @@ describe('edge reference repair', { timeout: 120_000 }, () => {
   async function hashOnlyFillet(radius = 15): Promise<{
     document: ProjectDocument;
     filletBodyId: BodyId;
+    cylinderBodyId: BodyId;
     filletFeatureId: string;
     edgeHashes: number[];
   }> {
@@ -104,6 +106,7 @@ describe('edge reference repair', { timeout: 120_000 }, () => {
     return {
       document: filleted.document,
       filletBodyId: filleted.bodyId,
+      cylinderBodyId: bodyId,
       filletFeatureId: feature.featureId,
       edgeHashes
     };
@@ -175,7 +178,9 @@ describe('edge reference repair', { timeout: 120_000 }, () => {
     const resized = await adapter.syncDocument(withRadius(repaired, 14));
     const { document: freshDoc, bodyId: freshBody } = cylinderDocument(14, 28);
     const freshBase = await adapter.syncDocument(freshDoc);
-    const freshEdges = selectableEdges(freshBase.bodyRepresentations[freshBody]);
+    const freshEdges = selectableEdges(
+      freshBase.bodyRepresentations[freshBody]
+    );
     const freshFillet = filletEdges(freshDoc, {
       name: 'Fresh fillet',
       targetBodyId: freshBody,
@@ -223,14 +228,12 @@ describe('edge reference repair', { timeout: 120_000 }, () => {
       feature.data.featureKind === 'fillet' && feature.data.edgeReferences
     ).toHaveLength(2);
 
-    const after = await adapter.syncDocument(
-      withRadius(manager.document, 14)
-    );
+    const after = await adapter.syncDocument(withRadius(manager.document, 14));
     expect(after.warnings).toEqual([]);
   });
 
   it('publishes no repair for a document already broken at rest', async () => {
-    const { document, filletBodyId } = await hashOnlyFillet();
+    const { document, filletBodyId, cylinderBodyId } = await hashOnlyFillet();
     // Saved mid-failure: the radius moved while the fillet was hash-only.
     const broken = withRadius(document, 14);
     const derived = await adapter.syncDocument(broken);
@@ -238,7 +241,7 @@ describe('edge reference repair', { timeout: 120_000 }, () => {
       'Feature "Round Outside Edges": A selected edge no longer exists. ' +
         'Re-select the edges and re-create this feature.'
     ]);
-    expect(derived.bodyRepresentations[filletBodyId]).toBeUndefined();
+    expectPassedThrough(derived, filletBodyId, cylinderBodyId);
     expect(derived.referenceRepairs).toBeUndefined();
   });
 

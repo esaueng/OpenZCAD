@@ -611,7 +611,17 @@ export function moveFacesJournalFaceMap(
     const faceMap = new Map<number, number>();
     const conflictedSources = new Set<number>();
     if (read.status === 'inferred') {
-      return { faceMap, conflictedSources };
+      return {
+        faceMap,
+        conflictedSources,
+        inferred: true,
+        retiredPlacements: retiredPositionalFaceMap(
+          kernel,
+          op,
+          sourceFaces,
+          resultFaces
+        )
+      };
     }
     for (const source of sourceFaces) {
       const images = read.images.get(source);
@@ -625,6 +635,42 @@ export function moveFacesJournalFaceMap(
   } catch {
     return null;
   }
+}
+
+/**
+ * Where the retired move-face reader (2026-11-03 to 2026-11-12) put each
+ * source face's name: output `i` read as source face `i`, inferred bindings
+ * included. It is NOT history and never names anything. A document saved in
+ * that window may store a name together with the witness of the face that
+ * reader put it on, so a predicted-carrier name is withheld wherever this
+ * reading disagrees with it (ADR-013, H01/M07 amendment). Empty when that
+ * reader would have published no relation at all.
+ */
+export function retiredPositionalFaceMap(
+  kernel: RemusKernel,
+  op: number,
+  sourceFaces: readonly number[],
+  resultFaces: readonly number[]
+): ReadonlyMap<number, number> {
+  const faceMap = new Map<number, number>();
+  try {
+    if (boundFaceOutput(kernel, op, sourceFaces.length) !== null) {
+      return faceMap;
+    }
+    const results = new Set(resultFaces);
+    const claimants = new Map<number, number[]>();
+    sourceFaces.forEach((source, index) => {
+      const handle = boundFaceOutput(kernel, op, index);
+      if (handle !== null && results.has(handle))
+        claimants.set(handle, [...(claimants.get(handle) ?? []), source]);
+    });
+    for (const [result, sources] of claimants) {
+      if (sources.length === 1) faceMap.set(sources[0]!, result);
+    }
+  } catch {
+    faceMap.clear();
+  }
+  return faceMap;
 }
 
 export function samePoint(

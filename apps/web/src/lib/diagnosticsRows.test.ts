@@ -95,6 +95,31 @@ describe('presented diagnostics', () => {
         'Union does not fill empty space. The selected solids form 2 disconnected groups.'
     });
   });
+
+  it('lists a forked history on the later branch (ADR-025)', () => {
+    const message =
+      'Feature "Offset face": Builds on an earlier state of “Union 1” that “Fillet 3” already replaced; this branches the history.';
+    expect(
+      presentedDiagnostics(
+        [message],
+        [
+          {
+            featureId,
+            featureName: 'Offset face',
+            message,
+            kind: 'history-fork'
+          }
+        ]
+      )
+    ).toEqual([
+      {
+        key: message,
+        featureName: 'Offset face',
+        message:
+          'Builds on an earlier state of “Union 1” that “Fillet 3” already replaced; this branches the history.'
+      }
+    ]);
+  });
 });
 
 describe('presented diagnostics carry the kernel category', () => {

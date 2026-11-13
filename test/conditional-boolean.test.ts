@@ -7,6 +7,7 @@ import {
 } from '@openzcad/document-core';
 import { createExactKernelAdapter } from '@openzcad/kernel-adapter/exact';
 import { toUserId } from '@openzcad/shared';
+import { expectPassedThrough } from './support/failed-pass-through';
 
 it('replays an exact identity at the source value and refuses unsupported parameter states', async () => {
   const adapter = await createExactKernelAdapter();
@@ -61,8 +62,9 @@ it('replays an exact identity at the source value and refuses unsupported parame
     expect(
       refused.warnings.some((w) => w.includes('supported values: 46, 50'))
     ).toBe(true);
-    expect(refused.bodyRepresentations[result.bodyId]).toBeUndefined();
-    expect(refused.bodyRepresentations[source]?.consumed).toBe(false);
+    // The refused cut hands its target through unchanged (ADR-017).
+    expectPassedThrough(refused, result.bodyId, source);
+    expect(refused.bodyRepresentations[tool]?.consumed).toBe(false);
   } finally {
     adapter.dispose();
   }

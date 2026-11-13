@@ -10,6 +10,7 @@ import {
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
+import { expectPassedThrough } from './support/failed-pass-through';
 
 /**
  * What a user sees when the exact pipeline will not do their boolean.
@@ -83,8 +84,10 @@ describe('a union the exact pipeline cannot build', () => {
       code: 'exact_only_unattainable'
     });
 
-    // The refusal costs the user nothing: their two bodies are still there.
-    expect(derived.bodyRepresentations[first]?.consumed).toBe(false);
+    // The refusal costs the user nothing: their two bodies are still there,
+    // the first standing in for the refused union (ADR-017, November 2026)
+    // and the tool unconsumed beside it.
+    expectPassedThrough(derived, united.bodyOrder.at(-1)!, first);
     expect(derived.bodyRepresentations[offsetBody]?.consumed).toBe(false);
   }, 120_000);
 

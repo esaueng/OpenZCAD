@@ -57,6 +57,8 @@ test('suppresses features and rolls the timeline back as one undoable edit', { t
   await box.getByRole('button', { name: 'Suppress Box' }).click();
   await expect(box).toContainText('suppressed');
   await expectBodyCount(page, 1);
+  // The state is said beside the name; the value keeps its place.
+  await expect(box.locator('.history-row-value')).toHaveText(/\d/);
 
   await box.getByRole('button', { name: 'Resume Box' }).click();
   await expect(box).not.toContainText('suppressed');
@@ -69,6 +71,7 @@ test('suppresses features and rolls the timeline back as one undoable edit', { t
   await expect(rollback).toHaveAttribute('aria-pressed', 'true');
   // Rolled back reads as paused; suppressed is kept for a manual toggle.
   await expect(cylinder).toContainText('paused');
+  await expect(cylinder.locator('.history-row-value')).toHaveText(/\d/);
   await expectBodyCount(page, 1);
 
   // The viewer bar's Undo: the suppress toast carries an Undo of its own.

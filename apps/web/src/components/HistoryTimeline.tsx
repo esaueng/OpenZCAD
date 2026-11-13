@@ -10,31 +10,40 @@ import {
   type RefObject,
   type SetStateAction,
   type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode
 } from 'react';
 import type { LocalHistoryAppend } from '../lib/localHistoryAppend';
 import {
   AlertTriangle,
+  ArrowDown,
+  ArrowUpFromDot,
   Axis3d,
   Box,
+  BrushCleaning,
   CirclePause,
   CirclePlay,
-  Combine,
+  Cog,
   Cone,
   Cylinder,
+  Diameter,
+  Drill,
+  Eraser,
   EyeOff,
   FileBox,
+  FlipHorizontal2,
   Globe,
   GripVertical,
   History,
-  Layers,
   MoreHorizontal,
   Move3d,
   PenLine,
-  RotateCw,
+  Radius,
   Search,
-  SquareDashed,
+  SquaresIntersect,
+  SquaresSubtract,
+  SquaresUnite,
   Torus,
   Trash2,
   X
@@ -51,59 +60,121 @@ import type {
   UnitSystem
 } from '@openzcad/shared';
 import { useArrivals } from '../hooks/useArrivals';
-import { featureNeedsRepair } from '../lib/featureRepair';
+import {
+  featureNeedsRepair,
+  historyFailureTier,
+  type HistoryFailureTier
+} from '../lib/featureRepair';
 import { featureValueSummary } from '../lib/featureSummary';
 import { FEATURE_KIND_LABELS } from '../lib/model';
+import {
+  chamferGlyph,
+  circularPatternGlyph,
+  draftGlyph,
+  extrudeGlyph,
+  gridPatternGlyph,
+  helicalSweepGlyph,
+  linearPatternGlyph,
+  loftGlyph,
+  planeGlyph,
+  revolveGlyph,
+  shellGlyph,
+  solidOffsetGlyph,
+  splitGlyph,
+  sweepGlyph,
+  thickenGlyph,
+  threadGlyph
+} from '../lib/toolIcons';
 
 // Row icons are constant elements: a commit re-renders every row of a long
 // history, and React skips an element it has already reconciled only when it
 // is the same object. Building them per row per render was a measurable part
-// of each edit's main-thread time on a 200-feature history.
+// of each edit's main-thread time on a 200-feature history. Each step wears
+// the glyph of the command that made it, as the tool and selection rails
+// draw it, so a run of fillets and face offsets is told apart at a glance.
 const PRIMITIVE_ICONS = {
-  box: <Box size={13} aria-hidden="true" />,
-  cylinder: <Cylinder size={13} aria-hidden="true" />,
-  sphere: <Globe size={13} aria-hidden="true" />,
-  cone: <Cone size={13} aria-hidden="true" />,
-  torus: <Torus size={13} aria-hidden="true" />
+  box: <Box size={14} aria-hidden="true" />,
+  cylinder: <Cylinder size={14} aria-hidden="true" />,
+  sphere: <Globe size={14} aria-hidden="true" />,
+  cone: <Cone size={14} aria-hidden="true" />,
+  torus: <Torus size={14} aria-hidden="true" />
 } as const;
-const SKETCH_ICON = <PenLine size={13} aria-hidden="true" />;
-const EXTRUDE_ICON = <Layers size={13} aria-hidden="true" />;
-const REVOLVE_ICON = <RotateCw size={13} aria-hidden="true" />;
-const BOOLEAN_ICON = <Combine size={13} aria-hidden="true" />;
-const TRANSFORM_ICON = <Move3d size={13} aria-hidden="true" />;
-const DATUM_PLANE_ICON = <SquareDashed size={13} aria-hidden="true" />;
-const DATUM_AXIS_ICON = <Axis3d size={13} aria-hidden="true" />;
-const OTHER_FEATURE_ICON = <FileBox size={13} aria-hidden="true" />;
+const FILLET_ICON = <Radius size={14} aria-hidden="true" />;
+const KIND_ICONS: Partial<Record<FeatureNode['featureKind'], ReactNode>> = {
+  sketch: <PenLine size={14} aria-hidden="true" />,
+  extrude: extrudeGlyph,
+  revolve: revolveGlyph,
+  loft: loftGlyph,
+  sweep: sweepGlyph,
+  'helical-sweep': helicalSweepGlyph,
+  transform: <Move3d size={14} aria-hidden="true" />,
+  mirror: <FlipHorizontal2 size={14} aria-hidden="true" />,
+  split: splitGlyph,
+  hole: <Drill size={14} aria-hidden="true" />,
+  gear: <Cog size={14} aria-hidden="true" />,
+  thread: threadGlyph,
+  shell: shellGlyph,
+  'solid-offset': solidOffsetGlyph,
+  draft: draftGlyph,
+  thicken: thickenGlyph,
+  fillet: FILLET_ICON,
+  chamfer: chamferGlyph,
+  'datum-plane': planeGlyph,
+  'datum-axis': <Axis3d size={14} aria-hidden="true" />
+};
+const BOOLEAN_ICONS: Record<string, ReactNode> = {
+  union: <SquaresUnite size={14} aria-hidden="true" />,
+  subtract: <SquaresSubtract size={14} aria-hidden="true" />,
+  intersect: <SquaresIntersect size={14} aria-hidden="true" />
+};
+const PATTERN_ICONS: Record<string, ReactNode> = {
+  linear: linearPatternGlyph,
+  circular: circularPatternGlyph,
+  grid: gridPatternGlyph
+};
+const OFFSET_FACE_ICON = <ArrowUpFromDot size={14} aria-hidden="true" />;
+const RESIZE_DIAMETER_ICON = <Diameter size={14} aria-hidden="true" />;
+const DIRECT_EDIT_ICONS: Record<string, ReactNode> = {
+  'offset-face': OFFSET_FACE_ICON,
+  'set-face-distance': OFFSET_FACE_ICON,
+  'resize-cylindrical-face': RESIZE_DIAMETER_ICON,
+  'resize-through-hole': RESIZE_DIAMETER_ICON,
+  'resize-imported-blind-hole': RESIZE_DIAMETER_ICON,
+  'resize-imported-counterbore': RESIZE_DIAMETER_ICON,
+  'resize-imported-countersink': RESIZE_DIAMETER_ICON,
+  'resize-blend': FILLET_ICON,
+  'remove-face-feature': <Eraser size={14} aria-hidden="true" />,
+  'remove-blends': <BrushCleaning size={14} aria-hidden="true" />
+};
+const OTHER_FEATURE_ICON = <FileBox size={14} aria-hidden="true" />;
 const GRIP_ICON = <GripVertical size={12} aria-hidden="true" />;
 const ROW_ALERT_ICON = <AlertTriangle size={11} aria-hidden="true" />;
+const ROOT_FAILURE_ICON = <AlertTriangle size={13} aria-hidden="true" />;
+const DOWNSTREAM_FAILURE_ICON = <AlertTriangle size={12} aria-hidden="true" />;
+const SUPPRESSED_STATUS_ICON = <CirclePause size={13} aria-hidden="true" />;
 const RESUME_ICON = <CirclePlay size={12} aria-hidden="true" />;
 const SUPPRESS_ICON = <CirclePause size={12} aria-hidden="true" />;
 const ROLLBACK_ICON = <History size={12} aria-hidden="true" />;
 const MORE_ICON = <MoreHorizontal size={12} aria-hidden="true" />;
 const HIDDEN_ICON = <EyeOff size={12} aria-hidden="true" />;
+const ROLLED_BACK_ICON = <CirclePause size={13} aria-hidden="true" />;
+const LATEST_ICON = <ArrowDown size={12} aria-hidden="true" />;
+const NO_LINEAGE: ReadonlyMap<FeatureId, FeatureNode> = new Map();
 
-function featureIcon(feature: FeatureNode) {
-  if (feature.data.featureKind === 'primitive') {
-    const icon = PRIMITIVE_ICONS[feature.data.primitiveKind];
-    if (icon) return icon;
-  }
-  switch (feature.featureKind) {
-    case 'sketch':
-      return SKETCH_ICON;
-    case 'extrude':
-      return EXTRUDE_ICON;
-    case 'revolve':
-      return REVOLVE_ICON;
+/** The glyph of the command that made `feature`, as the rails draw it. */
+export function featureIcon(feature: FeatureNode): ReactNode {
+  const data = feature.data;
+  switch (data.featureKind) {
+    case 'primitive':
+      return PRIMITIVE_ICONS[data.primitiveKind] ?? OTHER_FEATURE_ICON;
     case 'boolean':
-      return BOOLEAN_ICON;
-    case 'transform':
-      return TRANSFORM_ICON;
-    case 'datum-plane':
-      return DATUM_PLANE_ICON;
-    case 'datum-axis':
-      return DATUM_AXIS_ICON;
+      return BOOLEAN_ICONS[data.operation] ?? OTHER_FEATURE_ICON;
+    case 'pattern':
+      return PATTERN_ICONS[data.patternKind] ?? OTHER_FEATURE_ICON;
+    case 'direct-edit':
+      return DIRECT_EDIT_ICONS[data.operation?.kind] ?? OTHER_FEATURE_ICON;
     default:
-      return OTHER_FEATURE_ICON;
+      return KIND_ICONS[feature.featureKind] ?? OTHER_FEATURE_ICON;
   }
 }
 
@@ -143,6 +214,19 @@ export interface HistoryTimelineProps {
   representations: Record<string, BodyRepresentation>;
   /** Features the current rebuild reported as failed or refused. */
   failedFeatureIds?: ReadonlySet<FeatureId>;
+  /**
+   * Every feature with a failed step upstream, each with the earliest such
+   * step (`failureLineage`). A failed row without an entry is a first
+   * failure; one with an entry failed after it; a built row with an entry
+   * stands on a failed step.
+   */
+  failureLineage?: ReadonlyMap<FeatureId, FeatureNode>;
+  /**
+   * Brings a row into view from outside the list (the header's repair
+   * chip). A filter that hides the row is cleared first. A new `seq` asks
+   * again for the same row.
+   */
+  revealRequest?: HistoryRevealRequest | null;
   /**
    * The steps related to the current selection, or null with nothing
    * selected. The find bar's Related toggle keeps only these rows.
@@ -188,7 +272,8 @@ export interface HistoryTimelineProps {
   /**
    * An exact operation is still running. A reorder started now would be
    * refused as busy, and repeated arrow presses would leave an order nobody
-   * chose, so the grips hold still until it finishes.
+   * chose, so the grips hold still until it finishes. Resume waits too: its
+   * own check of the paused features is one of those operations.
    */
   reorderBusy?: boolean;
   /** Renames a feature in place. Without it the row offers no rename. */
@@ -199,6 +284,11 @@ export interface HistoryTimelineProps {
    * selects alone.
    */
   onDeleteFeatures?(featureIds: readonly FeatureId[]): void;
+}
+
+export interface HistoryRevealRequest {
+  nodeId: string;
+  seq: number;
 }
 
 /**
@@ -253,12 +343,10 @@ function markedName(name: string, query: string): ReactNode {
  */
 function FeatureRenameField({
   feature,
-  icon,
   onCommit,
   onDone
 }: {
   feature: FeatureNode;
-  icon: ReactNode;
   onCommit(name: string): void;
   onDone(refocus: boolean): void;
 }) {
@@ -278,8 +366,8 @@ function FeatureRenameField({
     onDone(refocus);
   }
   return (
+    // The step's icon stays in the grip beside it.
     <span className="feature-row-rename">
-      <span className="feature-icon">{icon}</span>
       <input
         ref={inputRef}
         type="text"
@@ -324,6 +412,7 @@ interface HistoryRowContext {
   extendBatch(feature: FeatureNode, range: boolean): void;
   clearBatch(): void;
   selectHistoryFeature(id: string): void;
+  activateRow(feature: FeatureNode, event: ReactMouseEvent<HTMLElement>): void;
   rollBackAfter(feature: FeatureNode): void;
   onFeatureContextMenu: HistoryTimelineProps['onFeatureContextMenu'];
   onReorderFeature: HistoryTimelineProps['onReorderFeature'];
@@ -333,18 +422,83 @@ interface HistoryRowContext {
   onToggleBodyVisibility: HistoryTimelineProps['onToggleBodyVisibility'];
 }
 
+/**
+ * The one state a row's rail dot, status glyph and spoken status carry, in
+ * precedence order. Interaction states (selected, batch, editing) layer on
+ * top in CSS.
+ */
+type HistoryRowStatus =
+  | 'suppressed'
+  | 'paused'
+  | 'preparing'
+  | HistoryFailureTier
+  | 'broken-projection'
+  | null;
+
+/** What a screen reader hears after the name, as the words the rows used to show. */
+const STATUS_WORDS: Record<
+  NonNullable<HistoryRowStatus>,
+  { word: string; qualifier?: string }
+> = {
+  suppressed: { word: 'suppressed' },
+  paused: { word: 'paused' },
+  preparing: { word: 'preparing' },
+  root: { word: 'needs repair', qualifier: 'first failure' },
+  downstream: { word: 'needs repair', qualifier: 'after an earlier failure' },
+  'built-on-failed': { word: 'built on a failed step' },
+  'broken-projection': { word: 'broken projection' }
+};
+
+const STATUS_CLASSES: Record<NonNullable<HistoryRowStatus>, string> = {
+  suppressed: '',
+  paused: '',
+  preparing: ' is-preparing',
+  root: ' is-failure-root',
+  downstream: ' is-failure-downstream',
+  'built-on-failed': ' is-built-on-failed',
+  'broken-projection': ''
+};
+
+/** The status as the row's tooltip says it, after the value. */
+function statusNote(
+  status: HistoryRowStatus,
+  failureRoot: string | null
+): string {
+  switch (status) {
+    case 'suppressed':
+      return ', suppressed';
+    case 'paused':
+      return ', paused by rollback';
+    case 'preparing':
+      return ', preparing';
+    case 'root':
+      return ', needs repair: the first failure, fix this one first';
+    case 'downstream':
+      return `, needs repair after “${failureRoot}” failed`;
+    case 'built-on-failed':
+      return `, built on “${failureRoot}”, which failed: this step uses that step's input unchanged`;
+    case 'broken-projection':
+      return ', a linked projection lost its source edge';
+    default:
+      return '';
+  }
+}
+
 interface HistoryRowProps {
   /** Rendered for its name, kind and ids; handlers act on the latest node. */
   feature: FeatureNode;
+  icon: ReactNode;
   index: number;
   className: string;
   delay: number;
+  /** The value summary. Never replaced by a status: that has its own slot. */
   value: string;
+  status: HistoryRowStatus;
+  /** The first failure this row's failure or build follows from, or null. */
+  failureRoot: string | null;
   selected: boolean;
   inBatch: boolean;
   consumed: boolean;
-  failed: boolean;
-  projectionBroken: boolean;
   refusalTitle: string | null;
   refusalMessage: string | null;
   suppressed: boolean;
@@ -371,12 +525,55 @@ function sameHistoryRow(a: HistoryRowProps, b: HistoryRowProps): boolean {
       left.featureId === right.featureId &&
       left.name === right.name &&
       left.featureKind === right.featureKind &&
-      left.bodyId === right.bodyId &&
-      left.data.featureKind === right.data.featureKind &&
-      (left.data.featureKind !== 'primitive' ||
-        (right.data.featureKind === 'primitive' &&
-          left.data.primitiveKind === right.data.primitiveKind)))
+      left.bodyId === right.bodyId)
   );
+}
+
+/** The status glyph after the value, or null when the state has none. */
+function statusGlyph(status: HistoryRowStatus): ReactNode {
+  switch (status) {
+    case 'root':
+      return (
+        <span
+          className="feature-flag error history-row-status is-root"
+          title="Feature failed to build"
+        >
+          {ROOT_FAILURE_ICON}
+        </span>
+      );
+    case 'downstream':
+      return (
+        <span
+          className="feature-flag error history-row-status is-downstream"
+          title="Feature failed to build"
+        >
+          {DOWNSTREAM_FAILURE_ICON}
+        </span>
+      );
+    case 'suppressed':
+      return (
+        <span className="history-row-status is-suppressed">
+          {SUPPRESSED_STATUS_ICON}
+        </span>
+      );
+    case 'preparing':
+      return (
+        <span className="history-row-status">
+          <span className="history-row-spinner spin" />
+        </span>
+      );
+    case 'broken-projection':
+      return (
+        <span
+          className="feature-flag error history-row-status"
+          title="A linked projection lost its source edge. Open the sketch to re-pick or unlink it."
+        >
+          {ROW_ALERT_ICON}
+        </span>
+      );
+    default:
+      return null;
+  }
 }
 
 // One history step. Memoized: a long history re-rendered every row on each
@@ -384,15 +581,16 @@ function sameHistoryRow(a: HistoryRowProps, b: HistoryRowProps): boolean {
 // main-thread time on a 200-step history.
 const HistoryRow = memo(function HistoryRow({
   feature,
+  icon,
   index,
   className,
   delay,
   value,
+  status,
+  failureRoot,
   selected,
   inBatch,
   consumed,
-  failed,
-  projectionBroken,
   refusalTitle,
   refusalMessage,
   suppressed,
@@ -405,13 +603,14 @@ const HistoryRow = memo(function HistoryRow({
   reorderBusy,
   context
 }: HistoryRowProps) {
+  const spoken = status ? STATUS_WORDS[status] : null;
   return (
     <div
       key={feature.id}
       data-node-id={feature.id}
       data-history-index={index}
       style={{ '--history-delay': `${delay}ms` } as CSSProperties}
-      className={className}
+      className={`${className}${status ? STATUS_CLASSES[status] : ''}`}
       onContextMenu={(event) => {
         event.preventDefault();
         const ctx = context.current!;
@@ -448,6 +647,8 @@ const HistoryRow = memo(function HistoryRow({
       }}
     >
       <span className="history-dot" aria-hidden="true" />
+      {/* The step's icon at rest, the grip under the pointer: one 24px slot
+          that reorders on a drag and selects the row on a plain click. */}
       <button
         type="button"
         className="row-action feature-row-grip"
@@ -466,6 +667,13 @@ const HistoryRow = memo(function HistoryRow({
         // Not `disabled`: that would drop keyboard focus mid-press.
         aria-disabled={reorderBusy || undefined}
         draggable={!filtering && !reorderBusy}
+        onClick={(event) => {
+          // A drag never clicks; a press that did not move selects the
+          // row, as a click on its icon always has. Keyboard presses
+          // (detail 0) keep to the grip: Enter is not a selection here.
+          if (event.detail === 0) return;
+          context.current!.activateRow(feature, event);
+        }}
         onDragStart={(event) => {
           event.dataTransfer.effectAllowed = 'move';
           event.dataTransfer.setData('text/plain', feature.featureId);
@@ -508,12 +716,12 @@ const HistoryRow = memo(function HistoryRow({
           ctx.onReorderFeature(feature.featureId, target);
         }}
       >
-        {GRIP_ICON}
+        <span className="feature-icon">{icon}</span>
+        <span className="feature-row-grip-glyph">{GRIP_ICON}</span>
       </button>
       {renaming ? (
         <FeatureRenameField
           feature={feature}
-          icon={featureIcon(feature)}
           onCommit={(name) =>
             context.current!.onRenameFeature?.(feature.featureId, name)
           }
@@ -542,52 +750,25 @@ const HistoryRow = memo(function HistoryRow({
             if (context.current!.canDelete && event.shiftKey)
               event.preventDefault();
           }}
-          onClick={(event) => {
-            // Ahead of the multi-click guard: quick Shift- or
-            // Ctrl-clicks down the list count up `detail` too.
-            const ctx = context.current!;
-            if (
-              ctx.canDelete &&
-              (event.shiftKey || event.metaKey || event.ctrlKey)
-            ) {
-              ctx.extendBatch(ctx.latest(feature), event.shiftKey);
-              // Safari does not focus a clicked button, and Delete
-              // has to reach the list rather than the workspace.
-              event.currentTarget.focus();
-              return;
-            }
-            if (ctx.batchCount > 0) ctx.clearBatch();
-            ctx.batchAnchor.current = feature.featureId;
-            // A pointer's first click: Enter and Space report 0.
-            if (event.detail === 1) {
-              holdMultiClickToRow(event.currentTarget);
-            }
-            // The rest of a double-click is the same gesture, not a
-            // second press: selecting a selected row clears it, so
-            // the second click closed the edit card the first had
-            // opened — whenever the row stayed under the pointer, as
-            // it does now that the card stands in its own lane.
-            if (event.detail > 1) return;
-            ctx.selectHistoryFeature(feature.id);
-          }}
+          onClick={(event) => context.current!.activateRow(feature, event)}
           // Every row used to announce the same generic kind label, so
           // a history read aloud was a list of identical items. The
           // feature's own name comes first, as on screen.
           // The value beside the name can be cut short in a narrow
           // panel, and fades for the row's actions on hover: the
-          // tooltip carries it whole.
-          title={`${feature.name} — ${FEATURE_KIND_LABELS[feature.featureKind]}${value ? ` (${value})` : ''}${consumed ? ', combined into a later feature' : ''}, click to edit`}
+          // tooltip carries it whole, and the status with its cause.
+          title={`${feature.name} — ${FEATURE_KIND_LABELS[feature.featureKind]}${value ? ` (${value})` : ''}${consumed ? ', combined into a later feature' : ''}${statusNote(status, failureRoot)}, click to edit`}
         >
-          <span className="feature-icon">{featureIcon(feature)}</span>
           <span className="feature-name">
             {markedName(feature.name, needle)}
           </span>
-          {failed && (
-            <span
-              className="feature-flag error"
-              title="Feature failed to build"
-            >
-              {ROW_ALERT_ICON}
+          {spoken && (
+            // After the name, so the row's text and name still start
+            // with it; the words the row used to show, spoken only.
+            <span className="visually-hidden">
+              {' '}
+              <span>{spoken.word}</span>
+              {spoken.qualifier ? `, ${spoken.qualifier}` : ''}
             </span>
           )}
           {refusalTitle !== null && (
@@ -600,69 +781,62 @@ const HistoryRow = memo(function HistoryRow({
               <span>edit not applied</span>
             </span>
           )}
-          {projectionBroken && !failed && (
-            <span
-              className="feature-flag error"
-              title="A linked projection lost its source edge. Open the sketch to re-pick or unlink it."
-            >
-              {ROW_ALERT_ICON}
-            </span>
-          )}
         </button>
       )}
       <span className="history-row-tail">
         <span className="history-row-value mono">{value}</span>
-        <span className="history-row-actions">
-          <button
-            type="button"
-            className={`row-suppression${suppressed ? ' is-suppressed' : ''}`}
-            title={
-              suppressed ? `Resume ${feature.name}` : `Suppress ${feature.name}`
-            }
-            aria-label={
-              suppressed ? `Resume ${feature.name}` : `Suppress ${feature.name}`
-            }
-            aria-pressed={suppressed}
-            onClick={() => {
-              const ctx = context.current!;
-              ctx.onToggleFeatureSuppression(ctx.latest(feature));
-            }}
-          >
-            {suppressed ? RESUME_ICON : SUPPRESS_ICON}
-          </button>
-          <button
-            type="button"
-            className={`row-rollback${rollbackActive ? ' is-active' : ''}`}
-            title={`Roll back history after ${feature.name}`}
-            aria-label={`Roll back history after ${feature.name}`}
-            aria-pressed={rollbackActive}
-            onClick={() => {
-              const ctx = context.current!;
-              ctx.rollBackAfter(ctx.latest(feature));
-            }}
-          >
-            {ROLLBACK_ICON}
-          </button>
-          <button
-            type="button"
-            className="row-more"
-            title="More actions"
-            aria-label={`More actions for ${feature.name}`}
-            aria-haspopup="menu"
-            onClick={(event) => {
-              const box = event.currentTarget.getBoundingClientRect();
-              const ctx = context.current!;
-              const latest = ctx.latest(feature);
-              ctx.onFeatureContextMenu(
-                { clientX: box.left, clientY: box.bottom + 2 },
-                latest,
-                ctx.rowActions(latest, index)
-              );
-            }}
-          >
-            {MORE_ICON}
-          </button>
-        </span>
+        {statusGlyph(status)}
+      </span>
+      <span className="history-row-actions">
+        <button
+          type="button"
+          className={`row-suppression${suppressed ? ' is-suppressed' : ''}`}
+          title={
+            suppressed ? `Resume ${feature.name}` : `Suppress ${feature.name}`
+          }
+          aria-label={
+            suppressed ? `Resume ${feature.name}` : `Suppress ${feature.name}`
+          }
+          aria-pressed={suppressed}
+          onClick={() => {
+            const ctx = context.current!;
+            ctx.onToggleFeatureSuppression(ctx.latest(feature));
+          }}
+        >
+          {suppressed ? RESUME_ICON : SUPPRESS_ICON}
+        </button>
+        <button
+          type="button"
+          className={`row-rollback${rollbackActive ? ' is-active' : ''}`}
+          title={`Roll back history after ${feature.name}`}
+          aria-label={`Roll back history after ${feature.name}`}
+          aria-pressed={rollbackActive}
+          onClick={() => {
+            const ctx = context.current!;
+            ctx.rollBackAfter(ctx.latest(feature));
+          }}
+        >
+          {ROLLBACK_ICON}
+        </button>
+        <button
+          type="button"
+          className="row-more"
+          title="More actions"
+          aria-label={`More actions for ${feature.name}`}
+          aria-haspopup="menu"
+          onClick={(event) => {
+            const box = event.currentTarget.getBoundingClientRect();
+            const ctx = context.current!;
+            const latest = ctx.latest(feature);
+            ctx.onFeatureContextMenu(
+              { clientX: box.left, clientY: box.bottom + 2 },
+              latest,
+              ctx.rowActions(latest, index)
+            );
+          }}
+        >
+          {MORE_ICON}
+        </button>
       </span>
       {hidden && (
         <button
@@ -781,6 +955,8 @@ export function HistoryTimeline({
   localAppend = null,
   representations,
   failedFeatureIds,
+  failureLineage,
+  revealRequest = null,
   relatedFeatureIds = null,
   geometryPending = false,
   geometryPendingShown = geometryPending,
@@ -811,6 +987,7 @@ export function HistoryTimeline({
   const [dropFeatureId, setDropFeatureId] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [relatedOnly, setRelatedOnly] = useState(false);
+  const [problemsOnly, setProblemsOnly] = useState(false);
   // The multi-row selection, kept here rather than in the workspace: the
   // viewport and the edit card follow one feature, and a batch only feeds
   // the batch actions. The anchor is where a Shift-click range starts.
@@ -874,9 +1051,17 @@ export function HistoryTimeline({
     const list = listRef.current;
     const host = list?.closest<HTMLElement>('.model-panel-body') ?? list;
     if (!host) return;
+    // How far the list's end lies below the visible part of the panel. The
+    // History details can follow the list in the same scroller, so the
+    // scroller's own end is not the history's: measured from the list, the
+    // floating button never covers a last row already in view.
     const measure = () =>
       setLatestOutOfView(
-        host.scrollHeight - host.clientHeight - host.scrollTop > 24
+        (list && list !== host
+          ? list.getBoundingClientRect().bottom -
+            host.getBoundingClientRect().top -
+            host.clientHeight
+          : host.scrollHeight - host.clientHeight - host.scrollTop) > 24
       );
     measure();
     const resize =
@@ -909,6 +1094,38 @@ export function HistoryTimeline({
   function selectHistoryFeature(id: string) {
     following.current = id === features.at(-1)?.id;
     onSelectFeature(id);
+  }
+
+  /** A pointer press on a row's name or its icon. */
+  function activateRow(
+    feature: FeatureNode,
+    event: ReactMouseEvent<HTMLElement>
+  ) {
+    // Ahead of the multi-click guard: quick Shift- or Ctrl-clicks down the
+    // list count up `detail` too.
+    if (
+      onDeleteFeatures !== undefined &&
+      (event.shiftKey || event.metaKey || event.ctrlKey)
+    ) {
+      extendBatch(featureById.get(feature.id) ?? feature, event.shiftKey);
+      // Safari does not focus a clicked button, and Delete has to reach the
+      // list rather than the workspace.
+      event.currentTarget.focus();
+      return;
+    }
+    if (batchIds.length > 0) clearBatch();
+    batchAnchor.current = feature.featureId;
+    // A pointer's first click: Enter and Space report 0.
+    if (event.detail === 1) {
+      const row = event.currentTarget.closest<HTMLElement>('.feature-row');
+      holdMultiClickToRow(row ?? event.currentTarget);
+    }
+    // The rest of a double-click is the same gesture, not a second press:
+    // selecting a selected row clears it, so the second click closed the
+    // edit card the first had opened — whenever the row stayed under the
+    // pointer, as it does now that the card stands in its own lane.
+    if (event.detail > 1) return;
+    selectHistoryFeature(feature.id);
   }
 
   const featureArrivals = useArrivals(
@@ -946,16 +1163,50 @@ export function HistoryTimeline({
       (bodyId) => representations[bodyId]?.name
     )
   );
+  // Each row's one status, decided before any filter so the Problems
+  // filter keeps exactly the rows that show a problem.
+  const statuses = features.map((feature, index): HistoryRowStatus => {
+    if (isFeatureManuallySuppressed(feature)) return 'suppressed';
+    // At rest a row is paused by its own metadata, not its position: a
+    // paused feature reordered above the handle stays paused. While the
+    // handle is moving, the preview decides.
+    if (
+      previewEnd === null ? isFeatureRollbackSuppressed(feature) : index > end
+    )
+      return 'paused';
+    if (geometryPending) return geometryPendingShown ? 'preparing' : null;
+    const tier = historyFailureTier(
+      feature.featureId,
+      featureNeedsRepair(feature, representations, failedFeatureIds),
+      failureLineage ?? NO_LINEAGE
+    );
+    // A step suppressed by rollback alone is no failure of its own and
+    // stands on nothing while it is out of the build.
+    if (tier === 'built-on-failed' && isFeatureSuppressed(feature)) return null;
+    if (tier) return tier;
+    const sketchId = sketchIdOf(feature);
+    return sketchId !== null && brokenProjectionSketchIds?.has(sketchId)
+      ? 'broken-projection'
+      : null;
+  });
+  const isProblem = (status: HistoryRowStatus) =>
+    status === 'root' ||
+    status === 'downstream' ||
+    status === 'built-on-failed' ||
+    status === 'broken-projection';
+  const problemCount = statuses.filter(isProblem).length;
+  const problems = findOpen && problemsOnly && problemCount > 0;
   const visible = features
     .map((feature, index) => ({ feature, index }))
     .filter(
       ({ feature, index }) =>
         (!related || related.has(feature.featureId)) &&
+        (!problems || isProblem(statuses[index]!)) &&
         (!needle ||
           feature.name.toLowerCase().includes(needle) ||
           (summaries[index] ?? '').toLowerCase().includes(needle))
     );
-  const filtering = needle.length > 0 || related !== null;
+  const filtering = needle.length > 0 || related !== null || problems;
   // Only rows on screen act: a step a filter hides is never deleted unseen.
   const batchIds = onDeleteFeatures
     ? visible
@@ -967,8 +1218,15 @@ export function HistoryTimeline({
     if (!findOpen) {
       setQuery('');
       setRelatedOnly(false);
+      setProblemsOnly(false);
     }
   }, [findOpen]);
+
+  // Once nothing is wrong, Problems turns off for good, as Related does when
+  // the selection clears: the next failure does not silently re-filter.
+  useEffect(() => {
+    if (problemCount === 0) setProblemsOnly(false);
+  }, [problemCount]);
 
   // A step deleted or undone away leaves the batch, so an undo that brings
   // it back does not bring it back selected.
@@ -1061,6 +1319,40 @@ export function HistoryTimeline({
       }
     });
   }, [selectedFeatureNodeId, markProgrammaticScroll]);
+
+  const revealSeq = revealRequest?.seq;
+  // A request made before this list mounted (another project's) is old news.
+  const handledReveal = useRef(revealSeq);
+  useEffect(() => {
+    if (!revealRequest || handledReveal.current === revealRequest.seq) return;
+    handledReveal.current = revealRequest.seq;
+    const id = revealRequest.nodeId;
+    if (!features.some((feature) => feature.id === id)) return;
+    const visibleNow = listRef.current?.querySelector(
+      `[data-node-id="${CSS.escape(id)}"]`
+    );
+    if (!visibleNow) {
+      // A filter hides the row: clear it, as Show latest does.
+      onCloseFind();
+      setQuery('');
+      setRelatedOnly(false);
+      setProblemsOnly(false);
+    }
+    if (refocusFrame.current !== null)
+      cancelAnimationFrame(refocusFrame.current);
+    refocusFrame.current = requestAnimationFrame(() => {
+      refocusFrame.current = null;
+      const row = listRef.current?.querySelector<HTMLElement>(
+        `[data-node-id="${CSS.escape(id)}"]`
+      );
+      if (row) {
+        markProgrammaticScroll();
+        row.scrollIntoView?.({ block: 'nearest' });
+      }
+    });
+    // Only a new request reveals; the callbacks it reads are the latest.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [revealSeq]);
 
   useEffect(() => {
     if (
@@ -1430,6 +1722,7 @@ export function HistoryTimeline({
     extendBatch,
     clearBatch,
     selectHistoryFeature,
+    activateRow,
     rollBackAfter,
     onFeatureContextMenu,
     onReorderFeature,
@@ -1446,36 +1739,9 @@ export function HistoryTimeline({
           ? `New operation available: ${pendingFeature.name}`
           : ''}
       </span>
-      {features.length > 0 && (pendingFeature || latestOutOfView) && (
-        <button
-          type="button"
-          className="history-resume history-latest"
-          data-pending={Boolean(pendingFeature)}
-          aria-label={
-            pendingFeature
-              ? `Show new operation: ${pendingFeature.name}`
-              : undefined
-          }
-          onKeyDown={(event) => {
-            // Keep native button activation from also opening an armed
-            // viewport command's exact-value entry.
-            if (event.key === 'Enter') event.stopPropagation();
-          }}
-          onClick={() => {
-            onCloseFind();
-            setQuery('');
-            setRelatedOnly(false);
-            following.current = true;
-            setPendingAppendId(null);
-            revealOperation(pendingFeature?.id ?? features.at(-1)!.id);
-          }}
-          title={pendingFeature?.name ?? features.at(-1)!.name}
-        >
-          {pendingFeature ? 'Show new operation' : 'Show latest operation'}
-        </button>
-      )}
       {pausedCount > 0 && (
         <div className="history-rollback" role="status">
+          {ROLLED_BACK_ICON}
           <span>
             Rolled back · {pausedCount} later{' '}
             {pausedCount === 1 ? 'feature' : 'features'} paused
@@ -1484,10 +1750,19 @@ export function HistoryTimeline({
             type="button"
             className="history-resume"
             aria-label="Resume full history"
-            title="Resume every feature paused by rollback. Features you suppressed stay suppressed."
+            title={
+              reorderBusy
+                ? 'Resume once the current check finishes'
+                : 'Resume every feature paused by rollback. Features you suppressed stay suppressed.'
+            }
+            disabled={reorderBusy}
             onClick={resumeNow}
           >
-            Resume
+            {/* Hidden from the status region, which would otherwise read
+                every flip between the two words aloud. */}
+            <span aria-hidden="true">
+              {reorderBusy ? 'Checking…' : 'Resume'}
+            </span>
           </button>
         </div>
       )}
@@ -1535,6 +1810,20 @@ export function HistoryTimeline({
             onClick={() => setRelatedOnly((on) => !on)}
           >
             Related
+          </button>
+          <button
+            type="button"
+            className="history-find-problems"
+            aria-pressed={problems}
+            disabled={problemCount === 0}
+            title={
+              problemCount > 0
+                ? 'Show only the steps that need repair, the steps built on them and broken projections'
+                : 'No step needs repair'
+            }
+            onClick={() => setProblemsOnly((on) => !on)}
+          >
+            Problems
           </button>
         </div>
       )}
@@ -1584,7 +1873,9 @@ export function HistoryTimeline({
           <p className="muted sidebar-hint">
             {needle
               ? `No ${related ? 'related ' : ''}steps match “${query.trim()}”.`
-              : 'No steps relate to the selection.'}
+              : related
+                ? 'No steps relate to the selection.'
+                : 'No step has a problem.'}
           </p>
         )}
         {features.length > 0 && (
@@ -1596,6 +1887,7 @@ export function HistoryTimeline({
         )}
         {visible.map(({ feature, index }) => {
           const manual = isFeatureManuallySuppressed(feature);
+          const status = statuses[index]!;
           // At rest a row is paused by its own metadata, not its position:
           // a paused feature reordered above the handle stays paused. While
           // the handle is moving, the preview decides.
@@ -1614,28 +1906,15 @@ export function HistoryTimeline({
             : feature.bodyId
               ? hiddenBodyIds.has(feature.bodyId)
               : false;
-          const failed =
-            !geometryPending &&
-            featureNeedsRepair(feature, representations, failedFeatureIds);
-          const projectionBroken =
-            !geometryPending &&
-            sketchId !== null &&
-            brokenProjectionSketchIds?.has(sketchId) === true;
+          const failed = status === 'root' || status === 'downstream';
+          const failureRoot =
+            status === 'downstream' || status === 'built-on-failed'
+              ? (failureLineage?.get(feature.featureId)?.name ?? null)
+              : null;
           const selected = selectedFeatureNodeId === feature.id;
           const editing = editingFeatureId === feature.featureId;
           const refusedEdit = editing && pendingStep !== null;
           const inBatch = batchIds.includes(feature.featureId);
-          const value = manual
-            ? 'suppressed'
-            : paused
-              ? 'paused'
-              : geometryPending && geometryPendingShown
-                ? 'preparing'
-                : failed
-                  ? 'needs repair'
-                  : projectionBroken
-                    ? 'broken projection'
-                    : (summaries[index] ?? '');
           const delay =
             Math.min(Math.abs(index - end), CASCADE_MAX_STEPS) *
             CASCADE_STEP_MS;
@@ -1643,15 +1922,16 @@ export function HistoryTimeline({
             <HistoryRow
               key={feature.id}
               feature={feature}
+              icon={featureIcon(feature)}
               index={index}
               className={`feature-row${sketchId ? ' is-sketch' : ''}${selected ? ' selected' : ''}${inBatch ? ' in-batch' : ''}${consumed ? ' consumed' : ''}${hidden ? ' hidden-body' : ''}${manual ? ' suppressed' : ''}${paused ? ' paused' : ''}${failed ? ' failed' : ''}${editing ? ' is-editing' : ''}${dragFeatureId === feature.featureId ? ' is-dragging' : ''}${dropFeatureId === feature.featureId ? ' is-drop-target' : ''}${featureArrivals.has(feature.id) ? ' is-arrival' : ''}`}
               delay={delay}
-              value={value}
+              value={summaries[index] ?? ''}
+              status={status}
+              failureRoot={failureRoot}
               selected={selected}
               inBatch={inBatch}
               consumed={consumed}
-              failed={failed}
-              projectionBroken={projectionBroken}
               refusalTitle={refusedEdit ? pendingStep.title : null}
               refusalMessage={refusedEdit ? pendingStep.message : null}
               suppressed={suppressed}
@@ -1669,9 +1949,14 @@ export function HistoryTimeline({
             />
           );
         })}
+        {features.length > 0 && !filtering && end < last && (
+          // The end of history as a rule across the list, drawn while it
+          // falls before the last step. Not a target: the knob is.
+          <span className="history-marker" aria-hidden="true" />
+        )}
         {features.length > 0 && !filtering && handleFeature && (
           <div
-            className={`history-handle${draggingHandle ? ' is-dragging' : ''}`}
+            className={`history-handle${draggingHandle ? ' is-dragging' : ''}${reorderBusy ? ' is-busy' : ''}`}
             role="slider"
             tabIndex={0}
             aria-label="End of history"
@@ -1714,6 +1999,40 @@ export function HistoryTimeline({
             <span className="history-pending-state">not built</span>
           </div>
         )}
+      {features.length > 0 && (pendingFeature || latestOutOfView) && (
+        // Floats at the foot of the panel, where the end is, and reserves no
+        // row of its own; only while the end is out of view.
+        <button
+          type="button"
+          className="history-latest"
+          data-pending={Boolean(pendingFeature)}
+          aria-label={
+            pendingFeature
+              ? `Show new operation: ${pendingFeature.name}`
+              : 'Show latest operation'
+          }
+          onKeyDown={(event) => {
+            // Keep native button activation from also opening an armed
+            // viewport command's exact-value entry.
+            if (event.key === 'Enter') event.stopPropagation();
+          }}
+          onClick={() => {
+            onCloseFind();
+            setQuery('');
+            setRelatedOnly(false);
+            setProblemsOnly(false);
+            following.current = true;
+            setPendingAppendId(null);
+            revealOperation(pendingFeature?.id ?? features.at(-1)!.id);
+          }}
+          title={pendingFeature?.name ?? features.at(-1)!.name}
+        >
+          {LATEST_ICON}
+          <span className="history-latest-label">
+            {pendingFeature ? `New: ${pendingFeature.name}` : 'Latest'}
+          </span>
+        </button>
+      )}
     </div>
   );
 }

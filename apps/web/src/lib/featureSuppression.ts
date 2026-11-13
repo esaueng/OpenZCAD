@@ -21,7 +21,7 @@ export interface RefusedDependent {
 /** How many dependents a refusal sentence names before it counts the rest. */
 const NAMED_IN_SENTENCE = 3;
 
-function listNames(names: readonly string[]): string {
+export function listNames(names: readonly string[]): string {
   const named = names.slice(0, NAMED_IN_SENTENCE).map((name) => `"${name}"`);
   const rest = names.length - named.length;
   if (rest > 0) return `${named.join(', ')} and ${rest} more`;
@@ -63,6 +63,29 @@ export class FeatureSuppressionRefusal extends FeatureBuildError {
 }
 
 /**
+ * Why `feature` did not build in `derived`, or null when it did: its own
+ * refusing warning, or a result body the rebuild never produced.
+ */
+export function featureFailureReason(
+  feature: FeatureNode,
+  derived: ProjectDocument['derived']
+): string | null {
+  return (
+    refusingWarning(
+      feature.name,
+      derived.warnings,
+      derived.featureWarnings,
+      feature.featureId
+    ) ??
+    (featureResultBodyIds(feature).some(
+      (id) => !derived.bodyRepresentations[id]
+    )
+      ? 'The dependent feature did not produce its result body.'
+      : null)
+  );
+}
+
+/**
  * Suppression may pass a body through, but never substitute a topology pick.
  * Judge every active dependent using the exact candidate rebuild, including
  * in-place edits, attached sketches and both split results. Report the whole
@@ -100,18 +123,7 @@ export function suppressionRefusal(
     (a, b) => (order.get(a.featureId) ?? 0) - (order.get(b.featureId) ?? 0)
   );
   const refused = dependents.flatMap((feature): RefusedDependent[] => {
-    const reason =
-      refusingWarning(
-        feature.name,
-        derived.warnings,
-        derived.featureWarnings,
-        feature.featureId
-      ) ??
-      (featureResultBodyIds(feature).some(
-        (id) => !derived.bodyRepresentations[id]
-      )
-        ? 'The dependent feature did not produce its result body.'
-        : null);
+    const reason = featureFailureReason(feature, derived);
     return reason
       ? [{ featureId: feature.featureId, name: feature.name, reason }]
       : [];

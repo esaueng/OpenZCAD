@@ -1,6 +1,12 @@
 import type { PanelId } from '../../lib/panelLayout';
 import { DiagnosticsPanel, diagnosticCount } from './DiagnosticsPanel';
-import { HistoryFindToggle, HistoryPanel, historyCount } from './HistoryPanel';
+import {
+  HistoryFindToggle,
+  HistoryPanel,
+  HistoryRepairChip,
+  historyCount,
+  useHistoryRepair
+} from './HistoryPanel';
 import type { ModelPanelSource } from './modelPanelProps';
 import { modelBodies, ObjectsPanel, objectCount } from './ObjectsPanel';
 import { PanelFrame, type PanelControls } from './PanelFrame';
@@ -77,6 +83,7 @@ function ObjectsFrame(props: ModelPanelProps) {
 
 function HistoryFrame(props: ModelPanelProps) {
   const find = props.views.historyFind;
+  const repair = useHistoryRepair(props);
   return (
     <PanelFrame
       id="history"
@@ -84,11 +91,18 @@ function HistoryFrame(props: ModelPanelProps) {
       controls={props.controls}
       actions={
         props.features.length > 0 ? (
-          <HistoryFindToggle find={find} />
+          <>
+            <HistoryRepairChip
+              repair={repair}
+              selectedFeatureNodeId={props.selectedFeatureNodeId}
+              onSelectFeature={props.onSelectFeature}
+            />
+            <HistoryFindToggle find={find} />
+          </>
         ) : undefined
       }
     >
-      <HistoryPanel {...props} find={find} />
+      <HistoryPanel {...props} find={find} repair={repair} />
     </PanelFrame>
   );
 }

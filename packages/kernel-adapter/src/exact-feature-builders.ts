@@ -1,4 +1,7 @@
-import { faceReferenceRepairCandidate } from './exact-reference-resolution';
+import {
+  faceReferenceRepairCandidate,
+  faceSelectionRepairCandidates
+} from './exact-reference-resolution';
 import { edgeSelectionKey } from './exact-edge-selection-transport';
 import { upstreamSnapshot } from './exact-carry-edit-gate';
 import { buildGearFeature } from './exact-gear';
@@ -43,8 +46,10 @@ import {
   MAX_MESH_SOLID_CONVERSION_TRIANGLES,
   UNIT_TO_MM,
   isDatumPlaneRef,
+  type BodyId,
   type DatumPlaneSource,
   type DatumPointSource,
+  type FaceReferenceRepair,
   type FeatureNode,
   type ModelingPlaneReference,
   type ParamValue
@@ -422,6 +427,12 @@ function buildDirectEditFeature(
   const producer = listFeaturesInOrder(document).find(
     (candidate) => candidate.bodyId === targetBodyId
   );
+  if (edited.lineageByPredictedCarrier) {
+    delete edited.lineageByPredictedCarrier;
+    edited.lineage =
+      rederivePrimitiveDirectEditLineage(kernel, edited, producer) ??
+      edited.lineage;
+  }
   edited.lineage ??=
     rederivePrimitiveDirectEditLineage(kernel, edited, producer) ??
     remusHashOnlyLineage(
@@ -3498,8 +3509,81 @@ function buildPatternFeature(
   inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
 }
 
+/**
+ * The v5 references a feature's hash-only face picks can be upgraded to,
+ * proven on its target body as the feature finds it (a direct edit replaces
+ * that body). A direct edit's own face is proven in its builder; every other
+ * stored face pick is here. Each selection is all or nothing.
+ */
+function faceSelectionRepairs(
+  ctx: FeatureBuildContext,
+  feature: FeatureNode
+): FaceReferenceRepair[] {
+  const data = feature.data;
+  const offer = (
+    targetBodyId: BodyId,
+    hashes: readonly number[],
+    role?: FaceReferenceRepair['role']
+  ): FaceReferenceRepair[] => {
+    const target = ctx.result.shapes.get(targetBodyId);
+    const references = target
+      ? faceSelectionRepairCandidates(ctx.kernel, target, hashes)
+      : null;
+    return (references ?? []).map((faceReference) => ({
+      featureId: feature.featureId,
+      faceHash: faceReference.currentHash,
+      faceReference,
+      ...(role ? { role } : {})
+    }));
+  };
+  switch (data.featureKind) {
+    case 'hole':
+    case 'thicken':
+    case 'thread':
+      return data.faceReference
+        ? []
+        : offer(data.targetBodyId, [data.faceHash]);
+    case 'gear':
+      return data.targetBodyId &&
+        typeof data.faceHash === 'number' &&
+        !data.faceReference
+        ? offer(data.targetBodyId, [data.faceHash])
+        : [];
+    case 'shell':
+      return data.openingFaceReferences
+        ? []
+        : offer(data.targetBodyId, data.openingFaceHashes, 'set');
+    case 'draft':
+      return data.faceReferences
+        ? []
+        : offer(data.targetBodyId, data.faceHashes, 'set');
+    case 'direct-edit':
+      return data.operation.kind === 'set-face-distance' &&
+        !data.operation.oppositeFaceReference
+        ? offer(
+            data.targetBodyId,
+            [data.operation.oppositeFaceHash],
+            'opposite'
+          )
+        : [];
+    default:
+      return [];
+  }
+}
+
 /** Per-feature-kind dispatch: one builder owns each history feature. */
 export function buildFeature(
+  ctx: FeatureBuildContext,
+  feature: FeatureNode
+): void {
+  // Offered only once the feature has built: a throw below skips the push.
+  const faceRepairs = faceSelectionRepairs(ctx, feature);
+  buildFeatureByKind(ctx, feature);
+  if (faceRepairs.length > 0)
+    (ctx.result.faceReferenceRepairs ??= []).push(...faceRepairs);
+}
+
+function buildFeatureByKind(
   ctx: FeatureBuildContext,
   feature: FeatureNode
 ): void {

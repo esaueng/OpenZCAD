@@ -150,6 +150,79 @@ test('resumes rollback without resuming manually suppressed features and support
 });
 
 /**
+ * ADR-017, November 2026: an edit made while rolled back is checked only
+ * against the steps that build, so Resume rebuilds the paused ones first and
+ * asks before bringing back a model with failures in it.
+ */
+test('asks before resuming a rollback whose edit breaks a paused feature', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: /Heat Sink/ }).click();
+  await expectBodyCount(page, 1);
+  const base = page.locator('.feature-row', { hasText: /^Extrude base/ });
+  await base.hover();
+  await base
+    .getByRole('button', {
+      name: 'Roll back history after Extrude base',
+      exact: true
+    })
+    .click();
+  const rollback = page.locator('.history-rollback');
+  await expect(rollback).toContainText('later features paused');
+  // As in the repair test above: a base thicker than the fins are tall leaves
+  // the corner fillet nothing to follow. Paused, the fillet is not checked.
+  const extrudeEdit = await editExtrudeFromHistory(
+    page,
+    page.locator('.feature-row-main', { hasText: 'Extrude base' }),
+    'Extrude base'
+  );
+  await setBarValues(page, extrudeEdit, { Distance: 'base_t + fin_h' });
+  await finishInPlaceCommand(page, 'Edit Extrude base');
+  await revealModelPanel(page, 'History');
+  await expect(rollback).toContainText('later features paused');
+
+  await rollback.getByRole('button', { name: 'Resume full history' }).click();
+  const dialog = page.getByRole('alertdialog', {
+    name: 'Resume full history?'
+  });
+  await expect(dialog).toContainText('would not rebuild', { timeout: 30_000 });
+  await expect(dialog).toContainText('Base corner fillets');
+  await dialog.getByRole('button', { name: 'Keep rolled back' }).click();
+  await expect(dialog).toBeHidden();
+  await expect(rollback).toContainText('later features paused');
+  await expect(
+    page.locator('.feature-row.needs-repair, .feature-row.failed')
+  ).toHaveCount(0);
+
+  await rollback.getByRole('button', { name: 'Resume full history' }).click();
+  await dialog.getByRole('button', { name: 'Resume anyway' }).click();
+  await expect(rollback).toBeHidden();
+  const fillets = page.locator('.feature-row', {
+    hasText: /^Base corner fillets/
+  });
+  await expect(fillets).toHaveClass(/\b(failed|needs-repair)\b/, {
+    timeout: 30_000
+  });
+  // The fillet is the first failure: the one loud row, and the one the
+  // header's repair chip shows first. Its value stays beside its name.
+  await expect(page.locator('.feature-row.is-failure-root')).toHaveCount(1);
+  await expect(fillets).toHaveClass(/\bis-failure-root\b/);
+  await expect(fillets.locator('.history-row-value')).not.toHaveText('');
+  await page
+    .getByRole('button', {
+      name: /need(s)? repair\. Show Base corner fillets$/
+    })
+    .click();
+  await expect(fillets).toHaveClass(/\bselected\b/);
+  expect(errors).toEqual([]);
+});
+
+/**
  * F1 follow-up from the 1 October 2026 design review: suppressing a feature
  * that replaces its body used to take the body away from everything built on
  * it, so every later row read "needs repair · … target is unavailable". A

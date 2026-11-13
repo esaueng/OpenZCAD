@@ -14,6 +14,7 @@ import {
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
+import { expectPassedThrough } from './support/failed-pass-through';
 import {
   FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY,
   FEATURE_SUPPRESSED_METADATA_KEY,
@@ -414,7 +415,9 @@ describe('a suppressed feature passes its input body through', () => {
     expect(refusal?.message).toBe(
       'Feature "Bevel hole": Hole face is stale: The selected face lineage no longer exists.'
     );
-    expect(document.derived.bodyRepresentations[onBevel]).toBeUndefined();
+    // The refused hole hands its own input through (the November 2026
+    // amendment); nothing stands in for the bevel it was drilled on.
+    expectPassedThrough(document.derived, onBevel, target);
 
     suppress(manager, modifierIds!.featureId, false);
     document = await synced(manager.document);
