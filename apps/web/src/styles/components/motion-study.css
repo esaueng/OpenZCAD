@@ -138,6 +138,17 @@
   box-shadow: var(--shadow-1);
 }
 
+/* The notice lane stands on the floating timeline, not on its tracks: a
+   toast at the lane's usual foot covered the first track (I7). The
+   timeline measures its own height (MotionStudyTimeline). */
+.workspace.column-layout .viewer-area:has(.motion-timeline-floating) {
+  --lane-base: calc(
+    var(--island-gap) + var(--command-bar-h) +
+      var(--workspace-guidance-h, 0px) + 8px + var(--motion-timeline-h, 0px) +
+      8px
+  );
+}
+
 .motion-timeline-transport {
   display: flex;
   flex-wrap: wrap;

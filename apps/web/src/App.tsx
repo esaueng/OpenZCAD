@@ -16069,6 +16069,22 @@ export function App() {
   }
 
   const aiPreviewEpochRef = useRef(0);
+  // Bumped when something opens over the stage that the model should stay
+  // clear of: the viewer reframes only if part of the model is covered.
+  const [clearStageRequest, setClearStageRequest] = useState(0);
+  const sectionControlsShown =
+    viewerSettings.sectionView !== undefined &&
+    panelState.sectionPanelOpen !== false;
+  useEffect(() => {
+    if (sectionControlsShown) setClearStageRequest((request) => request + 1);
+  }, [sectionControlsShown]);
+  // The measurement workbench floats over View's and Tweak's stage (a
+  // phone's sheet across its foot, I47): what it measures stays in view.
+  // Build's workbench is a command card and never moves the camera.
+  const measuringOverStage = measuring && modelingLocked;
+  useEffect(() => {
+    if (measuringOverStage) setClearStageRequest((request) => request + 1);
+  }, [measuringOverStage]);
 
   /** D06 slice E: a proposal that edits a drawing sheet, not the model. */
   function isDrawingProposal(proposal: CadPatchProposal): boolean {
@@ -16146,6 +16162,9 @@ export function App() {
         };
       }
       setPreviewDoc(preflight.candidate);
+      // The proposal is reviewed on the model: keep it clear of the
+      // assistant's stream and the panels (I6).
+      setClearStageRequest((request) => request + 1);
       setStatus('Previewing exact proposed geometry.');
       return { ok: true };
     } catch (error) {
@@ -32501,6 +32520,7 @@ export function App() {
             fitSignal={fitSignal}
             autoFrame={autoFrame}
             creationFrame={creationFrame}
+            clearStageRequest={clearStageRequest}
             viewRequest={projectViewRequest}
             normalToFaceRequest={normalToFaceRequest}
             units={doc.units}
