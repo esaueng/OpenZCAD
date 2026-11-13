@@ -2660,6 +2660,14 @@ export function App() {
     loadPanelLayout(undefined, undefined, { leftDock: true })
   );
   const [panelStage, setPanelStage] = useState<PanelStage | null>(null);
+  // The parts list of a workspace opened on a phone: its own choice there,
+  // closed until asked for, as the phone lane rests. On a phone the list
+  // opens beside View's rail over the middle of the model, and the stored
+  // flag (open on a new device) is left as it is for a wider stage.
+  // Undefined for a workspace opened wider, which follows the stored flag.
+  const [phonePartsOpen, setPhonePartsOpen] = useState<boolean | undefined>(
+    undefined
+  );
   // A drag out of a rail button is the dock's to run, so the App (and the
   // viewer the rail is drawn in) does not re-render while it moves.
   const panelDockRef = useRef<PanelDockHandle | null>(null);
@@ -6317,16 +6325,15 @@ export function App() {
   // A workspace opened on a phone opens on the model: there the lane's panel
   // stands across the middle of the stage, so the lane rests until a panel
   // is asked for, whatever the stored layout has open, and that layout is
-  // left as it is for a wider stage. Opened wider, the lane follows recency
-  // as before when the window narrows. Before paint, so a stored panel never
-  // flashes over the model on the way in.
+  // left as it is for a wider stage. The parts list rests with it. Opened
+  // wider, the lane follows recency as before when the window narrows.
+  // Before paint, so a stored panel never flashes over the model on the way
+  // in.
   useLayoutEffect(() => {
     if (!openProjectId) return;
-    setPanelLayout(
-      window.innerWidth <= PANEL_LANE_REST_MAX_WIDTH
-        ? restPhoneLane
-        : followPhoneLane
-    );
+    const phone = window.innerWidth <= PANEL_LANE_REST_MAX_WIDTH;
+    setPanelLayout(phone ? restPhoneLane : followPhoneLane);
+    setPhonePartsOpen(phone ? false : undefined);
   }, [openProjectId]);
 
   useEffect(() => {
@@ -22286,7 +22293,11 @@ export function App() {
     projectId: doc?.projectId ?? null,
     mode: resolvedWorkspaceMode,
     layout: panelLayout,
-    panels: `${panelState.tweakPanelOpen}:${panelState.viewModeRailOpen}`,
+    // A parts list asked for on a phone changes the clear stage. Resting it
+    // on the way in does not: that first frame is the viewer's to make.
+    panels: `${panelState.tweakPanelOpen}:${panelState.viewModeRailOpen}${
+      phonePartsOpen ? ':asked' : ''
+    }`,
     enabled:
       displayedGeometryComplete &&
       presentedGeometry?.projectId === doc?.projectId &&
@@ -31138,9 +31149,14 @@ export function App() {
     bodies: partBodies,
     hiddenBodyIds,
     selectedBodyIds,
-    open: panelState.viewModeRailOpen,
-    onOpenChange: (viewModeRailOpen: boolean) =>
-      setPanelState((current) => ({ ...current, viewModeRailOpen })),
+    open: phonePartsOpen ?? panelState.viewModeRailOpen,
+    onOpenChange: (viewModeRailOpen: boolean) => {
+      if (phonePartsOpen !== undefined) {
+        setPhonePartsOpen(viewModeRailOpen);
+        return;
+      }
+      setPanelState((current) => ({ ...current, viewModeRailOpen }));
+    },
     onSelectBody: handleSelectBodyFromTree,
     onToggleVisibility: toggleBodyVisibility,
     onIsolate: isolateBody,
@@ -31372,7 +31388,7 @@ export function App() {
                 />
               ),
               list: <PartsList {...partsProps} />,
-              open: panelState.viewModeRailOpen,
+              open: partsProps.open,
               onOpenChange: partsProps.onOpenChange
             }}
           />

@@ -1575,12 +1575,16 @@
 
   /* Above the status row as well as the bar: the row spans a phone's width,
      and the status toast (or the hint) ran across the cube's foot and took
-     the click of its bottom facet. The ruler keeps its place under the
-     measurement workbench; it takes no clicks. */
+     the click of its bottom facet. Above the guidance card too, while a
+     pick has one over the bar: the card wraps to four lines at this width,
+     and the status row stands on it (--lane-base), so the cube kept under
+     both with only its top facet showing. The ruler keeps its place under
+     the measurement workbench; it takes no clicks. */
   .workspace.column-layout .viewer-rail-stack,
   .workspace.column-layout .viewer-area.has-inspector .viewer-rail-stack {
     bottom: calc(
-      var(--island-gap) * 2 + var(--command-bar-h) + var(--status-row-h)
+      var(--island-gap) * 2 + var(--command-bar-h) +
+        var(--workspace-guidance-h, 0px) + var(--status-row-h)
     );
   }
 

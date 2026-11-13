@@ -96,6 +96,23 @@ describe('the phone stage', () => {
     }
   });
 
+  it('keeps what opens over the bar between the two one-column rails', () => {
+    const block = mediaBlock(`${PHONE.replace('541px', '621px')}`);
+    // A pick's card: from the tool rail to the instrument rail, not on to
+    // the window's edge under the rail's foot.
+    expect(block).toMatch(
+      /\.command-bar-lane > \.workspace-hint:is\(\.is-selection, \.is-raised\) \{[^}]*width:\s*calc\(\s*100vw - var\(--column-w\) - var\(--island-gap\) \* 2 - var\(--lane-end\)\s*\)/
+    );
+    // An empty project's actions: a row, which ends above the cube.
+    expect(block).toMatch(
+      /\.stage-empty-actions \{[^}]*flex-direction:\s*row;[^}]*flex-wrap:\s*nowrap/
+    );
+    // The bar's help, off the tool rail at every height of the phone.
+    expect(mediaBlock(PHONE)).toMatch(
+      /\.workspace-hint-help > p \{[^}]*width:\s*min\(\s*360px,\s*calc\(100vw - var\(--column-w\)/
+    );
+  });
+
   it('keeps one column and Tools at the rail’s foot from 621px', () => {
     const block = mediaBlock(`${PHONE.replace('541px', '621px')}`);
     expect(block).toMatch(/--column-w:\s*var\(--rail-w\)/);
@@ -103,7 +120,7 @@ describe('the phone stage', () => {
       /--lane-end:\s*calc\(\s*var\(--rail-w\) \+ var\(--island-gap\) \* 2 \+ var\(--right-panels-w\)\s*\)/
     );
     expect(block).toMatch(
-      /nav\.command-rail \.command-more \{[^}]*position:\s*sticky;[^}]*bottom:\s*0/
+      /div\.command-rail \.command-more \{[^}]*position:\s*sticky;[^}]*bottom:\s*0/
     );
     // Sticky, Tools would otherwise become the catalog's containing block.
     expect(block).toMatch(

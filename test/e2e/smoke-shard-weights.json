@@ -56,7 +56,7 @@
   "panel-float.spec.ts": 11,
   "panel-suspension.spec.ts": 48,
   "parts-list-scroll.spec.ts": 17,
-  "phone-stage.spec.ts": 20,
+  "phone-stage.spec.ts": 45,
   "picked-feature-delete.spec.ts": 40,
   "picked-step-feature-delete.spec.ts": 53,
   "progressive-loading.spec.ts": 10,

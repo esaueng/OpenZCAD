@@ -1645,12 +1645,17 @@ export function computeFitPose(
   };
 }
 
+/**
+ * Puts the live camera on the home fit of `objects`. `frame` frames them into
+ * that part of the view instead of the whole canvas (see `computeFitPose`).
+ */
 export function fitCameraToObjects(
   camera: THREE.PerspectiveCamera,
   controlsTarget: THREE.Vector3,
-  objects: THREE.Object3D[]
+  objects: THREE.Object3D[],
+  frame?: NdcFrame
 ) {
-  const pose = computeFitPose(camera, objects);
+  const pose = computeFitPose(camera, objects, undefined, 0, frame);
   camera.position.copy(pose.position);
   controlsTarget.copy(pose.target);
   camera.near = pose.near;

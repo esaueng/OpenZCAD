@@ -305,6 +305,7 @@ import {
   cornersWithinFrame,
   measureCreationFrame,
   measureFitFrame,
+  measureOpeningFrame,
   measurePickFrame,
   shiftIntoFrame
 } from '../lib/fitFrame';
@@ -6533,13 +6534,52 @@ export function ModelViewer({
       for (const object of context.bodyGroup.children) {
         if (object.visible) box.expandByObject(object);
       }
+      // Where the bodies' box lands on the page, for a spec that asks
+      // whether chrome stands over the model rather than only whether the
+      // model is on the canvas.
+      let screen: {
+        left: number;
+        top: number;
+        right: number;
+        bottom: number;
+      } | null = null;
+      if (!box.isEmpty()) {
+        const bounds = renderer.domElement.getBoundingClientRect();
+        const corner = new THREE.Vector3();
+        screen = {
+          left: Infinity,
+          top: Infinity,
+          right: -Infinity,
+          bottom: -Infinity
+        };
+        for (let index = 0; index < 8; index += 1) {
+          corner
+            .set(
+              index & 1 ? box.max.x : box.min.x,
+              index & 2 ? box.max.y : box.min.y,
+              index & 4 ? box.max.z : box.min.z
+            )
+            .project(context.activeCamera);
+          const x = bounds.left + ((corner.x + 1) / 2) * bounds.width;
+          const y = bounds.top + ((1 - corner.y) / 2) * bounds.height;
+          screen.left = Math.min(screen.left, x);
+          screen.right = Math.max(screen.right, x);
+          screen.top = Math.min(screen.top, y);
+          screen.bottom = Math.max(screen.bottom, y);
+        }
+      }
       (
         event as CustomEvent<{
-          resolve?: (value: { inView: boolean; camera: number[] }) => void;
+          resolve?: (value: {
+            inView: boolean;
+            camera: number[];
+            screen: typeof screen;
+          }) => void;
         }>
       ).detail?.resolve?.({
         inView: !box.isEmpty() && boxFullyInView(box, context.activeCamera),
-        camera: context.activeCamera.position.toArray()
+        camera: context.activeCamera.position.toArray(),
+        screen
       });
     };
     /**
@@ -13584,10 +13624,13 @@ export function ModelViewer({
     }
 
     if (!context.hasFitCamera && context.bodyGroup.children.length > 0) {
+      // Into the clear stage on a phone, where the rails cover a third of
+      // the canvas; the whole canvas otherwise.
       fitCameraToObjects(
         context.camera,
         context.controls.target,
-        context.bodyGroup.children
+        context.bodyGroup.children,
+        measureOpeningFrame(context.renderer.domElement)
       );
       if (context.projection === 'orthographic') {
         context.syncOrthographic(true);

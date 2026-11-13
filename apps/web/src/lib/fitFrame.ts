@@ -13,11 +13,15 @@ import { SELECTION_CALLOUT_OBSTACLES } from './selectionCalloutView';
  * are the same panels a selection chip keeps out from under. Undefined means
  * the whole canvas.
  */
-export function measureFitFrame(canvas: HTMLElement): NdcFrame | undefined {
+export function measureFitFrame(
+  canvas: HTMLElement,
+  { throughCover = false }: { throughCover?: boolean } = {}
+): NdcFrame | undefined {
   const bounds = canvas.getBoundingClientRect();
   const panels = panelsOver(
     canvas,
-    `${SELECTION_CALLOUT_OBSTACLES}, .tweak-flyouts, .view-flyouts`
+    `${SELECTION_CALLOUT_OBSTACLES}, .tweak-flyouts, .view-flyouts`,
+    throughCover
   );
   const width = bounds.width;
   const height = bounds.height;
@@ -34,10 +38,12 @@ export function measureFitFrame(canvas: HTMLElement): NdcFrame | undefined {
   // Keep this UI projection local: the viewport package's side-band API
   // remains available unchanged to other consumers.
   for (const panel of panels) {
+    const panelWidth = panel.right - panel.left;
+    const panelHeight = panel.bottom - panel.top;
     if (
-      panel.width <= width / 2 ||
-      panel.height >= height / 2 ||
-      panel.height <= 0
+      panelWidth <= width / 2 ||
+      panelHeight >= height / 2 ||
+      panelHeight <= 0
     )
       continue;
     if ((panel.top + panel.bottom) / 2 >= bounds.top + height / 2)
@@ -60,6 +66,28 @@ export function measureFitFrame(canvas: HTMLElement): NdcFrame | undefined {
     minY: 1 - ((bottom - bounds.top) / height) * 2,
     maxY: 1 - ((top - bounds.top) / height) * 2
   };
+}
+
+/**
+ * At or below this canvas width the model's first frame is fitted into the
+ * clear stage rather than the whole canvas: a phone's two rails stand over a
+ * third of its width, and the home fit put both ends of the part under them.
+ * The same width at which the phone lane rests (`PANEL_LANE_REST_MAX_WIDTH`).
+ */
+export const OPENING_FRAME_MAX_WIDTH = 520;
+
+/**
+ * The frame a model's first fit lands in. On a phone, what `measureFitFrame`
+ * gives, so the part opens between the rails; wider, undefined (the whole
+ * canvas), as the home fit has always been: the rails take little of a wide
+ * stage, and the docks open over it afterwards.
+ */
+export function measureOpeningFrame(canvas: HTMLElement): NdcFrame | undefined {
+  // The first fit is made while the workspace is still covered, so the
+  // rails are read through the cover.
+  return canvas.getBoundingClientRect().width <= OPENING_FRAME_MAX_WIDTH
+    ? measureFitFrame(canvas, { throughCover: true })
+    : undefined;
 }
 
 /**
@@ -132,21 +160,49 @@ export function cornersWithinFrame(
   );
 }
 
-function panelsOver(canvas: HTMLElement, selector: string): DOMRect[] {
+/**
+ * The rectangles of the panels drawn over `canvas`. While its project opens,
+ * the workspace is laid out at its final size under a cover
+ * (`.workspace-reveal`: hidden by `visibility` and inert, both of which every
+ * panel inherits) and its rails are still sliding in. `throughCover` reads
+ * the panels as they will stand once it lifts: neither state of the cover
+ * counts against them, and each is taken where its entry motion ends.
+ */
+function panelsOver(
+  canvas: HTMLElement,
+  selector: string,
+  throughCover = false
+): StageRect[] {
+  const cover = throughCover ? canvas.closest('.workspace-reveal') : null;
+  const covered =
+    cover !== null && getComputedStyle(cover).visibility === 'hidden';
   return [
     ...(canvas
       .closest('.viewer-area')
       ?.querySelectorAll<HTMLElement>(selector) ?? [])
-  ]
-    .filter((panel) => {
-      const style = getComputedStyle(panel);
-      return (
-        style.display !== 'none' &&
-        style.visibility !== 'hidden' &&
-        !panel.closest('[inert]')
-      );
-    })
-    .map((panel) => panel.getBoundingClientRect());
+  ].flatMap((panel) => {
+    const style = getComputedStyle(panel);
+    if (style.display === 'none') return [];
+    if (!covered && style.visibility === 'hidden') return [];
+    const inert = panel.closest('[inert]');
+    // Inert of its own, or from something inside the cover: not drawn.
+    if (inert && !(covered && inert.contains(cover))) return [];
+    const rect = panel.getBoundingClientRect();
+    if (!covered) return [rect];
+    // The rails enter on `translate` (mode-in-*, view-mode.css), which the
+    // rectangle includes and which is gone by the time anyone looks.
+    const [dx = 0, dy = 0] = (style.translate ?? '')
+      .split(/\s+/)
+      .map((part) => Number.parseFloat(part) || 0);
+    return [
+      {
+        left: rect.left - dx,
+        right: rect.right - dx,
+        top: rect.top - dy,
+        bottom: rect.bottom - dy
+      }
+    ];
+  });
 }
 
 /**
