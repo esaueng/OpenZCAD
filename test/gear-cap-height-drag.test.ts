@@ -295,4 +295,90 @@ describe('end caps across whole-face and partial teeth (v55)', { timeout: 300_00
       expect(derived.datumFrames?.[planes.end!]?.origin.z).toBeCloseTo(12, 6);
     }
   });
+
+  it('keeps a datum on the body’s part of a split cap as the caps rejoin and split again', async () => {
+    for (const [end, z, reach] of [
+      ['start', 0, { faceWidth: 6 }],
+      ['end', 12, { faceWidth: 6, anchor: 'end' as const }]
+    ] as const) {
+      const base = addPrimitiveFeature(
+        createProjectDocument('Shaft', toUserId('user_gear')),
+        {
+          name: 'Blank',
+          primitiveKind: 'cylinder',
+          dimensions: { radius: 11, height: 12 }
+        }
+      );
+      const blankId = base.bodyOrder[0]!;
+      const blank = (await adapter.syncDocument(base)).bodyRepresentations[
+        blankId
+      ]!;
+      const wall = blank.topology!.faces.find(
+        (face) => face.geometry?.surfaceType === 'cylinder'
+      )!;
+      // Teeth 6 long reaching this end: its cap is the ring and the body's
+      // part, `cap.<end>.body`.
+      const cut = gearBody(base, {
+        name: 'Teeth',
+        gearType: 'external',
+        sizing: 'module',
+        pitch: 0.9,
+        fit: 'module',
+        teeth: 20,
+        ...reach,
+        targetBodyId: blankId,
+        faceHash: wall.hash,
+        ...(wall.reference ? { faceReference: wall.reference } : {})
+      });
+      let document = cut.document;
+      document.derived = await adapter.syncDocument(document);
+      const part = document.derived.bodyRepresentations[
+        cut.bodyId
+      ]!.topology!.faces.find(
+        (face) => face.reference?.lineageName === `gear.face.cap.${end}.body`
+      )!;
+      expect(part).toBeDefined();
+      const attachment = faceSketchAttachment({
+        bodyId: cut.bodyId,
+        pickedHash: part.hash,
+        face: part
+      });
+      if (!attachment.ok) throw new Error(attachment.reason);
+      const planed = addDatumPlane(document, {
+        name: 'Body cap',
+        definition: {
+          kind: 'offset',
+          source: attachment.planeRef as FacePlaneSource,
+          offset: 0
+        }
+      });
+      document = planed.document;
+      const gearId = listFeaturesInOrder(document).find(
+        (feature) => feature.data.featureKind === 'gear'
+      )!.featureId;
+      const clear = ['faceWidth', 'offset', 'anchor'];
+      const other: 'start' | 'end' = end === 'start' ? 'end' : 'start';
+      // Whole face (one cap), back (split again), the other end (one cap
+      // here), the middle (one cap), back again.
+      for (const step of [
+        { clearData: clear },
+        { data: reach },
+        { data: { faceWidth: 6, anchor: other }, clearData: ['offset'] },
+        { data: { faceWidth: 6, offset: 3 }, clearData: ['anchor'] },
+        { data: { ...reach, offset: 0 }, clearData: ['anchor'] }
+      ]) {
+        document = updateFeature(document, {
+          featureId: gearId,
+          ...(step.data ? { data: step.data } : {}),
+          ...(step.clearData ? { clearData: step.clearData } : {})
+        });
+        const derived = await adapter.syncDocument(document);
+        expect(derived.warnings, `${end} ${JSON.stringify(step)}`).toEqual([]);
+        expect(derived.datumFrames?.[planed.featureId]?.origin.z).toBeCloseTo(
+          z,
+          6
+        );
+      }
+    }
+  });
 });

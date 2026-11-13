@@ -1367,6 +1367,26 @@ function resolveByHash(
  * hash fallback is enabled solely for legacy references or an operation that
  * the caller explicitly marks unsupported by ADR-013.
  */
+/**
+ * Names whose face a later rebuild of the same feature may fold into a
+ * larger one, and the name that larger face carries. Gear teeth over part
+ * of a face (M14, schema v55) split the face's cap where they reach it: the
+ * toothed ring keeps `gear.face.cap.start|end` and the body's part is
+ * `gear.face.cap.start|end.body`. Teeth along the whole face, or stopping
+ * short of that end, leave one cap, `gear.face.cap.start|end`, which still
+ * holds the body's part, so a reference to that part follows it there.
+ */
+function lineageSuccessors(
+  kind: TopologyKind,
+  identity: TopologyLineageIdentity
+): string[] {
+  if (kind !== 'face') return [];
+  const cap = /^gear\.face\.cap\.(start|end)\.body(?:\[\d+\])?$/.exec(
+    identity.lineageName
+  );
+  return cap ? [`gear.face.cap.${cap[1]}`] : [];
+}
+
 export function resolveTopologyReference(
   reference: TopologyReferenceV5 | LegacyTopologyHashReference,
   candidates: readonly TopologyResolutionCandidate[],
@@ -1464,6 +1484,30 @@ export function resolveTopologyReference(
       reason: 'lineage-unverified',
       message: `The selected ${reference.kind} lineage has no witness-verified candidate.`
     };
+  }
+  // A name a rebuild folded into a larger face resolves to the face that now
+  // holds it, by that face's own name from the same feature.
+  for (const lineageName of lineageSuccessors(reference.kind, identity)) {
+    const successor: TopologyLineageIdentity = { ...identity, lineageName };
+    const folded = candidates.filter(
+      (candidate) =>
+        candidate.kind === reference.kind &&
+        candidate.lineage !== undefined &&
+        sameLineageIdentity(candidate.lineage.identity, successor) &&
+        candidateInspection(candidate).status === 'supported' &&
+        (candidate.lineage.source !== 'kernel-evolution' ||
+          kernelEvolutionIsBound(candidate, candidate.lineage))
+    );
+    if (folded.length === 1) {
+      return { status: 'resolved', via: 'lineage', candidate: folded[0]! };
+    }
+    if (folded.length > 1) {
+      return {
+        status: 'failed',
+        reason: 'ambiguous-lineage',
+        message: `The selected ${reference.kind} lineage resolves to multiple compatible candidates.`
+      };
+    }
   }
   if (lineageAvailability.status === 'partial') {
     const fallback = resolveByHash(
