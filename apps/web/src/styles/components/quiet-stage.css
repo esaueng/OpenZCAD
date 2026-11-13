@@ -1955,19 +1955,6 @@ button.command-rail svg {
   height: 16px;
 }
 
-button.command-more-toggle {
-  height: 44px;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 2px;
-}
-
-.command-rail-label {
-  font-size: var(--fs-mini);
-  line-height: 1;
-}
-
 /* Short windows and larger touch targets use the rail's width to keep its
    complete inventory, including Tools, on screen. The catalog still anchors
    to the outer float, outside the scrolling surface. */

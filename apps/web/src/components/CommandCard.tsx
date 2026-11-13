@@ -526,35 +526,32 @@ export function CommandCard({
         key={tool}
         className={`command-tile-row${pinned ? ' is-pinned' : ''}`}
       >
-        <Tooltip
-          label={meta.label}
-          shortcut={shortcut}
-          description={disabledReason ?? meta.hint}
+        {/* No tooltip: the row already reads its name (and, in the full
+            list, its hint and key), so help beside it only repeated the
+            label. Its accessible name carries all three. */}
+        <button
+          type="button"
+          className={`command-tile${active ? ' active' : ''}${applies ? '' : ' is-dim'}`}
+          aria-disabled={disabledReason !== null}
+          // A tool the rail already carries keeps one button of its own
+          // name: the rail's. Its row here says where it is.
+          aria-label={onRail.has(tool) ? `On rail: ${title}` : title}
+          aria-pressed={active}
+          data-applies={applies ? 'true' : 'false'}
+          draggable={canPin}
+          onDragStart={(event) => startDrag(event, tool, 'drawer')}
+          onDragEnd={endDrag}
+          onClick={() => {
+            if (disabledReason === null) onLaunchTool(tool);
+          }}
         >
-          <button
-            type="button"
-            className={`command-tile${active ? ' active' : ''}${applies ? '' : ' is-dim'}`}
-            aria-disabled={disabledReason !== null}
-            // A tool the rail already carries keeps one button of its own
-            // name: the rail's. Its row here says where it is.
-            aria-label={onRail.has(tool) ? `On rail: ${title}` : title}
-            aria-pressed={active}
-            data-applies={applies ? 'true' : 'false'}
-            draggable={canPin}
-            onDragStart={(event) => startDrag(event, tool, 'drawer')}
-            onDragEnd={endDrag}
-            onClick={() => {
-              if (disabledReason === null) onLaunchTool(tool);
-            }}
-          >
-            {meta.icon}
-            <span className="command-tile-description">
-              <span>{meta.label}</span>
-              {advanced && <small>{disabledReason ?? meta.hint}</small>}
-            </span>
-            {advanced && shortcut && <kbd>{shortcut}</kbd>}
-          </button>
-        </Tooltip>
+          {meta.icon}
+          <span className="command-tile-description">
+            <span>{meta.label}</span>
+            {advanced && <small>{disabledReason ?? meta.hint}</small>}
+          </span>
+          {advanced && shortcut && <kbd>{shortcut}</kbd>}
+        </button>
         {canPin && advanced && (
           <button
             type="button"
@@ -701,15 +698,12 @@ export function CommandCard({
             }}
           >
             <Ellipsis size={16} aria-hidden="true" />
-            <span className="command-rail-label" aria-hidden="true">
-              Tools
-            </span>
           </button>
         </Tooltip>
         {drawerOpen && (
           // A drawer docked to the rail: help for a rail button next to it
-          // drops its description, and a row's help opens beside the
-          // drawer rather than over the rows below it.
+          // drops its description, and its rows, which name themselves,
+          // carry no help of their own.
           <div
             ref={flyoutRef}
             id={drawerId}
