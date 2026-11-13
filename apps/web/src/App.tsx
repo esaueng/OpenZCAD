@@ -33664,6 +33664,7 @@ export function App() {
             warningCount={diagnostics.length}
             documentVersion={doc.version}
             saveState={presentedSaveState}
+            orbitMode={appSettings.viewport.orbitMode}
             repeatingToast={statusRepeatedByToast(toast)}
             searchBar={
               <CommandBar
