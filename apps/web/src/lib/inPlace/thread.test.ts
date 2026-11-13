@@ -1282,5 +1282,15 @@ describe('in-place pipe threads (schema v57)', () => {
     ).toBe(
       `1/4-18 NPT from the Ø13.716 mm face · Threads ${Math.round(reach * 1000) / 1000} of 30 mm, runs out where it stops`
     );
+    // An edit not clicked again cannot tell a boss from a bore: the build
+    // sizes it, and the summary does not guess.
+    const { point: _point, normal: _normal, ...unclicked } = pipe;
+    expect(
+      threadSummary(
+        inPlacePanelState(threadSpec, { profile: 'bspt' }, { length: 9 }),
+        'mm',
+        { faces: [unclicked] }
+      )
+    ).toMatch(/^Sized from the Ø13.716 mm face · /);
   });
 });

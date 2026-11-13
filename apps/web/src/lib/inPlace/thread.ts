@@ -170,17 +170,25 @@ export function threadEndFinishes(
 
 /**
  * Boss or bore, as the pick reads: the face's normal where it was clicked
- * points away from the axis on a boss. Unclicked, a boss; the build reads
- * the solid itself and is the one that decides.
+ * points away from the axis on a boss. Null where the pick cannot say (an
+ * edit not clicked again); the build reads the solid itself and is the one
+ * that decides.
  */
+export function threadFaceKnownKind(
+  face: FacePick | undefined
+): 'external' | 'internal' | null {
+  const geometry = threadFace(face);
+  if (!geometry || !face?.normal || !face.point || face.savedPosition) {
+    return null;
+  }
+  return dot(face.normal, geometry.radial) < 0 ? 'internal' : 'external';
+}
+
+/** {@link threadFaceKnownKind}, taking a boss where the pick cannot say. */
 export function threadFaceKind(
   face: FacePick | undefined
 ): 'external' | 'internal' {
-  const geometry = threadFace(face);
-  if (!geometry || !face?.normal || !face.point || face.savedPosition) {
-    return 'external';
-  }
-  return dot(face.normal, geometry.radial) < 0 ? 'internal' : 'external';
+  return threadFaceKnownKind(face) ?? 'external';
 }
 
 /**
@@ -700,15 +708,20 @@ export function threadSummary(
   const standard = pipeStandard(state.options.profile);
   if (geometry) {
     if (standard) {
+      const kind = threadFaceKnownKind(slots?.faces[0]);
       const spec = pipeSpecFor(
         standard,
         state.options.pipeSize,
         slots?.faces[0],
         units
       );
-      if (spec && !isPipeThreadSize(state.options.pipeSize)) {
+      if (!isPipeThreadSize(state.options.pipeSize)) {
+        // Boss or bore decides the size; where the pick cannot say, the
+        // build does.
         parts.push(
-          `${pipeThreadLabel(standard, spec.size, threadFaceKind(slots?.faces[0]))} from the Ø${round(2 * geometry.radius)} ${units} face`
+          spec && kind
+            ? `${pipeThreadLabel(standard, spec.size, kind)} from the Ø${round(2 * geometry.radius)} ${units} face`
+            : `Sized from the Ø${round(2 * geometry.radius)} ${units} face`
         );
       }
     } else if ((state.options.size ?? 'auto') === 'auto') {
