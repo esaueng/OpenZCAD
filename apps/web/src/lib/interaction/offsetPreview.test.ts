@@ -378,6 +378,8 @@ describe('offsetPreviewRejection for a face pushed past a neighbour', () => {
         'A neighbouring face would shrink to nothing past 6.4. Try a smaller offset.',
       detail: kernelWords,
       category: 'invalid_topology',
+      // The typed code rides along since #1330 (`PlainRefusal.code`).
+      code: 'offset_face_collapses_neighbor',
       limit: -6.400000000000002
     });
   });
