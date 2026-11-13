@@ -567,7 +567,7 @@ test('accepts exact visual selection and direct editing on the seeded boss', asy
   await page.keyboard.press('Escape');
   // The right-click took the top target for its menu (I18); pick the bore
   // again for the checks on it below.
-  bore = await probeFace(canvas, 'bore');
+  await probeFace(canvas, 'bore');
 
   // The reference opens with a real lower-rim fillet. Remove that downstream
   // history feature before the bore edit, then recreate a rim fillet below.
