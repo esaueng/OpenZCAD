@@ -3,7 +3,8 @@ import {
   addAssemblyComponents,
   addAssemblyJoint,
   addPrimitiveFeature,
-  createProjectDocument
+  createProjectDocument,
+  transformBody
 } from '@openzcad/document-core';
 import {
   DEFAULT_APP_SETTINGS,
@@ -97,6 +98,51 @@ const assemble = (page: Page) =>
 
 const panel = (page: Page) =>
   page.getByRole('complementary', { name: 'Assembly' });
+
+test(
+  'groups rigid copies and retains a missing assembly part in the BOM and CSV',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    let document = blades('Missing assembly part', true);
+    const missingId = document.bodyOrder[1]!;
+    document.bodyOrder = document.bodyOrder.filter((id) => id !== missingId);
+    document.assembly!.joints = [];
+    const copied = transformBody(document, {
+      name: 'Copy blade',
+      targetBodyId: document.bodyOrder[0]!,
+      translation: { x: 80, y: 0, z: 0 },
+      copy: true
+    });
+    document = addAssemblyComponents(copied.document, {
+      components: [
+        {
+          componentId: 'comp_copy',
+          name: 'Blade copy',
+          bodyId: copied.bodyId,
+          grounded: false
+        }
+      ]
+    });
+    await openDocument(page, document);
+    await assemble(page);
+    const bom = panel(page).getByRole('region', { name: 'Bill of materials' });
+    await expect(bom.getByRole('listitem')).toHaveText([
+      'Blade A×2',
+      'Blade BMissing×1'
+    ]);
+    const pending = page.waitForEvent('download');
+    await bom
+      .getByRole('button', { name: 'Download bill of materials as CSV' })
+      .click();
+    const download = await pending;
+    const chunks: Buffer[] = [];
+    for await (const chunk of await download.createReadStream())
+      chunks.push(chunk as Buffer);
+    expect(Buffer.concat(chunks).toString('utf8')).toContain(
+      `2,1,Blade B,Blade B,${missingId},missing`
+    );
+  }
+);
 
 for (const width of [1440, 390]) {
   test(
@@ -256,7 +302,7 @@ test(
 );
 
 test(
-  'adds a body that is not in the assembly yet (regression)',
+  'adds a body that is not in the assembly yet and lists it in the BOM (regression, AS03)',
   { tag: '@ci-smoke' },
   async ({ page }) => {
     await openDocument(page, blades('Assembly add body', true, true));
@@ -271,6 +317,30 @@ test(
     ).toHaveCount(0);
     await expect(parts).toContainText('Pivot screw');
     await expect(parts).toContainText('Not joined');
+    // AS03: the bill of materials lists the new part and exports as CSV.
+    const bom = panel(page).getByRole('region', { name: 'Bill of materials' });
+    await expect(bom.getByRole('listitem')).toHaveText([
+      'Blade A×1',
+      'Blade B×1',
+      'Pivot screw×1'
+    ]);
+    const pending = page.waitForEvent('download');
+    await bom
+      .getByRole('button', { name: 'Download bill of materials as CSV' })
+      .click();
+    const download = await pending;
+    expect(download.suggestedFilename()).toBe('Assembly-add-body.bom.csv');
+    const chunks: Buffer[] = [];
+    for await (const chunk of await download.createReadStream())
+      chunks.push(chunk as Buffer);
+    const csv = Buffer.concat(chunks).toString('utf8').trim().split('\n');
+    expect(csv[0]).toBe('item,quantity,part,instances,source_body,status');
+    expect(csv.slice(1).every((line) => line.endsWith(',ready'))).toBe(true);
+    expect(csv.slice(1).map((line) => line.split(',').slice(0, 4))).toEqual([
+      ['1', '1', 'Blade A', 'Blade A'],
+      ['2', '1', 'Blade B', 'Blade B'],
+      ['3', '1', 'Pivot screw', 'Pivot screw']
+    ]);
     // One undo takes the added part back out.
     await page.keyboard.press('ControlOrMeta+z');
     await expect(

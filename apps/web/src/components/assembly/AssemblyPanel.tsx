@@ -1,5 +1,6 @@
 import { useMemo, useState, type MouseEvent, type ReactNode } from 'react';
 import {
+  Download,
   Link2,
   MoveVertical,
   Pause,
@@ -9,6 +10,7 @@ import {
   TriangleAlert
 } from 'lucide-react';
 import { commandFactories } from '@openzcad/command-system';
+import { assemblyBomToCsv, deriveAssemblyBom } from '@openzcad/document-core';
 import {
   ASSEMBLY_JOINT_DOFS,
   createId,
@@ -31,6 +33,7 @@ import {
   sweepUnavailableReason,
   unsolvedReasonText
 } from '../../lib/assembly/assemblyUi';
+import { downloadText, exportFileStem } from '../../lib/model';
 import { ContextMenu, type ContextMenuState } from '../ContextMenu';
 import {
   AssemblyFirstRunCard,
@@ -60,6 +63,8 @@ export interface AssemblyPanelProps {
   bodyBounds?: MotionSetupBounds;
   /** Set up motion opens with its preview paused. */
   reducedMotion?: boolean;
+  /** Saves the BOM CSV; a browser download unless replaced (tests). */
+  saveBomCsv?(fileName: string, csv: string): void;
 }
 
 type MenuTarget =
@@ -134,7 +139,8 @@ function AssemblyLists({
   onStatus,
   studies,
   bodyBounds,
-  reducedMotion
+  reducedMotion,
+  saveBomCsv
 }: AssemblyPanelProps) {
   const model = useAssemblyModel(document);
   const selectedComponentId = useAssemblyRuntime((s) => s.selectedComponentId);
@@ -159,6 +165,23 @@ function AssemblyLists({
     ...[...bodyByComponent.values()].filter((id): id is BodyId => id !== null)
   ]);
   const addable = candidates.filter((body) => !used.has(body.bodyId));
+  const bom = deriveAssemblyBom(document);
+  const missingQuantity = bom.rows.reduce(
+    (count, row) => count + (row.status === 'missing' ? row.quantity : 0),
+    0
+  );
+
+  const downloadBom = () => {
+    const fileName = `${exportFileStem(document.name)}.bom.csv`;
+    const csv = `${assemblyBomToCsv(bom)}\n`;
+    if (saveBomCsv) saveBomCsv(fileName, csv);
+    else downloadText(fileName, csv, 'text/csv');
+    onStatus(
+      `Exported the bill of materials (${bom.rows.length} part${
+        bom.rows.length === 1 ? '' : 's'
+      }) to ${fileName}.${missingQuantity > 0 ? ` Includes ${missingQuantity} missing part${missingQuantity === 1 ? '' : 's'}.` : ''}`
+    );
+  };
 
   const addParts = (bodies: { bodyId: BodyId; name: string }[]) => {
     if (bodies.length === 0) return;
@@ -621,6 +644,62 @@ function AssemblyLists({
               />
             </Section>
           ))}
+
+        <Section
+          title="Bill of materials"
+          count={bom.rows.length}
+          action={
+            bom.rows.length > 0 ? (
+              <button
+                type="button"
+                className="assembly-link-button"
+                aria-label="Download bill of materials as CSV"
+                title="Download as CSV"
+                onClick={downloadBom}
+              >
+                <Download size={12} aria-hidden="true" />
+                CSV
+              </button>
+            ) : null
+          }
+        >
+          {bom.rows.length === 0 ? (
+            <p className="assembly-muted">No parts to list.</p>
+          ) : (
+            <ul className="assembly-list" aria-label="Bill of materials">
+              {bom.rows.map((row) => (
+                <li
+                  key={`${row.status}:${row.bodyId}`}
+                  className="assembly-row"
+                >
+                  <div
+                    className="assembly-row-line"
+                    title={row.instances.map((i) => i.name).join(', ')}
+                  >
+                    <span className="assembly-row-main is-static">
+                      <span className="assembly-row-name">{row.name}</span>
+                      {row.status === 'missing' && (
+                        <span
+                          className="assembly-row-flag"
+                          title="The part's body cannot be found"
+                        >
+                          <TriangleAlert size={12} aria-hidden="true" />
+                          Missing
+                        </span>
+                      )}
+                      <span
+                        className="assembly-row-value"
+                        aria-label={`Quantity ${row.quantity}`}
+                      >
+                        &times;{row.quantity}
+                      </span>
+                    </span>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Section>
       </div>
       {menu ? (
         <ContextMenu
