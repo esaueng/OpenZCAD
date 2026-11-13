@@ -512,6 +512,52 @@ describe('SelectionReadout', () => {
     expect(readout).toHaveTextContent('Bracket · Top face');
     expect(readout).toHaveTextContent('2503.45 mm²');
   });
+
+  it('offers the whole name as a tooltip only while it is cut', () => {
+    // Laid out, a name wider than its box ends in an ellipsis. The test DOM
+    // lays nothing out, so the two widths are given.
+    const widths = { scroll: 0, client: 0 };
+    const scrollWidth = vi
+      .spyOn(HTMLElement.prototype, 'scrollWidth', 'get')
+      .mockImplementation(() => widths.scroll);
+    const clientWidth = vi
+      .spyOn(HTMLElement.prototype, 'clientWidth', 'get')
+      .mockImplementation(() => widths.client);
+    try {
+      const name = 'Mounting Bracket · Front face';
+      widths.scroll = 196;
+      widths.client = 196;
+      const { rerender } = render(
+        <SelectionReadout label={textLabelSegments(name)} detail="263.89 mm²" />
+      );
+      const shown = screen
+        .getByRole('group', { name: 'Picked' })
+        .querySelector<HTMLElement>('.selection-callout-name')!;
+      // It fits: no tooltip repeating what is already read, and the line
+      // keeps leaving the pointer to the model.
+      expect(shown).not.toHaveAttribute('title');
+      expect(shown).not.toHaveAttribute('data-cut');
+
+      // A narrower row cuts it: the full name is the tooltip, and the text
+      // itself (what assistive tech reads) is still whole.
+      widths.client = 150;
+      rerender(
+        <SelectionReadout label={textLabelSegments(name)} detail="263.89 mm²" />
+      );
+      expect(shown).toHaveAttribute('title', name);
+      expect(shown).toHaveAttribute('data-cut');
+      expect(shown).toHaveTextContent(name);
+
+      // A drag rewrites the name in place, without a render: the tooltip
+      // follows it as the pointer arrives.
+      shown.textContent = 'Mounting Bracket · Ø12 hole';
+      fireEvent.pointerEnter(shown);
+      expect(shown).toHaveAttribute('title', 'Mounting Bracket · Ø12 hole');
+    } finally {
+      scrollWidth.mockRestore();
+      clientWidth.mockRestore();
+    }
+  });
 });
 
 describe('refusalIsExpandable', () => {

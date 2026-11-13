@@ -30,6 +30,33 @@ function isNotableStatus(status: string, tone: StatusTone): boolean {
   return tone === 'warning' || REFUSAL_PATTERN.test(status);
 }
 
+/** Phones keep the guidance in the bar; its help glyph opens the whole text. */
+const PHONE_QUERY = '(max-width: 520px)';
+
+/**
+ * Whether guidance is wider than the field it would read in. The probe is the
+ * field's line laid out without being drawn: its text box is the room, its
+ * ink the words. Unlaid out (a hidden lane, a test DOM) it has no room to
+ * outgrow.
+ */
+function hintOutgrowsField(probe: HTMLElement): boolean {
+  if (
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia(PHONE_QUERY).matches
+  ) {
+    return false;
+  }
+  // The line's box, and the inline run of words inside it: the box is cut
+  // to the room, the run never is.
+  const line = probe.firstElementChild;
+  const room = line?.getBoundingClientRect().width;
+  const ink = line?.firstElementChild?.getBoundingClientRect().width;
+  if (!room || !ink) return false;
+  // A hair of slack: the ellipsis appears as soon as the ink overflows at
+  // all, and sub-pixel layout rounds either way.
+  return ink > room - 0.5;
+}
+
 interface WorkspaceReadoutProps {
   status: string;
   statusAt?: number;
@@ -54,6 +81,12 @@ interface WorkspaceReadoutProps {
    * selection dock carry it visually now; it stays here for assistive tech.
    */
   prompt: string | null;
+  /**
+   * The prompt is the idle bar's resting line ("Search commands · ? shortcuts")
+   * rather than guidance: it stays in the field at any width, where a card
+   * over the bar would only repeat the bar's own name.
+   */
+  promptResting?: boolean;
   /** Additional measurement guidance, exposed with the full instructions. */
   instructionDetails?: string | null;
   /**
@@ -115,6 +148,7 @@ export function WorkspaceReadout({
   muted = false,
   onOpenLog,
   prompt,
+  promptResting = false,
   instructionDetails = null,
   pick = null,
   notice = null,
@@ -133,10 +167,14 @@ export function WorkspaceReadout({
   const hasCommandRow = commandRow !== null;
   const hasSelectionGuidance =
     !hasCommandRow && (pick !== null || notice !== null);
+  // Guidance too long for the field stands on a card over the bar, in the
+  // pick's place (measured below, once the toast's state is known).
+  const [raised, setRaised] = useState(false);
+  const hasGuidanceCard = hasSelectionGuidance || (!hasCommandRow && raised);
   useLayoutEffect(() => {
     const lane = laneRef.current;
     const viewer = lane?.closest<HTMLElement>('.viewer-area');
-    if (!lane || !viewer || (!hasCommandRow && !hasSelectionGuidance)) return;
+    if (!lane || !viewer || (!hasCommandRow && !hasGuidanceCard)) return;
     const measure = () => {
       const command = lane.querySelector<HTMLElement>('.in-place-command');
       const height = command?.getBoundingClientRect().height ?? 0;
@@ -147,7 +185,7 @@ export function WorkspaceReadout({
         );
       }
       const guidance = lane.querySelector<HTMLElement>(
-        '.workspace-hint.is-selection'
+        '.workspace-hint.is-selection, .workspace-hint.is-raised'
       );
       // The gap belongs to a row that is drawn. A guidance element with no
       // height (the pick's row while an operation is armed) still added it,
@@ -173,7 +211,7 @@ export function WorkspaceReadout({
       viewer.style.removeProperty('--in-place-command-h');
       viewer.style.removeProperty('--workspace-guidance-h');
     };
-  }, [hasCommandRow, hasSelectionGuidance]);
+  }, [hasCommandRow, hasGuidanceCard]);
   const sticky = statusSticky ?? false;
   // A message already past its lifetime when the readout mounts — entering
   // the workspace long after it was set — is not news, and stays gone.
@@ -284,6 +322,31 @@ export function WorkspaceReadout({
   // stylesheet need not ask `:has()`: that rule restyled the whole workspace
   // on every chip update during a drag.
   const hasSelectionHint = commandRow == null && Boolean(notice || pick);
+  // Guidance alone in the field, where the placeholder would be: the one
+  // case with a width to outgrow. A pick or a notice already has the card.
+  const fieldPrompt =
+    commandRow == null && !notice && !pick && prompt && !shown ? prompt : null;
+  const probedPrompt = promptResting ? null : fieldPrompt;
+  const probeRef = useRef<HTMLSpanElement>(null);
+  useLayoutEffect(() => {
+    const probe = probeRef.current;
+    if (!probe || probedPrompt === null) {
+      setRaised(false);
+      return;
+    }
+    const measure = () => setRaised(hintOutgrowsField(probe));
+    measure();
+    // The bar narrows with the window and the docks, and loses its key badge
+    // under 360px: the probe is laid out as the field's line is, so watching
+    // it follows all three.
+    const observer =
+      typeof ResizeObserver === 'undefined'
+        ? null
+        : new ResizeObserver(measure);
+    observer?.observe(probe);
+    return () => observer?.disconnect();
+  }, [probedPrompt]);
+  const hintRaised = raised && probedPrompt !== null;
   // Always in the tree, as the page's contentinfo landmark: what the status
   // bar used to be for assistive tech and for the specs that read it. Only
   // its visibility changes.
@@ -296,7 +359,7 @@ export function WorkspaceReadout({
           toast is up. */}
       <div
         className={`command-bar-lane${hasGuidance ? ' has-guidance' : ''}${
-          hasSelectionHint ? ' has-selection-hint' : ''
+          hasSelectionHint || hintRaised ? ' has-selection-hint' : ''
         }`}
         ref={laneRef}
       >
@@ -314,7 +377,11 @@ export function WorkspaceReadout({
               ) : null}
             </div>
           ) : (prompt && !shown) || pick ? (
-            <p className={`workspace-hint${pick ? ' is-selection' : ''}`}>
+            <p
+              className={`workspace-hint${
+                pick ? ' is-selection' : hintRaised ? ' is-raised' : ''
+              }`}
+            >
               {pick}
               {prompt && !shown ? (
                 <span className="workspace-hint-text" aria-hidden="true">
@@ -324,6 +391,21 @@ export function WorkspaceReadout({
             </p>
           ) : null)}
         {searchBar}
+        {probedPrompt !== null && (
+          // The field's line, laid out and never drawn: whether the guidance
+          // fits it is read here, so the answer does not depend on which of
+          // the two places the guidance is standing in, or on the bar being
+          // open and the line hidden.
+          <span
+            className="workspace-hint-probe"
+            aria-hidden="true"
+            ref={probeRef}
+          >
+            <span className="workspace-hint-text">
+              <span>{probedPrompt}</span>
+            </span>
+          </span>
+        )}
         {!commandRow && prompt && (
           <details
             className="workspace-hint-help"

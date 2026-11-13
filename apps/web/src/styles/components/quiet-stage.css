@@ -1091,8 +1091,13 @@
    on a box of its own above it. Pressing the bar puts the placeholder back.
    It stays out of the tree (the summary carries it) and never takes the
    pointer, so a press on it lands on the field. Clear of the glyph on the
-   left and the key on the right. */
-.workspace-hint {
+   left and the key on the right.
+   Only while it fits: guidance wider than the field stands on the card over
+   the bar instead (`.is-raised`, below), where a pick's guidance already
+   reads, rather than ending in an ellipsis. The probe is this same line laid
+   out and never drawn, which is how the readout knows (WorkspaceReadout). */
+.workspace-hint,
+.workspace-hint-probe {
   position: absolute;
   bottom: 0;
   left: 50%;
@@ -1110,6 +1115,10 @@
   white-space: nowrap;
   pointer-events: none;
   transform: translateX(-50%);
+}
+
+.workspace-hint-probe {
+  visibility: hidden;
 }
 
 .command-bar-lane:has(.command-bar.open) > .workspace-hint {
@@ -1136,8 +1145,8 @@
 /* ── The notice lane ──
    Everything that talks above the search bar shares one centred lane,
    stacked from the bar up: the status row (the status toast or the
-   activity pill; the guidance reads inside the bar), then the action toast
-   (Undo).
+   activity pill; the guidance reads inside the bar, or on its card when it
+   is too long for the field), then the action toast (Undo).
    Each row that is showing lifts the rows above it. The rows used to carry
    fixed offsets of their own, so the Undo toast and the status toast landed
    on the same pixels whenever both were up at once. The selection is named
@@ -1180,7 +1189,8 @@
 }
 
 /* The status row holds a 28px toast or the 58px activity pill. The hint
-   reads inside the bar and takes no row. */
+   takes no row here: it reads inside the bar, or on the card over it, whose
+   height is already in the lane's foot (--workspace-guidance-h). */
 .viewer-area:has(.workspace-toast:not(.hidden)) .toast {
   --lane-status: 40px;
 }
@@ -5204,8 +5214,27 @@ button.model-panel-grip[aria-expanded='true'] {
 .command-bar-lane:has(.command-bar.open) > .workspace-hint-help {
   display: none;
 }
-.workspace-hint {
-  padding-right: 116px;
+/* Clear of the help glyph, and of the key badge while the bar shows one.
+   The badge leaves a bar under 360px (the row's container query above) and
+   its room goes back to the line: held at 116px, a 290px bar at a 1024px
+   window kept 137px for words and cut every line it had. 279px of line is
+   that 360px bar less the two paddings. */
+.workspace-hint,
+.workspace-hint-probe {
+  padding-right: 44px;
+}
+
+.workspace-hint:not(.is-selection):not(.is-raised),
+.workspace-hint-probe {
+  container: workspace-hint / inline-size;
+}
+
+@media (min-width: 521px) {
+  @container workspace-hint (min-width: 279px) {
+    .workspace-hint-text {
+      margin-right: 72px;
+    }
+  }
 }
 
 /* Instructions have their own hit area after the shortcut badge. */
@@ -5213,7 +5242,10 @@ button.model-panel-grip[aria-expanded='true'] {
   padding-right: 40px;
 }
 
-.workspace-hint.is-selection {
+/* The card over the bar: a pick's name and guidance, or guidance alone
+   that the field is too narrow for. It wraps rather than cuts. */
+.workspace-hint.is-selection,
+.workspace-hint.is-raised {
   position: static;
   width: 100%;
   max-width: var(--command-bar-w);
@@ -5233,7 +5265,8 @@ button.model-panel-grip[aria-expanded='true'] {
   transform: none;
 }
 
-.workspace-hint.is-selection .workspace-hint-text {
+.workspace-hint.is-selection .workspace-hint-text,
+.workspace-hint.is-raised .workspace-hint-text {
   flex: 1 0 100%;
   white-space: normal;
   overflow-wrap: anywhere;
