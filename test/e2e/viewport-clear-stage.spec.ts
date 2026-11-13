@@ -84,34 +84,40 @@ async function box(page: Page, selector: string): Promise<Box> {
 const overlaps = (a: Box, b: Box) =>
   a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
 
-for (const [width, height] of [
-  [768, 1024],
-  [1024, 768]
-] as const) {
-  test(
-    `a project opens clear of the docked panels and the rail at ${width}×${height}`,
-    { tag: width === 768 ? '@ci-smoke' : [] },
-    async ({ page }) => {
-      test.setTimeout(120_000);
-      await openBracket(page, width, height);
-      const model = await restingModel(page);
-      const rail = await box(page, '.instrument-rail');
-      const column = await box(page, '.panel-column');
-      // The whole part stands left of the rail and the column beside it.
-      expect(model.right).toBeLessThanOrEqual(rail.left + 1);
-      expect(model.right).toBeLessThanOrEqual(column.left + 1);
-      expect(model.left).toBeGreaterThanOrEqual(0);
+async function expectOpensClear(page: Page, width: number, height: number) {
+  await openBracket(page, width, height);
+  const model = await restingModel(page);
+  const rail = await box(page, '.instrument-rail');
+  const column = await box(page, '.panel-column');
+  // The whole part stands left of the rail and the column beside it.
+  expect(model.right).toBeLessThanOrEqual(rail.left + 1);
+  expect(model.right).toBeLessThanOrEqual(column.left + 1);
+  expect(model.left).toBeGreaterThanOrEqual(0);
 
-      // The section controls open over the stage, and the cut they control
-      // is moved clear of them rather than left under them.
-      await page.getByRole('button', { name: /^Section view — now:/ }).click();
-      const controls = await box(page, '.rail-section-panel');
-      const cut = await restingModel(page);
-      expect(overlaps(cut, controls)).toBe(false);
-      expect(cut.right).toBeLessThanOrEqual(rail.left + 1);
-    }
-  );
+  // The section controls open over the stage, and the cut they control
+  // is moved clear of them rather than left under them.
+  await page.getByRole('button', { name: /^Section view — now:/ }).click();
+  const controls = await box(page, '.rail-section-panel');
+  const cut = await restingModel(page);
+  expect(overlaps(cut, controls)).toBe(false);
+  expect(cut.right).toBeLessThanOrEqual(rail.left + 1);
 }
+
+test(
+  'a project opens clear of the docked panels and the rail at 768×1024',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(120_000);
+    await expectOpensClear(page, 768, 1024);
+  }
+);
+
+test('a project opens clear of the docked panels and the rail at 1024×768', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  await expectOpensClear(page, 1024, 768);
+});
 
 test('the cube stands clear of a command card at 768px with the panels docked', async ({
   page
