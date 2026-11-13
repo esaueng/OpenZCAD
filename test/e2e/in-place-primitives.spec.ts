@@ -1,6 +1,8 @@
 import {
   addPrimitiveFeature,
+  addSketchFeature,
   createProjectDocument,
+  extrudeSketch,
   listFeaturesInOrder
 } from '@openzcad/document-core';
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
@@ -10,9 +12,12 @@ import {
   expect,
   stubApi,
   MODEL_ONLY,
+  editExtrudeFromHistory,
   enterCommandValue,
   expectBodyCount,
+  extrudeBar,
   finishInPlaceCommand,
+  revealModelPanel,
   setInPlaceOptionValues,
   setSelectionFilter,
   waitForStillViewport
@@ -24,7 +29,11 @@ import {
  * card opens. Each spec ends by reading what the export stored.
  */
 
-async function openProject(page: Page, seeded: ProjectDocument | null) {
+async function openProject(
+  page: Page,
+  seeded: ProjectDocument | null,
+  renderedBodies = 1
+) {
   const document =
     seeded ?? createProjectDocument('Drawn primitive', toUserId('user_e2e'));
   // The stub first: the routes below answer the project itself on top of it.
@@ -57,10 +66,12 @@ async function openProject(page: Page, seeded: ProjectDocument | null) {
   await page.getByRole('button', { name: 'New project' }).click();
   const canvas = page.locator('.viewer-host canvas');
   await expect(canvas).toBeVisible({ timeout: 30_000 });
-  if (seeded) {
-    await expect(canvas).toHaveAttribute('data-e2e-rendered-bodies', '1', {
-      timeout: 30_000
-    });
+  if (seeded && renderedBodies > 0) {
+    await expect(canvas).toHaveAttribute(
+      'data-e2e-rendered-bodies',
+      String(renderedBodies),
+      { timeout: 30_000 }
+    );
   }
 }
 
@@ -477,4 +488,142 @@ test('a cylinder takes typed sizes the same way, and Escape puts a value back', 
     primitiveKind: 'cylinder',
     dimensions: { radius: 20, height: 50 }
   });
+});
+
+/**
+ * A block, and a 10 mm circle sketched on the ground clear of it: extruded,
+ * the circle is a body of its own.
+ */
+function profileDocument(name: string) {
+  return addSketchFeature(seededBox(name), {
+    name: 'Profile',
+    plane: 'XY',
+    objects: [{ objectKind: 'circle', radius: 5, centerX: 80, centerY: 0 }]
+  });
+}
+
+/** The corners of the post that circle extrudes to, `height` tall. */
+const postCorners = (height: number) =>
+  [75, 85].flatMap((x) =>
+    [-5, 5].flatMap((y) =>
+      [0, height].map((z): [number, number, number] => [x, y, z])
+    )
+  );
+
+// The in-place Extrude is its own command, not the primitives' path, and a
+// typed distance that took its preview out of the stage left it there: the
+// post ran up under the top bar and out of the window.
+test('a typed Extrude distance that leaves the stage reframes the new body', { tag: '@ci-smoke' }, async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  await openProject(page, profileDocument('Typed extrude').document);
+  await waitForStillViewport(page);
+  await page.keyboard.press('e');
+  const bar = extrudeBar(page);
+  await expect(bar).toBeVisible({ timeout: 30_000 });
+  const done = bar.getByRole('button', { name: 'Done', exact: true });
+  const keypad = page.locator('.numeric-keypad');
+  // A digit is the distance; Enter sets it.
+  const typeDistance = async (text: string) => {
+    await page.keyboard.type(text);
+    await expect(keypad.locator('input')).toHaveValue(text);
+    await keypad.locator('input').press('Enter');
+    await expect(keypad).toHaveCount(0);
+    await expect(done).toBeEnabled({ timeout: 30_000 });
+  };
+  const stage = async () => {
+    const box = async (selector: string) =>
+      (await page.locator(selector).first().boundingBox())!;
+    const rail = await box('.instrument-rail');
+    const column = await box('.workspace-column-float');
+    const topbar = await box('.app-shell > .topbar');
+    const card = (await bar.boundingBox())!;
+    return {
+      left: column.x + column.width,
+      right: rail.x,
+      top: topbar.y + topbar.height,
+      bottom: card.y
+    };
+  };
+  const inside = async (height: number) => {
+    const frame = await stage();
+    return (await screenPoints(page, postCorners(height))).every(
+      (corner) =>
+        corner.x > frame.left &&
+        corner.x < frame.right &&
+        corner.y > frame.top &&
+        corner.y < frame.bottom
+    );
+  };
+  // A first distance, so the 400 below is a change to a preview already up
+  // (the first body in an empty scene is fitted whatever asked for it).
+  await typeDistance('10');
+  await waitForStillViewport(page);
+  // A 400 mm one does not fit: the value below has something to do.
+  expect(await inside(400)).toBe(false);
+  const before = await axisAngles(page);
+
+  await typeDistance('400');
+
+  // The preview is back in the clear stage: left of the instrument rail,
+  // right of the tool column, under the top bar, above the command's bar.
+  await expect.poll(() => inside(400), { timeout: 20_000 }).toBe(true);
+  await waitForStillViewport(page);
+  expect(await inside(400)).toBe(true);
+  // Reframed, not turned: the view keeps its direction.
+  const after = await axisAngles(page);
+  for (const [index, angle] of after.entries()) {
+    const turned = Math.abs(((angle - before[index]! + 540) % 360) - 180);
+    expect(turned, `axis ${'XYZ'[index]} turned on screen`).toBeLessThan(12);
+  }
+
+  await done.click();
+  await expect(bar).toHaveCount(0, { timeout: 30_000 });
+  await expectBodyCount(page, 2);
+});
+
+// The other half of the rule: an extrude being edited is an edit, and a
+// typed distance never moves the camera under it, however far it reaches.
+test('a typed distance on an extrude being edited keeps the camera', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  const sketched = profileDocument('Edited extrude');
+  const document = extrudeSketch(sketched.document, {
+    name: 'Post',
+    sketchId: sketched.sketchId,
+    distance: 10
+  }).document;
+  await openProject(page, document, 2);
+  await revealModelPanel(page, 'History');
+  const bar = await editExtrudeFromHistory(
+    page,
+    page.locator('.feature-row-main[title^="Post — "]'),
+    'Post'
+  );
+  const done = bar.getByRole('button', { name: 'Done', exact: true });
+  await expect(done).toBeEnabled({ timeout: 30_000 });
+  await waitForStillViewport(page);
+  const marks: [number, number, number][] = [
+    [0, 0, 0],
+    [40, 0, 0],
+    [0, 0, 40]
+  ];
+  const before = await screenPoints(page, marks);
+
+  await enterCommandValue(page, 'distance', '400');
+  await expect(page.getByTestId('command-handle-distance')).toHaveText(
+    '400 mm'
+  );
+  await expect(done).toBeEnabled({ timeout: 30_000 });
+  // Long enough for a reframe to have started, had one been asked for.
+  await page.waitForTimeout(800);
+  await waitForStillViewport(page);
+  const after = await screenPoints(page, marks);
+  for (const [index, point] of after.entries()) {
+    expect(Math.abs(point.x - before[index]!.x)).toBeLessThan(1);
+    expect(Math.abs(point.y - before[index]!.y)).toBeLessThan(1);
+  }
+  await page.keyboard.press('Escape');
 });

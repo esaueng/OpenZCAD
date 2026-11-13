@@ -21,6 +21,15 @@ interface WorkspaceTourProps extends WorkspaceTourSignals {
   onDismiss(): void;
   minimized?: boolean;
   onMinimizedChange?(value: boolean): void;
+  /**
+   * The step the tour had reached when the card last stood. The card leaves
+   * the stage while a command or a sketch runs, and comes back mounted
+   * anew: without this it counted its steps again from the first, and came
+   * back at "Select to edit" after the user had moved past it.
+   */
+  startIndex?: number;
+  /** The step now showing, for whoever keeps `startIndex`. */
+  onIndexChange?(index: number): void;
 }
 
 /**
@@ -37,13 +46,15 @@ export function WorkspaceTour({
   exportSeen,
   onDismiss,
   minimized: minimizedProp,
-  onMinimizedChange
+  onMinimizedChange,
+  startIndex = 0,
+  onIndexChange
 }: WorkspaceTourProps) {
   const keymap = useKeymap();
   const [localMinimized, setLocalMinimized] = useState(false);
   const minimized = minimizedProp ?? localMinimized;
   const [index, setIndex] = useState(() =>
-    advanceThroughCompleted(0, {
+    advanceThroughCompleted(startIndex, {
       featureCount,
       hasSelection,
       historyOpen,
@@ -101,6 +112,12 @@ export function WorkspaceTour({
     seenSignalsRef.current = after;
     setIndex((current) => advanceOnSignals(current, before, after));
   }, [featureCount, hasSelection, historyOpen, exportSeen]);
+
+  const onIndexChangeRef = useRef(onIndexChange);
+  onIndexChangeRef.current = onIndexChange;
+  useEffect(() => {
+    onIndexChangeRef.current?.(index);
+  }, [index]);
 
   const finished = index >= WORKSPACE_TOUR_STEPS.length;
   useEffect(() => {

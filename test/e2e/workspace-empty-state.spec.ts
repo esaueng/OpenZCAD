@@ -36,8 +36,40 @@ test(
     await expect(sketch).toBeVisible();
     await expect(importFiles).toBeVisible();
 
-    // It stands under the origin, centred on the stage the docked panels
-    // leave free (PanelDock publishes their widths on the workspace).
+    // The suite's baseline leaves the Tools drawer open, standing over the
+    // left of the lane. The invitation keeps clear of it: it used to run
+    // under the drawer, which covered its first words and half of "Box".
+    const drawer = page.getByRole('group', { name: 'Tools drawer' });
+    await expect(drawer).toBeVisible();
+    const beside = await invitation.boundingBox();
+    const drawerBox = await drawer.boundingBox();
+    if (!beside || !drawerBox) throw new Error('Stage is missing');
+    expect(beside.x).toBeGreaterThanOrEqual(drawerBox.x + drawerBox.width);
+    for (const part of [
+      invitation.locator('.stage-empty-line'),
+      box,
+      sketch,
+      importFiles
+    ]) {
+      const partBox = (await part.boundingBox())!;
+      expect(partBox.x).toBeGreaterThanOrEqual(drawerBox.x + drawerBox.width);
+      // Centred in what the drawer leaves, not pushed against its edge.
+      expect(partBox.x + partBox.width).toBeLessThanOrEqual(
+        beside.x + beside.width
+      );
+    }
+    const line = (await invitation
+      .locator('.stage-empty-line')
+      .boundingBox())!;
+    expect(
+      Math.abs(line.x + line.width / 2 - (beside.x + beside.width / 2))
+    ).toBeLessThanOrEqual(2);
+    await page.getByRole('button', { name: /^More tools/ }).click();
+    await expect(drawer).toHaveCount(0);
+
+    // With the drawer away it stands under the origin, centred on the stage
+    // the docked panels leave free (PanelDock publishes their widths on the
+    // workspace).
     const bounds = await invitation.boundingBox();
     const canvas = await page.locator('.viewer-host canvas').boundingBox();
     if (!bounds || !canvas) throw new Error('Stage is missing');

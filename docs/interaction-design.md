@@ -63,7 +63,8 @@ In a transaction combining edits and new parts, only the independent additions
 may request automatic framing; replacement results keep their edit semantics.
 
 A creation preview follows the creation rule, not the edit rule. While a
-command is creating a body (a primitive, a pattern's copies) and a typed value
+command is creating a body (a primitive, a pattern's copies, a new Extrude
+of a sketch profile) and a typed value
 takes the preview out of the visible stage, the camera reframes to fit it:
 only the bodies being created, into the stage the canvas keeps clear of the
 docked panels, the rails, the top bar and the command's own bar, with the view
@@ -72,6 +73,10 @@ motion). The trigger is a value typed and committed (the keypad, Tab between
 values, the Options fields); a handle drag never moves the camera under the
 hand, the first preview of an armed command is left where the user was
 looking, and a command editing an existing feature keeps the edit rule above.
+The in-place Extrude is a separate command path and asks through the same
+request: a new extrusion that makes a body reframes on a typed distance, one
+that only adds to or cuts an existing body has created nothing to frame, and
+an extrude re-armed from its History row is an edit.
 The preview's value chips are placed inside that stage and clear of one
 another (`commandChipLayout.ts`).
 

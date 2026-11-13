@@ -81,7 +81,10 @@ async function switchMode(page: Page, mode: string) {
 
 for (const size of SIZES) {
   test.describe(`at ${size.width}px`, () => {
-    test('Build guidance and the picked name read in full', async ({
+    // These two are the smoke set's: a line cut short (Build's, and Draw's
+    // long one) and a line that is not true of its state (Draw with no
+    // views), at both widths.
+    test('Build guidance and the picked name read in full', { tag: '@ci-smoke' }, async ({
       page
     }) => {
       test.setTimeout(180_000);
@@ -144,7 +147,7 @@ for (const size of SIZES) {
       }
     });
 
-    test('Draw points at views only once a sheet has them', async ({
+    test('Draw points at views only once a sheet has them', { tag: '@ci-smoke' }, async ({
       page
     }) => {
       test.setTimeout(180_000);
@@ -251,4 +254,36 @@ test('the resting line names the bar once, beside its key', async ({
       .locator('.workspace-hint-text')
       .evaluate((line) => line.scrollWidth > line.clientWidth)
   ).toBe(false);
+});
+
+// "Has views" used to be asked of the whole document, so an emptied sheet
+// beside a drawn one kept "Drag a view to place it" with nothing to drag.
+test('Draw reads the sheet on screen, not any sheet', async ({ page }) => {
+  test.setTimeout(180_000);
+  await openDemo(page, SIZES[0]);
+  await switchMode(page, 'Draw');
+  const drawings = page.getByRole('region', { name: 'Drawings' });
+  await page.getByRole('button', { name: 'New drawing sheet' }).click();
+  const drag = /^Drag a view to place it/;
+  const resting = 'Search commands · ? shortcuts';
+  await expect(hint(page)).toHaveText(drag, { timeout: 30_000 });
+
+  // A second sheet, emptied of its views.
+  await drawings.getByRole('button', { name: 'New sheet' }).click();
+  const second = drawings.getByRole('application', { name: 'Sheet Sheet 2' });
+  await expect(second).toBeVisible({ timeout: 30_000 });
+  const views = second.getByRole('button', { name: / view$/ });
+  await expect(views).toHaveCount(4, { timeout: 30_000 });
+  for (let left = 4; left > 0; left -= 1) {
+    await views.first().click();
+    await drawings.getByRole('button', { name: 'Delete view' }).click();
+    await expect(views).toHaveCount(left - 1);
+  }
+  await expect(hint(page)).toHaveText(resting, { timeout: 20_000 });
+
+  // The drawn sheet still says it; the empty one still does not.
+  await drawings.getByRole('tab', { name: 'Sheet 1' }).click();
+  await expect(hint(page)).toHaveText(drag, { timeout: 20_000 });
+  await drawings.getByRole('tab', { name: 'Sheet 2' }).click();
+  await expect(hint(page)).toHaveText(resting, { timeout: 20_000 });
 });

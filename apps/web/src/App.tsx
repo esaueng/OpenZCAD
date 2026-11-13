@@ -902,6 +902,7 @@ import type {
   ResolvedExtrude
 } from './lib/extrudeInference';
 import { isExtrudeSessionCurrent } from './lib/extrudeSession';
+import { drawingSheetHasViews } from './lib/drawingHint';
 import {
   beginFieldDefinition,
   createFieldDefinitionTracker,
@@ -2801,6 +2802,13 @@ export function App() {
    * features are added but never appears over someone's existing model.
    */
   const [tourProjectId, setTourProjectId] = useState<string | null>(null);
+  /**
+   * The step that project's tour has reached. The card unmounts while a
+   * command or a sketch runs, so the step is kept here, by project.
+   */
+  const tourStepRef = useRef<{ projectId: string; index: number } | null>(
+    null
+  );
   /** The export dialog has been opened this session — the tour's last signal. */
   const [tourExportSeen, setTourExportSeen] = useState(false);
   const [settingsBusy, setSettingsBusy] = useState(false);
@@ -5779,6 +5787,9 @@ export function App() {
   const tweakMode = resolvedWorkspaceMode === 'tweak';
   const drawingMode = resolvedWorkspaceMode === 'drawing';
   const assembleMode = resolvedWorkspaceMode === 'assemble';
+  /** The sheet the Draw workspace has on screen; null while it is closed. */
+  const [drawingActiveSheetId, setDrawingActiveSheetId] =
+    useState<DrawingSheetId | null>(null);
   const drawingModeRef = useRef(drawingMode);
   drawingModeRef.current = drawingMode;
   // Ctrl+Shift+M steps View → Tweak → Build → Assemble → Draw past whatever the project
@@ -22606,8 +22617,14 @@ export function App() {
    */
   const [creationFrameAsk, setCreationFrameAsk] = useState(0);
   const inPlaceCreating = inPlace.active && inPlace.editing === null;
+  // The in-place Extrude is its own command, and a new one creates a body
+  // as a primitive does: it asks the same way. An extrude being edited is
+  // an edit, and keeps the camera.
+  const extrudeCreating =
+    !inPlace.active && interaction.mode === 'region' && extrudeEdit === null;
+  const creating = inPlaceCreating || extrudeCreating;
   function askCreationFrame() {
-    if (inPlaceCreating) setCreationFrameAsk((ask) => ask + 1);
+    if (creating) setCreationFrameAsk((ask) => ask + 1);
   }
   const [creationFrame, setCreationFrame] = useState<AutoFrameRequest | null>(
     null
@@ -22616,26 +22633,39 @@ export function App() {
   const inPlaceCanFinish = inPlace.canFinish;
   useEffect(() => {
     if (creationFrameAsk === creationFrameAnswered.current) return;
-    if (!inPlaceCreating) {
+    if (!creating) {
       // The command ended first: nothing is left to frame.
       creationFrameAnswered.current = creationFrameAsk;
       return;
     }
     // Done is offered exactly when the preview on screen is the one the
     // values now ask for: until then the typed value has not been drawn.
-    if (!inPlaceCanFinish || !previewDoc || !doc) return;
+    // The Extrude's preview says the same of itself: it lags until the
+    // newest value it was asked for is the one published.
+    const drawn = inPlaceCreating
+      ? inPlaceCanFinish
+      : !regionExtrudePreview.lagging;
+    if (!drawn || !previewDoc || !doc) return;
     creationFrameAnswered.current = creationFrameAsk;
     setCreationFrame({
       before: doc.derived.bodyRepresentations,
       after: previewDoc.derived.bodyRepresentations,
       features: listFeaturesInOrder(previewDoc)
     });
-  }, [creationFrameAsk, inPlaceCreating, inPlaceCanFinish, previewDoc, doc]);
+  }, [
+    creationFrameAsk,
+    creating,
+    inPlaceCreating,
+    inPlaceCanFinish,
+    regionExtrudePreview,
+    previewDoc,
+    doc
+  ]);
   // A request is the running command's: once it ends, a viewport rebuilt
   // later (a hot update, a remount) must not frame its last preview again.
   useEffect(() => {
-    if (!inPlaceCreating) setCreationFrame(null);
-  }, [inPlaceCreating]);
+    if (!creating) setCreationFrame(null);
+  }, [creating]);
   /**
    * Takes a value entered on a command's keypad. Refused, the value goes
    * back to what the chip showed when entry opened, set or unset as it was.
@@ -29571,6 +29601,13 @@ export function App() {
             );
             return;
           }
+          // Assemble picks parts whatever the filter was left at.
+          if (assembleMode) {
+            setStatus('Assemble picks whole parts; the filter is Build\'s.', {
+              unlogged: true
+            });
+            return;
+          }
           // Advances from the filter in force, not from the manual one: with
           // a tool choosing the filter those differ, and stepping from the
           // manual slot would make the first press appear to do nothing.
@@ -30683,9 +30720,9 @@ export function App() {
   // the "Drawings" start and its New drawing sheet button, and "Drag a view
   // to place it" pointed at views that do not exist; the same once a sheet's
   // views are all removed. There the lane rests, as it does on an empty model.
-  const drawingHasViews = Boolean(
-    doc?.drawings?.sheets.some((sheet) => sheet.views.length > 0)
-  );
+  // "The sheet" is the one on screen: a project with an empty sheet beside
+  // a drawn one used to show the drag line on both.
+  const drawingHasViews = drawingSheetHasViews(doc, drawingActiveSheetId);
   // The plane chooser is the Sketch tool's whole first step and says so
   // itself, in its card: the lane neither repeats it nor runs ahead to the
   // drawing keys ("Drag to draw · R rectangle…"), which mean nothing until a
@@ -32394,6 +32431,9 @@ export function App() {
                             isExpression ? raw : undefined,
                             true
                           );
+                          // A typed size that takes a new extrusion out
+                          // of the stage reframes, as a primitive's does.
+                          askCreationFrame();
                           return;
                         }
                         if (keypad.kind === 'edge') {
@@ -32466,7 +32506,14 @@ export function App() {
               currentFaceGeometryPreview?.geometry.topology === 'pending'
             }
             onSelectEdgeChain={handleSelectEdgeChainFromViewer}
-            selectionFilter={selectionFilter}
+            // Assemble's picks are parts. Once an assembly exists its own
+            // viewport takes the primary button; before one does (the
+            // "Start an assembly" first run) a click fell through to
+            // Build's pick and armed its face or edge edit under the hood,
+            // handles hidden. There the pick is the whole body, which arms
+            // nothing: View and Tweak hide the handles of what they pick,
+            // Assemble has no face or edge pick of its own to hide.
+            selectionFilter={assembleMode ? 'body' : selectionFilter}
             onBoxSelect={handleBoxSelectFromViewer}
             onBoxSelectTopology={handleBoxSelectTopologyFromViewer}
             fieldOfView={appSettings.viewport.fieldOfView}
@@ -32539,6 +32586,14 @@ export function App() {
                 }
                 historyOpen={panelShowing('history')}
                 exportSeen={tourExportSeen}
+                startIndex={
+                  tourStepRef.current?.projectId === doc.projectId
+                    ? tourStepRef.current.index
+                    : 0
+                }
+                onIndexChange={(index) => {
+                  tourStepRef.current = { projectId: doc.projectId, index };
+                }}
                 onDismiss={() =>
                   setPanelState((current) => ({
                     ...current,
@@ -33102,6 +33157,7 @@ export function App() {
                 onCommand={(command) => executeCommand(command)}
                 onStatus={(message, options) => setStatus(message, options)}
                 onAssistantSource={handleDrawingAssistantSource}
+                onActiveSheetChange={setDrawingActiveSheetId}
                 previewAnnotations={drawingPreview}
               />
             </Suspense>
