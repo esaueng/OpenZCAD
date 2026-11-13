@@ -5335,6 +5335,22 @@ button.model-panel-grip[aria-expanded='true'] {
   padding: 0 4px;
 }
 
+/* A point's coordinates read like every other number in the panel: right
+   aligned against their unit. Position sat left while Size sat right. */
+.in-place-param-value.is-vector .in-place-param-field input {
+  text-align: right;
+}
+
+/* A point's name may take two lines rather than end in "Base cen…": its
+   fields take the rest of the row either way. */
+.in-place-param-value.is-vector > .in-place-option-label {
+  overflow: visible;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: normal;
+  line-height: 1.2;
+}
+
 .in-place-params-actions {
   margin-top: 8px;
 }

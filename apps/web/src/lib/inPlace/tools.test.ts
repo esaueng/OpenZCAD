@@ -2250,6 +2250,34 @@ describe('axes and directions picked in the model', () => {
   });
 });
 
+describe('hints before the first pick', () => {
+  it('never send the user to an Options field that is not there yet', () => {
+    // 13 November review: "Options sets the radius" over an Options panel
+    // with no radius in it until an edge was picked.
+    for (const [tool, size] of [
+      ['fillet', 'radius'],
+      ['chamfer', 'distance']
+    ] as const) {
+      const hint = IN_PLACE_TOOL_SPECS[tool].hint(EMPTY, {});
+      expect(hint).toMatch(new RegExp(`^Click the edges to ${tool}`));
+      expect(hint).toContain(`the ${size}`);
+      expect(hint).not.toMatch(/Options/);
+    }
+    expect(IN_PLACE_TOOL_SPECS.gear.hint(EMPTY, {})).toBe(
+      'Pick a plane or flat face · then set module and teeth on the gear'
+    );
+  });
+
+  it('spells center as every other card does', () => {
+    const pivot = IN_PLACE_TOOL_SPECS.scale.options?.find(
+      (option) => option.id === 'pivot'
+    );
+    expect(pivot?.choices.map((choice) => choice.label)).toContain(
+      'Body center'
+    );
+  });
+});
+
 describe('a new primitive over a model that has bodies', () => {
   it('says Done adds a separate body where it previews', () => {
     // 13 November review: Cylinder, Sphere, Cone and Torus previewed at the
