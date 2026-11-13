@@ -25,6 +25,7 @@ import {
 } from '@openzcad/shared';
 import {
   resolveThread,
+  threadChamfersShortOfFace,
   threadEndSpec,
   threadPrintAdvisories,
   threadProfileForm
@@ -194,6 +195,34 @@ describe('thread resolution against its face', () => {
 });
 
 describe('thread chamfers', () => {
+  it('finds the chamfered ends that stop short of the face', () => {
+    const face = { radius: 3, faceLength: 8 };
+    const short = (fields: Partial<ThreadData>) =>
+      threadChamfersShortOfFace(
+        resolveThread(
+          data({ chamferStart: true, chamferEnd: true, ...fields }),
+          values,
+          { kind: 'external', ...face },
+          1
+        ),
+        face
+      );
+    // The whole face, and a span within the kernel's snap of it.
+    expect(short({})).toEqual([]);
+    expect(short({ length: 8 - 1e-12 })).toEqual([]);
+    // From the start, short of the end; from the end, short of the start.
+    expect(short({ length: 5 })).toEqual(['end']);
+    expect(short({ length: 5, anchor: 'end' })).toEqual(['start']);
+    // Set off from the end it starts at.
+    expect(short({ offset: 2 })).toEqual(['start']);
+    expect(short({ offset: 2, anchor: 'end' })).toEqual(['end']);
+    expect(short({ offset: 1, length: 5 })).toEqual(['start', 'end']);
+    // Only a chamfered end counts.
+    expect(short({ length: 5, chamferEnd: false })).toEqual([]);
+    // A span past the face is the kernel's to refuse, by its own code.
+    expect(short({ offset: 2, length: 7 })).toEqual([]);
+  });
+
   it('sends a chamfered end to the kernel and leaves a plain one out', () => {
     const chamfered = resolveThread(
       data({ chamferEnd: true, chamferAngleDeg: 30 }),
@@ -534,6 +563,126 @@ describe('thread features on the exact kernel', () => {
       expect(plainBody.volume - body.volume).toBeGreaterThan(1.5);
       expect(plainBody.volume - body.volume).toBeLessThan(2.5);
       expect(body.bbox.max.x - body.bbox.min.x).toBeLessThan(6 + 1e-6);
+    },
+    120_000
+  );
+
+  it.runIf(kernelHasThreads)(
+    'keeps the chamfer at the end a partial thread starts from',
+    async () => {
+      const { document, bodyId, side } = await shank(3, 8);
+      const thread = (fields: Partial<ThreadInput>) =>
+        threadBody(document, {
+          name: 'Thread',
+          targetBodyId: bodyId,
+          faceHash: side.hash,
+          profile: 'iso-metric',
+          ...fields
+        });
+      const built = async (fields: Partial<ThreadInput>) => {
+        const threaded = thread(fields);
+        const derived = await adapter.syncDocument(threaded.document);
+        expect(
+          derived.featureWarnings!.filter(
+            (warning) => warning.kind === 'build-failed'
+          )
+        ).toEqual([]);
+        return derived.bodyRepresentations[threaded.bodyId]!;
+      };
+      // The M6 outline's area in closed form, as above: a plain thread 5
+      // long leaves a 3 long collar of the shank.
+      const [crest, root] = [3, 3 - ISO_DEPTH];
+      const flank =
+        ((2 * Math.PI * ISO_DEPTH * Math.tan(Math.PI / 6)) / 6) *
+        (crest * crest + crest * root + root * root);
+      const area =
+        0.5 * crest * crest * 2 * Math.PI * (1 / 8) +
+        0.5 * root * root * 2 * Math.PI * (1 / 4) +
+        2 * flank;
+      const plain = await built({ length: 5 });
+      expect(plain.volume).toBeCloseTo(area * 5 + Math.PI * 9 * 3, 2);
+      // What a 45° cone through the end plane at radius `atEnd` takes off
+      // the thread: the outline outside the cone's circle, in closed form
+      // at each height (arcs ½(r² − c²)Δθ, a flank's part above the circle
+      // Δθ·f·((r₁² + r₁c + c²)/6 − c²/2)), integrated up to the crest.
+      const outside = (c: number) => {
+        const turn = (width: number) => 2 * Math.PI * width;
+        const arc = (r: number, width: number) =>
+          r > c ? 0.5 * (r * r - c * c) * turn(width) : 0;
+        const from = Math.max(c, root);
+        const above =
+          ((crest - from) / ISO_DEPTH) *
+          turn(ISO_DEPTH * Math.tan(Math.PI / 6)) *
+          ((crest * crest + crest * from + from * from) / 6 - (c * c) / 2);
+        return arc(crest, 1 / 8) + arc(root, 1 / 4) + 2 * above;
+      };
+      const coneTakes = (atEnd: number) => {
+        const steps = 4000;
+        const height = crest - atEnd;
+        let sum = 0;
+        for (let step = 0; step < steps; step += 1) {
+          sum += outside(atEnd + (height * (step + 0.5)) / steps);
+        }
+        return (sum * height) / steps;
+      };
+      // The cone leaves the end plane just inside the root: between the
+      // root itself and a tenth of the depth below it.
+      const [least, most] = [coneTakes(root), coneTakes(root - ISO_DEPTH / 10)];
+      // From the face's start, and from its end.
+      const fromStart = await built({ length: 5, chamferStart: true });
+      expect(plain.volume - fromStart.volume).toBeGreaterThan(least);
+      expect(plain.volume - fromStart.volume).toBeLessThan(most);
+      expect(fromStart.bbox.max.x - fromStart.bbox.min.x).toBeLessThan(
+        6 + 1e-6
+      );
+      const fromEnd = await built({
+        length: 5,
+        anchor: 'end',
+        chamferEnd: true
+      });
+      expect(plain.volume - fromEnd.volume).toBeGreaterThan(least);
+      expect(plain.volume - fromEnd.volume).toBeLessThan(most);
+    },
+    240_000
+  );
+
+  it.each([
+    [{ length: 5, chamferEnd: true }, /short of the face's end\./],
+    [{ length: 5, anchor: 'end', chamferStart: true }, /face's start\./],
+    [{ offset: 2, chamferStart: true, chamferEnd: true }, /face's start\./],
+    [
+      { offset: 1, length: 5, chamferStart: true, chamferEnd: true },
+      /short of both/
+    ]
+  ] as const)(
+    'refuses a chamfer on an end short of the face by code: %j',
+    async (fields, reason) => {
+      const { document, bodyId, side } = await shank(3, 8);
+      const threaded = threadBody(document, {
+        name: 'Thread',
+        targetBodyId: bodyId,
+        faceHash: side.hash,
+        profile: 'iso-metric',
+        ...fields
+      });
+      const kernelCall = vi.spyOn(RemusKernel.prototype, 'cutThreadDetailed');
+      try {
+        const derived = await adapter.syncDocument(threaded.document);
+        const refusal = derived.featureWarnings!.find(
+          (warning) => warning.kind === 'build-failed'
+        );
+        expect(refusal?.message).toMatch(reason);
+        expect(refusal?.kernelRefusal).toEqual({
+          family: 'thread',
+          category: 'unsupported',
+          code: 'thread:chamfer-short-of-face'
+        });
+        // Refused before the kernel is asked; the shank stands in for it.
+        expect(kernelCall).not.toHaveBeenCalled();
+        expectPassedThrough(derived, threaded.bodyId, bodyId);
+      } finally {
+        kernelCall.mockRestore();
+      }
     },
     120_000
   );

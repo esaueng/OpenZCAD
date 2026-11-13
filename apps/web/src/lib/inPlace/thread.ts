@@ -52,6 +52,25 @@ const chamfered = (state: InPlacePanelState) =>
   (state.options.chamfer ?? 'both') !== 'none';
 
 /**
+ * The ends of the face that take their chamfer. A chamfer's cone is built
+ * into an end standing on the face's end plane, so only an end the thread
+ * reaches takes one: a partial thread keeps the one where it starts and
+ * stops plain, and one set off from its starting end is plain there.
+ */
+export function threadChamferedEnds(
+  chamfer: string | undefined,
+  extent: { partial: boolean; from: ThreadAnchor; setOff: boolean }
+): { start: boolean; end: boolean } {
+  const wanted = chamfer ?? 'both';
+  const reached = (end: ThreadAnchor) =>
+    extent.from === end ? !extent.setOff : !extent.partial;
+  return {
+    start: (wanted === 'both' || wanted === 'start') && reached('start'),
+    end: (wanted === 'both' || wanted === 'end') && reached('end')
+  };
+}
+
+/**
  * A picked cylinder as a thread reads it: its two ends on the axis, the unit
  * axis from start to end, its length and radius, and a direction across the
  * axis toward where it was clicked (any one, unclicked). Null when the face
@@ -112,7 +131,7 @@ export function threadFace(face: FacePick | undefined): ThreadFace | null {
 }
 
 /** The stored thread being edited, if this command edits one. */
-function savedThread(ctx: InPlaceContext | undefined) {
+function savedThread(ctx: Pick<InPlaceContext, 'saved'> | undefined) {
   return ctx?.saved?.featureKind === 'thread' ? ctx.saved : null;
 }
 
@@ -122,7 +141,7 @@ function savedThread(ctx: InPlaceContext | undefined) {
  */
 export function threadAnchor(
   face: FacePick | undefined,
-  ctx?: InPlaceContext
+  ctx?: Pick<InPlaceContext, 'saved'>
 ): ThreadAnchor {
   const geometry = threadFace(face);
   if (geometry && face?.point && !face.savedPosition) {
@@ -382,7 +401,8 @@ const THREAD_OPTIONS: readonly OptionSpec[] = [
   {
     id: 'chamfer',
     label: 'Chamfer',
-    // Kept only at an end the thread runs to: a partial thread's are plain.
+    // Kept only at an end the thread runs to: a partial thread keeps the
+    // one where it starts (see `threadChamferedEnds`).
     choices: [
       {
         value: 'both',
@@ -431,7 +451,8 @@ export function threadSummary(
   const parts: string[] = [];
   const geometry = threadFace(slots?.faces[0]);
   const round = (value: number) => Math.round(value * 1000) / 1000;
-  let partial = false;
+  // Without a face, every end asked for counts as chamfered.
+  let anyChamfer = chamfered(state);
   if (geometry) {
     if ((state.options.size ?? 'auto') === 'auto') {
       parts.push(`Sized from the Ø${round(2 * geometry.radius)} ${units} face`);
@@ -442,15 +463,26 @@ export function threadSummary(
     const face = round(geometry.length);
     // A length typed as an expression is kept as written, so it is stored
     // (and the ends left plain) even where it reaches the far end.
-    partial = lengthIsExplicit(
+    const partial = lengthIsExplicit(
       geometry,
       { ...state.numbers, ...state.raws },
       state.numbers,
       context ?? { touched: ['length'] }
     );
+    const ends = threadChamferedEnds(state.options.chamfer, {
+      partial,
+      from: threadAnchor(
+        slots?.faces[0],
+        context?.saved ? { saved: context.saved } : undefined
+      ),
+      setOff: offset !== 0
+    });
+    anyChamfer = ends.start || ends.end;
     parts.push(
       partial
-        ? `Threads ${round(length)} of ${face} ${units}, ends plain`
+        ? `Threads ${round(length)} of ${face} ${units}, ${
+            anyChamfer ? 'plain where it stops' : 'ends plain'
+          }`
         : offset > 0
           ? `To end · Threads ${round(reach)} of ${face} ${units}`
           : `Threads the full ${face} ${units}`
@@ -461,7 +493,7 @@ export function threadSummary(
   if (starts > 1) parts.push(`${starts} starts`);
   const phase = Math.round((state.numbers.phaseDeg ?? 0) * 100) / 100;
   if (phase !== 0) parts.push(`Rotated ${phase}°`);
-  if (chamfered(state) && !partial) {
+  if (anyChamfer) {
     const angle = Math.round((state.numbers.chamferAngleDeg ?? 45) * 100) / 100;
     if (angle !== 45) parts.push(`Chamfer ${angle}°`);
   }
@@ -594,22 +626,15 @@ export function threadRequestFields(
   }
   const phase = values.phaseDeg;
   if (phase !== undefined && phase !== 0) fields.phaseDeg = phase;
-  // A chamfered end must reach the end of the face: a partial thread takes
-  // none, and one set off from its starting end none there.
-  const chamfer = partial ? 'none' : (options.chamfer ?? 'both');
-  const setOff = offsetStored && (extent.offset ?? 1) !== 0;
-  if (
-    (chamfer === 'both' || chamfer === 'start') &&
-    !(setOff && from === 'start')
-  ) {
-    fields.chamferStart = true;
-  }
-  if (
-    (chamfer === 'both' || chamfer === 'end') &&
-    !(setOff && from === 'end')
-  ) {
-    fields.chamferEnd = true;
-  }
+  // A chamfered end must reach the end of the face: a partial thread keeps
+  // only the one where it starts, and one set off from there not that one.
+  const ends = threadChamferedEnds(options.chamfer, {
+    partial,
+    from,
+    setOff: offsetStored && (extent.offset ?? 1) !== 0
+  });
+  if (ends.start) fields.chamferStart = true;
+  if (ends.end) fields.chamferEnd = true;
   if (fields.chamferStart || fields.chamferEnd) {
     const angle = values.chamferAngleDeg;
     if (angle !== undefined && angle !== 45) fields.chamferAngleDeg = angle;

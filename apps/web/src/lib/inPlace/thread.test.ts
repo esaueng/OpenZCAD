@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { BodyId, ParamValue } from '@openzcad/shared';
 import {
   threadAnchor,
+  threadChamferedEnds,
   threadEditOptions,
   threadFace,
   threadIsPartial,
@@ -43,7 +44,7 @@ describe('in-place thread', () => {
     });
   });
 
-  it('chamfers the chosen ends at the chosen angle, and never a band', () => {
+  it('chamfers the chosen ends at the chosen angle, and a band only where it starts', () => {
     expect(
       threadRequestFields(
         initialValues({ chamferAngleDeg: 30 }),
@@ -62,8 +63,18 @@ describe('in-place thread', () => {
       'mm',
       { partial: true }
     );
-    expect(band.chamferStart).toBeUndefined();
+    expect(band.chamferStart).toBe(true);
     expect(band.chamferEnd).toBeUndefined();
+    // Set off from the end it starts at, it reaches neither end.
+    const island = threadRequestFields(
+      initialValues({ offset: 2 }),
+      defaults({ chamfer: 'both' }),
+      'mm',
+      { partial: true, offset: 2 }
+    );
+    expect(island.chamferStart).toBeUndefined();
+    expect(island.chamferEnd).toBeUndefined();
+    expect(island.chamferAngleDeg).toBeUndefined();
   });
 
   it('stores an ISO size in document units and an exact fit as no clearance', () => {
@@ -420,7 +431,8 @@ describe('in-place thread: picks and the dragged end (U11)', () => {
       dragged,
       numbersOf(short)
     );
-    // Clicked near the top, it runs 8 down from there, its ends plain.
+    // Clicked near the top, it runs 8 down from there: chamfered at the
+    // top it starts from, plain where it stops short of the bottom.
     expect(request).toEqual({
       tool: 'thread',
       thread: {
@@ -429,7 +441,8 @@ describe('in-place thread: picks and the dragged end (U11)', () => {
         profile: 'printable',
         clearance: 0.1,
         length: 8,
-        anchor: 'end'
+        anchor: 'end',
+        chamferEnd: true
       }
     });
     // Dragged back to the face's end, it is whole again, chamfers and all,
@@ -562,6 +575,105 @@ describe('in-place thread: picks and the dragged end (U11)', () => {
     expect(request.thread.length).toBeUndefined();
   });
 
+  it('chamfers only the ends of the face a thread reaches', () => {
+    const ends = (
+      chamfer: string | undefined,
+      partial: boolean,
+      from: 'start' | 'end',
+      setOff = false
+    ) => threadChamferedEnds(chamfer, { partial, from, setOff });
+    // The whole face: the ends asked for.
+    expect(ends(undefined, false, 'start')).toEqual({ start: true, end: true });
+    expect(ends('end', false, 'end')).toEqual({ start: false, end: true });
+    expect(ends('none', false, 'start')).toEqual({ start: false, end: false });
+    // Stopped short: only the end it starts from, where that one is asked.
+    expect(ends('both', true, 'start')).toEqual({ start: true, end: false });
+    expect(ends('both', true, 'end')).toEqual({ start: false, end: true });
+    expect(ends('end', true, 'start')).toEqual({ start: false, end: false });
+    // Set off from its starting end: only the far one, where it reaches it.
+    expect(ends('both', false, 'start', true)).toEqual({
+      start: false,
+      end: true
+    });
+    expect(ends('both', true, 'end', true)).toEqual({
+      start: false,
+      end: false
+    });
+  });
+
+  it('keeps a partial thread’s chamfer where it starts, from either end', () => {
+    const dragged = { ...CTX, touched: ['length'] };
+    const short = initialValues({ length: 8, offset: 0, chamferAngleDeg: 30 });
+    const request = (z: number, chamfer: string) =>
+      (
+        threadSpec.request(
+          { ...SLOTS, faces: [{ ...BOSS, point: { x: 3, y: 0, z } }] },
+          short,
+          defaults({ chamfer }),
+          dragged,
+          numbersOf(short)
+        ) as { thread: ThreadRequest }
+      ).thread;
+    // Picked near the bottom: the face's start.
+    expect(request(2, 'both')).toMatchObject({
+      length: 8,
+      chamferStart: true,
+      chamferAngleDeg: 30
+    });
+    expect(request(2, 'both').chamferEnd).toBeUndefined();
+    expect(request(2, 'both').anchor).toBeUndefined();
+    // Picked near the top: the face's end.
+    expect(request(10, 'both')).toMatchObject({
+      length: 8,
+      anchor: 'end',
+      chamferEnd: true,
+      chamferAngleDeg: 30
+    });
+    expect(request(10, 'both').chamferStart).toBeUndefined();
+    // Asked only for the end it stops short of, it has none, nor an angle.
+    const plain = request(2, 'end');
+    expect(plain.chamferStart).toBeUndefined();
+    expect(plain.chamferEnd).toBeUndefined();
+    expect(plain.chamferAngleDeg).toBeUndefined();
+  });
+
+  it('reads a partial thread’s kept chamfer back and writes it unchanged', () => {
+    const saved = {
+      featureKind: 'thread' as const,
+      targetBodyId: 'body_a' as BodyId,
+      faceHash: 9,
+      profile: 'printable' as const,
+      clearance: 0.1,
+      length: 8,
+      anchor: 'end' as const,
+      chamferEnd: true
+    };
+    const options = threadEditOptions(saved, evaluate, 'mm');
+    expect(options.chamfer).toBe('end');
+    const values = initialValues({ length: 8 });
+    const ctx = { ...CTX, saved, touched: ['length'] };
+    const { featureKind: _kind, ...fields } = saved;
+    expect(
+      threadSpec.request(
+        { ...SLOTS, faces: [BOSS] },
+        values,
+        options,
+        ctx,
+        numbersOf(values)
+      )
+    ).toEqual({ tool: 'thread', thread: fields });
+    expect(
+      threadSummary(
+        inPlacePanelState(threadSpec, options, { length: 8 }),
+        'mm',
+        { faces: [BOSS] },
+        { touched: ['length'], saved }
+      )
+    ).toBe(
+      'Sized from the Ø6 mm face · Threads 8 of 12 mm, plain where it stops'
+    );
+  });
+
   it('reads out what the face and the dragged end decide', () => {
     const slots = { faces: [{ ...BOSS, point: { x: 3, y: 0, z: 10 } }] };
     expect(
@@ -581,7 +693,21 @@ describe('in-place thread: picks and the dragged end (U11)', () => {
         'mm',
         slots
       )
-    ).toBe('Threads 8 of 12 mm, ends plain');
+    ).toBe('Threads 8 of 12 mm, plain where it stops · Chamfer 30°');
+    // With no chamfer left where it starts, both ends are plain.
+    for (const chamfer of ['none', 'start']) {
+      expect(
+        threadSummary(
+          inPlacePanelState(
+            threadSpec,
+            { size: 'M8', chamfer },
+            { length: 8, chamferAngleDeg: 30 }
+          ),
+          'mm',
+          slots
+        )
+      ).toBe('Threads 8 of 12 mm, ends plain');
+    }
     expect(
       threadSummary(
         inPlacePanelState(threadSpec, {}, { length: 10, offset: 2 }),
