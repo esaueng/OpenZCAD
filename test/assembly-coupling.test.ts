@@ -405,6 +405,9 @@ describe('coupling refusals', () => {
     );
     expect(broken((c) => (c.offset = Number.NaN))).toMatch(/offset/);
     expect(broken((c) => (c.name = ' '))).toMatch(/name/);
+    expect(
+      assemblySetError({ ...set, couplings: null as unknown as [] })
+    ).toMatch(/couplings are malformed/);
     // A stored loop never hangs or double-counts the solve: it is left out.
     expect(couplingGroups(looped)[0]?.couplingIds).toEqual(['mesh', 'mesh_2']);
   });

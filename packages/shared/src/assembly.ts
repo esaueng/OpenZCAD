@@ -535,7 +535,8 @@ function couplingsError(
   joints: Map<string, AssemblyJointKind>
 ): string | null {
   if (value === undefined) return null;
-  if (!Array.isArray(value) || value.length > MAX_ASSEMBLY_COUPLINGS)
+  if (!Array.isArray(value)) return 'The assembly couplings are malformed.';
+  if (value.length > MAX_ASSEMBLY_COUPLINGS)
     return `An assembly holds at most ${MAX_ASSEMBLY_COUPLINGS} couplings.`;
   const ids = new Set<string>();
   const group = new Map<string, string>();
