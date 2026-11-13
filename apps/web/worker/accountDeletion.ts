@@ -26,7 +26,10 @@ import type {
   ProjectCollaborationRoom
 } from '@openzcad/cloudflare-adapters';
 import type { PersistenceService } from '@openzcad/persistence';
-import { authEmailRateLimitBucket } from './auth';
+import {
+  authEmailCleanAllowanceBucket,
+  authEmailRateLimitBucket
+} from './auth';
 import { libraryFolderErasureStatements } from './libraryFolderSets';
 import {
   isAccountErasureReady,
@@ -291,9 +294,14 @@ function profileCleanupStatements(
         // Requester buckets share this opaque email prefix. Erase them with
         // the pending challenges, while keeping the shared IP limiter intact.
         .prepare(
-          `DELETE FROM auth_rate_limits WHERE bucket = ? OR bucket GLOB ?`
+          `DELETE FROM auth_rate_limits
+           WHERE bucket = ? OR bucket = ? OR bucket GLOB ?`
         )
-        .bind(authRateBucket, `${authRateBucket}:ip:*`)
+        .bind(
+          authRateBucket,
+          authEmailCleanAllowanceBucket(authRateBucket),
+          `${authRateBucket}:ip:*`
+        )
     );
   }
   if (e2eeProjectPreferencesReady) {
@@ -318,8 +326,8 @@ function profileCleanupStatements(
       .bind(userId),
     db.prepare(`DELETE FROM auth_sessions WHERE user_id = ?`).bind(userId),
     db
-      .prepare('DELETE FROM auth_rate_limits WHERE bucket = ?')
-      .bind(`api:${userId}`),
+      .prepare('DELETE FROM auth_rate_limits WHERE bucket IN (?, ?)')
+      .bind(`api:${userId}`, `api-read:${userId}`),
     db
       .prepare(`DELETE FROM desktop_auth_attempts WHERE user_id = ?`)
       .bind(userId),

@@ -820,15 +820,110 @@ describe('sign-in cannot be denied by someone who only knows the email', () => {
       await start(`203.0.113.${host}`);
     }
     expect(sent).toHaveLength(10);
+    // Past the shared allowance, two more requesters with no wrong codes
+    // still get one each.
+    await start('198.51.100.5');
+    await start('198.51.100.6');
+    expect(sent).toHaveLength(12);
 
     const capped = await start('198.51.100.7');
 
-    expect(sent).toHaveLength(10);
+    expect(sent).toHaveLength(12);
     expect(capped.expiresInSeconds).toBe(600);
-    await expect(verify(capped.challengeId, sent[9]!)).rejects.toMatchObject({
+    await expect(verify(capped.challengeId, sent[11]!)).rejects.toMatchObject({
       code: 'AUTH_CODE_INVALID'
     });
   });
+
+  it('still sends a code to a requester with no wrong codes once guessers spend the shared allowance', async () => {
+    const { sent, start, verify } = signInHarness();
+    for (let host = 1; host <= 10; host += 1) {
+      const { challengeId } = await start(`203.0.113.${host}`);
+      await expect(
+        verify(challengeId, wrongCode(sent.at(-1)!))
+      ).rejects.toMatchObject({ code: 'AUTH_CODE_INVALID' });
+    }
+    expect(sent).toHaveLength(10);
+
+    // A requester with a wrong code of its own gets nothing more.
+    await start('203.0.113.1');
+    expect(sent).toHaveLength(10);
+
+    const owner = await start('198.51.100.7');
+    expect(sent).toHaveLength(11);
+    await expect(verify(owner.challengeId, sent[10]!)).resolves.toMatchObject({
+      session: { email: 'person@example.com' }
+    });
+  });
+
+  it('cools an email down after a day of wrong codes, keeping one code a window for requesters with none', async () => {
+    const harness = signInHarness();
+    const { env, sent, start, verify } = harness;
+    let clock = Date.parse('2026-11-13T08:00:00Z');
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    const failures = async () =>
+      (await env.DB.prepare(
+        'SELECT COALESCE(SUM(attempts), 0) AS count FROM auth_email_challenges'
+      ).first<{ count: number }>())!.count;
+    try {
+      // Fifty wrong codes, each code tried until it locks, ten codes a
+      // window from fresh addresses.
+      let host = 0;
+      while ((await failures()) < 50) {
+        for (let code = 0; code < 10 && (await failures()) < 50; code += 1) {
+          host += 1;
+          const { challengeId } = await start(`192.0.2.${host}`);
+          const guess = wrongCode(sent.at(-1)!);
+          for (;;) {
+            const refusal = await verify(challengeId, guess).catch(
+              (error: { code: string }) => error
+            );
+            const code = (refusal as { code?: string }).code;
+            expect(code).toMatch(/^AUTH_CODE_(INVALID|LOCKED)$/);
+            if (code === 'AUTH_CODE_LOCKED') break;
+          }
+        }
+        clock += 15 * 60 * 1000;
+      }
+
+      // A fresh window: the shared allowance is closed, so a requester with
+      // wrong codes of its own gets nothing.
+      clock += 15 * 60 * 1000;
+      let sentCount = sent.length;
+      await start('192.0.2.1');
+      expect(sent).toHaveLength(sentCount);
+
+      // One requester with none gets a code this window, the next does not.
+      const owner = await start('198.51.100.7');
+      expect(sent).toHaveLength(sentCount + 1);
+      const ownerCode = sent.at(-1)!;
+      await start('198.51.100.8');
+      expect(sent).toHaveLength(sentCount + 1);
+      await expect(verify(owner.challengeId, ownerCode)).resolves.toMatchObject(
+        { session: { email: 'person@example.com' } }
+      );
+
+      // Next window's code allows a single try.
+      clock += 15 * 60 * 1000;
+      const oneTry = await start('198.51.100.9');
+      const oneTryCode = sent.at(-1)!;
+      await expect(
+        verify(oneTry.challengeId, wrongCode(oneTryCode))
+      ).rejects.toMatchObject({ code: 'AUTH_CODE_INVALID' });
+      await expect(
+        verify(oneTry.challengeId, oneTryCode)
+      ).rejects.toMatchObject({ status: 429, code: 'AUTH_CODE_LOCKED' });
+
+      // Once those failures age out of the day, the email cools off.
+      clock += 25 * 60 * 60 * 1000;
+      sentCount = sent.length;
+      await start('192.0.2.1');
+      expect(sent).toHaveLength(sentCount + 1);
+    } finally {
+      now.mockRestore();
+    }
+    // About forty codes and a hundred verifications on SQLite.
+  }, 120_000);
 
   it("cancels every one of the email's pending codes on a successful sign-in", async () => {
     const { sent, start, verify } = signInHarness();

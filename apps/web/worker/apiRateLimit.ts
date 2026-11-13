@@ -126,3 +126,24 @@ export async function publicRequestBucket(
   );
   return `${scope}:${Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')}`;
 }
+
+/**
+ * Counts one anonymous request against its client address's bucket for
+ * `scope`, before the route reads a body or looks anything up. Skipped
+ * exactly where `enforceApiRateLimit` is, so local development needs no
+ * pepper.
+ */
+export async function enforcePublicRequestRateLimit(
+  request: Request,
+  env: CloudflareEnv,
+  scope: string,
+  limit: number
+): Promise<void> {
+  if (env.ENVIRONMENT === 'development' && env.PRODUCTION_GUARD === undefined)
+    return;
+  await enforceApiRateLimit(
+    env,
+    await publicRequestBucket(request, env, scope),
+    limit
+  );
+}

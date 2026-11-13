@@ -38,10 +38,12 @@ import { encryptedRoomHeaders, notifyEncryptedRoom } from './e2eeRoom';
 import {
   assertApiRateLimitAvailable,
   enforceApiRateLimit,
+  enforcePublicRequestRateLimit,
   isApiRateLimitSpent,
   markApiRateLimitSpent,
   publicRequestBucket
 } from './apiRateLimit';
+import { redactPath } from './redactPath';
 import { serveAssetFallback } from './assetFallback';
 import { JsonComplexityGuard } from '@openzcad/shared';
 import {
@@ -93,6 +95,7 @@ import {
 } from '@openzcad/persistence';
 import {
   HttpError,
+  MAX_ASSISTANT_PROPOSAL_BODY_BYTES,
   openProjectStorageRequest,
   parseCreateProjectRequest,
   parseAssistantProposalRequest,
@@ -147,6 +150,7 @@ import {
 import {
   clearAssistantCredentialValidation,
   deleteAssistantCredential,
+  deploymentAssistantAllowed,
   getAppSettings,
   isProjectSharingPreferenceEnabled,
   markAssistantCredentialValidated,
@@ -222,6 +226,37 @@ type Env = CloudflareEnv &
 /** Upper bound for JSON request bodies; protects against oversized payloads. */
 const MAX_JSON_BODY_BYTES = 25 * 1024 * 1024;
 const MAX_ARTIFACT_BODY_BYTES = 25 * 1024 * 1024;
+/**
+ * Sign-in request bodies: a few short strings (an email and a Turnstile
+ * token of at most 2,048 characters, a challenge id and code, or desktop
+ * PKCE values and a refresh token). Read before any account exists, so they
+ * get a cap sized to that rather than to a project document.
+ */
+const MAX_AUTH_BODY_BYTES = 4 * 1024;
+/**
+ * Anonymous requests per client address and minute for the sign-in routes
+ * that have no other per-address limit before their body is read (judgment:
+ * far above what a person typing a code, or a desktop app polling for its
+ * approval every couple of seconds, needs).
+ */
+const AUTH_VERIFY_RATE_LIMIT = 30;
+const DESKTOP_EXCHANGE_RATE_LIMIT = 60;
+const DESKTOP_REFRESH_RATE_LIMIT = 30;
+/** Anonymous assistant requests per client address and minute (development). */
+const ANONYMOUS_ASSISTANT_RATE_LIMIT = 20;
+/**
+ * Plaintext share-link reads per client address and minute: one project
+ * load reads the link once and then each asset and import source it names
+ * (judgment; set like the encrypted routes' blob budget so a large shared
+ * model and a reload or two still load).
+ */
+const SHARED_PROJECT_RATE_LIMIT = 300;
+/**
+ * Signed-in reads per account and minute. Writes keep their tighter
+ * `api:` budget; reads get one generous enough for loading a large project's
+ * assets or encrypted blobs several times a minute.
+ */
+const AUTHENTICATED_READ_RATE_LIMIT = 1_200;
 /** Cache only a proven-ready schema; failures stay retryable without a deploy. */
 const projectStorageReadyEnvironments = new WeakSet<Env>();
 const d1ProjectStorageReadyEnvironments = new WeakSet<Env>();
@@ -461,6 +496,16 @@ function json(
     status,
     headers
   });
+}
+
+function assistantNotConfigured(): Response {
+  return json(
+    {
+      error: 'AI is disabled or not configured for this user.',
+      code: 'AI_NOT_CONFIGURED'
+    },
+    503
+  );
 }
 
 async function readJsonBody(
@@ -934,6 +979,14 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     if (!projectCollaborationRollout(env).sharingEnabled) {
       return sharedNotFound();
     }
+    // Counted per client address before the token is hashed or looked up,
+    // like the encrypted share routes below.
+    await enforcePublicRequestRateLimit(
+      request,
+      env,
+      'share',
+      SHARED_PROJECT_RATE_LIMIT
+    );
     const token = parseShareLinkToken(
       (sharedProjectSourceMatch ??
         sharedProjectAssetMatch ??
@@ -1269,7 +1322,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   }
 
   if (request.method === 'POST' && pathname === '/api/auth/email/start') {
-    const payload = await readJsonBody(request);
+    const payload = await readJsonBody(request, MAX_AUTH_BODY_BYTES);
     const input =
       payload && typeof payload === 'object'
         ? (payload as Record<string, unknown>)
@@ -1288,7 +1341,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   }
 
   if (request.method === 'POST' && pathname === '/api/auth/desktop/start') {
-    const payload = await readJsonBody(request);
+    const payload = await readJsonBody(request, MAX_AUTH_BODY_BYTES);
     const input =
       payload && typeof payload === 'object'
         ? (payload as Record<string, unknown>)
@@ -1308,7 +1361,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   }
 
   if (request.method === 'POST' && pathname === '/api/auth/desktop/approve') {
-    const payload = await readJsonBody(request);
+    const payload = await readJsonBody(request, MAX_AUTH_BODY_BYTES);
     const input =
       payload && typeof payload === 'object'
         ? (payload as Record<string, unknown>)
@@ -1324,7 +1377,13 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   }
 
   if (request.method === 'POST' && pathname === '/api/auth/desktop/exchange') {
-    const payload = await readJsonBody(request);
+    await enforcePublicRequestRateLimit(
+      request,
+      env,
+      'desktop-exchange',
+      DESKTOP_EXCHANGE_RATE_LIMIT
+    );
+    const payload = await readJsonBody(request, MAX_AUTH_BODY_BYTES);
     const input =
       payload && typeof payload === 'object'
         ? (payload as Record<string, unknown>)
@@ -1342,7 +1401,13 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   }
 
   if (request.method === 'POST' && pathname === '/api/auth/desktop/refresh') {
-    const payload = await readJsonBody(request);
+    await enforcePublicRequestRateLimit(
+      request,
+      env,
+      'desktop-refresh',
+      DESKTOP_REFRESH_RATE_LIMIT
+    );
+    const payload = await readJsonBody(request, MAX_AUTH_BODY_BYTES);
     const input =
       payload && typeof payload === 'object'
         ? (payload as Record<string, unknown>)
@@ -1364,7 +1429,13 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   }
 
   if (request.method === 'POST' && pathname === '/api/auth/email/verify') {
-    const payload = await readJsonBody(request);
+    await enforcePublicRequestRateLimit(
+      request,
+      env,
+      'auth-verify',
+      AUTH_VERIFY_RATE_LIMIT
+    );
+    const payload = await readJsonBody(request, MAX_AUTH_BODY_BYTES);
     const input =
       payload && typeof payload === 'object'
         ? (payload as Record<string, unknown>)
@@ -1420,9 +1491,25 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
 
   if (request.method === 'POST' && pathname === '/api/assistant/proposals') {
     const identity = await identifyAssistantIdentity(request, env);
+    if (identity.anonymous) {
+      // The deployment's assistant serves only signed-in accounts outside
+      // development, so refuse an anonymous caller before reading its body
+      // or touching D1, with the answer it would otherwise reach last.
+      if (!deploymentAssistantAllowed(undefined, env)) {
+        return assistantNotConfigured();
+      }
+      await enforcePublicRequestRateLimit(
+        request,
+        env,
+        'assistant',
+        ANONYMOUS_ASSISTANT_RATE_LIMIT
+      );
+    }
     const userId = identity.userId;
     await assertAccountNotErasing(env.DB, userId);
-    const payload = parseAssistantProposalRequest(await readJsonBody(request));
+    const payload = parseAssistantProposalRequest(
+      await readJsonBody(request, MAX_ASSISTANT_PROPOSAL_BODY_BYTES)
+    );
     const consentedRoute = await assertAssistantProjectAllowed(
       env,
       identity,
@@ -1430,13 +1517,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     );
     const assistant = await resolveUserAssistant(userId, env, identity.email);
     if (!assistant.effective.configured) {
-      return json(
-        {
-          error: 'AI is disabled or not configured for this user.',
-          code: 'AI_NOT_CONFIGURED'
-        },
-        503
-      );
+      return assistantNotConfigured();
     }
     // An encrypted project's consent names who receives the data: another
     // key source, provider or model needs the user's consent again.
@@ -1483,6 +1564,13 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
 
   const session = await authenticateRequest(request, env);
   const userId = session.userId;
+  if (request.method === 'GET' || request.method === 'HEAD') {
+    await enforceApiRateLimit(
+      env,
+      `api-read:${userId}`,
+      AUTHENTICATED_READ_RATE_LIMIT
+    );
+  }
   if (pathname.startsWith('/api/e2ee/')) {
     try {
       if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)) {
@@ -2894,7 +2982,7 @@ async function dispatchApiRequest(
       console.error(
         'Project document storage unavailable.',
         request.method,
-        pathname,
+        redactPath(pathname),
         error
       );
       return json(
@@ -2920,7 +3008,7 @@ async function dispatchApiRequest(
     }
     console.error('Unhandled API error.', {
       method: request.method,
-      pathname,
+      pathname: redactPath(pathname),
       errorName: error instanceof Error ? error.name : 'UnknownError'
     });
     return json({ error: 'Internal error' }, 500);

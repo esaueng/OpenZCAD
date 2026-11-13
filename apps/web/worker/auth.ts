@@ -34,6 +34,20 @@ const LOGIN_IP_RATE_LIMIT = 10;
 // failures for at most one extra code lifetime, without requiring a migration.
 const LOGIN_EMAIL_FAILURE_LIMIT = 20;
 const LOGIN_FAILURE_WINDOW_SECONDS = 24 * 60 * 60;
+// Once an email collects this many wrong codes within the failure window it
+// cools down: the shared per-email allowance sends nothing more until enough
+// of those failures age out, so wrong guesses per day stay near this cap
+// instead of growing with every code the shared allowance would send.
+const LOGIN_EMAIL_DAILY_FAILURE_CAP = 50;
+// Codes per window to one email for requesters with no wrong code of their
+// own in the failure window, once the shared allowance is spent or while the
+// email cools down. It keeps the owner able to sign in when someone else has
+// used up the shared allowance, and stays small because a fresh requester
+// is clean too.
+const LOGIN_EMAIL_CLEAN_ALLOWANCE = 2;
+// The same allowance while the email cools down: each such code allows one
+// try, so this bounds the wrong guesses a cooling email still takes.
+const LOGIN_EMAIL_COOLDOWN_ALLOWANCE = 1;
 const DEFAULT_SESSION_DAYS = 30;
 const TURNSTILE_ACTION = 'email-code';
 const DESKTOP_CLIENT_ID = 'openzcad-macos';
@@ -460,6 +474,51 @@ async function takeRateLimit(
   return (current?.request_count ?? limit + 1) <= limit;
 }
 
+/**
+ * Charges one code to the email: to its shared allowance unless the email is
+ * cooling down, and otherwise, for a requester with no wrong code of its own
+ * in the failure window, to the small clean-requester allowance.
+ */
+async function takeEmailAllowance(
+  db: D1Database,
+  email: string,
+  emailBucket: string,
+  requesterTag: string,
+  timestamp: number
+): Promise<boolean> {
+  const failures = await db
+    .prepare(
+      `SELECT
+         COALESCE(SUM(attempts), 0) AS email_failures,
+         COALESCE(SUM(CASE WHEN id LIKE ? THEN attempts ELSE 0 END), 0)
+           AS requester_failures
+       FROM auth_email_challenges
+       WHERE email = ? AND expires_at >= ?`
+    )
+    .bind(`${requesterTag}.%`, email, timestamp - LOGIN_FAILURE_WINDOW_SECONDS)
+    .first<{ email_failures: number; requester_failures: number }>();
+  const coolingDown =
+    (failures?.email_failures ?? 0) >= LOGIN_EMAIL_DAILY_FAILURE_CAP;
+  if (
+    !coolingDown &&
+    (await takeRateLimit(db, emailBucket, LOGIN_EMAIL_RATE_LIMIT, timestamp))
+  ) {
+    return true;
+  }
+  if ((failures?.requester_failures ?? 0) > 0) return false;
+  return takeRateLimit(
+    db,
+    authEmailCleanAllowanceBucket(emailBucket),
+    coolingDown ? LOGIN_EMAIL_COOLDOWN_ALLOWANCE : LOGIN_EMAIL_CLEAN_ALLOWANCE,
+    timestamp
+  );
+}
+
+/** The clean-requester allowance's bucket for an email's rate-limit bucket. */
+export function authEmailCleanAllowanceBucket(emailBucket: string): string {
+  return `${emailBucket}:clean`;
+}
+
 async function cleanExpiredAuthRows(
   db: D1Database,
   timestamp: number
@@ -615,10 +674,11 @@ export async function startEmailLogin(
   // ceiling, and neither limit voids a pending code.
   if (
     !requesterAllowed ||
-    !(await takeRateLimit(
+    !(await takeEmailAllowance(
       env.DB,
+      email,
       emailBucket,
-      LOGIN_EMAIL_RATE_LIMIT,
+      requesterTag,
       timestamp
     ))
   ) {
@@ -1515,6 +1575,8 @@ export async function authenticateBrowserSession(
 export interface AssistantRequestIdentity {
   userId: AuthSession['userId'];
   email?: string;
+  /** A caller with no session, identified only by its address. */
+  anonymous?: true;
 }
 
 export async function identifyAssistantIdentity(
@@ -1555,7 +1617,8 @@ export async function identifyAssistantIdentity(
       'user_anon',
       `openzcad-ai-user-v1:${connectingIp}`,
       pepper
-    )
+    ),
+    anonymous: true
   };
 }
 

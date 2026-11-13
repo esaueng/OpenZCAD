@@ -563,7 +563,8 @@ describe('the anonymous blob route (slice 5-11)', { timeout: 120_000 }, () => {
         })
       ).status
     ).toBe(200);
-    // Plaintext share links are not limited (unchanged).
+    // Plaintext share links count in their own, larger bucket, which the
+    // encrypted snapshot budget spent above does not touch.
     for (let i = 0; i < 70; i += 1) {
       expect(
         (await anonymous(srv, `/api/share/${'p'.repeat(43)}`, env, from)).status
