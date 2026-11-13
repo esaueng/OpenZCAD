@@ -16,6 +16,7 @@ import {
   invertTransform,
   inverseInvolute,
   involute,
+  gearToothCircles,
   isGearMeshRefusal,
   meshGearPair,
   solveAssembly,
@@ -51,6 +52,8 @@ function gear(overrides: Partial<GearMeshGear> = {}): GearMeshGear {
     module: 2,
     pressureAngleDeg: 20,
     profileShift: 0,
+    addendum: 1,
+    dedendum: 1.25,
     backlash: 0,
     helixAngleDeg: 0,
     hand: 'right',
@@ -425,6 +428,91 @@ describe('meshing-pair refusals', () => {
     );
   });
 
+  it('reads a herringbone’s hands with the axis sense it will have', () => {
+    const upsideDown: RigidTransform = {
+      t: { x: 0, y: 0, z: 10 },
+      q: axisAngleQuaternion(X, Math.PI)
+    };
+    const herringbone = { helixAngleDeg: 20, herringbone: true };
+    const right = gear(herringbone);
+    const left = gear({ ...herringbone, teeth: 27, hand: 'left' });
+    const sameRight = gear({ ...herringbone, teeth: 27 });
+    const meshes = (a: GearMeshGear, b: GearMeshGear, t: RigidTransform) =>
+      !isGearMeshRefusal(meshGearPair(a, b, t));
+    const code = (a: GearMeshGear, b: GearMeshGear, t: RigidTransform) => {
+      const result = meshGearPair(a, b, t);
+      return isGearMeshRefusal(result) ? result.code : null;
+    };
+    // Facing the same way: opposite stored hands, as for a single helix.
+    expect(meshes(right, left, IDENTITY_TRANSFORM)).toBe(true);
+    expect(code(right, sameRight, IDENTITY_TRANSFORM)).toBe(
+      'gear-mesh:same-hand'
+    );
+    // Turned end for end, the wheel meets the pinion with its other half:
+    // the same stored hand meshes and opposite stored hands do not.
+    expect(meshes(right, sameRight, upsideDown)).toBe(true);
+    expect(code(right, left, upsideDown)).toBe('gear-mesh:same-hand');
+    // In a ring the rule turns over too.
+    const ring = gear({ ...herringbone, gearType: 'internal', teeth: 60 });
+    expect(meshes(ring, right, IDENTITY_TRANSFORM)).toBe(true);
+    expect(
+      meshes(ring, gear({ ...herringbone, hand: 'left' }), upsideDown)
+    ).toBe(true);
+    expect(code(ring, right, upsideDown)).toBe('gear-mesh:opposite-hand');
+    // A single helix keeps its hand end for end: opposite hands either way.
+    const single = { helixAngleDeg: 20 };
+    expect(
+      meshes(gear(single), gear({ ...single, hand: 'left' }), upsideDown)
+    ).toBe(true);
+    expect(code(gear(single), gear(single), upsideDown)).toBe(
+      'gear-mesh:same-hand'
+    );
+  });
+
+  it('refuses tips that would dig into the mate’s roots', () => {
+    // Two m 2, 20-tooth gears at 40: the wheel's root at 20 − 0.5·2 = 19
+    // leaves the pinion's 22 tip 1 too long.
+    const shallow = refused(gear(), gear({ dedendum: 0.5 }));
+    expect(shallow.code).toBe('gear-mesh:tip-clearance');
+    expect(shallow.message).toMatch(/^The gear that stays put reaches 1 past/);
+    // The other way round, it is the meshing gear whose tips are too long.
+    expect(refused(gear({ dedendum: 0.5 }), gear()).message).toMatch(
+      /^The gear that meshes with it reaches 1 past/
+    );
+    // Zero clearance (addendum = dedendum) still meshes.
+    expect(
+      isGearMeshRefusal(
+        meshGearPair(gear(), gear({ dedendum: 1 }), IDENTITY_TRANSFORM)
+      )
+    ).toBe(false);
+    // A ring whose inner tips (40 − 1.5·2 = 37) pass the pinion's root
+    // (20 + 17.5 from the ring's centre).
+    expect(
+      refused(gear({ gearType: 'internal', teeth: 40, addendum: 1.5 }), gear())
+        .code
+    ).toBe('gear-mesh:tip-clearance');
+    // A pinion too long for the ring's root: 20 + 23.1 past 40 + 2.5.
+    expect(
+      refused(
+        gear({ gearType: 'internal', teeth: 40 }),
+        gear({ addendum: 1.55 })
+      ).code
+    ).toBe('gear-mesh:tip-clearance');
+    // A rack tooth 3 tall under a pinion root 2.5 above the pitch line, and
+    // a pinion tip 2 below the line over a rack root only 1.8 deep.
+    expect(
+      refused(gear({ gearType: 'rack', teeth: 12, addendum: 1.5 }), gear()).code
+    ).toBe('gear-mesh:tip-clearance');
+    expect(
+      refused(gear(), gear({ gearType: 'rack', teeth: 12, dedendum: 0.9 })).code
+    ).toBe('gear-mesh:tip-clearance');
+    // Large shifts on both gears grow the tips more than the working
+    // distance grows, as the kernel does not shorten tips.
+    expect(
+      refused(gear({ profileShift: 0.8 }), gear({ profileShift: 0.8 })).code
+    ).toBe('gear-mesh:tip-clearance');
+  });
+
   it('meshes a module-sized gear with the same tooth sized by circular pitch', () => {
     // The resolved module is what matters: 2π circular pitch is module 2.
     expect(
@@ -605,6 +693,47 @@ describe('Mesh gears in an assembly', () => {
     expectVector(centre, { x: 60, y: 0, z: 2.5 });
   });
 
+  it('places a gear stored with a non-unit axis where the helper says', () => {
+    // The wheel's axis is stored as (0, 0, 2): the kernel reads a direction.
+    const { manager, context } = assembled({ axis: { x: 0, y: 0, z: 2 } });
+    const wheel = context.gearOf('comp_b');
+    if (isGearMeshRefusal(wheel)) throw new Error(wheel.message);
+    expectVector(wheel.frame.zAxis, Z);
+    // The joint path also squares a raw gear's frame itself.
+    const raw = {
+      ...context,
+      gearOf: (id: string) =>
+        id === 'comp_b'
+          ? { ...wheel, frame: { ...wheel.frame, zAxis: { x: 0, y: 0, z: 2 } } }
+          : context.gearOf(id)
+    };
+    for (const ctx of [context, raw]) {
+      const result = gearMeshJoint(
+        ctx,
+        { baseId: 'comp_a', movingId: 'comp_b' },
+        'joint_mesh'
+      );
+      if ('error' in result) throw new Error(result.error);
+      const set = manager.document.assembly!;
+      const solution = solveAssembly({
+        ...set,
+        components: set.components.map((c) =>
+          c.id === 'comp_a' ? { ...c, grounded: true } : c
+        ),
+        joints: [result.joint]
+      });
+      const pose = composeTransforms(
+        invertTransform(solution.poses.get('comp_a')!),
+        solution.poses.get('comp_b')!
+      );
+      const landed = frameInWorld(pose, { origin: ORIGIN, zAxis: Z, xAxis: X });
+      expectVector(landed.origin, result.mesh.frame.origin);
+      expectVector(landed.origin, { x: 60, y: 0, z: 0 });
+      expectVector(landed.zAxis, result.mesh.frame.zAxis);
+      expectVector(landed.xAxis, result.mesh.frame.xAxis);
+    }
+  });
+
   it('refuses a mismatched pair and a part that is not a gear, by reason', () => {
     const { context } = assembled({ pitch: 2.5 });
     const result = gearMeshJoint(
@@ -630,6 +759,8 @@ describe('meshed pairs on the exact kernel', { timeout: 120_000 }, () => {
   });
   afterAll(() => kernel.free());
 
+  let lastDetails: unknown = null;
+
   function build(g: GearMeshGear, frame: AssemblyFrame, turnDeg = 0): number {
     const v = (p: Vector3) => [p.x, p.y, p.z];
     const spec: Record<string, unknown> = {
@@ -648,15 +779,20 @@ describe('meshed pairs on the exact kernel', { timeout: 120_000 }, () => {
     if (g.helixAngleDeg) {
       spec.helixAngle = g.helixAngleDeg;
       spec.hand = g.hand;
+      if (g.herringbone) spec.herringbone = true;
     }
+    if (g.addendum !== 1) spec.addendum = g.addendum;
+    if (g.dedendum !== 1.25) spec.dedendum = g.dedendum;
     if (g.gearType === 'internal')
       spec.rimDiameter =
         (g.teeth * g.module) / Math.cos(g.helixAngleDeg * DEG) + 12 * g.module;
     const result = kernel.makeGearDetailed(JSON.stringify(spec)) as {
       status: string;
       value?: unknown;
+      details?: unknown;
     };
     if (result.status !== 'ok') throw new Error(JSON.stringify(result));
+    lastDetails = result.details;
     const value = result.value as number | { solid: number };
     return typeof value === 'number' ? value : value.solid;
   }
@@ -670,13 +806,14 @@ describe('meshed pairs on the exact kernel', { timeout: 120_000 }, () => {
     normal: Vector3,
     pitch: number,
     module: number,
-    zs: number[]
+    zs: number[],
+    step = 0.1
   ) {
     let both = 0;
     let first = 0;
     let second = 0;
     for (const z of zs)
-      for (let i = -pitch; i <= pitch + 1e-9; i += 0.1)
+      for (let i = -pitch; i <= pitch + 1e-9; i += step)
         for (
           let j = -0.8 * module;
           j <= 0.8 * module + 1e-9;
@@ -849,4 +986,89 @@ describe('meshed pairs on the exact kernel', { timeout: 120_000 }, () => {
     );
     expect(off.both).toBeGreaterThan(20);
   });
+  it('reads the tip and root circles the kernel cuts', () => {
+    for (const g of [
+      gear(),
+      gear({ profileShift: 0.4, teeth: 23 }),
+      gear({ helixAngleDeg: 20, profileShift: -0.2 }),
+      gear({ addendum: 0.8, dedendum: 1.4 }),
+      gear({ gearType: 'internal', teeth: 50, profileShift: 0.2 }),
+      gear({ gearType: 'internal', teeth: 50, addendum: 0.8 })
+    ]) {
+      build(g, g.frame);
+      const { geometry } = lastDetails as {
+        geometry: { tipDiameter: number; rootDiameter: number };
+      };
+      const circles = gearToothCircles(g);
+      expect(circles.tip * 2).toBeCloseTo(geometry.tipDiameter, 9);
+      expect(circles.root * 2).toBeCloseTo(geometry.rootDiameter, 9);
+    }
+  });
+
+  it(
+    'interleaves helical and herringbone pairs facing opposite ways, across both halves',
+    { timeout: 300_000 },
+    () => {
+      const upsideDown: RigidTransform = {
+        t: { x: 0, y: 0, z: 12 },
+        q: axisAngleQuaternion(X, Math.PI)
+      };
+      // Both halves, on a coarser grid: herringbone flanks classify slowly.
+      const zs = [1, 7];
+      const pitch = (2 * Math.PI) / Math.cos(20 * DEG);
+      const check = (a: GearMeshGear, b: GearMeshGear) => {
+        const mesh = solved(a, b, upsideDown);
+        expect(mesh.frame.zAxis.z).toBeCloseTo(-1, 12);
+        const { p, tangent, normal } = pitchPoint(a, mesh);
+        const sa = build(a, a.frame);
+        const meshed = overlap(
+          sa,
+          build(b, mesh.frame),
+          p,
+          tangent,
+          normal,
+          pitch,
+          2,
+          zs,
+          0.2
+        );
+        expect(meshed.both).toBe(0);
+        expect(meshed.first).toBeGreaterThan(30);
+        expect(meshed.second).toBeGreaterThan(30);
+        return { mesh, sa, p, tangent, normal };
+      };
+      // A single helix keeps its hand: opposite hands, flipped.
+      check(
+        gear({ helixAngleDeg: 20, faceWidth: 8 }),
+        gear({
+          teeth: 27,
+          helixAngleDeg: 20,
+          hand: 'left',
+          faceWidth: 8,
+          backlash: 0.1
+        })
+      );
+      // A flipped herringbone meshes with the same stored hand.
+      const a = gear({ helixAngleDeg: 20, herringbone: true, faceWidth: 8 });
+      const b = gear({
+        teeth: 27,
+        helixAngleDeg: 20,
+        herringbone: true,
+        faceWidth: 8,
+        backlash: 0.1
+      });
+      const { mesh, sa, p, tangent, normal } = check(a, b);
+      // The opposite stored hand, turned so its mid-plane teeth sit where the
+      // right one's do, crosses the halves: the mid-plane is clear but both
+      // halves collide.
+      const rB = (2 / Math.cos(20 * DEG)) * (27 / 2);
+      const realign = (8 * Math.tan(20 * DEG)) / rB / DEG;
+      const wrong = build({ ...b, hand: 'left' }, mesh.frame, realign);
+      const at = (z: number) =>
+        overlap(sa, wrong, p, tangent, normal, pitch, 2, [z], 0.2).both;
+      expect(at(4)).toBe(0);
+      expect(at(1)).toBeGreaterThan(0);
+      expect(at(7)).toBeGreaterThan(0);
+    }
+  );
 });

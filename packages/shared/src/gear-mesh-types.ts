@@ -25,6 +25,10 @@ export interface GearMeshGear {
   /** Normal pressure angle, degrees. */
   pressureAngleDeg: number;
   profileShift: number;
+  /** Tip height above the reference circle, in modules (ISO 53: 1). */
+  addendum: number;
+  /** Root depth below the reference circle, in modules (ISO 53: 1.25). */
+  dedendum: number;
   /** Circumferential tooth thinning at the pitch circle, document units. */
   backlash: number;
   /** 0 for a spur gear. */
@@ -57,7 +61,8 @@ export type GearMeshRefusalCode =
   | 'gear-mesh:same-hand'
   | 'gear-mesh:opposite-hand'
   | 'gear-mesh:ring-too-small'
-  | 'gear-mesh:no-working-pressure-angle';
+  | 'gear-mesh:no-working-pressure-angle'
+  | 'gear-mesh:tip-clearance';
 
 export interface GearMeshRefusal {
   code: GearMeshRefusalCode;

@@ -90,10 +90,16 @@ function refusal(code: GearMeshRefusalCode, message: string): GearMeshRefusal {
   return { code, message };
 }
 
-/** Why two gears cannot mesh, or null when they can. */
+/**
+ * Why two gears cannot mesh, or null when they can. `axisSense` is −1 when
+ * the second gear's axis will run against the first's: a single helix keeps
+ * its hand end for end, but a herringbone then meets the first gear with
+ * its far half, whose hand is the other one.
+ */
 export function gearMeshPairError(
   a: GearMeshGear,
-  b: GearMeshGear
+  b: GearMeshGear,
+  axisSense: 1 | -1 = 1
 ): GearMeshRefusal | null {
   for (const gear of [a, b]) {
     const reason = UNSUPPORTED[gear.gearType];
@@ -147,15 +153,25 @@ export function gearMeshPairError(
         'A herringbone gear meshes only with another herringbone gear.'
       );
     const internal = a.gearType === 'internal' || b.gearType === 'internal';
-    if (!internal && a.hand === b.hand)
+    // The hand b shows a's start half: a flipped herringbone's far half.
+    const flipped = a.herringbone && axisSense < 0;
+    const handB = flipped ? (b.hand === 'right' ? 'left' : 'right') : b.hand;
+    const turned = flipped
+      ? ' (turned end for end, a herringbone meets it with its other half)'
+      : '';
+    if (!internal && a.hand === handB)
       return refusal(
         'gear-mesh:same-hand',
-        `Both gears are ${a.hand}-handed; external helical gears on parallel axes need opposite hands.`
+        flipped
+          ? `External herringbone gears facing opposite ways need the same stored hand${turned}.`
+          : `Both gears are ${a.hand}-handed; external helical gears on parallel axes need opposite hands.`
       );
-    if (internal && a.hand !== b.hand)
+    if (internal && a.hand !== handB)
       return refusal(
         'gear-mesh:opposite-hand',
-        'A helical pinion and its internal gear need the same hand.'
+        flipped
+          ? `A herringbone pinion facing against its internal gear needs the opposite stored hand${turned}.`
+          : 'A helical pinion and its internal gear need the same hand.'
       );
   }
   const ring =
@@ -167,6 +183,75 @@ export function gearMeshPairError(
       `The internal gear needs more teeth than its pinion (${ring.teeth} against ${pinion.teeth}).`
     );
   return null;
+}
+
+/**
+ * A gear's tip and root circles (transverse, document units) as the kernel
+ * cuts them: the profile shift moves both outward by `x·m`, so an internal
+ * gear's inner tip is `r − (h_a − x)·m` and its root `r + (h_f + x)·m`. A
+ * rack's are its tip height above and root depth below its pitch line.
+ */
+export function gearToothCircles(gear: GearMeshGear): {
+  pitch: number;
+  tip: number;
+  root: number;
+} {
+  const m = gear.module;
+  if (gear.gearType === 'rack')
+    return { pitch: 0, tip: gear.addendum * m, root: gear.dedendum * m };
+  const pitch = (m / Math.cos(gear.helixAngleDeg * DEG)) * (gear.teeth / 2);
+  const x = gear.profileShift;
+  return gear.gearType === 'internal'
+    ? {
+        pitch,
+        tip: pitch - (gear.addendum - x) * m,
+        root: pitch + (gear.dedendum + x) * m
+      }
+    : {
+        pitch,
+        tip: pitch + (gear.addendum + x) * m,
+        root: pitch - (gear.dedendum - x) * m
+      };
+}
+
+/** How far each gear's tips reach past the other's root (≤ 0: clear). */
+function tipOverlaps(
+  a: GearMeshGear,
+  b: GearMeshGear,
+  distance: number
+): [number, number] {
+  const ca = gearToothCircles(a);
+  const cb = gearToothCircles(b);
+  if (a.gearType === 'rack')
+    // Pinion b stands `distance` above the rack's pitch line.
+    return [ca.tip - (distance - cb.root), cb.tip - distance - ca.root];
+  if (b.gearType === 'rack') {
+    const [rack, pinion] = tipOverlaps(b, a, distance);
+    return [pinion, rack];
+  }
+  if (a.gearType === 'internal')
+    return [distance + cb.root - ca.tip, distance + cb.tip - ca.root];
+  if (b.gearType === 'internal')
+    return [distance + ca.tip - cb.root, distance + ca.root - cb.tip];
+  return [ca.tip - (distance - cb.root), cb.tip - (distance - ca.root)];
+}
+
+/** A refusal when either gear's tips would dig into the other's roots. */
+function clearanceError(
+  a: GearMeshGear,
+  b: GearMeshGear,
+  distance: number
+): GearMeshRefusal | null {
+  const [overA, overB] = tipOverlaps(a, b, distance);
+  const tolerance = 1e-9 * Math.max(1, distance);
+  const over = overA >= overB ? overA : overB;
+  if (!(over > tolerance)) return null;
+  const who =
+    overA >= overB ? 'The gear that stays put' : 'The gear that meshes with it';
+  return refusal(
+    'gear-mesh:tip-clearance',
+    `${who} reaches ${format(over)} past the other gear’s root circle at this centre distance; shorten its addendum, deepen the other’s dedendum or reduce the profile shift.`
+  );
 }
 
 /** A helical tooth's turn about the axis at height `h` (right hand: CCW). */
@@ -206,8 +291,11 @@ function normalized(a: Vector3): Vector3 | null {
   return length > 1e-12 ? scale(a, 1 / length) : null;
 }
 
-/** A gear's frame with a unit axis and a unit x direction perpendicular to it. */
-function cleanFrame(frame: AssemblyFrame): AssemblyFrame | null {
+/**
+ * A gear's frame as the kernel reads it: the axis made unit length and the
+ * x direction made a unit vector perpendicular to it. Null without an axis.
+ */
+export function gearMeshFrame(frame: AssemblyFrame): AssemblyFrame | null {
   return frameFromAxis(frame.origin, frame.zAxis, frame.xAxis);
 }
 
@@ -238,12 +326,14 @@ export function meshGearPair(
   b: GearMeshGear,
   current: RigidTransform
 ): GearMeshSolution | GearMeshRefusal {
-  const error = gearMeshPairError(a, b);
-  if (error) return error;
-  const frameA = cleanFrame(a.frame);
-  const frameB = cleanFrame(b.frame);
+  const frameA = gearMeshFrame(a.frame);
+  const frameB = gearMeshFrame(b.frame);
   if (!frameA || !frameB)
     return refusal('gear-mesh:unresolved', 'A gear’s axis has no direction.');
+  const sense =
+    dot3(frameInWorld(current, frameB).zAxis, frameA.zAxis) < 0 ? -1 : 1;
+  const error = gearMeshPairError(a, b, sense);
+  if (error) return error;
   const gearA = { ...a, frame: frameA };
   const gearB = { ...b, frame: frameB };
   if (a.gearType === 'rack') return meshRack(gearA, gearB, current, true);
@@ -281,6 +371,8 @@ function meshGears(
     );
   const standard = internal ? Math.abs(rA - rB) : rA + rB;
   const distance = (standard * Math.cos(alphaT)) / Math.cos(alphaW);
+  const clearance = clearanceError(a, b, distance);
+  if (clearance) return clearance;
 
   const zA = a.frame.zAxis;
   const oA = a.frame.origin;
@@ -336,11 +428,15 @@ function meshRack(
   pinion: GearMeshGear,
   current: RigidTransform,
   pinionMoves: boolean
-): GearMeshSolution {
+): GearMeshSolution | GearMeshRefusal {
   const m = rack.module;
   const pitch = Math.PI * m;
   const radius = (m * pinion.teeth) / 2;
   const distance = radius + pinion.profileShift * m;
+  const clearance = pinionMoves
+    ? clearanceError(rack, pinion, distance)
+    : clearanceError(pinion, rack, distance);
+  if (clearance) return clearance;
   const { origin: oR, zAxis: zR, xAxis: xR } = rack.frame;
   const n = cross3(zR, xR);
   const nowP = frameInWorld(current, pinion.frame);

@@ -5,6 +5,7 @@ import {
   invertTransform,
   isGearMeshRefusal,
   jointAddError,
+  gearMeshFrame,
   meshGearPair,
   solveAssembly,
   type AssemblyFrame,
@@ -95,7 +96,11 @@ export function gearMeshJoint(
   const mesh = meshGearPair(a, b, current);
   if (isGearMeshRefusal(mesh)) return { error: mesh.message, code: mesh.code };
 
-  const own = midFrame(b.frame, b.faceWidth);
+  // B's own frame as the helper and the kernel read it (unit axis, square
+  // x direction), so a stored axis length cannot shift the saved joint.
+  const ownFrame = gearMeshFrame(b.frame);
+  if (!ownFrame) return { error: `${moving.name}’s axis has no direction.` };
+  const own = midFrame(ownFrame, b.faceWidth);
   const landed = midFrame(mesh.frame, b.faceWidth);
   const source = { kind: 'body' as const, label: 'Gear axis · meshed' };
   const joint: AssemblyJoint = {

@@ -1,5 +1,6 @@
 import {
   defaultGearXDirection,
+  frameFromAxis,
   gearModule,
   isFeatureSuppressed,
   type BodyId,
@@ -144,6 +145,20 @@ export function gearMeshGearOfBody(
     });
     const axis = vector(data.axis, 'axis');
     const helix = optional(data.helixAngleDeg, 'helix angle', 0);
+    // The kernel reads the axis as a direction and squares the x direction
+    // to it; so does the helper, so a stored length never shifts a frame.
+    const frame = frameFromAxis(
+      vector(data.origin, 'origin'),
+      axis,
+      data.xDirection
+        ? vector(data.xDirection, 'x direction')
+        : defaultGearXDirection(axis)
+    );
+    if (!frame)
+      return refusal(
+        'gear-mesh:unresolved',
+        `${gear.name}’s axis has no direction.`
+      );
     return {
       gearType: data.gearType,
       teeth: Math.round(value(data.teeth, 'teeth')),
@@ -154,19 +169,17 @@ export function gearMeshGearOfBody(
       ),
       pressureAngleDeg: optional(data.pressureAngleDeg, 'pressure angle', 20),
       profileShift: optional(data.profileShift, 'profile shift', 0),
+      // The root fillet rounds into the root circle without moving it, so
+      // the tip and root circles are all the clearance check needs.
+      addendum: optional(data.addendum, 'addendum', 1),
+      dedendum: optional(data.dedendum, 'dedendum', 1.25),
       backlash: optional(data.backlash, 'backlash', 0),
       helixAngleDeg: helix,
       hand: data.hand ?? 'right',
       herringbone: helix !== 0 && data.herringbone === true,
       faceWidth: value(data.faceWidth, 'face width'),
       phaseDeg: optional(data.phaseDeg, 'phase', 0),
-      frame: {
-        origin: vector(data.origin, 'origin'),
-        zAxis: axis,
-        xAxis: data.xDirection
-          ? vector(data.xDirection, 'x direction')
-          : defaultGearXDirection(axis)
-      }
+      frame
     };
   } catch (error) {
     return refusal(
