@@ -60,3 +60,24 @@ describe('workspace resume X-ray', () => {
     ).toBe(false);
   });
 });
+
+describe('workspace resume camera up', () => {
+  it('carries an upside-down view to the other device', () => {
+    const parsed = parseWorkspaceResumeState({
+      ...state,
+      camera: { ...state.camera, up: [0, 0, -1] }
+    });
+    expect(parsed?.camera.up).toEqual([0, 0, -1]);
+  });
+
+  it('drops an unusable up and keeps the pose right way up', () => {
+    for (const up of [[0, 0, 0], [0, Number.NaN, 1], [0, 1], 'down']) {
+      const parsed = parseWorkspaceResumeState({
+        ...state,
+        camera: { ...state.camera, up }
+      });
+      expect(parsed?.camera.position).toEqual([40, 30, 20]);
+      expect(parsed?.camera).not.toHaveProperty('up');
+    }
+  });
+});

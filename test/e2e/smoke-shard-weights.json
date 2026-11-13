@@ -89,6 +89,7 @@
   "through-hole-chamfer-resize.spec.ts": 37,
   "tool-rail-pins.spec.ts": 5,
   "touch-navigation.spec.ts": 9,
+  "upside-down-view-reload.spec.ts": 7,
   "viewport.spec.ts": 13,
   "visual-selection-fillet-edit.spec.ts": 12,
   "visual-selection-live-preview.spec.ts": 12,

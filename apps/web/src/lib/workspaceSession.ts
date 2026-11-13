@@ -175,6 +175,16 @@ function withFieldOfView(
     : {};
 }
 
+/**
+ * A recorded camera up, or nothing: a pose without one (or with an unusable
+ * one) restores right way up, as every pose did before it was recorded.
+ */
+function withUp(value: unknown): Pick<ViewportCameraState, 'up'> {
+  return isVector3Tuple(value) && Math.hypot(...value) > 1e-9
+    ? { up: [...value] }
+    : {};
+}
+
 function parseStoredView(value: unknown): StoredProjectView | null {
   if (!value || typeof value !== 'object') {
     return null;
@@ -210,7 +220,8 @@ function parseStoredView(value: unknown): StoredProjectView | null {
       target: [...camera.target],
       orthographicZoom: camera.orthographicZoom,
       orthographicHalfHeight: camera.orthographicHalfHeight,
-      ...withFieldOfView(camera.fieldOfView)
+      ...withFieldOfView(camera.fieldOfView),
+      ...withUp(camera.up)
     },
     projection: candidate.projection,
     settings: {

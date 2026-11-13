@@ -1446,3 +1446,92 @@ describe('CameraController touch pinch', () => {
     controller.dispose();
   });
 });
+
+describe('CameraController saved up', () => {
+  /** Orbits a fresh front view `radians` over the top in one drag. */
+  function orbitOverTop(controller: CameraController, radians: number) {
+    controller.startTween({
+      position: new THREE.Vector3(0, -150, 0),
+      target: new THREE.Vector3(0, 0, 0),
+      near: 0.1,
+      far: 4000
+    });
+    const height = 600;
+    controller.beginOrbitDrag();
+    for (let step = 0; step < 30; step += 1) {
+      controller.orbitByPixels(0, (radians * height) / (2 * Math.PI) / 30);
+    }
+    controller.endOrbitDrag();
+  }
+
+  function screenUp(camera: THREE.Camera) {
+    camera.updateMatrixWorld(true);
+    return new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1);
+  }
+
+  it('leaves the up out of a right-way-up pose', () => {
+    const { controller } = createController();
+    expect(controller.capture()).not.toHaveProperty('up');
+    controller.dispose();
+  });
+
+  it.each(['perspective', 'orthographic'] as const)(
+    'reopens an upside-down view upside down (%s)',
+    (projection) => {
+      const first = createController();
+      orbitOverTop(first.controller, (3 * Math.PI) / 4);
+      first.controller.applyProjection(projection);
+      const saved = first.controller.capture();
+      expect(saved.up).toEqual([0, 0, -1]);
+      const expected = first.controller.activeCamera.quaternion.clone();
+      first.controller.dispose();
+
+      const { controller } = createController();
+      controller.restore(saved, projection);
+      const camera = controller.activeCamera;
+      expect(camera.quaternion.angleTo(expected)).toBeLessThan(1e-9);
+      expect(screenUp(camera).z).toBeLessThan(-0.5);
+      // And it stays upside down for the next gesture: a pan keeps it, and
+      // an orbit starts from it rather than flipping the picture first.
+      controller.beginOrbitDrag();
+      controller.controls.update();
+      expect(camera.quaternion.angleTo(expected)).toBeLessThan(1e-9);
+      controller.endOrbitDrag();
+      controller.dispose();
+    }
+  );
+
+  it('restores a pose saved before the up was recorded right way up', () => {
+    const first = createController();
+    orbitOverTop(first.controller, (3 * Math.PI) / 4);
+    const { up: _unrecorded, ...legacy } = first.controller.capture();
+    first.controller.dispose();
+    const { controller } = createController();
+    controller.restore(legacy, 'perspective');
+    expect(controller.perspective.up.toArray()).toEqual([0, 0, 1]);
+    expect(screenUp(controller.perspective).z).toBeGreaterThan(0.5);
+    controller.dispose();
+  });
+
+  it('ignores an unusable up', () => {
+    const first = createController();
+    const saved = first.controller.capture();
+    first.controller.dispose();
+    for (const up of [
+      [0, 0, 0],
+      [Number.NaN, 0, 1],
+      // Along the view axis: it fixes no roll.
+      saved.position.map(
+        (value, axis) => value - saved.target[axis]!
+      ) as THREE.Vector3Tuple
+    ]) {
+      const { controller } = createController();
+      controller.restore(
+        { ...saved, up: up as THREE.Vector3Tuple },
+        'perspective'
+      );
+      expect(controller.perspective.up.toArray()).toEqual([0, 0, 1]);
+      controller.dispose();
+    }
+  });
+});

@@ -6,6 +6,11 @@ export interface WorkspaceResumeState {
     orthographicHalfHeight?: number;
     /** Perspective field of view the pose was framed at, in degrees. */
     fieldOfView?: number;
+    /**
+     * The up the camera held when it was not world +Z: an upside-down view
+     * holds world −Z. Absent means right way up.
+     */
+    up?: [number, number, number];
   };
   projection: 'perspective' | 'orthographic';
   settings: {
@@ -117,6 +122,11 @@ export function parseWorkspaceResumeState(
       camera.fieldOfView > 0 &&
       camera.fieldOfView < 180
         ? { fieldOfView: camera.fieldOfView }
+        : {}),
+      // Dropped rather than refused for the same reason: without it the
+      // pose restores right way up, as it did before it was recorded.
+      ...(vector(camera.up) && Math.hypot(...camera.up) > 1e-9
+        ? { up: [...camera.up] as [number, number, number] }
         : {})
     },
     projection: value.projection as WorkspaceResumeState['projection'],
