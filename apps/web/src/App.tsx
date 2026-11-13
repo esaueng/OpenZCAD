@@ -31498,6 +31498,9 @@ export function App() {
           : null
       }
       onDropFiles={(files) => void handleDroppedFiles(files)}
+      onRefuseDroppedFiles={() =>
+        setStatus('Finish or cancel the open dialog, then drop the file again.')
+      }
       sidebarWidth={sidebarWidth}
       assistantWidth={assistantWidth}
       sidebarResizer={

@@ -138,6 +138,8 @@ interface AppShellProps {
    * area is not a drop target and the browser keeps its default.
    */
   onDropFiles?(files: File[]): void;
+  /** Files dropped while a dialog is open, which are not imported. */
+  onRefuseDroppedFiles?(): void;
   /**
    * Lets every expression field in the workspace define a parameter it
    * names before one exists. Absent, a field only reports the unknown name.
@@ -172,6 +174,7 @@ export function AppShell({
   stage = null,
   overlays,
   onDropFiles,
+  onRefuseDroppedFiles,
   parameterDefinition = null
 }: AppShellProps) {
   // The inspector fades out rather than vanishing. `has-inspector` still
@@ -263,7 +266,10 @@ export function AppShell({
             {readout}
             {onDropFiles && (
               <Suspense fallback={null}>
-                <LazyFileDropTarget onDrop={onDropFiles} />
+                <LazyFileDropTarget
+                  onDrop={onDropFiles}
+                  onRefuse={onRefuseDroppedFiles}
+                />
               </Suspense>
             )}
           </div>
