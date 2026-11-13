@@ -86,6 +86,7 @@
     "test/css-class-coverage.test.ts",
     "test/cylinder-radius-across-boolean.test.ts",
     "test/cylinder-resize-face-lineage.test.ts",
+    "test/cylinder-union-step-seam.test.ts",
     "test/dense-polyline-crossings.test.ts",
     "test/deploy-safety.test.ts",
     "test/deployment-config-validator.test.ts",
