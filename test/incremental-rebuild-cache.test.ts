@@ -400,7 +400,9 @@ describe('incremental prefix rebuild cache', { timeout: 120_000 }, () => {
         replayed: 1,
         restored: 2,
         remeasured: 1,
-        reusedMeasurements: 1
+        // The base and the failed pattern, which hands the base through
+        // under its own id (ADR-017, November 2026).
+        reusedMeasurements: 2
       });
       expect(
         second.warnings.filter((warning) =>
@@ -423,7 +425,7 @@ describe('incremental prefix rebuild cache', { timeout: 120_000 }, () => {
         replayed: 1,
         restored: 2,
         remeasured: 0,
-        reusedMeasurements: 1
+        reusedMeasurements: 2
       });
       expect(
         third.warnings.filter((warning) => warning.includes('Suppressed'))

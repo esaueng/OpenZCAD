@@ -41,7 +41,9 @@ function dockedTitles(page: Page, side: 'left' | 'right') {
     .locator(`.panel-column[data-side="${side}"]`)
     .evaluateAll((columns) =>
       columns.map((column) =>
-        [...column.querySelectorAll('.model-panel')].map(
+        // Docked ones only: a temporary panel may stand under them in the
+        // column without being pinned there.
+        [...column.querySelectorAll('.model-panel.is-docked')].map(
           (panel) => panel.getAttribute('aria-label') ?? ''
         )
       )
@@ -516,7 +518,7 @@ async function modelShare(page: Page) {
     const leftEdge = Math.max(
       stage.left,
       ...rects(
-        '.panel-column[data-side="left"], nav[aria-label="Feature tools"]'
+        '.panel-column[data-side="left"], [role="toolbar"][aria-label="Feature tools"]'
       ).map((rect) => rect.right)
     );
     const rightEdge = Math.min(

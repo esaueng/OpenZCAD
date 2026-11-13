@@ -6,6 +6,7 @@ import { GeometryWorkerError } from '../lib/workerRefusal';
 import { beginEditTrace, recordEditPhase } from '../lib/editTrace';
 import type { GeometryReadyState } from '@openzcad/shared';
 import type { EditAnalysisRequest } from '@openzcad/shared';
+import { hasDraftDisplay as hasDraftBodies } from '@openzcad/shared';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { documentForWorker, documentForRebuild } from '../lib/meshTransport';
 import {
@@ -44,6 +45,7 @@ import type {
   GeometryExportFormat,
   GeometryExportResult,
   GeometryWorkerPhase,
+  GeometryWorkerRequest,
   GeometryWorkerState,
   GeometryWorkerResult
 } from '../worker/geometryWorker';
@@ -110,11 +112,12 @@ function postSync(
   lastSyncedKey: { current: string | null },
   armed: { current: boolean },
   // Sorted and unique, as `useLineageDemand` hands it over.
-  lineageDemand: readonly BodyId[] = []
-): void {
-  const syncKey = `${document.projectId}:${document.version}:${lineageDemandCacheKey(document, lineageDemand)}`;
+  lineageDemand: readonly BodyId[] = [],
+  persistSession = false
+): boolean {
+  const syncKey = broadcastSyncKey(document, lineageDemand);
   if (lastSyncedKey.current === syncKey) {
-    return;
+    return false;
   }
   lastSyncedKey.current = syncKey;
   armed.current = true;
@@ -126,8 +129,31 @@ function postSync(
   worker.postMessage({
     type: 'sync',
     document: input,
-    lineageDemand: [...lineageDemand]
+    lineageDemand: [...lineageDemand],
+    ...(persistSession ? { persistSession: true } : {})
   });
+  return true;
+}
+
+/** The `persistSession` the app last gave a broadcast of this project. */
+function persistSessionFor(
+  last: { current: { projectId: string; persist: boolean } | null },
+  document: ProjectDocument
+): boolean {
+  return last.current?.projectId === document.projectId && last.current.persist;
+}
+
+/**
+ * What a broadcast is deduplicated by: the geometry it asks for. Not
+ * `persistSession`, whose change alone (the owner resolved, a shared link
+ * of the same revision opened) rebuilds nothing; `sync` tells the worker
+ * with a `session-policy` message instead.
+ */
+function broadcastSyncKey(
+  document: ProjectDocument,
+  lineageDemand: readonly BodyId[]
+): string {
+  return `${document.projectId}:${document.version}:${lineageDemandCacheKey(document, lineageDemand)}`;
 }
 
 /** Cancellation rejection, named so callers can tell it from a failure. */
@@ -176,7 +202,16 @@ export interface GeometryWorkerApi {
    */
   sync(
     document: ProjectDocument | null,
-    lineageDemand?: readonly BodyId[]
+    lineageDemand?: readonly BodyId[],
+    options?: {
+      /**
+       * The document is the current user's own local project, kept on this
+       * device: only then may the worker persist its kernel session and
+       * offer the stored one on reopen. Never for a shared link's model or
+       * someone else's project. Unset means false.
+       */
+      persistSession?: boolean;
+    }
   ): void;
   /**
    * One-off exact rebuild resolved by request id — used for seeding demo
@@ -406,6 +441,13 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
   const readyDocument = useRef<ProjectDocument | null>(null);
   const readyDerived = useRef<DerivedState | null>(null);
   const lastDemandRef = useRef<readonly BodyId[] | null>(null);
+  // The `persistSession` the app last gave `sync`, by project: what the
+  // worker was told (with a broadcast or a `session-policy` message), and
+  // what the re-posts a respawn or projection recovery make carry.
+  const persistSessionRef = useRef<{
+    projectId: string;
+    persist: boolean;
+  } | null>(null);
   // What built each `syncOnce` result, for `adoptValidatedResult`. Keyed by
   // the resolved object itself, so a copy or a different result never matches.
   const syncOrigins = useRef(
@@ -418,6 +460,13 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       }
     >()
   );
+  // The full-quality display of a draft result that arrived before that
+  // result became live; the adoption that makes it live uses this instead.
+  const refinedDisplay = useRef<{
+    projectId: string;
+    contentKey: string;
+    derived: DerivedState;
+  } | null>(null);
   // `syncOnce` results that waited on a font face or source: never cached by
   // the worker, so never adopted either.
   const transientSyncResults = useRef(new WeakSet<DerivedState>());
@@ -538,7 +587,8 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
             manager.document,
             lastSyncedKey,
             armedRef,
-            lastDemandRef.current ?? undefined
+            lastDemandRef.current ?? undefined,
+            persistSessionFor(persistSessionRef, manager.document)
           );
         }
       } else {
@@ -634,7 +684,10 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
                 type: 'sync',
                 document: documentForRebuild(document),
                 lineageDemand: [...(lastDemandRef.current ?? [])],
-                forceFull: true
+                forceFull: true,
+                ...(persistSessionFor(persistSessionRef, document)
+                  ? { persistSession: true }
+                  : {})
               });
             }
             return;
@@ -666,6 +719,35 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
                 };
         }
         lastWorkerMessageAt = Date.now();
+        if (message.type === 'display-refined') {
+          // The full-quality display of a draft result (see
+          // `BodyRepresentation.displayQuality`). It replaces only what is on
+          // screen and still a draft of the same content; otherwise it waits
+          // for the adoption that makes that draft live.
+          const document = hostRef.current.manager()?.document;
+          if (
+            document?.projectId === message.projectId &&
+            hasDraftDisplay(document.derived) &&
+            geometryContentKey(document) === message.contentKey
+          ) {
+            refinedDisplay.current = null;
+            const refined = rebindSketchGeometryForContent(
+              document,
+              message.derived,
+              message.contentKey
+            );
+            if (readyDerived.current && hasDraftDisplay(readyDerived.current))
+              readyDerived.current = refined;
+            hostRef.current.onDerived(refined);
+          } else {
+            refinedDisplay.current = {
+              projectId: message.projectId,
+              contentKey: message.contentKey,
+              derived: message.derived
+            };
+          }
+          return;
+        }
         if (message.type === 'geometry-ready') {
           const document = hostRef.current.manager()?.document;
           if (
@@ -1120,7 +1202,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         state.version === document.version
       );
     },
-    sync(document, lineageDemand) {
+    sync(document, lineageDemand, options) {
       const worker = workerRef.current;
       if (!worker) {
         return;
@@ -1141,21 +1223,39 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
         lastDemandRef.current = lineageDemand;
       }
       const demand = lastDemandRef.current ?? [];
-      if (
-        lastSyncedKey.current !==
-        `${document.projectId}:${document.version}:${lineageDemandCacheKey(document, demand)}`
-      ) {
+      const persistSession = options?.persistSession === true;
+      // What the worker was told for this project: every change of it is
+      // either carried by a broadcast below or sent on its own.
+      const told = persistSessionRef.current;
+      persistSessionRef.current = {
+        projectId: document.projectId,
+        persist: persistSession
+      };
+      if (lastSyncedKey.current !== broadcastSyncKey(document, demand)) {
         broadcastDocument.current = document;
         readyDocument.current = null;
         readyDerived.current = null;
       }
-      postSync(
+      const posted = postSync(
         worker,
         document,
         lastSyncedKey,
         armedRef,
-        lastDemandRef.current ?? undefined
+        lastDemandRef.current ?? undefined,
+        persistSession
       );
+      // The geometry is already live (or on its way): a policy change alone
+      // must not rebuild it, so it travels as its own message.
+      if (
+        !posted &&
+        (told?.projectId !== document.projectId ||
+          told.persist !== persistSession)
+      )
+        worker.postMessage({
+          type: 'session-policy',
+          projectId: document.projectId,
+          persistSession
+        } satisfies GeometryWorkerRequest);
     },
     syncOnce(document, analysis, lineageDemand, options) {
       // One-off rebuilds (previews, preflights, demo seeding, AI proposals)
@@ -1460,7 +1560,10 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       }
       readyDocument.current = document;
       broadcastDocument.current = document;
-      lastSyncedKey.current = `${document.projectId}:${document.version}:${lineageDemandCacheKey(document, lastDemandRef.current ?? [])}`;
+      lastSyncedKey.current = broadcastSyncKey(
+        document,
+        lastDemandRef.current ?? []
+      );
       setState((current) => ({ ...current, version: document.version }));
       return true;
     },
@@ -1507,15 +1610,30 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       ) {
         return false;
       }
+      // A refinement that overtook this adoption is the same result at full
+      // display quality.
+      const refined = refinedDisplay.current;
+      refinedDisplay.current = null;
       const adopted = rebindSketchGeometryForContent(
         document,
-        derived,
+        hasDraftDisplay(derived) &&
+          refined?.projectId === document.projectId &&
+          refined.contentKey === contentKey
+          ? refined.derived
+          : derived,
         contentKey
       );
       broadcastDocument.current = document;
       readyDocument.current = document;
       readyDerived.current = adopted;
-      lastSyncedKey.current = `${document.projectId}:${document.version}:${lineageDemandCacheKey(document, demand)}`;
+      lastSyncedKey.current = broadcastSyncKey(document, demand);
+      // No broadcast follows: tell the worker what is live, so it refines
+      // only a draft of this content and drops an older one.
+      workerRef.current.postMessage({
+        type: 'live-content',
+        projectId: document.projectId,
+        contentKey
+      } satisfies GeometryWorkerRequest);
       setState({
         type: 'state',
         phase: 'ready',
@@ -1530,4 +1648,8 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       return true;
     }
   };
+}
+
+function hasDraftDisplay(derived: DerivedState): boolean {
+  return hasDraftBodies(derived.bodyRepresentations);
 }

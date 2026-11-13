@@ -99,7 +99,7 @@ async function hashOnlyChamferedBox(adapter: ExactKernelAdapter) {
   );
   expect(bottom).toHaveLength(4);
   // Hashes only, as a document saved before edges had names stores them.
-  const { document } = chamferEdges(box, {
+  const { document, bodyId: chamferedBodyId } = chamferEdges(box, {
     name: 'Break bottom',
     targetBodyId: bodyId,
     edgeHashes: bottom.map((edge) => edge.hash),
@@ -107,7 +107,7 @@ async function hashOnlyChamferedBox(adapter: ExactKernelAdapter) {
   });
   const derived = await adapter.syncDocument(document);
   expect(derived.warnings).toEqual([]);
-  return { document: { ...document, derived }, bodyId };
+  return { document: { ...document, derived }, bodyId, chamferedBodyId };
 }
 
 function outcome(derived: ProjectDocument['derived'], bodyId: BodyId) {
@@ -129,14 +129,15 @@ describe('carry-neutral history checkpoints', { timeout: 240_000 }, () => {
     const chamfers = countChamfers();
     restorers.push(chamfers.restore);
     const model = await hashOnlyChamferedBox(adapter);
+    // The offset continues the chain on the chamfered body (ADR-025).
     const top = model.document.derived.bodyRepresentations[
-      model.bodyId
+      model.chamferedBodyId
     ]!.topology!.faces.find((face) => (face.geometry?.normal?.z ?? 0) > 0.999)!;
     expect(top).toBeDefined();
     const offsetBy = (offset: number) =>
       directEditBody(model.document, {
         name: 'Offset',
-        targetBodyId: model.bodyId,
+        targetBodyId: model.chamferedBodyId,
         operation: {
           kind: 'offset-face',
           faceHash: top.hash,
@@ -191,10 +192,10 @@ describe('carry-neutral history checkpoints', { timeout: 240_000 }, () => {
     try {
       const expected = outcome(
         await cold.syncDocument(committed),
-        model.bodyId
+        model.chamferedBodyId
       );
-      expect(outcome(commit, model.bodyId)).toEqual(expected);
-      expect(outcome(broadcast, model.bodyId)).toEqual(expected);
+      expect(outcome(commit, model.chamferedBodyId)).toEqual(expected);
+      expect(outcome(broadcast, model.chamferedBodyId)).toEqual(expected);
     } finally {
       cold.dispose();
     }

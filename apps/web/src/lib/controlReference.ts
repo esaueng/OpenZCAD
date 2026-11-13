@@ -238,7 +238,7 @@ export const KEYBOARD_CONTROL_GROUPS = [
         ...bound('panels-hide-all'),
         action: 'Hide or show the model panels',
         detail:
-          'Keeps the layout. The rest is under View options on the panel rail.'
+          'Keeps the layout. The rest is under Panel layout on the panel rail.'
       }
     ]
   },

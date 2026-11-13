@@ -7,7 +7,7 @@ import { toUserId, type BodyId } from '@openzcad/shared';
 import { test, expect, stubApi } from './openzcad-fixtures';
 
 /**
- * U06 (ZC-104): a history row's menu duplicates a Move, Mirror or Pattern
+ * U06 (ZC-104): a history row's menu duplicates a Move or Mirror
  * step right after itself, opens the copy for review, and one Undo removes
  * it. Other kinds show the item disabled with the reason.
  */
@@ -61,7 +61,7 @@ test('duplicates a Move step from its history menu', async ({ page }) => {
     .click({ button: 'right' });
   const refused = menu.getByRole('menuitem', { name: /^Duplicate/ });
   await expect(refused).toBeDisabled();
-  await expect(refused).toContainText('Move, Mirror and Pattern steps only');
+  await expect(refused).toContainText('Move and Mirror steps only');
   await page.keyboard.press('Escape');
 
   await page

@@ -90,7 +90,7 @@ export interface EdgeTopologyLayout {
   planes: Map<string, string>;
 }
 
-interface SelectionRecord {
+export interface SelectionRecord {
   /** Witness hash → label, for every edge whose hash is unique. */
   edgeLabels: Map<number, string>;
   /** Stored selection hash → label, for selected edges with unique labels. */
@@ -103,6 +103,13 @@ interface SelectionRecord {
   /** The features up to the modifier on the build that recorded this. */
   upstream: UpstreamSnapshot;
 }
+
+/** {@link EdgeSelectionMemory.exportProject}: key, layouts, latest layout. */
+export type EdgeSelectionMemoryState = [
+  key: string,
+  layouts: [signature: string, record: SelectionRecord][],
+  latest: string | null
+][];
 
 /**
  * Per-adapter memory of hash-only selections, keyed by project and feature.
@@ -139,8 +146,37 @@ export class EdgeSelectionMemory {
       : this.records.get(key)?.get(signature);
   }
 
+  /**
+   * One project's records, oldest first, for a persisted history session
+   * (`exact-session-snapshot.ts`): a reopened session that restores instead
+   * of replaying would otherwise start with nothing to carry from, unlike a
+   * replay that resolves each selection again.
+   */
+  exportProject(projectId: string): EdgeSelectionMemoryState {
+    const prefix = edgeSelectionKey(projectId, '');
+    const state: EdgeSelectionMemoryState = [];
+    for (const [key, byLayout] of this.records) {
+      if (!key.startsWith(prefix)) continue;
+      state.push([key, [...byLayout], this.latest.get(key) ?? null]);
+    }
+    return state;
+  }
+
+  /** Re-records an exported project's selections, keeping the bounds. */
+  importProject(projectId: string, state: EdgeSelectionMemoryState): void {
+    const prefix = edgeSelectionKey(projectId, '');
+    for (const [key, layouts, latest] of state) {
+      if (!key.startsWith(prefix)) continue;
+      for (const [signature, record] of layouts)
+        this.store(key, signature, record);
+      if (latest !== null && this.records.get(key)?.has(latest))
+        this.latest.set(key, latest);
+    }
+  }
+
   store(key: string, signature: string, record: SelectionRecord): void {
-    const byLayout = this.records.get(key) ?? new Map<string, SelectionRecord>();
+    const byLayout =
+      this.records.get(key) ?? new Map<string, SelectionRecord>();
     byLayout.delete(signature);
     byLayout.set(signature, record);
     while (byLayout.size > LAYOUTS_PER_FEATURE) {
@@ -503,7 +539,10 @@ export function carryEdgeSelection(
   // A stretch along one line: the planes that moved all face one way or
   // its opposite.
   const moved = new Set<string>();
-  for (const normal of new Set([...record.planes.keys(), ...layout.planes.keys()])) {
+  for (const normal of new Set([
+    ...record.planes.keys(),
+    ...layout.planes.keys()
+  ])) {
     if (record.planes.get(normal) === layout.planes.get(normal)) continue;
     const line = direction(normal.split(',').map(Number), false);
     if (line === null) return null;

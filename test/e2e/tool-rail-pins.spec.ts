@@ -10,7 +10,7 @@ import { createPrimitiveInPlace, stubApi } from './openzcad-fixtures';
 
 const pinnedTools = (page: Page) =>
   page
-    .locator('nav[aria-label="Feature tools"] [data-pinned-tool]')
+    .locator('[role="toolbar"][aria-label="Feature tools"] [data-pinned-tool]')
     .evaluateAll((buttons) =>
       buttons.map((button) => (button as HTMLElement).dataset.pinnedTool)
     );

@@ -26,6 +26,7 @@
     "packages/kernel-adapter/src/exact-imported-mesh-cache.test.ts",
     "packages/kernel-adapter/src/exact-prepared-face-move.test.ts",
     "packages/kernel-adapter/src/exact-prior-blend.test.ts",
+    "packages/kernel-adapter/src/exact-reference-repair.test.ts",
     "packages/kernel-adapter/src/export-units.test.ts",
     "packages/kernel-adapter/src/face-attachment.test.ts",
     "packages/kernel-adapter/src/import-mesh-solid.test.ts",
@@ -33,9 +34,11 @@
     "packages/kernel-adapter/src/kernel-step-import.test.ts",
     "packages/kernel-adapter/src/kernel-validation.test.ts",
     "packages/kernel-adapter/src/mesh-reference.test.ts",
+    "packages/kernel-adapter/src/move-faces-journal-face-map.test.ts",
     "packages/kernel-adapter/src/remus-lineage.test.ts",
     "packages/kernel-adapter/src/remus-modeling-operations.test.ts",
     "packages/kernel-adapter/src/remus-native-vertices.test.ts",
+    "packages/kernel-adapter/src/remus-predicted-carrier-lineage.test.ts",
     "packages/kernel-adapter/src/remus-runtime.test.ts",
     "packages/kernel-adapter/src/result-acceptance.test.ts",
     "packages/kernel-adapter/src/union-unify-gate.test.ts",
@@ -86,8 +89,10 @@
     "test/deployment-config-validator.test.ts",
     "test/desktop-release-privacy.test.ts",
     "test/direct-edit-corpus/corpus.test.ts",
+    "test/direct-edit-predicted-carrier-lineage.test.ts",
     "test/display-only-blend-preview.test.ts",
     "test/document-core.test.ts",
+    "test/draft-display-release.test.ts",
     "test/drawing-assistant-operations.test.ts",
     "test/drawing-auto-dimension.test.ts",
     "test/drawing-dimension-audit.test.ts",
@@ -116,6 +121,7 @@
     "test/geometry.test.ts",
     "test/growing-holder-holes.test.ts",
     "test/growing-holder-units.test.ts",
+    "test/hash-only-reference-upgrade.test.ts",
     "test/helical-coil-cap-rims.test.ts",
     "test/imported-mesh-conversion-cache.test.ts",
     "test/imported-mesh.test.ts",
@@ -172,7 +178,8 @@
     "test/typed-parameters.test.ts",
     "test/unit-global-setup.test.ts",
     "test/unit-runtime-budget.test.ts",
-    "test/unit-suites.test.ts"
+    "test/unit-suites.test.ts",
+    "test/kernel-session-snapshot.test.ts"
   ],
   "web": [
     "src/components/DrawingWorkspace.test.tsx",
@@ -206,6 +213,7 @@
     "src/hooks/useGeometryWorkerDemand.test.tsx",
     "src/hooks/useProjectView.test.tsx",
     "src/hooks/useRefusalHarvest.test.tsx",
+    "src/hooks/useRovingToolbar.test.tsx",
     "src/hooks/useLocalProjectAutosaveSchedule.test.tsx",
     "src/hooks/useScrollMemory.test.tsx",
     "src/hooks/useWorkspaceResume.test.tsx",
@@ -238,6 +246,7 @@
     "src/lib/featureValidation.test.ts",
     "src/lib/fieldParameterDefinitions.test.ts",
     "src/lib/formatBytes.test.ts",
+    "src/lib/fragileSelections.test.ts",
     "src/lib/inPlace/blendEdgeRemap.test.ts",
     "src/lib/inPlace/thread.test.ts",
     "src/lib/inPlace/tools.test.ts",
@@ -293,6 +302,10 @@
     "src/theme/contrast.test.ts",
     "src/theme/tokens-defined.test.ts",
     "src/worker/geometryWorker.test.ts",
-    "worker/glimpse.test.ts"
+    "worker/glimpse.test.ts",
+    "src/lib/kernelSessionStore.test.ts",
+    "src/worker/kernelSessionPersistence.test.ts",
+    "src/worker/geometryWorkerSessions.test.ts",
+    "src/lib/kernelSessionPolicy.test.ts"
   ]
 }

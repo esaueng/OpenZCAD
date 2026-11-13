@@ -24,7 +24,61 @@
   display: flex;
   flex-direction: column;
   align-items: center;
+  align-self: stretch;
   gap: 2px;
+}
+
+/* What the verbs act on, at the head of the rail: the kind in one word the
+   rail's width holds ("Face", "Edge", "Body"), and the count under it above
+   one. An accent cap across the rail's full width, flush with its top, so
+   the rail a pick has taken reads as the selection's at a glance and not as
+   the Build tools rearranged. The words in full are its title and the
+   group's description. */
+.selection-rail .selection-rail-heading {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  align-self: stretch;
+  gap: 1px;
+  /* Over the rail's own top padding, to the island's edge. */
+  margin: -4px 0 2px;
+  padding: 5px 0 4px;
+  color: var(--color-selected-text);
+  background: var(--color-selected-fill);
+  border-bottom: 1px solid var(--color-accent-border);
+  font-size: var(--fs-mini);
+  font-weight: var(--fw-semibold);
+  line-height: 1.15;
+  white-space: nowrap;
+  cursor: default;
+}
+
+/* One word, never wider than the rail: a kind added later that runs long
+   is cut short rather than pushed past the island's edge. */
+.selection-rail .selection-rail-heading-kind {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.selection-rail .selection-rail-heading-count {
+  font-weight: var(--fw-regular);
+  font-variant-numeric: tabular-nums;
+}
+
+/* A short window or a touch screen lays the rail out in columns
+   (quiet-stage.css), and the pick's verbs keep to the first. The rail fills
+   that column's width there, so the heading caps it from the island's edge
+   instead of floating as a chip the width of a button. */
+@media (max-height: 540px), (pointer: coarse) and (max-height: 900px) {
+  div.command-rail .selection-rail {
+    justify-self: stretch;
+  }
+}
+
+/* The island itself takes the accent's edge while a pick owns the rail. */
+.workspace-column-float:has(.selection-rail) .workspace-column {
+  border-color: var(--color-accent-border);
 }
 
 /* The verbs keep the rail's look, not the old viewport chip's, whose
@@ -37,7 +91,8 @@ button.command-rail.selection-rail-verb[aria-pressed='true'] {
 
 /* Quick checks hold the verbs without dimming them: the verbs are back a
    frame or two later, and a blink of grey read as a refusal. */
-.selection-rail[data-busy='quiet'] button.command-rail:disabled {
+.selection-rail[data-busy='quiet']
+  button.command-rail:is(:disabled, [aria-disabled='true']) {
   opacity: 1;
 }
 
@@ -45,7 +100,10 @@ button.command-rail.selection-rail-verb[aria-pressed='true'] {
    other verbs greyed in place (never removed, so the rail neither changes
    nor jumps), the verb being made lit at full strength. */
 .selection-rail[data-hold='drag']
-  button.command-rail.selection-rail-verb[aria-pressed='true']:disabled {
+  button.command-rail.selection-rail-verb[aria-pressed='true']:is(
+    :disabled,
+    [aria-disabled='true']
+  ) {
   opacity: 1;
 }
 
@@ -115,7 +173,8 @@ button.command-rail.selection-rail-verb[aria-pressed='true'] {
    Its name and measurement lead the line, as one quiet chip; the guidance
    follows it. The line never takes the pointer, so neither does the chip. */
 
-.workspace-hint {
+.workspace-hint,
+.workspace-hint-probe {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -165,11 +224,23 @@ button.command-rail.selection-rail-verb[aria-pressed='true'] {
   white-space: nowrap;
 }
 
+/* The name has the row: the chip is capped at the card's width (above) and
+   the measurement keeps its own, so the name gives way only when the two
+   fill the row. A fixed 180px cut "Mounting Bracket · Front face" with a
+   hundred pixels of the row unused. */
 .selection-readout .selection-callout-name {
+  flex: 0 1 auto;
   min-width: 0;
-  max-width: 180px;
+  /* Not the viewport chip's 260px (viewer.css), which shares the class. */
+  max-width: none;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Cut, the whole name is its tooltip (SelectionReadout), so the name takes
+   the pointer then and only then: the rest of the line never does. */
+.selection-readout .selection-callout-name[data-cut] {
+  pointer-events: auto;
 }
 
 .selection-readout .selection-callout-detail {

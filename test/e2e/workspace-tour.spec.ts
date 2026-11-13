@@ -60,9 +60,9 @@ test('first-model tour rides the real workflow and never returns', async ({
     contentType: 'image/png'
   });
 
-  // History is the one step the app cannot observe; Next is the way on,
-  // and Finish on the last step is the same dismissal as skipping.
-  await tour.getByRole('button', { name: 'Next' }).click();
+  // Opening History is what the step asks for, so it moved the tour on as
+  // the first two steps do; Finish on the last step is the same dismissal
+  // as skipping.
   await expect(tour).toContainText('Take it with you');
   await expect(history).not.toHaveClass(/tour-target/);
   await tour.getByRole('button', { name: 'Finish' }).click();

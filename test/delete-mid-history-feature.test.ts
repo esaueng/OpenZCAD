@@ -121,16 +121,18 @@ describe('deleting a feature from the middle of the history', () => {
   }, 120_000);
 
   it.each([
-    ['BoxB', 8000, ['Stack', 'Fuse']],
-    ['BoxA', 1000, ['Fuse']]
+    ['BoxB', 8000, ['Stack', 'Fuse'], 8000],
+    ['BoxA', 1000, ['Fuse'], undefined]
   ] as const)(
     'refuses loudly, not silently, when operand %s goes',
-    async (dropped, survivingVolume, complainingFeatures) => {
+    async (dropped, survivingVolume, complainingFeatures, passedThrough) => {
       const { volumes, warnings } = await read(drop(fused(), dropped));
-      // The surviving primitive still measures; the dependent body does not
-      // exist at all, rather than existing with a stale volume.
+      // The surviving primitive still measures. The failed union never
+      // exists with a stale volume: it hands its first operand through
+      // unchanged when that survives (ADR-017, November 2026), and is
+      // absent when it does not.
       expect(volumes[0]).toBe(survivingVolume);
-      expect(volumes.at(-1)).toBeUndefined();
+      expect(volumes.at(-1)).toBe(passedThrough);
       // And every feature that lost its input says so by name.
       for (const feature of complainingFeatures) {
         expect(warnings.join(' ')).toContain(`"${feature}"`);
@@ -200,18 +202,26 @@ describe('deleting a feature from the middle of the history', () => {
       expect(warnings).toEqual([]);
     }, 120_000);
 
-    it.each(['BoxB', 'Fuse'] as const)(
-      'refuses the fillet loudly when %s goes',
-      async (dropped) => {
-        const { volumes, warnings } = await read(
-          drop(await fusedAndFilleted(), dropped)
-        );
-        // No filleted body at all, and the fillet names itself in a warning.
-        expect(volumes.at(-1)).toBeUndefined();
-        expect(warnings.join(' ')).toContain('"Break"');
-        expect(warnings.join(' ')).toMatch(/unavailable/);
-      },
-      120_000
-    );
+    it('refuses the fillet loudly when Fuse goes', async () => {
+      const { volumes, warnings } = await read(
+        drop(await fusedAndFilleted(), 'Fuse')
+      );
+      // No filleted body at all, and the fillet names itself in a warning.
+      expect(volumes.at(-1)).toBeUndefined();
+      expect(warnings.join(' ')).toContain('"Break"');
+      expect(warnings.join(' ')).toMatch(/unavailable/);
+    }, 120_000);
+
+    it('fails the union loudly when BoxB goes, and the fillet lands on the box it hands through', async () => {
+      const { volumes, warnings } = await read(
+        drop(await fusedAndFilleted(), 'BoxB')
+      );
+      // The failed Fuse passes BoxA through (ADR-017, November 2026); the
+      // fillet's edge at (20, 20) is on it, so only the Fuse is refused.
+      expect(volumes.at(-1)!).toBeCloseTo(8000 - CUT, 6);
+      expect(warnings.join(' ')).toContain('"Fuse"');
+      expect(warnings.join(' ')).toMatch(/unavailable/);
+      expect(warnings.join(' ')).not.toContain('"Break"');
+    }, 120_000);
   });
 });

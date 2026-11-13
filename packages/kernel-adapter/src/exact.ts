@@ -275,7 +275,6 @@ export {
   type ExportUnitOptions,
   type MeshExportTolerances
 } from './export-units';
-import { refineBoundsAtSplineFaces, tightenBoundsToMesh } from './exact-bounds';
 import {
   readMeshQuality,
   type BodyMeshQuality,
@@ -289,10 +288,12 @@ export {
   type MeshQualityReport
 };
 import { dot, length, subtract, uniformScaleMatrix } from './exact-math';
+import { previewDisplayTessellation } from './display-tessellation';
 import {
-  displayTessellationForExtents,
-  heldDisplayTessellation
-} from './display-tessellation';
+  publishedSolidBounds,
+  refineDraftDisplay,
+  solidDisplayTessellation
+} from './exact-display-refinement';
 import {
   displayOnlyBlendSalt,
   displayOnlyBlendsSupported,
@@ -319,6 +320,21 @@ import {
   type CheckpointMemoryStats,
   type RebuildCacheEvent
 } from './exact-history-cache';
+import {
+  kernelSnapshotSupport,
+  projectionMatches,
+  projectionSignature,
+  restoreKernelSnapshot,
+  snapshotKernel,
+  PERSISTED_HISTORY_SESSION_FORMAT,
+  type PersistedHistorySession
+} from './exact-session-snapshot';
+export {
+  estimateStructuredBytes,
+  isPersistedHistorySession,
+  kernelSnapshotBuildId,
+  type PersistedHistorySession
+} from './exact-session-snapshot';
 import {
   ownedMeshPositions,
   ownedMeshIndices,
@@ -709,8 +725,45 @@ export interface ExactKernelAdapter {
        * build depends on the document alone.
        */
       proposeCarry?: boolean;
+      /**
+       * The idle refinement of a draft display (see
+       * `exact-display-refinement.ts`): a drag that is still under way
+       * keeps what its frames recorded, so its release is drafted as if
+       * this sync had never run.
+       */
+      displayRefinement?: boolean;
+      /**
+       * A reopened project's persisted session: restored instead of
+       * replaying when it matches this document exactly, and published only
+       * once its projection matches the one it was captured with. Any
+       * mismatch or refusal replays as without it.
+       */
+      persistedSession?: PersistedHistorySession;
     }
   ): Promise<DerivedState>;
+  /** Whether the history kernel holds this project's state. */
+  hasHistoryFor?(projectId: ProjectDocument['projectId']): boolean;
+  /**
+   * The history kernel's state as a persisted session, when it is exactly
+   * the complete build of `document` the last sync published; otherwise null.
+   */
+  captureHistorySession?(
+    document: ProjectDocument
+  ): Promise<PersistedHistorySession | null>;
+  /** Whether a restored session still awaits {@link warmHistory}. */
+  needsHistoryWarmup?(projectId: ProjectDocument['projectId']): boolean;
+  /**
+   * Idle: rebuilds a restored session's checkpoint table in a second kernel
+   * and swaps it in once complete; cancellation keeps the restored kernel.
+   */
+  warmHistory?(
+    document: ProjectDocument,
+    options?: {
+      cancellation?: BuildCancellationSignal;
+      yieldControl?: () => Promise<void> | void;
+      lineageDemand?: readonly BodyId[] | ReadonlySet<BodyId>;
+    }
+  ): Promise<boolean>;
   /**
    * Whether a sync result carries a failure of this device's moment — a
    * font face or import source that had not arrived — rather than of the
@@ -989,6 +1042,18 @@ export interface ExactKernelAdapterOptions {
   onRebuildCacheEvent?: (event: RebuildCacheEvent) => void;
   /** Session-local H02 benchmark counters; disabled for ordinary workers. */
   measurementCacheDiagnostics?: boolean;
+  /**
+   * Publish an unchanged body's retained measurement as is instead of a
+   * fresh copy: its mesh buffers, `bbox` and `topology` are then the same
+   * objects in every sync that reuses it, and in a sync's geometry-ready
+   * publication and its final state. Such a caller must treat body meshes
+   * and topology as immutable and copy them before transferring or editing
+   * them. Diffing callers then see unchanged bodies by identity instead of
+   * comparing every buffer, and each sync skips one copy per body. Off by
+   * default: results are otherwise caller-owned, as documented on
+   * `storeMeasuredShape`.
+   */
+  shareRetainedMeasurements?: boolean;
 }
 
 /** Bodies whose exact geometry descends from an imported STEP feature. */
@@ -1153,14 +1218,68 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   private historyReplayWork = 0;
   private readonly primitiveBuildCache = new PrimitiveBuildCache();
 
+  /**
+   * A persisted session (`exact-session-snapshot.ts`) offered to the build
+   * of the sync that carries it; the build consumes it either way.
+   */
+  private offeredSession: PersistedHistorySession | null = null;
+  /** The outcome of the last offered session, for the next cache event. */
+  private sessionRestoreOutcome: 'restored' | 'rejected' | null = null;
+  /**
+   * The history kernel came from a persisted session: it holds one
+   * checkpoint, at the last feature, so an edit of an earlier feature would
+   * replay the whole history. {@link warmHistory} rebuilds the ordinary
+   * checkpoint table in the background.
+   */
+  private sparseRestoredHistory = false;
+  /**
+   * A persisted session seeded the history kernel and its projection has
+   * not been matched yet. Nothing may build on or publish from it until it
+   * is: a cancelled or failed sync drops it, and so does any later build
+   * that finds it still unmatched.
+   */
+  private unvalidatedSeed = false;
+  /**
+   * What the last complete build left in the history kernel, recorded by
+   * `buildWithHistoryCache` when nothing about it depended on this device's
+   * moment or on an edit's proposal; `syncDocument` promotes it to
+   * {@link liveSession} with the projection it published.
+   */
+  private lastBuildRecord: {
+    kernel: RemusKernel;
+    projectId: string;
+    scopeKey: string;
+    digests: string[];
+    lineageProbeKey: string;
+    carryNeutral: boolean;
+    demand: ReadonlySet<BodyId> | undefined;
+    build: ExactBuildResult;
+  } | null = null;
+  /**
+   * The history kernel's current state, as a complete sync left it, and the
+   * projection that sync published: what {@link captureHistorySession} may
+   * snapshot. Every other history job, and any restore, clears it first.
+   */
+  private liveSession:
+    | (NonNullable<RemusKernelAdapter['lastBuildRecord']> & {
+        derived: DerivedState;
+      })
+    | null = null;
+
   /** Task yields must not let another caller restore the owned live arena. */
   private historyJobs: Promise<void> = Promise.resolve();
   private historyGeneration = 0;
   private historyCancellation: BuildCancellationSignal | undefined;
 
-  private runHistoryJob<T>(work: () => Promise<T>): Promise<T> {
+  private runHistoryJob<T>(
+    work: () => Promise<T>,
+    keepLiveSession = false
+  ): Promise<T> {
     const generation = this.historyGeneration;
     const job = this.historyJobs.then(async () => {
+      // Any job may move the history kernel away from the state the last
+      // complete sync published; only a capture reads it as it is.
+      if (!keepLiveSession) this.liveSession = null;
       const lifetime = {
         isCancelled: () => generation !== this.historyGeneration
       };
@@ -1339,6 +1458,20 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
    */
   private coarseFaceMoveFrame = false;
   /**
+   * The edit whose last preview frame was meshed at the drag tessellation:
+   * the source history before it and the body it moves. The complete sync
+   * that follows it for the same edit — its release — draws that body with
+   * a draft display mesh (see `exact-display-refinement.ts`). Every gating
+   * check still runs on the commit; only the display-gap advisory, which
+   * describes the full-quality mesh, waits for the refinement. Any complete sync consumes it; a full-quality preview frame,
+   * a released preview and a dropped history cache clear it.
+   */
+  private draftDisplaySource: {
+    projectId: ProjectDocument['projectId'];
+    source: string;
+    bodyId: BodyId;
+  } | null = null;
+  /**
    * Per body, the linear display deflection each of its solids was last
    * meshed at (see `heldDisplayTessellation`). A display policy, not a
    * geometry cache: it survives history-cache invalidation (a sync whose
@@ -1382,6 +1515,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   }
 
   private invalidateHistoryCache(): void {
+    this.sparseRestoredHistory = false;
+    this.unvalidatedSeed = false;
+    this.liveSession = null;
+    this.lastBuildRecord = null;
+    this.draftDisplaySource = null;
     if (this.historyKernel) releasePreparedGroupEdit(this.historyKernel);
     this.clearCurrentMassSnapshot();
     this.historyCheckpoints = [];
@@ -1631,10 +1769,19 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     cacheResetReason?: 'checkpoint-ownership' | 'checkpoint-restore';
     /** A feature this sync rebuilt waited on a font or source; see below. */
     transient: boolean;
+    /**
+     * The persisted session this build restored instead of replaying; the
+     * sync must match its projection before publishing anything.
+     */
+    seededSession?: PersistedHistorySession;
   }> {
     cancellation = this.historySignal(cancellation);
     throwIfBuildCancelled(cancellation);
     this.clearCurrentMassSnapshot();
+    const offered = this.offeredSession;
+    this.offeredSession = null;
+    this.lastBuildRecord = null;
+    if (this.unvalidatedSeed) this.invalidateHistoryCache();
     const features = listFeaturesInOrder(document);
     const terminal = features.at(-1);
     const deferredDirectEditFeatureId =
@@ -1645,6 +1792,17 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       )
         ? terminal.featureId
         : undefined;
+    // A drag preview builds display-only from the edit it drags on. A
+    // feature before that edit which the preview has to replay (its source
+    // was not checkpointed) is built checked, so its checkpoint is one the
+    // release's checked sync restores, together with the edit the preview
+    // prepared on it, instead of replaying that prefix and the edit afresh.
+    const displayOnlyFrom = !displayOnlyBlends
+      ? features.length
+      : deferredDirectEditFeatureId
+        ? features.length - 1
+        : 0;
+    const displayOnlyAt = (index: number) => index >= displayOnlyFrom;
     // Only a drag preview keeps a prepared face move; any other sync ends it.
     if (!deferredDirectEditFeatureId && this.historyKernel) {
       releasePreparedFaceMove(this.historyKernel);
@@ -1716,7 +1874,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             ? '|display-output'
             : '') +
           carryProposalSalt(features[index]!, carry) +
-          displayOnlyBlendSalt(features[index]!, displayOnlyBlends)
+          displayOnlyBlendSalt(features[index]!, displayOnlyAt(index))
       );
     const demandBases = cachingEnabled
       ? features.map((feature, index) =>
@@ -1741,7 +1899,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     const unsaltDisplayOnly = (spellings: readonly string[]) =>
       displayOnlyBlends
         ? spellings.map((digest, index) => {
-            const salt = displayOnlyBlendSalt(features[index]!, true);
+            const salt = displayOnlyBlendSalt(
+              features[index]!,
+              displayOnlyAt(index)
+            );
             return salt ? digest.slice(0, -salt.length) : digest;
           })
         : [...spellings];
@@ -1844,6 +2005,65 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       }
     }
 
+    // A reopened project's persisted session (`exact-session-snapshot.ts`),
+    // seeded as one checkpoint at the last feature, and only when everything
+    // the prefix loop below checks already agrees: that loop then restores
+    // it and replays nothing. Anything else, including any refusal of the
+    // bytes, leaves the ordinary replay.
+    let seeded: PersistedHistorySession | undefined;
+    if (
+      offered &&
+      cachingEnabled &&
+      transientFrom < 0 &&
+      (!kernel || this.historyProjectId !== document.projectId) &&
+      offered.projectId === document.projectId &&
+      offered.scopeKey === scopeKey &&
+      offered.digests.length === features.length &&
+      offered.lineageProbeKey === probeKeys[features.length - 1] &&
+      offered.digests.every((digest, index) =>
+        digestMatches(digest, index, offered.carryNeutral)
+      )
+    ) {
+      let restored: RemusKernel | null = null;
+      try {
+        restored = restoreKernelSnapshot(offered);
+        const checkpointId = restored.checkpoint();
+        if (
+          !isCheckpointHandle(checkpointId) ||
+          restored.checkpointCount() !== 1
+        )
+          throw new HistoryCacheIntegrityError(
+            'Session checkpoint allocation disagrees.'
+          );
+        this.invalidateHistoryCache();
+        const entry: HistoryCheckpointEntry = {
+          featureIndex: features.length - 1,
+          digests: [...offered.digests],
+          checkpointId,
+          snapshot: offered.build,
+          ...(offered.carryNeutral ? { carryNeutral: true } : {}),
+          lineageProbeKey: offered.lineageProbeKey,
+          lineageMetadataBytes: new TextEncoder().encode(
+            offered.lineageProbeKey
+          ).byteLength
+        };
+        this.historyKernel = restored;
+        this.historyCheckpoints = [entry];
+        this.historyCheckpointOwners.set(checkpointId, entry);
+        this.historyScopeKey = scopeKey;
+        this.historyProjectId = document.projectId;
+        // The restored arena still holds what the captured kernel's replays
+        // retired: its budget continues where that kernel's stopped.
+        this.historyReplayWork = offered.replayWork;
+        kernel = restored;
+        restored = null;
+        seeded = offered;
+        this.unvalidatedSeed = true;
+      } catch {
+        restored?.free();
+      }
+    }
+
     // A changed literal box width can reuse a checked prefix only through
     // its common clear prism. No other changed feature is skipped. Native
     // moves, complete construction maps and the normal measurement pass still
@@ -1920,7 +2140,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             .map((digest, index) => {
               const salt = displayOnlyBlendSalt(
                 features[index]!,
-                displayOnlyBlends
+                displayOnlyAt(index)
               );
               return salt ? digest.slice(0, -salt.length) : digest;
             });
@@ -2189,6 +2409,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       kernel = null;
     }
 
+    // Restored in full, with nothing replayed on it, or not at all.
+    const seededSession =
+      seeded && kernel && startIndex === features.length ? seeded : undefined;
     if (!kernel) {
       kernel = new RemusKernel();
       this.historyKernel = kernel;
@@ -2209,6 +2432,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     const report = rebuildReporter(onProgress);
     let featureDone: (() => void) | undefined;
     let executedFeatures = 0;
+    // The feature the next build step runs: each step builds one.
+    let nextBuildIndex = startIndex;
     const onFeatureStart = (index: number) => {
       executedFeatures += 1;
       featureDone = report(
@@ -2224,6 +2449,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       idleView?: IdleLineageView
     ) => {
       featureDone?.();
+      nextBuildIndex = index + 1;
       if (index <= checkpointIndices.at(-1)!)
         axialExtent.observe(index, result);
       // Publish only a disposable mesh projection before an expensive pattern.
@@ -2444,8 +2670,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       build = await buildDocumentHistoryCooperatively(
         {
           run: (work) =>
-            withDisplayOnlyBlends(activeKernel, displayOnlyBlends, () =>
-              withSyncReadMemo(readMemo, work)
+            withDisplayOnlyBlends(
+              activeKernel,
+              displayOnlyAt(nextBuildIndex),
+              () => withSyncReadMemo(readMemo, work)
             ),
           checkpoint: () =>
             yieldControl
@@ -2529,9 +2757,32 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           executedFeatures - reusedPrimitives - reusedPreparedFeatures;
       }
     }
+    // What a persisted session of this state needs. Nothing this device's
+    // moment decided (a font or source still to come), no drag or display
+    // build, no edit's proposal: only a build any later replay reproduces.
+    this.lastBuildRecord =
+      cachingEnabled &&
+      scopeKey !== null &&
+      features.length > 0 &&
+      transientFrom < 0 &&
+      !displayOnlyBlends &&
+      !deferredDirectEditFeatureId &&
+      !proposeCarry
+        ? {
+            kernel: activeKernel,
+            projectId: document.projectId,
+            scopeKey,
+            digests: [...plainDigests],
+            lineageProbeKey: probeKeys.at(-1)!,
+            carryNeutral: !unresolvedEdgeHash,
+            demand: normalizedDemand,
+            build
+          }
+        : null;
     // The cache event is emitted by syncDocument AFTER the measure pass, so
     // it can carry the measure-reuse counts alongside the replay counts.
     return {
+      ...(seededSession ? { seededSession } : {}),
       kernel: activeKernel,
       build,
       replayed:
@@ -2659,7 +2910,13 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
      * last time, in solid order; held while the body's size stays close.
      */
     heldDisplayDeflections?: readonly number[],
-    provePlanarPairs = true
+    provePlanarPairs = true,
+    /**
+     * Mesh the faces at the drag tessellation (see
+     * `exact-display-refinement.ts`). Validation, measurement, edges and
+     * volume are unchanged; edges keep the full display deflection.
+     */
+    draftDisplay = false
   ): PreparedShapeMeasurement {
     if (shape.solids.length === 0) {
       throw new Error('Exact body contains no solids.');
@@ -2702,15 +2959,15 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       // Hold the previous deflection while the body's size stays close: a
       // nudged bounding box must not re-mesh every face (the kernel reuses
       // per-face meshes only at the same deflection).
-      const displayTessellation = heldDisplayTessellation(
-        displayTessellationForExtents(
-          bounds[3]! - bounds[0]!,
-          bounds[4]! - bounds[1]!,
-          bounds[5]! - bounds[2]!
-        ),
+      const displayTessellation = solidDisplayTessellation(
+        bounds,
         heldDisplayDeflections?.[displayLinearDeflections.length]
       );
+      // The held value stays the full display quality a draft refines to.
       displayLinearDeflections.push(displayTessellation.linearDeflection);
+      const meshTessellation = draftDisplay
+        ? previewDisplayTessellation(displayTessellation)
+        : displayTessellation;
       const faceHandles = Array.from(kernel.getSolidFaces(solid));
       const edgeToFaces = edgeToFaceMapOf(kernel, solid);
       // The edit that produced this solid usually measured its witnesses
@@ -2793,13 +3050,13 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           strictVerdicts?.get(solid),
           kernel,
           solid,
-          displayTessellation.linearDeflection,
-          displayTessellation.angularDeflection
+          meshTessellation.linearDeflection,
+          meshTessellation.angularDeflection
         ) ??
         kernel.tessellateSolidGroupedBinary(
           solid,
-          displayTessellation.linearDeflection,
-          displayTessellation.angularDeflection
+          meshTessellation.linearDeflection,
+          meshTessellation.angularDeflection
         );
       try {
         const faceOffsets = Array.from(ownedMeshFaceOffsets(mesh));
@@ -2808,11 +3065,6 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         // wasm-bindgen returns caller-owned arrays, independent of mesh.free().
         // Only nonzero body offsets require another index allocation.
         const positions = ownedMeshPositions(mesh);
-        publishedBounds = tightenBoundsToMesh(
-          bounds,
-          positions,
-          displayTessellation.linearDeflection
-        );
         const meshIndices = ownedMeshIndices(mesh);
         const shifted =
           vertexOffset === 0
@@ -2877,30 +3129,17 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           faceTopologyByHandle.set(handle, publishedFace);
           topology.faces.push(publishedFace);
         }
-        publishedBounds = refineBoundsAtSplineFaces(
-          publishedBounds,
+        publishedBounds = publishedSolidBounds(
+          kernel,
+          solid,
+          bounds,
           { positions, indices: meshIndices, faceOffsets },
-          faceHandles.map((handle) => ({
-            surfaceType:
+          faceHandles.map(
+            (handle) =>
               faceTopologyByHandle.get(handle)?.geometry?.surfaceType ?? ''
-          })),
-          displayTessellation.linearDeflection,
-          (deflection) => {
-            const fine = kernel.tessellateSolidGroupedBinary(
-              solid,
-              deflection,
-              displayTessellation.angularDeflection
-            );
-            try {
-              return {
-                positions: ownedMeshPositions(fine),
-                indices: ownedMeshIndices(fine),
-                faceOffsets: Array.from(ownedMeshFaceOffsets(fine))
-              };
-            } finally {
-              fine.free();
-            }
-          }
+          ),
+          meshTessellation,
+          !draftDisplay
         );
       } finally {
         mesh.free();
@@ -3181,7 +3420,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       strictValid,
       meshClosure,
       bbox,
-      displayLinearDeflections
+      displayLinearDeflections,
+      ...(draftDisplay ? { draftDisplay: true as const } : {})
     };
     return {
       geometry,
@@ -3205,28 +3445,240 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       onGeometryReady?: (geometry: GeometryReadyState) => void;
       yieldControl?: () => Promise<void> | void;
       proposeCarry?: boolean;
+      displayRefinement?: boolean;
+      persistedSession?: PersistedHistorySession;
     }
   ): Promise<DerivedState> {
     return this.runHistoryJob(async () => {
-      const result = await this.syncMeasuredDocument(
-        document,
-        onProgress,
-        onProjection,
-        analysis,
-        true,
-        options?.lineageDemand,
-        options?.cancellation,
-        options?.onGeometryReady,
-        options?.yieldControl,
-        false,
-        false,
-        false,
-        options?.proposeCarry === true
-      );
-      if ('analysis' in result)
-        throw new Error('Document analysis is pending.');
-      return result;
+      this.offeredSession = options?.persistedSession ?? null;
+      // A complete sync ends a drag's draft and coarse-frame state. An idle
+      // refinement that slipped into a paused drag hands it back unless the
+      // history kernel itself was dropped (a fresh kernel holds no warm drag
+      // meshes, and nothing the drag recorded applies to it).
+      const kernel = this.historyKernel;
+      const drag = options?.displayRefinement
+        ? {
+            draftDisplaySource: this.draftDisplaySource,
+            coarseFaceMoveFrame: this.coarseFaceMoveFrame
+          }
+        : null;
+      try {
+        const result = await this.syncMeasuredDocument(
+          document,
+          onProgress,
+          onProjection,
+          analysis,
+          true,
+          options?.lineageDemand,
+          options?.cancellation,
+          options?.onGeometryReady,
+          options?.yieldControl,
+          false,
+          false,
+          false,
+          options?.proposeCarry === true
+        );
+        if ('analysis' in result)
+          throw new Error('Document analysis is pending.');
+        const record = this.lastBuildRecord;
+        this.liveSession =
+          record &&
+          record.kernel === this.historyKernel &&
+          !analysis &&
+          options?.proposeCarry !== true &&
+          !this.transientResults.has(result)
+            ? { ...record, derived: result }
+            : null;
+        return result;
+      } finally {
+        this.offeredSession = null;
+        if (drag && kernel && this.historyKernel === kernel) {
+          this.draftDisplaySource = drag.draftDisplaySource;
+          this.coarseFaceMoveFrame = drag.coarseFaceMoveFrame;
+        }
+      }
     });
+  }
+
+  hasHistoryFor(projectId: ProjectDocument['projectId']): boolean {
+    return this.historyKernel !== null && this.historyProjectId === projectId;
+  }
+
+  /**
+   * The history kernel's state as a persisted session, when it is exactly
+   * the complete build of `document` that the last sync published and the
+   * pinned kernel can snapshot it; otherwise null. Idle work: it reads the
+   * kernel and copies the build, and changes nothing.
+   */
+  captureHistorySession(
+    document: ProjectDocument
+  ): Promise<PersistedHistorySession | null> {
+    return this.runHistoryJob(async () => {
+      const live = this.liveSessionFor(document);
+      const kernel = this.historyKernel;
+      const support = kernelSnapshotSupport();
+      // A kernel past half its replay budget is not persisted: a restore
+      // would carry that arena into every later session and recycle (a full
+      // replay) a few edits after reopening. Its reopen replays into a fresh
+      // kernel instead, and that kernel is captured.
+      if (
+        !live ||
+        !kernel ||
+        !support ||
+        this.historyReplayWork * 2 >= MAX_HISTORY_REPLAY_WORK
+      )
+        return null;
+      try {
+        const kernelBytes = snapshotKernel(kernel);
+        return {
+          format: PERSISTED_HISTORY_SESSION_FORMAT,
+          kernelBuildId: support.snapshotBuildId(),
+          projectId: document.projectId,
+          scopeKey: live.scopeKey,
+          digests: [...live.digests],
+          lineageProbeKey: live.lineageProbeKey,
+          carryNeutral: live.carryNeutral,
+          build: cloneBuildState(live.build),
+          edgeSelections: this.edgeSelections.exportProject(document.projectId),
+          kernelBytes,
+          kernelDigest: support.snapshotDigest(kernelBytes),
+          projectionSignature: projectionSignature(live.derived),
+          replayWork: this.historyReplayWork
+        };
+      } catch {
+        // A refusal (`snapshot:poisoned`, `transient_state`, a limit) only
+        // means this state is not persisted; the next reopen replays.
+        return null;
+      }
+    }, true);
+  }
+
+  /**
+   * {@link liveSession} when the history kernel still holds exactly the
+   * complete build of `document` the last sync published; otherwise null.
+   */
+  private liveSessionFor(
+    document: ProjectDocument
+  ): NonNullable<RemusKernelAdapter['liveSession']> | null {
+    const live = this.liveSession;
+    if (
+      !live ||
+      live.kernel !== this.historyKernel ||
+      live.projectId !== document.projectId
+    )
+      return null;
+    const features = listFeaturesInOrder(document);
+    if (
+      features.length !== live.digests.length ||
+      historyScopeDigest(document) !== live.scopeKey
+    )
+      return null;
+    const scope = getParameterScope(document).scope;
+    for (let index = 0; index < features.length; index += 1) {
+      const feature = features[index]!;
+      if (
+        historyFeatureDigest(document, feature, index, scope, live.demand) +
+          carryProposalSalt(feature, false) +
+          displayOnlyBlendSalt(feature, false) !==
+        live.digests[index]
+      )
+        return null;
+    }
+    return live;
+  }
+
+  needsHistoryWarmup(projectId: ProjectDocument['projectId']): boolean {
+    return this.sparseRestoredHistory && this.historyProjectId === projectId;
+  }
+
+  /**
+   * Idle work after a persisted session was restored: replays `document` in
+   * a second kernel with the ordinary checkpoint schedule, and swaps it in
+   * only once complete, so a later edit of any feature restores a nearby
+   * checkpoint instead of replaying the whole history. Cancellation (any new
+   * work) keeps the restored kernel and its checkpoint as they were; only
+   * the per-body measurements, which a later sync takes again, are dropped.
+   * Resolves whether the checkpoint table was rebuilt.
+   */
+  warmHistory(
+    document: ProjectDocument,
+    options?: {
+      cancellation?: BuildCancellationSignal;
+      yieldControl?: () => Promise<void> | void;
+      lineageDemand?: readonly BodyId[] | ReadonlySet<BodyId>;
+    }
+  ): Promise<boolean> {
+    return this.runHistoryJob(async () => {
+      if (!this.needsHistoryWarmup(document.projectId)) return false;
+      // Only the state the last sync published: a stale document (an older
+      // revision than the kernel now holds) would replay superseded work and
+      // swap it in over the current kernel.
+      const live = this.liveSessionFor(document);
+      if (!live) return false;
+      this.liveSession = null;
+      const restored = {
+        kernel: this.historyKernel!,
+        checkpoints: this.historyCheckpoints,
+        owners: new Map(this.historyCheckpointOwners),
+        scopeKey: this.historyScopeKey,
+        projectId: this.historyProjectId,
+        replayWork: this.historyReplayWork
+      };
+      // Detached, so the warm build starts in a fresh kernel and nothing it
+      // invalidates on the way frees the restored one.
+      this.historyKernel = null;
+      this.historyCheckpoints = [];
+      this.historyCheckpointOwners.clear();
+      this.historyScopeKey = null;
+      this.historyProjectId = null;
+      try {
+        const cancellation = this.historySignal(options?.cancellation);
+        const { sources, pinned } = await this.prefetchImportSources(
+          document,
+          cancellation
+        );
+        if (documentNeedsTranslators(document)) await loadRemusTranslators();
+        await this.buildWithHistoryCache(
+          document,
+          sources,
+          pinned,
+          undefined,
+          undefined,
+          options?.lineageDemand,
+          cancellation,
+          options?.yieldControl
+        );
+        restored.kernel.free();
+        // The same state the live session published, in the new kernel.
+        const record = this.lastBuildRecord;
+        if (
+          live &&
+          record &&
+          record.digests.length === live.digests.length &&
+          record.digests.every(
+            (digest, index) => digest === live.digests[index]
+          )
+        )
+          this.liveSession = { ...record, derived: live.derived };
+        return true;
+      } catch (error) {
+        // Whatever the warm build made goes; the restored kernel returns.
+        this.invalidateHistoryCache();
+        this.historyKernel = restored.kernel;
+        this.historyCheckpoints = restored.checkpoints;
+        for (const [id, entry] of restored.owners)
+          this.historyCheckpointOwners.set(id, entry);
+        this.historyScopeKey = restored.scopeKey;
+        this.historyProjectId = restored.projectId;
+        this.historyReplayWork = restored.replayWork;
+        // Still exactly what the last sync published: a retry may warm it,
+        // and a capture may persist it.
+        this.liveSession = live;
+        // Only new work stops a warm-up; anything else would fail again.
+        this.sparseRestoredHistory = isBuildCancelled(error);
+        return false;
+      }
+    }, true);
   }
 
   async previewGeometry(
@@ -3265,7 +3717,11 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   async refineEditPreview(document: ProjectDocument): Promise<boolean> {
     if (
       !this.historyKernel ||
-      !(hasPreparedGroupEdit(this.historyKernel) || this.coarseFaceMoveFrame)
+      !(hasPreparedGroupEdit(this.historyKernel) || this.coarseFaceMoveFrame) ||
+      // A release of this frame commits a draft display and refines it
+      // after acceptance; warming full-quality meshes now would only hold
+      // that commit behind a tessellation it no longer needs.
+      this.draftDisplaySource
     )
       return false;
     await this.previewGeometry(document, {
@@ -3334,7 +3790,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         readMemo,
         recycleReason,
         cacheResetReason,
-        transient
+        transient,
+        seededSession
       } = await this.buildWithHistoryCache(
         document,
         sources,
@@ -3352,7 +3809,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       // A face drag's frames are as disposable as a prepared group edit's:
       // they mesh at the drag tessellation, and the worker's at-rest
       // refinement (`refineEditPreview`) meshes the resting frame at full
-      // quality. Committed and complete syncs always mesh at full quality.
+      // quality, except where the release commits a draft display (below).
+      // Every other complete sync meshes at full quality.
       const terminalEdit = listFeaturesInOrder(document).at(-1)?.data;
       const faceMoveFrame =
         geometryOnly &&
@@ -3363,6 +3821,35 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       this.coarseFaceMoveFrame = faceMoveFrame;
       const dragMesh =
         faceMoveFrame || (hasPreparedGroupEdit(kernel) && !fullDisplayQuality);
+      // A release commits what its last drag frame showed. When that frame
+      // was a drag mesh, the commit draws the moved body with the same drag
+      // tessellation (the kernel's per-face meshes of it are warm) and a
+      // later complete sync refines it; see `exact-display-refinement.ts`.
+      const draftCandidate = draftDisplayCandidate(document);
+      let draftBodyId: BodyId | undefined;
+      if (geometryOnly) {
+        this.draftDisplaySource =
+          dragMesh && draftCandidate
+            ? { projectId: document.projectId, ...draftCandidate }
+            : null;
+      } else {
+        const source = this.draftDisplaySource;
+        this.draftDisplaySource = null;
+        // A refused or failed release is never accepted: nothing to draw.
+        if (
+          source &&
+          draftCandidate &&
+          !analysis &&
+          !build.featureWarnings.some(
+            (warning) =>
+              warning.kind === 'build-failed' || warning.kind === 'refusal'
+          ) &&
+          source.projectId === document.projectId &&
+          source.source === draftCandidate.source &&
+          source.bodyId === draftCandidate.bodyId
+        )
+          draftBodyId = draftCandidate.bodyId;
+      }
       const bodies = listNodesByKind(document, 'body');
       const features = new Map(
         listNodesByKind(document, 'feature').map((feature) => [
@@ -3377,6 +3864,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         GeometryBodyRepresentation
       > = {};
       const finishBodies: (() => Promise<void>)[] = [];
+      /** Bodies published from a retained measurement this sync. */
+      const sharedBodies = new Set<BodyId>();
       const scheduling = new CooperativeWork(
         8,
         yieldControl
@@ -3763,6 +4252,13 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           !isFeatureSuppressed(feature) &&
           feature.data.featureKind === 'boolean' &&
           feature.data.operation === 'union';
+        // A strict union's closure verdict is read from its display mesh, so
+        // that body is never drafted: the check keeps its full-quality input.
+        const draftThisBody =
+          bodyId === draftBodyId &&
+          !requiresStrictUnionValidation &&
+          !consumed &&
+          !shape.referenceMesh;
         const recognizeImportedFeatures =
           !consumed && importedBodyIds.has(bodyId);
         // The opening is measured only where it can be grown. Its one
@@ -3816,6 +4312,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         );
         let measured: Omit<MeasuredShape, 'volume'>;
         let completeMeasurement: () => Promise<MeasuredShape>;
+        let displayMeshClosed = () =>
+          isClosedConsistentlyOrientedMesh(
+            inspectDisplayMeshClosure(measured.vertices, measured.indices)
+          );
         if (
           cached &&
           cached.analysisKey === analysisKey &&
@@ -3849,9 +4349,49 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
               'Measurement handle or validation probe failed.'
             );
           }
-          const complete = structuredClone(cached.measured);
-          measured = complete;
-          completeMeasurement = async () => complete;
+          let complete = this.options.shareRetainedMeasurements
+            ? cached.measured
+            : structuredClone(cached.measured);
+          sharedBodies.add(bodyId);
+          // A complete sync of a drafted release keeps every exact part of
+          // its measurement and swaps in the full-quality display mesh. A
+          // preview frame only draws it, so it never pays for that here.
+          if (complete.draftDisplay && !draftThisBody && !geometryOnly) {
+            const draft = complete;
+            try {
+              complete = withSyncReadMemo(readMemo, () =>
+                profileDirectEditStage('draftRefinement', () =>
+                  refineDraftDisplay(kernel, shape, draft)
+                )
+              );
+            } catch {
+              throw new HistoryCacheIntegrityError(
+                'Draft display refinement failed.'
+              );
+            }
+            this.storeMeasuredShape(bodyId, {
+              ...cached,
+              bytes:
+                cached.bytes -
+                measuredShapeBytes(cached.measured) +
+                measuredShapeBytes(complete),
+              measured: complete
+            });
+          } else {
+            // The published mesh is the retained one: its closure verdict
+            // is remembered with it.
+            const entry = cached;
+            displayMeshClosed = () =>
+              (entry.displayMeshClosed ??= isClosedConsistentlyOrientedMesh(
+                inspectDisplayMeshClosure(
+                  entry.measured.vertices,
+                  entry.measured.indices
+                )
+              ));
+          }
+          const reused = complete;
+          measured = reused;
+          completeMeasurement = async () => reused;
           reusedMeasurements += 1;
         } else {
           const reason = !cached
@@ -3899,7 +4439,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
               strictVerdicts,
               measureOpening,
               this.heldDisplayDeflections.get(bodyId),
-              !deferPlanarProofs
+              !deferPlanarProofs,
+              draftThisBody
             )
           );
           measured = prepared.geometry;
@@ -3988,15 +4529,17 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           !consumed &&
           !hiddenBodies.has(bodyId) &&
           measured.valid &&
+          // A draft mesh is not the display this advisory describes: the
+          // refinement that swaps in the full-quality mesh (about 0.3 s
+          // later) raises it, so it never flips with the draft.
+          !measured.draftDisplay &&
           feature !== undefined &&
           // Imports report their own source-file diagnostics, and an imported
           // sheet or single facet is legitimately open.
           feature.featureKind !== 'imported-step' &&
           feature.featureKind !== 'imported-mesh' &&
           !hasRefusingFeatureWarning(build, feature.featureId) &&
-          !isClosedConsistentlyOrientedMesh(
-            inspectDisplayMeshClosure(measured.vertices, measured.indices)
-          )
+          !displayMeshClosed()
         ) {
           // The B-rep passed validation, so the solid is kept; only its
           // display tessellation has gaps. Say so instead of letting the
@@ -4037,7 +4580,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
             ? { importedStepDeclaredSolidCount: imported.declaredSolidCount }
             : {}),
           bbox: measured.bbox,
-          topology: measured.topology
+          topology: measured.topology,
+          ...(measured.draftDisplay ? { displayQuality: 'draft' as const } : {})
         };
         geometryValid =
           geometryValid &&
@@ -4083,22 +4627,50 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       }
       if (
         onGeometryReady &&
+        // A restored session publishes nothing before its projection is
+        // matched below; it is complete moments later anyway.
+        !seededSession &&
         geometryValid &&
         !build.featureWarnings.some(
           (warning) =>
             warning.kind === 'build-failed' || warning.kind === 'refusal'
         )
       ) {
-        // Publications own buffers/topology; later analysis cannot mutate them.
-        onGeometryReady(
-          structuredClone({
-            bodyRepresentations: geometryRepresentations,
-            warnings: build.warnings,
-            featureWarnings: build.featureWarnings,
-            updatedAt: nowIso(),
-            analysis: 'pending' as const
-          })
-        );
+        // Publications own buffers/topology; later analysis cannot mutate
+        // them. A shared retained measurement is immutable and no analysis
+        // runs on it, so in sharing mode it is published as is.
+        const share = this.options.shareRetainedMeasurements === true;
+        const owned = structuredClone({
+          bodyRepresentations: share
+            ? Object.fromEntries(
+                Object.entries(geometryRepresentations).filter(
+                  ([bodyId]) => !sharedBodies.has(bodyId as BodyId)
+                )
+              )
+            : geometryRepresentations,
+          warnings: build.warnings,
+          featureWarnings: build.featureWarnings,
+          updatedAt: nowIso(),
+          analysis: 'pending' as const
+        });
+        const publication: GeometryReadyState = share
+          ? {
+              ...owned,
+              // Body order as built, shared and owned bodies interleaved.
+              bodyRepresentations: Object.fromEntries(
+                Object.entries(geometryRepresentations).map(
+                  ([bodyId, body]) => [
+                    bodyId,
+                    owned.bodyRepresentations[bodyId as BodyId] ?? {
+                      ...body,
+                      mesh: { ...body.mesh }
+                    }
+                  ]
+                )
+              )
+            }
+          : owned;
+        onGeometryReady(publication);
         await scheduling.checkpoint(true);
         throwIfBuildCancelled(cancellation);
       }
@@ -4110,7 +4682,37 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       const pending = yieldControl?.();
       if (pending) await pending;
       throwIfBuildCancelled(cancellation);
+      if (seededSession) {
+        // Never publish or build on a restored state that differs from what
+        // the session showed when it was captured; recovery replays it.
+        if (
+          !projectionMatches(
+            seededSession.projectionSignature,
+            projectionSignature({
+              bodyRepresentations,
+              warnings: build.warnings,
+              featureWarnings: build.featureWarnings
+            })
+          )
+        ) {
+          this.sessionRestoreOutcome = 'rejected';
+          throw new HistoryCacheIntegrityError(
+            'The restored session disagrees with its captured projection.'
+          );
+        }
+        this.sessionRestoreOutcome = 'restored';
+        this.sparseRestoredHistory = true;
+        this.unvalidatedSeed = false;
+        // A replay would have resolved these again; a restore carries them.
+        this.edgeSelections.importProject(
+          document.projectId,
+          seededSession.edgeSelections
+        );
+      }
+      const sessionRestore = this.sessionRestoreOutcome;
+      this.sessionRestoreOutcome = null;
       this.options.onRebuildCacheEvent?.({
+        ...(sessionRestore ? { sessionRestore } : {}),
         kind:
           reusedPrimitives + reusedPreparedFeatures > 0
             ? 'independent-reuse'
@@ -4188,8 +4790,10 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       // Cancellation is not a failure to recover from: it commits nothing —
       // no measured shapes, no mass snapshot, no cache event — and rethrows
       // typed, so the last valid model stays and a stale result can never
-      // overwrite a newer one.
+      // overwrite a newer one. A seeded session it interrupted before its
+      // projection was matched is dropped with it.
       if (isBuildCancelled(error)) {
+        if (this.unvalidatedSeed) this.invalidateHistoryCache();
         throw error;
       }
       this.invalidateHistoryCache();
@@ -5236,7 +5840,9 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   }
 
   releaseEditPreview(): void {
+    this.liveSession = null;
     this.coarseFaceMoveFrame = false;
+    this.draftDisplaySource = null;
     const kernel = this.historyKernel;
     if (!kernel) return;
     if (hasPreparedGroupEdit(kernel)) {
@@ -5398,4 +6004,45 @@ export async function createExactKernelAdapter(
   options: ExactKernelAdapterOptions = {}
 ): Promise<ExactKernelAdapter> {
   return new RemusKernelAdapter(options);
+}
+
+/**
+ * The released edit a complete sync may draw with a draft display mesh: a
+ * face move or cylinder resize, identified by the history before it (feature
+ * ids of a candidate edit are regenerated per pointer frame) and its body.
+ * A body a union produced is excluded: its strict closure check reads the
+ * display mesh, so it is always meshed at full quality.
+ */
+function draftDisplayCandidate(
+  document: ProjectDocument
+): { source: string; bodyId: BodyId } | null {
+  const terminal = listFeaturesInOrder(document).at(-1);
+  const data = terminal?.data;
+  if (
+    !terminal ||
+    isFeatureSuppressed(terminal) ||
+    data?.featureKind !== 'direct-edit' ||
+    (data.operation.kind !== 'offset-face' &&
+      data.operation.kind !== 'resize-cylindrical-face')
+  )
+    return null;
+  const body = listNodesByKind(document, 'body').find(
+    (candidate) => candidate.bodyId === data.targetBodyId
+  );
+  const producer = body
+    ? listNodesByKind(document, 'feature').find(
+        (feature) => feature.featureId === body.featureId
+      )
+    : undefined;
+  if (
+    !body ||
+    (producer?.data.featureKind === 'boolean' &&
+      producer.data.operation === 'union' &&
+      !isFeatureSuppressed(producer))
+  )
+    return null;
+  return {
+    source: document.featureOrder.slice(0, -1).join(','),
+    bodyId: data.targetBodyId
+  };
 }

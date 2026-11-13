@@ -9,8 +9,11 @@ import {
 } from './exact-cancellation';
 import {
   getParameterScope,
+  historyForkMessage,
+  historyForks,
   typedParameterMisuse,
-  listFeaturesInOrder
+  listFeaturesInOrder,
+  type HistoryFork
 } from '@openzcad/document-core';
 import {
   isFeatureSuppressed,
@@ -38,7 +41,9 @@ import {
 import { kernelRefusalRecordOf } from './kernel-refusal';
 import { blendAdviceOf } from './exact-edge-modifiers';
 import {
+  captureFeatureEntryState,
   firstManualSuppressionIndex,
+  passFailedFeatureThrough,
   passSuppressedFeatureThrough,
   withholdReferenceRepairs
 } from './exact-suppression';
@@ -258,6 +263,19 @@ function* buildDocumentHistorySteps(
   // `withholdReferenceRepairs`. Read from the document, not from this run, so
   // a prefix-restored build draws the same line as a full one.
   const firstSuppressed = firstManualSuppressionIndex(features);
+  // The same line after a failed feature, which passes its input through
+  // too. A failure is known only by running, so a prefix-restored build reads
+  // it from the restored attribution, which records every earlier failure.
+  let downstreamOfFailure = result.featureWarnings.some(
+    (warning) => warning.kind === 'build-failed'
+  );
+  // ADR-025: a feature that builds on a body an earlier step already
+  // replaced says so. Read from the document, so a prefix-restored build
+  // reports the same branches as a full one; geometry is untouched.
+  const forks = new Map<FeatureId, HistoryFork[]>();
+  for (const fork of historyForks(document)) {
+    forks.set(fork.featureId, [...(forks.get(fork.featureId) ?? []), fork]);
+  }
   const normalizedDemand =
     lineageDemand === undefined
       ? undefined
@@ -324,15 +342,19 @@ function* buildDocumentHistorySteps(
         yield;
         continue;
       }
+      const withheld =
+        downstreamOfFailure ||
+        (firstSuppressed >= 0 && index > firstSuppressed);
+      const entry = captureFeatureEntryState(result, feature);
       try {
         const wrongQuantity = misuse.get(feature.featureId);
         if (wrongQuantity) throw new Error(wrongQuantity);
         assertFeatureSketchProjectionsValid(result, feature.data);
-        // Downstream of a manual suppression nothing the build learns is
-        // written back (`withholdReferenceRepairs`), so a hash-only pick is
-        // not carried there either: a carry it could not store would build
-        // geometry the saved document cannot rebuild.
-        if (firstSuppressed >= 0 && index > firstSuppressed) {
+        // Downstream of a manual suppression or a failure nothing the build
+        // learns is written back (`withholdReferenceRepairs`), so a hash-only
+        // pick is not carried there either: a carry it could not store would
+        // build geometry the saved document cannot rebuild.
+        if (withheld) {
           delete ctx.edgeSelections;
         } else if (edgeSelections !== undefined) {
           ctx.edgeSelections = edgeSelections;
@@ -351,7 +373,7 @@ function* buildDocumentHistorySteps(
             result.sketchObjectOverrides
           );
         }
-        if (firstSuppressed >= 0 && index > firstSuppressed) {
+        if (withheld) {
           withholdReferenceRepairs(result, feature);
         }
       } catch (error) {
@@ -378,6 +400,16 @@ function* buildDocumentHistorySteps(
           kernelRefusalRecordOf(error),
           blendAdviceOf(error)
         );
+        // ADR-017 November 2026: a failed step that replaced one body leaves
+        // that body, unchanged, where its dependents look for the result —
+        // as a suppressed one does — instead of failing every one of them.
+        passFailedFeatureThrough(result, feature, entry);
+        downstreamOfFailure = true;
+      }
+      for (const fork of forks.get(feature.featureId) ?? []) {
+        const message = `Feature "${feature.name}": ${historyForkMessage(document, fork)}`;
+        result.warnings.push(message);
+        attribute(result, feature, message, 'history-fork');
       }
       onFeature?.(index, result, idleLineageView?.finish(feature, result));
       yield;

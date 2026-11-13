@@ -138,8 +138,10 @@ export function tailCheckpointIndices(
  * A complete (checked) build of a terminal face edit keeps its result as
  * well as its source: `indices` (ending at the source) plus `terminal`, when
  * that is free. The next drag, which appends another edit, then restores the
- * result instead of replaying it display-only, and the follow-up sync of the
- * same document restores it instead of replaying it checked again.
+ * result instead of replaying it, and the follow-up sync of the same document
+ * restores it instead of replaying it checked again. Without that slot the
+ * drag's first frame replays the result checked (only the dragged edit is
+ * built display-only), so its release still restores what the drag built.
  *
  * Only where it can never cost a restore: a slot must be free, so a full
  * schedule keeps the source (the next value of the same edit restores it),
@@ -569,6 +571,12 @@ export interface MeasuredBodyCacheEntry {
   /** Owned buffers plus serialized metadata/key/witness estimate. */
   bytes: number;
   measured: MeasuredShape;
+  /**
+   * Whether `measured`'s display mesh is closed and consistently oriented,
+   * filled in the first time a hit asks. The retained buffers are never
+   * mutated, so the verdict holds for the entry's lifetime.
+   */
+  displayMeshClosed?: boolean;
 }
 
 /** What a drag preview publishes for an unchanged body. */
@@ -691,6 +699,12 @@ export interface RebuildCacheEvent {
       | null;
   };
   kind: 'full-rebuild' | 'prefix-restore' | 'independent-reuse';
+  /**
+   * A persisted session was offered and seeded: `restored` when its
+   * projection matched and it was published, `rejected` when it did not and
+   * this sync replayed the history instead.
+   */
+  sessionRestore?: 'restored' | 'rejected';
   /** The old history kernel was retired after exhausting its replay budget. */
   recycleReason?: 'replay-budget';
   /** Features replayed by this sync (total on a full rebuild). */

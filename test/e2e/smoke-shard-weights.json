@@ -13,6 +13,7 @@
   "collaboration-lease-recovery.spec.ts": 19,
   "collaboration.spec.ts": 20,
   "coplanar-bodies.spec.ts": 55,
+  "cylinder-preview.spec.ts": 23,
   "deep-design-polish.spec.ts": 63,
   "design-review-followups.spec.ts": 140,
   "direct-edit-ownership.spec.ts": 58,
@@ -45,6 +46,7 @@
   "history-local-append.spec.ts": 26,
   "import-formats.spec.ts": 2,
   "in-place-primitives.spec.ts": 16,
+  "kernel-session-privacy.spec.ts": 14,
   "keyboard-focus-recovery.spec.ts": 12,
   "library-folder-sync.spec.ts": 12,
   "library-reload-stability.spec.ts": 10,
@@ -57,6 +59,7 @@
   "picked-feature-delete.spec.ts": 40,
   "picked-step-feature-delete.spec.ts": 53,
   "progressive-loading.spec.ts": 10,
+  "rail-keyboard-and-drawer.spec.ts": 8,
   "refusal-reproduction.spec.ts": 7,
   "reload-face-offset.spec.ts": 23,
   "rotational-direct-edits.spec.ts": 149,
@@ -83,5 +86,6 @@
   "touch-navigation.spec.ts": 9,
   "viewport.spec.ts": 13,
   "visual-selection-fillet-edit.spec.ts": 12,
-  "visual-selection-live-preview.spec.ts": 12
+  "visual-selection-live-preview.spec.ts": 12,
+  "workspace-empty-state.spec.ts": 8
 }

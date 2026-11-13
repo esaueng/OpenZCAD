@@ -56,7 +56,13 @@ import type {
   ViewRequestTarget,
   WheelDevice
 } from '@openzcad/viewport';
-import { SECTION_PLANE_LABELS, ViewerToolbar } from './ViewerToolbar';
+import {
+  SECTION_PLANE_LABELS,
+  VIEWER_RAIL_STOPS,
+  VIEWER_RAIL_STOPS_EXCEPT,
+  ViewerToolbar
+} from './ViewerToolbar';
+import { useRovingToolbar } from '../hooks/useRovingToolbar';
 import type { SavedViewsSectionProps } from './SavedViewsSection';
 import {
   measurementAnnotationsOnScreen,
@@ -160,6 +166,7 @@ interface ViewerShellProps {
   settings: ViewerSettings;
   fitSignal: number;
   autoFrame?: AutoFrameRequest | null;
+  creationFrame?: AutoFrameRequest | null;
   viewRequest: { view: ViewRequestTarget; nonce: number } | null;
   normalToFaceRequest: NormalToFaceRequest | null;
   units: string;
@@ -443,6 +450,7 @@ export function ViewerShell({
   settings,
   fitSignal,
   autoFrame = null,
+  creationFrame = null,
   viewRequest,
   normalToFaceRequest,
   units,
@@ -645,6 +653,16 @@ export function ViewerShell({
   // Workspace-local, like a held key: a reload starts with neither on.
   const [touchModifiers, setTouchModifiers] =
     useState<TouchModifiers>(NO_TOUCH_MODIFIERS);
+  // The instrument rail is one tab stop: the viewer bar, the relations
+  // beside it while sketching, and the panel buttons, walked with the arrow
+  // keys. Fourteen stops stood here between the top bar and the first
+  // modeling tool.
+  const instrumentRailRef = useRef<HTMLDivElement | null>(null);
+  useRovingToolbar(instrumentRailRef, {
+    items: VIEWER_RAIL_STOPS,
+    except: VIEWER_RAIL_STOPS_EXCEPT,
+    orient: '.viewer-rail'
+  });
   const datumHandleKey = datumHandle
     ? JSON.stringify({ ...datumHandle, draftShift, gesture: datumGesture })
     : '';
@@ -715,6 +733,7 @@ export function ViewerShell({
       onExportSectionDxf={onExportSectionDxf}
       sectionOutline={drawnSection}
       units={units}
+      roving={!dockLayout}
     />
   );
   return (
@@ -771,6 +790,7 @@ export function ViewerShell({
         exactSection={exactSection}
         fitSignal={fitSignal}
         autoFrame={autoFrame}
+        creationFrame={creationFrame}
         viewRequest={viewRequest}
         normalToFaceRequest={normalToFaceRequest}
         units={units}
@@ -943,23 +963,22 @@ export function ViewerShell({
           {/* How you look at the model: icon instruments down the right edge,
               under the top islands. They never change with the selection. */}
           {!viewMode && (
-            <div className="instrument-rail">
+            <div className="instrument-rail" ref={instrumentRailRef}>
               {viewerToolbar}
               {railExtras}
+              {/* The sketch snap and grid spacing: one quiet readout over
+                  the head of the rails, which it hangs from. Last in the
+                  rail so the rails' sibling selectors never see it. */}
+              <div
+                className="viewport-readout"
+                role="group"
+                aria-label="Viewport readout"
+              >
+                {dockExtras}
+                <ViewportGridReadout sinkRef={sketchGridReadoutRef} />
+              </div>
             </div>
           )}
-          {/* How picks and snaps behave, and the activity log: one quiet
-              readout in the bottom-left corner, under the column. */}
-          <div
-            className="viewport-readout"
-            role="group"
-            aria-label="Viewport readout"
-          >
-            {dockExtras}
-            {/* The sketch grid spacing reads beside the snap segment; the
-                scale bar itself sits by the orientation cube. */}
-            <ViewportGridReadout sinkRef={sketchGridReadoutRef} />
-          </div>
         </>
       )}
       {/* After the rail and the readout in the document, though it is drawn
@@ -1005,7 +1024,7 @@ export function ViewerShell({
         </>
       )}
       {modeOverlay}
-      {/* Upright at the model's left edge, or along the foot on a phone. */}
+      {/* Upright in the stage's bottom-left corner at every window size. */}
       <ViewportScaleIndicator scaleSinkRef={scaleIndicatorRef} units={units} />
       {frameRateOverlay && (
         <ViewportFrameStats

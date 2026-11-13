@@ -1107,17 +1107,19 @@ describe('command-system', () => {
         size: 1
       })
     );
+    // Each step continues the chain on the fillet's result (ADR-025).
+    const filleted = manager.document.bodyOrder[1]!;
     manager.execute(
       commandFactories.transformBody({
         name: 'Move',
-        targetBodyId: bodyId,
+        targetBodyId: filleted,
         translation: { x: 5, y: 0, z: 0 }
       })
     );
     manager.execute(
       commandFactories.patternBody({
         name: 'Row',
-        targetBodyId: bodyId,
+        targetBodyId: filleted,
         patternKind: 'linear',
         count: 3,
         axis: 'x',

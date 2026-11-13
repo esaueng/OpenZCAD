@@ -1,17 +1,20 @@
 /**
  * Face names after a boss-wall resize on a filleted box ∪ cylinder.
  *
- * The kernel's journaled cylinder resize rebuilds a boss in a different face
- * order and binds its outputs to the source faces positionally, marked
- * `provenance: "inferred"`. Consumed as construction history, that pairing
+ * The kernel journals a boss resize from geometry (`provenance:
+ * "inferred"`), and rebuilds the boss in a different face order from the
+ * source. The move-face reader used to read the op's `i`-th output as what
+ * source face `i` became and took the inferred history as construction, which
  * moved names onto unrelated faces — a side plane's name onto the top, the
  * top's onto the bottom — and published one name on two faces, so a later
  * push of the top face refused with "Direct-edit face is stale: The selected
  * face lineage resolves to multiple compatible candidates."
  *
- * Inferred bindings are now refused, so the faces they would have named are
- * hash-only. A document saved while they were consumed stores those wrong
- * names; its features must still find their faces (ADR-013 step 2).
+ * The reader now pairs faces by the kernel's own events, and still refuses
+ * inferred history (ADR-013, M07 amendments), so the faces a boss resize
+ * re-trims are hash-only. A document saved while the old reader named them
+ * stores those wrong names; its features must still find their faces
+ * (ADR-013 step 2).
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
@@ -27,12 +30,60 @@ import type {
   ProjectDocument
 } from '@openzcad/shared';
 import { planFaceOffset } from '../apps/web/src/lib/interaction/faceOffsetPlan';
+import type * as LineageBuilders from '../packages/kernel-adapter/src/exact-lineage-builders';
 import { plainRefusal } from '../apps/web/src/lib/refusalLanguage';
-import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
 import {
   JUNCTION_FILLET_DISCLOSURE,
   filletedUnion
 } from './support/filleted-union';
+
+/**
+ * The move-face reader as it was before it paired faces by journal events:
+ * output `i` read as source face `i`, inferred history taken as construction.
+ * Only the legacy-document case below switches it on.
+ */
+const legacyReader = vi.hoisted(() => ({
+  enabled: false,
+  read(
+    kernel: {
+      resolveOperationOutput(op: number, kind: string, i: number): string;
+    },
+    op: number,
+    sourceFaces: readonly number[],
+    resultFaces: readonly number[]
+  ) {
+    const results = new Set(resultFaces);
+    const faceMap = new Map<number, number>();
+    sourceFaces.forEach((source, index) => {
+      const record = JSON.parse(
+        kernel.resolveOperationOutput(op, 'face', index)
+      ) as { status?: string; entities?: { handle: number }[] };
+      const handle = record.entities?.[0]?.handle;
+      if (
+        record.status === 'bound' &&
+        handle !== undefined &&
+        results.has(handle)
+      )
+        faceMap.set(source, handle);
+    });
+    return { faceMap, conflictedSources: new Set<number>() };
+  }
+}));
+vi.mock(
+  '../packages/kernel-adapter/src/exact-lineage-builders',
+  async (importOriginal) => {
+    const actual = await importOriginal<typeof LineageBuilders>();
+    return {
+      ...actual,
+      moveFacesJournalFaceMap: (
+        ...args: Parameters<typeof actual.moveFacesJournalFaceMap>
+      ) =>
+        legacyReader.enabled
+          ? legacyReader.read(...args)
+          : actual.moveFacesJournalFaceMap(...args)
+    };
+  }
+);
 
 function cylinderWall(body: BodyRepresentation, radius: number): FaceTopology {
   const walls = body.topology!.faces.filter(
@@ -241,16 +292,8 @@ describe(
   },
   () => {
     it('still replays a later edit that stored a misplaced name', async () => {
-      // Author the history the way the reader did before: every inferred
-      // binding taken as construction history.
-      const read = RemusKernel.prototype.resolveOperationOutput;
-      const asConstruction = vi
-        .spyOn(RemusKernel.prototype, 'resolveOperationOutput')
-        .mockImplementation(function (this: RemusKernel, op, kind, index) {
-          return read
-            .call(this, op, kind, index)
-            .replace('"provenance":"inferred"', '"provenance":"construction"');
-        });
+      // Author the history the way the reader did before.
+      legacyReader.enabled = true;
       const legacy = await createExactKernelAdapter();
       let saved: ProjectDocument;
       let bodyId: BodyId;
@@ -273,7 +316,7 @@ describe(
         );
         saved = resizeWall({ ...first, derived }, bodyId, wall, 4);
       } finally {
-        asConstruction.mockRestore();
+        legacyReader.enabled = false;
         legacy.dispose();
       }
 

@@ -71,15 +71,20 @@
   bottom: 38px;
   left: 18px;
   z-index: var(--z-viewer-overlay);
-  /* The rule lies along the foot with its value beside it, as a scale bar
-     reads on a drawing; ViewportScaleIndicator ends it short of the bar. */
+  /* The rule stands upright in the corner with its value at its foot.
+     ViewportScaleIndicator measures the rail above and the bar beside it and
+     moves the rule by these offsets, so it keeps the corner at every size. */
   display: flex;
   flex-direction: row;
   align-items: flex-end;
-  gap: 8px;
+  gap: 6px;
   color: var(--color-stage-ink);
   pointer-events: none;
   user-select: none;
+  transform: translate(
+    var(--viewport-scale-dx, 0px),
+    var(--viewport-scale-dy, 0px)
+  );
 }
 
 .viewport-scale-indicator[hidden] {
@@ -89,14 +94,12 @@
 .viewer-shell canvas.viewport-scale-rule {
   display: block;
   flex: 0 0 auto;
-  width: var(--viewport-scale-length, 1px) !important;
-  height: 18px !important;
+  width: 18px !important;
+  height: var(--viewport-scale-length, 1px) !important;
 }
 
 .viewport-scale-value {
   min-width: max-content;
-  /* Level with the rule's baseline, 2px above the canvas foot. */
-  padding-bottom: 1px;
   color: var(--color-stage-ink);
   font-family: var(--font-mono);
   font-size: 13px;
@@ -375,10 +378,18 @@
 
 /* The hover lift every other rail uses: surface-2 was within a shade of
    the rail's own surface in the dark theme and barely registered. */
-.rail-button:hover:not(:disabled):not(.active),
+.rail-button:hover:not(:disabled, [aria-disabled='true']):not(.active),
 .rail-button.open:not(.active) {
   color: var(--color-text);
   background: var(--color-surface-hover);
+}
+
+/* Undo and Redo are greyed by aria, not `disabled`, so the arrow keys still
+   reach them and their reason is read out (ViewerToolbar). They look as a
+   disabled button does. */
+.rail-button[aria-disabled='true'] {
+  cursor: not-allowed;
+  opacity: var(--opacity-disabled);
 }
 
 .rail-button.active {
@@ -398,6 +409,14 @@
   height: 1px;
   margin: 3px 2px;
   background: var(--color-border);
+}
+
+/* The viewer bar's groups (ViewerToolbar.tsx) take no box of their own:
+   their buttons lay out as the bar's children, in a column or a grid, and
+   the hairline between them is the grouping. A roomy stage makes each an
+   island instead (quiet-stage.css). */
+.rail-group {
+  display: contents;
 }
 
 .rail-views-anchor {

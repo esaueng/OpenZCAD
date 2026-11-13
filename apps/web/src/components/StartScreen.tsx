@@ -2453,6 +2453,14 @@ export function StartScreen({
         : shelves.archived.length > 0
           ? 'Archive'
           : 'Trash';
+  // The empty Projects shelf of a library with nothing in it: the shelf
+  // itself offers "Create your first project", the page's primary action
+  // for as long as it is showing.
+  const firstProjectPrompt =
+    !loading &&
+    shelf === 'active' &&
+    shelfProjects.length === 0 &&
+    partsElsewhere === null;
 
   const cloud = describeCloud();
   // A run's outcome is in the sentence, and the startup mode texts restate
@@ -2652,7 +2660,10 @@ export function StartScreen({
           <div className="start-launch-head">
             <button
               type="submit"
-              className="primary start-launch-create"
+              // One primary on the page: while the empty shelf offers
+              // "Create your first project", that is it, and this steps
+              // down beside it rather than compete.
+              className={`${firstProjectPrompt ? 'secondary' : 'primary'} start-launch-create`}
               disabled={!canCreate}
             >
               <Plus size={14} aria-hidden="true" />
@@ -2682,7 +2693,6 @@ export function StartScreen({
             <span className="start-field-label">Units</span>
             <select
               value={units}
-              // Kept for the narrow layout, which hides the visible label.
               aria-label="Units"
               onChange={(event) => {
                 unitsEdited.current = true;
@@ -3208,7 +3218,7 @@ export function StartScreen({
                     <strong>No projects on this shelf</strong>
                     <span>{`All your projects are in ${partsElsewhere}.`}</span>
                   </>
-                ) : shelf === 'active' ? (
+                ) : firstProjectPrompt ? (
                   <>
                     <strong>No projects yet</strong>
                     <span>

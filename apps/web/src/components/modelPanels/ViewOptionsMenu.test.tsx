@@ -4,8 +4,10 @@ import { describe, expect, it, vi } from 'vitest';
 import type { PanelLayoutOptions } from '../../lib/panelLayout';
 import {
   LAYOUT_LOCKED_DETAIL,
+  PANEL_LAYOUT_MENU_MARGIN,
   PanelsHiddenPill,
   ViewOptionsMenu,
+  placePanelLayoutMenu,
   type ViewOptionsMenuProps
 } from './ViewOptionsMenu';
 
@@ -35,12 +37,12 @@ describe('ViewOptionsMenu', () => {
   it('opens a menu of named groups with radio and checkbox items', async () => {
     const user = userEvent.setup();
     renderMenu();
-    const button = screen.getByRole('button', { name: 'View options' });
+    const button = screen.getByRole('button', { name: 'Panel layout' });
     expect(button).toHaveAttribute('aria-haspopup', 'menu');
     expect(button).toHaveAttribute('aria-expanded', 'false');
     await user.click(button);
     expect(button).toHaveAttribute('aria-expanded', 'true');
-    const menu = within(screen.getByRole('menu', { name: 'View options' }));
+    const menu = within(screen.getByRole('menu', { name: 'Panel layout' }));
 
     const layouts = within(menu.getByRole('group', { name: 'Layout' }));
     expect(
@@ -97,7 +99,7 @@ describe('ViewOptionsMenu', () => {
   it('acts on each item and stays open, so a setting reads back at once', async () => {
     const user = userEvent.setup();
     const { props } = renderMenu({ preset: null });
-    await user.click(screen.getByRole('button', { name: 'View options' }));
+    await user.click(screen.getByRole('button', { name: 'Panel layout' }));
     await user.click(screen.getByRole('menuitemradio', { name: 'Review' }));
     expect(props.onPreset).toHaveBeenCalledWith('review');
     await user.click(
@@ -122,7 +124,7 @@ describe('ViewOptionsMenu', () => {
   it('disables the presets and the width while locked, and says why', async () => {
     const user = userEvent.setup();
     const { props } = renderMenu({ options: { ...OPTIONS, locked: true } });
-    await user.click(screen.getByRole('button', { name: 'View options' }));
+    await user.click(screen.getByRole('button', { name: 'Panel layout' }));
     const radios = screen.getAllByRole('menuitemradio');
     expect(radios).toHaveLength(8);
     for (const radio of radios) {
@@ -141,7 +143,7 @@ describe('ViewOptionsMenu', () => {
   it('moves between enabled items by arrow key and closes on Escape and Tab', async () => {
     const user = userEvent.setup();
     renderMenu({ options: { ...OPTIONS, locked: true } });
-    const button = screen.getByRole('button', { name: 'View options' });
+    const button = screen.getByRole('button', { name: 'Panel layout' });
     button.focus();
     await user.keyboard('{Enter}');
     expect(screen.getByRole('menu')).toHaveFocus();
@@ -168,13 +170,67 @@ describe('ViewOptionsMenu', () => {
   it('closes on a press outside, and the button toggles it', async () => {
     const user = userEvent.setup();
     renderMenu();
-    const button = screen.getByRole('button', { name: 'View options' });
+    const button = screen.getByRole('button', { name: 'Panel layout' });
     await user.click(button);
     await user.click(button);
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
     await user.click(button);
     await user.click(document.body);
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+  });
+});
+
+describe('placePanelLayoutMenu', () => {
+  const menu = { width: 266, height: 570 };
+  const viewport = { width: 1440, height: 900 };
+
+  it('hangs from the button where the window has the room', () => {
+    expect(
+      placePanelLayoutMenu(
+        { left: 1096, top: 200, bottom: 232 },
+        menu,
+        viewport
+      )
+    ).toEqual({ x: 820, y: 196 });
+  });
+
+  it('rises from the button rather than pressing against the window foot', () => {
+    // The rail's last buttons at 1440 × 900: hanging from the top the menu
+    // ended at 892 of 900, lower than every island on the stage.
+    const placed = placePanelLayoutMenu(
+      { left: 1096, top: 684, bottom: 716 },
+      menu,
+      viewport
+    );
+    expect(placed).toEqual({ x: 820, y: 150 });
+    expect(placed.y + menu.height).toBe(720);
+    expect(viewport.height - (placed.y + menu.height)).toBeGreaterThanOrEqual(
+      PANEL_LAYOUT_MENU_MARGIN
+    );
+  });
+
+  it('keeps its margin at both ends of a window too short to hold it', () => {
+    const short = { width: 1440, height: 420 };
+    // CSS caps the height at the window less both margins; it scrolls inside.
+    const capped = { width: 266, height: short.height - 32 };
+    const placed = placePanelLayoutMenu(
+      { left: 1096, top: 330, bottom: 362 },
+      capped,
+      short
+    );
+    expect(placed.y).toBe(PANEL_LAYOUT_MENU_MARGIN);
+    expect(placed.y + capped.height).toBe(
+      short.height - PANEL_LAYOUT_MENU_MARGIN
+    );
+  });
+
+  it('stays in the window beside a rail with no room to its left', () => {
+    expect(
+      placePanelLayoutMenu({ left: 120, top: 100, bottom: 132 }, menu, {
+        width: 390,
+        height: 800
+      }).x
+    ).toBe(8);
   });
 });
 

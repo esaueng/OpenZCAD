@@ -30,6 +30,7 @@ import { Tooltip } from './Tooltip';
 import { labelWithKey, useKeymap, type Keymap } from '../lib/keymap';
 import { platformShortcutLabel } from '../lib/platformShortcut';
 import { useMediaQuery } from '../hooks/useMediaQuery';
+import { useRovingToolbar } from '../hooks/useRovingToolbar';
 import type { TouchModifiers } from './viewer/touchNavigation';
 
 /**
@@ -56,6 +57,16 @@ function viewTitle(
     view.command && keymap.label(view.command)
   );
 }
+
+/**
+ * The instrument rail's stops for the arrow keys: the buttons on the rail
+ * itself (and the sketch relations standing beside it). What a button opens
+ * (the section controls, the standard views, the point relations) keeps its
+ * own tab order.
+ */
+export const VIEWER_RAIL_STOPS = 'button.rail-button, button.sketch-relation';
+export const VIEWER_RAIL_STOPS_EXCEPT =
+  '[data-rail-flyout], .sketch-point-relations';
 
 interface ViewerToolbarProps {
   settings: ViewerSettings;
@@ -117,6 +128,11 @@ interface ViewerToolbarProps {
    */
   touchModifiers?: TouchModifiers;
   onTouchModifiersChange?(next: TouchModifiers): void;
+  /**
+   * False inside the instrument rail, which makes one tab stop of this bar
+   * and the panel buttons under it; true where the bar stands alone.
+   */
+  roving?: boolean;
 }
 
 export const SECTION_PLANE_LABELS: Record<SectionPlaneId, string> = {
@@ -166,7 +182,8 @@ export function ViewerToolbar({
   sectionOutline,
   units,
   touchModifiers,
-  onTouchModifiersChange
+  onTouchModifiersChange,
+  roving = true
 }: ViewerToolbarProps) {
   const keymap = useKeymap();
   const coarsePointer = useMediaQuery('(pointer: coarse)');
@@ -175,6 +192,16 @@ export function ViewerToolbar({
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const sectionAnchorRef = useRef<HTMLDivElement | null>(null);
   const sectionTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const toolbarRef = useRef<HTMLDivElement | null>(null);
+  // One tab stop for the bar where it stands alone (Tweak's layout). Inside
+  // the instrument rail the rail owns the stops, the panel buttons under
+  // this bar included (ViewerShell).
+  useRovingToolbar(toolbarRef, {
+    items: VIEWER_RAIL_STOPS,
+    except: VIEWER_RAIL_STOPS_EXCEPT,
+    orient: '.viewer-rail',
+    enabled: roving
+  });
   // The cut and its panel are two things: the cut stays on while the panel
   // is hidden (the section button or Escape), so a look from a standard view
   // can still be a sectioned one. Hiding is remembered by the workspace,
@@ -354,259 +381,288 @@ export function ViewerToolbar({
   return (
     // The viewer bar: undo/redo and the viewport toggles. Still `.viewer-rail`
     // in the stylesheets; the name is what people call it.
-    <div className="viewer-rail" role="toolbar" aria-label="Viewer bar">
-      <Tooltip
-        label="Undo"
-        shortcut={keymap.label('edit-undo')}
-        {...(!canUndo && undoFloorTrimmed
-          ? { description: UNDO_FLOOR_TRIMMED_REASON }
-          : {})}
-      >
-        <button
-          type="button"
-          className="rail-button"
-          onClick={onUndo}
-          aria-label="Undo"
-          disabled={!canUndo}
-        >
-          <Undo2 size={16} aria-hidden="true" />
-        </button>
-      </Tooltip>
-      <Tooltip label="Redo" shortcut={keymap.label('edit-redo')}>
-        <button
-          type="button"
-          className="rail-button"
-          onClick={onRedo}
-          aria-label="Redo"
-          disabled={!canRedo}
-        >
-          <Redo2 size={16} aria-hidden="true" />
-        </button>
-      </Tooltip>
-      {coarsePointer && touchModifiers && onTouchModifiersChange && (
-        <>
-          <span className="rail-divider" aria-hidden="true" />
-          <Tooltip
-            label="Multi-select"
-            description="Taps add to or remove from the selection, as Shift or Ctrl does"
-          >
-            <button
-              type="button"
-              className={`rail-button ${touchModifiers.multiSelect ? 'active' : ''}`}
-              onClick={() =>
-                onTouchModifiersChange({
-                  ...touchModifiers,
-                  multiSelect: !touchModifiers.multiSelect
-                })
-              }
-              aria-label="Multi-select"
-              aria-pressed={touchModifiers.multiSelect}
-            >
-              <ListPlus size={16} aria-hidden="true" />
-            </button>
-          </Tooltip>
-          <Tooltip
-            label="Free values"
-            description="Drags and sketching ignore snaps and inference, as Shift does"
-          >
-            <button
-              type="button"
-              className={`rail-button ${touchModifiers.freeValues ? 'active' : ''}`}
-              onClick={() =>
-                onTouchModifiersChange({
-                  ...touchModifiers,
-                  freeValues: !touchModifiers.freeValues
-                })
-              }
-              aria-label="Free values"
-              aria-pressed={touchModifiers.freeValues}
-            >
-              <Magnet size={16} aria-hidden="true" />
-            </button>
-          </Tooltip>
-        </>
-      )}
-      <span className="rail-divider" aria-hidden="true" />
-      {onMeasure && (
-        // First of the viewport group, as on View mode's rail: a reading
-        // tool, so it stands with the instruments rather than among the
-        // modeling verbs on the left.
+    <div
+      ref={toolbarRef}
+      className="viewer-rail"
+      role="toolbar"
+      aria-label="Viewer bar"
+    >
+      {/* Two groups: what changes the document, then how it is looked at.
+          A roomy window draws each as its own island (quiet-stage.css);
+          elsewhere the wrappers are `display: contents` and the hairline
+          between them is all that shows. */}
+      <div className="rail-group" role="group" aria-label="Edit">
+        {/* Greyed by aria, not `disabled`: a disabled button cannot take
+            the keyboard, so the arrow keys skipped it and its reason was
+            never read out, and Undo dropped the focus the moment the last
+            step was undone under it. The press is refused here instead. */}
         <Tooltip
-          label="Measure"
-          description="Inspect geometry, distance, and angle"
+          label="Undo"
+          shortcut={keymap.label('edit-undo')}
+          {...(!canUndo
+            ? {
+                description: undoFloorTrimmed
+                  ? UNDO_FLOOR_TRIMMED_REASON
+                  : 'Nothing to undo'
+              }
+            : {})}
         >
           <button
             type="button"
-            className={`rail-button ${measuring ? 'active' : ''}`}
-            onClick={() => onMeasure(!measuring)}
-            aria-label="Measure"
-            aria-pressed={measuring}
+            className="rail-button"
+            onClick={() => {
+              if (canUndo) onUndo();
+            }}
+            aria-label="Undo"
+            aria-disabled={!canUndo}
           >
-            <Ruler size={16} aria-hidden="true" />
+            <Undo2 size={16} aria-hidden="true" />
           </button>
         </Tooltip>
-      )}
-      <Tooltip
-        label="Fit view"
-        shortcut={keymap.label('view-fit')}
-        description="Double-click the viewport to fit"
-      >
-        <button
-          type="button"
-          className="rail-button"
-          onClick={onFit}
-          aria-label={labelWithKey('Fit view', keymap.label('view-fit'))}
-        >
-          <Maximize2 size={16} aria-hidden="true" />
-        </button>
-      </Tooltip>
-      <Tooltip label="Toggle grid" shortcut={keymap.label('view-grid')}>
-        <button
-          type="button"
-          className={`rail-button ${settings.showGrid ? 'active' : ''}`}
-          onClick={onToggleGrid}
-          aria-label={labelWithKey('Toggle grid', keymap.label('view-grid'))}
-          aria-pressed={settings.showGrid}
-        >
-          <Grid3x3 size={16} aria-hidden="true" />
-        </button>
-      </Tooltip>
-      <Tooltip
-        label="Projection"
-        shortcut={keymap.label('view-projection')}
-        description={`Now: ${projectionLabel}`}
-      >
-        <button
-          type="button"
-          className={`rail-button ${projection === 'orthographic' ? 'active' : ''}`}
-          onClick={onToggleProjection}
-          aria-label={`${labelWithKey('Orthographic projection', keymap.label('view-projection'))} — now: ${projectionLabel}`}
-          aria-pressed={projection === 'orthographic'}
-        >
-          <Camera size={16} aria-hidden="true" />
-        </button>
-      </Tooltip>
-      <div className="rail-views-anchor" ref={sectionAnchorRef}>
         <Tooltip
-          label="Section view"
-          // Short enough to show whole: the state is the part that matters,
-          // and the 320px tooltip cut the old sentence off before it.
-          description={`Now: ${sectionLabel} · ${
-            !sectionOn
-              ? 'cuts the display only'
-              : !shownCut
-                ? 'click to turn off'
-                : sectionPanelShown
-                  ? 'click to hide controls'
-                  : 'click for controls'
+          label="Redo"
+          shortcut={keymap.label('edit-redo')}
+          {...(!canRedo ? { description: 'Nothing to redo' } : {})}
+        >
+          <button
+            type="button"
+            className="rail-button"
+            onClick={() => {
+              if (canRedo) onRedo();
+            }}
+            aria-label="Redo"
+            aria-disabled={!canRedo}
+          >
+            <Redo2 size={16} aria-hidden="true" />
+          </button>
+        </Tooltip>
+        {coarsePointer && touchModifiers && onTouchModifiersChange && (
+          <>
+            <span className="rail-divider" aria-hidden="true" />
+            <Tooltip
+              label="Multi-select"
+              description="Taps add to or remove from the selection, as Shift or Ctrl does"
+            >
+              <button
+                type="button"
+                className={`rail-button ${touchModifiers.multiSelect ? 'active' : ''}`}
+                onClick={() =>
+                  onTouchModifiersChange({
+                    ...touchModifiers,
+                    multiSelect: !touchModifiers.multiSelect
+                  })
+                }
+                aria-label="Multi-select"
+                aria-pressed={touchModifiers.multiSelect}
+              >
+                <ListPlus size={16} aria-hidden="true" />
+              </button>
+            </Tooltip>
+            <Tooltip
+              label="Free values"
+              description="Drags and sketching ignore snaps and inference, as Shift does"
+            >
+              <button
+                type="button"
+                className={`rail-button ${touchModifiers.freeValues ? 'active' : ''}`}
+                onClick={() =>
+                  onTouchModifiersChange({
+                    ...touchModifiers,
+                    freeValues: !touchModifiers.freeValues
+                  })
+                }
+                aria-label="Free values"
+                aria-pressed={touchModifiers.freeValues}
+              >
+                <Magnet size={16} aria-hidden="true" />
+              </button>
+            </Tooltip>
+          </>
+        )}
+      </div>
+      <span className="rail-divider rail-group-break" aria-hidden="true" />
+      <div className="rail-group" role="group" aria-label="View">
+        {onMeasure && (
+          // First of the viewport group, as on View mode's rail: a reading
+          // tool, so it stands with the instruments rather than among the
+          // modeling verbs on the left.
+          <Tooltip
+            label="Measure"
+            description="Inspect geometry, distance, and angle"
+          >
+            <button
+              type="button"
+              className={`rail-button ${measuring ? 'active' : ''}`}
+              onClick={() => onMeasure(!measuring)}
+              aria-label="Measure"
+              aria-pressed={measuring}
+            >
+              <Ruler size={16} aria-hidden="true" />
+            </button>
+          </Tooltip>
+        )}
+        <Tooltip
+          label="Fit view"
+          shortcut={keymap.label('view-fit')}
+          description="Double-click the viewport to fit"
+        >
+          <button
+            type="button"
+            className="rail-button"
+            onClick={onFit}
+            aria-label={labelWithKey('Fit view', keymap.label('view-fit'))}
+          >
+            <Maximize2 size={16} aria-hidden="true" />
+          </button>
+        </Tooltip>
+        <Tooltip label="Toggle grid" shortcut={keymap.label('view-grid')}>
+          <button
+            type="button"
+            className={`rail-button ${settings.showGrid ? 'active' : ''}`}
+            onClick={onToggleGrid}
+            aria-label={labelWithKey('Toggle grid', keymap.label('view-grid'))}
+            aria-pressed={settings.showGrid}
+          >
+            <Grid3x3 size={16} aria-hidden="true" />
+          </button>
+        </Tooltip>
+        <Tooltip
+          label="Projection"
+          shortcut={keymap.label('view-projection')}
+          description={`Now: ${projectionLabel}`}
+        >
+          <button
+            type="button"
+            className={`rail-button ${projection === 'orthographic' ? 'active' : ''}`}
+            onClick={onToggleProjection}
+            aria-label={`${labelWithKey('Orthographic projection', keymap.label('view-projection'))} — now: ${projectionLabel}`}
+            aria-pressed={projection === 'orthographic'}
+          >
+            <Camera size={16} aria-hidden="true" />
+          </button>
+        </Tooltip>
+        <div className="rail-views-anchor" ref={sectionAnchorRef}>
+          <Tooltip
+            label="Section view"
+            // Short enough to show whole: the state is the part that matters,
+            // and the 320px tooltip cut the old sentence off before it.
+            description={`Now: ${sectionLabel} · ${
+              !sectionOn
+                ? 'cuts the display only'
+                : !shownCut
+                  ? 'click to turn off'
+                  : sectionPanelShown
+                    ? 'click to hide controls'
+                    : 'click for controls'
+            }`}
+          >
+            <button
+              type="button"
+              ref={sectionTriggerRef}
+              className={`rail-button ${settings.sectionView ? 'active' : ''} ${
+                sectionPanelShown ? 'open' : ''
+              }`}
+              onClick={(event) => pressSection(event.currentTarget)}
+              aria-label={`Section view — now: ${sectionLabel}`}
+              aria-pressed={sectionOn}
+              aria-expanded={sectionPanelShown}
+            >
+              <Slice size={16} aria-hidden="true" />
+            </button>
+          </Tooltip>
+          {sectionPanelShown && shownCut && (
+            <SectionToolbox
+              key={shownCut.section.plane}
+              section={shownCut.section}
+              range={shownCut.range}
+              active={sectionOn}
+              outline={sectionOutline}
+              units={units}
+              onSwitch={() => {
+                if (sectionOn) setHeldOff(true);
+                onToggleSection();
+              }}
+              onPlane={onSectionPlane}
+              onOffset={onSectionOffset}
+              onCommit={onSectionCommit}
+              onFlip={onSectionFlip}
+              onExport={onExportSectionDxf}
+            />
+          )}
+        </div>
+        <Tooltip
+          label="Display mode"
+          shortcut={keymap.label('view-display')}
+          description={`Now: ${displayModeLabel}${
+            xrayKey ? ` · ${platformShortcutLabel(xrayKey)} for X-ray` : ''
           }`}
         >
           <button
             type="button"
-            ref={sectionTriggerRef}
-            className={`rail-button ${settings.sectionView ? 'active' : ''} ${
-              sectionPanelShown ? 'open' : ''
-            }`}
-            onClick={(event) => pressSection(event.currentTarget)}
-            aria-label={`Section view — now: ${sectionLabel}`}
-            aria-pressed={sectionOn}
-            aria-expanded={sectionPanelShown}
+            className="rail-button"
+            onClick={onCycleDisplayMode}
+            aria-label={`${labelWithKey('Display mode', keymap.label('view-display'))} — now: ${displayModeLabel}`}
           >
-            <Slice size={16} aria-hidden="true" />
+            <DisplayModeIcon mode={settings.displayMode} />
           </button>
         </Tooltip>
-        {sectionPanelShown && shownCut && (
-          <SectionToolbox
-            key={shownCut.section.plane}
-            section={shownCut.section}
-            range={shownCut.range}
-            active={sectionOn}
-            outline={sectionOutline}
-            units={units}
-            onSwitch={() => {
-              if (sectionOn) setHeldOff(true);
-              onToggleSection();
-            }}
-            onPlane={onSectionPlane}
-            onOffset={onSectionOffset}
-            onCommit={onSectionCommit}
-            onFlip={onSectionFlip}
-            onExport={onExportSectionDxf}
-          />
-        )}
-      </div>
-      <Tooltip
-        label="Display mode"
-        shortcut={keymap.label('view-display')}
-        description={`Now: ${displayModeLabel}${
-          xrayKey ? ` · ${platformShortcutLabel(xrayKey)} for X-ray` : ''
-        }`}
-      >
-        <button
-          type="button"
-          className="rail-button"
-          onClick={onCycleDisplayMode}
-          aria-label={`${labelWithKey('Display mode', keymap.label('view-display'))} — now: ${displayModeLabel}`}
-        >
-          <DisplayModeIcon mode={settings.displayMode} />
-        </button>
-      </Tooltip>
-      <span className="rail-divider" aria-hidden="true" />
-      <div className="rail-views-anchor" ref={anchorRef}>
-        <Tooltip label="Standard views">
-          <button
-            type="button"
-            ref={triggerRef}
-            className={`rail-button ${viewsOpen ? 'open' : ''}`}
-            onClick={toggleViews}
-            aria-label="Standard views"
-            aria-expanded={viewsOpen}
-            aria-controls={viewsOpen ? panelId : undefined}
-          >
-            <AxisTriadIcon />
-          </button>
-        </Tooltip>
-        {viewsOpen && (
-          <div
-            className="rail-views-panel"
-            data-rail-flyout=""
-            id={panelId}
-            role="group"
-            aria-label="Standard views"
-          >
-            {/* The key is on the tile itself: a tooltip below each tile
+        <span className="rail-divider rail-views-break" aria-hidden="true" />
+        <div className="rail-views-anchor" ref={anchorRef}>
+          <Tooltip label="Standard views">
+            <button
+              type="button"
+              ref={triggerRef}
+              className={`rail-button ${viewsOpen ? 'open' : ''}`}
+              onClick={toggleViews}
+              aria-label="Standard views"
+              aria-expanded={viewsOpen}
+              aria-controls={viewsOpen ? panelId : undefined}
+            >
+              <AxisTriadIcon />
+            </button>
+          </Tooltip>
+          {viewsOpen && (
+            <div
+              className="rail-views-panel"
+              data-rail-flyout=""
+              id={panelId}
+              role="group"
+              aria-label="Standard views"
+            >
+              {/* The key is on the tile itself: a tooltip below each tile
                 covered the next one and, for the views without a key, only
                 repeated its name. */}
-            {VIEWS.map((view) => (
-              <button
-                key={view.id}
-                type="button"
-                className={view.id === 'iso' ? 'rail-view-wide' : undefined}
-                onClick={() => selectView(view.id)}
-                // The visible text is just the view name; the accessible
-                // name keeps the "<View> view (n)" wording used elsewhere.
-                aria-label={viewTitle(view, keymap)}
-              >
-                {VIEW_LABELS[view.id]}
-                {view.command && keymap.label(view.command) ? (
-                  <kbd aria-hidden="true">
-                    {platformShortcutLabel(keymap.label(view.command)!)}
-                  </kbd>
-                ) : null}
-              </button>
-            ))}
-            {savedViews && (
-              <SavedViewsSection
-                {...savedViews}
-                onApply={(viewId) => {
-                  savedViews.onApply(viewId);
-                  setViewsOpen(false);
-                  triggerRef.current?.focus();
-                }}
-              />
-            )}
-          </div>
-        )}
+              {VIEWS.map((view) => (
+                <button
+                  key={view.id}
+                  type="button"
+                  className={view.id === 'iso' ? 'rail-view-wide' : undefined}
+                  onClick={() => selectView(view.id)}
+                  // The visible text is just the view name; the accessible
+                  // name keeps the "<View> view (n)" wording used elsewhere.
+                  aria-label={viewTitle(view, keymap)}
+                >
+                  {VIEW_LABELS[view.id]}
+                  {view.command && keymap.label(view.command) ? (
+                    <kbd aria-hidden="true">
+                      {platformShortcutLabel(keymap.label(view.command)!)}
+                    </kbd>
+                  ) : null}
+                </button>
+              ))}
+              {savedViews && (
+                <SavedViewsSection
+                  {...savedViews}
+                  onApply={(viewId) => {
+                    savedViews.onApply(viewId);
+                    setViewsOpen(false);
+                    triggerRef.current?.focus();
+                  }}
+                />
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

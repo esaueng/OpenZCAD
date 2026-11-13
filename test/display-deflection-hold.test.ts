@@ -253,7 +253,7 @@ describe('the union gate meshes at the held deflection', () => {
 });
 
 describe('a face drag meshes its frames at the drag tessellation', () => {
-  it('keeps full quality for the resting refinement, the commit and the held value', async () => {
+  it('commits the resting frame as a draft and keeps full quality for its refinement and the held value', async () => {
     const calls: { linear: number; angular: number }[] = [];
     const underlying = RemusKernel.prototype.tessellateSolidGroupedBinary;
     const spy = vi
@@ -330,21 +330,32 @@ describe('a face drag meshes its frames at the drag tessellation', () => {
         expect(held.get(bodyId)).toEqual(sourceHeld);
       }
 
-      // At rest the worker's refinement meshes the same frame at full
-      // quality instead of reusing the cached drag mesh.
+      // At rest there is nothing to warm: the release commits this frame's
+      // drag mesh as a draft display and refines it after acceptance.
       calls.length = 0;
-      expect(await adapter.refineEditPreview?.(resting)).toBe(true);
-      expect(calls).toEqual([full]);
-      // Once refined, there is nothing coarse left to refine.
       expect(await adapter.refineEditPreview?.(resting)).toBe(false);
+      expect(calls).toEqual([]);
 
-      // The commit is a complete sync: full quality, as before.
-      calls.length = 0;
+      // The commit is a complete sync drawn with the drag tessellation; the
+      // held deflection stays the full-quality one its refinement uses.
       const committed = await adapter.syncDocument(resting);
       expect(committed.warnings).toEqual([]);
-      expect(calls.length).toBeGreaterThan(0);
-      expect(calls.every((call) => call.angular === full.angular)).toBe(true);
-      expect(calls.at(-1)).toEqual(full);
+      expect(committed.bodyRepresentations[bodyId]!.displayQuality).toBe(
+        'draft'
+      );
+      expect(calls).toEqual([
+        { linear: coarse.linearDeflection, angular: coarse.angularDeflection }
+      ]);
+      expect(held.get(bodyId)).toEqual(sourceHeld);
+
+      // The next complete sync draws it at full quality, as before.
+      calls.length = 0;
+      const refined = await adapter.syncDocument(resting);
+      expect(refined.warnings).toEqual([]);
+      expect(
+        refined.bodyRepresentations[bodyId]!.displayQuality
+      ).toBeUndefined();
+      expect(calls).toEqual([full]);
     } finally {
       spy.mockRestore();
       adapter.dispose();

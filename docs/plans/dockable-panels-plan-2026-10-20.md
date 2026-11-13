@@ -38,21 +38,23 @@ it.
 - **States:** closed, **unpinned**, **docked**, **floating**.
   - **Unpinned.** A rail click opens the panel unpinned, beside the inner edge
     of the right rail.
-    - **November design polish:** if another column would consume the
-      model's minimum stage share, a temporary panel borrows the nearest
-      right column (or the left column when there is no right dock).
+    - **November design polish, revised 12 November:** if another column
+      would consume the model's minimum stage share, a temporary panel
+      shares the first right column (or the left column when there is no
+      right dock), drawn under the panels pinned there. It hugs its content
+      up to half the column; the pinned panels keep the rest by their
+      weights, stay interactive and keep their rail buttons pressed, and get
+      the room back when it closes. (It first covered that column, hidden
+      and inert, which made a pinned panel vanish behind an unpinned one.)
       Independent panels remain alongside their dock when space permits.
-      Its content sets its height up to the
-      available stage height. The covered column stays mounted and retains
-      its layout, but is hidden and inert until inspection closes. Opening
-      a temporary panel therefore preserves usable model space.
     - Only one panel can be unpinned at a time; opening another replaces it.
     - Clicking the model does not close it. It stays until its rail button is
       pressed again.
-    - Its footer explains that it is temporary and offers Pin to keep it
-      alongside the other panels. The phone projection offers Hide panels
-      to clear the shared lane without rearranging saved docks. Docking is
-      offered only in a wider window.
+    - Its header's Pin says it is temporary (its tooltip) and docks it; the
+      footer that repeated this with a second Pin is gone. The phone
+      projection keeps a footer offering Hide panels, to clear the shared
+      lane without rearranging saved docks. Docking is offered only in a
+      wider window.
   - **Docked.** Pinning docks the panel.
   - **Floating.** Pop-out floats the panel.
 - **Close remembers where the panel was** (dock side, column and index, or its
@@ -122,9 +124,11 @@ it.
   - A drag out of the rail ignores targets until the cursor is 60 px away;
     otherwise the rail's own new-column target would trigger at once.
 
-### View options menu
+### Panel layout menu
 
-The menu replaces the rail's Layout button.
+The menu replaces the rail's Layout button. It shipped as "View options" and
+was renamed: it holds only panel layout controls, and the view options are the
+rail's own buttons.
 
 - **Presets:**
   - **Essentials** (the default): Objects left, Parameters right

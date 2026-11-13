@@ -207,6 +207,19 @@ describe('AppShell', () => {
     );
   });
 
+  it('puts the column ahead of the viewer in the tab sequence', () => {
+    // The viewer carries the instrument rail and the view cube. Behind
+    // them in the document, the modeling tools were twenty-one Tab presses
+    // away; every island is placed absolutely, so the order is the
+    // keyboard's alone.
+    const { container } = renderShell(null);
+    const column = container.querySelector('.workspace-column-float')!;
+    const viewer = container.querySelector('.viewer-shell')!;
+    expect(
+      column.compareDocumentPosition(viewer) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
   it('takes focus out of the inspector on the commit that closes it', () => {
     vi.useFakeTimers();
     try {

@@ -180,7 +180,7 @@ test('a member editor saves a named checkpoint through the lease-checked room', 
     'true'
   );
   await expect(
-    page.getByRole('navigation', { name: 'Feature tools' })
+    page.getByRole('toolbar', { name: 'Feature tools' })
   ).toHaveCount(0);
   await page.keyboard.press('ControlOrMeta+s');
   await page.keyboard.press('ControlOrMeta+Shift+s');

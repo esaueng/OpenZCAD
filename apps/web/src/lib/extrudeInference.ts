@@ -9,9 +9,11 @@ import {
 } from '@openzcad/kernel-adapter/extrude-inference';
 import type {
   BodyId,
+  FeatureId,
   ProjectDocument,
   SketchProfileReference
 } from '@openzcad/shared';
+import { refusingWarning } from './featureValidation';
 
 type DerivedState = ProjectDocument['derived'];
 type ExtrudeCommand = ReturnType<typeof commandFactories.extrudeSketch>;
@@ -84,6 +86,26 @@ function inferenceBody(
     : null;
 }
 
+/**
+ * The extrusion's own result, or null when it did not build. A failed add or
+ * cut passes its target through under the result id (ADR-017, November
+ * 2026), so a body there is not proof the extrusion built: its failure
+ * record decides.
+ */
+function builtResult(
+  derived: DerivedState,
+  extrusion: { bodyId: BodyId; featureId: FeatureId; name: string }
+): ExtrudeInferenceBody | null {
+  return refusingWarning(
+    extrusion.name,
+    derived.warnings,
+    derived.featureWarnings,
+    extrusion.featureId
+  )
+    ? null
+    : inferenceBody(extrusion.bodyId, derived);
+}
+
 function isMeasuredZeroOverlap(
   derived: DerivedState,
   featureName: string,
@@ -93,10 +115,11 @@ function isMeasuredZeroOverlap(
   const expected =
     `Feature "${featureName}": Stored add extrusion no longer overlaps ` +
     `${target.name}; operation was not re-inferred.`;
+  // The refused add hands its target through, consuming it (ADR-017), so
+  // only the refusal itself says the two shared nothing.
   return (
-    derived.bodyRepresentations[target.bodyId]?.consumed === false &&
     derived.warnings.filter((warning) => warning === expected).length >
-      baselineWarnings.filter((warning) => warning === expected).length
+    baselineWarnings.filter((warning) => warning === expected).length
   );
 }
 
@@ -109,9 +132,15 @@ export async function resolveExtrudeOperation(
 ): Promise<ResolvedExtrude> {
   const reserved = commandFactories.extrudeSketch(options.input).payload;
   const resultBodyId = reserved.ids?.bodyId;
-  if (!resultBodyId) {
+  const featureId = reserved.ids?.featureId;
+  if (!resultBodyId || !featureId) {
     throw new Error('Extrude could not reserve a result body.');
   }
+  const reservedResult = {
+    bodyId: resultBodyId,
+    featureId,
+    name: reserved.name
+  };
 
   const choice = options.choice;
   if (choice && choice.operation !== 'automatic') {
@@ -136,7 +165,7 @@ export async function resolveExtrudeOperation(
     command.validate(options.base);
     const document = command.apply(options.base);
     const derived = await options.derive(document);
-    if (!derived.bodyRepresentations[resultBodyId]) {
+    if (!builtResult(derived, reservedResult)) {
       throw new Error(
         derived.warnings.at(-1) ??
           'The selected extrusion operation did not produce an exact result body.'
@@ -187,9 +216,9 @@ export async function resolveExtrudeOperation(
       command.validate(options.base);
       const document = command.apply(options.base);
       const derived = await options.derive(document);
-      const result = inferenceBody(resultBodyId, derived);
+      const result = builtResult(derived, reservedResult);
       if (!result) {
-        // The stored-add rebuild deliberately omits a result when its exact
+        // The stored-add rebuild deliberately refuses when its exact
         // common-volume measurement is zero. For inference that is a valid
         // measurement, not a kernel refusal: record the disjoint union volume
         // so a bounding-box-only decoy cannot veto another unambiguous target.
@@ -291,7 +320,7 @@ export async function resolveExtrudeOperation(
   command.validate(options.base);
   const document = command.apply(options.base);
   const derived = await options.derive(document);
-  if (!derived.bodyRepresentations[resultBodyId]) {
+  if (!builtResult(derived, reservedResult)) {
     throw new Error('Inferred extrusion did not produce an exact result body.');
   }
   return {

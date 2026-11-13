@@ -146,13 +146,13 @@ test('model panels: History and Revisions stacked in a floating window', async (
   await capture(page, 'readme-panels-floating-window.png');
 });
 
-test('model panels: the View options menu', async ({ page }) => {
+test('model panels: the Panel layout menu', async ({ page }) => {
   await openMountingBracket(page, ESSENTIALS);
   await page
     .getByRole('toolbar', { name: 'Model panels' })
-    .getByRole('button', { name: 'View options' })
+    .getByRole('button', { name: 'Panel layout' })
     .click();
-  const menu = page.getByRole('menu', { name: 'View options' });
+  const menu = page.getByRole('menu', { name: 'Panel layout' });
   await expect(menu).toBeVisible();
   await expect(
     menu.getByRole('menuitemradio', { name: 'Essentials' })

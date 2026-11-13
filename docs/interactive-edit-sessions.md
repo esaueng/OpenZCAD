@@ -67,8 +67,9 @@ for anything that broadcast would not reproduce: different geometry content
 (a carried selection, a normalization written by the commit), another lineage
 demand, an analysis request, a carry proposal, a transient font/source
 result, or a live broadcast still running. The committed result is therefore
-measured and meshed once, at full display quality, and the next gesture's
-preview no longer queues behind a duplicate rebuild.
+measured once and meshed at full display quality once (by its refinement, for
+a draft display; see below), and the next gesture's preview no longer queues
+behind a duplicate rebuild.
 
 The validation stays authoritative: nothing reaches the document, its undo
 history, local or cloud storage, or export until it passes. While it runs,
@@ -87,6 +88,52 @@ still lands its release, a document that moved on drops it with the same
 (`onBusy`) stays held until the release is committed or dropped. Exact entry
 stays locked while a release validates.
 
+A released face drag or cylinder resize whose last frame was a drag mesh is
+accepted with a draft display (`BodyRepresentation.displayQuality: 'draft'`,
+see `exact-display-refinement.ts`). That commit's sync draws the moved body
+with the drag tessellation it was just shown at, whose per-face meshes the
+kernel still holds. It keeps every gating part of a complete sync: replay and
+the edit's kernel guards, relaxed and strict validation, exact face and edge
+measurements, full-quality edge polylines, volume, warnings and refusals. The
+one exception is the "display mesh has gaps" advisory. It is never a refusal
+and describes the full-quality mesh, so a drafted body does not evaluate it
+on its draft. The refinement evaluates it on the refined mesh, so a body
+whose full-quality mesh has gaps shows that advisory about 0.3 s after
+acceptance instead of with it, and the final warnings equal a full commit's.
+A body a union produced is never drafted, because its strict closure check
+(a refusal) reads the display mesh. Nor is a refused release or an analysis
+request. The draft box is tightened to the draft mesh with the draft
+deflection as slack, so it is still a valid bound.
+
+The worker refines only a draft the main thread shows: a broadcast's result,
+or a checked release once `adoptValidatedResult` posts `live-content`. A
+newer live content (that message, or a broadcast) retires any other draft,
+and a completed checked sync of other content holds the live draft back for
+up to a second, so a release awaiting adoption never sees its history kernel
+rewound to the previous edit. Once the worker has been idle for 100 ms, and
+no drag has sent a frame for a second (a released or cancelled cylinder drag
+ends that hold at once), it re-runs the same sync with `displayRefinement`.
+The adapter then keeps the draft's exact measurement and swaps in the
+full-quality mesh, face triangle ranges and certified box, so the result
+equals what a full-quality commit publishes. A refinement that lands in a
+paused drag hands that drag's draft and coarse-frame state back, so its
+release is still drafted. A refinement that fails other than by cancellation
+is retried once (after a dropped history cache that is a full rebuild). The
+worker sends the result as `display-refined`. The hook replaces the live
+result only while that result is still the draft of the same content; a
+refinement that overtook its adoption is adopted instead. Any new request
+cancels the refinement at the next build boundary, so the next gesture never
+waits behind it. The worker's result cache never stores a draft. Exports,
+mass properties, sections and mesh-quality reports build their own
+tessellations and never read a display mesh. Drawings treat a draft as
+geometry still pending: a sheet's stored fingerprint hashes the box, and
+view layout estimates read the display mesh. The local store may hold a
+draft projection until the derived-only save that follows the refinement; a
+reopen rebuilds anyway. Idle thumbnail capture waits for the refined display.
+The at-rest warm-up (`refineEditPreview`) is skipped for a drafted release,
+because it only existed to make a full-quality commit cheap, and when a
+release arrived during it the commit queued behind it.
+
 With `window.__ozFaceDragTrace` enabled, each release records `release`,
 `validated`, `committed`, `superseded` and `settled` (`detail.adopted`) in
 that array and as `performance.mark('oz.drag.<stage>')` User Timing marks. On a private 32-feature filleted box ∪ cylinder
@@ -97,8 +144,32 @@ side-face −32 mm 602/445/386 → 381/277/156 ms, cylinder diameter 1413/906 �
 post-validation tail (about 130 ms → 5 ms) changed. Main-thread work after a
 side release fell from about 970 to 420 ms in a profiled build, mostly the
 re-armed handle's step profile (136 → 28 ms). A retaken handle answers within
-one input event regardless of the validation's length. These are local
-measurements, not target-device results.
+one input event regardless of the validation's length. With the draft display
+(same part and setup, three top-face releases per run, two runs, against main
+`f7a1a1ca`), release → accepted fell from 291/282/292 and 317/286/530 ms to
+117/85/92 and 119/92/98 ms. The full-quality mesh replaced the draft about
+320–350 ms after acceptance, with no empty frame. In the Node harness the
+commit sync fell from 273 to 96–101 ms (full-quality tessellation 157 ms → the
+draft's 17 ms); the background refinement sync took 196–212 ms. These are
+local measurements, not target-device results.
+
+A boss diameter release commits the resize its drag prepared
+(`commitPreparedGroupEditJournaled`) rather than resizing the wall again,
+because it restores the checkpoint that drag prepared on. A drag preview
+builds only the dragged edit display-only. When the live build kept the
+previous edit's source but not its result (a full checkpoint schedule), the
+first frame replays that result checked, under the digests a checked release
+restores. Replayed display-only, its checkpoint was salted, so the release
+went back further, replayed the prefix and called
+`resizeCylindricalFaceJournaled` afresh (`test/prepared-resize-release.test.ts`).
+On the private part above (local Chromium, against main `a98f52cf`), the first
+diameter release fell from 773/780 to 609/609 ms release → accepted. The
+kernel commit is 530–535 ms of it; its own trace attributes almost all of that
+to the commit checks (material guard about 220 ms, volume guard about 185 ms,
+final watertight mesh about 130 ms), not to building the geometry, which the
+preview already made. A face-offset release that follows another edit drops
+its prefix replay the same way (Node: 103 → 74 ms), for 2–4 ms more on that
+drag's first frame.
 
 ## Qualification
 
@@ -155,12 +226,12 @@ advance adds through-all extrusion; this fixture uses finite distances.
 Numbers below are worker median / p95 milliseconds, excluding UI transport
 and rendering. Cold recycling samples remain included.
 
-| Workflow | Baseline median / p95 | Candidate median / p95 | Median reduction |
-| --- | ---: | ---: | ---: |
-| Face drag: exact display | 142 / 197 | 88 / 148 | 38% |
-| Face edit: completed analysis | 765 / 805 | 758 / 766 | 1% |
-| Parameter edit: exact display | 1963 / 2269 | 1264 / 1404 | 36% |
-| Parameter edit: completed analysis | 2971 / 3280 | 2556 / 2865 | 14% |
+| Workflow                           | Baseline median / p95 | Candidate median / p95 | Median reduction |
+| ---------------------------------- | --------------------: | ---------------------: | ---------------: |
+| Face drag: exact display           |             142 / 197 |               88 / 148 |              38% |
+| Face edit: completed analysis      |             765 / 805 |              758 / 766 |               1% |
+| Parameter edit: exact display      |           1963 / 2269 |            1264 / 1404 |              36% |
+| Parameter edit: completed analysis |           2971 / 3280 |            2556 / 2865 |              14% |
 
 All 240 paired geometry comparisons match live face counts, triangle counts
 and bounds. Completed volumes also match (numerical tolerance 1e-6), with no

@@ -5,8 +5,8 @@
  * first time a project opens EMPTY. Each step names one leg of the modeling
  * loop and, where the app can observe it, completes itself the moment the
  * user actually does the thing — a tour that advances on real actions teaches
- * the workspace; one that only pages through text teaches the tour. Steps the
- * app cannot observe advance manually.
+ * the workspace; one that only pages through text teaches the tour. Next
+ * moves on from any step by hand.
  *
  * Kept pure: the component owns rendering and the index; App owns the
  * signals; this module owns what the steps are and when one is done.
@@ -19,6 +19,8 @@ export interface WorkspaceTourSignals {
   featureCount: number;
   /** A face, edge, or body is currently selected in the viewport. */
   hasSelection: boolean;
+  /** The History panel is on screen, docked or floating. */
+  historyOpen: boolean;
   /** The export dialog has been opened at least once this session. */
   exportSeen: boolean;
 }
@@ -45,6 +47,16 @@ export interface WorkspaceTourStep {
   targetSelector: string | null;
   /** True when the signals show the user already did this step's action. */
   isComplete(signals: WorkspaceTourSignals): boolean;
+  /**
+   * True when the change from `before` to `after` is this step's action,
+   * done while the step is the one showing. For a step whose lesson is not
+   * its action alone: a state that merely holds when the step comes up
+   * (History left open earlier) does not skip what the step has to say.
+   */
+  completesOn?(
+    before: WorkspaceTourSignals,
+    after: WorkspaceTourSignals
+  ): boolean;
 }
 
 export const WORKSPACE_TOUR_STEPS: readonly WorkspaceTourStep[] = [
@@ -53,7 +65,7 @@ export const WORKSPACE_TOUR_STEPS: readonly WorkspaceTourStep[] = [
     title: 'Create your first feature',
     body: (keyLabel) => {
       const boxKey = keyLabel('tool-box');
-      return `Pick a tool from the rail on the left — click Box (the cube)${boxKey ? `, or press ${boxKey},` : ''} then press Enter to create it. Its tools stay in place whatever you pick; Tools at its foot opens the rest.`;
+      return `Pick a tool from the rail on the left — click Box (the cube)${boxKey ? `, or press ${boxKey},` : ''} then press Enter to create it. Select a face, edge or body and the rail shows that pick's tools instead, under its name; Tools at its foot opens the rest.`;
     },
     targetSelector: '.tool-palette',
     isComplete: (signals) => signals.featureCount > 0
@@ -70,7 +82,11 @@ export const WORKSPACE_TOUR_STEPS: readonly WorkspaceTourStep[] = [
     title: 'The history is the model',
     body: 'Open History from the rail on the right. Every feature lands there and replays in order. Drag the grip to reorder, right-click a row for actions, and roll back with the clock on a row.',
     targetSelector: '.rail-panels [aria-label="History panel"]',
-    isComplete: () => false
+    // Never done ahead of time: the step is how the user learns the history
+    // is the model, so it is always shown. Opening History from it is the
+    // action it asks for, and moves on as the first two steps do.
+    isComplete: () => false,
+    completesOn: (before, after) => !before.historyOpen && after.historyOpen
   },
   {
     id: 'export',
@@ -99,4 +115,18 @@ export function advanceThroughCompleted(
     next += 1;
   }
   return next;
+}
+
+/**
+ * Where the tour stands after the signals change from `before` to `after`:
+ * past the step at `index` when the change is the action that step asks for
+ * (`completesOn`), then past every step the user has already done.
+ */
+export function advanceOnSignals(
+  index: number,
+  before: WorkspaceTourSignals,
+  after: WorkspaceTourSignals
+): number {
+  const acted = WORKSPACE_TOUR_STEPS[index]?.completesOn?.(before, after);
+  return advanceThroughCompleted(acted ? index + 1 : index, after);
 }

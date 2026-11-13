@@ -3,10 +3,16 @@ import {
   composeCommands,
   type AnyCommand
 } from '@openzcad/command-system';
-import { listFeaturesInOrder } from '@openzcad/document-core';
+import {
+  listFeaturesInOrder,
+  type FeatureUpdateInput
+} from '@openzcad/document-core';
 import type {
   DerivedState,
+  FaceReferenceRepair,
+  FaceTopologyReferenceV5,
   FeatureId,
+  FeatureNode,
   ProjectDocument
 } from '@openzcad/shared';
 
@@ -73,22 +79,34 @@ export function carriedSelectionCommands(
  * writes it in that edit's revision; a plain rebuild never carries, so a path
  * that commits without a validated build (resume, AI patch, an unvalidated
  * sketch edit) leaves a stranded pick refused, never silently moved.
+ *
+ * Advice is taken only from features before the first step that failed, was
+ * refused or is suppressed: everything after it was built on a body that step
+ * passed through, so a name proven there need not be the name the complete
+ * model publishes (ADR-017, November 2026). The kernel withholds that advice
+ * itself; this is the same line drawn again on the derived state.
  */
 export function topologyReferenceRepairCommand(
   document: ProjectDocument,
   derived: DerivedState
 ): AnyCommand | null {
-  // Never normalize a partially replayed model.
-  if (
-    derived.featureWarnings?.some(
-      (w) => w.kind === 'build-failed' || w.kind === 'refusal'
-    )
-  )
-    return null;
   if (!derived.featureWarnings && derived.warnings.length) return null;
   const features = listFeaturesInOrder(document);
+  const interrupted = new Set(
+    (derived.featureWarnings ?? [])
+      .filter((warning) => warning.kind !== 'advisory')
+      .map((warning) => warning.featureId)
+  );
+  const firstInterrupted = features.findIndex((feature) =>
+    interrupted.has(feature.featureId)
+  );
+  const repairable = (featureId: FeatureId) => {
+    const index = features.findIndex((f) => f.featureId === featureId);
+    return index >= 0 && (firstInterrupted < 0 || index < firstInterrupted);
+  };
   const commands: AnyCommand[] = [];
   for (const repair of derived.referenceRepairs ?? []) {
+    if (!repairable(repair.featureId)) continue;
     const feature = features.find((f) => f.featureId === repair.featureId);
     if (
       !feature ||
@@ -115,24 +133,20 @@ export function topologyReferenceRepairCommand(
       )
     );
   }
+  const faceRepairs = new Map<FeatureId, FaceReferenceRepair[]>();
   for (const repair of derived.faceReferenceRepairs ?? []) {
-    const feature = features.find((f) => f.featureId === repair.featureId);
-    if (!feature || feature.data.featureKind !== 'direct-edit') continue;
-    const operation = feature.data.operation;
-    if (
-      operation.faceReference ||
-      operation.faceHash !== repair.faceHash ||
-      repair.faceReference.currentHash !== repair.faceHash
-    )
-      continue;
+    if (!repairable(repair.featureId)) continue;
+    const list = faceRepairs.get(repair.featureId) ?? [];
+    list.push(repair);
+    faceRepairs.set(repair.featureId, list);
+  }
+  for (const [featureId, repairs] of faceRepairs) {
+    const feature = features.find((f) => f.featureId === featureId);
+    const data = feature && faceRepairData(feature.data, repairs);
+    if (!data) continue;
     commands.push(
       commandFactories.updateFeature(
-        {
-          featureId: repair.featureId,
-          data: {
-            operation: { ...operation, faceReference: repair.faceReference }
-          }
-        },
+        { featureId, data },
         'Repair face reference'
       )
     );
@@ -140,6 +154,101 @@ export function topologyReferenceRepairCommand(
   return commands.length
     ? composeCommands('Repair topology references', commands)
     : null;
+}
+
+/** The one reference proven for the stored `faceHash` in `role`, if any. */
+function singleFaceRepair(
+  repairs: readonly FaceReferenceRepair[],
+  faceHash: number,
+  role: FaceReferenceRepair['role']
+): FaceTopologyReferenceV5 | undefined {
+  const matching = repairs.filter((repair) => repair.role === role);
+  const [repair] = matching;
+  return matching.length === 1 &&
+    repair!.faceHash === faceHash &&
+    repair!.faceReference.currentHash === faceHash
+    ? repair!.faceReference
+    : undefined;
+}
+
+/**
+ * A stored face set's references, all or nothing: exactly one proven
+ * reference for every distinct stored hash, each keeping that hash.
+ */
+function faceSetRepair(
+  repairs: readonly FaceReferenceRepair[],
+  faceHashes: readonly number[]
+): FaceTopologyReferenceV5[] | undefined {
+  const members = repairs.filter((repair) => repair.role === 'set');
+  const hashes = new Set(faceHashes);
+  if (
+    members.length !== hashes.size ||
+    members.some(
+      (repair) =>
+        repair.faceReference.currentHash !== repair.faceHash ||
+        !hashes.has(repair.faceHash)
+    ) ||
+    new Set(members.map((repair) => repair.faceHash)).size !== hashes.size
+  )
+    return undefined;
+  return [...hashes].map(
+    (hash) => members.find((repair) => repair.faceHash === hash)!.faceReference
+  );
+}
+
+/**
+ * The data patch that adds proven references to a feature's hash-only face
+ * picks, or null. A pick that already has a reference, or whose stored hash
+ * is not the one the proof started from, is left exactly as it is.
+ */
+function faceRepairData(
+  data: FeatureNode['data'],
+  repairs: readonly FaceReferenceRepair[]
+): FeatureUpdateInput['data'] | null {
+  switch (data.featureKind) {
+    case 'direct-edit': {
+      const operation = data.operation;
+      const faceReference = operation.faceReference
+        ? undefined
+        : singleFaceRepair(repairs, operation.faceHash, undefined);
+      const oppositeFaceReference =
+        operation.kind === 'set-face-distance' &&
+        !operation.oppositeFaceReference
+          ? singleFaceRepair(repairs, operation.oppositeFaceHash, 'opposite')
+          : undefined;
+      if (!faceReference && !oppositeFaceReference) return null;
+      return {
+        operation: {
+          ...operation,
+          ...(faceReference ? { faceReference } : {}),
+          ...(oppositeFaceReference ? { oppositeFaceReference } : {})
+        }
+      };
+    }
+    case 'hole':
+    case 'thicken':
+    case 'thread':
+    case 'gear': {
+      if (data.faceReference || typeof data.faceHash !== 'number') return null;
+      const faceReference = singleFaceRepair(repairs, data.faceHash, undefined);
+      return faceReference ? { faceReference } : null;
+    }
+    case 'shell': {
+      if (data.openingFaceReferences) return null;
+      const openingFaceReferences = faceSetRepair(
+        repairs,
+        data.openingFaceHashes
+      );
+      return openingFaceReferences ? { openingFaceReferences } : null;
+    }
+    case 'draft': {
+      if (data.faceReferences) return null;
+      const faceReferences = faceSetRepair(repairs, data.faceHashes);
+      return faceReferences ? { faceReferences } : null;
+    }
+    default:
+      return null;
+  }
 }
 
 /**

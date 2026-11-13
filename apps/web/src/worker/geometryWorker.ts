@@ -22,9 +22,13 @@ import type {
   DrawingSectionBody,
   DrawingSectionPlane,
   DxfFaceSelector,
+  estimateStructuredBytes,
   ExactSectionPlane,
+  isPersistedHistorySession,
+  kernelSnapshotBuildId,
   MeshQualityReport,
   MassPropertiesRead,
+  PersistedHistorySession,
   RebuildProgress,
   SectionOutlineReport,
   SketchPlanarOperation,
@@ -37,7 +41,8 @@ import {
   LatestBroadcastGate,
   geometryContentKey,
   lineageDemandCacheKey,
-  rebindSketchGeometryForContent
+  rebindSketchGeometryForContent,
+  cloneDerivedSharingBodyGeometry
 } from './exactRebuildCache';
 import { GeometryWorkerQueue } from './geometryWorkerQueue';
 import { geometryYield } from './geometryYield';
@@ -49,6 +54,15 @@ import {
 import { resolveExactSourceBytes } from '../lib/exactSourceResolver';
 import { workerRefusalOf, type WorkerRefusal } from '../lib/workerRefusal';
 import { documentFontsArrived, preloadDocumentFonts } from '../lib/textFonts';
+import { KERNEL_BUILD } from '../lib/kernelBuild';
+import {
+  kernelSessionIdentity,
+  rejectKernelSession,
+  loadKernelSession,
+  saveKernelSession,
+  touchKernelSession
+} from '../lib/kernelSessionStore';
+import { KernelSessionPersistence } from './kernelSessionPersistence';
 
 /**
  * `step`, `stl`, and `dxf` produce text (STEP data, ASCII STL, DXF R12);
@@ -69,6 +83,17 @@ export type GeometryBinaryExportFormat = Extract<
 >;
 
 export type GeometryWorkerRequest =
+  | {
+      /**
+       * Worker-internal: re-runs a completed `sync` whose result drew a
+       * released edit's body with its draft display mesh, so the adapter
+       * swaps in the full-quality mesh. Never posted by the main thread.
+       */
+      type: 'refine-committed-display';
+      document: ProjectDocument;
+      requestId: string;
+      sync: Extract<GeometryWorkerRequest, { type: 'sync' }>;
+    }
   | {
       type: 'refine-edit-preview';
       document: ProjectDocument;
@@ -112,6 +137,14 @@ export type GeometryWorkerRequest =
        * the result cache, so a plain rebuild never receives a carried result.
        */
       proposeCarry?: boolean;
+      /**
+       * The live broadcast of a document this device keeps as the current
+       * user's own local project: only then does the worker offer it a
+       * persisted kernel session or capture one of it. Unset (a shared
+       * link's model, someone else's project, any one-off rebuild) means
+       * neither, and a broadcast without it drops any scheduled capture.
+       */
+      persistSession?: boolean;
     }
   | {
       type: 'export';
@@ -240,6 +273,33 @@ export type GeometryWorkerRequest =
        * reply; a failed load is retried by the next job that needs the kernel.
        */
       type: 'prepare-kernel';
+    }
+  | {
+      /**
+       * The main thread adopted a checked result as the live state without
+       * a broadcast (`adoptValidatedResult`): only a draft display of this
+       * content may still be refined. Handled outside the queue, with no
+       * reply, and never cancels idle work of the same content.
+       */
+      type: 'live-content';
+      projectId: ProjectId;
+      /** `geometryContentKey` of the adopted document. */
+      contentKey: string;
+    }
+  | {
+      /**
+       * Whether the live project may persist its kernel session changed
+       * without its geometry changing (the app learned who owns it, or a
+       * shared link of the same revision opened): the broadcast's
+       * `persistSession`, applied to the project already live instead of
+       * re-posting the document for a rebuild. False drops any scheduled
+       * capture and warm-up and fences a running capture; true lets the
+       * live result be captured once idle. Handled outside the queue, with
+       * no reply, and never cancels idle work.
+       */
+      type: 'session-policy';
+      projectId: ProjectId;
+      persistSession: boolean;
     };
 
 export type GeometryWorkerPhase =
@@ -432,6 +492,19 @@ export type GeometryWorkerResult =
       geometry: GeometryReadyState;
     }
   | {
+      /**
+       * The full-quality display of a result that drew a released edit's
+       * body with its draft mesh. Identical to that result apart from the
+       * display mesh, face triangle ranges and mesh-tightened box.
+       */
+      type: 'display-refined';
+      projectId: ProjectId;
+      version: number;
+      /** `geometryContentKey` of the document this result was built for. */
+      contentKey: string;
+      derived: ProjectDocument['derived'];
+    }
+  | {
       type: 'projection';
       projectId: string;
       version: number;
@@ -454,6 +527,16 @@ let exactKernelError: unknown;
 let exactKernelPromise: Promise<ExactKernel | null> | null = null;
 let booleanProbeNeeded: typeof booleanEvolutionProbeNeeded | undefined;
 let rebuildMetrics: Record<string, number> = {};
+/** Persisted-session helpers from the loaded adapter module. */
+let sessionModule:
+  | {
+      estimateStructuredBytes: typeof estimateStructuredBytes;
+      isPersistedHistorySession: typeof isPersistedHistorySession;
+      kernelSnapshotBuildId: typeof kernelSnapshotBuildId;
+    }
+  | undefined;
+/** What the adapter made of the session offered to the running sync. */
+let lastSessionRestore: 'restored' | 'rejected' | undefined;
 
 /**
  * The kernel is a multi-megabyte wasm fetch plus compile; a stalled fetch
@@ -472,9 +555,15 @@ function loadExactKernel(): Promise<ExactKernel | null> {
       'booleanEvolutionProbeNeeded' in module
         ? module.booleanEvolutionProbeNeeded
         : undefined;
+    sessionModule = module;
     return module.createExactKernelAdapter({
       resolveSourceBytes: resolveExactSourceBytes,
+      // Unchanged bodies keep their buffer identity from sync to sync, so the
+      // projection diff and the result cache skip them; see
+      // `cloneDerivedSharingBodyGeometry` for the immutability this needs.
+      shareRetainedMeasurements: true,
       onRebuildCacheEvent: (event) => {
+        if (event.sessionRestore) lastSessionRestore = event.sessionRestore;
         rebuildMetrics = {
           replayedFeatures: event.replayed,
           restoredFeatures: event.restored,
@@ -547,12 +636,87 @@ const rebuildCache = new ExactRebuildCache<ProjectDocument['derived']>({
   maxEntries: 8,
   maxBytes: 32 * 1024 * 1024,
   maxInFlight: 4,
-  cacheable: (derived) => !transientResults.has(derived)
+  clone: cloneDerivedSharingBodyGeometry,
+  // A draft display is published once and refined, never served again.
+  cacheable: (derived) =>
+    !transientResults.has(derived) && !hasDraftDisplay(derived)
 });
 const broadcastGate = new LatestBroadcastGate();
 const projectionSender = new ProjectionSender();
+
+/**
+ * Persisted kernel sessions: a reopened project restores its history kernel
+ * instead of replaying it (see `kernelSessionPersistence.ts`). Off in dev
+ * servers, whose app commit does not name the code that is running.
+ */
+const kernelSessions = new KernelSessionPersistence({
+  identity: () =>
+    import.meta.env.DEV || !sessionModule
+      ? null
+      : kernelSessionIdentity({
+          appCommit: import.meta.env.OZ_BUILD_COMMIT,
+          remusVersion: KERNEL_BUILD.packageVersion,
+          remusCommit: KERNEL_BUILD.sourceCommit,
+          kernelBuildId: sessionModule.kernelSnapshotBuildId()
+        }),
+  load: loadKernelSession,
+  save: saveKernelSession,
+  reject: rejectKernelSession,
+  touch: touchKernelSession,
+  isSession: (value): value is PersistedHistorySession =>
+    sessionModule?.isPersistedHistorySession(value) ?? false,
+  estimateBytes: (session) =>
+    sessionModule?.estimateStructuredBytes(session) ?? Number.POSITIVE_INFINITY,
+  workSerial: () => workRequestSerial,
+  yieldControl: () => geometryYield(),
+  now: () => performance.now(),
+  setTimer: (callback, ms) => setTimeout(callback, ms),
+  clearTimer: (timer) =>
+    clearTimeout(timer as ReturnType<typeof setTimeout> | undefined),
+  ...(import.meta.env.VITE_E2E === '1'
+    ? {
+        report: (event) =>
+          console.debug('[kernel session]', JSON.stringify(event))
+      }
+    : {})
+});
 let lastExactSyncKey: string | null = null;
 let lastExactSyncEpoch: number | null = null;
+
+/**
+ * Whether the live project may persist its kernel session: the newest
+ * broadcast's `persistSession`, updated in place by `session-policy`.
+ * Fail-closed: null (nothing live, or not told) persists nothing, and only
+ * the project it names is offered a session or captured.
+ */
+let liveSessionPolicy: { projectId: ProjectId; persist: boolean } | null = null;
+function persistsLiveSession(projectId: ProjectId): boolean {
+  return (
+    liveSessionPolicy?.projectId === projectId && liveSessionPolicy.persist
+  );
+}
+/**
+ * The live, complete result a capture would take (never a draft display or
+ * a transient result), whatever the policy: a `session-policy` that turns
+ * persistence on schedules it without another rebuild.
+ */
+let liveCapturable: {
+  exact: ExactKernel;
+  document: ProjectDocument;
+  contentKey: string;
+  lineageDemand: readonly BodyId[] | undefined;
+} | null = null;
+function noteLiveCapturable(next: typeof liveCapturable): void {
+  liveCapturable = next;
+  if (next && persistsLiveSession(next.document.projectId)) {
+    kernelSessions.schedule(next.exact, next.document, next.contentKey);
+    kernelSessions.scheduleWarmup(
+      next.exact,
+      next.document,
+      next.lineageDemand
+    );
+  }
+}
 
 /**
  * Every request that carries work; `cancel` and `prepare-kernel` are handled
@@ -560,7 +724,10 @@ let lastExactSyncEpoch: number | null = null;
  */
 type GeometryWorkerWorkRequest = Exclude<
   GeometryWorkerRequest,
-  { type: 'cancel' } | { type: 'prepare-kernel' }
+  | { type: 'cancel' }
+  | { type: 'prepare-kernel' }
+  | { type: 'live-content' }
+  | { type: 'session-policy' }
 >;
 
 /**
@@ -662,6 +829,8 @@ let runningBroadcast: {
   projectId: string;
   version: number;
   key: string;
+  /** Its `persistSession`: a joining request must ask the same. */
+  persistSession: boolean;
 } | null = null;
 
 /**
@@ -689,6 +858,7 @@ function joinsRunningBroadcast(request: GeometryWorkerWorkRequest): boolean {
   return (
     document.projectId === running.projectId &&
     document.version === running.version &&
+    (request.persistSession === true) === running.persistSession &&
     !isGeometryEmpty(document) &&
     rebuildResultKey(request, geometryContentKey(document)) === running.key
   );
@@ -736,6 +906,10 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
     return; // Cancelled while queued; the caller already dropped its promise.
   }
   const request = job.request;
+  if (request.type === 'refine-committed-display') {
+    if (await refineCommittedDisplay(request)) armDisplayRefinement();
+    return;
+  }
   if (request.type === 'refine-edit-preview') {
     if (request.generation !== refinementGeneration) return;
     const exact =
@@ -771,6 +945,8 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
     const exact =
       exactKernelStatus === 'ready' ? await exactKernelPromise : null;
     exact?.releaseEditPreview?.();
+    // The gesture that held refinement back has ended.
+    armDisplayRefinement();
     return;
   }
   const document = request.document;
@@ -1237,7 +1413,8 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         token: job.broadcastToken,
         projectId: document.projectId,
         version: document.version,
-        key: resultKey
+        key: resultKey,
+        persistSession: request.persistSession === true
       };
     const cachedDerived =
       resultKey === null
@@ -1258,6 +1435,17 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
             if (!broadcastGate.isCurrent(job.broadcastToken)) {
               throw new Error('Superseded geometry broadcast.');
             }
+            // A reopened project's stored session, when this worker's
+            // history kernel does not hold the project yet.
+            const persistedSession =
+              request.type === 'sync' &&
+              !request.requestId &&
+              persistsLiveSession(document.projectId) &&
+              !request.analysis &&
+              !request.proposeCarry
+                ? await kernelSessions.offer(exact, document, contentKey!)
+                : undefined;
+            lastSessionRestore = undefined;
             post(stateFor('rebuilding', request, { stale: true }));
             // A superseded rebuild stops at the next feature boundary (a
             // running WASM call still completes); the adapter rejects typed
@@ -1327,9 +1515,16 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
                   : {}),
                 ...(request.type === 'sync' && request.proposeCarry
                   ? { proposeCarry: true }
-                  : {})
+                  : {}),
+                ...(persistedSession ? { persistedSession } : {})
               }
             );
+            if (persistedSession)
+              kernelSessions.noteOutcome(
+                document.projectId,
+                contentKey!,
+                lastSessionRestore
+              );
             if (exact.hasTransientFailures(result)) {
               transientResults.add(result);
               transient = true;
@@ -1364,7 +1559,11 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       derived
     };
     if (request.requestId) {
-      post(result, derivedMeshTransferables(derived));
+      // The body buffers are shared with the result cache and the adapter's
+      // retained measurements: transfer a copy, made here rather than on the
+      // receiving main thread.
+      const owned = structuredClone(result);
+      post(owned, derivedMeshTransferables(owned.derived));
     } else {
       const encodingStartedMs = performance.now();
       const packet = projectionSender.encode(
@@ -1396,6 +1595,31 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
       }
     }
     post(stateFor('ready', request, { stale: transient }));
+    if (request.type === 'sync')
+      noteDisplayRefinement(request, derived, job.broadcastToken);
+    // The live model at rest: persist its kernel session once idle, and
+    // warm a restored kernel with this document, if the live policy allows
+    // (`persistsLiveSession`; it may also allow it later). A draft waits for its
+    // refinement, which schedules both; it, and a transient result, drop the
+    // warm-up target so an older revision is never replayed in its place.
+    if (request.type === 'sync' && !request.requestId) {
+      if (
+        !transient &&
+        contentKey !== null &&
+        exactForSync &&
+        !hasDraftDisplay(cachedDerived)
+      )
+        noteLiveCapturable({
+          exact: exactForSync,
+          document,
+          contentKey,
+          lineageDemand: request.lineageDemand
+        });
+      else {
+        liveCapturable = null;
+        kernelSessions.dropWarmup();
+      }
+    }
   } catch (error) {
     if (!broadcastGate.isCurrent(job.broadcastToken)) {
       return;
@@ -1523,6 +1747,291 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
     if (job.requestId) {
       cancelledRequests.delete(job.requestId);
     }
+    // A drag's frames say a gesture is under way: no idle work behind them.
+    if (request.type !== 'preview-geometry') armDisplayRefinement();
+  }
+}
+
+function hasDraftDisplay(derived: ProjectDocument['derived']): boolean {
+  return Object.values(derived.bodyRepresentations).some(
+    (body) => body.displayQuality === 'draft'
+  );
+}
+
+/**
+ * A result that drew a released edit's body with its draft display mesh
+ * (see `exact-display-refinement.ts`), still waiting for its full-quality
+ * display.
+ */
+interface PendingDisplayRefinement {
+  sync: Extract<GeometryWorkerRequest, { type: 'sync' }>;
+  broadcastToken: number | null;
+  projectId: ProjectId;
+  contentKey: string;
+  /**
+   * Whether the main thread shows it: a broadcast's result always, a checked
+   * release's once the main thread adopts it (`live-content`). Only a live
+   * draft is refined; re-syncing anything else would rewind the history
+   * kernel away from what is on screen.
+   */
+  live: boolean;
+  /** Not before then: a different checked result awaits its adoption. */
+  heldUntilMs: number;
+  /** Refinements that failed other than by cancellation; one retry. */
+  failures: number;
+}
+
+/**
+ * Drafts waiting for refinement, newest first: at most the live one and a
+ * newer release not adopted yet. Whatever the main thread reports live
+ * (`live-content`, a broadcast) keeps only the draft of that content; a
+ * broadcast's own result, never a draft, settles them all.
+ *
+ * Refinement is idle work. It is queued only once the worker has been idle
+ * for {@link DISPLAY_REFINEMENT_IDLE_MS} and no drag is under way, never as
+ * a broadcast (the live state stays ready), and any new request cancels it
+ * at the next build boundary; it then waits for the next idle moment. The
+ * release it refines was accepted already, so nothing the user does next
+ * waits behind it.
+ */
+let pendingDisplayRefinements: PendingDisplayRefinement[] = [];
+const DISPLAY_REFINEMENT_IDLE_MS = 100;
+/**
+ * How long a completed checked sync of other content holds a live draft's
+ * refinement back: the main thread adopts a release within a frame or two,
+ * and that adoption retires the draft. Anything else (a copy, an analysis)
+ * is never adopted, and the draft is refined once the hold lapses.
+ */
+const DISPLAY_REFINEMENT_ADOPTION_HOLD_MS = 1_000;
+/**
+ * How long after its last frame a drag still holds refinement back. A
+ * released or cancelled cylinder drag says it ended; a cancelled face drag
+ * does not, so the hold lapses on its own.
+ */
+const DISPLAY_REFINEMENT_GESTURE_HOLD_MS = 1_000;
+let displayRefinementTimer: ReturnType<typeof setTimeout> | undefined;
+/** When the drag under way last sent a frame; null once it has ended. */
+let previewGestureFrameAtMs: number | null = null;
+/** Counts work requests, so idle work can tell it has been overtaken. */
+let workRequestSerial = 0;
+
+function noteDisplayRefinement(
+  sync: Extract<GeometryWorkerRequest, { type: 'sync' }>,
+  derived: ProjectDocument['derived'],
+  broadcastToken: number | null
+): void {
+  const projectId = sync.document.projectId;
+  if (hasDraftDisplay(derived)) {
+    const contentKey = geometryContentKey(sync.document);
+    pendingDisplayRefinements = [
+      {
+        sync,
+        broadcastToken,
+        projectId,
+        contentKey,
+        live: !sync.requestId,
+        heldUntilMs: 0,
+        failures: 0
+      },
+      ...pendingDisplayRefinements.filter(
+        (entry) =>
+          entry.live &&
+          !(entry.projectId === projectId && entry.contentKey === contentKey)
+      )
+    ].slice(0, 2);
+  } else if (!sync.requestId) {
+    // A broadcast's build is never a draft: the adapter refined the measured
+    // body, or the document moved on.
+    pendingDisplayRefinements = [];
+  } else if (pendingDisplayRefinements.length > 0) {
+    // A checked result of other content may be adopted next, which would
+    // retire every draft here; refining one now would rewind the history
+    // kernel away from it.
+    const contentKey = geometryContentKey(sync.document);
+    const heldUntilMs = performance.now() + DISPLAY_REFINEMENT_ADOPTION_HOLD_MS;
+    for (const entry of pendingDisplayRefinements)
+      if (entry.projectId !== projectId || entry.contentKey !== contentKey)
+        entry.heldUntilMs = heldUntilMs;
+  }
+}
+
+/** The main thread shows this content now (null: nothing). */
+function noteLiveContent(
+  live: { projectId: ProjectId; contentKey: string } | null
+): void {
+  pendingDisplayRefinements = pendingDisplayRefinements.filter((entry) => {
+    const current =
+      live !== null &&
+      entry.projectId === live.projectId &&
+      entry.contentKey === live.contentKey;
+    if (current) {
+      entry.live = true;
+      entry.heldUntilMs = 0;
+    }
+    return current;
+  });
+}
+
+function nextDisplayRefinement(): PendingDisplayRefinement | undefined {
+  return pendingDisplayRefinements.find((entry) => entry.live);
+}
+
+function armDisplayRefinement(): void {
+  const pending = nextDisplayRefinement();
+  if (!pending || displayRefinementTimer !== undefined) return;
+  const now = performance.now();
+  const delay = Math.max(
+    DISPLAY_REFINEMENT_IDLE_MS,
+    pending.heldUntilMs - now,
+    previewGestureFrameAtMs === null
+      ? 0
+      : previewGestureFrameAtMs + DISPLAY_REFINEMENT_GESTURE_HOLD_MS - now
+  );
+  const serial = workRequestSerial;
+  displayRefinementTimer = setTimeout(() => {
+    displayRefinementTimer = undefined;
+    // Overtaken: the job that just arrived re-arms when it finishes.
+    if (serial !== workRequestSerial) return;
+    const next = nextDisplayRefinement();
+    if (!next) return;
+    if (!broadcastGate.isCurrent(next.broadcastToken)) {
+      pendingDisplayRefinements = pendingDisplayRefinements.filter(
+        (entry) => entry !== next
+      );
+      armDisplayRefinement();
+      return;
+    }
+    const at = performance.now();
+    if (
+      next.heldUntilMs > at ||
+      (previewGestureFrameAtMs !== null &&
+        previewGestureFrameAtMs + DISPLAY_REFINEMENT_GESTURE_HOLD_MS > at)
+    ) {
+      armDisplayRefinement();
+      return;
+    }
+    previewGestureFrameAtMs = null;
+    const requestId = `refine-display:${crypto.randomUUID()}`;
+    queue.enqueue({
+      request: {
+        type: 'refine-committed-display',
+        document: next.sync.document,
+        requestId,
+        sync: next.sync
+      },
+      requestId,
+      queuedAtMs: performance.now(),
+      broadcastToken: null
+    });
+  }, delay);
+}
+
+/**
+ * Runs one refinement. Resolves whether to arm the next idle moment: not
+ * after a cancellation nothing new caused (the draft was retired), since
+ * that would only spin.
+ */
+async function refineCommittedDisplay(
+  request: Extract<GeometryWorkerRequest, { type: 'refine-committed-display' }>
+): Promise<boolean> {
+  const pending = pendingDisplayRefinements.find(
+    (entry) => entry.sync === request.sync
+  );
+  if (!pending?.live) return true;
+  const exact = exactKernelStatus === 'ready' ? await exactKernelPromise : null;
+  if (!exact) return false;
+  const { sync } = request;
+  const document = sync.document;
+  const contentKey = pending.contentKey;
+  const serial = workRequestSerial;
+  const retired = () => !pendingDisplayRefinements.includes(pending);
+  try {
+    const refined = await rebuildCache.get(
+      rebuildResultKey(sync, contentKey),
+      async () => {
+        const result = await exact.syncDocument(
+          document,
+          undefined,
+          undefined,
+          sync.analysis,
+          {
+            cancellation: {
+              isCancelled: () =>
+                serial !== workRequestSerial ||
+                retired() ||
+                !broadcastGate.isCurrent(pending.broadcastToken)
+            },
+            yieldControl: geometryYield(),
+            displayRefinement: true,
+            ...(sync.lineageDemand
+              ? { lineageDemand: sync.lineageDemand }
+              : {}),
+            ...(sync.proposeCarry ? { proposeCarry: true } : {})
+          }
+        );
+        if (exact.hasTransientFailures(result)) transientResults.add(result);
+        // The same bookkeeping as the sync it refines.
+        if (sync.proposeCarry) {
+          lastExactSyncKey = null;
+          lastExactSyncEpoch = null;
+        } else {
+          lastExactSyncKey = contentKey;
+          lastExactSyncEpoch = exact.currentMassPropertiesEpoch();
+        }
+        return result;
+      }
+    );
+    if (retired()) return true;
+    pendingDisplayRefinements = pendingDisplayRefinements.filter(
+      (entry) => entry !== pending
+    );
+    if (
+      hasDraftDisplay(refined) ||
+      !broadcastGate.isCurrent(pending.broadcastToken)
+    )
+      return true;
+    // Body buffers are shared with the result cache and the adapter's
+    // retained measurements (see `cloneDerivedSharingBodyGeometry`):
+    // transfer a copy, never them.
+    const derived = structuredClone(
+      rebindSketchGeometryForContent(document, refined, contentKey)
+    );
+    self.postMessage(
+      {
+        type: 'display-refined',
+        projectId: document.projectId,
+        version: document.version,
+        contentKey,
+        derived
+      } satisfies GeometryWorkerResult,
+      { transfer: derivedMeshTransferables(derived) }
+    );
+    if (
+      !sync.requestId &&
+      !sync.analysis &&
+      !sync.proposeCarry &&
+      !transientResults.has(refined)
+    )
+      noteLiveCapturable({
+        exact,
+        document,
+        contentKey,
+        lineageDemand: sync.lineageDemand
+      });
+    return true;
+  } catch (error) {
+    if ((error as { category?: unknown } | null)?.category === 'cancelled')
+      // Overtaken: retried at the next idle moment.
+      return serial !== workRequestSerial;
+    // A refinement is never a modelling refusal. A failed one is retried
+    // once, which after a dropped history cache is a full rebuild, so a
+    // draft never stays on screen for want of a second attempt.
+    pending.failures += 1;
+    if (pending.failures > 1)
+      pendingDisplayRefinements = pendingDisplayRefinements.filter(
+        (entry) => entry !== pending
+      );
+    return true;
   }
 }
 
@@ -1543,6 +2052,35 @@ self.onmessage = (event: MessageEvent<GeometryWorkerRequest>) => {
     void loadExactKernel();
     return;
   }
+  // Not input either: it only says which draft display is on screen.
+  if (event.data.type === 'live-content') {
+    noteLiveContent(event.data);
+    // A checked result adopted without a broadcast: the broadcast's own
+    // result is no longer what is live.
+    if (liveCapturable?.contentKey !== event.data.contentKey)
+      liveCapturable = null;
+    armDisplayRefinement();
+    return;
+  }
+  // Nor is a change of the persistence policy alone: it rebuilds nothing.
+  if (event.data.type === 'session-policy') {
+    const { projectId, persistSession } = event.data;
+    if (
+      liveSessionPolicy?.projectId === projectId &&
+      liveSessionPolicy.persist === persistSession
+    )
+      return;
+    if (!persistSession || liveSessionPolicy?.projectId !== projectId)
+      kernelSessions.forget();
+    liveSessionPolicy = { projectId, persist: persistSession };
+    if (
+      persistSession &&
+      liveCapturable &&
+      liveCapturable.document.projectId === projectId
+    )
+      noteLiveCapturable(liveCapturable);
+    return;
+  }
   // Any newer input cancels a queued warm-up. A synchronous WASM tessellation
   // already running completes; never accumulate obsolete warm-up frames.
   clearTimeout(refinementTimer);
@@ -1551,6 +2089,10 @@ self.onmessage = (event: MessageEvent<GeometryWorkerRequest>) => {
   // Unpack before anything reads the document: every consumer past this point
   // — the rebuild, the cache key, the history digest — expects plain arrays.
   const request = unpackWorkerRequest(event.data);
+  // Idle work yields to anything that asks for the worker.
+  workRequestSerial += 1;
+  clearTimeout(displayRefinementTimer);
+  displayRefinementTimer = undefined;
   if (request.type === 'cancel') {
     if (request.requestId !== undefined)
       cancelledRequests.add(request.requestId);
@@ -1559,10 +2101,43 @@ self.onmessage = (event: MessageEvent<GeometryWorkerRequest>) => {
       latestBroadcast = null;
       broadcastAwaitsEnvironment = environmentRecovered = false;
       broadcastGate.issue(true);
+      // Nothing is live: no draft is left to refine.
+      noteLiveContent(null);
+      // The project closed: nothing of it is captured or warmed any more,
+      // so deleting it right after cannot be undone by a late write.
+      liveSessionPolicy = null;
+      liveCapturable = null;
+      kernelSessions.forget();
     }
+    // Idle again unless a drag is under way, which holds refinement back
+    // until it ends or goes quiet.
+    armDisplayRefinement();
     return;
   }
+  if (request.type === 'preview-geometry')
+    previewGestureFrameAtMs = performance.now();
+  else if (request.type === 'sync' || request.type === 'release-edit-preview')
+    previewGestureFrameAtMs = null;
   const isBroadcast = request.type === 'sync' && !request.requestId;
+  // A live document that is not the user's own local project (a shared
+  // link's model, a collaborator's): nothing scheduled for an earlier one
+  // may write, and nothing of this one is captured.
+  if (isBroadcast) {
+    if (request.persistSession !== true) kernelSessions.forget();
+    // Its own result is what a later `session-policy` would capture.
+    liveCapturable = null;
+    liveSessionPolicy = {
+      projectId: request.document.projectId,
+      persist: request.persistSession === true
+    };
+  }
+  // A broadcast is what the main thread shows next: only a draft of that
+  // content is still worth refining.
+  if (isBroadcast && pendingDisplayRefinements.length > 0)
+    noteLiveContent({
+      projectId: request.document.projectId,
+      contentKey: geometryContentKey(request.document)
+    });
   if (isBroadcast && joinsRunningBroadcast(request)) {
     // The running build answers this request; its retry bookkeeping stays
     // with it, and a retry re-runs the newest (equivalent) request.

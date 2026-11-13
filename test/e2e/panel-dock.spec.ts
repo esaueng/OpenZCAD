@@ -56,7 +56,9 @@ function dockedTitles(page: Page, side: 'left' | 'right' = 'right') {
     .locator(`.panel-column[data-side="${side}"]`)
     .evaluateAll((columns) =>
       columns.map((column) =>
-        [...column.querySelectorAll('.model-panel')].map(
+        // Docked ones only: a temporary panel may stand under them in the
+        // column without being pinned there.
+        [...column.querySelectorAll('.model-panel.is-docked')].map(
           (panel) => panel.getAttribute('aria-label') ?? ''
         )
       )
@@ -160,11 +162,15 @@ test('a rail press opens a panel unpinned, and clicks on the model leave it open
   await expect(panel).toBeVisible();
   await expect(panel).toHaveClass(/is-unpinned/);
   await expect(history).toHaveAttribute('aria-pressed', 'true');
-  await expect(
-    panel.getByText(
-      'Temporary panel. Pin to keep it alongside your other panels.'
-    )
-  ).toBeVisible();
+  // It says it is temporary once, on its one Pin: no footer notice with a
+  // second Pin under a one-row list.
+  await expect(panel.locator('footer')).toHaveCount(0);
+  await expect(panel.getByRole('button', { name: /^Pin/ })).toHaveCount(1);
+  await panel.getByRole('button', { name: 'Pin History' }).hover();
+  await expect(page.getByRole('tooltip')).toContainText(
+    'Temporary: the next panel you open replaces it'
+  );
+  await page.mouse.move(0, 0);
   // Beside the rail's inner edge, not in a dock.
   await expect(page.locator('.panel-column')).toHaveCount(0);
   const rail = await box(page.locator('.rail-panels'));
@@ -234,10 +240,10 @@ test('Pin docks, two pinned panels stack, and a closed panel reopens at home', a
     })
     .toBeCloseTo(4, 0);
 
-  // A second pin stacks under it in the same column, from the footer's Pin.
+  // A second pin stacks under it in the same column.
   await railPanelButton(page, 'Parameters').click();
   await modelPanel(page, 'Parameters')
-    .getByRole('button', { name: 'Pin', exact: true })
+    .getByRole('button', { name: 'Pin Parameters' })
     .click();
   expect(await dockedTitles(page)).toEqual([['History', 'Parameters']]);
   const [top, bottom] = [
@@ -574,7 +580,7 @@ test('the inspector and the right lane stay clear of the dock, inside the rail',
   expect(shifted.x + shifted.width).toBeLessThanOrEqual(peek.x);
 });
 
-test('on a stage too narrow for both, an unpinned panel covers the lane instead of squeezing it', async ({
+test('on a stage too narrow for another column, an unpinned panel shares the dock and the lane keeps its width', async ({
   page
 }) => {
   await openWorkspace(page, 'Narrow lane', ALL_PANELS_DOCKED, {
@@ -588,26 +594,44 @@ test('on a stage too narrow for both, an unpinned panel covers the lane instead 
   const inspector = page.locator('.stage-right > .inspector-float');
   await expect(inspector).toBeVisible();
   const full = await box(inspector);
-  await modelPanel(page, 'History')
-    .getByRole('button', { name: 'Pin History' })
-    .click();
-  const peek = page.locator('.panel-unpinned');
-  await expect(peek).toBeVisible();
-  // Reserving the slot here would have left the inspector a sliver; it keeps
-  // its width and the unpinned panel stands over it until it closes.
+  const history = modelPanel(page, 'History');
+  await history.getByRole('button', { name: 'Pin History' }).click();
+  await expect(history).toHaveClass(/is-unpinned/);
+  // Another column here would have left the inspector a sliver, and covering
+  // the dock hid every panel pinned in it. The temporary panel stands under
+  // them in their column instead: they stay, and the lane keeps its width.
+  await expect(page.locator('.panel-unpinned')).toHaveCount(0);
+  await expect(page.locator('.panel-column .panel-slot.is-guest')).toHaveCount(
+    1
+  );
   const kept = await box(inspector);
   expect(Math.abs(kept.width - full.width)).toBeLessThan(1);
-  const slot = await box(peek);
-  expect(
-    await page.evaluate(
-      ({ x, y }) =>
-        document.elementFromPoint(x, y)?.closest('.panel-unpinned') !== null,
-      { x: slot.x + slot.width / 2, y: slot.y + 60 }
-    )
-  ).toBe(true);
+  const column = await box(page.locator('.panel-column'));
+  // Once it has slid in from the rail's side.
+  await expect
+    .poll(async () => Math.abs((await box(history)).x - column.x))
+    .toBeLessThan(1);
+  const guest = await box(history);
+  for (const title of [
+    'Parameters',
+    'Objects',
+    'Revisions',
+    'Diagnostics'
+  ] as const) {
+    const pinned = modelPanel(page, title);
+    await expect(pinned).toBeVisible();
+    await expect(pinned).toHaveClass(/is-docked/);
+    await expect(railPanelButton(page, title)).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    const pinnedBox = await box(pinned);
+    expect(pinnedBox.y + pinnedBox.height).toBeLessThanOrEqual(guest.y);
+  }
   await railPanelButton(page, 'History').click();
-  await expect(peek).toHaveCount(0);
+  await expect(history).toHaveCount(0);
   await expect(inspector).toBeVisible();
+  await expect(page.locator('.panel-slot.is-guest')).toHaveCount(0);
 });
 
 test('a sketch keeps docked and unpinned panels visible and respects manual closes', async ({

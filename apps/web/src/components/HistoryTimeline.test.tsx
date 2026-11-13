@@ -3,6 +3,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
   waitFor
 } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -87,6 +88,47 @@ function scrollListAwayFromLatest() {
 function row(name: string): HTMLElement {
   return screen.getByText(name).closest('.feature-row') as HTMLElement;
 }
+
+it('acts on the latest node of a row that skipped re-rendering', () => {
+  const { props, rerender } = renderTimeline();
+  const grip = within(row('Feature 2')).getByRole('button', {
+    name: 'Reorder Feature 2. Use the arrow keys to move it.'
+  });
+  // An edit replaces every node object; rows whose rendered inputs are
+  // unchanged keep their DOM, and their handlers must still see the new node.
+  const next = props.features.map((node) => structuredClone(node));
+  rerender(<HistoryTimeline {...props} features={next} />);
+  expect(
+    within(row('Feature 2')).getByRole('button', {
+      name: 'Reorder Feature 2. Use the arrow keys to move it.'
+    })
+  ).toBe(grip);
+  fireEvent.click(screen.getByRole('button', { name: 'Suppress Feature 2' }));
+  // The very object, not an equal one: a clone of the old node would pass
+  // a deep comparison.
+  expect(vi.mocked(props.onToggleFeatureSuppression).mock.calls[0]![0]).toBe(
+    next[1]
+  );
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Roll back history after Feature 2' })
+  );
+  expect(props.onRollbackAfterFeature).toHaveBeenCalledWith(
+    'feature-2',
+    'Feature 2'
+  );
+  fireEvent.contextMenu(row('Feature 3'));
+  expect(vi.mocked(props.onFeatureContextMenu).mock.lastCall![1]).toBe(next[2]);
+});
+
+it('re-renders a row whose name changed under the same node id', () => {
+  const { props, rerender } = renderTimeline();
+  const renamed = props.features.map((node, index) =>
+    index === 1 ? { ...node, name: 'Renamed step' } : node
+  );
+  rerender(<HistoryTimeline {...props} features={renamed} />);
+  expect(screen.getByText('Renamed step')).toBeInTheDocument();
+  expect(screen.queryByText('Feature 2')).toBeNull();
+});
 
 it('shows preparation instead of repair while accepted geometry awaits analysis', () => {
   const pending = feature(1);
@@ -218,9 +260,57 @@ describe('HistoryTimeline', () => {
       screen.queryByRole('button', { name: 'Show latest operation' })
     ).not.toBeInTheDocument();
     scrollListAwayFromLatest();
+    const latest = screen.getByRole('button', {
+      name: 'Show latest operation'
+    });
+    expect(latest).toHaveTextContent('Latest');
+    // At the foot, where the end is: after the list, not above the rows.
+    expect(
+      document.querySelector('.feature-list')!.compareDocumentPosition(latest) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    // Scrolled back to the foot, it goes again.
+    const list = document.querySelector('.feature-list') as HTMLElement;
+    list.scrollTop = 400;
+    fireEvent.scroll(list);
+    expect(
+      screen.queryByRole('button', { name: 'Show latest operation' })
+    ).not.toBeInTheDocument();
+  });
+
+  it('measures the latest row against the panel, not the details below the list', () => {
+    const host = document.createElement('div');
+    host.className = 'model-panel-body';
+    document.body.append(host);
+    render(<HistoryTimeline {...timelineProps()} />, { container: host });
+    // The History details follow the list in the same scroller: the scroller
+    // has more below, but the list's end is in view.
+    Object.defineProperty(host, 'scrollHeight', {
+      configurable: true,
+      value: 600
+    });
+    Object.defineProperty(host, 'clientHeight', {
+      configurable: true,
+      value: 200
+    });
+    const list = host.querySelector('.feature-list') as HTMLElement;
+    let listBottom = 150;
+    vi.spyOn(list, 'getBoundingClientRect').mockImplementation(
+      () => ({ bottom: listBottom }) as DOMRect
+    );
+    vi.spyOn(host, 'getBoundingClientRect').mockImplementation(
+      () => ({ top: 0 }) as DOMRect
+    );
+    fireEvent.scroll(host);
+    expect(
+      screen.queryByRole('button', { name: 'Show latest operation' })
+    ).toBeNull();
+    listBottom = 400;
+    fireEvent.scroll(host);
     expect(
       screen.getByRole('button', { name: 'Show latest operation' })
     ).toBeInTheDocument();
+    host.remove();
   });
 
   it('reveals the latest appended operation without changing the edited selection', () => {
@@ -459,6 +549,164 @@ describe('HistoryTimeline', () => {
     expect(featureReads).toBeLessThanOrEqual(items.length);
   });
 
+  it('tells the first failure from the failures and builds that follow it', () => {
+    const features = [
+      feature(1),
+      feature(2),
+      feature(3),
+      feature(4),
+      feature(5)
+    ];
+    renderTimeline({
+      features,
+      failedFeatureIds: new Set([
+        features[1]!.featureId,
+        features[3]!.featureId
+      ]),
+      // Feature 2 fails first; Feature 3 builds on it and Feature 4 fails
+      // after it. Feature 5 is on another branch.
+      failureLineage: new Map([
+        [features[2]!.featureId, features[1]!],
+        [features[3]!.featureId, features[1]!]
+      ])
+    });
+    expect(row('Feature 2')).toHaveClass('failed', 'is-failure-root');
+    expect(row('Feature 2')).toHaveTextContent(/needs repair, first failure/);
+    expect(row('Feature 4')).toHaveClass('failed', 'is-failure-downstream');
+    expect(row('Feature 4')).toHaveTextContent(
+      /needs repair, after an earlier failure/
+    );
+    expect(row('Feature 4').querySelector('.feature-row-main')).toHaveAttribute(
+      'title',
+      'Feature 4 — Extrude (4 mm), needs repair after “Feature 2” failed, click to edit'
+    );
+    expect(row('Feature 3')).toHaveClass('is-built-on-failed');
+    expect(row('Feature 3')).not.toHaveClass('failed');
+    expect(row('Feature 3')).toHaveTextContent('built on a failed step');
+    expect(row('Feature 3').querySelector('.feature-row-main')).toHaveAttribute(
+      'title',
+      expect.stringContaining('built on “Feature 2”, which failed')
+    );
+    // Only a failure carries the warning glyph; a build on one has none.
+    expect(
+      row('Feature 2').querySelector('.feature-flag.error')
+    ).not.toBeNull();
+    expect(row('Feature 3').querySelector('.feature-flag.error')).toBeNull();
+    for (const name of ['Feature 1', 'Feature 5']) {
+      expect(row(name).className).not.toMatch(/failure|built-on-failed|failed/);
+      expect(row(name)).not.toHaveTextContent(/repair|failed/);
+    }
+  });
+
+  it('keeps the value on a failed, suppressed, paused or preparing row', () => {
+    const failing = feature(2);
+    failing.bodyId = 'body-missing' as FeatureNode['bodyId'];
+    const features = [
+      feature(1, undefined, { [FEATURE_SUPPRESSED_METADATA_KEY]: true }),
+      failing,
+      feature(3, undefined, rolledBack)
+    ];
+    const { rerender, props } = renderTimeline({ features });
+    const value = (name: string) =>
+      row(name).querySelector('.history-row-value');
+    expect(value('Feature 1')).toHaveTextContent('1 mm');
+    expect(value('Feature 2')).toHaveTextContent('2 mm');
+    expect(value('Feature 3')).toHaveTextContent('3 mm');
+    // The state is said after the name, never in the value's place.
+    expect(row('Feature 1')).toHaveTextContent(/^Feature 1 suppressed/);
+    expect(row('Feature 2')).toHaveTextContent(/^Feature 2 needs repair/);
+    expect(row('Feature 3')).toHaveTextContent(/^Feature 3 paused/);
+    expect(
+      row('Feature 2').querySelector('.feature-row-main')
+    ).toHaveAccessibleName(/^Feature 2 needs repair.*first failure$/);
+    rerender(<HistoryTimeline {...props} geometryPending />);
+    expect(value('Feature 2')).toHaveTextContent('2 mm');
+    expect(row('Feature 2')).toHaveTextContent(/^Feature 2 preparing/);
+    expect(row('Feature 2')).toHaveClass('is-preparing');
+  });
+
+  it('wears the icon of the command that made each step', () => {
+    renderTimeline({
+      features: [
+        feature(1, { featureKind: 'fillet', radius: 1 }),
+        feature(2, {
+          featureKind: 'direct-edit',
+          operation: { kind: 'offset-face', offset: 2 }
+        }),
+        feature(3, {
+          featureKind: 'direct-edit',
+          operation: { kind: 'resize-cylindrical-face', radius: 3 }
+        }),
+        feature(4, {
+          featureKind: 'boolean',
+          operation: 'subtract',
+          targetBodyIds: []
+        })
+      ]
+    });
+    const icon = (name: string) =>
+      row(name).querySelector('.feature-row-grip .feature-icon svg');
+    expect(icon('Feature 1')).toHaveClass('lucide-radius');
+    expect(icon('Feature 2')).toHaveClass('lucide-arrow-up-from-dot');
+    expect(icon('Feature 3')).toHaveClass('lucide-diameter');
+    expect(icon('Feature 4')).toHaveClass('lucide-squares-subtract');
+  });
+
+  it('selects the row from a click on its icon, and reorders only on a drag', () => {
+    const { props } = renderTimeline();
+    const grip = within(row('Feature 2')).getByRole('button', {
+      name: 'Reorder Feature 2. Use the arrow keys to move it.'
+    });
+    fireEvent.click(grip, { detail: 1 });
+    expect(props.onSelectFeature).toHaveBeenCalledWith('node-2');
+    // Enter on the grip is not a selection: the grip's keys reorder.
+    fireEvent.click(grip, { detail: 0 });
+    expect(props.onSelectFeature).toHaveBeenCalledTimes(1);
+    expect(props.onReorderFeature).not.toHaveBeenCalled();
+  });
+
+  it('narrows to the problem rows with Problems, alongside the text filter', async () => {
+    const user = userEvent.setup();
+    const features = [feature(1), feature(2), feature(3), feature(4)];
+    const { container, rerender, props } = renderTimeline({
+      findOpen: true,
+      features,
+      failedFeatureIds: new Set([features[1]!.featureId]),
+      failureLineage: new Map([[features[2]!.featureId, features[1]!]])
+    });
+    const toggle = screen.getByRole('button', { name: 'Problems' });
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    // The failure and the step built on it.
+    expect(
+      [...container.querySelectorAll('.feature-row .feature-name')].map(
+        (name) => name.textContent
+      )
+    ).toEqual(['Feature 2', 'Feature 3']);
+    expect(screen.getByText('2 of 4')).toBeInTheDocument();
+    await user.type(
+      screen.getByRole('searchbox', { name: 'Find a step' }),
+      'Feature 3'
+    );
+    expect(container.querySelectorAll('.feature-row')).toHaveLength(1);
+    // Repaired: the toggle turns off and disables rather than emptying the list.
+    rerender(
+      <HistoryTimeline
+        {...props}
+        failedFeatureIds={new Set()}
+        failureLineage={new Map()}
+      />
+    );
+    expect(screen.getByRole('button', { name: 'Problems' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Problems' })).toHaveAttribute(
+      'aria-pressed',
+      'false'
+    );
+    await user.clear(screen.getByRole('searchbox', { name: 'Find a step' }));
+    expect(container.querySelectorAll('.feature-row')).toHaveLength(4);
+  });
+
   it('shows one value per row in document units', () => {
     renderTimeline({ units: 'inch' });
     expect(row('Feature 3')).toHaveTextContent('3 in');
@@ -488,6 +736,18 @@ describe('HistoryTimeline', () => {
       screen.getByRole('button', { name: 'Resume full history' })
     );
     expect(props.onResumeHistory).toHaveBeenCalledTimes(1);
+  });
+
+  it('holds Resume while an exact check is running', () => {
+    const { props } = renderTimeline({
+      features: [feature(1), feature(2, undefined, rolledBack)],
+      reorderBusy: true
+    });
+    const resume = screen.getByRole('button', { name: 'Resume full history' });
+    expect(resume).toBeDisabled();
+    expect(resume).toHaveTextContent('Checking…');
+    fireEvent.click(resume);
+    expect(props.onResumeHistory).not.toHaveBeenCalled();
   });
 
   it('has no status line while the history is complete', () => {

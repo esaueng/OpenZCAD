@@ -10,6 +10,7 @@ import {
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
+import { expectPassedThrough } from './support/failed-pass-through';
 import { commandFactories } from '@openzcad/command-system';
 import {
   PROJECT_DOCUMENT_SCHEMA_VERSION,
@@ -490,8 +491,8 @@ describe('thread features on the exact kernel', () => {
           family: 'thread',
           code
         });
-        expect(derived.bodyRepresentations[threaded.bodyId]).toBeUndefined();
-        expect(derived.bodyRepresentations[bodyId]!.consumed).toBe(false);
+        // Refused: the shank stands in for the thread, unchanged (ADR-017).
+        expectPassedThrough(derived, threaded.bodyId, bodyId);
       } finally {
         mock.mockRestore();
       }

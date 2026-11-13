@@ -24,6 +24,7 @@ function renderTopBar(
     projectName?: string;
     encryption?: EncryptionIndicatorProps | null;
     buildModeDisabledReason?: string;
+    warningCount?: number;
   } = {}
 ) {
   const handlers = {
@@ -36,6 +37,7 @@ function renderTopBar(
     onExportStep: vi.fn(),
     onRenameProject: vi.fn(),
     onReviewEditFailure: vi.fn(),
+    onShowWarnings: vi.fn(),
     onWorkspaceMode: vi.fn()
   };
   render(
@@ -51,6 +53,7 @@ function renderTopBar(
       geometryFailed={options.geometryFailed}
       editPending={options.editPending}
       editRefusal={options.editRefusal}
+      warningCount={options.warningCount}
       saveToAccount={options.saveToAccount ?? false}
       knownDeviceOnly={options.knownDeviceOnly ?? false}
       localOnlySourceCount={0}
@@ -70,8 +73,6 @@ function renderTopBar(
       buildModeDisabledReason={options.buildModeDisabledReason ?? null}
       tweakModeDisabledReason={null}
       onArchiveLocalSources={vi.fn()}
-      onExportDiagnostics={vi.fn()}
-      onExportInteractionLog={vi.fn()}
       onGoHome={vi.fn()}
       onOpenSettings={vi.fn()}
       encryption={options.encryption ?? null}
@@ -103,6 +104,30 @@ describe('TopBar workspace mode help', () => {
       expect(onWorkspaceMode).toHaveBeenCalledWith(mode);
     }
   );
+
+  it("counts the model's warnings beside the save status and opens Diagnostics", () => {
+    // With none there is no chip: the bar never spends the name's room on
+    // a zero.
+    renderTopBar();
+    expect(
+      screen.queryByRole('button', { name: /show Diagnostics/ })
+    ).toBeNull();
+    cleanup();
+
+    const { onShowWarnings } = renderTopBar({ warningCount: 1 });
+    const one = screen.getByRole('button', {
+      name: '1 warning: show Diagnostics'
+    });
+    expect(one).toHaveTextContent('1');
+    fireEvent.click(one);
+    expect(onShowWarnings).toHaveBeenCalledTimes(1);
+    cleanup();
+
+    renderTopBar({ warningCount: 240 });
+    expect(
+      screen.getByRole('button', { name: '240 warnings: show Diagnostics' })
+    ).toHaveTextContent('99+');
+  });
 
   it('explains a mode on hover and hides the help when the pointer leaves', async () => {
     renderTopBar();
@@ -551,20 +576,27 @@ describe('TopBar File menu', () => {
   it('closes when focus tabs out of it', () => {
     renderTopBar();
     fileMenu().open = true;
-    const last = screen.getByRole('button', {
-      name: /^Export interaction log/
-    });
+    const last = screen.getByRole('button', { name: /^Export mesh…/ });
     const settings = screen.getByRole('button', { name: 'Open settings' });
     last.focus();
     // Moving between its own items keeps it open.
     fireEvent.blur(last, {
-      relatedTarget: screen.getByRole('button', {
-        name: /^Export diagnostics/
-      })
+      relatedTarget: screen.getByRole('button', { name: /^Export STEP/ })
     });
     expect(fileMenu().open).toBe(true);
     fireEvent.blur(last, { relatedTarget: settings });
     expect(fileMenu().open).toBe(false);
+  });
+
+  it('leaves the support exports to Settings and the palette', () => {
+    // Export diagnostics and Export interaction log closed the menu as a
+    // Troubleshooting group; they are support tools, not file work.
+    renderTopBar({ canExport: true });
+    fileMenu().open = true;
+    expect(screen.queryByText('Troubleshooting')).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /diagnostics|interaction log/i })
+    ).not.toBeInTheDocument();
   });
 });
 
