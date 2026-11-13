@@ -2,7 +2,8 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 import {
   revealModelPanel,
   stubApi,
-  createPrimitiveInPlace
+  createPrimitiveInPlace,
+  waitForStillViewport
 } from './openzcad-fixtures';
 
 /**
@@ -47,6 +48,39 @@ async function insideWindow(locator: Locator): Promise<boolean> {
 async function clickCentre(page: Page, locator: Locator) {
   const box = (await locator.boundingBox())!;
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+}
+
+/**
+ * A canvas point where a right-click offers Select other: the viewer's own
+ * pick, in its current view, finds two or more faces or edges there.
+ */
+async function locatePickStack(canvas: Locator) {
+  interface PickStack {
+    x: number;
+    y: number;
+    labels: string[];
+    kinds: ('face' | 'edge')[];
+  }
+  let found: PickStack | null = null;
+  await expect
+    .poll(
+      async () => {
+        found = await canvas.evaluate(
+          (element) =>
+            new Promise<PickStack | null>((resolve) => {
+              element.dispatchEvent(
+                new CustomEvent('openzcad:e2e-locate-pick-stack', {
+                  detail: { resolve }
+                })
+              );
+            })
+        );
+        return found !== null;
+      },
+      { message: 'the box should have an edge over a face in view' }
+    )
+    .toBe(true);
+  return found!;
 }
 
 async function createBox(
@@ -165,55 +199,64 @@ test('UI-04: a Settings filter can be cleared at every width', async ({
   await expect(page.getByLabel('Find a setting')).toHaveValue('');
 });
 
-test('UI-06: open menus move back inside a window resized under them', async ({
-  page
-}) => {
-  await page.setViewportSize({ width: 1528, height: 684 });
-  await createBox(page, 'Resized Menus');
+test(
+  'UI-06: open menus move back inside a window resized under them',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await page.setViewportSize({ width: 1528, height: 684 });
+    await createBox(page, 'Resized Menus');
 
-  // A history row's actions.
-  await revealModelPanel(page, 'History');
-  await page
-    .locator('.feature-row-main', { hasText: 'Box' })
-    .click({ button: 'right' });
-  const rowMenu = page.locator('.context-menu');
-  await expect(rowMenu).toBeVisible();
-  await page.setViewportSize({ width: 390, height: 844 });
-  await expect.poll(() => insideWindow(rowMenu)).toBe(true);
-  await expectReachable(rowMenu.getByRole('menuitem').first());
-  await page.keyboard.press('Escape');
-  await expect(rowMenu).toHaveCount(0);
-
-  // Select other, in View.
-  await page.setViewportSize({ width: 1280, height: 800 });
-  await page
-    .getByRole('group', { name: 'Workspace mode' })
-    .getByRole('button', { name: 'View' })
-    .click();
-  const canvas = page.locator('.viewer-host canvas');
-  const pickList = page.getByTestId('topology-pick-list');
-  const bounds = (await canvas.boundingBox())!;
-  for (const [fx, fy] of [
-    [0.5, 0.5],
-    [0.55, 0.55],
-    [0.45, 0.45],
-    [0.6, 0.5]
-  ] as const) {
-    await page.mouse.click(
-      bounds.x + bounds.width * fx,
-      bounds.y + bounds.height * fy,
-      { button: 'right' }
-    );
-    if (await pickList.isVisible()) {
-      break;
-    }
+    // A history row's actions.
+    await revealModelPanel(page, 'History');
+    await page
+      .locator('.feature-row-main', { hasText: 'Box' })
+      .click({ button: 'right' });
+    const rowMenu = page.locator('.context-menu');
+    await expect(rowMenu).toBeVisible();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect.poll(() => insideWindow(rowMenu)).toBe(true);
+    await expectReachable(rowMenu.getByRole('menuitem').first());
     await page.keyboard.press('Escape');
+    await expect(rowMenu).toHaveCount(0);
+
+    // Select other, in View.
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page
+      .getByRole('group', { name: 'Workspace mode' })
+      .getByRole('button', { name: 'View' })
+      .click();
+    const canvas = page.locator('.viewer-host canvas');
+    const pickList = page.getByTestId('topology-pick-list');
+    // Widening the window and changing mode each ask for a reframe, which
+    // starts some 120 ms later and then glides. A press on the canvas hands the
+    // camera to the user and stops that wherever it has got to, so a click made
+    // before the view rests meets the box in a different place on every run.
+    await waitForStillViewport(page);
+    // The list opens only where two or more faces or edges lie under the
+    // pointer. The viewer says where that is for the view it settled on; a
+    // fixed fraction of the canvas is the middle of one face, or empty stage.
+    const stack = await locatePickStack(canvas);
+    await page.mouse.click(stack.x, stack.y, { button: 'right' });
+    await expect(pickList).toBeVisible();
+    await expect(pickList.getByRole('menuitem')).toHaveText(
+      stack.labels.map((label, index) => `${label}${stack.kinds[index]}`)
+    );
+    // The resize has to take the window out from under the list, or the
+    // list being inside afterwards says nothing about it having moved.
+    const narrow = { width: 360, height: 640 };
+    const opened = (await pickList.boundingBox())!;
+    expect(
+      opened.x + opened.width > narrow.width ||
+        opened.y + opened.height > narrow.height,
+      `the list opened at ${JSON.stringify(opened)}, already inside the smaller window`
+    ).toBe(true);
+    await page.setViewportSize(narrow);
+    await expect.poll(() => insideWindow(pickList)).toBe(true);
+    await expectReachable(pickList.getByRole('menuitem').first());
+    await page.keyboard.press('Escape');
+    await expect(pickList).toBeHidden();
   }
-  await expect(pickList).toBeVisible();
-  await page.setViewportSize({ width: 360, height: 640 });
-  await expect.poll(() => insideWindow(pickList)).toBe(true);
-  await page.keyboard.press('Escape');
-});
+);
 
 test('UI-09: the circle type strip sits beside the rail and leaves with the tool', async ({
   page
