@@ -85,7 +85,7 @@ import {
   MAX_FOLDER_NAME_LENGTH,
   type LibraryFolder
 } from '../lib/libraryFolders';
-import { useLibraryFolderCloudSync } from '../lib/libraryFolderCloudSync';
+import { useLibraryFolderCloudSync } from '../lib/useLibraryFolderCloudSync';
 import { LibrarySelectionBar } from './LibrarySelectionBar';
 import {
   bucketProjectsByShelf,

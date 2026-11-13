@@ -1,4 +1,3 @@
-import { useEffect, useRef } from 'react';
 import {
   folderStorageKey,
   readLibraryFolders,
@@ -14,7 +13,6 @@ import {
   recordFolderChanges,
   type FolderSet
 } from './libraryFolderSync';
-import { watchLibraryFreshness } from './libraryRefresh';
 import { unlockedAccount } from './e2ee/unlockedKeys';
 
 /**
@@ -236,8 +234,6 @@ function finish(
 // ── Browser wiring ─────────────────────────────────────────────────────────
 
 const RECORD_PREFIX = 'openzcad.library.folders.sync.v2';
-/** Lets a burst of shelf edits (a drag, a rename) go up as one write. */
-const PUSH_DELAY_MS = 2_000;
 
 export function folderSyncRecordKey(accountId: string): string {
   return `${RECORD_PREFIX}:${accountId}`;
@@ -319,8 +315,6 @@ export function browserFolderSyncHost(
   };
 }
 
-/** Accounts that stopped syncing folders during this visit. */
-const stoppedAccounts = new Set<string>();
 /**
  * Whether this account encrypts, asked once per visit and only after the
  * first read answered. An unanswerable check counts as encrypting, so
@@ -364,91 +358,35 @@ export function localStorageFolderSequencePins(accountId: string) {
 }
 
 /**
- * Syncs the signed-in account's folders while the library is shown: on
- * arrival, shortly after each shelf edit, and whenever the library refreshes
- * from the account. Signed out, it does nothing.
+ * One sync round for the signed-in account's folders, as the shelf runs it
+ * (`useLibraryFolderCloudSync.ts`, which loads this module with its first
+ * round). True when this account should stop syncing for the rest of the
+ * visit; anything else (offline, a server error) waits for the next try.
  */
-export function useLibraryFolderCloudSync(
-  accountId: string | null | undefined,
-  folders: LibraryFolders
-) {
-  const request = useRef<(() => void) | null>(null);
-
-  useEffect(() => {
-    if (!accountId || stoppedAccounts.has(accountId)) return;
-    let cancelled = false;
-    let running: Promise<void> | null = null;
-    let again = false;
-    const stop = () => {
-      stoppedAccounts.add(accountId);
-      cancelled = true;
-    };
-    const run = async (): Promise<void> => {
-      if (cancelled) return;
-      if (running) {
-        again = true;
-        return running;
+export async function syncAccountLibraryFolders(
+  accountId: string,
+  cancelled: () => boolean
+): Promise<boolean> {
+  try {
+    const { api, encryptsNewProjects } = await import('./api');
+    const host = browserFolderSyncHost(accountId, api, async () => {
+      let encrypts = encrypting.get(accountId);
+      if (!encrypts) {
+        encrypts = encryptsNewProjects().catch(() => true);
+        encrypting.set(accountId, encrypts);
       }
-      running = (async () => {
-        try {
-          const { api, encryptsNewProjects } = await import('./api');
-          const host = browserFolderSyncHost(accountId, api, async () => {
-            let encrypts = encrypting.get(accountId);
-            if (!encrypts) {
-              encrypts = encryptsNewProjects().catch(() => true);
-              encrypting.set(accountId, encrypts);
-            }
-            if (!(await encrypts)) return plaintextFolderCodec;
-            const account = unlockedAccount(accountId);
-            if (!account || cancelled) return null;
-            const { sealedFolderCodec } =
-              await import('./e2ee/sealedLibraryFolders');
-            return sealedFolderCodec({
-              accountKey: account.accountKey,
-              userId: accountId,
-              pins: localStorageFolderSequencePins(accountId)
-            });
-          });
-          const outcome = await syncLibraryFolders(host);
-          if (outcome === 'unsupported') stop();
-        } catch (error) {
-          if (STOP_CODES.has(errorCode(error) ?? '')) stop();
-          // Anything else (offline, a server error) waits for the next try.
-        }
-      })();
-      try {
-        await running;
-      } finally {
-        running = null;
-        if (again && !cancelled) {
-          again = false;
-          void run();
-        }
-      }
-    };
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    request.current = () => {
-      clearTimeout(timer);
-      timer = setTimeout(() => void run(), PUSH_DELAY_MS);
-    };
-    void run();
-    const stopWatching = watchLibraryFreshness(run);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-      request.current = null;
-      stopWatching();
-    };
-  }, [accountId]);
-
-  // A shelf edit (or another tab's) goes up shortly after it lands. The
-  // sync's own write also arrives here and costs one cheap no-op round.
-  const first = useRef(true);
-  useEffect(() => {
-    if (first.current) {
-      first.current = false;
-      return;
-    }
-    request.current?.();
-  }, [folders]);
+      if (!(await encrypts)) return plaintextFolderCodec;
+      const account = unlockedAccount(accountId);
+      if (!account || cancelled()) return null;
+      const { sealedFolderCodec } = await import('./e2ee/sealedLibraryFolders');
+      return sealedFolderCodec({
+        accountKey: account.accountKey,
+        userId: accountId,
+        pins: localStorageFolderSequencePins(accountId)
+      });
+    });
+    return (await syncLibraryFolders(host)) === 'unsupported';
+  } catch (error) {
+    return STOP_CODES.has(errorCode(error) ?? '');
+  }
 }
