@@ -315,6 +315,22 @@
   color: var(--color-error);
 }
 
+/* "Download your data first": a link in the impact text (design review I84). */
+.cloud-deletion-download {
+  padding: 0;
+  border: 0;
+  color: var(--color-accent-hi);
+  background: transparent;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.cloud-deletion-download:hover {
+  color: var(--color-text);
+}
+
 /* The personal-info toggle is a button, not a full-width bar. */
 .cloud-deletion-dialog > .secondary {
   justify-self: start;
@@ -723,6 +739,17 @@
   font-size: var(--fs-sm);
 }
 
+.export-dialog-check-failed {
+  display: grid;
+  gap: var(--sp-1);
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+}
+
+.export-dialog-check-failed p {
+  margin: 0;
+}
+
 .export-dialog-progress {
   margin: 0;
   display: flex;
@@ -804,7 +831,14 @@
 }
 
 .shapr-import-error {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--sp-1);
   color: var(--color-error);
+}
+
+.shapr-import-error p {
+  margin: 0;
 }
 
 .shapr-import-exact {
@@ -1865,4 +1899,8 @@
 .modal-backdrop .secondary:not(.danger, :hover:not(:disabled), :focus-visible) {
   background: transparent;
   border-color: transparent;
+}
+
+.conflict-choice-name {
+  color: var(--color-text);
 }

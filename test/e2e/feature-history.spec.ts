@@ -540,7 +540,7 @@ test('a seeded demo stores every revision it promises, and restores one', async 
     .getByRole('button', { name: /^Open demo: Mounting Bracket/ })
     .click();
   await expectBodyCount(page, 1);
-  await expect(page.getByText('not stored')).toHaveCount(0);
+  await expect(page.getByText('history only')).toHaveCount(0);
   await expect(
     page.getByRole('button', { name: 'Restore Rev A — L-bracket blank' })
   ).toBeVisible();

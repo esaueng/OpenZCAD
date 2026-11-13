@@ -371,6 +371,7 @@ import {
   screenRayToPlanePoint,
   SKETCH_SNAP_GLYPHS,
   SKETCH_SNAP_LABELS,
+  sketchContentFramePoints,
   sketchEntryPose,
   sketchEntryUp,
   sketchObjectFromDrag,
@@ -2643,6 +2644,28 @@ export function ModelViewer({
   } | null>(null);
   const sketchModeRef = useRef(sketchMode);
   sketchModeRef.current = sketchMode;
+  // I40: selecting sketch geometry opens its editor beside the rail, over
+  // the canvas. When that card lands on the selection it edits, the view
+  // pans the selection clear of it, once per selection.
+  // Returns false while the editor has not laid out yet.
+  const keepSketchSelectionClearRef = useRef<(() => boolean) | null>(null);
+  const selectedSketchObjectId = sketchMode?.selectedObjectId ?? null;
+  useEffect(() => {
+    if (!selectedSketchObjectId) return;
+    // The editor is loaded on demand, so the first selection can take some
+    // frames to show it: look each frame, for about a second.
+    let frame = 0;
+    let tries = 0;
+    const attempt = () => {
+      tries += 1;
+      if (keepSketchSelectionClearRef.current?.() !== false || tries > 60) {
+        return;
+      }
+      frame = window.requestAnimationFrame(attempt);
+    };
+    frame = window.requestAnimationFrame(attempt);
+    return () => window.cancelAnimationFrame(frame);
+  }, [selectedSketchObjectId]);
   const onSelectRegionRef = useRef(onSelectRegion);
   onSelectRegionRef.current = onSelectRegion;
   const onHoverRegionRef = useRef(onHoverRegion);
@@ -4301,6 +4324,90 @@ export function ModelViewer({
       // here already; restoring a face-offset proxy did not, so Escape from
       // a typed offset left the viewport awake.
       disposeRetiringOverlays(retiringOverlaysRef.current);
+    };
+    keepSketchSelectionClearRef.current = () => {
+      const mode = sketchModeRef.current;
+      const object = mode?.selectedObjectId
+        ? mode.objects.find(({ id }) => id === mode.selectedObjectId)
+        : undefined;
+      if (!mode || !object) return true;
+      const canvasRect = renderer.domElement.getBoundingClientRect();
+      const cards = [
+        ...document.querySelectorAll('.sketch-flyouts > .sketch-entity-dock')
+      ]
+        .map((card) => card.getBoundingClientRect())
+        .filter((rect) => rect.width > 0 && rect.height > 0);
+      if (canvasRect.width <= 0) return true;
+      if (cards.length === 0) return false;
+      const cover = {
+        left: Math.min(...cards.map((rect) => rect.left)) - canvasRect.left,
+        right: Math.max(...cards.map((rect) => rect.right)) - canvasRect.left,
+        top: Math.min(...cards.map((rect) => rect.top)) - canvasRect.top,
+        bottom: Math.max(...cards.map((rect) => rect.bottom)) - canvasRect.top
+      };
+      const screen = sketchContentFramePoints(
+        [object],
+        sketchModeResolver(mode),
+        mode.basis
+      ).flatMap((point) => {
+        const projected = projectToScreen(
+          new THREE.Vector3(point.x, point.y, point.z),
+          context.activeCamera,
+          canvasWidth(),
+          canvasHeight()
+        );
+        return projected ? [projected] : [];
+      });
+      if (screen.length === 0) return true;
+      const left = Math.min(...screen.map(({ x }) => x));
+      const right = Math.max(...screen.map(({ x }) => x));
+      const top = Math.min(...screen.map(({ y }) => y));
+      const bottom = Math.max(...screen.map(({ y }) => y));
+      const margin = 24;
+      // Only a selection the cards actually hide moves the view: most of
+      // it under them. One beside the cards, or merely touching them, stays
+      // where the user put it, so a press that follows lands where it was
+      // aimed. (A straight line's box is given some depth to measure.)
+      const pad = 4;
+      const box = {
+        left: left - pad,
+        right: right + pad,
+        top: top - pad,
+        bottom: bottom + pad
+      };
+      const hiddenWidth = Math.max(
+        0,
+        Math.min(box.right, cover.right) - Math.max(box.left, cover.left)
+      );
+      const hiddenHeight = Math.max(
+        0,
+        Math.min(box.bottom, cover.bottom) - Math.max(box.top, cover.top)
+      );
+      const boxArea = (box.right - box.left) * (box.bottom - box.top);
+      if (hiddenWidth * hiddenHeight < boxArea * 0.5) {
+        return true;
+      }
+      // The free span runs from the cards to the right lane's rails.
+      const lane = document
+        .querySelector('[role="toolbar"][aria-label="Relations"]')
+        ?.getBoundingClientRect();
+      const freeLeft = cover.right + margin;
+      const freeRight =
+        (lane && lane.width > 0 ? lane.left : canvasRect.right) -
+        canvasRect.left -
+        margin;
+      if (freeRight <= freeLeft) return true;
+      // Its left edge just past the cards when it fits; centred in the
+      // free span when it does not.
+      const deltaX =
+        right - left <= freeRight - freeLeft
+          ? freeLeft - left
+          : (freeLeft + freeRight) / 2 - (left + right) / 2;
+      if (Math.abs(deltaX) < 1) return true;
+      cameraRig.beginPinchDrag();
+      cameraRig.panByPixels(deltaX, 0);
+      cameraRig.endOrbitDrag();
+      return true;
     };
     const handleCapturedEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && topologyPickList.visible) {

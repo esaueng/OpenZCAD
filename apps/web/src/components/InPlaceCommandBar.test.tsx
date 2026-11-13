@@ -127,7 +127,10 @@ describe('InPlaceCommandBar', () => {
         />
       );
       const status = screen.getByRole('status');
-      expect(status.textContent).toBe(refusal);
+      // The bar's title already names the feature.
+      expect(status.textContent).toBe(
+        refusal.replace('Feature "Fillet": ', '')
+      );
       const more = screen.getByRole('button', { name: 'More' });
       expect(more).toHaveAttribute('aria-expanded', 'false');
       expect(more).toHaveAttribute('aria-controls', status.id);
@@ -682,6 +685,105 @@ describe('InPlaceCommandBar', () => {
         .getByRole('button', { name: 'Cancel' })
         .getAttribute('aria-keyshortcuts')
     ).toBe('Escape');
+  });
+});
+
+describe('Enter while the preview is still being checked', () => {
+  it('is held and applies once the preview is valid, saying Applying…', () => {
+    // 13 November review: "100 Tab 60 Tab 6 Enter" then Enter again lost
+    // the second Enter while the last value's preview was checked.
+    const onDone = vi.fn();
+    const props = {
+      title: 'Box',
+      hint: 'Drag a footprint',
+      onDone,
+      onCancel: vi.fn()
+    };
+    const { rerender } = render(
+      <InPlaceCommandBar {...props} canFinish={false} previewPending />
+    );
+    const command = screen.getByRole('group', { name: 'Box command' });
+    fireEvent.keyDown(command, { key: 'Enter' });
+    expect(onDone).not.toHaveBeenCalled();
+    expect(command).toHaveTextContent('Applying…');
+    rerender(<InPlaceCommandBar {...props} canFinish previewPending />);
+    expect(onDone).toHaveBeenCalledOnce();
+  });
+
+  it('is not held when nothing is waiting to preview, or a refusal stands', () => {
+    // An Enter before the edges are picked must not finish the command at
+    // the first pick.
+    const onDone = vi.fn();
+    const props = {
+      title: 'Fillet',
+      hint: 'Click the edges',
+      onDone,
+      onCancel: vi.fn()
+    };
+    const { rerender } = render(
+      <InPlaceCommandBar {...props} canFinish={false} />
+    );
+    const command = screen.getByRole('group', { name: 'Fillet command' });
+    fireEvent.keyDown(command, { key: 'Enter' });
+    rerender(<InPlaceCommandBar {...props} canFinish previewPending />);
+    expect(onDone).not.toHaveBeenCalled();
+
+    rerender(
+      <InPlaceCommandBar
+        {...props}
+        canFinish={false}
+        previewPending
+        refusal="Fillet could not be created."
+      />
+    );
+    fireEvent.keyDown(command, { key: 'Enter' });
+    rerender(<InPlaceCommandBar {...props} canFinish previewPending />);
+    expect(onDone).not.toHaveBeenCalled();
+  });
+});
+
+describe('the state pill', () => {
+  it('stays empty until there is something to preview', () => {
+    const props = {
+      title: 'Fillet',
+      hint: 'Click the edges',
+      onDone: vi.fn(),
+      onCancel: vi.fn()
+    };
+    const { container, rerender } = render(
+      <InPlaceCommandBar {...props} canFinish={false} />
+    );
+    const pill = container.querySelector('.in-place-command-state');
+    expect(pill).toBeEmptyDOMElement();
+    rerender(<InPlaceCommandBar {...props} canFinish={false} previewPending />);
+    expect(pill).toHaveTextContent('Preview');
+  });
+});
+
+describe('a blend refused at a size another builds at', () => {
+  it('quotes both sizes in the document unit and offers the one that builds', () => {
+    // 13 November review: 'Feature "Fillet": … with radius 50. Try a smaller
+    // radius: radius 6.25 builds here.' — no units, and retyped by hand.
+    const onTrySize = vi.fn();
+    render(
+      <InPlaceCommandBar
+        title="Edit Fillet"
+        hint="Drag the radius"
+        refusal={
+          'Feature "Fillet": Fillet could not be created on 12 selected edges with radius 50. Try a smaller radius: radius 6.25 builds here.'
+        }
+        unitLabel="mm"
+        onTrySize={onTrySize}
+        canFinish={false}
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('status')).toHaveTextContent(
+      /^Fillet could not be created on 12 selected edges with radius 50 mm\. Try a smaller radius: radius 6\.25 mm builds here\.$/
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Use 6.25 mm' }));
+    expect(onTrySize).toHaveBeenCalledWith('radius', 6.25);
   });
 });
 

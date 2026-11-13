@@ -172,6 +172,15 @@ describe('the Escape line matches the ladder it describes', () => {
     );
   });
 
+  it('gives a half-drawn rectangle its own step, not the line chain’s (I46)', () => {
+    const rectangle = commandPrompt(sketchState('rectangle', true));
+    expect(rectangle?.step).toMatch(/opposite corner/);
+    expect(rectangle?.escape).toBe('cancels the shape');
+    expect(commandPrompt(sketchState('line', true))?.step).toBe(
+      'Click the next point · Enter finishes'
+    );
+  });
+
   it('stays silent about Escape while a value is being validated', () => {
     // Escape does nothing mid-validation, so the prompt must not offer it.
     expect(commandPrompt(faceState('validating'))?.escape).toBeNull();
