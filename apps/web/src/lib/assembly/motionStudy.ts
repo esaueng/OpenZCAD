@@ -175,9 +175,13 @@ export const POSE_VALUE_TOLERANCE = 1e-6;
  * made that the first would overrule.
  *
  * `drivers` is required, and for coupled joints it is checked: a pose that
- * writes a value into a coupled group (any member differing from what the
- * study holds for it there) must name a motion of that group, else
- * {@link UndrivenPoseError} is thrown. Which motion was moved cannot be
+ * writes a value into a coupled group must name a motion of that group,
+ * else {@link UndrivenPoseError} is thrown. A value is written when it is
+ * neither what the study holds for that motion there nor what the study
+ * shows for it: an untouched value arrives either way, as a scrub left it
+ * or as the displayed one written back beside a neighbouring motion (a
+ * cylindrical joint's turn, coupled and shown at −20°, comes along when
+ * its slide is edited). Which motion was moved cannot be
  * read back from the values: seen from the study's track, a real move of a
  * geared-up shaft and the rounding of a long train look the same. Every
  * caller knows what it moved (a drag, a slider, a typed value), so a pose
@@ -269,10 +273,19 @@ export function keyPoseAt(
       if (!first || !lead) continue;
       const groupKey = `${first.jointId}/${first.dof}`;
       leads.set(groupKey, lead);
-      // Written: a value that is not what the study holds for that motion.
+      // Written: a value that is neither what the study holds for that
+      // motion nor what it shows for it. Untouched values come both ways:
+      // a scrub leaves the held one, and a joint's controls write its
+      // whole displayed array back when one of its motions is edited.
       const written = group.members.filter((m) => {
         const value = values[m.jointId]?.[m.dof];
-        return value !== undefined && value !== held.get(m.jointId)?.[m.dof];
+        if (value === undefined || value === held.get(m.jointId)?.[m.dof])
+          return false;
+        const displayed = shown.get(m.jointId)?.[m.dof];
+        return (
+          displayed === undefined ||
+          Math.abs(value - displayed) > POSE_VALUE_TOLERANCE
+        );
       });
       const named = group.members.some((m) =>
         drivers.some((d) => d.jointId === m.jointId && d.dof === m.dof)

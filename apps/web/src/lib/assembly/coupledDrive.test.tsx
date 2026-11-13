@@ -3,7 +3,8 @@ import {
   fireEvent,
   render,
   renderHook,
-  screen
+  screen,
+  within
 } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -19,9 +20,13 @@ import {
   type AssemblySet,
   type BodyId
 } from '@openzcad/shared';
+import { commandFactories, type AnyCommand } from '@openzcad/command-system';
+import type { AssemblyStudySetInput } from '@openzcad/document-core';
+import { AssemblyPanel } from '../../components/assembly/AssemblyPanel';
 import { AssemblyPlayer } from '../../components/assembly/AssemblyPlayer';
+import { MotionStudyTimeline } from '../../components/assembly/MotionStudyTimeline';
 import { coupledPairProject } from '../../components/assembly/motionTestFixture';
-import { recordingExecute } from '../../test/assemblyFixture';
+import { recordingExecute, withLiveBodies } from '../../test/assemblyFixture';
 import { useAssembleWorkspace } from './assembleWorkspace';
 import { playbackFrame } from './assemblyPlayback';
 import { assemblyRuntime, getAssemblyRuntime } from './assemblyRuntime';
@@ -366,8 +371,10 @@ describe('the motion being moved drives its coupled mates', () => {
     expect(() => keyPoseAt(train, study, 1, complete, [])).toThrow(
       UndrivenPoseError
     );
+    // (Shaft 5's 6.25e-7° is within the pose tolerance of what it shows,
+    // so it is not counted among the written ones.)
     expect(() => keyPoseAt(train, study, 1, complete, [])).toThrow(
-      /Shaft 1, Shaft 2, Shaft 3, Shaft 4, Shaft 5 without naming the motion that was moved/
+      /Shaft 1, Shaft 2, Shaft 3, Shaft 4 without naming the motion that was moved/
     );
     // So is the single moved value on its own.
     expect(() =>
@@ -585,5 +592,187 @@ describe('View and Animate sweep what a coupled pair can travel', () => {
       expect(b).toBeCloseTo(-a / 2, 9);
       expect(Math.abs(b)).toBeLessThanOrEqual(20);
     }
+  });
+});
+
+describe('a coupled joint’s own free motion, edited in an open study', () => {
+  function lane(element: HTMLElement, width = 200) {
+    element.getBoundingClientRect = () => ({
+      left: 0,
+      top: 0,
+      right: width,
+      bottom: 36,
+      width,
+      height: 36,
+      x: 0,
+      y: 0,
+      toJSON: () => ({})
+    });
+    return element;
+  }
+
+  /**
+   * The sidebar and the timeline on one project: gear A turns on a study
+   * (0° to 80° over 2 s), and B is a cylindrical joint whose turn is
+   * coupled to A at −0.5 while its slide is free. Scrubbed to 1 s, A shows
+   * 40° and B's turn shows −20° (its own saved turn is 0°).
+   */
+  function mounted() {
+    const manager = coupledPairProject({ limited: false, cylindrical: true });
+    manager.execute(
+      commandFactories.setAssemblyStudy({
+        study: {
+          id: 'study_1',
+          name: 'Motion 1',
+          durationS: 2,
+          playback: 'loop',
+          tracks: [
+            {
+              jointId: 'turn_a',
+              dof: 0,
+              keys: [
+                { t: 0, value: 0, easing: 'linear' },
+                { t: 2, value: 80, easing: 'linear' }
+              ]
+            }
+          ]
+        }
+      })
+    );
+    const [plate, a, b] = manager.document.bodyOrder as [
+      BodyId,
+      BodyId,
+      BodyId
+    ];
+    const live = () =>
+      withLiveBodies(manager.document, {
+        [plate]: 'Plate',
+        [a]: 'Gear A',
+        [b]: 'Gear B'
+      });
+    const recorder = recordingExecute(manager);
+    const execute = (command: AnyCommand) => {
+      const done = recorder.execute(command);
+      view.rerender(element());
+      return done;
+    };
+    const element = () => (
+      <>
+        <AssemblyPanel
+          document={live()}
+          execute={execute}
+          onStatus={() => undefined}
+        />
+        <MotionStudyTimeline
+          assembly={manager.document.assembly}
+          execute={execute}
+        />
+      </>
+    );
+    act(() => {
+      assemblyRuntime.setActive(true);
+      assemblyRuntime.selectStudy('study_1');
+    });
+    const view = render(element());
+    const ruler = lane(screen.getByTestId('motion-ruler'));
+    fireEvent.pointerDown(ruler, { clientX: 100, pointerId: 1, button: 0 });
+    fireEvent.pointerUp(ruler, { pointerId: 1 });
+    act(() => assemblyRuntime.selectJoint('turn_b'));
+    const details = () => screen.getByLabelText('Turn B details');
+    const study = () => {
+      const command = recorder.commands.at(-1);
+      expect(command?.kind).toBe('assembly.study.set');
+      return (command?.payload as AssemblyStudySetInput).study;
+    };
+    return { manager, recorder, details, study };
+  }
+
+  const trackA = [
+    { t: 0, value: 0, easing: 'linear' },
+    { t: 2, value: 80, easing: 'linear' }
+  ];
+
+  it('keys the Distance slider of a cylindrical follower, leaving its coupled turn', () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { recorder, details, study } = mounted();
+    // The follower's turn is shown where the coupling puts it.
+    expect(
+      within(details()).getByRole('textbox', { name: 'Angle' })
+    ).toHaveValue('-20');
+    const before = recorder.commands.length;
+    // Only the slide is moved. The control writes the joint's whole shown
+    // array back, turn included: that turn was not moved and names nothing.
+    const slider = within(details()).getByRole('slider', {
+      name: 'Distance slider'
+    });
+    fireEvent.change(slider, { target: { value: '5' } });
+    expect(getAssemblyRuntime().overrides.get('turn_b')).toEqual([-20, 5]);
+    expect(getAssemblyRuntime().moved).toEqual([{ jointId: 'turn_b', dof: 1 }]);
+    fireEvent.pointerUp(slider);
+    expect(recorder.commands).toHaveLength(before + 1);
+    expect(study().tracks).toEqual([
+      { jointId: 'turn_a', dof: 0, keys: trackA },
+      {
+        jointId: 'turn_b',
+        dof: 1,
+        keys: [
+          { t: 0, value: 0, easing: 'linear' },
+          { t: 1, value: 5, easing: 'linear' }
+        ]
+      }
+    ]);
+    expect(logged).not.toHaveBeenCalled();
+    expect(screen.queryByText(/That move was not keyed/)).toBeNull();
+    // The pair still shows the study's pose.
+    expect(
+      within(details()).getByRole('textbox', { name: 'Angle' })
+    ).toHaveValue('-20');
+  });
+
+  it('keys the Distance number field the same way, and the coupled turn still keys its gear', () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { details, study } = mounted();
+    const distance = within(details()).getByRole('textbox', {
+      name: 'Distance'
+    });
+    fireEvent.change(distance, { target: { value: '7' } });
+    fireEvent.keyDown(distance, { key: 'Enter' });
+    expect(study().tracks).toEqual([
+      { jointId: 'turn_a', dof: 0, keys: trackA },
+      {
+        jointId: 'turn_b',
+        dof: 1,
+        keys: [
+          { t: 0, value: 0, easing: 'linear' },
+          { t: 1, value: 7, easing: 'linear' }
+        ]
+      }
+    ]);
+    expect(logged).not.toHaveBeenCalled();
+    expect(screen.queryByText(/That move was not keyed/)).toBeNull();
+
+    // The same joint's coupled turn, typed: it names its motion, so the
+    // study's own gear is re-keyed (−30° on B is 60° on A) and B's slide
+    // keeps its key.
+    const angle = within(details()).getByRole('textbox', {
+      name: 'Angle'
+    });
+    fireEvent.change(angle, { target: { value: '-30' } });
+    fireEvent.keyDown(angle, { key: 'Enter' });
+    expect(study().tracks.map((t) => [t.jointId, t.dof])).toEqual([
+      ['turn_a', 0],
+      ['turn_b', 1]
+    ]);
+    expect(study().tracks[0]?.keys).toEqual([
+      { t: 0, value: 0, easing: 'linear' },
+      { t: 1, value: 60, easing: 'linear' },
+      { t: 2, value: 80, easing: 'linear' }
+    ]);
+    expect(study().tracks[1]?.keys.at(-1)).toEqual({
+      t: 1,
+      value: 7,
+      easing: 'linear'
+    });
+    expect(logged).not.toHaveBeenCalled();
   });
 });

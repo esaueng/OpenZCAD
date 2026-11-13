@@ -81,6 +81,8 @@ export function coupledPairProject(
     saved?: [number, number];
     /** Adds an unrelated part `c` turning on its own joint `turn_c`. */
     third?: boolean;
+    /** Joint B is cylindrical: its turn is coupled, its slide is free. */
+    cylindrical?: boolean;
   } = {}
 ) {
   const manager = new CommandManager(
@@ -111,20 +113,21 @@ export function coupledPairProject(
     ['turn_b', 'b', 50, savedB]
   ] as const) {
     const frame = { ...PIVOT, origin: { x, y: 0, z: 0 } };
+    const slides = id === 'turn_b' && options.cylindrical === true;
+    const limit =
+      id === 'turn_b' && options.limited !== false
+        ? { min: -20, max: 20 }
+        : null;
     manager.execute(
       commandFactories.addAssemblyJoint({
         joint: {
           id,
           name: id === 'turn_a' ? 'Turn A' : 'Turn B',
-          kind: 'revolute',
+          kind: slides ? 'cylindrical' : 'revolute',
           parent: { componentId: 'plate', frame },
           child: { componentId: child, frame },
-          values: [value],
-          limits: [
-            id === 'turn_b' && options.limited !== false
-              ? { min: -20, max: 20 }
-              : null
-          ]
+          values: slides ? [value, 0] : [value],
+          limits: slides ? [limit, null] : [limit]
         }
       })
     );

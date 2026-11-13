@@ -96,7 +96,9 @@ track, a shaft returned to its shown value adds no key and leaves the
 curve as it was, though rounding moves the first shaft's settled value by
 more than the tolerance; the five-shaft move as a complete pose is keyed
 when its motion is named and throws when it is not; the runtime's moved list
-excludes scrub and playback drivers; one track per coupled group; Animate and the View player sweep the same ±40° of a pair
+excludes scrub and playback drivers; mounted with the sidebar and the
+timeline, the Distance slider and number field of a cylindrical follower key
+its slide while its coupled turn, written back as shown, is left alone; one track per coupled group; Animate and the View player sweep the same ±40° of a pair
 whose mate is limited to ±20°),
 `apps/web/src/components/assembly/GearMeshCard.test.tsx` (Turn together is
 the default with a mount and saves one transaction, Fixed together one

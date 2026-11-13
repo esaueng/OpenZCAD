@@ -141,7 +141,11 @@ relates values, it never closes a kinematic loop.
   apart from the drivers a scrub or playback set, and hands only that to
   the study. A pose that writes a value into a coupled group without naming
   a motion of it is refused, not judged from the study's track, where a
-  real move of a geared-up shaft and rounding look the same.
+  real move of a geared-up shaft and rounding look the same. A value counts
+  as written only when it is neither what the study holds for that motion
+  nor what it shows for it: a joint's controls write its whole shown array
+  back when one motion is edited, so a cylindrical joint's coupled turn
+  comes along untouched when its free slide is moved.
 - **Limits bound the pair.** The lead value is clamped into the range every
   member's limit allows: a driven joint's limit stops its driver. A drag,
   an Animate sweep and View's playback of a joint all read that narrowed
