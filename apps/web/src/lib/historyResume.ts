@@ -32,6 +32,20 @@ export interface RollbackMarkerMove {
 }
 
 /**
+ * What Resume full history says it did. The note that hand-suppressed
+ * features stay suppressed is said only when one is: it was said every time,
+ * on a model with nothing suppressed, where it read as a warning about
+ * something that was not there.
+ */
+export function resumeHistoryMessage(features: readonly FeatureNode[]): string {
+  const kept = features.filter(isFeatureManuallySuppressed).length;
+  if (kept === 0) return 'Full history resumed.';
+  return kept === 1
+    ? 'Full history resumed. 1 feature you suppressed stays suppressed.'
+    : `Full history resumed. ${kept} features you suppressed stay suppressed.`;
+}
+
+/**
  * The marker after `features[markerIndex]`, or at the end of history when
  * `markerIndex` is null (Resume full history).
  */

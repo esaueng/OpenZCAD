@@ -123,6 +123,8 @@ export interface ModelPanelSource {
     name: string,
     expression: string
   ): void | Promise<string | null>;
+  /** A new parameter the add row refused before setting it (a taken name). */
+  onParameterAddRefused?(name: string, message: string): void;
   /** F05: retypes a parameter; answers with a refusal. */
   onSetParameterQuantity?(
     name: string,
