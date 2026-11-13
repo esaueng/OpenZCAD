@@ -1413,7 +1413,7 @@
      a phone reader guessing which was Saving and which Account. */
   .settings-layout {
     --settings-inline: var(--sp-3);
-    grid-template-columns: calc(var(--island-gap) + 72px) minmax(0, 1fr);
+    grid-template-columns: calc(var(--island-gap) + 64px) minmax(0, 1fr);
   }
 
   .settings-nav {
