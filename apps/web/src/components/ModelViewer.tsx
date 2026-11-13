@@ -305,6 +305,7 @@ import {
 } from '../lib/selectionCalloutView';
 import {
   cornersWithinFrame,
+  measureClearStage,
   measureCreationFrame,
   measureFitFrame,
   measureOpeningFrame,
@@ -1032,6 +1033,13 @@ export interface ModelViewerProps {
    * set for an edit, whose camera is the user's.
    */
   creationFrame?: AutoFrameRequest | null;
+  /**
+   * Bumped when something has just opened over the stage (the section
+   * controls, an assistant proposal's preview): the model, previews
+   * included, is reframed into the clear stage if any of it now stands
+   * outside it. The view keeps its direction; a model already clear stays.
+   */
+  clearStageRequest?: number;
   /** Set to move the camera to a view target; nonce forces re-runs. */
   viewRequest: { view: ViewRequestTarget; nonce: number } | null;
   /** Set to centre and frame an exact planar face; nonce forces re-runs. */
@@ -2227,6 +2235,7 @@ export function ModelViewer({
   fitSignal,
   autoFrame = null,
   creationFrame = null,
+  clearStageRequest = 0,
   viewRequest,
   normalToFaceRequest,
   units,
@@ -8418,7 +8427,31 @@ export function ModelViewer({
         sketchDimLabel,
         appendUnits ? `${text} ${unitLabelRef.current}` : text
       );
-      hud.showAtPointer(sketchDimLabel, event, 16, -28);
+      showSketchReadout(event);
+    }
+
+    // The clear stage's right edge, read at most every quarter second: the
+    // readout follows every pointer move, and the panels rarely move.
+    let readoutStageRight = Infinity;
+    let readoutStageReadAt = -Infinity;
+    /**
+     * Beside the pointer, on its right unless that runs past the clear
+     * stage: drawing toward the Relations rail clipped "40 × 31 mm" and its
+     * snap hint under the rail (I7), so near it the readout takes the
+     * pointer's left instead.
+     */
+    function showSketchReadout(event: PointerEvent) {
+      if (!hud.showAtPointer(sketchDimLabel, event, 16, -28)) return;
+      const now = performance.now();
+      if (now - readoutStageReadAt > 250) {
+        readoutStageReadAt = now;
+        readoutStageRight =
+          measureClearStage(renderer.domElement)?.rect.right ?? Infinity;
+      }
+      const width = sketchDimLabel.offsetWidth;
+      if (event.clientX + 16 + width > readoutStageRight) {
+        hud.showAtPointer(sketchDimLabel, event, -16 - width, -28);
+      }
     }
 
     function hideSketchDimLabel() {
@@ -8453,7 +8486,7 @@ export function ModelViewer({
           : `${label}: ${sketchNumericRaw || '…'} ${units} · Enter`;
       setElementText(sketchDimLabel, text);
       sketchDimLabel.dataset.editing = 'true';
-      hud.showAtPointer(sketchDimLabel, event, 16, -28);
+      showSketchReadout(event);
     }
 
     function finishSketchNumericEntry() {
@@ -8853,7 +8886,7 @@ export function ModelViewer({
       if (event.key === 'Enter' && sketchNumericRaw !== null) {
         if (!commitSketchNumericEntry() && latestSketchPointerEvent) {
           sketchDimLabel.textContent = 'Enter a positive exact value';
-          hud.showAtPointer(sketchDimLabel, latestSketchPointerEvent, 16, -28);
+          showSketchReadout(latestSketchPointerEvent);
         }
         event.preventDefault();
         event.stopPropagation();
@@ -15478,6 +15511,9 @@ export function ModelViewer({
       if (!frame) {
         return null;
       }
+      // Into the stage the docks, rails and lane leave clear (I6): a small
+      // sketch re-entered with panels docked ran under them at both sides.
+      const stage = measureFitFrame(context.renderer.domElement);
       const normal = new THREE.Vector3(
         sketchBasis.normal.x,
         sketchBasis.normal.y,
@@ -15517,7 +15553,8 @@ export function ModelViewer({
           points,
           center,
           normal,
-          sketchUp
+          sketchUp,
+          stage
         );
       }
       if (frame.points.length === 0) {
@@ -15534,7 +15571,8 @@ export function ModelViewer({
         points,
         center,
         normal,
-        sketchUp
+        sketchUp,
+        stage
       );
     })();
     const distance = Math.max(context.camera.position.distanceTo(origin), 40);
@@ -16205,6 +16243,57 @@ export function ModelViewer({
     return () => cancelAnimationFrame(frame);
   }, [creationFrame]);
 
+  // Something opened over the stage: keep the model where it can be seen.
+  useEffect(() => {
+    const context = contextRef.current;
+    if (!clearStageRequest || !context || !context.hasFitCamera) {
+      return;
+    }
+    // Two frames: whatever opened, and any preview it brought, are laid out.
+    let frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => {
+        const targets = [
+          ...context.bodyGroup.children,
+          ...(parameterPreviewController.current?.group.children ?? [])
+        ].filter((child) => child.visible);
+        const reached = new THREE.Box3();
+        for (const object of targets) reached.expandByObject(object);
+        const stage = measureFitFrame(context.renderer.domElement);
+        if (reached.isEmpty() || !stage) {
+          return;
+        }
+        const camera = context.activeCamera;
+        camera.updateMatrixWorld();
+        const corners = Array.from({ length: 8 }, (_, index) =>
+          new THREE.Vector3(
+            index & 1 ? reached.max.x : reached.min.x,
+            index & 2 ? reached.max.y : reached.min.y,
+            index & 4 ? reached.max.z : reached.min.z
+          ).project(camera)
+        );
+        if (cornersWithinFrame(corners, stage)) {
+          return;
+        }
+        const pose = computeFitPose(
+          context.camera,
+          targets,
+          context.viewDirection(),
+          0,
+          stage
+        );
+        context.startCameraTween(
+          pose,
+          () => {
+            if (context.projection === 'orthographic') {
+              context.syncOrthographic(true);
+            }
+          },
+          { ease: viewJumpEase }
+        );
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [clearStageRequest]);
   // View requests keep the current zoom and glide the camera to the axis —
   // named standard views and the cube's corner diagonals alike.
   useEffect(() => {

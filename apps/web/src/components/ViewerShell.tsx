@@ -167,6 +167,8 @@ interface ViewerShellProps {
   fitSignal: number;
   autoFrame?: AutoFrameRequest | null;
   creationFrame?: AutoFrameRequest | null;
+  /** Bumped to keep the model in the clear stage (ModelViewer). */
+  clearStageRequest?: number;
   viewRequest: { view: ViewRequestTarget; nonce: number } | null;
   normalToFaceRequest: NormalToFaceRequest | null;
   units: string;
@@ -453,6 +455,7 @@ export function ViewerShell({
   fitSignal,
   autoFrame = null,
   creationFrame = null,
+  clearStageRequest = 0,
   viewRequest,
   normalToFaceRequest,
   units,
@@ -795,6 +798,7 @@ export function ViewerShell({
         fitSignal={fitSignal}
         autoFrame={autoFrame}
         creationFrame={creationFrame}
+        clearStageRequest={clearStageRequest}
         viewRequest={viewRequest}
         normalToFaceRequest={normalToFaceRequest}
         units={units}
