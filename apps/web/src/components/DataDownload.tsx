@@ -102,6 +102,7 @@ export function DataDownload({
           className="secondary"
           type="button"
           disabled={busy || preparing}
+          data-download-all-data
           onClick={() => void download()}
           aria-busy={preparing}
         >

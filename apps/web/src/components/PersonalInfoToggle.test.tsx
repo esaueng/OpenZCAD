@@ -49,6 +49,23 @@ describe('private email input', () => {
   });
 });
 
+// Design review I78: a masked field hid typos from the person typing.
+describe('private email input while typing', () => {
+  it('shows what is typed while focused and masks it again on blur', async () => {
+    const user = userEvent.setup();
+    render(<EmailForm />);
+    const input = screen.getByLabelText<HTMLInputElement>('Email');
+    expect(input).toHaveAttribute('type', 'password');
+    await user.click(input);
+    expect(input).toHaveAttribute('type', 'email');
+    await user.type(input, 'persn@example.com');
+    expect(input).toHaveAttribute('type', 'email');
+    await user.tab();
+    expect(input).toHaveAttribute('type', 'password');
+    expect(input).toHaveValue('persn@example.com');
+  });
+});
+
 describe('personal info toggle', () => {
   it('carries its state in the label alone', async () => {
     const user = userEvent.setup();
