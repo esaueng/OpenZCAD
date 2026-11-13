@@ -32,6 +32,7 @@ import {
   type BodyAppearancePreview,
   type FaceResizeCommit,
   type ModelViewerProps,
+  type ViewportContextMenuOptions,
   type CylinderRadiusHandleTarget,
   type EdgeHandleTarget,
   type OrientationDragControls,
@@ -168,6 +169,8 @@ interface ViewerShellProps {
   fitSignal: number;
   autoFrame?: AutoFrameRequest | null;
   creationFrame?: AutoFrameRequest | null;
+  /** Bumped to keep the model in the clear stage (ModelViewer). */
+  clearStageRequest?: number;
   viewRequest: { view: ViewRequestTarget; nonce: number } | null;
   normalToFaceRequest: NormalToFaceRequest | null;
   units: string;
@@ -395,7 +398,8 @@ interface ViewerShellProps {
   onContextMenu(
     x: number,
     y: number,
-    selection: TopologySelection | null
+    selection: TopologySelection | null,
+    options?: ViewportContextMenuOptions
   ): void;
   onToggleGrid(): void;
   onFit(): void;
@@ -457,6 +461,7 @@ export function ViewerShell({
   fitSignal,
   autoFrame = null,
   creationFrame = null,
+  clearStageRequest = 0,
   viewRequest,
   normalToFaceRequest,
   units,
@@ -803,6 +808,7 @@ export function ViewerShell({
         fitSignal={fitSignal}
         autoFrame={autoFrame}
         creationFrame={creationFrame}
+        clearStageRequest={clearStageRequest}
         viewRequest={viewRequest}
         normalToFaceRequest={normalToFaceRequest}
         units={units}

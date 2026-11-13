@@ -3290,6 +3290,15 @@ button.command-rail.is-suggested {
   z-index: calc(var(--z-inspector-float) + 1);
 }
 
+/* A card in the right lane (a command's card, or the feature card a click
+   in a floating History opens) stands over the floating windows: the edit
+   card opened BEHIND the History it was opened from, its labels cut to
+   "e center Y" and its Apply half covered (I7). Under the Tools drawer
+   (+9) and the rail's own flyouts (+10), which are more temporary still. */
+.stage-right:has(> :is(.command-float, .inspector-float)) {
+  z-index: calc(var(--z-panel-float) + 8);
+}
+
 /* A floating window: its panels stacked as in a column, the corner that
    resizes it and, over a stack, the grip bar on its frame that moves the
    whole window. It may stand anywhere on the stage, over the top islands

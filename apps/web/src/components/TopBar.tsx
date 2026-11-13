@@ -4,6 +4,7 @@ import { labelWithKey, useKeymap } from '../lib/keymap';
 import { platformShortcutLabel } from '../lib/platformShortcut';
 import {
   type ChangeEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   useEffect,
   useId,
   useLayoutEffect,
@@ -46,6 +47,7 @@ import {
   ACCOUNT_LABEL_RESERVE,
   COLLABORATION_LABEL_RESERVE,
   WORKSPACE_MODE_OPTIONS,
+  nextWorkspaceMode,
   saveGlyphFor,
   type SaveGlyph
 } from '../lib/topBarPresentation';
@@ -321,6 +323,17 @@ export function TopBar({
   encryption = null
 }: TopBarProps) {
   const keymap = useKeymap();
+  const modeLockedReason = (mode: WorkspaceMode): string | null =>
+    mode === 'build'
+      ? buildModeDisabledReason
+      : mode === 'tweak'
+        ? tweakModeDisabledReason
+        : mode === 'drawing'
+          ? drawingModeDisabledReason
+          : mode === 'assemble'
+            ? assembleModeDisabledReason
+            : null;
+  const cycleTarget = nextWorkspaceMode(workspaceMode, modeLockedReason);
   const saveKey = keymap.label('file-save');
   const saveNamedKey = keymap.label('file-save-named');
   // A mesh payload is the import's internal triangles, not a file anyone
@@ -412,6 +425,44 @@ export function TopBar({
       document.removeEventListener('keydown', closeFileMenuOnEscape, true);
     };
   }, []);
+
+  /**
+   * ArrowDown/ArrowUp on the File button open the menu at its first or last
+   * item; inside, the arrows, Home and End move between the enabled items,
+   * wrapping round. Tab still leaves, as before.
+   */
+  function moveInFileMenu(event: ReactKeyboardEvent<HTMLDetailsElement>) {
+    const key = event.key;
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(key)) return;
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
+    const menu = event.currentTarget;
+    const items = Array.from(
+      menu.querySelectorAll<HTMLElement>(
+        '.topbar-menu-panel :is(button, a[href]):not([disabled])'
+      )
+    );
+    if (items.length === 0) return;
+    if ((event.target as Element).matches('summary')) {
+      if (key !== 'ArrowDown' && key !== 'ArrowUp') return;
+      event.preventDefault();
+      menu.open = true;
+      (key === 'ArrowDown' ? items[0] : items.at(-1))?.focus();
+      return;
+    }
+    const current = items.indexOf(document.activeElement as HTMLElement);
+    const next =
+      key === 'Home'
+        ? 0
+        : key === 'End'
+          ? items.length - 1
+          : key === 'ArrowDown'
+            ? (current + 1) % items.length
+            : current <= 0
+              ? items.length - 1
+              : current - 1;
+    event.preventDefault();
+    items[next]?.focus();
+  }
 
   /**
    * Closes the menu for an item that opens a dialog. The dialog hands focus
@@ -585,6 +636,8 @@ export function TopBar({
       : collaborationStatus === 'live'
         ? `${collaboratorCount} live`
         : COLLABORATION_LABELS[collaborationStatus];
+  // Signed out, archiving can only fail: no amber dot calls for it (I8).
+  const archiveAttention = localOnlySourceCount > 0 && Boolean(session);
   const accountLabel =
     accountState === 'checking'
       ? 'Checking'
@@ -592,7 +645,12 @@ export function TopBar({
         ? 'Signed in'
         : accountState === 'signed-out'
           ? 'Signed out'
-          : 'Unavailable';
+          : // The start screen and Settings name this state the same way.
+            'Cloud unavailable';
+  const accountDescription =
+    accountState === 'unavailable'
+      ? 'Cloud unavailable: sign-in could not be reached. Projects keep saving on this device.'
+      : `Cloud account: ${accountLabel.toLowerCase()}`;
 
   const breadcrumb = (
     <div className="breadcrumb">
@@ -813,23 +871,19 @@ export function TopBar({
         aria-label="Workspace mode"
       >
         {WORKSPACE_MODE_OPTIONS.map(({ mode, label, hint, Icon }) => {
-          const disabledReason =
-            mode === 'build'
-              ? buildModeDisabledReason
-              : mode === 'tweak'
-                ? tweakModeDisabledReason
-                : mode === 'drawing'
-                  ? drawingModeDisabledReason
-                  : mode === 'assemble'
-                    ? assembleModeDisabledReason
-                    : null;
+          const disabledReason = modeLockedReason(mode);
+          // The cycle key belongs to the mode it goes to next, not to each.
+          const cycleKey =
+            mode === cycleTarget
+              ? keymap.label('workspace-mode-cycle')
+              : undefined;
           return (
             <Tooltip
               key={mode}
               multiline
               label={label}
               description={disabledReason ?? hint}
-              shortcut={keymap.label('workspace-mode-cycle')}
+              shortcut={cycleKey}
             >
               <button
                 type="button"
@@ -866,8 +920,8 @@ export function TopBar({
             <span
               className={`account-state is-${accountState}`}
               role="status"
-              title={`Cloud account: ${accountLabel.toLowerCase()}`}
-              aria-label={`Cloud account: ${accountLabel.toLowerCase()}`}
+              title={accountDescription}
+              aria-label={accountDescription}
             >
               {accountState === 'checking' ? (
                 <LoaderCircle className="spin" size={13} aria-hidden="true" />
@@ -943,6 +997,9 @@ export function TopBar({
                 event.currentTarget.open = false;
               }
             }}
+            // Arrow keys move through the items as they do in Panel layout
+            // and every other menu here; File took only Tab (I24).
+            onKeyDown={(event) => moveInFileMenu(event)}
           >
             <summary
               className="secondary topbar-action"
@@ -952,14 +1009,14 @@ export function TopBar({
                   ? ` · ${artifacts.length} stored ${artifacts.length === 1 ? 'file' : 'files'}`
                   : ''
               }${
-                localOnlySourceCount > 0
+                archiveAttention
                   ? ` · ${localOnlySourceCount} import ${localOnlySourceCount === 1 ? 'source needs' : 'sources need'} archiving`
                   : ''
               }`}
             >
               <FolderOpen size={14} aria-hidden="true" />
               File
-              {localOnlySourceCount > 0 ? (
+              {archiveAttention ? (
                 <i className="file-menu-attention" aria-hidden="true" />
               ) : null}
               {artifacts.length > 0 ? (
@@ -1032,6 +1089,9 @@ export function TopBar({
                 <ProjectImportButton
                   onImport={onImportProject}
                   disabled={projectTransferBusy}
+                  // It opens a file picker, as Import CAD files… does, and
+                  // the command bar names it with the same ellipsis (I24).
+                  shortLabel="Import project…"
                   hint=".openzcad backup"
                 />
               )}
@@ -1095,7 +1155,14 @@ export function TopBar({
                   <button
                     type="button"
                     className="topbar-menu-item"
-                    title="Upload import sources that exist only on this device so other devices can rebuild this project"
+                    title={
+                      session
+                        ? 'Upload import sources that exist only on this device so other devices can rebuild this project'
+                        : 'Sign in to archive imports to your account'
+                    }
+                    // Signed out the upload can only fail, so it says what
+                    // it needs instead (I8).
+                    disabled={!session}
                     onClick={onArchiveLocalSources}
                   >
                     <Upload size={13} aria-hidden="true" />
@@ -1107,9 +1174,11 @@ export function TopBar({
                       </span>
                     </span>
                     <small>
-                      {localOnlySourceCount === 1
-                        ? 'one import exists only on this device'
-                        : 'these imports exist only on this device'}
+                      {!session
+                        ? 'Sign in to archive imports'
+                        : localOnlySourceCount === 1
+                          ? 'one import exists only on this device'
+                          : 'these imports exist only on this device'}
                     </small>
                   </button>
                 </>

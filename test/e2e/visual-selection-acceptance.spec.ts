@@ -548,6 +548,11 @@ test('accepts exact visual selection and direct editing on the seeded boss', asy
     disambiguation!.pickList!.y,
     { button: 'right' }
   );
+  // The menu for the top target leads with Select other (I18).
+  await page
+    .locator('.context-menu')
+    .getByRole('menuitem', { name: /^Select other/ })
+    .click();
   const pickList = page.getByRole('menu', { name: 'Select other' });
   await expect(pickList).toBeVisible();
   const pickRows = pickList.getByRole('menuitem');
@@ -560,6 +565,9 @@ test('accepts exact visual selection and direct editing on the seeded boss', asy
     )
     .toEqual(disambiguation!.pickList!.labels);
   await page.keyboard.press('Escape');
+  // The right-click took the top target for its menu (I18); pick the bore
+  // again for the checks on it below.
+  await probeFace(canvas, 'bore');
 
   // The reference opens with a real lower-rim fillet. Remove that downstream
   // history feature before the bore edit, then recreate a rim fillet below.

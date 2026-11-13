@@ -2132,16 +2132,28 @@ test('explains beta auth and Turnstile readiness failures', async ({
   );
 
   await page.goto('/');
+  // Design review I8: the start screen names the state as the rest of the
+  // app does and offers Retry, not a Sign in that leads to a page saying
+  // sign-in cannot be reached.
+  await expect(
+    page.getByText('Cloud unavailable', { exact: true })
+  ).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Retry the cloud connection' })
+  ).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Sign in', exact: true })
+  ).toHaveCount(0);
   await page.getByRole('button', { name: 'Open settings' }).click();
   await page.getByRole('button', { name: 'Account', exact: true }).click();
   await expect(
     page.getByRole('alert').filter({
-      hasText: 'Sign-in could not be reached'
+      hasText: 'Cloud unavailable: sign-in could not be reached'
     })
   ).toBeVisible();
   await expect(page.getByLabel('Email address')).toHaveCount(0);
   await expect(page.locator('.settings-save-message')).toContainText(
-    'Beta sign-in unavailable'
+    'Cloud unavailable · settings and projects stay on this device.'
   );
 
   await page.unrouteAll({ behavior: 'wait' });

@@ -153,7 +153,22 @@ export function SectionToolbox({
       const right = rail?.left ?? window.innerWidth;
       const bottom = footer?.top ?? window.innerHeight;
       const x = Math.max(8, Math.min(box.x, right - box.width - 8));
-      const y = Math.max(stageTop, Math.min(box.y, bottom - box.height - 48));
+      // Beside its button the controls hang mid-stage. Where they would also
+      // stand across the canvas's middle (a stage narrower than about three
+      // of them), they lay over the cut they control (I6), so on a tablet or
+      // laptop stage they hang from its top and the model is framed below.
+      const canvas = stage
+        ?.querySelector('.viewer-host canvas')
+        ?.getBoundingClientRect();
+      // Not on a phone, whose short stage and own rails place them already.
+      const middle =
+        canvas && canvas.width > 520 && canvas.height > 600
+          ? canvas.left + canvas.width / 2
+          : null;
+      const across = middle !== null && x < middle && x + box.width > middle;
+      const y = across
+        ? stageTop
+        : Math.max(stageTop, Math.min(box.y, bottom - box.height - 48));
       panel.style.translate = `${x - box.x}px ${y - box.y}px`;
     }
     function schedulePlacement() {

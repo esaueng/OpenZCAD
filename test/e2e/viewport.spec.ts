@@ -2228,7 +2228,7 @@ test('the control reference shows the mouse bindings, not just the keys', async 
   // user who reaches for it clears their selection rather than turning the
   // model. The sheet was keyboard-only, so nothing in the product said so.
   await expect(sheet).toContainText('Orbit');
-  await expect(sheet).toContainText('Shift + left-drag');
+  await expect(sheet).toContainText('Shift+Left-drag');
   await expect(sheet).toContainText('Pan');
 });
 

@@ -5,7 +5,7 @@ import {
   useState,
   type ReactNode
 } from 'react';
-import { CircleHelp, Magnet, ScrollText } from 'lucide-react';
+import { Info, Magnet, ScrollText } from 'lucide-react';
 import type { WorkspaceSaveState } from '../lib/cloudProjectAutosave';
 import { OVERLAY_EXIT_MS, useDelayedUnmount } from '../hooks/useDelayedUnmount';
 import { usePacedStatus } from '../hooks/usePacedStatus';
@@ -424,8 +424,13 @@ export function WorkspaceReadout({
               }
             }}
           >
-            <summary aria-label="Operation instructions">
-              <CircleHelp size={15} aria-hidden="true" />
+            {/* An "i", not a "?": it repeats this step's instructions in
+                full, and read as Help, which the ? key opens (I24). */}
+            <summary
+              aria-label="Operation instructions"
+              title="This step's instructions in full"
+            >
+              <Info size={15} aria-hidden="true" />
             </summary>
             <p>
               {prompt}

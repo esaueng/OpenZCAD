@@ -383,6 +383,24 @@
   }
 }
 
+/* A command's card stands in the same lane over the search bar, centred on
+   it, and at 768px with the panels docked it covered the cube completely
+   (I7). While one is up the cube steps above it, and above the status row
+   that stands on it too. */
+@media (min-width: 521px) and (max-width: 960px) {
+  .workspace.column-layout
+    .viewer-area:has(.in-place-command)
+    .viewer-rail-stack {
+    bottom: calc(var(--lane-base) + var(--in-place-command-h, 38px) + 10px);
+  }
+
+  .workspace.column-layout
+    .viewer-area:has(.in-place-command):has(.workspace-toast:not(.hidden))
+    .viewer-rail-stack {
+    bottom: calc(var(--lane-base) + var(--in-place-command-h, 38px) + 50px);
+  }
+}
+
 /* Same steps as the docked sidebar: labels go first, then width. */
 @media (max-width: 1120px) {
   .workspace.column-layout {
