@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { ResumeHistoryDialog } from './ResumeHistoryDialog';
 
 describe('ResumeHistoryDialog', () => {
-  it('names each failing feature with its reason and focuses Resume anyway', () => {
+  it('names each failing feature with its reason and focuses Keep rolled back', () => {
     const onResume = vi.fn();
     const onKeep = vi.fn();
     render(
@@ -32,8 +32,10 @@ describe('ResumeHistoryDialog', () => {
       'Offset top: Direct-edit face is stale: The selected face lineage no longer exists.'
     );
     expect(items[1]).toMatch(/^Fillet 3: /);
+    expect(
+      screen.getByRole('button', { name: 'Keep rolled back' })
+    ).toHaveFocus();
     const confirm = screen.getByRole('button', { name: 'Resume anyway' });
-    expect(confirm).toHaveFocus();
     fireEvent.click(confirm);
     expect(onResume).toHaveBeenCalledOnce();
     expect(onKeep).not.toHaveBeenCalled();

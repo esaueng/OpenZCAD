@@ -34,8 +34,9 @@ export function ResumeHistoryDialog({
   onResume
 }: ResumeHistoryDialogProps) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
-  const confirmRef = useRef<HTMLButtonElement | null>(null);
-  useModalFocus(dialogRef, { autoFocus: true, initialFocusRef: confirmRef });
+  // Focus the non-destructive choice so Enter never resumes into failures.
+  const keepRef = useRef<HTMLButtonElement | null>(null);
+  useModalFocus(dialogRef, { autoFocus: true, initialFocusRef: keepRef });
 
   const named = failures.slice(0, NAMED_FAILURES);
   const unnamed = failures.length - named.length;
@@ -83,15 +84,15 @@ export function ResumeHistoryDialog({
           </p>
         </div>
         <div className="delete-feature-actions">
-          <button type="button" className="secondary" onClick={onKeep}>
+          <button
+            ref={keepRef}
+            type="button"
+            className="secondary"
+            onClick={onKeep}
+          >
             Keep rolled back
           </button>
-          <button
-            ref={confirmRef}
-            type="button"
-            className="primary"
-            onClick={onResume}
-          >
+          <button type="button" className="primary" onClick={onResume}>
             Resume anyway
           </button>
         </div>
