@@ -5,10 +5,6 @@ import {
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import { expect, expectBodyCount, stubApi, test } from './openzcad-fixtures';
 import { STALE_CHUNK_MESSAGE } from '../../apps/web/src/lib/staleChunk';
-import {
-  TOAST_EXIT_MS,
-  TOAST_LIFETIME_MS
-} from '../../apps/web/src/lib/toasts';
 
 test('a missing Keep my version chunk preserves conflict work and persistent reload', async ({
   page
@@ -152,9 +148,13 @@ test('a missing Keep my version chunk preserves conflict work and persistent rel
     )
   ).toBe(0);
   await expect(keep).not.toHaveAttribute('aria-disabled');
-  await expect(page.locator('.toast')).toContainText(STALE_CHUNK_MESSAGE);
+  // The reload waits in the top bar as one quiet chip, not a toast, and it
+  // claims no update the version watch has not confirmed.
+  const chip = page.locator('.topbar-reload-chip');
+  await expect(chip).toHaveClass(/is-interrupted/);
+  await expect(chip).toHaveAttribute('title', STALE_CHUNK_MESSAGE);
   await expect(
-    page.getByText('A newer OpenZCAD build is available.')
+    page.locator('.toast').getByRole('button', { name: 'Reload' })
   ).toHaveCount(0);
   const stored = await page.evaluate(
     (projectId) =>
@@ -181,18 +181,13 @@ test('a missing Keep my version chunk preserves conflict work and persistent rel
   expect(stored.nodes).toEqual(local.nodes);
   expect(stored.commandLog).toEqual(local.commandLog);
   await dialog.getByRole('button', { name: 'Decide later' }).click();
-  await expect(
-    page.locator('.toast').getByRole('button', { name: 'Reload' })
-  ).toBeVisible();
+  await expect(chip).toBeVisible();
   await expectBodyCount(page, 1);
   await expect(
     page.locator('.feature-row', { hasText: 'Local box' })
   ).toBeVisible();
   await expect(page.locator('.error-page, vite-error-overlay')).toHaveCount(0);
   expect(await page.evaluate(() => performance.timeOrigin)).toBe(origin);
-  await expect(page.locator('.toast')).toHaveCount(0, {
-    timeout: TOAST_LIFETIME_MS + TOAST_EXIT_MS + 2000
-  });
   await page.getByTitle('Back to projects').click();
   const notice = page.locator('.start-update');
   await expect(notice).toContainText(STALE_CHUNK_MESSAGE);

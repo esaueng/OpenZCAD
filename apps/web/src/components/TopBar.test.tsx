@@ -25,6 +25,7 @@ function renderTopBar(
     encryption?: EncryptionIndicatorProps | null;
     buildModeDisabledReason?: string;
     warningCount?: number;
+    reloadPrompt?: 'update' | 'interrupted' | null;
   } = {}
 ) {
   const handlers = {
@@ -55,6 +56,7 @@ function renderTopBar(
       editPending={options.editPending}
       editRefusal={options.editRefusal}
       warningCount={options.warningCount}
+      reloadPrompt={options.reloadPrompt ?? null}
       saveToAccount={options.saveToAccount ?? false}
       knownDeviceOnly={options.knownDeviceOnly ?? false}
       localOnlySourceCount={0}
@@ -329,6 +331,44 @@ describe('TopBar save chip', () => {
  * window "Save to my account" kept its words in a 270px island and printed
  * over the units and past the island's edge.
  */
+describe('TopBar reload chip', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('shows nothing until there is something to reload for', () => {
+    renderTopBar();
+    expect(screen.queryByRole('button', { name: /^(Update|Reload)/ })).toBe(
+      null
+    );
+  });
+
+  it('offers a newer version as an optional, quiet reload', () => {
+    const reload = vi.fn();
+    vi.spyOn(window, 'location', 'get').mockReturnValue({
+      ...window.location,
+      reload
+    });
+    renderTopBar({ reloadPrompt: 'update' });
+    const chip = screen.getByRole('button', { name: /^Update/ });
+    expect(chip).toHaveAttribute('title', expect.stringMatching(/newer/i));
+    expect(chip.closest('[role="status"]')).not.toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+    fireEvent.click(chip);
+    expect(reload).toHaveBeenCalledOnce();
+  });
+
+  it('does not claim an update for a failed download', () => {
+    renderTopBar({ reloadPrompt: 'interrupted' });
+    const chip = screen.getByRole('button', { name: /^Reload/ });
+    expect(chip).toHaveAttribute(
+      'title',
+      expect.stringMatching(/check your connection/i)
+    );
+    expect(chip).not.toHaveTextContent(/newer|update/i);
+  });
+});
+
 describe('TopBar identity room', () => {
   function stubNameOverflow(overflowing: (topbar: HTMLElement) => boolean) {
     const isName = (element: HTMLElement) =>

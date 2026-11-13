@@ -89,13 +89,18 @@ describe('lazy panels', () => {
         <Drawer />
       </>
     );
-    await screen.findByText('Model drawer could not be rendered.');
-    expect(screen.getByRole('alert')).toHaveTextContent(
-      'Check your connection'
+    // Quiet and optional: one muted line, not an alert card.
+    const notice = (
+      await screen.findByText('Model drawer did not load.')
+    ).closest('section');
+    expect(notice).toHaveClass('error-boundary', 'is-quiet');
+    expect(screen.queryByRole('alert')).toBeNull();
+    const reload = screen.getByRole('button', { name: 'Reload workspace' });
+    expect(reload).toHaveTextContent('Reload');
+    expect(reload).toHaveAttribute(
+      'title',
+      expect.stringMatching(/check your connection/i)
     );
-    expect(
-      screen.getByRole('button', { name: 'Reload workspace' })
-    ).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Retry panel' })).toBeNull();
     expect(screen.getByText('Model remains available')).toBeTruthy();
     expect(screen.queryByText(/updated|new version/i)).toBeNull();
@@ -105,7 +110,7 @@ describe('lazy panels', () => {
     ['View tools', 'view-tools', 'view-mode-bar'],
     ['Parameters panel', 'tweak-rail', 'tweak-rail']
   ] as const)(
-    'keeps a failed %s in its rail with a note and a Reload',
+    'keeps a failed %s in its rail with only a Reload',
     async (label, presentation, railClass) => {
       vi.spyOn(console, 'error').mockImplementation(() => undefined);
       const reload = vi.fn();
@@ -124,12 +129,18 @@ describe('lazy panels', () => {
         presentation
       );
       render(<Rail />);
-      const alert = await screen.findByRole('alert');
+      const rail = (await screen.findByText(`${label} did not load.`)).closest(
+        'section'
+      );
       // The rail's own shape, never the panel card that covered the stage
-      // or was squeezed to a word per line in a 40px column.
-      expect(alert).toHaveClass(railClass);
-      expect(alert).not.toHaveClass('error-boundary');
-      expect(alert).toHaveTextContent(`${label} could not be shown.`);
+      // or was squeezed to a word per line in a 40px column, and no note
+      // card beside it either: the reason is for screen readers and the
+      // button's tooltip.
+      expect(rail).toHaveClass(railClass);
+      expect(rail).not.toHaveClass('error-boundary');
+      expect(rail).toHaveTextContent(`${label} did not load.`);
+      expect(rail?.querySelector('.rail-note')).toBeFalsy();
+      expect(screen.queryByRole('alert')).toBeNull();
       fireEvent.click(
         screen.getByRole('button', {
           name: `Reload workspace to restore ${label.toLowerCase()}`

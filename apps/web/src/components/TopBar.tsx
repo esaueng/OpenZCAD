@@ -19,6 +19,7 @@ import {
   FolderOpen,
   LoaderCircle,
   Pencil,
+  RotateCw,
   Save,
   Settings as SettingsIcon,
   TriangleAlert,
@@ -48,6 +49,11 @@ import {
   type SaveGlyph
 } from '../lib/topBarPresentation';
 import { createLazyPanel } from './LazyPanel';
+import {
+  NEW_VERSION_MESSAGE,
+  STALE_CHUNK_MESSAGE,
+  type ReloadPrompt
+} from '../lib/staleChunk';
 import type { UnusedMeshPayloadsProps } from './UnusedMeshPayloads';
 
 const UnusedMeshPayloads = createLazyPanel<UnusedMeshPayloadsProps>(
@@ -158,6 +164,12 @@ interface TopBarProps {
    * project (ADR-024 Phase 4). Absent or null, nothing is shown.
    */
   encryption?: EncryptionIndicatorProps | null;
+  /**
+   * A newer build is out, or part of the app did not download. The reload is
+   * the user's call (the workspace may hold unsaved edits), so this is one
+   * quiet chip that waits rather than a notice that interrupts.
+   */
+  reloadPrompt?: ReloadPrompt | null;
 }
 
 /**
@@ -256,6 +268,7 @@ export function TopBar({
   onReviewEditFailure,
   warningCount = 0,
   onShowWarnings,
+  reloadPrompt = null,
   localOnlySourceCount,
   artifacts: storedArtifacts,
   meshCleanup,
@@ -638,7 +651,14 @@ export function TopBar({
     if (topbarRef.current) {
       fitProjectName(topbarRef.current);
     }
-  }, [projectName, editingProjectName, saveText, saveChipActs, encrypted]);
+  }, [
+    projectName,
+    editingProjectName,
+    saveText,
+    saveChipActs,
+    encrypted,
+    reloadPrompt
+  ]);
 
   return (
     <header ref={topbarRef} className="topbar">
@@ -710,6 +730,29 @@ export function TopBar({
             </span>
           </button>
         ) : null}
+        {/* Polite, not an alert: the chip appears and waits. */}
+        <span className="topbar-reload" role="status">
+          {reloadPrompt ? (
+            <button
+              type="button"
+              className={`topbar-reload-chip is-${reloadPrompt}`}
+              title={
+                reloadPrompt === 'update'
+                  ? NEW_VERSION_MESSAGE
+                  : STALE_CHUNK_MESSAGE
+              }
+              onClick={() => window.location.reload()}
+            >
+              <RotateCw size={12} aria-hidden="true" />
+              <span>{reloadPrompt === 'update' ? 'Update' : 'Reload'}</span>
+              <span className="visually-hidden">
+                {reloadPrompt === 'update'
+                  ? NEW_VERSION_MESSAGE
+                  : STALE_CHUNK_MESSAGE}
+              </span>
+            </button>
+          ) : null}
+        </span>
       </div>
       <div
         className="mode-switch topbar-island"

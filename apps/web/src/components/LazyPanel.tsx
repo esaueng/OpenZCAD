@@ -69,8 +69,9 @@ function LoadingPanel({
 }
 
 /**
- * A rail that failed keeps its slot and shape, with its Reload in the rail
- * and the reason in a note beside it, which outlasts the workspace notice.
+ * A rail that failed keeps its slot and shape with only its Reload in it.
+ * The reason is the button's tooltip and name, not a card over the stage:
+ * the reload is optional, and the top bar's chip already offers it.
  */
 function FailedRail({
   label,
@@ -81,12 +82,13 @@ function FailedRail({
 }) {
   const rail = RAILS[presentation];
   return (
-    <section className={rail.rail} role="alert">
-      <span className="rail-note">
-        <strong>{label} could not be shown.</strong> Reload the workspace to
-        restore it; your document is still available.
-      </span>
-      <Tooltip label="Reload workspace">
+    <section className={rail.rail} role="status">
+      <span className="visually-hidden">{label} did not load.</span>
+      <Tooltip
+        label="Reload workspace"
+        description={`${label} did not load. Reload to restore it.`}
+        multiline
+      >
         <button
           type="button"
           {...(rail.button ? { className: rail.button } : {})}

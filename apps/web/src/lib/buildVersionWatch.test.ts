@@ -57,6 +57,30 @@ describe('build version watch', () => {
     stop();
   });
 
+  it('checks at once when asked, without waiting for the next poll', async () => {
+    const clock = manualSchedule();
+    const onNewVersion = vi.fn();
+    const fetchMeta = vi
+      .fn()
+      .mockResolvedValueOnce('old-build')
+      .mockResolvedValue('new-build');
+    const stop = watchBuildVersion({
+      runningCommit: 'old-build',
+      fetchMeta,
+      onNewVersion,
+      schedule: clock.schedule
+    });
+    await settle();
+    expect(onNewVersion).not.toHaveBeenCalled();
+    stop.checkNow();
+    await settle();
+    expect(onNewVersion).toHaveBeenCalledWith('new-build');
+    stop();
+    stop.checkNow();
+    await settle();
+    expect(fetchMeta).toHaveBeenCalledTimes(2);
+  });
+
   it('reads the commit from build-meta.json and treats a missing file as unknown', async () => {
     const ok = vi.fn(async () => ({
       ok: true,

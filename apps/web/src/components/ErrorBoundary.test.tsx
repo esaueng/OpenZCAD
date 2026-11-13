@@ -143,13 +143,15 @@ describe('ErrorBoundary', () => {
     act(() => {
       vi.advanceTimersByTime(PANEL_AUTO_RETRY_DELAY_MS);
     });
-    expect(screen.getByRole('alert')).toHaveTextContent(
-      'Check your connection'
+    // A quiet line, not an alert: the reload is optional.
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'OpenZCAD workspace did not load.'
     );
     expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
     expect(
       screen.getByRole('button', { name: 'Reload workspace' })
-    ).toBeTruthy();
+    ).toHaveAttribute('title', expect.stringMatching(/check your connection/i));
   });
 
   it('keeps the whole-app fallback on a reload', () => {

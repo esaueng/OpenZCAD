@@ -48,6 +48,16 @@ function defaultSchedule(tick: () => void, intervalMs: number): () => void {
   };
 }
 
+/** Stops the watch; `checkNow` reads the deployed build without waiting. */
+export interface BuildVersionWatch {
+  (): void;
+  /**
+   * A failed chunk is a hint that the deployment moved. Checking at once lets
+   * the workspace call it an update instead of a possible connection fault.
+   */
+  checkNow(): void;
+}
+
 /**
  * Compare with the running bundle, including on the first read: a restored
  * tab may already be older than the server when the watch starts. Without an
@@ -59,7 +69,7 @@ export function watchBuildVersion({
   fetchMeta = () => fetchBuildCommit(),
   intervalMs = BUILD_VERSION_POLL_MS,
   schedule = defaultSchedule
-}: BuildVersionWatchOptions): () => void {
+}: BuildVersionWatchOptions): BuildVersionWatch {
   let baseline: string | null = runningCommit?.trim() || null;
   let notified = false;
   let stopped = false;
@@ -85,8 +95,10 @@ export function watchBuildVersion({
   };
   tick();
   const stopSchedule = schedule(tick, intervalMs);
-  return () => {
+  const stop = (() => {
     stopped = true;
     stopSchedule();
-  };
+  }) as BuildVersionWatch;
+  stop.checkNow = tick;
+  return stop;
 }

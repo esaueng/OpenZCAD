@@ -995,6 +995,46 @@ button.save-state:focus-visible,
   background: var(--color-surface-hover);
 }
 
+/* An optional reload: a small text chip after the status, never a notice
+   over the stage. Its live region takes no room until it has a chip. */
+.topbar-identity > .topbar-reload {
+  display: contents;
+}
+
+.topbar-reload-chip {
+  flex: none;
+  height: 24px;
+  min-height: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-inline: -5px -5px;
+  padding: 0 7px;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+}
+
+.topbar-reload-chip.is-update {
+  color: var(--color-accent);
+}
+
+.topbar-reload-chip:hover,
+.topbar-reload-chip:focus-visible {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+}
+
+@media (max-width: 959px) {
+  .topbar-reload-chip > span:not(.visually-hidden) {
+    display: none;
+  }
+}
+
 /* The lock is a fact about the project, so it sits close to the name
    (10px from the units); the status then keeps its usual 14px. */
 .topbar-identity > .encryption-menu {
