@@ -32,6 +32,7 @@ import {
   type BodyAppearancePreview,
   type FaceResizeCommit,
   type ModelViewerProps,
+  type ViewportContextMenuOptions,
   type CylinderRadiusHandleTarget,
   type EdgeHandleTarget,
   type OrientationDragControls,
@@ -394,7 +395,8 @@ interface ViewerShellProps {
   onContextMenu(
     x: number,
     y: number,
-    selection: TopologySelection | null
+    selection: TopologySelection | null,
+    options?: ViewportContextMenuOptions
   ): void;
   onToggleGrid(): void;
   onFit(): void;

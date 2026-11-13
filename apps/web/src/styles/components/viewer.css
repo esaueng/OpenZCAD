@@ -1477,20 +1477,20 @@
 
 /* Ordered select-other stack. Kept in the lazy imperative viewer chunk so a
    pointer moving between rows can pre-highlight topology without a React
-   render or a second picking path. */
+   render or a second picking path. Drawn as the context menu it opens from
+   is, in the chrome's theme: it stayed dark in the light theme (I18). */
 .topology-pick-list {
   position: absolute;
   z-index: calc(var(--z-viewer-overlay) + 4);
-  width: min(278px, calc(100% - 16px));
+  width: min(320px, calc(100% - 16px));
   max-height: min(340px, calc(100% - 16px));
-  padding: 5px;
+  padding: 4px;
   overflow-y: auto;
-  color: var(--color-viewport-text);
-  background: rgba(14, 17, 20, 0.97);
-  border: 1px solid color-mix(in srgb, var(--color-select) 45%, transparent);
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
-  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.46);
-  backdrop-filter: blur(10px);
+  box-shadow: var(--shadow-popover);
   pointer-events: auto;
 }
 
@@ -1500,7 +1500,7 @@
   justify-content: space-between;
   gap: 10px;
   padding: 3px 7px 6px;
-  color: var(--color-viewport-text-muted);
+  color: var(--color-text-muted);
   font-size: var(--fs-mini);
   font-weight: var(--fw-semibold);
   letter-spacing: 0.04em;
@@ -1508,7 +1508,7 @@
 }
 
 .topology-pick-list-title span {
-  color: var(--color-viewport-text-muted);
+  color: var(--color-text-muted);
   font-weight: var(--fw-normal);
   letter-spacing: 0;
   text-transform: none;
@@ -1522,7 +1522,7 @@
   width: 100%;
   min-height: 31px;
   padding: 5px 8px;
-  color: var(--color-viewport-text);
+  color: var(--color-text);
   background: transparent;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
@@ -1538,7 +1538,7 @@
 }
 
 .topology-pick-list-row small {
-  color: var(--color-viewport-text-muted);
+  color: var(--color-text-muted);
   font-family: var(--font-mono);
   font-size: var(--fs-mini);
   text-transform: uppercase;
@@ -1546,20 +1546,8 @@
 
 .topology-pick-list-row:hover,
 .topology-pick-list-row:focus-visible {
-  color: #f5f8ff;
-  background: rgba(103, 152, 255, 0.18);
-  border-color: rgba(129, 169, 255, 0.52);
-}
-
-/* On the dark stage, so the viewport's accent rather than the chrome's. */
-.topology-pick-list-row:focus-visible {
-  outline: 2px solid var(--color-preselect);
-  outline-offset: -1px;
-}
-
-.topology-pick-list-row:hover small,
-.topology-pick-list-row:focus-visible small {
-  color: var(--color-preselect);
+  color: var(--color-text);
+  background: var(--color-surface-hover);
 }
 
 .move-gizmo-hud {
