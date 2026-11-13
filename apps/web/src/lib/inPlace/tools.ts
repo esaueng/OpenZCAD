@@ -3043,7 +3043,12 @@ const gearTeeth: InPlaceToolSpec = {
         'diametralPitch'
       ]
     },
-    { label: 'Length', boxed: true, compact: true, items: ['faceWidth', 'offset'] },
+    {
+      label: 'Length',
+      boxed: true,
+      compact: true,
+      items: ['faceWidth', 'offset']
+    },
     ...GEAR_FORM_SECTIONS
   ],
   summary: gearSummary,
@@ -5415,6 +5420,29 @@ export function valueInRange(spec: ValueSpec, value: number): boolean {
     min === undefined || (spec.exclusive ? value > min : value >= min);
   const belowMax = max === undefined || (openMax ? value < max : value <= max);
   return aboveMin && belowMax;
+}
+
+/**
+ * The range a typed value fell outside, as one sentence for the keypad that
+ * stays open on it: "Width must be more than 0 mm." The status lane's own
+ * refusal ("Box width takes at least 0.001.") gave no unit, and closed the
+ * keypad, so the typed value was shown nowhere (13 November review I4).
+ * `unit` is what follows a number: "mm", "°", or "" for a count.
+ */
+export function valueRangeSentence(spec: ValueSpec, unit: string): string {
+  const amount = (value: number) =>
+    unit === '' ? `${value}` : unit === '°' ? `${value}°` : `${value} ${unit}`;
+  const min = spec.min ?? 0;
+  const openMin = spec.exclusive === true || spec.exclusive === 'min';
+  const openMax = spec.exclusive === true;
+  const whole = spec.integer ? 'a whole number ' : '';
+  if (spec.max === undefined) {
+    return `${spec.label} must be ${whole}${openMin ? 'more than' : 'at least'} ${amount(min)}.`;
+  }
+  if (!openMin && !openMax) {
+    return `${spec.label} must be ${whole}from ${amount(min)} to ${amount(spec.max)}.`;
+  }
+  return `${spec.label} must be ${whole}${openMin ? 'more than' : 'at least'} ${amount(min)} and ${openMax ? 'less than' : 'at most'} ${amount(spec.max)}.`;
 }
 
 /**

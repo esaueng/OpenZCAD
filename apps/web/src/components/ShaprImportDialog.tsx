@@ -3,6 +3,7 @@ import { useRef } from 'react';
 
 import type { ShaprPairInspection } from '../lib/shaprImportWorkerClient';
 import { useModalFocus } from '../lib/useModalFocus';
+import { FailureDetails } from './FailureDetails';
 
 export type ShaprImportDialogPhase = 'parsing' | 'preview' | 'applying';
 
@@ -12,6 +13,8 @@ export interface ShaprImportDialogProps {
   phase: ShaprImportDialogPhase;
   progress: string;
   error: string | null;
+  /** The reader's raw words behind `error`, under Details. */
+  errorDetail?: string | undefined;
   inspection: ShaprPairInspection | null;
   onCancel(): void;
   onApply(): void;
@@ -24,6 +27,7 @@ export function ShaprImportDialog({
   phase,
   progress,
   error,
+  errorDetail,
   inspection,
   onCancel,
   onApply
@@ -82,9 +86,10 @@ export function ShaprImportDialog({
         ) : null}
 
         {error ? (
-          <p className="shapr-import-error" role="alert">
-            {error}
-          </p>
+          <div className="shapr-import-error" role="alert">
+            <p>{error}</p>
+            <FailureDetails detail={errorDetail} />
+          </div>
         ) : null}
 
         {ir ? (

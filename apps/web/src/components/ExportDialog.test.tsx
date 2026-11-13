@@ -82,9 +82,7 @@ describe('ExportDialog', () => {
       bodies: [{ bodyId: 'mesh', name: 'Mesh reference', meshReference: true }]
     });
     expect(screen.getByRole('radio', { name: 'STL (binary)' })).toBeChecked();
-    expect(
-      screen.getByRole('radio', { name: '3MF' })
-    ).toBeDisabled();
+    expect(screen.getByRole('radio', { name: '3MF' })).toBeDisabled();
     expect(
       screen.getByRole('button', { name: 'Check watertightness' })
     ).toBeDisabled();
@@ -92,9 +90,7 @@ describe('ExportDialog', () => {
       screen.getByText(/Printability checking requires a CAD shell/)
     ).toBeVisible();
     await user.click(screen.getByRole('radio', { name: 'STL (ASCII)' }));
-    await user.click(
-      screen.getByRole('button', { name: 'Export STL' })
-    );
+    await user.click(screen.getByRole('button', { name: 'Export STL' }));
     expect(onExport).toHaveBeenCalledWith('stl', 0.08);
   });
   it('reports the visible scope and refuses an empty export', () => {
@@ -367,6 +363,30 @@ describe('ExportDialog', () => {
     await user.click(screen.getByRole('radio', { name: 'glTF (GLB)' }));
     expect(screen.getByText(/in meters, the unit glTF defines/)).toBeVisible();
     expect(screen.getByRole('combobox', { name: 'Units' })).toBeDisabled();
+  });
+
+  it('says a failed check left the export alone, with the kernel text under Details', async () => {
+    // 13 November review I3: "check: distance computation failed: circular
+    // trim ray-event endpoint is unresolved" was the whole message, in red.
+    const user = userEvent.setup();
+    renderDialog({
+      onCheckQuality: vi.fn(async () => {
+        throw new Error(
+          'check: distance computation failed: circular trim ray-event endpoint is unresolved'
+        );
+      })
+    });
+
+    await user.click(
+      screen.getByRole('button', { name: /Check watertightness/ })
+    );
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(
+      'The watertightness check could not run on this model. The export is unaffected.'
+    );
+    expect(screen.getByText('Details')).toBeVisible();
+    expect(alert).toHaveTextContent(/ray-event endpoint is unresolved/);
+    expect(screen.getByRole('button', { name: /^Export / })).toBeEnabled();
   });
 
   it('marks a report stale when the quality changes', async () => {

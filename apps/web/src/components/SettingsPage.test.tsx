@@ -1550,6 +1550,69 @@ describe('settings desktop account section', () => {
     }
   });
 
+  it('says a refused sign-in code at the field', async () => {
+    // 13 November review I4: the refusal showed only in small mono text
+    // beside the Settings title, and the field had no error state.
+    const user = userEvent.setup();
+    const refused = Object.assign(new Error('That sign-in code is invalid.'), {
+      status: 400
+    });
+    const onVerifyLoginCode = vi.fn().mockRejectedValue(refused);
+    Object.defineProperty(window, 'turnstile', {
+      configurable: true,
+      value: {
+        render: vi.fn(
+          (
+            _container: HTMLElement,
+            options: { callback(token: string): void }
+          ) => {
+            options.callback('turnstile-token');
+            return 'widget-1';
+          }
+        ),
+        remove: vi.fn(),
+        reset: vi.fn()
+      }
+    });
+    const script = document.createElement('script');
+    script.dataset.openzcadTurnstile = 'true';
+    document.head.append(script);
+    try {
+      renderSettings(null, {
+        initialSection: 'account',
+        authConfig: {
+          mode: 'email-code',
+          emailCodeEnabled: true,
+          turnstileSiteKey: 'site-key'
+        },
+        authConfigStatus: 'ready',
+        onRequestLoginCode: vi.fn().mockResolvedValue({
+          challengeId: 'challenge-1',
+          expiresInSeconds: 600
+        }),
+        onVerifyLoginCode
+      });
+      await user.type(
+        screen.getByLabelText('Email address'),
+        'person@example.com'
+      );
+      await user.click(screen.getByRole('button', { name: 'Email me a code' }));
+      const codeField = await screen.findByLabelText('Email sign-in code');
+      await user.type(codeField, '111111');
+      await user.click(screen.getByRole('button', { name: 'Sign in' }));
+      await waitFor(() => expect(codeField).toHaveAttribute('aria-invalid'));
+      expect(codeField).toHaveAccessibleDescription(
+        'That sign-in code is invalid.'
+      );
+      await user.type(codeField, '{Backspace}');
+      expect(codeField).not.toHaveAttribute('aria-invalid');
+      expect(codeField).not.toHaveAccessibleDescription();
+    } finally {
+      script.remove();
+      delete (window as Window & { turnstile?: unknown }).turnstile;
+    }
+  });
+
   it('links the privacy policy from the email sign-in form', () => {
     Object.defineProperty(window, 'turnstile', {
       configurable: true,

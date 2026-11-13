@@ -241,9 +241,17 @@ test('removes another device with the recovery key and rotates the keys', async 
     .get() as { n: number };
 
   await settings.getByRole('button', { name: 'Remove Old laptop' }).click();
-  await settings
-    .getByLabel('Recovery key', { exact: true })
-    .fill(seeded.recoveryKey);
+  const recoveryKey = settings.getByLabel('Recovery key', { exact: true });
+  // A mistyped key is said under the field, not in the page's top alert.
+  await recoveryKey.fill('not-a-key');
+  await settings.getByRole('button', { name: 'Remove device' }).click();
+  await expect(recoveryKey).toHaveAttribute('aria-invalid', 'true');
+  await expect(recoveryKey).toHaveAccessibleDescription(
+    /^That is not a recovery key\./
+  );
+  await expect(settings.getByText('Old laptop', { exact: true })).toBeVisible();
+  await recoveryKey.fill(seeded.recoveryKey);
+  await expect(recoveryKey).not.toHaveAttribute('aria-invalid');
   await settings.getByRole('button', { name: 'Remove device' }).click();
   await expect(settings.getByText('Old laptop')).toHaveCount(0);
   await expect(settings.getByText('1 certified')).toBeVisible();
