@@ -8,6 +8,7 @@ import {
   enableFullRender,
   bareCanvasDrags,
   locateEdge,
+  pickPlanarFace,
   waitForStillViewport
 } from './openzcad-fixtures';
 
@@ -442,6 +443,30 @@ async function holdValidation(page: Page) {
     });
   });
 }
+
+test('the viewport goes back to sleep after a typed face offset is cancelled', async ({
+  page
+}) => {
+  // Escape from the keypad restored the face-offset proxy, which cleared the
+  // fade set under a highlight retired a moment before. That highlight never
+  // finished fading, so the loop drew the still scene at full rate until the
+  // page was closed, and a Fit after it never came to rest
+  // (panel-dock.spec.ts, "Fit frames what is left").
+  await newProject(page, 'Idle after typed offset');
+  await addBox(page);
+  await waitForStillViewport(page);
+  expect(await pickPlanarFace(page, { x: 0, y: 0, z: 1 })).not.toBeNull();
+  await page.getByTestId('direct-manipulation-value').click();
+  const keypad = page.locator('.numeric-keypad');
+  await expect(keypad).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(keypad).toHaveCount(0);
+  await waitForStillViewport(page);
+  // Clearing the pick retires its highlight too, and still comes to rest.
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.selection-callout-chip')).toHaveCount(0);
+  await waitForStillViewport(page);
+});
 
 test('a normal-to-face glide does not replay when the bodies change later', async ({
   page

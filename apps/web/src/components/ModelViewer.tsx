@@ -306,6 +306,7 @@ import {
   cornersWithinFrame,
   measureCreationFrame,
   measureFitFrame,
+  measureOpeningFrame,
   measurePickFrame,
   shiftIntoFrame
 } from '../lib/fitFrame';
@@ -4273,6 +4274,13 @@ export function ModelViewer({
       topologyPickList.hide();
       hoverDwellRef.current.reset();
       selection.resetForRebuild();
+      // A highlight retired just before this was fading on the set that
+      // call cleared, so it would never reach zero or be disposed, and one
+      // entry left in the list keeps the loop drawing a still scene at full
+      // rate for the rest of the session. The body rebuild disposed them
+      // here already; restoring a face-offset proxy did not, so Escape from
+      // a typed offset left the viewport awake.
+      disposeRetiringOverlays(retiringOverlaysRef.current);
     };
     const handleCapturedEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && topologyPickList.visible) {
@@ -6560,13 +6568,52 @@ export function ModelViewer({
       for (const object of context.bodyGroup.children) {
         if (object.visible) box.expandByObject(object);
       }
+      // Where the bodies' box lands on the page, for a spec that asks
+      // whether chrome stands over the model rather than only whether the
+      // model is on the canvas.
+      let screen: {
+        left: number;
+        top: number;
+        right: number;
+        bottom: number;
+      } | null = null;
+      if (!box.isEmpty()) {
+        const bounds = renderer.domElement.getBoundingClientRect();
+        const corner = new THREE.Vector3();
+        screen = {
+          left: Infinity,
+          top: Infinity,
+          right: -Infinity,
+          bottom: -Infinity
+        };
+        for (let index = 0; index < 8; index += 1) {
+          corner
+            .set(
+              index & 1 ? box.max.x : box.min.x,
+              index & 2 ? box.max.y : box.min.y,
+              index & 4 ? box.max.z : box.min.z
+            )
+            .project(context.activeCamera);
+          const x = bounds.left + ((corner.x + 1) / 2) * bounds.width;
+          const y = bounds.top + ((1 - corner.y) / 2) * bounds.height;
+          screen.left = Math.min(screen.left, x);
+          screen.right = Math.max(screen.right, x);
+          screen.top = Math.min(screen.top, y);
+          screen.bottom = Math.max(screen.bottom, y);
+        }
+      }
       (
         event as CustomEvent<{
-          resolve?: (value: { inView: boolean; camera: number[] }) => void;
+          resolve?: (value: {
+            inView: boolean;
+            camera: number[];
+            screen: typeof screen;
+          }) => void;
         }>
       ).detail?.resolve?.({
         inView: !box.isEmpty() && boxFullyInView(box, context.activeCamera),
-        camera: context.activeCamera.position.toArray()
+        camera: context.activeCamera.position.toArray(),
+        screen
       });
     };
     /**
@@ -12854,10 +12901,11 @@ export function ModelViewer({
         offsetGhostClearRef.current?.();
       // The manager owns hover-slot geometry even while the slots are
       // parented under bodies, so it must detach them before body disposal.
+      // This also disposes the highlights still retiring, for the same
+      // reason as the one dropped rather than retired below: the bodies they
+      // were fading against are about to be disposed, and their fade died
+      // with the set `resetForRebuild` clears.
       resetBodyPickingRef.current?.();
-      // Same reasoning as the highlight dropped rather than retired below:
-      // the bodies these were fading against are about to be disposed. Their
-      // fade also died with the set `resetForRebuild` just cleared.
       disposeRetiringOverlays(retiringOverlaysRef.current);
       const liveIds = new Set(bodies.map((body) => body.bodyId));
       for (const [id, object] of context.objectsByBodyId) {
@@ -13613,10 +13661,13 @@ export function ModelViewer({
     }
 
     if (!context.hasFitCamera && context.bodyGroup.children.length > 0) {
+      // Into the clear stage on a phone, where the rails cover a third of
+      // the canvas; the whole canvas otherwise.
       fitCameraToObjects(
         context.camera,
         context.controls.target,
-        context.bodyGroup.children
+        context.bodyGroup.children,
+        measureOpeningFrame(context.renderer.domElement)
       );
       if (context.projection === 'orthographic') {
         context.syncOrthographic(true);

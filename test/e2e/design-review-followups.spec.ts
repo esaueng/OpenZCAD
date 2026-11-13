@@ -1353,13 +1353,33 @@ test.describe('touch review followups', () => {
           '.workspace-toast:not(.hidden) .workspace-toast-body'
         );
         if (await status.count()) await reachable(status);
-        for (const control of await page
-          .locator('button.command-rail, .instrument-rail .rail-button')
-          .all()) {
-          await reachable(control);
-          const box = await control.boundingBox();
-          expect(box!.width).toBeGreaterThanOrEqual(40);
-          expect(box!.height).toBeGreaterThanOrEqual(40);
+        const railButtons = page.locator(
+          'button.command-rail, .instrument-rail .rail-button'
+        );
+        const touchSized = async (controls: Locator[]) => {
+          for (const control of controls) {
+            await reachable(control);
+            const box = await control.boundingBox();
+            expect(box!.width).toBeGreaterThanOrEqual(40);
+            expect(box!.height).toBeGreaterThanOrEqual(40);
+          }
+        };
+        // Upright, a phone's instrument rail shows a short set with the rest
+        // behind "More view tools" (phone-stage.spec.ts): what it shows is
+        // in reach as it stands, and every button once the rest is out.
+        const moreView = page.getByRole('button', { name: 'More view tools' });
+        const folded = (await moreView.count()) > 0;
+        if (folded) {
+          const shown = await railButtons.filter({ visible: true }).all();
+          expect(shown.length).toBeGreaterThan(0);
+          await touchSized(shown);
+          await moreView.tap();
+          await expect(moreView).toHaveAttribute('aria-expanded', 'true');
+        }
+        await touchSized(await railButtons.all());
+        if (folded) {
+          await moreView.tap();
+          await expect(moreView).toHaveAttribute('aria-expanded', 'false');
         }
         const more = page.getByRole('button', { name: /^More tools/ });
         await more.tap();

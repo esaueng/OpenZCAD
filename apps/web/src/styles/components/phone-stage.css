@@ -1,0 +1,247 @@
+/* ─────────────────────────────────────────────────────────────
+   A touch phone held upright: the model first, the chrome one column deep.
+
+   Touch-sized rails fold to two columns up to 900px tall (target-size.css,
+   quiet-stage.css) so an iPad on its side keeps every tool on screen. A
+   phone is that short and a third as wide: two 104px rails took more than
+   half of a 390px stage between them, and with the panel the lane showed
+   only a fifth of the part was left in view. Here each rail is one column
+   again, and the instrument rail shows a short set (undo, redo,
+   multi-select, the model panels) with the rest behind "More view tools"
+   (ViewerToolbar.tsx, which uses the same query).
+
+   Three bands by height, since a phone's browser bars take 100–200px of
+   it: from 820px the stage also has room for Fit view and the suggested
+   tools; 621–819px keeps the short sets; 541–620px cannot stand nine 44px
+   targets in a column, so the rails keep two columns and only the folding
+   applies. 540px and under is a phone on its side, which the
+   `max-height: 540px` rules already lay out.
+
+   One-column rails reach further down the stage than two did, so what
+   stands over the search bar keeps between them here: a pick's guidance
+   card, the bar's help, and an empty project's invitation.
+
+   After target-size.css in the cascade: it undoes that file's grids at the
+   same specificity.
+   ───────────────────────────────────────────────────────────── */
+
+@media (pointer: coarse) and (max-width: 520px) and (min-height: 541px) {
+  /* A status message wraps on a phone rather than being cut short
+     (quiet-stage.css), and the cube stands above its row. The row is two
+     lines deep here, and runs from the tool rail rather than from the
+     ruler's reserve beside the search bar (the ruler stands under it): with
+     no panel in the lane the usual messages were squeezed to two lines,
+     and the second ran 4px into the cube. A panel in the lane still gives
+     the row the whole width. */
+  .workspace.column-layout {
+    --status-row-h: 50px;
+  }
+
+  .workspace.has-column {
+    --notice-start: calc(var(--column-w) + var(--island-gap) * 2);
+  }
+
+  /* The bar's whole guidance, opened from its help glyph, stays in the lane
+     beside the tool rail. At its usual width it reached 30px from the left
+     edge, across the foot of a one-column rail and the Tools button there. */
+  .workspace-hint-help > p {
+    width: min(
+      360px,
+      calc(100vw - var(--column-w) - var(--island-gap) * 2 - 18px)
+    );
+  }
+
+  /* The short set. Everything else in the viewer bar's View group, Free
+     values, and the layout menu and the activity log under the panels'
+     buttons wait behind the toggle. */
+  .instrument-rail:not(:has(.rail-more-toggle[aria-expanded='true']))
+    .rail-group[aria-label='Edit']
+    > :is(.rail-divider, [aria-label='Free values']),
+  .instrument-rail:not(:has(.rail-more-toggle[aria-expanded='true']))
+    .rail-group[aria-label='View']
+    > :not([aria-label^='Fit view']),
+  .instrument-rail:not(:has(.rail-more-toggle[aria-expanded='true']))
+    .viewer-rail
+    > .rail-group-break,
+  .instrument-rail:not(:has(.rail-more-toggle[aria-expanded='true']))
+    .rail-panels
+    > .rail-divider,
+  .instrument-rail:not(:has(.rail-more-toggle[aria-expanded='true']))
+    .rail-panels
+    > .rail-divider
+    ~ * {
+    display: none;
+  }
+
+  /* Opened, the whole rail in three columns: twelve instruments and seven
+     panel controls are 339px tall, which the shortest of these stages
+     holds. The dividers would each take a row of their own. */
+  .instrument-rail:has(.rail-more-toggle[aria-expanded='true']) > .viewer-rail {
+    display: grid;
+    grid-template-columns: repeat(3, 44px);
+    justify-content: center;
+    width: calc(44px * 3 + 2px * 2 + 8px);
+  }
+
+  .instrument-rail:has(.rail-more-toggle[aria-expanded='true']) .rail-divider {
+    display: none;
+  }
+
+  /* The section controls and the views open beside the whole rail rather
+     than beside their own button, which may stand in its first column with
+     no room to its left; and no wider than the stage beside it. */
+  .instrument-rail:has(.rail-more-toggle[aria-expanded='true'])
+    .rail-views-anchor {
+    position: static;
+  }
+
+  .instrument-rail:has(.rail-more-toggle[aria-expanded='true'])
+    :is(.rail-section-panel, .rail-views-panel) {
+    top: 0;
+    right: calc(100% + var(--island-gap));
+    max-width: calc(100vw - 44px * 3 - 12px - var(--island-gap) * 3);
+  }
+}
+
+/* Under 820px Fit view waits behind the toggle too: nine targets are what a
+   640px stage holds between the top bar and the search bar. */
+@media (pointer: coarse) and (max-width: 520px) and (min-height: 541px) and (max-height: 819px) {
+  .instrument-rail:not(:has(.rail-more-toggle[aria-expanded='true']))
+    .rail-group[aria-label='View']
+    > [aria-label^='Fit view'] {
+    display: none;
+  }
+
+  /* The suggestions come and go with the pick and every one of them is in
+     Tools; here they would take the rows the pins need. (Two classes on the
+     group: the one-column rule below lays every group out again.) */
+  div.command-rail .command-rail-group.command-rail-suggested,
+  div.command-rail .command-rail-divider.is-suggested {
+    display: none;
+  }
+}
+
+@media (pointer: coarse) and (max-width: 520px) and (min-height: 621px) {
+  /* One column each side. The right lane, the cube beside the rail and the
+     search lane all step by `--lane-end`, so they follow. */
+  .workspace.column-layout {
+    --lane-end: calc(
+      var(--rail-w) + var(--island-gap) * 2 + var(--right-panels-w)
+    );
+  }
+
+  .instrument-rail:not(:has(.rail-more-toggle[aria-expanded='true']))
+    > .viewer-rail {
+    display: flex;
+    width: calc(var(--rail-w) - 2px);
+  }
+
+  .workspace.column-layout:has(.command-rail) {
+    --column-w: var(--rail-w);
+  }
+
+  /* A panel in the lane hands the status row the whole width
+     (quiet-stage.css), which was clear while the two-column rail ended
+     above it. One column reaches down beside that row at 640px, so the
+     row keeps starting after the rail. */
+  .workspace.column-layout.has-column:has(.panel-lane-float) {
+    --notice-start: calc(var(--column-w) + var(--island-gap) * 2);
+  }
+
+  /* A pick's guidance card spans the bar's lane, which runs on to the
+     window's edge under the instrument rail. A one-column rail reaches down
+     beside the card on a phone under about 800px tall, and the card's right
+     end, with the pick's measurement on it, ran under the rail's foot. Here
+     the card keeps to the stage between the two rails: from the tool rail,
+     over the reserve the bar leaves the ruler (which stands beside the bar,
+     under the card), to the instrument rail. */
+  .command-bar-lane > .workspace-hint:is(.is-selection, .is-raised) {
+    align-self: flex-start;
+    width: calc(
+      100vw - var(--column-w) - var(--island-gap) * 2 - var(--lane-end)
+    );
+    max-width: none;
+    margin-left: calc(
+      var(--column-w) + var(--island-gap) * 2 - var(--lane-inset)
+    );
+  }
+
+  /* An empty project's three ways to begin stood one over another beside
+     the rails, 148px of them, down over the cube on a 640px stage. Between
+     two one-column rails they fit a row as words alone, centred under the
+     origin, and end above the cube. */
+  .stage-empty {
+    left: calc(var(--column-w) + var(--island-gap) * 2);
+  }
+
+  .stage-empty-actions {
+    flex-direction: row;
+    flex-wrap: nowrap;
+    gap: 6px;
+  }
+
+  .stage-empty-action {
+    padding: 0 10px;
+  }
+
+  .stage-empty-action > svg {
+    display: none;
+  }
+
+  .viewer-area .workspace-column-float div.command-rail {
+    display: flex;
+  }
+
+  div.command-rail .command-rail-group,
+  div.command-rail .command-rail-pins {
+    display: flex;
+    width: auto;
+  }
+
+  /* A pick's verbs, or more pins than the default eight, are taller than a
+     640px stage, and the rail scrolls there without a bar. Tools stays at
+     its foot rather than scrolling away with them: it is the way to every
+     tool the rail is not showing. */
+  div.command-rail {
+    padding-bottom: 0;
+  }
+
+  div.command-rail .command-more {
+    position: sticky;
+    bottom: 0;
+    z-index: 1;
+    width: 100%;
+    padding: 3px 0 4px;
+    background: var(--color-surface);
+    border-top: var(--border-thin);
+  }
+
+  /* Its own hairline now. */
+  div.command-rail .command-rail-divider:has(+ .command-more) {
+    display: none;
+  }
+
+  /* Sticky, Tools would become the catalog's containing block and hang it
+     from the rail's foot. Fixed, it keeps the float's (which is
+     transformed, so it contains fixed boxes) and its place beside the rail,
+     as the sketch rail's type strip does. */
+  div.command-rail .command-more > .command-flyout {
+    position: fixed;
+  }
+}
+
+/* 541–620px keeps two columns, and folded the instrument rail there ends
+   above the cube's corner, so the cube stays in it: stepped left past two
+   104px rails it stood on the tool rail at 320px wide. Opened, the rail
+   reaches the corner and the cube steps aside as before. So it does while a
+   pick's guidance card lifts it (quiet-stage.css), up beside the rail: the
+   corner while the card's height is 0, and past the rail for any other. */
+@media (pointer: coarse) and (max-width: 520px) and (min-height: 541px) and (max-height: 620px) {
+  .workspace.column-layout:not(:has(.rail-more-toggle[aria-expanded='true']))
+    .viewer-rail-stack {
+    right: min(
+      var(--lane-end),
+      calc(2px + var(--workspace-guidance-h, 0px) * 1000)
+    );
+  }
+}

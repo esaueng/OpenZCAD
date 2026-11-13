@@ -3,9 +3,12 @@ import {
   cornersWithinFrame,
   measureCreationFrame,
   measureFitFrame,
+  measureOpeningFrame,
   measurePickFrame,
+  OPENING_FRAME_MAX_WIDTH,
   shiftIntoFrame
 } from './fitFrame';
+import { PANEL_LANE_REST_MAX_WIDTH } from './panelLayout';
 
 function placed(
   element: HTMLElement,
@@ -130,6 +133,77 @@ describe('measureFitFrame', () => {
     column.setAttribute('inert', '');
     const frame = measureFitFrame(canvas)!;
     expect(frame.maxX).toBeCloseTo(((668 - 12) / 1024) * 2 - 1);
+  });
+});
+
+describe('measureOpeningFrame', () => {
+  /** A phone's stage: a 52px rail each side, 10px in from the edge. */
+  function phoneStage({ covered = false, width = 390 } = {}) {
+    const reveal = document.createElement('div');
+    reveal.className = 'workspace-reveal';
+    // The cover hides by visibility and is inert, and the panels under it
+    // inherit both.
+    if (covered) {
+      reveal.style.visibility = 'hidden';
+      reveal.setAttribute('inert', '');
+    }
+    const area = document.createElement('div');
+    area.className = 'viewer-area';
+    const canvas = placed(document.createElement('canvas'), 0, 0, width, 844);
+    const column = document.createElement('div');
+    column.className = 'workspace-column-float';
+    const rail = document.createElement('div');
+    rail.className = 'instrument-rail';
+    // Covered, the instrument rail is 16px into its slide in from the
+    // edge, which its rectangle includes.
+    const slide = covered ? 16 : 0;
+    if (covered) rail.style.translate = '16px 0px';
+    area.append(
+      canvas,
+      placed(column, 10, 196, 62, 750),
+      placed(rail, width - 62 + slide, 164, width - 10 + slide, 637)
+    );
+    reveal.append(area);
+    document.body.append(reveal);
+    return canvas;
+  }
+
+  it('opens a phone’s model between its rails', () => {
+    const frame = measureOpeningFrame(phoneStage());
+    expect(frame?.minX).toBeCloseTo(((62 + 12) / 390) * 2 - 1, 12);
+    expect(frame?.maxX).toBeCloseTo(((328 - 12) / 390) * 2 - 1, 12);
+  });
+
+  it('reads the rails through the cover a project opens under', () => {
+    // The first fit is made before the workspace is revealed. Read as
+    // hidden, the rails left the whole canvas, and both ends of the part
+    // opened under them.
+    const canvas = phoneStage({ covered: true });
+    expect(measureFitFrame(canvas)).toBeUndefined();
+    const frame = measureOpeningFrame(canvas);
+    expect(frame?.minX).toBeCloseTo(((62 + 12) / 390) * 2 - 1, 12);
+    // Where the rail stands once its entry motion ends.
+    expect(frame?.maxX).toBeCloseTo(((328 - 12) / 390) * 2 - 1, 12);
+  });
+
+  it('still leaves out a panel that is inert or hidden under the cover', () => {
+    const canvas = phoneStage({ covered: true });
+    const rail = canvas
+      .closest('.viewer-area')!
+      .querySelector<HTMLElement>('.instrument-rail')!;
+    rail.setAttribute('inert', '');
+    expect(measureOpeningFrame(canvas)?.maxX).toBe(1);
+    rail.removeAttribute('inert');
+    rail.style.display = 'none';
+    expect(measureOpeningFrame(canvas)?.maxX).toBe(1);
+  });
+
+  it('leaves a wider stage its home fit to the whole canvas', () => {
+    expect(measureOpeningFrame(phoneStage({ width: 521 }))).toBeUndefined();
+    expect(measureFitFrame(phoneStage({ width: 521 }))).toBeDefined();
+    // One width for a phone's opening: where the lane rests, the frame is
+    // fitted between the rails.
+    expect(OPENING_FRAME_MAX_WIDTH).toBe(PANEL_LANE_REST_MAX_WIDTH);
   });
 });
 

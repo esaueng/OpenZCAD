@@ -35,6 +35,10 @@ export function useResponsiveFraming({
     columnHeights: layout.columnHeights,
     unpinned: layout.unpinned,
     revealed: layout.revealed,
+    // The panel a resting phone lane was asked for. Resting itself is not a
+    // layout choice: a workspace opened on a phone rests the lane before the
+    // viewer's first frame, which must stay the viewer's to make.
+    phoneLane: layout.phoneLane ?? undefined,
     options: { ...layout.options, locked: undefined },
     recent:
       window.innerWidth <= PANEL_PHONE_MAX_WIDTH ? layout.recent : undefined

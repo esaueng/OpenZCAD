@@ -13,7 +13,8 @@ import {
   test,
   waitForSurfacesToSettle,
   finishInPlaceCommand,
-  pickObjectsBody
+  pickObjectsBody,
+  revealModelPanel
 } from './openzcad-fixtures';
 
 test(
@@ -372,6 +373,10 @@ test(
     await page.goto('/');
     await page.getByLabel('Project name').fill('Narrow Part');
     await page.getByRole('button', { name: 'New project' }).click();
+    // A workspace opened on a phone shows no panel until one is asked for
+    // (phone-stage.spec.ts); the lane is a surface here once it is.
+    await expect(page.locator('.panel-lane-float')).toHaveCount(0);
+    await revealModelPanel(page, 'History');
     await openAssistant(page);
 
     const selectors = [

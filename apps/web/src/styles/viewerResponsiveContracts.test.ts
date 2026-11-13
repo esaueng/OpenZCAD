@@ -93,6 +93,11 @@ describe('the instrument rail over the cube', () => {
     expect(phone).toMatch(/--stage-corner-h:[^;]*var\(--status-row-h\)/);
     const phoneCube = phone.slice(phone.indexOf(CUBE));
     expect(phoneCube).toMatch(/bottom:[^;]*var\(--status-row-h\)/);
+    // And above a pick's guidance card, which the row itself stands on
+    // there: four lines of it covered all but the cube's top facet.
+    expect(phoneCube).toMatch(
+      /bottom:[^;]*var\(--workspace-guidance-h, 0px\)[^;]*var\(--status-row-h\)/
+    );
     // Off the corner, narrow and short, the cube is nearer the row's centre.
     const narrow = media(
       css,

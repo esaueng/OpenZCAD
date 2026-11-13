@@ -104,6 +104,14 @@ export const PANEL_RAIL_DRAG_CLEARANCE = 60;
 export const PANEL_DOCK_CAP = 0.6;
 /** At or below this stage width nothing docks: the phone lane takes over. */
 export const PANEL_PHONE_MAX_WIDTH = 720;
+/**
+ * At or below this window width the phone lane has no column of its own: its
+ * panel stands over the stage between the two rails (`max-width: 520px` in
+ * quiet-stage.css), across the middle of the model. A workspace opened there
+ * rests the lane (`restPhoneLane`). Wider, up to the limit above, the lane is
+ * a column beside the right rail and shows the stored layout's panel.
+ */
+export const PANEL_LANE_REST_MAX_WIDTH = 520;
 
 const WEIGHT_MIN = 0.01;
 const WEIGHT_MAX = 100;
@@ -193,6 +201,17 @@ export interface PanelLayout<T extends PanelEntry = PanelId> {
    * Transient: never stored.
    */
   revealed: PanelId | null;
+  /**
+   * The phone lane's own choice, for a workspace opened on a phone
+   * (`restPhoneLane`): `null` while the lane rests, showing nothing, and
+   * otherwise the panel asked for there. A press on the panel it shows puts
+   * the lane back to rest instead of closing the panel, so an arrangement
+   * made on a wider stage comes through a phone visit as it was. Absent, as
+   * it is for a workspace opened wider and then narrowed, the lane shows the
+   * most recently used open panel and a press on it closes it. Transient:
+   * never stored.
+   */
+  phoneLane?: PanelId | null;
   homes: Partial<Record<PanelId, PanelHome>>;
   /**
    * Docked columns the user shortened, keyed by the set of panels in them
@@ -334,6 +353,8 @@ function copyLayout<T extends PanelEntry>(
     unpinned: layout.unpinned,
     recent: layout.recent.slice(),
     revealed: layout.revealed,
+    // Only when the lane has a choice: a layout without one stays without.
+    ...(layout.phoneLane !== undefined ? { phoneLane: layout.phoneLane } : {}),
     homes: { ...layout.homes },
     columnHeights: { ...layout.columnHeights },
     options: { ...layout.options }
@@ -770,6 +791,14 @@ export function applyPreset(
   }
   const next = presetLayout(name, { ...layout.options, hidden: false });
   next.recent = layout.recent.slice();
+  // A preset arranges the docks; a resting phone lane goes on resting, and
+  // one showing a panel the preset closed has nothing left to show.
+  if (layout.phoneLane !== undefined) {
+    next.phoneLane =
+      layout.phoneLane && isPanelOpen(next, layout.phoneLane)
+        ? layout.phoneLane
+        : null;
+  }
   return next;
 }
 
@@ -1491,6 +1520,58 @@ function openUnpinned(layout: PanelLayout, id: PanelId): PanelLayout {
 }
 
 /**
+ * Puts the phone lane to rest for a workspace opened on a phone
+ * (`PANEL_LANE_REST_MAX_WIDTH`): it shows no panel until one is asked for,
+ * whatever the stored layout has open, and the layout itself is untouched.
+ */
+export function restPhoneLane(layout: PanelLayout): PanelLayout {
+  return layout.phoneLane === null ? layout : { ...layout, phoneLane: null };
+}
+
+/**
+ * Hands the phone lane back to recency, for a workspace opened wider: once
+ * narrowed, the lane shows the most recently used open panel.
+ */
+export function followPhoneLane(layout: PanelLayout): PanelLayout {
+  if (layout.phoneLane === undefined) {
+    return layout;
+  }
+  const next = { ...layout };
+  delete next.phoneLane;
+  return next;
+}
+
+/**
+ * The phone lane's panel, where the lane keeps its own choice: `id` takes
+ * it, or `null` rests it. A panel that was only open unpinned for the lane
+ * closes as it leaves, as opening another unpinned panel would close it;
+ * a docked or floating one stays where the wider stage has it.
+ */
+function choosePhoneLane(layout: PanelLayout, id: PanelId | null): PanelLayout {
+  const shown = layout.phoneLane;
+  if (shown === undefined || shown === id) {
+    return layout;
+  }
+  const next =
+    shown && layout.unpinned === shown ? closePanel(layout, shown) : layout;
+  return { ...next, phoneLane: id };
+}
+
+/**
+ * Closes the panel the phone lane shows. Where the lane keeps its own
+ * choice it rests, and the panel stays in the dock or window it has on a
+ * wider stage; otherwise the panel closes, as from any other frame.
+ */
+export function dismissPhonePanel(
+  layout: PanelLayout,
+  id: PanelId
+): PanelLayout {
+  return layout.phoneLane === undefined
+    ? closePanel(layout, id)
+    : choosePhoneLane(layout, null);
+}
+
+/**
  * Opens a panel from the rail: where it last lived if it has a home, else
  * unpinned. A home past the footprint cap is refused like any placement, so
  * the panel opens unpinned instead. An open panel stays where it is. Either
@@ -1529,7 +1610,7 @@ export function openPanel(
       next = openUnpinned(layout, id);
     }
   }
-  next = notePanelUsed(next, id);
+  next = choosePhoneLane(notePanelUsed(next, id), id);
   return next.options.hidden ? setOption(next, 'hidden', false) : next;
 }
 
@@ -1566,7 +1647,9 @@ function revealPanel(layout: PanelLayout, id: PanelId): PanelLayout {
  * panel shows it in the unpinned slot, and a second press hides it again;
  * it stays docked throughout. On a phone-width stage, where the lane shows
  * only the most recently used open panel, a press on an open panel the lane
- * is not showing brings it into the lane rather than closing it unseen.
+ * is not showing brings it into the lane rather than closing it unseen;
+ * where the lane keeps its own choice (`phoneLane`), a press on the panel it
+ * shows rests the lane and leaves the panel where the wider stage has it.
  * Wider, a press on a floating panel whose window another covers brings it
  * to the front. Every press counts as a use.
  */
@@ -1588,12 +1671,13 @@ export function togglePanel(
   }
   // The phone lane shows one open panel; a press on another open one brings
   // it there rather than closing what nobody can see.
-  if (
-    stage &&
-    stage.width <= PANEL_PHONE_MAX_WIDTH &&
-    arrangedGeometry(layout, stage).phonePanel !== id
-  ) {
-    return notePanelUsed(layout, id);
+  if (stage && stage.width <= PANEL_PHONE_MAX_WIDTH) {
+    if (arrangedGeometry(layout, stage).phonePanel !== id) {
+      return choosePhoneLane(notePanelUsed(layout, id), id);
+    }
+    if (layout.phoneLane !== undefined) {
+      return choosePhoneLane(notePanelUsed(layout, id), null);
+    }
   }
   if (stage && isPanelParked(layout, id, stage)) {
     return notePanelUsed(revealPanel(layout, id), id);
@@ -1656,7 +1740,7 @@ export function presentPanel(
   } else if (stage && isPanelParked(layout, id, stage)) {
     next = revealPanel(layout, id);
   }
-  next = notePanelUsed(next, id);
+  next = choosePhoneLane(notePanelUsed(next, id), id);
   return next.options.hidden ? setOption(next, 'hidden', false) : next;
 }
 
@@ -2066,7 +2150,11 @@ export interface PanelGeometry {
    * shows one panel, `phonePanel`, and no panel has a rectangle.
    */
   phone: boolean;
-  /** The most recently used open panel, which the phone lane shows. */
+  /**
+   * The panel the phone lane shows: the most recently used open one, or,
+   * where the lane keeps its own choice (`PanelLayout.phoneLane`), the panel
+   * asked for there and none while it rests.
+   */
   phonePanel: PanelId | null;
   /** Every open panel, most recently used first. */
   phonePanels: PanelId[];
@@ -2378,7 +2466,15 @@ export function computePanelGeometry(
   }
   if (phone) {
     geometry.phonePanels = openByRecency(layout);
-    geometry.phonePanel = geometry.phonePanels[0] ?? null;
+    // A lane with its own choice shows that panel or nothing; otherwise the
+    // most recently used open one.
+    const chosen = layout.phoneLane;
+    geometry.phonePanel =
+      chosen === undefined
+        ? (geometry.phonePanels[0] ?? null)
+        : chosen && geometry.phonePanels.includes(chosen)
+          ? chosen
+          : null;
     return geometry;
   }
 
