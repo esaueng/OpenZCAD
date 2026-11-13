@@ -121,11 +121,6 @@
   box-shadow: 0 0 0 2px var(--color-accent-dim);
 }
 
-.settings-search-clear {
-  /* The wide layout shows the field itself; see the narrow rule below. */
-  display: none;
-}
-
 .settings-search input {
   min-width: 0;
   flex: 1;
@@ -248,9 +243,10 @@
 }
 
 /* Every page starts at the same left edge, beside the sections, whichever
-   page is open. A page's groups keep a reading width inside it; the
-   controls reference alone runs the full frame. Centring each page at its
-   own width put the reference's left edge 140px left of the others. */
+   page is open. A page's groups keep a reading width inside it; the activity
+   log's table alone runs the full frame. Controls ran it too, so its cards
+   stood out 1040px wide against every other page's 760 (13 November review);
+   its key list fits the reading width. */
 .settings-section {
   width: min(1040px, 100%);
   margin: 0;
@@ -552,6 +548,32 @@
    the fields' right edges line up down a card. */
 .settings-unit-input > span {
   min-width: 2ch;
+}
+
+/* A number field with its range under it, and, after a value was pulled to
+   a bound, the line that says so. Both sit at the field's right edge. */
+.settings-number-setting {
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+}
+
+.settings-number-range {
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-number-clamped {
+  max-width: 28ch;
+  color: var(--color-warning);
+  font-size: var(--fs-mini);
+  text-align: right;
+}
+
+.settings-number-clamped:empty {
+  margin-top: -2px;
 }
 
 /* ── Switch ──
@@ -1387,39 +1409,46 @@
     box-sizing: border-box;
   }
 
+  /* A rail of sections, each named under its icon: eleven bare icons left
+     a phone reader guessing which was Saving and which Account. */
   .settings-layout {
     --settings-inline: var(--sp-3);
-    grid-template-columns: calc(var(--island-gap) + 56px) minmax(0, 1fr);
+    grid-template-columns: calc(var(--island-gap) + 72px) minmax(0, 1fr);
   }
 
   .settings-nav {
-    padding: var(--sp-2);
+    padding: var(--sp-1);
   }
 
-  .settings-search,
-  .settings-nav nav button span,
   .settings-nav-group {
     display: none;
-  }
-
-  /* The rail's way out of a filter it cannot show: the sections it is
-     hiding come back on one press. */
-  .settings-search-clear {
-    display: grid;
-    place-items: center;
-    width: 100%;
-    min-height: 40px;
-    margin-bottom: var(--sp-2);
-    color: var(--color-accent);
-    background: var(--color-accent-dim);
-    border: 1px solid var(--color-accent-border);
-    border-radius: var(--radius-md);
   }
 
   .settings-nav nav button {
     grid-template-columns: 1fr;
     place-items: center;
-    min-height: 40px;
+    gap: 2px;
+    min-height: 48px;
+    padding: 5px 2px;
+    text-align: center;
+  }
+
+  .settings-nav nav button span {
+    max-width: 100%;
+    font-size: var(--fs-mini);
+    line-height: 1.15;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  /* The search stays, on a row of its own under the title: the phone used
+     to have no way to find a setting at all. */
+  .settings-head .settings-search {
+    flex: 1 0 100%;
+    order: 3;
+    width: auto;
+    min-height: 36px;
+    margin-bottom: var(--sp-2);
   }
 
   .settings-content {
@@ -1481,8 +1510,17 @@
     min-width: 0;
   }
 
-  .settings-unit-input {
+  .settings-unit-input,
+  .settings-number-setting {
     width: 100%;
+  }
+
+  .settings-number-setting {
+    justify-items: start;
+  }
+
+  .settings-number-clamped {
+    text-align: left;
   }
 
   .settings-unit-input input {

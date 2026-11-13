@@ -29887,6 +29887,7 @@ export function App() {
           desktopAuthorizationApproved={desktopAuthorizationApproved}
           desktopAuthorizationCode={desktopAuthorizationCode}
           workspaceOpen={doc !== null}
+          documentUnits={doc?.units}
           onDesktopAuthorizationCodeChange={setDesktopAuthorizationCode}
           onChange={handleAppSettingsChange}
           onCloudFunctionsEnabledChange={handleCloudFunctionsEnabledChange}
