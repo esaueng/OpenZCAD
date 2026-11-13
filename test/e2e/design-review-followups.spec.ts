@@ -168,8 +168,16 @@ for (const colorScheme of ['light', 'dark'] as const) {
         await expect(
           page.getByRole('group', { name: 'Box command', exact: true })
         ).toBeHidden();
+        // The rail is one tab stop: Tab reaches it, End its last tool.
         const more = page.getByRole('button', { name: /^More tools/ });
-        await tabTo(page, more);
+        await tabTo(
+          page,
+          page
+            .getByRole('toolbar', { name: 'Feature tools' })
+            .locator('button.command-rail[tabindex="0"]')
+        );
+        await page.keyboard.press('End');
+        await expect(more).toBeFocused();
         await page.keyboard.press('Enter');
         const search = page.getByRole('searchbox', { name: 'Find a tool' });
         await expect(search).toBeFocused();

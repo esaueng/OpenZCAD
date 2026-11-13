@@ -29071,6 +29071,23 @@ export function App() {
           event.preventDefault();
           if (tool || selectedFeatureNodeId || interaction.mode !== 'idle') {
             cancelPanel();
+          } else if (
+            toolFold.commandFoldOpen &&
+            resolvedWorkspaceMode === 'build' &&
+            !selectedTopology &&
+            selectedEdges.length === 0 &&
+            selectedBodyIds.length === 0 &&
+            !selectedSketchProfileId &&
+            selectedProfiles.length === 0
+          ) {
+            // The last rung: nothing armed and nothing picked, so the key is
+            // nobody else's and it puts the Tools drawer away. The drawer is
+            // docked and remembered, so every rung above keeps it: Escape
+            // only closes it once there is nothing left to cancel or clear.
+            setPanelState((current) => ({
+              ...current,
+              commandFoldOpen: false
+            }));
           } else {
             // A bare selection: nothing of a panel's to close, so leave any
             // preview that is not a panel's (an assistant proposal) alone.

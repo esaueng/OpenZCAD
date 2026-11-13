@@ -1850,7 +1850,7 @@
 
 .viewer-area
   .workspace-column-float:has(:is(.command-rail, .sketch-rail))
-  nav.command-rail {
+  div.command-rail {
   position: static;
 }
 
@@ -1962,17 +1962,17 @@ button.command-more-toggle {
     --column-w: calc(var(--rail-w) * var(--tool-rail-columns, 2));
   }
 
-  .viewer-area .workspace-column-float nav.command-rail {
+  .viewer-area .workspace-column-float div.command-rail {
     display: grid;
     grid-template-columns: repeat(var(--tool-rail-columns, 2), minmax(0, 1fr));
     justify-items: center;
   }
 
-  nav.command-rail .command-rail-group {
+  div.command-rail .command-rail-group {
     display: contents;
   }
 
-  nav.command-rail .command-rail-pins {
+  div.command-rail .command-rail-pins {
     display: grid;
     grid-column: 1 / -1;
     grid-template-columns: subgrid;
@@ -1980,8 +1980,8 @@ button.command-more-toggle {
     width: 100%;
   }
 
-  nav.command-rail .command-rail-divider,
-  nav.command-rail .command-more {
+  div.command-rail .command-rail-divider,
+  div.command-rail .command-more {
     grid-column: 1 / -1;
   }
 }
@@ -2130,21 +2130,30 @@ button.command-rail.is-suggested {
   );
 }
 
-/* Every tool by name, beside the rail: one tall column — search and the
-   fits/all switch at the head, the list under the palette's own headings,
-   and the pin hint or the hidden count at the foot. */
+/* Every tool by name, docked to the rail: one tall column — its name and
+   close button, search and the fits/all switch at the head, the list under
+   the palette's own headings, and the pin hint or the hidden count at the
+   foot.
+
+   Docked, not floating: the drawer is remembered open and stays through a
+   click on the model, as a model panel does, so it is drawn as part of the
+   rail rather than as a popover standing off it. It shares the rail's edge
+   (their borders overlap), its corners on that side are square, and it has
+   no gap for the stage to show through. The rail keeps its own island
+   corners: the simple list meets only part of its edge. A popover's look with a panel's
+   behaviour was the defect: it read as something a click outside closes. */
 .command-flyout {
   position: absolute;
   top: 0;
-  left: calc(100% + var(--island-gap));
+  left: calc(100% - 1px);
   width: 236px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
   background: var(--color-surface);
   border: var(--border-thin);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-2);
+  border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
+  box-shadow: var(--shadow-1);
   animation: oz-fade var(--dur-fast) var(--ease-out);
 }
 
@@ -2185,12 +2194,24 @@ button.command-rail.is-suggested {
   max-height: var(--sheet-h);
 }
 
-/* The catalog is a temporary surface, above both instrument rails. Its
+/* The drawer stands above both instrument rails and a floating panel: its
    search and filters must remain usable when a phone has no gap between
-   the two rails; a child's z-index cannot escape its column's stacking
-   context. Restore the column's normal layer when the catalog closes. */
+   the two rails, and a child's z-index cannot escape its column's stacking
+   context. It stands under every temporary surface, though: the tooltips,
+   the command bar's results and the popovers (--z-popover). At the popover
+   layer itself, where it used to be, a drawer left open lay across the
+   search results and whatever opened after it. Restore the column's normal
+   layer when the drawer closes. */
 .viewer-area .workspace-column-float:has(.command-flyout) {
-  z-index: var(--z-popover);
+  z-index: calc(var(--z-panel-float) + 9);
+}
+
+/* A popover the instrument rail opens (the standard views, the section
+   controls) is the more temporary of the two, so it stands over the drawer
+   where a phone lays one across the other. Only while both are open: the
+   rail otherwise stays under a floating panel dragged onto it. */
+.viewer-area:has(.command-flyout) .instrument-rail:has([data-rail-flyout]) {
+  z-index: calc(var(--z-panel-float) + 10);
 }
 
 /* The simple list stands on the stage's foot, lifted until its own foot is
@@ -2243,6 +2264,42 @@ button.command-rail.is-suggested {
 
 .command-flyout.is-unpin-target {
   border-color: var(--color-accent-border);
+}
+
+/* The drawer's name and its close button, as a model panel's header: what
+   says this is a docked surface with a way out of its own. */
+.command-flyout-title {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 3px 4px 0 9px;
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mini);
+  font-weight: var(--fw-regular);
+  letter-spacing: var(--ls-eyebrow);
+  text-transform: uppercase;
+}
+
+.command-flyout-close {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  min-height: 0;
+  padding: 0;
+  color: var(--color-text-subtle);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+}
+
+.command-flyout-close:hover {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
 }
 
 .command-flyout-head {

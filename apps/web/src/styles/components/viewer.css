@@ -378,10 +378,18 @@
 
 /* The hover lift every other rail uses: surface-2 was within a shade of
    the rail's own surface in the dark theme and barely registered. */
-.rail-button:hover:not(:disabled):not(.active),
+.rail-button:hover:not(:disabled, [aria-disabled='true']):not(.active),
 .rail-button.open:not(.active) {
   color: var(--color-text);
   background: var(--color-surface-hover);
+}
+
+/* Undo and Redo are greyed by aria, not `disabled`, so the arrow keys still
+   reach them and their reason is read out (ViewerToolbar). They look as a
+   disabled button does. */
+.rail-button[aria-disabled='true'] {
+  cursor: not-allowed;
+  opacity: var(--opacity-disabled);
 }
 
 .rail-button.active {

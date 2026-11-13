@@ -526,6 +526,59 @@ describe('OrientationWidget pointer lifecycle', () => {
 });
 
 describe('OrientationWidget controls', () => {
+  it('is one tab stop, with the arrow keys between the facets in view', () => {
+    const { container, orientationRef } = renderWidget();
+    orientationRef.current?.update({
+      x: { x: 0.70711, y: 0.40825, z: 0.57735 },
+      y: { x: -0.70711, y: 0.40825, z: 0.57735 },
+      z: { x: 0, y: -0.8165, z: 0.57735 }
+    });
+    const facets = Array.from(
+      container.querySelectorAll<SVGElement>('[role="button"]')
+    );
+    const shown = facets.filter((facet) => facet.style.display !== 'none');
+    // Three faces and their corners face the camera; each was a stop.
+    expect(shown.length).toBeGreaterThan(3);
+    const stops = () =>
+      facets.filter((facet) => facet.getAttribute('tabindex') === '0');
+    expect(stops()).toEqual([shown[0]]);
+    // A facet turned away is never the stop.
+    for (const facet of facets) {
+      if (facet.style.display === 'none') {
+        expect(facet.getAttribute('tabindex')).not.toBe('0');
+      }
+    }
+    shown[0]!.focus();
+    fireEvent.keyDown(shown[0]!, { key: 'ArrowRight' });
+    expect(document.activeElement).toBe(shown[1]);
+    expect(stops()).toEqual([shown[1]]);
+    fireEvent.keyDown(shown[1]!, { key: 'End' });
+    expect(document.activeElement).toBe(shown.at(-1));
+  });
+
+  it('moves its tab stop off a facet that turns out of view', () => {
+    const { container, orientationRef } = renderWidget();
+    orientationRef.current?.update({
+      x: { x: 0.70711, y: 0.40825, z: 0.57735 },
+      y: { x: -0.70711, y: 0.40825, z: 0.57735 },
+      z: { x: 0, y: -0.8165, z: 0.57735 }
+    });
+    const stop = () =>
+      container.querySelector<SVGElement>('[role="button"][tabindex="0"]');
+    const first = stop()!;
+    expect(first.style.display).not.toBe('none');
+    // Look from the opposite corner: every facet that showed is hidden.
+    orientationRef.current?.update({
+      x: { x: -0.70711, y: -0.40825, z: -0.57735 },
+      y: { x: 0.70711, y: -0.40825, z: -0.57735 },
+      z: { x: 0, y: 0.8165, z: -0.57735 }
+    });
+    expect(first.style.display).toBe('none');
+    expect(stop()).not.toBeNull();
+    expect(stop()).not.toBe(first);
+    expect(stop()!.style.display).not.toBe('none');
+  });
+
   it('keeps cube navigation without separate rotate buttons', () => {
     const { queryByRole, getByRole, orientationRef } = renderWidget();
     orientationRef.current?.update({
@@ -535,7 +588,7 @@ describe('OrientationWidget controls', () => {
     });
     expect(queryByRole('button', { name: /Rotate view/ })).toBeNull();
     expect(
-      getByRole('group', { name: 'Drag to rotate the view' })
+      getByRole('toolbar', { name: 'Drag to rotate the view' })
     ).toBeDefined();
     expect(getByRole('button', { name: 'Right view' })).toBeDefined();
   });

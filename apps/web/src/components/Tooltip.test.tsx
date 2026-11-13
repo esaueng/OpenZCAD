@@ -394,8 +394,9 @@ describe('Tooltip', () => {
     });
 
     it('opens beside a rail that is a landmark rather than a toolbar', () => {
-      // The Build rail is the "Feature tools" navigation: every tooltip on it
-      // fell through to below, over the next tool and the open More fold.
+      // The Build rail was the "Feature tools" navigation (it is a toolbar
+      // now): every tooltip on it fell through to below, over the next tool
+      // and the open More fold. The mark still covers a rail of another role.
       boxes.Rail = box(20, 300, 40, 120);
       boxes.Parts = box(25, 305, 30, 30);
       render(

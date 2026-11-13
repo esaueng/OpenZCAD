@@ -58,8 +58,8 @@ const RAIL_FLYOUT_SELECTOR = '[data-rail-flyouts] > *, [data-rail-flyout]';
 
 /**
  * Icon rails, whose tooltips open beside them: toolbars, and the rails that
- * carry another role (the Build rail is the "Feature tools" navigation
- * landmark) marked `data-tooltip-rail`. A `data-tooltip-rail="vertical"`
+ * carry another role (a landmark, say) marked `data-tooltip-rail`. The Build
+ * rail is a toolbar and carries the mark as well. A `data-tooltip-rail="vertical"`
  * box counts as vertical whatever its layout: the More tools fold is a grid
  * of tiles, and help below a tile covered the next row.
  */
