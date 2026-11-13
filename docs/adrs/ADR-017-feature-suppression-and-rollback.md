@@ -211,6 +211,16 @@ against: any later edit, undo or project switch drops the dialog, and Resume
 anyway on a moved document commits nothing. Resume is disabled while any exact
 check runs, its own included.
 
+A row's own Resume takes the same preflight. It judges the resumed row and
+every later feature that is not paused; a later feature counts only if it was
+building before the resume (by the rebuild of the current version), since only
+the row changed, and features before the row are not judged. With no failure
+the same single command that clears both keys commits with the checked
+rebuild; with failures the dialog, titled after the action ("Resume Fillet
+3?"), offers **Keep suppressed** (or **Keep paused** for a row a rollback
+paused) or **Resume anyway**, under the same version rule. Clicked while
+another exact check runs, it commits nothing and says so.
+
 Moving the marker earlier only pauses features and needs no check. Undo and
 redo of a marker move, command replay and collaboration snapshots are
 unchanged, so stored states with failing resumed features still load as they

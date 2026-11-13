@@ -10,6 +10,7 @@ import {
   FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY,
   FEATURE_SUPPRESSED_METADATA_KEY,
   isFeatureRollbackSuppressed,
+  isFeatureSuppressed,
   toUserId,
   type BodyId,
   type FeatureNode,
@@ -24,6 +25,8 @@ import {
   resumeFailures,
   resumeRefusalMessage,
   rollbackMarkerMove,
+  rowResume,
+  rowResumeAlreadyFailing,
   validateHistoryResume
 } from './historyResume';
 
@@ -302,6 +305,190 @@ describe('resume preflight decision', () => {
     expect(
       listFeaturesInOrder(manager.document).some(isFeatureRollbackSuppressed)
     ).toBe(false);
+  });
+});
+
+/** Source → Copy → Move copy, all resumed, then `row` suppressed by hand. */
+function suppressedRow(row: 0 | 1 | 2) {
+  const { manager, features, derived } = rolledBackChain();
+  manager.runTransaction('Resume', rollbackMarkerMove(features, null).commands);
+  manager.execute(
+    commandFactories.setNodeMetadata({
+      nodeId: listFeaturesInOrder(manager.document)[row]!.id,
+      metadata: { [FEATURE_SUPPRESSED_METADATA_KEY]: true }
+    })
+  );
+  return { manager, features: listFeaturesInOrder(manager.document), derived };
+}
+
+describe('row resume preflight decision', () => {
+  it('is null for a building row, whose toggle suppresses instead', () => {
+    const { features } = suppressedRow(1);
+    expect(rowResume(features, features[0]!.featureId)).toBeNull();
+    expect(rowResume(features, features[2]!.featureId)).toBeNull();
+  });
+
+  it("commits the toggle's own command: one step clearing both pauses", () => {
+    const { manager, features } = rolledBackChain();
+    const resume = rowResume(features, features[1]!.featureId)!;
+    expect(resume.command.label).toBe('Resume Copy');
+    expect(resume.command.kind).toBe('node.metadata.set');
+    expect(resume.command.payload).toEqual({
+      nodeId: features[1]!.id,
+      metadata: {
+        [FEATURE_SUPPRESSED_METADATA_KEY]: null,
+        [FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY]: null
+      }
+    });
+    manager.runTransaction(resume.command.label, [resume.command]);
+    const after = listFeaturesInOrder(manager.document);
+    expect(isFeatureRollbackSuppressed(after[1]!)).toBe(false);
+    // The rest of the rollback stays paused.
+    expect(isFeatureRollbackSuppressed(after[2]!)).toBe(true);
+  });
+
+  it('checks the row and the later features that build, not paused or earlier ones', () => {
+    const middle = suppressedRow(1);
+    expect(
+      rowResume(middle.features, middle.features[1]!.featureId)!.checked.map(
+        (feature) => feature.name
+      )
+    ).toEqual(['Copy', 'Move copy']);
+    // Resuming one row of a rollback leaves the rest of it out of the build.
+    const { features } = rolledBackChain();
+    expect(
+      rowResume(features, features[1]!.featureId)!.checked.map(
+        (feature) => feature.name
+      )
+    ).toEqual(['Copy']);
+  });
+
+  it('reports the row and a later feature that was building and now fails because of it', () => {
+    const { features, derived } = suppressedRow(1);
+    const resume = rowResume(features, features[1]!.featureId)!;
+    const alreadyFailing = rowResumeAlreadyFailing(resume, derived);
+    expect([...alreadyFailing]).toEqual([]);
+    const candidate: ProjectDocument['derived'] = {
+      ...derived,
+      featureWarnings: [
+        failed(features[1]!, 'Mirror plane is degenerate.'),
+        failed(features[2]!, 'Target is unavailable.')
+      ]
+    };
+    let thrown: unknown;
+    try {
+      validateHistoryResume(resume.checked, candidate, alreadyFailing);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(HistoryResumeRefusal);
+    expect(
+      (thrown as HistoryResumeRefusal).failures.map((failure) => failure.name)
+    ).toEqual(['Copy', 'Move copy']);
+    // A failure before the row is not the resume's doing.
+    expect(
+      resumeFailures(
+        resume.checked,
+        { ...derived, featureWarnings: [failed(features[0]!, 'Unrelated.')] },
+        alreadyFailing
+      )
+    ).toEqual([]);
+  });
+
+  it('does not blame the resume for a later feature that was already failing', () => {
+    const { features, derived } = suppressedRow(1);
+    const resume = rowResume(features, features[1]!.featureId)!;
+    derived.featureWarnings = [failed(features[2]!, 'Already broken.')];
+    const alreadyFailing = rowResumeAlreadyFailing(resume, derived);
+    expect([...alreadyFailing]).toEqual([features[2]!.featureId]);
+    expect(resumeFailures(resume.checked, derived, alreadyFailing)).toEqual([]);
+    // Before the rebuild of the current version is in, none is known.
+    expect([...rowResumeAlreadyFailing(resume, null)]).toEqual([]);
+  });
+
+  it('takes the row as already failing only when a rollback paused it so', () => {
+    const rolled = rolledBackChain();
+    const copy = rolled.features[1]!;
+    const memory = new Set([copy.featureId]);
+    const paused = rowResume(rolled.features, copy.featureId)!;
+    expect([...rowResumeAlreadyFailing(paused, null, memory)]).toEqual([
+      copy.featureId
+    ]);
+    // Suppressed by hand: the rollback memory says nothing about it.
+    const { features } = suppressedRow(1);
+    const suppressed = rowResume(features, features[1]!.featureId)!;
+    expect([...rowResumeAlreadyFailing(suppressed, null, memory)]).toEqual([]);
+  });
+
+  it('keeps the row suppressed when the validated candidate fails, and commits one undo step when clean', async () => {
+    const { manager, features, derived } = suppressedRow(1);
+    const resume = rowResume(features, features[1]!.featureId)!;
+    const before = manager.document;
+    let candidate = derived;
+    const commitTransaction = vi.fn(
+      (
+        label: string,
+        commands: Parameters<CommandManager['runTransaction']>[1]
+      ) => {
+        manager.runTransaction(label, commands);
+        return true;
+      }
+    );
+    const onRejection = vi.fn();
+    const { result } = renderHook(() =>
+      useValidatedFeatureCommit({
+        manager: () => manager,
+        derive: async () => candidate,
+        commit: vi.fn(),
+        commitTransaction,
+        onBusy: vi.fn(),
+        onStatus: vi.fn(),
+        onRejection
+      })
+    );
+    const run = () =>
+      result.current.runTransaction([resume.command], {
+        label: resume.command.label,
+        targets: [],
+        validateDerived: (next) =>
+          validateHistoryResume(
+            resume.checked,
+            next,
+            rowResumeAlreadyFailing(resume, derived)
+          ),
+        successMessage: 'Resumed Copy',
+        onFailure: vi.fn()
+      });
+
+    // The row builds; the feature after it, building before, does not.
+    candidate = {
+      ...derived,
+      featureWarnings: [failed(features[2]!, 'Target is unavailable.')]
+    };
+    await act(async () => {
+      expect(await run()).toBe('rejected');
+    });
+    expect(commitTransaction).not.toHaveBeenCalled();
+    expect(manager.document).toBe(before);
+    // Answered by the resume dialog, so no History failure record.
+    expect(onRejection).not.toHaveBeenCalled();
+
+    candidate = derived;
+    await act(async () => {
+      expect(await run()).toBe('committed');
+    });
+    expect(commitTransaction).toHaveBeenCalledWith(
+      'Resume Copy',
+      [resume.command],
+      derived
+    );
+    expect(
+      listFeaturesInOrder(manager.document).some(isFeatureSuppressed)
+    ).toBe(false);
+    manager.undo();
+    expect(isFeatureSuppressed(listFeaturesInOrder(manager.document)[1]!)).toBe(
+      true
+    );
   });
 });
 

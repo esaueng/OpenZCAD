@@ -1,8 +1,10 @@
 import { commandFactories, type AnyCommand } from '@openzcad/command-system';
 import {
   FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY,
+  FEATURE_SUPPRESSED_METADATA_KEY,
   isFeatureManuallySuppressed,
   isFeatureRollbackSuppressed,
+  isFeatureSuppressed,
   type FeatureId,
   type FeatureNode,
   type ProjectDocument
@@ -60,6 +62,77 @@ export function rollbackMarkerMove(
     else if (!isFeatureManuallySuppressed(feature)) move.resumed.push(feature);
   });
   return move;
+}
+
+/**
+ * A History row's own Resume: one command that clears both its suppression
+ * and its rollback pause, and the features whose build it can change.
+ */
+export interface RowResume {
+  feature: FeatureNode;
+  command: AnyCommand;
+  /**
+   * The resumed row, then every later feature that builds with or without
+   * it, in history order. A later feature that already built and now fails
+   * can only fail because of the row; features before it rebuild unchanged.
+   */
+  checked: FeatureNode[];
+}
+
+/**
+ * The resume a row's suppression toggle commits, or null when the row is
+ * building and the toggle suppresses it instead.
+ */
+export function rowResume(
+  features: readonly FeatureNode[],
+  featureId: FeatureId
+): RowResume | null {
+  const index = features.findIndex(
+    (feature) => feature.featureId === featureId
+  );
+  const feature = features[index];
+  if (!feature || !isFeatureSuppressed(feature)) return null;
+  return {
+    feature,
+    command: commandFactories.setNodeMetadata(
+      {
+        nodeId: feature.id,
+        metadata: {
+          [FEATURE_SUPPRESSED_METADATA_KEY]: null,
+          [FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY]: null
+        }
+      },
+      `Resume ${feature.name}`
+    ),
+    checked: [
+      feature,
+      ...features
+        .slice(index + 1)
+        .filter((later) => !isFeatureSuppressed(later))
+    ]
+  };
+}
+
+/**
+ * The checked features a row resume is not blamed for: later features that
+ * already fail in `derived`, the rebuild of the document before the resume
+ * (null when that rebuild is not in yet, so none is known), and the row
+ * itself when a rollback in this session paused it while it was failing.
+ */
+export function rowResumeAlreadyFailing(
+  resume: RowResume,
+  derived: ProjectDocument['derived'] | null,
+  rollbackFailing: ReadonlySet<FeatureId> = new Set()
+): Set<FeatureId> {
+  const failing = new Set(
+    derived ? failingFeatureIds(resume.checked.slice(1), derived) : []
+  );
+  if (
+    isFeatureRollbackSuppressed(resume.feature) &&
+    rollbackFailing.has(resume.feature.featureId)
+  )
+    failing.add(resume.feature.featureId);
+  return failing;
 }
 
 /**
