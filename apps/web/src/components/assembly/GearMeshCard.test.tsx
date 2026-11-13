@@ -87,7 +87,13 @@ function renderGears(wheel: Partial<GearInput> = {}) {
 }
 
 /** The card loads lazily the first time Gears opens it. */
-const card = () => screen.findByRole('region', { name: 'Mesh gears' });
+const card = () =>
+  screen.findByRole(
+    'region',
+    { name: 'Mesh gears' },
+    // The first open imports the card's chunk, slow under a parallel run.
+    { timeout: 10_000 }
+  );
 
 describe('Mesh gears card', () => {
   it('offers Gears once two parts are gears, and lists only the gears', async () => {
