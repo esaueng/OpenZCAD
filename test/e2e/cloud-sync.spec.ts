@@ -1366,6 +1366,23 @@ for (const resolution of [
         await expect(
           conflict.getByRole('button', { name: /^Cloud/ })
         ).toContainText('Newer');
+        // Design review I74: each row names its own copy, and "Decide later"
+        // is not a dead end — the Conflict chip asks again.
+        await expect(
+          conflict.getByRole('button', { name: /^This browser/ })
+        ).toContainText('“Device B unsent edit”');
+        await expect(
+          conflict.getByRole('button', { name: /^Cloud/ })
+        ).toContainText('“Device A account edit”');
+        await expect(conflict).not.toContainText(/\b1 (edits|save points)\b/);
+        if (resolution === 'use-remote') {
+          await conflict.getByRole('button', { name: 'Decide later' }).click();
+          await expect(conflict).toBeHidden();
+          await pageB
+            .getByRole('button', { name: /^Conflict: choose a version/ })
+            .click();
+          await expect(conflict).toBeVisible();
+        }
         if (resolution === 'keep-mine') {
           await conflict.getByRole('button', { name: choice }).focus();
           await pageB.keyboard.press('Enter');

@@ -5,7 +5,10 @@ import { createProjectDocument } from '@openzcad/document-core';
 import { toUserId, type ProjectDocument } from '@openzcad/shared';
 import type { ConflictSource, ProjectConflict } from '../lib/conflictRecovery';
 import { STALE_CHUNK_MESSAGE } from '../lib/staleChunk';
-import { ProjectConflictDialog } from './ProjectConflictDialog';
+import {
+  ProjectConflictDialog,
+  relativeModified
+} from './ProjectConflictDialog';
 
 const owner = toUserId('user_conflict_owner');
 
@@ -400,5 +403,55 @@ describe('ProjectConflictDialog', () => {
     expect(
       screen.getByText(/Using one version replaces the other\./)
     ).toHaveTextContent('They differ in the project name.');
+  });
+
+  // Design review I74: both rows read "2:34:27 PM · 2 edits · 1 save points"
+  // while Cloud was marked Newer, and only one of two names was shown.
+  it('names each copy, pluralises its counts and says when the newer copy is under a second newer', () => {
+    const value = conflict('account');
+    value.localDocument.name = 'Device B unsent edit';
+    value.remoteDocument.name = 'Device A account edit';
+    setModified(value.localDocument, '2026-11-13T19:34:27.100Z');
+    setModified(value.remoteDocument, '2026-11-13T19:34:27.900Z');
+    value.localDocument.checkpoints = value.localDocument.checkpoints.slice(0, 1);
+    render(
+      <ProjectConflictDialog
+        conflict={value}
+        busy={false}
+        onResolve={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+    const local = screen.getByRole('button', { name: /^This browser/ });
+    const cloud = screen.getByRole('button', { name: /^Cloud/ });
+    expect(local).toHaveTextContent('“Device B unsent edit”');
+    expect(cloud).toHaveTextContent('“Device A account edit”');
+    expect(cloud).toHaveTextContent('Newer · under 1 s');
+    expect(local).not.toHaveTextContent('Newer');
+    expect(local).not.toHaveTextContent(/\b1 save points\b/);
+    expect(local).not.toHaveTextContent(/\b1 edits\b/);
+    expect(local).toHaveTextContent(
+      `${value.localDocument.checkpoints.length} save point${value.localDocument.checkpoints.length === 1 ? '' : 's'}`
+    );
+  });
+
+  it('omits the per-row name when both copies share it', () => {
+    const value = conflict('account');
+    render(
+      <ProjectConflictDialog
+        conflict={value}
+        busy={false}
+        onResolve={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+    expect(screen.queryByText('“Bracket”')).not.toBeInTheDocument();
+  });
+
+  it('describes modified times relative to now', () => {
+    const now = Date.parse('2026-11-13T19:40:00Z');
+    expect(relativeModified(now - 2_000, now)).toBe('just now');
+    expect(relativeModified(now - 5 * 60_000, now)).toMatch(/5 minutes ago/);
+    expect(relativeModified(now - 3 * 3_600_000, now)).toMatch(/3 hours ago/);
   });
 });
