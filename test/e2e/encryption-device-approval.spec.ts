@@ -131,12 +131,20 @@ test('certifies a new device approved by its full-hash scan code', { tag: '@ci-s
   const phone = await secondDevice(browser, server);
   try {
     const phoneSettings = await openEncryptionSettings(phone.page);
+    // A locked device offers no Remove beside the certified one (I83).
+    await expect(
+      phoneSettings.getByRole('button', { name: /^Remove / })
+    ).toHaveCount(0);
     await phoneSettings
       .getByRole('button', { name: 'Ask for approval' })
       .click();
     await expect(
       phoneSettings.getByRole('img', { name: 'Device approval QR code' })
     ).toBeVisible();
+    // It names the control the unlocked device really has (I83).
+    await expect(phoneSettings).toContainText(
+      'listed under Devices asking to join: choose Scan code'
+    );
     const code = (await phoneSettings
       .getByLabel('Device approval code')
       .textContent())!;

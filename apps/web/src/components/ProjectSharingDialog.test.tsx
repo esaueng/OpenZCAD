@@ -545,6 +545,15 @@ describe('ProjectSharingDialog', () => {
     await user.click(
       screen.getByRole('button', { name: /Revoke share link created/ })
     );
+    // Revoking asks first, in place, with focus on Keep link (I2).
+    expect(links.revokeProjectShareLink).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Keep link' })).toHaveFocus();
+    await user.click(screen.getByRole('button', { name: 'Keep link' }));
+    expect(links.revokeProjectShareLink).not.toHaveBeenCalled();
+    await user.click(
+      screen.getByRole('button', { name: /Revoke share link created/ })
+    );
+    await user.click(screen.getByRole('button', { name: 'Revoke link' }));
     await waitFor(() =>
       expect(links.revokeProjectShareLink).toHaveBeenCalledWith(
         base.projectId,
@@ -750,6 +759,7 @@ describe('ProjectSharingDialog', () => {
     await user.click(
       screen.getByRole('button', { name: /Revoke share link created/ })
     );
+    await user.click(screen.getByRole('button', { name: 'Revoke link' }));
     expect(links.revokeProjectShareLink).toHaveBeenCalledWith(
       base.projectId,
       'share_old'

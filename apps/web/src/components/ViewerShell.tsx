@@ -995,6 +995,7 @@ export function ViewerShell({
           <div className="viewer-rail-stack">
             <OrientationWidget
               orientationRef={orientationRef}
+              orbitMode={settings.orbitMode ?? 'free'}
               onSelectView={onView}
               onDragStart={() => orientationDragRef.current?.begin()}
               onDrag={(deltaX, deltaY) =>

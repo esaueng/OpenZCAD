@@ -171,8 +171,9 @@ const FIELDS: Record<
   text: [
     // The stored size is the em size (the layout scales the face by
     // size / unitsPerEm), not the capital height: Open Sans capitals stand
-    // 0.714 of it. The label says which.
-    { key: 'size', label: 'Size (em)' },
+    // 0.714 of it. The label says which, and the unit beside it says it is a
+    // document length, not a typographic em (I11).
+    { key: 'size', label: 'Em size' },
     { key: 'rotation', label: 'Rotation', fallback: '0', dimension: 'angle' },
     { key: 'x', label: 'X' },
     { key: 'y', label: 'Y' }
@@ -630,7 +631,16 @@ export function SketchEntityEditor({
             {fields.map(({ key, label, dimension = 'length' }) => (
               <ExprInput
                 key={key}
-                label={label}
+                // Every value says its unit (I11); the field keeps its
+                // plain name for assistive tech and the keyboard.
+                label={
+                  dimension === 'length'
+                    ? `${label} (${units === 'inch' ? 'in' : units})`
+                    : dimension === 'angle'
+                      ? `${label} (°)`
+                      : label
+                }
+                ariaLabel={dimension === 'number' ? undefined : label}
                 value={values[key] ?? ''}
                 scope={scope}
                 quantity={{ documentUnits: units, dimension }}

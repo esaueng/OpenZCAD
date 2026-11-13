@@ -284,6 +284,11 @@ export interface HistoryTimelineProps {
    * selects alone.
    */
   onDeleteFeatures?(featureIds: readonly FeatureId[]): void;
+  /**
+   * Opens a sketch step for editing in the viewport. A double-click on a
+   * sketch row calls it; without it a double-click only selects.
+   */
+  onEditSketch?(feature: FeatureNode): void;
 }
 
 export interface HistoryRevealRequest {
@@ -417,6 +422,7 @@ interface HistoryRowContext {
   onFeatureContextMenu: HistoryTimelineProps['onFeatureContextMenu'];
   onReorderFeature: HistoryTimelineProps['onReorderFeature'];
   onRenameFeature: HistoryTimelineProps['onRenameFeature'];
+  onEditSketch: HistoryTimelineProps['onEditSketch'];
   onToggleFeatureSuppression: HistoryTimelineProps['onToggleFeatureSuppression'];
   onToggleSketchVisibility: HistoryTimelineProps['onToggleSketchVisibility'];
   onToggleBodyVisibility: HistoryTimelineProps['onToggleBodyVisibility'];
@@ -751,6 +757,18 @@ const HistoryRow = memo(function HistoryRow({
               event.preventDefault();
           }}
           onClick={(event) => context.current!.activateRow(feature, event)}
+          // A sketch opens for editing on double-click, as in the Objects
+          // panel; the first click of the pair already selected the row.
+          onDoubleClick={(event) => {
+            if (
+              feature.data.featureKind !== 'sketch' ||
+              event.shiftKey ||
+              event.metaKey ||
+              event.ctrlKey
+            )
+              return;
+            context.current!.onEditSketch?.(context.current!.latest(feature));
+          }}
           // Every row used to announce the same generic kind label, so
           // a history read aloud was a list of identical items. The
           // feature's own name comes first, as on screen.
@@ -980,7 +998,8 @@ export function HistoryTimeline({
   onReorderFeature,
   reorderBusy = false,
   onRenameFeature,
-  onDeleteFeatures
+  onDeleteFeatures,
+  onEditSketch
 }: HistoryTimelineProps) {
   const [dragFeatureId, setDragFeatureId] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<FeatureId | null>(null);
@@ -1727,6 +1746,7 @@ export function HistoryTimeline({
     onFeatureContextMenu,
     onReorderFeature,
     onRenameFeature,
+    onEditSketch,
     onToggleFeatureSuppression,
     onToggleSketchVisibility,
     onToggleBodyVisibility

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Globe } from 'lucide-react';
 import { StableLabel } from './StableLabel';
+import { ShareLinkRevokeConfirm } from './ShareLinkRevokeConfirm';
 import type { ShareRemovalNotice } from '../lib/e2ee/shareWorkStore';
 import { shareLinkCreationProblem } from '../lib/projectShareLink';
 
@@ -258,8 +259,12 @@ export function EncryptedShareLinks({
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<string | null>(null);
+  // The link whose Revoke is waiting for a yes (design review I2).
+  const [revokingId, setRevokingId] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
+  // The confirmation was asked for by Create link, which finishes after it.
+  const [createAfterConfirm, setCreateAfterConfirm] = useState(false);
   const [recoveryKey, setRecoveryKey] = useState('');
   const [transientRemoval, setTransientRemoval] = useState<{
     projectId: string;
@@ -320,6 +325,18 @@ export function EncryptedShareLinks({
     } finally {
       setBusy(null);
     }
+  };
+
+  const createLink = async () => {
+    setCreated(null);
+    setCopied(null);
+    setCreated((await client.create(projectId, 'view')).url);
+  };
+  // Inside the confirmation's own run: a refused confirmation creates nothing.
+  const finishConfirm = async () => {
+    if (!createAfterConfirm) return;
+    setCreateAfterConfirm(false);
+    await createLink();
   };
 
   const copy = async (url: string, key: string) => {
@@ -389,14 +406,17 @@ export function EncryptedShareLinks({
         <button
           type="button"
           className={links.length > 0 ? 'secondary' : 'primary'}
-          disabled={disabled || state?.needsConfirmation}
-          onClick={() =>
-            void run('create', async () => {
-              setCreated(null);
-              setCopied(null);
-              setCreated((await client.create(projectId, 'view')).url);
-            })
-          }
+          disabled={disabled || confirming}
+          onClick={() => {
+            // One action (design review I79): Create link asks for the
+            // confirmation sharing needs, then makes the link.
+            if (state?.needsConfirmation) {
+              setCreateAfterConfirm(true);
+              setConfirming(true);
+              return;
+            }
+            void run('create', createLink);
+          }}
         >
           Create link
         </button>
@@ -416,8 +436,11 @@ export function EncryptedShareLinks({
             aria-label="Confirm sharing"
           >
             <p className="sharing-tag">
-              Confirm with your passkey or recovery key. Visitors trust a link
-              only while you have confirmed it in the last 30 days.
+              {createAfterConfirm
+                ? 'To create the link, confirm with your passkey or recovery key.'
+                : 'Confirm with your passkey or recovery key.'}{' '}
+              Visitors trust a link only while you have confirmed it in the last
+              30 days.
             </p>
             <input
               className="sharing-share-url"
@@ -441,6 +464,7 @@ export function EncryptedShareLinks({
                     });
                     setRecoveryKey('');
                     setConfirming(false);
+                    await finishConfirm();
                   })
                 }
               >
@@ -453,6 +477,7 @@ export function EncryptedShareLinks({
                   void run('confirm', async () => {
                     await client.confirm(projectId, 'passkey');
                     setConfirming(false);
+                    await finishConfirm();
                   })
                 }
               >
@@ -463,6 +488,7 @@ export function EncryptedShareLinks({
                 disabled={disabled}
                 onClick={() => {
                   setConfirming(false);
+                  setCreateAfterConfirm(false);
                   setRecoveryKey('');
                 }}
               >
@@ -470,11 +496,12 @@ export function EncryptedShareLinks({
               </button>
             </div>
           </div>
-        ) : (
+        ) : links.length > 0 ? (
+          // Without links, Create link asks for this itself; only existing
+          // links need a separate nudge to keep opening.
           <div className="sharing-share-notice" role="status">
             <span className="sharing-tag">
-              Confirm sharing before creating a link. Existing links also need
-              confirmation to keep opening for visitors.
+              Your links need your confirmation to keep opening for visitors.
             </span>
             <button
               type="button"
@@ -485,7 +512,7 @@ export function EncryptedShareLinks({
               Confirm sharing…
             </button>
           </div>
-        )
+        ) : null
       ) : null}
 
       {created ? (
@@ -569,45 +596,67 @@ export function EncryptedShareLinks({
 
       {links.length > 0 ? (
         <ul className="sharing-list" aria-label="Active share links">
-          {links.map((row) => (
-            <li key={row.shareId}>
-              <span className="sharing-row-text">
-                <span className="sharing-member-id">
-                  {MODE_LABEL[row.mode]} link
+          {links.map((row) =>
+            revokingId === row.shareId ? (
+              <li key={row.shareId} className="sharing-confirm-row">
+                <ShareLinkRevokeConfirm
+                  name={`${MODE_LABEL[row.mode]} link`}
+                  disabled={busy !== null}
+                  onCancel={() => {
+                    setRevokingId(null);
+                    requestAnimationFrame(() =>
+                      document
+                        .querySelector<HTMLElement>(
+                          `[data-share-link-revoke="${row.shareId}"]`
+                        )
+                        ?.focus()
+                    );
+                  }}
+                  onRevoke={() => {
+                    setRevokingId(null);
+                    void run(`revoke:${row.shareId}`, async () => {
+                      await client.revoke(projectId, row.shareId);
+                      setCreated(null);
+                    });
+                  }}
+                />
+              </li>
+            ) : (
+              <li key={row.shareId}>
+                <span className="sharing-row-text">
+                  <span className="sharing-member-id">
+                    {MODE_LABEL[row.mode]} link
+                  </span>
+                  <span className="sharing-row-detail" data-status={row.status}>
+                    {expiryText(row)}
+                  </span>
                 </span>
-                <span className="sharing-row-detail" data-status={row.status}>
-                  {expiryText(row)}
-                </span>
-              </span>
-              {row.url ? (
+                {row.url ? (
+                  <button
+                    type="button"
+                    className="sharing-row-copy"
+                    disabled={busy !== null || row.status !== 'active'}
+                    aria-label={`Copy ${MODE_LABEL[row.mode]} link`}
+                    onClick={() => void copy(row.url!, row.shareId)}
+                  >
+                    <StableLabel reserve={['Copied', 'Copy']} align="center">
+                      {copied === row.shareId ? 'Copied' : 'Copy'}
+                    </StableLabel>
+                  </button>
+                ) : null}
                 <button
                   type="button"
-                  className="sharing-row-copy"
-                  disabled={busy !== null || row.status !== 'active'}
-                  aria-label={`Copy ${MODE_LABEL[row.mode]} link`}
-                  onClick={() => void copy(row.url!, row.shareId)}
+                  className="sharing-row-action"
+                  disabled={busy !== null}
+                  aria-label={`Revoke ${MODE_LABEL[row.mode]} link`}
+                  data-share-link-revoke={row.shareId}
+                  onClick={() => setRevokingId(row.shareId)}
                 >
-                  <StableLabel reserve={['Copied', 'Copy']} align="center">
-                    {copied === row.shareId ? 'Copied' : 'Copy'}
-                  </StableLabel>
+                  Revoke
                 </button>
-              ) : null}
-              <button
-                type="button"
-                className="sharing-row-action"
-                disabled={busy !== null}
-                aria-label={`Revoke ${MODE_LABEL[row.mode]} link`}
-                onClick={() =>
-                  void run(`revoke:${row.shareId}`, async () => {
-                    await client.revoke(projectId, row.shareId);
-                    setCreated(null);
-                  })
-                }
-              >
-                Revoke
-              </button>
-            </li>
-          ))}
+              </li>
+            )
+          )}
         </ul>
       ) : null}
     </section>

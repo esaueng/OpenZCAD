@@ -24,12 +24,26 @@ import {
   type OrientationLink
 } from './viewer/orientationCube';
 import { useRovingToolbar } from '../hooks/useRovingToolbar';
+import { useKeymap } from '../lib/keymap';
+import { Tooltip } from './Tooltip';
 
 const AXIS_COLORS = {
   x: 'var(--color-handle-x)',
   y: 'var(--color-handle-y)',
   z: 'var(--color-handle-z)'
 };
+
+/** The orbit mode a drag on the cube turns the view with, and what it does. */
+const ORBIT_MODE_HELP = {
+  free: {
+    label: 'Free orbit',
+    detail: 'Drag to rotate; it tumbles over the top and bottom.'
+  },
+  turntable: {
+    label: 'Turntable orbit',
+    detail: 'Drag to rotate; Z stays up and it stops at the top and bottom.'
+  }
+} as const;
 
 /** Preserve facet clicks through normal pointer wobble, then commit to orbit. */
 const DRAG_THRESHOLD_PX = 4;
@@ -107,20 +121,27 @@ function sameFacet(a: CubeFacet | null, b: CubeFacet | null) {
  * Once the viewer paints the cube into its own canvas (`attachOverlay`), the
  * SVG stops painting and writes nothing while the camera moves: it catches up
  * when the camera rests, or the moment a pointer moves over it.
+ *
+ * Its help names the orbit mode a drag on it uses, with the key that switches
+ * it; pressing the cube closes the help, so it never sits over a drag.
  */
 export function OrientationWidget({
   orientationRef,
+  orbitMode = 'free',
   onSelectView,
   onDragStart,
   onDrag,
   onDragEnd
 }: {
   orientationRef: MutableRefObject<OrientationLink | null>;
+  /** How a drag here turns the view; absent reads as free, the default. */
+  orbitMode?: 'free' | 'turntable';
   onSelectView(view: ViewTarget): void;
   onDragStart(): void;
   onDrag(deltaX: number, deltaY: number): void;
   onDragEnd(): void;
 }) {
+  const orbitKey = useKeymap().label('view-orbit-mode');
   const svgRef = useRef<SVGSVGElement | null>(null);
   const faceRefs = useRef<(SVGPolygonElement | null)[]>([]);
   const faceLabelRefs = useRef<(SVGTextElement | null)[]>([]);
@@ -503,142 +524,153 @@ export function OrientationWidget({
           children are presentational, which hid the face and corner buttons
           inside it from some screen readers. One tab stop, the arrow keys
           between the facets (useRovingToolbar). */}
-      <svg
-        ref={svgRef}
-        role="toolbar"
-        className="orientation-cube"
-        viewBox={`0 0 ${CUBE_SIZE} ${CUBE_SIZE}`}
-        width={CUBE_SIZE}
-        height={CUBE_SIZE}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={(event) => finishPointerDrag(event.pointerId, false, true)}
-        onPointerCancel={(event) =>
-          finishPointerDrag(event.pointerId, true, true)
-        }
-        onLostPointerCapture={(event) =>
-          finishPointerDrag(event.pointerId, true, false)
-        }
-        onPointerOver={(event) =>
-          setHighlight({ hovered: facetOf(event.target) })
-        }
-        onPointerLeave={() => setHighlight({ hovered: null })}
-        onFocus={(event) =>
-          setHighlight({
-            focusVisible: showsFocusRing(event.target)
-              ? facetOf(event.target)
-              : null
-          })
-        }
-        onBlur={() => setHighlight({ focusVisible: null })}
+      <Tooltip
+        label={ORBIT_MODE_HELP[orbitMode].label}
+        shortcut={orbitKey}
+        description={ORBIT_MODE_HELP[orbitMode].detail}
+        multiline
       >
-        <title>Drag to rotate the view</title>
-        {/* Occluded triad arms live under the opaque facets, which is what
+        <svg
+          ref={svgRef}
+          role="toolbar"
+          // Named here rather than by a <title>, which the browser would show
+          // as a second tooltip over the one above.
+          aria-label="Drag to rotate the view"
+          className="orientation-cube"
+          viewBox={`0 0 ${CUBE_SIZE} ${CUBE_SIZE}`}
+          width={CUBE_SIZE}
+          height={CUBE_SIZE}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={(event) =>
+            finishPointerDrag(event.pointerId, false, true)
+          }
+          onPointerCancel={(event) =>
+            finishPointerDrag(event.pointerId, true, true)
+          }
+          onLostPointerCapture={(event) =>
+            finishPointerDrag(event.pointerId, true, false)
+          }
+          onPointerOver={(event) =>
+            setHighlight({ hovered: facetOf(event.target) })
+          }
+          onPointerLeave={() => setHighlight({ hovered: null })}
+          onFocus={(event) =>
+            setHighlight({
+              focusVisible: showsFocusRing(event.target)
+                ? facetOf(event.target)
+                : null
+            })
+          }
+          onBlur={() => setHighlight({ focusVisible: null })}
+        >
+          {/* Occluded triad arms live under the opaque facets, which is what
             clips them to the cube's silhouette: only overhang shows. */}
-        <g className="orientation-triad" ref={underLayerRef}>
-          {AXIS_KEYS.map((key) => (
-            <g key={key} ref={armGroupRefs[key]}>
-              <line
-                ref={armLineRefs[key]}
-                x1={CUBE_SIZE / 2}
-                y1={CUBE_SIZE / 2}
-                x2={CUBE_SIZE / 2}
-                y2={CUBE_SIZE / 2}
-                stroke={AXIS_COLORS[key]}
-                strokeWidth="2.2"
-                strokeLinecap="round"
+          <g className="orientation-triad" ref={underLayerRef}>
+            {AXIS_KEYS.map((key) => (
+              <g key={key} ref={armGroupRefs[key]}>
+                <line
+                  ref={armLineRefs[key]}
+                  x1={CUBE_SIZE / 2}
+                  y1={CUBE_SIZE / 2}
+                  x2={CUBE_SIZE / 2}
+                  y2={CUBE_SIZE / 2}
+                  stroke={AXIS_COLORS[key]}
+                  strokeWidth="2.2"
+                  strokeLinecap="round"
+                />
+                <text
+                  ref={armLabelRefs[key]}
+                  className="orientation-axis-label"
+                  x={CUBE_SIZE / 2}
+                  y={CUBE_SIZE / 2}
+                  fill={AXIS_COLORS[key]}
+                  aria-hidden="true"
+                >
+                  {key.toUpperCase()}
+                </text>
+              </g>
+            ))}
+          </g>
+          {FACES.map((face, index) => (
+            <g key={face.view}>
+              <polygon
+                ref={(element) => {
+                  faceRefs.current[index] = element;
+                }}
+                className="cube-face"
+                data-facet={`face:${index}`}
+                style={{ display: 'none' }}
+                role="button"
+                tabIndex={-1}
+                aria-label={`${VIEW_LABELS[face.view]} view`}
+                onClick={() => {
+                  selectFacet(faceActions.current[index] ?? face.view);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    onSelectView(faceActions.current[index] ?? face.view);
+                  }
+                }}
               />
               <text
-                ref={armLabelRefs[key]}
-                className="orientation-axis-label"
-                x={CUBE_SIZE / 2}
-                y={CUBE_SIZE / 2}
-                fill={AXIS_COLORS[key]}
+                ref={(element) => {
+                  faceLabelRefs.current[index] = element;
+                }}
+                className="cube-face-label"
+                style={{ display: 'none' }}
                 aria-hidden="true"
               >
-                {key.toUpperCase()}
+                {VIEW_LABELS[face.view]}
               </text>
             </g>
           ))}
-        </g>
-        {FACES.map((face, index) => (
-          <g key={face.view}>
-            <polygon
-              ref={(element) => {
-                faceRefs.current[index] = element;
-              }}
-              className="cube-face"
-              data-facet={`face:${index}`}
-              style={{ display: 'none' }}
-              role="button"
-              tabIndex={-1}
-              aria-label={`${VIEW_LABELS[face.view]} view`}
+          {CORNERS.map((corner, index) => (
+            // The painted facet and the deeper cut that widens it. The click
+            // lives on the group, so the target is the union of the two: the
+            // cut's outline contains the facet, and the union keeps that true
+            // for the facet's painted seam as well, so the target can never
+            // be smaller than what is drawn. Hover and focus are styled off
+            // the group too, so the drawn triangle lights up from anywhere in
+            // the union.
+            <g
+              className="cube-corner-target"
+              key={corner.label}
+              data-facet={`corner:${index}`}
               onClick={() => {
-                selectFacet(faceActions.current[index] ?? face.view);
+                selectFacet({ corner: corner.corner });
               }}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' || event.key === ' ') {
-                  event.preventDefault();
-                  onSelectView(faceActions.current[index] ?? face.view);
-                }
-              }}
-            />
-            <text
-              ref={(element) => {
-                faceLabelRefs.current[index] = element;
-              }}
-              className="cube-face-label"
-              style={{ display: 'none' }}
-              aria-hidden="true"
             >
-              {VIEW_LABELS[face.view]}
-            </text>
-          </g>
-        ))}
-        {CORNERS.map((corner, index) => (
-          // The painted facet and the deeper cut that widens it. The click
-          // lives on the group, so the target is the union of the two: the
-          // cut's outline contains the facet, and the union keeps that true
-          // for the facet's painted seam as well, so the target can never
-          // be smaller than what is drawn. Hover and focus are styled off
-          // the group too, so the drawn triangle lights up from anywhere in
-          // the union.
-          <g
-            className="cube-corner-target"
-            key={corner.label}
-            data-facet={`corner:${index}`}
-            onClick={() => {
-              selectFacet({ corner: corner.corner });
-            }}
-          >
-            <polygon
-              ref={(element) => {
-                cornerRefs.current[index] = element;
-              }}
-              className="cube-corner"
-              style={{ display: 'none' }}
-              aria-hidden="true"
-            />
-            <polygon
-              ref={(element) => {
-                cornerHitRefs.current[index] = element;
-              }}
-              className="cube-corner-hit"
-              style={{ display: 'none' }}
-              role="button"
-              tabIndex={-1}
-              aria-label={corner.label}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' || event.key === ' ') {
-                  event.preventDefault();
-                  onSelectView({ corner: corner.corner });
-                }
-              }}
-            />
-          </g>
-        ))}
-        <g className="orientation-triad" ref={overLayerRef} />
-      </svg>
+              <polygon
+                ref={(element) => {
+                  cornerRefs.current[index] = element;
+                }}
+                className="cube-corner"
+                style={{ display: 'none' }}
+                aria-hidden="true"
+              />
+              <polygon
+                ref={(element) => {
+                  cornerHitRefs.current[index] = element;
+                }}
+                className="cube-corner-hit"
+                style={{ display: 'none' }}
+                role="button"
+                tabIndex={-1}
+                aria-label={corner.label}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    onSelectView({ corner: corner.corner });
+                  }
+                }}
+              />
+            </g>
+          ))}
+          <g className="orientation-triad" ref={overLayerRef} />
+        </svg>
+      </Tooltip>
     </div>
   );
 }

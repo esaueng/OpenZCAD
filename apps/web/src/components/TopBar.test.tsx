@@ -26,6 +26,7 @@ function renderTopBar(
     buildModeDisabledReason?: string;
     warningCount?: number;
     reloadPrompt?: 'update' | 'interrupted' | null;
+    conflictDeferred?: boolean;
   } = {}
 ) {
   const handlers = {
@@ -40,8 +41,10 @@ function renderTopBar(
     onReviewEditFailure: vi.fn(),
     onShowWarnings: vi.fn(),
     onWorkspaceMode: vi.fn(),
-    onWorkspaceModeIntent: vi.fn()
+    onWorkspaceModeIntent: vi.fn(),
+    onReviewConflict: vi.fn()
   };
+  const { onReviewConflict, ...rest } = handlers;
   render(
     <TopBar
       projectName={options.projectName ?? 'Plate'}
@@ -79,7 +82,8 @@ function renderTopBar(
       onGoHome={vi.fn()}
       onOpenSettings={vi.fn()}
       encryption={options.encryption ?? null}
-      {...handlers}
+      {...rest}
+      {...(options.conflictDeferred ? { onReviewConflict } : {})}
     />
   );
   return handlers;
@@ -286,6 +290,27 @@ describe('TopBar save chip', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Edit not applied' }));
     expect(handlers.onReviewEditFailure).toHaveBeenCalledOnce();
     expect(handlers.onSave).not.toHaveBeenCalled();
+  });
+
+  // Design review I74: after "Decide later" the Conflict chip was a readout,
+  // so nothing led back to the question.
+  it('reopens a deferred conflict from the Conflict chip without saving', () => {
+    const handlers = renderTopBar({
+      saveState: 'conflict',
+      conflictDeferred: true
+    });
+    fireEvent.click(
+      screen.getByRole('button', { name: /Conflict: choose a version/ })
+    );
+    expect(handlers.onReviewConflict).toHaveBeenCalledOnce();
+    expect(handlers.onSave).not.toHaveBeenCalled();
+  });
+
+  it('keeps the Conflict chip a readout while the question is on screen', () => {
+    renderTopBar({ saveState: 'conflict' });
+    expect(
+      screen.queryByRole('button', { name: /choose a version/ })
+    ).not.toBeInTheDocument();
   });
 
   it('keeps a device write failure ahead of a refused proposal', () => {

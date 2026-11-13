@@ -1376,6 +1376,15 @@
   text-overflow: ellipsis;
 }
 
+/* A failure (a library import or move that did not happen): a warning
+   edge so it does not read as a success, and it wraps rather than cutting
+   off the part that says what to do. */
+.toast.warning {
+  border-color: var(--color-warning);
+  border-left-width: 3px;
+  white-space: normal;
+}
+
 .toast-action {
   min-height: 24px;
   padding: 3px 9px;

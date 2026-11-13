@@ -38,6 +38,7 @@ import {
   thickenGlyph,
   threadGlyph
 } from './toolIcons';
+import type { BodyRepresentation } from '@openzcad/shared';
 import { platformShortcutLabel } from './platformShortcut';
 
 export type ToolId =
@@ -427,6 +428,41 @@ export interface ToolAvailability {
   exactGeometryReady: boolean;
   /** An exact edge is picked in the viewport (enables fillet/chamfer). */
   hasEdgeSelected: boolean;
+  /**
+   * Whether a live body has a cylindrical face for Thread or Gear teeth to
+   * pick: false only when every live body's faces are known and none is;
+   * undefined while that is not known, which leaves the tools offered.
+   */
+  hasCylindricalFace?: boolean;
+}
+
+/**
+ * Whether a live (not consumed, not hidden) body has a cylindrical face:
+ * true as soon as one does, false only when every live body's faces are all
+ * known and none is, undefined otherwise (topology not built yet).
+ */
+export function liveCylindricalFace(
+  bodies: Readonly<
+    Record<string, Pick<BodyRepresentation, 'bodyId' | 'consumed' | 'topology'>>
+  > | null,
+  hidden: ReadonlySet<string>
+): boolean | undefined {
+  if (!bodies) return undefined;
+  let known = true;
+  for (const body of Object.values(bodies)) {
+    if (body.consumed || hidden.has(body.bodyId)) continue;
+    const faces = body.topology?.faces;
+    if (!faces) {
+      known = false;
+      continue;
+    }
+    for (const face of faces) {
+      const surface = face.geometry?.surfaceType.toLowerCase();
+      if (surface === 'cylinder') return true;
+      if (surface === undefined) known = false;
+    }
+  }
+  return known ? false : undefined;
 }
 
 /** Why a tool cannot run right now, or null when it can. */
@@ -497,6 +533,14 @@ export function toolDisabledReason(
   }
   if ((tool === 'fillet' || tool === 'chamfer') && avail.liveBodyCount < 1) {
     return 'Needs a body';
+  }
+  // A box-only model offered both, and neither could succeed: each waits on
+  // a pick that is not there to make.
+  if (
+    (tool === 'thread' || tool === 'gear-teeth') &&
+    avail.hasCylindricalFace === false
+  ) {
+    return 'Needs a cylindrical face';
   }
   if (
     (tool === 'linear-pattern' ||
