@@ -634,11 +634,13 @@ function AccountPanel({
             >
               {device.deviceId === thisDevice?.deviceId ? (
                 <Status tone="good">This device</Status>
-              ) : (
+              ) : certified ? (
+                // A locked device shows no Remove at all: a disabled one
+                // beside the only certified device read as a threat (I83).
                 <button
                   className="secondary"
                   type="button"
-                  disabled={busy || !certified}
+                  disabled={busy}
                   aria-label={`Remove ${device.label}`}
                   onClick={() =>
                     setFlow({
@@ -651,13 +653,13 @@ function AccountPanel({
                   <Trash2 size={14} aria-hidden="true" />
                   Remove
                 </button>
-              )}
+              ) : null}
             </SettingRow>
           ))}
         {certified ? (
           <SettingRow
             title="Add a device"
-            hint="On the new device, open Settings › Encryption and choose Ask for approval. Its request appears here."
+            hint="On the new device, open Settings › Encryption and choose Ask for approval. It then appears here under Devices asking to join, with Scan code and Compare codes."
           />
         ) : null}
       </Group>
@@ -931,7 +933,7 @@ function EnrollPanel({
         {step.step === 'waiting' ? (
           <SettingRow
             title="Scan this code"
-            hint="On an unlocked device, open Settings › Encryption and scan it, or choose Compare codes."
+            hint="On an unlocked device, open Settings › Encryption. This device is listed under Devices asking to join: choose Scan code and point its camera here, or Compare codes."
           >
             <ScanCodeDisplay code={step.scanCode} />
           </SettingRow>
