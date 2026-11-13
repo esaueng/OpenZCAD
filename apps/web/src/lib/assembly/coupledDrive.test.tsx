@@ -8,6 +8,8 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   IDENTITY_PLACEMENT,
+  coupledJointValues,
+  evaluateTrack,
   motionStudyDrivers,
   motionStudyValues,
   solveAssembly,
@@ -316,6 +318,133 @@ describe('the motion being moved drives its coupled mates', () => {
       keyPoseAt(train, study, 1, pose, [first, ...motionStudyDrivers(study)])
         .changed
     ).toBe(false);
+  });
+
+  it('does not key rounding: a part put back where the study shows it', () => {
+    // Ten shafts, nine stages at −0.05 with offsets (the shafts rest at
+    // 10°, 9°, … 1°), and an eased track on the last. Scrubbed to 1 s, the
+    // slider of shaft 8 is moved away and back to the value it showed.
+    // Settling the pose from shaft 8 and the study from shaft 9 reaches
+    // shaft 0 by two routes through 0.05⁸, and their rounding differs by
+    // more than the pose tolerance there. Nothing moved: no key, and the
+    // eased curve between the two keys must stay as it was.
+    const frame: AssemblyFrame = {
+      origin: { x: 0, y: 0, z: 0 },
+      zAxis: { x: 0, y: 0, z: 1 },
+      xAxis: { x: 1, y: 0, z: 0 }
+    };
+    const indices = Array.from({ length: 10 }, (_, index) => index);
+    const train: AssemblySet = {
+      components: ['plate', ...indices.map((i) => `part_${i}`)].map((id) => ({
+        id,
+        name: id,
+        bodyId: `body_${id}` as BodyId,
+        grounded: id === 'plate',
+        placement: IDENTITY_PLACEMENT
+      })),
+      joints: indices.map((i): AssemblyJoint => ({
+        id: `shaft_${i}`,
+        name: `Shaft ${i}`,
+        kind: 'revolute',
+        parent: { componentId: 'plate', frame },
+        child: { componentId: `part_${i}`, frame },
+        values: [10 - i],
+        limits: [null]
+      })),
+      positions: [],
+      studies: [],
+      couplings: indices.slice(0, 9).map((i) => ({
+        id: `stage_${i}`,
+        name: `Stage ${i}`,
+        driver: { jointId: `shaft_${i}`, dof: 0 },
+        driven: { jointId: `shaft_${i + 1}`, dof: 0 },
+        ratio: -0.05,
+        // Holds the resting pose: (10 − i − 1) + 0.05 × (10 − i).
+        offset: 9 - i + 0.05 * (10 - i)
+      }))
+    };
+    const study: AssemblyMotionStudy = {
+      id: 'study_eased',
+      name: 'Eased',
+      durationS: 2,
+      playback: 'once',
+      tracks: [
+        {
+          jointId: 'shaft_9',
+          dof: 0,
+          keys: [
+            { t: 0, value: 0, easing: 'linear' },
+            { t: 2, value: 2, easing: 'ease' }
+          ]
+        }
+      ]
+    };
+    const tracks = motionStudyDrivers(study);
+    const raw = motionStudyValues(train, study, 1);
+    const shown = coupledJointValues(train, raw, tracks);
+    const at = (values: Map<string, number[]>, id: string) =>
+      values.get(id)?.[0] as number;
+    const moved = { jointId: 'shaft_8', dof: 0 };
+    const drivers = [moved, ...tracks];
+    const back = {
+      ...Object.fromEntries(raw),
+      shaft_8: [at(shown, 'shaft_8')]
+    };
+    // The trap is real: settled from shaft 8, shaft 0 reads differently.
+    const posed = coupledJointValues(
+      train,
+      new Map(Object.entries(back)),
+      drivers
+    );
+    expect(at(posed, 'shaft_8')).toBe(at(shown, 'shaft_8'));
+    expect(at(posed, 'shaft_9')).toBe(at(shown, 'shaft_9'));
+    expect(
+      Math.abs(at(posed, 'shaft_0') - at(shown, 'shaft_0'))
+    ).toBeGreaterThan(1e-6);
+
+    const returned = keyPoseAt(train, study, 1, back, drivers);
+    expect(returned.changed).toBe(false);
+    expect(returned.study).toBe(study);
+    // Nor when the slider lands a hair off the shown value.
+    const hair = keyPoseAt(
+      train,
+      study,
+      1,
+      { ...back, shaft_8: [at(shown, 'shaft_8') + 1e-9] },
+      drivers
+    );
+    expect(hair.changed).toBe(false);
+    expect(evaluateTrack(hair.study!.tracks[0]!, 0.5)).toBe(
+      evaluateTrack(study.tracks[0]!, 0.5)
+    );
+    expect(evaluateTrack(study.tracks[0]!, 0.5)).toBeCloseTo(0.3125, 12);
+
+    // A real move of the same shaft is keyed, and plays back.
+    const turned = keyPoseAt(
+      train,
+      study,
+      1,
+      { ...back, shaft_8: [at(shown, 'shaft_8') + 0.5] },
+      drivers
+    );
+    expect(turned.changed).toBe(true);
+    expect(turned.study?.tracks[0]?.keys.map((k) => k.t)).toEqual([0, 1, 2]);
+    const played = coupledJointValues(
+      train,
+      motionStudyValues(train, turned.study!, 1),
+      motionStudyDrivers(turned.study!)
+    );
+    expect(at(played, 'shaft_8')).toBeCloseTo(at(shown, 'shaft_8') + 0.5, 9);
+    // So is a move of the first shaft, nine stages up from the tracked one.
+    expect(
+      keyPoseAt(
+        train,
+        study,
+        1,
+        { ...back, shaft_0: [at(shown, 'shaft_0') + 5] },
+        [{ jointId: 'shaft_0', dof: 0 }, ...tracks]
+      ).changed
+    ).toBe(true);
   });
 
   it('gives a coupled pair one track, and reads the values on screen', () => {

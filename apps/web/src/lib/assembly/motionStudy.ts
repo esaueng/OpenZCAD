@@ -8,6 +8,7 @@ import {
   coupledJointLimits,
   coupledJointValues,
   couplingGroupKeys,
+  couplingGroupLead,
   couplingGroups,
   evaluateTrack,
   jointSweepRange,
@@ -159,10 +160,16 @@ export const POSE_VALUE_TOLERANCE = 1e-6;
  * driven gear re-keys the gear the study plays, and no second track is
  * made that the first would overrule.
  *
- * A group is keyed only when the pose really moved it: what it shows with
- * the pose applied is compared with what the study shows there, both with
- * limits and couplings applied, on whichever member moved most. Once it
- * has, the key is written whatever the step comes to on the keyed motion. The values handed in include every joint a
+ * A group is keyed only when the pose really moved it, and that is judged
+ * on one motion: the one the pose drives the group from (the moved part,
+ * else the study's own track). Its value with the pose applied is compared
+ * with what the study shows for it there, both with limits and couplings
+ * applied, in its own units. The other members are that value carried
+ * through the ratio chain, so comparing them would scale a real move and
+ * the solve's rounding alike (nine 1 : 20 stages turn one unit in the last
+ * place of 2° into 5e-6° on the first shaft, though nothing moved). Once
+ * the driving motion has moved, the key is written whatever the step comes
+ * to on the keyed motion, which may be geared far down from it. The values handed in include every joint a
  * scrub left on screen, and a key a limit holds short of (a track keyed to
  * 80° that its mate stops at 40°) reads differently raw than shown; moving
  * some other joint must never rewrite that key.
@@ -216,7 +223,8 @@ export function keyPoseAt(
   let settled: {
     shown: Map<string, number[]>;
     posed: Map<string, number[]>;
-    members: Map<string, readonly AssemblyCouplingEnd[]>;
+    /** Per group: the motion the pose drives it from. */
+    leads: Map<string, AssemblyCouplingEnd>;
   } | null = null;
   const settle = () => {
     if (settled) return settled;
@@ -225,27 +233,35 @@ export function keyPoseAt(
     const shown = coupledJointValues(set, pose, tracks);
     for (const [jointId, posed] of Object.entries(values))
       pose.set(jointId, [...posed]);
-    const members = new Map<string, readonly AssemblyCouplingEnd[]>();
+    const driving = [...drivers, ...tracks];
+    const leads = new Map<string, AssemblyCouplingEnd>();
     for (const group of couplingGroups(set)) {
       const first = group.members[0];
-      if (first) members.set(`${first.jointId}/${first.dof}`, group.members);
+      const lead = couplingGroupLead(group, pose, driving);
+      if (first && lead) leads.set(`${first.jointId}/${first.dof}`, lead);
     }
     settled = {
       shown,
-      posed: coupledJointValues(set, pose, [...drivers, ...tracks]),
-      members
+      posed: coupledJointValues(set, pose, driving),
+      leads
     };
     return settled;
   };
-  /** Whether the pose shows any motion of the group somewhere new. */
+  /**
+   * Whether the pose moved the group: its driving motion shows a new value.
+   * Only that motion is compared. The pose is settled from it and the
+   * study from its track, so every other member differs by the rounding of
+   * two routes through the ratio chain even when nothing moved.
+   */
   const groupMoved = (group: string) => {
-    const { shown, posed, members } = settle();
-    return (members.get(group) ?? []).some(
-      (m) =>
-        Math.abs(
-          (posed.get(m.jointId)?.[m.dof] ?? 0) -
-            (shown.get(m.jointId)?.[m.dof] ?? 0)
-        ) > POSE_VALUE_TOLERANCE
+    const { shown, posed, leads } = settle();
+    const lead = leads.get(group);
+    if (!lead) return false;
+    return (
+      Math.abs(
+        (posed.get(lead.jointId)?.[lead.dof] ?? 0) -
+          (shown.get(lead.jointId)?.[lead.dof] ?? 0)
+      ) > POSE_VALUE_TOLERANCE
     );
   };
   const joints = new Map(set.joints.map((j) => [j.id, j]));
@@ -270,9 +286,9 @@ export function keyPoseAt(
         drivers.find(inGroup) ?? { jointId: joint.id, dof };
       const targetJoint = joints.get(target.jointId);
       const targetValue = settle().posed.get(target.jointId)?.[target.dof];
-      // The group moved, judged on the member that moved most. The keyed
-      // motion may be geared far down from it (four stages at 1 : 20 turn
-      // 0.1° into 6e-7°), so its own step is not tested again: a second
+      // The group moved, judged on its driving motion. The keyed motion
+      // may be geared far down from it (four stages at 1 : 20 turn 0.1°
+      // into 6e-7°), so its own step is not tested again: a second
       // tolerance check here would drop the edit.
       if (targetJoint && targetValue !== undefined)
         key(targetJoint, target.dof, targetValue, true);

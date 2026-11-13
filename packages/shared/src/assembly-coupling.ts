@@ -223,8 +223,11 @@ function groupRange(
  * 2. else the first member, in the group's stored order, whose joint has a
  *    candidate value in `overrides`: values being written lead;
  * 3. else the group's first member, with its stored value.
+ *
+ * Exported so a caller can ask which motion a pose is driven from (a motion
+ * study judges whether a pose moved a group on that motion alone).
  */
-function leadOf(
+export function couplingGroupLead(
   group: AssemblyCouplingGroup,
   overrides: ReadonlyMap<string, readonly number[]> | undefined,
   drivers: readonly AssemblyCouplingEnd[] | undefined
@@ -247,7 +250,7 @@ function leadOf(
  * `overrides` are candidate values (a drag, a playback frame, a pose being
  * saved); joints without one keep their stored values. `drivers` names the
  * motions being driven, most important first. In each coupled group one
- * member leads ({@link leadOf}) with its candidate (else stored) value and
+ * member leads ({@link couplingGroupLead}) with its candidate (else stored) value and
  * the rest follow it; another member's candidate value is ignored.
  */
 export function coupledJointValues(
@@ -274,7 +277,7 @@ export function coupledJointValues(
   const at = (member: AssemblyCouplingEnd): number =>
     (values.get(member.jointId) as number[])[member.dof] as number;
   for (const group of couplingGroups(set)) {
-    const lead = leadOf(group, overrides, drivers);
+    const lead = couplingGroupLead(group, overrides, drivers);
     if (!lead) continue;
     const leadValue = at(lead);
     const wanted = (leadValue - lead.shift) / lead.scale;

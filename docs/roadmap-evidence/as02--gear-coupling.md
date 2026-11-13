@@ -20,8 +20,10 @@ Animate, study playback and scrubbing, View playback, and keying a pose in an
 open study (which keys the motion the study already tracks in that group,
 so coupled joints share one track, and only a group the pose really moved:
 moving an unrelated joint never rewrites a key that a limit holds short of,
-while a real move is keyed however small it is on a geared-down tracked
-shaft). The lead is clamped to the range every
+and a part put back where the study shows it is no edit, since movement is
+judged on the driving motion in its own units rather than on values the
+ratio chain has scaled; a real move is keyed however small it is on a
+geared-down tracked shaft). The lead is clamped to the range every
 member's limit allows (a driven joint's limit stops its driver); a drag, an
 Animate sweep and View's joint playback all read that narrowed range.
 Refused by code (`coupling:*`): an unknown joint, a joint coupled to itself,
@@ -86,7 +88,10 @@ on screen; a drag in an open study re-keys the tracked gear; moving an
 unrelated joint at the end of a study whose track a limit holds at 40° of
 its 80° key leaves that key exactly; a 0.1° move of the first of five
 shafts geared 1 : 20 four times is keyed on the tracked last shaft at
-6.25e-7° and plays back; one track per coupled group; Animate and the View player sweep the same ±40° of a pair
+6.25e-7° and plays back; on a ten-shaft train with offsets and an eased
+track, a shaft returned to its shown value adds no key and leaves the
+curve as it was, though rounding moves the first shaft's settled value by
+more than the tolerance; one track per coupled group; Animate and the View player sweep the same ±40° of a pair
 whose mate is limited to ±20°),
 `apps/web/src/components/assembly/GearMeshCard.test.tsx` (Turn together is
 the default with a mount and saves one transaction, Fixed together one

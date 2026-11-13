@@ -127,12 +127,16 @@ relates values, it never closes a kinematic loop.
   a part while a study is open keys the motion the study already tracks in
   that group (with the value the dragged pose gives it) rather than adding a
   track the first would overrule. A group is keyed only when the pose moved
-  it: what it shows with the pose applied is compared with what the study
-  shows there, both with limits and couplings applied, on whichever member
-  moved most. Moving some other joint never rewrites a key, also one a limit
-  holds short of. Once a group has moved its key is written however small
-  the step is on the keyed motion, which may be geared far down from the
-  part that was moved.
+  it, judged on the motion the pose drives the group from (the moved part,
+  else the study's own track): its value with the pose applied against what
+  the study shows for it there, both with limits and couplings applied, in
+  its own units. The other members are that value carried through the
+  ratio chain, so comparing them would scale the solve's rounding with the
+  train; a part put back where the study shows it is no edit, however long
+  the train. Moving some other joint never rewrites a key, also one a limit
+  holds short of. Once the driving motion has moved, the key is written
+  however small the step is on the keyed motion, which may be geared far
+  down from the part that was moved.
 - **Limits bound the pair.** The lead value is clamped into the range every
   member's limit allows: a driven joint's limit stops its driver. A drag,
   an Animate sweep and View's playback of a joint all read that narrowed
