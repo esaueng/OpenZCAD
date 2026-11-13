@@ -145,6 +145,13 @@ const foldTools = (container: HTMLElement) =>
 const openDrawer = () =>
   fireEvent.click(screen.getByRole('button', { name: /^More tools/ }));
 
+/**
+ * Greyed, as the rail greys: by `aria-disabled`, never `disabled`, so the
+ * arrow keys still reach the button and it keeps the keyboard's focus.
+ */
+const greyed = (element: Element) =>
+  element.getAttribute('aria-disabled') === 'true';
+
 /** A DataTransfer stand-in: happy-dom's drag events carry none. */
 function dataTransfer() {
   const data = new Map<string, string>();
@@ -296,7 +303,7 @@ describe('CommandCard', () => {
         availability: { ...AVAILABILITY, liveBodyCount: 2 }
       });
       expect(
-        screen.getByRole('navigation', { name: 'Feature tools' })
+        screen.getByRole('toolbar', { name: 'Feature tools' })
       ).toHaveAttribute('data-context', kind);
       expect(railTools(container)).toEqual(RAIL_TOOLS);
       expect(suggestedRail(container)).toEqual(suggested);
@@ -454,7 +461,7 @@ describe('CommandCard', () => {
       .getAllByRole('button')
       .map((b) => [
         b.getAttribute('aria-label'),
-        (b as HTMLButtonElement).disabled
+        greyed(b)
       ]);
 
   it('holds the rail in place while a verb is dragged', () => {
@@ -509,13 +516,13 @@ describe('CommandCard', () => {
       rerender(view(null));
       expect(railTools(container)).toEqual([]);
       expect(
-        screen.getByRole('button', { name: 'Selection: Offset' })
-      ).toBeDisabled();
+        greyed(screen.getByRole('button', { name: 'Selection: Offset' }))
+      ).toBe(true);
       rerender(view(offsetPick('armed')));
       expect(railTools(container)).toEqual([]);
       expect(
-        screen.getByRole('button', { name: 'Selection: Hole' })
-      ).toBeEnabled();
+        greyed(screen.getByRole('button', { name: 'Selection: Hole' }))
+      ).toBe(false);
       // A pick really gone gives the rail back to the pins.
       rerender(view(null));
       expect(railTools(container)).toEqual(DEFAULT_PINNED_TOOLS);
@@ -557,8 +564,8 @@ describe('CommandCard', () => {
         screen.queryByRole('region', { name: 'Offset Face operation' })
       ).toBeNull();
       expect(
-        screen.getByRole('button', { name: /^More tools/ })
-      ).toBeEnabled();
+        greyed(screen.getByRole('button', { name: /^More tools/ }))
+      ).toBe(false);
     } finally {
       vi.useRealTimers();
     }
@@ -622,11 +629,13 @@ describe('CommandCard', () => {
       expect(observed()).toContain(firstDrawer);
 
       // The handle is grabbed: the drawer goes, and nothing says it is
-      // open. The toggle stays in place, disabled, out of the tab order.
+      // open. The toggle stays in place, greyed, and refuses its press.
       rerender(view('dragging'));
       expect(container.querySelector('.command-flyout')).toBeNull();
       expect(toggle()).toHaveAttribute('aria-expanded', 'false');
-      expect(toggle()).toBeDisabled();
+      expect(greyed(toggle())).toBe(true);
+      fireEvent.click(toggle());
+      expect(container.querySelector('.command-flyout')).toBeNull();
       expect(toggle()).not.toHaveClass('active');
       expect(container.querySelector('.command-more')).not.toHaveClass('open');
       expect(drawerTabStops()).toEqual([]);
@@ -641,7 +650,7 @@ describe('CommandCard', () => {
       expect(secondDrawer).not.toBeNull();
       expect(secondDrawer).not.toBe(firstDrawer);
       expect(toggle()).toHaveAttribute('aria-expanded', 'true');
-      expect(toggle()).toBeEnabled();
+      expect(greyed(toggle())).toBe(false);
       expect(drawerTabStops().length).toBeGreaterThan(0);
       expect(observed()).toContain(secondDrawer);
       expect(observed()).toContain(
@@ -1194,5 +1203,218 @@ describe('CommandCard', () => {
     expect(
       screen.queryByRole('button', { name: /^Scroll to/ })
     ).not.toBeInTheDocument();
+  });
+
+  describe('the rail as one tab stop', () => {
+    const tabStops = (container: HTMLElement) =>
+      Array.from(
+        container.querySelectorAll<HTMLElement>('button.command-rail')
+      )
+        .filter((button) => button.getAttribute('tabindex') === '0')
+        .map((button) => button.getAttribute('aria-label'));
+
+    it('is a vertical toolbar with a single stop, on its first tool', () => {
+      const { container } = renderCard();
+      const rail = screen.getByRole('toolbar', { name: 'Feature tools' });
+      expect(rail).toHaveAttribute('aria-orientation', 'vertical');
+      expect(rail).toHaveAttribute('data-rail', 'build');
+      // Twelve buttons, one stop: Tab passes the rail in one press.
+      expect(
+        container.querySelectorAll('button.command-rail').length
+      ).toBeGreaterThan(8);
+      expect(tabStops(container)).toEqual([
+        expect.stringMatching(/^Sketch/)
+      ]);
+    });
+
+    it('walks the tools, greyed ones included, with the arrow keys', () => {
+      const { container } = renderCard();
+      const sketch = screen.getByRole('button', { name: /^Sketch/ });
+      sketch.focus();
+      fireEvent.keyDown(sketch, { key: 'ArrowDown' });
+      // Extrude cannot run (no profile) and is greyed by aria: still a
+      // stop, and its name carries the reason.
+      const extrude = screen.getByRole('button', { name: /^Extrude/ });
+      expect(greyed(extrude)).toBe(true);
+      expect(extrude).toHaveFocus();
+      expect(extrude).toHaveAccessibleName(/ — .+/);
+      expect(tabStops(container)).toEqual([
+        expect.stringMatching(/^Extrude/)
+      ]);
+      fireEvent.keyDown(extrude, { key: 'End' });
+      expect(screen.getByRole('button', { name: /^More tools/ })).toHaveFocus();
+      fireEvent.keyDown(document.activeElement!, { key: 'Home' });
+      expect(sketch).toHaveFocus();
+    });
+
+    it('keeps the drawer out of the rail’s stops, in the tab order', () => {
+      const { container } = renderCard();
+      openDrawer();
+      const row = container.querySelector<HTMLElement>('.command-tile')!;
+      expect(row).not.toHaveAttribute('tabindex');
+      expect(screen.getByRole('searchbox', { name: 'Find a tool' })).toBe(
+        container.querySelector('.command-flyout input')
+      );
+      // An arrow in the drawer's search stays the field's.
+      const search = screen.getByRole('searchbox', { name: 'Find a tool' });
+      search.focus();
+      fireEvent.keyDown(search, { key: 'ArrowDown' });
+      expect(search).toHaveFocus();
+    });
+
+    it('leaves Alt+arrow to the pin it reorders', () => {
+      const onPins = vi.fn<(pins: ToolId[]) => void>();
+      renderCard(NOTHING, { onPins });
+      const sketch = screen.getByRole('button', { name: /^Sketch/ });
+      sketch.focus();
+      fireEvent.keyDown(sketch, { key: 'ArrowDown', altKey: true });
+      expect(onPins).toHaveBeenCalledOnce();
+      expect(onPins.mock.calls[0]![0].indexOf('sketch')).toBe(1);
+    });
+  });
+
+  describe('the docked drawer', () => {
+    it('names itself and closes from its own button', () => {
+      renderCard();
+      openDrawer();
+      const drawer = screen.getByRole('group', { name: 'Tools drawer' });
+      const toggle = screen.getByRole('button', { name: /^More tools/ });
+      expect(toggle).toHaveAttribute('aria-controls', drawer.id);
+      fireEvent.click(
+        within(drawer).getByRole('button', { name: 'Close tools drawer' })
+      );
+      expect(
+        screen.queryByRole('group', { name: 'Tools drawer' })
+      ).toBeNull();
+      expect(toggle).toHaveAttribute('aria-expanded', 'false');
+      // The keyboard goes back to the button that opens it.
+      expect(toggle).toHaveFocus();
+    });
+
+    it('has its close button in the simple view too', () => {
+      renderCard(NOTHING, { initialView: 'simple' });
+      openDrawer();
+      expect(
+        screen.getByRole('button', { name: 'Close tools drawer' })
+      ).toBeInTheDocument();
+    });
+
+    it('closes on Escape from its button, not only from inside', () => {
+      const onKeyDown = vi.fn<(key: string) => void>();
+      const onLaunchTool = vi.fn();
+      render(
+        // The workspace's Escape ladder, above the rail.
+        <div onKeyDown={(event) => onKeyDown(event.key)}>
+          <Harness selection={NOTHING} onLaunchTool={onLaunchTool} />
+        </div>
+      );
+      openDrawer();
+      const toggle = screen.getByRole('button', { name: /^More tools/ });
+      fireEvent.keyDown(toggle, { key: 'Escape' });
+      expect(
+        screen.queryByRole('group', { name: 'Tools drawer' })
+      ).toBeNull();
+      // The key was the drawer's: the workspace does not also act on it.
+      expect(onKeyDown).not.toHaveBeenCalled();
+      // Closed, Escape is the workspace's again.
+      fireEvent.keyDown(toggle, { key: 'Escape' });
+      expect(onKeyDown).toHaveBeenCalledWith('Escape');
+    });
+  });
+
+  describe('the rail a pick has taken', () => {
+    const pick = (): SelectionCalloutContent => ({
+      label: textLabelSegments('Bracket · Top face'),
+      verbs: [
+        {
+          id: 'tool:shell',
+          label: 'Shell',
+          title: 'Hollow the body',
+          disabled: false,
+          pressed: false
+        }
+      ],
+      anchor: 'selection',
+      onVerb: vi.fn(),
+      onClear: vi.fn()
+    });
+
+    it.each([
+      [{ ...NOTHING, faceSelected: true, bodyCount: 1 }, '1 face', 'Face'],
+      [{ ...NOTHING, edgeCount: 1, bodyCount: 1 }, '1 edge', 'Edge'],
+      [{ ...NOTHING, edgeCount: 8, bodyCount: 1 }, '8 edges', 'Edge×8'],
+      [{ ...NOTHING, bodyCount: 1 }, '1 body', 'Body'],
+      [{ ...NOTHING, bodyCount: 3 }, '3 bodies', 'Body×3'],
+      [{ ...NOTHING, regionCount: 2 }, '2 regions', 'Region×2']
+    ] as const)(
+      'says what its tools act on: %o reads %s',
+      (selection, summary, heading) => {
+        const { container } = renderCard(selection, {
+          pickSummary: summary,
+          pick: pick()
+        });
+        const rail = screen.getByRole('toolbar', { name: 'Feature tools' });
+        // The same toolbar, marked as the selection's rather than Build's.
+        expect(rail).toHaveAttribute('data-rail', 'selection');
+        const shown = Array.from(
+          container.querySelectorAll(
+            '.selection-rail-heading > [aria-hidden="true"]'
+          )
+        )
+          .map((part) => part.textContent)
+          .join('');
+        expect(shown).toBe(heading);
+        // The words in full describe the group for assistive tech.
+        expect(
+          screen.getByRole('group', { name: 'Selection' })
+        ).toHaveAccessibleDescription(`Tools for the selection: ${summary}`);
+      }
+    );
+
+    it('offers the same verbs in the same order under the heading', () => {
+      renderCard(
+        { ...NOTHING, faceSelected: true, bodyCount: 1 },
+        { pickSummary: '1 face', pick: pick() }
+      );
+      expect(
+        within(screen.getByRole('group', { name: 'Selection' }))
+          .getAllByRole('button')
+          .map((button) => button.getAttribute('aria-label'))
+      ).toEqual(['Deselect all', 'Selection: Shell']);
+    });
+
+    it('is one tab stop as well, entered on Deselect all', () => {
+      const { container } = renderCard(
+        { ...NOTHING, faceSelected: true, bodyCount: 1 },
+        { pickSummary: '1 face', pick: pick() }
+      );
+      const stops = Array.from(
+        container.querySelectorAll<HTMLElement>('button.command-rail')
+      ).filter((button) => button.getAttribute('tabindex') === '0');
+      expect(stops.map((button) => button.getAttribute('aria-label'))).toEqual(
+        ['Deselect all']
+      );
+      stops[0]!.focus();
+      fireEvent.keyDown(stops[0]!, { key: 'ArrowDown' });
+      expect(
+        screen.getByRole('button', { name: 'Selection: Shell' })
+      ).toHaveFocus();
+    });
+  });
+
+  it('says a suggested tool is a suggestion, in its name and its help', () => {
+    const { container } = renderCard();
+    const suggested = container.querySelector<HTMLElement>(
+      'button.command-rail.is-suggested'
+    )!;
+    // The dot on the button is the only other mark of it.
+    expect(suggested).toHaveAccessibleName(
+      /^Chamfer.* — .*\. Suggested for this step — drag up to pin$/
+    );
+    // Still found by the tool's name, as every other button of it is.
+    expect(screen.getByRole('button', { name: /^Chamfer/ })).toBe(suggested);
+    expect(
+      screen.getByRole('group', { name: 'Suggested' })
+    ).toContainElement(suggested);
   });
 });

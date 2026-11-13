@@ -30,6 +30,7 @@ import { Tooltip } from './Tooltip';
 import { labelWithKey, useKeymap, type Keymap } from '../lib/keymap';
 import { platformShortcutLabel } from '../lib/platformShortcut';
 import { useMediaQuery } from '../hooks/useMediaQuery';
+import { useRovingToolbar } from '../hooks/useRovingToolbar';
 import type { TouchModifiers } from './viewer/touchNavigation';
 
 /**
@@ -56,6 +57,16 @@ function viewTitle(
     view.command && keymap.label(view.command)
   );
 }
+
+/**
+ * The instrument rail's stops for the arrow keys: the buttons on the rail
+ * itself (and the sketch relations standing beside it). What a button opens
+ * (the section controls, the standard views, the point relations) keeps its
+ * own tab order.
+ */
+export const VIEWER_RAIL_STOPS = 'button.rail-button, button.sketch-relation';
+export const VIEWER_RAIL_STOPS_EXCEPT =
+  '[data-rail-flyout], .sketch-point-relations';
 
 interface ViewerToolbarProps {
   settings: ViewerSettings;
@@ -117,6 +128,11 @@ interface ViewerToolbarProps {
    */
   touchModifiers?: TouchModifiers;
   onTouchModifiersChange?(next: TouchModifiers): void;
+  /**
+   * False inside the instrument rail, which makes one tab stop of this bar
+   * and the panel buttons under it; true where the bar stands alone.
+   */
+  roving?: boolean;
 }
 
 export const SECTION_PLANE_LABELS: Record<SectionPlaneId, string> = {
@@ -166,7 +182,8 @@ export function ViewerToolbar({
   sectionOutline,
   units,
   touchModifiers,
-  onTouchModifiersChange
+  onTouchModifiersChange,
+  roving = true
 }: ViewerToolbarProps) {
   const keymap = useKeymap();
   const coarsePointer = useMediaQuery('(pointer: coarse)');
@@ -175,6 +192,16 @@ export function ViewerToolbar({
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const sectionAnchorRef = useRef<HTMLDivElement | null>(null);
   const sectionTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const toolbarRef = useRef<HTMLDivElement | null>(null);
+  // One tab stop for the bar where it stands alone (Tweak's layout). Inside
+  // the instrument rail the rail owns the stops, the panel buttons under
+  // this bar included (ViewerShell).
+  useRovingToolbar(toolbarRef, {
+    items: VIEWER_RAIL_STOPS,
+    except: VIEWER_RAIL_STOPS_EXCEPT,
+    orient: '.viewer-rail',
+    enabled: roving
+  });
   // The cut and its panel are two things: the cut stays on while the panel
   // is hidden (the section button or Escape), so a look from a standard view
   // can still be a sectioned one. Hiding is remembered by the workspace,
@@ -354,36 +381,57 @@ export function ViewerToolbar({
   return (
     // The viewer bar: undo/redo and the viewport toggles. Still `.viewer-rail`
     // in the stylesheets; the name is what people call it.
-    <div className="viewer-rail" role="toolbar" aria-label="Viewer bar">
+    <div
+      ref={toolbarRef}
+      className="viewer-rail"
+      role="toolbar"
+      aria-label="Viewer bar"
+    >
       {/* Two groups: what changes the document, then how it is looked at.
           A roomy window draws each as its own island (quiet-stage.css);
           elsewhere the wrappers are `display: contents` and the hairline
           between them is all that shows. */}
       <div className="rail-group" role="group" aria-label="Edit">
+        {/* Greyed by aria, not `disabled`: a disabled button cannot take
+            the keyboard, so the arrow keys skipped it and its reason was
+            never read out, and Undo dropped the focus the moment the last
+            step was undone under it. The press is refused here instead. */}
         <Tooltip
           label="Undo"
           shortcut={keymap.label('edit-undo')}
-          {...(!canUndo && undoFloorTrimmed
-            ? { description: UNDO_FLOOR_TRIMMED_REASON }
+          {...(!canUndo
+            ? {
+                description: undoFloorTrimmed
+                  ? UNDO_FLOOR_TRIMMED_REASON
+                  : 'Nothing to undo'
+              }
             : {})}
         >
           <button
             type="button"
             className="rail-button"
-            onClick={onUndo}
+            onClick={() => {
+              if (canUndo) onUndo();
+            }}
             aria-label="Undo"
-            disabled={!canUndo}
+            aria-disabled={!canUndo}
           >
             <Undo2 size={16} aria-hidden="true" />
           </button>
         </Tooltip>
-        <Tooltip label="Redo" shortcut={keymap.label('edit-redo')}>
+        <Tooltip
+          label="Redo"
+          shortcut={keymap.label('edit-redo')}
+          {...(!canRedo ? { description: 'Nothing to redo' } : {})}
+        >
           <button
             type="button"
             className="rail-button"
-            onClick={onRedo}
+            onClick={() => {
+              if (canRedo) onRedo();
+            }}
             aria-label="Redo"
-            disabled={!canRedo}
+            aria-disabled={!canRedo}
           >
             <Redo2 size={16} aria-hidden="true" />
           </button>

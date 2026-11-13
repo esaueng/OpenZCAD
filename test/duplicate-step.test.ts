@@ -23,7 +23,7 @@ import {
 } from '@openzcad/shared';
 
 /**
- * U06 (ZC-104): Duplicate repeats a Move, Mirror or Pattern step. The copy
+ * U06 (ZC-104): Duplicate repeats a Move or Mirror step. The copy
  * reads the source's references, takes new identities, lands right after the
  * source and is one undoable transaction; other kinds refuse explicitly.
  */
@@ -176,7 +176,7 @@ describe('duplicate history step (ZC-104)', () => {
     ]);
   });
 
-  it('copies a Pattern mid-history with its own body', async () => {
+  it('refuses a Pattern, whose copy would pattern the same seed again (ADR-025)', () => {
     const { commands, blockId } = manager();
     const pattern = commandFactories.patternBody({
       name: 'Row',
@@ -187,27 +187,18 @@ describe('duplicate history step (ZC-104)', () => {
       spacing: 20
     });
     commands.execute(pattern);
-    commands.execute(
-      commandFactories.addPrimitive({
-        name: 'Later',
-        primitiveKind: 'box',
-        dimensions: { width: 1, height: 1, depth: 1 }
-      })
-    );
-    const copyId = duplicate(commands, pattern.payload.ids!.featureId);
-    expect(order(commands.document)).toEqual([
-      'Block',
-      'Row',
-      'Row 2',
-      'Later'
-    ]);
-    const copy = listFeaturesInOrder(commands.document).find(
-      (feature) => feature.featureId === copyId
-    )!;
-    expect(copy.bodyId).not.toBe(pattern.payload.ids!.bodyId);
-    expect(await bbox(commands.document, copy.bodyId!)).toEqual(
-      await bbox(commands.document, pattern.payload.ids!.bodyId)
-    );
+    const featureId = pattern.payload.ids!.featureId;
+    const refusal = duplicateFeatureRefusal(commands.document, featureId);
+    expect(refusal).toMatch(/branches the history/);
+    expect(() =>
+      duplicateFeatureCommands(commands.document, featureId)
+    ).toThrow(refusal!);
+    // The command layer refuses the same copy made by hand.
+    const { ids: _ids, ...copy } = pattern.payload;
+    expect(() =>
+      commands.execute(commandFactories.patternBody({ ...copy, name: 'Row 2' }))
+    ).toThrow(/already replaced, which branches the history/);
+    expect(order(commands.document)).toEqual(['Block', 'Row']);
   });
 
   it('refuses a step past the end of history', () => {
@@ -236,10 +227,10 @@ describe('duplicate history step (ZC-104)', () => {
     const { commands } = manager();
     const block = listFeaturesInOrder(commands.document)[0]!;
     expect(duplicateFeatureRefusal(commands.document, block.featureId)).toBe(
-      'Duplicate covers Move, Mirror and Pattern steps only.'
+      'Duplicate covers Move and Mirror steps only.'
     );
     expect(() =>
       duplicateFeatureCommands(commands.document, block.featureId)
-    ).toThrow(/Move, Mirror and Pattern/);
+    ).toThrow(/Move and Mirror/);
   });
 });

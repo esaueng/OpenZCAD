@@ -12,7 +12,9 @@ import {
   SquareX
 } from 'lucide-react';
 import {
+  useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -172,11 +174,18 @@ export function useHeldPick(
 
 /**
  * What can be done with the pick, as the verb rail itself. A pick swaps the
- * rail's fixed tools for the pick's own verbs, under a Deselect all that
- * says what is picked; the verb the pick has armed is the lit one. The
- * pick's name and measurement read in the bar at the foot of the stage
+ * rail's fixed tools for the pick's own verbs, under a heading that names
+ * what they act on ("Face", "Edge ×8") and a Deselect all; the verb the pick
+ * has armed is the lit one. The heading is what tells the two rails apart:
+ * without it the Build tools turned, in the same slot, into ten other icons
+ * with nothing on screen saying the rail was now about the selection. The
+ * pick's full name and measurement read in the bar at the foot of the stage
  * ({@link SelectionReadout}), so nothing hangs over the model or beside
  * the rail.
+ *
+ * A verb the rail holds is greyed by `aria-disabled` and refuses its press,
+ * never `disabled`: the arrow keys still reach it, its help (the reason) is
+ * its description, and a verb greyed under the keyboard's focus keeps it.
  *
  * It keeps the Selection card's classes and accessible names ("Selection:
  * Fillet", "Deselect all", the "Offset Face operation" region), so every
@@ -192,11 +201,20 @@ export function useHeldPick(
  */
 export function SelectionRail({
   content,
-  summary
+  summary,
+  kind,
+  count = 1
 }: {
   content: SelectionCalloutContent;
   /** What is picked, in words: "1 face", "8 edges". */
   summary: string;
+  /**
+   * The pick's kind in one word, for the heading: "Face", "Edge", "Body".
+   * Absent, the heading reads "Pick".
+   */
+  kind?: string | undefined;
+  /** How many of that kind are picked; above one the heading counts them. */
+  count?: number;
 }) {
   const operation = content.operation;
   const validating = operation?.phase === 'validating';
@@ -215,24 +233,58 @@ export function SelectionRail({
   // lit and the rest dimmed. Undimming the rest for the check's frame or
   // two read as the rail coming back and going away again.
   const dragHold = held && phase === 'dragging';
+  const headingId = useId();
+  // Why a held control does nothing: its help says so, and the help is
+  // the button's description while the keyboard is on it (Tooltip).
+  const holdReason = !held
+    ? null
+    : operation?.phase === 'dragging'
+      ? 'Available once the drag is done'
+      : 'Available once the result is checked';
   return (
     <section
       className="selection-rail selection-callout-chip"
       role={operation ? 'region' : 'group'}
       aria-label={operation ? `${operation.title} operation` : 'Selection'}
+      aria-describedby={headingId}
       aria-busy={validating ? 'true' : undefined}
       data-busy={validating && !announced && !dragHold ? 'quiet' : undefined}
       data-hold={dragHold ? 'drag' : undefined}
     >
+      {/* One short word the rail's width holds, the count under it; the
+          words in full are the description assistive tech reads. */}
+      <span
+        className="selection-rail-heading"
+        id={headingId}
+        title={summary ? `Selection: ${summary}` : 'Selection'}
+      >
+        <span className="visually-hidden">
+          {summary ? `Tools for the selection: ${summary}` : 'Selection tools'}
+        </span>
+        <span className="selection-rail-heading-kind" aria-hidden="true">
+          {kind ?? 'Pick'}
+        </span>
+        {count > 1 && (
+          <span className="selection-rail-heading-count" aria-hidden="true">
+            ×{count}
+          </span>
+        )}
+      </span>
       {content.onClear && (
         <>
-          <Tooltip label="Deselect all" shortcut="Esc" description={summary}>
+          <Tooltip
+            label="Deselect all"
+            shortcut="Esc"
+            description={holdReason ?? summary}
+          >
             <button
               type="button"
               className="command-rail selection-rail-clear"
               aria-label="Deselect all"
-              disabled={held}
-              onClick={content.onClear}
+              aria-disabled={held}
+              onClick={() => {
+                if (!held) content.onClear?.();
+              }}
             >
               <SquareX size={16} aria-hidden="true" />
             </button>
@@ -242,36 +294,52 @@ export function SelectionRail({
           )}
         </>
       )}
-      {content.verbs.map((verb) => (
-        <Tooltip key={verb.id} label={verb.label} description={verb.title}>
-          <button
-            type="button"
-            className={`command-rail selection-rail-verb${verb.pressed ? ' active' : ''}`}
-            // Named for what it acts on, so it never shares a name with the
-            // More tools tile or tool-card action of the same verb.
-            aria-label={`Selection: ${verb.label}`}
-            aria-pressed={verb.pressed}
-            // The one rule shortcuts and the palette ask too
-            // (selectionRailToolHoldReason), so a key never launches what
-            // the rail shows greyed out.
-            disabled={!selectionRailVerbEnabled(content, verb)}
-            onClick={() => content.onVerb(verb.id)}
+      {content.verbs.map((verb) => {
+        // The one rule shortcuts and the palette ask too
+        // (selectionRailToolHoldReason), so a key never launches what
+        // the rail shows greyed out.
+        const enabled = selectionRailVerbEnabled(content, verb);
+        // A verb greyed by the hold says so; one the pick itself rules out
+        // already carries its reason as its title.
+        const reason = !enabled && !verb.disabled ? holdReason : null;
+        return (
+          <Tooltip
+            key={verb.id}
+            label={verb.label}
+            description={reason ?? verb.title}
           >
-            {verbIcon(verb)}
-          </button>
-        </Tooltip>
-      ))}
+            <button
+              type="button"
+              className={`command-rail selection-rail-verb${verb.pressed ? ' active' : ''}`}
+              // Named for what it acts on, so it never shares a name with the
+              // More tools tile or tool-card action of the same verb.
+              aria-label={`Selection: ${verb.label}`}
+              aria-pressed={verb.pressed}
+              aria-disabled={!enabled}
+              onClick={() => {
+                if (enabled) content.onVerb(verb.id);
+              }}
+            >
+              {verbIcon(verb)}
+            </button>
+          </Tooltip>
+        );
+      })}
       {operation?.selectAllEdgesCount ? (
         <Tooltip
           label={`All ${operation.selectAllEdgesCount} edges`}
-          description="Add every edge of this body to the operation"
+          description={
+            holdReason ?? 'Add every edge of this body to the operation'
+          }
         >
           <button
             type="button"
             className="command-rail selection-rail-verb"
             aria-label={`Select all ${operation.selectAllEdgesCount} edges`}
-            disabled={held}
-            onClick={operation.onSelectAllEdges}
+            aria-disabled={held}
+            onClick={() => {
+              if (!held) operation.onSelectAllEdges();
+            }}
           >
             <ListChecks size={16} aria-hidden="true" />
           </button>
@@ -367,14 +435,48 @@ export function SelectionReadout({
   detailDiameter?: { diameter: number; units: string } | undefined;
 }) {
   const nameRef = useRef<HTMLSpanElement>(null);
+  // The name ends in an ellipsis only when it and the measurement fill the
+  // row. Cut, the whole of it is the name's tooltip; assistive tech reads
+  // the full text either way, since the cut is drawn, not made.
+  const [cut, setCut] = useState(false);
+  const measureCut = useCallback(() => {
+    const name = nameRef.current;
+    if (!name) return;
+    const isCut = name.scrollWidth > name.clientWidth;
+    setCut(isCut);
+    if (isCut) name.title = name.textContent ?? '';
+    else name.removeAttribute('title');
+  }, []);
   // Segmented like every other spelling of a pick, so a cylinder-radius drag
   // can rewrite the diameter node in place (setLiveDiameter).
   useLayoutEffect(() => {
-    if (nameRef.current) renderLabelSegments(nameRef.current, label ?? []);
-  }, [label]);
+    if (!nameRef.current) return;
+    renderLabelSegments(nameRef.current, label ?? []);
+    measureCut();
+  }, [label, measureCut]);
+  // The row widens and narrows with the window and the docks, and a name
+  // that grows into the row's end changes its own box on the way.
+  useLayoutEffect(() => {
+    const name = nameRef.current;
+    if (!name || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measureCut);
+    observer.observe(name);
+    return () => observer.disconnect();
+  }, [measureCut]);
   return (
     <span className="selection-readout" role="group" aria-label="Picked">
-      <span className="selection-callout-name" ref={nameRef} />
+      <span
+        className="selection-callout-name"
+        ref={nameRef}
+        data-cut={cut ? '' : undefined}
+        // A radius drag rewrites the name in place without a render: the
+        // tooltip is read from the text as the pointer arrives.
+        onPointerEnter={(event) => {
+          if (cut) {
+            event.currentTarget.title = event.currentTarget.textContent ?? '';
+          }
+        }}
+      />
       {detail && (
         <span
           className="selection-callout-detail"

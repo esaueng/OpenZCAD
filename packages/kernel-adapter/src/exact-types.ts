@@ -38,6 +38,12 @@ export interface ExactShape {
    * coplanar-cap pierce (`exact-pierce-tool.ts`) to rebuild the tool.
    */
   sweepSource?: { featureId: FeatureId; solids: readonly number[] };
+  /**
+   * Set by a direct edit that ran no kernel journal and named its result by
+   * exact predicted carrier: a primitive's semantic re-derivation, which such
+   * an edit always received before, still outranks it.
+   */
+  lineageByPredictedCarrier?: true;
 }
 
 /** What the K0.6 import validator found on one `imported-step` feature. */

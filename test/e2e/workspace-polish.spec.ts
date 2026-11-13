@@ -911,7 +911,7 @@ test('empty-state copy points at the tool rail beside the history', async ({
 
   // The rail it names is on screen, and it is the other side of the stage
   // from the history in its panel.
-  const tools = page.getByRole('navigation', { name: 'Feature tools' });
+  const tools = page.getByRole('toolbar', { name: 'Feature tools' });
   await expect(tools).toBeVisible();
   const toolsBounds = await tools.boundingBox();
   const hintBounds = await hint.boundingBox();

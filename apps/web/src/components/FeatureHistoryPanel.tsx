@@ -3,11 +3,13 @@ import {
   isFeatureManuallySuppressed,
   isFeatureRollbackSuppressed,
   isFeatureSuppressed,
+  type FeatureId,
   type ProjectDocument,
   type FeatureNode
 } from '@openzcad/shared';
 import { featureHistory } from '../lib/featureHistory';
 import { datumPlaneDescription } from '../lib/datumPlanes';
+import { builtOnFailedFeatures } from '../lib/featureRepair';
 import {
   refusingWarning,
   type FeatureBuildError
@@ -18,6 +20,8 @@ interface Props {
   /** Parameter values, to state a datum's offset as a number. */
   scope?: Record<string, number>;
   selectedId: string | null;
+  /** Features the current rebuild reported as failed or refused. */
+  failedFeatureIds?: ReadonlySet<FeatureId>;
   failure: FeatureBuildError | null;
   onSelect(id: string): void;
   onDismissFailure(): void;
@@ -27,6 +31,7 @@ export function FeatureHistoryPanel({
   document,
   scope = {},
   selectedId,
+  failedFeatureIds,
   failure,
   onSelect,
   onDismissFailure
@@ -42,6 +47,15 @@ export function FeatureHistoryPanel({
   const missing = selected
     ? [...(graph.missing.get(selected.featureId) ?? [])]
     : [];
+  const upstreamFailure = useMemo(
+    () =>
+      selected && failedFeatureIds && !isFeatureSuppressed(selected)
+        ? builtOnFailedFeatures(document, failedFeatureIds).get(
+            selected.featureId
+          )
+        : undefined,
+    [document, failedFeatureIds, selected]
+  );
   const culprit = failure?.featureId
     ? graph.features.find((feature) => feature.featureId === failure.featureId)
     : undefined;
@@ -81,7 +95,9 @@ export function FeatureHistoryPanel({
         ? 'Suppressed'
         : warning || missing.length > 0
           ? 'Needs repair'
-          : null;
+          : upstreamFailure
+            ? 'Built on a failed step'
+            : null;
   const showsUses = parents.length > 0 || missing.length > 0;
   // A datum's definition is its source: said in words, beside what it uses.
   const datumSource = selected
@@ -131,6 +147,13 @@ export function FeatureHistoryPanel({
           {status && <p>{status}</p>}
           {datumSource && <p>Plane: {datumSource}</p>}
           {warning && <p role="alert">{warning}</p>}
+          {!warning && upstreamFailure && (
+            <p>
+              “{upstreamFailure.name}” failed to build, so this step is built on
+              that step's input unchanged. Repair it to build the intended
+              model.
+            </p>
+          )}
           {missing.length > 0 && (
             <p role="alert">
               An input {missing.join(' or ')} is missing from history. Undo its

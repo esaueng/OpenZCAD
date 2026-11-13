@@ -60,6 +60,7 @@
   "picked-feature-delete.spec.ts": 40,
   "picked-step-feature-delete.spec.ts": 53,
   "progressive-loading.spec.ts": 10,
+  "rail-keyboard-and-drawer.spec.ts": 8,
   "refusal-reproduction.spec.ts": 7,
   "reload-face-offset.spec.ts": 23,
   "rotational-direct-edits.spec.ts": 149,
@@ -86,5 +87,6 @@
   "touch-navigation.spec.ts": 9,
   "viewport.spec.ts": 13,
   "visual-selection-fillet-edit.spec.ts": 12,
-  "visual-selection-live-preview.spec.ts": 12
+  "visual-selection-live-preview.spec.ts": 12,
+  "workspace-empty-state.spec.ts": 8
 }

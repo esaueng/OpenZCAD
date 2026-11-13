@@ -57,6 +57,8 @@ test('suppresses features and rolls the timeline back as one undoable edit', { t
   await box.getByRole('button', { name: 'Suppress Box' }).click();
   await expect(box).toContainText('suppressed');
   await expectBodyCount(page, 1);
+  // The state is said beside the name; the value keeps its place.
+  await expect(box.locator('.history-row-value')).toHaveText(/\d/);
 
   await box.getByRole('button', { name: 'Resume Box' }).click();
   await expect(box).not.toContainText('suppressed');
@@ -69,6 +71,7 @@ test('suppresses features and rolls the timeline back as one undoable edit', { t
   await expect(rollback).toHaveAttribute('aria-pressed', 'true');
   // Rolled back reads as paused; suppressed is kept for a manual toggle.
   await expect(cylinder).toContainText('paused');
+  await expect(cylinder.locator('.history-row-value')).toHaveText(/\d/);
   await expectBodyCount(page, 1);
 
   // The viewer bar's Undo: the suppress toast carries an Undo of its own.
@@ -3088,12 +3091,21 @@ test('models a parametric part and exports a true STEP file', { tag: '@ci-smoke'
   expect(text.trimEnd().endsWith('END-ISO-10303-21;')).toBe(true);
 
   // Export the sanitized support bundle and verify that it preserves native
-  // modeling inputs without leaking account identity or cloud history.
+  // modeling inputs without leaking account identity or cloud history. It is
+  // a support tool, so it is not in the File menu: the command palette runs
+  // it (Settings › Advanced is its other home).
+  await fileMenu.locator('summary').click();
+  await expect(
+    fileMenu.getByRole('button', { name: /Export diagnostics/ })
+  ).toHaveCount(0);
   await fileMenu.locator('summary').click();
   const diagnosticDownloadPromise = page.waitForEvent('download');
-  await fileMenu.getByRole('button', { name: /Export diagnostics/ }).click();
+  await page.keyboard.press('ControlOrMeta+k');
+  await page
+    .getByRole('combobox', { name: 'Search commands', exact: true })
+    .fill('export diagnostics');
+  await page.getByRole('option', { name: /^Export diagnostics/ }).click();
   const diagnosticDownload = await diagnosticDownloadPromise;
-  await fileMenu.locator('summary').click();
   expect(diagnosticDownload.suggestedFilename()).toBe(
     'E2E-Part.openzcad-diagnostic.json'
   );

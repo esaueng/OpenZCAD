@@ -17,6 +17,7 @@ import {
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
+import { expectPassedThrough } from './support/failed-pass-through';
 import { extrudeEditTargets } from '../apps/web/src/lib/extrudeEditing';
 import {
   FEATURE_SUPPRESSED_METADATA_KEY,
@@ -555,8 +556,8 @@ describe('Stage 4 solid options: exact build', () => {
       targetBodyId: blockId
     });
     const derived = await adapter.syncDocument(created.document);
-    expect(derived.bodyRepresentations[created.bodyId]).toBeUndefined();
-    expect(derived.bodyRepresentations[blockId]?.consumed).toBe(false);
+    // Refused, so the block stands in for the intersect unchanged (ADR-017).
+    expectPassedThrough(derived, created.bodyId, blockId);
     expect(derived.warnings).toEqual([
       'Feature "Miss": Stored intersect extrusion no longer overlaps Block Body; operation was not re-inferred.'
     ]);

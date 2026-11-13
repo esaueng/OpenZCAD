@@ -2,7 +2,12 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { WorkspaceTour } from './WorkspaceTour';
 
-const idle = { featureCount: 0, hasSelection: false, exportSeen: false };
+const idle = {
+  featureCount: 0,
+  hasSelection: false,
+  historyOpen: false,
+  exportSeen: false
+};
 
 describe('WorkspaceTour', () => {
   it('minimizes guidance without dismissing or losing its step', () => {
@@ -57,11 +62,56 @@ describe('WorkspaceTour', () => {
         onDismiss={onDismiss}
       />
     );
-    // History is the step the app cannot observe; Next is the only way on.
+    // Next moves on from the history step without opening History.
     fireEvent.click(screen.getByRole('button', { name: 'Next' }));
     expect(screen.getByText('Take it with you')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Finish' }));
     expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it('moves on from the history step when History is opened', () => {
+    // It stayed on "Open History…" after the user had opened it.
+    const { rerender } = render(
+      <WorkspaceTour
+        {...idle}
+        featureCount={1}
+        hasSelection
+        onDismiss={vi.fn()}
+      />
+    );
+    expect(screen.getByText('The history is the model')).toBeTruthy();
+    rerender(
+      <WorkspaceTour
+        {...idle}
+        featureCount={1}
+        hasSelection
+        historyOpen
+        onDismiss={vi.fn()}
+      />
+    );
+    expect(screen.getByText('Take it with you')).toBeTruthy();
+  });
+
+  it('still teaches the history step when History was already open', () => {
+    const { rerender } = render(
+      <WorkspaceTour
+        {...idle}
+        featureCount={1}
+        historyOpen
+        onDismiss={vi.fn()}
+      />
+    );
+    expect(screen.getByText('Select to edit')).toBeTruthy();
+    rerender(
+      <WorkspaceTour
+        {...idle}
+        featureCount={1}
+        hasSelection
+        historyOpen
+        onDismiss={vi.fn()}
+      />
+    );
+    expect(screen.getByText('The history is the model')).toBeTruthy();
   });
 
   it('hands the keyboard back to where it came from when skipped', () => {

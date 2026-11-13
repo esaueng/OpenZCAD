@@ -201,7 +201,11 @@ describe('STL mesh references', { timeout: 60_000 }, () => {
       (warning) => warning.kind === 'build-failed'
     );
     expect(refusal?.message).toContain('mesh reference');
-    expect(state.bodyRepresentations[bodyId]!.consumed).toBe(false);
+    // The refused union hands its first operand through, still a mesh
+    // reference, and leaves the box unconsumed (ADR-017, November 2026).
+    expect(state.bodyRepresentations[bodyId]!.consumed).toBe(true);
+    expect(state.bodyRepresentations[cut.bodyId]!.meshReference).toBe(true);
+    expect(state.bodyRepresentations[cut.bodyId]!.consumed).toBe(false);
     expect(state.bodyRepresentations[mixed.bodyOrder[1]!]!.consumed).toBe(
       false
     );

@@ -140,7 +140,7 @@ button.command-rail:hover:not(:disabled, [aria-disabled='true'], .active),
 .tweak-rail button:hover:not(:disabled):not(.active),
 .workspace-column .sketch-rail button:hover:not(:disabled):not(.active),
 .sketch-relation:hover:not(:disabled):not(.active),
-.rail-button:hover:not(:disabled):not(.active),
+.rail-button:hover:not(:disabled, [aria-disabled='true']):not(.active),
 .rail-button.open:not(.active),
 .drawing-rail-button:hover:not(:disabled):not(.active),
 .view-mode-button:hover:not(.active),
@@ -383,6 +383,9 @@ html .assistant-chip:is(:hover, :focus-visible):not(:disabled),
 .history-find-related:not([aria-pressed='true']):not(:hover):not(
     :focus-visible
   ),
+.history-find-problems:not([aria-pressed='true']):not(:hover):not(
+    :focus-visible
+  ),
 .activity-log-chip:not([aria-pressed='true']):not(:hover):not(:focus-visible) {
   background: transparent;
   border-color: transparent;
@@ -391,6 +394,7 @@ html .assistant-chip:is(:hover, :focus-visible):not(:disabled),
 .plane-chip:hover:not([aria-pressed='true']),
 .in-place-option-choice:hover:not([aria-checked='true']):not(:disabled),
 .history-find-related:hover:not([aria-pressed='true']):not(:disabled),
+.history-find-problems:hover:not([aria-pressed='true']):not(:disabled),
 .activity-log-chip:hover:not([aria-pressed='true']) {
   background: var(--color-surface-hover);
   border-color: var(--color-border-strong);

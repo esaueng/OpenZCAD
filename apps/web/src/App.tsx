@@ -76,6 +76,7 @@ import {
   topologyReferenceRepairCommand,
   withCarriedSelections
 } from './lib/topologyReferenceRepairs';
+import { fragileSelectionAdvisory } from './lib/fragileSelections';
 import {
   parameterMinimums,
   parameterInputError,
@@ -288,7 +289,6 @@ import {
   duplicateProjectName,
   FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY,
   FEATURE_SUPPRESSED_METADATA_KEY,
-  isFeatureRollbackSuppressed,
   isFeatureSuppressed,
   projectBranchPoint,
   projectOrganization,
@@ -408,7 +408,11 @@ import { sweepFacetingAdvisories } from './lib/sweepFaceting';
 import { primitiveDimensionLabel } from './lib/primitiveDimensionLabel';
 import { useRememberedSection } from './hooks/useRememberedSection';
 import { newBlendFacePick } from './lib/blendRearm';
-import { exactEntryShortcut, isTypingTarget } from './lib/exactEntryShortcut';
+import {
+  exactEntryShortcut,
+  inPlaceTypedEntryKey,
+  isTypingTarget
+} from './lib/exactEntryShortcut';
 import { DeferredExactEntry } from './lib/deferredExactEntry';
 import type { SketchSolveStatus } from './components/SketchToolRail';
 import type { SharedLinkCopyDestination } from './components/SharedLinkCopyDialog';
@@ -465,6 +469,7 @@ import {
 import { rebuildImportInDisposableWorker } from './lib/importRebuildWorkerClient';
 import { shaprMigrationDraft } from './lib/shaprMigration';
 import { presentedWorkspaceSaveState } from './lib/workspaceSaveStatePresentation';
+import { showsWorkspaceEmptyState } from './lib/workspaceEmptyState';
 import {
   CheckpointSaveError,
   failedCheckpointSaveState
@@ -561,6 +566,7 @@ import {
   type CommandSelection
 } from './lib/commandContext';
 import { WorkspaceColumn } from './components/WorkspaceColumn';
+import { WorkspaceEmptyState } from './components/WorkspaceEmptyState';
 import {
   ActivityLogButton,
   ViewportDockExtras,
@@ -776,7 +782,12 @@ import {
 } from './lib/platformShortcut';
 import { retireStatus, type StatusEntry } from './lib/statusLifetime';
 import { LIBRARY_MODE_STATUS } from './lib/libraryStatus';
-import type { KeypadRequest, KeypadUiState } from './components/NumericKeypad';
+import type {
+  KeypadHold,
+  KeypadRequest,
+  KeypadStepEntry,
+  KeypadUiState
+} from './components/NumericKeypad';
 import type { DimensionMode } from './lib/keypad';
 import { usePreviewVerdict } from './hooks/usePreviewVerdict';
 import { evaluateKeypadInput } from './lib/keypad';
@@ -847,6 +858,7 @@ import {
 } from './lib/selectionCallout';
 import { ghostBodiesFor, historyFeatureFocus } from './lib/historyFocus';
 import { useLocalAutoFrame } from './hooks/useLocalAutoFrame';
+import type { AutoFrameRequest } from './lib/autoFrame';
 import { useOffsetFaceHandle } from './hooks/useOffsetFaceHandle';
 import {
   faceSketchAttachment,
@@ -1274,6 +1286,11 @@ const LazySuppressFeatureDialog = lazyWithStaleChunkNotice(() =>
     default: module.SuppressFeatureDialog
   }))
 );
+const LazyResumeHistoryDialog = lazyWithStaleChunkNotice(() =>
+  import('./components/ResumeHistoryDialog').then((module) => ({
+    default: module.ResumeHistoryDialog
+  }))
+);
 const LazyUnappliedCardDialog = lazyWithStaleChunkNotice(() =>
   import('./components/UnappliedCardDialog').then((module) => ({
     default: module.UnappliedCardDialog
@@ -1439,6 +1456,8 @@ const SaveRevisionDialog = withSuspense(LazySaveRevisionDialog);
 const DeleteFeatureDialog = withSuspense(LazyDeleteFeatureDialog);
 
 const SuppressFeatureDialog = withSuspense(LazySuppressFeatureDialog);
+
+const ResumeHistoryDialog = withSuspense(LazyResumeHistoryDialog);
 
 const UnappliedCardDialog = withSuspense(LazyUnappliedCardDialog);
 
@@ -1682,8 +1701,17 @@ import {
   suppressBranchLabel,
   suppressCommands,
   suppressedBranchMessage,
-  suppressionRefusal
+  suppressionRefusal,
+  type RefusedDependent
 } from './lib/featureSuppression';
+import {
+  activeResumePrompt,
+  failingFeatureIds,
+  HistoryResumeRefusal,
+  rollbackMarkerMove,
+  validateHistoryResume,
+  type RollbackMarkerMove
+} from './lib/historyResume';
 import type { HistoryRowActions } from './components/HistoryTimeline';
 import {
   moveHasFiniteValues,
@@ -1777,7 +1805,6 @@ import {
   applyPreset,
   closePanel,
   computePanelGeometry,
-  isPanelCoveredByInspection,
   isPanelOpen,
   loadPanelLayout,
   matchingPreset,
@@ -2820,6 +2847,28 @@ export function App() {
     featureId: FeatureId;
     name: string;
     dependents: { featureId: FeatureId; name: string }[];
+  } | null>(null);
+  /**
+   * A rollback marker move whose exact rebuild would leave resumed features
+   * failing, asking whether to resume anyway. Valid for one version only.
+   */
+  const [pendingResume, setPendingResume] = useState<{
+    projectId: ProjectDocument['projectId'];
+    version: number;
+    label: string;
+    message: string;
+    commands: AnyCommand[];
+    failures: readonly RefusedDependent[];
+    derived: ProjectDocument['derived'];
+  } | null>(null);
+  /**
+   * Features that were already failing when a rollback paused them, so a
+   * later resume does not blame itself for them. Session memory only: after
+   * a reload every resumed failure is reported.
+   */
+  const rollbackFailingRef = useRef<{
+    projectId: ProjectDocument['projectId'];
+    featureIds: Set<FeatureId>;
   } | null>(null);
   // Named `doc` (not `document`) so the global DOM document is never shadowed.
   const [doc, setDoc] = useState<ProjectDocument | null>(null);
@@ -6526,6 +6575,7 @@ export function App() {
     dispatchInteraction({ type: 'clear' });
     setPendingFeatureDelete(null);
     setPendingSuppression(null);
+    setPendingResume(null);
     setPendingToolSwitch(null);
   }, [doc?.projectId]);
 
@@ -9335,6 +9385,30 @@ export function App() {
     );
   }
 
+  /**
+   * Says once, as the commit lands, that it stored a pick with no lineage
+   * name: such a pick resolves only by its hash, which an upstream edit to
+   * that entity orphans. Never blocks the commit (`lib/fragileSelections`).
+   */
+  function announceFragileSelections(
+    before: ProjectDocument,
+    after: ProjectDocument,
+    derived: ProjectDocument['derived'] | undefined
+  ): void {
+    let advisory: string | null = null;
+    try {
+      advisory = fragileSelectionAdvisory(before, after, {
+        ...(derived ? { derived } : {}),
+        carried: new Set(
+          derived?.edgeHashRepairs?.map((repair) => repair.featureId) ?? []
+        )
+      });
+    } catch {
+      // Advice only: the commit has already landed.
+    }
+    if (advisory) announce(advisory);
+  }
+
   function executeCommand(
     command: AnyCommand,
     derived?: ProjectDocument['derived'],
@@ -9403,6 +9477,7 @@ export function App() {
         if (derived) trackCommittedParts(next, derived);
       }
       setStatus(commandOutcomeMessage(command.label));
+      announceFragileSelections(beforeDocument, next, derived);
       return true;
     } catch (error) {
       trackDetail('error_feature');
@@ -9472,6 +9547,7 @@ export function App() {
         if (derived) trackCommittedParts(next, derived);
       }
       setStatus(commandOutcomeMessage(label));
+      announceFragileSelections(beforeDocument, next, derived);
       return true;
     } catch (error) {
       trackDetail('error_feature');
@@ -17302,9 +17378,21 @@ export function App() {
     );
   }
 
+  /**
+   * The support exports are asked for from Settings › Advanced or the
+   * palette. Settings covers the workspace's status line, so the outcome is
+   * said on the Settings head too while it is open.
+   */
+  function reportSupportExport(text: string) {
+    setStatus(text);
+    if (settingsOpen) {
+      setSettingsMessage(text);
+    }
+  }
+
   function handleExportDiagnostics() {
     if (!doc) {
-      setStatus('Open a project before exporting diagnostics.');
+      reportSupportExport('Open a project before exporting diagnostics.');
       return;
     }
     try {
@@ -17318,9 +17406,9 @@ export function App() {
         `${JSON.stringify(bundle, null, 2)}\n`,
         'application/json'
       );
-      setStatus(`Exported sanitized diagnostics to ${fileName}.`);
+      reportSupportExport(`Exported sanitized diagnostics to ${fileName}.`);
     } catch (error) {
-      setStatus(errorMessage(error, 'Diagnostic export failed.'));
+      reportSupportExport(errorMessage(error, 'Diagnostic export failed.'));
     }
   }
 
@@ -17328,7 +17416,7 @@ export function App() {
     try {
       const entries = await listInteractionDiagnostics();
       if (entries.length === 0) {
-        setStatus(
+        reportSupportExport(
           'No direct-edit attempts have been recorded on this device yet.'
         );
         return;
@@ -17340,11 +17428,13 @@ export function App() {
         `${JSON.stringify(bundle, null, 2)}\n`,
         'application/json'
       );
-      setStatus(
+      reportSupportExport(
         `Exported ${bundle.summary.total} recorded direct-edit attempts (${bundle.summary.byOutcome.refused} refused) to ${fileName}.`
       );
     } catch (error) {
-      setStatus(errorMessage(error, 'Interaction log export failed.'));
+      reportSupportExport(
+        errorMessage(error, 'Interaction log export failed.')
+      );
     }
   }
 
@@ -22419,7 +22509,13 @@ export function App() {
   function openInPlaceKeypad(
     valueId: string,
     value: number,
-    at?: { x: number; y: number }
+    at?: { x: number; y: number },
+    entry: {
+      /** The key that opened it, typed over the value rather than into it. */
+      typed?: string;
+      /** Where the entry Tab stepped from stood. */
+      heldAt?: KeypadHold;
+    } = {}
   ): boolean {
     const valueSpec = inPlaceSpec?.values.find(
       (candidate) => candidate.id === valueId
@@ -22435,14 +22531,151 @@ export function App() {
         valueSpec.label,
       // A parametric value opens as its expression, and comes back as one
       // if entry is canceled.
-      initial: raw ?? keypadText(value),
-      selectInitial: true,
+      initial: entry.typed ?? raw ?? keypadText(value),
+      selectInitial: entry.typed === undefined,
       unitKind: valueSpec.unit,
       baseline: value,
       ...(raw !== undefined ? { baselineRaw: raw } : {}),
-      ...(at ? { fixedClientAnchor: at } : {})
+      ...(at ? { fixedClientAnchor: at } : {}),
+      ...(entry.heldAt ? { heldAt: entry.heldAt } : {})
     });
     return true;
+  }
+  /**
+   * The values a running command takes from the keyboard, in the order its
+   * Options list them: those with a chip in the viewport (a box's Width,
+   * Depth and Height). A typed digit opens the first, and Tab walks them.
+   */
+  const inPlaceTypedValueIds = useMemo(
+    () =>
+      (inPlaceSpec?.values ?? [])
+        .filter((value) =>
+          inPlace.handles.some((handle) => handle.valueId === value.id)
+        )
+        .map((value) => value.id),
+    [inPlaceSpec, inPlace.handles]
+  );
+  /**
+   * A value typed for a command that creates a body (never an edit's) asks
+   * the viewport to keep the preview in the clear stage; see the effect
+   * that answers it once that preview is on screen.
+   */
+  const [creationFrameAsk, setCreationFrameAsk] = useState(0);
+  const inPlaceCreating = inPlace.active && inPlace.editing === null;
+  function askCreationFrame() {
+    if (inPlaceCreating) setCreationFrameAsk((ask) => ask + 1);
+  }
+  const [creationFrame, setCreationFrame] = useState<AutoFrameRequest | null>(
+    null
+  );
+  const creationFrameAnswered = useRef(0);
+  const inPlaceCanFinish = inPlace.canFinish;
+  useEffect(() => {
+    if (creationFrameAsk === creationFrameAnswered.current) return;
+    if (!inPlaceCreating) {
+      // The command ended first: nothing is left to frame.
+      creationFrameAnswered.current = creationFrameAsk;
+      return;
+    }
+    // Done is offered exactly when the preview on screen is the one the
+    // values now ask for: until then the typed value has not been drawn.
+    if (!inPlaceCanFinish || !previewDoc || !doc) return;
+    creationFrameAnswered.current = creationFrameAsk;
+    setCreationFrame({
+      before: doc.derived.bodyRepresentations,
+      after: previewDoc.derived.bodyRepresentations,
+      features: listFeaturesInOrder(previewDoc)
+    });
+  }, [creationFrameAsk, inPlaceCreating, inPlaceCanFinish, previewDoc, doc]);
+  // A request is the running command's: once it ends, a viewport rebuilt
+  // later (a hot update, a remount) must not frame its last preview again.
+  useEffect(() => {
+    if (!inPlaceCreating) setCreationFrame(null);
+  }, [inPlaceCreating]);
+  /**
+   * Takes a value entered on a command's keypad. Refused, the value goes
+   * back to what the chip showed when entry opened, set or unset as it was.
+   */
+  function commitInPlaceKeypadValue(
+    open: KeypadRequest,
+    value: number,
+    raw: string
+  ): boolean {
+    const valueId = open.commandValueId!;
+    const valueSpec = inPlaceSpec?.values.find(
+      (candidate) => candidate.id === valueId
+    );
+    const baseline = open.baseline ?? inPlace.values[valueId] ?? value;
+    // Expressions stay parametric in the stored feature.
+    const accepted = inPlace.setValue(
+      valueId,
+      value,
+      Number.isFinite(Number(raw)) ? undefined : raw
+    );
+    if (accepted) {
+      commandSetterRef.current?.(
+        valueId,
+        valueSpec ? clampValue(valueSpec, value) : value
+      );
+      askCreationFrame();
+    } else {
+      // Refused: back to the value shown when the chip was tapped, undoing
+      // any in-range keystroke previews. Set or unset as it was, as Escape
+      // restores it.
+      commandSetterRef.current?.(valueId, baseline);
+      inPlace.restoreValue(
+        valueId,
+        baseline,
+        open.baselineRaw,
+        commandKeypadTouchedRef.current
+      );
+    }
+    return accepted;
+  }
+  /**
+   * Tab on a command's keypad: the entry is taken as Enter takes it, and
+   * the next value (the one before, with Shift) opens where this one stood.
+   * A refused entry ends there, with its refusal on the bar.
+   */
+  function stepInPlaceKeypad(
+    open: KeypadRequest,
+    direction: 1 | -1,
+    entry: KeypadStepEntry,
+    at: KeypadHold
+  ) {
+    const valueId = open.commandValueId!;
+    if (entry) {
+      if (!commitInPlaceKeypadValue(open, entry.value, entry.raw)) {
+        setKeypad(null);
+        return;
+      }
+    } else {
+      // Left as it opened: whatever it previewed meanwhile goes back.
+      const baseline = open.baseline ?? inPlace.values[valueId] ?? 0;
+      commandSetterRef.current?.(valueId, baseline);
+      inPlace.restoreValue(
+        valueId,
+        baseline,
+        open.baselineRaw,
+        commandKeypadTouchedRef.current
+      );
+    }
+    const ids = inPlaceTypedValueIds;
+    const index = ids.indexOf(valueId);
+    const next = ids[(index + direction + ids.length) % ids.length];
+    const nextSpec = inPlaceSpec?.values.find(
+      (candidate) => candidate.id === next
+    );
+    if (next === undefined || !nextSpec) {
+      setKeypad(null);
+      return;
+    }
+    openInPlaceKeypad(
+      next,
+      inPlace.values[next] ?? nextSpec.initial,
+      undefined,
+      { heldAt: at }
+    );
   }
   /**
    * The command's Options panel: its rows as they stand (a gear's tooth
@@ -22557,6 +22790,7 @@ export function App() {
         valueId,
         clampValue(valueSpec, evaluation.value)
       );
+      askCreationFrame();
     }
     return accepted;
   }
@@ -27270,7 +27504,8 @@ export function App() {
     // itself breaks. An earlier toggle may still own the rendered geometry.
     const before = suppressionRepairSnapshot(
       owner,
-      geometry.isReadyFor(owner.document)
+      geometry.isReadyFor(owner.document),
+      attributedFeatureWarnings()
     );
     const toggled = executeCommand(
       commandFactories.setNodeMetadata(
@@ -27372,70 +27607,157 @@ export function App() {
     });
   }
 
-  function handleResumeHistory() {
-    const commands = features
-      .filter(isFeatureRollbackSuppressed)
-      .map((feature) =>
-        commandFactories.setNodeMetadata(
-          {
-            nodeId: feature.id,
-            metadata: { [FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY]: null }
-          },
-          `Resume ${feature.name}`
-        )
+  /**
+   * Moves the rollback marker. Pausing more needs no check: the paused steps
+   * simply stop building. A move that resumes steps first rebuilds the
+   * candidate, because an edit made while rolled back was checked only
+   * against the steps that were building (ADR-017, November 2026). When a
+   * resumed step would not rebuild, a dialog names it and its reason and
+   * offers to resume anyway or keep the rollback.
+   */
+  function moveRollbackMarker(
+    move: RollbackMarkerMove,
+    label: string,
+    message: string
+  ) {
+    const owner = managerRef.current;
+    if (!owner || move.commands.length === 0) return;
+    const document = owner.document;
+    setPendingResume(null);
+    if (move.paused.length > 0) {
+      // Remember what the model already could not build before the pause,
+      // judged on the rebuild of this very version only.
+      const failing = geometry.isReadyFor(document)
+        ? new Set(failingFeatureIds(move.paused, document.derived))
+        : new Set<FeatureId>();
+      const known =
+        rollbackFailingRef.current?.projectId === document.projectId
+          ? rollbackFailingRef.current.featureIds
+          : new Set<FeatureId>();
+      for (const feature of move.paused) {
+        if (failing.has(feature.featureId)) known.add(feature.featureId);
+        else known.delete(feature.featureId);
+      }
+      rollbackFailingRef.current = {
+        projectId: document.projectId,
+        featureIds: known
+      };
+    }
+    const announceMove = () =>
+      announce(message, undefined, {
+        repeatsStatusAt: lastStatusAtRef.current
+      });
+    if (move.resumed.length === 0) {
+      if (executeTransaction(label, move.commands)) announceMove();
+      return;
+    }
+    if (!ensureCanExecute(move.commands, 'resume history')) return;
+    const alreadyFailing =
+      rollbackFailingRef.current?.projectId === document.projectId
+        ? rollbackFailingRef.current.featureIds
+        : undefined;
+    let refusal: HistoryResumeRefusal | null = null;
+    let candidate: ProjectDocument['derived'] | null = null;
+    void validatedFeature
+      .runTransaction(move.commands, {
+        label,
+        targets: [],
+        validateDerived: (derived) => {
+          try {
+            validateHistoryResume(move.resumed, derived, alreadyFailing);
+          } catch (error) {
+            if (error instanceof HistoryResumeRefusal) {
+              refusal = error;
+              candidate = derived;
+            }
+            throw error;
+          }
+        },
+        validatingMessage: 'Checking the features to resume…',
+        successMessage: message,
+        onFailure: (failure) => {
+          const refused: HistoryResumeRefusal | null = refusal;
+          const derived: ProjectDocument['derived'] | null = candidate;
+          if (
+            !refused ||
+            !derived ||
+            managerRef.current !== owner ||
+            owner.document.version !== document.version
+          ) {
+            announce(failure);
+            return;
+          }
+          setPendingResume({
+            projectId: document.projectId,
+            version: document.version,
+            label,
+            message,
+            commands: move.commands,
+            failures: refused.failures,
+            derived
+          });
+        },
+        onSuccess: () => queueMicrotask(announceMove)
+      })
+      .then((outcome) => {
+        if (outcome === 'busy')
+          announce(`${label} not applied. ${VALIDATED_FEATURE_BUSY_STATUS}`);
+      });
+  }
+
+  /** "Resume anyway": the checked move, committed only on the version checked. */
+  function resumeDespiteFailures() {
+    const pending = pendingResume;
+    setPendingResume(null);
+    if (!pending) return;
+    if (!activeResumePrompt(pending, managerRef.current?.document)) {
+      setStatus(
+        'The document changed after Resume was checked. Resume again to check the current model.'
       );
-    if (
-      commands.length &&
-      executeTransaction('Resume full history', commands)
-    ) {
+      return;
+    }
+    if (executeTransaction(pending.label, pending.commands, pending.derived)) {
       announce(
-        'Full history resumed. Manually suppressed features remain suppressed.',
-        undefined,
+        `${pending.message} ${pending.failures.length} ${pending.failures.length === 1 ? 'feature needs' : 'features need'} repair.`,
+        { label: 'Undo', run: handleUndo },
         { repeatsStatusAt: lastStatusAtRef.current }
       );
     }
   }
 
+  /** History as the manager holds it now, which the move is built against. */
+  function liveFeatures(): FeatureNode[] {
+    const current = managerRef.current?.document;
+    return current ? listFeaturesInOrder(current) : [];
+  }
+
+  function handleResumeHistory() {
+    moveRollbackMarker(
+      rollbackMarkerMove(liveFeatures(), null),
+      'Resume full history',
+      'Full history resumed. Manually suppressed features remain suppressed.'
+    );
+  }
+
   function handleRollbackAfterFeature(featureId: FeatureId, name: string) {
-    const markerIndex = features.findIndex(
+    const history = liveFeatures();
+    const markerIndex = history.findIndex(
       (feature) => feature.featureId === featureId
     );
     if (markerIndex < 0) {
       setStatus('The rollback feature is no longer in this document.');
       return;
     }
-    const commands = features.flatMap((feature, index) => {
-      const rollbackSuppressed = index > markerIndex;
-      if (isFeatureRollbackSuppressed(feature) === rollbackSuppressed) {
-        return [];
-      }
-      return [
-        commandFactories.setNodeMetadata(
-          {
-            nodeId: feature.id,
-            metadata: {
-              [FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY]: rollbackSuppressed
-                ? true
-                : null
-            }
-          },
-          rollbackSuppressed
-            ? `Roll back ${feature.name}`
-            : `Resume ${feature.name}`
-        )
-      ];
-    });
-    if (commands.length === 0) {
+    const move = rollbackMarkerMove(history, markerIndex);
+    if (move.commands.length === 0) {
       setStatus(`History is already rolled back after ${name}.`);
       return;
     }
-    if (executeTransaction(`Roll back after ${name}`, commands)) {
-      announce(
-        `History rolled back after ${name}. Later features are paused.`,
-        undefined,
-        { repeatsStatusAt: lastStatusAtRef.current }
-      );
-    }
+    moveRollbackMarker(
+      move,
+      `Roll back after ${name}`,
+      `History rolled back after ${name}. Later features are paused.`
+    );
   }
 
   function openContextMenu(
@@ -28359,6 +28681,7 @@ export function App() {
     !importUnitsPrompt &&
     !pendingFeatureDelete &&
     !activeSuppressionPrompt(pendingSuppression, doc?.projectId) &&
+    !activeResumePrompt(pendingResume, doc) &&
     !pendingToolSwitch;
   exactEntryInputEnabledRef.current =
     workspaceInputEnabled && !paletteOpen && !shortcutsOpen && !namingSave;
@@ -28494,6 +28817,48 @@ export function App() {
           event.preventDefault();
           inPlace.done();
           return;
+        }
+        // A digit typed at an armed command is its first size, as a digit
+        // typed at a selection is that selection's value: it opens the
+        // entry rather than turning the view (1 is Front, 5 is Back). While
+        // the entry is still loading its next keys join the first.
+        const typed = inPlaceTypedEntryKey(event, typing);
+        if (typed !== null && !modelingLocked) {
+          const first = inPlaceTypedValueIds[0];
+          if (keypad?.kind === 'command') {
+            const field = document.querySelector<HTMLInputElement>(
+              '.numeric-keypad input.keypad-value'
+            );
+            if (field) {
+              // Open, with focus elsewhere: the key is typed into it.
+              field.focus();
+            } else {
+              event.preventDefault();
+              setKeypad((current) =>
+                current?.kind === 'command' && current.selectInitial === false
+                  ? { ...current, initial: current.initial + typed }
+                  : current
+              );
+            }
+            return;
+          }
+          if (keypad === null && first !== undefined) {
+            const firstSpec = inPlaceSpec?.values.find(
+              (candidate) => candidate.id === first
+            );
+            if (
+              firstSpec &&
+              openInPlaceKeypad(
+                first,
+                inPlace.values[first] ?? firstSpec.initial,
+                undefined,
+                { typed }
+              )
+            ) {
+              event.preventDefault();
+              return;
+            }
+          }
         }
       }
       // U09: Enter finishes the in-place Extrude once it can create; until
@@ -28883,6 +29248,23 @@ export function App() {
           event.preventDefault();
           if (tool || selectedFeatureNodeId || interaction.mode !== 'idle') {
             cancelPanel();
+          } else if (
+            toolFold.commandFoldOpen &&
+            resolvedWorkspaceMode === 'build' &&
+            !selectedTopology &&
+            selectedEdges.length === 0 &&
+            selectedBodyIds.length === 0 &&
+            !selectedSketchProfileId &&
+            selectedProfiles.length === 0
+          ) {
+            // The last rung: nothing armed and nothing picked, so the key is
+            // nobody else's and it puts the Tools drawer away. The drawer is
+            // docked and remembered, so every rung above keeps it: Escape
+            // only closes it once there is nothing left to cancel or clear.
+            setPanelState((current) => ({
+              ...current,
+              commandFoldOpen: false
+            }));
           } else {
             // A bare selection: nothing of a panel's to close, so leave any
             // preview that is not a panel's (an assistant proposal) alone.
@@ -29220,6 +29602,8 @@ export function App() {
           onDeleteCloudData={handleDeleteCloudData}
           onReset={handleResetAppSettings}
           onApplyViewportDefaults={applyViewportDefaults}
+          onExportDiagnostics={handleExportDiagnostics}
+          onExportInteractionLog={() => void handleExportInteractionLog()}
           onDismissProjectInvitation={dismissProjectInvitation}
           onClose={closeSettings}
         />
@@ -29482,10 +29866,6 @@ export function App() {
   const panelShowing = (id: PanelId) =>
     !panelsHidden &&
     isPanelOpen(panelLayout, id) &&
-    !(
-      panelGeometry &&
-      isPanelCoveredByInspection(panelLayout, id, panelGeometry)
-    ) &&
     (panelGeometry === null ||
       (panelGeometry.phone
         ? phonePanel === id
@@ -29894,6 +30274,30 @@ export function App() {
       run: openImageExport
     },
     {
+      // The support exports left the File menu for Settings › Advanced; the
+      // palette is the other way to them, found by what they are for.
+      id: 'file-export-diagnostics',
+      label: 'Export diagnostics',
+      group: 'File',
+      keywords: ['troubleshooting', 'support', 'sanitized', 'json', 'report'],
+      icon: <Download size={16} aria-hidden="true" />,
+      run: handleExportDiagnostics
+    },
+    {
+      id: 'file-export-interaction-log',
+      label: 'Export interaction log',
+      group: 'File',
+      keywords: [
+        'troubleshooting',
+        'support',
+        'direct edit',
+        'refusal',
+        'json'
+      ],
+      icon: <Download size={16} aria-hidden="true" />,
+      run: () => void handleExportInteractionLog()
+    },
+    {
       id: 'file-import',
       label: 'Import CAD files…',
       group: 'File',
@@ -30061,7 +30465,6 @@ export function App() {
   // disarmed, and "drag the radial handle" is a promise View mode cannot keep.
   const idleHint = idleWorkspaceHint(
     undefined,
-    keymap.label('command-palette') ?? null,
     keymap.label('shortcut-reference') ?? null
   );
   const measureKey = keymap.label('view-measure')
@@ -30106,15 +30509,41 @@ export function App() {
       : 'This model has no parameters · Build mode is where they are defined';
   // Measuring writes the lane in Build too: it is the command of the moment.
   const readingHints = viewMode || measuring;
+  // Draw's guidance follows what is on the sheet. With no sheet the stage is
+  // the "Drawings" start and its New drawing sheet button, and "Drag a view
+  // to place it" pointed at views that do not exist; the same once a sheet's
+  // views are all removed. There the lane rests, as it does on an empty model.
+  const drawingHasViews = Boolean(
+    doc?.drawings?.sheets.some((sheet) => sheet.views.length > 0)
+  );
+  // The plane chooser is the Sketch tool's whole first step and says so
+  // itself, in its card: the lane neither repeats it nor runs ahead to the
+  // drawing keys ("Drag to draw · R rectangle…"), which mean nothing until a
+  // plane is chosen. Null only while that card is the one that is up.
+  const sketchPlaneCardShown =
+    tool === 'sketch' &&
+    !modelingLocked &&
+    !measurementDock &&
+    !contextualToolCard &&
+    !revertPill &&
+    !movePreview;
+  // Assemble's guidance is its panel's: the first run, the parts and the
+  // joint tool each say their own next step. The lane used to fall through
+  // to Build's lines there, so it read "Click a body, face, or edge" over
+  // "Tick the bodies that are parts", and "Drag the arrow to set the fillet
+  // on edge" once a part was clicked, with no arrow to drag. It rests.
+  const panelModeHint = assembleMode ? idleHint : tweakModeHint;
   const workspacePrompt =
     !displayedGeometryComplete && !drawingMode
       ? 'Preparing model · viewing is available; editing waits until it is ready'
       : drawingMode
-        ? 'Drag a view to place it · arrow keys nudge it · Update redraws a stale sheet'
+        ? drawingHasViews
+          ? 'Drag a view to place it · arrow keys nudge it · Update redraws a stale sheet'
+          : idleHint
         : readingHints
           ? viewModeHint
-          : tweakMode
-            ? tweakModeHint
+          : tweakMode || assembleMode
+            ? panelModeHint
             : (commandPromptText(interaction, cylinderDimensionMode, {
                 refusalShown: Boolean(calloutWithOperation?.operation?.error),
                 ...(keypad && keypadUi ? { editor: keypadUi } : {}),
@@ -30123,15 +30552,9 @@ export function App() {
                   : {})
               }) ??
               (tool === 'sketch'
-                ? [
-                    'Drag to draw',
-                    keyHint(keymap, 'sketch-rectangle', 'rectangle'),
-                    keyHint(keymap, 'sketch-circle', 'circle'),
-                    'P polygon',
-                    'Enter finishes'
-                  ]
-                    .filter(Boolean)
-                    .join(' · ')
+                ? sketchPlaneCardShown
+                  ? null
+                  : 'Pick a plane or a flat face to sketch on · Esc cancels'
                 : tool
                   ? 'Enter creates · Esc cancels'
                   : selectedBodyIds.length >= 2
@@ -30528,6 +30951,7 @@ export function App() {
           document={doc}
           scope={parameterScope.scope}
           selectedId={selectedFeatureNodeId}
+          failedFeatureIds={failedHistoryFeatureIds}
           failure={
             historyFailure?.projectId === doc.projectId &&
             historyFailure.version === doc.version
@@ -30838,8 +31262,6 @@ export function App() {
           onOpenMeshExport={() => setMeshExportOpen(true)}
           onOpenImageExport={openImageExport}
           onArchiveLocalSources={() => void handleArchiveLocalSources()}
-          onExportDiagnostics={handleExportDiagnostics}
-          onExportInteractionLog={() => void handleExportInteractionLog()}
           onRenameProject={(name) =>
             executeCommand(
               commandFactories.renameNode({ nodeId: doc.rootNodeId, name }),
@@ -31039,6 +31461,7 @@ export function App() {
             settings={viewerSettings}
             fitSignal={fitSignal}
             autoFrame={autoFrame}
+            creationFrame={creationFrame}
             viewRequest={projectViewRequest}
             normalToFaceRequest={normalToFaceRequest}
             units={doc.units}
@@ -31607,6 +32030,9 @@ export function App() {
               ) : inPlace.active ? (
                 keypad?.kind === 'command' && keypad.commandValueId ? (
                   <NumericKeypad
+                    // Each value has its own entry: Tab (or another chip)
+                    // opens the next with its own text, never the last one's.
+                    key={keypad.commandValueId}
                     request={keypad}
                     units={doc.units}
                     scope={parameterScope.scope}
@@ -31626,37 +32052,18 @@ export function App() {
                       inPlace.previewValue(valueId, value);
                     }}
                     onCommit={(value, raw) => {
-                      const valueId = keypad.commandValueId!;
-                      const valueSpec = inPlaceSpec?.values.find(
-                        (candidate) => candidate.id === valueId
-                      );
-                      const baseline =
-                        keypad.baseline ?? inPlace.values[valueId] ?? value;
                       setKeypad(null);
-                      // Expressions stay parametric in the stored feature.
-                      const accepted = inPlace.setValue(
-                        valueId,
-                        value,
-                        Number.isFinite(Number(raw)) ? undefined : raw
-                      );
-                      if (accepted) {
-                        commandSetterRef.current?.(
-                          valueId,
-                          valueSpec ? clampValue(valueSpec, value) : value
-                        );
-                      } else {
-                        // Refused: back to the value shown when the chip was
-                        // tapped, undoing any in-range keystroke previews.
-                        // Set or unset as it was, as Escape restores it.
-                        commandSetterRef.current?.(valueId, baseline);
-                        inPlace.restoreValue(
-                          valueId,
-                          baseline,
-                          keypad.baselineRaw,
-                          commandKeypadTouchedRef.current
-                        );
-                      }
+                      commitInPlaceKeypadValue(keypad, value, raw);
                     }}
+                    // One value has nowhere to step to: Tab stays the
+                    // browser's there.
+                    {...(inPlaceTypedValueIds.length > 1 &&
+                    inPlaceTypedValueIds.includes(keypad.commandValueId)
+                      ? {
+                          onStep: (direction, entry, at) =>
+                            stepInPlaceKeypad(keypad, direction, entry, at)
+                        }
+                      : {})}
                     onCancel={cancelOpenKeypad}
                   />
                 ) : null
@@ -31955,6 +32362,7 @@ export function App() {
                   selectedEdges.length > 0 ||
                   selectedBodyIds.length > 0
                 }
+                historyOpen={panelShowing('history')}
                 exportSeen={tourExportSeen}
                 onDismiss={() =>
                   setPanelState((current) => ({
@@ -31964,6 +32372,31 @@ export function App() {
                 }
               />
             )}
+          {showsWorkspaceEmptyState({
+            buildMode: resolvedWorkspaceMode === 'build',
+            featureCount: features.length,
+            bodyCount: viewerBodies.length,
+            commandActive: Boolean(
+              inPlace.active ||
+              measuring ||
+              faceRepair ||
+              datumRepair ||
+              toFacePick ||
+              tool ||
+              interaction.mode === 'sketch'
+            ),
+            editDisabledReason: shownAvailability.editDisabledReason ?? null
+          }) && (
+            <WorkspaceEmptyState
+              boxIcon={TOOL_META.box.icon}
+              sketchIcon={TOOL_META.sketch.icon}
+              boxKey={keymap.label(toolCommandId('box'))}
+              sketchKey={keymap.label(toolCommandId('sketch'))}
+              onBox={() => launchTool('box')}
+              onSketch={() => launchTool('sketch')}
+              onImport={() => importInputRef.current?.click()}
+            />
+          )}
           <ToastHost toast={toast} onDismiss={dismissToast} />
         </ErrorBoundary>
       }
@@ -32535,9 +32968,16 @@ export function App() {
             }
             geometryStatus={geometryStatus}
             tone={tone}
-            muted={contextualToolCard !== null && !hideSketchToolCard}
+            // The plane chooser carries the Sketch tool's instruction too:
+            // the toast under it said the same sentence a second time. The
+            // status is still set, for the log and for assistive tech.
+            muted={
+              (contextualToolCard !== null && !hideSketchToolCard) ||
+              sketchPlaneCardShown
+            }
             onOpenLog={openActivityLog}
             prompt={workspacePrompt}
+            promptResting={workspacePrompt === idleHint}
             instructionDetails={
               displayedGeometryComplete && offsetHandleTarget
                 ? offsetHandleTarget.totalBaseline === undefined
@@ -33120,6 +33560,17 @@ export function App() {
                 }}
               />
             )}
+          {pendingResume && activeResumePrompt(pendingResume, doc) && (
+            <ResumeHistoryDialog
+              action={pendingResume.label}
+              failures={pendingResume.failures}
+              onKeep={() => {
+                setPendingResume(null);
+                setStatus('History stays rolled back.');
+              }}
+              onResume={resumeDespiteFailures}
+            />
+          )}
           {pendingToolSwitch && doc && (
             <UnappliedCardDialog
               card="Move"

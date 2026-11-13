@@ -52,6 +52,26 @@ describe('column and panel sizes', () => {
     expect(px(handle['margin-top'])).toBe(-px(handle.height) / 2);
   });
 
+  it('keeps History to one line a step, its actions over the value', () => {
+    const css = sheet('sidebar.css');
+    // A name never wraps: rows keep one height and the rail its rhythm.
+    expect(rule(css, '.history-timeline .feature-name')['white-space']).toBe(
+      'nowrap'
+    );
+    // The actions open over the value instead of reserving their width…
+    expect(rule(css, '.history-row-actions').position).toBe('absolute');
+    // …and the value's lane is at least as wide as they are, so the name's
+    // button never lies under one of their 24px targets.
+    expect(
+      rule(css, '.history-timeline .feature-row')['--history-actions-w']
+    ).toBe('74px');
+    expect(rule(css, '.history-row-tail')['min-width']).toBe(
+      'var(--history-actions-w)'
+    );
+    // The rolled-back marker is drawn, not a target: the knob is.
+    expect(rule(css, '.history-marker')['pointer-events']).toBe('none');
+  });
+
   it('sets the rail subscripts at the mini size', () => {
     const css = sheet('quiet-stage.css');
     expect(rule(css, '.rail-count')['font-size']).toBe('var(--fs-mini)');

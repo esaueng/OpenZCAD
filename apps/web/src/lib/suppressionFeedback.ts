@@ -1,6 +1,10 @@
 import type { CommandManager } from '@openzcad/command-system';
 import { listFeaturesInOrder } from '@openzcad/document-core';
-import type { FeatureId, ProjectDocument } from '@openzcad/shared';
+import type {
+  FeatureId,
+  FeatureWarning,
+  ProjectDocument
+} from '@openzcad/shared';
 import { featuresNeedingRepair } from './featureRepair';
 import { suppressFeatureToastMessage } from './toasts';
 
@@ -19,12 +23,15 @@ export interface SuppressionNotice {
 /** A causal count needs geometry from the live document before the toggle. */
 export function suppressionRepairSnapshot(
   manager: CommandManager,
-  geometryReady: boolean
+  geometryReady: boolean,
+  /** The typed warnings of the derived state on screen, which it omits. */
+  featureWarnings?: readonly FeatureWarning[]
 ): ReadonlySet<FeatureId> | null {
   return geometryReady
     ? featuresNeedingRepair(
         listFeaturesInOrder(manager.document),
-        manager.document.derived.bodyRepresentations
+        manager.document.derived.bodyRepresentations,
+        featureWarnings
       )
     : null;
 }
@@ -52,7 +59,8 @@ export function settleSuppressionNotice(
       ? [
           ...featuresNeedingRepair(
             listFeaturesInOrder(document),
-            derived.bodyRepresentations
+            derived.bodyRepresentations,
+            derived.featureWarnings
           )
         ].filter((id) => id !== notice.featureId && !before.has(id)).length
       : 0;

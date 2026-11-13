@@ -10,6 +10,7 @@ import {
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
+import { expectPassedThrough } from './support/failed-pass-through';
 import {
   toUserId,
   type BodyId,
@@ -104,7 +105,7 @@ describe('fillet result lineage', { timeout: 60_000 }, () => {
         : {}),
       size: 1
     });
-    return { ...second, firstBody, bottomRim };
+    return { ...second, firstBodyId: first.bodyId, firstBody, bottomRim };
   }
 
   function withRadius(document: ProjectDocument, radius: number) {
@@ -181,7 +182,7 @@ describe('fillet result lineage', { timeout: 60_000 }, () => {
     expect(after.warnings).toEqual([
       'Feature "Fillet bottom": A selected edge no longer exists. Re-select the edges and re-create this feature.'
     ]);
-    expect(after.bodyRepresentations[chain.bodyId]).toBeUndefined();
+    expectPassedThrough(after, chain.bodyId, chain.firstBodyId);
     expect(after.edgeHashRepairs ?? []).toEqual([]);
   });
 
@@ -197,7 +198,7 @@ describe('fillet result lineage', { timeout: 60_000 }, () => {
     expect(after.warnings).toEqual([
       'Feature "Fillet bottom": A selected edge no longer exists. Re-select the edges and re-create this feature.'
     ]);
-    expect(after.bodyRepresentations[chain.bodyId]).toBeUndefined();
+    expectPassedThrough(after, chain.bodyId, chain.firstBodyId);
   });
 
   it('attributes the generated blend and the surviving box sides on a box modifier', async () => {

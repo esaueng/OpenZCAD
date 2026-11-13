@@ -41,6 +41,7 @@ import {
   edgeCircleMisfit,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
+import { expectPassedThrough } from './support/failed-pass-through';
 import {
   FEATURE_SUPPRESSED_METADATA_KEY,
   toUserId,
@@ -4971,7 +4972,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     expect(legacyDerived.warnings).toEqual([
       'Feature "Legacy box fillet": A selected edge no longer exists. Re-select the edges and re-create this feature.'
     ]);
-    expect(legacyDerived.bodyRepresentations[legacy.bodyId]).toBeUndefined();
+    expectPassedThrough(legacyDerived, legacy.bodyId, sourceBodyId);
   });
 
   it('fails closed when edge-modifier lineage contains duplicate claims', async () => {
@@ -5000,7 +5001,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     expect(derived.warnings).toEqual([
       'Feature "Duplicate lineage fillet": Edge modifier lineage contains duplicate references for one selected edge.'
     ]);
-    expect(derived.bodyRepresentations[invalid.bodyId]).toBeUndefined();
+    expectPassedThrough(derived, invalid.bodyId, sourceBodyId);
   });
 
   it('fails closed when edge-modifier lineage omits a selected edge', async () => {
@@ -5029,7 +5030,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     expect(derived.warnings).toEqual([
       'Feature "Missing lineage fillet": Edge modifier lineage is missing a reference for one selected edge.'
     ]);
-    expect(derived.bodyRepresentations[invalid.bodyId]).toBeUndefined();
+    expectPassedThrough(derived, invalid.bodyId, sourceBodyId);
   });
 
   it('fillets a cylinder cap rim across the whole radius range', async () => {
@@ -6522,11 +6523,15 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
     });
 
     // A hole aimed off the body is a refusal in the feature's warnings,
-    // never a silent no-op body.
+    // never a silent no-op body: the input stands in for it, attributed as
+    // failed (ADR-017, November 2026).
     const missed = drill({ position: { u: 100, v: 0 } });
     const missedDerived = await adapter.syncDocument(missed.document);
     expect(missedDerived.warnings.join('\n')).toMatch(/Bore/);
-    expect(missedDerived.bodyRepresentations[missed.bodyId]).toBeUndefined();
+    expect(
+      missedDerived.featureWarnings?.map((warning) => warning.kind)
+    ).toEqual(['build-failed']);
+    expectPassedThrough(missedDerived, missed.bodyId, sourceBodyId);
   });
 
   it('splits a body into two watertight halves whose volumes sum exactly', async () => {
@@ -6701,8 +6706,7 @@ describe('exact kernel adapter', { timeout: 30_000 }, () => {
 
     expect(derived.warnings).toHaveLength(1);
     expect(derived.warnings[0]).toMatch(/^Feature "Impossible shell":/);
-    expect(derived.bodyRepresentations[shellBodyId]).toBeUndefined();
-    expect(derived.bodyRepresentations[filletedBodyId]?.consumed).toBe(false);
+    expectPassedThrough(derived, shellBodyId, filletedBodyId);
   });
 
   it.each([

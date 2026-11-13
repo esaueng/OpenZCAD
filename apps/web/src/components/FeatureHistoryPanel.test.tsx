@@ -262,3 +262,43 @@ it('draws the failure actions as buttons, not as the alert text', () => {
     'secondary'
   );
 });
+
+it('says a step that built on a failed step stands on its unchanged input', () => {
+  const base = addPrimitiveFeature(
+    createProjectDocument('History', toUserId('user_test')),
+    {
+      name: 'Plate',
+      primitiveKind: 'box',
+      dimensions: { width: 40, height: 20, depth: 8 }
+    }
+  );
+  const rounded = filletEdges(base, {
+    name: 'Round corners',
+    targetBodyId: base.bodyOrder[0]!,
+    edgeHashes: [1],
+    size: 1
+  });
+  const { document } = filletEdges(rounded.document, {
+    name: 'Round top',
+    targetBodyId: rounded.bodyId,
+    edgeHashes: [2],
+    size: 1
+  });
+  const [, failed, dependent] = listFeaturesInOrder(document);
+  render(
+    <FeatureHistoryPanel
+      document={document}
+      selectedId={dependent!.id}
+      failedFeatureIds={new Set([failed!.featureId])}
+      failure={null}
+      onSelect={vi.fn()}
+      onDismissFailure={vi.fn()}
+    />
+  );
+  expect(screen.getByText('Built on a failed step')).toBeVisible();
+  expect(
+    screen.getByText(
+      /“Round corners” failed to build, so this step is built on that step's input unchanged\./
+    )
+  ).toBeVisible();
+});

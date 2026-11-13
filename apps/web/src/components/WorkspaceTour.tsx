@@ -6,6 +6,7 @@ import {
 } from 'react';
 import { ChevronDown, ChevronUp, X } from 'lucide-react';
 import {
+  advanceOnSignals,
   advanceThroughCompleted,
   tourStepBody,
   WORKSPACE_TOUR_STEPS,
@@ -27,11 +28,12 @@ interface WorkspaceTourProps extends WorkspaceTourSignals {
  *
  * Non-modal on purpose: every step asks the user to work the real workspace,
  * so nothing may sit between them and it. Steps auto-advance when their
- * observable action happens (see lib/workspaceTour); Next covers the rest.
+ * observable action happens (see lib/workspaceTour); Next moves on by hand.
  */
 export function WorkspaceTour({
   featureCount,
   hasSelection,
+  historyOpen,
   exportSeen,
   onDismiss,
   minimized: minimizedProp,
@@ -41,8 +43,20 @@ export function WorkspaceTour({
   const [localMinimized, setLocalMinimized] = useState(false);
   const minimized = minimizedProp ?? localMinimized;
   const [index, setIndex] = useState(() =>
-    advanceThroughCompleted(0, { featureCount, hasSelection, exportSeen })
+    advanceThroughCompleted(0, {
+      featureCount,
+      hasSelection,
+      historyOpen,
+      exportSeen
+    })
   );
+  /** The signals as of the last pass, to tell an action from a state. */
+  const seenSignalsRef = useRef<WorkspaceTourSignals>({
+    featureCount,
+    hasSelection,
+    historyOpen,
+    exportSeen
+  });
   const onDismissRef = useRef(onDismiss);
   onDismissRef.current = onDismiss;
   const cardRef = useRef<HTMLElement | null>(null);
@@ -82,14 +96,11 @@ export function WorkspaceTour({
   };
 
   useEffect(() => {
-    setIndex((current) =>
-      advanceThroughCompleted(current, {
-        featureCount,
-        hasSelection,
-        exportSeen
-      })
-    );
-  }, [featureCount, hasSelection, exportSeen]);
+    const before = seenSignalsRef.current;
+    const after = { featureCount, hasSelection, historyOpen, exportSeen };
+    seenSignalsRef.current = after;
+    setIndex((current) => advanceOnSignals(current, before, after));
+  }, [featureCount, hasSelection, historyOpen, exportSeen]);
 
   const finished = index >= WORKSPACE_TOUR_STEPS.length;
   useEffect(() => {

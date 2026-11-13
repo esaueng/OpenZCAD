@@ -686,6 +686,39 @@ describe('StartScreen library discovery', () => {
     ).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'New project' })).toBeEnabled();
   });
+
+  it('keeps one primary action while the empty shelf offers the first project', () => {
+    // UI review, 12 Nov 2026: New project and Create your first project
+    // were both the page's blue button.
+    const { unmount } = renderStartScreen({ projects: [], signedIn: false });
+    expect(
+      screen.getByRole('button', { name: 'Create your first project' })
+    ).toHaveClass('primary');
+    const launch = screen.getByRole('button', { name: 'New project' });
+    expect(launch).toHaveClass('secondary');
+    expect(launch).not.toHaveClass('primary');
+    expect(document.querySelectorAll('.start-screen .primary')).toHaveLength(1);
+    unmount();
+
+    // With projects on the shelf there is no prompt, and New project leads.
+    renderStartScreen();
+    expect(
+      screen.queryByRole('button', { name: 'Create your first project' })
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'New project' })).toHaveClass(
+      'primary'
+    );
+  });
+
+  it("labels the new project's name field in view, not only for a screen reader", () => {
+    // It arrives filled with a suggested name; unlabelled beside a button it
+    // read as a search box.
+    renderStartScreen({ projects: [], signedIn: false });
+    const field = screen.getByLabelText('Project name');
+    const label = field.closest('label');
+    expect(label).not.toBeNull();
+    expect(within(label!).getByText('Name')).toHaveClass('start-field-label');
+  });
 });
 
 describe('StartScreen project timestamps', () => {

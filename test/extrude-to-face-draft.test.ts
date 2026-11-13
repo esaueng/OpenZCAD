@@ -20,6 +20,7 @@ import {
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
+import { expectPassedThrough } from './support/failed-pass-through';
 import {
   toUserId,
   type BodyId,
@@ -1085,7 +1086,7 @@ describe('F01 to-face and draft', { timeout: 60_000 }, () => {
         expression: '3'
       });
       const refused = await derive(tapered);
-      expect(refused.bodyRepresentations[cut.bodyId]).toBeUndefined();
+      expectPassedThrough(refused, cut.bodyId, block.bodyId);
       expect(refused.warnings.join('\n')).toMatch(
         /through-all cut has no draft/
       );

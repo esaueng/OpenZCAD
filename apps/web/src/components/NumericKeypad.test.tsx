@@ -603,6 +603,185 @@ describe('numeric keypad focus handback', () => {
   });
 });
 
+describe('a running command’s keypad', () => {
+  function commandKeypad(
+    request: Partial<KeypadRequest> = {},
+    onStep?: Parameters<typeof NumericKeypad>[0]['onStep']
+  ) {
+    const area = document.createElement('div');
+    area.className = 'viewer-area';
+    const bar = document.createElement('div');
+    bar.className = 'in-place-command';
+    bar.tabIndex = -1;
+    const host = document.createElement('div');
+    Object.defineProperties(host, {
+      clientWidth: { value: 1000 },
+      clientHeight: { value: 800 }
+    });
+    area.append(bar, host);
+    document.body.append(area);
+    const onCommit = vi.fn();
+    const onPreview = vi.fn();
+    const view = render(
+      <NumericKeypad
+        request={{
+          kind: 'command',
+          commandValueId: 'width',
+          label: 'Width',
+          initial: '30',
+          unitKind: 'length',
+          ...request
+        }}
+        units="mm"
+        scope={{ plate: 60 }}
+        anchorRef={{ current: null }}
+        onPreview={onPreview}
+        onCommit={onCommit}
+        onCancel={() => undefined}
+        {...(onStep ? { onStep } : {})}
+      />,
+      { container: host }
+    );
+    return {
+      area,
+      bar,
+      view,
+      onCommit,
+      onPreview,
+      input: screen.getByRole<HTMLInputElement>('textbox', {
+        name: request.label ?? 'Width'
+      }),
+      keypad: screen.getByRole('dialog', {
+        name: `${request.label ?? 'Width'} value`
+      })
+    };
+  }
+
+  it('hands focus to the command bar when it closes, so the next Enter is Done', async () => {
+    const { area, bar, view } = commandKeypad();
+    expect(screen.getByRole('textbox')).toHaveFocus();
+    view.unmount();
+    await Promise.resolve();
+    expect(bar).toHaveFocus();
+    area.remove();
+  });
+
+  it('leaves focus where the user has already put it', async () => {
+    const { area, bar, view } = commandKeypad();
+    const other = document.createElement('button');
+    area.append(other);
+    view.unmount();
+    other.focus();
+    await Promise.resolve();
+    expect(other).toHaveFocus();
+    expect(bar).not.toHaveFocus();
+    area.remove();
+  });
+
+  it('gives Tab the typed value and its place, for the next value to open in', () => {
+    const onStep = vi.fn();
+    const { area, input, keypad, onCommit } = commandKeypad(
+      { initial: '1', selectInitial: false },
+      onStep
+    );
+    vi.spyOn(keypad, 'getBoundingClientRect').mockReturnValue({
+      x: 320,
+      y: 410,
+      left: 320,
+      top: 410,
+      right: 552,
+      bottom: 450,
+      width: 232,
+      height: 40,
+      toJSON: () => ({})
+    });
+    fireEvent.change(input, { target: { value: '100' } });
+    const tab = fireEvent.keyDown(input, { key: 'Tab' });
+    // Handled: focus does not walk on to the unit and the keypad button.
+    expect(tab).toBe(false);
+    expect(onStep).toHaveBeenCalledExactlyOnceWith(
+      1,
+      { value: 100, raw: '100' },
+      expect.objectContaining({ x: 320, y: 410 })
+    );
+    // Tab commits through the step, never as an Enter as well.
+    expect(onCommit).not.toHaveBeenCalled();
+    area.remove();
+  });
+
+  it('steps back with Shift+Tab, and keeps an expression as typed', () => {
+    const onStep = vi.fn();
+    const { area, input } = commandKeypad({}, onStep);
+    fireEvent.change(input, { target: { value: 'plate / 2' } });
+    fireEvent.keyDown(input, { key: 'Tab', shiftKey: true });
+    expect(onStep).toHaveBeenCalledExactlyOnceWith(
+      -1,
+      { value: 30, raw: 'plate / 2' },
+      expect.anything()
+    );
+    area.remove();
+  });
+
+  it('steps past a value left as it opened, or emptied, without setting it', () => {
+    const onStep = vi.fn();
+    const { area, input } = commandKeypad({}, onStep);
+    fireEvent.keyDown(input, { key: 'Tab' });
+    expect(onStep).toHaveBeenLastCalledWith(1, null, expect.anything());
+    fireEvent.change(input, { target: { value: '' } });
+    fireEvent.keyDown(input, { key: 'Tab' });
+    expect(onStep).toHaveBeenLastCalledWith(1, null, expect.anything());
+    expect(onStep).toHaveBeenCalledTimes(2);
+    area.remove();
+  });
+
+  it('keeps the field, with its warning, for an entry that does not read', () => {
+    const onStep = vi.fn();
+    const { area, input } = commandKeypad({}, onStep);
+    fireEvent.change(input, { target: { value: '10 +' } });
+    expect(fireEvent.keyDown(input, { key: 'Tab' })).toBe(false);
+    expect(onStep).not.toHaveBeenCalled();
+    expect(input).toHaveFocus();
+    area.remove();
+  });
+
+  it('leaves Tab to the browser where there is no next value, and on its buttons', () => {
+    const single = commandKeypad();
+    expect(fireEvent.keyDown(single.input, { key: 'Tab' })).toBe(true);
+    single.view.unmount();
+    single.area.remove();
+    const onStep = vi.fn();
+    const { area, input } = commandKeypad({}, onStep);
+    expect(
+      fireEvent.keyDown(screen.getByRole('button', { name: 'Keypad' }), {
+        key: 'Tab'
+      })
+    ).toBe(true);
+    expect(fireEvent.keyDown(input, { key: 'Tab', ctrlKey: true })).toBe(true);
+    expect(onStep).not.toHaveBeenCalled();
+    area.remove();
+  });
+
+  it('opens where the value Tab stepped from stood, not at its own chip', () => {
+    const { area, keypad, input } = commandKeypad({
+      commandValueId: 'depth',
+      label: 'Depth',
+      initial: '18',
+      heldAt: { x: 320, y: 410, side: 'docked' }
+    });
+    expect(keypad).toHaveStyle({
+      left: '320px',
+      top: '410px',
+      visibility: 'visible'
+    });
+    expect(keypad).toHaveAttribute('data-placement', 'docked');
+    // The value it opens on is selected, so typing replaces it.
+    expect(input).toHaveFocus();
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe(2);
+    area.remove();
+  });
+});
+
 describe('numeric keypad names', () => {
   it('names a glyph-labelled value in words', () => {
     render(

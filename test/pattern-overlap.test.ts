@@ -10,6 +10,7 @@ import {
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
+import { expectPassedThrough } from './support/failed-pass-through';
 import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
 
 /**
@@ -172,12 +173,14 @@ describe('a pattern whose instances overlap', () => {
     expect(derived.warnings).toContain(
       'Feature "Row": kernel refused the fuse'
     );
-    // The pattern produced nothing, which is correct and is not what changed.
-    expect(derived.bodyRepresentations[patternBodyId]).toBeUndefined();
-    // Its input must therefore still be there. This is the assertion that
-    // failed: the box was marked consumed by a feature that never delivered.
-    expect(derived.bodyRepresentations[targetBodyId]!.consumed).toBe(false);
-    expect(derived.exportableBodyIds).toContain(targetBodyId);
+    // The pattern produced nothing of its own. Its input must therefore
+    // still be there, exactly once. The box was once marked consumed by a
+    // feature that never delivered; now the build rolls back what the
+    // failed pattern wrote and hands the box through under its id (ADR-017,
+    // November 2026).
+    expectPassedThrough(derived, patternBodyId, targetBodyId);
+    expect(derived.exportableBodyIds).toContain(patternBodyId);
+    expect(derived.exportableBodyIds).not.toContain(targetBodyId);
   }, 120_000);
 
   it('folds an overlapping CIRCULAR pattern too', async () => {
