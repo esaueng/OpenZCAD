@@ -177,6 +177,7 @@
     "test/spline-self-seam.test.ts",
     "test/step-import-privacy.test.ts",
     "test/step-preview-profile.test.ts",
+    "test/subtract-curved-operands.test.ts",
     "test/synthetic-holder-fixtures.test.ts",
     "test/test-tools.test.ts",
     "test/thread-feature.test.ts",

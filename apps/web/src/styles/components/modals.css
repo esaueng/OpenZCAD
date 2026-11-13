@@ -315,6 +315,22 @@
   color: var(--color-error);
 }
 
+/* "Download your data first": a link in the impact text (design review I84). */
+.cloud-deletion-download {
+  padding: 0;
+  border: 0;
+  color: var(--color-accent-hi);
+  background: transparent;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.cloud-deletion-download:hover {
+  color: var(--color-text);
+}
+
 /* The personal-info toggle is a button, not a full-width bar. */
 .cloud-deletion-dialog > .secondary {
   justify-self: start;
