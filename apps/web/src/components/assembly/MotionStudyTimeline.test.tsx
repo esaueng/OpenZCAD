@@ -12,7 +12,7 @@ import {
   registerAssemblyCommitHandlers
 } from '../../lib/assembly/assemblyRuntime';
 import { MotionStudyTimeline } from './MotionStudyTimeline';
-import { pivotProject } from './motionTestFixture';
+import { coupledPairProject, pivotProject } from './motionTestFixture';
 
 function lane(element: HTMLElement, width = 200) {
   element.getBoundingClientRect = () => ({
@@ -252,6 +252,66 @@ describe('MotionStudyTimeline', () => {
     ]);
     // Every motion now has a track: nothing left to add.
     expect(screen.queryByRole('button', { name: 'Add track' })).toBeNull();
+  });
+
+  it('keys a coupled move from the part that was moved, and refuses one that names none', () => {
+    const commitPose = vi.fn();
+    registerAssemblyCommitHandlers({ commitPose, createJoint: vi.fn() });
+    const manager = coupledPairProject({ limited: false });
+    manager.execute(
+      commandFactories.setAssemblyStudy({
+        study: {
+          id: 'study_1',
+          name: 'Motion 1',
+          durationS: 2,
+          playback: 'loop',
+          tracks: [
+            {
+              jointId: 'turn_a',
+              dof: 0,
+              keys: [
+                { t: 0, value: 0, easing: 'linear' },
+                { t: 2, value: 80, easing: 'linear' }
+              ]
+            }
+          ]
+        }
+      })
+    );
+    const { executed } = mount(manager);
+    // A coupled value written without saying which part was moved (no
+    // real path does this) is not guessed at: no key, a note, and the
+    // parts go back to what the study shows.
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    act(() => {
+      assemblyRuntime.setOverride('turn_b', [-30]);
+      assemblyRuntime.commitOverrides();
+    });
+    expect(executed).toHaveLength(0);
+    expect(commitPose).not.toHaveBeenCalled();
+    expect(logged).toHaveBeenCalledTimes(1);
+    expect(
+      screen.getByText(
+        'That move was not keyed: it did not say which part was moved.'
+      )
+    ).toBeTruthy();
+    expect(getAssemblyRuntime().overrides.get('turn_b')).toEqual([0]);
+    // The same move as the slider and the drag make it, naming the motion:
+    // the study's own gear is keyed with the value that pose gives it.
+    act(() => {
+      assemblyRuntime.setOverride('turn_b', [-30], 0);
+      assemblyRuntime.commitOverrides();
+    });
+    expect(executed).toHaveLength(1);
+    expect(lastStudy(executed).tracks.map((t) => t.jointId)).toEqual([
+      'turn_a'
+    ]);
+    expect(lastStudy(executed).tracks[0]?.keys[0]).toEqual({
+      t: 0,
+      value: 60,
+      easing: 'linear'
+    });
+    registerAssemblyCommitHandlers(null);
   });
 
   it('keys a moved part at the playhead instead of saving the rest pose', () => {

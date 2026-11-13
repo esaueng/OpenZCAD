@@ -20,11 +20,14 @@ import { commandFactories } from '@openzcad/command-system';
 import { assemblyBomToCsv, deriveAssemblyBom } from '@openzcad/document-core';
 import {
   ASSEMBLY_JOINT_DOFS,
+  coupledJointLimits,
   createId,
   type BodyId,
   type ProjectDocument
 } from '@openzcad/shared';
 import {
+  removeAssemblyComponent,
+  removeAssemblyJoint,
   toggleComponentGrounded,
   toggleJointPlayback,
   type AssemblyExecute
@@ -305,9 +308,7 @@ function AssemblyLists({
       if (itemId === 'ground') toggleComponentGrounded(app, target.id);
       if (itemId === 'remove') {
         if (
-          execute(
-            commandFactories.deleteAssemblyComponent({ componentId: target.id })
-          ) &&
+          removeAssemblyComponent(app, target.id) &&
           selectedComponentIds.includes(target.id)
         )
           assemblyRuntime.selectComponent(null);
@@ -316,10 +317,7 @@ function AssemblyLists({
     }
     if (itemId === 'delete') {
       if (playingJointId === target.id) assemblyRuntime.stop();
-      if (
-        execute(commandFactories.deleteAssemblyJoint({ jointId: target.id })) &&
-        selectedJointId === target.id
-      )
+      if (removeAssemblyJoint(app, target.id) && selectedJointId === target.id)
         assemblyRuntime.selectJoint(null);
     }
   };
@@ -601,7 +599,10 @@ function AssemblyLists({
                 const unsolved = solution.unsolved.get(joint.id) ?? null;
                 const selected = joint.id === selectedJointId;
                 const playing = joint.id === playingJointId;
-                const reason = sweepUnavailableReason(joint);
+                const reason = sweepUnavailableReason({
+                  kind: joint.kind,
+                  limits: coupledJointLimits(set, joint)
+                });
                 const values = solution.values.get(joint.id) ?? joint.values;
                 return (
                   <li

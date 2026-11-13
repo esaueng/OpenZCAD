@@ -19,7 +19,8 @@ import {
 } from '@openzcad/shared';
 import {
   assemblyRuntime,
-  getAssemblyRuntime
+  getAssemblyRuntime,
+  type AssemblyRuntimeState
 } from '../../lib/assembly/assemblyRuntime';
 import type { AssemblyViewModel } from '../../lib/assembly/assemblyView';
 import {
@@ -89,6 +90,9 @@ interface Drag {
   session: AssemblyDragSession;
   startValue: number;
   previousOverride: readonly number[] | null;
+  /** The drivers before the drag took over, restored if it is cancelled. */
+  previousDrivers: AssemblyRuntimeState['drivers'];
+  previousMoved: AssemblyRuntimeState['moved'];
   last: AssemblyDragReading | null;
 }
 
@@ -383,7 +387,7 @@ export class AssemblyViewport {
         drag.last !== null &&
         Math.abs(drag.last.value - drag.startValue) > 1e-12;
       if (moved) assemblyRuntime.commitOverrides();
-      else assemblyRuntime.setOverride(drag.jointId, drag.previousOverride);
+      else this.restoreDrag(drag);
     } else if (!press.componentId && !press.blocked) {
       // A click on empty space (or a body outside the assembly) clears.
       assemblyRuntime.selectComponent(null);
@@ -425,8 +429,7 @@ export class AssemblyViewport {
   /** Ends a press or drag; `cancel` puts a dragged joint back. */
   private endGesture(cancel: boolean) {
     const drag = this.drag;
-    if (drag && cancel)
-      assemblyRuntime.setOverride(drag.jointId, drag.previousOverride);
+    if (drag && cancel) this.restoreDrag(drag);
     if (this.press) {
       try {
         if (this.deps.canvas.hasPointerCapture(this.press.pointerId))
@@ -440,13 +443,30 @@ export class AssemblyViewport {
     this.hideChip();
   }
 
+  /** Puts a joint's shown value, and who drives, back as before the drag. */
+  private restoreDrag(drag: Drag) {
+    const overrides = new Map(getAssemblyRuntime().overrides);
+    if (drag.previousOverride)
+      overrides.set(drag.jointId, drag.previousOverride);
+    else overrides.delete(drag.jointId);
+    assemblyRuntime.setOverrides(
+      overrides,
+      drag.previousDrivers,
+      drag.previousMoved
+    );
+  }
+
   private beginDrag(press: Press) {
     const view = this.view;
     if (!view || !press.componentId || !press.grabPoint) return;
     // Motion playing owns the values; a drag takes them over from rest.
     if (getAssemblyRuntime().playback) assemblyRuntime.stop();
     const runtime = getAssemblyRuntime();
-    const solution = solveAssembly(view.set, runtime.overrides);
+    const solution = solveAssembly(
+      view.set,
+      runtime.overrides,
+      runtime.drivers
+    );
     const spec = dragSpecFor(view.set, solution, press.componentId);
     const joint = spec
       ? view.set.joints.find((j) => j.id === spec.jointId)
@@ -475,6 +495,8 @@ export class AssemblyViewport {
       session,
       startValue: spec.startValue,
       previousOverride: runtime.overrides.get(joint.id) ?? null,
+      previousDrivers: runtime.drivers,
+      previousMoved: runtime.moved,
       last: null
     };
     this.glyphs.setMarker(null);
@@ -494,7 +516,11 @@ export class AssemblyViewport {
       const previous = drag.last;
       drag.last = reading;
       if (!previous || previous.value !== reading.value)
-        assemblyRuntime.setOverride(drag.jointId, reading.values);
+        assemblyRuntime.setOverride(
+          drag.jointId,
+          reading.values,
+          drag.session.spec.dof
+        );
     }
     const shown = drag.last;
     if (shown)

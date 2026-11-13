@@ -15,6 +15,7 @@ export * from './keymap-settings';
 export * from './drawings';
 export * from './object-folders';
 export * from './assembly';
+export * from './assembly-coupling';
 export * from './assembly-kinematics';
 export * from './gear-mesh-types';
 export * from './gear-mesh';
@@ -224,7 +225,13 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // v55 adds M14 partial-span teeth: gear teeth cut over part of a body's
 // cylindrical face (`faceWidth`, `offset` and `anchor` on teeth on a body).
 // An older client would cut them along the whole face, so it must refuse.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 55 as const;
+// v56 adds AS02 joint couplings (`assembly.couplings`): two joint values tied
+// by a ratio and an offset, so meshed gears and a rack and its pinion move
+// together. Absent means none, so every v54 assembly loads unchanged. An
+// older client would refuse the unknown commands, or, past that, drop the
+// list on its next save and let the gears turn out of mesh, so it must
+// refuse the document.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 56 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 

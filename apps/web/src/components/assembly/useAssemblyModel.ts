@@ -21,6 +21,7 @@ export function useAssemblyModel(
   document: ProjectDocument
 ): AssemblyViewModel | null {
   const overrides = useAssemblyRuntime((s) => s.overrides);
+  const drivers = useAssemblyRuntime((s) => s.drivers);
   const placementOverrides = useAssemblyRuntime((s) => s.placementOverrides);
   const selectedJointId = useAssemblyRuntime((s) => s.selectedJointId);
   return useMemo(
@@ -29,6 +30,7 @@ export function useAssemblyModel(
         document,
         {
           overrides,
+          drivers,
           placementOverrides,
           selectedJointId,
           jointTool: null,
@@ -36,6 +38,6 @@ export function useAssemblyModel(
         },
         (bodyId) => isLiveBody(document, bodyId)
       ),
-    [document, overrides, placementOverrides, selectedJointId]
+    [document, overrides, drivers, placementOverrides, selectedJointId]
   );
 }

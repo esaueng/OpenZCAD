@@ -13,18 +13,30 @@ import {
 /**
  * Mesh gears (M14 meshing-pair helper, AS02 joints): pick the gear that
  * stays put and the one that meshes with it; the helper works out the
- * working centre distance and the tooth phase and saves an ordinary
+ * working centre distance and the tooth phase and saves either an ordinary
  * rigid joint that places the second gear there and retains the tooth
- * phase. Ratio-linked motion is deferred. Pure: the card and tests share it.
- * This module only reads which parts are gears; the pair math and the joint
- * live in `gearMeshJoint.ts`, loaded with the card.
+ * phase, or (AS02 gear coupling) a joint per gear on the part they are
+ * mounted on plus the coupling that makes them turn together. Pure: the
+ * card and tests share it. This module only reads which parts are gears;
+ * the pair math and the joints live in `gearMeshJoint.ts` and
+ * `gearCoupling.ts`, loaded with the card.
  */
+
+/** Fixed together by one rigid joint, or turning together through a coupling. */
+export type GearMeshMotion = 'fixed' | 'coupled';
 
 export interface GearMeshDraft {
   /** The gear that stays put; grounded on Mesh when nothing places it. */
   baseId: string | null;
   /** The gear placed against it. */
   movingId: string | null;
+  /** Absent means fixed: the conservative default. */
+  motion?: GearMeshMotion;
+  /**
+   * Turning together: the part both gears are mounted on. Not needed when
+   * the first gear already turns on a joint (its other part is used).
+   */
+  carrierId?: string | null;
 }
 
 export interface GearMeshContext {

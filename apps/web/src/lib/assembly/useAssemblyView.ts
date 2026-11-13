@@ -14,6 +14,7 @@ export function useAssemblyView(
 ): AssemblyViewModel | null {
   const active = useAssemblyRuntime((s) => s.active);
   const overrides = useAssemblyRuntime((s) => s.overrides);
+  const drivers = useAssemblyRuntime((s) => s.drivers);
   const placementOverrides = useAssemblyRuntime((s) => s.placementOverrides);
   const selectedJointId = useAssemblyRuntime((s) => s.selectedJointId);
   const jointTool = useAssemblyRuntime((s) => s.jointTool);
@@ -30,6 +31,7 @@ export function useAssemblyView(
       document,
       {
         overrides,
+        drivers,
         placementOverrides,
         selectedJointId,
         jointTool,
@@ -41,6 +43,7 @@ export function useAssemblyView(
     active,
     document,
     overrides,
+    drivers,
     placementOverrides,
     selectedJointId,
     jointTool,

@@ -1,6 +1,8 @@
 import type { Vector3 } from './index';
 import {
   ASSEMBLY_JOINT_DOFS,
+  unsolvedAssemblyJoints,
+  type AssemblyCouplingEnd,
   type AssemblyDofLimit,
   type AssemblyEasing,
   type AssemblyFrame,
@@ -11,8 +13,10 @@ import {
   type AssemblyPlayback,
   type AssemblyQuaternion,
   type AssemblySet,
-  type AssemblyTrack
+  type AssemblyTrack,
+  type AssemblyUnsolvedReason
 } from './assembly';
+import { coupledDofLimit, coupledJointValues } from './assembly-coupling';
 
 /**
  * Assembly kinematics (AS02/AS06/AS07). Exact forward kinematics over a
@@ -23,6 +27,8 @@ import {
  * where F is a joint end's frame and M the joint's motion in the parent
  * frame. A joint that would close a loop is reported, never silently
  * dropped; closed-loop solving is a later, separate solver (AS09).
+ * Coupled joint values (meshed gears, schema v56) are settled first, as
+ * plain numbers, so the tree is then placed exactly as before.
  * Everything here is deterministic: traversal follows the stored orders.
  */
 
@@ -465,12 +471,6 @@ export type AssemblyComponentRole =
   /** Not reachable from a grounded component: it keeps its placement. */
   | 'free';
 
-export type AssemblyUnsolvedReason =
-  /** Both ends were already placed: the joint closes a loop (AS09). */
-  | 'loop'
-  /** Both ends are grounded, so the joint can never move. */
-  | 'grounded-both';
-
 export interface AssemblyTreeLink {
   jointId: string;
   /** True when the traversal went parent → child (the joint's own sense). */
@@ -490,52 +490,32 @@ export interface AssemblySolution {
   grounded: number;
 }
 
+/**
+ * `overrides` are candidate joint values (a drag, a playback frame);
+ * `drivers` names the motions being driven, most important first, so a
+ * coupled group follows the one the user is moving (see
+ * {@link coupledJointValues}).
+ */
 export function solveAssembly(
   set: AssemblySet,
-  overrides?: ReadonlyMap<string, readonly number[]>
+  overrides?: ReadonlyMap<string, readonly number[]>,
+  drivers?: readonly AssemblyCouplingEnd[]
 ): AssemblySolution {
-  const override = (jointId: string): readonly number[] | undefined =>
-    overrides?.get(jointId);
   const poses = new Map<string, RigidTransform>();
   const roles = new Map<string, AssemblyComponentRole>();
   const links = new Map<string, AssemblyTreeLink>();
-  const values = new Map<string, number[]>();
-  const unsolved = new Map<string, AssemblyUnsolvedReason>();
+  // Limits clamp, and coupled values follow the one being driven.
+  const values = coupledJointValues(set, overrides, drivers);
+  // The spanning forest in joint order: the joint that closes a loop is
+  // the one added last, whatever the traversal order.
+  const unsolved = unsolvedAssemblyJoints(set);
   const components = new Map(set.components.map((c) => [c.id, c]));
-
-  // Spanning forest in joint order (Kruskal over a ground super-node), so
-  // the joint that closes a loop is the one added last, whatever the
-  // traversal order. Grounded components all count as one fixed body.
-  const GROUND = '\u0000ground';
-  const parentOf = new Map<string, string>();
-  const find = (id: string): string => {
-    let root = id;
-    while (parentOf.has(root) && parentOf.get(root) !== root)
-      root = parentOf.get(root) as string;
-    parentOf.set(id, root);
-    return root;
-  };
-  for (const c of set.components)
-    parentOf.set(c.id, c.grounded ? GROUND : c.id);
-  parentOf.set(GROUND, GROUND);
   const adjacency = new Map<string, AssemblyJoint[]>();
   for (const joint of set.joints) {
-    values.set(
-      joint.id,
-      clampJointValues(joint, override(joint.id) ?? joint.values)
-    );
     const a = joint.parent.componentId;
     const b = joint.child.componentId;
     if (!components.has(a) || !components.has(b)) continue;
-    const ra = find(a);
-    const rb = find(b);
-    if (ra === rb) {
-      const bothGrounded =
-        components.get(a)?.grounded && components.get(b)?.grounded;
-      unsolved.set(joint.id, bothGrounded ? 'grounded-both' : 'loop');
-      continue;
-    }
-    parentOf.set(ra === GROUND ? rb : ra, ra === GROUND ? ra : rb);
+    if (unsolved.has(joint.id)) continue;
     for (const end of [a, b]) {
       const list = adjacency.get(end) ?? [];
       list.push(joint);
@@ -643,6 +623,7 @@ export interface AssemblyDragSpec {
    */
   direction: 1 | -1;
   startValue: number;
+  /** The joint's limit, narrowed by the limits of motions coupled to it. */
   limit: AssemblyDofLimit | null;
 }
 
@@ -697,7 +678,7 @@ export function dragSpecFor(
         axis,
         direction: link.forward ? 1 : -1,
         startValue: (solution.values.get(joint.id) ?? [])[dof] ?? 0,
-        limit: joint.limits[dof] ?? null
+        limit: coupledDofLimit(set, joint.id, dof)
       };
     }
     at = upstreamId;
@@ -777,9 +758,24 @@ export function evaluateTrack(track: AssemblyTrack, t: number): number {
 }
 
 /**
+ * The motions a study drives, in track order: the precedence when two
+ * tracks key motions that are coupled to each other (the earlier track
+ * leads for the whole study, wherever its value stands).
+ */
+export function motionStudyDrivers(
+  study: Pick<AssemblyMotionStudy, 'tracks'>
+): AssemblyCouplingEnd[] {
+  return study.tracks.map((track) => ({
+    jointId: track.jointId,
+    dof: track.dof
+  }));
+}
+
+/**
  * Every joint's values at time `t` of a study: tracked motions follow their
  * keys, everything else keeps its current value. Feed it to
- * {@link solveAssembly} as overrides; limits clamp there.
+ * {@link solveAssembly} as overrides with {@link motionStudyDrivers} as the
+ * drivers; limits clamp there.
  */
 export function motionStudyValues(
   set: AssemblySet,

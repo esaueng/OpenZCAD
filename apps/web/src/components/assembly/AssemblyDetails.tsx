@@ -1,17 +1,22 @@
-import { useEffect, useState } from 'react';
-import { Pause, Pin, Play, Plus, TriangleAlert, X } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Link2, Pause, Pin, Play, Plus, TriangleAlert, X } from 'lucide-react';
 import { commandFactories } from '@openzcad/command-system';
 import {
   ASSEMBLY_JOINT_DOFS,
+  coupledJointLimits,
+  couplingsOfJoint,
   createId,
   type AssemblyComponent,
+  type AssemblyCoupling,
   type AssemblyDofLimit,
   type AssemblyDofUnit,
   type AssemblyJoint,
   type AssemblyPlayback,
+  type AssemblySet,
   type ProjectDocument
 } from '@openzcad/shared';
 import {
+  removeAssemblyComponent,
   toggleComponentGrounded,
   toggleJointPlayback,
   type AssemblyExecute
@@ -21,6 +26,7 @@ import {
   useAssemblyRuntime
 } from '../../lib/assembly/assemblyRuntime';
 import type { AssemblyViewModel } from '../../lib/assembly/assemblyView';
+import { gearCouplingMismatch } from '../../lib/assembly/gearCouplingCheck';
 import {
   ANIMATE_MODES,
   ANIMATE_SPEEDS,
@@ -36,6 +42,7 @@ import {
   useAnimatePrefs
 } from '../../lib/assembly/assemblyUi';
 import { AssemblyNameField } from './AssemblyNameField';
+import { gearMeshCardContext } from './gearMeshEntry';
 
 export interface AssemblyDetailsProps {
   document: ProjectDocument;
@@ -86,6 +93,31 @@ function NumberField({
 }
 
 /**
+ * A coupling in a few words: "0.5 turns per turn, the other way" for two
+ * turns, "12.57 mm per turn" when one side slides (a rack and its pinion).
+ */
+export function couplingSummary(
+  set: Pick<AssemblySet, 'joints'>,
+  coupling: AssemblyCoupling
+): string {
+  const unitOf = (end: AssemblyCoupling['driver']) => {
+    const found = set.joints.find((j) => j.id === end.jointId);
+    return found ? ASSEMBLY_JOINT_DOFS[found.kind][end.dof] : undefined;
+  };
+  const from = unitOf(coupling.driver);
+  const to = unitOf(coupling.driven);
+  const size = Math.abs(coupling.ratio);
+  const number = (value: number) => String(Number(value.toFixed(4)));
+  if (from === 'deg' && to === 'deg')
+    return `${number(size)} turns per turn, ${
+      coupling.ratio < 0 ? 'the other way' : 'the same way'
+    }`;
+  if (from === 'deg' && to === 'mm') return `${number(size * 360)} mm per turn`;
+  if (from === 'mm' && to === 'deg') return `${number(360 / size)} mm per turn`;
+  return `ratio ${number(size)}`;
+}
+
+/**
  * A selected joint, opened under its row (AS02/AS06): one line per value
  * (slider and number), its limits, Animate and saved positions. Dragging
  * and playback move parts without adding history; a released value or a
@@ -106,13 +138,24 @@ export function JointDetails({
   const values = model.solution.values.get(joint.id) ?? joint.values;
   const unsolved = model.solution.unsolved.get(joint.id) ?? null;
   const playing = playback?.kind === 'joint' && playback.jointId === joint.id;
-  const sweepReason = sweepUnavailableReason(joint);
+  const couplings = couplingsOfJoint(model.set, joint.id);
+  // Read the gears only for a joint that is coupled.
+  const coupled = couplings.length > 0;
+  const gears = useMemo(
+    () => (coupled ? gearMeshCardContext(document) : null),
+    [coupled, document]
+  );
+  // What it can really travel: its own limits and those of its mates.
+  const sweepReason = sweepUnavailableReason({
+    kind: joint.kind,
+    limits: coupledJointLimits(model.set, joint)
+  });
 
   const preview = (dof: number, value: number) => {
     if (playback) assemblyRuntime.stop();
     const next = [...values];
     next[dof] = value;
-    assemblyRuntime.setOverride(joint.id, next);
+    assemblyRuntime.setOverride(joint.id, next, dof);
   };
   const commit = () => assemblyRuntime.commitOverrides();
 
@@ -236,6 +279,48 @@ export function JointDetails({
               )}
             </div>
           </div>
+        );
+      })}
+
+      {couplings.map((coupling) => {
+        const stale = gears ? gearCouplingMismatch(gears, coupling) : null;
+        return stale ? (
+          <p className="assembly-banner" role="status" key={coupling.id}>
+            <TriangleAlert size={14} aria-hidden="true" />
+            <span>{stale}</span>
+          </p>
+        ) : null;
+      })}
+
+      {couplings.map((coupling) => {
+        const otherId =
+          coupling.driver.jointId === joint.id
+            ? coupling.driven.jointId
+            : coupling.driver.jointId;
+        const other = model.set.joints.find((j) => j.id === otherId);
+        return (
+          <p className="assembly-coupling" key={coupling.id}>
+            <Link2 size={13} aria-hidden="true" />
+            <span>
+              {coupling.name}: moves with {other?.name ?? 'another joint'} ·{' '}
+              {couplingSummary(model.set, coupling)}
+            </span>
+            <button
+              type="button"
+              className="assembly-link-button"
+              aria-label={`Remove ${coupling.name}`}
+              title="The joints stay; they stop moving together"
+              onClick={() =>
+                execute(
+                  commandFactories.deleteAssemblyCoupling({
+                    couplingId: coupling.id
+                  })
+                )
+              }
+            >
+              Remove
+            </button>
+          </p>
         );
       })}
 
@@ -417,13 +502,7 @@ export function ComponentDetails({
           type="button"
           className="assembly-link-button is-danger"
           onClick={() => {
-            if (
-              execute(
-                commandFactories.deleteAssemblyComponent({
-                  componentId: component.id
-                })
-              )
-            )
+            if (removeAssemblyComponent(app, component.id))
               assemblyRuntime.selectComponent(null);
           }}
         >

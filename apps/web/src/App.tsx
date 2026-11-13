@@ -189,7 +189,7 @@ import {
   duplicateFeatureCommands,
   duplicateFeatureRefusal,
   isParameterRetype,
-  isAssemblyCommandKind,
+  isAssemblyOnlyCommand,
   isDrawingCommand,
   isObjectFolderCommandKind,
   isReferenceImageCommandKind,
@@ -6135,10 +6135,7 @@ export function App() {
       return ensureCanEditDrawings(action);
     }
     // Assembly commands move parts, never the model (AS01): Assemble's own.
-    if (
-      commands.length > 0 &&
-      commands.every((command) => isAssemblyCommandKind(command.kind))
-    ) {
+    if (commands.length > 0 && commands.every(isAssemblyOnlyCommand)) {
       return ensureCanEditAssembly(action);
     }
     const parametersOnly =
@@ -9569,7 +9566,7 @@ export function App() {
         isDrawingCommand(command) ||
         isReferenceImageCommandKind(command.kind) ||
         isObjectFolderCommandKind(command.kind) ||
-        isAssemblyCommandKind(command.kind)
+        isAssemblyOnlyCommand(command)
       )
         geometry.retainReadyGeometry(next);
       if (derived) {

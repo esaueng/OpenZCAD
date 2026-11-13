@@ -1,6 +1,7 @@
 import type { Page } from '@playwright/test';
 import {
   addAssemblyComponents,
+  addPrimitiveFeature,
   createProjectDocument,
   gearBody,
   type GearInput
@@ -11,7 +12,9 @@ import { expect, expectBodyCount, stubApi, test } from './openzcad-fixtures';
 /**
  * M14 meshing-pair helper in a real browser: two gear parts in Assemble,
  * Place gears opens its card with the working centre distance, Place fixes the
- * base and saves one rigid joint, and one undo takes the joint back.
+ * base and saves one rigid joint, and one undo takes the joint back. With a
+ * plate to mount them on, the pair can instead turn together (AS02 gear
+ * coupling): a joint per gear and a coupling, so turning one turns the other.
  */
 function gear(name: string, overrides: Partial<GearInput> = {}): GearInput {
   return {
@@ -43,7 +46,31 @@ function gearPair(): ProjectDocument {
   });
 }
 
-/** Imports the pair as a backup and waits for both gears to build. */
+/** The pair with a plate to mount them on, all three parts floating. */
+function gearPairOnPlate(): ProjectDocument {
+  let document = createProjectDocument('Gear train', toUserId('user_e2e'));
+  document = gearBody(document, gear('Pinion', { backlash: 0.1 })).document;
+  document = gearBody(
+    document,
+    gear('Wheel', { teeth: 40, backlash: 0.1 })
+  ).document;
+  document = addPrimitiveFeature(document, {
+    name: 'Plate',
+    bodyName: 'Plate',
+    primitiveKind: 'box',
+    dimensions: { width: 160, height: 100, depth: 2 }
+  });
+  const [a, b, c] = document.bodyOrder as [BodyId, BodyId, BodyId];
+  return addAssemblyComponents(document, {
+    components: [
+      { componentId: 'comp_a', name: 'Pinion', bodyId: a, grounded: false },
+      { componentId: 'comp_b', name: 'Wheel', bodyId: b, grounded: false },
+      { componentId: 'comp_plate', name: 'Plate', bodyId: c, grounded: false }
+    ]
+  });
+}
+
+/** Imports the pair as a backup and waits for every body to build. */
 async function openDocument(page: Page, document: ProjectDocument) {
   await stubApi(page);
   await page.goto('/');
@@ -62,7 +89,7 @@ async function openDocument(page: Page, document: ProjectDocument) {
   });
   await expect(page.locator('.viewer-host canvas')).toHaveAttribute(
     'data-e2e-rendered-bodies',
-    '2',
+    String(document.bodyOrder.length),
     { timeout: 30_000 }
   );
   await expectBodyCount(page, document.bodyOrder.length);
@@ -192,5 +219,77 @@ test(
     await expect(
       panel(page).getByRole('button', { name: 'Wheel is fixed' })
     ).toBeVisible();
+  }
+);
+
+test(
+  'meshed gears on a plate turn together: one drives, its mate follows (AS02)',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(90_000);
+    await openDocument(page, gearPairOnPlate());
+    await page.getByRole('button', { name: 'Assemble', exact: true }).click();
+    await panel(page)
+      .getByRole('region', { name: 'Joints' })
+      .getByRole('button', { name: 'Place gears', exact: true })
+      .click();
+    const card = panel(page).getByRole('region', { name: 'Place gears' });
+    // With a plate to mount them on, the card starts on Turn together;
+    // Fixed together stays one choice away.
+    const motion = card.getByRole('combobox', { name: 'How the pair moves' });
+    await expect(motion).toHaveValue('coupled');
+    await motion.selectOption('fixed');
+    await expect(card).toContainText('pair stays fixed together');
+    await motion.selectOption('coupled');
+    await expect(
+      card.getByRole('combobox', { name: 'Part the gears are mounted on' })
+    ).toHaveValue('comp_plate');
+    await expect(card).toContainText('which Place fixes in place');
+    await expect(card.getByRole('definition').nth(0)).toHaveText('60 mm');
+    await card.getByRole('button', { name: 'Place', exact: true }).click();
+    await expect(card).toHaveCount(0);
+
+    // A joint per gear, the plate fixed, the driving joint open with its
+    // coupling named.
+    const joints = panel(page).getByRole('region', { name: 'Joints' });
+    await expect(joints).toContainText('Pinion turn');
+    await expect(joints).toContainText('Wheel turn');
+    await expect(
+      panel(page).getByRole('button', { name: 'Plate is fixed' })
+    ).toBeVisible();
+    const pinionTurn = panel(page).getByLabel('Pinion turn details');
+    await expect(pinionTurn).toContainText(
+      'Gear ratio: moves with Wheel turn · 0.5 turns per turn, the other way'
+    );
+
+    // Turning the pinion 40° turns the wheel 20° the other way.
+    const angle = panel(page).getByRole('textbox', {
+      name: 'Angle',
+      exact: true
+    });
+    await angle.fill('40');
+    await angle.press('Enter');
+    await expect(angle).toHaveValue('40');
+    await joints.getByRole('button', { name: /^Wheel turn\b/ }).click();
+    await expect(angle).toHaveValue('-20');
+    // …and the wheel drives the pinion back the same way.
+    await angle.fill('10');
+    await angle.press('Enter');
+    await joints.getByRole('button', { name: /^Pinion turn\b/ }).click();
+    await expect(angle).toHaveValue('-20');
+
+    // The saved project reopens with the coupling still holding.
+    await page.reload();
+    await expect(page.locator('.viewer-host canvas')).toHaveAttribute(
+      'data-e2e-rendered-bodies',
+      '3',
+      { timeout: 30_000 }
+    );
+    await page.getByRole('button', { name: 'Assemble', exact: true }).click();
+    await joints.getByRole('button', { name: /^Wheel turn\b/ }).click();
+    await expect(angle).toHaveValue('10');
+    await expect(panel(page).getByLabel('Wheel turn details')).toContainText(
+      'Gear ratio: moves with Pinion turn'
+    );
   }
 );

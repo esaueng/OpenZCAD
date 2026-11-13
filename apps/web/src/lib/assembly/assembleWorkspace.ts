@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { commandFactories, type AnyCommand } from '@openzcad/command-system';
 import {
   ASSEMBLY_JOINT_DOFS,
+  coupledJointLimits,
   createId,
   jointAddError,
   solveAssembly,
@@ -158,18 +159,104 @@ export function toggleComponentGrounded(
   );
 }
 
+/** "Gear ratio", "Gear ratio and Rack travel", "A, B and C". */
+function listed(names: readonly string[]): string {
+  if (names.length <= 1) return names[0] ?? '';
+  return `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
+}
+
+/**
+ * The couplings a removal takes with it: those on a joint that goes (the
+ * joint itself, or every joint of a removed part), and those placed for a
+ * removed part as one of their gears. The last is the one nothing on
+ * screen shows: a gear keyed to a shaft is not an end of the coupled
+ * joint, so both joints stay while the coupling goes.
+ */
+export function couplingsRemovedWith(
+  set: AssemblySet | undefined,
+  removed: { componentId: string } | { jointId: string }
+): string[] {
+  if (!set?.couplings) return [];
+  const goes = (joint: AssemblyJoint) =>
+    'jointId' in removed
+      ? joint.id === removed.jointId
+      : joint.parent.componentId === removed.componentId ||
+        joint.child.componentId === removed.componentId;
+  const joints = new Set(set.joints.filter(goes).map((j) => j.id));
+  return set.couplings
+    .filter(
+      (c) =>
+        joints.has(c.driver.jointId) ||
+        joints.has(c.driven.jointId) ||
+        ('componentId' in removed &&
+          (c.gears?.driver === removed.componentId ||
+            c.gears?.driven === removed.componentId))
+    )
+    .map((c) => c.name);
+}
+
+function reportRemovedCouplings(
+  app: AssembleWorkspaceApp,
+  what: string,
+  couplings: readonly string[]
+): void {
+  if (couplings.length === 0) return;
+  const one = couplings.length === 1;
+  app.onStatus(
+    `Removed ${what}. ${listed(couplings)} ${one ? 'was' : 'were'} removed with it: ${one ? 'it' : 'they'} coupled it to another part, and one undo brings both back.`
+  );
+}
+
+/**
+ * Removes a part from the assembly, and says which couplings went with it
+ * (no confirmation: one undo restores everything).
+ */
+export function removeAssemblyComponent(
+  app: AssembleWorkspaceApp,
+  componentId: string
+): boolean {
+  const set = app.document?.assembly;
+  const component = set?.components.find((c) => c.id === componentId);
+  const couplings = couplingsRemovedWith(set, { componentId });
+  if (!app.execute(commandFactories.deleteAssemblyComponent({ componentId })))
+    return false;
+  reportRemovedCouplings(
+    app,
+    `${component?.name ?? 'the part'} from the assembly`,
+    couplings
+  );
+  return true;
+}
+
+/** Deletes a joint, and says which couplings went with it. */
+export function removeAssemblyJoint(
+  app: AssembleWorkspaceApp,
+  jointId: string
+): boolean {
+  const set = app.document?.assembly;
+  const joint = set?.joints.find((j) => j.id === jointId);
+  const couplings = couplingsRemovedWith(set, { jointId });
+  if (!app.execute(commandFactories.deleteAssemblyJoint({ jointId })))
+    return false;
+  reportRemovedCouplings(app, joint?.name ?? 'the joint', couplings);
+  return true;
+}
+
 /** Plays the selected joint, or pauses it when it is the one playing. */
 export function toggleJointPlayback(
   app: AssembleWorkspaceApp,
   jointId: string
 ): boolean {
-  const joint = app.document?.assembly?.joints.find((j) => j.id === jointId);
-  if (!joint) return false;
+  const set = app.document?.assembly;
+  const saved = set?.joints.find((j) => j.id === jointId);
+  if (!set || !saved) return false;
   const playback = getAssemblyRuntime().playback;
   if (playback?.kind === 'joint' && playback.jointId === jointId) {
     assemblyRuntime.stop();
     return true;
   }
+  // The range it can really travel: its own limits and its mates'.
+  const joint = { kind: saved.kind, limits: coupledJointLimits(set, saved) };
   const reason = sweepUnavailableReason(joint);
   const dof = sweepDof(joint);
   if (reason || dof === null) {
@@ -304,11 +391,17 @@ export function useAssembleWorkspace(
   }, [projectId]);
   useEffect(() => {
     registerAssemblyCommitHandlers({
-      commitPose(values, placements) {
+      commitPose(values, placements, drivers) {
+        // Which motion was moved only matters where joints are coupled.
+        const coupled =
+          (latest.current.document?.assembly?.couplings?.length ?? 0) > 0;
         latest.current.execute(
           commandFactories.setAssemblyPose({
             values,
-            ...(placements ? { placements } : {})
+            ...(placements ? { placements } : {}),
+            ...(coupled && drivers && drivers.length > 0
+              ? { drivers: drivers.map((d) => ({ ...d })) }
+              : {})
           })
         );
       },

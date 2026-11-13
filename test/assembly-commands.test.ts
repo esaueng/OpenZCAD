@@ -281,10 +281,11 @@ describe('assembly commands (AS01/AS02, schema v54)', () => {
     const saved = JSON.parse(
       JSON.stringify(manager.document)
     ) as ProjectDocument;
+    // Assemblies arrived in v54; later bumps (v56 couplings) leave that be.
     expect(() =>
       normalizeDocument({
         ...saved,
-        schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION - 1
+        schemaVersion: 53
       } as unknown as ProjectDocument)
     ).toThrow(/schema v54/);
     const broken = { ...saved, assembly: { components: 'nope' } };

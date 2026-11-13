@@ -62,7 +62,7 @@ type ViewRuntime = Pick<
   AssemblyRuntimeState,
   'overrides' | 'placementOverrides' | 'selectedJointId' | 'jointTool'
 > &
-  Partial<Pick<AssemblyRuntimeState, 'motionSetup'>>;
+  Partial<Pick<AssemblyRuntimeState, 'motionSetup' | 'drivers'>>;
 
 export const TOOL_PREVIEW_JOINT_ID = '__joint_tool_preview__';
 /** The joint Set up motion previews before Create. */
@@ -159,7 +159,7 @@ export function buildAssemblyView(
   }
   const tool = runtime.jointTool;
   if (tool?.step === 'review') {
-    const base = solveAssembly(set, runtime.overrides);
+    const base = solveAssembly(set, runtime.overrides, runtime.drivers);
     const preview = jointFromTool(base, tool, TOOL_PREVIEW_JOINT_ID, 'Preview');
     if (preview) set = { ...set, joints: [...set.joints, preview.joint] };
   }
@@ -185,7 +185,7 @@ export function buildAssemblyView(
       ]
     };
   }
-  const solution = solveAssembly(set, runtime.overrides);
+  const solution = solveAssembly(set, runtime.overrides, runtime.drivers);
   const bodyByComponent = assemblyComponentBodies(
     { ...document, assembly: set },
     isLive

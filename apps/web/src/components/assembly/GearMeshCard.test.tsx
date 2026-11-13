@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import { createProjectDocument, type GearInput } from '@openzcad/document-core';
-import { toUserId, type BodyId } from '@openzcad/shared';
+import { toUserId, type BodyId, type FeatureNode } from '@openzcad/shared';
 import { recordingExecute, withLiveBodies } from '../../test/assemblyFixture';
 import {
   assemblyRuntime,
@@ -31,8 +31,11 @@ function gear(name: string, overrides: Partial<GearInput> = {}): GearInput {
   };
 }
 
-/** A pinion, a wheel (or `wheel` overrides) and a box, all three parts. */
-function renderGears(wheel: Partial<GearInput> = {}) {
+/**
+ * A pinion, a wheel (or `wheel` overrides) and a box, all three parts;
+ * `plate: false` leaves the box out of the assembly.
+ */
+function renderGears(wheel: Partial<GearInput> = {}, plate = true) {
   const manager = new CommandManager(
     createProjectDocument('Gears', toUserId('user_gears'))
   );
@@ -51,12 +54,16 @@ function renderGears(wheel: Partial<GearInput> = {}) {
   manager.execute(
     commandFactories.addAssemblyComponents({
       components: [
-        {
-          componentId: 'comp_plate',
-          name: 'Plate',
-          bodyId: c,
-          grounded: false
-        },
+        ...(plate
+          ? [
+              {
+                componentId: 'comp_plate',
+                name: 'Plate',
+                bodyId: c,
+                grounded: false
+              }
+            ]
+          : []),
         { componentId: 'comp_a', name: 'Pinion', bodyId: a, grounded: false },
         { componentId: 'comp_b', name: 'Wheel', bodyId: b, grounded: false }
       ]
@@ -98,6 +105,111 @@ const card = () =>
     { timeout: LAZY_LOOKUP_MS }
   );
 
+/**
+ * plate → revolute shaft → rigid pinion, with a free wheel: the pinion is
+ * not an end of the joint it turns on.
+ */
+function renderShaftGears() {
+  const manager = new CommandManager(
+    createProjectDocument('Gears', toUserId('user_gears'))
+  );
+  manager.execute(commandFactories.gearBody(gear('Pinion')));
+  manager.execute(commandFactories.gearBody(gear('Wheel', { teeth: 40 })));
+  for (const name of ['Plate', 'Shaft'])
+    manager.execute(
+      commandFactories.addPrimitive({
+        name,
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 2, depth: 100 }
+      })
+    );
+  const [a, b, plate, shaft] = manager.document.bodyOrder;
+  manager.execute(
+    commandFactories.addAssemblyComponents({
+      components: [
+        {
+          componentId: 'comp_plate',
+          name: 'Plate',
+          bodyId: plate as BodyId,
+          grounded: true
+        },
+        {
+          componentId: 'comp_shaft',
+          name: 'Shaft',
+          bodyId: shaft as BodyId,
+          grounded: false
+        },
+        {
+          componentId: 'comp_a',
+          name: 'Pinion',
+          bodyId: a as BodyId,
+          grounded: false
+        },
+        {
+          componentId: 'comp_b',
+          name: 'Wheel',
+          bodyId: b as BodyId,
+          grounded: false
+        }
+      ]
+    })
+  );
+  const axis = {
+    origin: { x: 0, y: 0, z: 2.5 },
+    zAxis: { x: 0, y: 0, z: 1 },
+    xAxis: { x: 1, y: 0, z: 0 }
+  };
+  manager.execute(
+    commandFactories.addAssemblyJoint({
+      joint: {
+        id: 'joint_shaft',
+        name: 'Shaft turn',
+        kind: 'revolute',
+        parent: { componentId: 'comp_plate', frame: axis },
+        child: { componentId: 'comp_shaft', frame: axis },
+        values: [0],
+        limits: [null]
+      }
+    })
+  );
+  manager.execute(
+    commandFactories.addAssemblyJoint({
+      joint: {
+        id: 'joint_key',
+        name: 'Key',
+        kind: 'rigid',
+        parent: { componentId: 'comp_shaft', frame: axis },
+        child: { componentId: 'comp_a', frame: axis },
+        values: [],
+        limits: []
+      }
+    })
+  );
+  const live = () =>
+    withLiveBodies(manager.document, {
+      [a as BodyId]: 'Pinion',
+      [b as BodyId]: 'Wheel',
+      [plate as BodyId]: 'Plate',
+      [shaft as BodyId]: 'Shaft'
+    });
+  const recorder = recordingExecute(manager);
+  const status: string[] = [];
+  const element = () => (
+    <AssemblyPanel
+      document={live()}
+      execute={recorder.execute}
+      onStatus={(message) => status.push(message)}
+    />
+  );
+  const view = render(element());
+  return {
+    ...recorder,
+    manager,
+    status,
+    rerender: () => view.rerender(element())
+  };
+}
+
 describe('Place gears card', () => {
   it(
     'offers the action in Joints, and preselects an additive gear pair',
@@ -132,6 +244,13 @@ describe('Place gears card', () => {
       expect(
         within(form).getByRole('combobox', { name: 'Gear that meshes with it' })
       ).toHaveValue('comp_a');
+      // With a part to mount them on, the pair starts on Turn together;
+      // Fixed together is one choice away.
+      const motion = within(form).getByRole('combobox', {
+        name: 'How the pair moves'
+      });
+      expect(motion).toHaveValue('coupled');
+      fireEvent.change(motion, { target: { value: 'fixed' } });
       expect(within(form).getByText(/pair stays fixed together/)).toBeVisible();
     },
     LAZY_TEST_TIMEOUT_MS
@@ -190,9 +309,12 @@ describe('Place gears card', () => {
     async () => {
       const { commands, rerender, status } = renderGears();
       fireEvent.click(screen.getByRole('button', { name: 'Place gears' }));
-      fireEvent.click(
-        within(await card()).getByRole('button', { name: 'Place' })
+      const form = await card();
+      fireEvent.change(
+        within(form).getByRole('combobox', { name: 'How the pair moves' }),
+        { target: { value: 'fixed' } }
       );
+      fireEvent.click(within(form).getByRole('button', { name: 'Place' }));
       expect(commands.map((c) => c.kind)).toEqual([
         'assembly.component.update',
         'assembly.joint.add'
@@ -208,6 +330,250 @@ describe('Place gears card', () => {
       );
       rerender();
       expect(screen.queryByRole('region', { name: 'Place gears' })).toBeNull();
+    }
+  );
+
+  it(
+    'saves a joint per gear and their coupling as one step when they turn together',
+    { timeout: LAZY_TEST_TIMEOUT_MS },
+    async () => {
+      const { commands, manager, rerender, status } = renderGears();
+      fireEvent.click(screen.getByRole('button', { name: 'Place gears' }));
+      const form = await card();
+      // Turn together is where the card starts when a mount is available.
+      expect(
+        within(form).getByRole('combobox', { name: 'How the pair moves' })
+      ).toHaveValue('coupled');
+      // The only other part is offered as the mount, and Place will fix it.
+      expect(
+        within(form).getByRole('combobox', {
+          name: 'Part the gears are mounted on'
+        })
+      ).toHaveValue('comp_plate');
+      expect(
+        within(form).getByText(/own joint on Plate, which Place fixes in place/)
+      ).toBeVisible();
+      expect(within(form).getByText('0.5, the other way')).toBeInTheDocument();
+      fireEvent.click(within(form).getByRole('button', { name: 'Place' }));
+      expect(commands.map((c) => c.kind)).toEqual(['transaction']);
+      const set = manager.document.assembly!;
+      expect(set.joints.map((j) => [j.name, j.kind])).toEqual([
+        ['Pinion turn', 'revolute'],
+        ['Wheel turn', 'revolute']
+      ]);
+      expect(set.couplings).toHaveLength(1);
+      expect(set.couplings![0]!.ratio).toBeCloseTo(-0.5, 12);
+      expect(set.components.find((c) => c.id === 'comp_plate')?.grounded).toBe(
+        true
+      );
+      expect(getAssemblyRuntime().gearMesh).toBeNull();
+      // The driving joint is selected, ready to drag or play.
+      expect(getAssemblyRuntime().selectedJointId).toBe(set.joints[0]!.id);
+      expect(status.at(-1)).toBe(
+        'Gear ratio is in place: moving one gear moves the other.'
+      );
+      rerender();
+      const details = screen.getByLabelText('Pinion turn details');
+      expect(
+        within(details).getByText(
+          /Gear ratio: moves with Wheel turn · 0\.5 turns per turn, the other way/
+        )
+      ).toBeVisible();
+      // One undo takes all of it back; Remove alone keeps the joints.
+      fireEvent.click(
+        within(details).getByRole('button', { name: 'Remove Gear ratio' })
+      );
+      expect(commands.at(-1)?.kind).toBe('assembly.coupling.delete');
+      expect(manager.document.assembly!.couplings).toBeUndefined();
+      expect(manager.document.assembly!.joints).toHaveLength(2);
+      manager.undo();
+      manager.undo();
+      expect(manager.document.assembly!.joints).toEqual([]);
+    }
+  );
+
+  it(
+    'says that turning together needs a part to mount the gears on',
+    { timeout: LAZY_TEST_TIMEOUT_MS },
+    async () => {
+      renderGears({}, false);
+      fireEvent.click(screen.getByRole('button', { name: 'Place gears' }));
+      const form = await card();
+      // A bare pair starts on Fixed together, the only way it can be saved.
+      const motion = within(form).getByRole('combobox', {
+        name: 'How the pair moves'
+      });
+      expect(motion).toHaveValue('fixed');
+      expect(within(form).getByRole('button', { name: 'Place' })).toBeEnabled();
+      fireEvent.change(motion, { target: { value: 'coupled' } });
+      expect(within(form).getByRole('alert')).toHaveTextContent(
+        /need a part they are both mounted on/
+      );
+      expect(
+        within(form).queryByRole('combobox', {
+          name: 'Part the gears are mounted on'
+        })
+      ).toBeNull();
+      expect(
+        within(form).getByRole('button', { name: 'Place' })
+      ).toBeDisabled();
+    }
+  );
+
+  it(
+    'warns on the joint and in the reopened card when a gear’s teeth change',
+    { timeout: LAZY_TEST_TIMEOUT_MS },
+    async () => {
+      const { manager, rerender } = renderGears();
+      fireEvent.click(screen.getByRole('button', { name: 'Place gears' }));
+      fireEvent.click(
+        within(await card()).getByRole('button', { name: 'Place' })
+      );
+      rerender();
+      const details = () => screen.getByLabelText('Pinion turn details');
+      expect(within(details()).queryByRole('status')).toBeNull();
+      // The wheel goes from 40 to 45 teeth; the coupling keeps 20/40.
+      const wheel = Object.values(manager.document.nodes).find(
+        (node) => node.kind === 'feature' && node.name === 'Wheel'
+      ) as FeatureNode;
+      manager.execute(
+        commandFactories.updateFeature({
+          featureId: wheel.featureId,
+          data: { teeth: 45 }
+        })
+      );
+      rerender();
+      expect(within(details()).getByRole('status')).toHaveTextContent(
+        'Pinion and Wheel no longer match Gear ratio: their teeth now give 0.4444 turns per turn, and it was placed for 0.5 turns per turn. Remove it and place the gears again.'
+      );
+      expect(manager.document.assembly!.couplings![0]!.ratio).toBeCloseTo(
+        -0.5,
+        12
+      );
+      // Reopened on the same pair, the card says the same.
+      fireEvent.click(screen.getByRole('button', { name: 'Place gears' }));
+      const reopened = await card();
+      expect(within(reopened).getByRole('status')).toHaveTextContent(
+        /no longer match Gear ratio/
+      );
+      expect(
+        within(reopened).getByRole('button', { name: 'Place' })
+      ).toBeDisabled();
+      // Back at the count it was placed with, both read as plain coupled.
+      manager.execute(
+        commandFactories.updateFeature({
+          featureId: wheel.featureId,
+          data: { teeth: 40 }
+        })
+      );
+      rerender();
+      expect(within(reopened).queryByRole('status')).toBeNull();
+      expect(
+        within(reopened).getByText(/already moves this pair together/)
+      ).toBeVisible();
+    }
+  );
+
+  it(
+    'warns for a gear keyed to its shaft, on the shaft’s joint and in the card',
+    { timeout: LAZY_TEST_TIMEOUT_MS },
+    async () => {
+      const { manager, rerender } = renderShaftGears();
+      fireEvent.click(screen.getByRole('button', { name: 'Place gears' }));
+      const form = await card();
+      // The pinion already turns on the shaft's joint: that joint is used.
+      expect(
+        within(form).getByText(/Pinion already moves on Shaft turn/)
+      ).toBeVisible();
+      fireEvent.click(within(form).getByRole('button', { name: 'Place' }));
+      const coupling = () => manager.document.assembly!.couplings![0]!;
+      expect(coupling().driver.jointId).toBe('joint_shaft');
+      expect(coupling().gears).toEqual({ driver: 'comp_a', driven: 'comp_b' });
+      rerender();
+      const details = () => screen.getByLabelText('Shaft turn details');
+      expect(within(details()).queryByRole('status')).toBeNull();
+
+      // 20 → 30 teeth on the keyed pinion: 0.75 now, placed for 0.5.
+      const pinion = Object.values(manager.document.nodes).find(
+        (node) => node.kind === 'feature' && node.name === 'Pinion'
+      ) as FeatureNode;
+      manager.execute(
+        commandFactories.updateFeature({
+          featureId: pinion.featureId,
+          data: { teeth: 30 }
+        })
+      );
+      rerender();
+      expect(coupling().ratio).toBeCloseTo(-0.5, 12);
+      expect(within(details()).getByRole('status')).toHaveTextContent(
+        'Pinion and Wheel no longer match Gear ratio: their teeth now give 0.75 turns per turn, and it was placed for 0.5 turns per turn.'
+      );
+      // Reopened on the pair, the card finds the same coupling and warns.
+      fireEvent.click(screen.getByRole('button', { name: 'Place gears' }));
+      const reopened = await card();
+      expect(
+        within(reopened).getByRole('combobox', { name: 'Gear that stays put' })
+      ).toHaveValue('comp_a');
+      expect(within(reopened).getByRole('status')).toHaveTextContent(
+        /Pinion and Wheel no longer match Gear ratio/
+      );
+    }
+  );
+
+  it(
+    'says which coupling went when a keyed gear is removed, from either path',
+    { timeout: LAZY_TEST_TIMEOUT_MS },
+    async () => {
+      const { manager, rerender, status, commands } = renderShaftGears();
+      fireEvent.click(screen.getByRole('button', { name: 'Place gears' }));
+      fireEvent.click(
+        within(await card()).getByRole('button', { name: 'Place' })
+      );
+      rerender();
+      const said =
+        'Removed Pinion from the assembly. Gear ratio was removed with it: it coupled it to another part, and one undo brings both back.';
+      const state = () => manager.document.assembly!;
+      // The row menu. Both joints the coupling ties survive; it does not.
+      fireEvent.contextMenu(screen.getByRole('button', { name: /^Pinion\b/ }));
+      fireEvent.click(
+        screen.getByRole('menuitem', { name: 'Remove from assembly' })
+      );
+      expect(commands.at(-1)?.kind).toBe('assembly.component.delete');
+      expect(status.at(-1)).toBe(said);
+      expect(state().couplings).toBeUndefined();
+      expect(state().joints.map((j) => j.name)).toEqual([
+        'Shaft turn',
+        'Wheel turn'
+      ]);
+      // One undo brings the gear, its key joint and the coupling back.
+      manager.undo();
+      expect(state().couplings).toHaveLength(1);
+      rerender();
+      // The part's own details.
+      status.length = 0;
+      fireEvent.click(screen.getByRole('button', { name: /^Pinion\b/ }));
+      rerender();
+      fireEvent.click(
+        within(screen.getByLabelText('Pinion details')).getByRole('button', {
+          name: 'Remove from assembly'
+        })
+      );
+      expect(status).toEqual([said]);
+      expect(state().couplings).toBeUndefined();
+      // A part no coupling depends on is removed without a message.
+      manager.undo();
+      manager.execute(
+        commandFactories.deleteAssemblyCoupling({
+          couplingId: state().couplings![0]!.id
+        })
+      );
+      rerender();
+      status.length = 0;
+      fireEvent.contextMenu(screen.getByRole('button', { name: /^Pinion\b/ }));
+      fireEvent.click(
+        screen.getByRole('menuitem', { name: 'Remove from assembly' })
+      );
+      expect(status).toEqual([]);
     }
   );
 

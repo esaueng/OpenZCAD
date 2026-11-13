@@ -10,12 +10,14 @@ import {
   gearMeshRefusalText,
   meshGearPair,
   solveAssembly,
+  type AssemblyComponent,
   type AssemblyFrame,
   type AssemblyJoint,
   type AssemblySet,
   type GearMeshGear,
   type GearMeshRefusal,
-  type GearMeshSolution
+  type GearMeshSolution,
+  type RigidTransform
 } from '@openzcad/shared';
 import type { AssembleWorkspaceApp } from './assembleWorkspace';
 import { unitLabel } from '../measurements';
@@ -38,7 +40,8 @@ export function gearMeshJointName(set: AssemblySet): string {
 /** Why Mesh cannot place the pair; `refusal` keeps the helper's details. */
 export interface GearMeshJointError {
   error: string;
-  code?: GearMeshRefusal['code'];
+  /** A meshing-pair refusal, or a `gear-coupling:`/`coupling:` one. */
+  code?: GearMeshRefusal['code'] | (string & {});
   refusal?: GearMeshRefusal;
 }
 
@@ -54,7 +57,10 @@ export interface GearMeshResult {
   mesh: GearMeshSolution;
 }
 
-function midFrame(frame: AssemblyFrame, faceWidth: number): AssemblyFrame {
+export function midFrame(
+  frame: AssemblyFrame,
+  faceWidth: number
+): AssemblyFrame {
   const half = faceWidth / 2;
   return {
     origin: {
@@ -67,18 +73,26 @@ function midFrame(frame: AssemblyFrame, faceWidth: number): AssemblyFrame {
   };
 }
 
+/** The pair as placed: both gears read, posed and meshed. */
+export interface GearMeshPlacement {
+  base: AssemblyComponent;
+  moving: AssemblyComponent;
+  a: GearMeshGear;
+  b: GearMeshGear;
+  basePose: RigidTransform;
+  mesh: GearMeshSolution;
+  /** The moving gear's own frame as the kernel reads it. */
+  ownFrame: AssemblyFrame;
+}
+
 /**
- * The joint that meshes the pair, or why it cannot. A rigid joint on the
- * moving gear's axis through its mid-face: the parent frame where that axis
- * lands in the base gear's coordinates, the child frame on the moving
- * gear's own axis, so the pair retains its meshed pose without independent rotation.
+ * Where the moving gear lands against the base, or why the pair cannot
+ * mesh. Shared by the fixed and the turning ways of saving it.
  */
-export function gearMeshJoint(
+export function gearMeshPlacement(
   context: GearMeshContext,
-  draft: GearMeshDraft,
-  id: string,
-  name = gearMeshJointName(context.set)
-): GearMeshResult | GearMeshJointError {
+  draft: GearMeshDraft
+): GearMeshPlacement | GearMeshJointError {
   const { set, solution } = context;
   const base = set.components.find((c) => c.id === draft.baseId);
   const moving = set.components.find((c) => c.id === draft.movingId);
@@ -120,6 +134,25 @@ export function gearMeshJoint(
       error: `${moving.name} cannot be placed: ${GEAR_PLACEMENT_UNUSABLE}.`,
       code: 'gear-mesh:invalid-placement'
     };
+  return { base, moving, a, b, basePose, mesh, ownFrame };
+}
+
+/**
+ * The joint that meshes the pair, or why it cannot. A rigid joint on the
+ * moving gear's axis through its mid-face: the parent frame where that axis
+ * lands in the base gear's coordinates, the child frame on the moving
+ * gear's own axis, so the pair retains its meshed pose without independent rotation.
+ */
+export function gearMeshJoint(
+  context: GearMeshContext,
+  draft: GearMeshDraft,
+  id: string,
+  name = gearMeshJointName(context.set)
+): GearMeshResult | GearMeshJointError {
+  const placed = gearMeshPlacement(context, draft);
+  if ('error' in placed) return placed;
+  const { set, solution } = context;
+  const { base, moving, b, mesh, ownFrame } = placed;
   const own = midFrame(ownFrame, b.faceWidth);
   const landed = midFrame(mesh.frame, b.faceWidth);
   const source = { kind: 'body' as const, label: 'Gear axis · meshed' };
