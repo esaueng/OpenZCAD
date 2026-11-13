@@ -12,6 +12,7 @@ import {
 } from '../../lib/assembly/gearMesh';
 import {
   createGearMeshFromSetup,
+  gearMeshErrorText,
   gearMeshJoint
 } from '../../lib/assembly/gearMeshJoint';
 import { unitLabel } from '../../lib/measurements';
@@ -130,7 +131,7 @@ function GearMeshForm({
         <MeshReadout mesh={result.mesh} units={units} />
       ) : (
         <p className="form-error" role="alert">
-          {result.error}
+          {gearMeshErrorText(result, units)}
         </p>
       )}
 

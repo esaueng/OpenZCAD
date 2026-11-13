@@ -6,6 +6,7 @@ import {
   isGearMeshRefusal,
   jointAddError,
   gearMeshFrame,
+  gearMeshRefusalText,
   meshGearPair,
   solveAssembly,
   type AssemblyFrame,
@@ -16,6 +17,7 @@ import {
   type GearMeshSolution
 } from '@openzcad/shared';
 import type { AssembleWorkspaceApp } from './assembleWorkspace';
+import { unitLabel } from '../measurements';
 import { assemblyRuntime } from './assemblyRuntime';
 import type { GearMeshContext, GearMeshDraft } from './gearMesh';
 
@@ -30,6 +32,18 @@ export function gearMeshJointName(set: AssemblySet): string {
   if (!names.has('Gear mesh')) return 'Gear mesh';
   for (let n = 2; ; n += 1)
     if (!names.has(`Gear mesh ${n}`)) return `Gear mesh ${n}`;
+}
+
+/** Why Mesh cannot place the pair; `refusal` keeps the helper's details. */
+export interface GearMeshJointError {
+  error: string;
+  code?: GearMeshRefusal['code'];
+  refusal?: GearMeshRefusal;
+}
+
+/** The error's text, its lengths in the document's unit. */
+export function gearMeshErrorText(error: GearMeshJointError, unit: string) {
+  return error.refusal ? gearMeshRefusalText(error.refusal, unit) : error.error;
 }
 
 export interface GearMeshResult {
@@ -63,7 +77,7 @@ export function gearMeshJoint(
   draft: GearMeshDraft,
   id: string,
   name = gearMeshJointName(context.set)
-): GearMeshResult | { error: string; code?: GearMeshRefusal['code'] } {
+): GearMeshResult | GearMeshJointError {
   const { set, solution } = context;
   const base = set.components.find((c) => c.id === draft.baseId);
   const moving = set.components.find((c) => c.id === draft.movingId);
@@ -94,12 +108,17 @@ export function gearMeshJoint(
   const b = context.gearOf(moving.id) as GearMeshGear;
   const current = composeTransforms(invertTransform(basePose), movingPose);
   const mesh = meshGearPair(a, b, current);
-  if (isGearMeshRefusal(mesh)) return { error: mesh.message, code: mesh.code };
+  if (isGearMeshRefusal(mesh))
+    return { error: mesh.message, code: mesh.code, refusal: mesh };
 
   // B's own frame as the helper and the kernel read it (unit axis, square
   // x direction), so a stored axis length cannot shift the saved joint.
   const ownFrame = gearMeshFrame(b.frame);
-  if (!ownFrame) return { error: `${moving.name}’s axis has no direction.` };
+  if (!ownFrame)
+    return {
+      error: `${moving.name}’s axis has no direction, or its x direction runs along it.`,
+      code: 'gear-mesh:invalid-placement'
+    };
   const own = midFrame(ownFrame, b.faceWidth);
   const landed = midFrame(mesh.frame, b.faceWidth);
   const source = { kind: 'body' as const, label: 'Gear axis · meshed' };
@@ -142,7 +161,12 @@ export function createGearMeshFromSetup(
   const id = createId<'AssemblyJoint'>('joint');
   const result = gearMeshJoint(context, draft, id);
   if ('error' in result) {
-    app.onStatus(result.error);
+    app.onStatus(
+      gearMeshErrorText(
+        result,
+        unitLabel('length', app.document?.units ?? 'mm')
+      )
+    );
     return null;
   }
   if (

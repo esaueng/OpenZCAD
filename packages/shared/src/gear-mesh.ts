@@ -4,7 +4,6 @@ import {
   composeTransforms,
   cross3,
   dot3,
-  frameFromAxis,
   frameInWorld,
   frameToTransform,
   invertTransform,
@@ -16,6 +15,7 @@ import type {
   GearMeshRefusalCode,
   GearMeshSolution
 } from './gear-mesh-types';
+import { gearPlacementFrame } from './gear-mesh-types';
 
 /**
  * M14 meshing-pair helper: where a second gear goes so that it meshes with a
@@ -246,12 +246,16 @@ function clearanceError(
   const tolerance = 1e-9 * Math.max(1, distance);
   const over = overA >= overB ? overA : overB;
   if (!(over > tolerance)) return null;
+  const gear = overA >= overB ? 'base' : 'moving';
   const who =
-    overA >= overB ? 'The gear that stays put' : 'The gear that meshes with it';
-  return refusal(
-    'gear-mesh:tip-clearance',
-    `${who} reaches ${format(over)} past the other gear’s root circle at this centre distance; shorten its addendum, deepen the other’s dedendum or reduce the profile shift.`
-  );
+    gear === 'base'
+      ? 'The gear that stays put'
+      : 'The gear that meshes with it';
+  return {
+    code: 'gear-mesh:tip-clearance',
+    message: `${who} reaches past the other gear’s root circle at this centre distance; shorten its addendum, deepen the other’s dedendum or reduce the profile shift.`,
+    clearance: { gear, overlap: over }
+  };
 }
 
 /** A helical tooth's turn about the axis at height `h` (right hand: CCW). */
@@ -296,7 +300,7 @@ function normalized(a: Vector3): Vector3 | null {
  * x direction made a unit vector perpendicular to it. Null without an axis.
  */
 export function gearMeshFrame(frame: AssemblyFrame): AssemblyFrame | null {
-  return frameFromAxis(frame.origin, frame.zAxis, frame.xAxis);
+  return gearPlacementFrame(frame.origin, frame.zAxis, frame.xAxis);
 }
 
 function angleIn(frame: AssemblyFrame, direction: Vector3): number {
@@ -329,7 +333,10 @@ export function meshGearPair(
   const frameA = gearMeshFrame(a.frame);
   const frameB = gearMeshFrame(b.frame);
   if (!frameA || !frameB)
-    return refusal('gear-mesh:unresolved', 'A gear’s axis has no direction.');
+    return refusal(
+      'gear-mesh:invalid-placement',
+      'A gear’s axis has no direction, or its x direction runs along it.'
+    );
   const sense =
     dot3(frameInWorld(current, frameB).zAxis, frameA.zAxis) < 0 ? -1 : 1;
   const error = gearMeshPairError(a, b, sense);

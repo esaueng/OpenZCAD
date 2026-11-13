@@ -62,11 +62,19 @@ export type GearMeshRefusalCode =
   | 'gear-mesh:opposite-hand'
   | 'gear-mesh:ring-too-small'
   | 'gear-mesh:no-working-pressure-angle'
-  | 'gear-mesh:tip-clearance';
+  | 'gear-mesh:tip-clearance'
+  | 'gear-mesh:invalid-placement';
 
 export interface GearMeshRefusal {
   code: GearMeshRefusalCode;
+  /** Unit-free text; {@link gearMeshRefusalText} adds lengths with units. */
   message: string;
+  /**
+   * `gear-mesh:tip-clearance`: whose tips reach past the other gear's root
+   * circle (the gear that stays put, or the one that meshes with it) and by
+   * how much, in document units.
+   */
+  clearance?: { gear: 'base' | 'moving'; overlap: number };
 }
 
 export type GearMeshPairKind = 'external' | 'internal' | 'rack';
@@ -135,6 +143,54 @@ export function defaultGearXDirection(axis: Vector3): Vector3 {
     y: projected.y / size,
     z: projected.z / size
   };
+}
+
+/**
+ * A gear's placement frame exactly as the kernel builds it: the axis made
+ * unit length, and the stored x direction with its component along the
+ * axis removed, made unit length. Like the kernel, it never substitutes
+ * another direction: it is null only when the axis or that projection has
+ * no length at all (its squared length is zero), which the kernel refuses.
+ */
+export function gearPlacementFrame(
+  origin: Vector3,
+  axis: Vector3,
+  xDirection: Vector3
+): AssemblyFrame | null {
+  const zz = axis.x * axis.x + axis.y * axis.y + axis.z * axis.z;
+  if (!(zz > 0) || !Number.isFinite(zz)) return null;
+  const zl = Math.sqrt(zz);
+  const z = { x: axis.x / zl, y: axis.y / zl, z: axis.z / zl };
+  const along = xDirection.x * z.x + xDirection.y * z.y + xDirection.z * z.z;
+  const p = {
+    x: xDirection.x - z.x * along,
+    y: xDirection.y - z.y * along,
+    z: xDirection.z - z.z * along
+  };
+  const pp = p.x * p.x + p.y * p.y + p.z * p.z;
+  if (!(pp > 0) || !Number.isFinite(pp)) return null;
+  const pl = Math.sqrt(pp);
+  return {
+    origin: { ...origin },
+    zAxis: z,
+    xAxis: { x: p.x / pl, y: p.y / pl, z: p.z / pl }
+  };
+}
+
+/** A refusal's text, its lengths written with `unit` (e.g. "mm", "in"). */
+export function gearMeshRefusalText(
+  refusal: GearMeshRefusal,
+  unit: string
+): string {
+  const clearance = refusal.clearance;
+  if (refusal.code !== 'gear-mesh:tip-clearance' || !clearance)
+    return refusal.message;
+  const who =
+    clearance.gear === 'base'
+      ? 'The gear that stays put'
+      : 'The gear that meshes with it';
+  const by = String(Number(clearance.overlap.toPrecision(6)));
+  return `${who} reaches ${by} ${unit} past the other gear’s root circle at this centre distance; shorten its addendum, deepen the other’s dedendum or reduce the profile shift.`;
 }
 
 export function isGearMeshRefusal(

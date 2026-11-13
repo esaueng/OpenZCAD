@@ -1,7 +1,7 @@
 import {
   defaultGearXDirection,
-  frameFromAxis,
   gearModule,
+  gearPlacementFrame,
   isFeatureSuppressed,
   type BodyId,
   type BodyNode,
@@ -145,9 +145,10 @@ export function gearMeshGearOfBody(
     });
     const axis = vector(data.axis, 'axis');
     const helix = optional(data.helixAngleDeg, 'helix angle', 0);
-    // The kernel reads the axis as a direction and squares the x direction
-    // to it; so does the helper, so a stored length never shifts a frame.
-    const frame = frameFromAxis(
+    // The frame the kernel builds from what the adapter sends it (the
+    // stored x direction, else the adapter's default), so the helper phases
+    // the teeth the kernel cut.
+    const frame = gearPlacementFrame(
       vector(data.origin, 'origin'),
       axis,
       data.xDirection
@@ -156,8 +157,8 @@ export function gearMeshGearOfBody(
     );
     if (!frame)
       return refusal(
-        'gear-mesh:unresolved',
-        `${gear.name}’s axis has no direction.`
+        'gear-mesh:invalid-placement',
+        `${gear.name}’s axis has no direction, or its x direction runs along it.`
       );
     return {
       gearType: data.gearType,
