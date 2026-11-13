@@ -3247,10 +3247,17 @@ export function App() {
   }, []);
   // A deploy while this tab is open renames every chunk. The version watch
   // usually notices first; if a panel's chunk goes missing before it does,
-  // the failure asks the watch to look now. Either way the offer is one quiet
-  // chip (top bar, library foot) rather than a toast: the reload is the
-  // user's call, since the workspace may hold unsaved edits, and a notice per
-  // failed chunk only got in the way of the work it could not help with.
+  // the failure asks the watch to look now. In the workspace the offer is one
+  // quiet top-bar chip rather than a toast: the reload is the user's call,
+  // since the workspace may hold unsaved edits, and a notice per failed chunk
+  // only got in the way of the work it could not help with.
+  // The library has no top bar, and on a phone its foot line is out of view
+  // below the shelf, so a click there that fails (a demo) answers once with a
+  // toast. Warm-ups never report, so a report there follows a user action.
+  const onStartScreenRef = useRef(doc === null);
+  useEffect(() => {
+    onStartScreenRef.current = doc === null;
+  }, [doc]);
   useEffect(() => {
     let stopped = false;
     const watch = watchBuildVersion({
@@ -3265,11 +3272,19 @@ export function App() {
       }
     });
     let interruptionRecorded = false;
+    let libraryAnswered = false;
     const stopStale = onStaleChunk(() => {
       // A failed download alone also occurs offline; only the version watch
       // can prove that an update exists, so ask it rather than assume.
       setDownloadInterrupted(true);
       watch.checkNow();
+      if (onStartScreenRef.current && !libraryAnswered) {
+        libraryAnswered = true;
+        announce(STALE_CHUNK_MESSAGE, {
+          label: 'Reload',
+          run: () => window.location.reload()
+        });
+      }
       if (interruptionRecorded) return;
       interruptionRecorded = true;
       recordActivity({
@@ -3285,7 +3300,7 @@ export function App() {
       stopStale();
       stopPreload();
     };
-  }, []);
+  }, [announce]);
   const reloadPrompt: ReloadPrompt | null = newBuildAvailable
     ? 'update'
     : downloadInterrupted

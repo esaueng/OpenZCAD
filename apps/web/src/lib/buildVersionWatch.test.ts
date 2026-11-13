@@ -81,6 +81,35 @@ describe('build version watch', () => {
     expect(fetchMeta).toHaveBeenCalledTimes(2);
   });
 
+  it('reads again after a read that was already under way when asked', async () => {
+    const clock = manualSchedule();
+    const onNewVersion = vi.fn();
+    let finishFirst: (commit: string) => void = () => undefined;
+    const fetchMeta = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<string>((resolve) => {
+            finishFirst = resolve;
+          })
+      )
+      .mockResolvedValue('new-build');
+    const stop = watchBuildVersion({
+      runningCommit: 'old-build',
+      fetchMeta,
+      onNewVersion,
+      schedule: clock.schedule
+    });
+    // A chunk fails while the first read, begun before the deploy, is out.
+    stop.checkNow();
+    expect(fetchMeta).toHaveBeenCalledTimes(1);
+    finishFirst('old-build');
+    await settle();
+    expect(fetchMeta).toHaveBeenCalledTimes(2);
+    expect(onNewVersion).toHaveBeenCalledWith('new-build');
+    stop();
+  });
+
   it('reads the commit from build-meta.json and treats a missing file as unknown', async () => {
     const ok = vi.fn(async () => ({
       ok: true,

@@ -996,11 +996,7 @@ button.save-state:focus-visible,
 }
 
 /* An optional reload: a small text chip after the status, never a notice
-   over the stage. Its live region takes no room until it has a chip. */
-.topbar-identity > .topbar-reload {
-  display: contents;
-}
-
+   over the stage. */
 .topbar-reload-chip {
   flex: none;
   height: 24px;

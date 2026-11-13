@@ -5,6 +5,7 @@ import { platformShortcutLabel } from '../lib/platformShortcut';
 import {
   type ChangeEvent,
   useEffect,
+  useId,
   useLayoutEffect,
   useRef,
   useState
@@ -645,6 +646,14 @@ export function TopBar({
     }
   }, [workspaceMode]);
 
+  const reloadDescriptionId = useId();
+  const reloadMessage =
+    reloadPrompt === 'update'
+      ? NEW_VERSION_MESSAGE
+      : reloadPrompt === 'interrupted'
+        ? STALE_CHUNK_MESSAGE
+        : '';
+
   // What the island holds changes its need without resizing the header.
   const encrypted = encryption !== null;
   useLayoutEffect(() => {
@@ -730,29 +739,28 @@ export function TopBar({
             </span>
           </button>
         ) : null}
-        {/* Polite, not an alert: the chip appears and waits. */}
-        <span className="topbar-reload" role="status">
-          {reloadPrompt ? (
-            <button
-              type="button"
-              className={`topbar-reload-chip is-${reloadPrompt}`}
-              title={
-                reloadPrompt === 'update'
-                  ? NEW_VERSION_MESSAGE
-                  : STALE_CHUNK_MESSAGE
-              }
-              onClick={() => window.location.reload()}
-            >
-              <RotateCw size={12} aria-hidden="true" />
-              <span>{reloadPrompt === 'update' ? 'Update' : 'Reload'}</span>
-              <span className="visually-hidden">
-                {reloadPrompt === 'update'
-                  ? NEW_VERSION_MESSAGE
-                  : STALE_CHUNK_MESSAGE}
-              </span>
-            </button>
-          ) : null}
+        {/* Polite, not an alert: the chip appears and waits. The live
+            region is always present (and out of the flow), so its first
+            message is announced; the chip beside it takes room only when
+            there is something to reload for. */}
+        <span className="visually-hidden" role="status">
+          {reloadMessage}
         </span>
+        {reloadPrompt ? (
+          <button
+            type="button"
+            className={`topbar-reload-chip is-${reloadPrompt}`}
+            title={reloadMessage}
+            aria-describedby={reloadDescriptionId}
+            onClick={() => window.location.reload()}
+          >
+            <RotateCw size={12} aria-hidden="true" />
+            <span>{reloadPrompt === 'update' ? 'Update' : 'Reload'}</span>
+            <span id={reloadDescriptionId} hidden>
+              {reloadMessage}
+            </span>
+          </button>
+        ) : null}
       </div>
       <div
         className="mode-switch topbar-island"

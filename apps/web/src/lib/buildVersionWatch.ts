@@ -74,8 +74,14 @@ export function watchBuildVersion({
   let notified = false;
   let stopped = false;
   let inFlight = false;
+  /** A check asked for mid-read: that read may predate the deploy. */
+  let recheck = false;
   const tick = () => {
-    if (stopped || notified || inFlight) return;
+    if (stopped || notified) return;
+    if (inFlight) {
+      recheck = true;
+      return;
+    }
     inFlight = true;
     void fetchMeta()
       .then((commit) => {
@@ -91,6 +97,10 @@ export function watchBuildVersion({
       })
       .finally(() => {
         inFlight = false;
+        if (recheck) {
+          recheck = false;
+          tick();
+        }
       });
   };
   tick();

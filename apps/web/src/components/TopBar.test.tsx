@@ -350,9 +350,15 @@ describe('TopBar reload chip', () => {
       reload
     });
     renderTopBar({ reloadPrompt: 'update' });
-    const chip = screen.getByRole('button', { name: /^Update/ });
+    const chip = screen.getByRole('button', { name: 'Update' });
     expect(chip).toHaveAttribute('title', expect.stringMatching(/newer/i));
-    expect(chip.closest('[role="status"]')).not.toBeNull();
+    expect(chip).toHaveAccessibleDescription(/newer/i);
+    // Announced politely by a region that exists before the chip does.
+    expect(
+      screen
+        .getAllByRole('status')
+        .some((region) => /newer/i.test(region.textContent ?? ''))
+    ).toBe(true);
     expect(screen.queryByRole('alert')).toBeNull();
     fireEvent.click(chip);
     expect(reload).toHaveBeenCalledOnce();
@@ -360,7 +366,7 @@ describe('TopBar reload chip', () => {
 
   it('does not claim an update for a failed download', () => {
     renderTopBar({ reloadPrompt: 'interrupted' });
-    const chip = screen.getByRole('button', { name: /^Reload/ });
+    const chip = screen.getByRole('button', { name: 'Reload' });
     expect(chip).toHaveAttribute(
       'title',
       expect.stringMatching(/check your connection/i)

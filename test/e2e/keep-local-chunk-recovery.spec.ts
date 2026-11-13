@@ -154,6 +154,9 @@ test('a missing Keep my version chunk preserves conflict work and persistent rel
   await expect(chip).toHaveClass(/is-interrupted/);
   await expect(chip).toHaveAttribute('title', STALE_CHUNK_MESSAGE);
   await expect(
+    page.locator('.toast', { hasText: STALE_CHUNK_MESSAGE })
+  ).toHaveCount(0);
+  await expect(
     page.locator('.toast').getByRole('button', { name: 'Reload' })
   ).toHaveCount(0);
   const stored = await page.evaluate(

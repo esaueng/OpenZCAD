@@ -1,7 +1,7 @@
 import { test, expect, stubApi } from './openzcad-fixtures';
 
 for (const width of [1440, 390]) {
-  test(`a failed demo download offers reload without claiming an update at ${width}px`, async ({
+  test(`a failed demo download answers in view and offers reload without claiming an update at ${width}px`, async ({
     page
   }, testInfo) => {
     await page.setViewportSize({ width, height: 900 });
@@ -21,14 +21,17 @@ for (const width of [1440, 390]) {
     await expect(demo).toBeEnabled();
     const timeOrigin = await page.evaluate(() => performance.timeOrigin);
     await demo.click();
-    // No toast over the work: the library foot keeps one quiet line with
-    // Reload, which outlives any transient notice and never claims an update.
-    const notice = page.locator('.start-update');
-    await expect(notice).toBeVisible();
-    expect(failedDownloads).toBeGreaterThan(0);
+    // The click is answered where the user is looking, without scrolling:
+    // the library has no top bar, and on a phone its foot line is below the
+    // shelf. One toast with Reload, then the quiet foot line keeps the offer.
+    const toast = page.locator('.toast');
+    await expect(toast).toContainText(/check your connection/i);
     await expect(
-      page.locator('.toast').getByRole('button', { name: 'Reload' })
-    ).toHaveCount(0);
+      toast.getByRole('button', { name: 'Reload' })
+    ).toBeInViewport();
+    expect(failedDownloads).toBeGreaterThan(0);
+    const notice = page.locator('.start-update');
+    await expect(notice).toBeAttached();
     await expect(page.getByText(/newer OpenZCAD/i)).toHaveCount(0);
     await expect(page.locator('.error-page, vite-error-overlay')).toHaveCount(
       0
