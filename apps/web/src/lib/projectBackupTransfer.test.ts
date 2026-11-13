@@ -18,7 +18,7 @@ import {
   type ArtifactRecord,
   type ReferenceImageId
 } from '@openzcad/shared';
-import { api, rememberProjectFormats } from './api';
+import { api, forgetEncryptedProject, rememberProjectFormats } from './api';
 import {
   pageBlobReferences,
   setEncryptedBlobReader
@@ -482,7 +482,7 @@ it('backs up an encrypted project’s sources through its blob reader', async ()
   } finally {
     setEncryptedBlobReader(null);
     pageBlobReferences.clear();
-    rememberProjectFormats([{ projectId: document.projectId }]);
+    forgetEncryptedProject(document.projectId);
   }
 });
 
@@ -530,7 +530,7 @@ it('includes encrypted archived exports in a bulk backup without plaintext reque
   } finally {
     setEncryptedBlobReader(null);
     pageBlobReferences.clear();
-    rememberProjectFormats([{ projectId: document.projectId }]);
+    forgetEncryptedProject(document.projectId);
   }
 });
 

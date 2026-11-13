@@ -73,6 +73,10 @@ import { splitProjectStorageUpload } from '@openzcad/persistence';
 import { desktopFetch, isDesktopApp } from './desktopBridge';
 import type * as EncryptedProjectsModule from './e2ee/encryptedProjects';
 import { localStoragePreferencePins } from './e2ee/preferencePins';
+import {
+  localStorageEncryptedProjectPins,
+  type EncryptedProjectPinStore
+} from './e2ee/encryptedProjectPins';
 import { unlockedAccount } from './e2ee/unlockedKeys';
 import type { EncryptedProjectStore } from './e2ee/encryptedProjectStore';
 import { getKeySessionRevision, isCurrentKeySession } from './e2ee/keySession';
@@ -336,8 +340,19 @@ async function requestJson<T>(
 
 // --- Encrypted projects (ADR-024 Phase 4) ---------------------------------
 
-/** Projects the account stores end-to-end encrypted (format 2), by id. */
-const encryptedProjectIds = new Set<string>();
+/**
+ * Projects this device holds as end-to-end encrypted (format 2), pinned
+ * across reloads (`e2ee/encryptedProjectPins.ts`). Loaded on first use.
+ */
+let pinStore: EncryptedProjectPinStore | null = null;
+const encryptedProjectPins = () =>
+  (pinStore ??= localStorageEncryptedProjectPins());
+
+/**
+ * Pinned projects the account's latest listing reports as not encrypted.
+ * They stay encrypted here; a failed write names the disagreement.
+ */
+const formatMismatchIds = new Set<string>();
 
 /**
  * The encrypted-project module, loaded the first time a format-2 project is
@@ -347,16 +362,73 @@ let encryptedModule: Promise<typeof EncryptedProjectsModule> | null = null;
 const encryptedProjects = () =>
   (encryptedModule ??= import('./e2ee/encryptedProjects'));
 
-/** Records which listed projects are encrypted, for the dispatch below. */
+/**
+ * Records which listed projects are encrypted, for the dispatch below. A
+ * project is pinned as encrypted the first time it is seen so; a listing
+ * that later reports another format does not unpin it (only this device's
+ * own decrypt run does, `forgetEncryptedProject`), it is only noted as a
+ * disagreement.
+ */
 export function rememberProjectFormats(
   projects: readonly Pick<ProjectSummary, 'projectId' | 'storageFormat'>[]
 ): void {
+  const pins = encryptedProjectPins();
   for (const project of projects) {
     if (project.storageFormat === PROJECT_STORAGE_FORMAT_E2EE_V1) {
-      encryptedProjectIds.add(project.projectId);
-    } else {
-      encryptedProjectIds.delete(project.projectId);
+      pins.pin(project.projectId);
+      formatMismatchIds.delete(project.projectId);
+    } else if (pins.has(project.projectId)) {
+      formatMismatchIds.add(project.projectId);
     }
+  }
+}
+
+/**
+ * Pins one project as encrypted: this page created, copied or encrypted
+ * it, or a route answered that it is stored encrypted.
+ */
+export function rememberEncryptedProject(projectId: string): void {
+  encryptedProjectPins().pin(projectId);
+  formatMismatchIds.delete(projectId);
+}
+
+/**
+ * Unpins a project once this device's own decrypt run has cut it over to
+ * plaintext (ADR-024 Phase 7, slice 7-3). Nothing else may call this: no
+ * account record of the reverse path is signed by the owner, so the
+ * account's word alone never turns encryption off for a project here.
+ */
+export function forgetEncryptedProject(projectId: string): void {
+  encryptedProjectPins().forget(projectId);
+  formatMismatchIds.delete(projectId);
+}
+
+export const E2EE_FORMAT_MISMATCH_CODE = 'E2EE_FORMAT_MISMATCH';
+
+/**
+ * A pinned project's encrypted write or read failed while the account
+ * lists it as not encrypted: said plainly, since nothing went to the
+ * plaintext routes instead.
+ */
+function withFormatMismatch(projectId: string, error: unknown): unknown {
+  if (!formatMismatchIds.has(projectId)) return error;
+  return new ApiError(
+    409,
+    'This device keeps this project end-to-end encrypted, but your account now lists it as not encrypted, so nothing was sent without encryption. Your changes stay on this device.',
+    E2EE_FORMAT_MISMATCH_CODE,
+    error instanceof ApiError ? error.details : undefined
+  );
+}
+
+/** Runs an encrypted-route call, naming a format disagreement if it fails. */
+async function viaEncryptedRoute<T>(
+  projectId: string,
+  call: () => Promise<T>
+): Promise<T> {
+  try {
+    return await call();
+  } catch (error) {
+    throw withFormatMismatch(projectId, error);
   }
 }
 
@@ -378,9 +450,12 @@ export function encryptedLocalOnly(what: string): ApiError {
   );
 }
 
-/** Whether this page knows the project is stored encrypted (format 2). */
+/**
+ * Whether this device holds the project as stored encrypted (format 2):
+ * pinned when first seen so, and kept across reloads and listings.
+ */
 export function isEncryptedProject(projectId: string | null | undefined) {
-  return projectId ? encryptedProjectIds.has(projectId) : false;
+  return projectId ? encryptedProjectPins().has(projectId) : false;
 }
 
 export const E2EE_PREFERENCE_UNVERIFIED_CODE = 'E2EE_PREFERENCE_UNVERIFIED';
@@ -484,14 +559,16 @@ async function byFormat<T>(
   encrypted: (store: EncryptedProjectStore) => Promise<T>,
   options: { fallback: boolean }
 ): Promise<T> {
-  const viaStore = async () =>
-    encrypted(await (await encryptedProjects()).encryptedProjectStore());
-  if (encryptedProjectIds.has(projectId)) return viaStore();
+  const viaStore = () =>
+    viaEncryptedRoute(projectId, async () =>
+      encrypted(await (await encryptedProjects()).encryptedProjectStore())
+    );
+  if (isEncryptedProject(projectId)) return viaStore();
   try {
     return await plaintext();
   } catch (error) {
     if (options.fallback && isProjectFormatUnsupportedError(error)) {
-      encryptedProjectIds.add(projectId);
+      rememberEncryptedProject(projectId);
       return viaStore();
     }
     throw error;
@@ -714,7 +791,7 @@ export const api = {
       const created = await (
         await encryptedProjects()
       ).createEncryptedProject(payload);
-      rememberProjectFormats([created.project]);
+      rememberEncryptedProject(created.project.projectId);
       return created;
     };
     // A device document too: the encrypted store refuses it without sending.
@@ -806,7 +883,7 @@ export const api = {
         localProjectId: prepared.projectId,
         document: withoutDerivedProjection(adopted)
       });
-      rememberProjectFormats([created.project]);
+      rememberEncryptedProject(created.project.projectId);
       return created;
     };
     // A minted id that already names a project is a one-in-2^122 collision:
@@ -876,7 +953,7 @@ export const api = {
           ? {}
           : { revisionId: options.revisionId })
       });
-      rememberProjectFormats([created.project]);
+      rememberEncryptedProject(created.project.projectId);
       return created;
     }
     if (await encryptsNewProjects()) {
@@ -976,10 +1053,12 @@ export const api = {
    * the minted records with the trimmed reason it receives.
    */
   saveRevision: async (payload: SaveRevisionRequest) => {
-    if (encryptedProjectIds.has(payload.projectId)) {
-      return (
-        await (await encryptedProjects()).encryptedProjectStore()
-      ).saveRevision(payload);
+    if (isEncryptedProject(payload.projectId)) {
+      return viaEncryptedRoute(payload.projectId, async () =>
+        (
+          await (await encryptedProjects()).encryptedProjectStore()
+        ).saveRevision(payload)
+      );
     }
     const reason = payload.reason.trim();
     const document =
@@ -1018,10 +1097,12 @@ export const api = {
     payload: SaveProjectDocumentRequest,
     options?: { keepalive?: boolean }
   ) => {
-    if (encryptedProjectIds.has(payload.projectId)) {
-      return (
-        await (await encryptedProjects()).encryptedProjectStore()
-      ).saveProjectDocument(payload);
+    if (isEncryptedProject(payload.projectId)) {
+      return viaEncryptedRoute(payload.projectId, async () =>
+        (
+          await (await encryptedProjects()).encryptedProjectStore()
+        ).saveProjectDocument(payload)
+      );
     }
     const body = JSON.stringify(await withSplitStorage(payload, 'document'));
     return requestJson<SaveProjectDocumentResponse>(

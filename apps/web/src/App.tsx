@@ -8272,16 +8272,17 @@ export function App() {
   // ADR-024 Phase 6: an encrypted project's assistant reads it only with this
   // account's per-project consent. Null (no gate) for a plaintext project.
   // A project opened directly while the listing is unavailable has no
-  // summary; this page's own marker still says it is encrypted (#869).
+  // summary; this page's own marker still says it is encrypted (#869). The
+  // device's pin outranks the listing: a summary that reports another
+  // format does not lift the gate.
   const assistantProject:
     Pick<ProjectSummary, 'projectId' | 'storageFormat'> | undefined = doc
-    ? (projects.find((project) => project.projectId === doc.projectId) ??
-      (isEncryptedProject(doc.projectId)
-        ? {
-            projectId: doc.projectId,
-            storageFormat: PROJECT_STORAGE_FORMAT_E2EE_V1
-          }
-        : undefined))
+    ? isEncryptedProject(doc.projectId)
+      ? {
+          projectId: doc.projectId,
+          storageFormat: PROJECT_STORAGE_FORMAT_E2EE_V1
+        }
+      : projects.find((project) => project.projectId === doc.projectId)
     : undefined;
   const assistantConsent = useAssistantConsentGate(
     session?.userId ?? null,

@@ -12,7 +12,7 @@
  *   engine carries on from the Worker's journal.
  */
 import type { ProjectSummary } from '@openzcad/shared';
-import { api, rememberProjectFormats } from '../api';
+import { api, forgetEncryptedProject } from '../api';
 import { desktopFetch } from '../desktopBridge';
 import { flushProjectEdits } from '../migrationStatus';
 import { getKeySessionRevision } from './keySession';
@@ -142,10 +142,9 @@ export function createDecryptionController(
       createReaders: () => opened.readers,
       leases,
       flushProject: flushProjectEdits,
-      onCutover: (projectId) =>
-        rememberProjectFormats([
-          { projectId: projectId as never, storageFormat: 1 }
-        ]),
+      // This device's own run cut the project over: the one signal that
+      // unpins it as encrypted here (`encryptedProjectPins.ts`).
+      onCutover: (projectId) => forgetEncryptedProject(projectId),
       onProgress: update
     });
     return engine;

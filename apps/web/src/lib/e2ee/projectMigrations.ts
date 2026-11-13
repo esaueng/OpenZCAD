@@ -19,7 +19,7 @@
  *   ones it revoked (`reissueLinks`, `reinvite`).
  */
 import type { ProjectSummary } from '@openzcad/shared';
-import { rememberProjectFormats } from '../api';
+import { rememberEncryptedProject } from '../api';
 import { desktopFetch } from '../desktopBridge';
 import { flushProjectEdits, setMigratingProjects } from '../migrationStatus';
 import type { InvitationContext } from './invitations';
@@ -287,10 +287,7 @@ export function createMigrationController(
       leases,
       createStaging: (leased) => opened.open(leased),
       flushProject: flushProjectEdits,
-      onCutover: (projectId) =>
-        rememberProjectFormats([
-          { projectId: projectId as never, storageFormat: 2 }
-        ]),
+      onCutover: (projectId) => rememberEncryptedProject(projectId),
       onProgress: update,
       ...(deps.renewEveryMs ? { renewEveryMs: deps.renewEveryMs } : {})
     });
