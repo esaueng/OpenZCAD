@@ -73,7 +73,8 @@ Both suites use the existing six shards and required E2E completion gate.
 The immutable fleet workflow and its runner restrictions are unchanged.
 The sharder selects files containing the smoke tag, and Playwright selects
 tagged cases within those files. An empty shard fails rather than publishing
-an empty success. Merge candidates still run no browser shards.
+an empty success. Merge candidates run five tagged save/history canaries
+against the combined tree instead of the six shards.
 
 Full measurements live in `test/e2e/shard-weights.json`; smoke measurements
 live in `test/e2e/smoke-shard-weights.json`. Initial smoke weights sum the

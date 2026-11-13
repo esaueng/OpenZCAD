@@ -1,6 +1,6 @@
 # Trusted CI fleet
 
-Linux CI jobs and their completion gates live in `fleet-ci-v6.yml`, called at an
+Linux CI jobs and their completion gates live in `fleet-ci-v8.yml`, called at an
 immutable commit from `ci.yml`. GitHub evaluates the runner expression before
 scheduling each job. There is no GitHub-hosted authorization or routing job in
 front of the Linux checks, and no routing HTTP request from Actions.
@@ -42,6 +42,20 @@ Application jobs require preflight success; queue-trust failure still selects
 hosted execution. Its runner authorization and isolation are unchanged from
 v7. Activate it only at its landed main commit in a separate caller PR. Runner
 group activation and the CodeQL default-setup configuration are separate work.
+
+The activation PR pins `ci.yml` to `fleet-ci-v8.yml` at #1295's landed squash
+commit `158a250b52a1c83b31eb9088c09782383c8f835c` and retires the checked-in
+v6 file. v8's workflow header, `queue-trust` job, `&fleet-isolation` guard and
+runner expression are byte-identical to v6 at `18b7421`;
+`scripts/test-merge-queue-routing.py` pins that, and still checks v6's
+immutable bytes against the original queue policy. The unused staged v7 file
+stays checked in. Before routing any job to Jane, add this exact entry to the
+`ci-trusted-main` runner group; until then keep `CI_FLEET_ENABLED=false` or
+the Jane-selected jobs wait for a runner the group refuses:
+
+```text
+esaueng/OpenZCAD/.github/workflows/fleet-ci-v8.yml@158a250b52a1c83b31eb9088c09782383c8f835c
+```
 
 PR #1118 staged `fleet-ci-v6.yml` with `actions/setup-node` v7.1.0 and
 `actions/upload-artifact` v7.0.2. Its only differences from v5 are those

@@ -1,7 +1,9 @@
 # Unit test suites
 
-Routine pull-request and merge-queue CI run a focused Vitest smoke selection
-from `test/unit-ci-files.json`: representative model and command operations,
+Routine pull-request and merge-queue CI run the critical Vitest manifest
+in `test/unit-ci-files.json` plus the test files a change affects (fleet v8;
+see [CI qualification](ci-qualification.md) for when the complete suites run).
+The manifest covers representative model and command operations,
 exact-kernel validation/refusal, persistence, account authorization, crypto/MLS,
 and the web's editing, saving, sharing and recovery paths. Workflow, privacy,
 package, bundle, deployment and roadmap guards remain in this selection.

@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { FLEET_CI_PATH } from './fleet-workflow';
 
 describe('workflow runner policy', () => {
   it('keeps ordinary workflows hosted with a restricted trusted workflow', () => {
@@ -11,7 +12,6 @@ describe('workflow runner policy', () => {
       'ci.yml': [],
       'ci-recovery.yml': ['ubuntu-24.04'],
       'public-commit-metadata.yml': ['ubuntu-24.04'],
-      'fleet-ci-v6.yml': Array(6).fill('*fleet-runner'),
       'fleet-ci-v7.yml': [
         'ubuntu-24.04',
         ...Array<string>(8).fill('*fleet-runner')
@@ -20,7 +20,7 @@ describe('workflow runner policy', () => {
         'ubuntu-24.04',
         ...Array<string>(8).fill('*fleet-runner')
       ],
-      'daily-validation.yml': Array(4).fill('ubuntu-24.04'),
+      'daily-validation.yml': Array(5).fill('ubuntu-24.04'),
       'kernel-pin.yml': ['ubuntu-24.04'],
       'cloudflare.yml': ['ubuntu-latest', 'ubuntu-latest'],
       'macos-desktop.yml': ['macos-26'],
@@ -67,7 +67,7 @@ describe('workflow runner policy', () => {
           /pull_request_target|workflow_run|secrets(?:\.|:)|id-token: write|contents: write/
         );
       }
-      if (workflowPath === 'fleet-ci-v6.yml') {
+      if (`${workflowDirectory}/${workflowPath}` === FLEET_CI_PATH) {
         // Hosted shards install browser binaries only: the Ubuntu mirror
         // behind `--with-deps` stalled one shard in six for minutes.
         expect(workflow).toContain(

@@ -1,7 +1,8 @@
 # CI runtime optimization
 
-The runtime update stages `fleet-ci-v8.yml` without changing the active v6
-caller. Follow the two-PR activation procedure in [runner routing](runner-routing.md).
+The runtime update staged `fleet-ci-v8.yml` without changing the then-active
+v6 caller; a separate PR activates it following the two-PR procedure in
+[runner routing](runner-routing.md).
 The new callee retains the exact runner trust and isolation boundaries, adds a
 kernel preflight to required validation, partitions root units over two runners,
 separates lint and typecheck, and retains critical plus affected coverage.

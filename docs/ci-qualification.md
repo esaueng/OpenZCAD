@@ -1,6 +1,6 @@
 # Fast PR checks and complete qualification
 
-The staged `fleet-ci-v8.yml` supersedes v7, separates lint and typecheck, partitions root
+The active `fleet-ci-v8.yml` supersedes v7, separates lint and typecheck, partitions root
 unit tests over two runners, and combines the critical unit manifest with
 Vitest's affected-file inventory from the full project. Changed tests are
 eligible even when they are absent from the smoke manifest. Missing Git
@@ -54,6 +54,16 @@ the aggregate receipt records the source SHA, each project result and the
 last successful scheduled main qualification. Missing, skipped or cancelled
 projects do not produce a green receipt.
 
+A red scheduled run on `main` opens one tracking issue, "Daily full
+qualification is failing on main", naming the source SHA, the failing
+projects and their failing test files (or a missing report). Each later red
+scheduled run updates its body and adds a comment; the next green scheduled
+run comments and closes it. The `report` job reads only the small
+`qualification-report-*` JSON artifacts each project uploads beside its full
+reports. Only the separate `track` job holds `issues: write`. It runs for
+scheduled `main` runs only, never for pull requests or manual dispatches, and
+cannot change the verdict.
+
 The repository maintainer owns failed qualification runs. Triage the failing
 test and source SHA from the retained reports, distinguish product failures
 from harness/resource failures, and promote a confirmed regression into the
@@ -62,7 +72,12 @@ geometry, privacy, persistence or timeout assertions to clear it.
 
 ## Activation
 
-The staging PR leaves `ci.yml` and `fleet-ci-v6.yml` unchanged. After it lands:
+The staging PR (#1295) left `ci.yml` and `fleet-ci-v6.yml` unchanged. The
+activation PR pins v8 at `158a250b52a1c83b31eb9088c09782383c8f835c` and
+retires v6. Kernel (Remus) updates change `pnpm-lock.yaml` and
+`packages/kernel-adapter/package.json`, so v8 selects the complete unit
+suites for them, which catches ledger and measurement drift before merge.
+Activation steps:
 
 1. Retain the inline kernel declaration and all six existing required contexts
    and their GitHub App bindings. Requiring the separate declaration is an
