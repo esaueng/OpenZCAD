@@ -1252,7 +1252,7 @@ async function requireCommitSignature(
   const signature = bytesField(value, 'signature', {
     exact: MLS_COMMIT_SIGNATURE_BYTES
   });
-  let valid = false;
+  let valid: boolean;
   try {
     valid = await verifyMlsCommitSubmission(
       account.signingKey,
@@ -1289,7 +1289,7 @@ function requireCommitFraming(
   groupInfo: Uint8Array
 ): void {
   const groupId = projectGroupId(projectId);
-  let matches = false;
+  let matches: boolean;
   try {
     const frame = parseCommitFrame(message);
     const context = parseGroupInfoContext(groupInfo);
