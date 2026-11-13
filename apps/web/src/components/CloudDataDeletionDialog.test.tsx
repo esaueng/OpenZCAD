@@ -48,6 +48,32 @@ describe('CloudDataDeletionDialog', () => {
     ).toBeVisible();
   });
 
+  // Design review I84: nothing said what deleting the profile does to
+  // encryption keys.
+  it.each([
+    ['profile', true],
+    ['all', true],
+    ['projects', false]
+  ] as const)(
+    'for %s, says whether the encryption keys go too',
+    async (scope, shown) => {
+      vi.spyOn(api, 'accountDeletionPreview').mockResolvedValue(preview);
+      render(
+        <CloudDataDeletionDialog
+          scope={scope}
+          onConfirm={vi.fn()}
+          onClose={vi.fn()}
+        />
+      );
+      await screen.findByLabelText('Deletion confirmation');
+      const sentence = screen.queryByText(
+        /Your recovery key will no longer unlock anything\./
+      );
+      if (shown) expect(sentence).toBeVisible();
+      else expect(sentence).toBeNull();
+    }
+  );
+
   it('keeps focus on the delete button while it runs and after it fails', async () => {
     const user = userEvent.setup();
     vi.spyOn(api, 'accountDeletionPreview').mockResolvedValue(preview);

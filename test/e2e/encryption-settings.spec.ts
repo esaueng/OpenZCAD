@@ -178,6 +178,10 @@ test('sets up encryption only after the recovery key is confirmed', async ({
     .getByLabel('Recovery key', { exact: true })
     .textContent())!;
   expect(recoveryKey).toMatch(/^([0-9A-Z]{4}-){13}[0-9A-Z]{4}$/);
+  // Step 1 says plainly what losing the keys costs (design review I80).
+  await expect(settings).toContainText(
+    'your encrypted cloud projects cannot be recovered, by you or by us'
+  );
   const proceed = settings.getByRole('button', { name: 'Continue' });
   await expect(proceed).toBeDisabled();
   await settings

@@ -12,6 +12,14 @@
   color: var(--color-text-muted);
 }
 
+/* "I saved my recovery key": an acknowledgement, so a checkbox (I80). */
+.encryption-acknowledge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+}
+
 /* Codes people read or compare: never truncated, wrapped in groups. */
 .encryption-code {
   display: block;
