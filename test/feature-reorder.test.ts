@@ -3,6 +3,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { CommandManager, commandFactories, replayCommands } from '@openzcad/command-system';
 import {
   addPrimitiveFeature,
+  chamferEdges,
   createProjectDocument,
   filletEdges,
   listFeaturesInOrder,
@@ -127,6 +128,52 @@ describe('feature.reorder command', () => {
       'Box',
       'Cylinder',
       'Fillet box'
+    ]);
+  });
+
+  it('names the feature whose result a refused move would run before', () => {
+    // 13 November review: with Box → Fillet → Hole, moving the hole above the
+    // fillet said it "would run before the body it uses exists", though the
+    // box stood from the first step. The hole is on the body the fillet
+    // leaves, and the refusal says so.
+    const base = twoPrimitives();
+    const box = listFeaturesInOrder(base)[0]!;
+    const filleted = filletEdges(base, {
+      name: 'Fillet box',
+      targetBodyId: box.bodyId!,
+      edgeHashes: [],
+      size: 1
+    });
+    const chamfered = chamferEdges(filleted.document, {
+      name: 'Chamfer',
+      targetBodyId: filleted.bodyId,
+      edgeHashes: [],
+      size: 0.5
+    });
+    const manager = new CommandManager(chamfered.document);
+    const chamfer = listFeaturesInOrder(manager.document).find(
+      (feature) => feature.name === 'Chamfer'
+    )!;
+    let message = '';
+    try {
+      manager.execute(
+        commandFactories.moveFeature({
+          featureId: chamfer.featureId,
+          toIndex: 2
+        })
+      );
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toMatch(
+      /^Cannot reorder: "Chamfer" uses .+ as "Fillet box" leaves it, so it must stay after "Fillet box"\.$/
+    );
+    expect(message).not.toMatch(/exists/);
+    expect(orderedNames(manager.document)).toEqual([
+      'Box',
+      'Cylinder',
+      'Fillet box',
+      'Chamfer'
     ]);
   });
 

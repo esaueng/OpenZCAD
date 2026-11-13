@@ -161,7 +161,9 @@ test(
     // Nothing was armed behind the workspace: Build opens on the part with
     // no face's handle or value chip waiting.
     await page.getByRole('button', { name: 'Build', exact: true }).click();
-    await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible();
+    await expect(
+      page.getByRole('button', { name: /^Box \(B\)/ })
+    ).toBeVisible();
     await page.waitForTimeout(1_000);
     expect(await picked('e2eSelectedFace')).toBeNull();
     expect(await picked('e2eHandleX')).toBeNull();
@@ -301,8 +303,11 @@ for (const width of [1440, 390]) {
       const reset = page.getByRole('button', {
         name: 'Reset Scissors to the original'
       });
-      page.once('dialog', (dialog) => dialog.accept());
       await reset.click();
+      await page
+        .getByRole('alertdialog', { name: 'Reset the Scissors sample?' })
+        .getByRole('button', { name: 'Reset sample' })
+        .click();
       await expect(reset).toHaveCount(0);
       await sample.click();
       await ready('30');

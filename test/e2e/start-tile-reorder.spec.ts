@@ -156,6 +156,44 @@ test('selects several cards and trashes them together', async ({ page }) => {
   await expect.poll(() => cardOrder(page)).toHaveLength(3);
 });
 
+test('Move to trash offers Undo, and Empty trash asks in-page', async ({
+  page
+}) => {
+  // Every destructive confirm is in-page: a native one fails this test.
+  const native: string[] = [];
+  page.on('dialog', (dialog) => {
+    native.push(dialog.message());
+    void dialog.dismiss();
+  });
+  await card(page, names[1]!).hover();
+  await page
+    .getByRole('button', { name: `Actions for ${names[1]}` })
+    .first()
+    .click();
+  await page.getByRole('menuitem', { name: 'Move to trash' }).click();
+  await expect(card(page, names[1]!)).toHaveCount(0);
+  const toast = page.locator('.toast');
+  await expect(toast).toContainText(`Moved ${names[1]} to the trash.`);
+  await toast.getByRole('button', { name: 'Undo' }).click();
+  await expect(card(page, names[1]!)).toHaveCount(1);
+  await expect.poll(() => cardOrder(page)).toEqual(names);
+
+  await page.getByRole('checkbox', { name: `Select ${names[0]}` }).click();
+  await page
+    .getByRole('toolbar', { name: '1 project selected' })
+    .getByRole('button', { name: 'Move to trash' })
+    .click();
+  await page.getByRole('tab', { name: /Trash/ }).click();
+  await page.getByRole('button', { name: 'Empty trash' }).click();
+  const confirm = page.getByRole('alertdialog', { name: 'Empty the trash?' });
+  await expect(confirm).toContainText('1 project is deleted forever.');
+  await expect(confirm.getByRole('button', { name: 'Cancel' })).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(confirm).toHaveCount(0);
+  await expect.poll(() => cardOrder(page)).toEqual([names[0]]);
+  expect(native).toEqual([]);
+});
+
 test('drops a dragged card on Trash', async ({ page }) => {
   const trash = page.getByRole('tab', { name: /Trash/ });
   const source = await card(page, names[1]!)
@@ -182,7 +220,9 @@ test('drops a dragged card on Trash', async ({ page }) => {
   await page.mouse.up();
 
   await expect.poll(() => cardOrder(page)).toEqual([names[0], names[2]]);
-  await expect(page.getByText(`Moved ${names[1]} to the trash.`)).toBeVisible();
+  await expect(page.locator('.toast')).toContainText(
+    `Moved ${names[1]} to the trash.`
+  );
   await trash.click();
   await expect.poll(() => cardOrder(page)).toEqual([names[1]]);
 });
