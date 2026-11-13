@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Globe } from 'lucide-react';
 import { StableLabel } from './StableLabel';
+import { ShareLinkRevokeConfirm } from './ShareLinkRevokeConfirm';
 import type { ShareRemovalNotice } from '../lib/e2ee/shareWorkStore';
 import { shareLinkCreationProblem } from '../lib/projectShareLink';
 
@@ -258,6 +259,8 @@ export function EncryptedShareLinks({
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<string | null>(null);
+  // The link whose Revoke is waiting for a yes (design review I2).
+  const [revokingId, setRevokingId] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [recoveryKey, setRecoveryKey] = useState('');
@@ -569,45 +572,67 @@ export function EncryptedShareLinks({
 
       {links.length > 0 ? (
         <ul className="sharing-list" aria-label="Active share links">
-          {links.map((row) => (
-            <li key={row.shareId}>
-              <span className="sharing-row-text">
-                <span className="sharing-member-id">
-                  {MODE_LABEL[row.mode]} link
+          {links.map((row) =>
+            revokingId === row.shareId ? (
+              <li key={row.shareId} className="sharing-confirm-row">
+                <ShareLinkRevokeConfirm
+                  name={`${MODE_LABEL[row.mode]} link`}
+                  disabled={busy !== null}
+                  onCancel={() => {
+                    setRevokingId(null);
+                    requestAnimationFrame(() =>
+                      document
+                        .querySelector<HTMLElement>(
+                          `[data-share-link-revoke="${row.shareId}"]`
+                        )
+                        ?.focus()
+                    );
+                  }}
+                  onRevoke={() => {
+                    setRevokingId(null);
+                    void run(`revoke:${row.shareId}`, async () => {
+                      await client.revoke(projectId, row.shareId);
+                      setCreated(null);
+                    });
+                  }}
+                />
+              </li>
+            ) : (
+              <li key={row.shareId}>
+                <span className="sharing-row-text">
+                  <span className="sharing-member-id">
+                    {MODE_LABEL[row.mode]} link
+                  </span>
+                  <span className="sharing-row-detail" data-status={row.status}>
+                    {expiryText(row)}
+                  </span>
                 </span>
-                <span className="sharing-row-detail" data-status={row.status}>
-                  {expiryText(row)}
-                </span>
-              </span>
-              {row.url ? (
+                {row.url ? (
+                  <button
+                    type="button"
+                    className="sharing-row-copy"
+                    disabled={busy !== null || row.status !== 'active'}
+                    aria-label={`Copy ${MODE_LABEL[row.mode]} link`}
+                    onClick={() => void copy(row.url!, row.shareId)}
+                  >
+                    <StableLabel reserve={['Copied', 'Copy']} align="center">
+                      {copied === row.shareId ? 'Copied' : 'Copy'}
+                    </StableLabel>
+                  </button>
+                ) : null}
                 <button
                   type="button"
-                  className="sharing-row-copy"
-                  disabled={busy !== null || row.status !== 'active'}
-                  aria-label={`Copy ${MODE_LABEL[row.mode]} link`}
-                  onClick={() => void copy(row.url!, row.shareId)}
+                  className="sharing-row-action"
+                  disabled={busy !== null}
+                  aria-label={`Revoke ${MODE_LABEL[row.mode]} link`}
+                  data-share-link-revoke={row.shareId}
+                  onClick={() => setRevokingId(row.shareId)}
                 >
-                  <StableLabel reserve={['Copied', 'Copy']} align="center">
-                    {copied === row.shareId ? 'Copied' : 'Copy'}
-                  </StableLabel>
+                  Revoke
                 </button>
-              ) : null}
-              <button
-                type="button"
-                className="sharing-row-action"
-                disabled={busy !== null}
-                aria-label={`Revoke ${MODE_LABEL[row.mode]} link`}
-                onClick={() =>
-                  void run(`revoke:${row.shareId}`, async () => {
-                    await client.revoke(projectId, row.shareId);
-                    setCreated(null);
-                  })
-                }
-              >
-                Revoke
-              </button>
-            </li>
-          ))}
+              </li>
+            )
+          )}
         </ul>
       ) : null}
     </section>
