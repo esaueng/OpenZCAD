@@ -1295,7 +1295,7 @@
 
 /* View's bar stands on the right at the stage's middle, a vertical rail
    like Build's instruments (View and Tweak have no instrument rail of their
-   own): Measure, then fit, views, grid, display and projection, icons only
+   own): Measure, then fit, views, grid, display, projection and orbit mode, icons only
    with their names as tooltips. The views panel opens beside it, leftward. */
 .workspace.column-layout .palette-float:has(.view-mode-bar) {
   top: var(--stage-middle);
@@ -1316,9 +1316,9 @@
 }
 
 /* Keep the lazy fallback in the same right-hand slot as the loaded rail.
-   Its six 30px controls, divider, gaps and padding occupy 209px. */
+   Its seven 30px controls, divider, gaps and padding occupy 241px. */
 .workspace.column-layout .view-tools-loading {
-  min-height: 209px;
+  min-height: 241px;
   justify-content: center;
 }
 
