@@ -769,7 +769,8 @@ export interface InPlaceToolSpec {
   summary?(
     state: InPlacePanelState,
     units: UnitSystem,
-    slots?: InPlaceSlots
+    slots?: InPlaceSlots,
+    context?: InPlaceValueContext
   ): string | null;
   /**
    * Values an option's change carries with it, from the values as they

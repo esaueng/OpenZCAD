@@ -22746,7 +22746,12 @@ export function App() {
         inPlaceSpec.summary?.(
           { ...state, raws: inPlace.raws },
           inPlaceUnits,
-          inPlace.slots
+          inPlace.slots,
+          {
+            touched: inPlace.touched,
+            raws: inPlace.raws,
+            ...(inPlace.editing ? { saved: inPlace.editing.data } : {})
+          }
         ) ?? null
     };
   }, [
@@ -22757,6 +22762,8 @@ export function App() {
     inPlace.raws,
     inPlace.handles,
     inPlace.optionSpecs,
+    inPlace.touched,
+    inPlace.editing,
     inPlaceUnits
   ]);
   /**

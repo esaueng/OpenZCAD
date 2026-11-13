@@ -21,21 +21,21 @@ import {
  * U11: the Thread tool works as Helical sweep does. One pick in the model
  * (the cylinder, near the end the thread starts at), nothing the face
  * already says is asked for, and one arrow on the thread's free end that
- * stops it short of the face's far end. Nothing here types a value.
+ * stops it short of the face's far end. The first journey uses only picks
+ * and drags; the advisory journey also checks Offset in Options.
  */
 
 /**
- * An M12 boss: a cylinder 12 across and 12 tall, standing up +Z. (Its
- * printable crest is wider than an extrusion line, so the preview carries no
- * print advisory; see the PR's known issue for smaller bosses.)
+ * A boss 12 tall, standing up +Z. The default M12 has no crest advisory;
+ * radius 3 is an M6 that exercises the non-blocking printing note.
  */
-function boss(): ProjectDocument {
+function boss(radius = 6): ProjectDocument {
   return addPrimitiveFeature(
     createProjectDocument('In-place thread', toUserId('user_e2e')),
     {
       name: 'Boss',
       primitiveKind: 'cylinder',
-      dimensions: { radius: 6, height: 12 }
+      dimensions: { radius, height: 12 }
     }
   );
 }
@@ -220,5 +220,47 @@ test(
       timeout: 30_000
     });
     expect(await storedThreads(page)).toEqual([created]);
+  }
+);
+
+test(
+  'M6 printing advice stays visible while Done accepts a thread to the far end',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(120_000);
+    await stubApi(page, { panelLayout: MODEL_ONLY });
+    await openDocument(page, boss(3));
+    const more = page.getByRole('button', { name: /^More tools/ });
+    if ((await more.getAttribute('aria-expanded')) !== 'true')
+      await more.click();
+    await page.getByRole('button', { name: /^Thread\b/ }).click();
+    await setSelectionFilter(page, 'Face');
+    await clickWorldPoint(page, [0, -3, 10]);
+    const bar = page.getByRole('group', { name: 'Thread command' });
+    await expect(bar.getByRole('status')).toContainText(
+      /Note:.*crest.*extrusion line/i,
+      { timeout: 60_000 }
+    );
+    await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled();
+    await expect(bar).not.toHaveClass(/refused/);
+    await bar.locator('summary').click();
+    const offset = bar.getByRole('textbox', { name: 'Offset', exact: true });
+    await offset.fill('2');
+    await offset.press('Enter');
+    await expect(bar).toContainText('To end · Threads 10 of 12 mm');
+    await expect(bar.getByRole('status')).toContainText(/Note:.*crest/i, {
+      timeout: 60_000
+    });
+    await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled();
+    await finishInPlaceCommand(page, 'Thread');
+    const [thread] = await storedThreads(page);
+    expect(thread).toMatchObject({
+      profile: 'printable',
+      anchor: 'end',
+      offset: 2,
+      chamferStart: true
+    });
+    expect(thread?.length).toBeUndefined();
+    expect(thread?.chamferEnd).toBeUndefined();
   }
 );

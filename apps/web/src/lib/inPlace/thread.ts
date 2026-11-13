@@ -425,7 +425,8 @@ function fitClearance(fit: string | undefined, units: UnitSystem): number {
 export function threadSummary(
   state: InPlacePanelState,
   units: UnitSystem = 'mm',
-  slots?: Pick<InPlaceSlots, 'faces'>
+  slots?: Pick<InPlaceSlots, 'faces'>,
+  context?: InPlaceValueContext
 ): string | null {
   const parts: string[] = [];
   const geometry = threadFace(slots?.faces[0]);
@@ -441,14 +442,17 @@ export function threadSummary(
     const face = round(geometry.length);
     // A length typed as an expression is kept as written, so it is stored
     // (and the ends left plain) even where it reaches the far end.
-    partial =
-      state.raws?.length !== undefined ||
-      length < reach - tolerance(geometry.length);
+    partial = lengthIsExplicit(
+      geometry,
+      { ...state.numbers, ...state.raws },
+      state.numbers,
+      context ?? { touched: ['length'] }
+    );
     parts.push(
       partial
         ? `Threads ${round(length)} of ${face} ${units}, ends plain`
         : offset > 0
-          ? `Threads ${round(reach)} of ${face} ${units}`
+          ? `To end · Threads ${round(reach)} of ${face} ${units}`
           : `Threads the full ${face} ${units}`
     );
   }

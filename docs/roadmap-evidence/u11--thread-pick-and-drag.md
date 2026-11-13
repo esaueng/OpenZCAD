@@ -13,3 +13,14 @@ partial thread included, with no schema change; a length arrow's chip now hangs
 clear of its head instead of covering it (`thread.test.ts`, `edit.test.ts`,
 `useInPlaceCommand.test.tsx`, `in-place-thread.spec.ts`,
 `extrude-in-place.spec.ts`).
+
+Approved thread behavior: the nearer picked end is retained, whole-face
+offsets read as To end, and the offset starting chamfer is omitted. Printing
+advisories remain visible as command guidance while Done is available.
+Preview gating uses the shared attributed warning rule: build failures,
+refusals, missing geometry and invalid inputs still block, including a failed
+edited feature with a pass-through body. Legacy warning deltas are counted
+by occurrence. Saved explicit lengths that reach the far end still read as
+partial with plain ends. Coverage: shared hook regressions across Box, Gear
+and Thread, plus the real M6 printing-advisory browser case in
+`in-place-thread.spec.ts`, PR #1361. No schema or dependency change.

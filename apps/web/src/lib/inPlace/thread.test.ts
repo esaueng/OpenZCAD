@@ -588,7 +588,25 @@ describe('in-place thread: picks and the dragged end (U11)', () => {
         'mm',
         slots
       )
-    ).toBe('Sized from the Ø6 mm face · Threads 10 of 12 mm');
+    ).toBe('Sized from the Ø6 mm face · To end · Threads 10 of 12 mm');
+    expect(
+      threadSummary(
+        inPlacePanelState(threadSpec, {}, { length: 10, offset: 2 }),
+        'mm',
+        slots,
+        {
+          touched: ['length', 'offset'],
+          saved: {
+            featureKind: 'thread',
+            targetBodyId: BOSS.bodyId,
+            faceHash: BOSS.hash,
+            profile: 'printable',
+            length: 10,
+            offset: 2
+          }
+        }
+      )
+    ).toBe('Sized from the Ø6 mm face · Threads 10 of 12 mm, ends plain');
   });
 });
 

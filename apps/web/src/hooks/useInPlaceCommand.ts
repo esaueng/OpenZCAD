@@ -37,6 +37,8 @@ import type { InPlaceEditSeed } from '../lib/inPlace/edit';
 import { inPlacePanelState } from '../lib/inPlace/panel';
 import { findFeature } from '@openzcad/document-core';
 import type { PlacementPick } from '../lib/inPlace/primitives';
+import { newExactWarnings } from '../lib/exactWarnings';
+import { refusingWarning } from '../lib/featureValidation';
 
 /**
  * Runs whichever in-place command (U09) is active.
@@ -418,6 +420,7 @@ export function useInPlaceCommand(
 ): InPlaceCommand {
   const [session, setSession] = useState<Session | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
+  const [previewAdvisory, setPreviewAdvisory] = useState<string | null>(null);
   // A typed value the tool refused: it stands until the next accepted
   // value, and Done waits with it, since the chip went back to the value
   // before and finishing would commit that instead of what was typed.
@@ -764,14 +767,25 @@ export function useInPlaceCommand(
             : undefined;
         if (built && !frame) return;
         const bodyId = frame?.bodyId;
-        // As strict as the card's preflight: a warning the base model did
-        // not already carry refuses the preview, even with a body built.
-        const known = new Set(
-          optionsRef.current.baseDocument()?.derived.warnings ?? []
-        );
-        const fresh = result?.derived.warnings.find(
-          (warning) => !known.has(warning)
-        );
+        // Use the same attributed, occurrence-counted rule as other commit
+        // gates: advisories describe usable geometry; only failures and
+        // refusals block. An edited feature's own failure still blocks even
+        // when it was already present in the baseline (a failed replacement
+        // can now publish a pass-through body under its result id).
+        const base = optionsRef.current.baseDocument();
+        const edit = editRef.current;
+        const fresh =
+          result && base
+            ? (newExactWarnings(base, result.derived)[0] ??
+              (edit
+                ? refusingWarning(
+                    edit.name,
+                    result.derived.warnings,
+                    result.derived.featureWarnings,
+                    edit.featureId
+                  )
+                : null))
+            : null;
         // A datum adds no body: its own check proves it resolved.
         let unresolved: string | null = null;
         if (result && frame?.check) {
@@ -786,6 +800,7 @@ export function useInPlaceCommand(
         // command does so), so its body is looked for like any other.
         const valid = Boolean(
           result &&
+          base &&
           (frame?.check
             ? unresolved === null
             : bodyId && result.derived.bodyRepresentations[bodyId]) &&
@@ -796,24 +811,46 @@ export function useInPlaceCommand(
         if (!result) return;
         if (valid) {
           setRefusal(null);
+          const key = (warning: { featureId: string; message: string }) =>
+            JSON.stringify([warning.featureId, warning.message]);
+          const known = new Set(
+            (base?.derived.featureWarnings ?? [])
+              .filter((warning) => warning.kind === 'advisory')
+              .map(key)
+          );
+          const notes = (result.derived.featureWarnings ?? [])
+            .filter(
+              (warning) =>
+                warning.kind === 'advisory' &&
+                (warning.featureId === edit?.featureId ||
+                  !known.has(key(warning)))
+            )
+            .map((warning) =>
+              warning.message.replace(/^Feature "[^"]+":\s*/, '')
+            );
+          setPreviewAdvisory(notes.length ? notes.join(' · ') : null);
           optionsRef.current.publishPreview({
             ...result.document,
             derived: result.derived
           });
         } else {
+          setPreviewAdvisory(null);
           // The last frame that built is not this request: left on screen
           // under the refusal, it reads as the value that was refused.
           optionsRef.current.publishPreview(null);
           setRefusal(
             fresh ??
               unresolved ??
-              result.derived.warnings.at(-1) ??
+              (result.derived.featureWarnings === undefined
+                ? result.derived.warnings.at(-1)
+                : null) ??
               'This did not produce a valid body.'
           );
         }
       },
       onFailure: ({ error }) => {
         setPreviewValid(false);
+        setPreviewAdvisory(null);
         optionsRef.current.publishPreview(null);
         setRefusal(
           error instanceof Error ? error.message : 'Unable to preview this.'
@@ -2032,7 +2069,16 @@ export function useInPlaceCommand(
     optionSpecs,
     editing: editSeed,
     request,
-    hint: spec ? spec.hint(slots, chosen, ctx) : '',
+    hint: spec
+      ? [
+          spec.hint(slots, chosen, ctx),
+          previewValid && previewedKey === requestKey && previewAdvisory
+            ? `Note: ${previewAdvisory}`
+            : null
+        ]
+          .filter(Boolean)
+          .join(' · ')
+      : '',
     refusal: entryRefusal?.message ?? refusal,
     canFinish,
     edit,

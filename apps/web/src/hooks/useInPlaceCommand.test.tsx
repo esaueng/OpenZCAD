@@ -14,6 +14,7 @@ import type { PlaneBasis } from '@openzcad/geometry';
 import type {
   BodyId,
   FeatureId,
+  FeatureWarning,
   ProjectDocument,
   SketchId
 } from '@openzcad/shared';
@@ -119,6 +120,134 @@ function setup(overrides: Partial<UseInPlaceCommandOptions> = {}) {
   const hook = renderHook(() => useInPlaceCommand(options));
   return { hook, commit, publishPreview, built };
 }
+
+describe('useInPlaceCommand: preview warning disposition', () => {
+  const warning = (kind: FeatureWarning['kind']): FeatureWarning => ({
+    featureId: 'feature_preview' as FeatureId,
+    featureName: 'Preview',
+    kind,
+    message: 'Feature "Preview": The crest is under a 0.4 mm extrusion line.'
+  });
+  const derivedWith = (entries: FeatureWarning[], body = true) => ({
+    ...fakeDocument(body).derived,
+    warnings: entries.map((entry) => entry.message),
+    featureWarnings: entries
+  });
+
+  it.each(['box', 'gear'] as const)(
+    'allows Done for a %s advisory and keeps the note visible',
+    async (tool) => {
+      const { hook, commit, publishPreview } = setup({
+        derive: async () => derivedWith([warning('advisory')])
+      });
+      act(() => hook.result.current.start(tool));
+      if (tool === 'gear') {
+        act(() => {
+          hook.result.current.pickPlane({
+            kind: 'principal',
+            plane: 'XY',
+            origin: { x: 0, y: 0, z: 0 },
+            normal: { x: 0, y: 0, z: 1 }
+          });
+        });
+      }
+      await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+      expect(hook.result.current.refusal).toBeNull();
+      expect(hook.result.current.hint).toContain(
+        'Note: The crest is under a 0.4 mm extrusion line.'
+      );
+      expect(publishPreview).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          derived: expect.objectContaining({
+            featureWarnings: [warning('advisory')]
+          })
+        })
+      );
+      act(() => {
+        expect(hook.result.current.done()).toBe(true);
+      });
+      expect(commit).toHaveBeenCalledOnce();
+    }
+  );
+
+  it.each(['build-failed', 'refusal'] as const)(
+    'blocks a %s even when a body and an advisory are also present',
+    async (kind) => {
+      const failure = {
+        ...warning(kind),
+        message: 'Feature "Preview": Invalid geometry.'
+      };
+      const { hook, commit } = setup({
+        derive: async () => derivedWith([warning('advisory'), failure])
+      });
+      act(() => hook.result.current.start('box'));
+      await waitFor(() =>
+        expect(hook.result.current.refusal).toContain('Invalid geometry')
+      );
+      expect(hook.result.current.canFinish).toBe(false);
+      act(() => {
+        expect(hook.result.current.done()).toBe(false);
+      });
+      expect(commit).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['suppressed', 'history-fork'] as const)(
+    'does not turn a %s diagnostic into a refusal',
+    async (kind) => {
+      const { hook } = setup({
+        derive: async () => derivedWith([warning(kind)])
+      });
+      act(() => hook.result.current.start('box'));
+      await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+      expect(hook.result.current.refusal).toBeNull();
+    }
+  );
+
+  it('still blocks a missing result body when the only message is an advisory', async () => {
+    const { hook } = setup({
+      derive: async () => derivedWith([warning('advisory')], false)
+    });
+    act(() => hook.result.current.start('box'));
+    await waitFor(() =>
+      expect(hook.result.current.refusal).toMatch(/valid body/)
+    );
+    expect(hook.result.current.canFinish).toBe(false);
+  });
+
+  it('counts legacy warning occurrences instead of hiding a new duplicate', async () => {
+    const base = fakeDocument(true);
+    base.derived.warnings = ['Legacy failure'];
+    const { hook } = setup({
+      baseDocument: () => base,
+      derive: async () => ({
+        ...base.derived,
+        warnings: ['Legacy failure', 'Legacy failure']
+      })
+    });
+    act(() => hook.result.current.start('box'));
+    await waitFor(() =>
+      expect(hook.result.current.refusal).toBe('Legacy failure')
+    );
+    expect(hook.result.current.canFinish).toBe(false);
+  });
+
+  it('removes the previous preview advisory as soon as the request changes', async () => {
+    let advisory = true;
+    const { hook } = setup({
+      derive: async () => derivedWith(advisory ? [warning('advisory')] : [])
+    });
+    act(() => hook.result.current.start('box'));
+    await waitFor(() => expect(hook.result.current.hint).toContain('Note:'));
+    advisory = false;
+    act(() => {
+      hook.result.current.setValue('width', 31);
+    });
+    expect(hook.result.current.hint).not.toContain('Note:');
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    expect(hook.result.current.hint).not.toContain('Note:');
+  });
+});
 
 describe('useInPlaceCommand: revolve', () => {
   it('walks profile → axis → angle in its hint', () => {
@@ -1057,6 +1186,47 @@ describe('useInPlaceCommand: thread', () => {
     lockedOptions: [],
     notice: null
   };
+
+  it('keeps an existing printing advisory visible while editing its thread', async () => {
+    const base = fakeDocument(true);
+    const advisory: FeatureWarning = {
+      featureId: STORED.featureId,
+      featureName: STORED.name,
+      kind: 'advisory',
+      message: 'Feature "Thread 1": The crest is narrow.'
+    };
+    base.derived.warnings = [advisory.message];
+    base.derived.featureWarnings = [advisory];
+    const { hook } = setup({
+      baseDocument: () => base,
+      derive: async () => base.derived
+    });
+    act(() => hook.result.current.edit('thread', STORED));
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    expect(hook.result.current.hint).toContain('Note: The crest is narrow.');
+    expect(hook.result.current.refusal).toBeNull();
+  });
+
+  it('blocks an edited thread that still has its baseline failure despite a pass-through body', async () => {
+    const base = fakeDocument(true);
+    const failure: FeatureWarning = {
+      featureId: STORED.featureId,
+      featureName: STORED.name,
+      kind: 'build-failed',
+      message: 'Feature "Thread 1": The thread did not build.'
+    };
+    base.derived.warnings = [failure.message];
+    base.derived.featureWarnings = [failure];
+    const { hook } = setup({
+      baseDocument: () => base,
+      derive: async () => base.derived
+    });
+    act(() => hook.result.current.edit('thread', STORED));
+    await waitFor(() =>
+      expect(hook.result.current.refusal).toContain('thread did not build')
+    );
+    expect(hook.result.current.canFinish).toBe(false);
+  });
 
   it('keeps a stored length that reaches the face end, refusing an offset that would cut it (second re-check #2)', async () => {
     const { hook, built } = setup();
