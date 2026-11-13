@@ -74,6 +74,28 @@ async function capture(page: Page, testInfo: TestInfo, name: string) {
   await testInfo.attach(name, { path, contentType: 'image/png' });
 }
 
+/**
+ * Orbit mode's rail button leaves the viewer bar in the window heights where
+ * it would push the bar past the window's foot (quiet-stage.css); Shift+O
+ * still switches it there. True when `control` is that button and `height`
+ * is one of those bands, so the caller checks it is hidden instead.
+ */
+async function railOmits(
+  control: Locator,
+  height: number,
+  coarse: boolean
+): Promise<boolean> {
+  const orbitMode = await control.evaluate((element) =>
+    element.classList.contains('rail-orbit-mode')
+  );
+  return (
+    orbitMode &&
+    (height <= 540 ||
+      (coarse && height <= 611) ||
+      (!coarse && height >= 601 && height <= 638))
+  );
+}
+
 async function reachable(control: Locator) {
   await expect(control).toBeVisible();
   await expect
@@ -721,6 +743,10 @@ for (const colorScheme of ['light', 'dark'] as const) {
           for (const control of await page
             .locator('.instrument-rail .rail-button')
             .all()) {
+            if (await railOmits(control, size.height, false)) {
+              await expect(control).toBeHidden();
+              continue;
+            }
             await reachable(control);
           }
           await page
@@ -1358,6 +1384,10 @@ test.describe('touch review followups', () => {
         );
         const touchSized = async (controls: Locator[]) => {
           for (const control of controls) {
+            if (await railOmits(control, size.height, true)) {
+              await expect(control).toBeHidden();
+              continue;
+            }
             await reachable(control);
             const box = await control.boundingBox();
             expect(box!.width).toBeGreaterThanOrEqual(40);

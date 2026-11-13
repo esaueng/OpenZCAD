@@ -6,6 +6,7 @@ import {
   ListPlus,
   Magnet,
   Maximize2,
+  Orbit,
   Redo2,
   Ruler,
   Slice,
@@ -104,6 +105,11 @@ interface ViewerToolbarProps {
   savedViews?: SavedViewsSectionProps;
   onCycleDisplayMode(): void;
   onToggleProjection(): void;
+  /**
+   * Flips orbiting between Free and Turntable, the account preference
+   * `settings.orbitMode` reports. Absent, no orbit button is drawn.
+   */
+  onToggleOrbitMode?(): void;
   /** Switches the section view on (at the last plane used) or off. */
   onToggleSection(): void;
   /**
@@ -150,6 +156,17 @@ export const SECTION_PLANE_LABELS: Record<SectionPlaneId, string> = {
 };
 
 /** Cased like the display modes the rail's other "Now:" lines name. */
+const ORBIT_MODE_LABELS = {
+  free: 'Free',
+  turntable: 'Turntable'
+} as const;
+
+/** What each orbit mode does, for the button's help. */
+const ORBIT_MODE_DETAILS = {
+  free: 'tumbles over the top and bottom',
+  turntable: 'Z stays up, stops at the top and bottom'
+} as const;
+
 const PROJECTION_LABELS: Record<ProjectionMode, string> = {
   perspective: 'Perspective',
   orthographic: 'Orthographic'
@@ -179,6 +196,7 @@ export function ViewerToolbar({
   savedViews,
   onCycleDisplayMode,
   onToggleProjection,
+  onToggleOrbitMode,
   onToggleSection,
   sectionPanelOpen: sectionPanelOpenProp,
   onSectionPanelOpenChange,
@@ -330,6 +348,9 @@ export function ViewerToolbar({
     ? SECTION_PLANE_LABELS[settings.sectionView.plane]
     : 'Off';
   const projectionLabel = PROJECTION_LABELS[projection];
+  // Saved views from before the preference existed carry none: free.
+  const orbitMode = settings.orbitMode ?? 'free';
+  const orbitKey = keymap.label('view-orbit-mode');
   // Close on an outside pointer or Escape; Escape hands focus back to the
   // control that opened the flyout, so the rail stays keyboard-navigable.
   useEffect(() => {
@@ -602,6 +623,23 @@ export function ViewerToolbar({
             <Camera size={16} aria-hidden="true" />
           </button>
         </Tooltip>
+        {onToggleOrbitMode && (
+          <Tooltip
+            label="Orbit mode"
+            shortcut={orbitKey}
+            description={`Now: ${ORBIT_MODE_LABELS[orbitMode]} · ${ORBIT_MODE_DETAILS[orbitMode]}`}
+          >
+            <button
+              type="button"
+              className={`rail-button rail-orbit-mode ${orbitMode === 'turntable' ? 'active' : ''}`}
+              onClick={onToggleOrbitMode}
+              aria-label={`${labelWithKey('Turntable orbit', orbitKey)} — now: ${ORBIT_MODE_LABELS[orbitMode]}`}
+              aria-pressed={orbitMode === 'turntable'}
+            >
+              <Orbit size={16} aria-hidden="true" />
+            </button>
+          </Tooltip>
+        )}
         <div className="rail-views-anchor" ref={sectionAnchorRef}>
           <Tooltip
             label="Section view"
@@ -731,7 +769,7 @@ export function ViewerToolbar({
           description={
             moreShown
               ? 'Back to the short rail'
-              : 'Measure, grid, projection, section, display, views, panel layout and the activity log'
+              : 'Measure, grid, projection, orbit, section, display, views, panel layout and the activity log'
           }
         >
           <button

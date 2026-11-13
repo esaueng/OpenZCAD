@@ -409,6 +409,8 @@ interface ViewerShellProps {
   savedViews?: SavedViewsSectionProps;
   onCycleDisplayMode(): void;
   onToggleProjection(): void;
+  /** Flips orbiting between Free and Turntable; absent, no rail button. */
+  onToggleOrbitMode?(): void;
   /** Perspective field of view, degrees (Settings › Viewport). */
   fieldOfView?: number;
   /** Face opacity in X-ray, 0–1 (Settings › Viewport). */
@@ -580,6 +582,7 @@ export function ViewerShell({
   savedViews,
   onCycleDisplayMode,
   onToggleProjection,
+  onToggleOrbitMode,
   fieldOfView,
   xrayOpacity,
   tangentEdges,
@@ -722,6 +725,7 @@ export function ViewerShell({
       {...(savedViews ? { savedViews } : {})}
       onCycleDisplayMode={onCycleDisplayMode}
       onToggleProjection={onToggleProjection}
+      {...(onToggleOrbitMode ? { onToggleOrbitMode } : {})}
       sectionRange={sectionRange}
       onToggleSection={onToggleSection}
       {...(sectionPanelOpen !== undefined ? { sectionPanelOpen } : {})}

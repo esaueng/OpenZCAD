@@ -284,6 +284,69 @@ describe('Measure on the viewer bar', () => {
   });
 });
 
+describe('Orbit mode on the viewer bar', () => {
+  function renderWithOrbit(
+    orbitMode: ViewerSettings['orbitMode'],
+    onToggleOrbitMode?: () => void
+  ) {
+    const noop = () => undefined;
+    render(
+      <ViewerToolbar
+        settings={{
+          ...settings,
+          sectionView: undefined,
+          ...(orbitMode ? { orbitMode } : {})
+        }}
+        projection="perspective"
+        canUndo={false}
+        canRedo={false}
+        sectionRange={null}
+        onUndo={noop}
+        onRedo={noop}
+        onToggleGrid={noop}
+        onFit={noop}
+        onView={noop}
+        onCycleDisplayMode={noop}
+        onToggleProjection={noop}
+        {...(onToggleOrbitMode ? { onToggleOrbitMode } : {})}
+        onToggleSection={noop}
+        onSectionPlane={noop}
+        onSectionOffset={noop}
+        onSectionCommit={noop}
+        onExportSectionDxf={noop}
+        sectionOutline={{ kind: 'clipping' }}
+        units="mm"
+      />
+    );
+  }
+
+  it('reads pressed in turntable mode, names the mode and its key, and toggles', () => {
+    const onToggleOrbitMode = vi.fn();
+    renderWithOrbit('turntable', onToggleOrbitMode);
+    const button = screen.getByRole('button', { name: /^Turntable orbit/ });
+    expect(button.getAttribute('aria-pressed')).toBe('true');
+    expect(button.getAttribute('aria-label')).toBe(
+      'Turntable orbit (Shift+O) — now: Turntable'
+    );
+    fireEvent.click(button);
+    expect(onToggleOrbitMode).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads free when the view carries no orbit mode', () => {
+    renderWithOrbit(undefined, vi.fn());
+    const button = screen.getByRole('button', { name: /^Turntable orbit/ });
+    expect(button.getAttribute('aria-pressed')).toBe('false');
+    expect(button.getAttribute('aria-label')).toMatch(/now: Free$/);
+  });
+
+  it('draws no orbit button without a handler', () => {
+    renderWithOrbit('free');
+    expect(
+      screen.queryByRole('button', { name: /^Turntable orbit/ })
+    ).toBeNull();
+  });
+});
+
 describe('Undo at the oldest kept step', () => {
   // The history drops its oldest steps past its limits. That used to be a
   // toast that never left the screen; now the spent Undo button says it, and

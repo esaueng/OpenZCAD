@@ -32663,6 +32663,7 @@ export function App() {
             {...(savedViewsControl ? { savedViews: savedViewsControl } : {})}
             onCycleDisplayMode={cycleDisplayMode}
             onToggleProjection={toggleProjection}
+            onToggleOrbitMode={toggleOrbitMode}
             sectionRange={
               viewerSettings.sectionView
                 ? sectionAxisRange(viewerSettings.sectionView.plane)
