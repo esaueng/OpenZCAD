@@ -2708,6 +2708,11 @@ button.command-rail.is-suggested {
   color: var(--color-warning);
 }
 
+/* Nothing previewed yet: the pill keeps its place, unseen. */
+.in-place-command-state:empty {
+  visibility: hidden;
+}
+
 /* ── The Tweak rail ───────────────────────────────────────── */
 
 /* Tweak's left side is the same 40px rail: the parameter table's button
@@ -4780,7 +4785,9 @@ button.model-panel-grip[aria-expanded='true'] {
 }
 
 .move-command .in-place-command-hint {
-  max-width: 34ch;
+  /* The body's name and the whole instruction, rings and Shift included:
+     it is the only place the step is said. */
+  max-width: 52ch;
 }
 
 /* What the Move turns, named in its hint: the body (or sketch) itself. */
