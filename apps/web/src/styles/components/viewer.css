@@ -957,8 +957,9 @@
 }
 
 /* The Display menu: the three display modes, then X-ray, one per line in
-   the views flyout's panel. Both rails use it (I52). */
-.display-menu {
+   the views flyout's panel (over its two-column tile grid, whichever sheet
+   loads last). Both rails use it (I52). */
+.display-menu:is(.rail-views-panel, .view-mode-views-panel) {
   grid-template-columns: minmax(168px, 1fr);
 }
 
@@ -979,8 +980,11 @@
   flex: 1;
 }
 
-.display-menu .display-menu-check {
+.display-menu .display-menu-item > svg {
   flex: none;
+}
+
+.display-menu .display-menu-check {
   color: var(--color-accent-hi);
 }
 

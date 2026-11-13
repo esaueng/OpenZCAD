@@ -60,10 +60,11 @@ const SPATIAL_KEYS: Record<string, readonly [number, number]> = {
 };
 
 /**
- * The shown facet nearest `from` in `direction` on screen: ahead of it by
- * more than a pixel, scored by distance along the key's direction plus
- * twice the distance across it, so the facet straight that way wins over a
- * nearer one off to the side. Null when none lies that way.
+ * The shown facet nearest `from` in `direction` on screen: within 45° of
+ * the key's direction (so each key has its own quarter of the screen),
+ * scored by distance along it plus twice the distance across it, so the
+ * facet straight that way wins over a nearer one off to the side. Null when
+ * none lies that way.
  */
 export function nearestFacetToward<T extends Element>(
   from: Element,
@@ -88,8 +89,9 @@ export function nearestFacetToward<T extends Element>(
     const ox = point.x - start.x;
     const oy = point.y - start.y;
     const along = ox * dx + oy * dy;
-    if (along <= 1) continue;
-    const score = along + 2 * Math.abs(ox * dy - oy * dx);
+    const across = Math.abs(ox * dy - oy * dx);
+    if (along <= 1 || across > along) continue;
+    const score = along + 2 * across;
     if (score < bestScore) {
       bestScore = score;
       best = facet;
@@ -256,8 +258,9 @@ export function OrientationWidget({
   // The arrow keys move between facets the way they lie on screen: Right
   // from Front reaches the facet to its right, not the next one in the
   // document (Top), as the toolbar's own order would (I54). A press with
-  // nothing that way falls through to that order. Captured on the widget,
-  // ahead of the toolbar's own listener on the same element.
+  // nothing that way stays put rather than fall back to that order.
+  // Captured on the widget, ahead of the toolbar's own listener on the same
+  // element; Home and End still take the toolbar's ends.
   useEffect(() => {
     const root = widgetRef.current;
     if (!root) return;
@@ -274,15 +277,17 @@ export function OrientationWidget({
       ) {
         return;
       }
+      // Not laid out (no box to go by): the toolbar's order is all there is.
+      const box = from.getBoundingClientRect();
+      if (box.width === 0 && box.height === 0) return;
       const next = nearestFacetToward(
         from,
         [...root.querySelectorAll<SVGElement>(CUBE_STOPS)],
         direction
       );
-      if (!next) return;
       event.preventDefault();
       event.stopPropagation();
-      next.focus();
+      next?.focus();
     };
     root.addEventListener('keydown', onKeyDown, true);
     return () => root.removeEventListener('keydown', onKeyDown, true);

@@ -109,17 +109,17 @@ test('W names the mode the model shows, even pressed inside the toast’s dwell'
   const display = page.getByRole('button', { name: /^Display mode/ });
   const toast = page.locator('.workspace-toast:not(.hidden)');
   await page.evaluate(() => (document.activeElement as HTMLElement)?.blur());
-  // Spaced so the second press lands while the first toast holds and the
-  // third after the second has taken over: paced, the toast then still
-  // named the second mode while the model showed the third.
+  // Pressed faster than the toast's 1.2 s dwell: paced, each new mode
+  // waited its turn, so the toast went on naming the one before while the
+  // model already showed the next. Each must show well inside the dwell.
   for (let press = 0; press < 3; press += 1) {
     await page.keyboard.press('w');
     const now = /now: (.+)$/.exec(
       (await display.getAttribute('aria-label')) ?? ''
     )?.[1];
     expect(now).toBeTruthy();
-    await expect(toast).toContainText(`Display: ${now}.`, { timeout: 500 });
-    await page.waitForTimeout(700);
+    await expect(toast).toContainText(`Display: ${now}.`, { timeout: 250 });
+    await page.waitForTimeout(300);
   }
 });
 
@@ -150,4 +150,68 @@ test('a saved view is named in place, and its name never arms a tool', async ({
   await expect(
     page.getByRole('button', { name: 'Go to Side bolts' })
   ).toHaveCount(0);
+});
+
+test('every Tab stop is a sized, named control until the page’s end', async ({
+  page
+}) => {
+  // I54 reported a stop at (0, 0) named with the top bar's text: that was
+  // the document itself, where Tab leaves the page after the last control.
+  // This keeps a real control from ever standing there.
+  test.setTimeout(120_000);
+  await openBracket(page);
+  await page.evaluate(() => (document.activeElement as HTMLElement)?.blur());
+  const strays: string[] = [];
+  let stops = 0;
+  for (; stops < 400; stops += 1) {
+    await page.keyboard.press('Tab');
+    const stop = await page.evaluate(() => {
+      const element = document.activeElement as HTMLElement | null;
+      if (!element || element === document.body) return null;
+      const box = element.getBoundingClientRect();
+      const name =
+        element.getAttribute('aria-label') ??
+        element.getAttribute('aria-labelledby') ??
+        element.getAttribute('title') ??
+        element.innerText;
+      const stray =
+        box.width < 2 ||
+        box.height < 2 ||
+        (box.left < 1 && box.top < 1) ||
+        !name?.trim();
+      return stray
+        ? `${element.tagName.toLowerCase()}.${element.className} at ${Math.round(box.left)},${Math.round(box.top)}`
+        : '';
+    });
+    if (stop === null) break;
+    if (stop) strays.push(stop);
+  }
+  expect(stops).toBeGreaterThan(10);
+  expect(stops).toBeLessThan(400);
+  expect(strays).toEqual([]);
+});
+
+test('the cube’s arrow keys move the way its facets lie on screen', async ({
+  page
+}) => {
+  // I54: Right from Front went to Top, the next facet in the document. In
+  // the home view the corner Front and Right share lies between them, so
+  // Right reaches it first, then the Right face; Left walks back.
+  test.setTimeout(120_000);
+  await openBracket(page);
+  const cube = page.getByRole('toolbar', { name: 'Drag to rotate the view' });
+  const facet = (name: string) =>
+    cube.getByRole('button', { name, exact: true });
+  await facet('Front view').focus();
+  await expect(facet('Front view')).toBeFocused();
+  await page.keyboard.press('ArrowRight');
+  await expect(facet('Top front right isometric view')).toBeFocused();
+  await page.keyboard.press('ArrowRight');
+  await expect(facet('Right view')).toBeFocused();
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('ArrowLeft');
+  await expect(facet('Front view')).toBeFocused();
+  // Up reaches the corner above Front's top edge, not Top past it.
+  await page.keyboard.press('ArrowUp');
+  await expect(facet('Top front left isometric view')).toBeFocused();
 });

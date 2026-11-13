@@ -630,11 +630,12 @@ describe('the cube’s arrow keys follow the screen', () => {
     const corner = facet('Top front right', 50, 55);
     const all = [front, top, right, corner];
     expect(nearestFacetToward(front, all, [1, 0])).toBe(right);
-    // Up from Front: the corner just above it, then Top above that.
-    expect(nearestFacetToward(front, all, [0, -1])).toBe(corner);
+    // Up from Front: Top, not the corner, which lies more right than up.
+    expect(nearestFacetToward(front, all, [0, -1])).toBe(top);
     expect(nearestFacetToward(corner, all, [0, -1])).toBe(top);
+    expect(nearestFacetToward(corner, all, [1, 0])).toBe(right);
     expect(nearestFacetToward(right, all, [-1, 0])).toBe(front);
-    // Nothing lies below the bottom facets: the toolbar's order takes it.
+    // Nothing lies below the bottom facets: the press stays put.
     expect(nearestFacetToward(front, all, [0, 1])).toBeNull();
   });
 });
