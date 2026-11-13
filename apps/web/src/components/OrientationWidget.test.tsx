@@ -2,7 +2,11 @@ import type { MutableRefObject } from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { AxisProjection } from '@openzcad/viewport';
-import { HIT_LAYER_SETTLE_MS, OrientationWidget } from './OrientationWidget';
+import {
+  HIT_LAYER_SETTLE_MS,
+  nearestFacetToward,
+  OrientationWidget
+} from './OrientationWidget';
 import { TOOLTIP_OPEN_DELAY_MS } from './Tooltip';
 import { setActiveKeymapOverrides } from '../lib/keymap';
 import type { OrientationLink } from './viewer/orientationCube';
@@ -593,6 +597,46 @@ describe('OrientationWidget controls', () => {
       getByRole('toolbar', { name: 'Drag to rotate the view' })
     ).toBeDefined();
     expect(getByRole('button', { name: 'Right view' })).toBeDefined();
+  });
+});
+
+describe('the cube’s arrow keys follow the screen', () => {
+  // I54: Right from Front went to Top, the next facet in the document.
+  function facet(name: string, x: number, y: number) {
+    const element = document.createElementNS(
+      'http://www.w3.org/2000/svg',
+      'polygon'
+    );
+    element.setAttribute('aria-label', name);
+    element.getBoundingClientRect = () =>
+      ({
+        left: x - 5,
+        top: y - 5,
+        right: x + 5,
+        bottom: y + 5,
+        width: 10,
+        height: 10,
+        x: x - 5,
+        y: y - 5,
+        toJSON: () => ({})
+      }) as DOMRect;
+    return element;
+  }
+
+  it('moves to the facet that lies that way, not the next in order', () => {
+    // The home iso view: Top above, Front lower left, Right lower right.
+    const front = facet('Front', 30, 70);
+    const top = facet('Top', 50, 30);
+    const right = facet('Right', 70, 70);
+    const corner = facet('Top front right', 50, 55);
+    const all = [front, top, right, corner];
+    expect(nearestFacetToward(front, all, [1, 0])).toBe(right);
+    // Up from Front: the corner just above it, then Top above that.
+    expect(nearestFacetToward(front, all, [0, -1])).toBe(corner);
+    expect(nearestFacetToward(corner, all, [0, -1])).toBe(top);
+    expect(nearestFacetToward(right, all, [-1, 0])).toBe(front);
+    // Nothing lies below the bottom facets: the toolbar's order takes it.
+    expect(nearestFacetToward(front, all, [0, 1])).toBeNull();
   });
 });
 

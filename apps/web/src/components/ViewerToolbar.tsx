@@ -9,7 +9,7 @@ import {
   Orbit,
   Redo2,
   Ruler,
-  Slice,
+  SquareSplitVertical,
   Undo2
 } from 'lucide-react';
 import {
@@ -685,7 +685,7 @@ export function ViewerToolbar({
               aria-disabled={!sectionOn && nothingToSection ? true : undefined}
               aria-expanded={sectionPanelShown}
             >
-              <Slice size={16} aria-hidden="true" />
+              <SquareSplitVertical size={16} aria-hidden="true" />
             </button>
           </Tooltip>
           {sectionPanelShown && shownCut && (

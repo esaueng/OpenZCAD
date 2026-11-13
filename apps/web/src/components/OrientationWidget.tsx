@@ -51,6 +51,53 @@ const DRAG_THRESHOLD_PX = 4;
 /** The cube's stops for the arrow keys: its faces and its corners. */
 const CUBE_STOPS = '.cube-face, .cube-corner-hit';
 
+/** Screen directions of the arrow keys, +y down. */
+const SPATIAL_KEYS: Record<string, readonly [number, number]> = {
+  ArrowRight: [1, 0],
+  ArrowLeft: [-1, 0],
+  ArrowUp: [0, -1],
+  ArrowDown: [0, 1]
+};
+
+/**
+ * The shown facet nearest `from` in `direction` on screen: ahead of it by
+ * more than a pixel, scored by distance along the key's direction plus
+ * twice the distance across it, so the facet straight that way wins over a
+ * nearer one off to the side. Null when none lies that way.
+ */
+export function nearestFacetToward<T extends Element>(
+  from: Element,
+  facets: readonly T[],
+  [dx, dy]: readonly [number, number]
+): T | null {
+  const centre = (element: Element) => {
+    const box = element.getBoundingClientRect();
+    return box.width > 0 || box.height > 0
+      ? { x: box.left + box.width / 2, y: box.top + box.height / 2 }
+      : null;
+  };
+  const start = centre(from);
+  if (!start) return null;
+  let best: T | null = null;
+  let bestScore = Infinity;
+  for (const facet of facets) {
+    if (facet === from) continue;
+    if ((facet as unknown as HTMLElement).style?.display === 'none') continue;
+    const point = centre(facet);
+    if (!point) continue;
+    const ox = point.x - start.x;
+    const oy = point.y - start.y;
+    const along = ox * dx + oy * dy;
+    if (along <= 1) continue;
+    const score = along + 2 * Math.abs(ox * dy - oy * dx);
+    if (score < bestScore) {
+      bestScore = score;
+      best = facet;
+    }
+  }
+  return best;
+}
+
 /**
  * How long the camera must rest before the unpainted hit layer catches up
  * with it, once the viewer draws the cube. Long enough that an orbit's frames
@@ -206,6 +253,40 @@ export function OrientationWidget({
     items: CUBE_STOPS,
     observe: false
   });
+  // The arrow keys move between facets the way they lie on screen: Right
+  // from Front reaches the facet to its right, not the next one in the
+  // document (Top), as the toolbar's own order would (I54). A press with
+  // nothing that way falls through to that order. Captured on the widget,
+  // ahead of the toolbar's own listener on the same element.
+  useEffect(() => {
+    const root = widgetRef.current;
+    if (!root) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      const direction = SPATIAL_KEYS[event.key];
+      const from = event.target;
+      if (
+        !direction ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        !(from instanceof Element) ||
+        !from.matches(CUBE_STOPS)
+      ) {
+        return;
+      }
+      const next = nearestFacetToward(
+        from,
+        [...root.querySelectorAll<SVGElement>(CUBE_STOPS)],
+        direction
+      );
+      if (!next) return;
+      event.preventDefault();
+      event.stopPropagation();
+      next.focus();
+    };
+    root.addEventListener('keydown', onKeyDown, true);
+    return () => root.removeEventListener('keydown', onKeyDown, true);
+  }, []);
   const syncStopsRef = useRef(syncStops);
   useEffect(() => {
     syncStopsRef.current = syncStops;

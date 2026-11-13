@@ -787,7 +787,24 @@ describe('the standard views flyout', () => {
     expect(saved().queryByRole('button', { name: 'Go to View 2' })).toBeNull();
     fireEvent.click(saved().getByRole('button', { name: /Save view/ }));
     expect(capture).toHaveBeenCalledTimes(1);
-    expect(onStatus).toHaveBeenLastCalledWith('Saved View 2.');
+    expect(onStatus).toHaveBeenLastCalledWith(
+      'Saved View 2 · type a name, or Enter to keep it.'
+    );
+    // I54: the new view is named in place, and the keys typed into the name
+    // never reach the workspace's shortcuts.
+    const name = saved().getByRole('textbox', { name: 'Name View 2' });
+    expect(document.activeElement).toBe(name);
+    const shortcut = vi.fn();
+    window.addEventListener('keydown', shortcut);
+    fireEvent.change(name, { target: { value: 'Bolt side' } });
+    fireEvent.keyDown(name, { key: 's' });
+    expect(shortcut).not.toHaveBeenCalled();
+    window.removeEventListener('keydown', shortcut);
+    fireEvent.keyDown(name, { key: 'Enter' });
+    expect(onStatus).toHaveBeenLastCalledWith('Renamed View 2 to Bolt side.');
+    expect(
+      saved().getByRole('button', { name: 'Go to Bolt side' })
+    ).toBeDefined();
     // Going to a view closes the panel and returns the keyboard.
     fireEvent.click(saved().getByRole('button', { name: 'Go to View 1' }));
     expect(onApply).toHaveBeenCalledWith(

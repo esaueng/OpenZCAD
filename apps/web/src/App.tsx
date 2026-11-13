@@ -173,7 +173,7 @@ import {
   ScanEye,
   Settings as SettingsIcon,
   Scissors,
-  Slice,
+  SquareSplitVertical,
   SlidersHorizontal,
   ListOrdered,
   Spline,
@@ -11875,10 +11875,19 @@ export function App() {
   }
 
   function cycleDisplayMode() {
-    const index = DISPLAY_MODE_ORDER.indexOf(viewerSettings.displayMode);
+    // From the latest mode, not this render's: W pressed three times before
+    // a render cycled from a stale mode, and the toast named one mode while
+    // the model showed another (I54).
+    const index = DISPLAY_MODE_ORDER.indexOf(
+      viewerSettingsRef.current.displayMode
+    );
     const next =
       DISPLAY_MODE_ORDER[(index + 1) % DISPLAY_MODE_ORDER.length] ??
       'shaded-edges';
+    viewerSettingsRef.current = {
+      ...viewerSettingsRef.current,
+      displayMode: next
+    };
     setViewerSettings((current) => ({ ...current, displayMode: next }));
     setStatus(`Display: ${DISPLAY_MODE_LABELS[next]}.`);
   }
@@ -31029,7 +31038,7 @@ export function App() {
         : 'Section view: on',
       group: 'View',
       keywords: ['section', 'cut', 'clip', 'plane'],
-      icon: <Slice size={16} aria-hidden="true" />,
+      icon: <SquareSplitVertical size={16} aria-hidden="true" />,
       disabledReason: viewerBodies.length === 0 ? 'Create a body first' : null,
       run: toggleSectionView
     },
@@ -32215,6 +32224,7 @@ export function App() {
             onCycleDisplayMode={cycleDisplayMode}
             onToggleProjection={toggleProjection}
             onToggleOrbitMode={toggleOrbitMode}
+            onToggleXray={toggleXray}
           />
         ) : // The sketch session brings its own tool rail. Before it, while
         // the plane is being picked, the plane chooser in the command slot

@@ -5,6 +5,8 @@ import {
   deleteSavedView,
   forgetSavedViews,
   loadSavedViews,
+  renameSavedView,
+  SAVED_VIEW_NAME_MAX,
   saveView
 } from './savedViews';
 
@@ -28,6 +30,23 @@ const pose = (x: number) => ({
 });
 
 describe('saved views (ZC-115)', () => {
+  it('renames a view, keeping the name on a blank one and capping its length', () => {
+    const storage = memoryStorage();
+    saveView('p1', pose(1), { storage, now: 10, id: 'a' });
+    expect(
+      renameSavedView('p1', 'a', '  Bolt side ', storage)?.[0]?.name
+    ).toBe('Bolt side');
+    expect(renameSavedView('p1', 'a', '   ', storage)?.[0]?.name).toBe(
+      'Bolt side'
+    );
+    expect(
+      renameSavedView('p1', 'a', 'x'.repeat(80), storage)?.[0]?.name
+    ).toHaveLength(SAVED_VIEW_NAME_MAX);
+    expect(loadSavedViews('p1', storage)[0]?.name).toHaveLength(
+      SAVED_VIEW_NAME_MAX
+    );
+  });
+
   it('saves numbered views per project and reads them back exactly', () => {
     const storage = memoryStorage();
     const first = saveView('p1', pose(1), { storage, now: 10, id: 'a' });

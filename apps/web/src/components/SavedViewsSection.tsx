@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Plus, X } from 'lucide-react';
 import {
   MAX_SAVED_VIEWS,
+  SAVED_VIEW_NAME_MAX,
   deleteSavedView,
   loadSavedViews,
+  renameSavedView,
   saveView,
   type SavedView
 } from '../lib/savedViews';
@@ -35,6 +37,30 @@ export function SavedViewsSection({
   );
   useEffect(() => setViews(loadSavedViews(projectId)), [projectId]);
   const full = views.length >= MAX_SAVED_VIEWS;
+  // The view just saved, named in place: "+ Save view" saved "View 1" with
+  // no way to call it anything else, and a name typed afterwards went to the
+  // workspace's shortcuts (S armed Sketch) (I54).
+  const [naming, setNaming] = useState<string | null>(null);
+  const nameRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    if (naming) {
+      nameRef.current?.focus();
+      nameRef.current?.select();
+    }
+  }, [naming]);
+
+  function finishNaming(view: SavedView, name: string) {
+    setNaming(null);
+    if (name.trim() === '' || name.trim() === view.name) return;
+    const renamed = renameSavedView(projectId, view.id, name);
+    if (!renamed) {
+      onStatus(`Could not rename ${view.name}: this browser is not saving views.`);
+      return;
+    }
+    setViews(renamed);
+    const saved = renamed.find((entry) => entry.id === view.id);
+    onStatus(`Renamed ${view.name} to ${saved?.name ?? name.trim()}.`);
+  }
 
   function save() {
     const view = capture();
@@ -48,21 +74,45 @@ export function SavedViewsSection({
       return;
     }
     setViews(result.views);
-    onStatus(`Saved ${result.view.name}.`);
+    setNaming(result.view.id);
+    onStatus(`Saved ${result.view.name} · type a name, or Enter to keep it.`);
   }
 
   return (
     <div className="saved-views" role="group" aria-label="Saved views">
       {views.map((view) => (
         <div key={view.id} className="saved-views-row">
-          <button
-            type="button"
-            className="saved-views-apply"
-            aria-label={`Go to ${view.name}`}
-            onClick={() => onApply(view)}
-          >
-            {view.name}
-          </button>
+          {naming === view.id ? (
+            <input
+              ref={nameRef}
+              className="saved-views-name"
+              aria-label={`Name ${view.name}`}
+              defaultValue={view.name}
+              maxLength={SAVED_VIEW_NAME_MAX}
+              onKeyDown={(event) => {
+                // The workspace's single-key shortcuts must not see a name.
+                event.stopPropagation();
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  finishNaming(view, event.currentTarget.value);
+                } else if (event.key === 'Escape') {
+                  event.preventDefault();
+                  setNaming(null);
+                }
+              }}
+              onBlur={(event) => finishNaming(view, event.currentTarget.value)}
+            />
+          ) : (
+            <button
+              type="button"
+              className="saved-views-apply"
+              aria-label={`Go to ${view.name}`}
+              onClick={() => onApply(view)}
+              onDoubleClick={() => setNaming(view.id)}
+            >
+              {view.name}
+            </button>
+          )}
           <button
             type="button"
             className="saved-views-delete"
