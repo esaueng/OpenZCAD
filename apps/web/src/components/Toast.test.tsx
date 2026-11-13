@@ -40,6 +40,18 @@ describe('ToastHost', () => {
     expect(onDismiss).toHaveBeenCalledWith(1);
   });
 
+  it('marks a failure with the warning tone', () => {
+    const { rerender } = render(
+      <ToastHost
+        toast={toast({ message: 'Could not move Bracket A.', tone: 'warning' })}
+        onDismiss={vi.fn()}
+      />
+    );
+    expect(card()).toHaveClass('toast', 'warning');
+    rerender(<ToastHost toast={toast({ id: 2 })} onDismiss={vi.fn()} />);
+    expect(card()).not.toHaveClass('warning');
+  });
+
   it('waits while the pointer is on it', () => {
     const onDismiss = vi.fn();
     render(<ToastHost toast={toast()} onDismiss={onDismiss} />);

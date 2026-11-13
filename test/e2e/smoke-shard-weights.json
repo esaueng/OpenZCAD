@@ -53,6 +53,7 @@
   "kernel-session-privacy.spec.ts": 14,
   "keyboard-focus-recovery.spec.ts": 12,
   "library-folder-sync.spec.ts": 12,
+  "library-plain-failures.spec.ts": 15,
   "library-reload-stability.spec.ts": 10,
   "measure.spec.ts": 7,
   "mixed-seam-fillet.spec.ts": 37,

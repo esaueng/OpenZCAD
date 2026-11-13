@@ -775,6 +775,13 @@ import {
 import { ToastHost } from './components/Toast';
 import { useConfirm } from './components/ConfirmDialog';
 import {
+  describeFailure as describePlainFailure,
+  describeProjectImportFailure,
+  describeShaprImportFailure,
+  describeShareOpenFailure,
+  unsupportedImportMessage
+} from './lib/plainFailure';
+import {
   commandPaletteShortcut,
   idleWorkspaceHint,
   platformShortcutLabel
@@ -1628,6 +1635,7 @@ import {
   requestNewAxis,
   resolveNewAxis,
   valueInRange,
+  valueRangeSentence,
   type InPlaceRequest,
   type ResolvedInPlaceRequest,
   type BodyPick,
@@ -2344,6 +2352,8 @@ interface PendingShaprImport {
   phase: ShaprImportDialogPhase;
   progress: string;
   error: string | null;
+  /** The reader's raw words behind `error`, for its Details disclosure. */
+  errorDetail?: string | undefined;
   inspection: ShaprPairInspection | null;
 }
 
@@ -3230,15 +3240,21 @@ export function App() {
     (
       message: string,
       action?: ToastAction,
-      options?: { repeatsStatusAt?: number }
+      options?: { repeatsStatusAt?: number; tone?: 'warning' }
     ) => {
       toastIdRef.current += 1;
       const id = toastIdRef.current;
-      recordActivity({ level: 'ready', source: 'notice', message });
-      const repeats =
-        options?.repeatsStatusAt === undefined
+      recordActivity({
+        level: options?.tone === 'warning' ? 'warning' : 'ready',
+        source: 'notice',
+        message
+      });
+      const repeats = {
+        ...(options?.repeatsStatusAt === undefined
           ? {}
-          : { repeatsStatusAt: options.repeatsStatusAt };
+          : { repeatsStatusAt: options.repeatsStatusAt }),
+        ...(options?.tone ? { tone: options.tone } : {})
+      };
       // An action-bearing toast (the delete Undo above all) is never silently
       // replaced by a text-only notice: the action moves into the slot the new
       // message would have taken, so Undo stays one click away no matter how
@@ -3896,6 +3912,12 @@ export function App() {
   toolRef.current = tool;
   /** Open exact-value entry (anchored keypad) for the armed handle. */
   const [keypad, setKeypad] = useState<KeypadRequest | null>(null);
+  // A typed in-place value outside its command's range keeps the keypad
+  // open with this sentence under the field, until the entry changes.
+  const [keypadRangeError, setKeypadRangeError] = useState<{
+    valueId: string;
+    message: string;
+  } | null>(null);
   const keypadRef = useRef(keypad);
   keypadRef.current = keypad;
   /** Latest pointer/entry value stays transient until an exact frame lands. */
@@ -14079,11 +14101,7 @@ export function App() {
           setSharePage({
             phase: 'error',
             title: 'We couldn’t open this shared model',
-            message: describeFailure
-              ? describeFailure(error)
-              : errorMessage(error, 'Could not open the share link.'),
-            guidance:
-              'Check your connection and try again. If it keeps failing, ask the owner to check the link.',
+            ...describeShareOpenFailure(error, describeFailure),
             retryable: true
           });
         }
@@ -14419,6 +14437,19 @@ export function App() {
     );
   }
 
+  /**
+   * A library action that failed. The library's only status is one grey
+   * line in its sidebar foot, so a failure there also raises a toast in a
+   * warning tone; the raw text goes to the activity log, not the message.
+   */
+  function reportLibraryFailure(error: unknown, fallback: string) {
+    const plain = describePlainFailure(error, { fallback, technical: true });
+    setStatus(plain.message, plain.detail ? { detail: plain.detail } : {});
+    if (onStartScreenRef.current) {
+      announce(plain.message, undefined, { tone: 'warning' });
+    }
+  }
+
   async function handleMoveProjectToShelf(
     project: ProjectSummary,
     status: ProjectStatus
@@ -14436,7 +14467,7 @@ export function App() {
       );
       announceShelfMove([project], project.name, status);
     } catch (error) {
-      setStatus(errorMessage(error, `Could not move ${project.name}.`));
+      reportLibraryFailure(error, `Could not move ${project.name}.`);
     }
   }
 
@@ -14511,11 +14542,9 @@ export function App() {
         ? targets[0]!.name
         : countLabel(moved, 'project', 'projects');
     if (failure) {
-      setStatus(
-        errorMessage(
-          failure,
-          `Moved ${countLabel(moved, 'project', 'projects')}; ${targets.length - moved} could not be moved.`
-        )
+      reportLibraryFailure(
+        failure,
+        `Moved ${countLabel(moved, 'project', 'projects')}; ${targets.length - moved} could not be moved.`
       );
       return;
     }
@@ -14548,13 +14577,11 @@ export function App() {
       targets.length === 1
         ? targets[0]!.name
         : countLabel(targets.length, 'project', 'projects');
-    setStatus(
-      failure
-        ? errorMessage(failure, `Could not update every project.`)
-        : pinned
-          ? `Pinned ${what}.`
-          : `Unpinned ${what}.`
-    );
+    if (failure) {
+      reportLibraryFailure(failure, 'Could not update every project.');
+      return;
+    }
+    setStatus(pinned ? `Pinned ${what}.` : `Unpinned ${what}.`);
   }
 
   async function handleTogglePin(project: ProjectSummary) {
@@ -14568,7 +14595,7 @@ export function App() {
         pinned ? `Pinned ${project.name}.` : `Unpinned ${project.name}.`
       );
     } catch (error) {
-      setStatus(errorMessage(error, `Could not update ${project.name}.`));
+      reportLibraryFailure(error, `Could not update ${project.name}.`);
     }
   }
 
@@ -14611,7 +14638,7 @@ export function App() {
           : undefined;
       });
     } catch (error) {
-      setStatus(errorMessage(error, 'Could not reorder the projects.'));
+      reportLibraryFailure(error, 'Could not reorder the projects.');
       return;
     }
     if (pin && pinnedName !== undefined) {
@@ -15059,7 +15086,7 @@ export function App() {
       await destroyProjects([project]);
       setStatus(`Deleted ${project.name} permanently.`);
     } catch (error) {
-      setStatus(errorMessage(error, 'Could not delete the project.'));
+      reportLibraryFailure(error, 'Could not delete the project.');
     } finally {
       setBusy(false);
     }
@@ -15089,7 +15116,7 @@ export function App() {
         `Deleted ${countLabel(targets.length, 'project', 'projects')} permanently.`
       );
     } catch (error) {
-      setStatus(errorMessage(error, 'Could not delete every project.'));
+      reportLibraryFailure(error, 'Could not delete every project.');
     } finally {
       setBusy(false);
     }
@@ -15120,7 +15147,7 @@ export function App() {
       setStatus(`Reset ${name}. It opens as the original.`);
       return true;
     } catch (error) {
-      setStatus(errorMessage(error, `Could not reset ${name}.`));
+      reportLibraryFailure(error, `Could not reset ${name}.`);
       return false;
     } finally {
       setBusy(false);
@@ -15148,7 +15175,7 @@ export function App() {
         `Emptied the trash · ${countLabel(trashed.length, 'project', 'projects')} deleted.`
       );
     } catch (error) {
-      setStatus(errorMessage(error, 'Could not empty the trash.'));
+      reportLibraryFailure(error, 'Could not empty the trash.');
     } finally {
       setBusy(false);
     }
@@ -16273,7 +16300,7 @@ export function App() {
       return;
     }
     if (!/\.(?:stl|step|stp|3mf|obj|glb|ply)$/i.test(file.name)) {
-      setStatus(`Unsupported import format: ${file.name}`);
+      refuseImportOnCard(file.name, unsupportedImportMessage(file.name));
       return;
     }
 
@@ -16530,7 +16557,7 @@ export function App() {
         } = await import('./lib/meshImportWorkerClient');
         const format = meshImportFormatForFileName(file.name);
         if (!format) {
-          setStatus(`Unsupported import format: ${file.name}`);
+          refuseImportOnCard(file.name, unsupportedImportMessage(file.name));
           return;
         }
         // The open document's units, not millimetres: the import runs the
@@ -16731,6 +16758,18 @@ export function App() {
     }
   }
 
+  /**
+   * A file refused before it was read. The import card says so too: it used
+   * to keep showing the previous run's failure ("Not imported empty.stl")
+   * while this refusal went only to the status line (review I4).
+   */
+  function refuseImportOnCard(fileName: string, message: string) {
+    setStatus(message);
+    const sink = createImportProgressSink();
+    sink.start({ fileName, phases: ['reading'], cancellable: false });
+    sink.finish({ tone: 'error', message });
+  }
+
   function createImportProgressSink(): ImportProgressSink {
     // New per run, so a second import replaces the card rather than being
     // merged into the first one's phases.
@@ -16783,7 +16822,10 @@ export function App() {
       return;
     }
     if (files.length !== 1) {
-      setStatus('Drop one .openzcad backup on its own.');
+      refuseImportOnCard(
+        countLabel(files.length, 'file', 'files'),
+        'Drop one .openzcad backup on its own.'
+      );
       return;
     }
     await handleImportProject(backups[0]!);
@@ -16793,7 +16835,10 @@ export function App() {
     const shaprFiles = files.filter((file) => /\.shapr$/i.test(file.name));
     if (shaprFiles.length === 0) {
       if (files.length !== 1) {
-        setStatus('Select one STEP or mesh file, or one .shapr + STEP pair.');
+        refuseImportOnCard(
+          countLabel(files.length, 'file', 'files'),
+          'Select one STEP or mesh file, or one .shapr + STEP pair.'
+        );
         return;
       }
       await handleImportFile(files[0]!);
@@ -16857,11 +16902,17 @@ export function App() {
       if (controller.signal.aborted) {
         return;
       }
-      const message = errorMessage(error, 'Shapr3D preview failed.');
-      setStatus(message);
+      const plain = describeShaprImportFailure(error);
+      setStatus(plain.message, plain.detail ? { detail: plain.detail } : {});
       setPendingShaprImport((current) =>
         current
-          ? { ...current, phase: 'preview', progress: '', error: message }
+          ? {
+              ...current,
+              phase: 'preview',
+              progress: '',
+              error: plain.message,
+              errorDetail: plain.detail
+            }
           : null
       );
     } finally {
@@ -17304,9 +17355,19 @@ export function App() {
       });
     } catch (error) {
       trackDetail('error_import');
-      const message = errorMessage(error, 'Unable to read backup.');
-      if (isCurrent()) setStatus(`Project import failed: ${message}`);
-      sink.finish({ tone: 'error', message });
+      // A STEP or STL picked through "All files" used to fail with the JSON
+      // parser's words; say what the file is and where it goes instead.
+      const plain = await describeProjectImportFailure(error, file);
+      if (isCurrent()) {
+        setStatus(
+          `Project import failed. ${plain.message}`,
+          plain.detail ? { detail: plain.detail } : {}
+        );
+        if (onStartScreenRef.current) {
+          announce(plain.message, undefined, { tone: 'warning' });
+        }
+      }
+      sink.finish({ tone: 'error', message: plain.message });
     } finally {
       projectTransferRef.current = false;
       setProjectTransferBusy(false);
@@ -26175,6 +26236,7 @@ export function App() {
     if (!open) {
       return false;
     }
+    setKeypadRangeError(null);
     if (open.kind === 'command' && open.commandValueId) {
       // Back to the value the handle showed when the chip was tapped.
       const valueId = open.commandValueId;
@@ -32551,13 +32613,47 @@ export function App() {
                       if (valueSpec && !valueInRange(valueSpec, value)) {
                         return;
                       }
+                      setKeypadRangeError(null);
                       commandSetterRef.current?.(valueId, value);
                       inPlace.previewValue(valueId, value);
                     }}
                     onCommit={(value, raw) => {
+                      const valueId = keypad.commandValueId!;
+                      const valueSpec = inPlaceSpec?.values.find(
+                        (candidate) => candidate.id === valueId
+                      );
+                      // Out of range, the keypad stays open on what was
+                      // typed and says the range at the field. It used to
+                      // close, and the chip went back to the old value.
+                      if (valueSpec && !valueInRange(valueSpec, value)) {
+                        setKeypadRangeError({
+                          valueId,
+                          message: valueRangeSentence(
+                            valueSpec,
+                            valueSpec.unit === 'length'
+                              ? doc.units === 'inch'
+                                ? 'in'
+                                : doc.units
+                              : valueSpec.unit === 'angle'
+                                ? '°'
+                                : ''
+                          )
+                        });
+                        // Still refused on the bar as before, so Done
+                        // waits; only the keypad no longer closes on it.
+                        commitInPlaceKeypadValue(keypad, value, raw);
+                        return;
+                      }
+                      setKeypadRangeError(null);
                       setKeypad(null);
                       commitInPlaceKeypadValue(keypad, value, raw);
                     }}
+                    {...(keypadRangeError?.valueId === keypad.commandValueId
+                      ? {
+                          commitRefused: true,
+                          commitDisabledReason: keypadRangeError.message
+                        }
+                      : {})}
                     // One value has nowhere to step to: Tab stays the
                     // browser's there.
                     {...(inPlaceTypedValueIds.length > 1 &&
@@ -34271,6 +34367,7 @@ export function App() {
               phase={pendingShaprImport.phase}
               progress={pendingShaprImport.progress}
               error={pendingShaprImport.error}
+              errorDetail={pendingShaprImport.errorDetail}
               inspection={pendingShaprImport.inspection}
               onCancel={cancelShaprImport}
               onApply={() => void applyShaprImport()}
