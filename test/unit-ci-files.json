@@ -120,6 +120,7 @@
     "test/gear-face-width-cap-drag.test.ts",
     "test/gear-height-preview-profile.test.ts",
     "test/gear-mesh.test.ts",
+    "test/gear-neighbour-face-lineage.test.ts",
     "test/gear-stale-reference.test.ts",
     "test/geometry.test.ts",
     "test/growing-holder-holes.test.ts",

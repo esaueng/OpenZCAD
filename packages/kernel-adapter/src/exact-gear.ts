@@ -22,10 +22,14 @@ import {
 import { resolveParamValue } from '@openzcad/document-core';
 
 import { collapseShape } from './exact-boolean-helpers';
+import type { FaceWitnessV1 } from '@openzcad/shared';
 import type { FeatureBuildContext, FeatureDataOf } from './exact-build-loop';
 import { raiseFeatureWarning } from './exact-feature-warnings';
 import { gearEdgeFrame, withGearEdgeLineage } from './exact-gear-edges';
-import { topologyCandidatesForSolid } from './exact-lineage-builders';
+import {
+  sameAnalyticCarrier,
+  topologyCandidatesForSolid
+} from './exact-lineage-builders';
 import { measureFaceGeometry } from './exact-measure';
 import { resolveFeatureFaces } from './exact-reference-resolution';
 import { inheritMeshOrigin, validateGeneratedSolid } from './exact-shape-utils';
@@ -43,6 +47,10 @@ import type {
   RemusKernel,
   SolidOperationDetailedResult
 } from './remus-runtime';
+import {
+  topologyHashOfWitness,
+  topologyWitnessesEqual
+} from './topology-lineage';
 
 /**
  * The gear entry points, typed here until the pinned kernel's declarations
@@ -818,14 +826,33 @@ function buildGearTeethOnBody(
     // Unifying a partial band would also merge each tip land into the collar
     // it stands on, which the kernel reverts or leaves unmeasurable; its
     // shoulders, collars and any end it reaches are named instead.
-    kept = carried();
-    details = nameGearSpanFaces(kernel, solid, cutDetails, {
-      start: geometry.axisStart!,
-      end: geometry.axisEnd!,
-      radius: geometry.radius!,
-      from: span.offset,
-      to: span.offset + span.width
-    });
+    const byCarrier = carried();
+    // Unification is also what leaves a neighbouring face the teeth run into
+    // (a flange the cylinder ends on) as one face under whole-face teeth.
+    // Here it stays as the teeth cut it: the face as it was and the shoulder
+    // opened beside it. The first keeps its name.
+    const unchanged = carriedUnchangedFaces(
+      kernel,
+      feature.featureId,
+      shape.lineage,
+      targetSolid,
+      solid,
+      byCarrier
+    );
+    kept = mergeRemusLineageStates([byCarrier, unchanged]);
+    details = nameGearSpanFaces(
+      kernel,
+      solid,
+      cutDetails,
+      {
+        start: geometry.axisStart!,
+        end: geometry.axisEnd!,
+        radius: geometry.radius!,
+        from: span.offset,
+        to: span.offset + span.width
+      },
+      new Set(unchanged.faceReferences.keys())
+    );
   } else {
     details = unifyGearCaps(kernel, solid, cutDetails);
     kept = carried();
@@ -863,6 +890,75 @@ function buildGearTeethOnBody(
   inheritMeshOrigin(result, targetBodyId, feature.bodyId);
 }
 
+/**
+ * Names for faces of the body that partial teeth left exactly as they were
+ * on a surface the teeth cut into several faces.
+ *
+ * The carrier rule names a body face only where its surface holds one result
+ * face. Teeth that run up to a neighbouring face (a flange the picked
+ * cylinder ends on) open a shoulder in its plane, so that plane holds two:
+ * the neighbour as it was and the shoulder. Whole-face teeth unify the two
+ * and the carrier rule names the result; a partial band is not unified. The
+ * neighbour then keeps the same name here, by its exact witness: it must be
+ * the only named face of the body on its surface, verified against the body
+ * as built, and exactly one result face must carry that witness unchanged.
+ * A face the teeth trimmed has another witness and takes nothing from this.
+ */
+function carriedUnchangedFaces(
+  kernel: RemusKernel,
+  featureId: FeatureId,
+  lineage: RemusLineageState | undefined,
+  targetSolid: number,
+  solid: number,
+  byCarrier: RemusLineageState
+): RemusLineageState {
+  const sources = topologyCandidatesForSolid(kernel, targetSolid).flatMap(
+    (candidate) => {
+      if (candidate.kind !== 'face') return [];
+      const witness = candidate.witness as FaceWitnessV1;
+      const reference = lineage?.faceReferences.get(candidate.handle);
+      return reference &&
+        witness.analytic.kind !== 'none' &&
+        reference.currentHash === topologyHashOfWitness('face', witness) &&
+        topologyWitnessesEqual('face', reference.witness, witness)
+        ? [{ witness, lineageName: reference.lineageName }]
+        : [];
+    }
+  );
+  const results = topologyCandidatesForSolid(kernel, solid).filter(
+    (candidate) => candidate.kind === 'face'
+  );
+  const assignments: RemusSemanticAssignment[] = [];
+  for (const source of sources) {
+    if (
+      sources.filter((other) =>
+        sameAnalyticCarrier(other.witness.analytic, source.witness.analytic)
+      ).length !== 1
+    ) {
+      continue;
+    }
+    const matches = results.filter((candidate) =>
+      topologyWitnessesEqual(
+        'face',
+        source.witness,
+        candidate.witness as FaceWitnessV1
+      )
+    );
+    if (
+      matches.length !== 1 ||
+      byCarrier.faceReferences.has(matches[0]!.handle)
+    ) {
+      continue;
+    }
+    assignments.push({
+      ...matches[0]!,
+      // The name the carrier rule gives the same face.
+      lineageName: `boolean.face.target.${source.lineageName}`
+    });
+  }
+  return createRemusSemanticLineage(featureId, 'boolean', assignments);
+}
+
 /** Axial lengths this close are one position along a face of `length`. */
 function spanTolerance(length: number): number {
   return 1e-7 * Math.max(1, length);
@@ -873,17 +969,27 @@ function spanTolerance(length: number): number {
  * them as collars, faces the kernel gives no role. Name them from where they
  * stand: a coaxial cylinder of the face's radius before or after the teeth is
  * `collar.start|end`; a plane across the axis at either end of the teeth that
- * borders a gear face is `shoulder.start|end`, or `shoulder.start[k]` per
- * tooth space where the tips stand on the collar and split it, `k` the root
- * it borders. The face's cap at either end is `cap.start|end`, as the
- * whole-face cut names it: at an end the teeth stop short of, the plane
- * there that bounds the collar; where the teeth reach the end, the cap is
- * split, the gear's toothed ring keeps `cap.*` and the body's part of it,
- * inside (a boss) or outside (a bore) the ring, is `cap.start|end.body`.
- * Collars are only
- * what remains of the picked face, and always take their role, so a span
- * edit that splits or rejoins them keeps their names. Other faces keep the
- * body's lineage.
+ * borders a gear face and looks back along the teeth is
+ * `shoulder.start|end`, or `shoulder.start[k]` per tooth space where the tips
+ * stand on the collar and split it, `k` the root it borders. The face's own
+ * cap at either end is `cap.start|end`, as the whole-face cut names it: at
+ * an end the teeth stop short of, the plane there that bounds the collar;
+ * where the teeth reach the end, the cap is split, the gear's toothed ring
+ * keeps `cap.*` and the body's part of it, inside (a boss) or outside (a
+ * bore) the ring, is `cap.start|end.body`.
+ *
+ * A cap is the picked face's own only where it closes the cylinder, looking
+ * away from it along the axis. A plane at the face's end that looks back
+ * along it is a neighbouring face the cylinder runs into, a flange or a
+ * floor. It is no cap: it keeps the name the body's lineage carries, as it
+ * does under whole-face teeth, so a reference to it or to its rim holds
+ * between the whole face and part of it. Teeth that reach it end at a
+ * shoulder in its plane, like any other. `unchanged` are faces already
+ * proved to be the body's own, left as they were; they take no role.
+ *
+ * Collars are only what remains of the picked face, and always take their
+ * role, so a span edit that splits or rejoins them keeps their names. Other
+ * faces keep the body's lineage.
  */
 function nameGearSpanFaces(
   kernel: RemusKernel,
@@ -895,7 +1001,8 @@ function nameGearSpanFaces(
     radius: number;
     from: number;
     to: number;
-  }
+  },
+  unchanged: ReadonlySet<number> = new Set()
 ): GearOkDetails {
   const roles = details.faceRoles ?? [];
   const roleOf = new Map(roles.map(({ face, role }) => [face, role] as const));
@@ -923,6 +1030,16 @@ function nameGearSpanFaces(
     );
   };
   const tolerance = spanTolerance(length);
+  // Whether a plane across the axis at one end of the picked face looks away
+  // from the face, as its own cap does. A face the cylinder runs into looks
+  // back along it. The planes read here are already across the axis.
+  const looksAway = (
+    side: 'start' | 'end',
+    normal: { x: number; y: number; z: number }
+  ) => {
+    const along = normal.x * axis.x + normal.y * axis.y + normal.z * axis.z;
+    return side === 'start' ? along < 0 : along > 0;
+  };
   // Each gear face's edges, to find the shoulders that border the teeth.
   const gearEdges = new Map<number, string>();
   for (const { face, role } of roles) {
@@ -946,7 +1063,7 @@ function nameGearSpanFaces(
     );
   };
   for (const face of kernel.getSolidFaces(solid)) {
-    if (roleOf.has(face)) continue;
+    if (roleOf.has(face) || unchanged.has(face)) continue;
     const geometry = measureFaceGeometry(kernel, face);
     if (!geometry) continue;
     if (
@@ -987,16 +1104,17 @@ function nameGearSpanFaces(
     }
     const position = at(geometry.center);
     // A plane at an end of the picked face the teeth stop short of: the
-    // face's cap there, once it is seen to bound that end's collar.
+    // face's cap there, once it is seen to bound that end's collar. A plane
+    // that looks back along the face is a neighbour and keeps its own name.
     if (Math.abs(position) <= tolerance && band.from > tolerance) {
-      endPlanes.start.push(face);
+      if (looksAway('start', geometry.normal)) endPlanes.start.push(face);
       continue;
     }
     if (
       Math.abs(position - length) <= tolerance &&
       band.to < length - tolerance
     ) {
-      endPlanes.end.push(face);
+      if (looksAway('end', geometry.normal)) endPlanes.end.push(face);
       continue;
     }
     const side =
@@ -1018,10 +1136,13 @@ function nameGearSpanFaces(
       if (index !== undefined) root = Number(index);
     }
     if (!borders) continue;
-    if (atFaceEnd) {
-      ends[side].push(face);
+    if (looksAway(side, geometry.normal)) {
+      // The body's part of the face's own cap, where the teeth reach it.
+      if (atFaceEnd) ends[side].push(face);
       continue;
     }
+    // Looking back along the teeth: a shoulder, also where the teeth run up
+    // to a neighbouring face and open it in that face's plane.
     shoulders[side].push(face);
     shoulderRoot.set(face, root);
   }

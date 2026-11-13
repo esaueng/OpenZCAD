@@ -589,11 +589,33 @@ rim, and fewer teeth remove the higher tooth indices. Hash-only edge picks
 stored on gear bodies before this resolve as before and take the existing
 all-or-nothing upgrade once they resolve.
 
-Limits: an edge beside the body's part of a split end cap
-(`gear.face.cap.*.body`) is named after that part and so shares its known
-limit, refusing once the caps rejoin; and a name is no promise that the
-kernel can blend the edge (it refuses a chamfer on a shoulder's rim and both
-blends on a cap's edge at one tooth, as geometry, with the edge resolved).
+An edge name is only as stable as its two face names, and one face name was
+not. Partial-span teeth named any plane at the picked face's end
+`gear.face.cap.start|end`, including a face the cylinder runs into, a flange
+it ends on, which whole-face teeth leave under the name the body's lineage
+carries. A reference to that face, and to its untouched rim, was therefore
+lost between the whole face and part of it. A plane is now the picked face's
+own cap only where it closes the cylinder, which the command decides: at the
+start it looks along the axis away from the face, at the end likewise. A
+plane at an end that looks back along the face is a neighbour and takes no
+gear role. It keeps its carried name: by the boolean carrier rule while it is
+the one face on its plane, and, where teeth run up to it and open a shoulder
+in that plane (a partial band is not unified), by its exact unchanged
+witness, provided it is the body's only named face on that plane and exactly
+one result face carries that witness. That is the name the carrier rule
+gives the unified face under whole-face teeth. The shoulder beside it is a
+`gear.face.shoulder.*` like any other. A face the teeth trimmed has another
+witness and takes nothing from this.
+
+Limits: an edge beside the body's part of the picked face's own split end
+cap (`gear.face.cap.*.body`) is named after that part and so shares its
+known limit, refusing once the caps rejoin; where partial teeth run up to a
+neighbouring face, the edges at which the teeth meet its plane are named
+from the shoulder there, and under whole-face teeth, which unify the shoulder
+into the neighbour, from the neighbour, so a reference to one does not cross
+between those two; and a name is no promise that the kernel can blend the
+edge (it refuses a chamfer on a shoulder's rim and both blends on a cap's
+edge at one tooth, as geometry, with the edge resolved).
 
 ## Consequences
 
