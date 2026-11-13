@@ -11,6 +11,7 @@ import {
   normalizeKeymapOverrides,
   nowIso,
   PANEL_WIDTH_LIMITS,
+  SETTINGS_ORBIT_MODES,
   SETTINGS_TANGENT_EDGES,
   VIEWPORT_FIELD_OF_VIEW_BOUNDS,
   XRAY_OPACITY_BOUNDS,
@@ -334,6 +335,14 @@ export function parseUpdateAppSettingsRequest(
             ? viewport.zoomToCursor
             : true,
         middleDrag: optionalMember(viewport, 'middleDrag', MIDDLE_DRAGS, 'pan'),
+        // Optional, like tangentEdges: an older client omits it, and its save
+        // carries the stored value forward (CarriedViewportField).
+        orbitMode: optionalMember(
+          viewport,
+          'orbitMode',
+          SETTINGS_ORBIT_MODES,
+          DEFAULT_APP_SETTINGS.viewport.orbitMode
+        ),
         // Optional, like middleDrag: a client that predates this setting
         // must still be able to save its settings.
         pointerNavigation: optionalMember(
@@ -971,7 +980,8 @@ export type CarriedViewportField =
   | 'xrayOpacity'
   | 'touchHistoryGestures'
   | 'pencilDrawsOnly'
-  | 'tangentEdges';
+  | 'tangentEdges'
+  | 'orbitMode';
 
 /**
  * The viewport preferences a settings PATCH leaves out because its client
@@ -985,7 +995,8 @@ export function settingsRequestOmittedViewportFields(
     'xrayOpacity',
     'touchHistoryGestures',
     'pencilDrawsOnly',
-    'tangentEdges'
+    'tangentEdges',
+    'orbitMode'
   ];
   if (!body || typeof body !== 'object') return fields;
   const settings = (body as Record<string, unknown>).settings;

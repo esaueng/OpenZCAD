@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { CameraController } from './CameraController';
 import { updateCameraClipping } from './depthRange';
 import { computeFitPose } from '../render/scene';
+import type { OrbitMode } from '../types';
 
 function fakeElement(width: number, height: number): HTMLElement {
   const root = {
@@ -42,7 +43,7 @@ const WHEEL_NOTCH_DELTA = 120;
 /** The exact log-scale one notch queues at OrbitControls' base speed. */
 const NOTCH_LOG_SCALE = -Math.log(0.95) * 1.2;
 
-function createController(reducedMotion = true) {
+function createController(reducedMotion = true, orbitMode?: () => OrbitMode) {
   const requestRender = vi.fn();
   const onViewChange = vi.fn();
   const onViewSettled = vi.fn();
@@ -55,7 +56,8 @@ function createController(reducedMotion = true) {
     onViewSettled,
     reducedMotion: () => reducedMotion,
     zoomToCursor: () => true,
-    middleDrag: () => 'pan'
+    middleDrag: () => 'pan',
+    ...(orbitMode ? { orbitMode } : {})
   });
   const wheelListener = (
     host.addEventListener as unknown as ReturnType<typeof vi.fn>
@@ -692,6 +694,82 @@ function expectLastPersistedAt(
     )
   ).toBeLessThan(1e-9);
 }
+
+describe('CameraController turntable orbit', () => {
+  /** Pixels of vertical drag OrbitControls turns into `radians`. */
+  const pixelsFor = (radians: number) => (radians * 600) / (2 * Math.PI);
+
+  function frontView(controller: CameraController) {
+    controller.startTween({
+      position: new THREE.Vector3(0, -150, 0),
+      target: new THREE.Vector3(0, 0, 0),
+      near: 0.1,
+      far: 4000
+    });
+  }
+
+  function dragDown(controller: CameraController, radians: number) {
+    controller.beginOrbitDrag();
+    for (let step = 0; step < 30; step += 1) {
+      controller.orbitByPixels(0, pixelsFor(radians) / 30);
+    }
+    controller.endOrbitDrag();
+  }
+
+  function viewDirection(controller: CameraController) {
+    return controller.activeCamera.position
+      .clone()
+      .sub(controller.controls.target)
+      .normalize();
+  }
+
+  function screenUpZ(camera: THREE.Camera) {
+    return new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion).z;
+  }
+
+  it('stops a vertical drag at the top view, right way up', () => {
+    const { controller } = createController(true, () => 'turntable');
+    frontView(controller);
+    dragDown(controller, (3 * Math.PI) / 4);
+    // 135° from the front would carry a free orbit 45° past the top; the
+    // turntable parks on it.
+    expect(viewDirection(controller).z).toBeCloseTo(1, 9);
+    expect(controller.activeCamera.up.toArray()).toEqual([0, 0, 1]);
+    expect(controller.capture()).not.toHaveProperty('up');
+    controller.dispose();
+  });
+
+  it('turns an upside-down view right way up as an orbit starts', () => {
+    let mode: OrbitMode = 'free';
+    const { controller } = createController(true, () => mode);
+    const camera = controller.activeCamera;
+    frontView(controller);
+    dragDown(controller, (3 * Math.PI) / 4);
+    expect(screenUpZ(camera)).toBeLessThan(-0.5);
+
+    // Switched live, with no rebuild: the next orbit takes the view back on
+    // world up, looking the same way, and it then stops at the pole.
+    mode = 'turntable';
+    const looking = viewDirection(controller);
+    controller.beginOrbitDrag();
+    controller.controls.update();
+    expect(camera.up.toArray()).toEqual([0, 0, 1]);
+    expect(screenUpZ(camera)).toBeGreaterThan(0.5);
+    expect(viewDirection(controller).distanceTo(looking)).toBeLessThan(1e-9);
+    controller.endOrbitDrag();
+    dragDown(controller, -Math.PI);
+    expect(viewDirection(controller).z).toBeCloseTo(-1, 9);
+    expect(screenUpZ(camera)).toBeGreaterThan(0);
+
+    // And switched back, a drag tumbles straight over the pole again.
+    mode = 'free';
+    frontView(controller);
+    dragDown(controller, (3 * Math.PI) / 4);
+    expect(viewDirection(controller).y).toBeCloseTo(Math.SQRT1_2, 6);
+    expect(screenUpZ(camera)).toBeLessThan(-0.5);
+    controller.dispose();
+  });
+});
 
 describe('CameraController orbit release glide', () => {
   afterEach(() => {

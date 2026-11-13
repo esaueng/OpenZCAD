@@ -56,6 +56,7 @@
   "measure.spec.ts": 7,
   "mixed-seam-fillet.spec.ts": 37,
   "modeling.spec.ts": 165,
+  "orbit-mode-setting.spec.ts": 8,
   "overlay-reach.spec.ts": 5,
   "panel-float.spec.ts": 11,
   "panel-suspension.spec.ts": 48,

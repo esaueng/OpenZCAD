@@ -4,6 +4,7 @@ import {
   EXPORT_UNITS,
   normalizeHiddenRelationGlyphs,
   PANEL_WIDTH_LIMITS,
+  SETTINGS_ORBIT_MODES,
   SETTINGS_TANGENT_EDGES,
   VIEWPORT_FIELD_OF_VIEW_BOUNDS,
   XRAY_OPACITY_BOUNDS,
@@ -238,6 +239,12 @@ export function normalizeAppSettings(value: unknown): AppSettings {
         viewport.middleDrag,
         MIDDLE_DRAGS,
         defaults.viewport.middleDrag
+      ),
+      // Absent from settings written before it existed: free orbiting.
+      orbitMode: member(
+        viewport.orbitMode,
+        SETTINGS_ORBIT_MODES,
+        defaults.viewport.orbitMode
       ),
       pointerNavigation: member(
         viewport.pointerNavigation,

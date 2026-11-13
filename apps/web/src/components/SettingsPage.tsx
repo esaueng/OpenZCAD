@@ -390,6 +390,13 @@ const MIDDLE_DRAG_OPTIONS: readonly SegmentOption<
   label: MIDDLE_DRAG_LABELS[value]
 }));
 
+const ORBIT_MODE_OPTIONS: readonly SegmentOption<
+  AppSettings['viewport']['orbitMode']
+>[] = [
+  { value: 'free', label: 'Free' },
+  { value: 'turntable', label: 'Turntable' }
+];
+
 const DELETION_OPTIONS: readonly SegmentOption<AccountDeletionScope>[] = [
   { value: 'projects', label: 'Projects' },
   { value: 'profile', label: 'Profile' },
@@ -1524,6 +1531,21 @@ export function SettingsPage({
                     onChange={(middleDrag) =>
                       patch({
                         viewport: { ...settings.viewport, middleDrag }
+                      })
+                    }
+                  />
+                </SettingRow>
+                <SettingRow
+                  title="Orbit"
+                  hint="Free tumbles over the top and bottom. Turntable keeps the model upright and stops there."
+                >
+                  <Segmented
+                    label="Orbit"
+                    value={settings.viewport.orbitMode}
+                    options={ORBIT_MODE_OPTIONS}
+                    onChange={(orbitMode) =>
+                      patch({
+                        viewport: { ...settings.viewport, orbitMode }
                       })
                     }
                   />

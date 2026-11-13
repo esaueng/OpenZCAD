@@ -129,10 +129,15 @@ interface OrbitInternals {
  * `setUp` receives the `up` the camera must hold for `lookAt` to reproduce
  * the rotated view (see `orbitUpFor`); the caller copies it onto every camera
  * that shares the pose.
+ *
+ * `enabled` is read on every update: while it returns false the stock
+ * turntable rotation runs untouched, polar clamp included, so the orbit mode
+ * preference can change without rebuilding the controls.
  */
 export function installFreeOrbit(
   orbit: OrbitControls<THREE.Camera>,
-  setUp: (up: THREE.Vector3) => void
+  setUp: (up: THREE.Vector3) => void,
+  enabled: () => boolean = () => true
 ) {
   const internals = orbit as unknown as OrbitInternals;
   const stockUpdate = orbit.update.bind(orbit);
@@ -141,7 +146,7 @@ export function installFreeOrbit(
     const delta = internals._sphericalDelta;
     const yawPending = delta.theta;
     const pitchPending = delta.phi;
-    if (yawPending !== 0 || pitchPending !== 0) {
+    if ((yawPending !== 0 || pitchPending !== 0) && enabled()) {
       const share = orbit.enableDamping ? orbit.dampingFactor : 1;
       const camera = orbit.object;
       const { screenUp } = cameraScreenFrame(camera);

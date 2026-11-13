@@ -801,6 +801,38 @@ describe('application settings', () => {
     ).toBe('hide');
   });
 
+  it('reads orbit mode as free unless set, and rejects unknown modes', () => {
+    expect(normalizeAppSettings({}).viewport.orbitMode).toBe('free');
+    expect(DEFAULT_APP_SETTINGS.viewport.orbitMode).toBe('free');
+    for (const orbitMode of ['free', 'turntable'] as const) {
+      expect(
+        normalizeAppSettings({ viewport: { orbitMode } }).viewport.orbitMode
+      ).toBe(orbitMode);
+    }
+    expect(
+      normalizeAppSettings({ viewport: { orbitMode: 'trackball' } }).viewport
+        .orbitMode
+    ).toBe('free');
+    const legacy = deepClone(DEFAULT_APP_SETTINGS) as unknown as {
+      viewport: Record<string, unknown>;
+    };
+    delete legacy.viewport.orbitMode;
+    expect(
+      parseUpdateAppSettingsRequest(
+        { expectedRevision: 1, settings: legacy },
+        'development'
+      ).settings.viewport.orbitMode
+    ).toBe('free');
+    const turntable = deepClone(DEFAULT_APP_SETTINGS);
+    turntable.viewport.orbitMode = 'turntable';
+    expect(
+      parseUpdateAppSettingsRequest(
+        { expectedRevision: 1, settings: turntable },
+        'development'
+      ).settings.viewport.orbitMode
+    ).toBe('turntable');
+  });
+
   it('reads Pencil-only drawing as on unless switched off', () => {
     expect(normalizeAppSettings({}).viewport.pencilDrawsOnly).toBe(true);
     expect(

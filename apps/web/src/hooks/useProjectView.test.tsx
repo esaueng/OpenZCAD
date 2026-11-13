@@ -83,6 +83,7 @@ describe('remembered views on this device', () => {
     reducedMotion: false,
     zoomToCursor: true,
     middleDrag: 'pan' as const,
+    orbitMode: 'free' as const,
     pointerNavigation: 'auto' as const
   };
 

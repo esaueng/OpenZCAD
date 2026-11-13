@@ -24,6 +24,12 @@ describe('find a setting', () => {
     }
   });
 
+  it('finds the orbit mode by turntable and upside down', () => {
+    for (const query of ['turntable', 'orbit mode', 'upside down']) {
+      expect(matches(query)).toContain('controls');
+    }
+  });
+
   it('finds the theme by dark and light', () => {
     for (const query of ['dark', 'light mode']) {
       expect(matches(query)).toContain('appearance');

@@ -92,6 +92,12 @@ export interface SectionViewSettings {
   flipped?: boolean;
 }
 
+/**
+ * How a rotate drag turns the view: `free` tumbles over the top and bottom
+ * views without limit, `turntable` keeps world Z up and stops at them.
+ */
+export type OrbitMode = 'free' | 'turntable';
+
 export interface ViewerSettings {
   showGrid: boolean;
   displayMode: DisplayMode;
@@ -108,6 +114,8 @@ export interface ViewerSettings {
   zoomToCursor?: boolean;
   /** Runtime-only navigation preference; omitted by older saved views. */
   middleDrag?: 'pan' | 'orbit' | 'zoom';
+  /** Runtime-only navigation preference; omitted by older saved views. */
+  orbitMode?: OrbitMode;
   /** Runtime-only navigation preference; omitted by older saved views. */
   pointerNavigation?: 'auto' | 'mouse' | 'trackpad';
 }
