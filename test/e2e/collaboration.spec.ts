@@ -1044,10 +1044,24 @@ test('makes a durable share copy without storing the owner snapshot', async ({
     })
   );
   await page.goto(`/#share=${'p'.repeat(43)}`);
-  await page.getByRole('button', { name: 'Make a copy', exact: true }).click();
+  // Design review I73: the top bar names the session for what it is, not
+  // "Local only", "Signed out" and "Offline", and Make a copy is labelled.
+  const topbar = page.locator('.topbar');
+  await expect(
+    topbar.getByRole('status', { name: 'Shared model · Tweak only' })
+  ).toBeVisible();
+  await expect(topbar).not.toContainText('Local only');
+  await expect(topbar).not.toContainText('Signed out');
+  await expect(
+    topbar.getByRole('button', { name: /Sign in to share/ })
+  ).toHaveCount(0);
+  await topbar
+    .getByRole('button', { name: 'Make a copy', exact: true })
+    .click();
   await expect(
     page.getByRole('button', { name: 'Rename project' })
   ).toContainText('Anonymous source');
+  await expect(topbar.locator('.topbar-share-state')).toHaveCount(0);
   await expect(
     page
       .getByRole('group', { name: 'Workspace mode' })
@@ -1199,9 +1213,13 @@ test('saves incoming member updates through the room without refused account wri
   await expect(
     page.getByRole('button', { name: 'Make a copy', exact: true })
   ).toBeVisible();
+  // A share session names itself rather than claiming "Local only" (I73).
+  await expect(
+    page.getByRole('status', { name: 'Shared model · Tweak only', exact: true })
+  ).toBeVisible();
   await expect(
     page.getByRole('status', { name: 'Local only', exact: true })
-  ).toBeVisible();
+  ).toHaveCount(0);
   expect(accountWrites).toBe(0);
 });
 

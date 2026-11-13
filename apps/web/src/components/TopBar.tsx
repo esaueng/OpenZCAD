@@ -15,6 +15,7 @@ import {
   Check,
   CircleUserRound,
   CloudOff,
+  Copy,
   Download,
   Files,
   FolderOpen,
@@ -109,6 +110,12 @@ interface TopBarProps {
   collaborationFailure?: string | null;
   collaboratorCount: number;
   projectSharingEnabled: boolean;
+  /**
+   * A share-link visitor's session (design review I73): the top bar says
+   * "Shared model · Tweak only" instead of "Local only", "Signed out" and
+   * "Offline", none of which describe it, and offers a labelled Make a copy.
+   */
+  shareSession?: { mode: 'view' | 'tweak'; onMakeCopy(): void } | null;
   workspaceMode: WorkspaceMode;
   canRenameProject: boolean;
   /**
@@ -278,7 +285,8 @@ export function TopBar({
   collaborationStatus,
   collaborationFailure,
   collaboratorCount,
-  projectSharingEnabled,
+  projectSharingEnabled: sharingAvailable,
+  shareSession = null,
   workspaceMode,
   canRenameProject,
   buildModeDisabledReason,
@@ -307,6 +315,8 @@ export function TopBar({
   onOpenSettings,
   encryption = null
 }: TopBarProps) {
+  // A share-link session has nothing to share into (design review I73).
+  const projectSharingEnabled = sharingAvailable && !shareSession;
   const keymap = useKeymap();
   const saveKey = keymap.label('file-save');
   const saveNamedKey = keymap.label('file-save-named');
@@ -695,7 +705,29 @@ export function TopBar({
             This island is anchored at its left edge with open stage beyond
             it, so a label change moves nothing; the actions island keeps a
             fixed width with no status slot to reserve. */}
-        {saveChipActs ? (
+        {shareSession ? (
+          // Nothing here is saved or synced until a copy is made, so the
+          // save chip's "Local only" (saved on this device) was false.
+          <Tooltip
+            label="Shared model"
+            description={
+              shareSession.mode === 'view'
+                ? 'Someone shared this model with you to look at. Make a copy to keep or change it.'
+                : 'Someone shared this model with you. You can try parameter changes here; they stay in this tab. Make a copy to keep them.'
+            }
+            multiline
+          >
+            <span
+              className="topbar-share-state topbar-action"
+              role="status"
+              aria-label={`Shared model · ${shareSession.mode === 'view' ? 'View only' : 'Tweak only'}`}
+              tabIndex={0}
+            >
+              Shared model ·{' '}
+              {shareSession.mode === 'view' ? 'View only' : 'Tweak only'}
+            </span>
+          </Tooltip>
+        ) : saveChipActs ? (
           <button
             className={`save-state topbar-action is-${saveState}`}
             type="button"
@@ -818,7 +850,17 @@ export function TopBar({
           {/* Signed in is the happy default and the save status already shows
             cloud state, so the account chip appears only when something
             needs attention. */}
-          {accountState !== 'signed-in' && (
+          {shareSession ? (
+            <button
+              type="button"
+              className="primary topbar-share-copy"
+              onClick={shareSession.onMakeCopy}
+            >
+              <Copy size={14} aria-hidden="true" />
+              Make a copy
+            </button>
+          ) : null}
+          {accountState !== 'signed-in' && !shareSession && (
             <span
               className={`account-state is-${accountState}`}
               role="status"
