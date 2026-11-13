@@ -68,6 +68,7 @@ export const COLLABORATION_LABEL_RESERVE = [
   'Offline',
   'Joining…',
   'Not shared',
+  'Read-only',
   'Unavailable'
 ];
 export const ACCOUNT_LABEL_RESERVE = ['Checking', 'Signed out'];

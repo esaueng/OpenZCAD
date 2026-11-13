@@ -112,6 +112,12 @@ interface TopBarProps {
   accountState: 'checking' | 'signed-in' | 'signed-out' | 'unavailable';
   collaborationStatus: CollaborationStatus;
   collaborationFailure?: string | null;
+  /**
+   * This seat may only look (a viewer, or a room that answered read-only):
+   * the chip says "Read-only" in words, not only on disabled mode buttons
+   * (design review I77).
+   */
+  readOnlySeat?: boolean;
   collaboratorCount: number;
   projectSharingEnabled: boolean;
   workspaceMode: WorkspaceMode;
@@ -283,6 +289,7 @@ export function TopBar({
   accountState,
   collaborationStatus,
   collaborationFailure,
+  readOnlySeat = false,
   collaboratorCount,
   projectSharingEnabled,
   workspaceMode,
@@ -564,11 +571,20 @@ export function TopBar({
   // A project that is not in the account has no room to join, so its room
   // status is `offline` — which, beside "Save to my account", read as a
   // connection problem rather than the plain fact that nothing is shared yet.
+  // "Read-only" names the seat only while the room itself is fine: a viewer
+  // whose copy now conflicts, or who went offline, needs that state instead.
+  const namesReadOnlySeat =
+    readOnlySeat &&
+    (collaborationStatus === 'connecting' ||
+      collaborationStatus === 'live' ||
+      collaborationStatus === 'read-only');
   const collaborationLabel = knownDeviceOnly
     ? 'Not shared'
-    : collaborationStatus === 'live'
-      ? `${collaboratorCount} live`
-      : COLLABORATION_LABELS[collaborationStatus];
+    : namesReadOnlySeat
+      ? 'Read-only'
+      : collaborationStatus === 'live'
+        ? `${collaboratorCount} live`
+        : COLLABORATION_LABELS[collaborationStatus];
   const accountLabel =
     accountState === 'checking'
       ? 'Checking'
@@ -733,14 +749,22 @@ export function TopBar({
         ) : (
           // A readout, not a control: clicking "Local only" or "Saved" used
           // to save a revision unasked. Saving is on File and the shortcut.
-          <span
-            className={`save-state topbar-action is-readout is-${saveState}`}
-            role="status"
-            aria-label={saveLabel}
-            title={`${saveTitle} Save a revision from File${saveKey ? ` or with ${platformShortcutLabel(saveKey)}` : ''}.`}
+          // Its reason and next step open on hover, keyboard focus and a
+          // touch long-press, not only in a `title` (design review I77).
+          <Tooltip
+            label={saveLabel}
+            description={`${saveTitle} Save a revision from File${saveKey ? ` or with ${platformShortcutLabel(saveKey)}` : ''}.`}
+            multiline
           >
-            {saveChipContent}
-          </span>
+            <span
+              className={`save-state topbar-action is-readout is-${saveState}`}
+              role="status"
+              aria-label={saveLabel}
+              tabIndex={0}
+            >
+              {saveChipContent}
+            </span>
+          </Tooltip>
         )}
         {/* Warnings are a fact about the document, so they read beside its
             status rather than only on a button far down the right rail. The
@@ -862,39 +886,49 @@ export function TopBar({
             // Signed out there is nothing to share into, so the chip says so
             // and takes the user to where signing in happens. It used to be
             // aria-disabled: a button that did nothing when pressed.
-            <button
-              type="button"
-              className={`collaboration-state ${collaborationStatus}`}
-              title={
+            <Tooltip
+              label={session ? 'Project sharing' : 'Sign in to share'}
+              description={
                 session
                   ? collaborationFailure && collaborationStatus === 'rejected'
-                    ? `Connection refused: ${collaborationFailure}`
-                    : `Project sharing · ${collaborationLabel}`
-                  : 'Sign in to share'
+                    ? `Connection refused: ${collaborationFailure} Your edits stay on this device. Open sharing to retry.`
+                    : namesReadOnlySeat
+                      ? 'You can view this shared project, not edit it.'
+                      : collaborationLabel
+                  : collaborationLabel
               }
-              // Each name carries the label the chip shows (WCAG 2.5.3).
-              aria-label={
-                session
-                  ? `Open project sharing · ${collaborationLabel}`
-                  : `${collaborationLabel} · Sign in to share`
-              }
-              disabled={!projectName}
-              onClick={session ? onOpenSharing : onSignIn}
+              multiline
             >
-              <PresenceGlyph
-                status={knownDeviceOnly ? 'not-shared' : collaborationStatus}
-              />
-              {collaborationStatus === 'live' ? (
-                // Only drawn once the row has collapsed to icons; the label
-                // carries the count everywhere else.
-                <span className="live-badge" aria-hidden="true">
-                  {collaboratorCount}
-                </span>
-              ) : null}
-              <StableLabel reserve={COLLABORATION_LABEL_RESERVE} align="center">
-                {collaborationLabel}
-              </StableLabel>
-            </button>
+              <button
+                type="button"
+                className={`collaboration-state ${collaborationStatus}${readOnlySeat ? ' is-read-only' : ''}`}
+                // Each name carries the label the chip shows (WCAG 2.5.3).
+                aria-label={
+                  session
+                    ? `Open project sharing · ${collaborationLabel}`
+                    : `${collaborationLabel} · Sign in to share`
+                }
+                disabled={!projectName}
+                onClick={session ? onOpenSharing : onSignIn}
+              >
+                <PresenceGlyph
+                  status={knownDeviceOnly ? 'not-shared' : collaborationStatus}
+                />
+                {collaborationStatus === 'live' ? (
+                  // Only drawn once the row has collapsed to icons; the label
+                  // carries the count everywhere else.
+                  <span className="live-badge" aria-hidden="true">
+                    {collaboratorCount}
+                  </span>
+                ) : null}
+                <StableLabel
+                  reserve={COLLABORATION_LABEL_RESERVE}
+                  align="center"
+                >
+                  {collaborationLabel}
+                </StableLabel>
+              </button>
+            </Tooltip>
           ) : null}
           <details
             ref={fileMenuRef}
