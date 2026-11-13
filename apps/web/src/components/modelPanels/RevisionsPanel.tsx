@@ -121,6 +121,9 @@ export function RevisionsPanel({
     canonicalIds: canonicalCheckpointIds,
     local: localCheckpoints
   } = revisions;
+  // The row a press opened: its details and labelled actions show without
+  // hover (design review I82, I87).
+  const [openId, setOpenId] = useState<string | null>(null);
   if (visibleCheckpoints.length === 0) {
     return (
       <p className="muted sidebar-hint">
@@ -142,14 +145,28 @@ export function RevisionsPanel({
           localCheckpoints.some(
             (point) => point.checkpointId === checkpoint.checkpointId
           );
+        const open = openId === checkpoint.checkpointId;
+        const detailsId = `revision-details-${checkpoint.checkpointId}`;
         return (
           <div
             key={checkpoint.checkpointId}
-            className={`revision-row ${index === 0 ? 'latest' : ''}`}
-            title={`${checkpoint.reason} · document v${checkpoint.documentVersion} · ${new Date(checkpoint.createdAt).toLocaleString()}${canonicalCheckpointIds.has(checkpoint.checkpointId) ? '' : ' · Stored on this device'}`}
+            className={`revision-row${index === 0 ? ' latest' : ''}${open ? ' is-open' : ''}`}
+            onClick={(event) => {
+              // A press anywhere on the row opens it; its own buttons act.
+              if ((event.target as HTMLElement).closest('.revision-action'))
+                return;
+              setOpenId(open ? null : checkpoint.checkpointId);
+            }}
           >
             <span className="revision-dot" aria-hidden="true" />
-            <span className="revision-reason">{checkpoint.reason}</span>
+            <button
+              type="button"
+              className="revision-reason"
+              aria-expanded={open}
+              aria-controls={detailsId}
+            >
+              {checkpoint.reason}
+            </button>
             <small className="revision-time mono">
               {revisionTime(checkpoint.createdAt)}
             </small>
@@ -159,21 +176,21 @@ export function RevisionsPanel({
                   <button
                     type="button"
                     className="revision-action"
-                    title={`Restore “${checkpoint.reason}”. This is one Undo away, and the current state is saved first.`}
                     aria-label={`Restore ${checkpoint.reason}`}
                     onClick={() => onRestoreCheckpoint(checkpoint)}
                   >
                     <History size={12} aria-hidden="true" />
+                    <span>Restore</span>
                   </button>
                 )}
                 <button
                   type="button"
                   className="revision-action"
-                  title={`Branch “${checkpoint.reason}” into a new project. This project is left as it is.`}
                   aria-label={`Branch ${checkpoint.reason} into a new project`}
                   onClick={() => onBranchCheckpoint(checkpoint)}
                 >
                   <GitBranch size={12} aria-hidden="true" />
+                  <span>Branch</span>
                 </button>
               </span>
             ) : (
@@ -181,13 +198,22 @@ export function RevisionsPanel({
               // naming them stay in the document, so some rows are a
               // record of a save rather than a save you can open. Saying
               // so beats a button that fails when pressed.
-              <span
-                className="revision-unavailable"
-                title="This save is listed in the project's history, but its model is no longer stored."
-              >
-                not stored
-              </span>
+              <span className="revision-unavailable">history only</span>
             )}
+            {open ? (
+              <p id={detailsId} className="revision-details">
+                {new Date(checkpoint.createdAt).toLocaleString()} · document v
+                {checkpoint.documentVersion}
+                {canonicalCheckpointIds.has(checkpoint.checkpointId)
+                  ? ''
+                  : ' · Stored on this device'}
+                {stored
+                  ? isCurrent
+                    ? '. The project is at this save point now. Branch copies it into a new project.'
+                    : '. Restore brings the project back to it (one Undo away; the current state is saved first). Branch copies it into a new project and leaves this one as it is.'
+                  : '. Listed in the project’s history only: its model is no longer stored, so it cannot be restored or branched.'}
+              </p>
+            ) : null}
           </div>
         );
       })}

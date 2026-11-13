@@ -8,6 +8,7 @@ import {
   type ExactSectionRegionDisplay
 } from './exactSection';
 import { SECTION_CAP } from './sectionCaps';
+import { SECTION_HATCH } from './sectionHatch';
 import { applyDisplayMode, applySectionPlane, sectionClippingPlane } from './objects';
 import { isViewerMesh } from '../pick/meshes';
 
@@ -256,6 +257,8 @@ describe('exact section geometry in the viewport', () => {
     expect(fill.material.color.getHex()).toBe(
       sectionCutColor('#3fa7d6').getHex()
     );
+    // Hatched like the approximate cap (I49).
+    expect(fill.material.userData[SECTION_HATCH]).toBe(true);
     // And back, as the picker's cleanup restores the committed colour.
     mesh.material.color.set('#e1a948');
     render();

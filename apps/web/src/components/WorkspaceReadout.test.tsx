@@ -108,7 +108,7 @@ describe('WorkspaceReadout', () => {
     );
     expect(
       screen.getByLabelText(
-        /Bracket · 2 features · 1 body\. Sync Synced\. Preview active, not applied\./
+        /Bracket · 2 features · 1 body\. Sync Saved\. Preview active, not applied\./
       )
     ).toBeInTheDocument();
   });
@@ -400,7 +400,7 @@ describe('WorkspaceReadout', () => {
       screen.getByRole('group', { name: 'Workspace status' })
     ).toHaveTextContent('sync');
     expect(
-      screen.getByLabelText('Bracket · 2 features · 1 body. Sync Synced.')
+      screen.getByLabelText('Bracket · 2 features · 1 body. Sync Saved.')
     ).toBeInTheDocument();
     expect(screen.getByRole('contentinfo')).toHaveTextContent(
       'Shift+Click adds to selection'

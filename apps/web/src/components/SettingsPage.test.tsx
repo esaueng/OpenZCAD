@@ -1603,6 +1603,162 @@ describe('settings desktop account section', () => {
     }
   });
 
+  it('says a refused sign-in code at the field', async () => {
+    // 13 November review I4: the refusal showed only in small mono text
+    // beside the Settings title, and the field had no error state.
+    const user = userEvent.setup();
+    const refused = Object.assign(new Error('That sign-in code is invalid.'), {
+      status: 400
+    });
+    const onVerifyLoginCode = vi.fn().mockRejectedValue(refused);
+    Object.defineProperty(window, 'turnstile', {
+      configurable: true,
+      value: {
+        render: vi.fn(
+          (
+            _container: HTMLElement,
+            options: { callback(token: string): void }
+          ) => {
+            options.callback('turnstile-token');
+            return 'widget-1';
+          }
+        ),
+        remove: vi.fn(),
+        reset: vi.fn()
+      }
+    });
+    const script = document.createElement('script');
+    script.dataset.openzcadTurnstile = 'true';
+    document.head.append(script);
+    try {
+      renderSettings(null, {
+        initialSection: 'account',
+        authConfig: {
+          mode: 'email-code',
+          emailCodeEnabled: true,
+          turnstileSiteKey: 'site-key'
+        },
+        authConfigStatus: 'ready',
+        onRequestLoginCode: vi.fn().mockResolvedValue({
+          challengeId: 'challenge-1',
+          expiresInSeconds: 600
+        }),
+        onVerifyLoginCode
+      });
+      await user.type(
+        screen.getByLabelText('Email address'),
+        'person@example.com'
+      );
+      await user.click(screen.getByRole('button', { name: 'Email me a code' }));
+      const codeField = await screen.findByLabelText('Email sign-in code');
+      await user.type(codeField, '111111');
+      await user.click(screen.getByRole('button', { name: 'Sign in' }));
+      await waitFor(() => expect(codeField).toHaveAttribute('aria-invalid'));
+      expect(codeField).toHaveAccessibleDescription(
+        'That sign-in code is invalid.'
+      );
+      // The refused code is cleared (I81), so the next digit is the edit.
+      await user.type(codeField, '1');
+      expect(codeField).not.toHaveAttribute('aria-invalid');
+      expect(codeField).not.toHaveAccessibleDescription();
+    } finally {
+      script.remove();
+      delete (window as Window & { turnstile?: unknown }).turnstile;
+    }
+  });
+
+  // Design review I81: no Resend, a placeholder that looked typed, and a
+  // wrong code left in the field.
+  it('clears a wrong code, uses a neutral placeholder and offers a new code after a wait', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const onVerifyLoginCode = vi
+      .fn()
+      .mockRejectedValue(new Error('That sign-in code is invalid.'));
+    const onRequestLoginCode = vi
+      .fn()
+      .mockResolvedValueOnce({
+        challengeId: 'challenge-1',
+        expiresInSeconds: 600
+      })
+      .mockResolvedValueOnce({
+        challengeId: 'challenge-2',
+        expiresInSeconds: 600
+      });
+    Object.defineProperty(window, 'turnstile', {
+      configurable: true,
+      value: {
+        render: vi.fn(
+          (
+            _container: HTMLElement,
+            options: { callback(token: string): void }
+          ) => {
+            options.callback('turnstile-token');
+            return 'widget-1';
+          }
+        ),
+        remove: vi.fn(),
+        reset: vi.fn()
+      }
+    });
+    const script = document.createElement('script');
+    script.dataset.openzcadTurnstile = 'true';
+    document.head.append(script);
+    try {
+      renderSettings(null, {
+        initialSection: 'account',
+        authConfig: {
+          mode: 'email-code',
+          emailCodeEnabled: true,
+          turnstileSiteKey: 'site-key'
+        },
+        authConfigStatus: 'ready',
+        onRequestLoginCode,
+        onVerifyLoginCode
+      });
+      await user.type(
+        screen.getByLabelText('Email address'),
+        'person@example.com'
+      );
+      await user.click(screen.getByRole('button', { name: 'Email me a code' }));
+      const codeField = await screen.findByLabelText('Email sign-in code');
+      expect(codeField).toHaveAttribute('placeholder', '6-digit code');
+      await user.type(codeField, '123456');
+      await user.click(screen.getByRole('button', { name: 'Sign in' }));
+      await waitFor(() => expect(codeField).toHaveValue(''));
+      expect(codeField).toHaveFocus();
+
+      expect(
+        screen.getByRole('button', { name: /^Send a new code/ })
+      ).toBeDisabled();
+      await act(async () => {
+        vi.advanceTimersByTime(30_000);
+      });
+      const resend = await screen.findByRole('button', {
+        name: 'Send a new code'
+      });
+      await waitFor(() => expect(resend).toBeEnabled());
+      await user.click(resend);
+      expect(onRequestLoginCode).toHaveBeenLastCalledWith(
+        'person@example.com',
+        'turnstile-token'
+      );
+      await user.type(
+        await screen.findByLabelText('Email sign-in code'),
+        '654321'
+      );
+      await user.click(screen.getByRole('button', { name: 'Sign in' }));
+      expect(onVerifyLoginCode).toHaveBeenLastCalledWith(
+        'challenge-2',
+        '654321'
+      );
+    } finally {
+      script.remove();
+      delete (window as Window & { turnstile?: unknown }).turnstile;
+      vi.useRealTimers();
+    }
+  });
+
   it('links the privacy policy from the email sign-in form', () => {
     Object.defineProperty(window, 'turnstile', {
       configurable: true,
@@ -2025,6 +2181,11 @@ describe('settings privacy and data section', () => {
     expect(confirm).toBeDisabled();
     expect(dialog.innerHTML).not.toContain(session.email);
     const confirmation = within(dialog).getByLabelText('Deletion confirmation');
+    // Masked only while it is not being typed in (design review I78): the
+    // field shows what is typed while focused and masks again on blur.
+    act(() => confirmation.focus());
+    expect(confirmation).toHaveAttribute('type', 'text');
+    act(() => confirmation.blur());
     expect(confirmation).toHaveAttribute('type', 'password');
     await user.click(
       within(dialog).getByRole('button', { name: 'Show personal info' })

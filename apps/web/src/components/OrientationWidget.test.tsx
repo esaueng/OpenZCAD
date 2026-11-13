@@ -1,8 +1,10 @@
 import type { MutableRefObject } from 'react';
-import { fireEvent, render } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { AxisProjection } from '@openzcad/viewport';
 import { HIT_LAYER_SETTLE_MS, OrientationWidget } from './OrientationWidget';
+import { TOOLTIP_OPEN_DELAY_MS } from './Tooltip';
+import { setActiveKeymapOverrides } from '../lib/keymap';
 import type { OrientationLink } from './viewer/orientationCube';
 
 const capturedPointers = new WeakMap<SVGElement, Set<number>>();
@@ -591,6 +593,81 @@ describe('OrientationWidget controls', () => {
       getByRole('toolbar', { name: 'Drag to rotate the view' })
     ).toBeDefined();
     expect(getByRole('button', { name: 'Right view' })).toBeDefined();
+  });
+});
+
+describe('OrientationWidget orbit mode help', () => {
+  function hoverHelp(orbitMode?: 'free' | 'turntable') {
+    vi.useFakeTimers();
+    try {
+      const orientationRef = {
+        current: null
+      } as MutableRefObject<OrientationLink | null>;
+      const view = render(
+        <OrientationWidget
+          orientationRef={orientationRef}
+          {...(orbitMode ? { orbitMode } : {})}
+          onSelectView={vi.fn()}
+          onDragStart={vi.fn()}
+          onDrag={vi.fn()}
+          onDragEnd={vi.fn()}
+        />
+      );
+      const cube = view.getByRole('toolbar', {
+        name: 'Drag to rotate the view'
+      });
+      fireEvent.pointerEnter(cube);
+      act(() => {
+        vi.advanceTimersByTime(TOOLTIP_OPEN_DELAY_MS);
+      });
+      return { view, cube };
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  it('names free orbiting and the key that switches it by default', () => {
+    const { view } = hoverHelp();
+    const help = screen.getByRole('tooltip');
+    expect(help).toHaveTextContent('Free orbit');
+    expect(help).toHaveTextContent('tumbles over the top and bottom');
+    expect(help.querySelector('kbd')).not.toBeNull();
+    view.unmount();
+  });
+
+  it('names turntable orbiting when that is the mode', () => {
+    const { view } = hoverHelp('turntable');
+    const help = screen.getByRole('tooltip');
+    expect(help).toHaveTextContent('Turntable orbit');
+    expect(help).toHaveTextContent('Z stays up');
+    view.unmount();
+  });
+
+  it('shows a remapped key', () => {
+    act(() => setActiveKeymapOverrides({ 'view-orbit-mode': ['Shift+T'] }));
+    try {
+      const { view } = hoverHelp();
+      const key = screen.getByRole('tooltip').querySelector('kbd');
+      expect(key?.textContent).toMatch(/T$/);
+      expect(key?.textContent).not.toMatch(/O/);
+      view.unmount();
+    } finally {
+      act(() => setActiveKeymapOverrides({}));
+    }
+  });
+
+  it('closes its help when the cube is pressed, so a drag runs clear', () => {
+    const { view, cube } = hoverHelp();
+    expect(screen.getByRole('tooltip')).toBeDefined();
+    fireEvent.pointerDown(cube, { pointerId: 1, button: 0, buttons: 1 });
+    expect(screen.queryByRole('tooltip')).toBeNull();
+    view.unmount();
+  });
+
+  it('draws no native title tooltip beside it', () => {
+    const { view, cube } = hoverHelp();
+    expect(cube.querySelector('title')).toBeNull();
+    view.unmount();
   });
 });
 

@@ -163,6 +163,13 @@ interface StartScreenProps {
    */
   conflictedProjectIds: ReadonlySet<string>;
   signedIn: boolean;
+  /**
+   * Sign-in itself could not be reached. The footer then says the cloud is
+   * unavailable and offers Retry, instead of a Sign in that leads to a page
+   * saying sign-in is unreachable (design review I8, S9).
+   */
+  cloudUnavailable?: boolean;
+  onRetryCloud?(): void;
   onSaveToAccount(project: ProjectSummary): void;
   onSaveAllToAccount(projects: ProjectSummary[]): void;
   /**
@@ -501,6 +508,8 @@ export function StartScreen({
   accountProjectListReached,
   conflictedProjectIds,
   signedIn,
+  cloudUnavailable = false,
+  onRetryCloud,
   onSaveToAccount,
   onSaveAllToAccount,
   syncRun,
@@ -1030,15 +1039,10 @@ export function StartScreen({
     });
     if (chosen.length === 0) return;
     setSelected(new Set());
+    // The app answers a move to Trash or Archive with a toast that carries
+    // Undo; a notice here as well said the same thing twice.
     if (onMoveManyToShelf) onMoveManyToShelf(chosen, status);
     else chosen.forEach((project) => onMoveToShelf(project, status));
-    const what =
-      chosen.length === 1 ? chosen[0]!.name : `${chosen.length} projects`;
-    setNotice(
-      status === 'deleted'
-        ? `Moved ${what} to the trash. Restore it from Trash.`
-        : `Archived ${what}.`
-    );
   }
 
   function fileProjects(projectIds: string[], folderId: string | null) {
@@ -2522,6 +2526,24 @@ export function StartScreen({
     }
     if (loading) {
       return { tone: 'idle', Icon: Cloud, text: 'Checking account…' };
+    }
+    if (!signedIn && cloudUnavailable) {
+      return {
+        tone: 'warning',
+        Icon: CloudAlert,
+        text: 'Cloud unavailable',
+        title:
+          'Sign-in could not be reached. Projects keep saving on this device.',
+        ...(onRetryCloud
+          ? {
+              action: {
+                text: 'Retry',
+                label: 'Retry the cloud connection',
+                run: onRetryCloud
+              }
+            }
+          : {})
+      };
     }
     if (!signedIn) {
       return {

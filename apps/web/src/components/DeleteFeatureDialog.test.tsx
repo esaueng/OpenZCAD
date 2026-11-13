@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { DeleteFeatureDialog } from './DeleteFeatureDialog';
 
 describe('DeleteFeatureDialog', () => {
-  it('names the dependents and focuses Delete so Del then Enter deletes', () => {
+  it('names the dependents and focuses Cancel so a reflex Enter keeps them', () => {
     const onDelete = vi.fn();
     const onCancel = vi.fn();
     render(
@@ -19,8 +19,9 @@ describe('DeleteFeatureDialog', () => {
     expect(
       screen.getAllByRole('listitem').map((item) => item.textContent)
     ).toEqual(['Union', 'Fillet', 'Hole']);
+    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus();
     const remove = screen.getByRole('button', { name: 'Delete' });
-    expect(remove).toHaveFocus();
+    expect(remove).not.toHaveFocus();
     fireEvent.click(remove);
     expect(onDelete).toHaveBeenCalledOnce();
     expect(onCancel).not.toHaveBeenCalled();

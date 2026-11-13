@@ -616,6 +616,7 @@ describe('what the section rail may offer to export', () => {
   });
 
   it('keeps every other refusal free of kernel vocabulary', () => {
+    const details = new Set<string>();
     for (const reason of [
       'kernel-refused',
       'empty-section',
@@ -635,11 +636,52 @@ describe('what the section rail may offer to export', () => {
           ]
         )
       );
-      expect(state).toEqual({
-        kind: 'refused',
-        detail: 'This cut can only be shown approximately.'
-      });
+      expect(state.kind).toBe('refused');
+      const detail = describeSectionOutline(state, 'mm').detail;
+      expect(detail).toMatch(/approximately/);
+      expect(detail).not.toMatch(/kernel|witness|tessellat|bspline|[0-9]/i);
+      details.add(detail);
     }
+    // Each refusal says its own reason, not one generic sentence (I48).
+    expect(details.size).toBe(5);
+  });
+
+  it('names a round face as the reason the demos never cut exactly', () => {
+    // What the paired kernel says for the Mounting Bracket's boss and holes
+    // and for the Heat Sink's fillets at their default cuts (I48).
+    for (const message of [
+      'The kernel could not section this body: section: unsupported configuration: cylindrical section parallel to axis requires authoritative cap clipping',
+      'The kernel could not section this body: section: unsupported configuration: cylindrical section requires a complete two-rim band without holes'
+    ]) {
+      const state = sectionOutlineFromReport(
+        report([], [{ bodyId: 'body_a', reason: 'kernel-refused', message }])
+      );
+      expect(state.kind).toBe('refused');
+      expect(describeSectionOutline(state, 'mm').detail).toMatch(
+        /hole, boss or fillet/
+      );
+      expect(sectionOutlineExportable(state)).toBe(false);
+    }
+  });
+
+  it('explains the refusal that stops the cut, not a body the plane misses', () => {
+    const state = sectionOutlineFromReport(
+      report(
+        [],
+        [
+          missed,
+          {
+            bodyId: 'body_d',
+            reason: 'kernel-refused',
+            message: 'cylindrical section requires a complete two-rim band'
+          }
+        ]
+      )
+    );
+    expect(state.kind).toBe('refused');
+    expect(describeSectionOutline(state, 'mm').detail).toMatch(
+      /hole, boss or fillet/
+    );
   });
 });
 

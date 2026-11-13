@@ -13,6 +13,7 @@ import type {
 } from '@openzcad/shared';
 import type { ProjectDocument } from '@openzcad/shared';
 import { resolvedSketchDocument } from '@openzcad/document-core';
+import { sketchObjectLabels, sketchPointNamer } from './objectLabels';
 // Type-only on purpose: a value import would pull the WASM-bearing module
 // into the main bundle and fail the build's bundle-size check.
 import type {
@@ -840,8 +841,16 @@ export function measureDrivingDimension(
 /** Compact one-line description for the constraint list. */
 export function describeConstraint(
   data: SketchConstraintData,
-  nameOf: (objectId: EntityId) => string
+  nameOf: (objectId: EntityId) => string,
+  pointName: (ref: SketchPointRef) => string = (ref) =>
+    `${ref.point} of ${nameOf(ref.objectId)}`
 ): string {
+  const pair = (a: SketchPointRef, b: SketchPointRef, join: string) => {
+    const first = pointName(a);
+    const second = pointName(b);
+    // A shape's own corner joins two of its sides at one named corner.
+    return first === second ? first : `${first} ${join} ${second}`;
+  };
   switch (data.constraintKind) {
     case 'horizontal':
     case 'vertical':
@@ -857,21 +866,21 @@ export function describeConstraint(
     case 'concentric':
       return `Concentric · ${nameOf(data.a)} ◎ ${nameOf(data.b)}`;
     case 'coincident':
-      return `Coincident · ${nameOf(data.a.objectId)}.${data.a.point} = ${nameOf(data.b.objectId)}.${data.b.point}`;
+      return `Coincident · ${pair(data.a, data.b, '=')}`;
     case 'midpoint':
-      return `Midpoint · ${nameOf(data.point.objectId)}.${data.point.point} on ${nameOf(data.line)}`;
+      return `Midpoint · ${pointName(data.point)} on ${nameOf(data.line)}`;
     case 'distance':
-      return `Distance ${String(data.value)} · ${nameOf(data.a.objectId)}.${data.a.point} ↔ ${nameOf(data.b.objectId)}.${data.b.point}`;
+      return `Distance ${String(data.value)} · ${pair(data.a, data.b, '↔')}`;
     case 'radius':
       return `Radius ${String(data.value)} · ${nameOf(data.objectId)}`;
     case 'angle':
       return `Angle ${String(data.valueDeg)}° · ${nameOf(data.a)} ∠ ${nameOf(data.b)}`;
     case 'symmetric':
-      return `Symmetric · ${nameOf(data.a.objectId)}.${data.a.point} ↔ ${nameOf(data.b.objectId)}.${data.b.point} about ${nameOf(data.axis)}`;
+      return `Symmetric · ${pair(data.a, data.b, '↔')} about ${nameOf(data.axis)}`;
     case 'point-on-object':
-      return `Point on curve · ${nameOf(data.point.objectId)}.${data.point.point} on ${nameOf(data.objectId)}`;
+      return `Point on curve · ${pointName(data.point)} on ${nameOf(data.objectId)}`;
     case 'lock':
-      return `Lock · ${nameOf(data.point.objectId)}.${data.point.point}`;
+      return `Lock · ${pointName(data.point)}`;
   }
 }
 
@@ -909,21 +918,21 @@ export function constraintToolsForObject(
  * Human-readable names of the constraints with the worst solve residuals —
  * the ones most likely fighting the edit that just failed. Pure lookup over
  * the given sketch's stored constraints; unknown ids are skipped, so a stale
- * residual can never surface a phantom culprit.
+ * residual can never surface a phantom culprit. `exclude` leaves out the
+ * constraint that was being added: it is the refused value, not a culprit.
  */
 export function topResidualConstraints(
   document: ProjectDocument,
   sketch: SketchNode | undefined,
   residuals: ReadonlyArray<{ constraintId: string; maxResidual: number }>,
-  limit = 2
+  limit = 2,
+  exclude: ReadonlySet<string> = new Set()
 ): string[] {
   if (!sketch) return [];
-  const nameOf = (objectId: EntityId) => {
-    const node = resolvedSketchDocument(document).nodes[objectId];
-    return node?.kind === 'sketch-object'
-      ? node.name || node.data.objectKind
-      : 'entity';
-  };
+  const labels = sketchObjectLabels(resolvedSketchDocument(document), sketch);
+  const nameOf = (objectId: EntityId) =>
+    labels.get(String(objectId)) ?? 'entity';
+  const pointName = sketchPointNamer(sketch, labels);
   const byId = new Map(
     (sketch.constraints ?? []).map((constraint) => [
       String(constraint.constraintId),
@@ -931,12 +940,34 @@ export function topResidualConstraints(
     ])
   );
   return [...residuals]
+    .filter(
+      ({ constraintId, maxResidual }) =>
+        !exclude.has(String(constraintId)) &&
+        Number.isFinite(maxResidual) &&
+        maxResidual > 1e-10
+    )
     .sort((a, b) => b.maxResidual - a.maxResidual)
     .flatMap(({ constraintId }) => {
       const data = byId.get(String(constraintId));
-      return data ? [describeConstraint(data, nameOf)] : [];
+      return data ? [describeConstraint(data, nameOf, pointName)] : [];
     })
     .slice(0, Math.max(0, limit));
+}
+
+/**
+ * What a refused relation or dimension says: the refused value first, then
+ * what it fights, once. The sketch is left as it was, so Undo still undoes
+ * the step before the refusal.
+ */
+export function constraintRefusalMessage(
+  refused: string,
+  culprits: readonly string[]
+): string {
+  const against =
+    culprits.length > 0
+      ? `it conflicts with ${culprits.join('; ')}`
+      : 'it conflicts with the existing constraints';
+  return `${refused} was not added: ${against}. The sketch is unchanged; edit or remove a conflicting constraint to make room for it.`;
 }
 
 /** True when the constraint mentions the object, as a whole or by a point. */
