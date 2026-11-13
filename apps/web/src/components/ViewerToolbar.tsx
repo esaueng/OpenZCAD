@@ -113,6 +113,11 @@ interface ViewerToolbarProps {
   /** Switches the section view on (at the last plane used) or off. */
   onToggleSection(): void;
   /**
+   * No body is on screen: Section is greyed and switches nothing on, as a
+   * cut with no bounds has no controls to show (I49).
+   */
+  nothingToSection?: boolean;
+  /**
    * Whether the section controls show while the cut is on. Owned by the
    * workspace so hiding them survives this bar remounting (a workspace mode
    * or dock layout change); uncontrolled when omitted.
@@ -198,6 +203,7 @@ export function ViewerToolbar({
   onToggleProjection,
   onToggleOrbitMode,
   onToggleSection,
+  nothingToSection = false,
   sectionPanelOpen: sectionPanelOpenProp,
   onSectionPanelOpenChange,
   onSectionPlane,
@@ -451,6 +457,9 @@ export function ViewerToolbar({
       setHeldOff(false);
       return;
     }
+    // Nothing on screen to cut: the button says so instead of switching on
+    // a cut with no controls and nothing to show (I49).
+    if (!sectionOn && nothingToSection) return;
     if (!sectionOn || !shownCut) {
       onToggleSection();
       return;
@@ -652,7 +661,9 @@ export function ViewerToolbar({
             // and the 320px tooltip cut the old sentence off before it.
             description={`Now: ${sectionLabel} · ${
               !sectionOn
-                ? 'cuts the display only'
+                ? nothingToSection
+                  ? 'nothing to cut yet'
+                  : 'cuts the display only'
                 : !shownCut
                   ? 'click to turn off'
                   : sectionPanelShown
@@ -669,6 +680,9 @@ export function ViewerToolbar({
               onClick={(event) => pressSection(event.currentTarget)}
               aria-label={`Section view — now: ${sectionLabel}`}
               aria-pressed={sectionOn}
+              // Greyed by aria, like Undo: a disabled button cannot take
+              // focus or show the tooltip that says why.
+              aria-disabled={!sectionOn && nothingToSection ? true : undefined}
               aria-expanded={sectionPanelShown}
             >
               <Slice size={16} aria-hidden="true" />

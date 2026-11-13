@@ -284,6 +284,45 @@ describe('Measure on the viewer bar', () => {
   });
 });
 
+describe('Section with nothing to cut', () => {
+  // I49: Section switched on in an empty project, showed no controls, and
+  // the cut then carried into the next mode with nothing to say it was on.
+  it('stays off and says why', () => {
+    const noop = () => undefined;
+    const onToggleSection = vi.fn();
+    render(
+      <ViewerToolbar
+        settings={{ ...settings, sectionView: undefined }}
+        projection="perspective"
+        canUndo={false}
+        canRedo={false}
+        sectionRange={null}
+        onUndo={noop}
+        onRedo={noop}
+        onToggleGrid={noop}
+        onFit={noop}
+        onView={noop}
+        onCycleDisplayMode={noop}
+        onToggleProjection={noop}
+        onToggleSection={onToggleSection}
+        nothingToSection
+        onSectionPlane={noop}
+        onSectionOffset={noop}
+        onSectionCommit={noop}
+        onExportSectionDxf={noop}
+        sectionOutline={{ kind: 'clipping' }}
+        units="mm"
+      />
+    );
+    const button = screen.getByRole('button', {
+      name: /^Section view — now: Off$/
+    });
+    expect(button).toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(button);
+    expect(onToggleSection).not.toHaveBeenCalled();
+  });
+});
+
 describe('Orbit mode on the viewer bar', () => {
   function renderWithOrbit(
     orbitMode: ViewerSettings['orbitMode'],
