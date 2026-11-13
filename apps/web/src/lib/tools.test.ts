@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { toolDescription, toolDisabledReason } from './tools';
+import {
+  liveCylindricalFace,
+  toolDescription,
+  toolDisabledReason
+} from './tools';
 
 describe('finish tool selection order', () => {
   it('allows launching fillet before an edge is selected', () => {
@@ -116,6 +120,57 @@ describe('finish tool selection order', () => {
         closedProfileSketchCount: 1
       })
     ).toBeNull();
+  });
+});
+
+describe('Thread and Gear teeth on a model with no cylindrical face', () => {
+  const READY = {
+    sketchCount: 0,
+    liveBodyCount: 1,
+    exactGeometryReady: true,
+    hasEdgeSelected: false
+  };
+  const face = (surfaceType: string) => ({ geometry: { surfaceType } });
+  const body = (bodyId: string, surfaces: string[] | null, consumed = false) =>
+    ({
+      bodyId,
+      consumed,
+      ...(surfaces ? { topology: { faces: surfaces.map(face) } } : {})
+    }) as never;
+
+  it('says what is missing rather than offering a dead end', () => {
+    // 13 November review: both were offered on a box-only model.
+    for (const tool of ['thread', 'gear-teeth'] as const) {
+      expect(
+        toolDisabledReason(tool, { ...READY, hasCylindricalFace: false })
+      ).toBe('Needs a cylindrical face');
+      expect(
+        toolDisabledReason(tool, { ...READY, hasCylindricalFace: true })
+      ).toBeNull();
+      // Unknown (topology still building) leaves them offered.
+      expect(toolDisabledReason(tool, READY)).toBeNull();
+    }
+    expect(
+      toolDisabledReason('hole', { ...READY, hasCylindricalFace: false })
+    ).toBeNull();
+  });
+
+  it('reads the live bodies faces, skipping consumed and hidden ones', () => {
+    const box = body('box', ['Plane', 'Plane', 'Plane']);
+    const rod = body('rod', ['Plane', 'Cylinder', 'Plane']);
+    expect(liveCylindricalFace({ box }, new Set())).toBe(false);
+    expect(liveCylindricalFace({ box, rod }, new Set())).toBe(true);
+    expect(liveCylindricalFace({ box, rod }, new Set(['rod']))).toBe(false);
+    expect(
+      liveCylindricalFace(
+        { box, rod: body('rod', ['Cylinder'], true) },
+        new Set()
+      )
+    ).toBe(false);
+    expect(
+      liveCylindricalFace({ box, mesh: body('mesh', null) }, new Set())
+    ).toBe(undefined);
+    expect(liveCylindricalFace(null, new Set())).toBeUndefined();
   });
 });
 

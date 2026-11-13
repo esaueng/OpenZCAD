@@ -244,6 +244,17 @@ describe('interactionReducer', () => {
     expect(state).toEqual(IDLE);
   });
 
+  it('arms Line for a new sketch and Select for a re-opened one (I36)', () => {
+    const fresh = interactionReducer(IDLE, { type: 'enter-sketch', plane });
+    expect(fresh.mode === 'sketch' && fresh.session.tool).toBe('line');
+    const reopened = interactionReducer(IDLE, {
+      type: 'enter-sketch',
+      plane,
+      sketchId: 'sketch_1'
+    });
+    expect(reopened.mode === 'sketch' && reopened.session.tool).toBe('select');
+  });
+
   it('ignores 3D selection while sketching', () => {
     const sketching = interactionReducer(IDLE, {
       type: 'enter-sketch',
@@ -669,7 +680,7 @@ describe('text tool composing', () => {
     expect(textDraftPlaceable(draft(), { h: 0 })).toBe(false);
     // Or `h` is deleted and the expression no longer resolves at all.
     expect(textDraftPlaceable(draft(), {})).toBe(false);
-    // The card typing 0 into Size (em) writes it to the draft.
+    // The card typing 0 into Em size writes it to the draft.
     state = interactionReducer(state, {
       type: 'sketch-text-draft',
       patch: { size: 0 }

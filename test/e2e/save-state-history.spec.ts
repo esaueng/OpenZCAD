@@ -178,9 +178,18 @@ test('offers no action for a save state whose model is not stored', async ({
   await page.reload();
 
   const savedRow = revisionRow(page, 'Manual save');
-  await expect(savedRow).toContainText('not stored');
+  await expect(savedRow).toContainText('history only');
   await savedRow.hover();
-  await expect(savedRow.getByRole('button')).toHaveCount(0);
+  // The row's only button opens it; it offers no Restore or Branch.
+  await expect(savedRow.getByRole('button')).toHaveCount(1);
+  await expect(
+    savedRow.getByRole('button', { name: /^(Restore|Branch) / })
+  ).toHaveCount(0);
+  // Opened, it says why in words rather than in a hover title (I87).
+  await savedRow.getByRole('button', { name: 'Manual save' }).click();
+  await expect(savedRow).toContainText(
+    'Listed in the project’s history only: its model is no longer stored'
+  );
 });
 
 test('offers no restore for the save the project is already sitting on', async ({

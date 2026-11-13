@@ -131,9 +131,12 @@ test(
       return route.fulfill({ status: 204 });
     });
     await page.goto('/');
-    page.on('dialog', (dialog) => dialog.accept());
     await page
       .getByRole('button', { name: 'Reset Heat Sink to the original' })
+      .click();
+    await page
+      .getByRole('alertdialog', { name: 'Reset the Heat Sink sample?' })
+      .getByRole('button', { name: 'Reset sample' })
       .click();
     await expect.poll(() => deleted).toBe(true);
     await expect(

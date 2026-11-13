@@ -252,7 +252,7 @@ describe('featureValueSummary', () => {
         {},
         'mm'
       )
-    ).toBe('r 1–2.5 mm');
+    ).toBe('R 1–2.5 mm');
     expect(
       featureValueSummary(
         feature({ featureKind: 'chamfer', distance: 1.5, angleDeg: 30 }),
@@ -355,14 +355,14 @@ describe('featureValueSummary', () => {
         {},
         'mm'
       )
-    ).toBe('5 edges · r 2 mm');
+    ).toBe('5 edges · R 2 mm');
     expect(
       featureValueSummary(
         feature({ featureKind: 'fillet', radius: 2, edgeHashes: [9] }),
         {},
         'mm'
       )
-    ).toBe('r 2 mm');
+    ).toBe('R 2 mm');
     expect(
       featureValueSummary(
         feature({ featureKind: 'chamfer', distance: 1, edgeHashes: [1, 2] }),
@@ -428,7 +428,7 @@ describe('featureValueSummary', () => {
 
     it('reads four quarter arcs of one rim as a closed edge', () => {
       expect(fillet([0, 1, 2, 3].map((q) => arc(10 + q, q)))).toBe(
-        'closed edge · r 3.8 mm'
+        'closed edge · R 3.8 mm'
       );
       // Chamfers share the naming.
       expect(
@@ -450,16 +450,16 @@ describe('featureValueSummary', () => {
         arc(20 + q, q, 0),
         arc(30 + q, q, 28)
       ]);
-      expect(fillet(rims)).toBe('2 closed edges · r 3.8 mm');
+      expect(fillet(rims)).toBe('2 closed edges · R 3.8 mm');
     });
 
     it('keeps the plain count for an open chain', () => {
       const chain = [0, 1, 2, 3, 4].map((i) => line(40 + i, i, i + 1));
-      expect(fillet(chain)).toBe('5 edges · r 3.8 mm');
+      expect(fillet(chain)).toBe('5 edges · R 3.8 mm');
     });
 
     it('shows no count for a single edge', () => {
-      expect(fillet([arc(10, 0)])).toBe('r 3.8 mm');
+      expect(fillet([arc(10, 0)])).toBe('R 3.8 mm');
       expect(
         fillet([
           reference(50, {
@@ -470,14 +470,14 @@ describe('featureValueSummary', () => {
             axis: [0, 0, Q]
           })
         ])
-      ).toBe('r 3.8 mm');
+      ).toBe('R 3.8 mm');
     });
 
     it('falls back to the count when an edge has no stored witness', () => {
       const rim = [0, 1, 2, 3].map((q) => arc(10 + q, q));
       // A hash-only pick, or an older document with no references.
       expect(fillet(rim.slice(0, 3), [10, 11, 12, 13])).toBe(
-        '4 edges · r 3.8 mm'
+        '4 edges · R 3.8 mm'
       );
       expect(
         featureValueSummary(
@@ -489,13 +489,13 @@ describe('featureValueSummary', () => {
           {},
           'mm'
         )
-      ).toBe('4 edges · r 3.8 mm');
+      ).toBe('4 edges · R 3.8 mm');
       // A malformed witness from untrusted JSON names nothing.
       const broken = {
         ...rim[3]!,
         witness: { curveType: 'CIRCLE', length: 1, closed: false }
       } as unknown as EdgeTopologyReferenceV5;
-      expect(fillet([...rim.slice(0, 3), broken])).toBe('4 edges · r 3.8 mm');
+      expect(fillet([...rim.slice(0, 3), broken])).toBe('4 edges · R 3.8 mm');
     });
   });
 
