@@ -558,6 +558,14 @@
   font-size: var(--fs-xs);
 }
 
+/* Every option's name in one column, so the hints start at one edge: a
+   name that shrank to fit ("STL (ASCII)" over two lines at 390 px) pushed
+   its hint a little further each row. */
+.export-dialog-option > span {
+  flex: none;
+  min-width: 7em;
+}
+
 .export-dialog-presets {
   display: flex;
   gap: var(--sp-2);
@@ -609,6 +617,24 @@
 
 .import-units-dialog .export-dialog-option small {
   font-variant-numeric: tabular-nums;
+}
+
+/* Width and Height as one two-column table, so their fields line up under
+   labels of different widths. The labels keep wrapping their inputs. */
+.export-dialog-size {
+  display: grid;
+  grid-template-columns: max-content max-content;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+}
+
+.export-dialog-size > label {
+  display: contents;
+}
+
+.export-dialog-size input[type='number'] {
+  width: 90px;
 }
 
 /* Facet angle and units side by side, wrapping on a narrow dialog. */
@@ -722,6 +748,20 @@
   display: inline-flex;
   align-items: center;
   gap: var(--sp-1);
+}
+
+/* On a phone, or in a short window, the dialog scrolls: Cancel and Export
+   stay pinned to its foot instead of waiting below the fold with nothing
+   to say they are there. */
+@media (max-width: 480px), (max-height: 720px) {
+  .export-dialog-actions {
+    position: sticky;
+    bottom: calc(-1 * var(--sp-4));
+    margin: 0 calc(-1 * var(--sp-4)) calc(-1 * var(--sp-4));
+    padding: var(--sp-3) var(--sp-4) var(--sp-4);
+    background: var(--color-surface);
+    border-top: var(--border-thin);
+  }
 }
 
 /* ── Shapr3D paired migration preview ───────────────────── */
