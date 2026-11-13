@@ -6,6 +6,7 @@ import {
   threadEditOptions,
   threadFace,
   threadIsPartial,
+  threadReach,
   threadRequestFields,
   threadSpec,
   threadSummary,
@@ -578,27 +579,265 @@ describe('in-place thread: picks and the dragged end (U11)', () => {
   it('chamfers only the ends of the face a thread reaches', () => {
     const ends = (
       chamfer: string | undefined,
-      partial: boolean,
       from: 'start' | 'end',
-      setOff = false
-    ) => threadChamferedEnds(chamfer, { partial, from, setOff });
+      near: boolean,
+      far: boolean
+    ) => threadChamferedEnds(chamfer, from, { near, far });
     // The whole face: the ends asked for.
-    expect(ends(undefined, false, 'start')).toEqual({ start: true, end: true });
-    expect(ends('end', false, 'end')).toEqual({ start: false, end: true });
-    expect(ends('none', false, 'start')).toEqual({ start: false, end: false });
-    // Stopped short: only the end it starts from, where that one is asked.
-    expect(ends('both', true, 'start')).toEqual({ start: true, end: false });
-    expect(ends('both', true, 'end')).toEqual({ start: false, end: true });
-    expect(ends('end', true, 'start')).toEqual({ start: false, end: false });
-    // Set off from its starting end: only the far one, where it reaches it.
-    expect(ends('both', false, 'start', true)).toEqual({
-      start: false,
+    expect(ends(undefined, 'start', true, true)).toEqual({
+      start: true,
       end: true
     });
-    expect(ends('both', true, 'end', true)).toEqual({
+    expect(ends('end', 'end', true, true)).toEqual({ start: false, end: true });
+    expect(ends('none', 'start', true, true)).toEqual({
       start: false,
       end: false
     });
+    // Stopped short: only the end it starts from, where that one is asked.
+    expect(ends('both', 'start', true, false)).toEqual({
+      start: true,
+      end: false
+    });
+    expect(ends('both', 'end', true, false)).toEqual({
+      start: false,
+      end: true
+    });
+    expect(ends('end', 'start', true, false)).toEqual({
+      start: false,
+      end: false
+    });
+    // Set off from its starting end: only the far one, where it reaches it.
+    expect(ends('both', 'start', false, true)).toEqual({
+      start: false,
+      end: true
+    });
+    expect(ends('both', 'end', false, false)).toEqual({
+      start: false,
+      end: false
+    });
+  });
+
+  it('reads where a span reaches from its resolved offset and length, not how the length is stored (review #1390)', () => {
+    const face = { length: 8, radius: 3 };
+    const reach = (
+      held: boolean,
+      offset: number | undefined,
+      length: number | undefined
+    ) => threadReach({ held, offset, length, face });
+    // A length that follows the offset reaches the far end by construction.
+    expect(reach(false, 0, 8)).toEqual({ near: true, far: true });
+    expect(reach(false, 2, undefined)).toEqual({ near: false, far: true });
+    // A held length reaches the far end where its span does, within the
+    // kernel's snap (1e-9 of the larger of the face's length and radius).
+    expect(reach(true, 0, 8)).toEqual({ near: true, far: true });
+    expect(reach(true, 2, 6)).toEqual({ near: false, far: true });
+    expect(reach(true, 0, 8 - 1e-12)).toEqual({ near: true, far: true });
+    expect(reach(true, 1e-12, 8)).toEqual({ near: true, far: true });
+    expect(reach(true, 0, 8 - 1e-6)).toEqual({ near: true, far: false });
+    expect(reach(true, 1e-6, 5)).toEqual({ near: false, far: false });
+    expect(reach(true, 0, 5)).toEqual({ near: true, far: false });
+    // The radius sets the slack on a face shorter than it is wide.
+    expect(
+      threadReach({
+        held: true,
+        offset: 0,
+        length: 1 - 5e-9,
+        face: { length: 1, radius: 20 }
+      }).far
+    ).toBe(true);
+    // What does not resolve reaches nothing it is not known to.
+    expect(reach(true, undefined, 8)).toEqual({ near: false, far: false });
+    expect(reach(true, 0, undefined)).toEqual({ near: true, far: false });
+    expect(
+      threadReach({ held: true, offset: 0, length: 8, face: null })
+    ).toEqual({ near: true, far: false });
+    expect(
+      threadReach({ held: false, offset: 0, length: 8, face: null })
+    ).toEqual({ near: true, far: true });
+  });
+
+  // The boss, and the same one with its axis running down from the top.
+  const FLIPPED: FacePick = {
+    ...BOSS,
+    cylinder: {
+      axisStart: { x: 0, y: 0, z: 12 },
+      axisEnd: { x: 0, y: 0, z: 0 },
+      radius: 3
+    }
+  };
+  // Clicked near the face's start, then near its end; z is the click.
+  const PICKS = [
+    { name: 'from the start', boss: BOSS, z: 2, from: 'start' as const },
+    { name: 'from the end', boss: BOSS, z: 10, from: 'end' as const },
+    {
+      name: 'flipped, from the start',
+      boss: FLIPPED,
+      z: 10,
+      from: 'start' as const
+    },
+    { name: 'flipped, from the end', boss: FLIPPED, z: 2, from: 'end' as const }
+  ];
+
+  it.each(PICKS)(
+    'chamfers both ends of an expression length that runs the whole face: $name (review #1390)',
+    ({ boss, z, from }) => {
+      const values = initialValues({ length: 'face', offset: 0 });
+      const numbers = {
+        ...numbersOf(initialValues({ offset: 0 })),
+        length: 12
+      };
+      const ctx = { ...CTX, touched: ['length'] };
+      const face = { ...boss, point: { x: 3, y: 0, z } };
+      expect(threadIsPartial(face, values, numbers, ctx)).toBe(true);
+      const { thread } = threadSpec.request(
+        { ...SLOTS, faces: [face] },
+        values,
+        defaults(),
+        ctx,
+        numbers
+      ) as { thread: ThreadRequest };
+      // Stored as written, and chamfered at both ends it reaches.
+      expect(thread).toMatchObject({
+        length: 'face',
+        chamferStart: true,
+        chamferEnd: true
+      });
+      expect(thread.anchor).toBe(from === 'end' ? 'end' : undefined);
+      expect(
+        threadSummary(
+          {
+            ...inPlacePanelState(threadSpec, {}, numbers),
+            raws: { length: 'face' }
+          },
+          'mm',
+          { faces: [face] },
+          { touched: ['length'], raws: { length: 'face' } }
+        )
+      ).toBe('Sized from the Ø6 mm face · Threads the full 12 mm');
+    }
+  );
+
+  it.each(PICKS)(
+    'chamfers the far end an offset expression length reaches: $name (review #1390)',
+    ({ boss, z, from }) => {
+      const values = initialValues({ length: 'rest', offset: 2 });
+      const numbers = {
+        ...numbersOf(initialValues({ offset: 2 })),
+        length: 10
+      };
+      const ctx = { ...CTX, touched: ['length', 'offset'] };
+      const face = { ...boss, point: { x: 3, y: 0, z } };
+      const { thread } = threadSpec.request(
+        { ...SLOTS, faces: [face] },
+        values,
+        defaults(),
+        ctx,
+        numbers
+      ) as { thread: ThreadRequest };
+      expect(thread).toMatchObject({ length: 'rest', offset: 2 });
+      // Set off from where it starts, it reaches only the other end.
+      expect([thread.chamferStart, thread.chamferEnd]).toEqual(
+        from === 'start' ? [undefined, true] : [true, undefined]
+      );
+      // One that stops 1 short of it reaches neither.
+      const short = threadSpec.request(
+        { ...SLOTS, faces: [face] },
+        values,
+        defaults(),
+        ctx,
+        { ...numbers, length: 9 }
+      ) as { thread: ThreadRequest };
+      expect(short.thread.chamferStart).toBeUndefined();
+      expect(short.thread.chamferEnd).toBeUndefined();
+      expect(
+        threadSummary(
+          {
+            ...inPlacePanelState(threadSpec, {}, numbers),
+            raws: { length: 'rest' }
+          },
+          'mm',
+          { faces: [face] },
+          { touched: ['length', 'offset'], raws: { length: 'rest' } }
+        )
+      ).toBe('Sized from the Ø6 mm face · To end · Threads 10 of 12 mm');
+    }
+  );
+
+  it.each(
+    [
+      { name: 'a number', length: 12 as ParamValue },
+      { name: 'an expression', length: 'face' as ParamValue }
+    ].flatMap((stored) =>
+      [BOSS, FLIPPED].flatMap((boss) =>
+        ([undefined, 'start', 'end'] as const).map((anchor) => ({
+          ...stored,
+          boss,
+          anchor,
+          label: [
+            stored.name,
+            boss === BOSS ? 'axis up' : 'axis down',
+            'anchor ' + (anchor ?? 'absent')
+          ].join(', ')
+        }))
+      )
+    )
+  )(
+    'writes back both chamfers of a stored length that runs the whole face, edited untouched: $label (review #1390)',
+    ({ length, boss, anchor }) => {
+      const saved = {
+        featureKind: 'thread' as const,
+        targetBodyId: 'body_a' as BodyId,
+        faceHash: 9,
+        profile: 'printable' as const,
+        clearance: 0.1,
+        length,
+        ...(anchor ? { anchor } : {}),
+        chamferStart: true,
+        chamferEnd: true
+      };
+      const values = initialValues({ length });
+      const numbers = { ...numbersOf(initialValues()), length: 12 };
+      const ctx = { ...CTX, saved, touched: ['length'] };
+      expect(threadIsPartial(boss, values, numbers, ctx)).toBe(true);
+      const { featureKind: _kind, ...fields } = saved;
+      expect(
+        threadSpec.request(
+          { ...SLOTS, faces: [boss] },
+          values,
+          threadEditOptions(saved, evaluate, 'mm'),
+          ctx,
+          numbers
+        )
+      ).toEqual({ tool: 'thread', thread: fields });
+    }
+  );
+
+  it('writes back the far chamfer of a stored offset span that reaches the far end (review #1390)', () => {
+    for (const anchor of ['start', 'end'] as const) {
+      const saved = {
+        featureKind: 'thread' as const,
+        targetBodyId: 'body_a' as BodyId,
+        faceHash: 9,
+        profile: 'printable' as const,
+        clearance: 0.1,
+        length: 10,
+        offset: 2,
+        anchor,
+        ...(anchor === 'start' ? { chamferEnd: true } : { chamferStart: true })
+      };
+      const values = initialValues({ length: 10, offset: 2 });
+      const ctx = { ...CTX, saved, touched: ['length', 'offset'] };
+      const { featureKind: _kind, ...fields } = saved;
+      expect(
+        threadSpec.request(
+          { ...SLOTS, faces: [BOSS] },
+          values,
+          threadEditOptions(saved, evaluate, 'mm'),
+          ctx,
+          numbersOf(values)
+        )
+      ).toEqual({ tool: 'thread', thread: fields });
+    }
   });
 
   it('keeps a partial thread’s chamfer where it starts, from either end', () => {
@@ -732,7 +971,26 @@ describe('in-place thread: picks and the dragged end (U11)', () => {
           }
         }
       )
-    ).toBe('Sized from the Ø6 mm face · Threads 10 of 12 mm, ends plain');
+    ).toBe('Sized from the Ø6 mm face · To end · Threads 10 of 12 mm');
+    // The same stored span one short of the far end stops plain there.
+    expect(
+      threadSummary(
+        inPlacePanelState(threadSpec, {}, { length: 9, offset: 2 }),
+        'mm',
+        slots,
+        {
+          touched: ['length', 'offset'],
+          saved: {
+            featureKind: 'thread',
+            targetBodyId: BOSS.bodyId,
+            faceHash: BOSS.hash,
+            profile: 'printable',
+            length: 9,
+            offset: 2
+          }
+        }
+      )
+    ).toBe('Sized from the Ø6 mm face · Threads 9 of 12 mm, ends plain');
   });
 });
 
