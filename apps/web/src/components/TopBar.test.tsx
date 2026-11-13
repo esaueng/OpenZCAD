@@ -38,7 +38,8 @@ function renderTopBar(
     onRenameProject: vi.fn(),
     onReviewEditFailure: vi.fn(),
     onShowWarnings: vi.fn(),
-    onWorkspaceMode: vi.fn()
+    onWorkspaceMode: vi.fn(),
+    onWorkspaceModeIntent: vi.fn()
   };
   render(
     <TopBar
@@ -104,6 +105,16 @@ describe('TopBar workspace mode help', () => {
       expect(onWorkspaceMode).toHaveBeenCalledWith(mode);
     }
   );
+
+  it('reports intent to switch mode on pointer enter and focus, before any click', () => {
+    const { onWorkspaceMode, onWorkspaceModeIntent } = renderTopBar();
+    const assemble = screen.getByRole('button', { name: 'Assemble' });
+    fireEvent.pointerEnter(assemble);
+    expect(onWorkspaceModeIntent).toHaveBeenLastCalledWith('assemble');
+    fireEvent.focus(screen.getByRole('button', { name: 'Draw' }));
+    expect(onWorkspaceModeIntent).toHaveBeenLastCalledWith('drawing');
+    expect(onWorkspaceMode).not.toHaveBeenCalled();
+  });
 
   it("counts the model's warnings beside the save status and opens Diagnostics", () => {
     // With none there is no chip: the bar never spends the name's room on

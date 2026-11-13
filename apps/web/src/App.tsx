@@ -1845,15 +1845,27 @@ import {
   savedPanelWidths,
   SIDEBAR_WIDTH_LIMITS
 } from './lib/panelWidths';
-// Parts, joints and gear setup are used only in Assemble. Share the existing
-// pending state and stale-chunk recovery with the other workspace panels.
-const AssemblyPanel = withSuspense(
-  lazyWithStaleChunkNotice(() =>
-    import('./components/assembly/AssemblyPanel').then((module) => ({
-      default: module.AssemblyPanel
-    }))
-  )
+// Parts, joints and gear setup are used only in Assemble. The chunk loads
+// when the pointer or focus reaches the Assemble switch (or on entry), and
+// until it has, a sidebar-shaped pending panel stands in its place: the
+// project's one-time reveal does not cover later loads.
+const LazyAssemblyPanel = preloadableLazy(() =>
+  import('./components/assembly/AssemblyPanel').then((module) => ({
+    default: module.AssemblyPanel
+  }))
 );
+function AssemblyPanel(props: ComponentProps<typeof LazyAssemblyPanel>) {
+  return (
+    <Suspense fallback={<AssemblyPanelPending />}>
+      <LazyAssemblyPanel {...props} />
+    </Suspense>
+  );
+}
+/** Warms Assemble's sidebar before the switch is pressed; failures are quiet. */
+function preloadWorkspaceMode(mode: WorkspaceMode) {
+  if (mode === 'assemble') LazyAssemblyPanel.preload().catch(() => undefined);
+}
+import { AssemblyPanelPending } from './components/assembly/AssemblyPanelPending';
 import { meshBoundsLookup } from './lib/assembly/motionSetup';
 import { MotionStudyTimeline } from './components/assembly/MotionStudyTimeline';
 import { AssemblyPlayer } from './components/assembly/AssemblyPlayer';
@@ -31467,6 +31479,7 @@ export function App() {
           drawingModeDisabledReason={drawingModeDisabledReason}
           assembleModeDisabledReason={assembleModeDisabledReason}
           onWorkspaceMode={handleWorkspaceMode}
+          onWorkspaceModeIntent={preloadWorkspaceMode}
           onSave={() => void handleSave()}
           onSaveAs={openSaveNameDialog}
           onImportFiles={(files) => void handleImportFiles(files)}

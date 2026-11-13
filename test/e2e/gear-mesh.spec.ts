@@ -72,6 +72,47 @@ const panel = (page: Page) =>
   page.getByRole('complementary', { name: 'Assembly' });
 
 test(
+  'shows the Assemble sidebar loading while its chunk downloads after Build (M14)',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(90_000);
+    // Hold the sidebar's chunk until Build is visible and Assemble opened.
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let requested = 0;
+    await page.route(
+      /\/assets\/AssemblyPanel-[^/]+\.js(?:\?|$)/,
+      async (route) => {
+        requested += 1;
+        await gate;
+        await route.continue();
+      }
+    );
+    await openDocument(page, gearPair());
+    expect(requested).toBe(0);
+    const assemble = page.getByRole('button', {
+      name: 'Assemble',
+      exact: true
+    });
+    // Pointing at the switch starts the download before the click.
+    await assemble.hover();
+    await expect.poll(() => requested).toBe(1);
+    await assemble.click();
+    const loading = panel(page).getByRole('status');
+    await expect(loading).toHaveText('Loading parts and joints…');
+    await expect(panel(page)).toHaveAttribute('aria-busy', 'true');
+    release();
+    await expect(
+      panel(page).getByRole('region', { name: 'Parts' })
+    ).toBeVisible();
+    await expect(
+      loading.filter({ hasText: 'Loading parts and joints…' })
+    ).toHaveCount(0);
+    expect(requested).toBe(1);
+  }
+);
+
+test(
   'meshes two gears at their centre distance with one joint (M14)',
   { tag: '@ci-smoke' },
   async ({ page }) => {

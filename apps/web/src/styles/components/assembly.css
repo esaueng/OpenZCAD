@@ -36,6 +36,12 @@
   font-size: var(--fs-sm);
 }
 
+/* Assemble's sidebar while its chunk loads: the panel frame, saying so. */
+.assembly-panel-pending {
+  padding: var(--sp-3);
+  cursor: progress;
+}
+
 .assembly-panel {
   max-height: 100%;
   overflow: hidden;
