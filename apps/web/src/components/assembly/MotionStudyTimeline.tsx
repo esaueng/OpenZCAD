@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -218,6 +219,33 @@ export function MotionStudyTimeline({
     if (selectedTrack !== null && !saved?.tracks[selectedTrack])
       setSelectedTrack(null);
   }, [saved, selection, selectedTrack]);
+
+  // Floating over the stage, the timeline publishes its height to the
+  // viewer area, which lifts the notice lane above it: "New motion study
+  // Motion 1 added." sat on the first track (I7).
+  const timelineRef = useRef<HTMLElement | null>(null);
+  const timelineShown = Boolean(assembly && saved);
+  useLayoutEffect(() => {
+    const element = timelineRef.current;
+    const viewer = element?.closest<HTMLElement>('.viewer-area');
+    if (!floating || !timelineShown || !element || !viewer) return;
+    const measure = () => {
+      viewer.style.setProperty(
+        '--motion-timeline-h',
+        `${Math.ceil(element.getBoundingClientRect().height)}px`
+      );
+    };
+    measure();
+    const observer =
+      typeof ResizeObserver === 'undefined'
+        ? null
+        : new ResizeObserver(measure);
+    observer?.observe(element);
+    return () => {
+      observer?.disconnect();
+      viewer.style.removeProperty('--motion-timeline-h');
+    };
+  }, [floating, timelineShown]);
 
   if (!assembly || !saved) {
     poseRef.current = () => false;
@@ -516,6 +544,7 @@ export function MotionStudyTimeline({
           ? 'motion-timeline motion-timeline-floating'
           : 'motion-timeline'
       }
+      ref={timelineRef}
       aria-label={`Motion study ${saved.name}`}
       tabIndex={0}
       onKeyDown={onKeyDown}

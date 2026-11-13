@@ -4,10 +4,14 @@ import { RemusKernel, loadRemusTranslators } from './remus-runtime';
 import { kernelRefusalRecordOf } from './kernel-refusal';
 import {
   assertWallResizeAccepted,
+  cutKeptToolMaterialMeshRefusal,
   cutKeptToolMaterialRefusal,
+  cutRetainedToolMaterialMeshWitness,
   cutRetainedToolMaterialWitness,
   intersectKeptOutsideMaterialRefusal,
   intersectKeptOutsideMaterialWitness,
+  meshDistance,
+  meshWindingNumber,
   ResultAcceptanceRefusal,
   type WallResizeAcceptance
 } from './result-acceptance';
@@ -263,6 +267,132 @@ describe('intersect acceptance (#1244 torus ∩ holed block)', () => {
     expect(
       intersectKeptOutsideMaterialWitness(kernel, box, drill, box)?.outside
     ).toBe('tool');
+  });
+});
+
+/** Depth of `point` inside a circular tube about a full circle. */
+function tubeDepth(
+  point: readonly number[],
+  centre: readonly [number, number, number],
+  axis: 0 | 1 | 2,
+  spineRadius: number,
+  tubeRadius: number
+): number {
+  const offset = point.map((value, index) => value - centre[index]!);
+  const axial = offset[axis]!;
+  const radial = Math.hypot(...offset.filter((_, index) => index !== axis));
+  return tubeRadius - Math.hypot(radial - spineRadius, axial);
+}
+
+describe('cut acceptance without the point classifier (#1242)', () => {
+  it('measures winding and distance on a closed mesh', () => {
+    const kernel = new RemusKernel();
+    const box = kernel.makeBox(10, 10, 10);
+    const tessellation = kernel.tessellateSolid(box, 0.1);
+    const mesh = {
+      positions: tessellation.positions.slice(),
+      indices: tessellation.indices.slice()
+    };
+    tessellation.free();
+    expect(meshWindingNumber(mesh, [5, 5, 5])).toBeCloseTo(1, 9);
+    expect(meshWindingNumber(mesh, [5, 5, 15])).toBeCloseTo(0, 9);
+    expect(meshWindingNumber(mesh, [-3, 12, 4])).toBeCloseTo(0, 9);
+    expect(meshDistance(mesh, [5, 5, 5])).toBeCloseTo(5, 9);
+    expect(meshDistance(mesh, [2, 7, 5])).toBeCloseTo(2, 9);
+    expect(meshDistance(mesh, [13, 14, 5])).toBeCloseTo(5, 9);
+  });
+
+  it('finds the K10 torus overlap a cut kept, and accepts real cuts', () => {
+    const kernel = new RemusKernel();
+    const box = kernel.makeBox(60, 60, 20);
+    const torus = kernel.makeTorus(15, 4, 64);
+    kernel.transformSolid(torus, translation(30, 30, 20));
+    // The box handed back untouched, as the kernel did on the K10 pin.
+    const witness = cutRetainedToolMaterialMeshWitness(
+      kernel,
+      box,
+      torus,
+      kernel.copySolid(box)
+    );
+    expect(witness).not.toBeNull();
+    const [x, y, z] = witness!.point;
+    expect(
+      4 - Math.hypot(Math.hypot(x - 30, y - 30) - 15, z - 20)
+    ).toBeGreaterThan(witness!.clearance);
+    expect(20 - z).toBeGreaterThan(witness!.clearance);
+    expect(witness!.clearance).toBeGreaterThan(4 * witness!.deflection);
+
+    const drill = kernel.makeCylinder(6, 30);
+    kernel.transformSolid(drill, translation(30, 30, 10));
+    const drilled = kernel.cut(kernel.copySolid(box), drill);
+    expect(
+      cutRetainedToolMaterialMeshWitness(kernel, box, drill, drilled)
+    ).toBeNull();
+    const lid = kernel.makeBox(60, 60, 5);
+    kernel.transformSolid(lid, translation(0, 0, 20));
+    expect(
+      cutRetainedToolMaterialMeshWitness(kernel, box, lid, box)
+    ).toBeNull();
+  });
+
+  it('proves the #1242 sweep/sweep cut kept the overlap', async () => {
+    const io = await loadRemusTranslators();
+    const kernel = new RemusKernel();
+    const imported = (name: string) =>
+      kernel.deserializeSolids(
+        io.importStep(
+          readFileSync(
+            new URL(
+              `../../../test/fixtures/step/subtract-curved/${name}`,
+              import.meta.url
+            )
+          )
+        )
+      )[0]!;
+    const target = imported('swept-arc-target.step');
+    const tool = imported('crossing-sweep-tool.step');
+    const witness = cutRetainedToolMaterialMeshWitness(
+      kernel,
+      target,
+      tool,
+      kernel.copySolid(target)
+    );
+    expect(witness).not.toBeNull();
+    // The analytic tubes generate.py swept, independent of every mesh: the
+    // witness lies inside both by at least the clearance it reports.
+    const point = witness!.point;
+    expect(
+      tubeDepth(
+        point,
+        [6, 1, 0.5 - (0.82 * 53) / 22],
+        1,
+        0.82 * (6 + 53 / 22),
+        1.64
+      )
+    ).toBeGreaterThan(witness!.clearance - 2 * witness!.deflection);
+    expect(tubeDepth(point, [6, 1, -4 / 3], 0, 7 + 4 / 3, 2)).toBeGreaterThan(
+      witness!.clearance - 2 * witness!.deflection
+    );
+
+    const refusal = cutKeptToolMaterialMeshRefusal('subtract', witness!);
+    expect(refusal.message.split('\n')[0]).toBe(
+      cutKeptToolMaterialRefusal('subtract', point).message.split('\n')[0]
+    );
+    expect(refusal.kernelMessage).toMatch(
+      /tessellated target, tool and result/
+    );
+    expect(kernelRefusalRecordOf(refusal)).toEqual({
+      family: 'validation',
+      category: 'internal',
+      code: 'cut_kept_tool_material'
+    });
+
+    // The revolve/sweep pair cuts correctly on this pin; nothing is kept.
+    const annulus = imported('annulus-tool.step');
+    const cut = kernel.cut(kernel.copySolid(target), kernel.copySolid(annulus));
+    expect(
+      cutRetainedToolMaterialMeshWitness(kernel, target, annulus, cut)
+    ).toBeNull();
   });
 });
 

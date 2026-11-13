@@ -980,6 +980,15 @@
   justify-content: flex-start;
 }
 
+/* Resend under the code: its own security check, then a new code (I81). */
+.settings-auth-resend {
+  display: grid;
+  gap: var(--sp-2);
+  justify-items: start;
+  padding-top: var(--sp-2);
+  border-top: var(--border-thin);
+}
+
 .settings-auth-controls label {
   display: grid;
   gap: var(--sp-1);

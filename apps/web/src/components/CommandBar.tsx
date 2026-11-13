@@ -126,6 +126,15 @@ function completionOf(typed: string, command: PaletteCommand | undefined) {
 }
 
 /**
+ * What a search that found nothing says: where to look instead, rather than
+ * a dead end (I20).
+ */
+export function noMatchMessage(typed: string): string {
+  const words = typed.trim();
+  return `No command matches “${words}”. Clear the field and press ↓ to list every command, or search “help” for the keyboard shortcuts.`;
+}
+
+/**
  * The prompt line at the foot of the stage, the one text field on it.
  *
  * Typed words search the commands: the list of matches stands on the bar,
@@ -155,6 +164,10 @@ export function CommandBar({
   pick = null
 }: CommandBarProps) {
   const [query, setQuery] = useState('');
+  // The empty field's list of commands, asked for with ArrowDown or by the
+  // host's Ctrl+K (an empty draft). Empty, the field otherwise lists
+  // nothing, so neither key looked like it did anything (I20).
+  const [browseEmpty, setBrowseEmpty] = useState(false);
   // Null is the default row: the ask row when there is one, else the best
   // match.
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
@@ -175,8 +188,12 @@ export function CommandBar({
   // Plain words search as the slash does. Without an assistant they are
   // only a search, so the bar reads as one (the glyph turns, the stream
   // steps aside) exactly as it does for "/".
-  const searching = slashMode || question.length > 0;
-  const commandMode = slashMode || (question.length > 0 && !canAsk);
+  const searching =
+    slashMode || question.length > 0 || (browseEmpty && query.length === 0);
+  const commandMode =
+    slashMode ||
+    (question.length > 0 && !canAsk) ||
+    (browseEmpty && query.length === 0);
   const prefix = slashMode ? COMMAND_PREFIX : '';
   const typed = query.slice(prefix.length);
   // The host rebuilds the command list every render; only rank it while
@@ -204,8 +221,12 @@ export function CommandBar({
   const askRow = canAsk && question.length > 0 && hasMatches;
   const rowCount = matches.length + (askRow ? 1 : 0);
   const askIndex = askRow ? matches.length : -1;
+  // The default row is one that can run: a disabled best match stays
+  // listed with its reason but is not the row Enter or Tab would take
+  // (I24: a disabled Extrude was highlighted and ghost-completed).
+  const firstEnabled = matches.findIndex((command) => !command.disabledReason);
   const clampedIndex = Math.min(
-    activeIndex ?? (askRow ? askIndex : 0),
+    activeIndex ?? (askRow ? askIndex : Math.max(firstEnabled, 0)),
     Math.max(rowCount - 1, 0)
   );
   const activeCommand =
@@ -216,7 +237,10 @@ export function CommandBar({
   // that found nothing. Say what Enter will do with them, and where the
   // commands are.
   const askHintShown = open && canAsk && question.length > 0 && !askRow;
-  const completion = listShown ? completionOf(typed, activeCommand) : '';
+  const completion =
+    listShown && !activeCommand?.disabledReason
+      ? completionOf(typed, activeCommand)
+      : '';
 
   useEffect(() => {
     const input = inputRef.current;
@@ -238,6 +262,7 @@ export function CommandBar({
     handledDraftId.current = draft.id;
     setQuery(draft.text);
     setActiveIndex(null);
+    setBrowseEmpty(draft.text === '');
     onOpenChange(true);
     const input = inputRef.current;
     if (input) {
@@ -264,6 +289,7 @@ export function CommandBar({
   function reset() {
     setQuery('');
     setActiveIndex(null);
+    setBrowseEmpty(false);
   }
 
   function dismiss() {
@@ -344,7 +370,7 @@ export function CommandBar({
                 ? ''
                 : browsing
                   ? 'Nothing runs here now. Type to search every command.'
-                  : 'No matching command.'}
+                  : noMatchMessage(typed)}
             </p>
             {hasRows && (
               <div
@@ -590,6 +616,17 @@ export function CommandBar({
                     recentIds
                   ).findIndex((command) => command.id === completed.id)
                 );
+              } else if (
+                empty &&
+                !listShown &&
+                event.key === 'ArrowDown' &&
+                !event.altKey &&
+                !meta
+              ) {
+                // An empty field lists the commands that run here.
+                event.preventDefault();
+                setBrowseEmpty(true);
+                setActiveIndex(null);
               } else if (listShown && hasRows && event.key === 'ArrowDown') {
                 event.preventDefault();
                 setActiveIndex(Math.min(clampedIndex + 1, rowCount - 1));

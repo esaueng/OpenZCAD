@@ -153,6 +153,7 @@ import {
   CirclePause,
   CirclePlay,
   Combine,
+  Cog,
   Copy,
   Crosshair,
   Download,
@@ -160,6 +161,7 @@ import {
   FolderOpen,
   Grid3x3,
   History as HistoryIcon,
+  Keyboard,
   Layers3,
   Maximize2,
   Monitor,
@@ -471,7 +473,10 @@ import {
 } from './lib/shaprImportWorkerClient';
 import { rebuildImportInDisposableWorker } from './lib/importRebuildWorkerClient';
 import { shaprMigrationDraft } from './lib/shaprMigration';
-import { presentedWorkspaceSaveState } from './lib/workspaceSaveStatePresentation';
+import {
+  autosaveReportedSaveState,
+  presentedWorkspaceSaveState
+} from './lib/workspaceSaveStatePresentation';
 import { showsWorkspaceEmptyState } from './lib/workspaceEmptyState';
 import {
   CheckpointSaveError,
@@ -567,6 +572,10 @@ import {
   type CommandSelection
 } from './lib/commandContext';
 import { WorkspaceColumn } from './components/WorkspaceColumn';
+import {
+  LIVE_SESSION_CONNECTING,
+  LiveSessionNotice
+} from './components/LiveSessionNotice';
 import { WorkspaceEmptyState } from './components/WorkspaceEmptyState';
 import {
   ActivityLogButton,
@@ -906,6 +915,13 @@ import { parameterDisplayName } from './lib/parameterDisplayName';
 import { featurePaletteLabel, withDistinctLabels } from './lib/paletteLabels';
 import { DISPLAY_MODE_LABELS } from './lib/displayMode';
 import { ContextMenu, type ContextMenuState } from './components/ContextMenu';
+import {
+  FACE_VERB_PREFIX,
+  LOOK_AT_FACE_ITEM_ID,
+  selectOtherMenuItem,
+  withFaceVerbs,
+  type ViewportMenuState
+} from './lib/viewportMenu';
 import type {
   ResolveExtrudeOptions,
   ResolvedExtrude
@@ -953,7 +969,8 @@ import type {
   BodyAppearancePreview,
   FaceResizeCommit,
   OffsetCommitOutcome,
-  NormalToFaceRequest
+  NormalToFaceRequest,
+  ViewportContextMenuOptions
 } from './components/ModelViewer';
 import type { OrientationLink } from './components/viewer/orientationCube';
 import type {
@@ -3888,7 +3905,9 @@ export function App() {
     }
   );
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
-  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [contextMenu, setContextMenu] = useState<ViewportMenuState | null>(
+    null
+  );
   const contextMenuExit = useDelayedUnmount(contextMenu, OVERLAY_EXIT_MS);
   const orientationRef = useRef<OrientationLink | null>(null);
   /** Click point + normal of the latest topology pick (drag-handle anchor). */
@@ -6025,8 +6044,8 @@ export function App() {
                     : collaborationRollout.editLeasesEnforced &&
                         !activeCollaborationLease
                       ? collaboration.status === 'lease-denied'
-                        ? 'Another collaborator holds the edit lease'
-                        : 'Waiting for the project edit lease'
+                        ? 'Someone else is editing this project right now'
+                        : LIVE_SESSION_CONNECTING
                       : null;
   // Being encrypted locks the document as firmly as a second tab does; the
   // second tab keeps its own notice.
@@ -6052,6 +6071,9 @@ export function App() {
           : assembleMode
             ? 'Assemble mode edits the assembly only — switch to Build to model'
             : projectEditDisabledReason;
+  // The seat is waiting for the live session: one notice says so, and the
+  // tools keep their own descriptions (design review I10).
+  const liveSessionConnecting = editDisabledReason === LIVE_SESSION_CONNECTING;
   // D01 sheet edits answer to the project's own locks in Draw and Build (a
   // read-only seat or a second tab refuses them), and to the reading
   // workspaces' locks in View and Tweak, where a drawing-only undo or redo
@@ -6110,6 +6132,11 @@ export function App() {
   const projectRenameDisabledReasonRef = useRef(projectRenameDisabledReason);
   projectRenameDisabledReasonRef.current = projectRenameDisabledReason;
 
+  /** "Cannot use Box: …": one stop, even after a reason that ends in "…". */
+  function cannotSentence(action: string, reason: string): string {
+    return `Cannot ${action}: ${reason}${/[.…!?]$/.test(reason) ? '' : '.'}`;
+  }
+
   function ensureCanEdit(action = 'edit this project'): boolean {
     const reason = editDisabledReasonRef.current;
     if (!reason) {
@@ -6118,7 +6145,7 @@ export function App() {
     setStatus(
       projectOpenElsewhereRef.current
         ? PROJECT_OPEN_ELSEWHERE_NOTICE
-        : `Cannot ${action}: ${reason}.`
+        : cannotSentence(action, reason)
     );
     return false;
   }
@@ -6138,7 +6165,7 @@ export function App() {
     setStatus(
       projectOpenElsewhereRef.current
         ? PROJECT_OPEN_ELSEWHERE_NOTICE
-        : `Cannot ${action}: ${reason}.`
+        : cannotSentence(action, reason)
     );
     return false;
   }
@@ -6159,7 +6186,7 @@ export function App() {
     setStatus(
       projectOpenElsewhereRef.current
         ? PROJECT_OPEN_ELSEWHERE_NOTICE
-        : `Cannot ${action}: ${reason}.`
+        : cannotSentence(action, reason)
     );
     return false;
   }
@@ -6172,7 +6199,7 @@ export function App() {
     setStatus(
       projectOpenElsewhereRef.current
         ? PROJECT_OPEN_ELSEWHERE_NOTICE
-        : `Cannot ${action}: ${reason}.`
+        : cannotSentence(action, reason)
     );
     return false;
   }
@@ -6495,7 +6522,7 @@ export function App() {
     const controller = new CloudProjectAutosave({
       api,
       onStatus(status) {
-        setSaveState(status.state);
+        setSaveState(autosaveReportedSaveState(status.state, status.error));
         if (status.state === 'repair' && status.projectId) {
           accountDocumentUnavailableProjectIdRef.current = status.projectId;
           setCloudAvailable(false);
@@ -8881,6 +8908,7 @@ export function App() {
   );
   const availability: ToolAvailability = {
     editDisabledReason,
+    editDisabledExplained: liveSessionConnecting,
     sketchCount: sketchOptions.length,
     closedProfileSketchCount,
     liveBodyCount: committedBodyCount,
@@ -12069,6 +12097,14 @@ export function App() {
       setStatus('Section view off.', { immediate: true });
       return;
     }
+    // An empty stage has nothing to cut; the palette says so rather than
+    // leaving a cut on with no controls to carry into the next mode (I49).
+    if (!viewerBodies.some((body) => !body.consumed)) {
+      setStatus('Nothing to cut yet · add or show a body first.', {
+        immediate: true
+      });
+      return;
+    }
     // Switching the cut on brings its controls back, even when they were
     // hidden the last time it was on.
     setPanelState((current) =>
@@ -12778,7 +12814,7 @@ export function App() {
           ? // Signed out is the normal state, and the Settings footer already
             // reads "Device only"; the header stays quiet rather than repeat it.
             ''
-          : 'Beta sign-in unavailable · device settings remain active.'
+          : 'Cloud unavailable · settings and projects stay on this device.'
       );
       return;
     }
@@ -16036,6 +16072,22 @@ export function App() {
   }
 
   const aiPreviewEpochRef = useRef(0);
+  // Bumped when something opens over the stage that the model should stay
+  // clear of: the viewer reframes only if part of the model is covered.
+  const [clearStageRequest, setClearStageRequest] = useState(0);
+  const sectionControlsShown =
+    viewerSettings.sectionView !== undefined &&
+    panelState.sectionPanelOpen !== false;
+  useEffect(() => {
+    if (sectionControlsShown) setClearStageRequest((request) => request + 1);
+  }, [sectionControlsShown]);
+  // The measurement workbench floats over View's and Tweak's stage (a
+  // phone's sheet across its foot, I47): what it measures stays in view.
+  // Build's workbench is a command card and never moves the camera.
+  const measuringOverStage = measuring && modelingLocked;
+  useEffect(() => {
+    if (measuringOverStage) setClearStageRequest((request) => request + 1);
+  }, [measuringOverStage]);
 
   /** D06 slice E: a proposal that edits a drawing sheet, not the model. */
   function isDrawingProposal(proposal: CadPatchProposal): boolean {
@@ -16113,6 +16165,9 @@ export function App() {
         };
       }
       setPreviewDoc(preflight.candidate);
+      // The proposal is reviewed on the model: keep it clear of the
+      // assistant's stream and the panels (I6).
+      setClearStageRequest((request) => request + 1);
       setStatus('Previewing exact proposed geometry.');
       return { ok: true };
     } catch (error) {
@@ -28544,7 +28599,8 @@ export function App() {
     x: number,
     y: number,
     entries: { item: ContextMenuState['items'][number]; run(): void }[],
-    heading?: string
+    heading?: string,
+    face?: ViewportMenuState['face']
   ) {
     contextMenuActionsRef.current = Object.fromEntries(
       entries.map((entry) => [entry.item.id, entry.run])
@@ -28553,18 +28609,31 @@ export function App() {
       x,
       y,
       items: entries.map((entry) => entry.item),
-      ...(heading ? { heading } : {})
+      ...(heading ? { heading } : {}),
+      ...(face ? { face } : {})
     });
   }
 
   function handleViewportContextMenu(
     x: number,
     y: number,
-    selection: TopologySelection | null
+    selection: TopologySelection | null,
+    options: ViewportContextMenuOptions = {}
   ) {
     if (!doc) {
       return;
     }
+    // I18: over stacked targets the menu leads with Select other, whose list
+    // reopens this menu for the target chosen from it.
+    const selectOther = options.selectOther;
+    const leading = selectOther
+      ? [
+          {
+            item: selectOtherMenuItem(selectOther.count),
+            run: selectOther.open
+          }
+        ]
+      : [];
     // A running command owns both its geometry and empty viewport space.
     // A preview can move an edge away from the pointer before right-click.
     if (!modelingLocked && inPlaceRef.current.active) {
@@ -28576,12 +28645,14 @@ export function App() {
     // the viewport controls someone reading a model actually wants.
     if (!selection || modelingLocked) {
       openContextMenu(x, y, [
+        ...leading,
         {
           item: {
             id: 'fit',
             label: 'Fit view',
             icon: <Maximize2 size={13} aria-hidden="true" />,
-            shortcut: menuShortcut('view-fit')
+            shortcut: menuShortcut('view-fit'),
+            section: leading.length > 0
           },
           run: () => setFitSignal((value) => value + 1)
         },
@@ -28632,17 +28703,23 @@ export function App() {
     }
     // Actions wait for the clicked selection to land. An unapplied Move
     // owns the question first; a menu here would act on the old selection.
-    if (handleSelectTopologyFromViewer(selection, false, undefined, { x, y })) {
+    // The keyboard's menu is for the selection as it stands, so it picks
+    // nothing (a multi-selection stays whole).
+    if (
+      !options.keyboard &&
+      handleSelectTopologyFromViewer(selection, false, undefined, { x, y })
+    ) {
       setContextMenu(null);
       return;
     }
-    openViewportSelectionContextMenu(x, y, selection);
+    openViewportSelectionContextMenu(x, y, selection, leading);
   }
 
   function openViewportSelectionContextMenu(
     x: number,
     y: number,
-    selection: TopologySelection
+    selection: TopologySelection,
+    leading: { item: ContextMenuState['items'][number]; run(): void }[] = []
   ) {
     const owner = managerRef.current;
     const current = owner?.document;
@@ -28679,17 +28756,22 @@ export function App() {
     const body = current.derived.bodyRepresentations[selection.bodyId];
     const feature = selectionFeature(current, body, selection);
     const edge = selection.kind === 'edge';
+    // Union and Subtract say why they are greyed out, as the rail does.
+    const combineReason =
+      viewerBodies.length < 2 ? 'Needs a second body to combine with' : null;
     openContextMenu(
       x,
       y,
       [
+        ...leading,
         ...(edge
           ? [
               {
                 item: {
                   id: 'fillet',
                   label: 'Fillet edge…',
-                  icon: <Spline size={13} aria-hidden="true" />
+                  icon: <Spline size={13} aria-hidden="true" />,
+                  section: leading.length > 0
                 },
                 run: runCurrent((handlers) => handlers.launchTool('fillet'))
               },
@@ -28709,7 +28791,7 @@ export function App() {
             label: 'Move / Rotate…',
             icon: <Move3d size={13} aria-hidden="true" />,
             shortcut: menuShortcut('tool-transform'),
-            section: edge
+            section: edge || leading.length > 0
           },
           run: runCurrent((handlers) => handlers.launchTool('transform'))
         },
@@ -28719,7 +28801,7 @@ export function App() {
             label: 'Union…',
             icon: <Combine size={13} aria-hidden="true" />,
             shortcut: menuShortcut('tool-union'),
-            disabled: viewerBodies.length < 2
+            ...(combineReason ? { disabled: true, detail: combineReason } : {})
           },
           run: runCurrent((handlers) => handlers.launchTool('union'))
         },
@@ -28729,7 +28811,7 @@ export function App() {
             label: 'Subtract…',
             icon: <Scissors size={13} aria-hidden="true" />,
             shortcut: menuShortcut('tool-subtract'),
-            disabled: viewerBodies.length < 2
+            ...(combineReason ? { disabled: true, detail: combineReason } : {})
           },
           run: runCurrent((handlers) => handlers.launchTool('subtract'))
         },
@@ -28783,7 +28865,14 @@ export function App() {
             ]
           : [])
       ],
-      topologySelectionLabel(body, selection)
+      topologySelectionLabel(body, selection),
+      selection.kind === 'face'
+        ? {
+            bodyId: selection.bodyId,
+            topologyId: selection.topologyId,
+            hash: selection.hash
+          }
+        : undefined
     );
   }
 
@@ -29549,7 +29638,10 @@ export function App() {
       if (global === 'command-palette') {
         event.preventDefault();
         setShortcutsOpen(false);
-        setPaletteOpen((open) => !open);
+        // Opening lists the commands that run here (an empty draft), so the
+        // key visibly does something before a word is typed (I20).
+        if (paletteOpen) setPaletteOpen(false);
+        else draftPrompt('');
         return;
       }
       if (paletteOpen || shortcutsOpen) {
@@ -30482,6 +30574,10 @@ export function App() {
           accountProjectListReached={accountProjectListReached}
           conflictedProjectIds={conflictedProjectIds}
           signedIn={Boolean(session)}
+          cloudUnavailable={
+            cloudFunctionsEnabled && authConfigStatus === 'unavailable'
+          }
+          onRetryCloud={() => void handleRefreshAuthConfig()}
           onSaveToAccount={(project) => void handleSaveToAccount(project)}
           onSaveAllToAccount={(candidates) =>
             void handleSaveAllToAccount(candidates)
@@ -30589,7 +30685,8 @@ export function App() {
       ? 'warning'
       : !exactGeometryReady
         ? 'running'
-        : /fail|error|invalid|unable|denied|not changed|not applied|no change|refus/i.test(
+        : // A refusal is a warning, not a "ready" dot (design review I77).
+          /fail|error|invalid|unable|denied|cannot|can't|not changed|not applied|no change|refus/i.test(
               status
             )
           ? 'warning'
@@ -31133,7 +31230,9 @@ export function App() {
       // palette is the other way to them, found by what they are for.
       id: 'file-export-diagnostics',
       label: 'Export diagnostics',
-      group: 'File',
+      // Not "File": the File menu no longer holds it (I24). Settings ›
+      // Advanced does, under troubleshooting.
+      group: 'Support',
       keywords: ['troubleshooting', 'support', 'sanitized', 'json', 'report'],
       icon: <Download size={16} aria-hidden="true" />,
       run: handleExportDiagnostics
@@ -31141,7 +31240,7 @@ export function App() {
     {
       id: 'file-export-interaction-log',
       label: 'Export interaction log',
-      group: 'File',
+      group: 'Support',
       keywords: [
         'troubleshooting',
         'support',
@@ -31164,6 +31263,8 @@ export function App() {
       id: 'file-home',
       label: 'Back to projects',
       group: 'File',
+      // The library is where a new project starts and every project opens.
+      keywords: ['home', 'library', 'projects', 'new', 'open', 'start'],
       icon: <FolderOpen size={16} aria-hidden="true" />,
       run: () => void handleGoHome()
     },
@@ -31175,6 +31276,7 @@ export function App() {
             id: 'workspace-mode-view',
             label: 'Switch to View mode',
             group: 'General',
+            keywords: ['read', 'inspect', 'mode', 'workspace'],
             shortcut: modeShortcut('view'),
             icon: <Eye size={16} aria-hidden="true" />,
             run: () => handleWorkspaceMode('view')
@@ -31187,6 +31289,7 @@ export function App() {
             id: 'workspace-mode-tweak',
             label: 'Switch to Tweak mode',
             group: 'General',
+            keywords: ['parameters', 'mode', 'workspace'],
             shortcut: modeShortcut('tweak'),
             icon: <SlidersHorizontal size={16} aria-hidden="true" />,
             disabledReason: tweakModeDisabledReason,
@@ -31200,10 +31303,26 @@ export function App() {
             id: 'workspace-mode-build',
             label: 'Switch to Build mode',
             group: 'General',
+            keywords: ['model', 'modeling', 'edit', 'mode', 'workspace'],
             shortcut: modeShortcut('build'),
             icon: <Box size={16} aria-hidden="true" />,
             disabledReason: buildModeDisabledReason,
             run: () => handleWorkspaceMode('build')
+          } satisfies PaletteCommand
+        ]
+      : []),
+    // The mode switch offers Assemble; the bar did not (I20).
+    ...(!assembleMode
+      ? [
+          {
+            id: 'workspace-mode-assemble',
+            label: 'Switch to Assemble mode',
+            group: 'General',
+            keywords: ['assembly', 'joints', 'motion', 'mode', 'workspace'],
+            shortcut: modeShortcut('assemble'),
+            icon: <Cog size={16} aria-hidden="true" />,
+            disabledReason: assembleModeDisabledReason,
+            run: () => handleWorkspaceMode('assemble')
           } satisfies PaletteCommand
         ]
       : []),
@@ -31213,10 +31332,66 @@ export function App() {
             id: 'workspace-mode-drawing',
             label: 'Switch to Draw mode',
             group: 'General',
+            keywords: ['drawing', 'sheet', '2d', 'mode', 'workspace'],
             shortcut: modeShortcut('drawing'),
             icon: <DraftingCompass size={16} aria-hidden="true" />,
             disabledReason: drawingModeDisabledReason,
             run: () => handleWorkspaceMode('drawing')
+          } satisfies PaletteCommand
+        ]
+      : []),
+    {
+      // The overlay the ? key opens, under the words people search for it
+      // by (I20: "help", "shortcuts" and "keyboard" found nothing).
+      id: 'app-help',
+      label: 'Help & keyboard shortcuts',
+      group: 'General',
+      keywords: [
+        'help',
+        'shortcuts',
+        'keyboard',
+        'keys',
+        'controls',
+        'hotkeys'
+      ],
+      shortcut: keymap.label('shortcut-reference'),
+      icon: <Keyboard size={16} aria-hidden="true" />,
+      run: () => setShortcutsOpen(true)
+    },
+    ...(doc && !shareSession
+      ? [
+          {
+            // The project name in the top bar is the rename field; the
+            // command opens it as a click on the name does.
+            id: 'project-rename',
+            label: 'Rename project',
+            group: 'File',
+            keywords: ['rename', 'name', 'title'],
+            icon: <PenLine size={16} aria-hidden="true" />,
+            run: () =>
+              document
+                .querySelector<HTMLButtonElement>('.project-title-button')
+                ?.click()
+          } satisfies PaletteCommand,
+          {
+            id: 'project-duplicate',
+            label: 'Duplicate project',
+            group: 'File',
+            keywords: ['duplicate', 'copy', 'clone'],
+            icon: <Copy size={16} aria-hidden="true" />,
+            disabledReason: projectTransferBusy
+              ? 'Project transfer in progress'
+              : null,
+            run: () => {
+              const current = managerRef.current?.document;
+              if (!current) return;
+              void handleDuplicateProject(
+                projects.find(
+                  (summary) => summary.projectId === current.projectId
+                ) ??
+                  summarizeLocalDocument(current, DEFAULT_PROJECT_ORGANIZATION)
+              );
+            }
           } satisfies PaletteCommand
         ]
       : []),
@@ -32126,6 +32301,12 @@ export function App() {
           }
           collaborationStatus={collaboration.status}
           collaborationFailure={collaboration.failureReason}
+          readOnlySeat={
+            activeProjectIsCloud &&
+            !shareSession &&
+            (collaboration.role === 'viewer' ||
+              collaboration.status === 'read-only')
+          }
           collaboratorCount={collaboration.members.length}
           projectSharingEnabled={
             cloudFunctionsEnabled && projectSharingPreferenceEnabled
@@ -32346,6 +32527,7 @@ export function App() {
             fitSignal={fitSignal}
             autoFrame={autoFrame}
             creationFrame={creationFrame}
+            clearStageRequest={clearStageRequest}
             viewRequest={projectViewRequest}
             normalToFaceRequest={normalToFaceRequest}
             units={doc.units}
@@ -33256,6 +33438,7 @@ export function App() {
                 : null
             }
             onToggleSection={toggleSectionView}
+            nothingToSection={!viewerBodies.some((body) => !body.consumed)}
             sectionPanelOpen={panelState.sectionPanelOpen}
             onSectionPanelOpenChange={(open) =>
               setPanelState((current) =>
@@ -33924,7 +34107,13 @@ export function App() {
             // the guidance row: the same line, remedies and Why? the control
             // shows, where the eye returns when the model has nothing to say.
             notice={
-              !keypad && calloutWithOperation?.operation?.error ? (
+              liveSessionConnecting &&
+              !(!keypad && calloutWithOperation?.operation?.error) ? (
+                <LiveSessionNotice
+                  key={doc.projectId}
+                  onRetry={collaboration.reconnect}
+                />
+              ) : !keypad && calloutWithOperation?.operation?.error ? (
                 <EditRefusal
                   operation={calloutWithOperation.operation}
                   variant="bar"
@@ -34377,9 +34566,36 @@ export function App() {
           )}
           {contextMenuExit.rendered ? (
             <ContextMenu
-              menu={contextMenuExit.rendered}
+              menu={withFaceVerbs(
+                contextMenuExit.rendered,
+                renderedSelectedTopology?.kind === 'face'
+                  ? renderedSelectedTopology
+                  : null,
+                calloutWithOperation?.anchor === 'selection'
+                  ? calloutWithOperation.verbs
+                  : null,
+                {
+                  disabledReason: normalToFaceTarget
+                    ? null
+                    : 'The face is not flat',
+                  shortcut: menuShortcut('view-normal-to-face')
+                }
+              )}
               closing={contextMenuExit.closing}
-              onSelect={(itemId) => contextMenuActionsRef.current[itemId]?.()}
+              onSelect={(itemId) => {
+                // A face's verbs act as its rail buttons do (I19).
+                if (itemId.startsWith(FACE_VERB_PREFIX)) {
+                  calloutWithOperation?.onVerb(
+                    itemId.slice(
+                      FACE_VERB_PREFIX.length
+                    ) as SelectionCalloutVerbId
+                  );
+                } else if (itemId === LOOK_AT_FACE_ITEM_ID) {
+                  requestNormalToSelectedFace();
+                } else {
+                  contextMenuActionsRef.current[itemId]?.();
+                }
+              }}
               onClose={() => setContextMenu(null)}
             />
           ) : null}

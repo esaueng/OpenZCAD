@@ -1,0 +1,58 @@
+{
+  "revolve-sweep": {
+    "target": "swept-arc-target.step",
+    "tool": "annulus-tool.step",
+    "targetVolume": 219.538848,
+    "toolVolume": 3166.725395,
+    "cutVolume": 175.430451,
+    "sharedVolume": 44.108457,
+    "witness": [
+      6.17578517,
+      1.0310132,
+      4.87029036
+    ],
+    "witnessClearance": 1.091847
+  },
+  "revolve-trimmed-nurbs": {
+    "target": "trimmed-nurbs-target.step",
+    "tool": "annulus-tool.step",
+    "targetVolume": 117.810969,
+    "toolVolume": 3166.725395,
+    "cutVolume": 83.26178,
+    "sharedVolume": 34.5487,
+    "witness": [
+      8.77233673,
+      2.23783367,
+      1.42899163
+    ],
+    "witnessClearance": 0.946725
+  },
+  "sweep-sweep": {
+    "target": "swept-arc-target.step",
+    "tool": "crossing-sweep-tool.step",
+    "targetVolume": 219.538848,
+    "toolVolume": 269.549114,
+    "cutVolume": 202.862135,
+    "sharedVolume": 16.676733,
+    "witness": [
+      5.84275504,
+      1.47370056,
+      5.91763525
+    ],
+    "witnessClearance": 0.921567
+  },
+  "sweep-loft": {
+    "target": "swept-arc-target.step",
+    "tool": "loft-tool.step",
+    "targetVolume": 219.538848,
+    "toolVolume": 119.858427,
+    "cutVolume": 179.499591,
+    "sharedVolume": 40.040819,
+    "witness": [
+      3.56463948,
+      1.18557291,
+      4.6876371
+    ],
+    "witnessClearance": 1.312363
+  }
+}

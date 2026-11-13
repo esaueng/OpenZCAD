@@ -411,6 +411,12 @@ export const TOOL_GROUP_IDS: readonly ToolGroup[] = TOOL_GROUPS.map(
 export interface ToolAvailability {
   /** Central collaboration/lease refusal applied to every mutating tool. */
   editDisabledReason?: string | null;
+  /**
+   * The workspace explains `editDisabledReason` in a notice of its own (the
+   * live-session one, design review I10). Tools stay greyed, but their rows
+   * keep their own descriptions instead of 35 copies of the reason.
+   */
+  editDisabledExplained?: boolean;
   sketchCount: number;
   /**
    * Sketches with at least one closed region. A sketch that is only an open
@@ -463,6 +469,22 @@ export function liveCylindricalFace(
     }
   }
   return known ? false : undefined;
+}
+
+/**
+ * What a tool's row or tooltip says: why it cannot run, or its own hint
+ * while the workspace explains a shared lock elsewhere.
+ */
+export function toolDescription(
+  tool: ToolId,
+  avail: ToolAvailability,
+  hint: string
+): string {
+  const reason = toolDisabledReason(tool, avail);
+  return reason === null ||
+    (avail.editDisabledExplained && reason === avail.editDisabledReason)
+    ? hint
+    : reason;
 }
 
 /** Why a tool cannot run right now, or null when it can. */
