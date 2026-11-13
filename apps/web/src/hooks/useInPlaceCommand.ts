@@ -355,6 +355,12 @@ export interface InPlaceCommand {
    * refusal goes, and Done no longer waits on it.
    */
   dropRefusal(valueId: string): void;
+  /**
+   * A typed entry of this value that does not evaluate (an undefined name,
+   * a syntax error): refused like an entry out of range, so Done waits
+   * rather than taking the value held while the field shows another.
+   */
+  refuseValue(valueId: string, message: string): void;
   /** Values the user has set, which the picks' or values' defaults leave alone. */
   touched: readonly string[];
   /**
@@ -502,6 +508,7 @@ export function useInPlaceCommand(
       datumLabel: (featureId) => optionsRef.current.datumLabel(featureId),
       linearSnap: options.linearSnap ?? null,
       bodyBounds: (bodyId) => optionsRef.current.bodyBounds?.(bodyId) ?? null,
+      liveBodyIds: () => optionsRef.current.liveBodyIds?.() ?? [],
       evaluate: (value) => optionsRef.current.evaluate?.(value) ?? null,
       touched: sessionTouched,
       ...(savedData ? { saved: savedData } : {}),
@@ -1884,6 +1891,10 @@ export function useInPlaceCommand(
     },
     [clearEntryRefusals]
   );
+  const refuseValue = useCallback(
+    (valueId: string, message: string) => refuseEntry({ valueId, message }),
+    [refuseEntry]
+  );
   const previewValue = useCallback(
     (valueId: string, value: number) =>
       writeValue(valueId, value, undefined, false),
@@ -2103,6 +2114,7 @@ export function useInPlaceCommand(
     previewValue,
     setValue,
     dropRefusal,
+    refuseValue,
     touched: session?.touched ?? EMPTY_TOUCHED,
     restoreValue,
     done,

@@ -197,6 +197,12 @@
   color: var(--color-error-text);
 }
 
+/* A name no parameter defines yet: the same offer an expression field
+   makes, in the line's place and padding. */
+.keypad-define {
+  padding: 1px 6px 3px;
+}
+
 .keypad-state .spin {
   flex: none;
   animation: oz-spin 0.9s linear infinite;

@@ -15,9 +15,7 @@ describe('DeleteFeatureDialog', () => {
       />
     );
     const dialog = screen.getByRole('alertdialog', { name: 'Delete “Box”?' });
-    expect(dialog).toHaveTextContent(
-      '3 later features build on it and will rebuild without it:'
-    );
+    expect(dialog).toHaveTextContent('3 later features build on it:');
     expect(
       screen.getAllByRole('listitem').map((item) => item.textContent)
     ).toEqual(['Union', 'Fillet', 'Hole']);
@@ -59,9 +57,7 @@ describe('DeleteFeatureDialog', () => {
     );
     expect(
       screen.getByRole('alertdialog', { name: 'Delete 3 features?' })
-    ).toHaveTextContent(
-      '2 later features build on them and will rebuild without them:'
-    );
+    ).toHaveTextContent('2 later features build on them:');
   });
 
   it('uses the singular for one dependent', () => {
@@ -74,9 +70,38 @@ describe('DeleteFeatureDialog', () => {
       />
     );
     expect(
-      screen.getByText(
-        '1 later feature builds on it and will rebuild without it:'
-      )
+      screen.getByText('1 later feature builds on it:')
     ).toBeInTheDocument();
+  });
+
+  it('says what deleting does to the dependents in the terms Suppress uses', () => {
+    // 13 November review: Delete said the dependents "will rebuild without
+    // it" while Suppress, of the same Fillet and Hole, said they "cannot
+    // rebuild without it". Both are now one account: they stay and rebuild,
+    // and one that needed the feature fails.
+    const { rerender } = render(
+      <DeleteFeatureDialog
+        name="Box"
+        dependents={['Fillet', 'Hole']}
+        onCancel={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    );
+    const dialog = screen.getByRole('alertdialog', { name: 'Delete “Box”?' });
+    expect(dialog).toHaveTextContent(
+      'They stay in History, and any that cannot rebuild without it shows an error. Undo brings everything back.'
+    );
+    expect(dialog).not.toHaveTextContent('will rebuild without');
+    rerender(
+      <DeleteFeatureDialog
+        name="Box"
+        dependents={['Fillet']}
+        onCancel={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('alertdialog')).toHaveTextContent(
+      'It stays in History, and shows an error if it cannot rebuild without it.'
+    );
   });
 });

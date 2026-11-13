@@ -166,6 +166,31 @@ function eventTextDelta(event: Record<string, unknown>): string | undefined {
     : outputTextFromPart(part);
 }
 
+/**
+ * The status as the panel can rely on it. A Worker that answered only
+ * `{ configured: false }` (an older or stripped-down deployment) left
+ * provider and model undefined, and the consent route's string handling
+ * threw: the whole panel fell over into a 60%-high error. Missing strings
+ * read as empty, and anything but a literal `true` is unconfigured.
+ */
+export function normalizeAssistantStatus(raw: unknown): AssistantStatus {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('Assistant status check returned no status.');
+  }
+  const value = raw as Record<string, unknown>;
+  const text = (field: unknown) => (typeof field === 'string' ? field : '');
+  return {
+    configured: value.configured === true,
+    ...(value.source === 'deployment' || value.source === 'personal'
+      ? { source: value.source }
+      : {}),
+    provider: text(value.provider),
+    model: text(value.model),
+    reasoningEffort: text(value.reasoningEffort),
+    ...(typeof value.endpoint === 'string' ? { endpoint: value.endpoint } : {})
+  };
+}
+
 export async function loadAssistantStatus(
   signal?: AbortSignal
 ): Promise<AssistantStatus> {
@@ -173,7 +198,7 @@ export async function loadAssistantStatus(
   if (!response.ok) {
     throw new Error(`Assistant status check failed (${response.status}).`);
   }
-  return (await response.json()) as AssistantStatus;
+  return normalizeAssistantStatus(await response.json());
 }
 
 export function readAssistantEvent(

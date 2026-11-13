@@ -6,6 +6,7 @@ import {
   openAssistant,
   promptField,
   stubApi,
+  verifiedRecipe,
   openMoveOptions
 } from './openzcad-fixtures';
 
@@ -44,9 +45,7 @@ async function importHolder(
   await expect(page.getByRole('region', { name: '3D viewport' })).toBeVisible();
   if (accountReady)
     await expect(page.locator('.save-state')).toHaveClass(/is-synced/);
-  await page
-    .getByLabel(/^Import STEP or /)
-    .setInputFiles(fixture(file));
+  await page.getByLabel(/^Import STEP or /).setInputFiles(fixture(file));
   await expect(page.locator('.feature-row').first()).toBeVisible({
     timeout: 60_000
   });
@@ -61,12 +60,7 @@ async function importHolder(
  * and returns its open proposal card, ready to apply.
  */
 async function requestVerified(page: Page, label: string) {
-  const chip = page
-    .locator('.assistant-suggestion, .assistant-verified-action', {
-      hasText: label
-    })
-    .first();
-  await expect(chip).toBeVisible({ timeout: 60_000 });
+  const chip = await verifiedRecipe(page, label, 60_000);
   await expect(chip).toContainText('Verified');
   await chip.click();
   // The chip fills the request; sending it runs the recipe's exact preflight.
