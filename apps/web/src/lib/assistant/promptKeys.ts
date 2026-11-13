@@ -15,8 +15,11 @@ export type AssistantPromptKey =
   | 'apply'
   /** `p` on the empty prompt: toggle the open proposal's viewport preview. */
   | 'preview'
-  /** Escape on the empty prompt: reject the open proposal. */
-  | 'reject'
+  /**
+   * Escape on the empty prompt: hide the open proposal's preview. It never
+   * rejects: a rejection cannot be taken back, so Reject stays a click.
+   */
+  | 'escape'
   /** ⌘↑ / Ctrl+↑: open or close scrollback. */
   | 'history';
 

@@ -440,6 +440,7 @@
 .file-drop-target > div {
   display: grid;
   gap: 4px;
+  max-width: min(420px, calc(100% - 24px));
   padding: 14px 22px;
   text-align: center;
   color: var(--color-text);
