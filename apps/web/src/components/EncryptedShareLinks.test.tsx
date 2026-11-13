@@ -276,9 +276,24 @@ describe('EncryptedShareLinks (slice 5-10)', () => {
     );
     expect(writeText).toHaveBeenCalledWith(URL_A);
 
+    // Revoking asks first, with focus on the safe choice (design review I2).
     await user.click(
       screen.getByRole('button', { name: 'Revoke View only link' })
     );
+    expect(client.revoke).not.toHaveBeenCalled();
+    const ask = screen.getByRole('group', { name: 'Revoke View only link' });
+    expect(
+      within(ask).getByRole('button', { name: 'Keep link' })
+    ).toHaveFocus();
+    await user.keyboard('{Escape}');
+    expect(client.revoke).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole('button', { name: 'Revoke View only link' })
+    ).toBeVisible();
+    await user.click(
+      screen.getByRole('button', { name: 'Revoke View only link' })
+    );
+    await user.click(screen.getByRole('button', { name: 'Revoke link' }));
     expect(client.revoke).toHaveBeenCalledWith('proj_x', 'shr_a');
     expect(await screen.findByText('Only invited people')).toBeVisible();
     expect(screen.queryByLabelText('Share link')).not.toBeInTheDocument();
@@ -370,6 +385,7 @@ describe('EncryptedShareLinks (slice 5-10)', () => {
     await user.click(
       screen.getByRole('button', { name: 'Revoke View only link' })
     );
+    await user.click(screen.getByRole('button', { name: 'Revoke link' }));
     expect(await screen.findByText('Revocation pending')).toBeVisible();
     expect(screen.getByRole('alert')).toHaveTextContent(
       'did not confirm it stopped serving it'
@@ -383,6 +399,7 @@ describe('EncryptedShareLinks (slice 5-10)', () => {
     await user.click(
       screen.getByRole('button', { name: 'Revoke View only link' })
     );
+    await user.click(screen.getByRole('button', { name: 'Revoke link' }));
     expect(client.revoke).toHaveBeenCalledTimes(2);
     expect(client.revoke).toHaveBeenLastCalledWith('proj_x', 'shr_a');
     expect(await screen.findByText('Only invited people')).toBeVisible();

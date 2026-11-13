@@ -36,6 +36,7 @@ import {
 import type { CollaborationStatus } from '../lib/useCollaboration';
 import { useModalFocus } from '../lib/useModalFocus';
 import { StableLabel } from './StableLabel';
+import { ShareLinkRevokeConfirm } from './ShareLinkRevokeConfirm';
 import {
   EncryptedShareLinks,
   type EncryptedShareLinkClient
@@ -1301,6 +1302,8 @@ function PlaintextShareLinks({
   onRevoke
 }: PlaintextShareLinksProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
+  // The link whose Revoke is waiting for a yes (design review I2).
+  const [revokingId, setRevokingId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   // Keyed by link, so a newly created link starts unnamed.
   const [createdDraft, setCreatedDraft] = useState({ id: '', name: '' });
@@ -1471,6 +1474,31 @@ function PlaintextShareLinks({
                 </li>
               );
             }
+            if (revokingId === shareLink.shareLinkId) {
+              return (
+                <li key={shareLink.shareLinkId} className="sharing-confirm-row">
+                  <ShareLinkRevokeConfirm
+                    name={name}
+                    disabled={disabled}
+                    onCancel={() => {
+                      setRevokingId(null);
+                      // Back to the row's Revoke, for the keyboard.
+                      requestAnimationFrame(() =>
+                        document
+                          .querySelector<HTMLElement>(
+                            `[data-share-link-revoke="${shareLink.shareLinkId}"]`
+                          )
+                          ?.focus()
+                      );
+                    }}
+                    onRevoke={() => {
+                      setRevokingId(null);
+                      onRevoke(shareLink);
+                    }}
+                  />
+                </li>
+              );
+            }
             return (
               <li key={shareLink.shareLinkId}>
                 <span className="sharing-row-text">
@@ -1500,8 +1528,9 @@ function PlaintextShareLinks({
                       ? `Revoke share link created ${createdLabel(shareLink.createdAt)}`
                       : `Revoke share link ${shareLink.label}`
                   }
+                  data-share-link-revoke={shareLink.shareLinkId}
                   disabled={disabled}
-                  onClick={() => onRevoke(shareLink)}
+                  onClick={() => setRevokingId(shareLink.shareLinkId)}
                 >
                   Revoke
                 </button>
