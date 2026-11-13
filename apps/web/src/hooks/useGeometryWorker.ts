@@ -16,6 +16,11 @@ import {
 } from '../worker/exactRebuildCache';
 import { attachDerivedState } from '@openzcad/document-core';
 import { describeWorkerFailure } from '../lib/workerFailure';
+import {
+  observeWorker,
+  trackOutOfMemory,
+  trackWorkerFailure
+} from '../lib/diagnosticSignal';
 import { prefersSavingData } from '../lib/saveData';
 import type {
   BodyId,
@@ -611,20 +616,21 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       mark('worker.requested');
       let worker: Worker;
       try {
-        worker = timed(
-          'worker.create',
-          () =>
+        worker = timed('worker.create', () =>
+          observeWorker(
             new Worker(
               new URL('../worker/geometryWorker.ts', import.meta.url),
               {
                 type: 'module'
               }
             )
+          )
         );
       } catch (error) {
         // A blocked or unsupported worker environment throws synchronously.
         // Swallowing it used to leave workerRef null: every sync silently
         // no-oped and the UI sat at "Starting geometry worker" forever.
+        trackWorkerFailure();
         failAndMaybeRespawn(
           null,
           `Geometry worker could not be started: ${
@@ -1015,6 +1021,7 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
           lastSyncedKey.current = null;
           readyDocument.current = null;
           readyDerived.current = null;
+          trackOutOfMemory(result.error);
           hostRef.current.onError(`Geometry rebuild failed: ${result.error}`);
           return;
         }
@@ -1094,6 +1101,9 @@ export function useGeometryWorker(host: GeometryWorkerHost): GeometryWorkerApi {
       if (deadline === -Infinity || now <= deadline) {
         return;
       }
+      // A wedged worker stopped unexpectedly; its crash would have raised
+      // `error` instead, which `observeWorker` already counts.
+      trackWorkerFailure();
       failAndMaybeRespawn(
         worker,
         `The geometry worker stopped responding during "${phase}".`

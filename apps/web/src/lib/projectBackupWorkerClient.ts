@@ -1,3 +1,4 @@
+import { observeWorker } from './diagnosticSignal';
 import type { UserId } from '@openzcad/shared';
 import { MAX_PROJECT_BACKUP_BYTES, type ProjectBackup } from './projectBackup';
 import type { ProjectBackupWorkerResult } from '../worker/projectBackupWorker';
@@ -10,9 +11,10 @@ export function restoreProjectInWorker(
     return Promise.reject(
       new Error('Project backup exceeds the 256 MB limit.')
     );
-  const worker = new Worker(
-    new URL('../worker/projectBackupWorker.ts', import.meta.url),
-    { type: 'module' }
+  const worker = observeWorker(
+    new Worker(new URL('../worker/projectBackupWorker.ts', import.meta.url), {
+      type: 'module'
+    })
   );
   return new Promise((resolve, reject) => {
     let settled = false;

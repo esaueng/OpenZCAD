@@ -1,3 +1,4 @@
+import { observeWorker } from './diagnosticSignal';
 import type { ShaprImportIR } from '@openzcad/io-shapr';
 
 import type {
@@ -29,9 +30,10 @@ export function inspectShaprPair(
   if (options.signal?.aborted) {
     return Promise.reject(abortError());
   }
-  const worker = new Worker(
-    new URL('../worker/shaprImportWorker.ts', import.meta.url),
-    { type: 'module' }
+  const worker = observeWorker(
+    new Worker(new URL('../worker/shaprImportWorker.ts', import.meta.url), {
+      type: 'module'
+    })
   );
   const requestId = crypto.randomUUID();
   return new Promise((resolve, reject) => {

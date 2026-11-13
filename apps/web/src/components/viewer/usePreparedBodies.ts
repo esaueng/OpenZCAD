@@ -1,3 +1,4 @@
+import { observeWorker } from '../../lib/diagnosticSignal';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { GeometryBodyRepresentation } from '@openzcad/shared';
 import {
@@ -118,9 +119,10 @@ export function usePreparedBodies<T = undefined>(
     let worker = workerRef.current;
     if (!worker) {
       try {
-        worker = new Worker(
-          new URL('./bodyPreparationWorker.ts', import.meta.url),
-          { type: 'module' }
+        worker = observeWorker(
+          new Worker(new URL('./bodyPreparationWorker.ts', import.meta.url), {
+            type: 'module'
+          })
         );
         worker.onerror = () => fail('error');
         worker.onmessageerror = () => fail('messageerror');

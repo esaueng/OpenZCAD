@@ -67,7 +67,8 @@ counts; reports' page-local counts need not equal delivered service counts.
 OpenZCAD separately offers an expiring **Cloud account statistics for 30 days**
 choice under Settings → Privacy. It covers this account's retained owned projects
 (including trash), revisions and numeric stored/logical byte metadata, across
-its devices. Only this explicit grant enrolls the account; neither sign-in nor
+its devices, and since permission version 3 its save activity (see
+[below](#runtime-diagnostics-and-account-activity-13-nov-2026-review)). Only this explicit grant enrolls the account; neither sign-in nor
 browser analytics does. The account preference's existing user key and expiry
 stay in OpenZCAD. Erasing accounts are excluded; deletion cascades the grant.
 DNT/GPC suppresses browser analytics but does not revoke the separate account
@@ -97,6 +98,70 @@ consent/API/census checks: 99 root and 62 web passed. The full unrelated browser
 suite was not rerun. The master cloud switch is rechecked from persisted storage
 on every send, including startup and other-tab changes; regression coverage
 protects this boundary. Hosted checks and production verification are separate.
+
+## Runtime diagnostics and account activity (13 Nov 2026 review)
+
+The Glimpse owner approved four more diagnostic codes and three census
+activity counts on 13 November 2026 ([review](https://github.com/esaueng/glimpse/blob/main/docs/PRIVACY.md#review-additional-diagnostic-codes-and-account-activity)).
+Glimpse accepts them from esaueng/glimpse#32; deploy that first. Older Glimpse
+versions reject the new codes (the relay answers 400, the browser drops it)
+and reject a snapshot carrying activity counts as an invalid census, after
+which OpenZCAD resends that generation once without them.
+
+**Diagnostic codes.** Failure sites raise a fixed code through the import-free
+`src/lib/diagnosticSignal.ts` (so lazy chunks do not pull in the analytics
+client), and `src/lib/runtimeDiagnostics.ts`, installed at startup, forwards it
+through `trackDetail`, the same opt-in path as every other diagnostic: consent, DNT/GPC, the cloud switch and the desktop check are
+rechecked per send, withdrawal aborts pending sends and clears report counts,
+and the existing four-request cap applies. Only the code is sent, with bucket
+`none`; messages, stacks, URLs, GPU or driver names, memory sizes, worker
+script names and durations stay in the page. The v2 notice already describes
+"diagnostic codes", so there is no consent-version change (owner decision).
+
+| Code | Where the app decides it |
+| --- | --- |
+| `error_unresponsive` | Main thread blocked 5 s or more while the page is visible. Chromium long-task entries where reported; elsewhere a 1 s heartbeat at least 5 s late (gaps over hidden time or of 60 s or more are taken as throttling or sleep). Runs only while this browser holds an analytics grant |
+| `error_gpu_lost` | The viewport's WebGL `webglcontextlost`, not in a hidden page (browsers reclaim background GPU memory by design) and not the app's own teardown `forceContextLoss`. The app has no WebGPU device today |
+| `error_out_of_memory` | Engine out-of-memory wording (`Array buffer allocation failed`, Wasm memory growth, `out of memory`, Rust/Emscripten allocation aborts) in uncaught page errors and rejections, worker error events, worker-reported failures through `describeWorkerFailure`, and geometry rebuild failures. Only the classification leaves the page |
+| `error_worker` | Every uncaught error event of an app Web Worker (`observeWorker` around each `new Worker`), a geometry worker the watchdog terminates as wedged, and a geometry worker that cannot start |
+
+One failure can produce several codes (for example `error_worker` and
+`error_out_of_memory`, or `error_runtime` and `error_out_of_memory`).
+
+**Account activity.** The census adds `active7d` (consenting accounts that
+saved a project in the last 7 days), `active30d` (last 30 days) and `idle90d`
+(no save for 90 days or more; an account that never saved counts from its
+creation). A save is the latest document save of a project the account owns,
+Trash included and whoever saved it, or a revision the account saved on any
+project, shared ones included. Purged projects leave no trace. The counts are
+computed in SQL (`ACTIVITY_CENSUS_SQL` in `worker/glimpseCensus.ts`) and no
+per-account row, date or identifier leaves the Worker.
+
+Before sending, `activityCounts` applies Glimpse's k-rule (K = 5): a count is
+sent as `null` when it is below 5 or leaves fewer than 5 accounts outside it,
+judged against both the census `accounts` and the activity population, so
+with fewer than 10 consenting accounts all three are `null`. The three are
+always sent together, satisfy `active7d ≤ active30d` and
+`active30d + idle90d ≤ accounts`, and are all withheld if raw counts ever broke
+that. `snapshot()` now resolves `{ accepted }`; `false` (Glimpse already holds
+a newer generation) reports the publication as pending, and an older Glimpse's
+`undefined` counts as delivered. Nothing is logged.
+
+**Permission version 3.** The version 2 text of **Cloud account statistics**
+named account, project, revision and storage totals only, not save activity.
+Version 3 (`ACCOUNT_STATISTICS_VERSION`) adds it, and migration
+`0047_glimpse_account_consent_version.sql` records which version each grant
+accepted (existing rows default to 2). Activity counts cover version 3 grants
+only; version 2 grants keep counting toward the totals until they expire, and
+the setting tells their holders to switch it off and on to accept the new
+text. Granting requires version 3; withdrawal is accepted from either. Before
+the migration is applied, grants are stored without a version (read as 2) and
+snapshots carry no activity counts. The account data export includes the
+version.
+
+**Rollout dependency:** Glimpse esaueng/glimpse#32 deployed and its migration
+`0005_census_activity.sql` applied (without it Glimpse stores the census but
+drops the activity counts), then OpenZCAD migration `0047` and this code.
 
 ## Kernel refusal harvest (WS3)
 

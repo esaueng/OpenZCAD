@@ -17,6 +17,7 @@ import '@fontsource/geist-mono/latin-400.css';
 import '@fontsource/geist-mono/latin-500.css';
 import { installRuntimeErrorCapture } from './lib/activityLog';
 import { mark } from './lib/perf';
+import { installRuntimeDiagnostics } from './lib/runtimeDiagnostics';
 import { loadWhenOnline } from './lib/staleChunk';
 import { installTouchLongPress } from './lib/touchLongPress';
 import './theme/tokens.css';
@@ -56,6 +57,8 @@ if (import.meta.env.VITE_E2E === '1') {
 
 // Uncaught errors join the activity log (Settings › Activity log).
 installRuntimeErrorCapture();
+// Opt-in fixed diagnostic codes: unresponsive page and out-of-memory signals.
+installRuntimeDiagnostics();
 // A finger's hold opens context menus and help the chrome otherwise hides.
 installTouchLongPress();
 mark('bundle.evaluated');

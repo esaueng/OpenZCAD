@@ -1,4 +1,5 @@
 import { fetchBuildCommit } from './buildVersionWatch';
+import { trackOutOfMemory } from './diagnosticSignal';
 import {
   isChunkLoadError,
   reportStaleChunk,
@@ -12,6 +13,8 @@ import {
 export async function describeWorkerFailure(
   message: string
 ): Promise<{ message: string; reloadRequired: boolean }> {
+  // Only the classification is counted; the message stays in this page.
+  trackOutOfMemory(message);
   const runningCommit = import.meta.env.OZ_BUILD_COMMIT;
   const chunkFailed = isChunkLoadError(message);
   const deployedCommit =

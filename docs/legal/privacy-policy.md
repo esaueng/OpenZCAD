@@ -18,7 +18,8 @@ Michigan, United States (one sentence in section 1, the only place to edit).
 
 ## Placeholders
 
-None left. The effective date (October 28, 2026) is at the top of the page;
+None left. The effective date (November 13, 2026, for the account-activity
+addition to Cloud account statistics) is at the top of the page;
 update it whenever the policy changes.
 `apps/web/src/lib/privacyPolicyPlaceholders.test.ts` ("FILL IN BEFORE MERGE")
 fails in `pnpm test:web` while any placeholder in square brackets and capitals

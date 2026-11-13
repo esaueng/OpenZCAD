@@ -1,3 +1,4 @@
+import { observeWorker } from './diagnosticSignal';
 import {
   MESH_IMPORT_POLICIES,
   meshImportTooLargeMessage,
@@ -98,9 +99,10 @@ function readMeshInWorker(
   if (signal?.aborted) {
     return Promise.reject(abortError());
   }
-  const worker = new Worker(
-    new URL('../worker/meshImportWorker.ts', import.meta.url),
-    { type: 'module' }
+  const worker = observeWorker(
+    new Worker(new URL('../worker/meshImportWorker.ts', import.meta.url), {
+      type: 'module'
+    })
   );
   const requestId = crypto.randomUUID();
   return new Promise((resolve, reject) => {

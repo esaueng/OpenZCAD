@@ -9,6 +9,7 @@ import {
   type PersistenceService
 } from '@openzcad/persistence';
 import type { AuthSession } from '@openzcad/shared';
+import { isConsentVersionReady } from './glimpseCensus';
 
 /** Explicit projections keep credentials, token hashes and other users' data
  * out of the export. Project contents travel through the existing authorized
@@ -76,7 +77,7 @@ export async function exportAccountData(
     ],
     [
       'glimpse_account_consent',
-      'SELECT expires_at FROM glimpse_account_consent WHERE user_id = ?',
+      `SELECT expires_at${(await isConsentVersionReady(db)) ? ', version' : ''} FROM glimpse_account_consent WHERE user_id = ?`,
       [session.userId]
     ],
     [

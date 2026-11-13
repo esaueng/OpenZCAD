@@ -18,7 +18,13 @@ export const DIAGNOSTICS = [
   'error_cloud_load',
   'error_storage',
   'error_feature',
-  'error_render'
+  'error_render',
+  // Glimpse privacy review approved 13 Nov 2026: fixed codes decided in the
+  // app. Never the message, stack, URL, GPU/driver name, memory size or time.
+  'error_unresponsive', // main thread blocked for 5 s or more
+  'error_gpu_lost', // WebGPU/WebGL device or context lost
+  'error_out_of_memory', // allocation failure or out-of-memory signal
+  'error_worker' // a Web Worker failed or stopped unexpectedly
 ] as const;
 export const CAD_OPERATIONS = [
   'transaction',
@@ -412,10 +418,34 @@ export const CENSUS_FIELDS = [
   'mib10to100',
   'gte100mib'
 ] as const;
+/**
+ * Version of the Cloud account statistics permission text. Version 3 names
+ * save activity; activity counts cover only grants of this version or later.
+ */
+export const ACCOUNT_STATISTICS_VERSION = 3;
+// Optional account-activity counts (Glimpse migration 0005), approved in the
+// same review. All three are sent together, each a count or null (withheld).
+export const ACTIVITY_FIELDS = ['active7d', 'active30d', 'idle90d'] as const;
+export type ActivityField = (typeof ACTIVITY_FIELDS)[number];
+/**
+ * k-threshold: a count below K, or one leaving fewer than K accounts outside
+ * it, is withheld (null). The app applies it before sending; Glimpse again.
+ */
+export const ACTIVITY_MIN_COUNT = 5;
+export type Activity = Record<ActivityField, number | null>;
 export type Census = Record<(typeof CENSUS_FIELDS)[number], number> & {
   generation: number;
-};
+} & Partial<Activity>;
 export type CensusRow = Census & { day: string; app: 'openzcad' };
+const isCount = (value: unknown): value is number =>
+  typeof value === 'number' &&
+  Number.isSafeInteger(value) &&
+  value >= 0 &&
+  value <= 1000000000000000;
+/** Whether one activity count must be withheld against its population. */
+export function withheld(value: number, accounts: number): boolean {
+  return value < ACTIVITY_MIN_COUNT || accounts - value < ACTIVITY_MIN_COUNT;
+}
 export function census(value: unknown, app: string): Census | null {
   if (
     app !== 'openzcad' ||
@@ -425,25 +455,39 @@ export function census(value: unknown, app: string): Census | null {
   )
     return null;
   const v = value as Record<string, unknown>;
-  const keys = [...CENSUS_FIELDS, 'generation'];
+  const base = ['generation', ...CENSUS_FIELDS] as const;
+  const activity = ACTIVITY_FIELDS.some((k) => Object.hasOwn(v, k));
+  const keys: readonly string[] = activity
+    ? [...base, ...ACTIVITY_FIELDS]
+    : base;
   if (
     Object.keys(v).length !== keys.length ||
-    keys.some(
-      (k) =>
-        !Object.hasOwn(v, k) ||
-        typeof v[k] !== 'number' ||
-        !Number.isSafeInteger(v[k]) ||
-        v[k] < 0 ||
-        v[k] > 1000000000000000
-    )
+    keys.some((k) => !Object.hasOwn(v, k)) ||
+    base.some((k) => !isCount(v[k]))
   )
     return null;
-  const c = v as Census;
+  const c = Object.fromEntries(base.map((k) => [k, v[k]])) as Census;
   if (
     c.generation < 1 ||
     c.projects !== c.lt1mib + c.mib1to10 + c.mib10to100 + c.gte100mib ||
     (c.accounts === 0 && CENSUS_FIELDS.some((k) => c[k] !== 0))
   )
     return null;
-  return { ...c };
+  if (!activity) return c;
+  // Each count is bounded by the consenting-account total and consistent: a
+  // 7-day saver is a 30-day saver, and a 30-day saver is not 90 days idle.
+  const a = {} as Activity;
+  for (const k of ACTIVITY_FIELDS) {
+    const n = v[k];
+    if (n !== null && !(isCount(n) && n <= c.accounts)) return null;
+    a[k] = n;
+  }
+  if (
+    (a.active7d !== null && a.active30d !== null && a.active7d > a.active30d) ||
+    (a.active30d !== null &&
+      a.idle90d !== null &&
+      a.active30d + a.idle90d > c.accounts)
+  )
+    return null;
+  return { ...c, ...a };
 }
