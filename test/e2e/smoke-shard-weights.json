@@ -93,6 +93,7 @@
   "through-hole-chamfer-resize.spec.ts": 37,
   "tool-rail-pins.spec.ts": 5,
   "touch-navigation.spec.ts": 9,
+  "touch-targets.spec.ts": 13,
   "upside-down-view-reload.spec.ts": 7,
   "view-cube-orbit-tooltip.spec.ts": 6,
   "viewport.spec.ts": 13,
