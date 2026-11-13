@@ -24,15 +24,16 @@
  * past which old pins are dropped (a listing cannot push a pin out by
  * naming many other encrypted projects).
  *
- * When storage cannot be read, or a pin cannot be saved, nothing here can
- * say which projects were pinned, so the store is `degraded` and holds
+ * When storage cannot be read, or a pin could not be saved, nothing here
+ * can say which projects were pinned, so the store is `degraded` and holds
  * every project as encrypted: writes then fail on the encrypted routes
- * instead of going out in plaintext. A pin that could not be saved is
- * recorded in a state key reserved at startup at a size larger than any
- * pin, so overwriting it with the shorter failure mark frees space rather
- * than needing it. That mark keeps every tab and every later page load
- * degraded, since the lost pin cannot be named, until the site's storage
- * is cleared.
+ * instead of going out in plaintext. A pin that could not be saved sets a
+ * failure key that nothing here ever clears or overwrites, so every tab
+ * and every later load stays degraded. To make room for that key in full
+ * storage, a reserve key larger than it is kept and removed first. Where
+ * even the failure key cannot be saved, `api.ts` refuses to open, create,
+ * copy or encrypt a project whose pin is not saved (`pinDurably`), so no
+ * encrypted project's content reaches this device without a saved pin.
  */
 
 export interface EncryptedProjectPinStore {
@@ -41,8 +42,17 @@ export interface EncryptedProjectPinStore {
    * the store is degraded.
    */
   has(projectId: string): boolean;
-  /** Pins the project as encrypted on this device. */
-  pin(projectId: string): void;
+  /**
+   * Pins the project as encrypted on this device; whether the pin is saved
+   * (read back from storage) so a reload still knows it.
+   */
+  pin(projectId: string): boolean;
+  /**
+   * Whether the project's pin is saved, pinning it first if not. A degraded
+   * store pins nothing new (it cannot tell an encrypted project from one
+   * it only holds as encrypted), so only an already saved pin counts.
+   */
+  pinDurably(projectId: string): boolean;
   /**
    * Unpins the project: only after this device's own decrypt run cut it
    * over to plaintext.
@@ -59,14 +69,17 @@ export interface EncryptedProjectPinStore {
 export const ENCRYPTED_PROJECT_PIN_PREFIX =
   'openzcad:e2ee-encrypted-project:v1:';
 
+/** Set once a pin could not be saved; never cleared or overwritten here. */
+export const ENCRYPTED_PROJECT_PIN_FAILED_KEY =
+  'openzcad:e2ee-encrypted-project-pins:failed';
+
 /**
- * Reserved at startup at `PIN_STATE_RESERVED`, larger than any pin's key
- * and value; set to `PIN_STATE_FAILED` once a pin could not be saved.
+ * Larger than the failure key and its value, and removed just before that
+ * key is set, so full storage has room for it.
  */
-export const ENCRYPTED_PROJECT_PIN_STATE_KEY =
-  'openzcad:e2ee-encrypted-project-pins:state';
-const PIN_STATE_RESERVED = `ok:${'.'.repeat(253)}`;
-export const PIN_STATE_FAILED = 'failed';
+export const ENCRYPTED_PROJECT_PIN_RESERVE_KEY =
+  'openzcad:e2ee-encrypted-project-pins:reserve';
+const RESERVE_VALUE = '.'.repeat(256);
 
 const PROJECT_ID = /^[!-~]{1,128}$/;
 
@@ -109,34 +122,29 @@ export function localStorageEncryptedProjectPins(
 ): EncryptedProjectPinStore {
   const own = new Set<string>();
   let degraded = storage === null;
-  const failedState = (): boolean => {
+  const failed = (): boolean => {
     if (!storage) return false;
     try {
-      return (
-        storage.getItem(ENCRYPTED_PROJECT_PIN_STATE_KEY) === PIN_STATE_FAILED
-      );
+      return storage.getItem(ENCRYPTED_PROJECT_PIN_FAILED_KEY) !== null;
     } catch {
       return true;
     }
   };
-  if (storage && !failedState()) {
+  if (storage && failed()) degraded = true;
+  if (storage && !degraded) {
     try {
-      // Without the reserved state a later failed pin could not be
-      // recorded, so storage that refuses it cannot keep pins either.
-      if (
-        storage.getItem(ENCRYPTED_PROJECT_PIN_STATE_KEY) !== PIN_STATE_RESERVED
-      ) {
-        storage.setItem(ENCRYPTED_PROJECT_PIN_STATE_KEY, PIN_STATE_RESERVED);
+      // Without the reserve, a later failed pin might find no room to be
+      // recorded; storage that refuses it now cannot keep pins either.
+      if (storage.getItem(ENCRYPTED_PROJECT_PIN_RESERVE_KEY) === null) {
+        storage.setItem(ENCRYPTED_PROJECT_PIN_RESERVE_KEY, RESERVE_VALUE);
       }
     } catch {
       degraded = true;
     }
-  } else if (storage) {
-    degraded = true;
   }
   const isDegraded = (): boolean => {
     // Another tab's failed pin degrades this page too.
-    if (!degraded && failedState()) degraded = true;
+    if (!degraded && failed()) degraded = true;
     return degraded;
   };
   const stored = (projectId: string): boolean => {
@@ -146,8 +154,38 @@ export function localStorageEncryptedProjectPins(
       return storage.getItem(ENCRYPTED_PROJECT_PIN_PREFIX + projectId) !== null;
     } catch {
       degraded = true;
-      return true;
+      return false;
     }
+  };
+  const recordFailure = () => {
+    degraded = true;
+    if (!storage) return;
+    try {
+      storage.removeItem(ENCRYPTED_PROJECT_PIN_RESERVE_KEY);
+    } catch {
+      // The failure key may still fit.
+    }
+    try {
+      storage.setItem(ENCRYPTED_PROJECT_PIN_FAILED_KEY, '1');
+    } catch {
+      // Not recorded: this page stays degraded, and `pinDurably` keeps
+      // the project's content off this device.
+    }
+  };
+  const pin = (projectId: string): boolean => {
+    if (!PROJECT_ID.test(projectId)) return false;
+    own.add(projectId);
+    if (!storage) return false;
+    try {
+      storage.setItem(ENCRYPTED_PROJECT_PIN_PREFIX + projectId, '1');
+    } catch {
+      // Fall through to the read-back.
+    }
+    if (stored(projectId)) return true;
+    // Not saved, so a reload would not know it: hold everything as
+    // encrypted, here, in other tabs and after a reload.
+    recordFailure();
+    return false;
   };
   return {
     get degraded() {
@@ -156,26 +194,15 @@ export function localStorageEncryptedProjectPins(
     has(projectId) {
       if (isDegraded()) return true;
       if (!PROJECT_ID.test(projectId)) return false;
-      return own.has(projectId) || stored(projectId);
+      // A read that throws degrades the store, so ask again after it.
+      return own.has(projectId) || stored(projectId) || degraded;
     },
-    pin(projectId) {
-      if (!PROJECT_ID.test(projectId)) return;
-      own.add(projectId);
-      if (!storage) return;
-      try {
-        storage.setItem(ENCRYPTED_PROJECT_PIN_PREFIX + projectId, '1');
-      } catch {
-        // Not saved, so a reload would not know it: hold everything as
-        // encrypted, here, in other tabs and after a reload, rather than
-        // lose track of this one. The mark is shorter than the reserved
-        // value it replaces, so a full storage still takes it.
-        degraded = true;
-        try {
-          storage.setItem(ENCRYPTED_PROJECT_PIN_STATE_KEY, PIN_STATE_FAILED);
-        } catch {
-          // Nothing more to do: this page stays degraded.
-        }
-      }
+    pin,
+    pinDurably(projectId) {
+      if (!PROJECT_ID.test(projectId)) return false;
+      if (stored(projectId)) return true;
+      if (isDegraded()) return false;
+      return pin(projectId);
     },
     forget(projectId) {
       own.delete(projectId);

@@ -19,10 +19,7 @@ import {
   type ReferenceImageId
 } from '@openzcad/shared';
 import { api, forgetEncryptedProject, rememberProjectFormats } from './api';
-import {
-  ENCRYPTED_PROJECT_PIN_STATE_KEY,
-  PIN_STATE_FAILED
-} from './e2ee/encryptedProjectPins';
+import { ENCRYPTED_PROJECT_PIN_FAILED_KEY } from './e2ee/encryptedProjectPins';
 import {
   pageBlobReferences,
   setEncryptedBlobReader
@@ -713,10 +710,7 @@ it('refuses a cloud backup while this device cannot tell which projects are encr
   const document = createProjectDocument('Plain', toUserId('user_backup'));
   // An earlier load could not save a pin: every project is held encrypted,
   // so a cloud backup cannot know which files belong in it.
-  window.localStorage.setItem(
-    ENCRYPTED_PROJECT_PIN_STATE_KEY,
-    PIN_STATE_FAILED
-  );
+  window.localStorage.setItem(ENCRYPTED_PROJECT_PIN_FAILED_KEY, '1');
   try {
     vi.resetModules();
     const { createProjectBackup: backupAfterReload } =
@@ -730,6 +724,6 @@ it('refuses a cloud backup while this device cannot tell which projects are encr
       'openzcad-project'
     );
   } finally {
-    window.localStorage.removeItem(ENCRYPTED_PROJECT_PIN_STATE_KEY);
+    window.localStorage.removeItem(ENCRYPTED_PROJECT_PIN_FAILED_KEY);
   }
 });

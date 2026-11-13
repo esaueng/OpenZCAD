@@ -11,7 +11,7 @@ import {
 import { desktopFetch } from './desktopBridge';
 import {
   ENCRYPTED_PROJECT_PIN_PREFIX,
-  ENCRYPTED_PROJECT_PIN_STATE_KEY
+  ENCRYPTED_PROJECT_PIN_FAILED_KEY
 } from './e2ee/encryptedProjectPins';
 import { createDecryptionController } from './e2ee/projectDecryption';
 import type * as DecryptionEngineModule from './e2ee/projectDecryptionEngine';
@@ -357,7 +357,46 @@ describe('an encrypted project stays encrypted on this device', () => {
       ).toEqual([]);
     } finally {
       restore();
-      real.removeItem(ENCRYPTED_PROJECT_PIN_STATE_KEY);
+      real.removeItem(ENCRYPTED_PROJECT_PIN_FAILED_KEY);
+    }
+  });
+
+  it('does not open an encrypted project whose pin cannot be saved', async () => {
+    const projectId = 'proj_pin_unsavable';
+    const real = window.localStorage;
+    const descriptor = Object.getOwnPropertyDescriptor(window, 'localStorage');
+    let refusing = false;
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      get: () => ({
+        getItem: (key: string) => real.getItem(key),
+        setItem: (key: string, value: string) => {
+          if (refusing) throw new Error('SecurityError');
+          real.setItem(key, value);
+        },
+        removeItem: (key: string) => real.removeItem(key)
+      })
+    });
+    try {
+      vi.resetModules();
+      const page = await import('./api');
+      const { desktopFetch: pageFetch } = await import('./desktopBridge');
+      // Storage refuses every write, the failure key included.
+      refusing = true;
+      vi.mocked(pageFetch).mockResolvedValue(
+        json({ projects: [summary(projectId, 2)] })
+      );
+      await page.api.listProjects();
+      store.loadProject.mockResolvedValue(documentOf(projectId));
+
+      await expect(page.api.loadProject(projectId)).rejects.toMatchObject({
+        code: page.E2EE_PIN_STORAGE_UNAVAILABLE_CODE
+      });
+      expect(store.loadProject).not.toHaveBeenCalled();
+    } finally {
+      if (descriptor) Object.defineProperty(window, 'localStorage', descriptor);
+      else delete (window as { localStorage?: Storage }).localStorage;
+      real.removeItem(ENCRYPTED_PROJECT_PIN_FAILED_KEY);
     }
   });
 

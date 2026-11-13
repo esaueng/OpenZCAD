@@ -387,9 +387,35 @@ export function rememberProjectFormats(
  * Pins one project as encrypted: this page created, copied or encrypted
  * it, or a route answered that it is stored encrypted.
  */
-export function rememberEncryptedProject(projectId: string): void {
-  encryptedProjectPins().pin(projectId);
+export function rememberEncryptedProject(projectId: string): boolean {
   formatMismatchIds.delete(projectId);
+  return encryptedProjectPins().pin(projectId);
+}
+
+/**
+ * Refuses unless the project's pin is saved on this device, pinning it
+ * first if it can: no encrypted project is opened, written, created or
+ * copied here unless a reload would still hold it as encrypted.
+ */
+function requireDurablePin(projectId: string): void {
+  if (!encryptedProjectPins().pinDurably(projectId)) {
+    throw pinStorageUnavailable();
+  }
+}
+
+/** Refuses before an encrypted create or copy while pins are unavailable. */
+function requirePinStorage(): void {
+  if (encryptedProjectPins().degraded) throw pinStorageUnavailable();
+}
+
+/** Pins a project this page just created or copied encrypted, or refuses. */
+function pinCreated<T extends { project: { projectId: string } }>(
+  created: T
+): T {
+  if (!rememberEncryptedProject(created.project.projectId)) {
+    throw pinStorageUnavailable();
+  }
+  return created;
 }
 
 /**
@@ -420,7 +446,7 @@ export function pinStorageUnavailable(
 ): ApiError {
   return new ApiError(
     409,
-    'This browser’s site storage is blocked or full, or once could not save which projects are end-to-end encrypted, so this device treats every project as encrypted and sent nothing without encryption. Allow site storage, or free up space and clear this site’s stored data, then reload.',
+    'This device could not save which projects are end-to-end encrypted (its site storage is blocked or full), so it treats every project as encrypted and sent nothing without encryption. Your work on this device is kept. Allow site storage for this site, or free up space, then reload. Do not clear this site’s data to fix this: it holds unsynced work and this device’s encryption keys.',
     E2EE_PIN_STORAGE_UNAVAILABLE_CODE,
     details
   );
@@ -587,9 +613,12 @@ async function byFormat<T>(
   options: { fallback: boolean }
 ): Promise<T> {
   const viaStore = () =>
-    viaEncryptedRoute(projectId, async () =>
-      encrypted(await (await encryptedProjects()).encryptedProjectStore())
-    );
+    viaEncryptedRoute(projectId, async () => {
+      requireDurablePin(projectId);
+      return encrypted(
+        await (await encryptedProjects()).encryptedProjectStore()
+      );
+    });
   if (isEncryptedProject(projectId)) return viaStore();
   try {
     return await plaintext();
@@ -815,11 +844,10 @@ export const api = {
    */
   createProject: async (payload: CreateProjectRequest) => {
     const encrypted = async () => {
-      const created = await (
-        await encryptedProjects()
-      ).createEncryptedProject(payload);
-      rememberEncryptedProject(created.project.projectId);
-      return created;
+      requirePinStorage();
+      return pinCreated(
+        await (await encryptedProjects()).createEncryptedProject(payload)
+      );
     };
     // A device document too: the encrypted store refuses it without sending.
     if (await encryptsNewProjects()) {
@@ -902,16 +930,17 @@ export const api = {
         ownerUserId,
         prepared.name
       );
-      const created = await (
-        await encryptedProjects()
-      ).createEncryptedProject({
-        name: prepared.name,
-        adoptionProtocolVersion: 2,
-        localProjectId: prepared.projectId,
-        document: withoutDerivedProjection(adopted)
-      });
-      rememberEncryptedProject(created.project.projectId);
-      return created;
+      requirePinStorage();
+      return pinCreated(
+        await (
+          await encryptedProjects()
+        ).createEncryptedProject({
+          name: prepared.name,
+          adoptionProtocolVersion: 2,
+          localProjectId: prepared.projectId,
+          document: withoutDerivedProjection(adopted)
+        })
+      );
     };
     // A minted id that already names a project is a one-in-2^122 collision:
     // mint another once rather than failing the save.
@@ -971,17 +1000,18 @@ export const api = {
           'An end-to-end encrypted project is copied in the browser.'
         );
       }
-      const created = await (
-        await encryptedProjects()
-      ).copyEncryptedProject({
-        sourceProjectId: projectId,
-        document: withoutDerivedProjection(options.document),
-        ...(options.revisionId === undefined
-          ? {}
-          : { revisionId: options.revisionId })
-      });
-      rememberEncryptedProject(created.project.projectId);
-      return created;
+      requirePinStorage();
+      return pinCreated(
+        await (
+          await encryptedProjects()
+        ).copyEncryptedProject({
+          sourceProjectId: projectId,
+          document: withoutDerivedProjection(options.document),
+          ...(options.revisionId === undefined
+            ? {}
+            : { revisionId: options.revisionId })
+        })
+      );
     }
     if (await encryptsNewProjects()) {
       throw new ApiError(

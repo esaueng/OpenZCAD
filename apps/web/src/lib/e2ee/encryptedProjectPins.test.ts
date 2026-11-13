@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   ENCRYPTED_PROJECT_PIN_PREFIX,
-  ENCRYPTED_PROJECT_PIN_STATE_KEY,
-  PIN_STATE_FAILED,
+  ENCRYPTED_PROJECT_PIN_FAILED_KEY,
+  ENCRYPTED_PROJECT_PIN_RESERVE_KEY,
   localStorageEncryptedProjectPins
 } from './encryptedProjectPins';
 
@@ -103,13 +103,16 @@ describe('encrypted project pins', () => {
 
   it('stays degraded in other tabs and after a reload once a pin could not be saved', () => {
     const storage = memoryStorage();
-    // Full storage: a pin is larger than anything it can still take, but
-    // shrinking the reserved state is allowed.
+    // Full storage: nothing larger fits, but removing the reserve frees
+    // room for the failure key.
     let full = false;
     const nearlyFull = {
       ...storage,
       setItem: (key: string, value: string) => {
-        if (full && (storage.values.get(key)?.length ?? 0) < value.length) {
+        if (full && storage.values.has(ENCRYPTED_PROJECT_PIN_RESERVE_KEY)) {
+          throw new Error('QuotaExceededError');
+        }
+        if (full && key.startsWith(ENCRYPTED_PROJECT_PIN_PREFIX)) {
           throw new Error('QuotaExceededError');
         }
         storage.setItem(key, value);
@@ -117,14 +120,13 @@ describe('encrypted project pins', () => {
     };
     const pins = localStorageEncryptedProjectPins(nearlyFull);
     const otherTab = localStorageEncryptedProjectPins(nearlyFull);
+    expect(storage.values.has(ENCRYPTED_PROJECT_PIN_RESERVE_KEY)).toBe(true);
     expect(pins.degraded).toBe(false);
     expect(pins.has('proj_plain')).toBe(false);
 
     full = true;
-    pins.pin('proj_unsaved');
-    expect(storage.values.get(ENCRYPTED_PROJECT_PIN_STATE_KEY)).toBe(
-      PIN_STATE_FAILED
-    );
+    expect(pins.pin('proj_unsaved')).toBe(false);
+    expect(storage.values.has(ENCRYPTED_PROJECT_PIN_FAILED_KEY)).toBe(true);
     expect(pins.degraded).toBe(true);
     expect(pins.has('proj_unsaved')).toBe(true);
     expect(pins.has('proj_plain')).toBe(true);
@@ -134,5 +136,37 @@ describe('encrypted project pins', () => {
     const reloaded = localStorageEncryptedProjectPins(nearlyFull);
     expect(reloaded.degraded).toBe(true);
     expect(reloaded.has('proj_unsaved')).toBe(true);
+    // A degraded store saves no new pins: it cannot tell which are real.
+    expect(reloaded.pinDurably('proj_plain')).toBe(false);
+  });
+
+  it('never clears the failure key when another tab starts up', () => {
+    const storage = memoryStorage();
+    const starting = localStorageEncryptedProjectPins(storage);
+    storage.setItem(ENCRYPTED_PROJECT_PIN_FAILED_KEY, '1');
+    storage.removeItem(ENCRYPTED_PROJECT_PIN_RESERVE_KEY);
+    const late = localStorageEncryptedProjectPins(storage);
+    expect(storage.values.has(ENCRYPTED_PROJECT_PIN_FAILED_KEY)).toBe(true);
+    expect(late.degraded).toBe(true);
+    expect(starting.degraded).toBe(true);
+  });
+
+  it('reports a pin as unsaved when storage refuses every write', () => {
+    const storage = memoryStorage();
+    let refusing = false;
+    const pins = localStorageEncryptedProjectPins({
+      ...storage,
+      setItem: (key: string, value: string) => {
+        if (refusing) throw new Error('SecurityError');
+        storage.setItem(key, value);
+      }
+    });
+    expect(pins.pinDurably('proj_saved')).toBe(true);
+    refusing = true;
+    expect(pins.pinDurably('proj_new')).toBe(false);
+    // Neither the pin nor the failure key could be saved; the pin saved
+    // earlier still counts.
+    expect(storage.values.has(ENCRYPTED_PROJECT_PIN_FAILED_KEY)).toBe(false);
+    expect(pins.pinDurably('proj_saved')).toBe(true);
   });
 });
