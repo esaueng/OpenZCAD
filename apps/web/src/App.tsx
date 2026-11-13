@@ -287,8 +287,8 @@ import {
   DEFAULT_PROJECT_ORGANIZATION,
   displayLengthName,
   duplicateProjectName,
-  FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY,
   FEATURE_SUPPRESSED_METADATA_KEY,
+  isFeatureManuallySuppressed,
   isFeatureSuppressed,
   projectBranchPoint,
   projectOrganization,
@@ -398,6 +398,7 @@ import { watchBuildVersion } from './lib/buildVersionWatch';
 import { commandOutcomeMessage } from './lib/commandOutcome';
 import { tintPreviewResultBodies } from './lib/previewBodyTint';
 import { remappedBlendEdge } from './lib/inPlace/blendEdgeRemap';
+import { cancelCommandChipEntry } from './lib/inPlace/chipCancel';
 import { commandChipName } from './lib/inPlace/chipNames';
 import {
   presentedDiagnostics,
@@ -1708,8 +1709,11 @@ import {
   failingFeatureIds,
   HistoryResumeRefusal,
   rollbackMarkerMove,
+  rowResume,
+  rowResumeAlreadyFailing,
   validateHistoryResume,
-  type RollbackMarkerMove
+  type RollbackMarkerMove,
+  type RowResume
 } from './lib/historyResume';
 import type { HistoryRowActions } from './components/HistoryTimeline';
 import {
@@ -2860,14 +2864,17 @@ export function App() {
     dependents: { featureId: FeatureId; name: string }[];
   } | null>(null);
   /**
-   * A rollback marker move whose exact rebuild would leave resumed features
-   * failing, asking whether to resume anyway. Valid for one version only.
+   * A rollback marker move, or a row's own Resume, whose exact rebuild would
+   * leave features failing, asking whether to resume anyway. Valid for one
+   * version only.
    */
   const [pendingResume, setPendingResume] = useState<{
     projectId: ProjectDocument['projectId'];
     version: number;
     label: string;
     message: string;
+    /** Set for a row's own Resume: the row, as the dialog words it. */
+    row?: { name: string; state: 'suppressed' | 'paused' };
     commands: AnyCommand[];
     failures: readonly RefusedDependent[];
     derived: ProjectDocument['derived'];
@@ -10803,6 +10810,18 @@ export function App() {
       ...(geometry?.normal ? { normal: geometry.normal } : {}),
       ...(geometry?.centroid ? { centroid: geometry.centroid } : {}),
       ...(geometry?.center ? { center: geometry.center } : {}),
+      ...(geometry?.surfaceType === 'cylinder' &&
+      geometry.axisStart &&
+      geometry.axisEnd &&
+      geometry.radius !== undefined
+        ? {
+            cylinder: {
+              axisStart: geometry.axisStart,
+              axisEnd: geometry.axisEnd,
+              radius: geometry.radius
+            }
+          }
+        : {}),
       ...(point ? { point } : {})
     };
   }
@@ -22759,15 +22778,28 @@ export function App() {
     return {
       sections,
       values,
-      summary: inPlaceSpec.summary?.(state, inPlaceUnits) ?? null
+      summary:
+        inPlaceSpec.summary?.(
+          { ...state, raws: inPlace.raws },
+          inPlaceUnits,
+          inPlace.slots,
+          {
+            touched: inPlace.touched,
+            raws: inPlace.raws,
+            ...(inPlace.editing ? { saved: inPlace.editing.data } : {})
+          }
+        ) ?? null
     };
   }, [
     inPlaceSpec,
+    inPlace.slots,
     inPlace.options,
     inPlace.values,
     inPlace.raws,
     inPlace.handles,
     inPlace.optionSpecs,
+    inPlace.touched,
+    inPlace.editing,
     inPlaceUnits
   ]);
   /**
@@ -22859,7 +22891,9 @@ export function App() {
           ...handle,
           value: inPlace.values[handle.valueId] ?? valueSpec?.initial ?? 0,
           ...(valueSpec?.min === undefined ? {} : { min: valueSpec.min }),
-          ...(valueSpec?.max === undefined ? {} : { max: valueSpec.max }),
+          ...(handle.max === undefined && valueSpec?.max === undefined
+            ? {}
+            : { max: handle.max ?? valueSpec!.max! }),
           format,
           describe: (value: number) =>
             commandChipName(label, round(value), valueSpec?.unit, inPlaceUnits)
@@ -25866,7 +25900,9 @@ export function App() {
       const baseline = open.baseline ?? inPlaceRef.current.values[valueId] ?? 0;
       commandSetterRef.current?.(valueId, baseline);
       // Unset stays unset: a step that followed its bore still follows it.
-      inPlaceRef.current.restoreValue(
+      // A refused entry of it (the chip reopened on a refusal) goes too.
+      cancelCommandChipEntry(
+        inPlaceRef.current,
         valueId,
         baseline,
         open.baselineRaw,
@@ -27497,9 +27533,15 @@ export function App() {
     if (!owner) return;
     const liveFeature = findFeature(owner.document, feature.featureId);
     if (!liveFeature) return;
-    const resume = isFeatureSuppressed(liveFeature);
+    const resume = rowResume(
+      listFeaturesInOrder(owner.document),
+      liveFeature.featureId
+    );
+    if (resume) {
+      resumeRow(resume);
+      return;
+    }
     if (
-      !resume &&
       featureHistory(owner.document)
         .downstream(liveFeature.featureId)
         .some((dependent) => !isFeatureSuppressed(dependent))
@@ -27518,14 +27560,9 @@ export function App() {
       commandFactories.setNodeMetadata(
         {
           nodeId: liveFeature.id,
-          metadata: resume
-            ? {
-                [FEATURE_SUPPRESSED_METADATA_KEY]: null,
-                [FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY]: null
-              }
-            : { [FEATURE_SUPPRESSED_METADATA_KEY]: true }
+          metadata: { [FEATURE_SUPPRESSED_METADATA_KEY]: true }
         },
-        resume ? `Resume ${liveFeature.name}` : `Suppress ${liveFeature.name}`
+        `Suppress ${liveFeature.name}`
       )
     );
     const after = managerRef.current?.document;
@@ -27538,11 +27575,119 @@ export function App() {
         version: after.version,
         featureId: liveFeature.featureId,
         name: liveFeature.name,
-        resume,
+        resume: false,
         before,
         statusAt: lastStatusAtRef.current
       };
     }
+  }
+
+  /**
+   * A row's own Resume. The row was skipped while it was paused, so nothing
+   * checked it against the model as it is now, nor the later features
+   * against it: the candidate is rebuilt first, as for a marker move that
+   * resumes (ADR-017, November 2026). The same single command commits with
+   * the checked rebuild, or a dialog names what would not rebuild.
+   */
+  function resumeRow(resume: RowResume) {
+    const owner = managerRef.current;
+    if (!owner) return;
+    const document = owner.document;
+    const { feature, command } = resume;
+    const label = command.label;
+    setPendingResume(null);
+    if (!ensureCanExecute([command], `resume ${feature.name}`)) return;
+    const ready = geometry.isReadyFor(document);
+    // What the resume toast counts against, as for an unchecked toggle.
+    const before = suppressionRepairSnapshot(
+      owner,
+      ready,
+      attributedFeatureWarnings()
+    );
+    const alreadyFailing = rowResumeAlreadyFailing(
+      resume,
+      ready ? document.derived : null,
+      rollbackFailingRef.current?.projectId === document.projectId
+        ? rollbackFailingRef.current.featureIds
+        : undefined
+    );
+    let refusal: HistoryResumeRefusal | null = null;
+    let candidate: ProjectDocument['derived'] | null = null;
+    void validatedFeature
+      .runTransaction([command], {
+        label,
+        targets: [],
+        validateDerived: (derived) => {
+          candidate = derived;
+          try {
+            validateHistoryResume(resume.checked, derived, alreadyFailing);
+          } catch (error) {
+            if (error instanceof HistoryResumeRefusal) refusal = error;
+            throw error;
+          }
+        },
+        validatingMessage: `Checking ${feature.name} and the features after it…`,
+        successMessage: commandOutcomeMessage(label),
+        onFailure: (failure) => {
+          const refused: HistoryResumeRefusal | null = refusal;
+          const derived: ProjectDocument['derived'] | null = candidate;
+          if (
+            !refused ||
+            !derived ||
+            managerRef.current !== owner ||
+            owner.document.version !== document.version
+          ) {
+            announce(failure);
+            return;
+          }
+          setPendingResume({
+            projectId: document.projectId,
+            version: document.version,
+            label,
+            message: `Resumed ${feature.name}.`,
+            row: {
+              name: feature.name,
+              state: isFeatureManuallySuppressed(feature)
+                ? 'suppressed'
+                : 'paused'
+            },
+            commands: [command],
+            failures: refused.failures,
+            derived
+          });
+        },
+        onSuccess: () => {
+          const after = managerRef.current?.document;
+          const derived: ProjectDocument['derived'] | null = candidate;
+          if (!after || managerRef.current !== owner) return;
+          // The committed rebuild is the checked one, so the toast is known now.
+          const feedback = settleSuppressionNotice(
+            {
+              manager: owner,
+              projectId: after.projectId,
+              version: after.version,
+              featureId: feature.featureId,
+              name: feature.name,
+              resume: true,
+              before
+            },
+            owner,
+            derived
+          );
+          if (feedback.state !== 'ready') return;
+          queueMicrotask(() =>
+            announce(
+              feedback.message,
+              { label: 'Undo', run: handleUndo },
+              { repeatsStatusAt: lastStatusAtRef.current }
+            )
+          );
+        }
+      })
+      .then((outcome) => {
+        if (outcome === 'busy')
+          announce(`${label} not applied. ${VALIDATED_FEATURE_BUSY_STATUS}`);
+      });
   }
 
   /**
@@ -33074,6 +33219,7 @@ export function App() {
                   summary={inPlacePanel?.summary ?? null}
                   values={inPlacePanel?.values ?? []}
                   onValueCommit={commitInPlacePanelValue}
+                  onValueRestore={inPlace.dropRefusal}
                   onValuePreview={previewInPlacePanelValue}
                   onDone={() => inPlace.done()}
                   onCancel={cancelInPlaceCommand}
@@ -33584,10 +33730,15 @@ export function App() {
           {pendingResume && activeResumePrompt(pendingResume, doc) && (
             <ResumeHistoryDialog
               action={pendingResume.label}
+              {...(pendingResume.row ? { row: pendingResume.row } : {})}
               failures={pendingResume.failures}
               onKeep={() => {
                 setPendingResume(null);
-                setStatus('History stays rolled back.');
+                setStatus(
+                  pendingResume.row
+                    ? `${pendingResume.row.name} stays ${pendingResume.row.state}.`
+                    : 'History stays rolled back.'
+                );
               }}
               onResume={resumeDespiteFailures}
             />

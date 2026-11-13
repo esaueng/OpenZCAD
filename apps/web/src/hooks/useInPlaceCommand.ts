@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   BodyId,
+  FeatureData,
   ParamValue,
   ParametricVector3,
   ProjectDocument,
@@ -24,6 +25,7 @@ import {
   type InPlaceSlots,
   type InPlaceToolId,
   type InPlaceToolSpec,
+  type InPlaceValueContext,
   type OptionSpec,
   type PlanePick,
   type ProfilePick,
@@ -35,6 +37,8 @@ import type { InPlaceEditSeed } from '../lib/inPlace/edit';
 import { inPlacePanelState } from '../lib/inPlace/panel';
 import { findFeature } from '@openzcad/document-core';
 import type { PlacementPick } from '../lib/inPlace/primitives';
+import { newExactWarnings } from '../lib/exactWarnings';
+import { refusingWarning } from '../lib/featureValidation';
 
 /**
  * Runs whichever in-place command (U09) is active.
@@ -197,6 +201,12 @@ function sessionFromSeed(
   };
 }
 
+/** A typed entry refused, and why, held against its value. */
+interface EntryRefusal {
+  valueId: string;
+  message: string;
+}
+
 interface Session {
   /** Which start this is: a new one each time a command starts. */
   id: number;
@@ -339,6 +349,12 @@ export interface InPlaceCommand {
   previewValue(valueId: string, value: number): void;
   /** False when a typed expression is refused, leaving the value as it was. */
   setValue(valueId: string, value: number, raw?: string): boolean;
+  /**
+   * A refused entry of this value given up, its field put back to the value
+   * held (Escape, leaving the field, or the held value entered again): the
+   * refusal goes, and Done no longer waits on it.
+   */
+  dropRefusal(valueId: string): void;
   /** Values the user has set, which the picks' or values' defaults leave alone. */
   touched: readonly string[];
   /**
@@ -404,6 +420,7 @@ export function useInPlaceCommand(
 ): InPlaceCommand {
   const [session, setSession] = useState<Session | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
+  const [previewAdvisory, setPreviewAdvisory] = useState<string | null>(null);
   // A typed value the tool refused: it stands until the next accepted
   // value, and Done waits with it, since the chip went back to the value
   // before and finishing would commit that instead of what was typed.
@@ -427,10 +444,31 @@ export function useInPlaceCommand(
     options: Record<string, string>;
     slots: InPlaceEditSeed['slots'];
   } | null>(null);
-  const [entryRefusal, setEntryRefusal] = useState<{
-    valueId: string;
-    message: string;
-  } | null>(null);
+  /**
+   * Refused entries, one per value, oldest first: each holds Done until that
+   * value is taken, put back, or no longer applies. The bar shows the last.
+   */
+  const [entryRefusals, setEntryRefusals] = useState<readonly EntryRefusal[]>(
+    []
+  );
+  const entryRefusal = entryRefusals.at(-1) ?? null;
+  /** Refuses an entry of one value, replacing only that value's refusal. */
+  const refuseEntry = useCallback((refused: EntryRefusal) => {
+    setEntryRefusals((current) => [
+      ...current.filter((other) => other.valueId !== refused.valueId),
+      refused
+    ]);
+  }, []);
+  /** Lets go of the refusals of these values, and no other. */
+  const clearEntryRefusals = useCallback(
+    (cleared: (valueId: string) => boolean) => {
+      setEntryRefusals((current) => {
+        const kept = current.filter((refused) => !cleared(refused.valueId));
+        return kept.length === current.length ? current : kept;
+      });
+    },
+    []
+  );
   const [previewValid, setPreviewValid] = useState(false);
   const optionsRef = useRef(options);
   optionsRef.current = options;
@@ -729,14 +767,25 @@ export function useInPlaceCommand(
             : undefined;
         if (built && !frame) return;
         const bodyId = frame?.bodyId;
-        // As strict as the card's preflight: a warning the base model did
-        // not already carry refuses the preview, even with a body built.
-        const known = new Set(
-          optionsRef.current.baseDocument()?.derived.warnings ?? []
-        );
-        const fresh = result?.derived.warnings.find(
-          (warning) => !known.has(warning)
-        );
+        // Use the same attributed, occurrence-counted rule as other commit
+        // gates: advisories describe usable geometry; only failures and
+        // refusals block. An edited feature's own failure still blocks even
+        // when it was already present in the baseline (a failed replacement
+        // can now publish a pass-through body under its result id).
+        const base = optionsRef.current.baseDocument();
+        const edit = editRef.current;
+        const fresh =
+          result && base
+            ? (newExactWarnings(base, result.derived)[0] ??
+              (edit
+                ? refusingWarning(
+                    edit.name,
+                    result.derived.warnings,
+                    result.derived.featureWarnings,
+                    edit.featureId
+                  )
+                : null))
+            : null;
         // A datum adds no body: its own check proves it resolved.
         let unresolved: string | null = null;
         if (result && frame?.check) {
@@ -751,6 +800,7 @@ export function useInPlaceCommand(
         // command does so), so its body is looked for like any other.
         const valid = Boolean(
           result &&
+          base &&
           (frame?.check
             ? unresolved === null
             : bodyId && result.derived.bodyRepresentations[bodyId]) &&
@@ -761,24 +811,46 @@ export function useInPlaceCommand(
         if (!result) return;
         if (valid) {
           setRefusal(null);
+          const key = (warning: { featureId: string; message: string }) =>
+            JSON.stringify([warning.featureId, warning.message]);
+          const known = new Set(
+            (base?.derived.featureWarnings ?? [])
+              .filter((warning) => warning.kind === 'advisory')
+              .map(key)
+          );
+          const notes = (result.derived.featureWarnings ?? [])
+            .filter(
+              (warning) =>
+                warning.kind === 'advisory' &&
+                (warning.featureId === edit?.featureId ||
+                  !known.has(key(warning)))
+            )
+            .map((warning) =>
+              warning.message.replace(/^Feature "[^"]+":\s*/, '')
+            );
+          setPreviewAdvisory(notes.length ? notes.join(' · ') : null);
           optionsRef.current.publishPreview({
             ...result.document,
             derived: result.derived
           });
         } else {
+          setPreviewAdvisory(null);
           // The last frame that built is not this request: left on screen
           // under the refusal, it reads as the value that was refused.
           optionsRef.current.publishPreview(null);
           setRefusal(
             fresh ??
               unresolved ??
-              result.derived.warnings.at(-1) ??
+              (result.derived.featureWarnings === undefined
+                ? result.derived.warnings.at(-1)
+                : null) ??
               'This did not produce a valid body.'
           );
         }
       },
       onFailure: ({ error }) => {
         setPreviewValid(false);
+        setPreviewAdvisory(null);
         optionsRef.current.publishPreview(null);
         setRefusal(
           error instanceof Error ? error.message : 'Unable to preview this.'
@@ -795,7 +867,7 @@ export function useInPlaceCommand(
   // A refused entry belongs to the edit it was typed in: one re-armed from
   // a changed feature (a Linear pattern made Grid) starts without it.
   useEffect(() => {
-    setEntryRefusal(null);
+    setEntryRefusals([]);
   }, [editIdentity]);
   const instant = spec?.instant === true;
   useEffect(() => {
@@ -1057,7 +1129,7 @@ export function useInPlaceCommand(
     setSession(null);
     setCommitting(false);
     setRefusal(null);
-    setEntryRefusal(null);
+    setEntryRefusals([]);
     setPreviewValid(false);
     optionsRef.current.publishPreview(null);
   }, [preview, setCommitting]);
@@ -1088,7 +1160,7 @@ export function useInPlaceCommand(
       preview.clear();
       optionsRef.current.publishPreview(null);
       setRefusal(null);
-      setEntryRefusal(null);
+      setEntryRefusals([]);
       setCommitting(false);
       setPreviewValid(false);
       sessionCount.current += 1;
@@ -1153,7 +1225,7 @@ export function useInPlaceCommand(
       preview.clear();
       optionsRef.current.publishPreview(null);
       setRefusal(null);
-      setEntryRefusal(null);
+      setEntryRefusals([]);
       setCommitting(false);
       setPreviewValid(false);
       sessionCount.current += 1;
@@ -1514,9 +1586,7 @@ export function useInPlaceCommand(
       const toolSpec = current ? IN_PLACE_TOOL_SPECS[current.tool] : null;
       if (!current || !toolSpec?.footprint) return false;
       // A drawn value replaces a refused typed one, and its refusal with it.
-      setEntryRefusal((refused) =>
-        refused && refused.valueId in placed ? null : refused
-      );
+      clearEntryRefusals((valueId) => valueId in placed);
       setSession((latest) => {
         if (!latest) return latest;
         const specs = IN_PLACE_TOOL_SPECS[latest.tool].values;
@@ -1541,7 +1611,7 @@ export function useInPlaceCommand(
       });
       return true;
     },
-    []
+    [clearEntryRefusals]
   );
 
   const pickRef = useCallback((ref: RefPick) => {
@@ -1584,9 +1654,7 @@ export function useInPlaceCommand(
       // New picks are measured afresh: a distance refused for the old
       // pair no longer stands.
       const linked = IN_PLACE_TOOL_SPECS[current.tool].linked ?? {};
-      setEntryRefusal((refused) =>
-        refused && refused.valueId in linked ? null : refused
-      );
+      clearEntryRefusals((valueId) => valueId in linked);
       setSession((latest) => {
         const image = latest?.slots.image;
         if (!latest || !image) return latest;
@@ -1618,7 +1686,7 @@ export function useInPlaceCommand(
       });
       return true;
     },
-    [ctx]
+    [ctx, clearEntryRefusals]
   );
 
   const setOption = useCallback((optionId: string, value: string) => {
@@ -1699,15 +1767,13 @@ export function useInPlaceCommand(
         if (!written) {
           // An entry refusal, so Done waits: the value shown was refused,
           // and the width it would have set is not what was asked for.
-          setEntryRefusal({
+          refuseEntry({
             valueId,
             message: `${IN_PLACE_TOOL_SPECS[current.tool].title} cannot take ${raw ?? value} for its ${valueSpec?.label.toLowerCase() ?? 'value'}.`
           });
           return false;
         }
-        setEntryRefusal((refused) =>
-          refused?.valueId === valueId ? null : refused
-        );
+        clearEntryRefusals((refused) => refused === valueId);
         setSession((latestSession) => {
           if (!latestSession) return latestSession;
           const specs = IN_PLACE_TOOL_SPECS[latestSession.tool].values;
@@ -1751,7 +1817,7 @@ export function useInPlaceCommand(
           : valueSpec.max === undefined
             ? `${whole ? `${whole}of ` : ''}at least ${valueSpec.min ?? 0}`
             : `${whole}${valueSpec.min ?? 0} to ${valueSpec.max}`;
-        setEntryRefusal({
+        refuseEntry({
           valueId,
           message: `${raw === undefined ? value : `${raw} is ${value}`}; ${IN_PLACE_TOOL_SPECS[current.tool].title} ${valueSpec.label.toLowerCase()} takes ${range}.`
         });
@@ -1764,12 +1830,14 @@ export function useInPlaceCommand(
           ? (IN_PLACE_TOOL_SPECS[current.tool].refuseValue?.(
               valueId,
               value,
-              current.values
+              current.values,
+              { faces: current.slots.faces },
+              valueContext(current, savedDataRef.current)
             ) ?? null)
           : null;
       if (crossed) {
         if (typed) {
-          setEntryRefusal({
+          refuseEntry({
             valueId,
             message: `${raw === undefined ? value : `${raw} is ${value}`}; ${crossed}`
           });
@@ -1778,9 +1846,7 @@ export function useInPlaceCommand(
       }
       // Only the refused value, taken now, lifts its refusal: another value
       // changing leaves the refused one still not what was typed.
-      setEntryRefusal((refused) =>
-        refused?.valueId === valueId ? null : refused
-      );
+      clearEntryRefusals((refused) => refused === valueId);
       setSession((current) => {
         if (!current) return current;
         const valueSpec = IN_PLACE_TOOL_SPECS[current.tool].values.find(
@@ -1799,7 +1865,7 @@ export function useInPlaceCommand(
           ...current,
           values: {
             ...current.values,
-            ...carriedValues(current, valueId, next),
+            ...carriedValues(current, valueId, next, savedDataRef.current),
             [valueId]: next
           },
           raws,
@@ -1810,7 +1876,13 @@ export function useInPlaceCommand(
       });
       return true;
     },
-    []
+    [clearEntryRefusals, refuseEntry]
+  );
+  const dropRefusal = useCallback(
+    (valueId: string) => {
+      clearEntryRefusals((refused) => refused === valueId);
+    },
+    [clearEntryRefusals]
   );
   const previewValue = useCallback(
     (valueId: string, value: number) =>
@@ -1848,7 +1920,7 @@ export function useInPlaceCommand(
           // box's corner, with its height).
           values: {
             ...current.values,
-            ...carriedValues(current, valueId, restored),
+            ...carriedValues(current, valueId, restored, savedDataRef.current),
             [valueId]: restored
           },
           raws,
@@ -1863,7 +1935,7 @@ export function useInPlaceCommand(
   // that changed the request since the last frame has not been shown yet.
   const canFinish = Boolean(
     !committing &&
-    !entryRefusal &&
+    entryRefusals.length === 0 &&
     request &&
     (instant ||
       (previewValid && previewedKey !== null && previewedKey === requestKey))
@@ -1952,15 +2024,24 @@ export function useInPlaceCommand(
     [spec, slots, values, ctx, chosen]
   );
   // A refused entry holds Done until its value is taken, or until the value
-  // no longer applies: a choice (a hole's style) that hides its chip.
+  // no longer applies: a choice (a hole's style) that hides its chip, or its
+  // Options row (a value typed only there, a thread's offset).
   useEffect(() => {
-    if (
-      entryRefusal &&
-      !handles.some((handle) => handle.valueId === entryRefusal.valueId)
-    ) {
-      setEntryRefusal(null);
-    }
-  }, [entryRefusal, handles]);
+    if (entryRefusals.length === 0) return;
+    const state = spec ? inPlacePanelState(spec, chosen, heldValues) : null;
+    const applies = (valueId: string) => {
+      if (handles.some((handle) => handle.valueId === valueId)) return true;
+      const valueSpec = spec?.values.find(
+        (candidate) => candidate.id === valueId
+      );
+      return (
+        state !== null &&
+        valueSpec?.inOptions === true &&
+        (valueSpec.when?.(state) ?? true)
+      );
+    };
+    clearEntryRefusals((valueId) => !applies(valueId));
+  }, [entryRefusals, handles, spec, chosen, heldValues, clearEntryRefusals]);
   const optionSpecs = useMemo(
     () =>
       (spec?.options ?? [])
@@ -1988,7 +2069,16 @@ export function useInPlaceCommand(
     optionSpecs,
     editing: editSeed,
     request,
-    hint: spec ? spec.hint(slots, chosen, ctx) : '',
+    hint: spec
+      ? [
+          spec.hint(slots, chosen, ctx),
+          previewValid && previewedKey === requestKey && previewAdvisory
+            ? `Note: ${previewAdvisory}`
+            : null
+        ]
+          .filter(Boolean)
+          .join(' · ')
+      : '',
     refusal: entryRefusal?.message ?? refusal,
     canFinish,
     edit,
@@ -2012,6 +2102,7 @@ export function useInPlaceCommand(
     setOption,
     previewValue,
     setValue,
+    dropRefusal,
     touched: session?.touched ?? EMPTY_TOUCHED,
     restoreValue,
     done,
@@ -2038,7 +2129,8 @@ function sameBodyEdges(edges: readonly EdgePick[]): EdgePick[] {
 function carriedValues(
   session: Session,
   valueId: string,
-  value: number
+  value: number,
+  saved: FeatureData | undefined
 ): Record<string, number> {
   return Object.fromEntries(
     Object.entries(
@@ -2046,10 +2138,27 @@ function carriedValues(
         valueId,
         value,
         session.values,
-        { ...EMPTY_SLOTS, placement: session.slots.placement }
+        {
+          ...EMPTY_SLOTS,
+          placement: session.slots.placement,
+          faces: session.slots.faces
+        },
+        valueContext(session, saved)
       ) ?? {}
     ).filter(([id]) => session.raws[id] === undefined)
   );
+}
+
+/** How a session holds its values, for a tool's value checks. */
+function valueContext(
+  session: Session,
+  saved: FeatureData | undefined
+): InPlaceValueContext {
+  return {
+    touched: session.touched,
+    raws: session.raws,
+    ...(saved ? { saved } : {})
+  };
 }
 
 /**

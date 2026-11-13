@@ -4,11 +4,19 @@ import { useModalFocus } from '../lib/useModalFocus';
 import { plainRefusal } from '../lib/refusalLanguage';
 
 export interface ResumeHistoryDialogProps {
-  /** The marker move asked for: "Resume full history", "Roll back after …". */
+  /**
+   * The move asked for: "Resume full history", "Roll back after …", or a
+   * row's own "Resume Fillet 3".
+   */
   action: string;
+  /**
+   * The row a row's own Resume brings back, and whether it is suppressed by
+   * hand or paused by a rollback. Absent for a rollback marker move.
+   */
+  row?: { name: string; state: 'suppressed' | 'paused' };
   /** The resumed features that would not rebuild, each with its reason. */
   failures: readonly { name: string; reason: string }[];
-  /** Keep the rollback where it is. Nothing changes. */
+  /** Keep the rollback, or the row, paused. Nothing changes. */
   onKeep(): void;
   /** Commit the move as one undoable step, failures and all. */
   onResume(): void;
@@ -29,6 +37,7 @@ const NAMED_FAILURES = 6;
  */
 export function ResumeHistoryDialog({
   action,
+  row,
   failures,
   onKeep,
   onResume
@@ -40,6 +49,7 @@ export function ResumeHistoryDialog({
 
   const named = failures.slice(0, NAMED_FAILURES);
   const unnamed = failures.length - named.length;
+  const them = failures.length === 1 ? 'it' : 'them';
 
   return (
     <div className="modal-backdrop">
@@ -64,9 +74,7 @@ export function ResumeHistoryDialog({
         </h2>
         <div id="resume-history-dialog-body" className="delete-feature-body">
           <p>
-            {failures.length === 1
-              ? '1 paused feature would not rebuild:'
-              : `${failures.length} paused features would not rebuild:`}
+            {`${failures.length} ${row ? '' : 'paused '}${failures.length === 1 ? 'feature' : 'features'} would not rebuild:`}
           </p>
           <ul className="delete-feature-dependents">
             {named.map((failure, index) => (
@@ -77,11 +85,18 @@ export function ResumeHistoryDialog({
             ))}
             {unnamed > 0 && <li>and {unnamed} more</li>}
           </ul>
-          <p>
-            Keep rolled back to change the edit first, or resume anyway and
-            repair {failures.length === 1 ? 'it' : 'them'} in place. Undo brings
-            the rollback back.
-          </p>
+          {row ? (
+            <p>
+              Keep {row.name} {row.state} to change the model first, or resume
+              anyway and repair {them} in place. Undo{' '}
+              {row.state === 'suppressed' ? 'suppresses' : 'pauses'} it again.
+            </p>
+          ) : (
+            <p>
+              Keep rolled back to change the edit first, or resume anyway and
+              repair {them} in place. Undo brings the rollback back.
+            </p>
+          )}
         </div>
         <div className="delete-feature-actions">
           <button
@@ -90,7 +105,7 @@ export function ResumeHistoryDialog({
             className="secondary"
             onClick={onKeep}
           >
-            Keep rolled back
+            {row ? `Keep ${row.state}` : 'Keep rolled back'}
           </button>
           <button type="button" className="primary" onClick={onResume}>
             Resume anyway
