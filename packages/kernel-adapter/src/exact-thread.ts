@@ -1,6 +1,7 @@
 /**
  * Schema v53 thread features: a screw thread modeled on a body's cylindrical
- * face by the kernel's thread generator.
+ * face by the kernel's thread generator. Schema v57 adds runouts and the
+ * tapered NPT and BSPT pipe threads.
  *
  * The kernel owns the thread: its helical surfaces, their certified fit, the
  * proof that the band is solid and the boolean-free gluing onto the body.
@@ -12,11 +13,20 @@
  * past 45°, crests narrower than an extrusion line, a thread a layer deep.
  */
 import {
+  PIPE_THREAD_TAPER,
   UNIT_TO_MM,
   isoMetricThreadForBore,
   nearestIsoMetricThread,
+  pipeGaugeFromFittingEnd,
+  pipeThreadForFace,
+  pipeThreadForm,
+  pipeThreadReach,
+  pipeThreadSpec,
+  type FeatureId,
   type FeatureNode,
   type ParamValue,
+  type PipeThreadSpec,
+  type PipeThreadStandard,
   type ThreadProfile
 } from '@openzcad/shared';
 import { resolveParamValue } from '@openzcad/document-core';
@@ -30,7 +40,13 @@ import { resolveFeatureFaces } from './exact-reference-resolution';
 import { inheritMeshOrigin, validateGeneratedSolid } from './exact-shape-utils';
 import type { ExactShape } from './exact-types';
 import { KernelRefusal } from './kernel-refusal';
-import { deriveRemusBooleanCarrierLineage } from './remus-lineage';
+import {
+  createRemusSemanticLineage,
+  deriveRemusBooleanCarrierLineage,
+  mergeRemusLineageStates,
+  type RemusLineageState,
+  type RemusSemanticAssignment
+} from './remus-lineage';
 import type {
   RemusKernel,
   SolidOperationDetailedResult
@@ -74,19 +90,55 @@ const THREAD_REFUSALS: Readonly<Record<string, string>> = {
   'thread:tolerance-too-tight':
     'The thread is too long for the generator to resolve. Shorten it.',
   'thread:features-in-thread-region':
-    'A hole, slot or other feature crosses the band the thread would occupy.'
+    'A hole, slot or other feature crosses the band the thread would occupy.',
+  'thread:ends-overlap':
+    'The finishes at the two ends overlap: the thread is too short for both. Lengthen it, finish one end only, or use a larger end angle.',
+  'thread:taper-out-of-range':
+    'The taper is out of range: it must change the diameter by 1 in 1000 to 1 in 4.'
 };
 
-/** The success envelope's solid, or the refusal as a throw. */
-function unwrap(envelope: SolidOperationDetailedResult): number {
+/** Where a tapered thread's copy differs: each is decided at one end. */
+const TAPERED_THREAD_REFUSALS: Readonly<Record<string, string>> = {
+  'thread:cylinder-too-small':
+    'The tapered thread grows larger than the boss before its large end. Shorten it or use a smaller size.',
+  'thread:bore-too-large':
+    'The bore is wider than the tapered thread at its small end. Shorten the thread, use a smaller bore, or use a larger size.',
+  'thread:too-deep':
+    'The tapered thread is too deep for this diameter at its small end.'
+};
+
+/** What a successful cut reports, as far as the feature reads it. */
+export interface ThreadOkDetails {
+  readonly geometry?: {
+    readonly taperAngle?: number;
+    readonly start?: { readonly kind?: string };
+    readonly end?: { readonly kind?: string };
+  };
+  readonly faceRoles?: readonly {
+    readonly face: number;
+    readonly role: string;
+  }[];
+}
+
+/** The success envelope's solid and details, or the refusal as a throw. */
+function unwrap(
+  envelope: SolidOperationDetailedResult,
+  tapered: boolean
+): { solid: number; details: ThreadOkDetails } {
   if (envelope.status === 'ok') {
-    return envelope.value;
+    return {
+      solid: envelope.value,
+      details: envelope.details ?? {}
+    };
   }
   const kernelMessage =
     typeof envelope.details?.message === 'string'
       ? envelope.details.message
       : envelope.code;
-  const reason = THREAD_REFUSALS[envelope.code] ?? kernelMessage;
+  const reason =
+    (tapered ? TAPERED_THREAD_REFUSALS[envelope.code] : undefined) ??
+    THREAD_REFUSALS[envelope.code] ??
+    kernelMessage;
   throw new KernelRefusal({
     family: 'thread',
     category: envelope.category,
@@ -124,13 +176,27 @@ export interface ResolvedThread {
   phaseDeg: number;
   /** The chamfer cone's angle from the axis at each chamfered end. */
   chamfer: { start?: number; end?: number };
+  /** Schema v57: the runout cone's angle from the axis at each such end. */
+  runout?: { start?: number; end?: number };
   /** How much the face truncated the crest, radially; 0 when it did not. */
   truncation: number;
+  /**
+   * Schema v57 pipe threads: the kernel's taper, its small end and the
+   * gauge plane's distance from it. `majorDiameter` is on the gauge plane.
+   */
+  taper?: { ratio: number; smallEnd: 'start' | 'end'; gaugeOffset: number };
+  /** The pipe size a pipe thread was cut to, in millimetres. */
+  pipe?: PipeThreadSpec;
+  /**
+   * A pipe thread whose length the feature left to the standard, cut
+   * shorter where its crest meets the cylinder: the standard's length.
+   */
+  shortOfStandard?: number;
 }
 
 /** A profile's depth, crest flat and flank angles for a pitch. */
 export function threadProfileForm(
-  profile: Exclude<ThreadProfile, 'custom'>,
+  profile: Exclude<ThreadProfile, 'custom' | PipeThreadStandard>,
   kind: 'external' | 'internal',
   pitch: number
 ): {
@@ -174,6 +240,9 @@ export function resolveThread(
   face: { kind: 'external' | 'internal'; radius: number; faceLength: number },
   mm: number
 ): ResolvedThread {
+  if (data.profile === 'npt' || data.profile === 'bspt') {
+    return resolvePipeThread(data, data.profile, values, face, mm);
+  }
   const { kind, radius, faceLength } = face;
   const typedMajor = values.optional(data.majorDiameter, 'major diameter');
   const typedPitch = values.optional(data.pitch, 'pitch');
@@ -248,7 +317,116 @@ export function resolveThread(
     length,
     phaseDeg: values.optional(data.phaseDeg, 'phase') ?? 0,
     chamfer: threadChamfers(data, values),
+    ...threadRunouts(data, values),
     truncation
+  };
+}
+
+/**
+ * Schema v57: a tapered pipe thread, NPT or BSPT. The pipe size sets the
+ * pitch, the form and the major diameter on the gauge plane; the thread's
+ * fitting end is the end it starts at (`anchor`). A boss tapers small toward
+ * it and is gauged its gauge length in; a bore opens large at it and is
+ * gauged on it (NPT) or half a pitch behind it (Rc). A taper is not
+ * truncated by its face: where the crest would cross the cylinder the
+ * kernel refuses, so a length left to the standard stops short of that.
+ */
+function resolvePipeThread(
+  data: FeatureDataOf<'thread'>,
+  standard: PipeThreadStandard,
+  values: {
+    optional(value: ParamValue | undefined, label: string): number | undefined;
+  },
+  face: { kind: 'external' | 'internal'; radius: number; faceLength: number },
+  mm: number
+): ResolvedThread {
+  const { kind, radius, faceLength } = face;
+  const pipe =
+    data.pipeSize === undefined
+      ? pipeThreadForFace(standard, kind, 2 * radius * mm)
+      : pipeThreadSpec(standard, data.pipeSize);
+  const pitch = pipe.pitch / mm;
+  const form = pipeThreadForm(standard, pitch);
+  const clearance = values.optional(data.clearance, 'clearance') ?? 0;
+  const majorAtGauge =
+    pipe.gaugeMajor / mm + (kind === 'external' ? -2 : 2) * clearance;
+  const gaugeFromFittingEnd = pipeGaugeFromFittingEnd(pipe, kind) / mm;
+  const offset = values.optional(data.offset, 'offset') ?? 0;
+  const typedLength = values.optional(data.length, 'length');
+  const standardLength = pipe.threadLength / mm;
+  const reach = pipeThreadReach({
+    kind,
+    majorAtGauge,
+    depth: form.depth,
+    gaugeFromFittingEnd,
+    diameter: 2 * radius
+  });
+  // Left to the standard, the thread takes its standard length within the
+  // face, and stops where its crest meets the cylinder. One that does not
+  // fit at all keeps the standard's, and the kernel names why.
+  const room = faceLength - offset;
+  const fitted = Math.min(
+    standardLength,
+    room,
+    reach > 0 ? reach : standardLength
+  );
+  const length = typedLength ?? fitted;
+  const fittingEnd = data.anchor ?? 'start';
+  const farEnd = fittingEnd === 'start' ? 'end' : 'start';
+  const slack = (size: number) => 1e-9 * Math.max(size, 1);
+  return {
+    kind,
+    majorDiameter: majorAtGauge,
+    pitch,
+    depth: form.depth,
+    crestWidth: form.crestWidth,
+    upperFlankAngleDeg: form.flankAngleDeg,
+    lowerFlankAngleDeg: form.flankAngleDeg,
+    starts: Math.round(values.optional(data.starts, 'starts') ?? 1),
+    hand: data.hand ?? 'right',
+    offset: fittingEnd === 'end' ? faceLength - offset - length : offset,
+    length,
+    phaseDeg: values.optional(data.phaseDeg, 'phase') ?? 0,
+    chamfer: threadChamfers(data, values),
+    ...threadRunouts(data, values),
+    truncation: 0,
+    // The gauge offset runs from the small end toward the large end: from
+    // a boss's fitting end, from a bore's far end.
+    taper:
+      kind === 'external'
+        ? {
+            ratio: PIPE_THREAD_TAPER,
+            smallEnd: fittingEnd,
+            gaugeOffset: gaugeFromFittingEnd
+          }
+        : {
+            ratio: PIPE_THREAD_TAPER,
+            smallEnd: farEnd,
+            gaugeOffset: length - gaugeFromFittingEnd
+          },
+    pipe,
+    ...(typedLength === undefined &&
+    fitted < standardLength - slack(standardLength) &&
+    fitted < room - slack(faceLength)
+      ? { shortOfStandard: standardLength }
+      : {})
+  };
+}
+
+/** Schema v57: the run-out ends' cone angles; absent when there are none. */
+function threadRunouts(
+  data: FeatureDataOf<'thread'>,
+  values: {
+    optional(value: ParamValue | undefined, label: string): number | undefined;
+  }
+): { runout?: { start?: number; end?: number } } {
+  if (!data.runoutStart && !data.runoutEnd) return {};
+  const angle = values.optional(data.chamferAngleDeg, 'runout angle') ?? 45;
+  return {
+    runout: {
+      ...(data.runoutStart ? { start: angle } : {}),
+      ...(data.runoutEnd ? { end: angle } : {})
+    }
   };
 }
 
@@ -266,18 +444,31 @@ function threadChamfers(
   };
 }
 
-/** The kernel spec's end fields: present only for a chamfered end. */
-export function threadEndSpec(thread: Pick<ResolvedThread, 'chamfer'>): {
-  start?: { kind: 'chamfer'; angle: number };
-  end?: { kind: 'chamfer'; angle: number };
-} {
-  const { start, end } = thread.chamfer;
-  return {
-    ...(start === undefined
-      ? {}
-      : { start: { kind: 'chamfer', angle: start } }),
-    ...(end === undefined ? {} : { end: { kind: 'chamfer', angle: end } })
-  };
+interface ThreadEndKind {
+  kind: 'chamfer' | 'runout';
+  angle: number;
+}
+
+/**
+ * The kernel spec's end fields: present only for a finished end, a chamfer
+ * or (schema v57) a runout. An end asked for both is refused.
+ */
+export function threadEndSpec(
+  thread: Pick<ResolvedThread, 'chamfer' | 'runout'>
+): { start?: ThreadEndKind; end?: ThreadEndKind } {
+  const spec: { start?: ThreadEndKind; end?: ThreadEndKind } = {};
+  for (const end of ['start', 'end'] as const) {
+    const chamfer = thread.chamfer[end];
+    const runout = thread.runout?.[end];
+    if (chamfer !== undefined && runout !== undefined) {
+      throw new Error(
+        `The thread's ${end} takes a chamfer or a runout, not both.`
+      );
+    }
+    if (chamfer !== undefined) spec[end] = { kind: 'chamfer', angle: chamfer };
+    if (runout !== undefined) spec[end] = { kind: 'runout', angle: runout };
+  }
+  return spec;
 }
 
 /**
@@ -319,8 +510,8 @@ function refuseChamferShortOfFace(
   const kernelMessage = `the thread spans ${formatted(thread.offset)}..${formatted(stop)} ${unitLabel} along a face ${formatted(face.faceLength)} ${unitLabel} long, chamfered at its ${short.join(' and ')}`;
   const reason =
     short.length === 2
-      ? 'A chamfered end must reach the end of the face, and this thread stops short of both. Run it to an end, or turn the chamfers off.'
-      : `A chamfered end must reach the end of the face, and this thread stops short of the face's ${short[0]}. Run it to that end, or turn that chamfer off.`;
+      ? 'A chamfered end must reach the end of the face, and this thread stops short of both. Run it to an end, or run the thread out there instead.'
+      : `A chamfered end must reach the end of the face, and this thread stops short of the face's ${short[0]}. Run it to that end, or run the thread out there instead.`;
   throw new KernelRefusal({
     family: 'thread',
     category: 'unsupported',
@@ -364,6 +555,16 @@ export function threadPrintAdvisories(
   if (thread.depth < 1.5 * layer) {
     advisories.push(
       `The thread is ${formatted(thread.depth)} ${unitLabel} deep, about one ${formatted(layer)} ${unitLabel} layer; it may not print.`
+    );
+  }
+  if (thread.shortOfStandard !== undefined) {
+    advisories.push(
+      `The pipe thread stops after ${formatted(thread.length)} ${unitLabel}, where its crest meets the ${thread.kind === 'external' ? 'boss' : 'bore'}, short of the standard's ${formatted(thread.shortOfStandard)} ${unitLabel}.`
+    );
+  }
+  if (thread.pipe?.standard === 'bspt') {
+    advisories.push(
+      'The BSPT profile is approximate: its rounded crests and roots are modelled as flats.'
     );
   }
   return advisories;
@@ -437,39 +638,107 @@ export function buildThreadFeature(
     offset: thread.offset,
     length: thread.length,
     phase: thread.phaseDeg,
-    // Sent only for a chamfered end, so a plain thread builds on a kernel
+    // Sent only for a finished end, so a plain thread builds on a kernel
     // from before chamfers.
-    ...threadEndSpec(thread)
+    ...threadEndSpec(thread),
+    // Schema v57: only a pipe thread tapers.
+    ...(thread.taper ? { taper: thread.taper } : {})
   };
-  const solid = unwrap(
+  const { solid, details } = unwrap(
     threadKernel(kernel).cutThreadDetailed(
       targetSolid,
       face,
       JSON.stringify(spec)
-    )
+    ),
+    thread.taper !== undefined
   );
+  requireBuiltAsAsked(thread, details);
   validateGeneratedSolid(kernel, solid, 'Thread');
   for (const advisory of threadPrintAdvisories(thread, mm, document.units)) {
     raiseFeatureWarning(result, feature, advisory, 'advisory');
   }
   result.consumed.add(data.targetBodyId);
   // The body's other faces keep their names through a unique analytic
-  // carrier, as across a boolean.
+  // carrier, as across a boolean; the thread's own faces take their roles
+  // where a role names one face.
+  const carried = deriveRemusBooleanCarrierLineage({
+    producingFeatureId: feature.featureId,
+    operands: [
+      {
+        lineage: shape.lineage,
+        candidates: topologyCandidatesForSolid(kernel, targetSolid),
+        role: 'target'
+      }
+    ],
+    resultCandidates: topologyCandidatesForSolid(kernel, solid)
+  });
   result.shapes.set(feature.bodyId, {
     solids: [solid],
-    lineage: deriveRemusBooleanCarrierLineage({
-      producingFeatureId: feature.featureId,
-      operands: [
-        {
-          lineage: shape.lineage,
-          candidates: topologyCandidatesForSolid(kernel, targetSolid),
-          role: 'target'
-        }
-      ],
-      resultCandidates: topologyCandidatesForSolid(kernel, solid)
-    })
+    lineage: mergeRemusLineageStates([
+      threadRoleLineage(kernel, solid, feature.featureId, details, carried),
+      carried
+    ])
   });
   inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
+}
+
+/**
+ * The kernel reports what it built at each end and the taper it cut. A
+ * runout or a taper it did not report was not built, so the feature refuses
+ * rather than show a thread other than the one it stores.
+ */
+export function requireBuiltAsAsked(
+  thread: Pick<ResolvedThread, 'runout' | 'taper'>,
+  details: ThreadOkDetails
+): void {
+  for (const end of ['start', 'end'] as const) {
+    if (
+      thread.runout?.[end] !== undefined &&
+      details.geometry?.[end]?.kind !== 'runout'
+    ) {
+      throw new Error('This kernel build has no thread runouts.');
+    }
+  }
+  if (thread.taper && !(Number(details.geometry?.taperAngle) > 0)) {
+    throw new Error('This kernel build has no tapered threads.');
+  }
+}
+
+/**
+ * Names for the thread's own faces from the kernel's face roles, e.g.
+ * `thread.face.runout.end`. A thread is a stack of half-turn segments, so
+ * most roles (crest, root, flanks) are held by many faces: only a role held
+ * by exactly one face names it, and never a face the body's own names
+ * already carry. The rest stay unnamed rather than be told apart by
+ * guesswork (ADR-013).
+ */
+export function threadRoleLineage(
+  kernel: RemusKernel,
+  solid: number,
+  featureId: FeatureId,
+  details: ThreadOkDetails,
+  carried: Pick<RemusLineageState, 'faceReferences'>
+): RemusLineageState {
+  const roles = details.faceRoles ?? [];
+  const held = new Map<string, number>();
+  for (const { role } of roles) held.set(role, (held.get(role) ?? 0) + 1);
+  const candidates = new Map(
+    topologyCandidatesForSolid(kernel, solid)
+      .filter((candidate) => candidate.kind === 'face')
+      .map((candidate) => [candidate.handle, candidate] as const)
+  );
+  const assignments: RemusSemanticAssignment[] = [];
+  for (const { face, role } of roles) {
+    const candidate = candidates.get(face);
+    if (
+      candidate &&
+      held.get(role) === 1 &&
+      !carried.faceReferences.has(face)
+    ) {
+      assignments.push({ ...candidate, lineageName: `thread.face.${role}` });
+    }
+  }
+  return createRemusSemanticLineage(featureId, 'primitive', assignments);
 }
 
 /**

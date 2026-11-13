@@ -30,6 +30,7 @@ import type { BoundaryProvenance } from './sketch-boundary-provenance';
 import type { SketchPromotion } from './sketch-promotions';
 import type { ObjectFolderSet } from './object-folders';
 import type { AssemblySet } from './assembly';
+import type { PipeThreadSize } from './pipe-threads';
 export * from './drawing-annotations';
 export * from './topology-reference';
 export * from './reference-images';
@@ -231,7 +232,13 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // older client would refuse the unknown commands, or, past that, drop the
 // list on its next save and let the gears turn out of mesh, so it must
 // refuse the document.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 56 as const;
+// v57 adds M15 thread runouts and tapered pipe threads: `runoutStart` and
+// `runoutEnd` finish a thread end with the kernel's runout cone, and the
+// `'npt'` and `'bspt'` profiles with their `pipeSize` cut a 1:16 taper.
+// Every field is optional and absent keeps the v53 thread, so older
+// documents load unchanged. An older client would build a plain end or a
+// cylindrical thread in their place, so it must refuse.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 57 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -264,9 +271,12 @@ export type GearHand = 'right' | 'left';
 /**
  * A thread's form: the ISO 68-1 metric profile (60°), a printable profile
  * whose flanks stand 45° so neither overhangs more than 45° printed upright,
- * or a custom trapezoid.
+ * a custom trapezoid, or (schema v57) a tapered pipe thread: NPT (ASME
+ * B1.20.1, 60°) or BSPT R/Rc (ISO 7-1, 55°, its rounded crests and roots
+ * approximated by flats).
  */
-export type ThreadProfile = 'iso-metric' | 'printable' | 'custom';
+export type ThreadProfile =
+  'iso-metric' | 'printable' | 'custom' | 'npt' | 'bspt';
 /** Which way a thread winds: a right hand advances turning counter-clockwise. */
 export type ThreadHand = 'right' | 'left';
 /**
@@ -2100,8 +2110,29 @@ export type FeatureData =
        */
       chamferStart?: boolean;
       chamferEnd?: boolean;
-      /** The chamfer cone's angle from the axis, degrees; absent is 45. */
+      /**
+       * The end cone's angle from the axis, degrees, for a chamfer or a
+       * runout; absent is 45.
+       */
       chamferAngleDeg?: ParamValue;
+      /**
+       * Schema v57: run the thread out at its start or end: a cone from the
+       * crest at that end plane down to the root, so the groove fades out
+       * against the collar a thread stopping short of the face leaves (or a
+       * shoulder the face ends on) with no undercut. An end takes a chamfer
+       * or a runout, not both. Absent is plain.
+       */
+      runoutStart?: boolean;
+      runoutEnd?: boolean;
+      /**
+       * Schema v57, `'npt'` and `'bspt'` profiles only: the nominal pipe
+       * size, which sets the pitch, the gauge-plane diameter and the thread
+       * length taken when `length` is absent. Absent takes the size the
+       * face is nearest: a boss its pipe, a bore its minor diameter. A pipe
+       * thread's fitting end is the end it starts at (`anchor`): a boss
+       * tapers small toward it, a bore opens large at it.
+       */
+      pipeSize?: PipeThreadSize;
     }
   | {
       featureKind: 'split';
@@ -5562,3 +5593,4 @@ export function sanitizeFileName(fileName: string): string {
 export * from './legacy-project-storage';
 export * from './import-limits';
 export * from './mesh-buffer-equality';
+export * from './pipe-threads';

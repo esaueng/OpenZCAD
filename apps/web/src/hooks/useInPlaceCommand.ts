@@ -667,7 +667,7 @@ export function useInPlaceCommand(
   // another value does (a hole step from its bore), land on every value the
   // user has not set, each time they change.
   const defaultsKey = spec?.defaults
-    ? JSON.stringify(spec.defaults(slots, ctx, numbers))
+    ? JSON.stringify(spec.defaults(slots, ctx, numbers, session?.options ?? {}))
     : '';
   /** The defaults as they stand now, for a value put back unset. */
   const defaultsRef = useRef<Record<string, number>>({});

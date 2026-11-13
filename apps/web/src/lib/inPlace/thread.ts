@@ -1,9 +1,18 @@
 import {
   ISO_METRIC_COARSE_THREADS,
+  PIPE_THREAD_SIZES,
   UNIT_TO_MM,
+  isPipeThreadSize,
   isoMetricThreadLabel,
+  pipeGaugeFromFittingEnd,
+  pipeThreadForFace,
+  pipeThreadForm,
+  pipeThreadLabel,
+  pipeThreadReach,
+  pipeThreadSpec,
   type FeatureData,
   type ParamValue,
+  type PipeThreadStandard,
   type ThreadAnchor,
   type ThreadProfile,
   type UnitSystem,
@@ -45,11 +54,21 @@ function isoSize(option: string | undefined) {
   return ISO_SIZES.find((entry) => entry.value === option)?.size ?? null;
 }
 
+/** Schema v57: the pipe standard a profile choice stands for, if any. */
+function pipeStandard(profile: string | undefined): PipeThreadStandard | null {
+  return profile === 'npt' || profile === 'bspt' ? profile : null;
+}
+
+const pipe = (state: InPlacePanelState) =>
+  pipeStandard(state.options.profile) !== null;
 const custom = (state: InPlacePanelState) => state.options.profile === 'custom';
 const customSize = (state: InPlacePanelState) =>
-  state.options.size === 'custom';
+  !pipe(state) && state.options.size === 'custom';
 const chamfered = (state: InPlacePanelState) =>
   (state.options.chamfer ?? 'both') !== 'none';
+/** The fit row a profile reads: a pipe thread's starts exact. */
+const fitOption = (options: Readonly<Record<string, string>>) =>
+  pipeStandard(options.profile) ? options.pipeFit : options.fit;
 
 /**
  * Whether a thread's two ends stand on the ends of its face: `near` the one
@@ -60,6 +79,12 @@ const chamfered = (state: InPlacePanelState) =>
 export interface ThreadReach {
   near: boolean;
   far: boolean;
+  /**
+   * Where the end could not be resolved: not known to stop short either,
+   * so it takes no runout. Absent is known.
+   */
+  nearUnknown?: true;
+  farUnknown?: true;
 }
 
 /**
@@ -80,6 +105,8 @@ export function threadReach(span: {
 }): ThreadReach {
   const { held, offset, length, face } = span;
   const snap = face ? 1e-9 * Math.max(face.length, face.radius) : 0;
+  const farKnown =
+    !held || (face !== null && offset !== undefined && length !== undefined);
   return {
     near: offset !== undefined && Math.abs(offset) <= snap,
     far:
@@ -87,29 +114,131 @@ export function threadReach(span: {
       (face !== null &&
         offset !== undefined &&
         length !== undefined &&
-        offset + length >= face.length - snap)
+        offset + length >= face.length - snap),
+    ...(offset === undefined ? { nearUnknown: true as const } : {}),
+    ...(farKnown ? {} : { farUnknown: true as const })
   };
 }
 
 /**
  * The ends of the face that take their chamfer. A chamfer's cone is built
  * into an end standing on the face's end plane, so only an end the thread
- * reaches takes one: a thread that stops short keeps the one where it
- * starts and stops plain, and one set off from its starting end is plain
- * there.
+ * reaches takes one; an end that stops short runs out instead (see
+ * {@link threadEndFinishes}).
  */
 export function threadChamferedEnds(
   chamfer: string | undefined,
   from: ThreadAnchor,
   reach: ThreadReach
 ): { start: boolean; end: boolean } {
+  const ends = threadEndFinishes(chamfer, from, reach);
+  return { start: ends.start === 'chamfer', end: ends.end === 'chamfer' };
+}
+
+/**
+ * How each end asked for (`chamfer`: both, start, end or none) is finished
+ * (schema v57): chamfered where the thread reaches that end of the face,
+ * run out where it stops short of it, so the groove fades into the collar
+ * instead of ending in a full-depth wedge. An end whose reach does not
+ * resolve stays plain, as before runouts.
+ */
+export function threadEndFinishes(
+  chamfer: string | undefined,
+  from: ThreadAnchor,
+  reach: ThreadReach
+): { start?: 'chamfer' | 'runout'; end?: 'chamfer' | 'runout' } {
   const wanted = chamfer ?? 'both';
   const reached = (end: ThreadAnchor) =>
     from === end ? reach.near : reach.far;
+  const unknown = (end: ThreadAnchor) =>
+    from === end ? reach.nearUnknown : reach.farUnknown;
+  const finish = (end: ThreadAnchor) =>
+    wanted !== 'both' && wanted !== end
+      ? undefined
+      : reached(end)
+        ? 'chamfer'
+        : unknown(end)
+          ? undefined
+          : 'runout';
+  const start = finish('start');
+  const end = finish('end');
   return {
-    start: (wanted === 'both' || wanted === 'start') && reached('start'),
-    end: (wanted === 'both' || wanted === 'end') && reached('end')
+    ...(start ? { start } : {}),
+    ...(end ? { end } : {})
   };
+}
+
+/**
+ * Boss or bore, as the pick reads: the face's normal where it was clicked
+ * points away from the axis on a boss. Unclicked, a boss; the build reads
+ * the solid itself and is the one that decides.
+ */
+export function threadFaceKind(
+  face: FacePick | undefined
+): 'external' | 'internal' {
+  const geometry = threadFace(face);
+  if (!geometry || !face?.normal || !face.point || face.savedPosition) {
+    return 'external';
+  }
+  return dot(face.normal, geometry.radial) < 0 ? 'internal' : 'external';
+}
+
+/**
+ * Schema v57: the pipe size a pipe thread takes on this face, the stored
+ * size or the face's nearest, in millimetres.
+ */
+function pipeSpecFor(
+  standard: PipeThreadStandard,
+  size: string | undefined,
+  face: FacePick | undefined,
+  units: UnitSystem
+) {
+  if (isPipeThreadSize(size)) return pipeThreadSpec(standard, size);
+  const geometry = threadFace(face);
+  return geometry
+    ? pipeThreadForFace(
+        standard,
+        threadFaceKind(face),
+        2 * geometry.radius * UNIT_TO_MM[units]
+      )
+    : null;
+}
+
+/**
+ * Schema v57: the length a pipe thread takes until it is dragged: its
+ * standard's, within the face from its offset, and no further than its
+ * crest can go before it meets the cylinder (the adapter's own rule).
+ */
+export function pipeThreadDefaultLength(
+  standard: PipeThreadStandard,
+  size: string | undefined,
+  face: FacePick | undefined,
+  units: UnitSystem,
+  clearance: number,
+  offset: number
+): number | null {
+  const geometry = threadFace(face);
+  const spec = pipeSpecFor(standard, size, face, units);
+  if (!geometry || !spec) return null;
+  const mm = UNIT_TO_MM[units];
+  const kind = threadFaceKind(face);
+  const standardLength = spec.threadLength / mm;
+  const reach = pipeThreadReach({
+    kind,
+    majorAtGauge:
+      spec.gaugeMajor / mm + (kind === 'external' ? -2 : 2) * clearance,
+    depth: pipeThreadForm(standard, spec.pitch / mm).depth,
+    gaugeFromFittingEnd: pipeGaugeFromFittingEnd(spec, kind) / mm,
+    diameter: 2 * geometry.radius
+  });
+  return Math.max(
+    Math.min(
+      standardLength,
+      geometry.length - Math.max(offset, 0),
+      reach > 0 ? reach : standardLength
+    ),
+    0
+  );
 }
 
 /**
@@ -346,7 +475,7 @@ const THREAD_VALUES: readonly ValueSpec[] = [
     min: 0,
     inOptions: true,
     note: 'Radial gap to the mating part: a boss shrinks, a bore grows',
-    when: (state) => state.options.fit === 'custom'
+    when: (state) => fitOption(state.options) === 'custom'
   },
   {
     id: 'length',
@@ -387,14 +516,14 @@ const THREAD_VALUES: readonly ValueSpec[] = [
   },
   {
     id: 'chamferAngleDeg',
-    label: 'Chamfer angle',
+    label: 'End angle',
     unit: 'angle',
     initial: 45,
     min: 0,
     max: 90,
     exclusive: true,
     inOptions: true,
-    note: 'Cone angle from the axis',
+    note: 'Chamfer or runout cone, from the axis',
     when: (state) => chamfered(state)
   }
 ];
@@ -418,6 +547,16 @@ const THREAD_OPTIONS: readonly OptionSpec[] = [
         value: 'custom',
         label: 'Custom',
         tip: 'Set the pitch, depth, crest and flanks'
+      },
+      {
+        value: 'npt',
+        label: 'NPT',
+        tip: 'Tapered pipe thread, 60°, 1 in 16 (ASME B1.20.1). Starts at the fitting end: small on a boss, large in a bore.'
+      },
+      {
+        value: 'bspt',
+        label: 'BSPT',
+        tip: 'Tapered pipe thread, 55°, 1 in 16: R on a boss, Rc in a bore (ISO 7-1). Rounded crests and roots are approximated by flats.'
       }
     ],
     initial: 'printable'
@@ -437,7 +576,22 @@ const THREAD_OPTIONS: readonly OptionSpec[] = [
       })),
       { value: 'custom', label: 'Custom' }
     ],
-    initial: 'auto'
+    initial: 'auto',
+    when: (state) => !pipe(state)
+  },
+  {
+    id: 'pipeSize',
+    label: 'Size',
+    choices: [
+      {
+        value: 'auto',
+        label: 'Auto',
+        tip: 'From the face: a boss takes the size of its pipe, a bore the size its diameter is drilled for'
+      },
+      ...PIPE_THREAD_SIZES.map((size) => ({ value: size, label: `${size}″` }))
+    ],
+    initial: 'auto',
+    when: pipe
   },
   {
     id: 'fit',
@@ -460,18 +614,44 @@ const THREAD_OPTIONS: readonly OptionSpec[] = [
       },
       { value: 'custom', label: 'Custom' }
     ],
-    initial: 'print'
+    initial: 'print',
+    when: (state) => !pipe(state)
+  },
+  {
+    // A pipe thread mates with standard fittings, so it starts exact.
+    id: 'pipeFit',
+    label: 'Fit',
+    choices: [
+      {
+        value: 'exact',
+        label: 'Exact',
+        tip: 'No gap: the standard size, to mate with metal fittings'
+      },
+      {
+        value: 'print',
+        label: 'Print',
+        tip: '0.1 mm radial gap: printed parts turn freely'
+      },
+      {
+        value: 'loose',
+        label: 'Loose',
+        tip: '0.2 mm radial gap: for coarse layers or elephant’s foot'
+      },
+      { value: 'custom', label: 'Custom' }
+    ],
+    initial: 'exact',
+    when: pipe
   },
   {
     id: 'chamfer',
-    label: 'Chamfer',
-    // Kept only at an end the thread runs to: one that stops short keeps
-    // the one where it starts (see `threadChamferedEnds`).
+    label: 'Ends',
+    // Chamfered at an end the thread runs to, run out where it stops short
+    // (see `threadEndFinishes`).
     choices: [
       {
         value: 'both',
         label: 'Both',
-        tip: 'Taper both ends: no thin wedge to print, and mating parts start easily'
+        tip: 'Finish both ends: a chamfer where the thread reaches the face’s end, a runout where it stops short. No thin wedge to print, and mating parts start easily'
       },
       { value: 'start', label: 'Start' },
       { value: 'end', label: 'End' },
@@ -515,10 +695,23 @@ export function threadSummary(
   const parts: string[] = [];
   const geometry = threadFace(slots?.faces[0]);
   const round = (value: number) => Math.round(value * 1000) / 1000;
-  // Without a face, every end asked for counts as chamfered.
+  // Without a face, every end asked for counts as finished.
   let anyChamfer = chamfered(state);
+  const standard = pipeStandard(state.options.profile);
   if (geometry) {
-    if ((state.options.size ?? 'auto') === 'auto') {
+    if (standard) {
+      const spec = pipeSpecFor(
+        standard,
+        state.options.pipeSize,
+        slots?.faces[0],
+        units
+      );
+      if (spec && !isPipeThreadSize(state.options.pipeSize)) {
+        parts.push(
+          `${pipeThreadLabel(standard, spec.size, threadFaceKind(slots?.faces[0]))} from the Ø${round(2 * geometry.radius)} ${units} face`
+        );
+      }
+    } else if ((state.options.size ?? 'auto') === 'auto') {
       parts.push(`Sized from the Ø${round(2 * geometry.radius)} ${units} face`);
     }
     const offset = state.numbers.offset ?? 0;
@@ -528,26 +721,31 @@ export function threadSummary(
     // A length held as given (an expression, a stored one) is stored as
     // written; what it reads as, and which ends chamfer, is where it
     // reaches.
-    const held = lengthIsExplicit(
-      geometry,
-      { ...state.numbers, ...state.raws },
-      state.numbers,
-      context ?? { touched: ['length'] }
-    );
+    // A pipe thread always holds its length: its standard's, or dragged.
+    const held =
+      standard !== null ||
+      lengthIsExplicit(
+        geometry,
+        { ...state.numbers, ...state.raws },
+        state.numbers,
+        context ?? { touched: ['length'] }
+      );
     const reached = threadReach({ held, offset, length, face: geometry });
-    const ends = threadChamferedEnds(
-      state.options.chamfer,
-      threadAnchor(
-        slots?.faces[0],
-        context?.saved ? { saved: context.saved } : undefined
-      ),
-      reached
+    const from = threadAnchor(
+      slots?.faces[0],
+      context?.saved ? { saved: context.saved } : undefined
     );
-    anyChamfer = ends.start || ends.end;
+    const ends = threadEndFinishes(state.options.chamfer, from, reached);
+    anyChamfer = ends.start !== undefined || ends.end !== undefined;
+    const stop = ends[from === 'start' ? 'end' : 'start'];
     parts.push(
       !reached.far
         ? `Threads ${round(length)} of ${face} ${units}, ${
-            anyChamfer ? 'plain where it stops' : 'ends plain'
+            stop === 'runout'
+              ? 'runs out where it stops'
+              : anyChamfer
+                ? 'plain where it stops'
+                : 'ends plain'
           }`
         : offset > 0
           ? `To end · Threads ${round(reach)} of ${face} ${units}`
@@ -561,7 +759,7 @@ export function threadSummary(
   if (phase !== 0) parts.push(`Rotated ${phase}°`);
   if (anyChamfer) {
     const angle = Math.round((state.numbers.chamferAngleDeg ?? 45) * 100) / 100;
-    if (angle !== 45) parts.push(`Chamfer ${angle}°`);
+    if (angle !== 45) parts.push(`Ends ${angle}°`);
   }
   return parts.length > 0 ? parts.join(' · ') : null;
 }
@@ -584,7 +782,10 @@ export function threadEditOptions(
   const options: Record<string, string> = { profile: data.profile };
   const major = number(data.majorDiameter);
   const pitch = number(data.pitch);
-  if (data.majorDiameter === undefined) {
+  const standard = pipeStandard(data.profile);
+  if (standard) {
+    options.pipeSize = data.pipeSize ?? 'auto';
+  } else if (data.majorDiameter === undefined) {
     options.size = 'auto';
   } else {
     const iso = ISO_SIZES.find(
@@ -600,21 +801,18 @@ export function threadEditOptions(
   const preset = (['exact', 'print', 'loose'] as const).find((fit) =>
     close(clearance, fitClearance(fit, units))
   );
-  options.fit =
+  options[standard ? 'pipeFit' : 'fit'] =
     data.clearance !== undefined && typeof data.clearance !== 'number'
       ? 'custom'
       : (preset ?? 'custom');
   // Its extent and end are not options: the stored length and anchor go
   // back as values and the face's end (see `threadIsPartial`).
   options.hand = data.hand ?? 'right';
+  // A runout (schema v57) is the finish of an end that stops short.
+  const start = data.chamferStart || data.runoutStart;
+  const end = data.chamferEnd || data.runoutEnd;
   options.chamfer =
-    data.chamferStart && data.chamferEnd
-      ? 'both'
-      : data.chamferStart
-        ? 'start'
-        : data.chamferEnd
-          ? 'end'
-          : 'none';
+    start && end ? 'both' : start ? 'start' : end ? 'end' : 'none';
   return options;
 }
 
@@ -648,17 +846,22 @@ export function threadRequestFields(
   units: UnitSystem,
   extent: ThreadExtent = {}
 ): Omit<ThreadRequest, 'targetBodyId' | 'faceHash' | 'faceReference'> {
+  const standard = pipeStandard(options.profile);
   const profile: ThreadProfile =
-    options.profile === 'iso-metric' || options.profile === 'custom'
+    standard ??
+    (options.profile === 'iso-metric' || options.profile === 'custom'
       ? options.profile
-      : 'printable';
+      : 'printable');
   const fields: Omit<
     ThreadRequest,
     'targetBodyId' | 'faceHash' | 'faceReference'
   > = { profile };
-  const iso = isoSize(options.size);
+  const iso = standard ? null : isoSize(options.size);
   const mm = UNIT_TO_MM[units];
-  if (iso) {
+  if (standard) {
+    // The pipe size sets the diameter and pitch; Auto leaves it to the face.
+    if (isPipeThreadSize(options.pipeSize)) fields.pipeSize = options.pipeSize;
+  } else if (iso) {
     fields.majorDiameter = iso.nominal / mm;
     fields.pitch = iso.pitch / mm;
   } else if (options.size === 'custom') {
@@ -673,15 +876,15 @@ export function threadRequestFields(
     fields.upperFlankAngleDeg = values.upperFlankAngleDeg ?? 45;
     fields.lowerFlankAngleDeg = values.lowerFlankAngleDeg ?? 45;
   }
+  const fit = standard ? (options.pipeFit ?? 'exact') : options.fit;
   const clearance =
-    options.fit === 'custom'
-      ? (values.clearance ?? 0)
-      : fitClearance(options.fit, units);
+    fit === 'custom' ? (values.clearance ?? 0) : fitClearance(fit, units);
   if (clearance !== 0) fields.clearance = clearance;
   const starts = values.starts;
   if (starts !== undefined && starts !== 1) fields.starts = starts;
   if (options.hand === 'left') fields.hand = 'left';
-  const partial = extent.partial === true;
+  // A pipe thread stores its length: the standard's until it is dragged.
+  const partial = extent.partial === true || standard !== null;
   if (partial) fields.length = values.length ?? 5 / mm;
   const offset = values.offset;
   const offsetStored = offset !== undefined && offset !== 0;
@@ -699,7 +902,7 @@ export function threadRequestFields(
   // A chamfered end must reach the end of the face. Where the span reaches
   // is not how its length is stored: a held length (an expression, a
   // stored one) that reaches the far end keeps its chamfer there.
-  const ends = threadChamferedEnds(
+  const ends = threadEndFinishes(
     options.chamfer,
     from,
     threadReach({
@@ -710,9 +913,11 @@ export function threadRequestFields(
       face: extent.face ?? null
     })
   );
-  if (ends.start) fields.chamferStart = true;
-  if (ends.end) fields.chamferEnd = true;
-  if (fields.chamferStart || fields.chamferEnd) {
+  if (ends.start === 'chamfer') fields.chamferStart = true;
+  if (ends.end === 'chamfer') fields.chamferEnd = true;
+  if (ends.start === 'runout') fields.runoutStart = true;
+  if (ends.end === 'runout') fields.runoutEnd = true;
+  if (ends.start || ends.end) {
     const angle = values.chamferAngleDeg;
     if (angle !== undefined && angle !== 45) fields.chamferAngleDeg = angle;
   }
@@ -918,7 +1123,16 @@ export const threadSpec: InPlaceToolSpec = {
       label: 'Thread',
       compact: true,
       boxed: true,
-      items: ['profile', 'size', 'majorDiameter', 'pitch', 'fit', 'clearance']
+      items: [
+        'profile',
+        'size',
+        'pipeSize',
+        'majorDiameter',
+        'pitch',
+        'fit',
+        'pipeFit',
+        'clearance'
+      ]
     },
     {
       label: 'Length',
@@ -941,6 +1155,23 @@ export const threadSpec: InPlaceToolSpec = {
   ],
   summary: threadSummary,
   ...threadSpan.behaviour,
+  defaults(slots, ctx, numbers, options = {}) {
+    const span = threadSpan.behaviour.defaults!(slots, ctx, numbers);
+    const standard = pipeStandard(options.profile);
+    if (!standard) return span;
+    // Schema v57: a pipe thread runs its standard's length until dragged.
+    const units = ctx.units ?? 'mm';
+    const fit = options.pipeFit ?? 'exact';
+    const length = pipeThreadDefaultLength(
+      standard,
+      options.pipeSize,
+      slots.faces[0],
+      units,
+      fit === 'custom' ? (numbers.clearance ?? 0) : fitClearance(fit, units),
+      numbers.offset ?? 0
+    );
+    return length === null ? span : { ...span, length };
+  },
   hint(slots: InPlaceSlots) {
     const face = slots.faces[0];
     if (!face) {

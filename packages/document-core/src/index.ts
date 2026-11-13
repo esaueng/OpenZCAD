@@ -1076,6 +1076,8 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
   // derive them from a legacy object or promote an older carrier silently.
   // Schema v37 boundary provenance and conversion ownership are authored.
   // Opening older content never converts it or invents source witnesses.
+  // Schema v56 -> v57 thread runouts and pipe threads are optional fields on
+  // a thread; absent keeps the v53 thread, so nothing is rewritten.
   // Schema v16 -> v17 allows reference-form mesh payloads. Keep existing
   // embedded triangles and pre-release references as written; the version
   // boundary prevents older clients from accepting meshes they cannot rebuild.
@@ -4670,7 +4672,10 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'phaseDeg',
     'chamferStart',
     'chamferEnd',
-    'chamferAngleDeg'
+    'chamferAngleDeg',
+    'runoutStart',
+    'runoutEnd',
+    'pipeSize'
   ],
   // `secondBodyId` is body wiring, not a parameter: never patchable.
   split: ['targetBodyId', 'plane', 'keepOriginal'],
@@ -4833,7 +4838,10 @@ const FEATURE_DATA_CLEARABLE_KEYS: Partial<
     'phaseDeg',
     'chamferStart',
     'chamferEnd',
-    'chamferAngleDeg'
+    'chamferAngleDeg',
+    'runoutStart',
+    'runoutEnd',
+    'pipeSize'
   ],
   // M14: every tooth-form override falls back to its documented default;
   // `pitch` may go only where the gear keeps a cylinder's diameter, and

@@ -870,7 +870,7 @@ describe('an untouched edit writes the feature back as stored', () => {
       thread: wholeFields
     });
     // Its end dragged 4 up from the bottom: a partial thread from the start,
-    // which keeps its chamfer there and stops plain.
+    // which keeps its chamfer there and runs out where it stops.
     expect(untouched(feature(whole), { length: 4 }, ctx)).toEqual({
       tool: 'thread',
       thread: {
@@ -879,7 +879,8 @@ describe('an untouched edit writes the feature back as stored', () => {
         profile: 'printable',
         clearance: 0.1,
         length: 4,
-        chamferStart: true
+        chamferStart: true,
+        runoutEnd: true
       }
     });
     // A stored length that runs the whole face is held as given, and still

@@ -3,6 +3,7 @@ import type { BodyId, ParamValue } from '@openzcad/shared';
 import {
   threadAnchor,
   threadChamferedEnds,
+  threadEndFinishes,
   threadEditOptions,
   threadFace,
   threadIsPartial,
@@ -183,7 +184,7 @@ describe('in-place thread', () => {
       { starts: 2, phaseDeg: 30, chamferAngleDeg: 30 }
     );
     expect(threadSummary(state)).toBe(
-      'Left hand · 2 starts · Rotated 30° · Chamfer 30°'
+      'Left hand · 2 starts · Rotated 30° · Ends 30°'
     );
     expect(
       threadSummary(
@@ -433,7 +434,7 @@ describe('in-place thread: picks and the dragged end (U11)', () => {
       numbersOf(short)
     );
     // Clicked near the top, it runs 8 down from there: chamfered at the
-    // top it starts from, plain where it stops short of the bottom.
+    // top it starts from, run out where it stops short of the bottom.
     expect(request).toEqual({
       tool: 'thread',
       thread: {
@@ -443,7 +444,8 @@ describe('in-place thread: picks and the dragged end (U11)', () => {
         clearance: 0.1,
         length: 8,
         anchor: 'end',
-        chamferEnd: true
+        chamferEnd: true,
+        runoutStart: true
       }
     });
     // Dragged back to the face's end, it is whole again, chamfers and all,
@@ -571,7 +573,11 @@ describe('in-place thread: picks and the dragged end (U11)', () => {
       CTX,
       numbersOf(values)
     ) as { thread: ThreadRequest };
-    expect(request.thread).toMatchObject({ offset: 2, chamferEnd: true });
+    expect(request.thread).toMatchObject({
+      offset: 2,
+      chamferEnd: true,
+      runoutStart: true
+    });
     expect(request.thread.chamferStart).toBeUndefined();
     expect(request.thread.length).toBeUndefined();
   });
@@ -645,12 +651,33 @@ describe('in-place thread: picks and the dragged end (U11)', () => {
         face: { length: 1, radius: 20 }
       }).far
     ).toBe(true);
-    // What does not resolve reaches nothing it is not known to.
-    expect(reach(true, undefined, 8)).toEqual({ near: false, far: false });
-    expect(reach(true, 0, undefined)).toEqual({ near: true, far: false });
+    // What does not resolve reaches nothing it is not known to, and is not
+    // known to stop short either, so it takes no runout (schema v57).
+    expect(reach(true, undefined, 8)).toEqual({
+      near: false,
+      far: false,
+      nearUnknown: true,
+      farUnknown: true
+    });
+    expect(reach(true, 0, undefined)).toEqual({
+      near: true,
+      far: false,
+      farUnknown: true
+    });
     expect(
       threadReach({ held: true, offset: 0, length: 8, face: null })
-    ).toEqual({ near: true, far: false });
+    ).toEqual({ near: true, far: false, farUnknown: true });
+    expect(
+      threadEndFinishes('both', 'start', {
+        near: false,
+        far: false,
+        nearUnknown: true,
+        farUnknown: true
+      })
+    ).toEqual({});
+    expect(
+      threadEndFinishes('both', 'end', { near: true, far: false })
+    ).toEqual({ start: 'runout', end: 'chamfer' });
     expect(
       threadReach({ held: false, offset: 0, length: 8, face: null })
     ).toEqual({ near: true, far: true });
@@ -860,6 +887,7 @@ describe('in-place thread: picks and the dragged end (U11)', () => {
       chamferAngleDeg: 30
     });
     expect(request(2, 'both').chamferEnd).toBeUndefined();
+    expect(request(2, 'both').runoutEnd).toBe(true);
     expect(request(2, 'both').anchor).toBeUndefined();
     // Picked near the top: the face's end.
     expect(request(10, 'both')).toMatchObject({
@@ -869,10 +897,16 @@ describe('in-place thread: picks and the dragged end (U11)', () => {
       chamferAngleDeg: 30
     });
     expect(request(10, 'both').chamferStart).toBeUndefined();
-    // Asked only for the end it stops short of, it has none, nor an angle.
-    const plain = request(2, 'end');
-    expect(plain.chamferStart).toBeUndefined();
-    expect(plain.chamferEnd).toBeUndefined();
+    expect(request(10, 'both').runoutStart).toBe(true);
+    // Asked only for the end it stops short of, it runs out there alone.
+    const runout = request(2, 'end');
+    expect(runout.chamferStart).toBeUndefined();
+    expect(runout.chamferEnd).toBeUndefined();
+    expect(runout.runoutStart).toBeUndefined();
+    expect(runout).toMatchObject({ runoutEnd: true, chamferAngleDeg: 30 });
+    // Asked for none, it has none, nor an angle.
+    const plain = request(2, 'none');
+    expect(plain.runoutEnd).toBeUndefined();
     expect(plain.chamferAngleDeg).toBeUndefined();
   });
 
@@ -932,21 +966,31 @@ describe('in-place thread: picks and the dragged end (U11)', () => {
         'mm',
         slots
       )
-    ).toBe('Threads 8 of 12 mm, plain where it stops · Chamfer 30°');
-    // With no chamfer left where it starts, both ends are plain.
-    for (const chamfer of ['none', 'start']) {
-      expect(
-        threadSummary(
-          inPlacePanelState(
-            threadSpec,
-            { size: 'M8', chamfer },
-            { length: 8, chamferAngleDeg: 30 }
-          ),
-          'mm',
-          slots
-        )
-      ).toBe('Threads 8 of 12 mm, ends plain');
-    }
+    ).toBe('Threads 8 of 12 mm, runs out where it stops · Ends 30°');
+    // Finished only where it starts, it stops plain; finished nowhere, both
+    // ends are plain.
+    expect(
+      threadSummary(
+        inPlacePanelState(
+          threadSpec,
+          { size: 'M8', chamfer: 'end' },
+          { length: 8, chamferAngleDeg: 30 }
+        ),
+        'mm',
+        slots
+      )
+    ).toBe('Threads 8 of 12 mm, plain where it stops · Ends 30°');
+    expect(
+      threadSummary(
+        inPlacePanelState(
+          threadSpec,
+          { size: 'M8', chamfer: 'none' },
+          { length: 8, chamferAngleDeg: 30 }
+        ),
+        'mm',
+        slots
+      )
+    ).toBe('Threads 8 of 12 mm, ends plain');
     expect(
       threadSummary(
         inPlacePanelState(threadSpec, {}, { length: 10, offset: 2 }),
@@ -972,7 +1016,7 @@ describe('in-place thread: picks and the dragged end (U11)', () => {
         }
       )
     ).toBe('Sized from the Ø6 mm face · To end · Threads 10 of 12 mm');
-    // The same stored span one short of the far end stops plain there.
+    // The same stored span one short of the far end runs out there.
     expect(
       threadSummary(
         inPlacePanelState(threadSpec, {}, { length: 9, offset: 2 }),
@@ -990,7 +1034,9 @@ describe('in-place thread: picks and the dragged end (U11)', () => {
           }
         }
       )
-    ).toBe('Sized from the Ø6 mm face · Threads 9 of 12 mm, ends plain');
+    ).toBe(
+      'Sized from the Ø6 mm face · Threads 9 of 12 mm, runs out where it stops'
+    );
   });
 });
 
@@ -1124,6 +1170,117 @@ describe('in-place thread edits', () => {
         'pitch',
         'upperFlankAngleDeg'
       ].sort()
+    );
+  });
+});
+
+describe('in-place pipe threads (schema v57)', () => {
+  // A 1/4 NPT pipe, 30 long up +Z, clicked near its top.
+  const radius = (0.54 * 25.4) / 2;
+  const pipe: FacePick = {
+    ...BOSS,
+    point: { x: radius, y: 0, z: 28 },
+    normal: { x: 1, y: 0, z: 0 },
+    cylinder: {
+      axisStart: { x: 0, y: 0, z: 0 },
+      axisEnd: { x: 0, y: 0, z: 30 },
+      radius
+    }
+  };
+  const slots = { ...SLOTS, faces: [pipe] };
+  // On its nominal pipe the crest meets the boss short of L2.
+  const reach = (0.2278 + 16 * (0.54 - 0.49163 - 0.8 / 18)) * 25.4;
+
+  it('runs the standard length, stopping where the crest meets the boss', () => {
+    const numbers = numbersOf(initialValues());
+    const pipeDefaults = threadSpec.defaults!(slots, CTX, numbers, {
+      ...defaults(),
+      profile: 'npt'
+    });
+    expect(pipeDefaults.length).toBeCloseTo(reach, 9);
+    // A bore 30 long of Ø10.5 takes Rc 1/4 and its useful 9.7.
+    const bore: FacePick = {
+      ...pipe,
+      point: { x: 5.25, y: 0, z: 28 },
+      normal: { x: -1, y: 0, z: 0 },
+      cylinder: { ...pipe.cylinder!, radius: 5.25 }
+    };
+    expect(
+      threadSpec.defaults!({ ...SLOTS, faces: [bore] }, CTX, numbers, {
+        ...defaults(),
+        profile: 'bspt'
+      }).length
+    ).toBeCloseTo(9.7, 9);
+    // Not a pipe thread: the rest of the face.
+    expect(threadSpec.defaults!(slots, CTX, numbers, defaults()).length).toBe(
+      30
+    );
+  });
+
+  it('stores the profile, its length and no clearance, and runs out where it stops', () => {
+    const values = initialValues({ length: reach, offset: 0 });
+    const request = threadSpec.request(
+      slots,
+      values,
+      defaults({ profile: 'npt' }),
+      CTX,
+      numbersOf(values)
+    ) as { thread: ThreadRequest };
+    expect(request.thread).toEqual({
+      targetBodyId: 'body_a',
+      faceHash: 9,
+      profile: 'npt',
+      length: reach,
+      anchor: 'end',
+      chamferEnd: true,
+      runoutStart: true
+    });
+    // A chosen size and a printed fit are stored, and read back as chosen.
+    const sized = threadSpec.request(
+      slots,
+      values,
+      defaults({ profile: 'bspt', pipeSize: '1/4', pipeFit: 'print' }),
+      CTX,
+      numbersOf(values)
+    ) as { thread: ThreadRequest };
+    expect(sized.thread).toMatchObject({
+      profile: 'bspt',
+      pipeSize: '1/4',
+      clearance: 0.1
+    });
+    expect(sized.thread.majorDiameter).toBeUndefined();
+    const read = threadEditOptions(sized.thread, evaluate, 'mm');
+    expect(read).toMatchObject({
+      profile: 'bspt',
+      pipeSize: '1/4',
+      pipeFit: 'print',
+      chamfer: 'both'
+    });
+    expect(read.size).toBeUndefined();
+  });
+
+  it('shows the pipe rows in place of the ISO ones and names the size', () => {
+    const state = inPlacePanelState(threadSpec, { profile: 'npt' }, {});
+    const shown = (id: string) =>
+      (threadSpec.options ?? []).find((option) => option.id === id)!.when!(
+        state
+      );
+    expect([shown('size'), shown('fit')]).toEqual([false, false]);
+    expect([shown('pipeSize'), shown('pipeFit')]).toEqual([true, true]);
+    expect(
+      threadSpec.values.find((value) => value.id === 'majorDiameter')!.when!({
+        ...state,
+        options: { ...state.options, size: 'custom' }
+      })
+    ).toBe(false);
+    expect(
+      threadSummary(
+        inPlacePanelState(threadSpec, { profile: 'npt' }, { length: reach }),
+        'mm',
+        { faces: [pipe] }
+      )
+    ).toBe(
+      `1/4-18 NPT from the Ø13.716 mm face · Threads ${Math.round(reach * 1000) / 1000} of 30 mm, runs out where it stops`
     );
   });
 });

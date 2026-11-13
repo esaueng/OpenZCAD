@@ -795,7 +795,9 @@ export interface InPlaceToolSpec {
   defaults?(
     slots: InPlaceSlots,
     ctx: InPlaceContext,
-    numbers: Record<string, number>
+    numbers: Record<string, number>,
+    /** Each option's value (a thread's profile sets its length). */
+    options?: Readonly<Record<string, string>>
   ): Record<string, number>;
   /**
    * Other values a value's change carries with it (a box hung under a face
