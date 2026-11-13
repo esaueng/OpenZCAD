@@ -3888,6 +3888,35 @@ button.model-panel-grip[aria-expanded='true'] {
   background: var(--color-warning);
 }
 
+/* The sketch's state as a chip under Solve, coloured like the edges it
+   describes: free (blue), fully constrained (green), in conflict (red). */
+.workspace-column .sketch-rail button.sketch-dof-chip {
+  width: 30px;
+  height: 22px;
+  padding: 0;
+  color: var(--color-accent);
+  background: var(--color-accent-dim);
+  border: 1px solid var(--color-accent-border);
+  border-radius: var(--radius-md);
+  font-size: 10px;
+  font-weight: var(--fw-medium);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+}
+
+.workspace-column .sketch-rail button.sketch-dof-chip[data-state='defined'] {
+  color: var(--color-success);
+  background: color-mix(in srgb, var(--color-success) 14%, transparent);
+  border-color: color-mix(in srgb, var(--color-success) 45%, transparent);
+}
+
+.workspace-column .sketch-rail button.sketch-dof-chip[data-state='conflict'] {
+  color: var(--color-error);
+  background: color-mix(in srgb, var(--color-error) 14%, transparent);
+  border-color: color-mix(in srgb, var(--color-error) 45%, transparent);
+}
+
 /* The circle tool's type strip opens beside the rail, level with the tool.
    Its tiles sit inside the rail, so the rail's 30px icon-button rule (and
    its zero font size) reached them; they are the labelled tiles
@@ -4384,6 +4413,56 @@ button.model-panel-grip[aria-expanded='true'] {
     --lane-end: calc(
       var(--rail-w) * 2 + 72px + var(--island-gap) * 4 + var(--right-panels-w)
     );
+  }
+}
+
+/* I41: on a phone the relations were a third rail, and with the tools and
+   the viewer bar they left the canvas about 205px. Below 600px wide a
+   sketch gives the right column to the relations: the viewer bar keeps
+   only Undo and Redo above them, the panels' buttons step aside until
+   Finish, and the relations stand in the rail's own flow, so the lane is
+   one rail wide on each side. */
+@media (max-width: 600px) {
+  .workspace.column-layout .viewer-area:has(.sketch-relations) {
+    --lane-end: calc(
+      var(--rail-w) + var(--island-gap) * 2 + var(--right-panels-w)
+    );
+  }
+
+  /* Specific enough to win over phone-stage.css's one-column rail. */
+  .workspace.column-layout
+    .viewer-area
+    .instrument-rail:has(> .sketch-relations)
+    > .viewer-rail.rail-panels,
+  .workspace.column-layout
+    .viewer-area
+    .instrument-rail:has(> .sketch-relations)
+    > .viewer-rail
+    > :not(.rail-group[aria-label='Edit']),
+  .workspace.column-layout
+    .viewer-area
+    .instrument-rail:has(> .sketch-relations)
+    .rail-group[aria-label='Edit']
+    > :not([aria-label='Undo'], [aria-label='Redo']) {
+    display: none;
+  }
+
+  .workspace.column-layout
+    .viewer-area
+    .instrument-rail:has(> .sketch-relations)
+    > .viewer-rail:not(.rail-panels) {
+    display: flex;
+    flex-direction: column;
+    width: auto;
+  }
+
+  .viewer-area .instrument-rail > .sketch-relations {
+    position: static;
+    max-height: none;
+  }
+
+  .viewer-area .instrument-rail > .sketch-relations .sketch-relation-name {
+    display: none;
   }
 }
 

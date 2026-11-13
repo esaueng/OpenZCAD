@@ -110,6 +110,8 @@ export interface ModelPanelSource {
   onResumeHistory(): void;
   /** Renames a history feature in place, from its row's menu. */
   onRenameFeature?(featureId: FeatureId, name: string): void;
+  /** Opens a sketch step for editing; a History row's double-click. */
+  onEditSketch?(feature: FeatureNode): void;
   /**
    * Deletes a History multi-selection as one undoable step. Without it the
    * rows select one at a time, as before.
