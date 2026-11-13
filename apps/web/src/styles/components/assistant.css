@@ -1090,10 +1090,14 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-height: 24px;
-  padding: 0;
+  min-height: 25px;
+  padding: 0 9px;
   color: var(--color-text-muted);
-  border: 0;
+  background: transparent;
+  /* Framed like the question chips: bare, "Analyze selected geometry"
+     read as a caption rather than something to press. */
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
   font-size: var(--fs-sm);
   text-align: left;
   cursor: pointer;
@@ -1102,6 +1106,7 @@
 .assistant-verified-action:hover:not(:disabled),
 .assistant-verified-action:focus-visible {
   color: var(--color-text);
+  border-color: var(--color-accent);
 }
 
 .assistant-verified-action:disabled {
