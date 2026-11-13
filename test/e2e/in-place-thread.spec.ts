@@ -182,7 +182,9 @@ test(
     const dragged = (await commandHandles(canvas)).length!.value;
     expect(dragged).toBeGreaterThan(7.5);
     await bar.locator('summary').click();
-    await expect(bar).toContainText(/Threads [\d.]+ of 12 mm, ends plain/);
+    await expect(bar).toContainText(
+      /Threads [\d.]+ of 12 mm, plain where it stops/
+    );
     await bar.locator('summary').click();
     // A thread is slow to build and mesh: give the dragged frame its time.
     await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled({
@@ -200,8 +202,9 @@ test(
     });
     expect(Number(created!.length)).toBeCloseTo(dragged, 6);
     expect(created!.majorDiameter).toBeUndefined();
+    // Chamfered at the top it starts from, plain where it stops short.
     expect(created!.chamferStart).toBeUndefined();
-    expect(created!.chamferEnd).toBeUndefined();
+    expect(created!.chamferEnd).toBe(true);
 
     // Re-armed from History and finished untouched, it is stored as it was.
     await revealModelPanel(page, 'History');

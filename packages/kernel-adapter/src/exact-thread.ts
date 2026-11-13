@@ -280,6 +280,57 @@ export function threadEndSpec(thread: Pick<ResolvedThread, 'chamfer'>): {
   };
 }
 
+/**
+ * The chamfered ends that stop short of their end of the face. A chamfer's
+ * cone is built into an end standing on the face's end plane; the kernel has
+ * no chamfer for an end that stops against a collar of the face. The slack
+ * is the kernel's own, within which a span snaps to the face's end. A span
+ * past the face has none: the kernel refuses that with its own code.
+ */
+export function threadChamfersShortOfFace(
+  thread: Pick<ResolvedThread, 'offset' | 'length' | 'chamfer'>,
+  face: { radius: number; faceLength: number }
+): ('start' | 'end')[] {
+  const snap = 1e-9 * Math.max(face.faceLength, face.radius);
+  const stop = thread.offset + thread.length;
+  if (thread.offset < -snap || stop > face.faceLength + snap) return [];
+  const short: ('start' | 'end')[] = [];
+  if (thread.chamfer.start !== undefined && thread.offset > snap) {
+    short.push('start');
+  }
+  if (thread.chamfer.end !== undefined && stop < face.faceLength - snap) {
+    short.push('end');
+  }
+  return short;
+}
+
+/**
+ * Refuse, by code, a chamfer on an end that stops short of the face: the
+ * kernel answers that case with its general `thread:invalid-parameter`.
+ */
+function refuseChamferShortOfFace(
+  thread: ResolvedThread,
+  face: { radius: number; faceLength: number },
+  unitLabel: string
+): void {
+  const short = threadChamfersShortOfFace(thread, face);
+  if (short.length === 0) return;
+  const stop = thread.offset + thread.length;
+  const kernelMessage = `the thread spans ${formatted(thread.offset)}..${formatted(stop)} ${unitLabel} along a face ${formatted(face.faceLength)} ${unitLabel} long, chamfered at its ${short.join(' and ')}`;
+  const reason =
+    short.length === 2
+      ? 'A chamfered end must reach the end of the face, and this thread stops short of both. Run it to an end, or turn the chamfers off.'
+      : `A chamfered end must reach the end of the face, and this thread stops short of the face's ${short[0]}. Run it to that end, or turn that chamfer off.`;
+  throw new KernelRefusal({
+    family: 'thread',
+    category: 'unsupported',
+    kernelCode: 'thread:chamfer-short-of-face',
+    kernelMessage,
+    reason,
+    message: `Thread: ${reason}\n${kernelMessage}`
+  });
+}
+
 /** Six significant digits, without exponent noise for ordinary sizes. */
 function formatted(value: number): string {
   return String(Number(value.toPrecision(6)));
@@ -368,6 +419,11 @@ export function buildThreadFeature(
     values,
     { kind, radius: geometry.radius, faceLength: geometry.axialLength },
     mm
+  );
+  refuseChamferShortOfFace(
+    thread,
+    { radius: geometry.radius, faceLength: geometry.axialLength },
+    document.units
   );
   const spec = {
     pitch: thread.pitch,

@@ -832,7 +832,8 @@ describe('an untouched edit writes the feature back as stored', () => {
       tool: 'thread',
       thread: wholeFields
     });
-    // Its end dragged 4 up from the bottom: a partial thread from the start.
+    // Its end dragged 4 up from the bottom: a partial thread from the start,
+    // which keeps its chamfer there and stops plain.
     expect(untouched(feature(whole), { length: 4 }, ctx)).toEqual({
       tool: 'thread',
       thread: {
@@ -840,9 +841,34 @@ describe('an untouched edit writes the feature back as stored', () => {
         faceHash: 31,
         profile: 'printable',
         clearance: 0.1,
-        length: 4
+        length: 4,
+        chamferStart: true
       }
     });
+    // A stored length that runs the whole face is held as given, and still
+    // reaches both ends: both chamfers go back, from either end (review
+    // #1390). Offset 2 and 10 long, it reaches only the far one.
+    for (const anchor of ['start', 'end'] as const) {
+      const held: FeatureData = { ...whole, length: 12, anchor };
+      const { featureKind: _h, ...heldFields } = held;
+      expect(untouched(feature(held), {}, ctx)).toEqual({
+        tool: 'thread',
+        thread: heldFields
+      });
+      const { chamferStart: _s, chamferEnd: _e, ...plain } = whole;
+      const setOff: FeatureData = {
+        ...plain,
+        length: 10,
+        offset: 2,
+        anchor,
+        ...(anchor === 'start' ? { chamferEnd: true } : { chamferStart: true })
+      };
+      const { featureKind: _o, ...setOffFields } = setOff;
+      expect(untouched(feature(setOff), {}, ctx)).toEqual({
+        tool: 'thread',
+        thread: setOffFields
+      });
+    }
     // A partial thread from the far end, its length an expression: it goes
     // back as written, from that end.
     const partial: FeatureData = {

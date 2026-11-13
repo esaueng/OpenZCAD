@@ -52,6 +52,67 @@ const chamfered = (state: InPlacePanelState) =>
   (state.options.chamfer ?? 'both') !== 'none';
 
 /**
+ * Whether a thread's two ends stand on the ends of its face: `near` the one
+ * it starts at, `far` the other. This is where the span reaches, not how
+ * its length is stored: a length held as given (an expression, a stored
+ * one) can reach the far end all the same.
+ */
+export interface ThreadReach {
+  near: boolean;
+  far: boolean;
+}
+
+/**
+ * Where a span reaches along its face, from its resolved offset and length.
+ * The slack is the kernel's own, within which a span snaps to an end of the
+ * face (the adapter's `threadChamfersShortOfFace` uses the same). A length
+ * that follows the offset to the far end (`held` false) reaches it by
+ * construction. What cannot be resolved (an expression with no value yet, a
+ * face that published no cylinder) reaches nothing it is not known to.
+ */
+export function threadReach(span: {
+  /** The length is stored as given, rather than following the offset. */
+  held: boolean;
+  /** Resolved; undefined where it does not resolve. */
+  offset: number | undefined;
+  length: number | undefined;
+  face: Pick<ThreadFace, 'length' | 'radius'> | null;
+}): ThreadReach {
+  const { held, offset, length, face } = span;
+  const snap = face ? 1e-9 * Math.max(face.length, face.radius) : 0;
+  return {
+    near: offset !== undefined && Math.abs(offset) <= snap,
+    far:
+      !held ||
+      (face !== null &&
+        offset !== undefined &&
+        length !== undefined &&
+        offset + length >= face.length - snap)
+  };
+}
+
+/**
+ * The ends of the face that take their chamfer. A chamfer's cone is built
+ * into an end standing on the face's end plane, so only an end the thread
+ * reaches takes one: a thread that stops short keeps the one where it
+ * starts and stops plain, and one set off from its starting end is plain
+ * there.
+ */
+export function threadChamferedEnds(
+  chamfer: string | undefined,
+  from: ThreadAnchor,
+  reach: ThreadReach
+): { start: boolean; end: boolean } {
+  const wanted = chamfer ?? 'both';
+  const reached = (end: ThreadAnchor) =>
+    from === end ? reach.near : reach.far;
+  return {
+    start: (wanted === 'both' || wanted === 'start') && reached('start'),
+    end: (wanted === 'both' || wanted === 'end') && reached('end')
+  };
+}
+
+/**
  * A picked cylinder as a thread reads it: its two ends on the axis, the unit
  * axis from start to end, its length and radius, and a direction across the
  * axis toward where it was clicked (any one, unclicked). Null when the face
@@ -112,7 +173,7 @@ export function threadFace(face: FacePick | undefined): ThreadFace | null {
 }
 
 /** The stored thread being edited, if this command edits one. */
-function savedThread(ctx: InPlaceContext | undefined) {
+function savedThread(ctx: Pick<InPlaceContext, 'saved'> | undefined) {
   return ctx?.saved?.featureKind === 'thread' ? ctx.saved : null;
 }
 
@@ -122,7 +183,7 @@ function savedThread(ctx: InPlaceContext | undefined) {
  */
 export function threadAnchor(
   face: FacePick | undefined,
-  ctx?: InPlaceContext
+  ctx?: Pick<InPlaceContext, 'saved'>
 ): ThreadAnchor {
   const geometry = threadFace(face);
   if (geometry && face?.point && !face.savedPosition) {
@@ -382,7 +443,8 @@ const THREAD_OPTIONS: readonly OptionSpec[] = [
   {
     id: 'chamfer',
     label: 'Chamfer',
-    // Kept only at an end the thread runs to: a partial thread's are plain.
+    // Kept only at an end the thread runs to: one that stops short keeps
+    // the one where it starts (see `threadChamferedEnds`).
     choices: [
       {
         value: 'both',
@@ -431,7 +493,8 @@ export function threadSummary(
   const parts: string[] = [];
   const geometry = threadFace(slots?.faces[0]);
   const round = (value: number) => Math.round(value * 1000) / 1000;
-  let partial = false;
+  // Without a face, every end asked for counts as chamfered.
+  let anyChamfer = chamfered(state);
   if (geometry) {
     if ((state.options.size ?? 'auto') === 'auto') {
       parts.push(`Sized from the Ø${round(2 * geometry.radius)} ${units} face`);
@@ -440,17 +503,30 @@ export function threadSummary(
     const reach = geometry.length - offset;
     const length = state.numbers.length ?? reach;
     const face = round(geometry.length);
-    // A length typed as an expression is kept as written, so it is stored
-    // (and the ends left plain) even where it reaches the far end.
-    partial = lengthIsExplicit(
+    // A length held as given (an expression, a stored one) is stored as
+    // written; what it reads as, and which ends chamfer, is where it
+    // reaches.
+    const held = lengthIsExplicit(
       geometry,
       { ...state.numbers, ...state.raws },
       state.numbers,
       context ?? { touched: ['length'] }
     );
+    const reached = threadReach({ held, offset, length, face: geometry });
+    const ends = threadChamferedEnds(
+      state.options.chamfer,
+      threadAnchor(
+        slots?.faces[0],
+        context?.saved ? { saved: context.saved } : undefined
+      ),
+      reached
+    );
+    anyChamfer = ends.start || ends.end;
     parts.push(
-      partial
-        ? `Threads ${round(length)} of ${face} ${units}, ends plain`
+      !reached.far
+        ? `Threads ${round(length)} of ${face} ${units}, ${
+            anyChamfer ? 'plain where it stops' : 'ends plain'
+          }`
         : offset > 0
           ? `To end · Threads ${round(reach)} of ${face} ${units}`
           : `Threads the full ${face} ${units}`
@@ -461,7 +537,7 @@ export function threadSummary(
   if (starts > 1) parts.push(`${starts} starts`);
   const phase = Math.round((state.numbers.phaseDeg ?? 0) * 100) / 100;
   if (phase !== 0) parts.push(`Rotated ${phase}°`);
-  if (chamfered(state) && !partial) {
+  if (anyChamfer) {
     const angle = Math.round((state.numbers.chamferAngleDeg ?? 45) * 100) / 100;
     if (angle !== 45) parts.push(`Chamfer ${angle}°`);
   }
@@ -537,6 +613,10 @@ export interface ThreadExtent {
   storedAnchor?: ThreadAnchor;
   /** The offset as a number, where it resolves. */
   offset?: number;
+  /** The length as a number, where it resolves. */
+  length?: number;
+  /** The face's length and radius, where it published a cylinder. */
+  face?: Pick<ThreadFace, 'length' | 'radius'>;
 }
 
 /** The feature fields an in-place thread command stores. */
@@ -594,22 +674,22 @@ export function threadRequestFields(
   }
   const phase = values.phaseDeg;
   if (phase !== undefined && phase !== 0) fields.phaseDeg = phase;
-  // A chamfered end must reach the end of the face: a partial thread takes
-  // none, and one set off from its starting end none there.
-  const chamfer = partial ? 'none' : (options.chamfer ?? 'both');
-  const setOff = offsetStored && (extent.offset ?? 1) !== 0;
-  if (
-    (chamfer === 'both' || chamfer === 'start') &&
-    !(setOff && from === 'start')
-  ) {
-    fields.chamferStart = true;
-  }
-  if (
-    (chamfer === 'both' || chamfer === 'end') &&
-    !(setOff && from === 'end')
-  ) {
-    fields.chamferEnd = true;
-  }
+  // A chamfered end must reach the end of the face. Where the span reaches
+  // is not how its length is stored: a held length (an expression, a
+  // stored one) that reaches the far end keeps its chamfer there.
+  const ends = threadChamferedEnds(
+    options.chamfer,
+    from,
+    threadReach({
+      held: partial,
+      // An offset left out is none; one that does not resolve is unknown.
+      offset: offsetStored ? extent.offset : 0,
+      length: extent.length,
+      face: extent.face ?? null
+    })
+  );
+  if (ends.start) fields.chamferStart = true;
+  if (ends.end) fields.chamferEnd = true;
   if (fields.chamferStart || fields.chamferEnd) {
     const angle = values.chamferAngleDeg;
     if (angle !== undefined && angle !== 45) fields.chamferAngleDeg = angle;
@@ -756,6 +836,7 @@ export const threadSpec: InPlaceToolSpec = {
       if (number !== undefined) all[id] = number;
     }
     const from = threadAnchor(face, ctx);
+    const geometry = threadFace(face);
     return {
       tool: 'thread',
       thread: {
@@ -768,7 +849,11 @@ export const threadSpec: InPlaceToolSpec = {
           ...(savedThread(ctx)?.anchor === undefined
             ? {}
             : { storedAnchor: savedThread(ctx)!.anchor! }),
-          ...(all.offset === undefined ? {} : { offset: all.offset })
+          ...(all.offset === undefined ? {} : { offset: all.offset }),
+          ...(all.length === undefined ? {} : { length: all.length }),
+          ...(geometry
+            ? { face: { length: geometry.length, radius: geometry.radius } }
+            : {})
         })
       }
     };
