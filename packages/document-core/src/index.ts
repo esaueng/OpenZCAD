@@ -57,6 +57,7 @@ export * from './drawings';
 export * from './object-folders';
 export * from './assembly';
 export * from './assembly-bom';
+export * from './gear-mesh';
 export * from './reference-images';
 export * from './body-consumption';
 export {

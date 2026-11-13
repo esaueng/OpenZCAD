@@ -2386,14 +2386,23 @@ export function ModelViewer({
   const assemblyDimmedKey = assemblyView
     ? assemblyView.otherBodyIds.join('\n')
     : null;
-  /** The body of the component Assemble has selected, drawn as selected. */
-  const assemblySelectedComponentId = useAssemblyRuntime(
-    (s) => s.selectedComponentId
+  /** Every selected assembly part is highlighted, including an additive pair. */
+  const assemblySelectedComponentIds = useAssemblyRuntime(
+    (s) => s.selectedComponentIds
   );
-  const assemblySelectedBodyId =
-    assemblyView && assemblySelectedComponentId
-      ? (assemblyView.bodyByComponent.get(assemblySelectedComponentId) ?? null)
-      : null;
+  const assemblySelectedBodyKey = assemblySelectedComponentIds
+    .flatMap((id) => {
+      const bodyId = assemblyView?.bodyByComponent.get(id);
+      return bodyId ? [bodyId] : [];
+    })
+    .join('\n');
+  const assemblySelectedBodyIds = useMemo(
+    () =>
+      new Set(
+        assemblySelectedBodyKey ? assemblySelectedBodyKey.split('\n') : []
+      ),
+    [assemblySelectedBodyKey]
+  );
   const topologyPickListRef = useRef<TopologyPickList | null>(null);
   const onSelectTopologyRef = useRef(onSelectTopology);
   onSelectTopologyRef.current = onSelectTopology;
@@ -12979,7 +12988,7 @@ export function ModelViewer({
       const isSelected =
         (selectedBodyIds.includes(body.bodyId) &&
           !(selectionRecedes && partPicked)) ||
-        body.bodyId === assemblySelectedBodyId;
+        assemblySelectedBodyIds.has(body.bodyId);
 
       // X-ray scales every body's own opacity, so a body already made
       // translucent by its appearance stays the fainter of the two.
@@ -13660,7 +13669,7 @@ export function ModelViewer({
     xrayFactor,
     pickLabel,
     assemblyDimmedKey,
-    assemblySelectedBodyId
+    assemblySelectedBodyIds
   ]);
 
   // Assemble poses component bodies by matrix and draws the joint glyphs.

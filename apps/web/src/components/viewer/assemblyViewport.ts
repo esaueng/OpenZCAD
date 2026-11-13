@@ -306,6 +306,10 @@ export class AssemblyViewport {
       return;
     }
     const hit = this.componentAt(event);
+    if (hit && (event.ctrlKey || event.metaKey)) {
+      assemblyRuntime.selectComponent(hit.componentId, true);
+      return;
+    }
     this.deps.picker.setRayFromEvent(event);
     this.press = {
       pointerId: event.pointerId,

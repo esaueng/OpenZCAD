@@ -241,6 +241,10 @@ export function runAssembleKey(
         assemblyRuntime.closeMotionSetup();
         return true;
       }
+      if (runtime.gearMesh) {
+        assemblyRuntime.closeGearMesh();
+        return true;
+      }
       if (runtime.playback) {
         assemblyRuntime.stop();
         return true;

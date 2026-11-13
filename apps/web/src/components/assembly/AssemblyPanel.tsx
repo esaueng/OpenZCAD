@@ -1,5 +1,12 @@
-import { useMemo, useState, type MouseEvent, type ReactNode } from 'react';
 import {
+  Suspense,
+  useMemo,
+  useState,
+  type MouseEvent,
+  type ReactNode
+} from 'react';
+import {
+  Cog,
   Download,
   Link2,
   MoveVertical,
@@ -35,6 +42,7 @@ import {
 } from '../../lib/assembly/assemblyUi';
 import { downloadText, exportFileStem } from '../../lib/model';
 import { ContextMenu, type ContextMenuState } from '../ContextMenu';
+import { lazyWithStaleChunkNotice } from '../../lib/staleChunk';
 import {
   AssemblyFirstRunCard,
   assemblyCandidateBodies
@@ -47,9 +55,20 @@ import {
 } from './AssemblyStudiesSection';
 import { JointKindIcon } from './JointKindIcon';
 import { JointToolCard } from './JointToolCard';
+import {
+  assemblyGearCount,
+  openGearMesh,
+  selectedGearMesh
+} from './gearMeshEntry';
 import { MotionSetupCard, openMotionSetup } from './MotionSetupCard';
 import type { MotionSetupBounds } from '../../lib/assembly/motionSetup';
 import { useAssemblyModel } from './useAssemblyModel';
+
+// Mesh gears and its pair math load when the card first opens; the entry
+// chunk runs at its budget and keeps only the gear check.
+const GearMeshCard = lazyWithStaleChunkNotice(() =>
+  import('./GearMeshCard').then((module) => ({ default: module.GearMeshCard }))
+);
 
 export interface AssemblyPanelProps {
   document: ProjectDocument;
@@ -81,6 +100,7 @@ export function AssemblyPanel(props: AssemblyPanelProps) {
   const { document, execute, onStatus, onAnnounce } = props;
   const tool = useAssemblyRuntime((s) => s.jointTool !== null);
   const setup = useAssemblyRuntime((s) => s.motionSetup !== null);
+  const gearMesh = useAssemblyRuntime((s) => s.gearMesh !== null);
   const hasParts = (document.assembly?.components.length ?? 0) > 0;
   return (
     <aside className="assembly-panel" aria-label="Assembly">
@@ -93,6 +113,14 @@ export function AssemblyPanel(props: AssemblyPanelProps) {
           onStatus={onStatus}
           {...(props.bodyBounds ? { bounds: props.bodyBounds } : {})}
         />
+      ) : gearMesh ? (
+        <Suspense fallback={null}>
+          <GearMeshCard
+            document={document}
+            execute={execute}
+            onStatus={onStatus}
+          />
+        </Suspense>
       ) : hasParts ? (
         <AssemblyLists {...props} />
       ) : (
@@ -144,6 +172,9 @@ function AssemblyLists({
 }: AssemblyPanelProps) {
   const model = useAssemblyModel(document);
   const selectedComponentId = useAssemblyRuntime((s) => s.selectedComponentId);
+  const selectedComponentIds = useAssemblyRuntime(
+    (s) => s.selectedComponentIds
+  );
   const selectedJointId = useAssemblyRuntime((s) => s.selectedJointId);
   const playback = useAssemblyRuntime((s) => s.playback);
   const [menu, setMenu] = useState<
@@ -153,6 +184,11 @@ function AssemblyLists({
   const candidates = useMemo(
     () => assemblyCandidateBodies(document),
     [document]
+  );
+  const gearCount = useMemo(() => assemblyGearCount(document), [document]);
+  const selectedPair = useMemo(
+    () => selectedGearMesh(document, selectedComponentIds),
+    [document, selectedComponentIds]
   );
   if (!model) return null;
   const { set, solution, bodyByComponent } = model;
@@ -213,6 +249,11 @@ function AssemblyLists({
       onStatus('Set up motion · choose what moves and how.');
   };
 
+  const startGearMesh = () => {
+    if (openGearMesh(document, selectedComponentIds))
+      onStatus('Place gears · choose the gear that stays put and its mate.');
+  };
+
   const openJointTool = () => {
     assemblyRuntime.openJointTool();
     onStatus('Joint · click the part that moves.');
@@ -267,7 +308,7 @@ function AssemblyLists({
           execute(
             commandFactories.deleteAssemblyComponent({ componentId: target.id })
           ) &&
-          selectedComponentId === target.id
+          selectedComponentIds.includes(target.id)
         )
           assemblyRuntime.selectComponent(null);
       }
@@ -346,7 +387,8 @@ function AssemblyLists({
           <ul className="assembly-list">
             {set.components.map((component) => {
               const missing = bodyByComponent.get(component.id) === null;
-              const selected = component.id === selectedComponentId;
+              const selected = selectedComponentIds.includes(component.id);
+              const expanded = component.id === selectedComponentId;
               const role = solution.roles.get(component.id) ?? 'free';
               const link = solution.links.get(component.id);
               const via = link
@@ -384,14 +426,21 @@ function AssemblyLists({
                       <button
                         type="button"
                         className="assembly-row-main"
-                        aria-expanded={selected}
+                        aria-expanded={expanded}
+                        aria-pressed={selected}
+                        title="Ctrl or Command-click to select more than one part"
                         aria-controls={`assembly-details-${component.id}`}
                         onClick={(event) => {
                           // A double-click renames: its second click must
                           // not close the row the first one opened.
                           if (event.detail > 1) return;
                           assemblyRuntime.selectComponent(
-                            selected ? null : component.id
+                            event.ctrlKey || event.metaKey
+                              ? component.id
+                              : expanded
+                                ? null
+                                : component.id,
+                            event.ctrlKey || event.metaKey
                           );
                         }}
                         onDoubleClick={() =>
@@ -435,13 +484,25 @@ function AssemblyLists({
                       <Pin size={12} aria-hidden="true" />
                     </button>
                   </div>
-                  {selected ? (
+                  {expanded ? (
                     <ComponentDetails {...detailProps} component={component} />
                   ) : null}
                 </li>
               );
             })}
           </ul>
+          {selectedPair ? (
+            <div className="assembly-actions">
+              <button
+                type="button"
+                className="secondary"
+                onClick={startGearMesh}
+              >
+                <Cog size={13} aria-hidden="true" />
+                Place selected gears
+              </button>
+            </div>
+          ) : null}
           {addable.length > 0 ? (
             <div
               className="assembly-addable"
@@ -500,6 +561,18 @@ function AssemblyLists({
             ) : null
           }
         >
+          {gearCount >= 2 ? (
+            <div className="assembly-actions">
+              <button
+                type="button"
+                className="secondary"
+                onClick={startGearMesh}
+              >
+                <Cog size={13} aria-hidden="true" />
+                Place gears
+              </button>
+            </div>
+          ) : null}
           {set.joints.length === 0 ? (
             set.components.length < 2 ? (
               <p className="assembly-muted">Add a second part to join it.</p>

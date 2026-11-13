@@ -9,6 +9,7 @@ import type {
   AssemblyPlayback,
   BodyId
 } from '@openzcad/shared';
+import type { GearMeshDraft } from './gearMesh';
 import type { MotionSetupDraft } from './motionSetup';
 
 /**
@@ -85,7 +86,9 @@ export interface AssemblyMotionSetupState {
 export interface AssemblyRuntimeState {
   /** True while the Assemble workspace (or a playing View) shows the assembly. */
   active: boolean;
+  /** Active part for details and grounding; the last member of the selection. */
   selectedComponentId: string | null;
+  selectedComponentIds: readonly string[];
   selectedJointId: string | null;
   selectedStudyId: string | null;
   /** Joint values shown instead of the saved ones; never saved. */
@@ -97,6 +100,8 @@ export interface AssemblyRuntimeState {
   studyTimeS: number;
   jointTool: AssemblyJointToolState | null;
   motionSetup: AssemblyMotionSetupState | null;
+  /** Mesh gears' draft while its card is open (never saved until Mesh). */
+  gearMesh: GearMeshDraft | null;
 }
 
 /** Commits the app performs on the store's behalf (registered by App). */
@@ -113,6 +118,7 @@ export interface AssemblyCommitHandlers {
 const INITIAL: AssemblyRuntimeState = {
   active: false,
   selectedComponentId: null,
+  selectedComponentIds: [],
   selectedJointId: null,
   selectedStudyId: null,
   overrides: new Map(),
@@ -120,7 +126,8 @@ const INITIAL: AssemblyRuntimeState = {
   playback: null,
   studyTimeS: 0,
   jointTool: null,
-  motionSetup: null
+  motionSetup: null,
+  gearMesh: null
 };
 
 let state: AssemblyRuntimeState = INITIAL;
@@ -192,19 +199,29 @@ export const assemblyRuntime = {
             overrides: new Map(),
             placementOverrides: new Map(),
             jointTool: null,
-            motionSetup: null
+            motionSetup: null,
+            gearMesh: null
           }
     );
   },
-  selectComponent(componentId: string | null): void {
+  selectComponent(componentId: string | null, additive = false): void {
+    const ids = !componentId
+      ? []
+      : additive
+        ? state.selectedComponentIds.includes(componentId)
+          ? state.selectedComponentIds.filter((id) => id !== componentId)
+          : [...state.selectedComponentIds, componentId]
+        : [componentId];
     patch({
-      selectedComponentId: componentId,
+      selectedComponentIds: ids,
+      selectedComponentId: ids.at(-1) ?? null,
       selectedJointId: componentId ? null : state.selectedJointId
     });
   },
   selectJoint(jointId: string | null): void {
     patch({
       selectedJointId: jointId,
+      selectedComponentIds: jointId ? [] : state.selectedComponentIds,
       selectedComponentId: jointId ? null : state.selectedComponentId
     });
   },
@@ -306,6 +323,7 @@ export const assemblyRuntime = {
       playback: null,
       overrides: new Map(),
       motionSetup: null,
+      gearMesh: null,
       jointTool: {
         step: 'child',
         parent: null,
@@ -355,6 +373,7 @@ export const assemblyRuntime = {
       playback: null,
       overrides: new Map(),
       jointTool: null,
+      gearMesh: null,
       motionSetup: { draft, preview: null, previewing }
     });
   },
@@ -387,5 +406,21 @@ export const assemblyRuntime = {
   },
   closeMotionSetup(): void {
     if (state.motionSetup) patch({ motionSetup: null, overrides: new Map() });
+  },
+  /** Opens Mesh gears with a starting pair; closes the other tools. */
+  openGearMesh(draft: GearMeshDraft): void {
+    patch({
+      playback: null,
+      overrides: new Map(),
+      jointTool: null,
+      motionSetup: null,
+      gearMesh: draft
+    });
+  },
+  updateGearMesh(partial: Partial<GearMeshDraft>): void {
+    if (state.gearMesh) patch({ gearMesh: { ...state.gearMesh, ...partial } });
+  },
+  closeGearMesh(): void {
+    if (state.gearMesh) patch({ gearMesh: null });
   }
 };

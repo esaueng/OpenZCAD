@@ -1840,7 +1840,15 @@ import {
   savedPanelWidths,
   SIDEBAR_WIDTH_LIMITS
 } from './lib/panelWidths';
-import { AssemblyPanel } from './components/assembly/AssemblyPanel';
+// Parts, joints and gear setup are used only in Assemble. Share the existing
+// pending state and stale-chunk recovery with the other workspace panels.
+const AssemblyPanel = withSuspense(
+  lazyWithStaleChunkNotice(() =>
+    import('./components/assembly/AssemblyPanel').then((module) => ({
+      default: module.AssemblyPanel
+    }))
+  )
+);
 import { meshBoundsLookup } from './lib/assembly/motionSetup';
 import { MotionStudyTimeline } from './components/assembly/MotionStudyTimeline';
 import { AssemblyPlayer } from './components/assembly/AssemblyPlayer';
