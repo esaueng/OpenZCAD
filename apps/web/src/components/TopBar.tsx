@@ -717,7 +717,9 @@ export function TopBar({
                   ? onReviewConflict
                   : onSave
             }
-            aria-label={reviewConflict ? `${saveLabel}: choose a version` : saveLabel}
+            aria-label={
+              reviewConflict ? `${saveLabel}: choose a version` : saveLabel
+            }
             title={
               saveToAccount && !editRefusal
                 ? 'Save this local project and its source files to your account.'

@@ -413,7 +413,10 @@ describe('ProjectConflictDialog', () => {
     value.remoteDocument.name = 'Device A account edit';
     setModified(value.localDocument, '2026-11-13T19:34:27.100Z');
     setModified(value.remoteDocument, '2026-11-13T19:34:27.900Z');
-    value.localDocument.checkpoints = value.localDocument.checkpoints.slice(0, 1);
+    value.localDocument.checkpoints = value.localDocument.checkpoints.slice(
+      0,
+      1
+    );
     render(
       <ProjectConflictDialog
         conflict={value}
