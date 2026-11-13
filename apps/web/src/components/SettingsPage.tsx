@@ -201,6 +201,9 @@ interface SettingsPageProps {
   onClose(): void;
 }
 
+/** How long after a sign-in code is sent a new one can be asked for. */
+const LOGIN_CODE_RESEND_DELAY_MS = 30_000;
+
 export type AuthConfigStatus = 'loading' | 'ready' | 'unavailable';
 
 /**
@@ -762,6 +765,19 @@ export function SettingsPage({
   const personalInfoVisible = usePersonalInfoVisible();
   const [loginCode, setLoginCode] = useState('');
   const [loginChallengeId, setLoginChallengeId] = useState<string | null>(null);
+  const loginCodeRef = useRef<HTMLInputElement>(null);
+  // A new code can be asked for a short while after the last one was sent,
+  // so a slow email is not answered with a flood of codes (I81).
+  const [resendReady, setResendReady] = useState(false);
+  useEffect(() => {
+    setResendReady(false);
+    if (!loginChallengeId) return;
+    const timer = window.setTimeout(
+      () => setResendReady(true),
+      LOGIN_CODE_RESEND_DELAY_MS
+    );
+    return () => window.clearTimeout(timer);
+  }, [loginChallengeId]);
   const [turnstileToken, setTurnstileToken] = useState('');
   const [turnstileReset, setTurnstileReset] = useState(0);
   const [storageUsage, setStorageUsage] = useState<AccountStorageUsage | null>(
@@ -1931,7 +1947,26 @@ export function SettingsPage({
                   </Group>
 
                   <Group title="Token">
-                    {!session ? (
+                    {!session && authConfigStatus === 'unavailable' ? (
+                      // The same words and action Account shows: its Sign in
+                      // led to a page that offered only Retry (I86).
+                      <Notice
+                        action={
+                          <button
+                            className="secondary"
+                            type="button"
+                            disabled={busy}
+                            onClick={() => void onRefreshAuthConfig()}
+                          >
+                            <RefreshCcw size={13} aria-hidden="true" />
+                            Retry
+                          </button>
+                        }
+                      >
+                        Sign-in could not be reached, so a personal token can’t
+                        be stored right now.
+                      </Notice>
+                    ) : !session ? (
                       <Notice
                         action={
                           <button
@@ -2378,7 +2413,12 @@ export function SettingsPage({
                             void onVerifyLoginCode(
                               loginChallengeId,
                               loginCode.trim()
-                            ).catch(() => undefined);
+                            ).catch(() => {
+                              // A wrong code is cleared for the next try
+                              // rather than left to be edited (I81).
+                              setLoginCode('');
+                              loginCodeRef.current?.focus();
+                            });
                           }}
                         >
                           <span>
@@ -2399,7 +2439,9 @@ export function SettingsPage({
                               autoComplete="one-time-code"
                               pattern="[0-9]{6}"
                               aria-label="Email sign-in code"
-                              placeholder="000000"
+                              ref={loginCodeRef}
+                              // Digits looked already typed (design review I81).
+                              placeholder="6-digit code"
                               // No maxLength: it cuts a pasted " 730418" before
                               // the digit filter runs and drops the last digit.
                               onChange={(event) =>
@@ -2431,6 +2473,43 @@ export function SettingsPage({
                                 Use another email
                               </button>
                             </span>
+                            {/* Resend (design review I81): the email form's
+                              security check, then a new code to the same
+                              address, after a short wait. */}
+                            <div className="settings-auth-resend">
+                              <TurnstileWidget
+                                siteKey={authConfig.turnstileSiteKey}
+                                resetSignal={turnstileReset}
+                                onToken={setTurnstileToken}
+                              />
+                              <button
+                                className="secondary"
+                                type="button"
+                                disabled={
+                                  busy || !resendReady || !turnstileToken
+                                }
+                                onClick={() => {
+                                  void onRequestLoginCode(
+                                    loginEmail.trim(),
+                                    turnstileToken
+                                  )
+                                    .then((response) => {
+                                      setLoginCode('');
+                                      setLoginChallengeId(response.challengeId);
+                                    })
+                                    .catch(() => undefined)
+                                    .finally(() => {
+                                      setTurnstileToken('');
+                                      setTurnstileReset((value) => value + 1);
+                                    });
+                                }}
+                              >
+                                <Mail size={14} aria-hidden="true" />
+                                {resendReady
+                                  ? 'Send a new code'
+                                  : 'Send a new code (in a moment)'}
+                              </button>
+                            </div>
                           </div>
                         </form>
                       ) : (
