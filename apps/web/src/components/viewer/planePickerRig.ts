@@ -18,8 +18,8 @@ import { DATUM_HIDDEN_DASHED, DATUM_HIDDEN_WIDTH_PX } from './datumStyle';
  * principal plane, each covering only that plane's positive quadrant, so the
  * three meet along the positive axes like the inside corner of a box instead
  * of crossing. Each panel has chamfered, slightly filleted corners and its
- * name lying flat in the outer corner. Armed while the Sketch tool (or an
- * in-place command) is waiting for a plane.
+ * name at the outer corner, turned to the camera. Armed while the Sketch tool
+ * (or an in-place command) is waiting for a plane.
  *
  * A part built at the origin fills those same quadrants, so the panels draw
  * through it: the fill and label ignore depth, and the border's hidden part
@@ -283,7 +283,7 @@ export function buildPlanePickerRig(
     fillMaterial: THREE.MeshBasicMaterial;
     border: Line2;
     hidden: Line2;
-    labelMaterial: THREE.MeshBasicMaterial | null;
+    labelMaterial: THREE.SpriteMaterial | null;
   }
   const panels = new Map<PlaneId, Panel>();
 
@@ -348,10 +348,10 @@ export function buildPlanePickerRig(
     disposables.push(fillMaterial);
     holder.add(fill, hidden, border);
 
-    let labelMaterial: THREE.MeshBasicMaterial | null = null;
+    let labelMaterial: THREE.SpriteMaterial | null = null;
     const label = labelTexture(plane);
     if (label) {
-      labelMaterial = new THREE.MeshBasicMaterial({
+      labelMaterial = new THREE.SpriteMaterial({
         map: label.texture,
         transparent: true,
         opacity: IDLE.label,
@@ -361,25 +361,24 @@ export function buildPlanePickerRig(
       // The quad is sized so the ink is LABEL_INK_PX tall; the ink box is
       // centred on the canvas, so the quad's centre is the ink's centre.
       const height = LABEL_INK_PX / label.inkHeight;
-      const quad = new THREE.PlaneGeometry(height * label.aspect, height);
-      disposables.push(label.texture, labelMaterial, quad);
+      disposables.push(label.texture, labelMaterial);
       const inkHalfWidth = (height * label.aspect * label.inkWidth) / 2;
-      const position = new THREE.Vector3(
+      // A sprite: anchored in the panel's outer corner, drawn facing the
+      // camera and upright. The name used to lie flat in the panel, so from
+      // the default view "XY" was sheared along the floor until it read as
+      // mirrored and "XZ" was squeezed to a sliver on a panel seen nearly
+      // edge-on. Held to the corner, it still says which panel it names.
+      const sprite = new THREE.Sprite(labelMaterial);
+      sprite.name = `plane-picker-label-${plane}`;
+      sprite.position.set(
         EXTENT_PX - LABEL_INSET_PX - inkHalfWidth,
         EXTENT_PX - LABEL_INSET_PX - LABEL_INK_PX / 2,
         0
       );
-      // Front face reads from the panel's front; a twin turned about the
-      // panel's up axis reads correctly from behind. Both cull their back.
-      for (const turned of [false, true]) {
-        const mesh = new THREE.Mesh(quad, labelMaterial);
-        mesh.name = `plane-picker-label-${plane}`;
-        mesh.position.copy(position);
-        if (turned) mesh.rotation.y = Math.PI;
-        mesh.renderOrder = VIEWPORT_RENDER_ORDER.SKETCH_CURVE;
-        mesh.raycast = () => undefined;
-        holder.add(mesh);
-      }
+      sprite.scale.set(height * label.aspect, height, 1);
+      sprite.renderOrder = VIEWPORT_RENDER_ORDER.SKETCH_CURVE;
+      sprite.raycast = () => undefined;
+      holder.add(sprite);
     }
 
     group.add(holder);

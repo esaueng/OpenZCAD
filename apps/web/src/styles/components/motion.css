@@ -269,9 +269,11 @@ textarea {
   animation: oz-pop var(--dur-fast) var(--ease-out);
 }
 
-/* A panel arrives from the rail's side: opened unpinned, or in the phone
-   lane. Docked panels are layout, not arrivals, and stay put. */
+/* A panel arrives from the rail's side: opened unpinned (beside the rail,
+   or as a docked column's guest), or in the phone lane. Docked panels are
+   layout, not arrivals, and stay put. */
 .panel-unpinned > .model-panel,
+.panel-slot.is-guest > .model-panel,
 .panel-lane-float {
   animation: oz-enter-left var(--dur-base) var(--ease-out);
 }

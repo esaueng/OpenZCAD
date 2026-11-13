@@ -118,7 +118,7 @@ function clamp(value: number, lo: number, hi: number): number {
 const FULL_DOCKS = 'The docks are full at this width.';
 const LOCKED = 'Unlock the layout to change it';
 const LOCKED_STATUS =
-  'The layout is locked. Unlock it in View options to move or resize panels.';
+  'The layout is locked. Unlock it in Panel layout to move or resize panels.';
 /** Keyboard steps for gaps and floating windows, in CSS pixels. */
 const KEY_STEP = 10;
 /** A float dropped from a column is at most this tall, as Pop out makes it. */
@@ -213,7 +213,9 @@ function titlesOf(entries: readonly PanelEntry[]): string {
 /**
  * Both docks: their columns against the screen edges, the panels stacked in
  * them and the gaps between, the floating windows, and the unpinned panel
- * beside the right rail's inner edge. The layer it draws in spans the whole
+ * beside the right rail's inner edge (or, with no room for a column of its
+ * own, under the panels of a docked column: `ColumnGeometry.guest`). The
+ * layer it draws in spans the whole
  * viewer area, which is the stage the layout is projected onto: a window
  * may stand anywhere on it, over the top islands too, while the docks keep
  * to the band its padding leaves (under the top islands, down to the
@@ -339,13 +341,18 @@ export function PanelDock({
         (rect) => rect && (rect.mode === 'unpinned' || rect.mode === 'revealed')
       )
     : undefined;
+  /** Drawn in a docked column, under its panels, rather than beside the rail. */
+  const slotHosted = Boolean(
+    slot && docked?.columns.some((column) => column.guest === slot.id)
+  );
   const leftWidth = docked ? docked.dockWidth.left : 0;
   const rightWidth = docked ? docked.dockWidth.right : 0;
+  // A temporary panel sharing a docked column takes no width of its own.
   const slotWidth =
     resting &&
     !resting.phone &&
     restingSlot &&
-    !resting.columns.some((column) => column.x === restingSlot.x)
+    !resting.columns.some((column) => column.guest === restingSlot.id)
       ? resting.columnWidth + resting.insets.gap
       : 0;
   // Judged against the resting docks, both of them: the lane keeps its card
@@ -1054,10 +1061,12 @@ export function PanelDock({
     entries: PanelEntry[],
     container: Rect,
     placement: PanelPlacement,
-    isGap: (gap: GapGeometry) => boolean
+    isGap: (gap: GapGeometry) => boolean,
+    /** A column's temporary panel, drawn under its own (`column.guest`). */
+    guest: PanelId | null = null
   ) => (
     <>
-      {entries.map((id) => {
+      {(guest ? [...entries, guest] : entries).map((id) => {
         const rect = docked!.panels[id];
         if (!rect) return null;
         if (id === PANEL_SLOT) {
@@ -1072,10 +1081,17 @@ export function PanelDock({
         return (
           <div
             key={id}
-            className="panel-slot"
+            className={`panel-slot${id === guest ? ' is-guest' : ''}`}
             style={{ top: rect.y - container.y, height: rect.h }}
           >
-            {panelElement(id, placement)}
+            {panelElement(
+              id,
+              id !== guest
+                ? placement
+                : rect.mode === 'revealed'
+                  ? 'revealed'
+                  : 'unpinned'
+            )}
           </div>
         );
       })}
@@ -1152,9 +1168,7 @@ export function PanelDock({
 
   const renderColumn = (column: ColumnGeometry) => (
     <div
-      className={`panel-column${column.overflowing ? ' is-scrolling' : ''}${slot && !dragView && slot.x === column.x ? ' is-inspecting' : ''}`}
-      inert={slot && !dragView && slot.x === column.x ? true : undefined}
-      aria-hidden={slot && !dragView && slot.x === column.x ? true : undefined}
+      className={`panel-column${column.overflowing ? ' is-scrolling' : ''}`}
       data-side={column.side}
       style={{
         left: column.x,
@@ -1174,7 +1188,8 @@ export function PanelDock({
           (gap) =>
             gap.container.kind === 'column' &&
             gap.container.side === column.side &&
-            gap.container.column === column.column
+            gap.container.column === column.column,
+          column.guest
         )}
       </div>
     </div>
@@ -1185,7 +1200,8 @@ export function PanelDock({
    * down to the dock's foot (or double-click it) to fill the dock again.
    */
   const renderColumnFoot = (column: ColumnGeometry) => {
-    if (slot && !dragView && slot.x === column.x) return null;
+    // A guest fills the column to the dock's foot: nothing to shorten.
+    if (column.guest) return null;
     const { dockHeight, drawn, reach, panels, enabled } = columnFoot(column);
     if (panels.length === 0) return null;
     const percent = (value: number) =>
@@ -1256,7 +1272,7 @@ export function PanelDock({
           {!dragView && renderColumnFoot(column)}
         </Fragment>
       ))}
-      {slot && slot.id !== PANEL_SLOT && (
+      {slot && slot.id !== PANEL_SLOT && !slotHosted && (
         <div
           className={`panel-unpinned${slot.mode === 'revealed' ? ' is-revealed' : ''}`}
           style={{

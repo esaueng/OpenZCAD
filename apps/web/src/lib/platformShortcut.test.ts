@@ -6,16 +6,24 @@ import {
 } from './platformShortcut';
 
 describe('idleWorkspaceHint', () => {
-  it('names the key the command box shows', () => {
-    expect(idleWorkspaceHint('MacIntel')).toBe('⌘K commands · ? shortcuts');
-    expect(idleWorkspaceHint('Win32')).toBe('Ctrl+K commands · ? shortcuts');
+  it("leaves the palette key to the badge at the bar's end", () => {
+    // "Ctrl+K commands · ? shortcuts" stood directly beside a "Ctrl+K"
+    // badge: the line names what the bar is, the badge its key.
+    for (const platform of ['MacIntel', 'Win32']) {
+      const hint = idleWorkspaceHint(platform);
+      expect(hint).toBe('Search commands · ? shortcuts');
+      expect(hint).not.toMatch(/Ctrl|⌘/);
+    }
   });
 
-  it('names the keys the user remapped, and leaves out an unbound one', () => {
-    expect(idleWorkspaceHint('MacIntel', 'Ctrl+Shift+P', 'H')).toBe(
-      '⇧⌘P commands · H shortcuts'
+  it('names the reference key the user remapped, and leaves out an unbound one', () => {
+    expect(idleWorkspaceHint('MacIntel', 'Ctrl+H')).toBe(
+      'Search commands · ⌘H shortcuts'
     );
-    expect(idleWorkspaceHint('Win32', null, '?')).toBe('? shortcuts');
+    expect(idleWorkspaceHint('Win32', 'H')).toBe(
+      'Search commands · H shortcuts'
+    );
+    expect(idleWorkspaceHint('Win32', null)).toBe('Search commands');
   });
 });
 

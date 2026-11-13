@@ -2,9 +2,12 @@
  * Where the model panels live, remembered per device (U08).
  *
  * Parameters, Objects, History, Revisions and Diagnostics are independent
- * panels. Each is closed, unpinned (one at a time, beside the right rail),
- * docked in a column of the left or right dock, or floating in a window over
- * the model. This module is the whole model: the layout, every operation on
+ * panels. Each is closed, unpinned (one at a time: beside the right rail,
+ * or under a docked column's panels where the stage has no room for another
+ * column), docked in a column of the left or right dock, or floating in a
+ * window over the model.
+ *
+ * This module is the whole model: the layout, every operation on
  * it, the geometry that turns it into rectangles for a stage, hit-testing on
  * those rectangles, and persistence with the migration from the v1 drawer.
  * It is pure — no React, no DOM — so a drag can run on a local copy and
@@ -161,7 +164,7 @@ export interface PanelLayoutOptions {
   locked: boolean;
   compact: boolean;
   /**
-   * Docked panels hug their content (View options › Fit panels to
+   * Docked panels hug their content (Panel layout › Fit panels to
    * content): one drawn shorter than its share leaves the rest to the
    * panels beside it, or to the model. Off, the default, every docked panel
    * fills its share, as a window's panels always do — except a panel at its
@@ -1655,12 +1658,6 @@ export function togglePanel(
   id: PanelId,
   stage?: PanelStage
 ): PanelLayout {
-  if (stage && inspectionCovers(layout, id, stage)) {
-    return notePanelUsed(
-      setOption({ ...layout, unpinned: null, revealed: null }, 'hidden', false),
-      id
-    );
-  }
   if (
     stage &&
     !layout.options.hidden &&
@@ -1738,9 +1735,6 @@ export function presentPanel(
   stage?: PanelStage
 ): PanelLayout {
   let next: PanelLayout = layout;
-  if (stage && inspectionCovers(layout, id, stage)) {
-    next = { ...layout, unpinned: null, revealed: null };
-  }
   if (!isPanelOpen(layout, id)) {
     next = openUnpinned(layout, id);
   } else if (stage && isPanelParked(layout, id, stage)) {
@@ -2095,6 +2089,12 @@ export interface ColumnGeometry extends Rect {
   overflowing: boolean;
   /** The scrolling content's height; the column's height when it fits. */
   contentHeight: number;
+  /**
+   * The temporary panel (unpinned, or a parked one revealed) drawn under
+   * this column's own panels, on a stage with no room for a column of its
+   * own. Never in `panels`: the stored layout keeps it out of every dock.
+   */
+  guest: PanelId | null;
   /** The column ends where the user put its foot, short of the dock's. */
   shortened: boolean;
   /**
@@ -2478,6 +2478,37 @@ export function computePanelGeometry(
     return geometry;
   }
 
+  // One temporary slot: a parked panel revealed in it, or else the unpinned
+  // panel. A revealed panel that is no longer parked is drawn docked.
+  const isParked = (id: PanelId): boolean =>
+    DOCK_SIDES.some((side) =>
+      sideColumns(layout, side).some(
+        (entries, column) => column >= docked[side] && entries.includes(id)
+      )
+    );
+  const revealed =
+    layout.revealed && isParked(layout.revealed) ? layout.revealed : null;
+  const slot = revealed ?? layout.unpinned;
+  // Independent panels stand side by side when they fit. Where another
+  // column would take the model's minimum share of the stage, the temporary
+  // panel shares a docked column instead, under the panels pinned there:
+  // they give it room and stay in view (it used to cover them).
+  const slotNeedsRoom =
+    dockWidth.left +
+      dockWidth.right +
+      columnWidth +
+      insets.gap * 3 +
+      insets.rail * 2 >
+    stage.width * PANEL_DOCK_CAP;
+  const hostSide: DockSide | null =
+    slot === null || !slotNeedsRoom
+      ? null
+      : docked.right > 0
+        ? 'right'
+        : docked.left > 0
+          ? 'left'
+          : null;
+
   for (const side of DOCK_SIDES) {
     sideColumns(layout, side).forEach((entries, column) => {
       if (column >= docked[side]) {
@@ -2490,9 +2521,11 @@ export function computePanelGeometry(
         }
         return;
       }
+      const guest = side === hostSide && column === 0 ? slot : null;
       // A column the user shortened ends there; a shorter window ends it
-      // at the dock's foot.
-      const stored = storedColumnHeight(layout, entries);
+      // at the dock's foot. With a guest it fills the dock, as it would with
+      // another panel pinned in it.
+      const stored = guest ? null : storedColumnHeight(layout, entries);
       const h = stored === null ? dockHeight : Math.min(stored, dockHeight);
       const rect = {
         x: columnX(side, column),
@@ -2500,11 +2533,55 @@ export function computePanelGeometry(
         w: columnWidth,
         h
       };
-      const fit = stack(entries, rect, 'docked', {
-        kind: 'column',
-        side,
-        column
-      });
+      // The guest hugs its content, up to half the column, and less where
+      // that would push a pinned panel under its minimum; the pinned panels
+      // share what it leaves by their weights, as they always do. It has no
+      // gap to drag: its height is not a stored weight.
+      let guestHeight = 0;
+      if (guest) {
+        const natural = stage.naturals?.[guest];
+        const most =
+          entries.length > 0
+            ? Math.max(
+                PANEL_MIN_HEIGHT,
+                Math.min(
+                  Math.floor((h - PANEL_STACK_GAP) / 2),
+                  h - PANEL_STACK_GAP - columnMinimum(entries.length)
+                )
+              )
+            : h;
+        guestHeight = Math.min(
+          most,
+          Math.max(PANEL_MIN_HEIGHT, natural ?? most)
+        );
+      }
+      const hosted = guest !== null && entries.length > 0;
+      const own = stack(
+        entries,
+        hosted
+          ? { ...rect, h: Math.max(0, h - guestHeight - PANEL_STACK_GAP) }
+          : rect,
+        'docked',
+        { kind: 'column', side, column }
+      );
+      const fit = guest
+        ? {
+            overflowing: hosted && own.overflowing,
+            contentHeight: hosted
+              ? own.contentHeight + PANEL_STACK_GAP + guestHeight
+              : guestHeight
+          }
+        : own;
+      if (guest) {
+        geometry.panels[guest] = {
+          id: guest,
+          mode: revealed ? 'revealed' : 'unpinned',
+          x: rect.x,
+          y: rect.y + fit.contentHeight - guestHeight,
+          w: rect.w,
+          h: guestHeight
+        };
+      }
       const caps = entries.map((entry) => capOf(entry, entries));
       geometry.columns.push({
         ...rect,
@@ -2512,6 +2589,7 @@ export function computePanelGeometry(
         column,
         panels: entries.slice(),
         ...fit,
+        guest,
         shortened: h < dockHeight,
         reach: caps.every(Number.isFinite)
           ? caps.reduce(
@@ -2538,36 +2616,16 @@ export function computePanelGeometry(
     });
   }
 
-  // One slot: a parked panel revealed in it, or else the unpinned panel. A
-  // revealed panel that is no longer parked is already drawn docked.
-  const revealed =
-    layout.revealed && geometry.parked[layout.revealed]
-      ? layout.revealed
-      : null;
-  const slot = revealed ?? layout.unpinned;
-  if (slot) {
-    // Keep independent panels side by side when they fit. Borrow an existing
-    // column only when another would consume the model's minimum stage share.
-    const needsRoom =
-      geometry.dockWidth.left +
-        geometry.dockWidth.right +
-        columnWidth +
-        insets.gap * 3 +
-        insets.rail * 2 >
-      stage.width * PANEL_DOCK_CAP;
-    const inspectionColumn = needsRoom
-      ? (geometry.columns.find((column) => column.side === 'right') ??
-        geometry.columns.find((column) => column.side === 'left'))
-      : undefined;
+  // No docked column to share, or room for a column of its own: the slot
+  // stands beside the right rail's inner edge.
+  if (slot && !geometry.panels[slot]) {
     const naturalHeight = stage.naturals?.[slot];
     geometry.panels[slot] = {
       id: slot,
       mode: revealed ? 'revealed' : 'unpinned',
-      x:
-        inspectionColumn?.x ??
-        Math.max(insets.gap, rails.right.x - insets.gap - columnWidth),
+      x: Math.max(insets.gap, rails.right.x - insets.gap - columnWidth),
       y: dock.top,
-      w: inspectionColumn?.w ?? columnWidth,
+      w: columnWidth,
       h:
         naturalHeight === undefined
           ? dockHeight
@@ -2575,40 +2633,6 @@ export function computePanelGeometry(
     };
   }
   return geometry;
-}
-
-/** An inspection temporarily covers a saved dock column without closing it. */
-function inspectionCovers(
-  layout: PanelLayout,
-  id: PanelId,
-  stage: PanelStage
-): boolean {
-  const shown = layout.options.hidden
-    ? setOption(layout, 'hidden', false)
-    : layout;
-  return isPanelCoveredByInspection(
-    shown,
-    id,
-    computePanelGeometry(shown, stage)
-  );
-}
-
-export function isPanelCoveredByInspection(
-  layout: PanelLayout,
-  id: PanelId,
-  geometry: PanelGeometry
-): boolean {
-  if (geometry.phone || (!layout.unpinned && !layout.revealed)) return false;
-  const slot = Object.values(geometry.panels).find(
-    (rect) => rect?.mode === 'unpinned' || rect?.mode === 'revealed'
-  );
-  return Boolean(
-    slot &&
-    slot.id !== id &&
-    geometry.columns.some(
-      (column) => column.x === slot.x && column.panels.includes(id)
-    )
-  );
 }
 
 // ── Hit-testing ────────────────────────────────────────────

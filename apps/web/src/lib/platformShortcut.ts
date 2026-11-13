@@ -55,17 +55,18 @@ export function platformShortcutLabel(
 }
 
 /**
- * The lane's line when nothing is selected or armed. It named "Ctrl+K" on a
- * Mac while the command box beside it showed ⌘K. The keys are the live
- * keymap's; a half the user unbound is left out rather than named wrongly.
+ * The lane's line when nothing is selected or armed: what the bar is, and the
+ * key for the shortcut reference. It does not name the palette's own key: the
+ * bar shows that as a badge at its end, and "Ctrl+K commands" beside a
+ * "Ctrl+K" badge said it twice. The reference key is the live keymap's; left
+ * unbound, it is left out rather than named wrongly.
  */
 export function idleWorkspaceHint(
   platform = globalThis.navigator?.platform ?? '',
-  palette: string | null = 'Ctrl+K',
   reference: string | null = '?'
 ): string {
   return [
-    palette && `${platformShortcutLabel(palette, platform)} commands`,
+    'Search commands',
     reference && `${platformShortcutLabel(reference, platform)} shortcuts`
   ]
     .filter(Boolean)

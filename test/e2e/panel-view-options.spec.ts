@@ -12,7 +12,7 @@ import {
 import type { Locator, Page } from '@playwright/test';
 
 /*
-  The panel rail's View options menu (U08 slice 5): the presets, Hide all
+  The panel rail's Panel layout menu (U08 slice 5): the presets, Hide all
   (with its pill and Ctrl+\), Lock layout, Compact rows and the panel width,
   all kept in `openzcad-panel-layout:v1`. Lock turns off every rearranging
   and resizing input but leaves Pin, Pop out and Close working; a wider
@@ -80,7 +80,9 @@ function dockedTitles(page: Page, side: 'left' | 'right') {
     .locator(`.panel-column[data-side="${side}"]`)
     .evaluateAll((columns) =>
       columns.map((column) =>
-        [...column.querySelectorAll('.model-panel')].map(
+        // Docked ones only: a temporary panel may stand under them in the
+        // column without being pinned there.
+        [...column.querySelectorAll('.model-panel.is-docked')].map(
           (panel) => panel.getAttribute('aria-label') ?? ''
         )
       )
@@ -122,10 +124,10 @@ async function openDemo(
 const viewOptionsButton = (page: Page) =>
   page
     .getByRole('toolbar', { name: 'Model panels' })
-    .getByRole('button', { name: 'View options' });
+    .getByRole('button', { name: 'Panel layout' });
 
 const viewOptionsMenu = (page: Page) =>
-  page.getByRole('menu', { name: 'View options' });
+  page.getByRole('menu', { name: 'Panel layout' });
 
 /** Opens the menu if it is closed. */
 async function viewOptions(page: Page) {
@@ -462,7 +464,7 @@ for (const viewport of VIEWPORTS) {
       .click();
     await expect(modelPanel(page, 'Parameters')).toHaveClass(/is-docked/);
     expect(await dockedTitles(page, 'right')).toEqual([['Parameters']]);
-    // Unpinned and pinned again from its footer.
+    // Unpinned from its header's Pin.
     await modelPanel(page, 'Parameters')
       .getByRole('button', { name: 'Pin Parameters' })
       .click();
@@ -627,9 +629,10 @@ test('with Hide all on, a ⌘K feature or parameter turns it off and shows and f
     history.locator('.feature-row-main[aria-pressed="true"]')
   ).toHaveCount(1);
   await expect(history).toContainText(/base/i);
-  // The temporary inspection uses the right column at this width, keeping
-  // the saved Parameters dock intact underneath it.
-  await expect(modelPanel(page, 'Parameters')).toBeHidden();
+  // The temporary panel shares the right column at this width: Parameters,
+  // pinned there, stays in view above it.
+  await expect(modelPanel(page, 'Parameters')).toBeVisible();
+  await expect(modelPanel(page, 'Parameters')).toHaveClass(/is-docked/);
   expect(await storedLayout(page)).toMatchObject({
     unpinned: 'history',
     recent: ['history', 'parameters'],
@@ -654,7 +657,7 @@ test('Tab moves from the rail through the panel headers, gaps and the menu witho
       );
     });
   const stops = [
-    'View options',
+    'Panel layout',
     'Move Objects',
     'Move History',
     'Pin Objects',

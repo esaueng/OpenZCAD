@@ -26,7 +26,6 @@ import {
   hitTest,
   isDragStart,
   isFloatCovered,
-  isPanelCoveredByInspection,
   loadPanelLayout,
   matchingPreset,
   migratePanelState,
@@ -3701,46 +3700,185 @@ describe('the unpinned slot beside the right lane', () => {
   const insets = { rail: 40, gap: 10 };
   const stage = (width: number) => ({ width, height: 720, insets });
 
-  it('borrows the right dock footprint without mutating the saved layout', () => {
+  it('shares the right column with the panel pinned there, which stays in view', () => {
     const layout = deepFreeze({
       ...essentials(),
       unpinned: 'history' as const
     });
-    const geometry = computePanelGeometry(layout, stage(1280));
-    expect(geometry.panels.history?.x).toBe(geometry.panels.parameters?.x);
-    expect(geometry.panels.history?.mode).toBe('unpinned');
-    expect(geometry.panels.history?.w).toBe(
-      geometry.columns.find((column) => column.side === 'right')?.w
-    );
-    expect(isPanelCoveredByInspection(layout, 'parameters', geometry)).toBe(
-      true
-    );
+    // Essentials at 1280px: a third column would take the model's share.
+    const geometry = computePanelGeometry(layout, {
+      ...stage(1280),
+      naturals: { history: 120 }
+    });
+    const column = geometry.columns.find((entry) => entry.side === 'right')!;
+    const parameters = geometry.panels.parameters!;
+    const history = geometry.panels.history!;
+    expect(column.guest).toBe('history');
+    // Never one of the column's own panels: nothing was docked.
+    expect(column.panels).toEqual(['parameters']);
     expect(layout.right).toEqual([['parameters']]);
     expect(layout.left).toEqual([['bodies']]);
     expect(geometry.dockWidth).toEqual({ left: 300, right: 300 });
+    // Parameters keeps its place and its mode; History hugs its 120px
+    // under it, a stack gap apart, and the two fill the column.
+    expect(parameters.mode).toBe('docked');
+    expect(history.mode).toBe('unpinned');
+    expect(history.x).toBe(parameters.x);
+    expect(history.w).toBe(column.w);
+    expect(parameters.y).toBe(column.y);
+    expect(history.h).toBe(120);
+    expect(history.y).toBe(parameters.y + parameters.h + PANEL_STACK_GAP);
+    expect(history.y + history.h).toBe(column.y + column.h);
+    expect(column.overflowing).toBe(false);
+    // No gap to drag between a pinned panel and a temporary one.
+    expect(geometry.gaps).toEqual([]);
   });
 
-  it('brings a covered column back from its rail and from search, including after Hide all', () => {
+  it('gives a long temporary panel at most half the column', () => {
     const layout = { ...essentials(), unpinned: 'history' as const };
-    for (const current of [layout, setOption(layout, 'hidden', true)]) {
-      for (const restore of [togglePanel, presentPanel]) {
-        const next = restore(current, 'parameters', stage(1280));
-        expect(next.unpinned).toBeNull();
-        expect(next.options.hidden).toBe(false);
-        expect(next.right).toEqual(layout.right);
-        expect(next.left).toEqual(layout.left);
-      }
+    const geometry = computePanelGeometry(layout, {
+      ...stage(1280),
+      naturals: { history: 4000 }
+    });
+    const column = geometry.columns.find((entry) => entry.side === 'right')!;
+    const half = Math.floor((column.h - PANEL_STACK_GAP) / 2);
+    expect(geometry.panels.history?.h).toBe(half);
+    expect(geometry.panels.parameters?.h).toBe(
+      column.h - half - PANEL_STACK_GAP
+    );
+    // Before it is measured it takes that half too, never the whole column.
+    const unmeasured = computePanelGeometry(layout, stage(1280));
+    expect(unmeasured.panels.history?.h).toBe(half);
+    expect(unmeasured.panels.parameters?.h).toBeGreaterThan(0);
+  });
+
+  it('fills a shortened column while it hosts a temporary panel, and gives the height back', () => {
+    const shortened = resizeColumn(essentials(), ['parameters'], 300, 650);
+    expect(shortened.columnHeights).not.toEqual({});
+    const hosting = computePanelGeometry(
+      { ...shortened, unpinned: 'history' },
+      { ...stage(1280), naturals: { history: 120 } }
+    );
+    const column = hosting.columns.find((entry) => entry.side === 'right')!;
+    expect(column.shortened).toBe(false);
+    expect(hosting.panels.history!.y + 120).toBe(column.y + column.h);
+    const closed = computePanelGeometry(shortened, stage(1280));
+    expect(closed.columns.find((entry) => entry.side === 'right')?.h).toBe(300);
+    expect(closed.panels.parameters?.h).toBe(300);
+  });
+
+  it('yields to the pinned panels’ minimums before the column has to scroll', () => {
+    const layout = layoutWith({
+      right: [['parameters', 'bodies', 'revisions']],
+      unpinned: 'history'
+    });
+    // A 500px column: half would be 248px, leaving three panels 248px for
+    // the 278px their minimums need. The guest takes 218px instead.
+    const geometry = computePanelGeometry(layout, {
+      width: 900,
+      height: 570,
+      insets,
+      naturals: { history: 4000 }
+    });
+    const column = geometry.columns[0]!;
+    expect(column.h).toBe(500);
+    expect(column.overflowing).toBe(false);
+    expect(geometry.panels.history?.h).toBe(218);
+    for (const id of ['parameters', 'bodies', 'revisions'] as const) {
+      expect(geometry.panels[id]?.h).toBe(PANEL_MIN_HEIGHT);
     }
   });
 
-  it('fits a short inspection to content and uses the left dock if it is alone', () => {
+  it('scrolls the shared column rather than squeeze a panel under its minimum', () => {
+    const layout = layoutWith({
+      right: [['parameters', 'bodies', 'revisions']],
+      unpinned: 'history'
+    });
+    const geometry = computePanelGeometry(layout, {
+      width: 900,
+      height: 400,
+      insets
+    });
+    const column = geometry.columns[0]!;
+    expect(column.guest).toBe('history');
+    expect(column.overflowing).toBe(true);
+    for (const id of [
+      'parameters',
+      'bodies',
+      'revisions',
+      'history'
+    ] as const) {
+      expect(geometry.panels[id]?.h).toBeGreaterThanOrEqual(PANEL_MIN_HEIGHT);
+    }
+    expect(column.contentHeight).toBe(
+      geometry.panels.history!.y + geometry.panels.history!.h - column.y
+    );
+    expect(column.contentHeight).toBeGreaterThan(column.h);
+  });
+
+  it('keeps a pinned panel open and its rail press its own while a temporary one shares its column', () => {
+    const layout = { ...essentials(), unpinned: 'history' as const };
+    for (const current of [layout, setOption(layout, 'hidden', true)]) {
+      // Search brings Parameters forward and closes nothing.
+      const presented = presentPanel(current, 'parameters', stage(1280));
+      expect(presented.unpinned).toBe('history');
+      expect(presented.right).toEqual(layout.right);
+      expect(presented.left).toEqual(layout.left);
+      expect(presented.options.hidden).toBe(false);
+    }
+    // The rail press on the pinned panel closes that panel, as it does with
+    // no temporary panel open: it is on screen, so nothing is lost unseen.
+    const toggled = togglePanel(layout, 'parameters', stage(1280));
+    expect(toggled.right).toEqual([]);
+    expect(toggled.unpinned).toBe('history');
+    // Hidden, the press only shows the panels again.
+    const shown = togglePanel(
+      setOption(layout, 'hidden', true),
+      'parameters',
+      stage(1280)
+    );
+    expect(shown.options.hidden).toBe(false);
+    expect(shown.right).toEqual(layout.right);
+    expect(shown.unpinned).toBe('history');
+    // Closing the temporary panel gives the pinned one its column back.
+    const closed = computePanelGeometry(
+      closePanel(layout, 'history'),
+      stage(1280)
+    );
+    const column = closed.columns.find((entry) => entry.side === 'right')!;
+    expect(column.guest).toBeNull();
+    expect(closed.panels.parameters?.h).toBe(column.h);
+  });
+
+  it('shows a parked panel revealed in the shared column as revealed', () => {
+    const layout = {
+      ...layoutWith({
+        left: [['bodies']],
+        right: [['parameters']],
+        recent: ['parameters', 'bodies']
+      }),
+      revealed: 'bodies' as const
+    };
+    // 1000px docks one column; Objects is parked and revealed.
+    const geometry = computePanelGeometry(layout, stage(1000));
+    expect(geometry.parked.bodies).toBe(true);
+    expect(geometry.columns).toHaveLength(1);
+    expect(geometry.columns[0]?.guest).toBe('bodies');
+    expect(geometry.panels.bodies?.mode).toBe('revealed');
+    expect(geometry.panels.parameters?.mode).toBe('docked');
+    expect(geometry.panels.bodies?.x).toBe(geometry.panels.parameters?.x);
+  });
+
+  it('fits a short temporary panel to content and uses the left dock if it is alone', () => {
     const layout = layoutWith({ left: [['bodies']], unpinned: 'revisions' });
     const geometry = computePanelGeometry(layout, {
       ...stage(900),
       naturals: { revisions: 240 }
     });
+    expect(geometry.columns[0]?.guest).toBe('revisions');
     expect(geometry.panels.revisions?.x).toBe(geometry.panels.bodies?.x);
     expect(geometry.panels.revisions?.h).toBe(240);
+    expect(geometry.panels.bodies?.h).toBeGreaterThan(PANEL_MIN_HEIGHT);
   });
 
   it('preserves independent open panels when a spare column fits', () => {
@@ -3749,8 +3887,9 @@ describe('the unpinned slot beside the right lane', () => {
     );
     const geometry = computePanelGeometry(layout, stage(1600));
     expect(geometry.panels.parameters?.x).not.toBe(geometry.panels.bodies?.x);
-    expect(isPanelCoveredByInspection(layout, 'bodies', geometry)).toBe(false);
-    expect(isPanelCoveredByInspection(layout, 'history', geometry)).toBe(false);
+    expect(geometry.columns.every((column) => column.guest === null)).toBe(
+      true
+    );
   });
 
   it('retains a bounded temporary panel when there is no dock to borrow', () => {

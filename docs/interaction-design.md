@@ -62,6 +62,19 @@ automatic; reframing an edited body requires an explicit Fit View action.
 In a transaction combining edits and new parts, only the independent additions
 may request automatic framing; replacement results keep their edit semantics.
 
+A creation preview follows the creation rule, not the edit rule. While a
+command is creating a body (a primitive, a pattern's copies) and a typed value
+takes the preview out of the visible stage, the camera reframes to fit it:
+only the bodies being created, into the stage the canvas keeps clear of the
+docked panels, the rails, the top bar and the command's own bar, with the view
+direction unchanged. It is a view jump (`viewJumpEase`, at once under reduced
+motion). The trigger is a value typed and committed (the keypad, Tab between
+values, the Options fields); a handle drag never moves the camera under the
+hand, the first preview of an armed command is left where the user was
+looking, and a command editing an existing feature keeps the edit rule above.
+The preview's value chips are placed inside that stage and clear of one
+another (`commandChipLayout.ts`).
+
 The same measurements showed the reference spends its entire motion budget on
 the camera and on panel-content crossfades: geometry state (selection fills,
 extrude previews, boolean commits) changes on the next frame, deliberately.
@@ -113,6 +126,14 @@ the user just put it.
   classifies each event on its own.
 - **Click threshold is 5 px**, centralised in `GestureRouter` along with
   pointer capture.
+- **A typed digit is a value, wherever a value is waiting.** With a face or
+  edge armed it opens that selection's entry; with an in-place command
+  running (Box, Cylinder, Hole, Fillet) a digit, a minus or a point opens the
+  command's first value, in the order its Options list them, before any view
+  shortcut sees the key. Tab and Shift+Tab commit the field and open the
+  next or previous value in the same place; Enter commits and hands focus to
+  the command's bar, where Enter is Done; Escape puts the value back. So
+  `B 100 Tab 60 Tab 6 Enter Enter` is a 100 × 60 × 6 box.
 
 ## The React boundary
 

@@ -179,6 +179,153 @@ describe('WorkspaceReadout', () => {
     );
   });
 
+  describe('guidance wider than the field', () => {
+    // The test DOM lays nothing out: the probe's room and ink are given.
+    function layOut(room: number, ink: number, phone = false) {
+      const rect = vi
+        .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+        .mockImplementation(function (this: HTMLElement) {
+          const probe = this.closest('.workspace-hint-probe');
+          const line = probe?.firstElementChild;
+          // The line's box is the room; the run of words in it, the ink.
+          const width =
+            this === line ? room : this.parentElement === line ? ink : 0;
+          return { width, height: 0 } as DOMRect;
+        });
+      const media = vi
+        .spyOn(window, 'matchMedia')
+        .mockImplementation(
+          (query) =>
+            ({ matches: phone && query.includes('520px') }) as MediaQueryList
+        );
+      return () => {
+        rect.mockRestore();
+        media.mockRestore();
+      };
+    }
+    const readout = (
+      props: Partial<Parameters<typeof WorkspaceReadout>[0]>
+    ) => (
+      <div className="viewer-area">
+        <WorkspaceReadout
+          status=""
+          tone="ready"
+          onOpenLog={vi.fn()}
+          {...SUMMARY}
+          {...props}
+        />
+      </div>
+    );
+
+    it('stands on the card over the bar rather than ending in an ellipsis', () => {
+      // "Click a body, face, or edge · Shift+Cli…": some 390px of words in
+      // the 255px a 1440px window's bar had for them.
+      const restore = layOut(255, 390);
+      try {
+        const { container } = render(readout({}));
+        const hint = container.querySelector('.workspace-hint')!;
+        expect(hint).toHaveClass('is-raised');
+        expect(hint).toHaveTextContent(SUMMARY.prompt);
+        // The bar under the card is the search field again, its placeholder
+        // showing, as it is under a pick's card.
+        expect(container.querySelector('.command-bar-lane')).toHaveClass(
+          'has-guidance',
+          'has-selection-hint'
+        );
+        // The probe is measured, never read: out of the tree, and not the
+        // line itself, so the rules that hide the line cannot blind it.
+        const probe = container.querySelector('.workspace-hint-probe')!;
+        expect(probe).toHaveAttribute('aria-hidden', 'true');
+        expect(probe).not.toHaveClass('workspace-hint');
+      } finally {
+        restore();
+      }
+    });
+
+    it('stays in the field while it fits', () => {
+      const restore = layOut(255, 120);
+      try {
+        const { container } = render(readout({ prompt: 'Edit parameters' }));
+        const hint = container.querySelector('.workspace-hint')!;
+        expect(hint).not.toHaveClass('is-raised');
+        expect(container.querySelector('.command-bar-lane')).not.toHaveClass(
+          'has-selection-hint'
+        );
+      } finally {
+        restore();
+      }
+    });
+
+    it('returns to the field when shorter guidance replaces it', () => {
+      let restore = layOut(255, 390);
+      const { container, rerender } = render(readout({}));
+      try {
+        expect(container.querySelector('.workspace-hint')).toHaveClass(
+          'is-raised'
+        );
+        restore();
+        restore = layOut(255, 120);
+        rerender(readout({ prompt: 'Edit parameters' }));
+        expect(container.querySelector('.workspace-hint')).not.toHaveClass(
+          'is-raised'
+        );
+      } finally {
+        restore();
+      }
+    });
+
+    it("leaves the bar's resting line in the field at any width", () => {
+      // A card saying "Search commands" over a bar that says it already.
+      const restore = layOut(120, 203);
+      try {
+        const { container } = render(
+          readout({
+            prompt: 'Search commands · ? shortcuts',
+            promptResting: true
+          })
+        );
+        expect(container.querySelector('.workspace-hint')).not.toHaveClass(
+          'is-raised'
+        );
+        expect(container.querySelector('.workspace-hint-probe')).toBeNull();
+      } finally {
+        restore();
+      }
+    });
+
+    it("keeps a phone's guidance in the bar, where its help glyph opens it", () => {
+      const restore = layOut(150, 390, true);
+      try {
+        const { container } = render(readout({}));
+        expect(container.querySelector('.workspace-hint')).not.toHaveClass(
+          'is-raised'
+        );
+        expect(
+          screen.getByLabelText('Operation instructions')
+        ).toBeInTheDocument();
+      } finally {
+        restore();
+      }
+    });
+
+    it("leaves a pick's card as it is", () => {
+      const restore = layOut(255, 390);
+      try {
+        const { container } = render(
+          readout({
+            pick: <span className="selection-readout">Bracket · Top face</span>
+          })
+        );
+        const hint = container.querySelector('.workspace-hint')!;
+        expect(hint).toHaveClass('is-selection');
+        expect(hint).not.toHaveClass('is-raised');
+        expect(container.querySelector('.workspace-hint-probe')).toBeNull();
+      } finally {
+        restore();
+      }
+    });
+  });
+
   it('lifts the notice lane only by a guidance row that is drawn', () => {
     const pick = <span className="selection-readout">Bracket · Top face</span>;
     const { container } = render(

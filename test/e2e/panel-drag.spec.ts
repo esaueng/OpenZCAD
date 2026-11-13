@@ -41,7 +41,9 @@ function dockedTitles(page: Page, side: 'left' | 'right') {
     .locator(`.panel-column[data-side="${side}"]`)
     .evaluateAll((columns) =>
       columns.map((column) =>
-        [...column.querySelectorAll('.model-panel')].map(
+        // Docked ones only: a temporary panel may stand under them in the
+        // column without being pinned there.
+        [...column.querySelectorAll('.model-panel.is-docked')].map(
           (panel) => panel.getAttribute('aria-label') ?? ''
         )
       )

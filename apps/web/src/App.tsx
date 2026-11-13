@@ -407,7 +407,11 @@ import { sweepFacetingAdvisories } from './lib/sweepFaceting';
 import { primitiveDimensionLabel } from './lib/primitiveDimensionLabel';
 import { useRememberedSection } from './hooks/useRememberedSection';
 import { newBlendFacePick } from './lib/blendRearm';
-import { exactEntryShortcut, isTypingTarget } from './lib/exactEntryShortcut';
+import {
+  exactEntryShortcut,
+  inPlaceTypedEntryKey,
+  isTypingTarget
+} from './lib/exactEntryShortcut';
 import { DeferredExactEntry } from './lib/deferredExactEntry';
 import type { SketchSolveStatus } from './components/SketchToolRail';
 import type { SharedLinkCopyDestination } from './components/SharedLinkCopyDialog';
@@ -777,7 +781,12 @@ import {
 } from './lib/platformShortcut';
 import { retireStatus, type StatusEntry } from './lib/statusLifetime';
 import { LIBRARY_MODE_STATUS } from './lib/libraryStatus';
-import type { KeypadRequest, KeypadUiState } from './components/NumericKeypad';
+import type {
+  KeypadHold,
+  KeypadRequest,
+  KeypadStepEntry,
+  KeypadUiState
+} from './components/NumericKeypad';
 import type { DimensionMode } from './lib/keypad';
 import { usePreviewVerdict } from './hooks/usePreviewVerdict';
 import { evaluateKeypadInput } from './lib/keypad';
@@ -848,6 +857,7 @@ import {
 } from './lib/selectionCallout';
 import { ghostBodiesFor, historyFeatureFocus } from './lib/historyFocus';
 import { useLocalAutoFrame } from './hooks/useLocalAutoFrame';
+import type { AutoFrameRequest } from './lib/autoFrame';
 import { useOffsetFaceHandle } from './hooks/useOffsetFaceHandle';
 import {
   faceSketchAttachment,
@@ -1780,7 +1790,6 @@ import {
   computePanelGeometry,
   dismissPhonePanel,
   followPhoneLane,
-  isPanelCoveredByInspection,
   isPanelOpen,
   loadPanelLayout,
   matchingPreset,
@@ -22441,7 +22450,13 @@ export function App() {
   function openInPlaceKeypad(
     valueId: string,
     value: number,
-    at?: { x: number; y: number }
+    at?: { x: number; y: number },
+    entry: {
+      /** The key that opened it, typed over the value rather than into it. */
+      typed?: string;
+      /** Where the entry Tab stepped from stood. */
+      heldAt?: KeypadHold;
+    } = {}
   ): boolean {
     const valueSpec = inPlaceSpec?.values.find(
       (candidate) => candidate.id === valueId
@@ -22457,14 +22472,151 @@ export function App() {
         valueSpec.label,
       // A parametric value opens as its expression, and comes back as one
       // if entry is canceled.
-      initial: raw ?? keypadText(value),
-      selectInitial: true,
+      initial: entry.typed ?? raw ?? keypadText(value),
+      selectInitial: entry.typed === undefined,
       unitKind: valueSpec.unit,
       baseline: value,
       ...(raw !== undefined ? { baselineRaw: raw } : {}),
-      ...(at ? { fixedClientAnchor: at } : {})
+      ...(at ? { fixedClientAnchor: at } : {}),
+      ...(entry.heldAt ? { heldAt: entry.heldAt } : {})
     });
     return true;
+  }
+  /**
+   * The values a running command takes from the keyboard, in the order its
+   * Options list them: those with a chip in the viewport (a box's Width,
+   * Depth and Height). A typed digit opens the first, and Tab walks them.
+   */
+  const inPlaceTypedValueIds = useMemo(
+    () =>
+      (inPlaceSpec?.values ?? [])
+        .filter((value) =>
+          inPlace.handles.some((handle) => handle.valueId === value.id)
+        )
+        .map((value) => value.id),
+    [inPlaceSpec, inPlace.handles]
+  );
+  /**
+   * A value typed for a command that creates a body (never an edit's) asks
+   * the viewport to keep the preview in the clear stage; see the effect
+   * that answers it once that preview is on screen.
+   */
+  const [creationFrameAsk, setCreationFrameAsk] = useState(0);
+  const inPlaceCreating = inPlace.active && inPlace.editing === null;
+  function askCreationFrame() {
+    if (inPlaceCreating) setCreationFrameAsk((ask) => ask + 1);
+  }
+  const [creationFrame, setCreationFrame] = useState<AutoFrameRequest | null>(
+    null
+  );
+  const creationFrameAnswered = useRef(0);
+  const inPlaceCanFinish = inPlace.canFinish;
+  useEffect(() => {
+    if (creationFrameAsk === creationFrameAnswered.current) return;
+    if (!inPlaceCreating) {
+      // The command ended first: nothing is left to frame.
+      creationFrameAnswered.current = creationFrameAsk;
+      return;
+    }
+    // Done is offered exactly when the preview on screen is the one the
+    // values now ask for: until then the typed value has not been drawn.
+    if (!inPlaceCanFinish || !previewDoc || !doc) return;
+    creationFrameAnswered.current = creationFrameAsk;
+    setCreationFrame({
+      before: doc.derived.bodyRepresentations,
+      after: previewDoc.derived.bodyRepresentations,
+      features: listFeaturesInOrder(previewDoc)
+    });
+  }, [creationFrameAsk, inPlaceCreating, inPlaceCanFinish, previewDoc, doc]);
+  // A request is the running command's: once it ends, a viewport rebuilt
+  // later (a hot update, a remount) must not frame its last preview again.
+  useEffect(() => {
+    if (!inPlaceCreating) setCreationFrame(null);
+  }, [inPlaceCreating]);
+  /**
+   * Takes a value entered on a command's keypad. Refused, the value goes
+   * back to what the chip showed when entry opened, set or unset as it was.
+   */
+  function commitInPlaceKeypadValue(
+    open: KeypadRequest,
+    value: number,
+    raw: string
+  ): boolean {
+    const valueId = open.commandValueId!;
+    const valueSpec = inPlaceSpec?.values.find(
+      (candidate) => candidate.id === valueId
+    );
+    const baseline = open.baseline ?? inPlace.values[valueId] ?? value;
+    // Expressions stay parametric in the stored feature.
+    const accepted = inPlace.setValue(
+      valueId,
+      value,
+      Number.isFinite(Number(raw)) ? undefined : raw
+    );
+    if (accepted) {
+      commandSetterRef.current?.(
+        valueId,
+        valueSpec ? clampValue(valueSpec, value) : value
+      );
+      askCreationFrame();
+    } else {
+      // Refused: back to the value shown when the chip was tapped, undoing
+      // any in-range keystroke previews. Set or unset as it was, as Escape
+      // restores it.
+      commandSetterRef.current?.(valueId, baseline);
+      inPlace.restoreValue(
+        valueId,
+        baseline,
+        open.baselineRaw,
+        commandKeypadTouchedRef.current
+      );
+    }
+    return accepted;
+  }
+  /**
+   * Tab on a command's keypad: the entry is taken as Enter takes it, and
+   * the next value (the one before, with Shift) opens where this one stood.
+   * A refused entry ends there, with its refusal on the bar.
+   */
+  function stepInPlaceKeypad(
+    open: KeypadRequest,
+    direction: 1 | -1,
+    entry: KeypadStepEntry,
+    at: KeypadHold
+  ) {
+    const valueId = open.commandValueId!;
+    if (entry) {
+      if (!commitInPlaceKeypadValue(open, entry.value, entry.raw)) {
+        setKeypad(null);
+        return;
+      }
+    } else {
+      // Left as it opened: whatever it previewed meanwhile goes back.
+      const baseline = open.baseline ?? inPlace.values[valueId] ?? 0;
+      commandSetterRef.current?.(valueId, baseline);
+      inPlace.restoreValue(
+        valueId,
+        baseline,
+        open.baselineRaw,
+        commandKeypadTouchedRef.current
+      );
+    }
+    const ids = inPlaceTypedValueIds;
+    const index = ids.indexOf(valueId);
+    const next = ids[(index + direction + ids.length) % ids.length];
+    const nextSpec = inPlaceSpec?.values.find(
+      (candidate) => candidate.id === next
+    );
+    if (next === undefined || !nextSpec) {
+      setKeypad(null);
+      return;
+    }
+    openInPlaceKeypad(
+      next,
+      inPlace.values[next] ?? nextSpec.initial,
+      undefined,
+      { heldAt: at }
+    );
   }
   /**
    * The command's Options panel: its rows as they stand (a gear's tooth
@@ -22573,6 +22725,7 @@ export function App() {
         valueId,
         clampValue(valueSpec, evaluation.value)
       );
+      askCreationFrame();
     }
     return accepted;
   }
@@ -28507,6 +28660,48 @@ export function App() {
           inPlace.done();
           return;
         }
+        // A digit typed at an armed command is its first size, as a digit
+        // typed at a selection is that selection's value: it opens the
+        // entry rather than turning the view (1 is Front, 5 is Back). While
+        // the entry is still loading its next keys join the first.
+        const typed = inPlaceTypedEntryKey(event, typing);
+        if (typed !== null && !modelingLocked) {
+          const first = inPlaceTypedValueIds[0];
+          if (keypad?.kind === 'command') {
+            const field = document.querySelector<HTMLInputElement>(
+              '.numeric-keypad input.keypad-value'
+            );
+            if (field) {
+              // Open, with focus elsewhere: the key is typed into it.
+              field.focus();
+            } else {
+              event.preventDefault();
+              setKeypad((current) =>
+                current?.kind === 'command' && current.selectInitial === false
+                  ? { ...current, initial: current.initial + typed }
+                  : current
+              );
+            }
+            return;
+          }
+          if (keypad === null && first !== undefined) {
+            const firstSpec = inPlaceSpec?.values.find(
+              (candidate) => candidate.id === first
+            );
+            if (
+              firstSpec &&
+              openInPlaceKeypad(
+                first,
+                inPlace.values[first] ?? firstSpec.initial,
+                undefined,
+                { typed }
+              )
+            ) {
+              event.preventDefault();
+              return;
+            }
+          }
+        }
       }
       // U09: Enter finishes the in-place Extrude once it can create; until
       // then it opens the distance's exact entry, as it always has.
@@ -29496,10 +29691,6 @@ export function App() {
   const panelShowing = (id: PanelId) =>
     !panelsHidden &&
     isPanelOpen(panelLayout, id) &&
-    !(
-      panelGeometry &&
-      isPanelCoveredByInspection(panelLayout, id, panelGeometry)
-    ) &&
     (panelGeometry === null ||
       (panelGeometry.phone
         ? phonePanel === id
@@ -30109,7 +30300,6 @@ export function App() {
   // disarmed, and "drag the radial handle" is a promise View mode cannot keep.
   const idleHint = idleWorkspaceHint(
     undefined,
-    keymap.label('command-palette') ?? null,
     keymap.label('shortcut-reference') ?? null
   );
   const measureKey = keymap.label('view-measure')
@@ -30154,15 +30344,41 @@ export function App() {
       : 'This model has no parameters · Build mode is where they are defined';
   // Measuring writes the lane in Build too: it is the command of the moment.
   const readingHints = viewMode || measuring;
+  // Draw's guidance follows what is on the sheet. With no sheet the stage is
+  // the "Drawings" start and its New drawing sheet button, and "Drag a view
+  // to place it" pointed at views that do not exist; the same once a sheet's
+  // views are all removed. There the lane rests, as it does on an empty model.
+  const drawingHasViews = Boolean(
+    doc?.drawings?.sheets.some((sheet) => sheet.views.length > 0)
+  );
+  // The plane chooser is the Sketch tool's whole first step and says so
+  // itself, in its card: the lane neither repeats it nor runs ahead to the
+  // drawing keys ("Drag to draw · R rectangle…"), which mean nothing until a
+  // plane is chosen. Null only while that card is the one that is up.
+  const sketchPlaneCardShown =
+    tool === 'sketch' &&
+    !modelingLocked &&
+    !measurementDock &&
+    !contextualToolCard &&
+    !revertPill &&
+    !movePreview;
+  // Assemble's guidance is its panel's: the first run, the parts and the
+  // joint tool each say their own next step. The lane used to fall through
+  // to Build's lines there, so it read "Click a body, face, or edge" over
+  // "Tick the bodies that are parts", and "Drag the arrow to set the fillet
+  // on edge" once a part was clicked, with no arrow to drag. It rests.
+  const panelModeHint = assembleMode ? idleHint : tweakModeHint;
   const workspacePrompt =
     !displayedGeometryComplete && !drawingMode
       ? 'Preparing model · viewing is available; editing waits until it is ready'
       : drawingMode
-        ? 'Drag a view to place it · arrow keys nudge it · Update redraws a stale sheet'
+        ? drawingHasViews
+          ? 'Drag a view to place it · arrow keys nudge it · Update redraws a stale sheet'
+          : idleHint
         : readingHints
           ? viewModeHint
-          : tweakMode
-            ? tweakModeHint
+          : tweakMode || assembleMode
+            ? panelModeHint
             : (commandPromptText(interaction, cylinderDimensionMode, {
                 refusalShown: Boolean(calloutWithOperation?.operation?.error),
                 ...(keypad && keypadUi ? { editor: keypadUi } : {}),
@@ -30171,15 +30387,9 @@ export function App() {
                   : {})
               }) ??
               (tool === 'sketch'
-                ? [
-                    'Drag to draw',
-                    keyHint(keymap, 'sketch-rectangle', 'rectangle'),
-                    keyHint(keymap, 'sketch-circle', 'circle'),
-                    'P polygon',
-                    'Enter finishes'
-                  ]
-                    .filter(Boolean)
-                    .join(' · ')
+                ? sketchPlaneCardShown
+                  ? null
+                  : 'Pick a plane or a flat face to sketch on · Esc cancels'
                 : tool
                   ? 'Enter creates · Esc cancels'
                   : selectedBodyIds.length >= 2
@@ -31085,6 +31295,7 @@ export function App() {
             settings={viewerSettings}
             fitSignal={fitSignal}
             autoFrame={autoFrame}
+            creationFrame={creationFrame}
             viewRequest={projectViewRequest}
             normalToFaceRequest={normalToFaceRequest}
             units={doc.units}
@@ -31653,6 +31864,9 @@ export function App() {
               ) : inPlace.active ? (
                 keypad?.kind === 'command' && keypad.commandValueId ? (
                   <NumericKeypad
+                    // Each value has its own entry: Tab (or another chip)
+                    // opens the next with its own text, never the last one's.
+                    key={keypad.commandValueId}
                     request={keypad}
                     units={doc.units}
                     scope={parameterScope.scope}
@@ -31672,37 +31886,18 @@ export function App() {
                       inPlace.previewValue(valueId, value);
                     }}
                     onCommit={(value, raw) => {
-                      const valueId = keypad.commandValueId!;
-                      const valueSpec = inPlaceSpec?.values.find(
-                        (candidate) => candidate.id === valueId
-                      );
-                      const baseline =
-                        keypad.baseline ?? inPlace.values[valueId] ?? value;
                       setKeypad(null);
-                      // Expressions stay parametric in the stored feature.
-                      const accepted = inPlace.setValue(
-                        valueId,
-                        value,
-                        Number.isFinite(Number(raw)) ? undefined : raw
-                      );
-                      if (accepted) {
-                        commandSetterRef.current?.(
-                          valueId,
-                          valueSpec ? clampValue(valueSpec, value) : value
-                        );
-                      } else {
-                        // Refused: back to the value shown when the chip was
-                        // tapped, undoing any in-range keystroke previews.
-                        // Set or unset as it was, as Escape restores it.
-                        commandSetterRef.current?.(valueId, baseline);
-                        inPlace.restoreValue(
-                          valueId,
-                          baseline,
-                          keypad.baselineRaw,
-                          commandKeypadTouchedRef.current
-                        );
-                      }
+                      commitInPlaceKeypadValue(keypad, value, raw);
                     }}
+                    // One value has nowhere to step to: Tab stays the
+                    // browser's there.
+                    {...(inPlaceTypedValueIds.length > 1 &&
+                    inPlaceTypedValueIds.includes(keypad.commandValueId)
+                      ? {
+                          onStep: (direction, entry, at) =>
+                            stepInPlaceKeypad(keypad, direction, entry, at)
+                        }
+                      : {})}
                     onCancel={cancelOpenKeypad}
                   />
                 ) : null
@@ -32607,9 +32802,16 @@ export function App() {
             }
             geometryStatus={geometryStatus}
             tone={tone}
-            muted={contextualToolCard !== null && !hideSketchToolCard}
+            // The plane chooser carries the Sketch tool's instruction too:
+            // the toast under it said the same sentence a second time. The
+            // status is still set, for the log and for assistive tech.
+            muted={
+              (contextualToolCard !== null && !hideSketchToolCard) ||
+              sketchPlaneCardShown
+            }
             onOpenLog={openActivityLog}
             prompt={workspacePrompt}
+            promptResting={workspacePrompt === idleHint}
             instructionDetails={
               displayedGeometryComplete && offsetHandleTarget
                 ? offsetHandleTarget.totalBaseline === undefined

@@ -209,8 +209,10 @@ test('the activity lane yields the prompt placeholder to guidance only while no 
   page
 }) => {
   await newProject(page, 'Prompt lane styling');
-  await addBox(page);
-  await page.keyboard.press('Escape');
+  // The resting line: the guidance that reads in the field, where the
+  // placeholder would be. (Guidance too long for the field stands on the
+  // card over the bar and leaves the placeholder showing; a body's default
+  // line is that long at this width.)
   const input = page.locator('.command-bar-input').first();
   await input.blur();
   await expect(page.locator('.workspace-hint')).toBeVisible({

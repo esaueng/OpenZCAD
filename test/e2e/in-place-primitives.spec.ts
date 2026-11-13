@@ -300,3 +300,181 @@ test('Escape leaves nothing behind, and Enter alone makes the default box', { ta
   });
   expect(move).toBeUndefined();
 });
+
+/** Which way a world axis runs on the page, in degrees, through the camera. */
+async function axisAngles(page: Page): Promise<number[]> {
+  const [origin, x, y, z] = await screenPoints(page, [
+    [0, 0, 0],
+    [40, 0, 0],
+    [0, 40, 0],
+    [0, 0, 40]
+  ]);
+  return [x!, y!, z!].map(
+    (tip) =>
+      (Math.atan2(tip.y - origin!.y, tip.x - origin!.x) * 180) / Math.PI
+  );
+}
+
+test('typed sizes go to the box, not the camera: 100 Tab 60 Tab 6 Enter', { tag: '@ci-smoke' }, async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  await openProject(page, null);
+  await page.keyboard.press('b');
+  const bar = page.getByRole('group', { name: 'Box command' });
+  const done = bar.getByRole('button', { name: 'Done', exact: true });
+  await expect(done).toBeEnabled({ timeout: 30_000 });
+  await expect(page.getByTestId('command-handle-width')).toContainText(
+    'Width 30 mm'
+  );
+  await waitForStillViewport(page);
+  const before = await axisAngles(page);
+
+  // A digit opens Width (it used to be the Front and Back view shortcuts),
+  // and each further key is typed into it.
+  await page.keyboard.type('100');
+  const keypad = page.locator('.numeric-keypad');
+  const field = (name: string) =>
+    keypad.getByRole('textbox', { name, exact: true });
+  await expect(field('Width')).toBeFocused();
+  await expect(field('Width')).toHaveValue('100');
+
+  // Tab commits and moves on to the next size (it used to walk to the
+  // unit's help, then the keypad button, then Options and Cancel).
+  await page.keyboard.press('Tab');
+  await expect(field('Depth')).toBeFocused();
+  await expect(field('Depth')).toHaveValue('18');
+  await expect(page.getByTestId('command-handle-width')).toContainText(
+    'Width 100 mm'
+  );
+  await page.keyboard.type('60');
+  await page.keyboard.press('Tab');
+  await expect(field('Height')).toBeFocused();
+  await expect(field('Height')).toHaveValue('24');
+  await page.keyboard.type('6');
+
+  // Enter commits the field and hands focus to the bar, where Enter is Done.
+  await page.keyboard.press('Enter');
+  await expect(keypad).toHaveCount(0);
+  await expect(bar).toBeFocused();
+  await expect(bar).toBeVisible();
+  for (const [id, text] of [
+    ['width', 'Width 100 mm'],
+    ['depth', 'Depth 60 mm'],
+    ['height', 'Height 6 mm']
+  ] as const) {
+    await expect(page.getByTestId(`command-handle-${id}`)).toContainText(text);
+  }
+
+  // The view kept its direction: no digit turned it to a standard view.
+  await expect(done).toBeEnabled({ timeout: 30_000 });
+  await waitForStillViewport(page);
+  const after = await axisAngles(page);
+  for (const [index, angle] of after.entries()) {
+    const turned = Math.abs(((angle - before[index]! + 540) % 360) - 180);
+    expect(turned, `axis ${'XYZ'[index]} turned on screen`).toBeLessThan(12);
+  }
+
+  // The preview was reframed into the clear stage: every corner of the
+  // 100 × 60 × 6 plate is left of the instrument rail, right of the tool
+  // column, under the top bar and above the command's own bar.
+  const corners = await screenPoints(
+    page,
+    [0, 100].flatMap((x) =>
+      [0, 60].flatMap((y) =>
+        [0, 6].map((z): [number, number, number] => [x, y, z])
+      )
+    )
+  );
+  const box = async (selector: string) =>
+    (await page.locator(selector).first().boundingBox())!;
+  const rail = await box('.instrument-rail');
+  const column = await box('.workspace-column-float');
+  const topbar = await box('.app-shell > .topbar');
+  const card = (await bar.boundingBox())!;
+  for (const corner of corners) {
+    expect(corner.x).toBeLessThan(rail.x);
+    expect(corner.x).toBeGreaterThan(column.x + column.width);
+    expect(corner.y).toBeGreaterThan(topbar.y + topbar.height);
+    expect(corner.y).toBeLessThan(card.y);
+  }
+  // And its value chips stand clear of one another.
+  const chips = await Promise.all(
+    ['width', 'depth', 'height'].map(
+      async (id) =>
+        (await page.getByTestId(`command-handle-${id}`).boundingBox())!
+    )
+  );
+  for (const [index, a] of chips.entries()) {
+    for (const b of chips.slice(index + 1)) {
+      const apart =
+        a.x + a.width <= b.x ||
+        b.x + b.width <= a.x ||
+        a.y + a.height <= b.y ||
+        b.y + b.height <= a.y;
+      expect(apart, 'value chips overlap').toBe(true);
+    }
+  }
+
+  await page.keyboard.press('Enter');
+  await expect(bar).toHaveCount(0);
+  await expectBodyCount(page, 1);
+  const { primitive, move } = placementOf(await exportedDocument(page), 'Box');
+  // The kernel's keys: width is X, height Y (the footprint's depth), depth Z.
+  expect(primitive).toMatchObject({
+    primitiveKind: 'box',
+    dimensions: { width: 100, height: 60, depth: 6 }
+  });
+  expect(move).toBeUndefined();
+});
+
+test('a cylinder takes typed sizes the same way, and Escape puts a value back', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  await openProject(page, null);
+  await page.keyboard.press('c');
+  const bar = page.getByRole('group', { name: 'Cylinder command' });
+  const done = bar.getByRole('button', { name: 'Done', exact: true });
+  await expect(done).toBeEnabled({ timeout: 30_000 });
+  const keypad = page.locator('.numeric-keypad');
+  const field = (name: string) =>
+    keypad.getByRole('textbox', { name, exact: true });
+
+  await page.keyboard.type('20');
+  await expect(field('Radius')).toHaveValue('20');
+  await page.keyboard.press('Tab');
+  await expect(field('Height')).toBeFocused();
+  // Shift+Tab goes back, leaving a value that was not retyped as it was.
+  await page.keyboard.press('Shift+Tab');
+  await expect(field('Radius')).toHaveValue('20');
+  await page.keyboard.press('Tab');
+  await page.keyboard.type('50');
+  await page.keyboard.press('Enter');
+  await expect(keypad).toHaveCount(0);
+  await expect(bar).toBeFocused();
+
+  // A digit typed again reopens the first size; Escape restores it and
+  // returns to the bar, and only the next Escape would cancel the command.
+  await page.keyboard.type('7');
+  await expect(field('Radius')).toHaveValue('7');
+  await page.keyboard.press('Escape');
+  await expect(keypad).toHaveCount(0);
+  await expect(bar).toBeFocused();
+  await expect(page.getByTestId('command-handle-radius')).toContainText(
+    'Radius 20 mm'
+  );
+
+  await expect(done).toBeEnabled({ timeout: 30_000 });
+  await page.keyboard.press('Enter');
+  await expect(bar).toHaveCount(0);
+  await expectBodyCount(page, 1);
+  const { primitive } = placementOf(
+    await exportedDocument(page),
+    'Cylinder'
+  );
+  expect(primitive).toMatchObject({
+    primitiveKind: 'cylinder',
+    dimensions: { radius: 20, height: 50 }
+  });
+});

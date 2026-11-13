@@ -81,7 +81,24 @@ export interface KeypadRequest {
   baselineRaw?: string;
   /** Client-space anchor for a click-placed editor without a live 3D rig. */
   fixedClientAnchor?: { x: number; y: number };
+  /**
+   * Where the control stood when Tab stepped here from another value, in
+   * client pixels (its top-left corner) with the side it had settled on:
+   * the field stays put while its label and value change, rather than
+   * jumping from chip to chip under the typing.
+   */
+  heldAt?: KeypadHold;
 }
+
+/** A control's place on the page, handed from one value's entry to the next. */
+export interface KeypadHold {
+  x: number;
+  y: number;
+  side: KeypadPlacement['side'] | 'sheet';
+}
+
+/** What Tab leaves behind: the entry to commit, or null to leave the value as it was. */
+export type KeypadStepEntry = { value: number; raw: string } | null;
 
 interface NumericKeypadProps {
   request: KeypadRequest;
@@ -144,6 +161,13 @@ interface NumericKeypadProps {
    * once it closes.
    */
   onUiStateChange?(ui: KeypadUiState | null): void;
+  /**
+   * Tab (1) or Shift+Tab (-1) pressed in the value field of a command with
+   * more values to type: the host commits `entry` (null when the field was
+   * left as it opened, or emptied) and opens the next value at `at`. Without
+   * it Tab moves focus as it does anywhere.
+   */
+  onStep?(direction: 1 | -1, entry: KeypadStepEntry, at: KeypadHold): void;
   onCancel(): void;
 }
 
@@ -387,6 +411,7 @@ export function NumericKeypad({
   refusal = null,
   onDimensionModeChange,
   onUiStateChange,
+  onStep,
   onCancel
 }: NumericKeypadProps) {
   const [value, setValue] = useState(request.initial);
@@ -434,7 +459,19 @@ export function NumericKeypad({
   const raiseSystemKeyboard = useRef(false);
   // Read on the first render, before the field takes focus below.
   const [returnTarget] = useState(keypadReturnTarget);
-  useEffect(() => () => returnKeypadFocus(returnTarget), [returnTarget]);
+  // A running command's entry (opened by typing, a click or Tab) has no
+  // opener to go back to: its bar takes the focus, where Enter is Done.
+  const returnsToCommandBar = request.kind === 'command';
+  useEffect(() => {
+    const area = rootRef.current?.closest('.viewer-area') ?? null;
+    return () =>
+      returnKeypadFocus(
+        returnTarget,
+        returnsToCommandBar
+          ? () => area?.querySelector<HTMLElement>('.in-place-command') ?? null
+          : undefined
+      );
+  }, [returnTarget, returnsToCommandBar]);
   const selectInitial = useRef(request.selectInitial ?? true);
   const initialPreviewed = useRef(false);
   const untouchedPrefill = useRef(request.selectInitial !== false);
@@ -525,6 +562,30 @@ export function NumericKeypad({
         positioned = true;
         return;
       }
+      if (request.heldAt) {
+        // Stepped here by Tab: it stands where the last value's did.
+        if (positioned) return;
+        const { size, viewport } = measure(host);
+        const rect = host.getBoundingClientRect();
+        const within = (value: number, room: number) =>
+          Math.min(Math.max(value, 0), Math.max(0, room));
+        const left = within(
+          request.heldAt.x - rect.left,
+          viewport.width - size.width
+        );
+        const top = within(
+          request.heldAt.y - rect.top,
+          viewport.height - size.height
+        );
+        root.style.visibility = 'visible';
+        root.style.left = `${left}px`;
+        root.style.top = `${top}px`;
+        root.dataset.placement = request.heldAt.side;
+        setPlacement(request.heldAt.side);
+        lastAnchor = { x: 0, y: 0 };
+        positioned = true;
+        return;
+      }
       if (!point) {
         // The pick left the screen while the value was being edited.
         if (positioned && !docked && !request.fixedClientAnchor) {
@@ -555,7 +616,9 @@ export function NumericKeypad({
     };
     anchorRef.current = positionAt;
     const host = root.parentElement;
-    if (host && request.fixedClientAnchor) {
+    if (host && request.heldAt) {
+      positionAt(null);
+    } else if (host && request.fixedClientAnchor) {
       const rect = host.getBoundingClientRect();
       positionAt({
         x: request.fixedClientAnchor.x - rect.left,
@@ -613,7 +676,12 @@ export function NumericKeypad({
       visual?.removeEventListener('resize', onVisualResize);
       anchorRef.current = null;
     };
-  }, [anchorRef, request.fixedClientAnchor, request.commandValueId]);
+  }, [
+    anchorRef,
+    request.fixedClientAnchor,
+    request.commandValueId,
+    request.heldAt
+  ]);
 
   // The operation tag (Fillet ▾, Total ▾) stays at the pick; a control that
   // stands away from it carries the same switch as its first segment. Only
@@ -739,6 +807,39 @@ export function NumericKeypad({
     if (state === 'ready' || (state === 'checking' && !checking)) commitNow();
   };
 
+  /**
+   * Tab in the value field of a command with more values: the entry goes to
+   * the host with the place this control stands, and the next value opens
+   * there. An entry that does not read keeps the field, with its warning.
+   */
+  const step = (direction: 1 | -1): boolean => {
+    const root = rootRef.current;
+    if (!onStep || !root) return false;
+    const box = root.getBoundingClientRect();
+    const at: KeypadHold = {
+      x: box.left,
+      y: box.top,
+      side: (root.dataset.placement as KeypadHold['side'] | undefined) ?? 'over'
+    };
+    const untouched =
+      untouchedPrefill.current &&
+      value === request.initial &&
+      (request.unitKind !== 'length' || entryUnit === units);
+    if (untouched || value.trim() === '') {
+      onStep(direction, null, at);
+      return true;
+    }
+    if (
+      (state === 'ready' || (state === 'checking' && !checking)) &&
+      evaluation.ok &&
+      normalizedValue !== undefined &&
+      normalizedRaw !== undefined
+    ) {
+      onStep(direction, { value: normalizedValue, raw: normalizedRaw }, at);
+    }
+    return true;
+  };
+
   const switchDimensionMode = (nextMode: DimensionMode) => {
     if (!dimensionMode || nextMode === dimensionMode) {
       return;
@@ -823,6 +924,19 @@ export function NumericKeypad({
         ) {
           event.preventDefault();
           commit();
+        }
+        // Tab from the value goes to the command's next value, not to the
+        // unit's help and the keypad button, where what was typed next for
+        // Depth or Height went nowhere.
+        if (
+          event.key === 'Tab' &&
+          event.target === inputRef.current &&
+          !event.ctrlKey &&
+          !event.metaKey &&
+          !event.altKey &&
+          step(event.shiftKey ? -1 : 1)
+        ) {
+          event.preventDefault();
         }
         if (event.key === 'Escape') {
           event.preventDefault();
