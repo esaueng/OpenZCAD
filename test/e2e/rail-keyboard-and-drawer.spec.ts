@@ -132,6 +132,23 @@ test(
     expect(await focusIsIn(page, '.instrument-rail')).toBe(true);
     await page.keyboard.press('Shift+Tab');
     await expect(sketch).toBeFocused();
+
+    // View removes the instrument rail; Build mounts a new element on the
+    // same ref. Its listeners must follow that new element as well as its
+    // tab stops, or the arrows stop working after this round trip.
+    await page.getByRole('button', { name: 'View', exact: true }).click();
+    await expect(page.locator('.instrument-rail')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Build', exact: true }).click();
+    await expect(
+      page.getByRole('toolbar', { name: 'Viewer bar' })
+    ).toBeVisible();
+    const undo = page.getByRole('button', { name: 'Undo', exact: true });
+    await undo.focus();
+    await page.keyboard.press('ArrowDown');
+    await expect(redo).toBeFocused();
+    await expect(page.locator('.instrument-rail [tabindex="0"]')).toHaveCount(
+      1
+    );
   }
 );
 

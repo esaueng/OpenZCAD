@@ -124,12 +124,10 @@ for (const gap of [0, 0.02]) {
       await enableFullRender(page);
       await stubApi(page);
       const backup = reproduction(gap);
-      await test
-        .info()
-        .attach('coplanar-reproduction.openzcad', {
-          body: backup,
-          contentType: 'application/json'
-        });
+      await test.info().attach('coplanar-reproduction.openzcad', {
+        body: backup,
+        contentType: 'application/json'
+      });
       await page.goto('/');
       await page
         .getByRole('button', { name: 'Import project', exact: true })
@@ -142,7 +140,7 @@ for (const gap of [0, 0.02]) {
       await expectBodyCount(page, 2);
       await page.getByRole('button', { name: 'Fit view (F)' }).click();
       await waitForStillViewport(page);
-      const cube = page.getByRole('group', {
+      const cube = page.getByRole('toolbar', {
         name: 'Drag to rotate the view',
         exact: true
       });

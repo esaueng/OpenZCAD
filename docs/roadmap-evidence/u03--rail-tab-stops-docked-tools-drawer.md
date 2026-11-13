@@ -13,3 +13,11 @@ the rail with a close button, closes on Escape from the idle workspace and
 stands under the command bar's results and every popover
 (`rail-keyboard-and-drawer.spec.ts`, `useRovingToolbar.test.tsx`,
 `CommandCard.test.tsx`, PR #1378).
+
+Review repair: the instrument rail keeps its arrow-key handling after a
+Build → View → Build round trip and when it first mounts after its host.
+The hook follows the committed rail element and releases listeners and
+observers from the old one without reinstalling them on every render.
+Two hook regressions fail before the fix and pass after it; the tagged rail
+keyboard browser case also exercises the workspace-mode round trip. The
+coplanar-body browser regression now finds the cube by its toolbar role.

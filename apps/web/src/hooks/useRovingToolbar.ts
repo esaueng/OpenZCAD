@@ -109,6 +109,12 @@ export function useRovingToolbar(
 ): () => void {
   const current = useRef<RovingItem | null>(null);
   const lastReset = useRef(resetOn);
+  const subscription = useRef<{
+    root: Element;
+    sync: () => void;
+    observe: boolean;
+    dispose: () => void;
+  } | null>(null);
 
   const sync = useCallback(() => {
     const root = ref.current;
@@ -195,8 +201,23 @@ export function useRovingToolbar(
     sync();
   });
 
-  useEffect(() => {
+  // The host can outlive its rail: View mode removes the instrument rail,
+  // and Build mounts a new element on the same ref. Dependencies alone do
+  // not see that change. Compare the committed element on each render,
+  // keeping the existing listeners while the element and options are stable.
+  useLayoutEffect(() => {
     const root = ref.current;
+    const previous = subscription.current;
+    if (
+      enabled &&
+      previous?.root === root &&
+      previous.sync === sync &&
+      previous.observe === observe
+    ) {
+      return;
+    }
+    previous?.dispose();
+    subscription.current = null;
     if (!root || !enabled) return;
 
     const onFocusIn = (event: Event) => {
@@ -275,14 +296,27 @@ export function useRovingToolbar(
       attributes: true,
       attributeFilter: ['disabled', 'hidden', 'style', 'class', 'tabindex']
     });
-    return () => {
-      root.removeEventListener('focusin', onFocusIn);
-      root.removeEventListener('keydown', onKeyDown as EventListener);
-      window.removeEventListener('resize', sync);
-      resize?.disconnect();
-      observer?.disconnect();
+    subscription.current = {
+      root,
+      sync,
+      observe,
+      dispose: () => {
+        root.removeEventListener('focusin', onFocusIn);
+        root.removeEventListener('keydown', onKeyDown as EventListener);
+        window.removeEventListener('resize', sync);
+        resize?.disconnect();
+        observer?.disconnect();
+      }
     };
-  }, [ref, items, except, enabled, observe, sync]);
+  });
+
+  useEffect(
+    () => () => {
+      subscription.current?.dispose();
+      subscription.current = null;
+    },
+    []
+  );
 
   return sync;
 }

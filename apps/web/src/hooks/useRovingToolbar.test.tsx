@@ -72,6 +72,39 @@ const tabStops = () =>
     .map((element) => element.textContent);
 
 describe('useRovingToolbar', () => {
+  function ConditionalRail({ shown }: { shown: boolean }) {
+    const ref = useRef<HTMLDivElement>(null);
+    useRovingToolbar(ref, { items: 'button' });
+    return shown ? (
+      <div ref={ref} role="toolbar" aria-label="Conditional rail">
+        <button type="button">First</button>
+        <button type="button">Second</button>
+      </div>
+    ) : null;
+  }
+
+  it('attaches keyboard handling when a rail mounts after its host', () => {
+    const { rerender } = render(<ConditionalRail shown={false} />);
+    rerender(<ConditionalRail shown />);
+    button('First').focus();
+    fireEvent.keyDown(button('First'), { key: 'ArrowDown' });
+    expect(button('Second')).toHaveFocus();
+    expect(tabStops()).toEqual(['Second']);
+  });
+
+  it('reattaches keyboard handling after a workspace mode remounts the rail', () => {
+    const { rerender } = render(<ConditionalRail shown />);
+    button('First').focus();
+    fireEvent.keyDown(button('First'), { key: 'ArrowDown' });
+    expect(button('Second')).toHaveFocus();
+    rerender(<ConditionalRail shown={false} />);
+    rerender(<ConditionalRail shown />);
+    button('First').focus();
+    fireEvent.keyDown(button('First'), { key: 'End' });
+    expect(button('Second')).toHaveFocus();
+    expect(tabStops()).toEqual(['Second']);
+  });
+
   it('leaves the rail one tab stop, on the first tool that acts', () => {
     render(<Rail />);
     // Not the greyed Extrude: a rail is entered on something that works.
