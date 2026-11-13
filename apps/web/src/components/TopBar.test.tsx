@@ -546,6 +546,33 @@ describe('TopBar File menu', () => {
     expect(summary).toHaveAttribute('title', 'File: save, import and export');
   });
 
+  it('moves through its items with the arrow keys (I24)', () => {
+    renderTopBar({ canExport: true });
+    const menu = fileMenu();
+    const summary = menu.querySelector('summary')!;
+    summary.focus();
+    fireEvent.keyDown(summary, { key: 'ArrowDown' });
+    expect(menu.open).toBe(true);
+    const items = Array.from(
+      menu.querySelectorAll<HTMLElement>(
+        '.topbar-menu-panel :is(button, a[href]):not([disabled])'
+      )
+    );
+    expect(items.length).toBeGreaterThan(2);
+    expect(document.activeElement).toBe(items[0]);
+    fireEvent.keyDown(items[0]!, { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(items[1]);
+    fireEvent.keyDown(items[1]!, { key: 'End' });
+    expect(document.activeElement).toBe(items.at(-1));
+    // Wraps round, both ways.
+    fireEvent.keyDown(items.at(-1)!, { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(items[0]);
+    fireEvent.keyDown(items[0]!, { key: 'ArrowUp' });
+    expect(document.activeElement).toBe(items.at(-1));
+    fireEvent.keyDown(items.at(-1)!, { key: 'Home' });
+    expect(document.activeElement).toBe(items[0]);
+  });
+
   it('reaches Import CAD files from the keyboard', () => {
     const { onImportFiles } = renderTopBar();
     fileMenu().open = true;

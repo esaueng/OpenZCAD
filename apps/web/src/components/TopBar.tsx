@@ -4,6 +4,7 @@ import { labelWithKey, useKeymap } from '../lib/keymap';
 import { platformShortcutLabel } from '../lib/platformShortcut';
 import {
   type ChangeEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   useEffect,
   useId,
   useLayoutEffect,
@@ -405,6 +406,44 @@ export function TopBar({
       document.removeEventListener('keydown', closeFileMenuOnEscape, true);
     };
   }, []);
+
+  /**
+   * ArrowDown/ArrowUp on the File button open the menu at its first or last
+   * item; inside, the arrows, Home and End move between the enabled items,
+   * wrapping round. Tab still leaves, as before.
+   */
+  function moveInFileMenu(event: ReactKeyboardEvent<HTMLDetailsElement>) {
+    const key = event.key;
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(key)) return;
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
+    const menu = event.currentTarget;
+    const items = Array.from(
+      menu.querySelectorAll<HTMLElement>(
+        '.topbar-menu-panel :is(button, a[href]):not([disabled])'
+      )
+    );
+    if (items.length === 0) return;
+    if ((event.target as Element).matches('summary')) {
+      if (key !== 'ArrowDown' && key !== 'ArrowUp') return;
+      event.preventDefault();
+      menu.open = true;
+      (key === 'ArrowDown' ? items[0] : items.at(-1))?.focus();
+      return;
+    }
+    const current = items.indexOf(document.activeElement as HTMLElement);
+    const next =
+      key === 'Home'
+        ? 0
+        : key === 'End'
+          ? items.length - 1
+          : key === 'ArrowDown'
+            ? (current + 1) % items.length
+            : current <= 0
+              ? items.length - 1
+              : current - 1;
+    event.preventDefault();
+    items[next]?.focus();
+  }
 
   /**
    * Closes the menu for an item that opens a dialog. The dialog hands focus
@@ -909,6 +948,9 @@ export function TopBar({
                 event.currentTarget.open = false;
               }
             }}
+            // Arrow keys move through the items as they do in Panel layout
+            // and every other menu here; File took only Tab (I24).
+            onKeyDown={(event) => moveInFileMenu(event)}
           >
             <summary
               className="secondary topbar-action"
