@@ -548,6 +548,7 @@ import {
 import {
   TOOL_GROUPS,
   TOOL_META,
+  liveCylindricalFace,
   toolDisabledReason,
   type ToolAvailability,
   type ToolId
@@ -8822,13 +8823,18 @@ export function App() {
     () => countClosedProfileSketches(doc, parameterScope.scope),
     [doc, parameterScope]
   );
+  const hasCylindricalFace = useMemo(
+    () => liveCylindricalFace(liveBodyRepresentations, hiddenBodyIds),
+    [liveBodyRepresentations, hiddenBodyIds]
+  );
   const availability: ToolAvailability = {
     editDisabledReason,
     sketchCount: sketchOptions.length,
     closedProfileSketchCount,
     liveBodyCount: committedBodyCount,
     exactGeometryReady: displayedGeometryComplete,
-    hasEdgeSelected: selectedEdges.length > 0
+    hasEdgeSelected: selectedEdges.length > 0,
+    ...(hasCylindricalFace !== undefined ? { hasCylindricalFace } : {})
   };
   // What the palette, the verb rail and the command bar show. Launching
   // a tool still reads `availability`, so a tool that needs the finished
@@ -33388,7 +33394,14 @@ export function App() {
                   }
                   hint={inPlace.hint}
                   refusal={inPlace.refusal}
+                  unitLabel={displayLengthName(doc.units)}
+                  onTrySize={(dimension, size) => {
+                    commitInPlacePanelValue(dimension, formatNumber(size));
+                  }}
                   canFinish={inPlace.canFinish}
+                  previewPending={
+                    inPlace.request !== null && inPlace.refusal === null
+                  }
                   options={inPlace.optionSpecs.map((option) => ({
                     ...option,
                     value: inPlace.options[option.id] ?? option.initial

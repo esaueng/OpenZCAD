@@ -1,5 +1,6 @@
 import { Check, MoreHorizontal, SlidersHorizontal, X } from 'lucide-react';
 import {
+  useEffect,
   useId,
   useLayoutEffect,
   useRef,
@@ -12,6 +13,11 @@ import { ownedTopologyName } from '../lib/topologyLabels';
 import { modelingRefusalSummary } from '../lib/modelingRefusal';
 import type { InPlacePanelSectionView } from '../lib/inPlace/panel';
 import { spokenValueName } from '../lib/inPlace/chipNames';
+import {
+  blendRefusalText,
+  smallerSizeIn,
+  type SmallerSize
+} from '../lib/inPlace/sizeRefusal';
 
 /**
  * The only chrome an in-place command has: its name, the one-line step it
@@ -72,12 +78,24 @@ export interface InPlaceCommandBarProps {
   /** False until every required slot is filled and the preview is valid. */
   canFinish: boolean;
   /**
+   * Every required slot is filled and the preview of what Done would make is
+   * still being checked: Enter now is held until it is, not dropped.
+   */
+  previewPending?: boolean;
+  /**
    * Nothing but Cancel takes input (a Done being validated): what the bar
    * shows must stay what is being committed.
    */
   locked?: boolean;
   /** Shown instead of the hint while a refusal stands, in the warning tone. */
   refusal?: string | null;
+  /** The document's length unit, after each size a refusal quotes. */
+  unitLabel?: string | null;
+  /**
+   * A refusal that names a size that builds ("radius 6.25 builds here")
+   * offers it as one press: "Use 6.25 mm".
+   */
+  onTrySize?(dimension: SmallerSize['dimension'], size: number): void;
   /**
    * Rarely used choices (a hole's style, a draft's pull direction), behind
    * a disclosure: each a short row of mutually exclusive buttons.
@@ -134,8 +152,11 @@ export function InPlaceCommandBar({
   title,
   hint,
   canFinish,
+  previewPending = false,
   locked = false,
   refusal = null,
+  unitLabel = null,
+  onTrySize,
   options = [],
   onOption,
   onPreciseValues,
@@ -166,13 +187,34 @@ export function InPlaceCommandBar({
           ?.focus({ preventScroll: true });
     };
   }, [title]);
+  // Enter pressed while the preview of the last value typed is still being
+  // checked: Done waits for it rather than dropping the key. "100 Tab 60 Tab
+  // 6 Enter" then Enter again lost the second Enter, and only one pressed
+  // seconds later applied.
+  const [queued, setQueued] = useState(false);
+  useEffect(() => {
+    if (!queued) return;
+    if (canFinish && !locked) {
+      setQueued(false);
+      onDone();
+    } else if (refusal || !previewPending) {
+      // Refused, or no longer waiting on a preview (a pick was taken
+      // back): the Enter goes, rather than finishing something later.
+      setQueued(false);
+    }
+  }, [queued, canFinish, previewPending, locked, refusal, onDone]);
   const refusalSummary = refusal
     ? modelingRefusalSummary(refusal, title)
     : null;
   const shown =
     refusalSummary ??
-    refusal?.replace(/^-?(?:\d+\.?\d*|\.\d+);\s*/, '') ??
-    null;
+    (refusal
+      ? blendRefusalText(
+          refusal.replace(/^-?(?:\d+\.?\d*|\.\d+);\s*/, ''),
+          unitLabel
+        )
+      : null);
+  const smaller = refusal && onTrySize ? smallerSizeIn(refusal) : null;
   const hintRef = useRef<HTMLSpanElement>(null);
   const hintId = useId();
   // A refusal wraps to three lines; one longer than that offers the rest
@@ -210,11 +252,21 @@ export function InPlaceCommandBar({
         event.preventDefault();
         event.stopPropagation();
         if (canFinish && !locked) onDone();
+        else if (previewPending && !locked && !refusal) setQueued(true);
       }}
     >
       <span className="in-place-command-title">{title}</span>
       <span className="in-place-command-state">
-        {locked ? 'Applying…' : refusal ? 'Needs attention' : 'Preview'}
+        {/* Empty, and unseen, until there is something to preview: the
+            pill said "Preview" over a card with nothing picked yet. It keeps
+            its place, so the buttons after it do not move when it fills. */}
+        {locked || queued
+          ? 'Applying…'
+          : refusal
+            ? 'Needs attention'
+            : canFinish || previewPending
+              ? 'Preview'
+              : ''}
       </span>
       <span
         ref={hintRef}
@@ -235,6 +287,17 @@ export function InPlaceCommandBar({
           onClick={() => setExpanded((open) => !open)}
         >
           {expanded ? 'Less' : 'More'}
+        </button>
+      ) : null}
+      {smaller && onTrySize ? (
+        <button
+          type="button"
+          className="in-place-command-cancel"
+          disabled={locked}
+          onClick={() => onTrySize(smaller.dimension, smaller.size)}
+        >
+          Use {smaller.size}
+          {unitLabel ? ` ${unitLabel}` : ''}
         </button>
       ) : null}
       {refusalSummary && (

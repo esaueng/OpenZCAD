@@ -2782,7 +2782,10 @@ const gear: InPlaceToolSpec = {
     return { rimDiameter: module * (teeth + 10.5) };
   },
   hint(slots) {
-    if (!slots.plane) return 'Pick a plane or flat face';
+    // Module and teeth are chips on the placed gear: the summary names them
+    // before there is a field to change them, so the hint says where it is.
+    if (!slots.plane)
+      return 'Pick a plane or flat face · then set module and teeth on the gear';
     if (slots.plane.kind === 'datum') {
       return 'Pick a ghost plane or flat face instead';
     }
@@ -4292,7 +4295,7 @@ const scale: InPlaceToolSpec = {
       id: 'pivot',
       label: 'About',
       choices: [
-        { value: 'centre', label: 'Body centre' },
+        { value: 'centre', label: 'Body center' },
         { value: 'origin', label: 'Origin' },
         { value: 'typed', label: 'Point' }
       ],
@@ -4955,8 +4958,11 @@ function edgeReferences(
 
 function edgeHint(slots: InPlaceSlots, what: string, drag: string): string {
   const count = slots.edges.length;
+  // The size has no field until an edge is picked: its handle stands on the
+  // first edge, and Options lists it from then on. The hint said "Options
+  // sets the radius" over an Options panel with no radius in it.
   if (count === 0)
-    return `Click the edges to ${what} · Options sets the ${what === 'fillet' ? 'radius' : 'distance'}`;
+    return `Click the edges to ${what} · then drag or type the ${what === 'fillet' ? 'radius' : 'distance'}`;
   return `${count} ${count === 1 ? 'edge' : 'edges'} · drag the ${drag}`;
 }
 
