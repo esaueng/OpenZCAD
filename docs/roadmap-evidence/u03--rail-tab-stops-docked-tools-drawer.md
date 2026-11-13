@@ -21,3 +21,7 @@ observers from the old one without reinstalling them on every render.
 Two hook regressions fail before the fix and pass after it; the tagged rail
 keyboard browser case also exercises the workspace-mode round trip. The
 coplanar-body browser regression now finds the cube by its toolbar role.
+On a short stage, the advanced drawer puts its close button beside search
+and filters so its last catalog tile fits in the scrolling area. The tagged
+phone-rotation regression verifies search, close and the last tile remain
+reachable at 390 × 844 and 844 × 390.

@@ -1364,6 +1364,9 @@ test.describe('touch review followups', () => {
         const more = page.getByRole('button', { name: /^More tools/ });
         await more.tap();
         await reachable(page.getByRole('searchbox', { name: 'Find a tool' }));
+        await reachable(
+          page.getByRole('button', { name: 'Close tools drawer', exact: true })
+        );
         await expect(page.locator('.command-tile')).toHaveCount(35);
         const last = page.locator('.command-tile').last();
         await last.scrollIntoViewIfNeeded();

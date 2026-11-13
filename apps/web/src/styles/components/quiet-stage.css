@@ -2311,6 +2311,40 @@ button.command-rail.is-suggested {
   border-bottom: var(--border-thin);
 }
 
+/* A short stage (a phone on its side) has no row to spare for the drawer's
+   name: with it, the catalogue's list was left about 70px, less than one
+   three-line tile, so the last tool could not be brought fully into view.
+   There the close button stands beside the search and filters instead of
+   over them, and the name is dropped from view (the group keeps its
+   accessible name). The simple list has no search row and keeps its title. */
+@media (max-height: 540px) {
+  .command-flyout.is-advanced {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .command-flyout.is-advanced > * {
+    grid-column: 1 / -1;
+  }
+
+  .command-flyout.is-advanced > .command-flyout-head {
+    grid-area: 1 / 1;
+    padding-right: 2px;
+  }
+
+  .command-flyout.is-advanced > .command-flyout-title {
+    grid-area: 1 / 2;
+    align-items: flex-start;
+    padding: 6px 4px 0 0;
+    border-bottom: var(--border-thin);
+  }
+
+  .command-flyout.is-advanced > .command-flyout-title > span {
+    display: none;
+  }
+}
+
 .command-flyout-search {
   display: flex;
   align-items: center;
