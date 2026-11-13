@@ -153,6 +153,7 @@ import {
   CirclePause,
   CirclePlay,
   Combine,
+  Cog,
   Copy,
   Crosshair,
   Download,
@@ -160,6 +161,7 @@ import {
   FolderOpen,
   Grid3x3,
   History as HistoryIcon,
+  Keyboard,
   Layers3,
   Maximize2,
   Monitor,
@@ -29203,7 +29205,10 @@ export function App() {
       if (global === 'command-palette') {
         event.preventDefault();
         setShortcutsOpen(false);
-        setPaletteOpen((open) => !open);
+        // Opening lists the commands that run here (an empty draft), so the
+        // key visibly does something before a word is typed (I20).
+        if (paletteOpen) setPaletteOpen(false);
+        else draftPrompt('');
         return;
       }
       if (paletteOpen || shortcutsOpen) {
@@ -30751,7 +30756,9 @@ export function App() {
       // palette is the other way to them, found by what they are for.
       id: 'file-export-diagnostics',
       label: 'Export diagnostics',
-      group: 'File',
+      // Not "File": the File menu no longer holds it (I24). Settings ›
+      // Advanced does, under troubleshooting.
+      group: 'Support',
       keywords: ['troubleshooting', 'support', 'sanitized', 'json', 'report'],
       icon: <Download size={16} aria-hidden="true" />,
       run: handleExportDiagnostics
@@ -30759,7 +30766,7 @@ export function App() {
     {
       id: 'file-export-interaction-log',
       label: 'Export interaction log',
-      group: 'File',
+      group: 'Support',
       keywords: [
         'troubleshooting',
         'support',
@@ -30782,6 +30789,8 @@ export function App() {
       id: 'file-home',
       label: 'Back to projects',
       group: 'File',
+      // The library is where a new project starts and every project opens.
+      keywords: ['home', 'library', 'projects', 'new', 'open', 'start'],
       icon: <FolderOpen size={16} aria-hidden="true" />,
       run: () => void handleGoHome()
     },
@@ -30793,6 +30802,7 @@ export function App() {
             id: 'workspace-mode-view',
             label: 'Switch to View mode',
             group: 'General',
+            keywords: ['read', 'inspect', 'mode', 'workspace'],
             shortcut: modeShortcut('view'),
             icon: <Eye size={16} aria-hidden="true" />,
             run: () => handleWorkspaceMode('view')
@@ -30805,6 +30815,7 @@ export function App() {
             id: 'workspace-mode-tweak',
             label: 'Switch to Tweak mode',
             group: 'General',
+            keywords: ['parameters', 'mode', 'workspace'],
             shortcut: modeShortcut('tweak'),
             icon: <SlidersHorizontal size={16} aria-hidden="true" />,
             disabledReason: tweakModeDisabledReason,
@@ -30818,10 +30829,26 @@ export function App() {
             id: 'workspace-mode-build',
             label: 'Switch to Build mode',
             group: 'General',
+            keywords: ['model', 'modeling', 'edit', 'mode', 'workspace'],
             shortcut: modeShortcut('build'),
             icon: <Box size={16} aria-hidden="true" />,
             disabledReason: buildModeDisabledReason,
             run: () => handleWorkspaceMode('build')
+          } satisfies PaletteCommand
+        ]
+      : []),
+    // The mode switch offers Assemble; the bar did not (I20).
+    ...(!assembleMode
+      ? [
+          {
+            id: 'workspace-mode-assemble',
+            label: 'Switch to Assemble mode',
+            group: 'General',
+            keywords: ['assembly', 'joints', 'motion', 'mode', 'workspace'],
+            shortcut: modeShortcut('assemble'),
+            icon: <Cog size={16} aria-hidden="true" />,
+            disabledReason: assembleModeDisabledReason,
+            run: () => handleWorkspaceMode('assemble')
           } satisfies PaletteCommand
         ]
       : []),
@@ -30831,10 +30858,66 @@ export function App() {
             id: 'workspace-mode-drawing',
             label: 'Switch to Draw mode',
             group: 'General',
+            keywords: ['drawing', 'sheet', '2d', 'mode', 'workspace'],
             shortcut: modeShortcut('drawing'),
             icon: <DraftingCompass size={16} aria-hidden="true" />,
             disabledReason: drawingModeDisabledReason,
             run: () => handleWorkspaceMode('drawing')
+          } satisfies PaletteCommand
+        ]
+      : []),
+    {
+      // The overlay the ? key opens, under the words people search for it
+      // by (I20: "help", "shortcuts" and "keyboard" found nothing).
+      id: 'app-help',
+      label: 'Help & keyboard shortcuts',
+      group: 'General',
+      keywords: [
+        'help',
+        'shortcuts',
+        'keyboard',
+        'keys',
+        'controls',
+        'hotkeys'
+      ],
+      shortcut: keymap.label('shortcut-reference'),
+      icon: <Keyboard size={16} aria-hidden="true" />,
+      run: () => setShortcutsOpen(true)
+    },
+    ...(doc && !shareSession
+      ? [
+          {
+            // The project name in the top bar is the rename field; the
+            // command opens it as a click on the name does.
+            id: 'project-rename',
+            label: 'Rename project',
+            group: 'File',
+            keywords: ['rename', 'name', 'title'],
+            icon: <PenLine size={16} aria-hidden="true" />,
+            run: () =>
+              document
+                .querySelector<HTMLButtonElement>('.project-title-button')
+                ?.click()
+          } satisfies PaletteCommand,
+          {
+            id: 'project-duplicate',
+            label: 'Duplicate project',
+            group: 'File',
+            keywords: ['duplicate', 'copy', 'clone'],
+            icon: <Copy size={16} aria-hidden="true" />,
+            disabledReason: projectTransferBusy
+              ? 'Project transfer in progress'
+              : null,
+            run: () => {
+              const current = managerRef.current?.document;
+              if (!current) return;
+              void handleDuplicateProject(
+                projects.find(
+                  (summary) => summary.projectId === current.projectId
+                ) ??
+                  summarizeLocalDocument(current, DEFAULT_PROJECT_ORGANIZATION)
+              );
+            }
           } satisfies PaletteCommand
         ]
       : []),

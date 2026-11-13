@@ -5,8 +5,27 @@ import {
   Eye,
   SlidersHorizontal
 } from 'lucide-react';
-import type { WorkspaceMode } from './panelState';
+import { WORKSPACE_MODE_ORDER, type WorkspaceMode } from './panelState';
 import type { WorkspaceSaveState } from './cloudProjectAutosave';
+
+/**
+ * Where Ctrl/Cmd+Shift+M goes from `current`: the next mode in the switch's
+ * order that is not locked, wrapping round; null when none is open. Only that
+ * mode's tooltip carries the key (I21: every mode's tooltip showed it, as
+ * though it were each mode's own key).
+ */
+export function nextWorkspaceMode(
+  current: WorkspaceMode,
+  lockedReason: (mode: WorkspaceMode) => string | null
+): WorkspaceMode | null {
+  const start = WORKSPACE_MODE_ORDER.indexOf(current);
+  for (let step = 1; step < WORKSPACE_MODE_ORDER.length; step += 1) {
+    const mode =
+      WORKSPACE_MODE_ORDER[(start + step) % WORKSPACE_MODE_ORDER.length]!;
+    if (lockedReason(mode) === null) return mode;
+  }
+  return null;
+}
 
 /**
  * The five workspaces, in the order they appear. Each hint doubles as the

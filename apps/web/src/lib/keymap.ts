@@ -145,7 +145,7 @@ export const KEYMAP_COMMANDS: readonly KeymapCommand[] = [
   ),
   command(
     'workspace-mode-cycle',
-    'Cycle View, Tweak and Build',
+    'Next workspace mode',
     'view-mode',
     'global',
     'Ctrl+Shift+M'

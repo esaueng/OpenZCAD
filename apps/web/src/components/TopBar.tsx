@@ -46,6 +46,7 @@ import {
   ACCOUNT_LABEL_RESERVE,
   COLLABORATION_LABEL_RESERVE,
   WORKSPACE_MODE_OPTIONS,
+  nextWorkspaceMode,
   saveGlyphFor,
   type SaveGlyph
 } from '../lib/topBarPresentation';
@@ -308,6 +309,17 @@ export function TopBar({
   encryption = null
 }: TopBarProps) {
   const keymap = useKeymap();
+  const modeLockedReason = (mode: WorkspaceMode): string | null =>
+    mode === 'build'
+      ? buildModeDisabledReason
+      : mode === 'tweak'
+        ? tweakModeDisabledReason
+        : mode === 'drawing'
+          ? drawingModeDisabledReason
+          : mode === 'assemble'
+            ? assembleModeDisabledReason
+            : null;
+  const cycleTarget = nextWorkspaceMode(workspaceMode, modeLockedReason);
   const saveKey = keymap.label('file-save');
   const saveNamedKey = keymap.label('file-save-named');
   // A mesh payload is the import's internal triangles, not a file anyone
@@ -769,23 +781,19 @@ export function TopBar({
         aria-label="Workspace mode"
       >
         {WORKSPACE_MODE_OPTIONS.map(({ mode, label, hint, Icon }) => {
-          const disabledReason =
-            mode === 'build'
-              ? buildModeDisabledReason
-              : mode === 'tweak'
-                ? tweakModeDisabledReason
-                : mode === 'drawing'
-                  ? drawingModeDisabledReason
-                  : mode === 'assemble'
-                    ? assembleModeDisabledReason
-                    : null;
+          const disabledReason = modeLockedReason(mode);
+          // The cycle key belongs to the mode it goes to next, not to each.
+          const cycleKey =
+            mode === cycleTarget
+              ? keymap.label('workspace-mode-cycle')
+              : undefined;
           return (
             <Tooltip
               key={mode}
               multiline
               label={label}
               description={disabledReason ?? hint}
-              shortcut={keymap.label('workspace-mode-cycle')}
+              shortcut={cycleKey}
             >
               <button
                 type="button"
@@ -978,6 +986,9 @@ export function TopBar({
                 <ProjectImportButton
                   onImport={onImportProject}
                   disabled={projectTransferBusy}
+                  // It opens a file picker, as Import CAD files… does, and
+                  // the command bar names it with the same ellipsis (I24).
+                  shortLabel="Import project…"
                   hint=".openzcad backup"
                 />
               )}
