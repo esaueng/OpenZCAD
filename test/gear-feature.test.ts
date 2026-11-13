@@ -3,6 +3,8 @@ import {
   addPrimitiveFeature,
   createProjectDocument,
   gearBody,
+  listFeaturesInOrder,
+  updateFeature,
   type GearInput
 } from '@openzcad/document-core';
 import {
@@ -1191,5 +1193,172 @@ describe('gear features on the exact kernel', { timeout: 60_000 }, () => {
       code: 'gear:span-outside-face'
     });
     expect(refusal?.message).toMatch(/run past an end of the cylindrical face/);
+  });
+
+  it('keeps a collar’s name and a reference to it as the offset makes one collar two and back (v55)', async () => {
+    const base = addPrimitiveFeature(
+      createProjectDocument('Shaft', toUserId('user_gear')),
+      {
+        name: 'Blank',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 11, height: 12 }
+      }
+    );
+    const blankId = base.bodyOrder[0]!;
+    const blank = (await adapter.syncDocument(base)).bodyRepresentations[
+      blankId
+    ]!;
+    const side = blank.topology!.faces.find(
+      (face) => face.geometry?.surfaceType === 'cylinder'
+    )!;
+    // Set module 0.9, 6 long from the bottom: one collar, above the teeth.
+    const cut = gearBody(base, {
+      name: 'Teeth',
+      gearType: 'external',
+      sizing: 'module',
+      pitch: 0.9,
+      fit: 'module',
+      teeth: 20,
+      faceWidth: 6,
+      targetBodyId: blankId,
+      faceHash: side.hash,
+      ...(side.reference ? { faceReference: side.reference } : {})
+    });
+    const first = (await adapter.syncDocument(cut.document))
+      .bodyRepresentations[cut.bodyId]!;
+    const collar = first.topology!.faces.find(
+      (face) => face.reference?.lineageName === 'gear.face.collar.end'
+    )!;
+    expect(collar).toBeDefined();
+    // A later feature follows the collar by its name.
+    const axis = commandFactories.addDatumAxis({
+      name: 'Collar axis',
+      definition: {
+        kind: 'cylinder',
+        source: {
+          type: 'face',
+          bodyId: cut.bodyId,
+          faceReference: collar.reference!
+        }
+      }
+    });
+    const referenced = axis.apply(cut.document);
+    const axisId = listFeaturesInOrder(referenced).at(-1)!.featureId;
+    const gearId = listFeaturesInOrder(referenced).find(
+      (feature) => feature.data.featureKind === 'gear'
+    )!.featureId;
+    let document = referenced;
+    for (const offset of [0, 2, 0]) {
+      document = updateFeature(document, {
+        featureId: gearId,
+        data: { offset }
+      });
+      const derived = await adapter.syncDocument(document);
+      expect(derived.warnings).toEqual([]);
+      const names = derived.bodyRepresentations[
+        cut.bodyId
+      ]!.topology!.faces.map((face) => face.reference?.lineageName);
+      expect(new Set(names).size).toBe(names.length);
+      expect(names).toContain('gear.face.collar.end');
+      expect(names.includes('gear.face.collar.start')).toBe(offset > 0);
+      // The axis still stands on the shaft's: along Z through the origin.
+      const line = derived.datumAxes![axisId]!;
+      expect(Math.abs(line.direction.z)).toBeCloseTo(1, 9);
+      expect(Math.hypot(line.origin.x, line.origin.y)).toBeCloseTo(0, 9);
+    }
+  });
+
+  it('leaves a coaxial step of the same diameter beyond the picked face unnamed by the teeth (v55)', async () => {
+    // A Ø22 shaft 30 long with a Ø26 flange from 14 to 18: the Ø22 wall
+    // is two faces, below and above the flange.
+    let document = createProjectDocument('Shaft', toUserId('user_gear'));
+    document = commandFactories
+      .addPrimitive({
+        name: 'Shaft',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 11, height: 30 }
+      })
+      .apply(document);
+    document = commandFactories
+      .addPrimitive({
+        name: 'Flange',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 13, height: 4 }
+      })
+      .apply(document);
+    const [shaftId, flangeId] = document.bodyOrder as [BodyId, BodyId];
+    document = commandFactories
+      .transformBody({
+        name: 'Raise',
+        targetBodyId: flangeId,
+        translation: { x: 0, y: 0, z: 14 },
+        rotationDeg: { x: 0, y: 0, z: 0 }
+      })
+      .apply(document);
+    document = commandFactories
+      .booleanBodies({
+        name: 'Union',
+        operation: 'union',
+        targetBodyIds: [shaftId, flangeId]
+      })
+      .apply(document);
+    const stepped = document.bodyOrder.at(-1)!;
+    const body = (await adapter.syncDocument(document)).bodyRepresentations[
+      stepped
+    ]!;
+    const lower = body.topology!.faces.find(
+      (face) =>
+        face.geometry?.surfaceType === 'cylinder' &&
+        Math.abs(face.geometry.radius! - 11) < 1e-9 &&
+        Math.max(face.geometry.axisStart!.z, face.geometry.axisEnd!.z) < 15
+    )!;
+    expect(lower).toBeDefined();
+    const cut = gearBody(document, {
+      name: 'Teeth',
+      gearType: 'external',
+      sizing: 'module',
+      teeth: 20,
+      faceWidth: 6,
+      offset: 3,
+      targetBodyId: stepped,
+      faceHash: lower.hash,
+      ...(lower.reference ? { faceReference: lower.reference } : {})
+    });
+    const derived = await adapter.syncDocument(cut.document);
+    expect(derived.warnings).toEqual([]);
+    const faces = derived.bodyRepresentations[cut.bodyId]!.topology!.faces;
+    const names = faces.flatMap((face) =>
+      face.reference ? [face.reference.lineageName] : []
+    );
+    expect(new Set(names).size).toBe(names.length);
+    // Only the Ø22 above the flange goes unnamed, as it already is on the
+    // union (the flange splits the shaft's wall, so its name is ambiguous
+    // there too); every face the teeth make or leave is named.
+    expect(faces.length - names.length).toBe(1);
+    expect(
+      body.topology!.faces.filter((face) => !face.reference)
+    ).toHaveLength(2);
+    const named = (name: string) =>
+      faces.filter((face) => face.reference?.lineageName === name);
+    // The collars are 0..3 and 9..14, the rest of the picked face.
+    for (const [name, from, to] of [
+      ['gear.face.collar.start', 0, 3],
+      ['gear.face.collar.end', 9, 14]
+    ] as const) {
+      const [collar, ...others] = named(name);
+      expect(others).toEqual([]);
+      const ends = [collar!.geometry!.axisStart!.z, collar!.geometry!.axisEnd!.z];
+      expect(Math.min(...ends)).toBeCloseTo(from, 6);
+      expect(Math.max(...ends)).toBeCloseTo(to, 6);
+    }
+    // The Ø22 above the flange is not taken for a collar.
+    const upper = faces.find(
+      (face) =>
+        face.geometry?.surfaceType === 'cylinder' &&
+        Math.abs(face.geometry.radius! - 11) < 1e-9 &&
+        Math.min(face.geometry.axisStart!.z, face.geometry.axisEnd!.z) > 17
+    )!;
+    expect(upper).toBeDefined();
+    expect(upper.reference).toBeUndefined();
   });
 });

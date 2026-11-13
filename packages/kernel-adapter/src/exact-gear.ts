@@ -833,8 +833,10 @@ function spanTolerance(length: number): number {
  * tooth space where the tips stand on the collar and split it, `k` the root
  * it borders. Where the teeth reach an end of the face, the gear's ring keeps
  * its `cap.*` role and the body's part of that cap, inside (a boss) or
- * outside (a bore) the ring, is `cap.start|end.body`. Faces the body's own
- * lineage already names (`named`) keep it.
+ * outside (a bore) the ring, is `cap.start|end.body`. Collars are only
+ * what remains of the picked face, and always take their role, so a span
+ * edit that splits or rejoins them keeps their names; other faces the
+ * body's own lineage already names (`named`) keep it.
  */
 function nameGearSpanFaces(
   kernel: RemusKernel,
@@ -883,9 +885,21 @@ function nameGearSpanFaces(
   const added: { face: number; role: string }[] = [];
   const shoulders = { start: [] as number[], end: [] as number[] };
   const ends = { start: [] as number[], end: [] as number[] };
+  const collars = { start: [] as number[], end: [] as number[] };
   const shoulderRoot = new Map<number, number | undefined>();
+  // Whether a point lies on the picked face's axis line.
+  const onAxis = (point: { x: number; y: number; z: number }) => {
+    const t = at(point);
+    return (
+      Math.hypot(
+        point.x - band.start.x - axis.x * t,
+        point.y - band.start.y - axis.y * t,
+        point.z - band.start.z - axis.z * t
+      ) <= tolerance
+    );
+  };
   for (const face of kernel.getSolidFaces(solid)) {
-    if (roleOf.has(face) || named.faceReferences.has(face)) continue;
+    if (roleOf.has(face)) continue;
     const geometry = measureFaceGeometry(kernel, face);
     if (!geometry) continue;
     if (
@@ -898,16 +912,26 @@ function nameGearSpanFaces(
         x: geometry.axisEnd.x - geometry.axisStart.x,
         y: geometry.axisEnd.y - geometry.axisStart.y,
         z: geometry.axisEnd.z - geometry.axisStart.z
-      })
+      }) &&
+      onAxis(geometry.axisStart)
     ) {
-      const middle = (at(geometry.axisStart) + at(geometry.axisEnd)) / 2;
-      if (middle < band.from - tolerance) {
-        added.push({ face, role: 'collar.start' });
-      } else if (middle > band.to + tolerance) {
-        added.push({ face, role: 'collar.end' });
+      // Only what is left of the picked face: on its axis line and within
+      // its length, so a coaxial step of the same diameter elsewhere on the
+      // body keeps its own name. A collar is named by its role even where
+      // the body's lineage could carry the face's old name (a single
+      // collar), so the name holds as an offset or length edit makes one
+      // collar two, or two one.
+      const a = at(geometry.axisStart);
+      const b = at(geometry.axisEnd);
+      if (Math.min(a, b) < -tolerance || Math.max(a, b) > length + tolerance) {
+        continue;
       }
+      const middle = (a + b) / 2;
+      if (middle < band.from - tolerance) collars.start.push(face);
+      else if (middle > band.to + tolerance) collars.end.push(face);
       continue;
     }
+    if (named.faceReferences.has(face)) continue;
     if (
       geometry.surfaceType !== 'plane' ||
       !geometry.normal ||
@@ -943,6 +967,15 @@ function nameGearSpanFaces(
     shoulderRoot.set(face, root);
   }
   for (const side of ['start', 'end'] as const) {
+    collars[side].forEach((face, order) => {
+      added.push({
+        face,
+        role:
+          collars[side].length === 1
+            ? `collar.${side}`
+            : `collar.${side}[${order}]`
+      });
+    });
     ends[side].forEach((face, order) => {
       added.push({
         face,
