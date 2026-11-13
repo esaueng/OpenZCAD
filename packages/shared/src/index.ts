@@ -15,6 +15,7 @@ export * from './keymap-settings';
 export * from './drawings';
 export * from './object-folders';
 export * from './assembly';
+export * from './assembly-coupling';
 export * from './assembly-kinematics';
 export * from './gear-mesh-types';
 export * from './gear-mesh';
@@ -221,7 +222,13 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // grounding, joints with values and limits, saved positions and motion
 // studies. An older client would drop the section on its next save, so it
 // must refuse.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 54 as const;
+// v55 adds AS02 joint couplings (`assembly.couplings`): two joint values tied
+// by a ratio and an offset, so meshed gears and a rack and its pinion move
+// together. Absent means none, so every v54 assembly loads unchanged. An
+// older client would refuse the unknown commands, or, past that, drop the
+// list on its next save and let the gears turn out of mesh, so it must
+// refuse the document.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 55 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 

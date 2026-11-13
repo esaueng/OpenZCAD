@@ -1,14 +1,17 @@
 import { useEffect, useState } from 'react';
-import { Pause, Pin, Play, Plus, TriangleAlert, X } from 'lucide-react';
+import { Link2, Pause, Pin, Play, Plus, TriangleAlert, X } from 'lucide-react';
 import { commandFactories } from '@openzcad/command-system';
 import {
   ASSEMBLY_JOINT_DOFS,
+  couplingsOfJoint,
   createId,
   type AssemblyComponent,
+  type AssemblyCoupling,
   type AssemblyDofLimit,
   type AssemblyDofUnit,
   type AssemblyJoint,
   type AssemblyPlayback,
+  type AssemblySet,
   type ProjectDocument
 } from '@openzcad/shared';
 import {
@@ -83,6 +86,31 @@ function NumberField({
       {unit ? <span className="assembly-unit">{unitSymbol(unit)}</span> : null}
     </span>
   );
+}
+
+/**
+ * A coupling in a few words: "0.5 turns per turn, the other way" for two
+ * turns, "12.57 mm per turn" when one side slides (a rack and its pinion).
+ */
+export function couplingSummary(
+  set: Pick<AssemblySet, 'joints'>,
+  coupling: AssemblyCoupling
+): string {
+  const unitOf = (end: AssemblyCoupling['driver']) => {
+    const found = set.joints.find((j) => j.id === end.jointId);
+    return found ? ASSEMBLY_JOINT_DOFS[found.kind][end.dof] : undefined;
+  };
+  const from = unitOf(coupling.driver);
+  const to = unitOf(coupling.driven);
+  const size = Math.abs(coupling.ratio);
+  const number = (value: number) => String(Number(value.toFixed(4)));
+  if (from === 'deg' && to === 'deg')
+    return `${number(size)} turns per turn, ${
+      coupling.ratio < 0 ? 'the other way' : 'the same way'
+    }`;
+  if (from === 'deg' && to === 'mm') return `${number(size * 360)} mm per turn`;
+  if (from === 'mm' && to === 'deg') return `${number(360 / size)} mm per turn`;
+  return `ratio ${number(size)}`;
 }
 
 /**
@@ -236,6 +264,38 @@ export function JointDetails({
               )}
             </div>
           </div>
+        );
+      })}
+
+      {couplingsOfJoint(model.set, joint.id).map((coupling) => {
+        const otherId =
+          coupling.driver.jointId === joint.id
+            ? coupling.driven.jointId
+            : coupling.driver.jointId;
+        const other = model.set.joints.find((j) => j.id === otherId);
+        return (
+          <p className="assembly-coupling" key={coupling.id}>
+            <Link2 size={13} aria-hidden="true" />
+            <span>
+              {coupling.name}: moves with {other?.name ?? 'another joint'} ·{' '}
+              {couplingSummary(model.set, coupling)}
+            </span>
+            <button
+              type="button"
+              className="assembly-link-button"
+              aria-label={`Remove ${coupling.name}`}
+              title="The joints stay; they stop moving together"
+              onClick={() =>
+                execute(
+                  commandFactories.deleteAssemblyCoupling({
+                    couplingId: coupling.id
+                  })
+                )
+              }
+            >
+              Remove
+            </button>
+          </p>
         );
       })}
 

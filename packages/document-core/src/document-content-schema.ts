@@ -27,6 +27,15 @@ export function assertAssemblySchema(version: unknown): void {
   assertMinimumProjectSchema(version, 54, 'Assemblies');
 }
 
+/** AS02 joint couplings: `assembly.couplings` and its commands. */
+export function assertAssemblyCouplingSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 55, 'Joint couplings');
+}
+
+function hasCouplings(assembly: unknown): boolean {
+  return record(assembly) && assembly.couplings !== undefined;
+}
+
 export function assertSketchObjectContentSchema(
   data: SketchObjectData,
   version: unknown,
@@ -84,6 +93,11 @@ export function assertDocumentContentCommandSchema(
       command.kind.startsWith('assembly.')
     )
       assertAssemblySchema(document.schemaVersion);
+    if (
+      typeof command.kind === 'string' &&
+      command.kind.startsWith('assembly.coupling.')
+    )
+      assertAssemblyCouplingSchema(document.schemaVersion);
     if (!record(command.payload)) continue;
     switch (command.kind) {
       case 'sketch.add':
@@ -115,13 +129,16 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
         assertObjectFolderSchema(document.schemaVersion);
   if (document.assembly !== undefined)
     assertAssemblySchema(document.schemaVersion);
+  if (hasCouplings(document.assembly))
+    assertAssemblyCouplingSchema(document.schemaVersion);
   for (const entry of document.editHistory?.entries ?? [])
     for (const change of entry.changes)
-      if (
-        change.field === 'assembly' &&
-        (change.before !== undefined || change.after !== undefined)
-      )
-        assertAssemblySchema(document.schemaVersion);
+      if (change.field === 'assembly') {
+        if (change.before !== undefined || change.after !== undefined)
+          assertAssemblySchema(document.schemaVersion);
+        if (hasCouplings(change.before) || hasCouplings(change.after))
+          assertAssemblyCouplingSchema(document.schemaVersion);
+      }
   for (const node of documentNodesWithHistory(document))
     if (node.kind === 'sketch-object')
       assertSketchObjectContentSchema(

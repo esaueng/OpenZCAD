@@ -217,6 +217,12 @@ import {
   deleteAssemblyPosition,
   setAssemblyStudy,
   deleteAssemblyStudy,
+  addAssemblyCoupling,
+  updateAssemblyCoupling,
+  deleteAssemblyCoupling,
+  type AssemblyCouplingAddInput,
+  type AssemblyCouplingUpdateInput,
+  type AssemblyCouplingDeleteInput,
   type AssemblyComponentsAddInput,
   type AssemblyComponentUpdateInput,
   type AssemblyComponentDeleteInput,
@@ -384,6 +390,9 @@ export type CommandKind =
   | 'assembly.position.delete'
   | 'assembly.study.set'
   | 'assembly.study.delete'
+  | 'assembly.coupling.add'
+  | 'assembly.coupling.update'
+  | 'assembly.coupling.delete'
   | 'drawing.annotation.add'
   | 'drawing.annotation.update'
   | 'drawing.annotation.delete'
@@ -469,6 +478,9 @@ export type AnyCommand =
   | CommandDefinition<AssemblyPositionDeleteInput>
   | CommandDefinition<AssemblyStudySetInput>
   | CommandDefinition<AssemblyStudyDeleteInput>
+  | CommandDefinition<AssemblyCouplingAddInput>
+  | CommandDefinition<AssemblyCouplingUpdateInput>
+  | CommandDefinition<AssemblyCouplingDeleteInput>
   | CommandDefinition<DrawingAnnotationAddInput>
   | CommandDefinition<DrawingAnnotationUpdateInput>
   | CommandDefinition<DrawingAnnotationDeleteInput>
@@ -2870,6 +2882,34 @@ export const commandFactories = {
       (document) => deleteAssemblyStudy(document, payload)
     );
   },
+  addAssemblyCoupling(
+    payload: AssemblyCouplingAddInput
+  ): CommandDefinition<AssemblyCouplingAddInput> {
+    return makeCommand(
+      'assembly.coupling.add',
+      'Couple joints',
+      payload,
+      (document) => addAssemblyCoupling(document, payload)
+    );
+  },
+  updateAssemblyCoupling(
+    payload: AssemblyCouplingUpdateInput,
+    label = 'Edit coupling'
+  ): CommandDefinition<AssemblyCouplingUpdateInput> {
+    return makeCommand('assembly.coupling.update', label, payload, (document) =>
+      updateAssemblyCoupling(document, payload)
+    );
+  },
+  deleteAssemblyCoupling(
+    payload: AssemblyCouplingDeleteInput
+  ): CommandDefinition<AssemblyCouplingDeleteInput> {
+    return makeCommand(
+      'assembly.coupling.delete',
+      'Remove coupling',
+      payload,
+      (document) => deleteAssemblyCoupling(document, payload)
+    );
+  },
   createObjectFolder(
     payload: ObjectFolderCreateInput
   ): CommandDefinition<ObjectFolderCreateInput> {
@@ -5016,6 +5056,18 @@ export function isAssemblyCommandKind(kind: string): boolean {
   return kind.startsWith('assembly.');
 }
 
+/**
+ * Whether a command edits the assembly and never the model: an assembly
+ * command, or a transaction made only of them (Place gears saves two joints
+ * and their coupling as one step).
+ */
+export function isAssemblyOnlyCommand(command: AnyCommand): boolean {
+  return command.commands
+    ? command.commands.length > 0 &&
+        command.commands.every(isAssemblyOnlyCommand)
+    : isAssemblyCommandKind(command.kind);
+}
+
 /** Whether a history entry edits the assembly section and nothing else. */
 function assemblyOnly(entry: DocumentHistoryEntry | undefined): boolean {
   return sectionOnly(entry, isAssemblyCommandKind, 'assembly');
@@ -5788,6 +5840,24 @@ export function replayCommands(
         next = deleteAssemblyStudy(
           next,
           command.payload as AssemblyStudyDeleteInput
+        );
+        break;
+      case 'assembly.coupling.add':
+        next = addAssemblyCoupling(
+          next,
+          command.payload as AssemblyCouplingAddInput
+        );
+        break;
+      case 'assembly.coupling.update':
+        next = updateAssemblyCoupling(
+          next,
+          command.payload as AssemblyCouplingUpdateInput
+        );
+        break;
+      case 'assembly.coupling.delete':
+        next = deleteAssemblyCoupling(
+          next,
+          command.payload as AssemblyCouplingDeleteInput
         );
         break;
       case 'objectFolder.move':

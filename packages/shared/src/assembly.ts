@@ -5,7 +5,9 @@ import type { BodyId, Vector3 } from './index';
  * bodies take part as components, which component is grounded, the joints
  * between them with their current values and limits, saved positions and
  * motion studies. A rebuild never reads it: moving a component only changes
- * its display placement, never the modelled solid.
+ * its display placement, never the modelled solid. Schema v55 adds
+ * `couplings`: linear relations between two joint values (meshed gears, a
+ * rack and its pinion).
  *
  * Units: lengths in millimetres, angles in degrees (as `rotationDeg`).
  * Placements and frames are in the modelled coordinates of the component's
@@ -150,12 +152,46 @@ export interface AssemblyMotionStudy {
   tracks: AssemblyTrack[];
 }
 
+/** One free motion of a joint: an index into its values. */
+export interface AssemblyCouplingEnd {
+  jointId: string;
+  /** Index into the joint's free values ({@link ASSEMBLY_JOINT_DOFS}). */
+  dof: number;
+}
+
+/**
+ * Two joint motions that move together (schema v55): meshed gears, a rack
+ * and its pinion. A linear relation between their values,
+ *
+ *   driven = ratio × driver + offset
+ *
+ * each in its own unit (degrees or the assembly's length unit), so an
+ * external gear pair has ratio −z₁/z₂ (deg/deg) and a rack has its pinion's
+ * pitch radius × π/180 (length per degree). The offset holds the phase the
+ * pair was coupled at. Either side can be moved: the relation is solved
+ * both ways, and both joints' limits bound the pair.
+ */
+export interface AssemblyCoupling {
+  id: string;
+  name: string;
+  driver: AssemblyCouplingEnd;
+  driven: AssemblyCouplingEnd;
+  /** Never zero: the relation must run both ways. */
+  ratio: number;
+  offset: number;
+}
+
 export interface AssemblySet {
   /** Display order. */
   components: AssemblyComponent[];
   joints: AssemblyJoint[];
   positions: AssemblyPosition[];
   studies: AssemblyMotionStudy[];
+  /**
+   * Schema v55. Absent means none, so a v54 assembly reads unchanged. The
+   * couplings never form a loop: any two motions are linked at most one way.
+   */
+  couplings?: AssemblyCoupling[];
 }
 
 export const MAX_ASSEMBLY_COMPONENTS = 500;
@@ -164,6 +200,9 @@ export const MAX_ASSEMBLY_POSITIONS = 100;
 export const MAX_ASSEMBLY_STUDIES = 50;
 export const MAX_ASSEMBLY_TRACKS = 200;
 export const MAX_ASSEMBLY_KEYS = 500;
+export const MAX_ASSEMBLY_COUPLINGS = 1000;
+/** Smallest coupling ratio magnitude; below it the relation cannot run back. */
+export const MIN_ASSEMBLY_COUPLING_RATIO = 1e-9;
 export const MAX_ASSEMBLY_NAME_LENGTH = 120;
 export const MAX_ASSEMBLY_STUDY_SECONDS = 3600;
 /** Largest stored length or angle magnitude; keeps arithmetic finite. */
@@ -476,6 +515,77 @@ export function assemblySetError(value: unknown): string | null {
     const id = (study as AssemblyMotionStudy).id;
     if (studyIds.has(id)) return `Motion study ${id} is listed twice.`;
     studyIds.add(id);
+  }
+  return couplingsError(value.couplings, joints);
+}
+
+/** The key one joint motion has in a coupling graph. */
+export function couplingEndKey(end: AssemblyCouplingEnd): string {
+  return `${end.jointId}/${end.dof}`;
+}
+
+/**
+ * Why a coupling list is malformed, or null. Structure only: which motions
+ * exist, a usable ratio, and no loop. Whether the joints' limits leave the
+ * pair a shared position is judged where they are edited
+ * (`couplingAddError`), since a limit is not part of this list.
+ */
+function couplingsError(
+  value: unknown,
+  joints: Map<string, AssemblyJointKind>
+): string | null {
+  if (value === undefined) return null;
+  if (!Array.isArray(value) || value.length > MAX_ASSEMBLY_COUPLINGS)
+    return `An assembly holds at most ${MAX_ASSEMBLY_COUPLINGS} couplings.`;
+  const ids = new Set<string>();
+  const group = new Map<string, string>();
+  const find = (key: string): string => {
+    let root = key;
+    for (;;) {
+      const next = group.get(root);
+      if (next === undefined || next === root) break;
+      root = next;
+    }
+    group.set(key, root);
+    return root;
+  };
+  for (const coupling of value) {
+    if (!isRecord(coupling) || !isId(coupling.id))
+      return 'An assembly coupling has no id.';
+    const id = coupling.id;
+    if (ids.has(id)) return `Coupling ${id} is listed twice.`;
+    ids.add(id);
+    if (!isName(coupling.name)) return `Coupling ${id} has no usable name.`;
+    for (const side of ['driver', 'driven'] as const) {
+      const end = coupling[side];
+      if (!isRecord(end) || !isId(end.jointId))
+        return `Coupling ${id} has an end without a joint.`;
+      const kind = joints.get(end.jointId);
+      if (!kind) return `Coupling ${id} links a joint that does not exist.`;
+      if (
+        typeof end.dof !== 'number' ||
+        !Number.isInteger(end.dof) ||
+        end.dof < 0 ||
+        end.dof >= ASSEMBLY_JOINT_DOFS[kind].length
+      )
+        return `Coupling ${id} links a motion its joint does not have.`;
+    }
+    const driver = coupling.driver as AssemblyCouplingEnd;
+    const driven = coupling.driven as AssemblyCouplingEnd;
+    if (driver.jointId === driven.jointId)
+      return `Coupling ${id} links a joint to itself.`;
+    if (
+      !isNumber(coupling.ratio) ||
+      Math.abs(coupling.ratio) < MIN_ASSEMBLY_COUPLING_RATIO
+    )
+      return `Coupling ${id} has an unusable ratio.`;
+    if (!isNumber(coupling.offset))
+      return `Coupling ${id} has an offset that is not a number.`;
+    const a = find(couplingEndKey(driver));
+    const b = find(couplingEndKey(driven));
+    if (a === b)
+      return `Coupling ${id} links two motions that are already coupled.`;
+    group.set(a, b);
   }
   return null;
 }

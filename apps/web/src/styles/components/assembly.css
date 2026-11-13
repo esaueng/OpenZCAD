@@ -917,6 +917,22 @@
   text-align: right;
 }
 
+/* A joint's coupling: what it moves with, and Remove. */
+.assembly-coupling {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-normal);
+}
+
+.assembly-coupling > span {
+  flex: 1;
+  min-width: 0;
+}
+
 /* ── Set up motion (takes the sidebar while open) ────────── */
 
 .assembly-setup-field {

@@ -1,14 +1,26 @@
 import { useMemo, type ReactNode } from 'react';
 import { X } from 'lucide-react';
-import type { GearMeshSolution, ProjectDocument } from '@openzcad/shared';
+import {
+  isGearMeshRefusal,
+  type GearMeshSolution,
+  type ProjectDocument
+} from '@openzcad/shared';
 import type { AssemblyExecute } from '../../lib/assembly/assembleWorkspace';
 import {
   assemblyRuntime,
   useAssemblyRuntime
 } from '../../lib/assembly/assemblyRuntime';
 import {
+  createGearCouplingFromSetup,
+  defaultGearCarrier,
+  gearBaseDrive,
+  gearCarrierChoices,
+  gearCouplingPlan
+} from '../../lib/assembly/gearCoupling';
+import {
   gearComponentIds,
-  type GearMeshDraft
+  type GearMeshDraft,
+  type GearMeshMotion
 } from '../../lib/assembly/gearMesh';
 import {
   createGearMeshFromSetup,
@@ -27,9 +39,11 @@ export interface GearMeshCardProps {
 /**
  * Place gears (M14 meshing-pair helper): pick the gear that stays put and
  * the one that meshes with it; the card shows the working centre distance,
- * pressure angle, ratio and play, or why the pair cannot mesh, and Place
- * saves a rigid joint that places the second gear there. Loaded lazily
- * by the Assembly panel: the entry chunk keeps only `gearMeshEntry`.
+ * pressure angle, ratio and play, or why the pair cannot mesh. Place saves
+ * either a rigid joint that holds the second gear there, or (AS02 gear
+ * coupling) a joint per gear on the part they are mounted on and the
+ * coupling that moves them together. Loaded lazily by the Assembly panel:
+ * the entry chunk keeps only `gearMeshEntry`.
  */
 export function GearMeshCard(props: GearMeshCardProps) {
   const draft = useAssemblyRuntime((s) => s.gearMesh);
@@ -44,18 +58,37 @@ function GearMeshForm({
   draft
 }: GearMeshCardProps & { draft: GearMeshDraft }) {
   const context = useMemo(() => gearMeshCardContext(document), [document]);
+  const coupled = draft.motion === 'coupled';
   const result = useMemo(
     () =>
-      context
-        ? gearMeshJoint(context, draft, 'gear-mesh-preview')
-        : { error: 'This project has no assembly.' },
-    [context, draft]
+      !context
+        ? { error: 'This project has no assembly.' }
+        : coupled
+          ? gearCouplingPlan(context, draft, {
+              baseJointId: 'gear-mesh-preview-base',
+              jointId: 'gear-mesh-preview',
+              couplingId: 'gear-mesh-preview-coupling'
+            })
+          : gearMeshJoint(context, draft, 'gear-mesh-preview'),
+    [context, coupled, draft]
   );
   if (!context) return null;
   const gearIds = new Set(gearComponentIds(context));
   const gears = context.set.components.filter((c) => gearIds.has(c.id));
   const base = gears.find((c) => c.id === draft.baseId);
+  const moving = gears.find((c) => c.id === draft.movingId);
   const units = unitLabel('length', document.units);
+  const rackPair = [draft.baseId, draft.movingId].some((id) => {
+    const gear = id ? context.gearOf(id) : null;
+    return !!gear && !isGearMeshRefusal(gear) && gear.gearType === 'rack';
+  });
+  // The first gear's own joint decides the mount; else the user chooses it.
+  const drive = coupled ? gearBaseDrive(context, draft.baseId) : null;
+  const carriers = coupled ? gearCarrierChoices(context, draft) : [];
+  const carrierId = draft.carrierId ?? defaultGearCarrier(context, draft);
+  const carrierName = (id: string | null) =>
+    context.set.components.find((c) => c.id === id)?.name ?? 'the mount';
+  const plan = 'coupling' in result ? result : null;
 
   return (
     <section className="assembly-joint-tool" aria-label="Place gears">
@@ -81,6 +114,8 @@ function GearMeshForm({
               const baseId = event.currentTarget.value;
               assemblyRuntime.updateGearMesh({
                 baseId,
+                // The mount is chosen among the other parts: choose again.
+                carrierId: null,
                 ...(baseId === draft.movingId
                   ? {
                       movingId: gears.find((c) => c.id !== baseId)?.id ?? null
@@ -95,9 +130,17 @@ function GearMeshForm({
               </option>
             ))}
           </select>
-          {base && !base.grounded && 'joint' in result && result.groundBase ? (
+          {base &&
+          !base.grounded &&
+          'groundBase' in result &&
+          result.groundBase ? (
             <span className="assembly-muted">
               Not fixed yet — Place fixes it in place.
+            </span>
+          ) : null}
+          {base && plan?.releaseBase ? (
+            <span className="assembly-muted">
+              Fixed now — Place lets it move on its own joint.
             </span>
           ) : null}
         </Step>
@@ -108,7 +151,8 @@ function GearMeshForm({
             value={draft.movingId ?? ''}
             onChange={(event) =>
               assemblyRuntime.updateGearMesh({
-                movingId: event.currentTarget.value
+                movingId: event.currentTarget.value,
+                carrierId: null
               })
             }
           >
@@ -121,9 +165,64 @@ function GearMeshForm({
               ))}
           </select>
           <span className="assembly-muted">
-            Placed beside it with mid-faces level and teeth between teeth. The
-            pair stays fixed together; linked rotation is not available yet.
+            Placed beside it with mid-faces level and teeth between teeth.
           </span>
+        </Step>
+        <Step index={3} title="Motion">
+          <select
+            className="assembly-select"
+            aria-label="How the pair moves"
+            value={coupled ? 'coupled' : 'fixed'}
+            onChange={(event) =>
+              assemblyRuntime.updateGearMesh({
+                motion: event.currentTarget.value as GearMeshMotion
+              })
+            }
+          >
+            <option value="fixed">Fixed together</option>
+            <option value="coupled">
+              {rackPair ? 'Move together' : 'Turn together'}
+            </option>
+          </select>
+          {!coupled ? (
+            <span className="assembly-muted">
+              The pair stays fixed together. Choose{' '}
+              {rackPair ? 'Move together' : 'Turn together'} to link their
+              motion.
+            </span>
+          ) : drive ? (
+            <span className="assembly-muted">
+              {base?.name ?? 'The first gear'} already moves on{' '}
+              {drive.jointName}; {moving?.name ?? 'its mate'} joins{' '}
+              {carrierName(drive.carrierId)} and follows it.
+            </span>
+          ) : (
+            <>
+              {carriers.length > 0 ? (
+                <select
+                  className="assembly-select"
+                  aria-label="Part the gears are mounted on"
+                  value={carrierId ?? ''}
+                  onChange={(event) =>
+                    assemblyRuntime.updateGearMesh({
+                      carrierId: event.currentTarget.value
+                    })
+                  }
+                >
+                  {carriers.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              ) : null}
+              <span className="assembly-muted">
+                {plan?.groundCarrier
+                  ? `Each gets its own joint on ${carrierName(plan.carrierId)}, which Place fixes in place. Moving one moves the other.`
+                  : 'Each gets its own joint on the part they are mounted on. Moving one moves the other.'}
+              </span>
+            </>
+          )}
         </Step>
       </ol>
 
@@ -148,7 +247,7 @@ function GearMeshForm({
           className="primary"
           disabled={'error' in result}
           onClick={() =>
-            createGearMeshFromSetup(
+            (coupled ? createGearCouplingFromSetup : createGearMeshFromSetup)(
               { document, execute, onStatus },
               context,
               draft

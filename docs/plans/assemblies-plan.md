@@ -74,11 +74,67 @@ Frames are right-handed, stored as origin + Z + X in the component's modelled
 coordinates; validation requires unit axes and perpendicularity within
 `1e-6`. Values are clamped into their limits on every write.
 
+### Couplings (schema v55)
+
+`assembly.couplings?: AssemblyCoupling[]` — absent means none, so a v54
+assembly reads unchanged. A coupling ties two joint values with one linear
+relation:
+
+```
+driven = ratio × driver + offset
+```
+
+| Field              | Contents                                                       |
+| ------------------ | -------------------------------------------------------------- |
+| `driver`, `driven` | a joint id and the index of one of its free values             |
+| `ratio`            | driven units per driver unit; never zero, so it runs both ways |
+| `offset`           | the phase the pair was coupled at, in the driven value's unit  |
+
+An external gear pair is `−z₁/z₂` (degrees per degree), a pinion in a ring
+`+z₁/z₂`, a rack its pinion's pitch radius × π/180 (length per degree). Each
+joint measures its value about its own axis, so the stored sign also carries
+the two axis senses; Place gears works it out from the placed pair.
+
+Why this shape: joint values already are the assembly's only free numbers
+(decision 4), so a relation between two of them needs no change to frames,
+poses or the tree solve. The values are settled first, as plain numbers, and
+the tree is then placed exactly as before. It is the smallest addition that
+moves two joints together, and it is not a loop solver (AS09): a coupling
+relates values, it never closes a kinematic loop.
+
+- **One free value per group.** Couplings never form a loop (validation
+  refuses one), so every group of coupled motions is a tree and each member
+  is a linear function of one value. The solve is exact, with no iteration.
+- **Either side drives.** In a group the member whose value was written (a
+  drag, a typed value, a key, a playback frame) leads and the rest follow;
+  when nothing was written the group's first member leads with its stored
+  value. When several members were written at once (a motion study that keys
+  both gears) the first in the group's order leads and the others' written
+  values are ignored. Every command that writes values, limits or couplings
+  settles the group before it returns, so stored values always satisfy every
+  coupling.
+- **Limits bound the pair.** The lead value is clamped into the range every
+  member's limit allows: a driven joint's limit stops its driver, and a drag
+  or an Animate sweep reads that narrowed range.
+- **Refused by code** (`coupling:*`): an unknown joint, a joint coupled to
+  itself, a rigid joint or a motion the joint does not have, a joint that
+  never moves (it closes a loop or joins two fixed parts), a zero or
+  non-finite ratio, a second link between motions that already move together
+  (`redundant` at the same ratio, `conflict` at another, which would lock
+  them), and limits that leave the group no shared position.
+- A coupling goes with either of its joints: deleting the joint or its
+  component, or changing the joint's kind, removes it.
+
+Commands: `assembly.coupling.add` (without an offset it holds the current
+pose), `assembly.coupling.update`, `assembly.coupling.delete`.
+
 Commands, each one undo step: `assembly.components.add`,
 `assembly.component.update`, `assembly.component.delete`,
 `assembly.joint.add`, `assembly.joint.update`, `assembly.joint.delete`,
 `assembly.pose.set`, `assembly.position.save`, `assembly.position.delete`,
-`assembly.study.set`, `assembly.study.delete`. A structural edit first writes
+`assembly.study.set`, `assembly.study.delete`, and for couplings (v55)
+`assembly.coupling.add`, `assembly.coupling.update`,
+`assembly.coupling.delete`. A structural edit first writes
 every component's solved pose into its placement, so nothing jumps when the
 joint graph changes.
 
@@ -103,6 +159,15 @@ joint graph changes.
   part resting in a holder lifts clear of it. It refuses a fixed moving part,
   an empty range, and a part that already moves on another joint (that
   would close a loop). "Pick on the model" hands over to the Joint tool.
+- **Place gears:** two gear parts are placed at their working centre
+  distance and tooth phase (M14). Saved fixed together (one rigid joint, the
+  default) or moving together: each gear gets a revolute joint about its own
+  axis (a rack a slider along its teeth) on the part the pair is mounted on,
+  plus the coupling. Gears turn about fixed axes, so they need that third
+  part; a pair with nothing to mount it on can only be fixed together. A
+  first gear that already turns on a joint about its axis keeps that joint
+  and the second gear joins the same part, which is how a train is built
+  gear by gear. A joint's details name its coupling and can remove it.
 - **Drag:** the nearest movable joint between the dragged part and the ground
   takes the drag; turns use the angle rig about the joint axis, slides project
   onto it; the value soft-stops at its limits.
@@ -118,5 +183,10 @@ joint graph changes.
 
 - Frames are stored as numbers with their picked source; re-resolving them
   after a body is reshaped is a follow-up (today the stored frame is kept).
-- Loops (AS09), couplings and video export (AS08), interference during motion
-  (AS04, after kernel clash support), exploded views and BOM (AS03).
+- Loops (AS09), couplings beyond gear pairs (a general ratio between any two
+  joints with its own editor, screw couplings on one cylindrical joint) and
+  video export (AS08), interference during motion (AS04, after kernel clash
+  support), exploded views and BOM (AS03).
+- A coupling's ratio is fixed when the pair is placed: editing a gear's
+  tooth count or moving a joint's frame afterwards does not update it. Place
+  the pair again after such an edit.

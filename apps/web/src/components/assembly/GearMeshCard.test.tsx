@@ -31,8 +31,11 @@ function gear(name: string, overrides: Partial<GearInput> = {}): GearInput {
   };
 }
 
-/** A pinion, a wheel (or `wheel` overrides) and a box, all three parts. */
-function renderGears(wheel: Partial<GearInput> = {}) {
+/**
+ * A pinion, a wheel (or `wheel` overrides) and a box, all three parts;
+ * `plate: false` leaves the box out of the assembly.
+ */
+function renderGears(wheel: Partial<GearInput> = {}, plate = true) {
   const manager = new CommandManager(
     createProjectDocument('Gears', toUserId('user_gears'))
   );
@@ -51,12 +54,16 @@ function renderGears(wheel: Partial<GearInput> = {}) {
   manager.execute(
     commandFactories.addAssemblyComponents({
       components: [
-        {
-          componentId: 'comp_plate',
-          name: 'Plate',
-          bodyId: c,
-          grounded: false
-        },
+        ...(plate
+          ? [
+              {
+                componentId: 'comp_plate',
+                name: 'Plate',
+                bodyId: c,
+                grounded: false
+              }
+            ]
+          : []),
         { componentId: 'comp_a', name: 'Pinion', bodyId: a, grounded: false },
         { componentId: 'comp_b', name: 'Wheel', bodyId: b, grounded: false }
       ]
@@ -208,6 +215,91 @@ describe('Place gears card', () => {
       );
       rerender();
       expect(screen.queryByRole('region', { name: 'Place gears' })).toBeNull();
+    }
+  );
+
+  it(
+    'saves a joint per gear and their coupling as one step when they turn together',
+    { timeout: LAZY_TEST_TIMEOUT_MS },
+    async () => {
+      const { commands, manager, rerender, status } = renderGears();
+      fireEvent.click(screen.getByRole('button', { name: 'Place gears' }));
+      const form = await card();
+      fireEvent.change(
+        within(form).getByRole('combobox', { name: 'How the pair moves' }),
+        { target: { value: 'coupled' } }
+      );
+      // The only other part is offered as the mount, and Place will fix it.
+      expect(
+        within(form).getByRole('combobox', {
+          name: 'Part the gears are mounted on'
+        })
+      ).toHaveValue('comp_plate');
+      expect(
+        within(form).getByText(/own joint on Plate, which Place fixes in place/)
+      ).toBeVisible();
+      expect(within(form).getByText('0.5, the other way')).toBeInTheDocument();
+      fireEvent.click(within(form).getByRole('button', { name: 'Place' }));
+      expect(commands.map((c) => c.kind)).toEqual(['transaction']);
+      const set = manager.document.assembly!;
+      expect(set.joints.map((j) => [j.name, j.kind])).toEqual([
+        ['Pinion turn', 'revolute'],
+        ['Wheel turn', 'revolute']
+      ]);
+      expect(set.couplings).toHaveLength(1);
+      expect(set.couplings![0]!.ratio).toBeCloseTo(-0.5, 12);
+      expect(set.components.find((c) => c.id === 'comp_plate')?.grounded).toBe(
+        true
+      );
+      expect(getAssemblyRuntime().gearMesh).toBeNull();
+      // The driving joint is selected, ready to drag or play.
+      expect(getAssemblyRuntime().selectedJointId).toBe(set.joints[0]!.id);
+      expect(status.at(-1)).toBe(
+        'Gear ratio is in place: moving one gear moves the other.'
+      );
+      rerender();
+      const details = screen.getByLabelText('Pinion turn details');
+      expect(
+        within(details).getByText(
+          /Gear ratio: moves with Wheel turn · 0\.5 turns per turn, the other way/
+        )
+      ).toBeVisible();
+      // One undo takes all of it back; Remove alone keeps the joints.
+      fireEvent.click(
+        within(details).getByRole('button', { name: 'Remove Gear ratio' })
+      );
+      expect(commands.at(-1)?.kind).toBe('assembly.coupling.delete');
+      expect(manager.document.assembly!.couplings).toBeUndefined();
+      expect(manager.document.assembly!.joints).toHaveLength(2);
+      manager.undo();
+      manager.undo();
+      expect(manager.document.assembly!.joints).toEqual([]);
+    }
+  );
+
+  it(
+    'says that turning together needs a part to mount the gears on',
+    { timeout: LAZY_TEST_TIMEOUT_MS },
+    async () => {
+      renderGears({}, false);
+      fireEvent.click(screen.getByRole('button', { name: 'Place gears' }));
+      const form = await card();
+      expect(within(form).getByRole('button', { name: 'Place' })).toBeEnabled();
+      fireEvent.change(
+        within(form).getByRole('combobox', { name: 'How the pair moves' }),
+        { target: { value: 'coupled' } }
+      );
+      expect(within(form).getByRole('alert')).toHaveTextContent(
+        /need a part they are both mounted on/
+      );
+      expect(
+        within(form).queryByRole('combobox', {
+          name: 'Part the gears are mounted on'
+        })
+      ).toBeNull();
+      expect(
+        within(form).getByRole('button', { name: 'Place' })
+      ).toBeDisabled();
     }
   );
 

@@ -2,6 +2,10 @@ import {
   ASSEMBLY_JOINT_DOFS,
   assertAssemblySet,
   clampJointValues,
+  coupledJointValues,
+  couplingAddError,
+  couplingLimitsConflict,
+  couplingOffsetAtPose,
   deepClone,
   emptyAssemblySet,
   isAssemblySetEmpty,
@@ -11,6 +15,8 @@ import {
   transformToPlacement,
   IDENTITY_PLACEMENT,
   type AssemblyComponent,
+  type AssemblyCoupling,
+  type AssemblyCouplingEnd,
   type AssemblyDofLimit,
   type AssemblyJoint,
   type AssemblyJointEnd,
@@ -21,7 +27,10 @@ import {
   type BodyId,
   type ProjectDocument
 } from '@openzcad/shared';
-import { assertAssemblySchema } from './document-content-schema';
+import {
+  assertAssemblyCouplingSchema,
+  assertAssemblySchema
+} from './document-content-schema';
 import { bodySourceMap } from './object-folders';
 
 /**
@@ -31,6 +40,11 @@ import { bodySourceMap } from './object-folders';
  * `assembly`. A structural edit (joints, grounding, components) first writes
  * every component's current solved pose into its placement, so nothing on
  * screen jumps when the joint graph changes.
+ *
+ * Schema v55 adds couplings. Every command that writes joint values, limits
+ * or couplings settles the coupled values before it returns, so the stored
+ * values always satisfy every coupling: the joint that was written leads
+ * and the joints coupled to it follow.
  */
 
 export interface AssemblyComponentsAddInput {
@@ -88,6 +102,34 @@ export interface AssemblyPositionSaveInput {
 
 export interface AssemblyPositionDeleteInput {
   positionId: string;
+}
+
+export interface AssemblyCouplingAddInput {
+  coupling: {
+    id: string;
+    name: string;
+    driver: AssemblyCouplingEnd;
+    driven: AssemblyCouplingEnd;
+    /** Driven units per driver unit; never zero. */
+    ratio: number;
+    /**
+     * Omitted, the coupling holds the pose both joints are in now (a meshed
+     * pair keeps its tooth phase). Given, the driven joint moves to it.
+     */
+    offset?: number;
+  };
+}
+
+export interface AssemblyCouplingUpdateInput {
+  couplingId: string;
+  name?: string;
+  /** A new ratio keeps the current pose unless `offset` is given too. */
+  ratio?: number;
+  offset?: number;
+}
+
+export interface AssemblyCouplingDeleteInput {
+  couplingId: string;
 }
 
 /** Adds the study, or replaces the one with the same id. */
@@ -159,9 +201,48 @@ function freezePlacements(set: AssemblySet): void {
   }
 }
 
-/** Drops tracks and saved values that name joints no longer present. */
+/**
+ * Writes the joint values the limits and couplings allow. `lead` are values
+ * being written now: in a coupled group the joint that changed leads.
+ */
+function settleJointValues(
+  set: AssemblySet,
+  lead: Readonly<Record<string, readonly number[]>> = {}
+): void {
+  const settled = coupledJointValues(set, new Map(Object.entries(lead)));
+  for (const j of set.joints) j.values = settled.get(j.id) ?? j.values;
+}
+
+function couplingOf(set: AssemblySet, couplingId: string): AssemblyCoupling {
+  const found = set.couplings?.find((c) => c.id === couplingId);
+  if (!found) throw new Error(`Coupling ${couplingId} not found.`);
+  return found;
+}
+
+/** Refuses limits that leave a coupled group no position to be in. */
+function assertCoupledLimits(set: AssemblySet): void {
+  const conflict = couplingLimitsConflict(set);
+  if (conflict === null) return;
+  const name = set.couplings?.find((c) => c.id === conflict)?.name;
+  throw new Error(
+    `Those limits leave ${name ?? 'the coupled joints'} no position every joint can reach.`
+  );
+}
+
+/**
+ * Drops tracks, saved values and couplings that name joints or motions no
+ * longer present.
+ */
 function pruneJointReferences(set: AssemblySet): void {
   const joints = new Map(set.joints.map((j) => [j.id, j]));
+  if (set.couplings) {
+    const has = (end: AssemblyCouplingEnd) => {
+      const j = joints.get(end.jointId);
+      return !!j && end.dof < ASSEMBLY_JOINT_DOFS[j.kind].length;
+    };
+    set.couplings = set.couplings.filter((c) => has(c.driver) && has(c.driven));
+    if (set.couplings.length === 0) delete set.couplings;
+  }
   for (const study of set.studies) {
     study.tracks = study.tracks.filter((track) => {
       const j = joints.get(track.jointId);
@@ -295,6 +376,12 @@ export function updateAssemblyJoint(
       target.kind = input.kind;
       target.values = ASSEMBLY_JOINT_DOFS[input.kind].map(() => 0);
       target.limits = ASSEMBLY_JOINT_DOFS[input.kind].map(() => null);
+      // A ratio between a turn and a slide means nothing for the new kind.
+      if (set.couplings)
+        set.couplings = set.couplings.filter(
+          (c) =>
+            c.driver.jointId !== target.id && c.driven.jointId !== target.id
+        );
     }
     if (input.parent !== undefined) target.parent = jointEnd(input.parent);
     if (input.child !== undefined) target.child = jointEnd(input.child);
@@ -319,8 +406,12 @@ export function updateAssemblyJoint(
         return limit ? { min: limit.min, max: limit.max } : null;
       });
     }
-    target.values = clampJointValues(target, input.values ?? target.values);
+    const values = clampJointValues(target, input.values ?? target.values);
     pruneJointReferences(set);
+    if (set.couplings) {
+      assertCoupledLimits(set);
+      settleJointValues(set, { [target.id]: values });
+    } else target.values = values;
     return set;
   });
 }
@@ -343,13 +434,91 @@ export function setAssemblyPose(
   input: AssemblyPoseSetInput
 ): ProjectDocument {
   return withAssembly(document, (set) => {
-    for (const [jointId, values] of Object.entries(input.values ?? {})) {
-      const target = joint(set, jointId);
-      target.values = clampJointValues(target, values);
-    }
+    for (const jointId of Object.keys(input.values ?? {})) joint(set, jointId);
+    settleJointValues(set, input.values);
     for (const [componentId, value] of Object.entries(input.placements ?? {})) {
       component(set, componentId).placement = placement(value);
     }
+    return set;
+  });
+}
+
+export function addAssemblyCoupling(
+  document: ProjectDocument,
+  input: AssemblyCouplingAddInput
+): ProjectDocument {
+  assertAssemblyCouplingSchema(document.schemaVersion);
+  return withAssembly(document, (set) => {
+    const incoming = input.coupling;
+    if (set.couplings?.some((c) => c.id === incoming.id))
+      throw new Error(`Coupling ${incoming.id} already exists.`);
+    const draft = {
+      driver: { jointId: incoming.driver.jointId, dof: incoming.driver.dof },
+      driven: { jointId: incoming.driven.jointId, dof: incoming.driven.dof },
+      ratio: incoming.ratio,
+      ...(incoming.offset === undefined ? {} : { offset: incoming.offset })
+    };
+    const refusal = couplingAddError(set, draft, solveAssembly(set).unsolved);
+    if (refusal) throw new Error(refusal.message);
+    (set.couplings ??= []).push({
+      id: incoming.id,
+      name: cleanName(incoming.name, 'A coupling'),
+      driver: draft.driver,
+      driven: draft.driven,
+      ratio: draft.ratio,
+      offset: draft.offset ?? couplingOffsetAtPose(set, draft)
+    });
+    settleJointValues(set);
+    return set;
+  });
+}
+
+export function updateAssemblyCoupling(
+  document: ProjectDocument,
+  input: AssemblyCouplingUpdateInput
+): ProjectDocument {
+  assertAssemblyCouplingSchema(document.schemaVersion);
+  return withAssembly(document, (set) => {
+    const target = couplingOf(set, input.couplingId);
+    if (input.name !== undefined)
+      target.name = cleanName(input.name, 'A coupling');
+    if (input.ratio !== undefined || input.offset !== undefined) {
+      const ratio = input.ratio ?? target.ratio;
+      const draft = {
+        driver: target.driver,
+        driven: target.driven,
+        ratio,
+        // A new ratio alone turns about the current pose: nothing jumps.
+        ...(input.offset !== undefined
+          ? { offset: input.offset }
+          : input.ratio !== undefined
+            ? {}
+            : { offset: target.offset })
+      };
+      const others = {
+        joints: set.joints,
+        couplings: (set.couplings ?? []).filter((c) => c.id !== target.id)
+      };
+      const refusal = couplingAddError(others, draft);
+      if (refusal) throw new Error(refusal.message);
+      target.ratio = ratio;
+      target.offset = draft.offset ?? couplingOffsetAtPose(set, draft);
+      settleJointValues(set);
+    }
+    return set;
+  });
+}
+
+export function deleteAssemblyCoupling(
+  document: ProjectDocument,
+  input: AssemblyCouplingDeleteInput
+): ProjectDocument {
+  return withAssembly(document, (set) => {
+    couplingOf(set, input.couplingId);
+    set.couplings = (set.couplings ?? []).filter(
+      (c) => c.id !== input.couplingId
+    );
+    if (set.couplings.length === 0) delete set.couplings;
     return set;
   });
 }

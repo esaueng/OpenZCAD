@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import {
   ASSEMBLY_JOINT_DOFS,
+  coupledJointLimits,
   jointSweepRange,
   jointSweepValue,
   motionStudyValues,
@@ -42,7 +43,12 @@ export function playbackFrame(
   if (playback.kind === 'joint') {
     const joint = set.joints.find((j) => j.id === playback.jointId);
     if (!joint) return null;
-    const range = jointSweepRange(joint, playback.dof);
+    // A coupled joint sweeps only as far as the joints it moves allow, so
+    // the sweep never stalls against a mate's limit.
+    const range = jointSweepRange(
+      { kind: joint.kind, limits: coupledJointLimits(set, joint) },
+      playback.dof
+    );
     if (!range) return null;
     const { value, done } = jointSweepValue(
       range,

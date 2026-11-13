@@ -250,3 +250,103 @@ describe('assembly view model', () => {
     expect(back?.overrides.get('joint_pivot')?.[0]).toBeCloseTo(0, 9);
   });
 });
+
+describe('coupled joints in the view (AS02 gear coupling)', () => {
+  const at = (x: number): AssemblyFrame => ({
+    ...PIVOT,
+    origin: { x, y: 0, z: 0 }
+  });
+
+  /** A fixed plate with two parts turning on it, coupled at −2. */
+  function coupled() {
+    const manager = new CommandManager(
+      createProjectDocument('Gears', toUserId('user_view'))
+    );
+    for (const name of ['Plate', 'Gear A', 'Gear B'])
+      manager.execute(
+        commandFactories.addPrimitive({
+          name,
+          primitiveKind: 'box',
+          dimensions: { width: 10, height: 2, depth: 10 }
+        })
+      );
+    const bodies = manager.document.bodyOrder;
+    manager.execute(
+      commandFactories.addAssemblyComponents({
+        components: ['plate', 'a', 'b'].map((id, index) => ({
+          componentId: id,
+          name: id,
+          bodyId: bodies[index] as BodyId,
+          grounded: id === 'plate'
+        }))
+      })
+    );
+    for (const [id, child, x] of [
+      ['turn_a', 'a', 0],
+      ['turn_b', 'b', 50]
+    ] as const)
+      manager.execute(
+        commandFactories.addAssemblyJoint({
+          joint: {
+            id,
+            name: id,
+            kind: 'revolute',
+            parent: { componentId: 'plate', frame: at(x) },
+            child: { componentId: child, frame: at(x) },
+            values: [0],
+            limits: [id === 'turn_b' ? { min: -20, max: 20 } : null]
+          }
+        })
+      );
+    manager.execute(
+      commandFactories.addAssemblyCoupling({
+        coupling: {
+          id: 'mesh',
+          name: 'Gear ratio',
+          driver: { jointId: 'turn_a', dof: 0 },
+          driven: { jointId: 'turn_b', dof: 0 },
+          ratio: -2
+        }
+      })
+    );
+    return { document: manager.document, bodies };
+  }
+
+  it('moves both parts when either joint is dragged', () => {
+    const { document, bodies } = coupled();
+    const rest = buildAssemblyView(document, runtime)!;
+    const dragged = buildAssemblyView(document, {
+      ...runtime,
+      overrides: new Map([['turn_b', [10]]])
+    })!;
+    for (const body of [bodies[1], bodies[2]] as BodyId[])
+      expect(dragged.matrices.get(body)).not.toEqual(rest.matrices.get(body));
+    expect(dragged.matrices.get(bodies[0] as BodyId)).toEqual(
+      rest.matrices.get(bodies[0] as BodyId)
+    );
+    const values = Object.fromEntries(
+      dragged.glyphs.map((g) => [g.jointId, g.values[0]])
+    );
+    expect(values).toEqual({ turn_a: -5, turn_b: 10 });
+  });
+
+  it('sweeps a joint only as far as the joint coupled to it allows', () => {
+    const set = coupled().document.assembly!;
+    const sweep = (nowMs: number) =>
+      playbackFrame(
+        set,
+        {
+          kind: 'joint',
+          jointId: 'turn_a',
+          dof: 0,
+          mode: 'once',
+          sweepS: 1,
+          startedAtMs: 1000
+        },
+        nowMs
+      )?.overrides.get('turn_a')?.[0];
+    // Unlimited itself, but its mate stops at ±20°, which is ±10° here.
+    expect(sweep(1000)).toBeCloseTo(-10, 9);
+    expect(sweep(2000)).toBeCloseTo(10, 9);
+  });
+});

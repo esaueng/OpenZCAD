@@ -13,6 +13,7 @@ import {
   type AssemblySet,
   type AssemblyTrack
 } from './assembly';
+import { coupledDofLimit, coupledJointValues } from './assembly-coupling';
 
 /**
  * Assembly kinematics (AS02/AS06/AS07). Exact forward kinematics over a
@@ -23,6 +24,8 @@ import {
  * where F is a joint end's frame and M the joint's motion in the parent
  * frame. A joint that would close a loop is reported, never silently
  * dropped; closed-loop solving is a later, separate solver (AS09).
+ * Coupled joint values (meshed gears, schema v55) are settled first, as
+ * plain numbers, so the tree is then placed exactly as before.
  * Everything here is deterministic: traversal follows the stored orders.
  */
 
@@ -494,12 +497,11 @@ export function solveAssembly(
   set: AssemblySet,
   overrides?: ReadonlyMap<string, readonly number[]>
 ): AssemblySolution {
-  const override = (jointId: string): readonly number[] | undefined =>
-    overrides?.get(jointId);
   const poses = new Map<string, RigidTransform>();
   const roles = new Map<string, AssemblyComponentRole>();
   const links = new Map<string, AssemblyTreeLink>();
-  const values = new Map<string, number[]>();
+  // Limits clamp, and coupled values follow the one that was moved.
+  const values = coupledJointValues(set, overrides);
   const unsolved = new Map<string, AssemblyUnsolvedReason>();
   const components = new Map(set.components.map((c) => [c.id, c]));
 
@@ -520,10 +522,6 @@ export function solveAssembly(
   parentOf.set(GROUND, GROUND);
   const adjacency = new Map<string, AssemblyJoint[]>();
   for (const joint of set.joints) {
-    values.set(
-      joint.id,
-      clampJointValues(joint, override(joint.id) ?? joint.values)
-    );
     const a = joint.parent.componentId;
     const b = joint.child.componentId;
     if (!components.has(a) || !components.has(b)) continue;
@@ -643,6 +641,7 @@ export interface AssemblyDragSpec {
    */
   direction: 1 | -1;
   startValue: number;
+  /** The joint's limit, narrowed by the limits of motions coupled to it. */
   limit: AssemblyDofLimit | null;
 }
 
@@ -697,7 +696,7 @@ export function dragSpecFor(
         axis,
         direction: link.forward ? 1 : -1,
         startValue: (solution.values.get(joint.id) ?? [])[dof] ?? 0,
-        limit: joint.limits[dof] ?? null
+        limit: coupledDofLimit(set, joint.id, dof)
       };
     }
     at = upstreamId;
