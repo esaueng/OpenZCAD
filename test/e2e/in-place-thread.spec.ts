@@ -14,7 +14,8 @@ import {
   finishInPlaceCommand,
   revealModelPanel,
   setSelectionFilter,
-  waitForStillViewport
+  waitForStillViewport,
+  pressTool
 } from './openzcad-fixtures';
 
 /**
@@ -142,7 +143,7 @@ test(
     if ((await moreTools.getAttribute('aria-expanded')) !== 'true') {
       await moreTools.click();
     }
-    await page.getByRole('button', { name: /^Thread\b/ }).click();
+    await pressTool(page, /^Thread\b/);
     const bar = page.getByRole('group', { name: 'Thread command' });
     await expect(bar).toBeVisible();
     await expect(page.locator('form.feature-form')).toHaveCount(0);
@@ -236,7 +237,7 @@ test(
     const more = page.getByRole('button', { name: /^More tools/ });
     if ((await more.getAttribute('aria-expanded')) !== 'true')
       await more.click();
-    await page.getByRole('button', { name: /^Thread\b/ }).click();
+    await pressTool(page, /^Thread\b/);
     await setSelectionFilter(page, 'Face');
     await clickWorldPoint(page, [0, -3, 10]);
     const bar = page.getByRole('group', { name: 'Thread command' });

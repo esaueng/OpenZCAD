@@ -19,7 +19,8 @@ import {
   setInPlaceOptionValues,
   stubApi,
   test,
-  waitForStillViewport
+  waitForStillViewport,
+  pressTool
 } from './openzcad-fixtures';
 
 // U08: tools preserve docked, unpinned and floating panels. Exercise real
@@ -285,22 +286,28 @@ for (const [title, entry] of [
     await openWorkspace(page);
     const saved = await preferences(page);
     const camera = await framing(page);
+    // A tool taken from the open Tools drawer puts the drawer away; every
+    // other way in leaves it as it was. The layout and settings stay.
+    let after = saved;
     if (entry === 'keyboard') {
       await page.keyboard.press(title === 'Box' ? 'b' : 'r');
     } else {
-      await page
-        .getByRole('button', { name: new RegExp(`^${title} (?:\\(|—)`) })
-        .click();
+      const button = page.getByRole('button', {
+        name: new RegExp(`^${title} (?:\\(|—)`)
+      });
+      if (await button.evaluate((element) => !!element.closest('.command-flyout')))
+        after = { ...saved, fold: false };
+      await button.click();
     }
     const bar = page.getByRole('group', { name: `${title} command` });
     await expect(bar).toBeVisible();
     await expectPanelsDuringCommand(page);
-    expect(await preferences(page)).toEqual(saved);
+    expect(await preferences(page)).toEqual(after);
     expect(await framing(page)).toEqual(camera);
     await bar.getByRole('button', { name: 'Cancel', exact: true }).click();
     await expect(bar).toHaveCount(0);
     await expect(page.locator('.model-panel')).toHaveCount(4);
-    expect(await preferences(page)).toEqual(saved);
+    expect(await preferences(page)).toEqual(after);
     expect(await framing(page)).toEqual(camera);
     await expectBodyCount(page, 1);
   });
@@ -556,7 +563,7 @@ test('an asynchronously loaded Image keeps panels visible through creation and C
     return canvas.toDataURL('image/png').split(',')[1]!;
   });
   const chooser = page.waitForEvent('filechooser');
-  await page.getByRole('button', { name: /^Image —/ }).click();
+  await pressTool(page, /^Image —/);
   await (
     await chooser
   ).setFiles({
@@ -567,10 +574,14 @@ test('an asynchronously loaded Image keeps panels visible through creation and C
   const bar = page.getByRole('group', { name: 'Image command' });
   await expect(bar).toBeVisible();
   await expectPanelsDuringCommand(page);
-  expect(await preferences(page)).toEqual(saved);
+  // Taken from the open Tools drawer, Image put the drawer away; the panel
+  // layout and the settings are as they were.
+  expect(saved.fold).toBe(true);
+  const after = { ...saved, fold: false };
+  expect(await preferences(page)).toEqual(after);
   await bar.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(page.locator('.model-panel')).toHaveCount(4);
-  expect(await preferences(page)).toEqual(saved);
+  expect(await preferences(page)).toEqual(after);
   expect(await framing(page)).toEqual(camera);
   await expectBodyCount(page, 1);
 });

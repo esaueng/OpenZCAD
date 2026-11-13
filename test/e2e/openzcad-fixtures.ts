@@ -1222,6 +1222,23 @@ export async function ensureToolsDrawerOpen(page: Page) {
   await expect(page.getByRole('group', { name: 'Tools drawer' })).toBeVisible();
 }
 
+/**
+ * Presses a tool's button, on the rail or in the Tools drawer. A tool taken
+ * from the drawer closes it, so one the rail does not carry opens the
+ * drawer again first.
+ */
+export async function pressTool(page: Page, name: RegExp) {
+  const button = page.getByRole('button', { name }).first();
+  // The rail draws its tools and the drawer's button together: wait for
+  // either before deciding, or a workspace still opening reads as a tool
+  // the rail does not carry.
+  await expect(
+    button.or(page.getByRole('button', { name: /^More tools/ })).first()
+  ).toBeVisible();
+  if (!(await button.isVisible())) await ensureToolsDrawerOpen(page);
+  await button.click();
+}
+
 export function railPanelButton(page: Page, title: PanelTitle) {
   return page
     .getByRole('toolbar', { name: 'Model panels' })
@@ -1484,10 +1501,7 @@ export async function blendEdgesInPlace(
   page: Page,
   options: { tool: 'Fillet' | 'Chamfer'; size: string; allEdges?: number }
 ) {
-  await page
-    .getByRole('button', { name: new RegExp(`^${options.tool}`) })
-    .first()
-    .click();
+  await pressTool(page, new RegExp(`^${options.tool}`));
   const bar = page.getByRole('group', { name: `${options.tool} command` });
   await expect(bar).toBeVisible();
   if (options.allEdges !== undefined) {
@@ -1514,7 +1528,7 @@ export async function createShellInPlace(
   page: Page,
   options: { normals: { x: number; y: number; z: number }[]; thickness: string }
 ) {
-  await page.getByRole('button', { name: /^Shell/ }).click();
+  await pressTool(page, /^Shell/);
   const bar = page.getByRole('group', { name: 'Shell command' });
   await expect(bar).toContainText('Click the faces to open');
   for (const [index, normal] of options.normals.entries()) {
@@ -1680,9 +1694,7 @@ export async function createPrimitiveInPlace(
   options: PrimitiveInPlaceOptions = {}
 ) {
   const title = PRIMITIVE_TITLES[kind];
-  await page
-    .getByRole('button', { name: PRIMITIVE_TOOL_BUTTONS[kind] })
-    .click();
+  await pressTool(page, PRIMITIVE_TOOL_BUTTONS[kind]);
   const bar = page.getByRole('group', { name: `${title} command` });
   await expect(bar).toBeVisible();
   for (const [valueId, value] of Object.entries(options.sizes ?? {})) {

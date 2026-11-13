@@ -6,7 +6,8 @@ import {
   openMoveOptions,
   pickObjectsBody,
   stubApi,
-  test
+  test,
+  pressTool
 } from './openzcad-fixtures';
 
 /**
@@ -78,7 +79,7 @@ test(
     await expect(
       page.locator('.feature-row', { hasText: 'Move' })
     ).toBeVisible();
-    await page.getByRole('button', { name: /^Subtract \(X\)/ }).click();
+    await pressTool(page, /^Subtract \(X\)/);
     await pickObjectsBody(page, 'Plate 1');
     await pickObjectsBody(page, 'Bore tool 1');
     await finishInPlaceCommand(page, 'Subtract');

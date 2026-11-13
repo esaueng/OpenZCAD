@@ -4,7 +4,8 @@ import {
   test,
   stubApi,
   modelPanel,
-  revealModelPanel
+  revealModelPanel,
+  pressTool
 } from './openzcad-fixtures';
 
 /**
@@ -29,7 +30,7 @@ test('numbers the picked bodies in the viewport as an in-place boolean takes the
     });
   }
 
-  await page.getByRole('button', { name: /^Subtract \(X\)/ }).click();
+  await pressTool(page, /^Subtract \(X\)/);
   const bar = page.getByRole('group', { name: 'Subtract command' });
   await expect(bar).toContainText('cut from');
   const callouts = page.locator('.body-order-callout');

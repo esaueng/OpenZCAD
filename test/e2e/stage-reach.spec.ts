@@ -155,7 +155,7 @@ test('UI-07: the More tools list scrolls to its last tile in short windows', asy
   const armed = page
     .locator('.command-flyout')
     .getByRole('button', { name: /^(On rail: )?Grid pattern/ });
-  // The new command suspends the fold; request it to inspect its active tile.
+  // Taking the tool put the drawer away; open it to inspect its active tile.
   await expect(
     page.getByRole('group', { name: 'Grid pattern command' })
   ).toBeVisible();

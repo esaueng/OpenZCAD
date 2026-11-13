@@ -11,7 +11,8 @@ import {
   pickObjectsBody,
   stubApi,
   test,
-  waitForStillViewport
+  waitForStillViewport,
+  pressTool
 } from './openzcad-fixtures';
 
 /**
@@ -165,7 +166,7 @@ test('a datum plane drives a sketch, a Split and a Mirror, and an edit moves the
 
   // U09: the Plane runs in place. An offset plane 8 above Top (XY): its
   // ghost plane clicked through the box, then 8 on the offset chip.
-  await page.getByRole('button', { name: /^Plane — / }).click();
+  await pressTool(page, /^Plane — /);
   const planeBar = page.getByRole('group', { name: 'Plane command' });
   await expect(planeBar).toContainText('Pick a plane');
   await clickGhostPlane(page, 'XY');
@@ -182,7 +183,7 @@ test('a datum plane drives a sketch, a Split and a Mirror, and an edit moves the
 
   // Split on the datum, by id. U09: Split runs in place: the body, then
   // the plane (here Plane 1's row, since the box hides most of its quad).
-  await page.getByRole('button', { name: /^Split — / }).click();
+  await pressTool(page, /^Split — /);
   await pickObjectsBody(page, 'Box 1');
   const splitBar = page.getByRole('group', { name: 'Split command' });
   await expect(splitBar).toContainText('Pick a plane or flat face');
@@ -195,7 +196,7 @@ test('a datum plane drives a sketch, a Split and a Mirror, and an edit moves the
   await expectBodyCount(page, 2);
 
   // Mirror across the same datum.
-  await page.getByRole('button', { name: /^Mirror — / }).click();
+  await pressTool(page, /^Mirror — /);
   // Either half: the first live body listed.
   await pickObjectsBody(page, /./);
   await pickDatumRow(page, 'Plane 1');

@@ -5,7 +5,8 @@ import {
   stubApi,
   finishInPlaceCommand,
   pickObjectsBody,
-  openMoveOptions
+  openMoveOptions,
+  pressTool
 } from './openzcad-fixtures';
 import type { Download, Page } from '@playwright/test';
 import {
@@ -405,7 +406,7 @@ test('keeps a section hole in the exact DXF and shuts export during a posed prev
   await expect(page.locator('.feature-row', { hasText: 'Move' })).toBeVisible();
 
   // U09: Subtract runs in place: the base, then the tool, then Done.
-  await page.getByRole('button', { name: /^Subtract \(X\)/ }).click();
+  await pressTool(page, /^Subtract \(X\)/);
   await pickObjectsBody(page, 'Plate 1');
   await pickObjectsBody(page, 'Bore tool 1');
   await finishInPlaceCommand(page, 'Subtract');
