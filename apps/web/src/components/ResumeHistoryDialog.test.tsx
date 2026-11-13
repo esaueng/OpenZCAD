@@ -80,4 +80,53 @@ describe('ResumeHistoryDialog', () => {
       'resume anyway and repair it in place'
     );
   });
+
+  it("words a row's own resume after the row and focuses Keep suppressed", () => {
+    const onKeep = vi.fn();
+    render(
+      <ResumeHistoryDialog
+        action="Resume Fillet 3"
+        row={{ name: 'Fillet 3', state: 'suppressed' }}
+        failures={[
+          { name: 'Fillet 3', reason: 'Fillet edges are stale.' },
+          { name: 'Offset top', reason: 'Offset target is unavailable.' }
+        ]}
+        onKeep={onKeep}
+        onResume={vi.fn()}
+      />
+    );
+    const dialog = screen.getByRole('alertdialog', {
+      name: 'Resume Fillet 3?'
+    });
+    // The later feature was building, not paused.
+    expect(dialog).toHaveTextContent('2 features would not rebuild:');
+    expect(dialog).toHaveTextContent(
+      'Keep Fillet 3 suppressed to change the model first, or resume anyway and repair them in place. Undo suppresses it again.'
+    );
+    const keep = screen.getByRole('button', { name: 'Keep suppressed' });
+    expect(keep).toHaveFocus();
+    fireEvent.click(keep);
+    expect(onKeep).toHaveBeenCalledOnce();
+  });
+
+  it('calls a row a rollback paused "paused"', () => {
+    render(
+      <ResumeHistoryDialog
+        action="Resume Chamfer"
+        row={{ name: 'Chamfer', state: 'paused' }}
+        failures={[{ name: 'Chamfer', reason: 'Chamfer edges are stale.' }]}
+        onKeep={vi.fn()}
+        onResume={vi.fn()}
+      />
+    );
+    expect(
+      screen.getByText('1 feature would not rebuild:')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Keep paused' })
+    ).toBeInTheDocument();
+    expect(screen.getByRole('alertdialog')).toHaveTextContent(
+      'Undo pauses it again.'
+    );
+  });
 });

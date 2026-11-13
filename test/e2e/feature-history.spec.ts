@@ -222,6 +222,74 @@ test('asks before resuming a rollback whose edit breaks a paused feature', async
   expect(errors).toEqual([]);
 });
 
+/** The same preflight for a row's own Resume (ADR-017, November 2026). */
+test('asks before resuming a suppressed row that an edit since breaks', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  const errors: string[] = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: /Heat Sink/ }).click();
+  await expectBodyCount(page, 1);
+  const fillets = page.locator('.feature-row', {
+    hasText: /^Base corner fillets/
+  });
+  await fillets.hover();
+  await fillets
+    .getByRole('button', { name: 'Suppress Base corner fillets', exact: true })
+    .click();
+  await expect(fillets).toContainText('suppressed');
+  // Suppressed, the fillet is not checked against the edit.
+  const extrudeEdit = await editExtrudeFromHistory(
+    page,
+    page.locator('.feature-row-main', { hasText: 'Extrude base' }),
+    'Extrude base'
+  );
+  await setBarValues(page, extrudeEdit, { Distance: 'base_t + fin_h' });
+  await finishInPlaceCommand(page, 'Edit Extrude base');
+  await revealModelPanel(page, 'History');
+
+  const resume = () =>
+    fillets
+      .getByRole('button', { name: 'Resume Base corner fillets', exact: true })
+      .click();
+  await fillets.hover();
+  await resume();
+  const dialog = page.getByRole('alertdialog', {
+    name: 'Resume Base corner fillets?'
+  });
+  await expect(dialog).toContainText('1 feature would not rebuild', {
+    timeout: 30_000
+  });
+  await expect(dialog).toContainText('Base corner fillets');
+  const keep = dialog.getByRole('button', { name: 'Keep suppressed' });
+  await expect(keep).toBeFocused();
+  await keep.click();
+  await expect(dialog).toBeHidden();
+  await expect(fillets).toContainText('suppressed');
+  await expect(
+    page.locator('.feature-row.needs-repair, .feature-row.failed')
+  ).toHaveCount(0);
+
+  await fillets.hover();
+  await resume();
+  await dialog.getByRole('button', { name: 'Resume anyway' }).click();
+  await expect(dialog).toBeHidden();
+  await expect(fillets).not.toContainText('suppressed');
+  await expect(fillets).toHaveClass(/\b(failed|needs-repair)\b/, {
+    timeout: 30_000
+  });
+  // One undo step suppresses it again.
+  await page
+    .getByRole('toolbar', { name: 'Viewer bar' })
+    .getByRole('button', { name: 'Undo', exact: true })
+    .click();
+  await expect(fillets).toContainText('suppressed');
+  expect(errors).toEqual([]);
+});
+
 /**
  * F1 follow-up from the 1 October 2026 design review: suppressing a feature
  * that replaces its body used to take the body away from everything built on
