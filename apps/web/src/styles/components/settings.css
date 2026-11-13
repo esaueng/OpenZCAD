@@ -500,6 +500,28 @@
   line-height: var(--lh-normal);
 }
 
+/* The analytics disclosure: three short lists under plain headings, so
+   what is sent, what never is, and how to stop each read at a glance. */
+.analytics-disclosure {
+  display: grid;
+  gap: var(--sp-1);
+}
+
+.analytics-disclosure p,
+.analytics-disclosure ul {
+  margin: 0;
+}
+
+.analytics-disclosure ul {
+  padding-left: 1.2em;
+}
+
+.analytics-disclosure strong {
+  margin-top: var(--sp-1);
+  color: var(--color-text);
+  font-weight: var(--fw-medium);
+}
+
 .setting-control {
   min-width: 0;
   display: flex;
