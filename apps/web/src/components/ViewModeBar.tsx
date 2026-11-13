@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { Camera, Grid3x3, Maximize2, Ruler } from 'lucide-react';
+import { Camera, Grid3x3, Maximize2, Orbit, Ruler } from 'lucide-react';
 import {
   SavedViewsSection,
   type SavedViewsSectionProps
@@ -26,6 +26,17 @@ const VIEWS: { id: StandardView; command?: string }[] = [
   { id: 'iso', command: 'view-iso' }
 ];
 
+const ORBIT_MODE_LABELS = {
+  free: 'Free',
+  turntable: 'Turntable'
+} as const;
+
+/** What each orbit mode does, for the button's help. */
+const ORBIT_MODE_DETAILS = {
+  free: 'tumbles over the top and bottom',
+  turntable: 'Z stays up, stops at the top and bottom'
+} as const;
+
 /** Cased like the display modes the bar's other "Now:" lines name. */
 const PROJECTION_LABELS: Record<ProjectionMode, string> = {
   perspective: 'Perspective',
@@ -45,6 +56,11 @@ interface ViewModeBarProps {
   savedViews?: SavedViewsSectionProps;
   onCycleDisplayMode(): void;
   onToggleProjection(): void;
+  /**
+   * Flips orbiting between Free and Turntable, the account preference
+   * `settings.orbitMode` reports. Absent, no orbit button is drawn.
+   */
+  onToggleOrbitMode?(): void;
 }
 
 /**
@@ -52,9 +68,9 @@ interface ViewModeBarProps {
  * bottom of the viewport, where the modeling tool palette would otherwise be.
  *
  * It carries what someone reading a model needs — measure, fit, standard
- * views, grid, display mode, projection — and nothing that writes to the
- * document. Build mode keeps its own right-hand `ViewerToolbar`; the two never
- * render together.
+ * views, grid, display mode, projection, orbit mode — and nothing that writes
+ * to the document. Build mode keeps its own right-hand `ViewerToolbar`; the
+ * two never render together.
  */
 export function ViewModeBar({
   settings,
@@ -66,7 +82,8 @@ export function ViewModeBar({
   onView,
   savedViews,
   onCycleDisplayMode,
-  onToggleProjection
+  onToggleProjection,
+  onToggleOrbitMode
 }: ViewModeBarProps) {
   const keymap = useKeymap();
   const [viewsOpen, setViewsOpen] = useState(false);
@@ -81,6 +98,9 @@ export function ViewModeBar({
     settings.xray ? ' · X-ray' : ''
   }`;
   const projectionLabel = PROJECTION_LABELS[projection];
+  // Saved views from before the preference existed carry none: free.
+  const orbitMode = settings.orbitMode ?? 'free';
+  const orbitKey = keymap.label('view-orbit-mode');
 
   useEffect(() => {
     if (!viewsOpen) {
@@ -247,6 +267,23 @@ export function ViewModeBar({
           <Camera size={16} aria-hidden="true" />
         </button>
       </Tooltip>
+      {onToggleOrbitMode && (
+        <Tooltip
+          label="Orbit mode"
+          shortcut={orbitKey}
+          description={`Now: ${ORBIT_MODE_LABELS[orbitMode]} · ${ORBIT_MODE_DETAILS[orbitMode]}`}
+        >
+          <button
+            type="button"
+            className={`view-mode-button view-orbit-mode${orbitMode === 'turntable' ? ' active' : ''}`}
+            onClick={onToggleOrbitMode}
+            aria-label={`${labelWithKey('Turntable orbit', orbitKey)} — now: ${ORBIT_MODE_LABELS[orbitMode]}`}
+            aria-pressed={orbitMode === 'turntable'}
+          >
+            <Orbit size={16} aria-hidden="true" />
+          </button>
+        </Tooltip>
+      )}
     </div>
   );
 }
