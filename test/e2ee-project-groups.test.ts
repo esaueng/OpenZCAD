@@ -973,7 +973,7 @@ describe('solo MLS groups', () => {
         'mis-signed',
         (body) => {
           const bytes = fromBase64Url(body.signature as string);
-          bytes[10] ^= 1;
+          bytes[10] = bytes[10]! ^ 1;
           body.signature = toBase64Url(bytes);
         },
         'E2EE_COMMIT_SIGNATURE_INVALID'
@@ -1007,7 +1007,8 @@ describe('solo MLS groups', () => {
           const bytes = fromBase64Url(body.message);
           // MLSMessage header: version, wire format, group id vector, epoch.
           const idLength = bytes[4]!;
-          bytes[5 + idLength + 7] ^= 1;
+          const last = 5 + idLength + 7;
+          bytes[last] = bytes[last]! ^ 1;
           body.message = toBase64Url(bytes);
           await sign(body, 'owner_laptop');
         },
@@ -1057,7 +1058,8 @@ describe('solo MLS groups', () => {
     expect(row.sender_device_id).toBe('owner_laptop');
     expect(
       await verifyMlsCommitSubmission(
-        owner.devices.get('owner_laptop')!.signing.publicKey,
+        owner.list.devices.find((d) => d.deviceId === 'owner_laptop')!
+          .signingKey,
         {
           userId: OWNER,
           projectId,
