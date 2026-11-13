@@ -33,6 +33,32 @@ function formatEnd(value: number): string {
   return String(Number(value.toFixed(2)));
 }
 
+/**
+ * The slider's step: the smallest round value (1, 2, 2.5 or 5 times a power
+ * of ten) giving at most about 200 positions across the model. A step of
+ * "any" moved the plane by 1% of the range, to cuts like 17.775 mm (I54).
+ */
+export function sectionSliderStep(range: { min: number; max: number }): number {
+  const span = range.max - range.min;
+  if (!(span > 0)) return 1;
+  const target = span / 200;
+  const power = 10 ** Math.floor(Math.log10(target));
+  for (const factor of [1, 2, 2.5, 5, 10]) {
+    if (factor * power >= target) return factor * power;
+  }
+  return 10 * power;
+}
+
+/** `value` on the step's grid, clamped to the range, without float tails. */
+export function snapSectionOffset(
+  value: number,
+  range: { min: number; max: number },
+  step = sectionSliderStep(range)
+): number {
+  const snapped = Number((Math.round(value / step) * step).toPrecision(12));
+  return Math.min(range.max, Math.max(range.min, snapped));
+}
+
 interface SectionToolboxProps {
   section: SectionViewSettings;
   range: { min: number; max: number };
@@ -91,6 +117,10 @@ export function SectionToolbox({
       ? 'Partial'
       : STATUS_LABELS[status.kind];
   const span = range.max - range.min;
+  // A drag or a key lands on this grid. The element's own step stays "any":
+  // a stepped range input would also round a position typed in the field
+  // (3.125) to the grid, and a typed cut is exact on purpose.
+  const step = sectionSliderStep(range);
   const fill =
     span > 0
       ? Math.min(100, Math.max(0, ((section.offset - range.min) / span) * 100))
@@ -278,7 +308,11 @@ export function SectionToolbox({
             className="rail-section-icon"
             disabled={!active}
             onClick={() => {
-              const center = (range.min + range.max) / 2;
+              const center = snapSectionOffset(
+                (range.min + range.max) / 2,
+                range,
+                step
+              );
               onOffset(center);
               onCommit(center);
             }}
@@ -324,7 +358,34 @@ export function SectionToolbox({
           value={section.offset}
           style={{ '--section-fill': `${fill}%` } as CSSProperties}
           onChange={(event) => {
-            const offset = Number(event.target.value);
+            const offset = snapSectionOffset(
+              Number(event.target.value),
+              range,
+              step
+            );
+            pendingSliderOffset.current = offset;
+            onOffset(offset);
+          }}
+          onKeyDown={(event) => {
+            const moves: Record<string, number> = {
+              ArrowRight: step,
+              ArrowUp: step,
+              ArrowLeft: -step,
+              ArrowDown: -step,
+              PageUp: step * 10,
+              PageDown: -step * 10
+            };
+            const ends: Record<string, number> = {
+              Home: range.min,
+              End: range.max
+            };
+            const move = moves[event.key];
+            const end = ends[event.key];
+            if (move === undefined && end === undefined) return;
+            event.preventDefault();
+            const offset =
+              end ?? snapSectionOffset(section.offset + move!, range, step);
+            if (offset === section.offset) return;
             pendingSliderOffset.current = offset;
             onOffset(offset);
           }}

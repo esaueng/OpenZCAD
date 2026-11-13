@@ -419,6 +419,8 @@ interface ViewerShellProps {
   tangentEdges?: TangentEdgeStyle;
   sectionRange: { min: number; max: number } | null;
   onToggleSection(): void;
+  /** No body on screen to cut; Section is greyed. */
+  nothingToSection?: boolean;
   /** Whether the section controls show while the cut is on (remembered). */
   sectionPanelOpen?: boolean;
   onSectionPanelOpenChange?(open: boolean): void;
@@ -588,6 +590,7 @@ export function ViewerShell({
   tangentEdges,
   sectionRange,
   onToggleSection,
+  nothingToSection,
   sectionPanelOpen,
   onSectionPanelOpenChange,
   onSectionPlane,
@@ -728,6 +731,7 @@ export function ViewerShell({
       {...(onToggleOrbitMode ? { onToggleOrbitMode } : {})}
       sectionRange={sectionRange}
       onToggleSection={onToggleSection}
+      {...(nothingToSection ? { nothingToSection } : {})}
       {...(sectionPanelOpen !== undefined ? { sectionPanelOpen } : {})}
       {...(onSectionPanelOpenChange ? { onSectionPanelOpenChange } : {})}
       onSectionPlane={onSectionPlane}
@@ -1004,25 +1008,30 @@ export function ViewerShell({
             />
             {/* View has no instrument rail, yet command search can still
                 turn the cut on there. Without this the model stayed clipped
-                with nothing on screen saying so or turning it off. */}
-            {viewMode && settings.sectionView && (
-              <div
-                className="view-mode-section"
-                role="group"
-                aria-label="Section view"
-              >
-                <span className="view-mode-section-label">
-                  Section · {SECTION_PLANE_LABELS[settings.sectionView.plane]}
-                </span>
-                <button
-                  type="button"
-                  className="view-mode-section-off"
-                  onClick={onToggleSection}
+                with nothing on screen saying so or turning it off. Build
+                says it too once its controls are put away (Escape, or the
+                rail button): a lit button alone did not say the model on
+                screen was cut (I49). */}
+            {settings.sectionView &&
+              (viewMode || sectionPanelOpen === false || !sectionRange) && (
+                <div
+                  className="view-mode-section"
+                  role="group"
+                  // Not "Section view": that names the controls themselves.
+                  aria-label="Section view on"
                 >
-                  Turn off
-                </button>
-              </div>
-            )}
+                  <span className="view-mode-section-label">
+                    Section · {SECTION_PLANE_LABELS[settings.sectionView.plane]}
+                  </span>
+                  <button
+                    type="button"
+                    className="view-mode-section-off"
+                    onClick={onToggleSection}
+                  >
+                    Turn off
+                  </button>
+                </div>
+              )}
           </div>
           {!viewMode && !dockLayout && viewerToolbar}
         </>

@@ -11943,6 +11943,14 @@ export function App() {
       setStatus('Section view off.', { immediate: true });
       return;
     }
+    // An empty stage has nothing to cut; the palette says so rather than
+    // leaving a cut on with no controls to carry into the next mode (I49).
+    if (!viewerBodies.some((body) => !body.consumed)) {
+      setStatus('Nothing to cut yet · add or show a body first.', {
+        immediate: true
+      });
+      return;
+    }
     // Switching the cut on brings its controls back, even when they were
     // hidden the last time it was on.
     setPanelState((current) =>
@@ -32678,6 +32686,7 @@ export function App() {
                 : null
             }
             onToggleSection={toggleSectionView}
+            nothingToSection={!viewerBodies.some((body) => !body.consumed)}
             sectionPanelOpen={panelState.sectionPanelOpen}
             onSectionPanelOpenChange={(open) =>
               setPanelState((current) =>
