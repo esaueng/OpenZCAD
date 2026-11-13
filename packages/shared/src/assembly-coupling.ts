@@ -11,7 +11,7 @@ import {
 } from './assembly';
 
 /**
- * Joint couplings (AS02 gear coupling, schema v55): joint values that move
+ * Joint couplings (AS02 gear coupling, schema v56): joint values that move
  * together. Each coupling is one linear relation between two joint values,
  * `driven = ratio × driver + offset`, and the stored couplings never form a
  * loop, so every group of coupled motions has exactly one free value and

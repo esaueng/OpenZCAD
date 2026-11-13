@@ -41,7 +41,7 @@ import { bodySourceMap } from './object-folders';
  * every component's current solved pose into its placement, so nothing on
  * screen jumps when the joint graph changes.
  *
- * Schema v55 adds couplings. Every command that writes joint values, limits
+ * Schema v56 adds couplings. Every command that writes joint values, limits
  * or couplings settles the coupled values before it returns, so the stored
  * values always satisfy every coupling: the joint that was written leads
  * and the joints coupled to it follow.

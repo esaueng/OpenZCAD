@@ -39,7 +39,7 @@ import {
 } from '@openzcad/shared';
 
 /**
- * AS02 gear coupling (schema v55): joint values tied by a ratio and an
+ * AS02 gear coupling (schema v56): joint values tied by a ratio and an
  * offset. The solve is exact and linear, either side drives, both joints'
  * limits bound the pair, and anything that would lock or over-constrain
  * the pair is refused by code.
@@ -413,7 +413,7 @@ describe('coupling refusals', () => {
   });
 });
 
-describe('coupling commands (schema v55)', () => {
+describe('coupling commands (schema v56)', () => {
   const owner = toUserId('user_coupling');
 
   function assembled() {
@@ -662,7 +662,7 @@ describe('coupling commands (schema v55)', () => {
     );
   });
 
-  it('is additive: a v54 assembly opens unchanged, couplings need v55', () => {
+  it('is additive: a v54 assembly opens unchanged, couplings need v56', () => {
     const manager = assembled();
     const plain = JSON.parse(
       JSON.stringify(manager.document)
@@ -681,12 +681,14 @@ describe('coupling commands (schema v55)', () => {
     const coupled = JSON.parse(
       JSON.stringify(manager.document)
     ) as ProjectDocument;
-    expect(() =>
-      normalizeDocument({
-        ...coupled,
-        schemaVersion: 54
-      } as unknown as ProjectDocument)
-    ).toThrow(/schema v55/);
+    // Neither the assemblies' own version nor the one between declares them.
+    for (const schemaVersion of [54, 55])
+      expect(() =>
+        normalizeDocument({
+          ...coupled,
+          schemaVersion
+        } as unknown as ProjectDocument)
+      ).toThrow(/schema v56/);
     const broken = structuredClone(coupled);
     broken.assembly!.couplings![0]!.ratio = 0;
     expect(() => assertStorableDocument(broken)).toThrow(/unusable ratio/);

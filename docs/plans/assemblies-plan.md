@@ -74,7 +74,7 @@ Frames are right-handed, stored as origin + Z + X in the component's modelled
 coordinates; validation requires unit axes and perpendicularity within
 `1e-6`. Values are clamped into their limits on every write.
 
-### Couplings (schema v55)
+### Couplings (schema v56)
 
 `assembly.couplings?: AssemblyCoupling[]` — absent means none, so a v54
 assembly reads unchanged. A coupling ties two joint values with one linear
@@ -132,7 +132,7 @@ Commands, each one undo step: `assembly.components.add`,
 `assembly.component.update`, `assembly.component.delete`,
 `assembly.joint.add`, `assembly.joint.update`, `assembly.joint.delete`,
 `assembly.pose.set`, `assembly.position.save`, `assembly.position.delete`,
-`assembly.study.set`, `assembly.study.delete`, and for couplings (v55)
+`assembly.study.set`, `assembly.study.delete`, and for couplings (v56)
 `assembly.coupling.add`, `assembly.coupling.update`,
 `assembly.coupling.delete`. A structural edit first writes
 every component's solved pose into its placement, so nothing jumps when the

@@ -2,7 +2,7 @@
 row: AS02
 ---
 
-Gear coupling (schema v55, `assembly.couplings`): meshed gears turn
+Gear coupling (schema v56, `assembly.couplings`): meshed gears turn
 together. A coupling is one linear relation between two joint values,
 `driven = ratio × driver + offset`: −z₁/z₂ for an external pair, +z₁/z₂ for a
 pinion in a ring, pitch radius × π/180 per degree for a rack and its pinion,
@@ -38,7 +38,7 @@ driving, an idler train, limit clamping and the narrowed drag range, motion
 study keys, every refusal code, stored loops rejected, add/update/delete with
 undo and redo, a pose or typed value on either joint, limit conflicts,
 pruning with a joint, component or kind change, replay, save and reopen, and
-v54 documents opening unchanged while couplings require v55),
+v54 documents opening unchanged while couplings require v56),
 `test/gear-coupling.test.ts` (CI smoke selection: the saved joints and
 coupling land the second gear exactly where the fixed placement does; at the
 pitch point both parts move at the same velocity for external, flipped-axis,

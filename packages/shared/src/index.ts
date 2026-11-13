@@ -222,13 +222,14 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // grounding, joints with values and limits, saved positions and motion
 // studies. An older client would drop the section on its next save, so it
 // must refuse.
-// v55 adds AS02 joint couplings (`assembly.couplings`): two joint values tied
+// v55 is claimed by M14 partial-span teeth (PR #1389), still open.
+// v56 adds AS02 joint couplings (`assembly.couplings`): two joint values tied
 // by a ratio and an offset, so meshed gears and a rack and its pinion move
 // together. Absent means none, so every v54 assembly loads unchanged. An
 // older client would refuse the unknown commands, or, past that, drop the
 // list on its next save and let the gears turn out of mesh, so it must
 // refuse the document.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 55 as const;
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 56 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 

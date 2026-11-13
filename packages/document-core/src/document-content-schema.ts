@@ -29,7 +29,7 @@ export function assertAssemblySchema(version: unknown): void {
 
 /** AS02 joint couplings: `assembly.couplings` and its commands. */
 export function assertAssemblyCouplingSchema(version: unknown): void {
-  assertMinimumProjectSchema(version, 55, 'Joint couplings');
+  assertMinimumProjectSchema(version, 56, 'Joint couplings');
 }
 
 function hasCouplings(assembly: unknown): boolean {

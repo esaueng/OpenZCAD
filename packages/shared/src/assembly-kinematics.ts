@@ -24,7 +24,7 @@ import { coupledDofLimit, coupledJointValues } from './assembly-coupling';
  * where F is a joint end's frame and M the joint's motion in the parent
  * frame. A joint that would close a loop is reported, never silently
  * dropped; closed-loop solving is a later, separate solver (AS09).
- * Coupled joint values (meshed gears, schema v55) are settled first, as
+ * Coupled joint values (meshed gears, schema v56) are settled first, as
  * plain numbers, so the tree is then placed exactly as before.
  * Everything here is deterministic: traversal follows the stored orders.
  */

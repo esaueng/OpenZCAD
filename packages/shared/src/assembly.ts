@@ -5,7 +5,7 @@ import type { BodyId, Vector3 } from './index';
  * bodies take part as components, which component is grounded, the joints
  * between them with their current values and limits, saved positions and
  * motion studies. A rebuild never reads it: moving a component only changes
- * its display placement, never the modelled solid. Schema v55 adds
+ * its display placement, never the modelled solid. Schema v56 adds
  * `couplings`: linear relations between two joint values (meshed gears, a
  * rack and its pinion).
  *
@@ -160,7 +160,7 @@ export interface AssemblyCouplingEnd {
 }
 
 /**
- * Two joint motions that move together (schema v55): meshed gears, a rack
+ * Two joint motions that move together (schema v56): meshed gears, a rack
  * and its pinion. A linear relation between their values,
  *
  *   driven = ratio × driver + offset
@@ -188,7 +188,7 @@ export interface AssemblySet {
   positions: AssemblyPosition[];
   studies: AssemblyMotionStudy[];
   /**
-   * Schema v55. Absent means none, so a v54 assembly reads unchanged. The
+   * Schema v56. Absent means none, so a v54 assembly reads unchanged. The
    * couplings never form a loop: any two motions are linked at most one way.
    */
   couplings?: AssemblyCoupling[];

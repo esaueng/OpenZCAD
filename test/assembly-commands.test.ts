@@ -281,7 +281,7 @@ describe('assembly commands (AS01/AS02, schema v54)', () => {
     const saved = JSON.parse(
       JSON.stringify(manager.document)
     ) as ProjectDocument;
-    // Assemblies arrived in v54; later bumps (v55 couplings) leave that be.
+    // Assemblies arrived in v54; later bumps (v56 couplings) leave that be.
     expect(() =>
       normalizeDocument({
         ...saved,
