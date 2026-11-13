@@ -1884,3 +1884,7 @@
   background: transparent;
   border-color: transparent;
 }
+
+.conflict-choice-name {
+  color: var(--color-text);
+}

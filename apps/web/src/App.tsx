@@ -4515,6 +4515,12 @@ export function App() {
     useState<ProjectConflict | null>(null);
   const accountConflictRef = useRef(accountConflict);
   accountConflictRef.current = accountConflict;
+  /**
+   * "Decide later" on an account question keeps it: the Conflict chip asks it
+   * again (design review I74). A re-raised question is a new object and shows.
+   */
+  const [dismissedAccountConflict, setDismissedAccountConflict] =
+    useState<ProjectConflict | null>(null);
   /** Hides an account question while it is being re-asked after a room choice. */
   const [accountRecheckProjectId, setAccountRecheckProjectId] = useState<
     string | null
@@ -32057,6 +32063,16 @@ export function App() {
               : null
           }
           onReviewEditFailure={openActivityLog}
+          onReviewConflict={
+            collaboration.conflict?.projectId === doc.projectId &&
+            dismissedRoomConflict === roomConflictKey
+              ? () => setDismissedRoomConflict(null)
+              : !collaboration.conflict &&
+                  accountConflict?.projectId === doc.projectId &&
+                  dismissedAccountConflict === accountConflict
+                ? () => setDismissedAccountConflict(null)
+                : undefined
+          }
           geometryPending={!geometry.isReadyFor(doc)}
           geometryFailed={geometry.state.phase === 'failed'}
           projectTransferBusy={projectTransferBusy}
@@ -34560,12 +34576,13 @@ export function App() {
             accountConflict.projectId === doc.projectId &&
             !collaboration.conflict &&
             !roomConnectingForProject &&
-            accountRecheckProjectId !== doc.projectId && (
+            accountRecheckProjectId !== doc.projectId &&
+            dismissedAccountConflict !== accountConflict && (
               <ProjectConflictDialog
                 conflict={accountConflict}
                 busy={busy}
                 onResolve={resolveAccountConflict}
-                onClose={() => setAccountConflict(null)}
+                onClose={() => setDismissedAccountConflict(accountConflict)}
               />
             )}
           {importUnitsPrompt && (
