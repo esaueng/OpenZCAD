@@ -667,10 +667,32 @@ describe('CommandCard', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Move \(M\)/ }));
     openDrawer();
     fireEvent.click(screen.getByRole('button', { name: /^Sphere/ }));
+    openDrawer();
     fireEvent.click(screen.getByRole('button', { name: /^On rail: Box/ }));
     expect(onLaunchTool).toHaveBeenNthCalledWith(1, 'transform');
     expect(onLaunchTool).toHaveBeenNthCalledWith(2, 'sphere');
     expect(onLaunchTool).toHaveBeenNthCalledWith(3, 'box');
+  });
+
+  it('closes the drawer when a tool is taken from it, not when one is refused', () => {
+    const { onLaunchTool } = renderCard();
+    const toggle = screen.getByRole('button', { name: /^More tools/ });
+    // A rail tool leaves an open drawer where it is.
+    openDrawer();
+    fireEvent.click(screen.getByRole('button', { name: /^Sketch \(S\)/ }));
+    expect(screen.getByRole('group', { name: 'Tools drawer' })).toBeVisible();
+    // A greyed row is refused and keeps the drawer, its reason in view.
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: /^Revolve \(R\) — Create a sketch first/
+      })
+    );
+    expect(screen.getByRole('group', { name: 'Tools drawer' })).toBeVisible();
+    // A row that runs puts the drawer away.
+    fireEvent.click(screen.getByRole('button', { name: /^Sphere/ }));
+    expect(onLaunchTool).toHaveBeenLastCalledWith('sphere');
+    expect(screen.queryByRole('group', { name: 'Tools drawer' })).toBeNull();
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
   });
 
   it.each([
