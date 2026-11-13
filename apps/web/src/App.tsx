@@ -399,6 +399,7 @@ import { tintPreviewResultBodies } from './lib/previewBodyTint';
 import { remappedBlendEdge } from './lib/inPlace/blendEdgeRemap';
 import { cancelCommandChipEntry } from './lib/inPlace/chipCancel';
 import { commandChipName } from './lib/inPlace/chipNames';
+import { loneBodyFor } from './lib/inPlace/loneBody';
 import {
   presentedDiagnostics,
   shownFeatureWarnings
@@ -513,6 +514,7 @@ import {
 import { countReactCommit, mark, measure, timed, timedAsync } from './lib/perf';
 import { beginEditTrace } from './lib/editTrace';
 import { traceFaceDrag, traceFaceDragPublish } from './lib/faceDragTrace';
+import { quantityTypedIn } from './lib/parameterQuantity';
 import {
   modalHoldsKeyboard,
   modalLendsWorkspaceKeys,
@@ -524,7 +526,8 @@ import {
   exportFileStem,
   formatMeasuredQuantity,
   formatNumber,
-  inferContentType
+  inferContentType,
+  previewExpression
 } from './lib/model';
 import {
   sketchValueResolver,
@@ -1721,6 +1724,7 @@ import {
   activeResumePrompt,
   failingFeatureIds,
   HistoryResumeRefusal,
+  resumeHistoryMessage,
   rollbackMarkerMove,
   rowResume,
   rowResumeAlreadyFailing,
@@ -4988,6 +4992,10 @@ export function App() {
   const [regionExtrudeEntryError, setRegionExtrudeEntryError] = useState<
     string | null
   >(null);
+  /** Why a running command's open keypad entry does not evaluate (Done waits). */
+  const [commandEntryError, setCommandEntryError] = useState<string | null>(
+    null
+  );
   const extrudeEditRequest = useRef(0);
   const reusableRegionExtrudePreview = useRef<ResolvedExtrudePreview | null>(
     null
@@ -10080,10 +10088,18 @@ export function App() {
     }
     // Bodies selected first (in the Objects panel, say) are its bodies, in
     // the order they were picked: a subtract's first is its base.
-    const initialBodies = selectedBodyIds.flatMap((bodyId) => {
+    const chosenBodies = selectedBodyIds.flatMap((bodyId) => {
       const body = inPlaceBodyPick(bodyId);
       return body ? [body] : [];
     });
+    // With nothing chosen, a model's only body is the body, as it is for
+    // Move: Scale, Mirror and the rest asked to "Click the body" of it.
+    const loneBodyId =
+      chosenBodies.length === 0 && !selectedFace && sweptFaces.length === 0
+        ? loneBodyFor(tool, representations, hiddenBodyIds)
+        : null;
+    const loneBody = loneBodyId ? inPlaceBodyPick(loneBodyId) : null;
+    const initialBodies = loneBody ? [loneBody] : chosenBodies;
     // Edges selected first (the rail's Fillet, the edge's own
     // context menu) are a fillet's or chamfer's edges, in pick order.
     const initialEdges = IN_PLACE_TOOL_SPECS[tool].edgeMode
@@ -11260,9 +11276,8 @@ export function App() {
         });
         setMoveSnap(null);
         setTool('transform');
-        setStatus(
-          'Move sketch: drag the arrows — centers snap to faces of other bodies, Shift is free.'
-        );
+        // The Move bar says the step; a toast said it a second time.
+        retireStatusMessage();
         return true;
       }
       // WF-07 (resolved): Move used to be two UIs for one command, and which
@@ -11289,9 +11304,7 @@ export function App() {
         });
         setMoveSnap(null);
         setTool('transform');
-        setStatus(
-          'Move/Rotate: drag the arrows or rings — snapping follows your zoom, Shift is free.'
-        );
+        retireStatusMessage();
         return true;
       }
     }
@@ -11332,6 +11345,20 @@ export function App() {
    * preview can never outlive the card that made it, and nobody has to count
    * presses to reach a clean workspace.
    */
+  /**
+   * Cancels a Move and says so, as every other command's Cancel does: an
+   * Escape out of Move used to report nothing.
+   */
+  function cancelMove() {
+    const sketch = movePreview?.target === 'sketch';
+    cancelPanel();
+    setStatus(
+      sketch
+        ? 'Move canceled; the sketch is unchanged.'
+        : 'Move canceled; nothing was added.'
+    );
+  }
+
   function cancelPanel() {
     cancelPendingRegionExtrusion();
     cancelDirectManipulationRef.current?.();
@@ -21356,13 +21383,20 @@ export function App() {
       return 'Parameter editing is unavailable.';
     }
     const request = ++parameterEditRequest.current;
+    // A name the table does not have was being added, not changed: the lane
+    // said "Parameter 2bad was not changed." of a name that never existed.
+    const existing = listParameters(manager.document).find(
+      (parameter) => parameter.name === name
+    );
     const refuse = (message: string) => {
       if (
         parameterEditRequest.current === request &&
         managerRef.current === manager
       )
         setStatus(
-          `Parameter ${parameterDisplayName(name, listParameters(manager.document).find((parameter) => parameter.name === name)?.description)} was not changed.`,
+          existing
+            ? `Parameter ${parameterDisplayName(name, existing.description)} was not changed.`
+            : `Parameter ${name} was not added.`,
           { detail: message }
         );
       return message;
@@ -21388,11 +21422,22 @@ export function App() {
         geometry.syncOnce(document)
       );
       if (!current()) return stale();
+      // A new parameter takes the quantity its own units state: `width =
+      // 40 mm` is a length, not a unitless 40.
+      const added = !listParameters(base).some((p) => p.name === name);
+      const typed =
+        quantity !== undefined || !added
+          ? quantity
+          : quantityTypedIn(
+              expression,
+              getParameterScope(base).scope,
+              base.units
+            );
       const parameterCommand = commandFactories.setParameter({
         name,
         expression,
         ...(addOnly ? { addOnly: true } : {}),
-        ...(quantity !== undefined ? { quantity } : {})
+        ...(typed !== undefined ? { quantity: typed } : {})
       });
       parameterCommand.validate(base);
       let prospective = parameterCommand.apply(base);
@@ -21475,7 +21520,6 @@ export function App() {
         (p) => p.name === name
       )?.toggle;
       // setParameter both adds and changes one; say which happened.
-      const added = !listParameters(base).some((p) => p.name === name);
       if (toggle)
         setHiddenBodyIds(
           (hidden) =>
@@ -22311,6 +22355,10 @@ export function App() {
     datumLabel: (featureId) =>
       (doc && findFeature(doc, featureId)?.name) ?? 'Datum axis',
     bodyBounds: (bodyId) => inPlaceBodyPick(bodyId),
+    liveBodyIds: () =>
+      Object.values(representations)
+        .filter((body) => !body.consumed && !hiddenBodyIds.has(body.bodyId))
+        .map((body) => body.bodyId),
     evaluate: (value) =>
       evalParamValue(value, parameterScope.scope, doc?.units),
     imagePlaneBasis,
@@ -22962,7 +23010,22 @@ export function App() {
       inPlaceUnits,
       parameterScope.scope
     );
-    if (!evaluation.ok || evaluation.value === undefined) return false;
+    if (!evaluation.ok || evaluation.value === undefined) {
+      // Refused, so Done waits: it would take the value held while the
+      // field shows another. The field names the problem and offers to
+      // define a missing name.
+      const missing = previewExpression(
+        text,
+        parameterScope.scope
+      ).undefinedParameter;
+      inPlace.refuseValue(
+        valueId,
+        missing
+          ? `${valueSpec.label}: ${missing} is not defined yet.`
+          : `${valueSpec.label} was not applied: ${(evaluation.error ?? 'not a number or expression').replace(/\.$/, '')}.`
+      );
+      return false;
+    }
     // Expressions stay parametric in the stored feature.
     const accepted = inPlace.setValue(
       valueId,
@@ -28025,10 +28088,11 @@ export function App() {
   }
 
   function handleResumeHistory() {
+    const history = liveFeatures();
     moveRollbackMarker(
-      rollbackMarkerMove(liveFeatures(), null),
+      rollbackMarkerMove(history, null),
       'Resume full history',
-      'Full history resumed. Manually suppressed features remain suppressed.'
+      resumeHistoryMessage(history)
     );
   }
 
@@ -29186,7 +29250,7 @@ export function App() {
       if (movePreview) {
         if (event.key === 'Escape') {
           event.preventDefault();
-          cancelPanel();
+          cancelMove();
           return;
         }
         // As for an in-place command: Enter on the Move bar's own controls
@@ -29888,6 +29952,7 @@ export function App() {
           desktopAuthorizationApproved={desktopAuthorizationApproved}
           desktopAuthorizationCode={desktopAuthorizationCode}
           workspaceOpen={doc !== null}
+          documentUnits={doc?.units}
           onDesktopAuthorizationCodeChange={setDesktopAuthorizationCode}
           onChange={handleAppSettingsChange}
           onCloudFunctionsEnabledChange={handleCloudFunctionsEnabledChange}
@@ -31325,6 +31390,9 @@ export function App() {
       onSetParameter={(name, expression) =>
         handleSetParameter(name, expression)
       }
+      onParameterAddRefused={(name, message) =>
+        setStatus(`Parameter ${name} was not added.`, { detail: message })
+      }
       onSetParameterQuantity={(name, quantity, expression) => {
         const current = parameters.find((entry) => entry.name === name);
         return current
@@ -32386,6 +32454,9 @@ export function App() {
                     units={doc.units}
                     scope={parameterScope.scope}
                     anchorRef={keypadAnchorRef}
+                    // An entry that does not evaluate holds Done: it would
+                    // take the value held while the keypad shows another.
+                    onEntryError={setCommandEntryError}
                     onPreview={(value) => {
                       const valueId = keypad.commandValueId!;
                       const valueSpec = inPlaceSpec?.values.find(
@@ -33392,7 +33463,10 @@ export function App() {
                   }
                   hint={inPlace.hint}
                   refusal={inPlace.refusal}
-                  canFinish={inPlace.canFinish}
+                  canFinish={
+                    inPlace.canFinish &&
+                    !(keypad?.kind === 'command' && commandEntryError)
+                  }
                   options={inPlace.optionSpecs.map((option) => ({
                     ...option,
                     value: inPlace.options[option.id] ?? option.initial
@@ -33423,6 +33497,7 @@ export function App() {
                   onValueCommit={commitInPlacePanelValue}
                   onValueRestore={inPlace.dropRefusal}
                   onValuePreview={previewInPlacePanelValue}
+                  scope={parameterScope.scope}
                   onDone={() => inPlace.done()}
                   onCancel={cancelInPlaceCommand}
                 />
@@ -33643,7 +33718,7 @@ export function App() {
                     )
                   }
                   onConfirm={confirmMove}
-                  onCancel={cancelPanel}
+                  onCancel={cancelMove}
                   copy={
                     movePreview.target === 'sketch'
                       ? undefined

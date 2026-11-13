@@ -23,6 +23,7 @@ import {
   failingFeatureIds,
   HistoryResumeRefusal,
   resumeFailures,
+  resumeHistoryMessage,
   resumeRefusalMessage,
   rollbackMarkerMove,
   rowResume,
@@ -173,6 +174,19 @@ describe('rollbackMarkerMove', () => {
           )
       )
     ).toBe(true);
+  });
+});
+
+describe('resumeHistoryMessage', () => {
+  it('mentions hand-suppressed features only when there are some', () => {
+    // 13 November review: "Manually suppressed features remain suppressed."
+    // was said with nothing suppressed.
+    const { features } = rolledBackChain();
+    expect(resumeHistoryMessage(features)).toBe('Full history resumed.');
+    const suppressed = rolledBackChain({ suppressMove: true }).features;
+    expect(resumeHistoryMessage(suppressed)).toBe(
+      'Full history resumed. 1 feature you suppressed stays suppressed.'
+    );
   });
 });
 

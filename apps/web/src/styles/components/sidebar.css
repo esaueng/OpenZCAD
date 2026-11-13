@@ -108,6 +108,25 @@
   gap: 6px;
 }
 
+/* An expression longer than its 64px track grows to show itself, up to
+   about fourteen characters, taking the room from the name: `width / 2`
+   read "width /" in the cell beside a parameter's value. Only where the
+   field can size to its content; elsewhere it scrolls in place as before. */
+@supports (field-sizing: content) {
+  .param-row {
+    grid-template-columns:
+      minmax(0, 1fr) minmax(64px, max-content) minmax(0, max-content)
+      24px 24px;
+  }
+
+  /* Tweak's own row gives the field a whole track to fill. */
+  .param-row .param-expression:not(.tweak-panel *) {
+    field-sizing: content;
+    min-width: 64px;
+    max-width: calc(14ch + 14px);
+  }
+}
+
 /* Name and expression split the add row evenly. A row-width 76px track
    clipped its own "expression" placeholder to "expressio"; a fixed 96px one
    squeezed the name to "na" in a phone-width column. */
