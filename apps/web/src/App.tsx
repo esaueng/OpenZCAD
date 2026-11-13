@@ -912,6 +912,13 @@ import { parameterDisplayName } from './lib/parameterDisplayName';
 import { featurePaletteLabel, withDistinctLabels } from './lib/paletteLabels';
 import { DISPLAY_MODE_LABELS } from './lib/displayMode';
 import { ContextMenu, type ContextMenuState } from './components/ContextMenu';
+import {
+  FACE_VERB_PREFIX,
+  LOOK_AT_FACE_ITEM_ID,
+  selectOtherMenuItem,
+  withFaceVerbs,
+  type ViewportMenuState
+} from './lib/viewportMenu';
 import type {
   ResolveExtrudeOptions,
   ResolvedExtrude
@@ -959,7 +966,8 @@ import type {
   BodyAppearancePreview,
   FaceResizeCommit,
   OffsetCommitOutcome,
-  NormalToFaceRequest
+  NormalToFaceRequest,
+  ViewportContextMenuOptions
 } from './components/ModelViewer';
 import type { OrientationLink } from './components/viewer/orientationCube';
 import type {
@@ -3894,7 +3902,9 @@ export function App() {
     }
   );
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
-  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [contextMenu, setContextMenu] = useState<ViewportMenuState | null>(
+    null
+  );
   const contextMenuExit = useDelayedUnmount(contextMenu, OVERLAY_EXIT_MS);
   const orientationRef = useRef<OrientationLink | null>(null);
   /** Click point + normal of the latest topology pick (drag-handle anchor). */
@@ -28567,7 +28577,8 @@ export function App() {
     x: number,
     y: number,
     entries: { item: ContextMenuState['items'][number]; run(): void }[],
-    heading?: string
+    heading?: string,
+    face?: ViewportMenuState['face']
   ) {
     contextMenuActionsRef.current = Object.fromEntries(
       entries.map((entry) => [entry.item.id, entry.run])
@@ -28576,18 +28587,31 @@ export function App() {
       x,
       y,
       items: entries.map((entry) => entry.item),
-      ...(heading ? { heading } : {})
+      ...(heading ? { heading } : {}),
+      ...(face ? { face } : {})
     });
   }
 
   function handleViewportContextMenu(
     x: number,
     y: number,
-    selection: TopologySelection | null
+    selection: TopologySelection | null,
+    options: ViewportContextMenuOptions = {}
   ) {
     if (!doc) {
       return;
     }
+    // I18: over stacked targets the menu leads with Select other, whose list
+    // reopens this menu for the target chosen from it.
+    const selectOther = options.selectOther;
+    const leading = selectOther
+      ? [
+          {
+            item: selectOtherMenuItem(selectOther.count),
+            run: selectOther.open
+          }
+        ]
+      : [];
     // A running command owns both its geometry and empty viewport space.
     // A preview can move an edge away from the pointer before right-click.
     if (!modelingLocked && inPlaceRef.current.active) {
@@ -28599,12 +28623,14 @@ export function App() {
     // the viewport controls someone reading a model actually wants.
     if (!selection || modelingLocked) {
       openContextMenu(x, y, [
+        ...leading,
         {
           item: {
             id: 'fit',
             label: 'Fit view',
             icon: <Maximize2 size={13} aria-hidden="true" />,
-            shortcut: menuShortcut('view-fit')
+            shortcut: menuShortcut('view-fit'),
+            section: leading.length > 0
           },
           run: () => setFitSignal((value) => value + 1)
         },
@@ -28655,17 +28681,23 @@ export function App() {
     }
     // Actions wait for the clicked selection to land. An unapplied Move
     // owns the question first; a menu here would act on the old selection.
-    if (handleSelectTopologyFromViewer(selection, false, undefined, { x, y })) {
+    // The keyboard's menu is for the selection as it stands, so it picks
+    // nothing (a multi-selection stays whole).
+    if (
+      !options.keyboard &&
+      handleSelectTopologyFromViewer(selection, false, undefined, { x, y })
+    ) {
       setContextMenu(null);
       return;
     }
-    openViewportSelectionContextMenu(x, y, selection);
+    openViewportSelectionContextMenu(x, y, selection, leading);
   }
 
   function openViewportSelectionContextMenu(
     x: number,
     y: number,
-    selection: TopologySelection
+    selection: TopologySelection,
+    leading: { item: ContextMenuState['items'][number]; run(): void }[] = []
   ) {
     const owner = managerRef.current;
     const current = owner?.document;
@@ -28702,17 +28734,22 @@ export function App() {
     const body = current.derived.bodyRepresentations[selection.bodyId];
     const feature = selectionFeature(current, body, selection);
     const edge = selection.kind === 'edge';
+    // Union and Subtract say why they are greyed out, as the rail does.
+    const combineReason =
+      viewerBodies.length < 2 ? 'Needs a second body to combine with' : null;
     openContextMenu(
       x,
       y,
       [
+        ...leading,
         ...(edge
           ? [
               {
                 item: {
                   id: 'fillet',
                   label: 'Fillet edge…',
-                  icon: <Spline size={13} aria-hidden="true" />
+                  icon: <Spline size={13} aria-hidden="true" />,
+                  section: leading.length > 0
                 },
                 run: runCurrent((handlers) => handlers.launchTool('fillet'))
               },
@@ -28732,7 +28769,7 @@ export function App() {
             label: 'Move / Rotate…',
             icon: <Move3d size={13} aria-hidden="true" />,
             shortcut: menuShortcut('tool-transform'),
-            section: edge
+            section: edge || leading.length > 0
           },
           run: runCurrent((handlers) => handlers.launchTool('transform'))
         },
@@ -28742,7 +28779,7 @@ export function App() {
             label: 'Union…',
             icon: <Combine size={13} aria-hidden="true" />,
             shortcut: menuShortcut('tool-union'),
-            disabled: viewerBodies.length < 2
+            ...(combineReason ? { disabled: true, detail: combineReason } : {})
           },
           run: runCurrent((handlers) => handlers.launchTool('union'))
         },
@@ -28752,7 +28789,7 @@ export function App() {
             label: 'Subtract…',
             icon: <Scissors size={13} aria-hidden="true" />,
             shortcut: menuShortcut('tool-subtract'),
-            disabled: viewerBodies.length < 2
+            ...(combineReason ? { disabled: true, detail: combineReason } : {})
           },
           run: runCurrent((handlers) => handlers.launchTool('subtract'))
         },
@@ -28806,7 +28843,14 @@ export function App() {
             ]
           : [])
       ],
-      topologySelectionLabel(body, selection)
+      topologySelectionLabel(body, selection),
+      selection.kind === 'face'
+        ? {
+            bodyId: selection.bodyId,
+            topologyId: selection.topologyId,
+            hash: selection.hash
+          }
+        : undefined
     );
   }
 
@@ -34495,9 +34539,36 @@ export function App() {
           )}
           {contextMenuExit.rendered ? (
             <ContextMenu
-              menu={contextMenuExit.rendered}
+              menu={withFaceVerbs(
+                contextMenuExit.rendered,
+                renderedSelectedTopology?.kind === 'face'
+                  ? renderedSelectedTopology
+                  : null,
+                calloutWithOperation?.anchor === 'selection'
+                  ? calloutWithOperation.verbs
+                  : null,
+                {
+                  disabledReason: normalToFaceTarget
+                    ? null
+                    : 'The face is not flat',
+                  shortcut: menuShortcut('view-normal-to-face')
+                }
+              )}
               closing={contextMenuExit.closing}
-              onSelect={(itemId) => contextMenuActionsRef.current[itemId]?.()}
+              onSelect={(itemId) => {
+                // A face's verbs act as its rail buttons do (I19).
+                if (itemId.startsWith(FACE_VERB_PREFIX)) {
+                  calloutWithOperation?.onVerb(
+                    itemId.slice(
+                      FACE_VERB_PREFIX.length
+                    ) as SelectionCalloutVerbId
+                  );
+                } else if (itemId === LOOK_AT_FACE_ITEM_ID) {
+                  requestNormalToSelectedFace();
+                } else {
+                  contextMenuActionsRef.current[itemId]?.();
+                }
+              }}
               onClose={() => setContextMenu(null)}
             />
           ) : null}
