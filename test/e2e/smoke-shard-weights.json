@@ -47,6 +47,7 @@
   "history-local-append.spec.ts": 26,
   "import-formats.spec.ts": 2,
   "in-place-primitives.spec.ts": 16,
+  "in-place-thread.spec.ts": 60,
   "kernel-session-privacy.spec.ts": 14,
   "keyboard-focus-recovery.spec.ts": 12,
   "library-folder-sync.spec.ts": 12,
