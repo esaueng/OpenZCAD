@@ -180,7 +180,8 @@
     "test/unit-global-setup.test.ts",
     "test/unit-runtime-budget.test.ts",
     "test/unit-suites.test.ts",
-    "test/kernel-session-snapshot.test.ts"
+    "test/kernel-session-snapshot.test.ts",
+    "test/glimpse-census.test.ts"
   ],
   "web": [
     "src/components/DrawingWorkspace.test.tsx",
@@ -312,6 +313,7 @@
     "src/lib/kernelSessionStore.test.ts",
     "src/worker/kernelSessionPersistence.test.ts",
     "src/worker/geometryWorkerSessions.test.ts",
-    "src/lib/kernelSessionPolicy.test.ts"
+    "src/lib/kernelSessionPolicy.test.ts",
+    "src/lib/runtimeDiagnostics.test.ts"
   ]
 }

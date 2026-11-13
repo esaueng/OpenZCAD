@@ -7,6 +7,28 @@ import {
   setAnalyticsEnabled,
   downloadDiagnosticReport
 } from '../lib/analytics';
+import { ACCOUNT_STATISTICS_VERSION } from '../lib/glimpseContract';
+
+/**
+ * The Cloud account statistics permission text, version
+ * {@link ACCOUNT_STATISTICS_VERSION}. Version 3 added save activity; a grant
+ * of the version 2 text keeps covering totals only until it expires.
+ */
+export const ACCOUNT_STATISTICS_TEXT =
+  'Separately allow hourly aggregate snapshots for 30 days, across your devices: account, owned-project, revision and known storage-byte totals, and how many accounts saved a project in the last 7 and 30 days or have not saved one for 90 days or more. Only opted-in accounts are included, and an activity count that would describe fewer than 5 accounts is withheld. No account or project identifiers or save dates leave OpenZCAD. Includes retained trash and storage metadata, never model contents. Withdraw here at any time; published aggregates remain up to 90 days. This account-wide permission is separate from browser DNT/GPC and this device’s cloud switch.';
+
+function grantStatus(v: {
+  enabled: boolean;
+  expiresAt: string | null;
+  version?: number | null;
+}): string {
+  const until = `Enabled until ${v.expiresAt?.slice(0, 10)} UTC.`;
+  // An older grant accepted text without save activity: it stays limited to
+  // totals, and saying so asks for a fresh choice instead of assuming one.
+  return typeof v.version === 'number' && v.version < ACCOUNT_STATISTICS_VERSION
+    ? `${until} Totals only, under the earlier description without save activity. Turn this off and on to accept the current description.`
+    : until;
+}
 // One row per title whichever app renders it: the desktop app explains the
 // web-only choice in the same row rather than a second "Usage analytics".
 export function AnalyticsConsent() {
@@ -117,6 +139,7 @@ export function CloudStatisticsConsent({
         return r.json() as Promise<{
           enabled: boolean;
           expiresAt: string | null;
+          version?: number | null;
         }>;
       })
       .then((v) => {
@@ -124,7 +147,7 @@ export function CloudStatisticsConsent({
         setReady(true);
         setStatus(
           v.enabled
-            ? `Enabled until ${v.expiresAt?.slice(0, 10)} UTC.`
+            ? grantStatus(v)
             : 'Off. No cloud-account statistics are collected.'
         );
       })
@@ -145,17 +168,21 @@ export function CloudStatisticsConsent({
         credentials: 'same-origin',
         cache: 'no-store',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled: checked, version: 2 })
+        body: JSON.stringify({
+          enabled: checked,
+          version: ACCOUNT_STATISTICS_VERSION
+        })
       });
       if (!r.ok) throw new Error();
       const v = (await r.json()) as {
         enabled: boolean;
         expiresAt: string | null;
+        version?: number | null;
       };
       setEnabled(v.enabled);
       setStatus(
         v.enabled
-          ? `Enabled until ${v.expiresAt?.slice(0, 10)} UTC.`
+          ? grantStatus(v)
           : 'Withdrawn. Future cloud snapshots exclude this account.'
       );
     } catch {
@@ -172,7 +199,7 @@ export function CloudStatisticsConsent({
       hint={<span role="status">{status}</span>}
       details={{
         summary: 'What’s shared',
-        body: 'Separately allow hourly aggregate account, owned-project, revision and known storage-byte snapshots for 30 days, across your devices. Only opted-in accounts are included. No account or project identifiers leave OpenZCAD. Includes retained trash and storage metadata, never model contents. Withdraw here at any time; published aggregates remain up to 90 days. This account-wide permission is separate from browser DNT/GPC and this device’s cloud switch.'
+        body: ACCOUNT_STATISTICS_TEXT
       }}
     >
       <Toggle

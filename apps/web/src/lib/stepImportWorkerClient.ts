@@ -1,3 +1,4 @@
+import { observeWorker } from './diagnosticSignal';
 import type { StepImportInspectionResult } from '../worker/stepImportWorker';
 import { describeWorkerFailure } from './workerFailure';
 
@@ -9,9 +10,10 @@ export function inspectStepSolidsInWorker(
   const cancelled = () =>
     new DOMException('STEP inspection was cancelled.', 'AbortError');
   if (signal?.aborted) return Promise.reject(cancelled());
-  const worker = new Worker(
-    new URL('../worker/stepImportWorker.ts', import.meta.url),
-    { type: 'module' }
+  const worker = observeWorker(
+    new Worker(new URL('../worker/stepImportWorker.ts', import.meta.url), {
+      type: 'module'
+    })
   );
   return new Promise((resolve, reject) => {
     let settled = false;

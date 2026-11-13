@@ -1,3 +1,4 @@
+import { observeWorker } from './diagnosticSignal';
 import type { ProjectDocument } from '@openzcad/shared';
 import { describeWorkerFailure } from './workerFailure';
 import { isChunkLoadError } from './staleChunk';
@@ -27,9 +28,10 @@ export function rebuildImportInDisposableWorker(
   if (signal?.aborted) {
     return Promise.reject(abortError());
   }
-  const worker = new Worker(
-    new URL('../worker/importRebuildWorker.ts', import.meta.url),
-    { type: 'module' }
+  const worker = observeWorker(
+    new Worker(new URL('../worker/importRebuildWorker.ts', import.meta.url), {
+      type: 'module'
+    })
   );
   const requestId = crypto.randomUUID();
   return new Promise((resolve, reject) => {

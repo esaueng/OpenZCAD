@@ -1,5 +1,6 @@
 import type { Page } from '@playwright/test';
 import { DEFAULT_APP_SETTINGS } from '@openzcad/shared';
+import { ACCOUNT_STATISTICS_VERSION } from '../../apps/web/src/lib/glimpseContract';
 import {
   askAssistant,
   createPrimitiveInPlace,
@@ -1457,10 +1458,11 @@ test('cloud statistics require acknowledged consent and keep a failed withdrawal
   await expect(row).toContainText(
     'Withdrawn. Future cloud snapshots exclude this account.'
   );
+  // Version 3 names save activity (Glimpse review, 13 Nov 2026).
   expect(changes).toEqual([
-    { enabled: true, version: 2 },
-    { enabled: false, version: 2 },
-    { enabled: false, version: 2 }
+    { enabled: true, version: ACCOUNT_STATISTICS_VERSION },
+    { enabled: false, version: ACCOUNT_STATISTICS_VERSION },
+    { enabled: false, version: ACCOUNT_STATISTICS_VERSION }
   ]);
 });
 

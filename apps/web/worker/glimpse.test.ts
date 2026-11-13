@@ -136,6 +136,60 @@ it('keeps client and relay wire vocabularies aligned', async () => {
   const relay=await import('./glimpseContract');
   expect(client.EXPANDED).toEqual(relay.EXPANDED);
   expect(client.CENSUS_FIELDS).toEqual(relay.CENSUS_FIELDS);
+  expect(client.ACTIVITY_FIELDS).toEqual(relay.ACTIVITY_FIELDS);
+  expect(client.ACCOUNT_STATISTICS_VERSION).toBe(
+    relay.ACCOUNT_STATISTICS_VERSION
+  );
+});
+
+// Glimpse privacy review approved 13 Nov 2026 (esaueng/glimpse#32).
+it.each([
+  'error_unresponsive',
+  'error_gpu_lost',
+  'error_out_of_memory',
+  'error_worker'
+])('relays the new diagnostic code %s with only the bucket none', (event) => {
+  expect(parseUsage({ event, bucket: 'none' })).toEqual({
+    level: 'optional',
+    event,
+    bucket: 'none'
+  });
+  expect(parseUsage({ event, bucket: '5123ms' })).toBeNull();
+  expect(parseUsage({ event, bucket: 'none', adapter: 'Private GPU' })).toBeNull();
+});
+
+it('accepts activity counts only all together, bounded and consistent', async () => {
+  const { census } = await import('./glimpseContract');
+  const base = {
+    generation: 3,
+    accounts: 20,
+    projects: 1,
+    revisions: 0,
+    storedBytes: 1,
+    logicalBytes: 1,
+    unknownArtifacts: 0,
+    lt1mib: 1,
+    mib1to10: 0,
+    mib10to100: 0,
+    gte100mib: 0
+  };
+  expect(census(base, 'openzcad')).toEqual(base);
+  const full = { ...base, active7d: 5, active30d: 10, idle90d: 10 };
+  expect(census(full, 'openzcad')).toEqual(full);
+  const withheld = { ...base, active7d: null, active30d: null, idle90d: null };
+  expect(census(withheld, 'openzcad')).toEqual(withheld);
+  for (const invalid of [
+    { ...base, active7d: 5 },
+    { ...base, active7d: 5, active30d: 10 },
+    { ...full, active7d: 11 },
+    { ...full, idle90d: 11 },
+    { ...full, active30d: 21 },
+    { ...full, idle90d: -1 },
+    { ...full, idle90d: 1.5 },
+    { ...full, idle90d: '5' },
+    { ...full, lastSave: '2026-11-13' }
+  ])
+    expect(census(invalid, 'openzcad'), JSON.stringify(invalid)).toBeNull();
 });
 
 it('relays only canonical kernel_refused buckets and nothing beside them', async () => {

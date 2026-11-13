@@ -46,6 +46,7 @@ import {
   type CubeBox
 } from './viewer/orientationCubeOverlay';
 import { mark, measure, timed } from '../lib/perf';
+import { trackGpuLost } from '../lib/diagnosticSignal';
 import { InteractionShaderWarmup } from './viewer/interactionShaderWarmup';
 import { usePreparedBodies } from './viewer/usePreparedBodies';
 import { SelectionRecede } from './viewer/selectionRecede';
@@ -11770,6 +11771,9 @@ export function ModelViewer({
     const handleContextLost = (event: Event) => {
       event.preventDefault();
       renderer.domElement.dataset.contextLost = 'true';
+      // Teardown removes this listener before `forceContextLoss`, so only
+      // a loss the browser imposed is counted (and not in a hidden tab).
+      trackGpuLost();
     };
     const handleContextRestored = () => {
       delete renderer.domElement.dataset.contextLost;

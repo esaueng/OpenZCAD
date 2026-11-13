@@ -28,6 +28,7 @@
  * The worker script is loaded on the first job, not when this module is
  * imported, so it stays out of the entry chunk.
  */
+import { observeWorker } from '../diagnosticSignal';
 import { E2eeError, type E2eeErrorCode } from '@openzcad/crypto';
 import type {
   ContentBlobDecodeJob,
@@ -119,9 +120,10 @@ export interface E2eeDecoder {
 }
 
 function startModuleWorker(): DecodeWorkerHandle {
-  return new Worker(
-    new URL('../../worker/e2eeDecodeWorker.ts', import.meta.url),
-    { type: 'module' }
+  return observeWorker(
+    new Worker(new URL('../../worker/e2eeDecodeWorker.ts', import.meta.url), {
+      type: 'module'
+    })
   ) as unknown as DecodeWorkerHandle;
 }
 

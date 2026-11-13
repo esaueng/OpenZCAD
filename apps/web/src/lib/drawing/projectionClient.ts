@@ -1,3 +1,4 @@
+import { observeWorker } from '../diagnosticSignal';
 import type {
   DrawingProjectionRequest,
   DrawingProjectionResponse,
@@ -149,9 +150,11 @@ export class DrawingProjectionClient {
   }
 
   private startWorker(): Slot {
-    const worker = new Worker(
-      new URL('../../worker/drawingProjectionWorker.ts', import.meta.url),
-      { type: 'module' }
+    const worker = observeWorker(
+      new Worker(
+        new URL('../../worker/drawingProjectionWorker.ts', import.meta.url),
+        { type: 'module' }
+      )
     );
     const slot: Slot = { worker, busy: null, heldRequestId: null };
     worker.onmessage = (event: MessageEvent<DrawingProjectionResponse>) => {
