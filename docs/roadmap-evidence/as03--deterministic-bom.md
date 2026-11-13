@@ -15,4 +15,15 @@ Exploded-view offsets and drawing presentation remain open. Evidence:
 `test/assembly-bom.test.ts` (grouping, order, quantities, renamed bodies,
 empty assembly, save/reopen, CSV quoting and formula guard),
 `AssemblyPanel.test.tsx`, and the `test/e2e/assembly.spec.ts` add-body case
-(BOM rows and CSV download).
+(BOM rows and CSV download), PR #1359.
+
+Owner-approved behavior: rigid transform copies and copy chains share the
+source part's identity at their history position; scales, mirrors, aggregate
+pattern bodies and shape edits stay separate, with uncertain provenance
+kept separate. Missing component bodies remain as marked rows in the panel
+and CSV instead of silently reducing quantities. The CSV keeps its original
+five columns and appends `status` (`ready` or `missing`). Assembly display
+order and deterministic names are retained; material, volume and mass remain
+outside this slice. Regression coverage includes copies before and after an
+in-place source scale, edited shapes, lookalikes, missing rows, CSV status
+and save/reopen.

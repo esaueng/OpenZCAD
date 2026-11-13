@@ -76,6 +76,37 @@ function remake(
   return { document: next, bodyId };
 }
 
+function copyPart(
+  manager: CommandManager,
+  source: BodyId,
+  extra: Partial<Parameters<typeof commandFactories.transformBody>[0]> = {}
+): BodyId {
+  manager.execute(
+    commandFactories.transformBody({
+      name: 'Copy',
+      targetBodyId: source,
+      translation: { x: 20, y: 0, z: 0 },
+      rotationDeg: { x: 0, y: 0, z: 90 },
+      copy: true,
+      ...extra
+    })
+  );
+  return manager.document.bodyOrder.at(-1)!;
+}
+
+function assembleAll(manager: CommandManager): void {
+  manager.execute(
+    commandFactories.addAssemblyComponents({
+      components: manager.document.bodyOrder.map((bodyId, index) => ({
+        componentId: `comp_${index}`,
+        name: `Instance ${index + 1}`,
+        bodyId,
+        grounded: index === 0
+      }))
+    })
+  );
+}
+
 describe('deriveAssemblyBom (AS03)', () => {
   it('is empty for a project without an assembly', () => {
     const { manager } = bodies(['Plate']);
@@ -165,6 +196,7 @@ describe('deriveAssemblyBom (AS03)', () => {
       {
         item: 1,
         quantity: 2,
+        status: 'ready',
         name: 'Pin Body',
         bodyId: pin2,
         instances: [
@@ -175,6 +207,7 @@ describe('deriveAssemblyBom (AS03)', () => {
       {
         item: 2,
         quantity: 1,
+        status: 'ready',
         name: 'Plate Body',
         bodyId: plate,
         instances: [{ componentId: 'comp_plate', name: 'Plate' }]
@@ -194,12 +227,168 @@ describe('deriveAssemblyBom (AS03)', () => {
     expect(deriveAssemblyBom(rebuilt)).toEqual(bom);
     expect(isLiveAssemblyBody(rebuilt, pin)).toBe(false);
     expect(isLiveAssemblyBody(rebuilt, pin2)).toBe(true);
-    // A deleted body has no part to list.
+    // Unresolved references stay visible and keep their quantities.
     expect(
       deriveAssemblyBom(document, (bodyId) => bodyId === plate).rows.map(
-        (row) => row.bodyId
+        (row) => [row.bodyId, row.status, row.quantity]
       )
-    ).toEqual([plate]);
+    ).toEqual([
+      [pin, 'missing', 1],
+      [plate, 'ready', 1],
+      [pin2, 'missing', 1]
+    ]);
+  });
+
+  it('groups rigid copies and copy chains, keeping mirrors, scales and lookalikes separate', () => {
+    const {
+      manager,
+      ids: [source]
+    } = bodies(['Bolt']);
+    const first = copyPart(manager, source!);
+    copyPart(manager, first, { scale: 1 });
+    copyPart(manager, source!, { scale: 2 });
+    copyPart(manager, source!, { scale: '1' });
+    manager.execute(
+      commandFactories.mirrorBody({
+        name: 'Mirror',
+        targetBodyId: source!,
+        plane: { origin: { x: 0, y: 0, z: 0 }, normal: { x: 1, y: 0, z: 0 } }
+      })
+    );
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Lookalike',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 10, depth: 10 }
+      })
+    );
+    manager.execute(
+      commandFactories.patternBody({
+        name: 'Pattern aggregate',
+        targetBodyId: source!,
+        patternKind: 'linear',
+        count: 3,
+        axis: 'x',
+        spacing: 20
+      })
+    );
+    assembleAll(manager);
+    const bom = deriveAssemblyBom(manager.document, allLive);
+    expect(bom.rows.map((row) => row.quantity)).toEqual([3, 1, 1, 1, 1, 1]);
+    expect(bom.totalQuantity).toBe(8);
+    expect(bom.rows[0]?.instances.map((instance) => instance.name)).toEqual([
+      'Instance 1',
+      'Instance 2',
+      'Instance 3'
+    ]);
+    const reopened = normalizeDocument(
+      JSON.parse(JSON.stringify(manager.document)) as ProjectDocument
+    );
+    expect(deriveAssemblyBom(reopened, allLive)).toEqual(bom);
+  });
+
+  it('keeps earlier copies separate after an in-place source scale, but groups copies of the new shape', () => {
+    const {
+      manager,
+      ids: [source]
+    } = bodies(['Bolt']);
+    const before = copyPart(manager, source!);
+    manager.execute(
+      commandFactories.transformBody({
+        name: 'Scale source',
+        targetBodyId: source!,
+        translation: { x: 0, y: 0, z: 0 },
+        scale: 2
+      })
+    );
+    const after = copyPart(manager, source!);
+    assembleAll(manager);
+    const bom = deriveAssemblyBom(manager.document, allLive);
+    expect(
+      bom.rows.map((row) => row.instances.map((i) => i.componentId))
+    ).toEqual([['comp_0', 'comp_2'], ['comp_1']]);
+    expect(bom.rows.map((row) => row.bodyId)).toEqual([source, before]);
+    expect(bom.rows[0]?.quantity).toBe(2);
+    expect(after).not.toBe(source);
+  });
+
+  it('starts a new identity for a shape edit, and leaves an ordinary in-place move rigid', () => {
+    const {
+      manager,
+      ids: [source]
+    } = bodies(['Bolt']);
+    copyPart(manager, source!);
+    manager.execute(
+      commandFactories.transformBody({
+        name: 'Move source',
+        targetBodyId: source!,
+        translation: { x: 10, y: 0, z: 0 }
+      })
+    );
+    copyPart(manager, source!);
+    manager.execute(
+      commandFactories.filletEdges({
+        name: 'Round source',
+        targetBodyId: source!,
+        edgeHashes: [123],
+        size: 1
+      })
+    );
+    const rounded = manager.document.bodyOrder.at(-1)!;
+    copyPart(manager, rounded);
+    assembleAll(manager);
+    const bom = deriveAssemblyBom(manager.document, allLive);
+    expect(bom.rows.map((row) => row.quantity)).toEqual([3, 2]);
+  });
+
+  it('retains an unresolved component and marks its CSV row as missing', () => {
+    const {
+      manager,
+      ids: [source]
+    } = bodies(['Plate']);
+    assembleAll(manager);
+    const bom = deriveAssemblyBom(manager.document, () => false);
+    expect(bom.totalQuantity).toBe(1);
+    expect(bom.rows[0]).toMatchObject({
+      bodyId: source,
+      name: 'Plate Body',
+      quantity: 1,
+      status: 'missing'
+    });
+    expect(assemblyBomToCsv(bom).split('\n')).toEqual([
+      ASSEMBLY_BOM_CSV_HEADER,
+      `1,1,Plate Body,Instance 1,${source},missing`
+    ]);
+  });
+
+  it('does not group an earlier copy with a source edited in place', () => {
+    const {
+      manager,
+      ids: [source]
+    } = bodies(['Bolt']);
+    copyPart(manager, source!);
+    manager.execute(
+      commandFactories.directEditBody({
+        name: 'Offset source face',
+        targetBodyId: source!,
+        operation: {
+          kind: 'offset-face',
+          faceHash: 1,
+          sourceSurfaceType: 'plane',
+          sourceArea: 100,
+          sourceCenter: { x: 10, y: 5, z: 5 },
+          sourceNormal: { x: 1, y: 0, z: 0 },
+          offset: 2
+        }
+      })
+    );
+    copyPart(manager, source!);
+    assembleAll(manager);
+    expect(
+      deriveAssemblyBom(manager.document, allLive).rows.map((row) =>
+        row.instances.map((instance) => instance.componentId)
+      )
+    ).toEqual([['comp_0', 'comp_2'], ['comp_1']]);
   });
 
   it('follows renamed bodies, while component renames only change instances', () => {
@@ -267,6 +456,7 @@ describe('deriveAssemblyBom (AS03)', () => {
         {
           item: 1,
           quantity: 2,
+          status: 'ready',
           name: 'Bolt, M3 "short"',
           bodyId: 'body_1' as BodyId,
           instances: [
@@ -277,6 +467,7 @@ describe('deriveAssemblyBom (AS03)', () => {
         {
           item: 2,
           quantity: 1,
+          status: 'ready',
           name: '=HYPERLINK("x")',
           bodyId: 'body_2' as BodyId,
           instances: [{ componentId: 'c3', name: '-Spacer' }]
@@ -284,9 +475,9 @@ describe('deriveAssemblyBom (AS03)', () => {
       ]
     });
     expect(csv.split('\n')).toEqual([
-      'item,quantity,part,instances,source_body',
-      '1,2,"Bolt, M3 ""short""",Bolt 1; Bolt 2,body_1',
-      `2,1,"'=HYPERLINK(""x"")",'-Spacer,body_2`
+      'item,quantity,part,instances,source_body,status',
+      '1,2,"Bolt, M3 ""short""",Bolt 1; Bolt 2,body_1,ready',
+      `2,1,"'=HYPERLINK(""x"")",'-Spacer,body_2,ready`
     ]);
   });
 });

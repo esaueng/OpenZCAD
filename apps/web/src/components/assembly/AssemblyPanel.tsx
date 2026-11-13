@@ -166,6 +166,10 @@ function AssemblyLists({
   ]);
   const addable = candidates.filter((body) => !used.has(body.bodyId));
   const bom = deriveAssemblyBom(document);
+  const missingQuantity = bom.rows.reduce(
+    (count, row) => count + (row.status === 'missing' ? row.quantity : 0),
+    0
+  );
 
   const downloadBom = () => {
     const fileName = `${exportFileStem(document.name)}.bom.csv`;
@@ -175,7 +179,7 @@ function AssemblyLists({
     onStatus(
       `Exported the bill of materials (${bom.rows.length} part${
         bom.rows.length === 1 ? '' : 's'
-      }) to ${fileName}.`
+      }) to ${fileName}.${missingQuantity > 0 ? ` Includes ${missingQuantity} missing part${missingQuantity === 1 ? '' : 's'}.` : ''}`
     );
   };
 
@@ -660,19 +664,29 @@ function AssemblyLists({
           }
         >
           {bom.rows.length === 0 ? (
-            <p className="assembly-muted">
-              No parts to list: every part&rsquo;s body was deleted.
-            </p>
+            <p className="assembly-muted">No parts to list.</p>
           ) : (
             <ul className="assembly-list" aria-label="Bill of materials">
               {bom.rows.map((row) => (
-                <li key={row.bodyId} className="assembly-row">
+                <li
+                  key={`${row.status}:${row.bodyId}`}
+                  className="assembly-row"
+                >
                   <div
                     className="assembly-row-line"
                     title={row.instances.map((i) => i.name).join(', ')}
                   >
                     <span className="assembly-row-main is-static">
                       <span className="assembly-row-name">{row.name}</span>
+                      {row.status === 'missing' && (
+                        <span
+                          className="assembly-row-flag"
+                          title="The part's body cannot be found"
+                        >
+                          <TriangleAlert size={12} aria-hidden="true" />
+                          Missing
+                        </span>
+                      )}
                       <span
                         className="assembly-row-value"
                         aria-label={`Quantity ${row.quantity}`}

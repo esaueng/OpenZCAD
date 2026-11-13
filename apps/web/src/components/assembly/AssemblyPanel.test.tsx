@@ -89,14 +89,48 @@ describe('AssemblyPanel (one left sidebar)', () => {
     expect(saveBomCsv).toHaveBeenCalledWith(
       'Scissors.bom.csv',
       [
-        'item,quantity,part,instances,source_body',
-        `1,1,Blade A Body,Blade A,${fixture.a}`,
-        `2,1,Blade B Body,Blade B,${fixture.b}`,
+        'item,quantity,part,instances,source_body,status',
+        `1,1,Blade A Body,Blade A,${fixture.a},ready`,
+        `2,1,Blade B Body,Blade B,${fixture.b},ready`,
         ''
       ].join('\n')
     );
     expect(onStatus).toHaveBeenCalledWith(
       'Exported the bill of materials (2 parts) to Scissors.bom.csv.'
+    );
+  });
+
+  it('keeps a missing part in the BOM and warns that the exported CSV includes it', () => {
+    const fixture = scissorsManager({ components: true });
+    const document = fixture.live();
+    document.bodyOrder = document.bodyOrder.filter((id) => id !== fixture.b);
+    delete document.derived.bodyRepresentations[fixture.b];
+    const saveBomCsv = vi.fn();
+    const onStatus = vi.fn();
+    render(
+      <AssemblyPanel
+        document={document}
+        execute={vi.fn()}
+        onStatus={onStatus}
+        saveBomCsv={saveBomCsv}
+      />
+    );
+    const section = screen.getByRole('region', { name: 'Bill of materials' });
+    expect(within(section).getByText('Missing')).toBeInTheDocument();
+    const rows = within(section).getAllByRole('listitem');
+    expect(rows).toHaveLength(2);
+    expect(rows[1]).toHaveTextContent('Blade B BodyMissing×1');
+    fireEvent.click(
+      within(section).getByRole('button', {
+        name: 'Download bill of materials as CSV'
+      })
+    );
+    expect(saveBomCsv).toHaveBeenCalledWith(
+      'Scissors.bom.csv',
+      expect.stringContaining(`2,1,Blade B Body,Blade B,${fixture.b},missing`)
+    );
+    expect(onStatus).toHaveBeenCalledWith(
+      'Exported the bill of materials (2 parts) to Scissors.bom.csv. Includes 1 missing part.'
     );
   });
 
