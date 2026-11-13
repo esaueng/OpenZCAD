@@ -636,6 +636,8 @@ export function TopBar({
       : collaborationStatus === 'live'
         ? `${collaboratorCount} live`
         : COLLABORATION_LABELS[collaborationStatus];
+  // Signed out, archiving can only fail: no amber dot calls for it (I8).
+  const archiveAttention = localOnlySourceCount > 0 && Boolean(session);
   const accountLabel =
     accountState === 'checking'
       ? 'Checking'
@@ -643,7 +645,12 @@ export function TopBar({
         ? 'Signed in'
         : accountState === 'signed-out'
           ? 'Signed out'
-          : 'Unavailable';
+          : // The start screen and Settings name this state the same way.
+            'Cloud unavailable';
+  const accountDescription =
+    accountState === 'unavailable'
+      ? 'Cloud unavailable: sign-in could not be reached. Projects keep saving on this device.'
+      : `Cloud account: ${accountLabel.toLowerCase()}`;
 
   const breadcrumb = (
     <div className="breadcrumb">
@@ -913,8 +920,8 @@ export function TopBar({
             <span
               className={`account-state is-${accountState}`}
               role="status"
-              title={`Cloud account: ${accountLabel.toLowerCase()}`}
-              aria-label={`Cloud account: ${accountLabel.toLowerCase()}`}
+              title={accountDescription}
+              aria-label={accountDescription}
             >
               {accountState === 'checking' ? (
                 <LoaderCircle className="spin" size={13} aria-hidden="true" />
@@ -1002,14 +1009,14 @@ export function TopBar({
                   ? ` · ${artifacts.length} stored ${artifacts.length === 1 ? 'file' : 'files'}`
                   : ''
               }${
-                localOnlySourceCount > 0
+                archiveAttention
                   ? ` · ${localOnlySourceCount} import ${localOnlySourceCount === 1 ? 'source needs' : 'sources need'} archiving`
                   : ''
               }`}
             >
               <FolderOpen size={14} aria-hidden="true" />
               File
-              {localOnlySourceCount > 0 ? (
+              {archiveAttention ? (
                 <i className="file-menu-attention" aria-hidden="true" />
               ) : null}
               {artifacts.length > 0 ? (
@@ -1148,7 +1155,14 @@ export function TopBar({
                   <button
                     type="button"
                     className="topbar-menu-item"
-                    title="Upload import sources that exist only on this device so other devices can rebuild this project"
+                    title={
+                      session
+                        ? 'Upload import sources that exist only on this device so other devices can rebuild this project'
+                        : 'Sign in to archive imports to your account'
+                    }
+                    // Signed out the upload can only fail, so it says what
+                    // it needs instead (I8).
+                    disabled={!session}
                     onClick={onArchiveLocalSources}
                   >
                     <Upload size={13} aria-hidden="true" />
@@ -1160,9 +1174,11 @@ export function TopBar({
                       </span>
                     </span>
                     <small>
-                      {localOnlySourceCount === 1
-                        ? 'one import exists only on this device'
-                        : 'these imports exist only on this device'}
+                      {!session
+                        ? 'Sign in to archive imports'
+                        : localOnlySourceCount === 1
+                          ? 'one import exists only on this device'
+                          : 'these imports exist only on this device'}
                     </small>
                   </button>
                 </>

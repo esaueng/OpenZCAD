@@ -473,7 +473,10 @@ import {
 } from './lib/shaprImportWorkerClient';
 import { rebuildImportInDisposableWorker } from './lib/importRebuildWorkerClient';
 import { shaprMigrationDraft } from './lib/shaprMigration';
-import { presentedWorkspaceSaveState } from './lib/workspaceSaveStatePresentation';
+import {
+  autosaveReportedSaveState,
+  presentedWorkspaceSaveState
+} from './lib/workspaceSaveStatePresentation';
 import { showsWorkspaceEmptyState } from './lib/workspaceEmptyState';
 import {
   CheckpointSaveError,
@@ -6519,7 +6522,7 @@ export function App() {
     const controller = new CloudProjectAutosave({
       api,
       onStatus(status) {
-        setSaveState(status.state);
+        setSaveState(autosaveReportedSaveState(status.state, status.error));
         if (status.state === 'repair' && status.projectId) {
           accountDocumentUnavailableProjectIdRef.current = status.projectId;
           setCloudAvailable(false);
@@ -12811,7 +12814,7 @@ export function App() {
           ? // Signed out is the normal state, and the Settings footer already
             // reads "Device only"; the header stays quiet rather than repeat it.
             ''
-          : 'Beta sign-in unavailable · device settings remain active.'
+          : 'Cloud unavailable · settings and projects stay on this device.'
       );
       return;
     }
@@ -30571,6 +30574,10 @@ export function App() {
           accountProjectListReached={accountProjectListReached}
           conflictedProjectIds={conflictedProjectIds}
           signedIn={Boolean(session)}
+          cloudUnavailable={
+            cloudFunctionsEnabled && authConfigStatus === 'unavailable'
+          }
+          onRetryCloud={() => void handleRefreshAuthConfig()}
           onSaveToAccount={(project) => void handleSaveToAccount(project)}
           onSaveAllToAccount={(candidates) =>
             void handleSaveAllToAccount(candidates)

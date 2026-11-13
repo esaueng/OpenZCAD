@@ -28,6 +28,8 @@ function renderTopBar(
     warningCount?: number;
     reloadPrompt?: 'update' | 'interrupted' | null;
     conflictDeferred?: boolean;
+    localOnlySourceCount?: number;
+    accountState?: 'checking' | 'signed-in' | 'signed-out' | 'unavailable';
   } = {}
 ) {
   const handlers = {
@@ -63,14 +65,16 @@ function renderTopBar(
       reloadPrompt={options.reloadPrompt ?? null}
       saveToAccount={options.saveToAccount ?? false}
       knownDeviceOnly={options.knownDeviceOnly ?? false}
-      localOnlySourceCount={0}
+      localOnlySourceCount={options.localOnlySourceCount ?? 0}
       artifacts={[]}
       session={
         options.signedIn
           ? ({ userId: 'user-1', email: 'a@example.com' } as AuthSession)
           : null
       }
-      accountState={options.signedIn ? 'signed-in' : 'signed-out'}
+      accountState={
+        options.accountState ?? (options.signedIn ? 'signed-in' : 'signed-out')
+      }
       collaborationStatus={options.collaborationStatus ?? 'offline'}
       collaborationFailure={options.collaborationFailure}
       readOnlySeat={options.readOnlySeat}
@@ -985,5 +989,39 @@ describe('TopBar encryption indicator', () => {
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(lock.closest('details')).not.toHaveAttribute('open');
     expect(lock).toHaveFocus();
+  });
+});
+
+// Design review I8: one name for the unreachable cloud, and no call to an
+// archive that can only fail while signed out.
+describe('TopBar signed out', () => {
+  it('names an unreachable cloud as the start screen and Settings do', () => {
+    renderTopBar({ accountState: 'unavailable' });
+    const chip = screen.getByRole('status', {
+      name: /^Cloud unavailable: sign-in could not be reached/
+    });
+    expect(chip).toHaveTextContent('Cloud unavailable');
+  });
+
+  it('disables Archive local sources with its reason and raises no dot', () => {
+    renderTopBar({ localOnlySourceCount: 1 });
+    expect(document.querySelector('.file-menu-attention')).toBeNull();
+    const archive = screen.getByRole('button', {
+      name: /Archive local sources/,
+      hidden: true
+    });
+    expect(archive).toBeDisabled();
+    expect(archive).toHaveTextContent('Sign in to archive imports');
+  });
+
+  it('keeps the archive and its dot for a signed-in project', () => {
+    renderTopBar({ localOnlySourceCount: 1, signedIn: true });
+    expect(document.querySelector('.file-menu-attention')).not.toBeNull();
+    expect(
+      screen.getByRole('button', {
+        name: /Archive local sources/,
+        hidden: true
+      })
+    ).toBeEnabled();
   });
 });
