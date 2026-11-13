@@ -20,6 +20,10 @@ import {
 } from '@openzcad/shared';
 import { api, forgetEncryptedProject, rememberProjectFormats } from './api';
 import {
+  ENCRYPTED_PROJECT_PIN_STATE_KEY,
+  PIN_STATE_FAILED
+} from './e2ee/encryptedProjectPins';
+import {
   pageBlobReferences,
   setEncryptedBlobReader
 } from './e2ee/blobReferences';
@@ -704,3 +708,28 @@ it.each([true, false])(
     if (!identical) expect(backupFileBytes(backup.files[0]!)).toEqual(original);
   }
 );
+
+it('refuses a cloud backup while this device cannot tell which projects are encrypted', async () => {
+  const document = createProjectDocument('Plain', toUserId('user_backup'));
+  // An earlier load could not save a pin: every project is held encrypted,
+  // so a cloud backup cannot know which files belong in it.
+  window.localStorage.setItem(
+    ENCRYPTED_PROJECT_PIN_STATE_KEY,
+    PIN_STATE_FAILED
+  );
+  try {
+    vi.resetModules();
+    const { createProjectBackup: backupAfterReload } =
+      await import('./projectBackupTransfer');
+    const { E2EE_PIN_STORAGE_UNAVAILABLE_CODE } = await import('./api');
+    await expect(backupAfterReload(document, true)).rejects.toMatchObject({
+      code: E2EE_PIN_STORAGE_UNAVAILABLE_CODE
+    });
+    // A local-only backup does not depend on the cloud format.
+    await expect(backupAfterReload(document, false)).resolves.toContain(
+      'openzcad-project'
+    );
+  } finally {
+    window.localStorage.removeItem(ENCRYPTED_PROJECT_PIN_STATE_KEY);
+  }
+});

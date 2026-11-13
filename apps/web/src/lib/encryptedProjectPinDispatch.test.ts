@@ -9,6 +9,10 @@ import {
   isEncryptedProject
 } from './api';
 import { desktopFetch } from './desktopBridge';
+import {
+  ENCRYPTED_PROJECT_PIN_PREFIX,
+  ENCRYPTED_PROJECT_PIN_STATE_KEY
+} from './e2ee/encryptedProjectPins';
 import { createDecryptionController } from './e2ee/projectDecryption';
 import type * as DecryptionEngineModule from './e2ee/projectDecryptionEngine';
 
@@ -281,6 +285,79 @@ describe('an encrypted project stays encrypted on this device', () => {
       ).toEqual([]);
     } finally {
       storageOverride.restore();
+    }
+  });
+
+  it('sends nothing in plaintext after a reload when a pin could not be saved', async () => {
+    const projectId = 'proj_pin_unsaved';
+    const real = window.localStorage;
+    const descriptor = Object.getOwnPropertyDescriptor(window, 'localStorage');
+    const useStorage = (storage: unknown) =>
+      Object.defineProperty(window, 'localStorage', {
+        configurable: true,
+        get: () => storage
+      });
+    const restore = () => {
+      if (descriptor) Object.defineProperty(window, 'localStorage', descriptor);
+      else delete (window as { localStorage?: Storage }).localStorage;
+    };
+    try {
+      // Storage is full: the pin does not fit, the shorter failure mark does.
+      useStorage({
+        getItem: (key: string) => real.getItem(key),
+        setItem: (key: string, value: string) => {
+          if (key.startsWith(ENCRYPTED_PROJECT_PIN_PREFIX)) {
+            throw new Error('QuotaExceededError');
+          }
+          real.setItem(key, value);
+        },
+        removeItem: (key: string) => real.removeItem(key)
+      });
+      vi.resetModules();
+      const first = await import('./api');
+      const { desktopFetch: firstFetch } = await import('./desktopBridge');
+      vi.mocked(firstFetch).mockResolvedValue(
+        json({ projects: [summary(projectId, 2)] })
+      );
+      await first.api.listProjects();
+      expect(first.isEncryptedProject(projectId)).toBe(true);
+
+      // Reload with room again; the account now lists it as plaintext.
+      restore();
+      vi.resetModules();
+      const reloaded = await import('./api');
+      const { desktopFetch: fetchAfterReload } =
+        await import('./desktopBridge');
+      vi.mocked(fetchAfterReload).mockResolvedValue(
+        json({ projects: [summary(projectId, 1)] })
+      );
+      await reloaded.api.listProjects();
+      vi.mocked(fetchAfterReload).mockReset();
+      vi.mocked(fetchAfterReload).mockResolvedValue(json({}));
+      store.saveProjectDocument.mockRejectedValue(
+        new ApiError(404, 'No encrypted head')
+      );
+
+      expect(reloaded.isEncryptedProject(projectId)).toBe(true);
+      await expect(
+        reloaded.api.saveProjectDocument({
+          projectId: toProjectId(projectId),
+          expectedVersion: 3,
+          document: documentOf(projectId)
+        })
+      ).rejects.toMatchObject({
+        code: reloaded.E2EE_PIN_STORAGE_UNAVAILABLE_CODE
+      });
+      expect(
+        vi
+          .mocked(fetchAfterReload)
+          .mock.calls.filter(
+            ([input]) => typeof input === 'string' && input.includes(projectId)
+          )
+      ).toEqual([]);
+    } finally {
+      restore();
+      real.removeItem(ENCRYPTED_PROJECT_PIN_STATE_KEY);
     }
   });
 

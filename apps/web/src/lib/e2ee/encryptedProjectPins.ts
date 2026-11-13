@@ -22,10 +22,17 @@
  * Each pin is its own storage key, so tabs never read-modify-write a shared
  * list (one tab's write cannot drop another's pin), and there is no limit
  * past which old pins are dropped (a listing cannot push a pin out by
- * naming many other encrypted projects). When storage cannot be read or
- * written, nothing here can say which projects were pinned, so the store is
- * `degraded` and holds every project as encrypted: writes then fail on the
- * encrypted routes instead of going out in plaintext.
+ * naming many other encrypted projects).
+ *
+ * When storage cannot be read, or a pin cannot be saved, nothing here can
+ * say which projects were pinned, so the store is `degraded` and holds
+ * every project as encrypted: writes then fail on the encrypted routes
+ * instead of going out in plaintext. A pin that could not be saved is
+ * recorded in a state key reserved at startup at a size larger than any
+ * pin, so overwriting it with the shorter failure mark frees space rather
+ * than needing it. That mark keeps every tab and every later page load
+ * degraded, since the lost pin cannot be named, until the site's storage
+ * is cleared.
  */
 
 export interface EncryptedProjectPinStore {
@@ -42,8 +49,8 @@ export interface EncryptedProjectPinStore {
    */
   forget(projectId: string): void;
   /**
-   * Whether pins could not be read or saved on this page, so every project
-   * is held as encrypted.
+   * Whether pins cannot be read, or one could not be saved (on this page,
+   * another tab or an earlier load), so every project is held as encrypted.
    */
   readonly degraded: boolean;
 }
@@ -52,7 +59,14 @@ export interface EncryptedProjectPinStore {
 export const ENCRYPTED_PROJECT_PIN_PREFIX =
   'openzcad:e2ee-encrypted-project:v1:';
 
-const PROBE_KEY = 'openzcad:e2ee-encrypted-project-probe';
+/**
+ * Reserved at startup at `PIN_STATE_RESERVED`, larger than any pin's key
+ * and value; set to `PIN_STATE_FAILED` once a pin could not be saved.
+ */
+export const ENCRYPTED_PROJECT_PIN_STATE_KEY =
+  'openzcad:e2ee-encrypted-project-pins:state';
+const PIN_STATE_RESERVED = `ok:${'.'.repeat(253)}`;
+export const PIN_STATE_FAILED = 'failed';
 
 const PROJECT_ID = /^[!-~]{1,128}$/;
 
@@ -95,16 +109,36 @@ export function localStorageEncryptedProjectPins(
 ): EncryptedProjectPinStore {
   const own = new Set<string>();
   let degraded = storage === null;
-  if (storage) {
+  const failedState = (): boolean => {
+    if (!storage) return false;
     try {
-      // Storage that refuses a write (blocked, or full) cannot keep a pin
-      // made later on this page either.
-      storage.setItem(PROBE_KEY, '1');
-      storage.removeItem(PROBE_KEY);
+      return (
+        storage.getItem(ENCRYPTED_PROJECT_PIN_STATE_KEY) === PIN_STATE_FAILED
+      );
+    } catch {
+      return true;
+    }
+  };
+  if (storage && !failedState()) {
+    try {
+      // Without the reserved state a later failed pin could not be
+      // recorded, so storage that refuses it cannot keep pins either.
+      if (
+        storage.getItem(ENCRYPTED_PROJECT_PIN_STATE_KEY) !== PIN_STATE_RESERVED
+      ) {
+        storage.setItem(ENCRYPTED_PROJECT_PIN_STATE_KEY, PIN_STATE_RESERVED);
+      }
     } catch {
       degraded = true;
     }
+  } else if (storage) {
+    degraded = true;
   }
+  const isDegraded = (): boolean => {
+    // Another tab's failed pin degrades this page too.
+    if (!degraded && failedState()) degraded = true;
+    return degraded;
+  };
   const stored = (projectId: string): boolean => {
     if (!storage) return false;
     try {
@@ -117,10 +151,10 @@ export function localStorageEncryptedProjectPins(
   };
   return {
     get degraded() {
-      return degraded;
+      return isDegraded();
     },
     has(projectId) {
-      if (degraded) return true;
+      if (isDegraded()) return true;
       if (!PROJECT_ID.test(projectId)) return false;
       return own.has(projectId) || stored(projectId);
     },
@@ -132,8 +166,15 @@ export function localStorageEncryptedProjectPins(
         storage.setItem(ENCRYPTED_PROJECT_PIN_PREFIX + projectId, '1');
       } catch {
         // Not saved, so a reload would not know it: hold everything as
-        // encrypted on this page rather than lose track of this one.
+        // encrypted, here, in other tabs and after a reload, rather than
+        // lose track of this one. The mark is shorter than the reserved
+        // value it replaces, so a full storage still takes it.
         degraded = true;
+        try {
+          storage.setItem(ENCRYPTED_PROJECT_PIN_STATE_KEY, PIN_STATE_FAILED);
+        } catch {
+          // Nothing more to do: this page stays degraded.
+        }
       }
     },
     forget(projectId) {

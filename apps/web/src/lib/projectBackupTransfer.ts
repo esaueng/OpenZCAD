@@ -4,7 +4,12 @@ import type { StoredMeasurementRecord } from './measurementRecord';
 import { withoutDerivedProjection } from '@openzcad/document-core';
 import { importArtifactIds } from '@openzcad/persistence';
 import type { ArtifactRecord, ProjectDocument } from '@openzcad/shared';
-import { api, isEncryptedProject } from './api';
+import {
+  api,
+  encryptedProjectPinsUnavailable,
+  isEncryptedProject,
+  pinStorageUnavailable
+} from './api';
 import { desktopFetch } from './desktopBridge';
 import { prepareProjectSources, type ProjectSource } from './projectSources';
 import { encryptedBlobSource } from './e2ee/blobReferences';
@@ -152,6 +157,13 @@ export async function createProjectBackup(
     bytesUsed += length;
   };
   ensureSpace(0);
+  // What a cloud project's backup includes depends on whether it is
+  // encrypted. While this device cannot tell (its pins are unavailable and
+  // it holds every project as encrypted), refuse rather than finish a
+  // backup that silently leaves files out.
+  if (remote && encryptedProjectPinsUnavailable()) {
+    throw pinStorageUnavailable();
+  }
   const artifacts =
     remote &&
     (!isEncryptedProject(snapshot.projectId) || options.includeEncryptedFiles)
