@@ -76,6 +76,7 @@ describe('keymap registry', () => {
       'view-display': 'W',
       'view-projection': 'P',
       'view-xray': 'Shift+X',
+      'view-orbit-mode': 'Shift+O',
       'panels-hide-all': 'Ctrl+\\',
       'selection-filter': 'Q',
       'workspace-mode-cycle': 'Ctrl+Shift+M',

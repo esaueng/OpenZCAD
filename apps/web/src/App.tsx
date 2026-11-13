@@ -165,6 +165,7 @@ import {
   Monitor,
   PenLine,
   Move3d,
+  Orbit,
   Redo2,
   Ruler,
   Save,
@@ -11756,6 +11757,27 @@ export function App() {
    * it off returns exactly the mode, the hidden bodies and the selection
    * that were on screen before.
    */
+  /**
+   * Flips the orbit mode preference, which is an account setting like any
+   * other: the same change Settings → Controls → Orbit makes, synced the same
+   * way. The camera reads it per update, so the next drag uses it.
+   */
+  function toggleOrbitMode() {
+    const current = appSettingsRef.current;
+    const orbitMode =
+      current.viewport.orbitMode === 'turntable' ? 'free' : 'turntable';
+    handleAppSettingsChange({
+      ...current,
+      viewport: { ...current.viewport, orbitMode }
+    });
+    setStatus(
+      orbitMode === 'turntable'
+        ? 'Turntable orbit · Z stays up and a drag stops at the top and bottom views.'
+        : 'Free orbit · a drag carries over the top and bottom views.',
+      { unlogged: true }
+    );
+  }
+
   function toggleXray() {
     const next = !viewerSettingsRef.current.xray;
     setViewerSettings((current) => ({ ...current, xray: next }));
@@ -29669,6 +29691,9 @@ export function App() {
         case 'view-xray':
           toggleXray();
           return;
+        case 'view-orbit-mode':
+          toggleOrbitMode();
+          return;
         case 'selection-filter': {
           // A vertex repair picks edges whatever the manual filter says
           // (selectionFilter above; picking a sketch plane, which forces
@@ -30403,6 +30428,18 @@ export function App() {
       shortcut: keymap.label('view-xray'),
       icon: <ScanEye size={16} aria-hidden="true" />,
       run: toggleXray
+    },
+    {
+      id: 'view-orbit-mode',
+      label:
+        appSettings.viewport.orbitMode === 'turntable'
+          ? 'Orbit: switch to free'
+          : 'Orbit: switch to turntable',
+      group: 'View',
+      keywords: ['orbit mode', 'turntable', 'free orbit', 'upside down'],
+      shortcut: keymap.label('view-orbit-mode'),
+      icon: <Orbit size={16} aria-hidden="true" />,
+      run: toggleOrbitMode
     },
     {
       id: 'view-show-all',
@@ -32630,6 +32667,7 @@ export function App() {
             {...(savedViewsControl ? { savedViews: savedViewsControl } : {})}
             onCycleDisplayMode={cycleDisplayMode}
             onToggleProjection={toggleProjection}
+            onToggleOrbitMode={toggleOrbitMode}
             sectionRange={
               viewerSettings.sectionView
                 ? sectionAxisRange(viewerSettings.sectionView.plane)

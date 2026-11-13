@@ -1814,6 +1814,21 @@
   }
 }
 
+/* Orbit mode's button makes the viewer bar one button taller, and the bar
+   is sized to the shortest windows it must fit: with it, the views button
+   ended 11px past a phone on its side (844 x 390), a touch rail ran to
+   612px and a one-column mouse rail to 639px. Where that would pass the
+   window's foot, the button leaves the bar, as X-ray has no button of its
+   own; Shift+O and the command bar still switch it. Each band starts where
+   the bar without it already fits. */
+@media (max-height: 540px),
+  (pointer: coarse) and (max-height: 611px),
+  (pointer: fine) and (min-height: 601px) and (max-height: 638px) {
+  .instrument-rail .rail-orbit-mode {
+    display: none;
+  }
+}
+
 /* Lifted as far as the top islands, the rail still ends 518px down (374px
    as two islands). At 960px and narrower the cube stands above the search
    row (and on a phone above its status row too), so below about 660px
