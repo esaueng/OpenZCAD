@@ -301,6 +301,15 @@ export function modalHoldsKeyboard(): boolean {
 }
 
 /**
+ * Whether any modal dialog is open. A file dropped on the workspace behind
+ * one used to import there while the dialog still waited on its own answer,
+ * so the drop target refuses files until every modal has closed.
+ */
+export function modalIsOpen(): boolean {
+  return modalStack.length > 0;
+}
+
+/**
  * Whether the dialog on top hands its keys to the workspace keymap.
  *
  * Such a dialog still inerts the workspace behind it like any modal, so a

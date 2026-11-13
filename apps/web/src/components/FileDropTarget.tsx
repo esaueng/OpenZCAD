@@ -1,8 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
+import { modalIsOpen } from '../lib/useModalFocus';
 
 interface FileDropTargetProps {
   /** Files dropped on the parent element from outside the page. */
   onDrop(files: File[]): void;
+  /**
+   * Files dropped while a dialog is open, which are refused: the dialog is
+   * still waiting on its own answer (an STL's units, an export).
+   */
+  onRefuse?(): void;
 }
 
 /** Whether a drag carries files from outside the page, as opposed to a row
@@ -26,10 +32,12 @@ function carriesFiles(event: DragEvent): boolean {
  * counter — up on enter, down on leave, reset on drop — is what keeps the
  * overlay steady until the pointer actually leaves the target.
  */
-export function FileDropTarget({ onDrop }: FileDropTargetProps) {
+export function FileDropTarget({ onDrop, onRefuse }: FileDropTargetProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const onDropRef = useRef(onDrop);
   onDropRef.current = onDrop;
+  const onRefuseRef = useRef(onRefuse);
+  onRefuseRef.current = onRefuse;
   const [active, setActive] = useState(false);
 
   useEffect(() => {
@@ -44,7 +52,8 @@ export function FileDropTarget({ onDrop }: FileDropTargetProps) {
       }
       event.preventDefault();
       depth += 1;
-      setActive(true);
+      // Under a dialog the stage does not light: the drop would be refused.
+      setActive(!modalIsOpen());
     };
     const over = (event: DragEvent) => {
       if (!carriesFiles(event)) {
@@ -53,7 +62,7 @@ export function FileDropTarget({ onDrop }: FileDropTargetProps) {
       // Without this the browser refuses the drop and navigates to the file.
       event.preventDefault();
       if (event.dataTransfer) {
-        event.dataTransfer.dropEffect = 'copy';
+        event.dataTransfer.dropEffect = modalIsOpen() ? 'none' : 'copy';
       }
     };
     const leave = (event: DragEvent) => {
@@ -73,19 +82,49 @@ export function FileDropTarget({ onDrop }: FileDropTargetProps) {
       depth = 0;
       setActive(false);
       const files = Array.from(event.dataTransfer?.files ?? []);
-      if (files.length > 0) {
-        onDropRef.current(files);
+      if (files.length === 0) {
+        return;
+      }
+      // A file dropped under the Units dialog imported behind it, and the
+      // next Escape then cancelled the first file instead.
+      if (modalIsOpen()) {
+        onRefuseRef.current?.();
+        return;
+      }
+      onDropRef.current(files);
+    };
+    // A dialog's backdrop covers the stage, so a file dropped on it never
+    // reaches the target above, and the browser would open the file in
+    // place of the workspace. Swallow it there while a dialog is open.
+    const guard = (event: DragEvent) => {
+      if (
+        !carriesFiles(event) ||
+        !modalIsOpen() ||
+        (event.target instanceof Node && target.contains(event.target))
+      ) {
+        return;
+      }
+      event.preventDefault();
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = 'none';
+      }
+      if (event.type === 'drop') {
+        onRefuseRef.current?.();
       }
     };
     target.addEventListener('dragenter', enter);
     target.addEventListener('dragover', over);
     target.addEventListener('dragleave', leave);
     target.addEventListener('drop', drop);
+    window.addEventListener('dragover', guard);
+    window.addEventListener('drop', guard);
     return () => {
       target.removeEventListener('dragenter', enter);
       target.removeEventListener('dragover', over);
       target.removeEventListener('dragleave', leave);
       target.removeEventListener('drop', drop);
+      window.removeEventListener('dragover', guard);
+      window.removeEventListener('drop', guard);
     };
   }, []);
 
@@ -97,7 +136,9 @@ export function FileDropTarget({ onDrop }: FileDropTargetProps) {
     >
       <div>
         <strong>Drop to import</strong>
-        <span>STEP, a mesh file, or an .openzcad backup</span>
+        <span>
+          STEP, DXF, a mesh file, a .shapr + STEP pair, or an .openzcad backup
+        </span>
       </div>
     </div>
   );

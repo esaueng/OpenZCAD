@@ -82,9 +82,7 @@ describe('ExportDialog', () => {
       bodies: [{ bodyId: 'mesh', name: 'Mesh reference', meshReference: true }]
     });
     expect(screen.getByRole('radio', { name: 'STL (binary)' })).toBeChecked();
-    expect(
-      screen.getByRole('radio', { name: '3MF' })
-    ).toBeDisabled();
+    expect(screen.getByRole('radio', { name: '3MF' })).toBeDisabled();
     expect(
       screen.getByRole('button', { name: 'Check watertightness' })
     ).toBeDisabled();
@@ -92,9 +90,7 @@ describe('ExportDialog', () => {
       screen.getByText(/Printability checking requires a CAD shell/)
     ).toBeVisible();
     await user.click(screen.getByRole('radio', { name: 'STL (ASCII)' }));
-    await user.click(
-      screen.getByRole('button', { name: 'Export STL' })
-    );
+    await user.click(screen.getByRole('button', { name: 'Export STL' }));
     expect(onExport).toHaveBeenCalledWith('stl', 0.08);
   });
   it('reports the visible scope and refuses an empty export', () => {
@@ -535,5 +531,41 @@ describe('ExportDialog', () => {
     // The visible label fills the width it reserves; a bare "Re-check" sat
     // in a button sized for the longer label.
     expect(check).toHaveTextContent('Re-check watertightness');
+  });
+
+  // I67: the dialog had no form, so Enter exported nothing.
+  it('exports with Enter on the focused format', async () => {
+    const user = userEvent.setup();
+    const props = renderDialog();
+    await user.click(screen.getByRole('radio', { name: 'STL (binary)' }));
+    await user.keyboard('{Enter}');
+    expect(props.onExport).toHaveBeenCalledOnce();
+    expect(props.onExport).toHaveBeenCalledWith('stl-binary', 0.08);
+    expect(props.onClose).toHaveBeenCalled();
+  });
+
+  it('keeps Enter from exporting a custom deviation out of range', async () => {
+    const user = userEvent.setup();
+    const props = renderDialog();
+    await user.click(screen.getByRole('button', { name: 'Custom' }));
+    const input = screen.getByLabelText(/Max chord deviation/);
+    await user.clear(input);
+    await user.type(input, '7{Enter}');
+    expect(props.onExport).not.toHaveBeenCalled();
+
+    await user.clear(input);
+    await user.type(input, '0.5{Enter}');
+    expect(props.onExport).toHaveBeenCalledWith('3mf', 0.5);
+  });
+
+  it('leaves Enter on a quality preset to choose the preset', async () => {
+    const user = userEvent.setup();
+    const props = renderDialog();
+    screen.getByRole('button', { name: /^Fine/ }).focus();
+    await user.keyboard('{Enter}');
+    expect(props.onExport).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole('button', { name: /^Fine/ }).getAttribute('aria-pressed')
+    ).toBe('true');
   });
 });
