@@ -36,8 +36,7 @@ import {
   SquareDot,
   SquareRoundCorner,
   Trash2,
-  Type,
-  Waypoints
+  Type
 } from 'lucide-react';
 import {
   MAX_SKETCH_POLYGON_SIDES,
@@ -65,7 +64,7 @@ import type { SketchDefinedState } from '../lib/sketch/constraints';
 import type { ConstraintInspectionTarget } from '../lib/sketch/constraintInspection';
 import { SKETCH_EDIT_TOOL_SPECS } from '../lib/sketch/edits';
 import { DEFAULT_SKETCH_OFFSET_OPTIONS } from '../lib/sketch/offset';
-import { CONSTRAINT_ICONS } from './constraintIcons';
+import { ArcGlyph, CONSTRAINT_ICONS } from './constraintIcons';
 import { Tooltip } from './Tooltip';
 import { SketchModifyFlyout } from './SketchModifyFlyout';
 import { RelationGlyphFilter } from './RelationGlyphFilter';
@@ -184,7 +183,7 @@ const TOOLS: {
     icon: MousePointer2
   },
   { id: 'line', label: 'Line', command: 'sketch-line', icon: Minus },
-  { id: 'arc', label: 'Arc', command: 'sketch-arc', icon: Waypoints },
+  { id: 'arc', label: 'Arc', command: 'sketch-arc', icon: ArcGlyph },
   { id: 'text', label: 'Text', command: 'sketch-text', icon: Type }
 ];
 
@@ -684,6 +683,36 @@ export function SketchToolRail({
   const togglePalette = () =>
     onTogglePalette ? onTogglePalette() : setPaletteOpenState((open) => !open);
   const constraintGroupRef = useRef<HTMLFieldSetElement>(null);
+  // A tool's type strip is for choosing before drawing. The first press on
+  // the canvas folds it away, so it never sits over the drawing and takes
+  // the next click (I37); the tool's rail button or a new type brings it
+  // back. Keyed by the tool and its types, so a change re-opens it.
+  const stripKey = [
+    tool,
+    circleMode,
+    rectangleMode,
+    polygonSides,
+    curveMode,
+    projectMode,
+    pendingEdit?.kind ?? ''
+  ].join('|');
+  const stripKeyRef = useRef(stripKey);
+  stripKeyRef.current = stripKey;
+  const [foldedStripKey, setFoldedStripKey] = useState<string | null>(null);
+  const stripOpen = foldedStripKey !== stripKey;
+  useEffect(() => {
+    const fold = (event: PointerEvent) => {
+      const target = event.target;
+      if (
+        target instanceof HTMLCanvasElement &&
+        target.closest('.viewer-host')
+      ) {
+        setFoldedStripKey(stripKeyRef.current);
+      }
+    };
+    document.addEventListener('pointerdown', fold, true);
+    return () => document.removeEventListener('pointerdown', fold, true);
+  }, []);
   const [modifyOpen, setModifyOpen] = useState(false);
   const modifyTriggerRef = useRef<HTMLButtonElement>(null);
   const modifyGroupId = useId();
@@ -745,7 +774,10 @@ export function SketchToolRail({
           className={on ? 'active' : undefined}
           aria-pressed={on}
           aria-label={label}
-          onClick={() => onTool(id)}
+          onClick={() => {
+            setFoldedStripKey(null);
+            onTool(id);
+          }}
         >
           <Icon size={16} aria-hidden="true" />
         </button>
@@ -785,12 +817,15 @@ export function SketchToolRail({
             className={tool === 'circle' ? 'active' : undefined}
             aria-pressed={tool === 'circle'}
             aria-label={`Circle: ${circleSpec.label}`}
-            onClick={() => onTool('circle')}
+            onClick={() => {
+              setFoldedStripKey(null);
+              onTool('circle');
+            }}
           >
             <CircleIcon size={16} aria-hidden="true" />
           </button>
         </Tooltip>
-        {tool === 'circle' ? (
+        {tool === 'circle' && stripOpen ? (
           // The type rides beside the rail while the circle tool is live:
           // one click to any type, and the strip leaves with the tool.
           <span
@@ -860,14 +895,15 @@ export function SketchToolRail({
             className={shapeOn ? 'active' : undefined}
             aria-pressed={shapeOn}
             aria-label={shapeSpec.mode === 'polygon' ? 'Polygon' : 'Rectangle'}
-            onClick={() =>
-              onTool(shapeSpec.mode === 'polygon' ? 'polygon' : 'rectangle')
-            }
+            onClick={() => {
+              setFoldedStripKey(null);
+              onTool(shapeSpec.mode === 'polygon' ? 'polygon' : 'rectangle');
+            }}
           >
             <ShapeIcon size={16} aria-hidden="true" />
           </button>
         </Tooltip>
-        {shapeOn ? (
+        {shapeOn && stripOpen ? (
           // Like the circle's strip: the types ride beside the rail while a
           // shape tool is live, and leave with it.
           <span
@@ -953,12 +989,15 @@ export function SketchToolRail({
             className={curveOn ? 'active' : undefined}
             aria-pressed={curveOn}
             aria-label={`Curve: ${curveSpec.label}`}
-            onClick={() => chooseCurve(curveSpec.mode)}
+            onClick={() => {
+              setFoldedStripKey(null);
+              chooseCurve(curveSpec.mode);
+            }}
           >
             <CurveIcon size={16} aria-hidden="true" />
           </button>
         </Tooltip>
-        {curveOn ? (
+        {curveOn && stripOpen ? (
           // Like the shape slot: the types ride beside the rail while the
           // ellipse or spline tool is live, and leave with it.
           <span
@@ -1030,12 +1069,15 @@ export function SketchToolRail({
             className={tool === 'project' ? 'active' : undefined}
             aria-pressed={tool === 'project'}
             aria-label="Project edges"
-            onClick={() => onProjectMode?.(projectMode)}
+            onClick={() => {
+              setFoldedStripKey(null);
+              onProjectMode?.(projectMode);
+            }}
           >
             <Projector size={16} aria-hidden="true" />
           </button>
         </Tooltip>
-        {tool === 'project' ? (
+        {tool === 'project' && stripOpen ? (
           <span
             className="sketch-type-strip"
             role="radiogroup"
@@ -1103,6 +1145,8 @@ export function SketchToolRail({
           disabled={!canConstrain}
           onClick={() => {
             if (inFold) setModifyOpen(false);
+            // Choosing a tool again brings back its folded options strip.
+            setFoldedStripKey(null);
             if (active) onEditTool(null);
             else onEditTool(kind, hint);
           }}
@@ -1162,7 +1206,7 @@ export function SketchToolRail({
             ).map((spec) => editTool(spec, true))}
           </SketchModifyFlyout>
         )}
-        {pendingEdit?.kind === 'offset' && !modifyOpen ? (
+        {pendingEdit?.kind === 'offset' && !modifyOpen && stripOpen ? (
           // Like the circle's types: Offset's settings ride beside its slot
           // while it is armed, and leave with it. They apply to the next pick.
           <span
@@ -1268,11 +1312,41 @@ export function SketchToolRail({
           {solveStatus?.label ?? ''}
         </span>
       )}
+      {solveStatus && (
+        // The sketch's state, always in view (I38): what the edges' colour
+        // means, in words, with the legend on hover. A click opens the
+        // constraint list.
+        <Tooltip
+          label={solveStatus.label}
+          description={SOLVE_STATE_LEGEND}
+          multiline
+        >
+          <button
+            type="button"
+            className="sketch-dof-chip"
+            data-state={
+              warning
+                ? 'conflict'
+                : solveStatus.tone === 'ok'
+                  ? 'defined'
+                  : 'free'
+            }
+            aria-label={`Sketch state: ${solveStatus.label}. ${SOLVE_STATE_LEGEND}`}
+            onClick={reviewConstraints}
+          >
+            {solveChipText(solveStatus)}
+          </button>
+        </Tooltip>
+      )}
     </>
   );
   const utilityTools = (
     <>
-      <Tooltip label="Construction" description="Toggle construction geometry">
+      <Tooltip
+        label="Construction"
+        shortcut={keymap.label('sketch-construction')}
+        description="Toggle construction geometry"
+      >
         <button
           type="button"
           className={construction ? 'active' : undefined}
@@ -1607,6 +1681,20 @@ export function SketchToolRail({
       </div>
     </>
   );
+}
+
+/** What the edge colours mean; the DOF chip's tooltip. */
+export const SOLVE_STATE_LEGEND =
+  'Blue edges can still move; green edges are fully constrained; red marks conflicting constraints.';
+
+/** The DOF chip's few characters: free degrees, 0 when defined, ! in conflict. */
+export function solveChipText(status: SketchSolveStatus): string {
+  if (status.tone === 'warn') return '!';
+  if (status.tone === 'ok' || status.definedState === 'fully-defined') {
+    return '0 DOF';
+  }
+  const dof = /^(\d+) DOF/.exec(status.label)?.[1];
+  return dof ? `${dof} DOF` : '…';
 }
 
 /** Relations dividers: before the positional group and the dimensions. */

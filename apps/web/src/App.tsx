@@ -272,6 +272,7 @@ import type {
   SketchId,
   SketchNode,
   SketchObjectData,
+  SketchPlaneRef,
   TopologySelection,
   UnitSystem
 } from '@openzcad/shared';
@@ -321,6 +322,7 @@ import {
   residualConstraintObjectIds,
   sketchDefinedState,
   topResidualConstraints,
+  constraintRefusalMessage,
   unreferencedSnapRefusal,
   type ConstraintPick,
   type DrivingDimensionKind
@@ -1821,7 +1823,11 @@ import {
   shouldAdoptAccountSettings
 } from './lib/appSettings';
 import { useCommandFold } from './hooks/useCommandFold';
-import { sketchObjectLabels } from './lib/sketch/objectLabels';
+import {
+  sketchObjectLabels,
+  sketchPointNamer
+} from './lib/sketch/objectLabels';
+import { regionsOutsideHoles } from './lib/sketch/extrudePreselect';
 import {
   commandFoldsTools,
   loadPanelState,
@@ -9928,6 +9934,38 @@ export function App() {
     [doc]
   );
 
+  const extrudeReturnRef = useRef<{
+    sketchId: SketchId;
+    plane: SketchPlaneRef;
+    version: number;
+  } | null>(null);
+  const previousInteractionModeRef = useRef(interaction.mode);
+  useEffect(() => {
+    const previous = previousInteractionModeRef.current;
+    previousInteractionModeRef.current = interaction.mode;
+    const back = extrudeReturnRef.current;
+    if (!back || previous !== 'region' || interaction.mode === 'region') {
+      return;
+    }
+    extrudeReturnRef.current = null;
+    // Built (the document moved on) or replaced by another command: stay.
+    if (
+      interaction.mode !== 'idle' ||
+      managerRef.current?.document.version !== back.version ||
+      !findSketch(managerRef.current.document, back.sketchId)
+    ) {
+      return;
+    }
+    setSelectedProfiles([]);
+    dispatchInteraction({
+      type: 'enter-sketch',
+      plane: back.plane,
+      sketchId: back.sketchId
+    });
+    setStatus('Extrude canceled · back in the sketch.');
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs on the mode change alone
+  }, [interaction.mode]);
+
   function startExtrude(sketchId: SketchId) {
     const view = sketchViews.find(
       (candidate) => candidate.sketchId === sketchId
@@ -9972,7 +10010,15 @@ export function App() {
     // back). The commit path infers add/cut from drag direction and the
     // kernel's classification. With no prior selection, every valid profile
     // extrudes together; the largest one anchors the arrow.
-    const chosen = existing.length > 0 ? existing : available;
+    // I42: with nothing picked, the regions outside holes; a circle drawn
+    // as a hole is not extruded into a plug.
+    const outside = new Set(
+      regionsOutsideHoles(view?.regions ?? []).map(({ profileId }) => profileId)
+    );
+    const chosen =
+      existing.length > 0
+        ? existing
+        : available.filter(({ profileId }) => outside.has(profileId));
     const anchor = chosen.reduce(
       (best, candidate) => (candidate.area > best.area ? candidate : best),
       chosen[0]!
@@ -9987,6 +10033,15 @@ export function App() {
     setSelectedSketchProfileId(sketchId);
     setSelectedProfiles(chosen);
     setTool(null);
+    // Cancelled before it builds, an Extrude started in a sketch returns
+    // to that sketch rather than to Build (I42).
+    extrudeReturnRef.current = activeSketch
+      ? {
+          sketchId,
+          plane: activeSketch.plane,
+          version: managerRef.current?.document.version ?? -1
+        }
+      : null;
     if (activeSketch) {
       dispatchInteraction({ type: 'exit-sketch' });
     } else if (interaction.mode !== 'idle') {
@@ -17879,6 +17934,30 @@ export function App() {
     );
   }
 
+  /**
+   * Re-opens a sketch step in the viewport, from the Inspector's button or
+   * a History row's double-click. It opens in Select (see `enter-sketch`).
+   */
+  function editSketchFeatureInViewport(feature: FeatureNode) {
+    if (feature.data.featureKind !== 'sketch' || !doc) {
+      return;
+    }
+    const sketch = findSketch(doc, feature.data.sketchId);
+    if (sketch) {
+      selectFeatureNode(null, 'pinned');
+      setTool(null);
+      dispatchInteraction({
+        type: 'enter-sketch',
+        plane: sketch.planeRef,
+        sketchId: sketch.sketchId
+      });
+      // Same reason as the revert pill: entering a sketch from the tree
+      // changes what every key does, so it should say so rather than leaving
+      // the previous message in place.
+      setStatus(`Editing ${sketch.name} · Finish Sketch when done.`);
+    }
+  }
+
   function startSketchOnFace(target: FaceTarget): boolean {
     const faceTopology = representations[
       target.bodyId as BodyId
@@ -20600,8 +20679,17 @@ export function App() {
     sketchLabels
   ]);
 
+  const sketchSolveSnapshotRef = useRef(sketchSolveSnapshot);
+  sketchSolveSnapshotRef.current = sketchSolveSnapshot;
   useEffect(() => {
     setSketchDiagnosticPoints([]);
+    // A commit records its solve status for the state it commits, in the
+    // same batch as the document change. Clearing the colours here as well
+    // dropped every committed classification, so a fully constrained sketch
+    // stayed blue until a manual Solve (I38). Only a stale status is cleared.
+    if (sketchSolveSnapshotRef.current?.key === currentSketchSolveKey) {
+      return;
+    }
     setSketchSolveDiagnosticObjectIds([]);
     setSketchDefinedObjectIds([]);
   }, [currentSketchSolveKey, editingSketchNode?.sketchId]);
@@ -20624,7 +20712,11 @@ export function App() {
       .filter(({ origin }) => origin !== 'promotion-structure')
       .map(({ constraintId, data }) => ({
         constraintId: String(constraintId),
-        label: describeConstraint(data, nameOf),
+        label: describeConstraint(
+          data,
+          nameOf,
+          sketchPointNamer(editingSketchNode, sketchLabels)
+        ),
         targets: constraintInspectionTargets(
           doc,
           editingSketchNode,
@@ -20655,7 +20747,11 @@ export function App() {
       .map(({ constraintId, data }) => ({
         constraintId: String(constraintId),
         kind: data.constraintKind,
-        label: describeConstraint(data, nameOf),
+        label: describeConstraint(
+          data,
+          nameOf,
+          sketchPointNamer(editingSketchNode, sketchLabels)
+        ),
         editable:
           data.constraintKind === 'distance' ||
           data.constraintKind === 'angle' ||
@@ -20754,9 +20850,15 @@ export function App() {
       selectedSketchEntity && interaction.mode === 'sketch'
         ? {
             kind: selectedSketchEntity.data.objectKind,
-            fitting: constraintToolsForObject(
-              selectedSketchEntity.data.objectKind
-            ).map(({ kind }) => kind)
+            fitting: [
+              ...constraintToolsForObject(
+                selectedSketchEntity.data.objectKind
+              ).map(({ kind }) => kind),
+              // A selected line's length (I39).
+              ...(selectedSketchEntity.data.objectKind === 'line'
+                ? (['distance'] as const)
+                : [])
+            ]
           }
         : null,
     [selectedSketchEntity, interaction.mode]
@@ -20767,6 +20869,78 @@ export function App() {
    * so single-pick tools finish here and two-pick tools arm with one pick
    * left. Choosing the armed tool again disarms it, as on the rail.
    */
+  /** Finish Sketch: every edit is already committed, so nothing is lost. */
+  function finishSketchSession() {
+    dispatchInteraction({ type: 'exit-sketch' });
+    setTool(null);
+    setSketchEditError(null);
+    setSketchDiagnosticPoints([]);
+    setStatus(`${editingSketchName} finished.`);
+  }
+
+  /**
+   * A selected line's length as a driving distance (I39): its two ends are
+   * the picks, so the value prompt opens at once, prefilled with the
+   * current length.
+   */
+  function startLineLengthDimension(objectId: string) {
+    if (!doc || !editingSketchNode) return;
+    if (
+      sketchSolving ||
+      geometryBusy ||
+      !requireCurrentSketchGeometry(editingSketchNode.sketchId)
+    )
+      return;
+    const picks: ConstraintPick[] = [
+      { kind: 'point', objectId, point: 'start' },
+      { kind: 'point', objectId, point: 'end' }
+    ];
+    const measured = measureDrivingDimension(
+      doc,
+      editingSketchNode,
+      'distance',
+      picks,
+      (value) =>
+        evalParamValue(value, parameterScope.scope, doc.units) ?? undefined
+    );
+    if ('error' in measured) {
+      setStatus(measured.error);
+      return;
+    }
+    dispatchInteraction({ type: 'sketch-constraint-tool', kind: null });
+    setSketchDimensionDraft({
+      kind: 'distance',
+      picks,
+      documentVersion: doc.version
+    });
+    setKeypad({
+      kind: 'sketch-dimension',
+      label: 'Distance',
+      initial: String(measured.value),
+      unitKind: 'length'
+    });
+    setStatus('Distance: enter the line’s driving length.');
+  }
+
+  /**
+   * The Dimension key: the selection decides what it measures, and with
+   * nothing selected it arms Distance for two picks.
+   */
+  function startSmartDimension() {
+    if (interaction.mode !== 'sketch') return;
+    const kind = selectedSketchEntity?.data.objectKind;
+    if (selectedSketchEntity && kind === 'line') {
+      startLineLengthDimension(selectedSketchEntity.id);
+      return;
+    }
+    if (selectedSketchEntity && (kind === 'circle' || kind === 'arc')) {
+      handleSelectionConstraintTool('radius');
+      return;
+    }
+    dispatchInteraction({ type: 'sketch-constraint-tool', kind: 'distance' });
+    setStatus(constraintToolSpec('distance').hint);
+  }
+
   function handleSelectionConstraintTool(kind: SketchConstraintToolKind) {
     if (
       interaction.mode !== 'sketch' ||
@@ -20778,6 +20952,14 @@ export function App() {
     }
     if (interaction.session.pendingConstraint?.kind === kind) {
       dispatchInteraction({ type: 'sketch-constraint-tool', kind: null });
+      return;
+    }
+    // A line is dimensioned by its length: one pick, not two endpoints.
+    if (
+      kind === 'distance' &&
+      selectedSketchEntity.data.objectKind === 'line'
+    ) {
+      startLineLengthDimension(selectedSketchEntity.id);
       return;
     }
     const plan = planConstraintFromSelection(
@@ -20965,6 +21147,46 @@ export function App() {
   }
 
   /**
+   * Explains a relation or dimension the solver refused. Nothing was
+   * committed, so the committed sketch keeps its solve status and Undo still
+   * undoes the step before. The message leads with the refused value and
+   * names what it fights in people's words, never the refused constraint
+   * itself as its own culprit.
+   */
+  function reportSketchConstraintRefusal(
+    base: ProjectDocument,
+    prospective: ProjectDocument,
+    sketchId: SketchId,
+    outcome: SketchSolveOutcome,
+    refused: string,
+    replacedConstraintIds: readonly string[] = []
+  ) {
+    const committed = new Set(
+      (findSketch(base, sketchId)?.constraints ?? []).map(({ constraintId }) =>
+        String(constraintId)
+      )
+    );
+    const attempted = new Set(replacedConstraintIds);
+    for (const { constraintId } of findSketch(prospective, sketchId)
+      ?.constraints ?? []) {
+      if (!committed.has(String(constraintId))) {
+        attempted.add(String(constraintId));
+      }
+    }
+    const culprits = topResidualConstraints(
+      prospective,
+      findSketch(prospective, sketchId),
+      outcome.constraintResiduals,
+      2,
+      attempted
+    );
+    setSketchEditError(constraintRefusalMessage(refused, culprits));
+    setStatus(
+      `${refused} was not added: it conflicts with ${culprits[0] ?? 'the existing constraints'}.`
+    );
+  }
+
+  /**
    * Adds a relation and applies it in the same edit, holding its first pick
    * so the others move to meet it (ZC-041). When the hold makes it
    * unsatisfiable (only the first pick can move), it applies free and says
@@ -21034,22 +21256,15 @@ export function App() {
         return;
       }
       if (!solves(outcome)) {
-        setSketchSolveStatus(
-          solveStatusFor(outcome, findSketch(prospective, sketchId))
-        );
-        const culprits = topResidualConstraints(
+        // The refused attempt never reached the document, so its residuals
+        // must not paint the committed sketch as conflicted (I35): the
+        // last committed solve status stands.
+        reportSketchConstraintRefusal(
+          base,
           prospective,
-          findSketch(prospective, sketchId),
-          outcome.constraintResiduals,
-          2
-        );
-        const culpritSuffix =
-          culprits.length > 0 ? ` Likely culprit: ${culprits.join('; ')}.` : '';
-        setSketchEditError(
-          `${label} conflicts with existing constraints.${culpritSuffix} Edit or remove a conflicting constraint; no change was applied.`
-        );
-        setStatus(
-          `${label} refused: ${solveStatusLabel(outcome)};${culpritSuffix} no change was applied.`
+          sketchId,
+          outcome,
+          label
         );
         return;
       }
@@ -21405,23 +21620,21 @@ export function App() {
         );
         return;
       }
-      setSketchSolveStatus(
-        solveStatusFor(outcome, findSketch(prospective, sketchId))
-      );
       if (!outcome.converged || outcome.rolledBack) {
-        const culprits = topResidualConstraints(
+        // As for a relation: a refused value leaves the committed sketch,
+        // and its solve status, exactly as they were (I35).
+        const numeric = Number.isFinite(Number(raw));
+        const unit =
+          draft.kind === 'angle'
+            ? '°'
+            : ` ${base.units === 'inch' ? 'in' : base.units}`;
+        reportSketchConstraintRefusal(
+          base,
           prospective,
-          findSketch(prospective, sketchId),
-          outcome.constraintResiduals,
-          2
-        );
-        const culpritSuffix =
-          culprits.length > 0 ? ` Likely culprit: ${culprits.join('; ')}.` : '';
-        setSketchEditError(
-          `${spec.label} dimension conflicts with existing constraints.${culpritSuffix} Edit or remove a conflicting constraint; no change was applied.`
-        );
-        setStatus(
-          `${spec.label} dimension refused: ${solveStatusLabel(outcome)};${culpritSuffix} no change was applied.`
+          sketchId,
+          outcome,
+          `${spec.label} ${raw.trim()}${numeric ? unit : ''}`,
+          draft.constraintId ? [draft.constraintId] : []
         );
         return;
       }
@@ -21839,6 +22052,64 @@ export function App() {
       setStatus('Deleted constraint.');
     }
   }
+
+  // I38: the committed sketch is classified after every change that has no
+  // status of its own yet (a drawn entity, a held relation, a delete, an
+  // undo), so its colours and the DOF chip always describe what is on the
+  // canvas. Classification only: nothing is committed from this solve.
+  const classifySketchId = editingSketchNode?.sketchId ?? null;
+  const classifyConstraintCount = editingSketchNode?.constraints?.length ?? 0;
+  useEffect(() => {
+    const base = managerRef.current?.document;
+    if (
+      !base ||
+      !classifySketchId ||
+      !currentSketchSolveKey ||
+      sketchSolving ||
+      classifyConstraintCount === 0 ||
+      sketchSolveSnapshotRef.current?.key === currentSketchSolveKey
+    ) {
+      return;
+    }
+    const key = currentSketchSolveKey;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      geometry
+        .solveSketch(base, classifySketchId)
+        .then((outcome) => {
+          const session = interactionRef.current;
+          if (
+            cancelled ||
+            session.mode !== 'sketch' ||
+            session.session.sketchId !== classifySketchId ||
+            sketchSolveEvidenceKey(
+              managerRef.current?.document,
+              classifySketchId
+            ) !== key ||
+            sketchSolveSnapshotRef.current?.key === key
+          ) {
+            return;
+          }
+          setSketchSolveStatus(
+            solveStatusFor(outcome, findSketch(base, classifySketchId))
+          );
+        })
+        .catch(() => {
+          // A classification that cannot run leaves the chip as it was; an
+          // explicit Solve reports the error.
+        });
+    }, 200);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `geometry` and the status helpers are stable for the session
+  }, [
+    currentSketchSolveKey,
+    classifySketchId,
+    classifyConstraintCount,
+    sketchSolving
+  ]);
 
   async function handleSolveSketch() {
     setSketchEditError(null);
@@ -29504,6 +29775,42 @@ export function App() {
           startExtrude(interaction.session.sketchId as SketchId);
           return;
         }
+        if (sketchCommand === 'sketch-dimension') {
+          event.preventDefault();
+          startSmartDimension();
+          return;
+        }
+        if (sketchCommand === 'sketch-construction') {
+          event.preventDefault();
+          setSketchConstruction((on) => !on);
+          return;
+        }
+        if (
+          sketchCommand === 'sketch-trim' ||
+          sketchCommand === 'sketch-offset'
+        ) {
+          event.preventDefault();
+          const editKind = sketchCommand === 'sketch-trim' ? 'trim' : 'offset';
+          dispatchInteraction({
+            type: 'sketch-edit-tool',
+            kind:
+              interaction.session.pendingEdit?.kind === editKind
+                ? null
+                : editKind
+          });
+          return;
+        }
+        if (sketchCommand === 'sketch-finish') {
+          event.preventDefault();
+          finishSketchSession();
+          return;
+        }
+        // Select all would select the page's text, which is never what a
+        // sketch means by it (I46).
+        if (meta && event.key.toLowerCase() === 'a' && !event.altKey) {
+          event.preventDefault();
+          return;
+        }
         // A relation picked from its glyph is the narrower selection, so
         // Delete removes it before it would remove the entity it sits on.
         // Only a relation whose glyph is drawn counts as selected (an undo,
@@ -31523,6 +31830,9 @@ export function App() {
       onResumeHistory={handleResumeHistory}
       onRenameFeature={handleRenameFeature}
       onDeleteFeatures={editDisabledReason ? undefined : handleDeleteFeatures}
+      onEditSketch={
+        editDisabledReason ? undefined : editSketchFeatureInViewport
+      }
       units={doc?.units ?? 'mm'}
       onConfigureToggle={(name, bodyIds) => {
         if (ensureCanEdit('configure an on/off parameter')) {
@@ -31594,13 +31904,7 @@ export function App() {
         className="workspace-column-finish"
         title="Finish Sketch"
         aria-label="Finish Sketch"
-        onClick={() => {
-          dispatchInteraction({ type: 'exit-sketch' });
-          setTool(null);
-          setSketchEditError(null);
-          setSketchDiagnosticPoints([]);
-          setStatus(`${editingSketchName} finished.`);
-        }}
+        onClick={finishSketchSession}
       >
         <Check size={16} aria-hidden="true" />
         <span className="workspace-column-finish-label">Finish Sketch</span>
@@ -33408,27 +33712,7 @@ export function App() {
                   );
                 }}
                 onEditModelingFeature={openModelingFeatureEditor}
-                onEditSketchInViewport={(feature) => {
-                  if (feature.data.featureKind !== 'sketch' || !doc) {
-                    return;
-                  }
-                  const sketch = findSketch(doc, feature.data.sketchId);
-                  if (sketch) {
-                    selectFeatureNode(null, 'pinned');
-                    setTool(null);
-                    dispatchInteraction({
-                      type: 'enter-sketch',
-                      plane: sketch.planeRef,
-                      sketchId: sketch.sketchId
-                    });
-                    // Same reason as the revert pill: entering a sketch from
-                    // the tree changes what every key does, so it should say
-                    // so rather than leaving the previous message in place.
-                    setStatus(
-                      `Editing ${sketch.name} · Finish Sketch when done.`
-                    );
-                  }
-                }}
+                onEditSketchInViewport={editSketchFeatureInViewport}
                 onApplyTransform={(feature, value) =>
                   applyValidatedFeature(
                     commandFactories.updateFeature(

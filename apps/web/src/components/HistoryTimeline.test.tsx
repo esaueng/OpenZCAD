@@ -120,6 +120,26 @@ it('acts on the latest node of a row that skipped re-rendering', () => {
   expect(vi.mocked(props.onFeatureContextMenu).mock.lastCall![1]).toBe(next[2]);
 });
 
+it('opens a sketch row for editing on double-click, and only a sketch row (I36)', () => {
+  const onEditSketch = vi.fn();
+  const sketchRow = {
+    ...feature(2, { featureKind: 'sketch', sketchId: 'sketch_1' }),
+    name: 'Base sketch'
+  } as FeatureNode;
+  renderTimeline({
+    features: [feature(1), sketchRow],
+    onEditSketch
+  });
+  fireEvent.doubleClick(
+    within(row('Feature 1')).getByRole('button', { name: /^Feature 1/ })
+  );
+  expect(onEditSketch).not.toHaveBeenCalled();
+  fireEvent.doubleClick(
+    within(row('Base sketch')).getByRole('button', { name: /^Base sketch/ })
+  );
+  expect(onEditSketch).toHaveBeenCalledWith(sketchRow);
+});
+
 it('re-renders a row whose name changed under the same node id', () => {
   const { props, rerender } = renderTimeline();
   const renamed = props.features.map((node, index) =>
