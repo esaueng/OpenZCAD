@@ -1,6 +1,18 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor
+} from '@testing-library/react';
+import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { InPlaceCommandBar } from './InPlaceCommandBar';
+import { previewExpression } from '../lib/model';
+import {
+  ParameterDefinitionProvider,
+  type ParameterDefinition
+} from './forms/parameterDefinition';
 
 describe('InPlaceCommandBar', () => {
   it('confirms from the focused instructions only when ready and leaves child controls their Enter key', () => {
@@ -772,5 +784,102 @@ describe('a blend refused at a size another builds at', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: 'Use 6.25 mm' }));
     expect(onTrySize).toHaveBeenCalledWith('radius', 6.25);
+  });
+});
+
+describe('a typed Options value that does not evaluate', () => {
+  /** A Box's Width typed in Options, against a parameter table. */
+  function Harness({
+    onValueCommit
+  }: {
+    onValueCommit: (id: string, text: string, accepted: boolean) => void;
+  }) {
+    const [scope, setScope] = useState<Record<string, number>>({});
+    const [text, setText] = useState('30');
+    const definition: ParameterDefinition = {
+      has: (name) => name in scope,
+      define: async (name, expression) => {
+        setScope((current) => ({ ...current, [name]: Number(expression) }));
+        return null;
+      }
+    };
+    return (
+      <ParameterDefinitionProvider value={definition}>
+        <InPlaceCommandBar
+          title="Box"
+          hint="Drag a footprint"
+          canFinish
+          values={[
+            {
+              id: 'width',
+              label: 'Width',
+              text,
+              suffix: 'mm',
+              value: 30,
+              step: 1,
+              min: 0.001
+            }
+          ]}
+          scope={scope}
+          onValueCommit={(id, typed) => {
+            const accepted = previewExpression(typed, scope).ok;
+            onValueCommit(id, typed, accepted);
+            if (accepted) setText(typed);
+            return accepted;
+          }}
+          onDone={vi.fn()}
+          onCancel={vi.fn()}
+        />
+      </ParameterDefinitionProvider>
+    );
+  }
+
+  it('offers to define a missing name, then applies the entry', async () => {
+    // "Width was not applied" never named `depthx`, and offered no Define.
+    const onValueCommit = vi.fn();
+    render(<Harness onValueCommit={onValueCommit} />);
+    const field = screen.getByRole('textbox', { name: 'Width' });
+    act(() => field.focus());
+    fireEvent.change(field, { target: { value: 'depthx * 2' } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+    expect(field).toHaveAttribute('aria-invalid', 'true');
+    const value = await screen.findByRole('textbox', {
+      name: 'Value for new parameter depthx'
+    });
+    expect(value).toHaveValue('30');
+    expect(field).toHaveAccessibleDescription('depthx is not defined yet');
+    expect(screen.getByText(/Esc restores 30 mm/)).toBeInTheDocument();
+    // Into the offer, the entry waits for its name rather than being dropped.
+    act(() => value.focus());
+    fireEvent.blur(field, { relatedTarget: value });
+    expect(field).toHaveValue('depthx * 2');
+    fireEvent.change(value, { target: { value: '9' } });
+    await act(async () => {
+      fireEvent.keyDown(value, { key: 'Enter' });
+    });
+    await waitFor(() =>
+      expect(onValueCommit).toHaveBeenLastCalledWith(
+        'width',
+        'depthx * 2',
+        true
+      )
+    );
+    expect(field).not.toHaveAttribute('aria-invalid');
+    expect(field).toHaveValue('depthx * 2');
+  });
+
+  it('says why any other entry was not applied', () => {
+    const onValueCommit = vi.fn();
+    render(<Harness onValueCommit={onValueCommit} />);
+    const field = screen.getByRole('textbox', { name: 'Width' });
+    act(() => field.focus());
+    fireEvent.change(field, { target: { value: '2 *' } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      /^Width was not applied: .+\. Correct it or press Esc to restore 30 mm\.$/
+    );
+    expect(
+      screen.queryByRole('textbox', { name: /Value for new parameter/ })
+    ).toBeNull();
   });
 });

@@ -5,7 +5,8 @@ import {
   expectBodyCount,
   openAssistant,
   promptField,
-  stubApi
+  stubApi,
+  verifiedRecipe
 } from './openzcad-fixtures';
 import {
   RemusKernel,
@@ -223,12 +224,7 @@ async function importHolder(page: Page, source: HolderSource, project: string) {
 }
 
 async function applyVerified(page: Page, label: string) {
-  const chip = page
-    .locator('.assistant-suggestion, .assistant-verified-action', {
-      hasText: label
-    })
-    .first();
-  await expect(chip).toBeVisible({ timeout: 120_000 });
+  const chip = await verifiedRecipe(page, label, 120_000);
   await expect(chip).toContainText('Verified');
   // The NURBS-heavy private holder keeps the assistant in "Reading the model"
   // with the verified chip disabled well after it becomes visible; clicking

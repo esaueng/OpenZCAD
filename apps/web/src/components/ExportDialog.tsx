@@ -13,6 +13,7 @@ import {
   type UnitSystem
 } from '@openzcad/shared';
 import { countLabel } from '../lib/toasts';
+import { submitOnEnter } from '../lib/submitOnEnter';
 import { useModalFocus } from '../lib/useModalFocus';
 import { StableLabel } from './StableLabel';
 
@@ -187,7 +188,7 @@ export function ExportDialog({
   documentUnits = 'mm',
   onExportUnitsChange
 }: ExportDialogProps) {
-  const dialogRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLFormElement>(null);
   // Escape must still close the dialog when focus has fallen out of it (a
   // click on the backdrop drops it on the body). The workspace keymap stands
   // down while the dialog is open, so nothing else would take the key.
@@ -309,7 +310,7 @@ export function ExportDialog({
   }
 
   function runExport() {
-    if (deflection === null || phase !== 'idle') {
+    if (deflection === null || phase !== 'idle' || bodies.length === 0) {
       return;
     }
     const angularTolerance = angularToleranceFor(angle);
@@ -324,18 +325,27 @@ export function ExportDialog({
 
   return (
     <div className="modal-backdrop">
-      <div
+      {/* A form, so Enter in any field exports; runExport keeps its guard,
+          and the app's own range message stands in for the browser's. */}
+      <form
         ref={dialogRef}
         className="export-dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby="export-dialog-title"
         tabIndex={-1}
+        noValidate
+        onSubmit={(event) => {
+          event.preventDefault();
+          runExport();
+        }}
         onKeyDown={(event) => {
           if (event.key === 'Escape') {
             event.stopPropagation();
             onClose();
+            return;
           }
+          submitOnEnter(event);
         }}
       >
         <h2 id="export-dialog-title">
@@ -567,18 +577,17 @@ export function ExportDialog({
             Cancel
           </button>
           <button
-            type="button"
+            type="submit"
             className="primary"
             disabled={
               deflection === null || phase !== 'idle' || bodies.length === 0
             }
-            onClick={runExport}
           >
             <Download size={13} aria-hidden="true" />
             Export {FORMAT_LABELS[format]}
           </button>
         </div>
-      </div>
+      </form>
     </div>
   );
 }
