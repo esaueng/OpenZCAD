@@ -33,9 +33,9 @@ describe('saved views (ZC-115)', () => {
   it('renames a view, keeping the name on a blank one and capping its length', () => {
     const storage = memoryStorage();
     saveView('p1', pose(1), { storage, now: 10, id: 'a' });
-    expect(
-      renameSavedView('p1', 'a', '  Bolt side ', storage)?.[0]?.name
-    ).toBe('Bolt side');
+    expect(renameSavedView('p1', 'a', '  Bolt side ', storage)?.[0]?.name).toBe(
+      'Bolt side'
+    );
     expect(renameSavedView('p1', 'a', '   ', storage)?.[0]?.name).toBe(
       'Bolt side'
     );

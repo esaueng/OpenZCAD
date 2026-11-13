@@ -608,18 +608,17 @@ describe('the cube’s arrow keys follow the screen', () => {
       'polygon'
     );
     element.setAttribute('aria-label', name);
-    element.getBoundingClientRect = () =>
-      ({
-        left: x - 5,
-        top: y - 5,
-        right: x + 5,
-        bottom: y + 5,
-        width: 10,
-        height: 10,
-        x: x - 5,
-        y: y - 5,
-        toJSON: () => ({})
-      }) as DOMRect;
+    element.getBoundingClientRect = () => ({
+      left: x - 5,
+      top: y - 5,
+      right: x + 5,
+      bottom: y + 5,
+      width: 10,
+      height: 10,
+      x: x - 5,
+      y: y - 5,
+      toJSON: () => ({})
+    });
     return element;
   }
 

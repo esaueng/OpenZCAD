@@ -54,7 +54,9 @@ export function SavedViewsSection({
     if (name.trim() === '' || name.trim() === view.name) return;
     const renamed = renameSavedView(projectId, view.id, name);
     if (!renamed) {
-      onStatus(`Could not rename ${view.name}: this browser is not saving views.`);
+      onStatus(
+        `Could not rename ${view.name}: this browser is not saving views.`
+      );
       return;
     }
     setViews(renamed);

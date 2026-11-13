@@ -863,6 +863,44 @@ describe('the standard views flyout', () => {
     expect(onView).toHaveBeenCalledWith('top');
     expect(trigger).toHaveFocus();
   });
+
+  it('steps aside when a shortcut arms a tool (I54)', () => {
+    // S pressed with the flyout open armed Sketch under it, and the flyout
+    // stayed over the stage.
+    const noop = () => undefined;
+    render(
+      <ViewerToolbar
+        settings={{ ...settings, sectionView: undefined }}
+        projection="perspective"
+        canUndo={false}
+        canRedo={false}
+        sectionRange={null}
+        onUndo={noop}
+        onRedo={noop}
+        onToggleGrid={noop}
+        onFit={noop}
+        onView={noop}
+        onDisplayMode={noop}
+        onToggleXray={noop}
+        onToggleProjection={noop}
+        onToggleSection={noop}
+        onSectionPlane={noop}
+        onSectionOffset={noop}
+        onSectionCommit={noop}
+        onExportSectionDxf={noop}
+        sectionOutline={{ kind: 'clipping' }}
+        units="mm"
+      />
+    );
+    const trigger = screen.getByRole('button', { name: 'Standard views' });
+    fireEvent.click(trigger);
+    // Tab and the modifiers move within it; they are not shortcuts.
+    fireEvent.keyDown(trigger, { key: 'Tab' });
+    fireEvent.keyDown(trigger, { key: 's', ctrlKey: true });
+    expect(trigger).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.keyDown(trigger, { key: 's' });
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+  });
 });
 
 describe('the section view help', () => {
