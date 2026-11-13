@@ -8,7 +8,9 @@ import { buildGearFeature } from './exact-gear';
 import { buildThreadFeature } from './exact-thread';
 import { requireValidSolid } from './kernel-validation';
 import {
+  cutKeptToolMaterialMeshRefusal,
   cutKeptToolMaterialRefusal,
+  cutRetainedToolMaterialMeshWitness,
   cutRetainedToolMaterialWitness
 } from './result-acceptance';
 import {
@@ -2159,6 +2161,7 @@ function combineBooleanOperands(
         bodyName(document, data.targetBodyIds[index]!)
       ];
       let overlapMeasured = false;
+      let sharedWithTool = 0;
       if (subtracting) {
         try {
           // An intersect that refuses says nothing either way, and a
@@ -2172,10 +2175,11 @@ function combineBooleanOperands(
           );
           if (common.status === 'ok') {
             overlapMeasured = true;
-            sharedWithTools += kernel.volume(
+            sharedWithTool = kernel.volume(
               common.solid,
               MEASUREMENT_DEFLECTION
             );
+            sharedWithTools += sharedWithTool;
           }
         } catch {
           // Neither does a kernel that throws instead of answering.
@@ -2207,13 +2211,23 @@ function combineBooleanOperands(
               ctx.cancellation,
               operandNames
             ));
-      // Where the overlap could not be measured the removed-volume gate
-      // below has nothing to compare against. Measured on the pin: a box
-      // minus a torus half-embedded in its top face refuses the exact
-      // intersect, yet `cutDetailed` reports `ok` and returns the box
-      // untouched. A point the kernel classifies inside the target, the
-      // tool and the cut settles that the cut did not take.
-      if (subtracting && !overlapMeasured && coaxial === null) {
+      // Where the overlap could not be measured, or measured as nothing,
+      // the removed-volume gate below has nothing to compare against.
+      // Measured on the pin: a box minus a torus half-embedded in its top
+      // face refuses the exact intersect, yet `cutDetailed` reports `ok`
+      // and returns the box untouched. A point the kernel classifies inside
+      // the target, the tool and the cut settles that the cut did not take.
+      //
+      // The classifier is not the only witness. Issue #1242 filed curved
+      // operands whose cut returned the target unchanged while that same
+      // classifier misplaced their overlap, so it found nothing to refuse.
+      // The tessellated search encloses a point by the three meshes instead,
+      // without asking the classifier.
+      if (
+        subtracting &&
+        coaxial === null &&
+        !(overlapMeasured && sharedWithTool > GEOMETRY_EPSILON)
+      ) {
         const witness = cutRetainedToolMaterialWitness(
           kernel,
           target,
@@ -2221,6 +2235,15 @@ function combineBooleanOperands(
           solid
         );
         if (witness) throw cutKeptToolMaterialRefusal('subtract', witness);
+        const meshWitness = cutRetainedToolMaterialMeshWitness(
+          kernel,
+          target,
+          tool,
+          solid
+        );
+        if (meshWitness) {
+          throw cutKeptToolMaterialMeshRefusal('subtract', meshWitness);
+        }
       }
       if (!pairwiseOperands) {
         probeDeclined = `The ${data.operation} reduced ${operands.length} operands in sequence; the entity-evolution entry points are pairwise.`;
