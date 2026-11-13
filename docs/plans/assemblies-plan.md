@@ -136,7 +136,12 @@ relates values, it never closes a kinematic loop.
   the train. Moving some other joint never rewrites a key, also one a limit
   holds short of. Once the driving motion has moved, the key is written
   however small the step is on the keyed motion, which may be geared far
-  down from the part that was moved.
+  down from the part that was moved. The moved motion must be named: the
+  runtime records what the user moved (a drag, a slider, a typed value)
+  apart from the drivers a scrub or playback set, and hands only that to
+  the study. A pose that writes a value into a coupled group without naming
+  a motion of it is refused, not judged from the study's track, where a
+  real move of a geared-up shaft and rounding look the same.
 - **Limits bound the pair.** The lead value is clamped into the range every
   member's limit allows: a driven joint's limit stops its driver. A drag,
   an Animate sweep and View's playback of a joint all read that narrowed

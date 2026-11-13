@@ -143,6 +143,20 @@ export function createDefaultStudy(
   };
 }
 
+/**
+ * A pose moves coupled joints without naming the motion that was moved, so
+ * it cannot be keyed (see {@link keyPoseAt}). A caller's mistake, not a
+ * user's: it is thrown so a test or a development build fails loudly.
+ */
+export class UndrivenPoseError extends Error {
+  constructor(joints: readonly string[]) {
+    super(
+      `A pose moves the coupled joints ${joints.join(', ')} without naming the motion that was moved. Pass it in "drivers".`
+    );
+    this.name = 'UndrivenPoseError';
+  }
+}
+
 /** Joint values closer than this are the same pose (degrees or millimetres). */
 export const POSE_VALUE_TOLERANCE = 1e-6;
 
@@ -160,16 +174,26 @@ export const POSE_VALUE_TOLERANCE = 1e-6;
  * driven gear re-keys the gear the study plays, and no second track is
  * made that the first would overrule.
  *
+ * `drivers` is required, and for coupled joints it is checked: a pose that
+ * writes a value into a coupled group (any member differing from what the
+ * study holds for it there) must name a motion of that group, else
+ * {@link UndrivenPoseError} is thrown. Which motion was moved cannot be
+ * read back from the values: seen from the study's track, a real move of a
+ * geared-up shaft and the rounding of a long train look the same. Every
+ * caller knows what it moved (a drag, a slider, a typed value), so a pose
+ * without that is refused rather than judged from the track. Naming the
+ * study's own track is a statement that the track is what moved.
+ *
  * A group is keyed only when the pose really moved it, and that is judged
- * on one motion: the one the pose drives the group from (the moved part,
- * else the study's own track). Its value with the pose applied is compared
- * with what the study shows for it there, both with limits and couplings
- * applied, in its own units. The other members are that value carried
- * through the ratio chain, so comparing them would scale a real move and
- * the solve's rounding alike (nine 1 : 20 stages turn one unit in the last
- * place of 2° into 5e-6° on the first shaft, though nothing moved). Once
- * the driving motion has moved, the key is written whatever the step comes
- * to on the keyed motion, which may be geared far down from it. The values handed in include every joint a
+ * on one motion: the one the pose drives the group from. Its value with
+ * the pose applied is compared with what the study shows for it there,
+ * both with limits and couplings applied, in its own units. The other
+ * members are that value carried through the ratio chain, so comparing
+ * them would scale a real move and the solve's rounding alike (nine 1 : 20
+ * stages turn one unit in the last place of 2° into 5e-6° on the first
+ * shaft, though nothing moved). Once the driving motion has moved, the key
+ * is written whatever the step comes to on the keyed motion, which may be
+ * geared far down from it. The values handed in include every joint a
  * scrub left on screen, and a key a limit holds short of (a track keyed to
  * 80° that its mate stops at 40°) reads differently raw than shown; moving
  * some other joint must never rewrite that key.
@@ -179,7 +203,7 @@ export function keyPoseAt(
   study: AssemblyMotionStudy,
   t: number,
   values: Readonly<Record<string, readonly number[]>>,
-  drivers: readonly AssemblyCouplingEnd[] = []
+  drivers: readonly AssemblyCouplingEnd[]
 ): { study: AssemblyMotionStudy | null; changed: boolean } {
   const at = Math.min(study.durationS, Math.max(0, t));
   let next: AssemblyMotionStudy = study;
@@ -225,25 +249,41 @@ export function keyPoseAt(
     posed: Map<string, number[]>;
     /** Per group: the motion the pose drives it from. */
     leads: Map<string, AssemblyCouplingEnd>;
+    /** Per group: members the pose writes without a named driver. */
+    undriven: Map<string, readonly AssemblyCouplingEnd[]>;
   } | null = null;
   const settle = () => {
     if (settled) return settled;
     const tracks = motionStudyDrivers(study);
     const pose = motionStudyValues(set, study, at);
+    const held = new Map([...pose].map(([id, list]) => [id, [...list]]));
     const shown = coupledJointValues(set, pose, tracks);
     for (const [jointId, posed] of Object.entries(values))
       pose.set(jointId, [...posed]);
     const driving = [...drivers, ...tracks];
     const leads = new Map<string, AssemblyCouplingEnd>();
+    const undriven = new Map<string, readonly AssemblyCouplingEnd[]>();
     for (const group of couplingGroups(set)) {
       const first = group.members[0];
       const lead = couplingGroupLead(group, pose, driving);
-      if (first && lead) leads.set(`${first.jointId}/${first.dof}`, lead);
+      if (!first || !lead) continue;
+      const groupKey = `${first.jointId}/${first.dof}`;
+      leads.set(groupKey, lead);
+      // Written: a value that is not what the study holds for that motion.
+      const written = group.members.filter((m) => {
+        const value = values[m.jointId]?.[m.dof];
+        return value !== undefined && value !== held.get(m.jointId)?.[m.dof];
+      });
+      const named = group.members.some((m) =>
+        drivers.some((d) => d.jointId === m.jointId && d.dof === m.dof)
+      );
+      if (written.length > 0 && !named) undriven.set(groupKey, written);
     }
     settled = {
       shown,
       posed: coupledJointValues(set, pose, driving),
-      leads
+      leads,
+      undriven
     };
     return settled;
   };
@@ -279,6 +319,11 @@ export function keyPoseAt(
       }
       if (keyedGroups.has(group)) continue;
       keyedGroups.add(group);
+      const undriven = settle().undriven.get(group);
+      if (undriven)
+        throw new UndrivenPoseError(
+          undriven.map((m) => joints.get(m.jointId)?.name ?? m.jointId)
+        );
       if (!groupMoved(group)) continue;
       const inGroup = (end: AssemblyCouplingEnd) =>
         groups.get(`${end.jointId}/${end.dof}`) === group;

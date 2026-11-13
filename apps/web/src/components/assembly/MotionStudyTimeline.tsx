@@ -54,6 +54,7 @@ import {
   setKeyAt,
   setStudyDuration,
   shownJointValues,
+  UndrivenPoseError,
   studyError,
   trackCurvePoints,
   untrackedMotions,
@@ -344,10 +345,23 @@ export function MotionStudyTimeline({
 
   function keyPose(
     values: Record<string, number[]>,
+    // The motions the user moved, as the runtime recorded them.
     drivers: readonly AssemblyCouplingEnd[]
   ): boolean {
     const at = Math.min(getAssemblyRuntime().studyTimeS, base.durationS);
-    const { study: keyed, changed } = keyPoseAt(set, base, at, values, drivers);
+    let result: ReturnType<typeof keyPoseAt>;
+    try {
+      result = keyPoseAt(set, base, at, values, drivers);
+    } catch (error) {
+      // A pose that does not say which coupled part was moved is never
+      // guessed at: nothing is keyed, the parts go back, and it is said.
+      if (!(error instanceof UndrivenPoseError)) throw error;
+      console.error(error);
+      setNote('That move was not keyed: it did not say which part was moved.');
+      showAt(set, base, at);
+      return true;
+    }
+    const { study: keyed, changed } = result;
     if (!changed) return true;
     if (!commit(keyed, 'Key pose', 'This study holds as many keys as it can.'))
       // Refused: the parts go back to what the study shows.

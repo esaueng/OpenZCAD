@@ -23,7 +23,10 @@ moving an unrelated joint never rewrites a key that a limit holds short of,
 and a part put back where the study shows it is no edit, since movement is
 judged on the driving motion in its own units rather than on values the
 ratio chain has scaled; a real move is keyed however small it is on a
-geared-down tracked shaft). The lead is clamped to the range every
+geared-down tracked shaft). The moved motion is required: the runtime keeps what the user moved apart
+from what a scrub or playback drives, and a pose that writes into a coupled
+group without naming a motion of it is refused rather than judged from the
+track. The lead is clamped to the range every
 member's limit allows (a driven joint's limit stops its driver); a drag, an
 Animate sweep and View's joint playback all read that narrowed range.
 Refused by code (`coupling:*`): an unknown joint, a joint coupled to itself,
@@ -91,7 +94,9 @@ shafts geared 1 : 20 four times is keyed on the tracked last shaft at
 6.25e-7° and plays back; on a ten-shaft train with offsets and an eased
 track, a shaft returned to its shown value adds no key and leaves the
 curve as it was, though rounding moves the first shaft's settled value by
-more than the tolerance; one track per coupled group; Animate and the View player sweep the same ±40° of a pair
+more than the tolerance; the five-shaft move as a complete pose is keyed
+when its motion is named and throws when it is not; the runtime's moved list
+excludes scrub and playback drivers; one track per coupled group; Animate and the View player sweep the same ±40° of a pair
 whose mate is limited to ±20°),
 `apps/web/src/components/assembly/GearMeshCard.test.tsx` (Turn together is
 the default with a mount and saves one transaction, Fixed together one
@@ -99,7 +104,9 @@ choice away and the default for a bare pair; the joint's details name the
 coupling and Remove deletes it; the stale-ratio warning on the joint and in
 the reopened card, also for a pinion keyed to its shaft; removing that
 pinion from the row menu or its details says Gear ratio went with it),
-`apps/web/src/lib/assembly/assembleWorkspace.test.ts` (the removal message
+`apps/web/src/components/assembly/MotionStudyTimeline.test.tsx` (a coupled
+move that names no motion is not keyed and says so; named, it keys the
+study's own gear), `apps/web/src/lib/assembly/assembleWorkspace.test.ts` (the removal message
 for a keyed gear, a joint and several couplings, and none when refused), `apps/web/src/lib/assembly/assemblyView.test.ts` (both
 bodies move when either joint is overridden; a sweep covers only the coupled
 range) and `test/e2e/gear-mesh.spec.ts` (CI smoke: two gears on a plate

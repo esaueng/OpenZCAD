@@ -356,11 +356,17 @@ describe('motion study helpers', () => {
     ]);
     // Pivot moved to 10 at 1 s; the slide's second motion moved from 4 to 9;
     // its first (0, as saved) and the rigid joint stay out.
-    const { study: keyed, changed } = keyPoseAt(set, base, 1, {
-      j_pivot: [10],
-      j_fixed: [],
-      j_slide: [0, 9]
-    });
+    const { study: keyed, changed } = keyPoseAt(
+      set,
+      base,
+      1,
+      {
+        j_pivot: [10],
+        j_fixed: [],
+        j_slide: [0, 9]
+      },
+      []
+    );
     expect(changed).toBe(true);
     expect(keyed?.tracks).toEqual([
       {
@@ -384,11 +390,13 @@ describe('motion study helpers', () => {
     expect(studyError(set, keyed!)).toBeNull();
     // What the study already shows (45° at 1 s, within tolerance) is no edit.
     expect(
-      keyPoseAt(set, base, 1, { j_pivot: [45 + 1e-9], j_slide: [0, 4] })
+      keyPoseAt(set, base, 1, { j_pivot: [45 + 1e-9], j_slide: [0, 4] }, [])
     ).toEqual({ study: base, changed: false });
     // Times outside the study clamp to its end.
     expect(
-      keyPoseAt(set, base, 5, { j_pivot: [30] }).study?.tracks[0]?.keys.at(-1)
+      keyPoseAt(set, base, 5, { j_pivot: [30] }, []).study?.tracks[0]?.keys.at(
+        -1
+      )
     ).toEqual({ t: 2, value: 30, easing: 'linear' });
   });
 

@@ -32,6 +32,7 @@ import {
   jointSweepStudy,
   keyPoseAt,
   shownJointValues,
+  UndrivenPoseError,
   untrackedMotions
 } from './motionStudy';
 
@@ -157,6 +158,33 @@ describe('the motion being moved drives its coupled mates', () => {
     ]);
     act(() => assemblyRuntime.clearOverrides());
     expect(getAssemblyRuntime().drivers).toEqual([]);
+    expect(getAssemblyRuntime().moved).toEqual([]);
+
+    // What a scrub or playback drives is not something the user moved:
+    // only a drag, a slider or a typed value is, and that is what a pose
+    // commit reports as moved.
+    act(() =>
+      assemblyRuntime.setOverrides(new Map([['turn_a', [40]]]), [
+        { jointId: 'turn_a', dof: 0 }
+      ])
+    );
+    expect(getAssemblyRuntime().drivers.map((d) => d.jointId)).toEqual([
+      'turn_a'
+    ]);
+    expect(getAssemblyRuntime().moved).toEqual([]);
+    act(() => assemblyRuntime.setOverride('turn_b', [-30], 0));
+    expect(getAssemblyRuntime().drivers.map((d) => d.jointId)).toEqual([
+      'turn_b',
+      'turn_a'
+    ]);
+    expect(getAssemblyRuntime().moved).toEqual([{ jointId: 'turn_b', dof: 0 }]);
+    // A new scrub replaces the values, and with them what was moved.
+    act(() =>
+      assemblyRuntime.setOverrides(new Map([['turn_a', [10]]]), [
+        { jointId: 'turn_a', dof: 0 }
+      ])
+    );
+    expect(getAssemblyRuntime().moved).toEqual([]);
   });
 
   it('keys the gear the study plays when its mate is dragged', () => {
@@ -318,6 +346,48 @@ describe('the motion being moved drives its coupled mates', () => {
       keyPoseAt(train, study, 1, pose, [first, ...motionStudyDrivers(study)])
         .changed
     ).toBe(false);
+
+    // The same move as a complete, consistent pose (every shaft where the
+    // train puts it). Named, it is keyed just the same.
+    const complete = Object.fromEntries(
+      coupledJointValues(
+        train,
+        new Map(Object.entries({ ...pose, shaft_1: [0.1] })),
+        [first]
+      )
+    );
+    expect(complete.shaft_5?.[0]).toBeCloseTo(6.25e-7, 15);
+    const named = keyPoseAt(train, study, 1, complete, [first]);
+    expect(named.changed).toBe(true);
+    expect(named.study?.tracks[0]?.keys.at(-1)?.value).toBeCloseTo(6.25e-7, 15);
+    // Without the motion that was moved it must not be judged from the
+    // study's track, where 6.25e-7° reads as nothing and the move would be
+    // dropped in silence: it is refused, loudly.
+    expect(() => keyPoseAt(train, study, 1, complete, [])).toThrow(
+      UndrivenPoseError
+    );
+    expect(() => keyPoseAt(train, study, 1, complete, [])).toThrow(
+      /Shaft 1, Shaft 2, Shaft 3, Shaft 4, Shaft 5 without naming the motion that was moved/
+    );
+    // So is the single moved value on its own.
+    expect(() =>
+      keyPoseAt(train, study, 1, { ...pose, shaft_1: [0.1] }, [])
+    ).toThrow(UndrivenPoseError);
+    // A pose that writes nothing needs no driver: a scrub's own values.
+    expect(keyPoseAt(train, study, 1, pose, [])).toEqual({
+      study,
+      changed: false
+    });
+    // An uncoupled joint needs none either: its own value is its key.
+    const loose: AssemblySet = { ...train, couplings: [] };
+    expect(
+      keyPoseAt(loose, study, 1, { shaft_1: [0.1] }, []).study?.tracks.map(
+        (t) => [t.jointId, t.keys.at(-1)?.value]
+      )
+    ).toEqual([
+      ['shaft_5', 0],
+      ['shaft_1', 0.1]
+    ]);
   });
 
   it('does not key rounding: a part put back where the study shows it', () => {

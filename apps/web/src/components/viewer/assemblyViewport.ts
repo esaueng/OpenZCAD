@@ -92,6 +92,7 @@ interface Drag {
   previousOverride: readonly number[] | null;
   /** The drivers before the drag took over, restored if it is cancelled. */
   previousDrivers: AssemblyRuntimeState['drivers'];
+  previousMoved: AssemblyRuntimeState['moved'];
   last: AssemblyDragReading | null;
 }
 
@@ -448,7 +449,11 @@ export class AssemblyViewport {
     if (drag.previousOverride)
       overrides.set(drag.jointId, drag.previousOverride);
     else overrides.delete(drag.jointId);
-    assemblyRuntime.setOverrides(overrides, drag.previousDrivers);
+    assemblyRuntime.setOverrides(
+      overrides,
+      drag.previousDrivers,
+      drag.previousMoved
+    );
   }
 
   private beginDrag(press: Press) {
@@ -491,6 +496,7 @@ export class AssemblyViewport {
       startValue: spec.startValue,
       previousOverride: runtime.overrides.get(joint.id) ?? null,
       previousDrivers: runtime.drivers,
+      previousMoved: runtime.moved,
       last: null
     };
     this.glyphs.setMarker(null);

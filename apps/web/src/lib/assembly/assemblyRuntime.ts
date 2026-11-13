@@ -101,6 +101,13 @@ export interface AssemblyRuntimeState {
    * members' transient values say. Always names joints in `overrides`.
    */
   drivers: readonly AssemblyCouplingEnd[];
+  /**
+   * The motions among `drivers` that the user moved (a drag, a slider, a
+   * typed value), most recent first; never the ones a scrub or playback
+   * put there. This is what a pose commit says was moved: a motion study
+   * keys from it and refuses a coupled move it does not account for.
+   */
+  moved: readonly AssemblyCouplingEnd[];
   /** Placements of free components shown instead of the saved ones. */
   placementOverrides: ReadonlyMap<string, AssemblyPlacement>;
   playback: AssemblyPlaybackState | null;
@@ -132,6 +139,7 @@ const INITIAL: AssemblyRuntimeState = {
   selectedStudyId: null,
   overrides: new Map(),
   drivers: [],
+  moved: [],
   placementOverrides: new Map(),
   playback: null,
   studyTimeS: 0,
@@ -146,12 +154,13 @@ let handlers: AssemblyCommitHandlers | null = null;
 
 /**
  * Takes a joint pose commit while a motion study is open, keying it at the
- * playhead instead of saving the rest pose. `drivers` are the motions that
- * were moved, most recent first. True when it took the pose.
+ * playhead instead of saving the rest pose. `moved` are the motions the
+ * user moved, most recent first, without the drivers a scrub or playback
+ * left. True when it took the pose.
  */
 export type StudyPoseSink = (
   values: Record<string, number[]>,
-  drivers: readonly AssemblyCouplingEnd[]
+  moved: readonly AssemblyCouplingEnd[]
 ) => boolean;
 let studyPoseSink: StudyPoseSink | null = null;
 
@@ -169,6 +178,12 @@ function patch(partial: Partial<AssemblyRuntimeState>): void {
     const kept = state.drivers.filter((d) => shown.has(d.jointId));
     if (kept.length !== state.drivers.length)
       partial = { ...partial, drivers: kept };
+  }
+  if (partial.overrides && !partial.moved) {
+    const shown = partial.overrides;
+    const kept = state.moved.filter((d) => shown.has(d.jointId));
+    if (kept.length !== state.moved.length)
+      partial = { ...partial, moved: kept };
   }
   emit({ ...state, ...partial });
 }
@@ -267,29 +282,33 @@ export const assemblyRuntime = {
       patch({ overrides });
       return;
     }
-    const first = state.drivers[0];
+    const toFront = (
+      list: readonly AssemblyCouplingEnd[]
+    ): readonly AssemblyCouplingEnd[] =>
+      list[0]?.jointId === jointId && list[0].dof === dof
+        ? list
+        : [
+            { jointId, dof },
+            ...list.filter((d) => d.jointId !== jointId || d.dof !== dof)
+          ];
     patch({
       overrides,
-      drivers:
-        first?.jointId === jointId && first.dof === dof
-          ? state.drivers
-          : [
-              { jointId, dof },
-              ...state.drivers.filter(
-                (d) => d.jointId !== jointId || d.dof !== dof
-              )
-            ]
+      drivers: toFront(state.drivers),
+      moved: toFront(state.moved)
     });
   },
   /**
    * Replaces every transient joint value at once (playback frames, a
-   * scrub), with the motions they drive in precedence order.
+   * scrub), with the motions they drive in precedence order. Nothing the
+   * user moved is carried over, unless `moved` restores it (a cancelled
+   * drag putting back what was there).
    */
   setOverrides(
     overrides: ReadonlyMap<string, readonly number[]>,
-    drivers: readonly AssemblyCouplingEnd[] = []
+    drivers: readonly AssemblyCouplingEnd[] = [],
+    moved: readonly AssemblyCouplingEnd[] = []
   ): void {
-    patch({ overrides, drivers });
+    patch({ overrides, drivers, moved });
   },
   setPlacementOverride(
     componentId: string,
@@ -321,7 +340,7 @@ export const assemblyRuntime = {
       studyPoseSink &&
       state.selectedStudyId &&
       state.placementOverrides.size === 0 &&
-      studyPoseSink(values, state.drivers)
+      studyPoseSink(values, state.moved)
     )
       return;
     if (!handlers) return;
