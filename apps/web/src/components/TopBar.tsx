@@ -90,6 +90,11 @@ interface TopBarProps {
   editRefusal?: string | null;
   onReviewEditFailure?(): void;
   /**
+   * Reopens the conflict question left with "Decide later". With it, the
+   * Conflict chip is a button rather than a readout (design review I74).
+   */
+  onReviewConflict?(): void;
+  /**
    * How many warnings the model carries. Nonzero, with `onShowWarnings`,
    * shows the count beside the save status; the Diagnostics button on the
    * instrument rail carries the same number.
@@ -268,6 +273,7 @@ export function TopBar({
   editPending = false,
   editRefusal: proposedEditRefusal = null,
   onReviewEditFailure,
+  onReviewConflict,
   warningCount = 0,
   onShowWarnings,
   reloadPrompt = null,
@@ -475,8 +481,12 @@ export function TopBar({
   // local project to the account, restoring a broken account copy, or
   // uploading a source that exists only here. Elsewhere it is a readout.
   const reviewRefusal = Boolean(editRefusal && onReviewEditFailure);
+  const reviewConflict = Boolean(
+    !reviewRefusal && saveState === 'conflict' && onReviewConflict
+  );
   const saveChipActs =
     reviewRefusal ||
+    reviewConflict ||
     saveToAccount ||
     saveState === 'repair' ||
     saveState === 'local-source';
@@ -712,12 +722,22 @@ export function TopBar({
             className={`save-state topbar-action is-${saveState}`}
             type="button"
             disabled={!projectName}
-            onClick={reviewRefusal ? onReviewEditFailure : onSave}
-            aria-label={saveLabel}
+            onClick={
+              reviewRefusal
+                ? onReviewEditFailure
+                : reviewConflict
+                  ? onReviewConflict
+                  : onSave
+            }
+            aria-label={
+              reviewConflict ? `${saveLabel}: choose a version` : saveLabel
+            }
             title={
               saveToAccount && !editRefusal
                 ? 'Save this local project and its source files to your account.'
-                : saveTitle
+                : reviewConflict
+                  ? `${saveTitle} Choose which version to keep.`
+                  : saveTitle
             }
           >
             {saveChipContent}

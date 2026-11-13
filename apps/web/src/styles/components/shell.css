@@ -125,3 +125,24 @@
 .inspector-float > * {
   pointer-events: auto;
 }
+
+/* ── The raw text behind a plain failure (FailureDetails) ── */
+
+.failure-details {
+  max-width: 100%;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.failure-details summary {
+  width: fit-content;
+  cursor: pointer;
+}
+
+.failure-details code {
+  display: block;
+  margin-top: var(--sp-1);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  user-select: text;
+}
