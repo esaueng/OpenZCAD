@@ -1117,13 +1117,9 @@ describe('gear features on the exact kernel', { timeout: 60_000 }, () => {
         (collar!.geometry!.axisStart!.z + collar!.geometry!.axisEnd!.z) / 2
       ).toBeCloseTo(z, 6);
     }
-    // The body's own end caps keep their names.
-    expect(names).toContain(
-      'boolean.face.target.primitive.cylinder.face.cap.start'
-    );
-    expect(names).toContain(
-      'boolean.face.target.primitive.cylinder.face.cap.end'
-    );
+    // The face's caps keep the names a whole-face cut gives them.
+    expect(names).toContain('gear.face.cap.start');
+    expect(names).toContain('gear.face.cap.end');
   });
 
   it('measures an offset from the far end when anchored there (v55)', async () => {

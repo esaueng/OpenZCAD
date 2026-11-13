@@ -1,9 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CommandManager } from '@openzcad/command-system';
 import {
+  addDatumPlane,
   addPrimitiveFeature,
   createProjectDocument,
-  gearBody
+  gearBody,
+  listFeaturesInOrder,
+  updateFeature
 } from '@openzcad/document-core';
 import {
   createExactKernelAdapter,
@@ -13,7 +16,9 @@ import {
   toUserId,
   type BodyId,
   type BodyRepresentation,
+  type FacePlaneSource,
   type FaceTopology,
+  type FeatureId,
   type ProjectDocument
 } from '@openzcad/shared';
 import {
@@ -21,6 +26,7 @@ import {
   planFaceOffset
 } from '../apps/web/src/lib/interaction/faceOffsetPlan';
 import { primitiveCylinderRadiusAncestor } from '../apps/web/src/lib/interaction/cylinderPrimitiveAncestry';
+import { faceSketchAttachment } from '../apps/web/src/lib/faceSketchAttachment';
 
 /** Every planar face whose normal points along `sense` × Z. */
 function caps(body: BodyRepresentation, sense: number): FaceTopology[] {
@@ -196,5 +202,97 @@ describe('teeth over part of a cylinder (v55)', { timeout: 60_000 }, () => {
       offset: 2
     });
     expect(plan?.kind).not.toBe('primitive-dimension');
+  });
+});
+
+describe('end caps across whole-face and partial teeth (v55)', { timeout: 300_000 }, () => {
+  let adapter: ExactKernelAdapter;
+
+  beforeAll(async () => {
+    adapter = await createExactKernelAdapter();
+  }, 60_000);
+
+  afterAll(() => adapter.dispose());
+
+  it('keeps each cap’s name and the datum planes on it through span edits either way', async () => {
+    const base = addPrimitiveFeature(
+      createProjectDocument('Shaft', toUserId('user_gear')),
+      {
+        name: 'Blank',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 11, height: 12 }
+      }
+    );
+    const blankId = base.bodyOrder[0]!;
+    const blank = (await adapter.syncDocument(base)).bodyRepresentations[
+      blankId
+    ]!;
+    const wall = blank.topology!.faces.find(
+      (face) => face.geometry?.surfaceType === 'cylinder'
+    )!;
+    // Whole-face teeth, set module 0.9.
+    const cut = gearBody(base, {
+      name: 'Teeth',
+      gearType: 'external',
+      sizing: 'module',
+      pitch: 0.9,
+      fit: 'module',
+      teeth: 20,
+      targetBodyId: blankId,
+      faceHash: wall.hash,
+      ...(wall.reference ? { faceReference: wall.reference } : {})
+    });
+    let document = cut.document;
+    document.derived = await adapter.syncDocument(document);
+    const gear = document.derived.bodyRepresentations[cut.bodyId]!;
+    // A datum plane on each cap, from the face as a pick gives it.
+    const planes: Record<string, FeatureId> = {};
+    for (const role of ['start', 'end'] as const) {
+      const face = gear.topology!.faces.find(
+        (candidate) =>
+          candidate.reference?.lineageName === `gear.face.cap.${role}`
+      )!;
+      const attachment = faceSketchAttachment({
+        bodyId: cut.bodyId,
+        pickedHash: face.hash,
+        face
+      });
+      if (!attachment.ok) throw new Error(attachment.reason);
+      const planed = addDatumPlane(document, {
+        name: `Cap ${role}`,
+        definition: {
+          kind: 'offset',
+          source: attachment.planeRef as FacePlaneSource,
+          offset: 0
+        }
+      });
+      document = planed.document;
+      planes[role] = planed.featureId;
+    }
+    const gearId = listFeaturesInOrder(document).find(
+      (feature) => feature.data.featureKind === 'gear'
+    )!.featureId;
+    const whole = { clearData: ['faceWidth', 'offset', 'anchor'] };
+    // Reaching the start, reaching the end, reaching neither; whole between.
+    for (const step of [
+      { data: { faceWidth: 6 } },
+      whole,
+      { data: { faceWidth: 6, anchor: 'end' as const } },
+      whole,
+      { data: { faceWidth: 6, offset: 3 } },
+      whole
+    ]) {
+      document = updateFeature(document, { featureId: gearId, ...step });
+      const derived = await adapter.syncDocument(document);
+      expect(derived.warnings).toEqual([]);
+      const names = derived.bodyRepresentations[
+        cut.bodyId
+      ]!.topology!.faces.map((face) => face.reference?.lineageName);
+      expect(new Set(names).size).toBe(names.length);
+      expect(names).toContain('gear.face.cap.start');
+      expect(names).toContain('gear.face.cap.end');
+      expect(derived.datumFrames?.[planes.start!]?.origin.z).toBeCloseTo(0, 6);
+      expect(derived.datumFrames?.[planes.end!]?.origin.z).toBeCloseTo(12, 6);
+    }
   });
 });

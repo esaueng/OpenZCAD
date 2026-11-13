@@ -795,7 +795,7 @@ function buildGearTeethOnBody(
     // it stands on, which the kernel reverts or leaves unmeasurable; its
     // shoulders, collars and any end it reaches are named instead.
     kept = carried();
-    details = nameGearSpanFaces(kernel, solid, cutDetails, kept, {
+    details = nameGearSpanFaces(kernel, solid, cutDetails, {
       start: geometry.axisStart!,
       end: geometry.axisEnd!,
       radius: geometry.radius!,
@@ -831,18 +831,20 @@ function spanTolerance(length: number): number {
  * `collar.start|end`; a plane across the axis at either end of the teeth that
  * borders a gear face is `shoulder.start|end`, or `shoulder.start[k]` per
  * tooth space where the tips stand on the collar and split it, `k` the root
- * it borders. Where the teeth reach an end of the face, the gear's ring keeps
- * its `cap.*` role and the body's part of that cap, inside (a boss) or
- * outside (a bore) the ring, is `cap.start|end.body`. Collars are only
+ * it borders. The face's cap at either end is `cap.start|end`, as the
+ * whole-face cut names it: at an end the teeth stop short of, the plane
+ * there that bounds the collar; where the teeth reach the end, the cap is
+ * split, the gear's toothed ring keeps `cap.*` and the body's part of it,
+ * inside (a boss) or outside (a bore) the ring, is `cap.start|end.body`.
+ * Collars are only
  * what remains of the picked face, and always take their role, so a span
- * edit that splits or rejoins them keeps their names; other faces the
- * body's own lineage already names (`named`) keep it.
+ * edit that splits or rejoins them keeps their names. Other faces keep the
+ * body's lineage.
  */
 function nameGearSpanFaces(
   kernel: RemusKernel,
   solid: number,
   details: GearOkDetails,
-  named: RemusLineageState,
   band: {
     start: { x: number; y: number; z: number };
     end: { x: number; y: number; z: number };
@@ -886,6 +888,7 @@ function nameGearSpanFaces(
   const shoulders = { start: [] as number[], end: [] as number[] };
   const ends = { start: [] as number[], end: [] as number[] };
   const collars = { start: [] as number[], end: [] as number[] };
+  const endPlanes = { start: [] as number[], end: [] as number[] };
   const shoulderRoot = new Map<number, number | undefined>();
   // Whether a point lies on the picked face's axis line.
   const onAxis = (point: { x: number; y: number; z: number }) => {
@@ -931,7 +934,6 @@ function nameGearSpanFaces(
       else if (middle > band.to + tolerance) collars.end.push(face);
       continue;
     }
-    if (named.faceReferences.has(face)) continue;
     if (
       geometry.surfaceType !== 'plane' ||
       !geometry.normal ||
@@ -940,6 +942,19 @@ function nameGearSpanFaces(
       continue;
     }
     const position = at(geometry.center);
+    // A plane at an end of the picked face the teeth stop short of: the
+    // face's cap there, once it is seen to bound that end's collar.
+    if (Math.abs(position) <= tolerance && band.from > tolerance) {
+      endPlanes.start.push(face);
+      continue;
+    }
+    if (
+      Math.abs(position - length) <= tolerance &&
+      band.to < length - tolerance
+    ) {
+      endPlanes.end.push(face);
+      continue;
+    }
     const side =
       Math.abs(position - band.from) <= tolerance
         ? 'start'
@@ -967,6 +982,21 @@ function nameGearSpanFaces(
     shoulderRoot.set(face, root);
   }
   for (const side of ['start', 'end'] as const) {
+    // The face's cap at an end the teeth stop short of keeps the name the
+    // whole-face cut gives it, `cap.start|end`, so a span edit either way
+    // leaves a reference to it in place.
+    const collarEdges = new Set(
+      collars[side].flatMap((face) => Array.from(kernel.getFaceEdges(face)))
+    );
+    const caps = endPlanes[side].filter((face) =>
+      kernel.getFaceEdges(face).some((edge) => collarEdges.has(edge))
+    );
+    caps.forEach((face, order) => {
+      added.push({
+        face,
+        role: caps.length === 1 ? `cap.${side}` : `cap.${side}[${order}]`
+      });
+    });
     collars[side].forEach((face, order) => {
       added.push({
         face,
