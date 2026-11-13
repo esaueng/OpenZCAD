@@ -11,12 +11,12 @@
  * construction roles.
  */
 import {
-  UNIT_TO_MM,
+  defaultGearXDirection,
+  gearModule,
   type FeatureId,
   type FeatureNode,
   type ParamValue,
-  type ParametricVector3,
-  type UnitSystem
+  type ParametricVector3
 } from '@openzcad/shared';
 import { resolveParamValue } from '@openzcad/document-core';
 
@@ -235,47 +235,12 @@ function gearRoleLineage(
 /**
  * The module in document units. A diametral pitch counts teeth per inch of
  * pitch diameter in every unit system, so its module is one inch over it.
+ * Shared with the meshing-pair helper, which sizes pairs the same way.
  */
-export function gearModule(
-  sizing: FeatureDataOf<'gear'>['sizing'],
-  pitch: number,
-  units: UnitSystem
-): number {
-  switch (sizing) {
-    case 'module':
-      return pitch;
-    case 'circular-pitch':
-      return pitch / Math.PI;
-    case 'diametral-pitch':
-      return UNIT_TO_MM.inch / UNIT_TO_MM[units] / pitch;
-  }
-}
+export { gearModule };
 
 /** A deterministic reference direction perpendicular to `axis`. */
-export function defaultGearXDirection(axis: {
-  x: number;
-  y: number;
-  z: number;
-}): { x: number; y: number; z: number } {
-  const length = Math.hypot(axis.x, axis.y, axis.z);
-  const unit = { x: axis.x / length, y: axis.y / length, z: axis.z / length };
-  // World +X unless the axis lies along it, then world +Y.
-  const reference =
-    Math.abs(unit.x) < 0.9 ? { x: 1, y: 0, z: 0 } : { x: 0, y: 1, z: 0 };
-  const along =
-    reference.x * unit.x + reference.y * unit.y + reference.z * unit.z;
-  const projected = {
-    x: reference.x - unit.x * along,
-    y: reference.y - unit.y * along,
-    z: reference.z - unit.z * along
-  };
-  const size = Math.hypot(projected.x, projected.y, projected.z);
-  return {
-    x: projected.x / size,
-    y: projected.y / size,
-    z: projected.z / size
-  };
-}
+export { defaultGearXDirection };
 
 /** Resolves a feature's expressions in document units. */
 interface GearValues {
