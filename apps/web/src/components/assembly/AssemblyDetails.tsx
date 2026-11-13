@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link2, Pause, Pin, Play, Plus, TriangleAlert, X } from 'lucide-react';
 import { commandFactories } from '@openzcad/command-system';
 import {
   ASSEMBLY_JOINT_DOFS,
+  coupledJointLimits,
   couplingsOfJoint,
   createId,
   type AssemblyComponent,
@@ -24,6 +25,7 @@ import {
   useAssemblyRuntime
 } from '../../lib/assembly/assemblyRuntime';
 import type { AssemblyViewModel } from '../../lib/assembly/assemblyView';
+import { gearCouplingMismatch } from '../../lib/assembly/gearCouplingCheck';
 import {
   ANIMATE_MODES,
   ANIMATE_SPEEDS,
@@ -39,6 +41,7 @@ import {
   useAnimatePrefs
 } from '../../lib/assembly/assemblyUi';
 import { AssemblyNameField } from './AssemblyNameField';
+import { gearMeshCardContext } from './gearMeshEntry';
 
 export interface AssemblyDetailsProps {
   document: ProjectDocument;
@@ -134,13 +137,24 @@ export function JointDetails({
   const values = model.solution.values.get(joint.id) ?? joint.values;
   const unsolved = model.solution.unsolved.get(joint.id) ?? null;
   const playing = playback?.kind === 'joint' && playback.jointId === joint.id;
-  const sweepReason = sweepUnavailableReason(joint);
+  const couplings = couplingsOfJoint(model.set, joint.id);
+  // Read the gears only for a joint that is coupled.
+  const coupled = couplings.length > 0;
+  const gears = useMemo(
+    () => (coupled ? gearMeshCardContext(document) : null),
+    [coupled, document]
+  );
+  // What it can really travel: its own limits and those of its mates.
+  const sweepReason = sweepUnavailableReason({
+    kind: joint.kind,
+    limits: coupledJointLimits(model.set, joint)
+  });
 
   const preview = (dof: number, value: number) => {
     if (playback) assemblyRuntime.stop();
     const next = [...values];
     next[dof] = value;
-    assemblyRuntime.setOverride(joint.id, next);
+    assemblyRuntime.setOverride(joint.id, next, dof);
   };
   const commit = () => assemblyRuntime.commitOverrides();
 
@@ -267,7 +281,17 @@ export function JointDetails({
         );
       })}
 
-      {couplingsOfJoint(model.set, joint.id).map((coupling) => {
+      {couplings.map((coupling) => {
+        const stale = gears ? gearCouplingMismatch(gears, coupling) : null;
+        return stale ? (
+          <p className="assembly-banner" role="status" key={coupling.id}>
+            <TriangleAlert size={14} aria-hidden="true" />
+            <span>{stale}</span>
+          </p>
+        ) : null;
+      })}
+
+      {couplings.map((coupling) => {
         const otherId =
           coupling.driver.jointId === joint.id
             ? coupling.driven.jointId

@@ -104,7 +104,10 @@ export const CAD_OPERATIONS = [
   'assembly.position.save',
   'assembly.position.delete',
   'assembly.study.set',
-  'assembly.study.delete'
+  'assembly.study.delete',
+  'assembly.coupling.add',
+  'assembly.coupling.update',
+  'assembly.coupling.delete'
 ] as const;
 /**
  * `kernel_refused`: one aggregate observation per new kernel refusal, opt-in

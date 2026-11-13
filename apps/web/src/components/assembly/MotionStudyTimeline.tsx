@@ -22,7 +22,9 @@ import {
 import { commandFactories, type AnyCommand } from '@openzcad/command-system';
 import {
   evaluateTrack,
+  motionStudyDrivers,
   motionStudyValues,
+  type AssemblyCouplingEnd,
   type AssemblyMotionStudy,
   type AssemblyPlayback,
   type AssemblySet
@@ -51,6 +53,7 @@ import {
   rulerTicks,
   setKeyAt,
   setStudyDuration,
+  shownJointValues,
   studyError,
   trackCurvePoints,
   untrackedMotions,
@@ -121,7 +124,10 @@ function capture(element: HTMLElement, pointerId: number) {
 /** Shows the study's pose at `t` with the clock stopped. */
 function showAt(set: AssemblySet, study: AssemblyMotionStudy, t: number) {
   assemblyRuntime.setStudyTime(t);
-  assemblyRuntime.setOverrides(motionStudyValues(set, study, t));
+  assemblyRuntime.setOverrides(
+    motionStudyValues(set, study, t),
+    motionStudyDrivers(study)
+  );
 }
 
 /**
@@ -187,12 +193,17 @@ export function MotionStudyTimeline({
 
   // Moving a part keys it at the playhead. Read through refs so the sink
   // registered once always sees the latest study and handlers.
-  const poseRef = useRef<(values: Record<string, number[]>) => boolean>(
-    () => false
-  );
+  const poseRef = useRef<
+    (
+      values: Record<string, number[]>,
+      drivers: readonly AssemblyCouplingEnd[]
+    ) => boolean
+  >(() => false);
   useEffect(() => {
     if (readOnly) return;
-    registerStudyPoseSink((values) => poseRef.current(values));
+    registerStudyPoseSink((values, drivers) =>
+      poseRef.current(values, drivers)
+    );
     return () => registerStudyPoseSink(null);
   }, [readOnly]);
 
@@ -304,7 +315,11 @@ export function MotionStudyTimeline({
       // What the part shows now: a pose dragged in the viewport, else the
       // study's own value there.
       const value = joint
-        ? currentJointValue(joint, track.dof, runtime.overrides)
+        ? currentJointValue(
+            joint,
+            track.dof,
+            shownJointValues(set, runtime.overrides, runtime.drivers)
+          )
         : evaluateTrack(track, at);
       next = setKeyAt(next, index, at, value);
       if (!next) break;
@@ -327,9 +342,12 @@ export function MotionStudyTimeline({
     }
   }
 
-  function keyPose(values: Record<string, number[]>): boolean {
+  function keyPose(
+    values: Record<string, number[]>,
+    drivers: readonly AssemblyCouplingEnd[]
+  ): boolean {
     const at = Math.min(getAssemblyRuntime().studyTimeS, base.durationS);
-    const { study: keyed, changed } = keyPoseAt(set, base, at, values);
+    const { study: keyed, changed } = keyPoseAt(set, base, at, values, drivers);
     if (!changed) return true;
     if (!commit(keyed, 'Key pose', 'This study holds as many keys as it can.'))
       // Refused: the parts go back to what the study shows.
@@ -721,10 +739,11 @@ export function MotionStudyTimeline({
                       className="motion-track-menu-item"
                       onClick={() => {
                         setAddOpen(false);
+                        const shown = getAssemblyRuntime();
                         const value = currentJointValue(
                           joint,
                           dof,
-                          getAssemblyRuntime().overrides
+                          shownJointValues(set, shown.overrides, shown.drivers)
                         );
                         if (
                           commit(

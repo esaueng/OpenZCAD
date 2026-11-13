@@ -4,7 +4,9 @@ import {
   coupledJointLimits,
   jointSweepRange,
   jointSweepValue,
+  motionStudyDrivers,
   motionStudyValues,
+  type AssemblyCouplingEnd,
   playbackTime,
   type AssemblySet
 } from '@openzcad/shared';
@@ -29,6 +31,8 @@ import {
 
 export interface PlaybackFrame {
   overrides: Map<string, number[]>;
+  /** The motions the frame drives: coupled joints follow the first. */
+  drivers: AssemblyCouplingEnd[];
   /** The study playhead, for a study. */
   studyTimeS?: number;
   done: boolean;
@@ -58,7 +62,11 @@ export function playbackFrame(
     );
     const values = [...joint.values];
     values[playback.dof] = value;
-    return { overrides: new Map([[joint.id, values]]), done };
+    return {
+      overrides: new Map([[joint.id, values]]),
+      drivers: [{ jointId: joint.id, dof: playback.dof }],
+      done
+    };
   }
   const study = set.studies.find((s) => s.id === playback.studyId);
   if (!study) return null;
@@ -67,7 +75,12 @@ export function playbackFrame(
     playback.fromS + elapsedS * playback.speed,
     study.durationS
   );
-  return { overrides: motionStudyValues(set, study, t), studyTimeS: t, done };
+  return {
+    overrides: motionStudyValues(set, study, t),
+    drivers: motionStudyDrivers(study),
+    studyTimeS: t,
+    done
+  };
 }
 
 /** The joint tool's looping preview of the motion it is about to create. */
@@ -128,7 +141,7 @@ export function useAssemblyPlaybackDriver(set: AssemblySet | undefined): void {
             assemblyRuntime.stop();
             return;
           }
-          assemblyRuntime.setOverrides(next.overrides);
+          assemblyRuntime.setOverrides(next.overrides, next.drivers);
           if (next.studyTimeS !== undefined)
             assemblyRuntime.setStudyTime(next.studyTimeS);
           if (next.done) {
@@ -193,7 +206,7 @@ export function useAssemblyPlaybackDriver(set: AssemblySet | undefined): void {
 function stopClockKeepPose(): void {
   const runtime = getAssemblyRuntime();
   if (!runtime.playback) return;
-  const overrides = runtime.overrides;
+  const { overrides, drivers } = runtime;
   assemblyRuntime.stop();
-  assemblyRuntime.setOverrides(overrides);
+  assemblyRuntime.setOverrides(overrides, drivers);
 }

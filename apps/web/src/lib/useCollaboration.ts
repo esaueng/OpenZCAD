@@ -6,7 +6,7 @@ import {
   useState
 } from 'react';
 import {
-  PROJECT_DOCUMENT_SCHEMA_VERSION,
+  isUnsupportedProjectSchema,
   type AuthSession,
   type CollaborationMember,
   type CollaborationServerMessage,
@@ -307,7 +307,7 @@ export function useCollaboration({
       if (
         !local ||
         local.projectId !== remote.projectId ||
-        remote.schemaVersion > PROJECT_DOCUMENT_SCHEMA_VERSION ||
+        isUnsupportedProjectSchema(remote.schemaVersion) ||
         !projectPreservesLocalWork(local, remote)
       ) {
         return false;
@@ -446,7 +446,7 @@ export function useCollaboration({
     // this client cannot faithfully edit. Refuse it rather than silently
     // stripping fields the normalizer does not know about.
     const rejectsNewerSchema = (incoming: ProjectDocument): boolean => {
-      if ((incoming.schemaVersion ?? 0) <= PROJECT_DOCUMENT_SCHEMA_VERSION) {
+      if (!isUnsupportedProjectSchema(incoming.schemaVersion ?? 0)) {
         return false;
       }
       setStatus('update-required');
@@ -664,8 +664,7 @@ export function useCollaboration({
       }
       if (
         message.type === 'conflict' &&
-        (message.document.schemaVersion ?? 0) <=
-          PROJECT_DOCUMENT_SCHEMA_VERSION &&
+        !isUnsupportedProjectSchema(message.document.schemaVersion ?? 0) &&
         mergeRoomConflict(socket, message)
       ) {
         return;
@@ -933,8 +932,7 @@ export function useCollaboration({
             const local = documentRef.current;
             const choice = chooseProjectDocument(local, message.document);
             const canAdopt =
-              message.role === 'viewer' ||
-              choice.choice === 'remote';
+              message.role === 'viewer' || choice.choice === 'remote';
             if (codecLoad && !retained && !canAdopt) {
               if (
                 choice.choice === 'local' ||
@@ -1130,8 +1128,7 @@ export function useCollaboration({
         }
         if (message.type === 'conflict') {
           if (
-            (message.document.schemaVersion ?? 0) <=
-              PROJECT_DOCUMENT_SCHEMA_VERSION &&
+            !isUnsupportedProjectSchema(message.document.schemaVersion ?? 0) &&
             mergeRoomConflict(socket, message)
           ) {
             return;

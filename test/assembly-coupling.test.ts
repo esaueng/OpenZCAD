@@ -19,24 +19,33 @@ import {
   coupledDofLimit,
   coupledJointValues,
   couplingAddError,
+  couplingGroupKeys,
   couplingGroups,
+  couplingImmovableJoint,
   couplingLimitsConflict,
   couplingOffsetAtPose,
   dragSpecFor,
+  isUnsupportedProjectSchema,
+  motionStudyDrivers,
   motionStudyValues,
+  previousProjectSchemaVersion,
   solveAssembly,
   toUserId,
+  unsolvedAssemblyJoints,
   transformPoint,
   type AssemblyCoupling,
   type AssemblyFrame,
   type AssemblyJoint,
   type AssemblyJointKind,
+  type AssemblyMotionStudy,
   type AssemblySet,
   type BodyId,
   type ProjectDocument,
   type RigidTransform,
   type Vector3
 } from '@openzcad/shared';
+import * as webGlimpse from '../apps/web/src/lib/glimpseContract';
+import * as workerGlimpse from '../apps/web/worker/glimpseContract';
 
 /**
  * AS02 gear coupling (schema v56): joint values tied by a ratio and an
@@ -279,11 +288,119 @@ describe('coupled joint values (AS02 gear coupling)', () => {
         }
       ]
     });
+    const study = set.studies[0]!;
     const at = (t: number) =>
-      solveAssembly(set, motionStudyValues(set, set.studies[0]!, t)).values;
+      solveAssembly(
+        set,
+        motionStudyValues(set, study, t),
+        motionStudyDrivers(study)
+      ).values;
     expect(at(1).get('turn_a')).toEqual([45]);
     expect(at(1).get('turn_b')?.[0]).toBeCloseTo(-30, 12);
     expect(at(2).get('turn_b')?.[0]).toBeCloseTo(-60, 12);
+    // Keyed on the driven gear instead, the driver follows it.
+    study.tracks[0]!.jointId = 'turn_b';
+    expect(at(1).get('turn_b')).toEqual([45]);
+    expect(at(1).get('turn_a')?.[0]).toBeCloseTo(-67.5, 12);
+  });
+});
+
+describe('which coupled motion leads', () => {
+  const B = { jointId: 'turn_b', dof: 0 };
+  const lead = (
+    set: AssemblySet,
+    overrides: Record<string, number[]>,
+    drivers?: { jointId: string; dof: number }[]
+  ) => {
+    const solved = solveAssembly(
+      set,
+      new Map(Object.entries(overrides)),
+      drivers
+    ).values;
+    return [solved.get('turn_a')?.[0], solved.get('turn_b')?.[0]];
+  };
+
+  it('follows the motion being edited, not a value an earlier scrub left', () => {
+    // Scrubbed to A = 40° (so B shows −20°); then B is dragged to −30°. A's
+    // retained 40° must not win: the dragged gear leads and A goes to 60°.
+    const set = gearPair(-0.5);
+    expect(lead(set, { turn_a: [40] })).toEqual([40, -20]);
+    expect(lead(set, { turn_a: [40], turn_b: [-30] }, [B])).toEqual([60, -30]);
+    // The most recent driver comes first; an older one behind it is ignored.
+    expect(
+      lead(set, { turn_a: [40], turn_b: [-30] }, [
+        B,
+        { jointId: 'turn_a', dof: 0 }
+      ])
+    ).toEqual([60, -30]);
+    // With no driver named, values being written lead in the group's own
+    // order: the same pair of values always reads the same way.
+    expect(lead(set, { turn_a: [40], turn_b: [-30] })).toEqual([40, -20]);
+    expect(lead(set, { turn_b: [-30] })).toEqual([60, -30]);
+  });
+
+  it('never hands over the lead where a value crosses its saved one', () => {
+    // Both gears keyed, A saved at 45°. Comparing with the saved value let
+    // B's track take over for the one frame A stood exactly on it.
+    const set = gearPair(-0.5);
+    (set.joints[0] as AssemblyJoint).values = [45];
+    (set.joints[1] as AssemblyJoint).values = [-22.5];
+    const study: AssemblyMotionStudy = {
+      id: 'study',
+      name: 'Both',
+      durationS: 2,
+      playback: 'once',
+      tracks: [
+        {
+          jointId: 'turn_a',
+          dof: 0,
+          keys: [
+            { t: 0, value: 0, easing: 'linear' },
+            { t: 2, value: 90, easing: 'linear' }
+          ]
+        },
+        {
+          jointId: 'turn_b',
+          dof: 0,
+          keys: [{ t: 0, value: -10, easing: 'linear' }]
+        }
+      ]
+    };
+    for (const t of [0.999, 1, 1.001, 0, 2]) {
+      const values = solveAssembly(
+        set,
+        motionStudyValues(set, study, t),
+        motionStudyDrivers(study)
+      ).values;
+      const a = values.get('turn_a')?.[0] as number;
+      expect(a).toBeCloseTo(45 * t, 9);
+      expect(values.get('turn_b')?.[0], `t = ${t}`).toBeCloseTo(-a / 2, 9);
+    }
+    // The other track order makes B the leader, just as steadily.
+    study.tracks.reverse();
+    for (const t of [0.999, 1, 1.001]) {
+      const values = solveAssembly(
+        set,
+        motionStudyValues(set, study, t),
+        motionStudyDrivers(study)
+      ).values;
+      expect(values.get('turn_b')).toEqual([-10]);
+      expect(values.get('turn_a')?.[0]).toBeCloseTo(20, 9);
+    }
+  });
+
+  it('names each coupled motion by its group', () => {
+    const set = gearPair();
+    set.components.push(component('c'), component('d'));
+    set.joints.push(
+      joint('turn_c', 'revolute', 'c', frameAt(100)),
+      joint('turn_d', 'revolute', 'd', frameAt(150))
+    );
+    set.couplings!.push(coupling('mesh_2', 'turn_b', 'turn_c', -2));
+    const keys = couplingGroupKeys(set);
+    expect(keys.get('turn_a/0')).toBe('turn_a/0');
+    expect(keys.get('turn_c/0')).toBe('turn_a/0');
+    expect(keys.has('turn_d/0')).toBe(false);
   });
 });
 
@@ -640,6 +757,93 @@ describe('coupling commands (schema v56)', () => {
     expect(values(manager.document).turn_a).toBe(12);
   });
 
+  it('saves a pose with the motion that was moved leading', () => {
+    const manager = assembled();
+    manager.execute(couple(0));
+    // Both values arrive (one left by a scrub): the dragged joint leads.
+    manager.execute(
+      commandFactories.setAssemblyPose({
+        values: { turn_a: [40], turn_b: [-30] },
+        drivers: [{ jointId: 'turn_b', dof: 0 }]
+      })
+    );
+    expect(values(manager.document).turn_a).toBeCloseTo(45, 12);
+    expect(values(manager.document).turn_b).toBe(-30);
+    const replayed = replayCommands(
+      createProjectDocument('Gears', owner),
+      manager.document.commandLog
+    );
+    expect(replayed.assembly).toEqual(manager.document.assembly);
+  });
+
+  it('refuses an edit that would stop a coupled joint', () => {
+    const manager = assembled();
+    manager.execute(couple(0));
+    const before = manager.document;
+    // Fixing gear A in place joins two fixed parts: its joint could never
+    // move, and its mate would turn alone.
+    expect(() =>
+      manager.execute(
+        commandFactories.updateAssemblyComponent({
+          componentId: 'a',
+          grounded: true
+        })
+      )
+    ).toThrow(/leave turn_a unable to move.*Remove Gear ratio first/);
+    expect(manager.document).toBe(before);
+    // The same for the driven side.
+    expect(() =>
+      manager.execute(
+        commandFactories.updateAssemblyComponent({
+          componentId: 'b',
+          grounded: true
+        })
+      )
+    ).toThrow(/leave turn_b unable to move/);
+    expect(manager.document).toBe(before);
+    // Without the coupling the same edit is an ordinary one again.
+    manager.execute(
+      commandFactories.deleteAssemblyCoupling({ couplingId: 'mesh' })
+    );
+    manager.execute(
+      commandFactories.updateAssemblyComponent({
+        componentId: 'a',
+        grounded: true
+      })
+    );
+    expect(
+      solveAssembly(manager.document.assembly!).unsolved.get('turn_a')
+    ).toBe('grounded-both');
+  });
+
+  it('refuses to store a coupling on a joint that cannot move', () => {
+    const manager = assembled();
+    manager.execute(couple(0));
+    const stored = JSON.parse(
+      JSON.stringify(manager.document)
+    ) as ProjectDocument;
+    const set = stored.assembly!;
+    set.components.find((c) => c.id === 'a')!.grounded = true;
+    expect(unsolvedAssemblyJoints(set)).toEqual(solveAssembly(set).unsolved);
+    expect(couplingImmovableJoint(set)?.joint.id).toBe('turn_a');
+    expect(assemblySetError(set)).toMatch(
+      /Coupling mesh links joint turn_a, which cannot move/
+    );
+    expect(() => assertStorableDocument(stored)).toThrow(/cannot move/);
+    expect(() => normalizeDocument(stored)).toThrow(/cannot move/);
+  });
+
+  it('lists the coupling commands for analytics', () => {
+    for (const contract of [webGlimpse, workerGlimpse])
+      expect(contract.EXPANDED.feature_operation).toEqual(
+        expect.arrayContaining([
+          'assembly.coupling.add',
+          'assembly.coupling.update',
+          'assembly.coupling.delete'
+        ])
+      );
+  });
+
   it('replays, saves and reopens to the same couplings', () => {
     const manager = assembled();
     manager.execute(couple());
@@ -681,16 +885,46 @@ describe('coupling commands (schema v56)', () => {
     const coupled = JSON.parse(
       JSON.stringify(manager.document)
     ) as ProjectDocument;
-    // Neither the assemblies' own version nor the one between declares them.
-    for (const schemaVersion of [54, 55])
-      expect(() =>
-        normalizeDocument({
-          ...coupled,
-          schemaVersion
-        } as unknown as ProjectDocument)
-      ).toThrow(/schema v56/);
+    expect(() =>
+      normalizeDocument({
+        ...coupled,
+        schemaVersion: 54
+      } as unknown as ProjectDocument)
+    ).toThrow(/schema v56/);
     const broken = structuredClone(coupled);
     broken.assembly!.couplings![0]!.ratio = 0;
     expect(() => assertStorableDocument(broken)).toThrow(/unusable ratio/);
+  });
+
+  it('refuses a v55 document: partial-span teeth are not in this build', () => {
+    // v55 belongs to work this build does not contain. A document that
+    // declares it may hold teeth this build would cut along the whole face,
+    // so it is refused like a newer one, with or without an assembly.
+    expect(isUnsupportedProjectSchema(55)).toBe(true);
+    expect(isUnsupportedProjectSchema(54)).toBe(false);
+    expect(isUnsupportedProjectSchema(PROJECT_DOCUMENT_SCHEMA_VERSION)).toBe(
+      false
+    );
+    expect(
+      isUnsupportedProjectSchema(PROJECT_DOCUMENT_SCHEMA_VERSION + 1)
+    ).toBe(true);
+    expect(previousProjectSchemaVersion()).toBe(54);
+    const plain = JSON.parse(
+      JSON.stringify(createProjectDocument('Plain', owner))
+    ) as ProjectDocument;
+    const claimed = {
+      ...plain,
+      schemaVersion: 55
+    } as unknown as ProjectDocument;
+    expect(() => normalizeDocument(claimed)).toThrow(
+      /Unsupported project schema \(v55\)/
+    );
+    expect(() => assertStorableDocument(claimed)).toThrow(/schema 55/);
+    expect(() =>
+      normalizeDocument({
+        ...plain,
+        schemaVersion: previousProjectSchemaVersion()
+      } as unknown as ProjectDocument)
+    ).not.toThrow();
   });
 });

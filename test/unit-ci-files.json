@@ -234,6 +234,7 @@
     "src/lib/assembly/assembleWorkspace.test.ts",
     "src/lib/assembly/assemblyPlayback.test.ts",
     "src/lib/assembly/assemblyView.test.ts",
+    "src/lib/assembly/coupledDrive.test.tsx",
     "src/lib/assembly/motionSetup.test.ts",
     "src/lib/cloudConfigurationReads.test.ts",
     "src/lib/commandContext.test.ts",

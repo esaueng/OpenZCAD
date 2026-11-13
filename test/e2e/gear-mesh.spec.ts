@@ -234,10 +234,13 @@ test(
       .getByRole('button', { name: 'Place gears', exact: true })
       .click();
     const card = panel(page).getByRole('region', { name: 'Place gears' });
+    // With a plate to mount them on, the card starts on Turn together;
+    // Fixed together stays one choice away.
+    const motion = card.getByRole('combobox', { name: 'How the pair moves' });
+    await expect(motion).toHaveValue('coupled');
+    await motion.selectOption('fixed');
     await expect(card).toContainText('pair stays fixed together');
-    await card
-      .getByRole('combobox', { name: 'How the pair moves' })
-      .selectOption('coupled');
+    await motion.selectOption('coupled');
     await expect(
       card.getByRole('combobox', { name: 'Part the gears are mounted on' })
     ).toHaveValue('comp_plate');

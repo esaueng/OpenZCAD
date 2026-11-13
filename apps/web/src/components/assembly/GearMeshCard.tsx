@@ -1,5 +1,5 @@
 import { useMemo, type ReactNode } from 'react';
-import { X } from 'lucide-react';
+import { TriangleAlert, X } from 'lucide-react';
 import {
   isGearMeshRefusal,
   type GearMeshSolution,
@@ -17,6 +17,10 @@ import {
   gearCarrierChoices,
   gearCouplingPlan
 } from '../../lib/assembly/gearCoupling';
+import {
+  gearCouplingMismatch,
+  gearPairCoupling
+} from '../../lib/assembly/gearCouplingCheck';
 import {
   gearComponentIds,
   type GearMeshDraft,
@@ -40,10 +44,12 @@ export interface GearMeshCardProps {
  * Place gears (M14 meshing-pair helper): pick the gear that stays put and
  * the one that meshes with it; the card shows the working centre distance,
  * pressure angle, ratio and play, or why the pair cannot mesh. Place saves
- * either a rigid joint that holds the second gear there, or (AS02 gear
- * coupling) a joint per gear on the part they are mounted on and the
- * coupling that moves them together. Loaded lazily by the Assembly panel:
- * the entry chunk keeps only `gearMeshEntry`.
+ * either (AS02 gear coupling) a joint per gear on the part they are mounted
+ * on and the coupling that moves them together, or a rigid joint that holds
+ * the second gear there. Moving together is what the card starts on
+ * whenever it can be made (there is a part to mount the gears on); Fixed
+ * together stays one choice away, and is all a bare pair can have. Loaded
+ * lazily by the Assembly panel: the entry chunk keeps only `gearMeshEntry`.
  */
 export function GearMeshCard(props: GearMeshCardProps) {
   const draft = useAssemblyRuntime((s) => s.gearMesh);
@@ -58,21 +64,36 @@ function GearMeshForm({
   draft
 }: GearMeshCardProps & { draft: GearMeshDraft }) {
   const context = useMemo(() => gearMeshCardContext(document), [document]);
-  const coupled = draft.motion === 'coupled';
+  const turning = useMemo(
+    () =>
+      context
+        ? gearCouplingPlan(context, draft, {
+            baseJointId: 'gear-mesh-preview-base',
+            jointId: 'gear-mesh-preview',
+            couplingId: 'gear-mesh-preview-coupling'
+          })
+        : { error: 'This project has no assembly.' },
+    [context, draft]
+  );
+  // Until the user chooses: moving together when that can be made.
+  const coupled = draft.motion
+    ? draft.motion === 'coupled'
+    : 'coupling' in turning;
   const result = useMemo(
     () =>
-      !context
-        ? { error: 'This project has no assembly.' }
-        : coupled
-          ? gearCouplingPlan(context, draft, {
-              baseJointId: 'gear-mesh-preview-base',
-              jointId: 'gear-mesh-preview',
-              couplingId: 'gear-mesh-preview-coupling'
-            })
-          : gearMeshJoint(context, draft, 'gear-mesh-preview'),
-    [context, coupled, draft]
+      !context || coupled
+        ? turning
+        : gearMeshJoint(context, draft, 'gear-mesh-preview'),
+    [context, coupled, draft, turning]
   );
   if (!context) return null;
+  // Reopened on a pair that already moves together: say so, and whether
+  // its ratio still matches the gears.
+  const existing =
+    draft.baseId && draft.movingId
+      ? gearPairCoupling(context, draft.baseId, draft.movingId)
+      : null;
+  const stale = existing ? gearCouplingMismatch(context, existing) : null;
   const gearIds = new Set(gearComponentIds(context));
   const gears = context.set.components.filter((c) => gearIds.has(c.id));
   const base = gears.find((c) => c.id === draft.baseId);
@@ -226,6 +247,20 @@ function GearMeshForm({
         </Step>
       </ol>
 
+      {existing ? (
+        stale ? (
+          <p className="assembly-banner" role="status">
+            <TriangleAlert size={14} aria-hidden="true" />
+            <span>{stale}</span>
+          </p>
+        ) : (
+          <p className="assembly-muted">
+            {existing.name} already moves this pair together. Remove it from
+            either joint to place the gears again.
+          </p>
+        )
+      ) : null}
+
       {'mesh' in result ? (
         <MeshReadout mesh={result.mesh} units={units} />
       ) : (
@@ -250,7 +285,7 @@ function GearMeshForm({
             (coupled ? createGearCouplingFromSetup : createGearMeshFromSetup)(
               { document, execute, onStatus },
               context,
-              draft
+              { ...draft, motion: coupled ? 'coupled' : 'fixed' }
             )
           }
         >

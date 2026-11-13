@@ -5,8 +5,14 @@ import {
   MAX_ASSEMBLY_STUDY_SECONDS,
   MAX_ASSEMBLY_TRACKS,
   assemblySetError,
+  coupledJointLimits,
+  coupledJointValues,
+  couplingGroupKeys,
   evaluateTrack,
   jointSweepRange,
+  motionStudyDrivers,
+  motionStudyValues,
+  type AssemblyCouplingEnd,
   type AssemblyDofUnit,
   type AssemblyEasing,
   type AssemblyJoint,
@@ -74,6 +80,19 @@ export function nextStudyName(set: AssemblySet | undefined): string {
   for (let n = 1; ; n += 1) if (!names.has(`Motion ${n}`)) return `Motion ${n}`;
 }
 
+/**
+ * The joint values on screen: the transient values with limits and
+ * couplings applied, so a joint that only follows its mate reads the value
+ * it is shown at rather than its own stale one.
+ */
+export function shownJointValues(
+  set: AssemblySet | undefined,
+  overrides: JointValueSource,
+  drivers: readonly AssemblyCouplingEnd[]
+): JointValueSource {
+  return set ? coupledJointValues(set, overrides, drivers) : overrides;
+}
+
 /** The value a joint motion shows now: a transient value, else the saved one. */
 export function currentJointValue(
   joint: AssemblyJoint,
@@ -86,6 +105,8 @@ export function currentJointValue(
 /**
  * A new study: two seconds, looping, one track per joint that moves (its
  * first motion), each holding one key at 0 with the joint's current value.
+ * Joints coupled to one another share one track, the first joint's: a
+ * second would only be overruled by it.
  */
 export function createDefaultStudy(
   set: AssemblySet | undefined,
@@ -93,9 +114,16 @@ export function createDefaultStudy(
   shown?: JointValueSource
 ): AssemblyMotionStudy {
   const tracks: AssemblyTrack[] = [];
+  const groups = set ? couplingGroupKeys(set) : new Map<string, string>();
+  const led = new Set<string>();
   for (const joint of set?.joints ?? []) {
     if (ASSEMBLY_JOINT_DOFS[joint.kind].length === 0) continue;
     if (tracks.length >= MAX_ASSEMBLY_TRACKS) break;
+    const group = groups.get(`${joint.id}/0`);
+    if (group !== undefined) {
+      if (led.has(group)) continue;
+      led.add(group);
+    }
     tracks.push({
       jointId: joint.id,
       dof: 0,
@@ -122,42 +150,89 @@ export const POSE_VALUE_TOLERANCE = 1e-6;
  * from its saved value at 0, since that is what the study showed before.
  * `changed` is false when the pose already matches the study; `study` is
  * null when a track or the study is full.
+ *
+ * Joints coupled to one another take one key between them. `drivers` are
+ * the motions that were moved, most recent first: the moved one leads its
+ * group, and the key goes on the motion the study already tracks there
+ * (else on the moved one) with the value that pose gives it. So dragging a
+ * driven gear re-keys the gear the study plays, and no second track is
+ * made that the first would overrule.
  */
 export function keyPoseAt(
   set: AssemblySet,
   study: AssemblyMotionStudy,
   t: number,
-  values: Readonly<Record<string, readonly number[]>>
+  values: Readonly<Record<string, readonly number[]>>,
+  drivers: readonly AssemblyCouplingEnd[] = []
 ): { study: AssemblyMotionStudy | null; changed: boolean } {
   const at = Math.min(study.durationS, Math.max(0, t));
   let next: AssemblyMotionStudy = study;
   let changed = false;
+  let full = false;
+  const key = (joint: AssemblyJoint, dof: number, value: number) => {
+    let index = next.tracks.findIndex(
+      (track) => track.jointId === joint.id && track.dof === dof
+    );
+    const shown =
+      index >= 0
+        ? evaluateTrack(next.tracks[index] as AssemblyTrack, at)
+        : (joint.values[dof] ?? 0);
+    if (Math.abs(value - shown) <= POSE_VALUE_TOLERANCE) return;
+    changed = true;
+    if (index < 0) {
+      const added = addTrack(set, next, joint.id, dof, shown);
+      if (!added) {
+        full = true;
+        return;
+      }
+      next = added;
+      index = next.tracks.length - 1;
+    }
+    const keyed = setKeyAt(next, index, at, value);
+    if (keyed) next = keyed;
+    else full = true;
+  };
+
+  const groups = couplingGroupKeys(set);
+  const keyedGroups = new Set<string>();
+  // The pose over what the study shows, with the moved motion leading.
+  let settled: Map<string, number[]> | null = null;
+  const settle = () => {
+    if (settled) return settled;
+    const pose = motionStudyValues(set, study, at);
+    for (const [jointId, posed] of Object.entries(values))
+      pose.set(jointId, [...posed]);
+    settled = coupledJointValues(set, pose, [
+      ...drivers,
+      ...motionStudyDrivers(study)
+    ]);
+    return settled;
+  };
+  const joints = new Map(set.joints.map((j) => [j.id, j]));
   for (const joint of set.joints) {
     const posed = values[joint.id];
     if (!posed) continue;
     const dofs = ASSEMBLY_JOINT_DOFS[joint.kind].length;
-    for (let dof = 0; dof < dofs; dof += 1) {
+    for (let dof = 0; dof < dofs && !full; dof += 1) {
       const value = posed[dof];
       if (value === undefined) continue;
-      let index = next.tracks.findIndex(
-        (track) => track.jointId === joint.id && track.dof === dof
-      );
-      const shown =
-        index >= 0
-          ? evaluateTrack(next.tracks[index] as AssemblyTrack, at)
-          : (joint.values[dof] ?? 0);
-      if (Math.abs(value - shown) <= POSE_VALUE_TOLERANCE) continue;
-      changed = true;
-      if (index < 0) {
-        const added = addTrack(set, next, joint.id, dof, shown);
-        if (!added) return { study: null, changed };
-        next = added;
-        index = next.tracks.length - 1;
+      const group = groups.get(`${joint.id}/${dof}`);
+      if (group === undefined) {
+        key(joint, dof, value);
+        continue;
       }
-      const keyed = setKeyAt(next, index, at, value);
-      if (!keyed) return { study: null, changed };
-      next = keyed;
+      if (keyedGroups.has(group)) continue;
+      keyedGroups.add(group);
+      const inGroup = (end: AssemblyCouplingEnd) =>
+        groups.get(`${end.jointId}/${end.dof}`) === group;
+      const target = study.tracks.find(inGroup) ??
+        drivers.find(inGroup) ?? { jointId: joint.id, dof };
+      const targetJoint = joints.get(target.jointId);
+      const targetValue = settle().get(target.jointId)?.[target.dof];
+      if (targetJoint && targetValue !== undefined)
+        key(targetJoint, target.dof, targetValue);
     }
+    if (full) return { study: null, changed };
   }
   return { study: next, changed };
 }
@@ -165,14 +240,18 @@ export function keyPoseAt(
 /**
  * A joint's Animate sweep as a study, for a project without studies to
  * play in View mode: its range from the low end to the high one with the
- * same ease, back and forth, so it moves exactly as Animate does.
+ * same ease, back and forth, so it moves exactly as Animate does. With the
+ * assembly given, the range is the one the joint can really travel: its
+ * own limits narrowed by the limits of the joints coupled to it.
  */
 export function jointSweepStudy(
   joint: AssemblyJoint,
-  sweepS: number
+  sweepS: number,
+  set?: Pick<AssemblySet, 'joints' | 'couplings'>
 ): AssemblyMotionStudy | null {
+  const limits = set ? coupledJointLimits(set, joint) : joint.limits;
   for (let dof = 0; dof < ASSEMBLY_JOINT_DOFS[joint.kind].length; dof += 1) {
-    const range = jointSweepRange(joint, dof);
+    const range = jointSweepRange({ kind: joint.kind, limits }, dof);
     if (!range || !(sweepS > 0)) continue;
     return {
       id: `sweep:${joint.id}`,
@@ -476,16 +555,29 @@ export function dofUnit(kind: AssemblyJointKind, dof: number): AssemblyDofUnit {
   return ASSEMBLY_JOINT_DOFS[kind][dof] ?? 'mm';
 }
 
-/** Joint motions that have no track yet, in joint order. */
+/**
+ * Joint motions that can take a track, in joint order: those without one
+ * that are not coupled to a motion the study already tracks (that track
+ * moves them, and would overrule a second).
+ */
 export function untrackedMotions(
   set: AssemblySet,
   study: AssemblyMotionStudy
 ): { joint: AssemblyJoint; dof: number }[] {
   const tracked = new Set(study.tracks.map((t) => `${t.jointId}/${t.dof}`));
+  const groups = couplingGroupKeys(set);
+  const led = new Set<string>();
+  for (const key of tracked) {
+    const group = groups.get(key);
+    if (group !== undefined) led.add(group);
+  }
   const result: { joint: AssemblyJoint; dof: number }[] = [];
   for (const joint of set.joints)
     ASSEMBLY_JOINT_DOFS[joint.kind].forEach((_, dof) => {
-      if (!tracked.has(`${joint.id}/${dof}`)) result.push({ joint, dof });
+      const key = `${joint.id}/${dof}`;
+      const group = groups.get(key);
+      if (!tracked.has(key) && (group === undefined || !led.has(group)))
+        result.push({ joint, dof });
     });
   return result;
 }

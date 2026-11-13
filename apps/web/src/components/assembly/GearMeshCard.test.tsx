@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import { createProjectDocument, type GearInput } from '@openzcad/document-core';
-import { toUserId, type BodyId } from '@openzcad/shared';
+import { toUserId, type BodyId, type FeatureNode } from '@openzcad/shared';
 import { recordingExecute, withLiveBodies } from '../../test/assemblyFixture';
 import {
   assemblyRuntime,
@@ -139,6 +139,13 @@ describe('Place gears card', () => {
       expect(
         within(form).getByRole('combobox', { name: 'Gear that meshes with it' })
       ).toHaveValue('comp_a');
+      // With a part to mount them on, the pair starts on Turn together;
+      // Fixed together is one choice away.
+      const motion = within(form).getByRole('combobox', {
+        name: 'How the pair moves'
+      });
+      expect(motion).toHaveValue('coupled');
+      fireEvent.change(motion, { target: { value: 'fixed' } });
       expect(within(form).getByText(/pair stays fixed together/)).toBeVisible();
     },
     LAZY_TEST_TIMEOUT_MS
@@ -197,9 +204,12 @@ describe('Place gears card', () => {
     async () => {
       const { commands, rerender, status } = renderGears();
       fireEvent.click(screen.getByRole('button', { name: 'Place gears' }));
-      fireEvent.click(
-        within(await card()).getByRole('button', { name: 'Place' })
+      const form = await card();
+      fireEvent.change(
+        within(form).getByRole('combobox', { name: 'How the pair moves' }),
+        { target: { value: 'fixed' } }
       );
+      fireEvent.click(within(form).getByRole('button', { name: 'Place' }));
       expect(commands.map((c) => c.kind)).toEqual([
         'assembly.component.update',
         'assembly.joint.add'
@@ -225,10 +235,10 @@ describe('Place gears card', () => {
       const { commands, manager, rerender, status } = renderGears();
       fireEvent.click(screen.getByRole('button', { name: 'Place gears' }));
       const form = await card();
-      fireEvent.change(
-        within(form).getByRole('combobox', { name: 'How the pair moves' }),
-        { target: { value: 'coupled' } }
-      );
+      // Turn together is where the card starts when a mount is available.
+      expect(
+        within(form).getByRole('combobox', { name: 'How the pair moves' })
+      ).toHaveValue('coupled');
       // The only other part is offered as the mount, and Place will fix it.
       expect(
         within(form).getByRole('combobox', {
@@ -284,11 +294,13 @@ describe('Place gears card', () => {
       renderGears({}, false);
       fireEvent.click(screen.getByRole('button', { name: 'Place gears' }));
       const form = await card();
+      // A bare pair starts on Fixed together, the only way it can be saved.
+      const motion = within(form).getByRole('combobox', {
+        name: 'How the pair moves'
+      });
+      expect(motion).toHaveValue('fixed');
       expect(within(form).getByRole('button', { name: 'Place' })).toBeEnabled();
-      fireEvent.change(
-        within(form).getByRole('combobox', { name: 'How the pair moves' }),
-        { target: { value: 'coupled' } }
-      );
+      fireEvent.change(motion, { target: { value: 'coupled' } });
       expect(within(form).getByRole('alert')).toHaveTextContent(
         /need a part they are both mounted on/
       );
@@ -300,6 +312,60 @@ describe('Place gears card', () => {
       expect(
         within(form).getByRole('button', { name: 'Place' })
       ).toBeDisabled();
+    }
+  );
+
+  it(
+    'warns on the joint and in the reopened card when a gear’s teeth change',
+    { timeout: LAZY_TEST_TIMEOUT_MS },
+    async () => {
+      const { manager, rerender } = renderGears();
+      fireEvent.click(screen.getByRole('button', { name: 'Place gears' }));
+      fireEvent.click(
+        within(await card()).getByRole('button', { name: 'Place' })
+      );
+      rerender();
+      const details = () => screen.getByLabelText('Pinion turn details');
+      expect(within(details()).queryByRole('status')).toBeNull();
+      // The wheel goes from 40 to 45 teeth; the coupling keeps 20/40.
+      const wheel = Object.values(manager.document.nodes).find(
+        (node) => node.kind === 'feature' && node.name === 'Wheel'
+      ) as FeatureNode;
+      manager.execute(
+        commandFactories.updateFeature({
+          featureId: wheel.featureId,
+          data: { teeth: 45 }
+        })
+      );
+      rerender();
+      expect(within(details()).getByRole('status')).toHaveTextContent(
+        'Pinion and Wheel no longer match Gear ratio: their teeth now give 0.4444 turns per turn, and it was placed for 0.5 turns per turn. Remove it and place the gears again.'
+      );
+      expect(manager.document.assembly!.couplings![0]!.ratio).toBeCloseTo(
+        -0.5,
+        12
+      );
+      // Reopened on the same pair, the card says the same.
+      fireEvent.click(screen.getByRole('button', { name: 'Place gears' }));
+      const reopened = await card();
+      expect(within(reopened).getByRole('status')).toHaveTextContent(
+        /no longer match Gear ratio/
+      );
+      expect(
+        within(reopened).getByRole('button', { name: 'Place' })
+      ).toBeDisabled();
+      // Back at the count it was placed with, both read as plain coupled.
+      manager.execute(
+        commandFactories.updateFeature({
+          featureId: wheel.featureId,
+          data: { teeth: 40 }
+        })
+      );
+      rerender();
+      expect(within(reopened).queryByRole('status')).toBeNull();
+      expect(
+        within(reopened).getByText(/already moves this pair together/)
+      ).toBeVisible();
     }
   );
 

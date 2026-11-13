@@ -20,6 +20,7 @@ import { commandFactories } from '@openzcad/command-system';
 import { assemblyBomToCsv, deriveAssemblyBom } from '@openzcad/document-core';
 import {
   ASSEMBLY_JOINT_DOFS,
+  coupledJointLimits,
   createId,
   type BodyId,
   type ProjectDocument
@@ -601,7 +602,10 @@ function AssemblyLists({
                 const unsolved = solution.unsolved.get(joint.id) ?? null;
                 const selected = joint.id === selectedJointId;
                 const playing = joint.id === playingJointId;
-                const reason = sweepUnavailableReason(joint);
+                const reason = sweepUnavailableReason({
+                  kind: joint.kind,
+                  limits: coupledJointLimits(set, joint)
+                });
                 const values = solution.values.get(joint.id) ?? joint.values;
                 return (
                   <li

@@ -94,6 +94,7 @@ import {
   MAX_PROJECT_REVISION_RECORDS,
   nowIso,
   PROJECT_DOCUMENT_SCHEMA_VERSION,
+  isUnsupportedProjectSchema,
   toArtifactId,
   toBodyId,
   toEntityId,
@@ -976,7 +977,8 @@ export function mergeCollaborationDocuments(
  * incomplete model, so a newer schema is refused instead.
  */
 export function normalizeDocument(input: ProjectDocument): ProjectDocument {
-  if (input.schemaVersion > PROJECT_DOCUMENT_SCHEMA_VERSION) {
+  // Also a number below this build's whose content it does not implement.
+  if (isUnsupportedProjectSchema(input.schemaVersion)) {
     throw new Error(
       `Unsupported project schema (v${input.schemaVersion}). Update OpenZCAD to open it.`
     );

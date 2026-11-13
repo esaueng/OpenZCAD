@@ -3,6 +3,7 @@ import {
   MAX_ASSEMBLY_MAGNITUDE,
   MIN_ASSEMBLY_COUPLING_RATIO,
   couplingEndKey,
+  unsolvedAssemblyJoints,
   type AssemblyCoupling,
   type AssemblyCouplingEnd,
   type AssemblyDofLimit,
@@ -18,7 +19,7 @@ import {
  * every member is a linear function of it. Solving is therefore exact and
  * needs no iteration:
  *
- * 1. the member that was moved (else the group's first) gives that value;
+ * 1. the member being driven (else the group's first) gives that value;
  * 2. it is clamped into the range every member's limits allow, so a driven
  *    joint's limit stops its driver;
  * 3. every member is written from it.
@@ -214,16 +215,45 @@ function groupRange(
 }
 
 /**
+ * Which member of a group leads. Never decided by comparing values (a
+ * motion passing through its saved value must not hand over the lead):
+ *
+ * 1. the first of `drivers` that is in the group: the motion being edited
+ *    or played, most important first;
+ * 2. else the first member, in the group's stored order, whose joint has a
+ *    candidate value in `overrides`: values being written lead;
+ * 3. else the group's first member, with its stored value.
+ */
+function leadOf(
+  group: AssemblyCouplingGroup,
+  overrides: ReadonlyMap<string, readonly number[]> | undefined,
+  drivers: readonly AssemblyCouplingEnd[] | undefined
+): AssemblyCouplingMember | undefined {
+  for (const driver of drivers ?? []) {
+    const member = group.members.find(
+      (m) => m.jointId === driver.jointId && m.dof === driver.dof
+    );
+    if (member) return member;
+  }
+  return (
+    (overrides
+      ? group.members.find((m) => overrides.has(m.jointId))
+      : undefined) ?? group.members[0]
+  );
+}
+
+/**
  * Every joint's values with its limits and the couplings applied.
  * `overrides` are candidate values (a drag, a playback frame, a pose being
- * saved); joints without one keep their stored values. In each coupled
- * group the first member whose candidate differs from its stored value
- * leads and the rest follow it; when none differs the group's first member
- * leads with its stored value, so a saved pose always reads the same way.
+ * saved); joints without one keep their stored values. `drivers` names the
+ * motions being driven, most important first. In each coupled group one
+ * member leads ({@link leadOf}) with its candidate (else stored) value and
+ * the rest follow it; another member's candidate value is ignored.
  */
 export function coupledJointValues(
   set: Pick<AssemblySet, 'joints' | 'couplings'>,
-  overrides?: ReadonlyMap<string, readonly number[]>
+  overrides?: ReadonlyMap<string, readonly number[]>,
+  drivers?: readonly AssemblyCouplingEnd[]
 ): Map<string, number[]> {
   const values = new Map<string, number[]>();
   for (const joint of set.joints) {
@@ -244,14 +274,8 @@ export function coupledJointValues(
   const at = (member: AssemblyCouplingEnd): number =>
     (values.get(member.jointId) as number[])[member.dof] as number;
   for (const group of couplingGroups(set)) {
-    const first = group.members[0];
-    if (!first) continue;
-    const lead =
-      group.members.find(
-        (member) =>
-          overrides?.has(member.jointId) === true &&
-          at(member) !== joints.get(member.jointId)?.values[member.dof]
-      ) ?? first;
+    const lead = leadOf(group, overrides, drivers);
+    if (!lead) continue;
     const leadValue = at(lead);
     const wanted = (leadValue - lead.shift) / lead.scale;
     const range = groupRange(group, joints);
@@ -315,6 +339,24 @@ export function coupledJointLimits(
   );
 }
 
+/**
+ * Each coupled motion's group, as the key of the group's first member
+ * ({@link couplingEndKey}): two motions move together exactly when they
+ * map to the same key. Uncoupled motions are absent.
+ */
+export function couplingGroupKeys(
+  set: Pick<AssemblySet, 'joints' | 'couplings'>
+): Map<string, string> {
+  const keys = new Map<string, string>();
+  for (const group of couplingGroups(set)) {
+    const first = group.members[0];
+    if (!first) continue;
+    const lead = couplingEndKey(first);
+    for (const member of group.members) keys.set(couplingEndKey(member), lead);
+  }
+  return keys;
+}
+
 /** The couplings one joint takes part in. */
 export function couplingsOfJoint(
   set: Pick<AssemblySet, 'couplings'>,
@@ -365,6 +407,27 @@ export type AssemblyCouplingDraft = Pick<
   AssemblyCoupling,
   'driver' | 'driven' | 'ratio'
 > & { offset?: number };
+
+/**
+ * A coupling one of whose joints the solve can never move (it closes a
+ * loop, or both of its parts are fixed), with that joint: its mate would
+ * move alone. Null when every coupled joint can move.
+ */
+export function couplingImmovableJoint(
+  set: Pick<AssemblySet, 'components' | 'joints' | 'couplings'>
+): { coupling: AssemblyCoupling; joint: AssemblyJoint } | null {
+  if (!set.couplings || set.couplings.length === 0) return null;
+  const unsolved = unsolvedAssemblyJoints(set);
+  if (unsolved.size === 0) return null;
+  for (const coupling of set.couplings)
+    for (const end of [coupling.driver, coupling.driven]) {
+      const joint = unsolved.has(end.jointId)
+        ? set.joints.find((j) => j.id === end.jointId)
+        : undefined;
+      if (joint) return { coupling, joint };
+    }
+  return null;
+}
 
 /** The group whose limits cannot all be met, as its first coupling's id. */
 export function couplingLimitsConflict(

@@ -17,6 +17,7 @@ import {
   REFERENCE_IMAGE_CONTENT_TYPES,
   persistedDocumentBytes,
   PROJECT_DOCUMENT_SCHEMA_VERSION,
+  isUnsupportedProjectSchema,
   PROJECT_STATUSES,
   isProjectCheckpoint,
   isRevisionRecord,
@@ -469,7 +470,7 @@ function parseProjectDocument(
   if (
     record.schemaVersion !== undefined &&
     (typeof record.schemaVersion !== 'number' ||
-      record.schemaVersion > PROJECT_DOCUMENT_SCHEMA_VERSION)
+      isUnsupportedProjectSchema(record.schemaVersion))
   ) {
     throw badRequest(
       `"document.schemaVersion" is newer than this deployment supports (${PROJECT_DOCUMENT_SCHEMA_VERSION}). Reload to update.`

@@ -1,6 +1,6 @@
 import {
   MAX_PROJECT_CHECKPOINTS,
-  PROJECT_DOCUMENT_SCHEMA_VERSION,
+  isUnsupportedProjectSchema,
   assertDocumentHistory,
   assertDocumentTextBudget,
   documentEnvelopeError,
@@ -87,7 +87,7 @@ export function assertStorableDocument(value: unknown): ProjectDocument {
   const record = value as Record<string, unknown>;
   check(
     typeof record.schemaVersion !== 'number' ||
-      record.schemaVersion <= PROJECT_DOCUMENT_SCHEMA_VERSION,
+      !isUnsupportedProjectSchema(record.schemaVersion),
     `The project was saved by a newer OpenZCAD (schema ${String(record.schemaVersion)}). Update to open it.`
   );
   for (const [section, error] of [

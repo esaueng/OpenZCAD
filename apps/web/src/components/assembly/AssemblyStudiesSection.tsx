@@ -16,6 +16,7 @@ import {
 } from '../../lib/assembly/assemblyRuntime';
 import {
   createDefaultStudy,
+  shownJointValues,
   formatStudyTime
 } from '../../lib/assembly/motionStudy';
 
@@ -69,10 +70,11 @@ export function AddStudyButton({
   );
   if (!moves || studies.length >= MAX_ASSEMBLY_STUDIES) return null;
   function create() {
+    const shown = getAssemblyRuntime();
     const study = createDefaultStudy(
       assembly,
       newStudyId(),
-      getAssemblyRuntime().overrides
+      shownJointValues(assembly, shown.overrides, shown.drivers)
     );
     if (
       !execute(

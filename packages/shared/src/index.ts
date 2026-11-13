@@ -222,7 +222,8 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // grounding, joints with values and limits, saved positions and motion
 // studies. An older client would drop the section on its next save, so it
 // must refuse.
-// v55 is claimed by M14 partial-span teeth (PR #1389), still open.
+// v55 is claimed by M14 partial-span teeth (PR #1389), which this build
+// does not contain: see UNIMPLEMENTED_PROJECT_SCHEMA_VERSIONS below.
 // v56 adds AS02 joint couplings (`assembly.couplings`): two joint values tied
 // by a ratio and an offset, so meshed gears and a rack and its pinion move
 // together. Absent means none, so every v54 assembly loads unchanged. An
@@ -232,6 +233,37 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 export const PROJECT_DOCUMENT_SCHEMA_VERSION = 56 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
+
+/**
+ * Schema numbers below this build's own whose content it does not
+ * implement, so a document declaring one is refused like a newer one.
+ *
+ * v55 is M14 partial-span teeth (PR #1389). Couplings took v56 while that
+ * work was still open, so a v55 document can hold teeth cut along part of
+ * a face that this build would cut along the whole face. Whoever merges
+ * second resolves it: with partial-span teeth merged in, drop 55 from this
+ * list; if that work lands later under another number, 55 stays refused.
+ */
+export const UNIMPLEMENTED_PROJECT_SCHEMA_VERSIONS: readonly number[] = [55];
+
+/** Whether this build must refuse a document that declares `version`. */
+export function isUnsupportedProjectSchema(version: number): boolean {
+  return (
+    version > PROJECT_DOCUMENT_SCHEMA_VERSION ||
+    UNIMPLEMENTED_PROJECT_SCHEMA_VERSIONS.includes(version)
+  );
+}
+
+/**
+ * The newest schema older than this build's that it still opens: what "a
+ * document from an older build" declares (tests use it instead of a
+ * literal or `version − 1`, which may be a number this build refuses).
+ */
+export function previousProjectSchemaVersion(): number {
+  let version = PROJECT_DOCUMENT_SCHEMA_VERSION - 1;
+  while (UNIMPLEMENTED_PROJECT_SCHEMA_VERSIONS.includes(version)) version -= 1;
+  return version;
+}
 
 export type UnitSystem = 'mm' | 'cm' | 'm' | 'inch';
 /** F05: what a typed parameter measures. Absent on a node is unitless. */

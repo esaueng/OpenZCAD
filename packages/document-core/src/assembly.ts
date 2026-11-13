@@ -4,6 +4,7 @@ import {
   clampJointValues,
   coupledJointValues,
   couplingAddError,
+  couplingImmovableJoint,
   couplingLimitsConflict,
   couplingOffsetAtPose,
   deepClone,
@@ -92,6 +93,13 @@ export interface AssemblyJointDeleteInput {
 export interface AssemblyPoseSetInput {
   values?: Record<string, number[]>;
   placements?: Record<string, AssemblyPlacement>;
+  /**
+   * Schema v56. The motions that were moved, most important first: in a
+   * coupled group the first of them leads and the joints coupled to it
+   * follow, whatever other values are written beside it. Absent, the first
+   * written member of each group (in the group's stored order) leads.
+   */
+  drivers?: AssemblyCouplingEnd[];
 }
 
 export interface AssemblyPositionSaveInput {
@@ -151,6 +159,13 @@ function withAssembly(
   // An edit that changes nothing returns the same document, which the
   // command manager records as no edit at all.
   if (JSON.stringify(after) === JSON.stringify(before)) return document;
+  // Any edit (fixing a part in place, moving a joint's end) that would stop
+  // a coupled joint is refused: its mate would go on moving alone.
+  const stuck = couplingImmovableJoint(after);
+  if (stuck)
+    throw new Error(
+      `That would leave ${stuck.joint.name} unable to move (it would close a loop or join two fixed parts), and ${stuck.coupling.name} moves it with another joint. Remove ${stuck.coupling.name} first.`
+    );
   const assembly = isAssemblySetEmpty(after) ? undefined : after;
   assertAssemblySet(assembly);
   const { assembly: _previous, ...rest } = document;
@@ -202,14 +217,20 @@ function freezePlacements(set: AssemblySet): void {
 }
 
 /**
- * Writes the joint values the limits and couplings allow. `lead` are values
- * being written now: in a coupled group the joint that changed leads.
+ * Writes the joint values the limits and couplings allow. `written` are
+ * values being written now and `drivers` the motions that lead their
+ * coupled groups (else the first written member of each group does).
  */
 function settleJointValues(
   set: AssemblySet,
-  lead: Readonly<Record<string, readonly number[]>> = {}
+  written: Readonly<Record<string, readonly number[]>> = {},
+  drivers?: readonly AssemblyCouplingEnd[]
 ): void {
-  const settled = coupledJointValues(set, new Map(Object.entries(lead)));
+  const settled = coupledJointValues(
+    set,
+    new Map(Object.entries(written)),
+    drivers
+  );
   for (const j of set.joints) j.values = settled.get(j.id) ?? j.values;
 }
 
@@ -410,7 +431,11 @@ export function updateAssemblyJoint(
     pruneJointReferences(set);
     if (set.couplings) {
       assertCoupledLimits(set);
-      settleJointValues(set, { [target.id]: values });
+      settleJointValues(
+        set,
+        { [target.id]: values },
+        values.map((_, dof) => ({ jointId: target.id, dof }))
+      );
     } else target.values = values;
     return set;
   });
@@ -435,7 +460,7 @@ export function setAssemblyPose(
 ): ProjectDocument {
   return withAssembly(document, (set) => {
     for (const jointId of Object.keys(input.values ?? {})) joint(set, jointId);
-    settleJointValues(set, input.values);
+    settleJointValues(set, input.values, input.drivers);
     for (const [componentId, value] of Object.entries(input.placements ?? {})) {
       component(set, componentId).placement = placement(value);
     }

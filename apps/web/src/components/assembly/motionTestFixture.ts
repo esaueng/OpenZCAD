@@ -69,3 +69,72 @@ export function pivotProject(options: { study?: boolean } = {}) {
   }
   return manager;
 }
+
+/**
+ * Test-only: a fixed plate with two parts turning on it, coupled at −0.5
+ * (B = −A / 2). B is limited to ±20°, so the pair can only travel A ±40°.
+ * `saved` are the joints' stored angles (they must satisfy the coupling).
+ */
+export function coupledPairProject(
+  options: { limited?: boolean; saved?: [number, number] } = {}
+) {
+  const manager = new CommandManager(
+    createProjectDocument('Gears', toUserId('user_motion'))
+  );
+  for (const name of ['Plate', 'Gear A', 'Gear B'])
+    manager.execute(
+      commandFactories.addPrimitive({
+        name,
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 2, depth: 10 }
+      })
+    );
+  const bodies = manager.document.bodyOrder;
+  manager.execute(
+    commandFactories.addAssemblyComponents({
+      components: ['plate', 'a', 'b'].map((id, index) => ({
+        componentId: id,
+        name: id,
+        bodyId: bodies[index] as BodyId,
+        grounded: id === 'plate'
+      }))
+    })
+  );
+  const [savedA, savedB] = options.saved ?? [0, 0];
+  for (const [id, child, x, value] of [
+    ['turn_a', 'a', 0, savedA],
+    ['turn_b', 'b', 50, savedB]
+  ] as const) {
+    const frame = { ...PIVOT, origin: { x, y: 0, z: 0 } };
+    manager.execute(
+      commandFactories.addAssemblyJoint({
+        joint: {
+          id,
+          name: id === 'turn_a' ? 'Turn A' : 'Turn B',
+          kind: 'revolute',
+          parent: { componentId: 'plate', frame },
+          child: { componentId: child, frame },
+          values: [value],
+          limits: [
+            id === 'turn_b' && options.limited !== false
+              ? { min: -20, max: 20 }
+              : null
+          ]
+        }
+      })
+    );
+  }
+  manager.execute(
+    commandFactories.addAssemblyCoupling({
+      coupling: {
+        id: 'mesh',
+        name: 'Gear ratio',
+        driver: { jointId: 'turn_a', dof: 0 },
+        driven: { jointId: 'turn_b', dof: 0 },
+        ratio: -0.5,
+        offset: 0
+      }
+    })
+  );
+  return manager;
+}

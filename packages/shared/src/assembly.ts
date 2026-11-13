@@ -194,6 +194,59 @@ export interface AssemblySet {
   couplings?: AssemblyCoupling[];
 }
 
+export type AssemblyUnsolvedReason =
+  /** Both ends were already placed: the joint closes a loop (AS09). */
+  | 'loop'
+  /** Both ends are grounded, so the joint can never move. */
+  | 'grounded-both';
+
+/**
+ * The joints the tree solve cannot move. A spanning forest in joint order
+ * (Kruskal over a ground super-node, every grounded component counting as
+ * one fixed body), so the joint that closes a loop is the one added last,
+ * whatever the traversal order. Graph only: no frames, no values. A joint
+ * naming a missing component is left out.
+ */
+export function unsolvedAssemblyJoints(
+  set: Pick<AssemblySet, 'components' | 'joints'>
+): Map<string, AssemblyUnsolvedReason> {
+  const unsolved = new Map<string, AssemblyUnsolvedReason>();
+  const GROUND = '\u0000ground';
+  const grounded = new Set<string>();
+  const parentOf = new Map<string, string>();
+  for (const c of set.components) {
+    if (c.grounded) grounded.add(c.id);
+    parentOf.set(c.id, c.grounded ? GROUND : c.id);
+  }
+  parentOf.set(GROUND, GROUND);
+  const find = (id: string): string => {
+    let root = id;
+    for (;;) {
+      const next = parentOf.get(root);
+      if (next === undefined || next === root) break;
+      root = next;
+    }
+    parentOf.set(id, root);
+    return root;
+  };
+  for (const joint of set.joints) {
+    const a = joint.parent.componentId;
+    const b = joint.child.componentId;
+    if (!parentOf.has(a) || !parentOf.has(b)) continue;
+    const ra = find(a);
+    const rb = find(b);
+    if (ra === rb) {
+      unsolved.set(
+        joint.id,
+        grounded.has(a) && grounded.has(b) ? 'grounded-both' : 'loop'
+      );
+      continue;
+    }
+    parentOf.set(ra === GROUND ? rb : ra, ra === GROUND ? ra : rb);
+  }
+  return unsolved;
+}
+
 export const MAX_ASSEMBLY_COMPONENTS = 500;
 export const MAX_ASSEMBLY_JOINTS = 1000;
 export const MAX_ASSEMBLY_POSITIONS = 100;
@@ -516,7 +569,11 @@ export function assemblySetError(value: unknown): string | null {
     if (studyIds.has(id)) return `Motion study ${id} is listed twice.`;
     studyIds.add(id);
   }
-  return couplingsError(value.couplings, joints);
+  return couplingsError(
+    value.couplings,
+    joints,
+    value as unknown as AssemblySet
+  );
 }
 
 /** The key one joint motion has in a coupling graph. */
@@ -526,13 +583,16 @@ export function couplingEndKey(end: AssemblyCouplingEnd): string {
 
 /**
  * Why a coupling list is malformed, or null. Structure only: which motions
- * exist, a usable ratio, and no loop. Whether the joints' limits leave the
- * pair a shared position is judged where they are edited
- * (`couplingAddError`), since a limit is not part of this list.
+ * exist, a usable ratio, no loop, and no joint the solve can never move
+ * (grounding both of its parts after it was coupled would leave its mate
+ * turning alone). Whether the joints' limits leave the pair a shared
+ * position is judged where they are edited (`couplingAddError`), since a
+ * limit is not part of this list.
  */
 function couplingsError(
   value: unknown,
-  joints: Map<string, AssemblyJointKind>
+  joints: Map<string, AssemblyJointKind>,
+  set: Pick<AssemblySet, 'components' | 'joints'>
 ): string | null {
   if (value === undefined) return null;
   if (!Array.isArray(value)) return 'The assembly couplings are malformed.';
@@ -587,6 +647,13 @@ function couplingsError(
     if (a === b)
       return `Coupling ${id} links two motions that are already coupled.`;
     group.set(a, b);
+  }
+  if (value.length > 0) {
+    const unsolved = unsolvedAssemblyJoints(set);
+    for (const coupling of value as AssemblyCoupling[])
+      for (const end of [coupling.driver, coupling.driven])
+        if (unsolved.has(end.jointId))
+          return `Coupling ${coupling.id} links joint ${end.jointId}, which cannot move.`;
   }
   return null;
 }

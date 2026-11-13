@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { commandFactories, type AnyCommand } from '@openzcad/command-system';
 import {
   ASSEMBLY_JOINT_DOFS,
+  coupledJointLimits,
   createId,
   jointAddError,
   solveAssembly,
@@ -163,13 +164,16 @@ export function toggleJointPlayback(
   app: AssembleWorkspaceApp,
   jointId: string
 ): boolean {
-  const joint = app.document?.assembly?.joints.find((j) => j.id === jointId);
-  if (!joint) return false;
+  const set = app.document?.assembly;
+  const saved = set?.joints.find((j) => j.id === jointId);
+  if (!set || !saved) return false;
   const playback = getAssemblyRuntime().playback;
   if (playback?.kind === 'joint' && playback.jointId === jointId) {
     assemblyRuntime.stop();
     return true;
   }
+  // The range it can really travel: its own limits and its mates'.
+  const joint = { kind: saved.kind, limits: coupledJointLimits(set, saved) };
   const reason = sweepUnavailableReason(joint);
   const dof = sweepDof(joint);
   if (reason || dof === null) {
@@ -304,11 +308,17 @@ export function useAssembleWorkspace(
   }, [projectId]);
   useEffect(() => {
     registerAssemblyCommitHandlers({
-      commitPose(values, placements) {
+      commitPose(values, placements, drivers) {
+        // Which motion was moved only matters where joints are coupled.
+        const coupled =
+          (latest.current.document?.assembly?.couplings?.length ?? 0) > 0;
         latest.current.execute(
           commandFactories.setAssemblyPose({
             values,
-            ...(placements ? { placements } : {})
+            ...(placements ? { placements } : {}),
+            ...(coupled && drivers && drivers.length > 0
+              ? { drivers: drivers.map((d) => ({ ...d })) }
+              : {})
           })
         );
       },

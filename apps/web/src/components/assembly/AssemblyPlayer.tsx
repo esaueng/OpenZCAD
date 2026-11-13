@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Pause, Play, Repeat, Square } from 'lucide-react';
 import {
+  motionStudyDrivers,
   motionStudyValues,
   type AssemblyMotionStudy,
   type AssemblyPlayback,
@@ -55,8 +56,10 @@ export function AssemblyPlayer({ assembly }: AssemblyPlayerProps) {
     if (!assembly) return [];
     if (assembly.studies.length > 0) return assembly.studies;
     const { sweepS } = getAnimatePrefs();
+    // Each joint's sweep covers what it can really travel: a joint coupled
+    // to a limited one plays that narrower range, as Animate does.
     return assembly.joints.flatMap(
-      (joint) => jointSweepStudy(joint, sweepS) ?? []
+      (joint) => jointSweepStudy(joint, sweepS, assembly) ?? []
     );
   }, [assembly]);
   const [chosenId, setChosenId] = useState<string | null>(null);
@@ -113,7 +116,7 @@ export function AssemblyPlayer({ assembly }: AssemblyPlayerProps) {
         setPlaying(false);
         return;
       }
-      assemblyRuntime.setOverrides(next.overrides);
+      assemblyRuntime.setOverrides(next.overrides, next.drivers);
       setT(next.studyTimeS ?? 0);
       if (next.done) {
         setPlaying(false);
@@ -157,7 +160,10 @@ export function AssemblyPlayer({ assembly }: AssemblyPlayerProps) {
     setPlaying(false);
     const clamped = Math.min(duration, Math.max(0, at));
     setT(clamped);
-    assemblyRuntime.setOverrides(motionStudyValues(set, current, clamped));
+    assemblyRuntime.setOverrides(
+      motionStudyValues(set, current, clamped),
+      motionStudyDrivers(current)
+    );
   }
 
   function stop() {
@@ -176,7 +182,11 @@ export function AssemblyPlayer({ assembly }: AssemblyPlayerProps) {
     setPlaying(false);
     setLoop(null);
     setT(0);
-    if (showing) assemblyRuntime.setOverrides(motionStudyValues(set, next, 0));
+    if (showing)
+      assemblyRuntime.setOverrides(
+        motionStudyValues(set, next, 0),
+        motionStudyDrivers(next)
+      );
   }
 
   function toggleLoop() {

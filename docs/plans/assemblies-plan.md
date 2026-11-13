@@ -105,17 +105,37 @@ relates values, it never closes a kinematic loop.
 - **One free value per group.** Couplings never form a loop (validation
   refuses one), so every group of coupled motions is a tree and each member
   is a linear function of one value. The solve is exact, with no iteration.
-- **Either side drives.** In a group the member whose value was written (a
-  drag, a typed value, a key, a playback frame) leads and the rest follow;
-  when nothing was written the group's first member leads with its stored
-  value. When several members were written at once (a motion study that keys
-  both gears) the first in the group's order leads and the others' written
-  values are ignored. Every command that writes values, limits or couplings
-  settles the group before it returns, so stored values always satisfy every
-  coupling.
+- **Either side drives, and the driver is named.** One member of a group
+  leads and the rest follow; another member's own value is ignored. Who
+  leads is never worked out by comparing values with the saved ones (a
+  motion passing through its saved angle would hand the lead over for a
+  frame). It is, in order: the first _driver_ that belongs to the group;
+  else the first member, in the group's stored order, that a value is being
+  written for; else the group's first member with its stored value. Drivers
+  are the motions being moved, most recent first, and travel with the values
+  everywhere: the runtime keeps them beside its transient values (a drag or
+  a typed value puts its motion first, so it leads even over a value an
+  earlier scrub left on screen), a playback frame carries them (a study's
+  tracks in track order, which is the stable precedence when two tracks key
+  coupled motions), and `assembly.pose.set` stores them (`drivers`) so the
+  saved pose is the one that was shown. Every command that writes values,
+  limits or couplings settles the group before it returns, so stored values
+  always satisfy every coupling.
+- **One key per group in a study.** Coupled joints share one track: a new
+  study gives a group one, the timeline does not offer a second, and moving
+  a part while a study is open keys the motion the study already tracks in
+  that group (with the value the dragged pose gives it) rather than adding a
+  track the first would overrule.
 - **Limits bound the pair.** The lead value is clamped into the range every
-  member's limit allows: a driven joint's limit stops its driver, and a drag
-  or an Animate sweep reads that narrowed range.
+  member's limit allows: a driven joint's limit stops its driver. A drag,
+  an Animate sweep and View's playback of a joint all read that narrowed
+  range, so they sweep the same travel.
+- **A coupled joint must be able to move.** A coupling on a joint the tree
+  solve cannot move (it closes a loop, or both of its parts are fixed) would
+  leave its mate moving alone. It is refused when the coupling is added,
+  again on any later edit that would cause it (fixing a coupled gear in
+  place is refused until the coupling is removed), and by storage
+  validation.
 - **Refused by code** (`coupling:*`): an unknown joint, a joint coupled to
   itself, a rigid joint or a motion the joint does not have, a joint that
   never moves (it closes a loop or joins two fixed parts), a zero or
@@ -160,14 +180,17 @@ joint graph changes.
   an empty range, and a part that already moves on another joint (that
   would close a loop). "Pick on the model" hands over to the Joint tool.
 - **Place gears:** two gear parts are placed at their working centre
-  distance and tooth phase (M14). Saved fixed together (one rigid joint, the
-  default) or moving together: each gear gets a revolute joint about its own
-  axis (a rack a slider along its teeth) on the part the pair is mounted on,
-  plus the coupling. Gears turn about fixed axes, so they need that third
-  part; a pair with nothing to mount it on can only be fixed together. A
-  first gear that already turns on a joint about its axis keeps that joint
-  and the second gear joins the same part, which is how a train is built
-  gear by gear. A joint's details name its coupling and can remove it.
+  distance and tooth phase (M14). Saved moving together or fixed together
+  (one rigid joint). Moving together: each gear gets a revolute joint about
+  its own axis (a rack a slider along its teeth) on the part the pair is
+  mounted on, plus the coupling. The card starts on moving together whenever
+  that can be made, with Fixed together one choice away. Gears turn about
+  fixed axes, so they need that third part; a bare pair with nothing to
+  mount it on can only be fixed together, and the card says why. A first
+  gear that already turns on a joint about its axis keeps that joint and the
+  second gear joins the same part, which is how a train is built gear by
+  gear. A joint's details name its coupling and can remove it; couplings are
+  made only here (gear pairs) until AS08.
 - **Drag:** the nearest movable joint between the dragged part and the ground
   takes the drag; turns use the angle rig about the joint axis, slides project
   onto it; the value soft-stops at its limits.
@@ -188,5 +211,8 @@ joint graph changes.
   video export (AS08), interference during motion (AS04, after kernel clash
   support), exploded views and BOM (AS03).
 - A coupling's ratio is fixed when the pair is placed: editing a gear's
-  tooth count or moving a joint's frame afterwards does not update it. Place
-  the pair again after such an edit.
+  tooth count or moving a joint's frame afterwards does not update it. When
+  a gear's teeth no longer give the stored ratio, the joint's details (and
+  Place gears, reopened on that pair) warn and ask for the pair to be placed
+  again; nothing is changed for the user. A moved joint frame is not
+  detected.

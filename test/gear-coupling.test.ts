@@ -8,6 +8,7 @@ import {
   transformPoint,
   type AssemblyFrame,
   type AssemblyJoint,
+  type FeatureNode,
   type RigidTransform,
   type Vector3
 } from '@openzcad/shared';
@@ -17,6 +18,10 @@ import {
   gearBaseDrive,
   type GearCouplingResult
 } from '../apps/web/src/lib/assembly/gearCoupling';
+import {
+  gearCouplingMismatch,
+  gearPairCoupling
+} from '../apps/web/src/lib/assembly/gearCouplingCheck';
 import { gearMeshJoint } from '../apps/web/src/lib/assembly/gearMeshJoint';
 import {
   PINION,
@@ -397,6 +402,64 @@ describe('Place gears, turning together', () => {
     ).values;
     expect(driven.get(second.coupling.driven.jointId)?.[0]).toBeCloseTo(60, 9);
     expect(solveAssembly(set).unsolved.size).toBe(0);
+  });
+
+  it('warns when a gear’s teeth no longer match the stored ratio', () => {
+    const fixture = assembled([PINION, WHEEL, PLATE]);
+    const plan = place(fixture, draft('pinion', 'wheel'));
+    const coupling = () => fixture.set().couplings![0]!;
+    expect(gearPairCoupling(fixture.context(), 'wheel', 'pinion')?.id).toBe(
+      plan.coupling.id
+    );
+    expect(gearPairCoupling(fixture.context(), 'wheel', 'plate')).toBeNull();
+    expect(gearCouplingMismatch(fixture.context(), coupling())).toBeNull();
+    // The wheel is edited from 40 to 45 teeth: the coupling keeps 20/40.
+    const wheel = Object.values(fixture.manager.document.nodes).find(
+      (node) => node.kind === 'feature' && node.name === 'Wheel'
+    ) as FeatureNode;
+    const retooth = (teeth: number) =>
+      fixture.manager.execute(
+        commandFactories.updateFeature({
+          featureId: wheel.featureId,
+          data: { teeth }
+        })
+      );
+    retooth(45);
+    expect(coupling().ratio).toBeCloseTo(-0.5, 12);
+    expect(gearCouplingMismatch(fixture.context(), coupling())).toBe(
+      'Pinion and Wheel no longer match Gear ratio: their teeth now give 0.4444 turns per turn, and it was placed for 0.5 turns per turn. Remove it and place the gears again.'
+    );
+    // Back at the count it was placed with, the warning goes.
+    retooth(40);
+    expect(gearCouplingMismatch(fixture.context(), coupling())).toBeNull();
+
+    // A rack pair: the pinion's teeth set the travel per turn.
+    const rack: Part = {
+      id: 'rack',
+      name: 'Rack',
+      gear: { gearType: 'rack', teeth: 12 }
+    };
+    const pinion: Part = {
+      id: 'pinion',
+      name: 'Pinion',
+      gear: { teeth: 15, origin: { x: 30, y: 20, z: 0 } }
+    };
+    const sliding = assembled([pinion, rack, PLATE]);
+    place(sliding, draft('pinion', 'rack'));
+    const saved = () => sliding.set().couplings![0]!;
+    expect(gearCouplingMismatch(sliding.context(), saved())).toBeNull();
+    const pinionFeature = Object.values(sliding.manager.document.nodes).find(
+      (node) => node.kind === 'feature' && node.name === 'Pinion'
+    ) as FeatureNode;
+    sliding.manager.execute(
+      commandFactories.updateFeature({
+        featureId: pinionFeature.featureId,
+        data: { teeth: 18 }
+      })
+    );
+    expect(gearCouplingMismatch(sliding.context(), saved())).toMatch(
+      /their teeth now give 113\.0973 of travel per turn, and it was placed for 94\.2478 of travel per turn/
+    );
   });
 
   it('refuses by code what cannot turn together', () => {
