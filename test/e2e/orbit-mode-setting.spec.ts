@@ -4,8 +4,8 @@ import { createProject, expect, stubApi, test } from './openzcad-fixtures';
 /**
  * Orbit mode in Settings reaches the live viewer: with Turntable chosen, the
  * same drag that tumbles a free orbit over the top stops at the top view and
- * leaves the camera right way up. Shift+O and the viewer bar's orbit
- * button flip the same preference.
+ * leaves the camera right way up. Shift+O and the orbit button on Build's
+ * viewer bar and on View mode's bar flip the same preference.
  */
 
 interface CameraState {
@@ -87,7 +87,7 @@ test(
 );
 
 test(
-  'Shift+O and the viewer bar button toggle the orbit mode Settings shows',
+  "Shift+O and both bars' buttons toggle the orbit mode Settings shows",
   { tag: '@ci-smoke' },
   async ({ page }) => {
     await stubApi(page);
@@ -138,5 +138,23 @@ test(
     await expect(page.getByText(/^Turntable orbit ·/)).toBeVisible();
     await page.keyboard.press('Shift+O');
     await expect(button).toHaveAttribute('aria-pressed', 'false');
+
+    // View mode's own bar carries the same button, on the same preference,
+    // and its orbit takes the mode at once.
+    await page
+      .getByRole('group', { name: 'Workspace mode' })
+      .getByRole('button', { name: 'View', exact: true })
+      .click();
+    const viewBar = page.locator('.view-mode-bar');
+    const viewButton = viewBar.getByRole('button', {
+      name: /^Turntable orbit/
+    });
+    await expect(viewButton).toHaveAttribute('aria-pressed', 'false');
+    await viewButton.click();
+    await expect(viewButton).toHaveAttribute('aria-pressed', 'true');
+    await dragOverTheTop(page, canvas);
+    await expect
+      .poll(async () => elevation(await cameraState(canvas)))
+      .toBeGreaterThan(0.999_999);
   }
 );
