@@ -2389,12 +2389,17 @@ export function ModelViewer({
   const assemblySelectedComponentIds = useAssemblyRuntime(
     (s) => s.selectedComponentIds
   );
-  const assemblySelectedBodyKey = assemblySelectedComponentIds.flatMap((id) => {
-    const bodyId = assemblyView?.bodyByComponent.get(id);
-    return bodyId ? [bodyId] : [];
-  }).join('\n');
+  const assemblySelectedBodyKey = assemblySelectedComponentIds
+    .flatMap((id) => {
+      const bodyId = assemblyView?.bodyByComponent.get(id);
+      return bodyId ? [bodyId] : [];
+    })
+    .join('\n');
   const assemblySelectedBodyIds = useMemo(
-    () => new Set(assemblySelectedBodyKey ? assemblySelectedBodyKey.split('\n') : []),
+    () =>
+      new Set(
+        assemblySelectedBodyKey ? assemblySelectedBodyKey.split('\n') : []
+      ),
     [assemblySelectedBodyKey]
   );
   const topologyPickListRef = useRef<TopologyPickList | null>(null);

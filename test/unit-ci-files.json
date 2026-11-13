@@ -206,6 +206,7 @@
     "src/components/WorkspaceLoading.test.tsx",
     "src/components/assembly/AssemblyPanel.test.tsx",
     "src/components/assembly/GearMeshCard.test.tsx",
+    "src/components/viewer/assemblyViewport.test.ts",
     "src/components/assembly/MotionSetupCard.test.tsx",
     "src/components/assistant/AssistantPanel.drawing.test.tsx",
     "src/components/viewer/renderBudget.test.ts",

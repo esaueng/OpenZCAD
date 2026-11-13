@@ -181,7 +181,9 @@ describe('Assemble viewport', () => {
     const { viewport, pointer } = harness(b, () =>
       onBlade(b, new THREE.Vector3(40, 0, 1))
     );
-    viewport.setView(buildAssemblyView(doc, { ...VIEW_RUNTIME, overrides: new Map() }));
+    viewport.setView(
+      buildAssemblyView(doc, { ...VIEW_RUNTIME, overrides: new Map() })
+    );
     pointer('pointerdown', 40, 0, { ctrlKey: true });
     pointer('pointermove', 0, 40);
     pointer('pointerup', 0, 40);
