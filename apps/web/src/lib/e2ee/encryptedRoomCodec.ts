@@ -411,6 +411,9 @@ function unopenable(error: unknown): CollaborationServerMessage {
 export async function loadEncryptedRoomCodec(
   projectId: string
 ): Promise<EncryptedRoomCodec> {
+  // No encrypted room content reaches a device that could forget, after a
+  // reload, that the project is encrypted.
+  (await import('../api')).requireDurablePin(projectId);
   const { encryptedProjectStore } = await import('./encryptedProjects');
   const store = await encryptedProjectStore();
   return createEncryptedRoomCodec(store.roomAccess(), projectId);

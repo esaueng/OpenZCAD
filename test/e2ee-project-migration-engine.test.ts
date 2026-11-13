@@ -413,6 +413,7 @@ function engineOn(
     loadSource?(checksum: string): Promise<Uint8Array | null>;
     leases?: MigrationLeaseStore;
     beforeStep?: (step: string, projectId: string) => void | Promise<void>;
+    beforeCutover?: (projectId: string) => void;
   } = {}
 ): EngineDevice {
   const d = device(
@@ -448,7 +449,8 @@ function engineOn(
       flushed.push(projectId);
     },
     onProgress: (p) => progress.push(p),
-    ...(options.beforeStep ? { beforeStep: options.beforeStep } : {})
+    ...(options.beforeStep ? { beforeStep: options.beforeStep } : {}),
+    ...(options.beforeCutover ? { beforeCutover: options.beforeCutover } : {})
   });
   return {
     d,
@@ -735,6 +737,26 @@ describe('encrypting an existing project', () => {
     });
     expect(migrationRow(srv, projectId)).toBeUndefined();
     expect(count(srv, 'e2ee_project_versions', projectId)).toBe(0);
+    expect(formatOf(srv, projectId)).toBe(1);
+    expect((await srv.call('GET', `/api/projects/${projectId}`)).status).toBe(
+      200
+    );
+  });
+
+  it('does not cut over when this device could not then save that the project is encrypted', async () => {
+    const srv = roomServer();
+    const plain = await plaintextProject(srv, { revisions: 1 });
+    const projectId = plain.head.projectId;
+    const laptop = engineOn(srv, owner, 'owner_laptop', {
+      beforeCutover: () => {
+        throw Object.assign(new Error('Pins unavailable'), {
+          code: 'E2EE_PIN_STORAGE_UNAVAILABLE'
+        });
+      }
+    });
+    expect(await codeOfCall(migrateFully(laptop, projectId))).toBe(
+      'E2EE_PIN_STORAGE_UNAVAILABLE'
+    );
     expect(formatOf(srv, projectId)).toBe(1);
     expect((await srv.call('GET', `/api/projects/${projectId}`)).status).toBe(
       200

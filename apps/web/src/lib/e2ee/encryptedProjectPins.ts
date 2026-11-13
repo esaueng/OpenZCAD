@@ -54,6 +54,12 @@ export interface EncryptedProjectPinStore {
    */
   pinDurably(projectId: string): boolean;
   /**
+   * Whether a pin can be saved right now (a pin-sized write is read back
+   * and removed), and the store is not degraded: checked before a step that
+   * cannot be undone needs one, such as an encrypt cutover.
+   */
+  writable(): boolean;
+  /**
    * Unpins the project: only after this device's own decrypt run cut it
    * over to plaintext.
    */
@@ -203,6 +209,18 @@ export function localStorageEncryptedProjectPins(
       if (stored(projectId)) return true;
       if (isDegraded()) return false;
       return pin(projectId);
+    },
+    writable() {
+      if (!storage || isDegraded()) return false;
+      const probe = `${ENCRYPTED_PROJECT_PIN_PREFIX}${'~'.repeat(128)}`;
+      try {
+        storage.setItem(probe, '1');
+        const saved = storage.getItem(probe) === '1';
+        storage.removeItem(probe);
+        return saved;
+      } catch {
+        return false;
+      }
     },
     forget(projectId) {
       own.delete(projectId);

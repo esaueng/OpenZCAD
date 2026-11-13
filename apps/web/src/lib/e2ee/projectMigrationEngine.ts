@@ -200,6 +200,11 @@ export interface MigrationEngineDeps {
   readonly leases?: MigrationLeaseStore;
   /** Saves this page's pending edits to the project before staging begins. */
   flushProject?(projectId: string): Promise<void>;
+  /**
+   * Just before the cutover: throws to stop it, e.g. when this device could
+   * not then save that the project is encrypted.
+   */
+  beforeCutover?(projectId: string): void;
   /** After the cutover: this page now treats the project as encrypted. */
   onCutover?(projectId: string): void;
   onProgress?(progress: MigrationProgress): void;
@@ -595,6 +600,7 @@ export function createProjectMigrationEngine(
         );
       }
       await check('cutover');
+      deps.beforeCutover?.(projectId);
       report({ phase: 'cutover' });
       await migrations.cutover(projectId, lease);
     } finally {

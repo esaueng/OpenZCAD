@@ -400,6 +400,67 @@ describe('an encrypted project stays encrypted on this device', () => {
     }
   });
 
+  it('pins a project whose encrypted details it shows, whatever the listing says', async () => {
+    const projectId = 'proj_pin_from_shelf';
+    vi.mocked(desktopFetch).mockResolvedValue(
+      json({
+        projects: [summary(projectId, 1)],
+        encryptedProjectInfo: [{ projectId }]
+      })
+    );
+    encryptedModule.encryptedProjectShelf.mockResolvedValueOnce(
+      new Map([[projectId, { name: 'Decrypted name' }]])
+    );
+    const listing = await api.listProjects();
+    expect(listing.projects[0]?.name).toBe('Decrypted name');
+    expect(isEncryptedProject(projectId)).toBe(true);
+  });
+
+  it('shows no encrypted details and opens no encrypted room without a saved pin', async () => {
+    const projectId = 'proj_pin_shelf_unsaved';
+    const real = window.localStorage;
+    const descriptor = Object.getOwnPropertyDescriptor(window, 'localStorage');
+    let refusing = false;
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      get: () => ({
+        getItem: (key: string) => real.getItem(key),
+        setItem: (key: string, value: string) => {
+          if (refusing) throw new Error('SecurityError');
+          real.setItem(key, value);
+        },
+        removeItem: (key: string) => real.removeItem(key)
+      })
+    });
+    try {
+      vi.resetModules();
+      const page = await import('./api');
+      const { desktopFetch: pageFetch } = await import('./desktopBridge');
+      refusing = true;
+      vi.mocked(pageFetch).mockResolvedValue(
+        json({
+          projects: [summary(projectId, 1)],
+          encryptedProjectInfo: [{ projectId }]
+        })
+      );
+      encryptedModule.encryptedProjectShelf.mockResolvedValueOnce(
+        new Map([[projectId, { name: 'Decrypted name' }]])
+      );
+      const listing = await page.api.listProjects();
+      expect(listing.projects[0]?.name).toBe('Listed');
+
+      const { loadEncryptedRoomCodec } =
+        await import('./e2ee/encryptedRoomCodec');
+      await expect(loadEncryptedRoomCodec(projectId)).rejects.toMatchObject({
+        code: page.E2EE_PIN_STORAGE_UNAVAILABLE_CODE
+      });
+    } finally {
+      if (descriptor) Object.defineProperty(window, 'localStorage', descriptor);
+      else delete (window as { localStorage?: Storage }).localStorage;
+      real.removeItem(ENCRYPTED_PROJECT_PIN_FAILED_KEY);
+    }
+  });
+
   it('is unpinned by this device’s own decrypt run', async () => {
     const plaintext = createProjectDocument(
       'Decrypted',

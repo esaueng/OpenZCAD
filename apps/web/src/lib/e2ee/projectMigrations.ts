@@ -19,7 +19,11 @@
  *   ones it revoked (`reissueLinks`, `reinvite`).
  */
 import type { ProjectSummary } from '@openzcad/shared';
-import { rememberEncryptedProject } from '../api';
+import {
+  pinStorageUnavailable,
+  rememberEncryptedProject,
+  requireWritablePins
+} from '../api';
 import { desktopFetch } from '../desktopBridge';
 import { flushProjectEdits, setMigratingProjects } from '../migrationStatus';
 import type { InvitationContext } from './invitations';
@@ -287,7 +291,12 @@ export function createMigrationController(
       leases,
       createStaging: (leased) => opened.open(leased),
       flushProject: flushProjectEdits,
-      onCutover: (projectId) => rememberEncryptedProject(projectId),
+      // The pin must outlive this page: check it can be saved before the
+      // cutover, and report a pin that still was not saved after it.
+      beforeCutover: () => requireWritablePins(),
+      onCutover: (projectId) => {
+        if (!rememberEncryptedProject(projectId)) throw pinStorageUnavailable();
+      },
       onProgress: update,
       ...(deps.renewEveryMs ? { renewEveryMs: deps.renewEveryMs } : {})
     });

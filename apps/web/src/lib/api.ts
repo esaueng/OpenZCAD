@@ -397,10 +397,18 @@ export function rememberEncryptedProject(projectId: string): boolean {
  * first if it can: no encrypted project is opened, written, created or
  * copied here unless a reload would still hold it as encrypted.
  */
-function requireDurablePin(projectId: string): void {
+export function requireDurablePin(projectId: string): void {
   if (!encryptedProjectPins().pinDurably(projectId)) {
     throw pinStorageUnavailable();
   }
+}
+
+/**
+ * Refuses unless a pin can be saved right now: before an encrypt cutover,
+ * after which the project's pin must not be lost.
+ */
+export function requireWritablePins(): void {
+  if (!encryptedProjectPins().writable()) throw pinStorageUnavailable();
 }
 
 /** Refuses before an encrypted create or copy while pins are unavailable. */
@@ -792,6 +800,9 @@ export const api = {
               onEntry(projectId, entry) {
                 const project = projects.get(projectId);
                 if (!project || !isCurrent()) return;
+                // Decrypted details only for a project this device keeps
+                // as encrypted, whatever the listing says of its format.
+                if (!encryptedProjectPins().pinDurably(projectId)) return;
                 progress.onVerified({
                   ...project,
                   name: entry.name,
@@ -814,6 +825,11 @@ export const api = {
         await encryptedProjects()
       ).encryptedProjectShelf(encryptedProjectInfo);
       if (!isCurrent()) return unverified();
+      // Decrypted details only for a project this device keeps as
+      // encrypted, whatever the listing says of its format.
+      for (const id of [...shelf.keys()]) {
+        if (!encryptedProjectPins().pinDurably(id)) shelf.delete(id);
+      }
       for (const id of shelf.keys()) pending.delete(id);
       return {
         ...unverified(),
