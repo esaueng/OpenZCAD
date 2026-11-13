@@ -19,7 +19,10 @@ afterEach(() => {
   setAnimatePrefs({ mode: 'ping-pong', sweepS: 1.5 });
 });
 
-function renderPanel(manager: ReturnType<typeof scissorsManager>) {
+function renderPanel(
+  manager: ReturnType<typeof scissorsManager>,
+  extra: { saveBomCsv?: (fileName: string, csv: string) => void } = {}
+) {
   const recorder = recordingExecute(manager.manager);
   registerAssemblyCommitHandlers({
     commitPose: (values, placements) =>
@@ -37,6 +40,7 @@ function renderPanel(manager: ReturnType<typeof scissorsManager>) {
       document={manager.live()}
       execute={recorder.execute}
       onStatus={onStatus}
+      {...extra}
     />
   );
   const view = render(element());
@@ -60,6 +64,74 @@ describe('AssemblyPanel (one left sidebar)', () => {
     expect(within(joints).getByText('Pivot')).toBeInTheDocument();
     expect(within(joints).getByText('12.0°')).toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Motion' })).toBeInTheDocument();
+  });
+
+  it('lists the bill of materials and downloads it as CSV (AS03)', () => {
+    const fixture = scissorsManager({ joint: true, screw: true });
+    const saveBomCsv = vi.fn();
+    const { onStatus } = renderPanel(fixture, { saveBomCsv });
+    const section = screen.getByRole('region', { name: 'Bill of materials' });
+    expect(within(section).getByText('2')).toHaveClass('assembly-count');
+    const rows = within(
+      within(section).getByRole('list', { name: 'Bill of materials' })
+    ).getAllByRole('listitem');
+    expect(rows.map((row) => row.textContent)).toEqual([
+      'Blade A Body×1',
+      'Blade B Body×1'
+    ]);
+    // A body outside the assembly is not a part of it.
+    expect(within(section).queryByText(/Pivot screw/)).toBeNull();
+    fireEvent.click(
+      within(section).getByRole('button', {
+        name: 'Download bill of materials as CSV'
+      })
+    );
+    expect(saveBomCsv).toHaveBeenCalledWith(
+      'Scissors.bom.csv',
+      [
+        'item,quantity,part,instances,source_body,status',
+        `1,1,Blade A Body,Blade A,${fixture.a},ready`,
+        `2,1,Blade B Body,Blade B,${fixture.b},ready`,
+        ''
+      ].join('\n')
+    );
+    expect(onStatus).toHaveBeenCalledWith(
+      'Exported the bill of materials (2 parts) to Scissors.bom.csv.'
+    );
+  });
+
+  it('keeps a missing part in the BOM and warns that the exported CSV includes it', () => {
+    const fixture = scissorsManager({ components: true });
+    const document = fixture.live();
+    document.bodyOrder = document.bodyOrder.filter((id) => id !== fixture.b);
+    delete document.derived.bodyRepresentations[fixture.b];
+    const saveBomCsv = vi.fn();
+    const onStatus = vi.fn();
+    render(
+      <AssemblyPanel
+        document={document}
+        execute={vi.fn()}
+        onStatus={onStatus}
+        saveBomCsv={saveBomCsv}
+      />
+    );
+    const section = screen.getByRole('region', { name: 'Bill of materials' });
+    expect(within(section).getByText('Missing')).toBeInTheDocument();
+    const rows = within(section).getAllByRole('listitem');
+    expect(rows).toHaveLength(2);
+    expect(rows[1]).toHaveTextContent('Blade B BodyMissing×1');
+    fireEvent.click(
+      within(section).getByRole('button', {
+        name: 'Download bill of materials as CSV'
+      })
+    );
+    expect(saveBomCsv).toHaveBeenCalledWith(
+      'Scissors.bom.csv',
+      expect.stringContaining(`2,1,Blade B Body,Blade B,${fixture.b},missing`)
+    );
+    expect(onStatus).toHaveBeenCalledWith(
+      'Exported the bill of materials (2 parts) to Scissors.bom.csv. Includes 1 missing part.'
+    );
   });
 
   it('adds a body that is not in the assembly yet (regression: no way to add one)', () => {
