@@ -407,7 +407,10 @@ export function gearCouplingPlan(
     ratio,
     // The second joint is at 0 where the helper meshed the teeth: the
     // offset holds that phase wherever the first joint stands now.
-    offset: 0 - ratio * driverValue
+    offset: 0 - ratio * driverValue,
+    // Which gears these are: either may ride its joint through a rigid
+    // joint, or share it with another gear, so the pair is recorded.
+    gears: { driver: base.id, driven: moving.id }
   };
 
   const groundCarrier =

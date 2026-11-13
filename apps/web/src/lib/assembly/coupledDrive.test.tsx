@@ -185,6 +185,46 @@ describe('the motion being moved drives its coupled mates', () => {
     ).toEqual([['turn_b', -30]]);
   });
 
+  it('leaves a limited track’s keys alone when another joint is moved', () => {
+    // B = −A / 2 and B stops at ±20°, so the pair shows A = 40° at the end
+    // of a study keyed to 80°. Scrubbed there, the unrelated joint C is
+    // moved and the pose committed: every shown value arrives, A's raw 80°
+    // among them. A did not move, so its key must not become 40°.
+    const set = coupledPairProject({ third: true }).document.assembly!;
+    const end = Object.fromEntries(motionStudyValues(set, spin, 2));
+    expect(end.turn_a).toEqual([80]);
+    expect(
+      solveAssembly(
+        set,
+        motionStudyValues(set, spin, 2),
+        motionStudyDrivers(spin)
+      ).values.get('turn_a')
+    ).toEqual([40]);
+    const moved = keyPoseAt(set, spin, 2, { ...end, turn_c: [15] }, [
+      { jointId: 'turn_c', dof: 0 },
+      ...motionStudyDrivers(spin)
+    ]);
+    expect(moved.changed).toBe(true);
+    expect(moved.study?.tracks[0]).toEqual(spin.tracks[0]);
+    expect(
+      moved.study?.tracks.slice(1).map((t) => [t.jointId, t.keys.at(-1)?.value])
+    ).toEqual([['turn_c', 15]]);
+    // The same commit with nothing moved changes nothing at all.
+    expect(keyPoseAt(set, spin, 2, end, motionStudyDrivers(spin)).changed).toBe(
+      false
+    );
+    // Moving the pair itself there does re-key it, to what it then shows.
+    const dragged = keyPoseAt(set, spin, 2, { ...end, turn_b: [-10] }, [
+      { jointId: 'turn_b', dof: 0 },
+      ...motionStudyDrivers(spin)
+    ]);
+    expect(dragged.study?.tracks.map((t) => t.jointId)).toEqual(['turn_a']);
+    expect(dragged.study?.tracks[0]?.keys.at(-1)).toMatchObject({
+      t: 2,
+      value: 20
+    });
+  });
+
   it('gives a coupled pair one track, and reads the values on screen', () => {
     const set = coupledPairProject({ limited: false }).document.assembly!;
     const values = shownJointValues(set, new Map([['turn_b', [-30]]]), [

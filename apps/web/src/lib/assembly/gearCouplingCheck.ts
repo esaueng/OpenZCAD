@@ -1,7 +1,6 @@
 import {
   isGearMeshRefusal,
   type AssemblyCoupling,
-  type AssemblyJoint,
   type GearMeshGear
 } from '@openzcad/shared';
 import type { GearMeshContext } from './gearMesh';
@@ -13,40 +12,33 @@ import type { GearMeshContext } from './gearMesh';
  * turning the teeth out of mesh. Nothing is changed for the user: the
  * joint's details and Place gears say so and ask for the pair to be placed
  * again. Reads gears only, so it loads with the sidebar, not the pair math.
+ *
+ * The gears are the ones the coupling records (`coupling.gears`), not the
+ * ends of its joints: a gear keyed to a shaft rides the shaft's joint
+ * through a rigid joint, and two gears on one shaft share it, so the
+ * joints alone do not say which gears mesh. A coupling without the record
+ * was not made from a gear pair and is never judged.
  */
 
-interface JointGear {
+interface CoupledGear {
   componentId: string;
   gear: GearMeshGear;
 }
 
-/** The gear a joint carries: its child part, else its parent. */
-function gearOnJoint(
-  context: GearMeshContext,
-  joint: AssemblyJoint | undefined
-): JointGear | null {
-  if (!joint) return null;
-  for (const componentId of [
-    joint.child.componentId,
-    joint.parent.componentId
-  ]) {
-    const gear = context.gearOf(componentId);
-    if (!isGearMeshRefusal(gear)) return { componentId, gear };
-  }
-  return null;
-}
-
-/** The two gears a coupling ties, driver first; null when either is not one. */
+/** The two gears a coupling ties, driver first; null when it has none. */
 export function gearCouplingPair(
   context: GearMeshContext,
   coupling: AssemblyCoupling
-): { driver: JointGear; driven: JointGear } | null {
-  const joint = (id: string) => context.set.joints.find((j) => j.id === id);
-  const driver = gearOnJoint(context, joint(coupling.driver.jointId));
-  const driven = gearOnJoint(context, joint(coupling.driven.jointId));
-  return driver && driven && driver.componentId !== driven.componentId
-    ? { driver, driven }
-    : null;
+): { driver: CoupledGear; driven: CoupledGear } | null {
+  if (!coupling.gears) return null;
+  const read = (componentId: string): CoupledGear | null => {
+    if (!context.set.components.some((c) => c.id === componentId)) return null;
+    const gear = context.gearOf(componentId);
+    return isGearMeshRefusal(gear) ? null : { componentId, gear };
+  };
+  const driver = read(coupling.gears.driver);
+  const driven = read(coupling.gears.driven);
+  return driver && driven ? { driver, driven } : null;
 }
 
 /** The coupling that already moves these two gears together, if any. */
@@ -55,13 +47,16 @@ export function gearPairCoupling(
   firstId: string,
   secondId: string
 ): AssemblyCoupling | null {
-  for (const coupling of context.set.couplings ?? []) {
-    const pair = gearCouplingPair(context, coupling);
-    if (!pair) continue;
-    const ids = [pair.driver.componentId, pair.driven.componentId];
-    if (ids.includes(firstId) && ids.includes(secondId)) return coupling;
-  }
-  return null;
+  return (
+    (context.set.couplings ?? []).find((coupling) => {
+      const gears = coupling.gears;
+      return (
+        !!gears &&
+        ((gears.driver === firstId && gears.driven === secondId) ||
+          (gears.driver === secondId && gears.driven === firstId))
+      );
+    }) ?? null
+  );
 }
 
 function number(value: number): string {
@@ -70,7 +65,8 @@ function number(value: number): string {
 
 /**
  * Why a coupling no longer matches its gears, or null when it does (or when
- * its joints do not carry two readable gears, so nothing can be said).
+ * it records no gear pair, or a part is no longer a readable gear, so
+ * nothing can be said).
  */
 export function gearCouplingMismatch(
   context: GearMeshContext,

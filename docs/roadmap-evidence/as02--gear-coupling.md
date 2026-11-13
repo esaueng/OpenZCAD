@@ -18,7 +18,9 @@ drivers so the saved pose is the one shown. The paths that move joints each
 carry them: viewport drag and its cancel, the joint's slider and number,
 Animate, study playback and scrubbing, View playback, and keying a pose in an
 open study (which keys the motion the study already tracks in that group,
-so coupled joints share one track). The lead is clamped to the range every
+so coupled joints share one track, and only a group the pose really moved:
+moving an unrelated joint never rewrites a key that a limit holds short
+of). The lead is clamped to the range every
 member's limit allows (a driven joint's limit stops its driver); a drag, an
 Animate sweep and View's joint playback all read that narrowed range.
 Refused by code (`coupling:*`): an unknown joint, a joint coupled to itself,
@@ -43,7 +45,9 @@ still. The ratio and its sign come from the M14 helper (`meshGearPair`) and
 the placed axes ([plan](docs/plans/assemblies-plan.md)). A coupling's ratio
 is fixed when the pair is placed; when a gear's teeth no longer give it, the
 joint's details and the reopened card warn and ask for the pair to be placed
-again. v55 belongs to M14 partial-span teeth, which this slice does not
+again. The coupling records its gear pair (`gears`, component ids), so the
+check reads the real gears also when one is keyed to a shaft or two share a
+shaft, and the coupling goes when either gear leaves the assembly. v55 belongs to M14 partial-span teeth, which this slice does not
 contain, so every version gate refuses a v55 document. The three coupling
 commands are in the analytics operation vocabulary. Not in this slice: a
 coupling editor outside the card, couplings for non-gear joints, screw
@@ -56,7 +60,8 @@ crosses its saved one and in either track order; every refusal code, stored
 loops rejected; add/update/delete with undo and redo, a pose or typed value
 on either joint, a pose saved with its drivers, limit conflicts, fixing a
 coupled gear refused and rejected in storage, pruning with a joint,
-component or kind change, replay, save and reopen; v54 documents opening
+component or kind change, the recorded gear pair validated and the coupling
+dropped with a keyed gear, replay, save and reopen; v54 documents opening
 unchanged, couplings requiring v56 and v55 refused),
 `test/gear-coupling.test.ts` (CI smoke selection: the saved joints and
 coupling land the second gear exactly where the fixed placement does; at the
@@ -64,7 +69,8 @@ pitch point both parts move at the same velocity for external, flipped-axis,
 ring and rack pairs whichever stays put, for a reused joint at a non-zero
 angle, against its axis or from its parent end, and through a three-gear
 train; rack travel limits stop the pinion; the stale-ratio warning for a
-re-toothed wheel and rack pinion; every `gear-coupling:*` refusal; one undo),
+re-toothed wheel and rack pinion, and for a pinion keyed to a shaft that a
+second gear pair shares; every `gear-coupling:*` refusal; one undo),
 `test/gear-coupling-kernel.test.ts` (full suite: on the exact kernel, an
 external spur pair, a pinion in its ring and a rack pair are driven through
 several angles and built where the coupled solve poses them; grids across
@@ -72,14 +78,15 @@ the pitch point never overlap and stay interleaved, while the same drive
 with the ratio's sign reversed collides),
 `apps/web/src/lib/assembly/coupledDrive.test.tsx` (the driven gear dragged
 after a scrub leads and is saved with its driver; drivers follow the values
-on screen; a drag in an open study re-keys the tracked gear; one track per
-coupled group; Animate and the View player sweep the same ±40° of a pair
+on screen; a drag in an open study re-keys the tracked gear; moving an
+unrelated joint at the end of a study whose track a limit holds at 40° of
+its 80° key leaves that key exactly; one track per coupled group; Animate and the View player sweep the same ±40° of a pair
 whose mate is limited to ±20°),
 `apps/web/src/components/assembly/GearMeshCard.test.tsx` (Turn together is
 the default with a mount and saves one transaction, Fixed together one
 choice away and the default for a bare pair; the joint's details name the
 coupling and Remove deletes it; the stale-ratio warning on the joint and in
-the reopened card), `apps/web/src/lib/assembly/assemblyView.test.ts` (both
+the reopened card, also for a pinion keyed to its shaft), `apps/web/src/lib/assembly/assemblyView.test.ts` (both
 bodies move when either joint is overridden; a sweep covers only the coupled
 range) and `test/e2e/gear-mesh.spec.ts` (CI smoke: two gears on a plate
 start on Turn together, 40° on the pinion reads −20° on the wheel and back,

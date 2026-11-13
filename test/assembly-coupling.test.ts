@@ -712,6 +712,93 @@ describe('coupling commands (schema v56)', () => {
     expect(values(manager.document).turn_b).toBeCloseTo(7, 12);
   });
 
+  it('records the gear pair, validates it and drops the coupling with a gear', () => {
+    // A gear keyed to its shaft is not an end of the coupled joint: `g`
+    // rides gear A's joint through a rigid joint.
+    const manager = assembled();
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Keyed gear',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 10, depth: 10 }
+      })
+    );
+    manager.execute(
+      commandFactories.addAssemblyComponents({
+        components: [
+          {
+            componentId: 'g',
+            name: 'g',
+            bodyId: manager.document.bodyOrder[3] as BodyId,
+            grounded: false
+          }
+        ]
+      })
+    );
+    manager.execute(
+      commandFactories.addAssemblyJoint({
+        joint: {
+          id: 'key',
+          name: 'Key',
+          kind: 'rigid',
+          parent: { componentId: 'a', frame: frameAt(0) },
+          child: { componentId: 'g', frame: frameAt(0) },
+          values: [],
+          limits: []
+        }
+      })
+    );
+    const withGears = (gears: { driver: string; driven: string }) =>
+      commandFactories.addAssemblyCoupling({
+        coupling: {
+          id: 'mesh',
+          name: 'Gear ratio',
+          driver: { jointId: 'turn_a', dof: 0 },
+          driven: { jointId: 'turn_b', dof: 0 },
+          ratio: -0.5,
+          gears
+        }
+      });
+    expect(() =>
+      manager.execute(withGears({ driver: 'g', driven: 'nobody' }))
+    ).toThrow(/names gear nobody, which is not in the assembly/);
+    expect(() =>
+      manager.execute(withGears({ driver: 'g', driven: 'g' }))
+    ).toThrow(/names one gear twice/);
+    manager.execute(withGears({ driver: 'g', driven: 'b' }));
+    expect(manager.document.assembly!.couplings![0]!.gears).toEqual({
+      driver: 'g',
+      driven: 'b'
+    });
+    const replayed = replayCommands(
+      createProjectDocument('Gears', owner),
+      manager.document.commandLog
+    );
+    expect(replayed.assembly).toEqual(manager.document.assembly);
+    const saved = JSON.parse(
+      JSON.stringify(manager.document)
+    ) as ProjectDocument;
+    expect(normalizeDocument(saved).assembly).toEqual(
+      manager.document.assembly
+    );
+    const broken = structuredClone(saved);
+    (broken.assembly!.couplings![0] as { gears: unknown }).gears = {
+      driver: 'g'
+    };
+    expect(() => assertStorableDocument(broken)).toThrow(/malformed gear pair/);
+    // Removing the keyed gear leaves both joints, but not the mesh.
+    manager.execute(
+      commandFactories.deleteAssemblyComponent({ componentId: 'g' })
+    );
+    expect(manager.document.assembly!.joints.map((j) => j.id)).toEqual([
+      'turn_a',
+      'turn_b'
+    ]);
+    expect('couplings' in manager.document.assembly!).toBe(false);
+    manager.undo();
+    expect(manager.document.assembly!.couplings).toHaveLength(1);
+  });
+
   it('drops a coupling with either of its joints', () => {
     const manager = assembled();
     manager.execute(couple());

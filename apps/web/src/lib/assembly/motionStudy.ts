@@ -8,6 +8,7 @@ import {
   coupledJointLimits,
   coupledJointValues,
   couplingGroupKeys,
+  couplingGroups,
   evaluateTrack,
   jointSweepRange,
   motionStudyDrivers,
@@ -157,6 +158,13 @@ export const POSE_VALUE_TOLERANCE = 1e-6;
  * (else on the moved one) with the value that pose gives it. So dragging a
  * driven gear re-keys the gear the study plays, and no second track is
  * made that the first would overrule.
+ *
+ * A group is keyed only when the pose really moved it: what it shows with
+ * the pose applied is compared with what the study shows there, both with
+ * limits and couplings applied. The values handed in include every joint a
+ * scrub left on screen, and a key a limit holds short of (a track keyed to
+ * 80° that its mate stops at 40°) reads differently raw than shown; moving
+ * some other joint must never rewrite that key.
  */
 export function keyPoseAt(
   set: AssemblySet,
@@ -195,18 +203,42 @@ export function keyPoseAt(
 
   const groups = couplingGroupKeys(set);
   const keyedGroups = new Set<string>();
-  // The pose over what the study shows, with the moved motion leading.
-  let settled: Map<string, number[]> | null = null;
+  // What the study shows at `at`, and the pose over it with the moved
+  // motion leading: both as the solve shows them.
+  let settled: {
+    shown: Map<string, number[]>;
+    posed: Map<string, number[]>;
+    members: Map<string, readonly AssemblyCouplingEnd[]>;
+  } | null = null;
   const settle = () => {
     if (settled) return settled;
+    const tracks = motionStudyDrivers(study);
     const pose = motionStudyValues(set, study, at);
+    const shown = coupledJointValues(set, pose, tracks);
     for (const [jointId, posed] of Object.entries(values))
       pose.set(jointId, [...posed]);
-    settled = coupledJointValues(set, pose, [
-      ...drivers,
-      ...motionStudyDrivers(study)
-    ]);
+    const members = new Map<string, readonly AssemblyCouplingEnd[]>();
+    for (const group of couplingGroups(set)) {
+      const first = group.members[0];
+      if (first) members.set(`${first.jointId}/${first.dof}`, group.members);
+    }
+    settled = {
+      shown,
+      posed: coupledJointValues(set, pose, [...drivers, ...tracks]),
+      members
+    };
     return settled;
+  };
+  /** Whether the pose shows any motion of the group somewhere new. */
+  const groupMoved = (group: string) => {
+    const { shown, posed, members } = settle();
+    return (members.get(group) ?? []).some(
+      (m) =>
+        Math.abs(
+          (posed.get(m.jointId)?.[m.dof] ?? 0) -
+            (shown.get(m.jointId)?.[m.dof] ?? 0)
+        ) > POSE_VALUE_TOLERANCE
+    );
   };
   const joints = new Map(set.joints.map((j) => [j.id, j]));
   for (const joint of set.joints) {
@@ -223,12 +255,13 @@ export function keyPoseAt(
       }
       if (keyedGroups.has(group)) continue;
       keyedGroups.add(group);
+      if (!groupMoved(group)) continue;
       const inGroup = (end: AssemblyCouplingEnd) =>
         groups.get(`${end.jointId}/${end.dof}`) === group;
       const target = study.tracks.find(inGroup) ??
         drivers.find(inGroup) ?? { jointId: joint.id, dof };
       const targetJoint = joints.get(target.jointId);
-      const targetValue = settle().get(target.jointId)?.[target.dof];
+      const targetValue = settle().posed.get(target.jointId)?.[target.dof];
       if (targetJoint && targetValue !== undefined)
         key(targetJoint, target.dof, targetValue);
     }

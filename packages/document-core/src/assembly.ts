@@ -18,6 +18,7 @@ import {
   type AssemblyComponent,
   type AssemblyCoupling,
   type AssemblyCouplingEnd,
+  type AssemblyCouplingGears,
   type AssemblyDofLimit,
   type AssemblyJoint,
   type AssemblyJointEnd,
@@ -125,6 +126,8 @@ export interface AssemblyCouplingAddInput {
      * pair keeps its tooth phase). Given, the driven joint moves to it.
      */
     offset?: number;
+    /** The gear parts it was placed for, when it is a gear pair. */
+    gears?: AssemblyCouplingGears;
   };
 }
 
@@ -252,7 +255,8 @@ function assertCoupledLimits(set: AssemblySet): void {
 
 /**
  * Drops tracks, saved values and couplings that name joints or motions no
- * longer present.
+ * longer present, and couplings whose gear left the assembly (a gear keyed
+ * to a shaft is not an end of the coupled joint, so the joint outlives it).
  */
 function pruneJointReferences(set: AssemblySet): void {
   const joints = new Map(set.joints.map((j) => [j.id, j]));
@@ -261,7 +265,13 @@ function pruneJointReferences(set: AssemblySet): void {
       const j = joints.get(end.jointId);
       return !!j && end.dof < ASSEMBLY_JOINT_DOFS[j.kind].length;
     };
-    set.couplings = set.couplings.filter((c) => has(c.driver) && has(c.driven));
+    const parts = new Set(set.components.map((c) => c.id));
+    set.couplings = set.couplings.filter(
+      (c) =>
+        has(c.driver) &&
+        has(c.driven) &&
+        (!c.gears || (parts.has(c.gears.driver) && parts.has(c.gears.driven)))
+    );
     if (set.couplings.length === 0) delete set.couplings;
   }
   for (const study of set.studies) {
@@ -491,7 +501,15 @@ export function addAssemblyCoupling(
       driver: draft.driver,
       driven: draft.driven,
       ratio: draft.ratio,
-      offset: draft.offset ?? couplingOffsetAtPose(set, draft)
+      offset: draft.offset ?? couplingOffsetAtPose(set, draft),
+      ...(incoming.gears
+        ? {
+            gears: {
+              driver: incoming.gears.driver,
+              driven: incoming.gears.driven
+            }
+          }
+        : {})
     });
     settleJointValues(set);
     return set;

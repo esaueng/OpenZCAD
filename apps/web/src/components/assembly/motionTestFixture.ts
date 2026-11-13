@@ -76,7 +76,12 @@ export function pivotProject(options: { study?: boolean } = {}) {
  * `saved` are the joints' stored angles (they must satisfy the coupling).
  */
 export function coupledPairProject(
-  options: { limited?: boolean; saved?: [number, number] } = {}
+  options: {
+    limited?: boolean;
+    saved?: [number, number];
+    /** Adds an unrelated part `c` turning on its own joint `turn_c`. */
+    third?: boolean;
+  } = {}
 ) {
   const manager = new CommandManager(
     createProjectDocument('Gears', toUserId('user_motion'))
@@ -136,5 +141,40 @@ export function coupledPairProject(
       }
     })
   );
+  if (options.third) {
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Part C',
+        primitiveKind: 'box',
+        dimensions: { width: 10, height: 2, depth: 10 }
+      })
+    );
+    manager.execute(
+      commandFactories.addAssemblyComponents({
+        components: [
+          {
+            componentId: 'c',
+            name: 'c',
+            bodyId: manager.document.bodyOrder[3] as BodyId,
+            grounded: false
+          }
+        ]
+      })
+    );
+    const frame = { ...PIVOT, origin: { x: 100, y: 0, z: 0 } };
+    manager.execute(
+      commandFactories.addAssemblyJoint({
+        joint: {
+          id: 'turn_c',
+          name: 'Turn C',
+          kind: 'revolute',
+          parent: { componentId: 'plate', frame },
+          child: { componentId: 'c', frame },
+          values: [0],
+          limits: [null]
+        }
+      })
+    );
+  }
   return manager;
 }

@@ -370,6 +370,144 @@ describe('Place gears card', () => {
   );
 
   it(
+    'warns for a gear keyed to its shaft, on the shaft’s joint and in the card',
+    { timeout: LAZY_TEST_TIMEOUT_MS },
+    async () => {
+      // plate → revolute shaft → rigid pinion: the pinion is not an end of
+      // the joint it turns on.
+      const manager = new CommandManager(
+        createProjectDocument('Gears', toUserId('user_gears'))
+      );
+      manager.execute(commandFactories.gearBody(gear('Pinion')));
+      manager.execute(commandFactories.gearBody(gear('Wheel', { teeth: 40 })));
+      for (const name of ['Plate', 'Shaft'])
+        manager.execute(
+          commandFactories.addPrimitive({
+            name,
+            primitiveKind: 'box',
+            dimensions: { width: 10, height: 2, depth: 100 }
+          })
+        );
+      const [a, b, plate, shaft] = manager.document.bodyOrder;
+      manager.execute(
+        commandFactories.addAssemblyComponents({
+          components: [
+            {
+              componentId: 'comp_plate',
+              name: 'Plate',
+              bodyId: plate as BodyId,
+              grounded: true
+            },
+            {
+              componentId: 'comp_shaft',
+              name: 'Shaft',
+              bodyId: shaft as BodyId,
+              grounded: false
+            },
+            {
+              componentId: 'comp_a',
+              name: 'Pinion',
+              bodyId: a as BodyId,
+              grounded: false
+            },
+            {
+              componentId: 'comp_b',
+              name: 'Wheel',
+              bodyId: b as BodyId,
+              grounded: false
+            }
+          ]
+        })
+      );
+      const axis = {
+        origin: { x: 0, y: 0, z: 2.5 },
+        zAxis: { x: 0, y: 0, z: 1 },
+        xAxis: { x: 1, y: 0, z: 0 }
+      };
+      manager.execute(
+        commandFactories.addAssemblyJoint({
+          joint: {
+            id: 'joint_shaft',
+            name: 'Shaft turn',
+            kind: 'revolute',
+            parent: { componentId: 'comp_plate', frame: axis },
+            child: { componentId: 'comp_shaft', frame: axis },
+            values: [0],
+            limits: [null]
+          }
+        })
+      );
+      manager.execute(
+        commandFactories.addAssemblyJoint({
+          joint: {
+            id: 'joint_key',
+            name: 'Key',
+            kind: 'rigid',
+            parent: { componentId: 'comp_shaft', frame: axis },
+            child: { componentId: 'comp_a', frame: axis },
+            values: [],
+            limits: []
+          }
+        })
+      );
+      const live = () =>
+        withLiveBodies(manager.document, {
+          [a as BodyId]: 'Pinion',
+          [b as BodyId]: 'Wheel',
+          [plate as BodyId]: 'Plate',
+          [shaft as BodyId]: 'Shaft'
+        });
+      const recorder = recordingExecute(manager);
+      const element = () => (
+        <AssemblyPanel
+          document={live()}
+          execute={recorder.execute}
+          onStatus={() => undefined}
+        />
+      );
+      const view = render(element());
+      fireEvent.click(screen.getByRole('button', { name: 'Place gears' }));
+      const form = await card();
+      // The pinion already turns on the shaft's joint: that joint is used.
+      expect(
+        within(form).getByText(/Pinion already moves on Shaft turn/)
+      ).toBeVisible();
+      fireEvent.click(within(form).getByRole('button', { name: 'Place' }));
+      const coupling = () => manager.document.assembly!.couplings![0]!;
+      expect(coupling().driver.jointId).toBe('joint_shaft');
+      expect(coupling().gears).toEqual({ driver: 'comp_a', driven: 'comp_b' });
+      view.rerender(element());
+      const details = () => screen.getByLabelText('Shaft turn details');
+      expect(within(details()).queryByRole('status')).toBeNull();
+
+      // 20 → 30 teeth on the keyed pinion: 0.75 now, placed for 0.5.
+      const pinion = Object.values(manager.document.nodes).find(
+        (node) => node.kind === 'feature' && node.name === 'Pinion'
+      ) as FeatureNode;
+      manager.execute(
+        commandFactories.updateFeature({
+          featureId: pinion.featureId,
+          data: { teeth: 30 }
+        })
+      );
+      view.rerender(element());
+      expect(coupling().ratio).toBeCloseTo(-0.5, 12);
+      expect(within(details()).getByRole('status')).toHaveTextContent(
+        'Pinion and Wheel no longer match Gear ratio: their teeth now give 0.75 turns per turn, and it was placed for 0.5 turns per turn.'
+      );
+      // Reopened on the pair, the card finds the same coupling and warns.
+      fireEvent.click(screen.getByRole('button', { name: 'Place gears' }));
+      const reopened = await card();
+      expect(
+        within(reopened).getByRole('combobox', { name: 'Gear that stays put' })
+      ).toHaveValue('comp_a');
+      expect(within(reopened).getByRole('status')).toHaveTextContent(
+        /Pinion and Wheel no longer match Gear ratio/
+      );
+    }
+  );
+
+  it(
     'explains why a pair cannot mesh and keeps Place off',
     { timeout: LAZY_TEST_TIMEOUT_MS },
     async () => {

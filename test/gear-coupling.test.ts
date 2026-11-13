@@ -462,6 +462,93 @@ describe('Place gears, turning together', () => {
     );
   });
 
+  it('checks the gears it was placed for, also keyed to a shared shaft', () => {
+    // plate → revolute shaft → rigid pinion, and a second gear (a cog)
+    // keyed to the same shaft, each meshing its own wheel. Neither gear is
+    // an end of the shaft's joint, and both ride it.
+    const fixture = assembled([
+      PINION,
+      WHEEL,
+      {
+        id: 'cog',
+        name: 'Cog',
+        gear: { teeth: 30, origin: { x: 0, y: 0, z: 10 } }
+      },
+      {
+        id: 'rim',
+        name: 'Rim',
+        gear: { teeth: 60, origin: { x: 0, y: 0, z: 10 } }
+      },
+      PLATE,
+      { id: 'shaft', name: 'Shaft' }
+    ]);
+    fixture.manager.execute(
+      commandFactories.updateAssemblyComponent({
+        componentId: 'plate',
+        grounded: true
+      })
+    );
+    const rigid = (id: string, child: string): AssemblyJoint => ({
+      ...revolute(id, child, MID, 'shaft'),
+      kind: 'rigid',
+      values: [],
+      limits: []
+    });
+    for (const joint of [
+      { ...revolute('shaft_turn', 'shaft', MID), name: 'Shaft turn' },
+      rigid('key_pinion', 'pinion'),
+      rigid('key_cog', 'cog')
+    ])
+      fixture.manager.execute(commandFactories.addAssemblyJoint({ joint }));
+
+    const first = place(fixture, draft('pinion', 'wheel'));
+    expect(first.baseJoint).toBeNull();
+    expect(first.driverJointId).toBe('shaft_turn');
+    expect(first.coupling.gears).toEqual({ driver: 'pinion', driven: 'wheel' });
+    expect(first.coupling.ratio).toBeCloseTo(-0.5, 12);
+    expectNoSlip(fixture, first, 'pinion', 'wheel');
+    const second = place(fixture, draft('cog', 'rim'));
+    expect(second.driverJointId).toBe('shaft_turn');
+    expect(second.coupling.gears).toEqual({ driver: 'cog', driven: 'rim' });
+    expectNoSlip(fixture, second, 'cog', 'rim');
+
+    const coupling = (id: string) =>
+      fixture.set().couplings!.find((c) => c.id === id)!;
+    const context = () => fixture.context();
+    // Each pair is found by its gears, though both share the shaft's joint.
+    expect(gearPairCoupling(context(), 'wheel', 'pinion')?.id).toBe(
+      first.coupling.id
+    );
+    expect(gearPairCoupling(context(), 'cog', 'rim')?.id).toBe(
+      second.coupling.id
+    );
+    expect(gearPairCoupling(context(), 'pinion', 'rim')).toBeNull();
+    expect(
+      gearCouplingMismatch(context(), coupling(first.coupling.id))
+    ).toBeNull();
+    // The keyed pinion goes from 20 to 30 teeth: its coupling keeps 20/40.
+    const pinion = Object.values(fixture.manager.document.nodes).find(
+      (node) => node.kind === 'feature' && node.name === 'Pinion'
+    ) as FeatureNode;
+    fixture.manager.execute(
+      commandFactories.updateFeature({
+        featureId: pinion.featureId,
+        data: { teeth: 30 }
+      })
+    );
+    expect(coupling(first.coupling.id).ratio).toBeCloseTo(-0.5, 12);
+    expect(gearCouplingMismatch(context(), coupling(first.coupling.id))).toBe(
+      'Pinion and Wheel no longer match Gear ratio: their teeth now give 0.75 turns per turn, and it was placed for 0.5 turns per turn. Remove it and place the gears again.'
+    );
+    // The other pair on the same shaft is untouched.
+    expect(
+      gearCouplingMismatch(context(), coupling(second.coupling.id))
+    ).toBeNull();
+    // A coupling that records no gear pair is never judged.
+    const { gears: _gears, ...bare } = coupling(first.coupling.id);
+    expect(gearCouplingMismatch(context(), bare)).toBeNull();
+  });
+
   it('refuses by code what cannot turn together', () => {
     const bare = assembled([PINION, WHEEL]);
     expect(refusal(bare, draft('pinion', 'wheel')).code).toBe(

@@ -179,6 +179,22 @@ export interface AssemblyCoupling {
   /** Never zero: the relation must run both ways. */
   ratio: number;
   offset: number;
+  /**
+   * The two gear parts the coupling was placed for (Place gears), in the
+   * driver's and the driven joint's order. A gear need not be an end of its
+   * joint: it may ride it through a rigid joint (a gear keyed to its shaft)
+   * and share it with another gear, so the pair is recorded rather than
+   * looked for. It lets the ratio be checked against the gears' teeth
+   * later. Absent on a coupling that was not made from a gear pair. The
+   * coupling goes when either part leaves the assembly.
+   */
+  gears?: AssemblyCouplingGears;
+}
+
+/** Component ids of a coupled gear pair. */
+export interface AssemblyCouplingGears {
+  driver: string;
+  driven: string;
 }
 
 export interface AssemblySet {
@@ -642,6 +658,16 @@ function couplingsError(
       return `Coupling ${id} has an unusable ratio.`;
     if (!isNumber(coupling.offset))
       return `Coupling ${id} has an offset that is not a number.`;
+    if (coupling.gears !== undefined) {
+      const gears = coupling.gears;
+      if (!isRecord(gears) || !isId(gears.driver) || !isId(gears.driven))
+        return `Coupling ${id} has a malformed gear pair.`;
+      if (gears.driver === gears.driven)
+        return `Coupling ${id} names one gear twice.`;
+      for (const componentId of [gears.driver, gears.driven])
+        if (!set.components.some((c) => c.id === componentId))
+          return `Coupling ${id} names gear ${componentId}, which is not in the assembly.`;
+    }
     const a = find(couplingEndKey(driver));
     const b = find(couplingEndKey(driven));
     if (a === b)

@@ -89,6 +89,7 @@ driven = ratio × driver + offset
 | `driver`, `driven` | a joint id and the index of one of its free values             |
 | `ratio`            | driven units per driver unit; never zero, so it runs both ways |
 | `offset`           | the phase the pair was coupled at, in the driven value's unit  |
+| `gears` (optional) | the two gear components it was placed for, driver's first      |
 
 An external gear pair is `−z₁/z₂` (degrees per degree), a pinion in a ring
 `+z₁/z₂`, a rack its pinion's pitch radius × π/180 (length per degree). Each
@@ -125,7 +126,10 @@ relates values, it never closes a kinematic loop.
   study gives a group one, the timeline does not offer a second, and moving
   a part while a study is open keys the motion the study already tracks in
   that group (with the value the dragged pose gives it) rather than adding a
-  track the first would overrule.
+  track the first would overrule. A group is keyed only when the pose moved
+  it: what it shows with the pose applied is compared with what the study
+  shows there, both with limits and couplings applied. Moving some other
+  joint never rewrites a key, also one a limit holds short of.
 - **Limits bound the pair.** The lead value is clamped into the range every
   member's limit allows: a driven joint's limit stops its driver. A drag,
   an Animate sweep and View's playback of a joint all read that narrowed
@@ -143,7 +147,9 @@ relates values, it never closes a kinematic loop.
   (`redundant` at the same ratio, `conflict` at another, which would lock
   them), and limits that leave the group no shared position.
 - A coupling goes with either of its joints: deleting the joint or its
-  component, or changing the joint's kind, removes it.
+  component, or changing the joint's kind, removes it. A gear coupling also
+  goes with either of its gears (`gears`): a gear keyed to a shaft is not an
+  end of the coupled joint, so the joint outlives it.
 
 Commands: `assembly.coupling.add` (without an offset it holds the current
 pose), `assembly.coupling.update`, `assembly.coupling.delete`.
@@ -214,5 +220,7 @@ joint graph changes.
   tooth count or moving a joint's frame afterwards does not update it. When
   a gear's teeth no longer give the stored ratio, the joint's details (and
   Place gears, reopened on that pair) warn and ask for the pair to be placed
-  again; nothing is changed for the user. A moved joint frame is not
-  detected.
+  again; nothing is changed for the user. The gears checked are the ones the
+  coupling records (`gears`), not the ends of its joints, so a gear keyed to
+  a shaft and two gears sharing one shaft are each judged against their own
+  mate. A moved joint frame is not detected.
