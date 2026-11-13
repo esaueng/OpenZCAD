@@ -225,6 +225,66 @@ describe('face tools build the card state', () => {
     );
   });
 
+  it('gear teeth: over part of a boss from the end picked nearer (v55)', () => {
+    const spec = IN_PLACE_TOOL_SPECS['gear-teeth'];
+    // A Ø22 boss 12 tall up +Z, picked near its top end.
+    const boss: FacePick = {
+      bodyId: 'body_a' as BodyId,
+      hash: 11,
+      topologyId: 'f11',
+      surfaceType: 'cylinder',
+      point: { x: 11, y: 0, z: 10 },
+      cylinder: {
+        axisStart: { x: 0, y: 0, z: 0 },
+        axisEnd: { x: 0, y: 0, z: 12 },
+        radius: 11
+      }
+    };
+    const slots = { ...EMPTY, faces: [boss] };
+    const options = { side: 'outside', fit: 'keep-diameter' };
+    // Untouched, the teeth run the whole face and store no span.
+    const whole = spec.defaults!(slots, CTX, { teeth: 20 });
+    expect(whole).toEqual({ faceWidth: 12 });
+    const plain = spec.request(slots, { teeth: 20, ...whole }, options, CTX);
+    expect(plain?.tool === 'gear' && plain.gear).toMatchObject({
+      targetBodyId: 'body_a',
+      faceHash: 11
+    });
+    for (const key of ['faceWidth', 'offset', 'anchor']) {
+      expect(plain?.tool === 'gear' && plain.gear).not.toHaveProperty(key);
+    }
+    // Dragged short and set off from the top: stored from that end.
+    const ctx = { ...CTX, touched: ['faceWidth', 'offset'] };
+    const values = { teeth: 20, faceWidth: 6, offset: 2 };
+    expect(spec.request(slots, values, options, ctx, values)).toMatchObject({
+      tool: 'gear',
+      gear: { faceWidth: 6, offset: 2, anchor: 'end' }
+    });
+    // The arrow stands on the teeth's free end, pointing down from the top.
+    const arrow = spec
+      .handles(slots, values, ctx, options)
+      .find((handle) => handle.valueId === 'faceWidth');
+    expect(arrow).toMatchObject({
+      kind: 'linear',
+      params: {
+        origin: { x: 11, y: 0, z: 10 },
+        direction: { x: -0, y: -0, z: -1 }
+      },
+      max: 10
+    });
+    // Neither may run the teeth past the face.
+    expect(spec.refuseValue!('faceWidth', 11, values, slots, ctx)).toBe(
+      "teeth here run at most 10, to the face's far end."
+    );
+    expect(spec.refuseValue!('offset', 12, values, slots, ctx)).toBe(
+      'the face is only 12 long.'
+    );
+    // An offset alone keeps them running to the far end.
+    expect(spec.carries!('offset', 3, { teeth: 20, faceWidth: 12 }, slots, {})).toEqual({
+      faceWidth: 9
+    });
+  });
+
   it('gear: a worm sends its starts as teeth and a wheel as its mate', () => {
     const spec = IN_PLACE_TOOL_SPECS.gear;
     const slots: InPlaceSlots = {

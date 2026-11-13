@@ -14,7 +14,10 @@ import {
   pickPlanarFace,
   enterCommandValue,
   finishInPlaceCommand,
-  waitForStillViewport
+  waitForStillViewport,
+  clickWorldPoint,
+  setSelectionFilter,
+  revealModelPanel
 } from './openzcad-fixtures';
 
 /**
@@ -172,6 +175,63 @@ test('Gear teeth in place: teeth cut along a picked cylinder keep its diameter',
   // Keep-diameter is the default: no module stored, none needed.
   expect(teeth).not.toHaveProperty('pitch');
   expect(teeth).not.toHaveProperty('fit');
+});
+
+test('Gear teeth over part of a cylinder: from the end picked nearer, edited back unchanged', async ({
+  page
+}) => {
+  test.setTimeout(300_000);
+  await stubApi(page, { panelLayout: MODEL_ONLY });
+  await openPart(page, 'Partial gear teeth', 'cylinder', {
+    radius: 11,
+    height: 12
+  });
+  await startTool(page, /^Gear teeth/, 'Gear teeth');
+  const bar = page.getByRole('group', { name: 'Gear teeth command' });
+  await expect(bar).toContainText('Pick a boss or bore');
+  // The boss's side, near its top: the teeth run down from there.
+  await setSelectionFilter(page, 'Face');
+  await clickWorldPoint(page, [0, -11, 10]);
+  const length = page.getByTestId('command-handle-faceWidth');
+  await expect(length).toHaveText('Length 12 mm');
+  await enterCommandValue(page, 'faceWidth', '6');
+  await bar.locator('summary').click();
+  const offset = bar.getByRole('textbox', { name: 'Offset', exact: true });
+  await offset.fill('2');
+  await offset.press('Enter');
+  await bar.locator('summary').click();
+  await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled({
+    timeout: 120_000
+  });
+  // Cutting and checking a 12-long toothed band outlasts the helper's wait.
+  await bar.getByRole('button', { name: /Done/ }).click();
+  await expect(bar).toHaveCount(0, { timeout: 120_000 });
+  await setSelectionFilter(page, 'Any');
+  const [created, ...others] = await gearData(page);
+  expect(others).toHaveLength(0);
+  expect(created).toMatchObject({
+    gearType: 'external',
+    teeth: 20,
+    faceWidth: 6,
+    offset: 2,
+    anchor: 'end'
+  });
+
+  // Re-armed from History and finished untouched, it is stored as it was.
+  await revealModelPanel(page, 'History');
+  await page
+    .locator('.feature-row', { hasText: 'Gear' })
+    .locator('.feature-row-main')
+    .click();
+  const edit = page.getByRole('group', { name: 'Edit Gear teeth command' });
+  await expect(edit).toBeVisible();
+  await expect(page.getByTestId('command-handle-faceWidth')).toBeVisible();
+  await expect(edit.getByRole('button', { name: /Done/ })).toBeEnabled({
+    timeout: 120_000
+  });
+  await edit.getByRole('button', { name: /Done/ }).click();
+  await expect(edit).toHaveCount(0, { timeout: 120_000 });
+  expect(await gearData(page)).toEqual([created]);
 });
 
 test('Gear parameters: typed in place, in their own units, only where they apply', async ({

@@ -172,9 +172,23 @@ export function threadFace(face: FacePick | undefined): ThreadFace | null {
   };
 }
 
-/** The stored thread being edited, if this command edits one. */
-function savedThread(ctx: Pick<InPlaceContext, 'saved'> | undefined) {
-  return ctx?.saved?.featureKind === 'thread' ? ctx.saved : null;
+/** Which value holds a span's length: a thread's, or gear teeth's. */
+export type SpanLengthId = 'length' | 'faceWidth';
+
+/**
+ * The stored extent of the span being edited: a thread's, or that of gear
+ * teeth on a body (schema v55, whose length is their `faceWidth`).
+ */
+function savedSpan(
+  saved: InPlaceValueContext['saved']
+): { length?: ParamValue; anchor?: ThreadAnchor } | null {
+  if (saved?.featureKind === 'thread') {
+    return { length: saved.length, anchor: saved.anchor };
+  }
+  if (saved?.featureKind === 'gear' && saved.targetBodyId !== undefined) {
+    return { length: saved.faceWidth, anchor: saved.anchor };
+  }
+  return null;
 }
 
 /**
@@ -190,7 +204,7 @@ export function threadAnchor(
     const t = dot(sub(face.point, geometry.start), geometry.axis);
     return t > geometry.length / 2 ? 'end' : 'start';
   }
-  return savedThread(ctx)?.anchor ?? 'start';
+  return savedSpan(ctx?.saved)?.anchor ?? 'start';
 }
 
 /** Lengths this close to the face's are the whole face. */
@@ -206,12 +220,19 @@ export function threadIsPartial(
   face: FacePick | undefined,
   values: Readonly<Record<string, ParamValue>>,
   numbers: Readonly<Record<string, number>>,
-  ctx?: InPlaceContext
+  ctx?: InPlaceContext,
+  id: SpanLengthId = 'length'
 ): boolean {
-  return lengthIsExplicit(threadFace(face), values, numbers, {
-    ...(ctx?.touched ? { touched: ctx.touched } : {}),
-    ...(ctx?.saved ? { saved: ctx.saved } : {})
-  });
+  return lengthIsExplicit(
+    threadFace(face),
+    values,
+    numbers,
+    {
+      ...(ctx?.touched ? { touched: ctx.touched } : {}),
+      ...(ctx?.saved ? { saved: ctx.saved } : {})
+    },
+    id
+  );
 }
 
 /**
@@ -226,17 +247,18 @@ export function lengthIsExplicit(
   geometry: ThreadFace | null,
   held: Readonly<Record<string, ParamValue>>,
   numbers: Readonly<Record<string, number>>,
-  context: Pick<InPlaceValueContext, 'touched' | 'saved'>
+  context: Pick<InPlaceValueContext, 'touched' | 'saved'>,
+  id: SpanLengthId = 'length'
 ): boolean {
-  const saved = context.saved?.featureKind === 'thread' ? context.saved : null;
-  if (saved?.length !== undefined && held.length === saved.length) {
+  const stored = savedSpan(context.saved)?.length;
+  if (stored !== undefined && held[id] === stored) {
     return true;
   }
-  if (!context.touched?.includes('length')) return false;
-  if (typeof held.length === 'string') return true;
+  if (!context.touched?.includes(id)) return false;
+  if (typeof held[id] === 'string') return true;
   if (!geometry) return true;
   const reach = geometry.length - Math.max(numbers.offset ?? 0, 0);
-  return (numbers.length ?? reach) < reach - tolerance(geometry.length);
+  return (numbers[id] ?? reach) < reach - tolerance(geometry.length);
 }
 
 /** The session's values with its typed expressions as their text. */
@@ -697,6 +719,189 @@ export function threadRequestFields(
   return fields;
 }
 
+/**
+ * An extent along a picked cylindrical face from one of its ends, `lengthId`
+ * long after an `offset`: a thread's, or gear teeth's over part of a face
+ * (schema v55). Until its end is dragged or typed short it runs the rest of
+ * the face. `runs` begins the refusal for a length past the far end.
+ */
+export function faceSpan(lengthId: SpanLengthId, runs: string) {
+  const explicit = (
+    geometry: ThreadFace | null,
+    values: Readonly<Record<string, number>>,
+    context: InPlaceValueContext | undefined
+  ) =>
+    lengthIsExplicit(
+      geometry,
+      heldValues(values, context),
+      values,
+      context ?? {},
+      lengthId
+    );
+  const behaviour: Pick<
+    InPlaceToolSpec,
+    'refuseValue' | 'carries' | 'defaults'
+  > = {
+    refuseValue(valueId, value, values, slots, context) {
+      // A typed length or offset that would carry the span past the face's
+      // far end is refused: only a length that reaches the end exactly runs
+      // the whole face, and an offset never quietly shortens a length set.
+      const geometry = threadFace(slots?.faces[0]);
+      if (!geometry) return null;
+      const round = (number: number) => Math.round(number * 1e6) / 1e6;
+      const slack = tolerance(geometry.length);
+      if (valueId === lengthId) {
+        const reach = geometry.length - Math.max(values.offset ?? 0, 0);
+        return value > reach + slack
+          ? `${runs} at most ${round(reach)}, to the face's far end.`
+          : null;
+      }
+      if (valueId === 'offset') {
+        if (value >= geometry.length - slack) {
+          return `the face is only ${round(geometry.length)} long.`;
+        }
+        // A length held as given (set short, stored by an edit, or an
+        // expression) is never quietly shortened by a larger offset.
+        const length = values[lengthId];
+        if (
+          length !== undefined &&
+          explicit(geometry, values, context) &&
+          value + length > geometry.length + slack
+        ) {
+          const most = round(Math.max(geometry.length - length, 0));
+          const raw = context?.raws?.[lengthId];
+          return raw !== undefined
+            ? `the length is ${raw} (${round(length)}), so the offset can be at most ${most}; change the length too.`
+            : `with the length at ${round(length)}, the offset can be at most ${most}.`;
+        }
+      }
+      return null;
+    },
+    carries(valueId, value, values, slots, context) {
+      // A span that runs to the far end keeps running there as its offset
+      // moves: its length follows, as an untouched one does by default. A
+      // length held as given stays as it is (an offset that would overshoot
+      // it is refused instead).
+      if (valueId !== 'offset') return null;
+      const geometry = threadFace(slots.faces[0]);
+      if (!geometry || explicit(geometry, values, context)) return null;
+      return {
+        [lengthId]: Math.max(geometry.length - Math.max(value, 0), 0)
+      };
+    },
+    defaults(slots, _ctx, numbers): Record<string, number> {
+      // Until its end is dragged, the span runs the rest of the face.
+      const geometry = threadFace(slots.faces[0]);
+      if (!geometry) return {};
+      return {
+        [lengthId]: Math.max(geometry.length - (numbers.offset ?? 0), 0)
+      };
+    }
+  };
+  return {
+    behaviour,
+    /** How much of the face the span runs, and from which end. */
+    extent(
+      face: FacePick,
+      values: Readonly<Record<string, ParamValue>>,
+      ctx: InPlaceContext,
+      numbers?: Readonly<Record<string, number>>
+    ): ThreadExtent {
+      const resolved = (id: string) => {
+        const number = numbers?.[id];
+        if (number !== undefined) return number;
+        const value = values[id];
+        return typeof value === 'number'
+          ? value
+          : value === undefined
+            ? undefined
+            : (ctx.evaluate?.(value) ?? undefined);
+      };
+      const all: Record<string, number> = {};
+      for (const id of [lengthId, 'offset']) {
+        const number = resolved(id);
+        if (number !== undefined) all[id] = number;
+      }
+      const storedAnchor = savedSpan(ctx.saved)?.anchor;
+      const geometry = threadFace(face);
+      return {
+        partial: threadIsPartial(face, values, all, ctx, lengthId),
+        from: threadAnchor(face, ctx),
+        ...(storedAnchor === undefined ? {} : { storedAnchor }),
+        ...(all.offset === undefined ? {} : { offset: all.offset }),
+        ...(all[lengthId] === undefined ? {} : { length: all[lengthId] }),
+        ...(geometry
+          ? { face: { length: geometry.length, radius: geometry.radius } }
+          : {})
+      };
+    },
+    /**
+     * One arrow on the span's free end, sliding along the face from the end
+     * it starts at: drag it short of the far end to stop the span there.
+     */
+    arrow(
+      face: FacePick | undefined,
+      values: Record<string, number>,
+      ctx: InPlaceContext,
+      key: string
+    ): HandleSpec[] {
+      if (!face) return [];
+      const geometry = threadFace(face);
+      if (!geometry) {
+        // No cylinder to stand an arrow on: a stored partial span's length
+        // is still a chip on the face.
+        const anchor = face.point ?? face.centroid ?? face.center;
+        return anchor && savedSpan(ctx.saved)?.length !== undefined
+          ? [
+              {
+                valueId: lengthId,
+                kind: 'chip',
+                key: `${key}:${face.bodyId}:${face.hash}:${lengthId}`,
+                params: { anchor }
+              }
+            ]
+          : [];
+      }
+      const from = threadAnchor(face, ctx);
+      const direction =
+        from === 'end'
+          ? { x: -geometry.axis.x, y: -geometry.axis.y, z: -geometry.axis.z }
+          : geometry.axis;
+      const offset = Math.max(values.offset ?? 0, 0);
+      const reach = Math.max(geometry.length - offset, 0);
+      const base = from === 'end' ? geometry.end : geometry.start;
+      const origin = along(
+        along(base, direction, offset),
+        geometry.radial,
+        geometry.radius
+      );
+      const round = (value: number) => Math.round(value * 1e6) / 1e6;
+      return [
+        {
+          valueId: lengthId,
+          kind: 'linear',
+          key: [
+            key,
+            face.bodyId,
+            face.hash,
+            lengthId,
+            from,
+            round(offset),
+            round(geometry.length),
+            round(geometry.radial.x),
+            round(geometry.radial.y),
+            round(geometry.radial.z)
+          ].join(':'),
+          params: { origin, direction },
+          max: reach
+        }
+      ];
+    }
+  };
+}
+
+const threadSpan = faceSpan('length', 'a thread here runs');
+
 export const threadSpec: InPlaceToolSpec = {
   id: 'thread',
   title: 'Thread',
@@ -735,72 +940,7 @@ export const threadSpec: InPlaceToolSpec = {
     }
   ],
   summary: threadSummary,
-  refuseValue(valueId, value, values, slots, context) {
-    // A typed length or offset that would carry the thread past the face's
-    // far end is refused: only a length that reaches the end exactly runs
-    // the whole face, and an offset never quietly shortens a length set.
-    const geometry = threadFace(slots?.faces[0]);
-    if (!geometry) return null;
-    const round = (number: number) => Math.round(number * 1e6) / 1e6;
-    const slack = tolerance(geometry.length);
-    if (valueId === 'length') {
-      const reach = geometry.length - Math.max(values.offset ?? 0, 0);
-      return value > reach + slack
-        ? `a thread here runs at most ${round(reach)}, to the face's far end.`
-        : null;
-    }
-    if (valueId === 'offset') {
-      if (value >= geometry.length - slack) {
-        return `the face is only ${round(geometry.length)} long.`;
-      }
-      // A length held as given (set short, stored by an edit, or an
-      // expression) is never quietly shortened by a larger offset.
-      const length = values.length;
-      if (
-        length !== undefined &&
-        lengthIsExplicit(
-          geometry,
-          heldValues(values, context),
-          values,
-          context ?? {}
-        ) &&
-        value + length > geometry.length + slack
-      ) {
-        const most = round(Math.max(geometry.length - length, 0));
-        const raw = context?.raws?.length;
-        return raw !== undefined
-          ? `the length is ${raw} (${round(length)}), so the offset can be at most ${most}; change the length too.`
-          : `with the length at ${round(length)}, the offset can be at most ${most}.`;
-      }
-    }
-    return null;
-  },
-  carries(valueId, value, values, slots, context) {
-    // A thread that runs to the far end keeps running there as its offset
-    // moves: its length follows, as an untouched one does by default. A
-    // length held as given stays as it is (an offset that would overshoot
-    // it is refused instead).
-    if (valueId !== 'offset') return null;
-    const geometry = threadFace(slots.faces[0]);
-    if (
-      !geometry ||
-      lengthIsExplicit(
-        geometry,
-        heldValues(values, context),
-        values,
-        context ?? {}
-      )
-    ) {
-      return null;
-    }
-    return { length: Math.max(geometry.length - Math.max(value, 0), 0) };
-  },
-  defaults(slots, _ctx, numbers): Record<string, number> {
-    // Until its end is dragged, the thread runs the rest of the face.
-    const geometry = threadFace(slots.faces[0]);
-    if (!geometry) return {};
-    return { length: Math.max(geometry.length - (numbers.offset ?? 0), 0) };
-  },
+  ...threadSpan.behaviour,
   hint(slots: InPlaceSlots) {
     const face = slots.faces[0];
     if (!face) {
@@ -820,41 +960,18 @@ export const threadSpec: InPlaceToolSpec = {
   ): InPlaceRequest | null {
     const face = slots.faces[0];
     if (!face) return null;
-    const resolved = (id: string) => {
-      const number = numbers?.[id];
-      if (number !== undefined) return number;
-      const value = values[id];
-      return typeof value === 'number'
-        ? value
-        : value === undefined
-          ? undefined
-          : (ctx.evaluate?.(value) ?? undefined);
-    };
-    const all: Record<string, number> = {};
-    for (const id of ['length', 'offset']) {
-      const number = resolved(id);
-      if (number !== undefined) all[id] = number;
-    }
-    const from = threadAnchor(face, ctx);
-    const geometry = threadFace(face);
     return {
       tool: 'thread',
       thread: {
         targetBodyId: face.bodyId,
         faceHash: face.hash,
         ...(face.reference ? { faceReference: face.reference } : {}),
-        ...threadRequestFields(values, options, ctx.units ?? 'mm', {
-          partial: threadIsPartial(face, values, all, ctx),
-          from,
-          ...(savedThread(ctx)?.anchor === undefined
-            ? {}
-            : { storedAnchor: savedThread(ctx)!.anchor! }),
-          ...(all.offset === undefined ? {} : { offset: all.offset }),
-          ...(all.length === undefined ? {} : { length: all.length }),
-          ...(geometry
-            ? { face: { length: geometry.length, radius: geometry.radius } }
-            : {})
-        })
+        ...threadRequestFields(
+          values,
+          options,
+          ctx.units ?? 'mm',
+          threadSpan.extent(face, values, ctx, numbers)
+        )
       }
     };
   },
@@ -863,59 +980,6 @@ export const threadSpec: InPlaceToolSpec = {
     values: Record<string, number>,
     ctx: InPlaceContext
   ): HandleSpec[] {
-    const face = slots.faces[0];
-    if (!face) return [];
-    const geometry = threadFace(face);
-    if (!geometry) {
-      // No cylinder to stand an arrow on: a stored partial thread's length
-      // is still a chip on the face.
-      const anchor = face.point ?? face.centroid ?? face.center;
-      return anchor && savedThread(ctx)?.length !== undefined
-        ? [
-            {
-              valueId: 'length',
-              kind: 'chip',
-              key: `thread:${face.bodyId}:${face.hash}:length`,
-              params: { anchor }
-            }
-          ]
-        : [];
-    }
-    // One arrow on the thread's free end, sliding along the face from the
-    // end it starts at: drag it short of the far end for a partial thread.
-    const from = threadAnchor(face, ctx);
-    const direction =
-      from === 'end'
-        ? { x: -geometry.axis.x, y: -geometry.axis.y, z: -geometry.axis.z }
-        : geometry.axis;
-    const offset = Math.max(values.offset ?? 0, 0);
-    const reach = Math.max(geometry.length - offset, 0);
-    const base = from === 'end' ? geometry.end : geometry.start;
-    const origin = along(
-      along(base, direction, offset),
-      geometry.radial,
-      geometry.radius
-    );
-    const round = (value: number) => Math.round(value * 1e6) / 1e6;
-    return [
-      {
-        valueId: 'length',
-        kind: 'linear',
-        key: [
-          'thread',
-          face.bodyId,
-          face.hash,
-          'length',
-          from,
-          round(offset),
-          round(geometry.length),
-          round(geometry.radial.x),
-          round(geometry.radial.y),
-          round(geometry.radial.z)
-        ].join(':'),
-        params: { origin, direction },
-        max: reach
-      }
-    ];
+    return threadSpan.arrow(slots.faces[0], values, ctx, 'thread');
   }
 };

@@ -56,7 +56,7 @@ import {
   type PlacementPick
 } from './primitives';
 import { datumAxis, datumPlane, type RefKind, type RefPick } from './datums';
-import { threadSpec, type ThreadRequest } from './thread';
+import { faceSpan, threadSpec, type ThreadRequest } from './thread';
 import { referenceImage, type ImageSlot } from './image';
 
 export type { RefPick } from './datums';
@@ -2961,9 +2961,13 @@ const gear: InPlaceToolSpec = {
 };
 
 /**
- * Gear teeth (M14) cut along the whole length of a body's cylindrical face:
- * outside teeth on a boss, inside teeth in a bore.
+ * Gear teeth (M14) on a body's cylindrical face, outside teeth on a boss and
+ * inside teeth in a bore: along the whole face, or over part of it (schema
+ * v55) from the end picked nearer, the rest left as collars. Their length
+ * drags and types as a thread's does.
  */
+const gearTeethSpan = faceSpan('faceWidth', 'teeth here run');
+
 const gearTeeth: InPlaceToolSpec = {
   id: 'gear-teeth',
   title: 'Gear teeth',
@@ -2972,7 +2976,27 @@ const gearTeeth: InPlaceToolSpec = {
   faceFilter: 'cylindrical',
   wantsAxis: false,
   wantsPath: false,
-  values: GEAR_TOOTH_VALUES,
+  values: [
+    ...GEAR_TOOTH_VALUES,
+    {
+      id: 'faceWidth',
+      label: 'Length',
+      unit: 'length',
+      initial: 10,
+      min: 0,
+      exclusive: true,
+      note: 'Stop short of the face’s end for partial teeth'
+    },
+    {
+      id: 'offset',
+      label: 'Offset',
+      unit: 'length',
+      initial: 0,
+      min: 0,
+      inOptions: true,
+      note: 'Gap before the teeth'
+    }
+  ],
   options: [
     {
       id: 'side',
@@ -3019,10 +3043,12 @@ const gearTeeth: InPlaceToolSpec = {
         'diametralPitch'
       ]
     },
+    { label: 'Length', boxed: true, compact: true, items: ['faceWidth', 'offset'] },
     ...GEAR_FORM_SECTIONS
   ],
   summary: gearSummary,
   optionCarries: gearSizingCarries,
+  ...gearTeethSpan.behaviour,
   hint(slots, options) {
     if (slots.faces.length === 0) return 'Pick a boss or bore';
     return options?.fit === 'module'
@@ -3030,28 +3056,45 @@ const gearTeeth: InPlaceToolSpec = {
       : 'Tap the teeth to type';
   },
   ready: (slots) => slots.faces.length > 0,
-  request(slots, values, options, ctx) {
+  request(slots, values, options, ctx, numbers) {
     const face = slots.faces[0];
     if (!face) return null;
     const byModule = options.fit === 'module';
+    // Over part of the face: its length once set short, its offset once
+    // set, and the end it starts at whenever either is stored.
+    const { partial, from, storedAnchor } = gearTeethSpan.extent(
+      face,
+      values,
+      ctx,
+      numbers
+    );
+    const offset = values.offset || undefined;
+    const span = {
+      ...(partial && { faceWidth: values.faceWidth ?? 10 }),
+      ...(offset !== undefined && { offset }),
+      ...((partial || offset !== undefined) &&
+        (from === 'end' || storedAnchor === 'start') && { anchor: from! })
+    };
     return {
       tool: 'gear',
       gear: {
         gearType: options.side === 'inside' ? 'internal' : 'external',
         ...gearToothFields(values, options, ctx, byModule),
         ...(byModule ? { fit: 'module' as const } : {}),
+        ...span,
         targetBodyId: face.bodyId,
         faceHash: face.hash,
         ...(face.reference ? { faceReference: face.reference } : {})
       }
     };
   },
-  handles(slots, _values, _ctx, options) {
+  handles(slots, values, ctx, options) {
     const face = slots.faces[0];
     const anchor = face?.point ?? face?.centroid ?? face?.center;
     if (!face || !anchor) return [];
     const base = keyOf('gear-teeth', face.bodyId, face.hash);
     return [
+      ...gearTeethSpan.arrow(face, values, ctx, 'gear-teeth'),
       {
         valueId: 'teeth',
         kind: 'chip',

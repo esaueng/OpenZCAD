@@ -539,6 +539,43 @@ describe('an untouched edit writes the feature back as stored', () => {
     });
   });
 
+  it('gear: teeth over part of a face keep their span (v55)', () => {
+    const data: FeatureData = {
+      featureKind: 'gear',
+      gearType: 'external',
+      sizing: 'module',
+      teeth: 20,
+      faceWidth: 6,
+      offset: 'wall',
+      anchor: 'end',
+      targetBodyId: BODY,
+      faceHash: 11
+    };
+    const node = feature(data, BODY);
+    const armed = inPlaceEditSeed(node, EDIT_CTX)!;
+    expect(armed.seed.values).toMatchObject({ faceWidth: 6 });
+    const request = untouched(node)!;
+    expect(request).toMatchObject({
+      tool: 'gear',
+      gear: { faceWidth: 6, offset: 'wall', anchor: 'end' }
+    });
+    if (request.tool !== 'gear') throw new Error('not a gear request');
+    const saved = { featureId: node.featureId, name: node.name, data };
+    expect(inPlaceFeatureUpdate(saved, request)).not.toHaveProperty(
+      'clearData'
+    );
+    // Back to the whole face: the span goes.
+    const {
+      faceWidth: _width,
+      offset: _offset,
+      anchor: _anchor,
+      ...whole
+    } = request.gear;
+    expect(
+      inPlaceFeatureUpdate(saved, { tool: 'gear', gear: whole })?.clearData
+    ).toEqual(['faceWidth', 'offset', 'anchor']);
+  });
+
   it('gear: a helical gear keeps its helix angle and hand', () => {
     const data: FeatureData = {
       featureKind: 'gear',

@@ -221,7 +221,10 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // grounding, joints with values and limits, saved positions and motion
 // studies. An older client would drop the section on its next save, so it
 // must refuse.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 54 as const;
+// v55 adds M14 partial-span teeth: gear teeth cut over part of a body's
+// cylindrical face (`faceWidth`, `offset` and `anchor` on teeth on a body).
+// An older client would cut them along the whole face, so it must refuse.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 55 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -259,7 +262,10 @@ export type GearHand = 'right' | 'left';
 export type ThreadProfile = 'iso-metric' | 'printable' | 'custom';
 /** Which way a thread winds: a right hand advances turning counter-clockwise. */
 export type ThreadHand = 'right' | 'left';
-/** Which end of the face a thread's `offset` is measured from. */
+/**
+ * Which end of a cylindrical face a thread's or partial gear teeth's
+ * `offset` is measured from.
+ */
 export type ThreadAnchor = 'start' | 'end';
 export type FeatureKind =
   | 'primitive'
@@ -1873,10 +1879,12 @@ export type FeatureData =
        * axis (a rack runs along `xDirection` with its teeth pointing along
        * `axis × xDirection`).
        *
-       * With `targetBodyId` the teeth are cut along the whole length of that
-       * body's cylindrical face (`faceHash`, anchored by `faceReference`): a
-       * boss takes external teeth, a bore internal ones, and the body is
-       * consumed. The face's own length is the face width.
+       * With `targetBodyId` the teeth are cut into that body's cylindrical
+       * face (`faceHash`, anchored by `faceReference`): a boss takes external
+       * teeth, a bore internal ones, and the body is consumed. They run the
+       * whole face unless `faceWidth`, `offset` or `anchor` (schema v55)
+       * place them over part of it, leaving the cylinder beside them as
+       * collars.
        */
       featureKind: 'gear';
       gearType: GearType;
@@ -1894,8 +1902,23 @@ export type FeatureData =
       pitch?: ParamValue;
       /** The tooth count; a worm's or enveloping worm's thread starts. */
       teeth: ParamValue;
-      /** New bodies only; teeth on a cylinder span the whole face. */
+      /**
+       * Along the axis. Required on a new body. Teeth on a body (schema v55):
+       * the teeth's length along the face; absent runs from `offset` to the
+       * face's far end.
+       */
       faceWidth?: ParamValue;
+      /**
+       * Teeth on a body (schema v55): distance from `anchor` to the teeth's
+       * near end; absent is 0.
+       */
+      offset?: ParamValue;
+      /**
+       * Teeth on a body (schema v55): which end of the face `offset` is
+       * measured from. Absent is `'start'`, the face's lower end along its
+       * axis.
+       */
+      anchor?: ThreadAnchor;
       /** Degrees; absent is 20. */
       pressureAngleDeg?: ParamValue;
       /** Profile shift coefficient; absent is 0. */
