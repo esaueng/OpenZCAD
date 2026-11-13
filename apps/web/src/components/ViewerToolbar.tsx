@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import {
   Camera,
+  Ellipsis,
   Grid3x3,
   ListPlus,
   Magnet,
@@ -31,6 +32,13 @@ import { labelWithKey, useKeymap, type Keymap } from '../lib/keymap';
 import { platformShortcutLabel } from '../lib/platformShortcut';
 import { useMediaQuery } from '../hooks/useMediaQuery';
 import type { TouchModifiers } from './viewer/touchNavigation';
+
+/**
+ * Where the instrument rail folds to a short set behind "More view tools":
+ * a touch phone held upright. The same query as phone-stage.css.
+ */
+const PHONE_RAIL_QUERY =
+  '(pointer: coarse) and (max-width: 520px) and (min-height: 541px)';
 
 /**
  * Every standard view, in reading order down the flyout. Back, left and
@@ -171,6 +179,57 @@ export function ViewerToolbar({
   const keymap = useKeymap();
   const coarsePointer = useMediaQuery('(pointer: coarse)');
   const [viewsOpen, setViewsOpen] = useState(false);
+  // A phone held upright has no room for the whole rail beside the model: it
+  // shows a short set, and this button brings out the rest
+  // (phone-stage.css, which reads the button's `aria-expanded`).
+  const phoneRail = useMediaQuery(PHONE_RAIL_QUERY);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const moreRef = useRef<HTMLButtonElement | null>(null);
+  const moreShown = phoneRail && moreOpen;
+  useEffect(() => {
+    if (!moreShown) {
+      return;
+    }
+    // Put away by a press anywhere off the rail, and by a panel's button:
+    // the panel it opens stands where the rest of the rail was drawn. The
+    // button's own click, not its press: folding the rail under a finger
+    // still down moved another button there, which took the click.
+    function onPointerDown(event: PointerEvent) {
+      const rail = moreRef.current?.closest('.instrument-rail');
+      if (!rail?.contains(event.target as Node)) {
+        setMoreOpen(false);
+      }
+    }
+    function onClick(event: MouseEvent) {
+      if ((event.target as Element | null)?.closest('[data-model-panel-rail]')) {
+        setMoreOpen(false);
+      }
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== 'Escape') {
+        return;
+      }
+      const rail = moreRef.current?.closest('.instrument-rail');
+      // The views flyout takes its own Escape first.
+      if (rail?.querySelector('.rail-views-panel')) {
+        return;
+      }
+      // Escape keeps its workspace meaning unless the keyboard is here.
+      if (rail?.contains(document.activeElement)) {
+        event.stopPropagation();
+        moreRef.current?.focus();
+      }
+      setMoreOpen(false);
+    }
+    window.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('click', onClick);
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('click', onClick);
+      window.removeEventListener('keydown', onKeyDown, true);
+    };
+  }, [moreShown]);
   const anchorRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const sectionAnchorRef = useRef<HTMLDivElement | null>(null);
@@ -616,6 +675,27 @@ export function ViewerToolbar({
           )}
         </div>
       </div>
+      {phoneRail && (
+        <Tooltip
+          label={moreShown ? 'Fewer view tools' : 'More view tools'}
+          description={
+            moreShown
+              ? 'Back to the short rail'
+              : 'Measure, grid, projection, section, display, views, panel layout and the activity log'
+          }
+        >
+          <button
+            type="button"
+            ref={moreRef}
+            className={`rail-button rail-more-toggle${moreShown ? ' open' : ''}`}
+            onClick={() => setMoreOpen((open) => !open)}
+            aria-label="More view tools"
+            aria-expanded={moreShown}
+          >
+            <Ellipsis size={16} aria-hidden="true" />
+          </button>
+        </Tooltip>
+      )}
     </div>
   );
 }

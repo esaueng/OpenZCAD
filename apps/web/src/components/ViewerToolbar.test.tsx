@@ -783,6 +783,135 @@ describe('touch modifier toggles', () => {
   });
 });
 
+describe('the phone rail’s More view tools', () => {
+  // The same query phone-stage.css folds the rail under.
+  const PHONE =
+    '(pointer: coarse) and (max-width: 520px) and (min-height: 541px)';
+
+  function renderOnPhone(phone: boolean) {
+    vi.stubGlobal(
+      'matchMedia',
+      (query: string) =>
+        ({
+          matches: phone && (query === PHONE || query === '(pointer: coarse)'),
+          media: query,
+          addEventListener() {},
+          removeEventListener() {}
+        }) as unknown as MediaQueryList
+    );
+    const noop = () => undefined;
+    // Inside the instrument rail, as ViewerShell draws it, with a panel's
+    // button beside the bar.
+    render(
+      <div>
+        <div className="instrument-rail">
+          <ViewerToolbar
+            settings={{ showGrid: true, displayMode: 'shaded-edges' }}
+            projection="perspective"
+            canUndo={false}
+            canRedo={false}
+            sectionRange={null}
+            onUndo={noop}
+            onRedo={noop}
+            onToggleGrid={noop}
+            onFit={noop}
+            onView={noop}
+            onCycleDisplayMode={noop}
+            onToggleProjection={noop}
+            onToggleSection={noop}
+            onSectionPlane={noop}
+            onSectionOffset={noop}
+            onSectionCommit={noop}
+            onExportSectionDxf={noop}
+            sectionOutline={{ kind: 'clipping' }}
+            units="mm"
+            touchModifiers={{ multiSelect: false, freeValues: false }}
+            onTouchModifiersChange={noop}
+          />
+          <button type="button" data-model-panel-rail="history">
+            History panel
+          </button>
+        </div>
+        <button type="button">Elsewhere</button>
+      </div>
+    );
+  }
+
+  it('is not on a rail that shows every tool', () => {
+    try {
+      renderOnPhone(false);
+      expect(
+        screen.queryByRole('button', { name: 'More view tools' })
+      ).toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('opens the rest of the rail and puts it away again', () => {
+    try {
+      renderOnPhone(true);
+      const more = screen.getByRole('button', { name: 'More view tools' });
+      // Last in the bar, after the view controls it brings out.
+      const bar = screen.getByRole('toolbar', { name: 'Viewer bar' });
+      expect(bar.lastElementChild).toBe(more);
+      expect(more).toHaveAttribute('aria-expanded', 'false');
+      fireEvent.click(more);
+      expect(more).toHaveAttribute('aria-expanded', 'true');
+      // A press on the rail's own tools leaves it open.
+      fireEvent.pointerDown(screen.getByRole('button', { name: /^Fit view/ }));
+      expect(more).toHaveAttribute('aria-expanded', 'true');
+      fireEvent.click(more);
+      expect(more).toHaveAttribute('aria-expanded', 'false');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('folds on a press off the rail, on a panel button’s click and on Escape', () => {
+    try {
+      renderOnPhone(true);
+      const more = screen.getByRole('button', { name: 'More view tools' });
+      fireEvent.click(more);
+      fireEvent.pointerDown(screen.getByRole('button', { name: 'Elsewhere' }));
+      expect(more).toHaveAttribute('aria-expanded', 'false');
+
+      // The panel's button folds it on the click, not the press: folding
+      // under a finger still down moved another button there.
+      fireEvent.click(more);
+      const panel = screen.getByRole('button', { name: 'History panel' });
+      fireEvent.pointerDown(panel);
+      expect(more).toHaveAttribute('aria-expanded', 'true');
+      fireEvent.click(panel);
+      expect(more).toHaveAttribute('aria-expanded', 'false');
+
+      fireEvent.click(more);
+      more.focus();
+      fireEvent.keyDown(more, { key: 'Escape' });
+      expect(more).toHaveAttribute('aria-expanded', 'false');
+      expect(document.activeElement).toBe(more);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('leaves Escape to the views flyout while that is open', () => {
+    try {
+      renderOnPhone(true);
+      const more = screen.getByRole('button', { name: 'More view tools' });
+      fireEvent.click(more);
+      fireEvent.click(screen.getByRole('button', { name: 'Standard views' }));
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(more).toHaveAttribute('aria-expanded', 'true');
+      expect(
+        screen.getByRole('button', { name: 'Standard views' })
+      ).toHaveAttribute('aria-expanded', 'false');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 describe("the viewer bar's groups", () => {
   it('keeps every button in the bar, undo and redo apart from the view controls', () => {
     renderToolbar({ kind: 'clipping' });

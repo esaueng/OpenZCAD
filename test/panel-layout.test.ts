@@ -12,6 +12,7 @@ import {
   DEFAULT_PANEL_INSETS,
   DROP_SUPPRESSED,
   defaultPanelLayout,
+  dismissPhonePanel,
   dockFootprint,
   ESSENTIALS_RIGHT_PRESET,
   findPanel,
@@ -20,6 +21,7 @@ import {
   FLOAT_MAX_WIDTH,
   FLOAT_MIN_HEIGHT,
   FLOAT_MIN_WIDTH,
+  followPhoneLane,
   grownFloatRect,
   hitTest,
   isDragStart,
@@ -59,6 +61,7 @@ import {
   resizeColumn,
   resizeFloat,
   resizeGap,
+  restPhoneLane,
   savePanelLayout,
   setOption,
   splitGapEvenly,
@@ -2821,6 +2824,140 @@ describe('phone-width stages', () => {
     expect(panelStatus(togglePanel(layout, 'bodies', STAGE), 'bodies')).toBe(
       'closed'
     );
+  });
+});
+
+describe('a phone lane at rest', () => {
+  // A workspace opened at a phone width: the review found Parameters over
+  // the middle of a 390px stage on first open, with a fifth of the part
+  // left in view, because the lane showed whatever the stored layout had
+  // open.
+  const phoneStage: PanelStage = { width: 390, height: 844 };
+  const lane = (layout: PanelLayout) =>
+    computePanelGeometry(layout, phoneStage).phonePanel;
+  /** Everything but the lane's own choice, which is never stored. */
+  const arranged = (layout: PanelLayout) => {
+    const { phoneLane: _lane, recent: _recent, ...rest } = layout;
+    return rest;
+  };
+
+  it('shows no panel on first open and leaves the stored layout as it was', () => {
+    const stored = essentials();
+    expect(lane(stored)).toBe('parameters');
+    const opened = restPhoneLane(stored);
+    expect(lane(opened)).toBeNull();
+    // Still open and docked for a wider stage; only the lane is quiet.
+    expect(computePanelGeometry(opened, phoneStage).phonePanels).toEqual([
+      'parameters',
+      'bodies'
+    ]);
+    expect(arranged(opened)).toEqual(arranged(stored));
+    expect(panelStatus(opened, 'parameters')).toBe('docked');
+    expect(computePanelGeometry(opened, STAGE).columns).toHaveLength(2);
+    // Resting twice is resting.
+    expect(restPhoneLane(opened)).toBe(opened);
+  });
+
+  it('never stores the lane’s choice', () => {
+    const storage = memoryStorage();
+    savePanelLayout(restPhoneLane(essentials()), storage);
+    const loaded = loadPanelLayout(storage);
+    expect('phoneLane' in loaded).toBe(false);
+    expect(lane(loaded)).toBe('parameters');
+    expect(
+      'phoneLane' in normalizePanelLayout(openPanel(restPhoneLane(essentials()), 'bodies'))
+    ).toBe(false);
+  });
+
+  it('shows the panel a rail press asks for, and rests again on a second press without closing it', () => {
+    const stored = essentials();
+    let layout = restPhoneLane(stored);
+    layout = togglePanel(layout, 'bodies', phoneStage);
+    expect(lane(layout)).toBe('bodies');
+    // Objects was docked on the left and still is.
+    expect(arranged(layout)).toEqual(arranged(stored));
+    layout = togglePanel(layout, 'bodies', phoneStage);
+    expect(lane(layout)).toBeNull();
+    expect(panelStatus(layout, 'bodies')).toBe('docked');
+    expect(arranged(layout)).toEqual(arranged(stored));
+    // Nothing falls back into the lane: the next open panel was never
+    // asked for here.
+    expect(panelStatus(layout, 'parameters')).toBe('docked');
+  });
+
+  it('moves between asked panels and closes one that was only open for the lane', () => {
+    const stored = essentials();
+    let layout = restPhoneLane(stored);
+    // History is closed in Essentials: the press opens it unpinned.
+    layout = togglePanel(layout, 'history', phoneStage);
+    expect(lane(layout)).toBe('history');
+    expect(panelStatus(layout, 'history')).toBe('unpinned');
+    // Another press takes the lane, and the temporary panel closes with it.
+    layout = togglePanel(layout, 'parameters', phoneStage);
+    expect(lane(layout)).toBe('parameters');
+    expect(panelStatus(layout, 'history')).toBe('closed');
+    expect(arranged(layout)).toEqual(arranged(stored));
+    // Dismissed from its own frame, as from the rail.
+    layout = togglePanel(layout, 'history', phoneStage);
+    layout = dismissPhonePanel(layout, 'history');
+    expect(lane(layout)).toBeNull();
+    expect(panelStatus(layout, 'history')).toBe('closed');
+    expect(arranged(layout)).toEqual(arranged(stored));
+  });
+
+  it('shows a panel search asks for, and one reopened at its home', () => {
+    const stored = closePanel(essentials(), 'parameters');
+    let layout = presentPanel(restPhoneLane(stored), 'history', phoneStage);
+    expect(lane(layout)).toBe('history');
+    layout = openPanel(layout, 'parameters', phoneStage);
+    expect(lane(layout)).toBe('parameters');
+    expect(panelStatus(layout, 'parameters')).toBe('docked');
+    expect(panelStatus(layout, 'history')).toBe('closed');
+  });
+
+  it('shows the asked panel again after Hide all, and nothing while hidden', () => {
+    let layout = togglePanel(restPhoneLane(essentials()), 'bodies', phoneStage);
+    layout = setOption(layout, 'hidden', true);
+    expect(lane(layout)).toBeNull();
+    layout = togglePanel(layout, 'parameters', phoneStage);
+    expect(layout.options.hidden).toBe(false);
+    expect(lane(layout)).toBe('parameters');
+  });
+
+  it('keeps resting through a preset and a wider stage in between', () => {
+    let layout = restPhoneLane(essentials());
+    layout = applyPreset(layout, 'full');
+    expect(lane(layout)).toBeNull();
+    // Rotated wide, a press closes and opens docked panels as it always
+    // has; back upright the lane shows only what was asked for.
+    layout = togglePanel(layout, 'history', STAGE);
+    expect(panelStatus(layout, 'history')).toBe('closed');
+    expect(lane(layout)).toBeNull();
+    layout = togglePanel(layout, 'history', STAGE);
+    expect(panelStatus(layout, 'history')).toBe('docked');
+    expect(lane(layout)).toBe('history');
+    // A preset that closes the asked panel leaves the lane at rest.
+    expect(lane(applyPreset(layout, 'essentials'))).toBeNull();
+  });
+
+  it('follows recency again for a workspace opened wider', () => {
+    const rested = togglePanel(
+      restPhoneLane(essentials()),
+      'bodies',
+      phoneStage
+    );
+    const followed = followPhoneLane(rested);
+    expect('phoneLane' in followed).toBe(false);
+    expect(lane(followed)).toBe('bodies');
+    // A press on the panel the lane shows closes it, as before.
+    expect(
+      panelStatus(togglePanel(followed, 'bodies', phoneStage), 'bodies')
+    ).toBe('closed');
+    expect(dismissPhonePanel(followed, 'bodies')).toEqual(
+      closePanel(followed, 'bodies')
+    );
+    const plain = essentials();
+    expect(followPhoneLane(plain)).toBe(plain);
   });
 });
 

@@ -54,5 +54,8 @@
 @import './components/edit-control.css';
 /* After every sizing rule: it only adds hit area, never moves a control. */
 @import './components/target-size.css';
+/* A touch phone held upright: one-column rails and a short instrument set.
+   It undoes target-size.css's touch grids there, so it follows them. */
+@import './components/phone-stage.css';
 /* Touch-only browser behaviour; it sizes nothing. */
 @import './components/touch.css';

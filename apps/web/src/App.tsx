@@ -1778,14 +1778,18 @@ import {
   applyPreset,
   closePanel,
   computePanelGeometry,
+  dismissPhonePanel,
+  followPhoneLane,
   isPanelCoveredByInspection,
   isPanelOpen,
   loadPanelLayout,
   matchingPreset,
   notePanelUsed,
+  PANEL_LANE_REST_MAX_WIDTH,
   panelStatus,
   pinPanel,
   presentPanel,
+  restPhoneLane,
   savePanelLayout,
   setOption,
   togglePanel,
@@ -6262,6 +6266,21 @@ export function App() {
   useEffect(() => {
     savePanelLayout(panelLayout);
   }, [panelLayout]);
+
+  // A workspace opened on a phone opens on the model: there the lane's panel
+  // stands across the middle of the stage, so the lane rests until a panel
+  // is asked for, whatever the stored layout has open, and that layout is
+  // left as it is for a wider stage. Opened wider, the lane follows recency
+  // as before when the window narrows. Before paint, so a stored panel never
+  // flashes over the model on the way in.
+  useLayoutEffect(() => {
+    if (!openProjectId) return;
+    setPanelLayout(
+      window.innerWidth <= PANEL_LANE_REST_MAX_WIDTH
+        ? restPhoneLane
+        : followPhoneLane
+    );
+  }, [openProjectId]);
 
   useEffect(() => {
     setViewerSettings((current) => ({
@@ -29543,7 +29562,11 @@ export function App() {
     },
     onUnpin: () => setPanelLayout((current) => unpinPanel(current, id)),
     onClose: () => {
-      setPanelLayout((current) => closePanel(current, id));
+      setPanelLayout((current) =>
+        placement === 'phone'
+          ? dismissPhonePanel(current, id)
+          : closePanel(current, id)
+      );
       requestAnimationFrame(() =>
         document
           .querySelector<HTMLButtonElement>(`[data-model-panel-rail="${id}"]`)
@@ -29551,7 +29574,13 @@ export function App() {
       );
     },
     onHidePanels: () => {
-      setPanelLayout((current) => setOption(current, 'hidden', true));
+      // A lane that rests has nothing to hide: clearing it is the same
+      // press, and Hide all stays a choice made on a wider stage.
+      setPanelLayout((current) =>
+        current.phoneLane !== undefined
+          ? dismissPhonePanel(current, id)
+          : setOption(current, 'hidden', true)
+      );
       requestAnimationFrame(() =>
         document
           .querySelector<HTMLButtonElement>(`[data-model-panel-rail="${id}"]`)
