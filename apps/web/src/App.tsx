@@ -399,11 +399,13 @@ import { tintPreviewResultBodies } from './lib/previewBodyTint';
 import { remappedBlendEdge } from './lib/inPlace/blendEdgeRemap';
 import { cancelCommandChipEntry } from './lib/inPlace/chipCancel';
 import { commandChipName } from './lib/inPlace/chipNames';
+import { loneBodyFor } from './lib/inPlace/loneBody';
 import {
   presentedDiagnostics,
   shownFeatureWarnings
 } from './lib/diagnosticsRows';
 import { sweepFacetingAdvisories } from './lib/sweepFaceting';
+import { loftFacetingAdvisories } from './lib/loftFaceting';
 import { primitiveDimensionLabel } from './lib/primitiveDimensionLabel';
 import { useRememberedSection } from './hooks/useRememberedSection';
 import { newBlendFacePick } from './lib/blendRearm';
@@ -771,6 +773,7 @@ import {
   resolveImportedBlendFace
 } from './lib/interaction/filletFaceEdit';
 import { ToastHost } from './components/Toast';
+import { useConfirm } from './components/ConfirmDialog';
 import {
   commandPaletteShortcut,
   idleWorkspaceHint,
@@ -3213,6 +3216,9 @@ export function App() {
   // The status line is the log; a toast is the notice. Only actions whose
   // outcome is otherwise invisible in the viewport raise one.
   const [toast, setToast] = useState<ToastModel | null>(null);
+  // Every destructive confirm in the app shell (library deletes, demo reset,
+  // settings reset) asks in-page; see ConfirmDialog for why never natively.
+  const { confirm: confirmInPage, dialog: confirmDialog } = useConfirm();
   /**
    * A confirmed update and an interrupted download are separate facts. Keep
    * their Reload offers on the start screen after the toast expires.
@@ -7833,7 +7839,12 @@ export function App() {
       currentFaceGeometryPreview?.geometry.bodyRepresentations ??
       currentGeometrySnapshot?.bodyRepresentations ??
       shown?.derived.bodyRepresentations;
-    const faceting = shown ? sweepFacetingAdvisories(shown, shownBodies) : [];
+    const faceting = shown
+      ? [
+          ...sweepFacetingAdvisories(shown, shownBodies),
+          ...loftFacetingAdvisories(shown, shownBodies)
+        ]
+      : [];
     const featureWarnings = currentFaceGeometryPreview
       ? currentFaceGeometryPreview.geometry.featureWarnings
       : currentGeometrySnapshot
@@ -10087,10 +10098,18 @@ export function App() {
     }
     // Bodies selected first (in the Objects panel, say) are its bodies, in
     // the order they were picked: a subtract's first is its base.
-    const initialBodies = selectedBodyIds.flatMap((bodyId) => {
+    const chosenBodies = selectedBodyIds.flatMap((bodyId) => {
       const body = inPlaceBodyPick(bodyId);
       return body ? [body] : [];
     });
+    // With nothing chosen, a model's only body is the body, as it is for
+    // Move: Scale, Mirror and the rest asked to "Click the body" of it.
+    const loneBodyId =
+      chosenBodies.length === 0 && !selectedFace && sweptFaces.length === 0
+        ? loneBodyFor(tool, representations, hiddenBodyIds)
+        : null;
+    const loneBody = loneBodyId ? inPlaceBodyPick(loneBodyId) : null;
+    const initialBodies = loneBody ? [loneBody] : chosenBodies;
     // Edges selected first (the rail's Fillet, the edge's own
     // context menu) are a fillet's or chamfer's edges, in pick order.
     const initialEdges = IN_PLACE_TOOL_SPECS[tool].edgeMode
@@ -11267,9 +11286,8 @@ export function App() {
         });
         setMoveSnap(null);
         setTool('transform');
-        setStatus(
-          'Move sketch: drag the arrows — centers snap to faces of other bodies, Shift is free.'
-        );
+        // The Move bar says the step; a toast said it a second time.
+        retireStatusMessage();
         return true;
       }
       // WF-07 (resolved): Move used to be two UIs for one command, and which
@@ -11296,9 +11314,7 @@ export function App() {
         });
         setMoveSnap(null);
         setTool('transform');
-        setStatus(
-          'Move/Rotate: drag the arrows or rings — snapping follows your zoom, Shift is free.'
-        );
+        retireStatusMessage();
         return true;
       }
     }
@@ -11339,6 +11355,20 @@ export function App() {
    * preview can never outlive the card that made it, and nobody has to count
    * presses to reach a clean workspace.
    */
+  /**
+   * Cancels a Move and says so, as every other command's Cancel does: an
+   * Escape out of Move used to report nothing.
+   */
+  function cancelMove() {
+    const sketch = movePreview?.target === 'sketch';
+    cancelPanel();
+    setStatus(
+      sketch
+        ? 'Move canceled; the sketch is unchanged.'
+        : 'Move canceled; nothing was added.'
+    );
+  }
+
   function cancelPanel() {
     cancelPendingRegionExtrusion();
     cancelDirectManipulationRef.current?.();
@@ -12802,7 +12832,11 @@ export function App() {
   async function handleDeleteAssistantCredential() {
     if (
       appSettings.general.confirmDestructiveActions &&
-      !window.confirm('Remove the saved personal AI credential?')
+      !(await confirmInPage({
+        title: 'Remove the saved personal AI credential?',
+        body: 'The assistant stops using it until you add a credential again.',
+        confirmLabel: 'Remove'
+      }))
     ) {
       return;
     }
@@ -13234,12 +13268,14 @@ export function App() {
     }
   }
 
-  function handleResetAppSettings() {
+  async function handleResetAppSettings() {
     if (
       appSettings.general.confirmDestructiveActions &&
-      !window.confirm(
-        'Reset application settings on this device? Projects are not deleted.'
-      )
+      !(await confirmInPage({
+        title: 'Reset settings on this device?',
+        body: 'Every setting goes back to its default. Projects are not deleted.',
+        confirmLabel: 'Reset settings'
+      }))
     ) {
       return;
     }
@@ -14398,9 +14434,57 @@ export function App() {
             ? `Archived ${project.name}.`
             : `Restored ${project.name}.`
       );
+      announceShelfMove([project], project.name, status);
     } catch (error) {
       setStatus(errorMessage(error, `Could not move ${project.name}.`));
     }
+  }
+
+  /**
+   * Move to trash and Archive take a project off the shelf in view, so they
+   * answer with a toast that names what went and an Undo that puts each one
+   * back on the shelf it came from; a Restore needs neither.
+   */
+  function announceShelfMove(
+    moved: readonly ProjectSummary[],
+    what: string,
+    status: ProjectStatus
+  ) {
+    if (moved.length === 0 || (status !== 'deleted' && status !== 'archived')) {
+      return;
+    }
+    const previous = moved.map((project) => ({
+      project,
+      status: project.organization?.status ?? 'active'
+    }));
+    announce(
+      status === 'deleted'
+        ? `Moved ${what} to the trash.`
+        : `Archived ${what}.`,
+      {
+        label: 'Undo',
+        run: () => {
+          void (async () => {
+            let failure: unknown;
+            for (const { project, status: back } of previous) {
+              try {
+                await persistOrganization(project.projectId, (current) =>
+                  applyOrganizationUpdate(current, { status: back })
+                );
+              } catch (error) {
+                failure ??= error;
+              }
+            }
+            setStatus(
+              failure
+                ? errorMessage(failure, `Could not put back ${what}.`)
+                : `Put back ${what}.`
+            );
+          })();
+        }
+      },
+      { repeatsStatusAt: lastStatusAtRef.current }
+    );
   }
 
   /** Several projects onto one shelf, from the library's selection. */
@@ -14409,6 +14493,7 @@ export function App() {
     status: ProjectStatus
   ) {
     let moved = 0;
+    const movedProjects: ProjectSummary[] = [];
     let failure: unknown;
     for (const project of targets) {
       try {
@@ -14416,6 +14501,7 @@ export function App() {
           applyOrganizationUpdate(current, { status })
         );
         moved += 1;
+        movedProjects.push(project);
       } catch (error) {
         failure ??= error;
       }
@@ -14440,6 +14526,7 @@ export function App() {
           ? `Archived ${what}.`
           : `Restored ${what}.`
     );
+    announceShelfMove(movedProjects, what, status);
   }
 
   /** Pins or unpins several projects, from the library's selection. */
@@ -14959,9 +15046,11 @@ export function App() {
   async function handleDeleteProjectForever(project: ProjectSummary) {
     if (
       appSettings.general.confirmDestructiveActions &&
-      !window.confirm(
-        `Permanently delete “${project.name}”? This cannot be undone.`
-      )
+      !(await confirmInPage({
+        title: `Delete “${project.name}” forever?`,
+        body: 'This cannot be undone.',
+        confirmLabel: 'Delete forever'
+      }))
     ) {
       return;
     }
@@ -14985,9 +15074,11 @@ export function App() {
     if (
       targets.length === 0 ||
       (appSettings.general.confirmDestructiveActions &&
-        !window.confirm(
-          `Permanently delete ${countLabel(targets.length, 'project', 'projects')}? This cannot be undone.`
-        ))
+        !(await confirmInPage({
+          title: `Delete ${countLabel(targets.length, 'project', 'projects')} forever?`,
+          body: 'This cannot be undone.',
+          confirmLabel: 'Delete forever'
+        })))
     ) {
       return;
     }
@@ -15015,9 +15106,11 @@ export function App() {
     const name = definition.name.replace('Demo · ', '');
     if (
       appSettings.general.confirmDestructiveActions &&
-      !window.confirm(
-        `Reset the ${name} sample? Your changes to it are discarded; save a copy first to keep them.`
-      )
+      !(await confirmInPage({
+        title: `Reset the ${name} sample?`,
+        body: 'Your changes to it are discarded. Save a copy first to keep them.',
+        confirmLabel: 'Reset sample'
+      }))
     ) {
       return false;
     }
@@ -15040,9 +15133,11 @@ export function App() {
     }
     if (
       appSettings.general.confirmDestructiveActions &&
-      !window.confirm(
-        `Permanently delete ${countLabel(trashed.length, 'project', 'projects')} in the trash? This cannot be undone.`
-      )
+      !(await confirmInPage({
+        title: 'Empty the trash?',
+        body: `${countLabel(trashed.length, 'project is', 'projects are')} deleted forever. This cannot be undone.`,
+        confirmLabel: 'Empty trash'
+      }))
     ) {
       return;
     }
@@ -15448,9 +15543,12 @@ export function App() {
       return;
     }
     if (
-      !window.confirm(
-        `Restore ${localDocument.name} in your account from the copy saved on this device?\n\nThe unreadable current account copy will be replaced. Existing revisions are not changed.`
-      )
+      !(await confirmInPage({
+        title: `Restore ${localDocument.name} in your account from the copy saved on this device?`,
+        body: 'The unreadable current account copy will be replaced. Existing revisions are not changed.',
+        confirmLabel: 'Restore from this device',
+        tone: 'default'
+      }))
     ) {
       setStatus(
         'Account restore canceled. Your work remains saved on this device.'
@@ -22346,6 +22444,10 @@ export function App() {
     datumLabel: (featureId) =>
       (doc && findFeature(doc, featureId)?.name) ?? 'Datum axis',
     bodyBounds: (bodyId) => inPlaceBodyPick(bodyId),
+    liveBodyIds: () =>
+      Object.values(representations)
+        .filter((body) => !body.consumed && !hiddenBodyIds.has(body.bodyId))
+        .map((body) => body.bodyId),
     evaluate: (value) =>
       evalParamValue(value, parameterScope.scope, doc?.units),
     imagePlaneBasis,
@@ -29237,7 +29339,7 @@ export function App() {
       if (movePreview) {
         if (event.key === 'Escape') {
           event.preventDefault();
-          cancelPanel();
+          cancelMove();
           return;
         }
         // As for an in-place command: Enter on the Move bar's own controls
@@ -29955,7 +30057,7 @@ export function App() {
           onApproveDesktopLogin={handleApproveDesktopLogin}
           onLogout={handleLogout}
           onDeleteCloudData={handleDeleteCloudData}
-          onReset={handleResetAppSettings}
+          onReset={() => void handleResetAppSettings()}
           onApplyViewportDefaults={applyViewportDefaults}
           onExportDiagnostics={handleExportDiagnostics}
           onExportInteractionLog={() => void handleExportInteractionLog()}
@@ -30056,6 +30158,7 @@ export function App() {
           workspace="Projects"
         />
         {settingsOverlay}
+        {confirmDialog}
         <ToastHost toast={toast} onDismiss={dismissToast} />
       </>
     );
@@ -30186,18 +30289,23 @@ export function App() {
         setActiveMeasurementId((current) => (current === id ? null : current));
         setStatus('Measurement removed.');
       }}
-      onClear={() => {
-        if (
-          appSettings.general.confirmDestructiveActions &&
-          !window.confirm('Clear every measurement in this project?')
-        ) {
-          return;
-        }
-        setMeasurements([]);
-        setActiveMeasurementId(null);
-        clearMeasurementPicks();
-        setStatus('Measurement list cleared.');
-      }}
+      onClear={() =>
+        void (async () => {
+          if (
+            appSettings.general.confirmDestructiveActions &&
+            !(await confirmInPage({
+              title: 'Clear every measurement in this project?',
+              confirmLabel: 'Clear measurements'
+            }))
+          ) {
+            return;
+          }
+          setMeasurements([]);
+          setActiveMeasurementId(null);
+          clearMeasurementPicks();
+          setStatus('Measurement list cleared.');
+        })()
+      }
       onCopy={(measurement) => void copyMeasurements(measurement)}
       onExport={exportMeasurements}
     />
@@ -33706,7 +33814,7 @@ export function App() {
                     )
                   }
                   onConfirm={confirmMove}
-                  onCancel={cancelPanel}
+                  onCancel={cancelMove}
                   copy={
                     movePreview.target === 'sketch'
                       ? undefined
@@ -34182,6 +34290,7 @@ export function App() {
             />
           )}
           {settingsOverlay}
+          {confirmDialog}
         </>
       }
     />
