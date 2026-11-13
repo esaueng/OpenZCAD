@@ -131,6 +131,7 @@
     "test/helical-coil-cap-rims.test.ts",
     "test/imported-mesh-conversion-cache.test.ts",
     "test/imported-mesh.test.ts",
+    "test/intersect-material-acceptance.test.ts",
     "test/io-step.test.ts",
     "test/io.test.ts",
     "test/kernel-dependencies.test.ts",

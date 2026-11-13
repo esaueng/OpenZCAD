@@ -9,7 +9,9 @@ import { buildThreadFeature } from './exact-thread';
 import { requireValidSolid } from './kernel-validation';
 import {
   cutKeptToolMaterialRefusal,
-  cutRetainedToolMaterialWitness
+  cutRetainedToolMaterialWitness,
+  intersectKeptOutsideMaterialRefusal,
+  intersectKeptOutsideMaterialWitness
 } from './result-acceptance';
 import {
   carryAnalyticFaces,
@@ -919,6 +921,23 @@ function buildExtrudeFeature(
       }
     }
     const { operandLineage, extrusionSolid, coaxial, solid } = combined;
+    // The Boolean feature's intersect gate (#1244), for the same operation
+    // reached through an extrusion: material the result holds outside the
+    // target or the extrusion is a wrong body, whatever route rebuilt it.
+    if (operation === 'intersect') {
+      const witness = intersectKeptOutsideMaterialWitness(
+        kernel,
+        targetSolid,
+        extrusionSolid,
+        solid
+      );
+      if (witness) {
+        throw intersectKeptOutsideMaterialRefusal(witness, [
+          operandNames[0]!,
+          operandNames[1]!
+        ]);
+      }
+    }
     if (combined.union) {
       ctx.strictVerdicts?.set(solid, combined.union.verdict);
     }
@@ -2221,6 +2240,26 @@ function combineBooleanOperands(
           solid
         );
         if (witness) throw cutKeptToolMaterialRefusal('subtract', witness);
+      }
+      // An intersection is defined to hold only material inside both
+      // operands. Measured on Remus 2026.1.122 (#1244): a torus and a holed
+      // block intersected `ok` in both orders and kept the block's hole. A
+      // point the kernel classifies inside the result and outside either
+      // operand settles that the result is wrong, on every route that
+      // rebuilds this feature: preview, commit, reload and upstream edits.
+      if (!subtracting) {
+        const witness = intersectKeptOutsideMaterialWitness(
+          kernel,
+          target,
+          tool,
+          solid
+        );
+        if (witness) {
+          throw intersectKeptOutsideMaterialRefusal(witness, [
+            operandNames[0]!,
+            operandNames[1]!
+          ]);
+        }
       }
       if (!pairwiseOperands) {
         probeDeclined = `The ${data.operation} reduced ${operands.length} operands in sequence; the entity-evolution entry points are pairwise.`;
