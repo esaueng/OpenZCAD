@@ -268,7 +268,9 @@ describe('EncryptedShareLinks (slice 5-10)', () => {
     );
     expect(client.revoke).not.toHaveBeenCalled();
     const ask = screen.getByRole('group', { name: 'Revoke View only link' });
-    expect(within(ask).getByRole('button', { name: 'Keep link' })).toHaveFocus();
+    expect(
+      within(ask).getByRole('button', { name: 'Keep link' })
+    ).toHaveFocus();
     await user.keyboard('{Escape}');
     expect(client.revoke).not.toHaveBeenCalled();
     expect(
