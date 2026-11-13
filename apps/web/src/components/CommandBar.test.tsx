@@ -581,12 +581,12 @@ describe('CommandBar', () => {
 
     await userEvent.click(search);
     await userEvent.keyboard('{Enter}p{Escape}');
-    expect(keys).toEqual(['apply', 'preview', 'reject']);
+    expect(keys).toEqual(['apply', 'preview', 'escape']);
     // Taken: the letter was not typed and Escape did not drop focus.
     expect(search).toHaveValue('');
     expect(search).toHaveFocus();
     await userEvent.keyboard('{Control>}{ArrowUp}{/Control}');
-    expect(keys).toEqual(['apply', 'preview', 'reject', 'history']);
+    expect(keys).toEqual(['apply', 'preview', 'escape', 'history']);
 
     window.removeEventListener(ASSISTANT_PROMPT_KEY_EVENT, take);
     // Nothing listening: `p` is a letter, and one Escape clears it and
@@ -602,7 +602,7 @@ describe('CommandBar', () => {
     await userEvent.keyboard('q{Escape}');
     expect(search).toHaveValue('');
     expect(search).not.toHaveFocus();
-    expect(keys).toEqual(['apply', 'preview', 'reject', 'history']);
+    expect(keys).toEqual(['apply', 'preview', 'escape', 'history']);
     window.removeEventListener(ASSISTANT_PROMPT_KEY_EVENT, take);
   });
 

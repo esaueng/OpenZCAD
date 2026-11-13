@@ -5,7 +5,8 @@ import {
   expectBodyCount,
   openAssistant,
   promptField,
-  stubApi
+  stubApi,
+  verifiedRecipe
 } from './openzcad-fixtures';
 
 /**
@@ -103,12 +104,7 @@ async function expectApplyCheckInFlight(page: Page) {
 
 /** Opens the verified suggestion's proposal card. */
 async function openProposal(page: Page, label: string) {
-  const chip = page
-    .locator('.assistant-suggestion, .assistant-verified-action', {
-      hasText: label
-    })
-    .first();
-  await expect(chip).toBeVisible({ timeout: 60_000 });
+  const chip = await verifiedRecipe(page, label, 60_000);
   await chip.click();
   await promptField(page).press('Enter');
   const proposal = page.locator('.assistant-card.proposal.open').last();

@@ -213,7 +213,40 @@ describe('Move overlay', () => {
       />
     );
     expect(screen.getByRole('group', { name: 'Rotation' })).toBeTruthy();
-    expect(moveTitle()).toBe('Move / Rotate');
+    // "Move", as the rail and the drawer call it: the card said "Move /
+    // Rotate" (13 November review). Its hint names the rings instead.
+    expect(moveTitle()).toBe('Move');
+    expect(
+      document.querySelector('.move-command .in-place-command-hint')
+    ).toHaveTextContent('Box · drag the arrows or rings · Shift moves freely');
+  });
+
+  it('shows the state pill only once there is a move to preview', () => {
+    const props = {
+      bodyName: 'Box',
+      units: 'mm',
+      snap: null,
+      onChange: () => {},
+      onConfirm: () => {},
+      onCancel: () => {}
+    };
+    const { rerender } = render(
+      <MoveOverlay
+        {...props}
+        values={{ translation: zero, rotationDeg: zero }}
+      />
+    );
+    const pill = document.querySelector(
+      '.move-command .in-place-command-state'
+    );
+    expect(pill).toBeEmptyDOMElement();
+    rerender(
+      <MoveOverlay
+        {...props}
+        values={{ translation: { x: 4, y: 0, z: 0 }, rotationDeg: zero }}
+      />
+    );
+    expect(pill).toHaveTextContent('Preview');
   });
 
   // U09: the gizmo is the Move, so its bar is the in-place Cancel / Done
@@ -259,9 +292,10 @@ describe('Move overlay', () => {
     ]) {
       expect(options.contains(screen.getByLabelText(label))).toBe(true);
     }
-    expect(screen.getByLabelText('Move / Rotate options').tagName).toBe(
-      'SUMMARY'
-    );
+    const summary = screen.getByLabelText('Move options');
+    expect(summary.tagName).toBe('SUMMARY');
+    // Named in words, as every other command's Options are.
+    expect(summary).toHaveTextContent('Options');
     // Done submits the form, so Enter in a field still applies the Move.
     fireEvent.click(screen.getByRole('button', { name: 'Done' }));
     expect(confirm).toHaveBeenCalledTimes(1);

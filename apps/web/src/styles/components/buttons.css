@@ -306,18 +306,18 @@ html select:not([multiple]):not(.start-field *):not(.object-filter *):focus {
 
 /*
  * The last secondaries and options that rested filled or outlined: the
- * conflict dialog's choices, the assembly saved-position chip, assistant
- * suggestion chips, tool-card recovery actions, sketch constraint targets and
+ * conflict dialog's choices, the assembly saved-position chip, tool-card
+ * recovery actions, sketch constraint targets and
  * solve feedback, text style toggles, the sketch plane tiles, the drawing
  * sheet list, keypad units, the command flyout's More, and the start
  * screen's demo, startup, shelf and tile-footer actions. Each rests bare and
  * becomes a whole button under the pointer or keyboard focus; a chosen or
  * pressed option keeps its selected look, and the plane tiles keep their
- * plane-tinted hover.
+ * plane-tinted hover. The assistant's question chips are not among them:
+ * bare at rest, an answer to pick read as plain text (13 November review).
  */
 .conflict-dialog-actions .conflict-choice:not(:hover):not(:focus-visible),
 .assembly-position-chip:not(:hover):not(:focus-within),
-.assistant-chip:not(:hover):not(:focus-visible),
 .tool-card-recovery:not(:hover):not(:focus-visible),
 .sketch-constraint-targets
   button:not([aria-pressed='true']):not(:hover):not(:focus-visible),
@@ -341,7 +341,6 @@ html select:not([multiple]):not(.start-field *):not(.object-filter *):focus {
     [aria-disabled='true']
   ),
 .assembly-position-chip:is(:hover, :focus-within),
-html .assistant-chip:is(:hover, :focus-visible):not(:disabled),
 .tool-card-recovery:is(:hover, :focus-visible),
 .sketch-constraint-targets
   button:not([aria-pressed='true']):is(:hover, :focus-visible),
