@@ -399,6 +399,7 @@ import { tintPreviewResultBodies } from './lib/previewBodyTint';
 import { remappedBlendEdge } from './lib/inPlace/blendEdgeRemap';
 import { cancelCommandChipEntry } from './lib/inPlace/chipCancel';
 import { commandChipName } from './lib/inPlace/chipNames';
+import { loneBodyFor } from './lib/inPlace/loneBody';
 import {
   presentedDiagnostics,
   shownFeatureWarnings
@@ -10080,10 +10081,18 @@ export function App() {
     }
     // Bodies selected first (in the Objects panel, say) are its bodies, in
     // the order they were picked: a subtract's first is its base.
-    const initialBodies = selectedBodyIds.flatMap((bodyId) => {
+    const chosenBodies = selectedBodyIds.flatMap((bodyId) => {
       const body = inPlaceBodyPick(bodyId);
       return body ? [body] : [];
     });
+    // With nothing chosen, a model's only body is the body, as it is for
+    // Move: Scale, Mirror and the rest asked to "Click the body" of it.
+    const loneBodyId =
+      chosenBodies.length === 0 && !selectedFace && sweptFaces.length === 0
+        ? loneBodyFor(tool, representations, hiddenBodyIds)
+        : null;
+    const loneBody = loneBodyId ? inPlaceBodyPick(loneBodyId) : null;
+    const initialBodies = loneBody ? [loneBody] : chosenBodies;
     // Edges selected first (the rail's Fillet, the edge's own
     // context menu) are a fillet's or chamfer's edges, in pick order.
     const initialEdges = IN_PLACE_TOOL_SPECS[tool].edgeMode
@@ -11260,9 +11269,8 @@ export function App() {
         });
         setMoveSnap(null);
         setTool('transform');
-        setStatus(
-          'Move sketch: drag the arrows — centers snap to faces of other bodies, Shift is free.'
-        );
+        // The Move bar says the step; a toast said it a second time.
+        retireStatusMessage();
         return true;
       }
       // WF-07 (resolved): Move used to be two UIs for one command, and which
@@ -11289,9 +11297,7 @@ export function App() {
         });
         setMoveSnap(null);
         setTool('transform');
-        setStatus(
-          'Move/Rotate: drag the arrows or rings — snapping follows your zoom, Shift is free.'
-        );
+        retireStatusMessage();
         return true;
       }
     }
@@ -11332,6 +11338,20 @@ export function App() {
    * preview can never outlive the card that made it, and nobody has to count
    * presses to reach a clean workspace.
    */
+  /**
+   * Cancels a Move and says so, as every other command's Cancel does: an
+   * Escape out of Move used to report nothing.
+   */
+  function cancelMove() {
+    const sketch = movePreview?.target === 'sketch';
+    cancelPanel();
+    setStatus(
+      sketch
+        ? 'Move canceled; the sketch is unchanged.'
+        : 'Move canceled; nothing was added.'
+    );
+  }
+
   function cancelPanel() {
     cancelPendingRegionExtrusion();
     cancelDirectManipulationRef.current?.();
@@ -22310,6 +22330,10 @@ export function App() {
     datumLabel: (featureId) =>
       (doc && findFeature(doc, featureId)?.name) ?? 'Datum axis',
     bodyBounds: (bodyId) => inPlaceBodyPick(bodyId),
+    liveBodyIds: () =>
+      Object.values(representations)
+        .filter((body) => !body.consumed && !hiddenBodyIds.has(body.bodyId))
+        .map((body) => body.bodyId),
     evaluate: (value) =>
       evalParamValue(value, parameterScope.scope, doc?.units),
     imagePlaneBasis,
@@ -29185,7 +29209,7 @@ export function App() {
       if (movePreview) {
         if (event.key === 'Escape') {
           event.preventDefault();
-          cancelPanel();
+          cancelMove();
           return;
         }
         // As for an in-place command: Enter on the Move bar's own controls
@@ -33639,7 +33663,7 @@ export function App() {
                     )
                   }
                   onConfirm={confirmMove}
-                  onCancel={cancelPanel}
+                  onCancel={cancelMove}
                   copy={
                     movePreview.target === 'sketch'
                       ? undefined

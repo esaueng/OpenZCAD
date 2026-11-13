@@ -502,6 +502,7 @@ export function useInPlaceCommand(
       datumLabel: (featureId) => optionsRef.current.datumLabel(featureId),
       linearSnap: options.linearSnap ?? null,
       bodyBounds: (bodyId) => optionsRef.current.bodyBounds?.(bodyId) ?? null,
+      liveBodyIds: () => optionsRef.current.liveBodyIds?.() ?? [],
       evaluate: (value) => optionsRef.current.evaluate?.(value) ?? null,
       touched: sessionTouched,
       ...(savedData ? { saved: savedData } : {}),
