@@ -29,7 +29,7 @@ import {
 } from '../../lib/localProjectStore';
 import type { PanelId } from '../../lib/panelLayout';
 import { ModelPanel, type ModelPanelProps } from './ModelPanel';
-import type { PanelControls } from './PanelFrame';
+import { PINNED_HINT, TEMPORARY_HINT, type PanelControls } from './PanelFrame';
 import { useHistoryFind, useObjectsView } from './panelViews';
 
 function feature(
@@ -585,23 +585,41 @@ describe('ModelPanel', () => {
     expect(frame.onUnpin).not.toHaveBeenCalled();
   });
 
-  it('says it is unpinned in its footer and pins from there', async () => {
+  it('says it is temporary once, on its one Pin, with no footer', async () => {
     const user = userEvent.setup();
     const frame = controls({ placement: 'unpinned', status: 'unpinned' });
     renderPanels(['parameters'], {}, frame);
-    const region = within(screen.getByRole('region', { name: 'Parameters' }));
-    expect(
-      region.getByText(
-        'Temporary panel. Pin to keep it alongside your other panels.'
-      )
-    ).toBeVisible();
-    expect(
-      region.getByRole('button', { name: 'Pin Parameters' })
-    ).toHaveAttribute('aria-pressed', 'false');
-    await user.click(region.getByRole('button', { name: 'Pin' }));
-    await user.click(region.getByRole('button', { name: 'Pin Parameters' }));
-    expect(frame.onPin).toHaveBeenCalledTimes(2);
+    const section = screen.getByRole('region', { name: 'Parameters' });
+    const region = within(section);
+    // The notice and its second Pin stood taller than a one-row panel.
+    expect(section.querySelector('footer')).toBeNull();
+    expect(region.queryByText(/Temporary panel/)).toBeNull();
+    expect(region.getAllByRole('button', { name: /^Pin/ })).toHaveLength(1);
+    const pin = region.getByRole('button', { name: 'Pin Parameters' });
+    expect(pin).toHaveAttribute('aria-pressed', 'false');
+    await user.hover(pin);
+    const tooltip = await screen.findByRole('tooltip');
+    expect(tooltip).toHaveTextContent('Pin Parameters');
+    expect(tooltip).toHaveTextContent(TEMPORARY_HINT);
+    expect(pin).toHaveAccessibleDescription(
+      expect.stringContaining(TEMPORARY_HINT)
+    );
+    await user.click(pin);
+    expect(frame.onPin).toHaveBeenCalledTimes(1);
     expect(frame.onUnpin).not.toHaveBeenCalled();
+  });
+
+  it('says a docked panel is pinned on the same button', async () => {
+    const user = userEvent.setup();
+    const frame = controls({ placement: 'docked', status: 'docked' });
+    renderPanels(['parameters'], {}, frame);
+    const region = within(screen.getByRole('region', { name: 'Parameters' }));
+    const pin = region.getByRole('button', { name: 'Pin Parameters' });
+    expect(pin).toHaveAttribute('aria-pressed', 'true');
+    await user.hover(pin);
+    const tooltip = await screen.findByRole('tooltip');
+    expect(tooltip).toHaveTextContent('Unpin Parameters');
+    expect(tooltip).toHaveTextContent(PINNED_HINT);
   });
 
   it('keeps the footer to the unpinned panel', () => {

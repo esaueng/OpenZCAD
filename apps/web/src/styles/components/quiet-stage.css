@@ -3136,13 +3136,6 @@ button.command-rail.is-suggested {
   pointer-events: none;
 }
 
-/* A temporary inspection borrows an existing column, preserving its state.
-   Inert and aria-hidden in PanelDock also remove the covered controls. */
-.panel-column.is-inspecting {
-  visibility: hidden;
-  pointer-events: none;
-}
-
 .model-panel:focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: -2px;
@@ -3574,10 +3567,13 @@ button.model-panel-grip[aria-expanded='true'] {
   pointer-events: none;
 }
 
-/* View options' menu, opened to the rail's left: its groups are named,
-   and a check marks each chosen radio and each setting that is on. */
+/* The Panel layout menu, opened to the rail's left: its groups are named,
+   and a check marks each chosen radio and each setting that is on. It keeps
+   16px from the window's top and foot (PANEL_LAYOUT_MENU_MARGIN) and scrolls
+   inside where a short window cannot hold it. */
 .view-options-menu {
   min-width: 240px;
+  max-height: calc(100dvh - 32px);
 }
 
 .view-options-group-label {

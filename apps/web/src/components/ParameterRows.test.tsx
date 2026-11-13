@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import type { ParameterNode } from '@openzcad/shared';
 import { describe, expect, it, vi } from 'vitest';
 import { AddParameterRow, ParameterRow } from './ParameterRows';
@@ -331,10 +332,59 @@ describe('ParameterRow type picker (F05)', () => {
         onSetQuantity={vi.fn()}
       />
     );
-    expect(screen.getByLabelText('Type of width')).toHaveAttribute(
-      'title',
-      'width is a mass'
+    const picker = screen.getByLabelText('Type of width');
+    expect(picker).toHaveValue('mass');
+    expect(picker).toHaveAttribute(
+      'aria-description',
+      'mass. Its uses are checked as a mass.'
     );
+    expect(picker.parentElement).toHaveTextContent('mass');
+  });
+
+  it('shows the type as a readable glyph beside a chevron, with full words in the list', () => {
+    const { rerender } = render(
+      <ParameterRow
+        parameter={parameter('80')}
+        value={80}
+        onSet={vi.fn()}
+        onSetQuantity={vi.fn()}
+      />
+    );
+    const picker = screen.getByLabelText('Type of width');
+    const chip = picker.closest('.param-quantity-chip')!;
+    // A bare "—" read as an empty value, not a type.
+    expect(chip.querySelector('.param-quantity-glyph')).toHaveTextContent(
+      /^any$/
+    );
+    expect(chip.querySelector('svg')).not.toBeNull();
+    expect(chip).not.toHaveClass('suggested');
+    expect(
+      screen.getAllByRole('option').map((option) => option.textContent)
+    ).toEqual(['Unitless (any use)', 'Length', 'Angle', 'Number']);
+    expect(picker).toHaveAttribute(
+      'aria-description',
+      'Unitless. A plain number: it takes the unit of each field that uses it.'
+    );
+    // The row's own title must not show under the picker's tooltip.
+    expect(picker).toHaveAttribute('title', '');
+    for (const [quantity, glyph, description] of [
+      ['length', 'len', 'Length. Its uses are checked as a length.'],
+      ['angle', '°', 'Angle. Its uses are checked as an angle.'],
+      ['number', '#', 'Number. Its uses are checked as a number.']
+    ] as const) {
+      rerender(
+        <ParameterRow
+          parameter={{ ...parameter('80'), quantity }}
+          value={80}
+          onSet={vi.fn()}
+          onSetQuantity={vi.fn()}
+        />
+      );
+      expect(chip.querySelector('.param-quantity-glyph')).toHaveTextContent(
+        glyph
+      );
+      expect(picker).toHaveAttribute('aria-description', description);
+    }
   });
 
   it('offers a suggestion on a unitless parameter without applying it', () => {
@@ -351,14 +401,48 @@ describe('ParameterRow type picker (F05)', () => {
     const picker = screen.getByLabelText('Type of width');
     expect(picker).toHaveValue('unitless');
     expect(picker).toHaveClass('suggested');
+    // Amber is explained three ways: the description a screen reader always
+    // has, the option that is suggested, and the tooltip on hover or focus.
+    expect(picker.closest('.param-quantity-chip')).toHaveClass('suggested');
     expect(picker).toHaveAttribute(
-      'title',
-      'width is unitless; its uses suggest a length'
+      'aria-description',
+      'Unitless. Its uses expect a length. Choose Length to make it one.'
     );
-    expect(screen.getByRole('option', { name: 'Length' })).toHaveTextContent(
-      'len'
-    );
+    expect(
+      screen.getByRole('option', { name: 'Length · suggested' })
+    ).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Angle' })).toBeInTheDocument();
     expect(onSetQuantity).not.toHaveBeenCalled();
+  });
+
+  it('explains the suggestion in a tooltip, and drops it once the type is set', async () => {
+    const user = userEvent.setup();
+    const props = { value: 80, onSet: vi.fn(), onSetQuantity: vi.fn() };
+    const { rerender } = render(
+      <ParameterRow
+        parameter={parameter('80')}
+        {...props}
+        suggestedQuantity="length"
+      />
+    );
+    const picker = screen.getByLabelText('Type of width');
+    await user.hover(picker);
+    const tooltip = await screen.findByRole('tooltip');
+    expect(tooltip).toHaveTextContent('Type · Unitless');
+    expect(tooltip).toHaveTextContent(
+      'Its uses expect a length. Choose Length to make it one.'
+    );
+    // Typed, nothing is offered any more, whatever the suggestion says.
+    rerender(
+      <ParameterRow
+        parameter={{ ...parameter('80'), quantity: 'length' }}
+        {...props}
+        suggestedQuantity="length"
+      />
+    );
+    expect(picker).not.toHaveClass('suggested');
+    expect(picker.closest('.param-quantity-chip')).not.toHaveClass('suggested');
+    expect(screen.getByRole('option', { name: 'Length' })).toBeInTheDocument();
   });
 
   it('clears to unitless with null and is absent where retyping is not offered', () => {
