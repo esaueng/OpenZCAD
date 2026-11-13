@@ -296,7 +296,7 @@ describe('end caps across whole-face and partial teeth (v55)', { timeout: 300_00
     }
   });
 
-  it('keeps a datum on the body’s part of a split cap as the caps rejoin and split again', async () => {
+  it('refuses a datum on the body’s part of a split cap once the caps rejoin, and keeps it while they stay split', async () => {
     for (const [end, z, reach] of [
       ['start', 0, { faceWidth: 6 }],
       ['end', 12, { faceWidth: 6, anchor: 'end' as const }]
@@ -356,29 +356,48 @@ describe('end caps across whole-face and partial teeth (v55)', { timeout: 300_00
       const gearId = listFeaturesInOrder(document).find(
         (feature) => feature.data.featureKind === 'gear'
       )!.featureId;
-      const clear = ['faceWidth', 'offset', 'anchor'];
-      const other: 'start' | 'end' = end === 'start' ? 'end' : 'start';
-      // Whole face (one cap), back (split again), the other end (one cap
-      // here), the middle (one cap), back again.
-      for (const step of [
-        { clearData: clear },
-        { data: reach },
-        { data: { faceWidth: 6, anchor: other }, clearData: ['offset'] },
-        { data: { faceWidth: 6, offset: 3 }, clearData: ['anchor'] },
-        { data: { ...reach, offset: 0 }, clearData: ['anchor'] }
-      ]) {
-        document = updateFeature(document, {
-          featureId: gearId,
-          ...(step.data ? { data: step.data } : {}),
-          ...(step.clearData ? { clearData: step.clearData } : {})
-        });
+      // Each step keeps the anchor it was given, so the teeth reach this end
+      // exactly where `split` says.
+      for (const [step, split] of [
+        // The whole face: one cap again, so the part is gone.
+        [{ clearData: ['faceWidth', 'offset', 'anchor'] }, false],
+        // Back as created: split again, the part resolves.
+        [{ data: reach }, true],
+        // Shorter, still reaching this end: the part persists.
+        [{ data: { faceWidth: 4 } }, true],
+        // Set off from this end: the cap is one face here.
+        [{ data: { faceWidth: 6, offset: 3 } }, false],
+        // Reaching it again.
+        [{ data: { faceWidth: 6, offset: 0 } }, true]
+      ] as const) {
+        document = updateFeature(document, { featureId: gearId, ...step });
         const derived = await adapter.syncDocument(document);
-        expect(derived.warnings, `${end} ${JSON.stringify(step)}`).toEqual([]);
-        expect(derived.datumFrames?.[planed.featureId]?.origin.z).toBeCloseTo(
-          z,
-          6
-        );
+        const names = derived.bodyRepresentations[
+          cut.bodyId
+        ]!.topology!.faces.map((face) => face.reference?.lineageName);
+        expect(names.includes(`gear.face.cap.${end}.body`)).toBe(split);
+        if (split) {
+          expect(derived.warnings, `${end} ${JSON.stringify(step)}`).toEqual(
+            []
+          );
+          expect(
+            derived.datumFrames?.[planed.featureId]?.origin.z
+          ).toBeCloseTo(z, 6);
+        } else {
+          // Refused by name, never moved onto the ring or the rejoined cap.
+          expect(derived.datumFrames?.[planed.featureId]).toBeUndefined();
+          expect(derived.warnings.join(' ')).toMatch(
+            /part of the gear's end cap no longer exists.*Re-pick the face/
+          );
+        }
       }
+      // The end case finished anchored at the end it reaches.
+      const gear = listFeaturesInOrder(document).find(
+        (feature) => feature.featureId === gearId
+      )!;
+      expect(gear.data.featureKind === 'gear' && gear.data.anchor).toBe(
+        end === 'end' ? 'end' : undefined
+      );
     }
   });
 });

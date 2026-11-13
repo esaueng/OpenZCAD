@@ -406,6 +406,48 @@ describe('ADR-013 resolution order', () => {
     });
   });
 
+  it('refuses a split gear cap part that is gone, never taking the ring beside it', () => {
+    // M14 partial-span teeth: the body's part of a split end cap is
+    // `gear.face.cap.end.body`. When it is gone (the caps rejoined, or a
+    // later feature trimmed or split it so no face carries the name), the
+    // ring that keeps `gear.face.cap.end` is not taken in its place.
+    const ringWitness = EVOLVED_FACE;
+    for (const lineageName of [
+      'gear.face.cap.end.body',
+      'gear.face.cap.start.body[1]',
+      'boolean.face.target.gear.face.cap.end.body'
+    ]) {
+      const reference = { ...faceReference(), lineageName };
+      const ring = faceCandidate(ringWitness, {
+        source: 'semantic',
+        identity: {
+          producingFeatureId: FEATURE_ID,
+          lineageName: lineageName.replace(/\.body(\[\d+\])?$/, '')
+        }
+      });
+      // An unnamed piece with the stored part's exact hash, as a split
+      // leaves it, is not taken silently either.
+      const piece = faceCandidate(SOURCE_FACE, null);
+      for (const candidates of [[ring], [ring, piece]]) {
+        const result = resolveTopologyReference(reference, candidates);
+        expect(result).toMatchObject({
+          status: 'failed',
+          reason: 'lineage-not-found'
+        });
+        expect(result.status === 'failed' && result.message).toMatch(
+          /part of the gear's end cap no longer exists.*Re-pick the face/
+        );
+      }
+    }
+    // Any other missing name keeps the plain wording.
+    expect(
+      resolveTopologyReference(
+        { ...faceReference(), lineageName: 'gear.face.cap.end' },
+        [faceCandidate(SOURCE_FACE, null)]
+      )
+    ).toMatchObject({ message: 'The selected face lineage no longer exists.' });
+  });
+
   it('never uses a matching hash as a positional or silent v5 rebind', () => {
     const candidate = faceCandidate(SOURCE_FACE, null);
     expect(resolveTopologyReference(faceReference(), [candidate])).toEqual({
