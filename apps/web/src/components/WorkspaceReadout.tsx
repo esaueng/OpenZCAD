@@ -119,6 +119,12 @@ interface WorkspaceReadoutProps {
   documentVersion: number | null;
   saveState: WorkspaceSaveState;
   /**
+   * How a rotate drag turns the view. Shown on the orbit buttons and the
+   * view cube's help; the summary carries it for assistive tech. Absent, it
+   * is left out.
+   */
+  orbitMode?: 'free' | 'turntable';
+  /**
    * The command bar at the foot of the stage: the one place to search
    * commands or ask the assistant, under the guidance line.
    */
@@ -160,6 +166,7 @@ export function WorkspaceReadout({
   warningCount,
   documentVersion,
   saveState,
+  orbitMode,
   searchBar,
   repeatingToast = null
 }: WorkspaceReadoutProps) {
@@ -487,6 +494,12 @@ export function WorkspaceReadout({
             <b>sync</b>
             {syncLabel}
           </span>
+          {orbitMode && (
+            <span>
+              <b>orbit</b>
+              {orbitMode === 'turntable' ? 'Turntable' : 'Free'}
+            </span>
+          )}
         </div>
       </footer>
     </>
