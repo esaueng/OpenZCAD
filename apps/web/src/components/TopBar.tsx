@@ -561,9 +561,16 @@ export function TopBar({
   // A project that is not in the account has no room to join, so its room
   // status is `offline` — which, beside "Save to my account", read as a
   // connection problem rather than the plain fact that nothing is shared yet.
+  // "Read-only" names the seat only while the room itself is fine: a viewer
+  // whose copy now conflicts, or who went offline, needs that state instead.
+  const namesReadOnlySeat =
+    readOnlySeat &&
+    (collaborationStatus === 'connecting' ||
+      collaborationStatus === 'live' ||
+      collaborationStatus === 'read-only');
   const collaborationLabel = knownDeviceOnly
     ? 'Not shared'
-    : readOnlySeat
+    : namesReadOnlySeat
       ? 'Read-only'
       : collaborationStatus === 'live'
         ? `${collaboratorCount} live`
@@ -865,7 +872,7 @@ export function TopBar({
                 session
                   ? collaborationFailure && collaborationStatus === 'rejected'
                     ? `Connection refused: ${collaborationFailure} Your edits stay on this device. Open sharing to retry.`
-                    : readOnlySeat
+                    : namesReadOnlySeat
                       ? 'You can view this shared project, not edit it.'
                       : collaborationLabel
                   : collaborationLabel

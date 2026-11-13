@@ -12,7 +12,7 @@ function renderTopBar(
     signedIn?: boolean;
     saveToAccount?: boolean;
     knownDeviceOnly?: boolean;
-    collaborationStatus?: 'offline' | 'rejected' | 'connecting';
+    collaborationStatus?: 'offline' | 'rejected' | 'connecting' | 'conflict';
     collaborationFailure?: string;
     readOnlySeat?: boolean;
     geometryPending?: boolean;
@@ -477,6 +477,24 @@ describe('TopBar sharing chip', () => {
     });
     expect(chip).toHaveTextContent('Read-only');
     expect(tooltipFor(chip)).toHaveTextContent('not edit it');
+  });
+  it('lets a conflict or a lost connection outrank a read-only seat', () => {
+    // A viewer whose copy conflicts must still see "Conflict" on the chip
+    // (collaboration-lease-recovery.spec.ts reads it there).
+    for (const [status, label] of [
+      ['conflict', 'Conflict'],
+      ['offline', 'Offline']
+    ] as const) {
+      renderTopBar({
+        signedIn: true,
+        collaborationStatus: status,
+        readOnlySeat: true
+      });
+      const chip = screen.getByRole('button', { name: /Open project sharing/ });
+      expect(chip).toHaveTextContent(label);
+      expect(chip).not.toHaveTextContent('Read-only');
+      cleanup();
+    }
   });
   it('says to sign in, and goes to sign-in, when signed out', () => {
     const { onOpenSharing, onSignIn } = renderTopBar();
