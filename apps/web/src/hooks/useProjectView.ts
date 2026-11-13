@@ -26,6 +26,7 @@ export interface ProjectViewDefaults {
   reducedMotion: boolean;
   zoomToCursor: boolean;
   middleDrag: 'pan' | 'orbit' | 'zoom';
+  orbitMode: 'free' | 'turntable';
   pointerNavigation: 'auto' | 'mouse' | 'trackpad';
 }
 
@@ -218,6 +219,7 @@ export function useProjectView(projectId: string | null): ProjectView {
         reducedMotion: defaults.reducedMotion,
         zoomToCursor: defaults.zoomToCursor,
         middleDrag: defaults.middleDrag,
+        orbitMode: defaults.orbitMode,
         pointerNavigation: defaults.pointerNavigation
       });
       setHiddenBodyIds(new Set(saved?.hiddenBodyIds ?? []));

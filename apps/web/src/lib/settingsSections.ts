@@ -110,6 +110,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
     settings: [
       'Scroll wheel',
       'Middle-button drag',
+      'Orbit',
       'Zoom toward the pointer',
       'Undo with two fingers',
       'Only Apple Pencil draws'
@@ -120,6 +121,11 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'mouse',
       'trackpad',
       'navigation',
+      'orbit mode',
+      'turntable',
+      'free orbit',
+      'rotate',
+      'upside down',
       ...CONTROL_REFERENCE_SEARCH_TERMS,
       // Every remappable command by name, so "fillet" finds where to give
       // Fillet a key, and the words people use for remapping.

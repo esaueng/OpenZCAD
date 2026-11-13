@@ -4529,6 +4529,17 @@ export const SETTINGS_TANGENT_EDGES: readonly SettingsTangentEdges[] = [
 ];
 export type SettingsMiddleDrag = 'pan' | 'orbit' | 'zoom';
 /**
+ * How a rotate drag turns the view. `free` has no polar limit: a vertical
+ * drag carries straight over the top and bottom views and can leave the view
+ * upside down. `turntable` keeps world Z up: a vertical drag stops at the top
+ * and bottom views, and the view is turned back right way up when it starts.
+ */
+export type SettingsOrbitMode = 'free' | 'turntable';
+export const SETTINGS_ORBIT_MODES: readonly SettingsOrbitMode[] = [
+  'free',
+  'turntable'
+];
+/**
  * How to read a wheel event. `auto` classifies each one; the other two force
  * a device's meaning for hardware the classification reads wrongly.
  */
@@ -4614,6 +4625,8 @@ export interface AppSettings {
     zoomToCursor: boolean;
     /** What a middle-button drag does: pan, orbit, or zoom. */
     middleDrag: SettingsMiddleDrag;
+    /** Whether orbiting tumbles freely or stays a turntable about world Z. */
+    orbitMode: SettingsOrbitMode;
     /** Whether wheel input is auto-classified or forced to one device. */
     pointerNavigation: SettingsPointerNavigation;
     /**
@@ -4782,6 +4795,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     tangentEdges: 'faint',
     zoomToCursor: true,
     middleDrag: 'pan',
+    orbitMode: 'free',
     pointerNavigation: 'auto',
     fieldOfView: VIEWPORT_FIELD_OF_VIEW_BOUNDS.default,
     xrayOpacity: XRAY_OPACITY_BOUNDS.default,

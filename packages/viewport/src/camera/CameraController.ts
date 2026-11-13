@@ -16,7 +16,7 @@ import {
   shiftOrbitBindingsFor,
   type MiddleDragAction
 } from '../input/bindings';
-import type { ProjectionMode } from '../types';
+import type { OrbitMode, ProjectionMode } from '../types';
 import {
   WheelGestureClassifier,
   type PointerNavigationMode,
@@ -214,6 +214,12 @@ export interface CameraControllerOptions {
   zoomToCursor(): boolean;
   /** What a middle-button drag does. Read per call, like the others. */
   middleDrag(): MiddleDragAction;
+  /**
+   * How a rotate drag turns the view: `free` (the default) tumbles over the
+   * poles without limit; `turntable` keeps world Z up and stops at the top
+   * and bottom views. Read per call, like the others.
+   */
+  orbitMode?(): OrbitMode;
   /** How to read a wheel event: auto-detect, or force one device's meaning. */
   pointerNavigation?(): PointerNavigationMode;
   /**
@@ -608,8 +614,13 @@ export class CameraController {
     camera.up.copy(heldUp);
     orbit.enableDamping = true;
     orbit.dampingFactor = DRAG_DAMPING;
-    // No polar clamp: an orbit carries straight over the top and bottom.
-    installFreeOrbit(orbit, (up) => this.holdUp(up));
+    // In free mode there is no polar clamp: an orbit carries straight over
+    // the top and bottom. A turntable leaves the stock clamped rotation.
+    installFreeOrbit(
+      orbit,
+      (up) => this.holdUp(up),
+      () => this.orbitsFreely()
+    );
     orbit.zoomToCursor = this.options.zoomToCursor();
     this.applyPointerBindings(orbit);
     orbit.addEventListener('start', this.beginGesture);
@@ -858,6 +869,10 @@ export class CameraController {
    * was built from the same projection, so nothing moves — but leaving a
    * slerped up vector behind would roll every subsequent orbit.
    */
+  private orbitsFreely(): boolean {
+    return (this.options.orbitMode?.() ?? 'free') !== 'turntable';
+  }
+
   private restoreWorldUp() {
     this.perspective.up.set(0, 0, 1);
     this.orthographic.up.copy(this.perspective.up);
@@ -871,6 +886,12 @@ export class CameraController {
    * goes back on world up exactly, as `restoreWorldUp` puts it.
    */
   private releaseRoll() {
+    // A turntable orbits about world up and nothing else: an upside-down or
+    // rolled view is turned back right way up as the orbit takes it.
+    if (!this.orbitsFreely()) {
+      this.restoreWorldUp();
+      return;
+    }
     const { viewDirection, screenUp } = cameraScreenFrame(this.active);
     const up = orbitUpFor(viewDirection, screenUp);
     if (up.z === 1) {

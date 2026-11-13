@@ -6440,6 +6440,7 @@ export function App() {
       reducedMotion: appSettings.appearance.reducedMotion,
       zoomToCursor: appSettings.viewport.zoomToCursor,
       middleDrag: appSettings.viewport.middleDrag,
+      orbitMode: appSettings.viewport.orbitMode,
       pointerNavigation: appSettings.viewport.pointerNavigation
     }));
   }, [appSettings]);
@@ -9253,6 +9254,7 @@ export function App() {
         reducedMotion: appSettings.appearance.reducedMotion,
         zoomToCursor: appSettings.viewport.zoomToCursor,
         middleDrag: appSettings.viewport.middleDrag,
+        orbitMode: appSettings.viewport.orbitMode,
         pointerNavigation: appSettings.viewport.pointerNavigation
       });
     }
@@ -13237,6 +13239,7 @@ export function App() {
       reducedMotion: appSettings.appearance.reducedMotion,
       zoomToCursor: appSettings.viewport.zoomToCursor,
       middleDrag: appSettings.viewport.middleDrag,
+      orbitMode: appSettings.viewport.orbitMode,
       pointerNavigation: appSettings.viewport.pointerNavigation
     });
     setSettingsMessage('Viewport defaults applied to the current view.');

@@ -2111,6 +2111,22 @@ describe('settings page pattern', () => {
     expect(onChange.mock.calls[0]?.[0].viewport.tangentEdges).toBe('hide');
   });
 
+  it('offers Free and Turntable orbiting under Controls, Free by default', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn<ComponentProps<typeof SettingsPage>['onChange']>();
+    renderSettings(null, { initialSection: 'controls', onChange });
+
+    const orbit = screen.getByRole('radiogroup', { name: 'Orbit' });
+    expect(
+      within(orbit)
+        .getAllByRole('radio')
+        .map((option) => option.closest('label')?.textContent)
+    ).toEqual(['Free', 'Turntable']);
+    expect(within(orbit).getByRole('radio', { name: 'Free' })).toBeChecked();
+    await user.click(within(orbit).getByRole('radio', { name: 'Turntable' }));
+    expect(onChange.mock.calls[0]?.[0].viewport.orbitMode).toBe('turntable');
+  });
+
   it('finds the tangent edge setting by the words people use for it', async () => {
     const user = userEvent.setup();
     window.localStorage.clear();

@@ -2531,6 +2531,8 @@ export function ModelViewer({
   zoomToCursorRef.current = settings.zoomToCursor;
   const middleDragRef = useRef(settings.middleDrag);
   middleDragRef.current = settings.middleDrag;
+  const orbitModeRef = useRef(settings.orbitMode);
+  orbitModeRef.current = settings.orbitMode;
   const pointerNavigationRef = useRef(settings.pointerNavigation);
   pointerNavigationRef.current = settings.pointerNavigation;
   const reportWorkspaceFrame = useWorkspaceFrameReady();
@@ -3087,6 +3089,9 @@ export function ModelViewer({
       // Panning is what every other CAD tool puts on the middle drag; the
       // OrbitControls default of zoom is the odd one out.
       middleDrag: () => middleDragRef.current ?? 'pan',
+      // Free orbiting tumbles over the poles; a saved view from before the
+      // preference existed gets that, the current behaviour.
+      orbitMode: () => orbitModeRef.current ?? 'free',
       pointerNavigation: () => pointerNavigationRef.current ?? 'auto',
       wheelDeviceMemory: {
         read: readWheelDeviceMemory,
