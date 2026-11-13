@@ -16,3 +16,13 @@ details. Selection is transient, with no schema change. Gear-ratio coupling
 remains deferred. Regression coverage includes rigid solver overrides,
 selected/non-gear/third-part/deselection cases, viewport modifiers, and both
 Joints-entry and selected-pair browser journeys.
+
+Queue integration with U11: the combined entry bundle reproduced the required
+Cloudflare build failure at 1,050,503 bytes against the unchanged 1,048,576-byte
+budget. The assembly sidebar now loads on entering Assemble through the
+existing workspace pending state and stale-chunk recovery. The E2E build's
+entry is 1,015,404 bytes (33,172 bytes below the same limit). The gear browser
+regression verifies no sidebar request in Build, one when opening Assemble,
+and no second request after returning through Build. Gear placement, selection,
+BOM and motion behavior are preserved; the exact geometry and joint code are
+unchanged by this load-boundary fix.

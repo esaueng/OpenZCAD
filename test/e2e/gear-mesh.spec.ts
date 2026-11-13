@@ -76,8 +76,16 @@ test(
   { tag: '@ci-smoke' },
   async ({ page }) => {
     test.setTimeout(90_000);
+    const assemblyLoads: string[] = [];
+    page.on('request', (request) => {
+      if (/\/assets\/AssemblyPanel-[^/]+\.js(?:\?|$)/.test(request.url()))
+        assemblyLoads.push(request.url());
+    });
     await openDocument(page, gearPair());
+    expect(assemblyLoads).toHaveLength(0);
     await page.getByRole('button', { name: 'Assemble', exact: true }).click();
+    await expect(panel(page)).toBeVisible();
+    expect(assemblyLoads).toHaveLength(1);
     await panel(page)
       .getByRole('region', { name: 'Joints' })
       .getByRole('button', { name: 'Place gears', exact: true })
@@ -101,6 +109,10 @@ test(
     // One undo takes the joint back out; the base stays fixed.
     await page.keyboard.press('ControlOrMeta+z');
     await expect(joints).not.toContainText('Gear placement');
+    await page.getByRole('button', { name: 'Build', exact: true }).click();
+    await page.getByRole('button', { name: 'Assemble', exact: true }).click();
+    await expect(panel(page)).toBeVisible();
+    expect(assemblyLoads).toHaveLength(1);
   }
 );
 
