@@ -5226,6 +5226,18 @@ button.model-panel-grip[aria-expanded='true'] {
   padding: 4px 2px;
 }
 
+/* The define offer reads in the panel's own colours; only the line after
+   it, what Done and Esc do meanwhile, stays in the error tone. */
+.in-place-param-define {
+  display: grid;
+  gap: 4px;
+  color: var(--color-text);
+}
+
+.in-place-param-define > span {
+  color: var(--color-error-text);
+}
+
 /* A value's name scrubs it: dragged sideways, it steps the number. */
 .in-place-param-value > .in-place-option-label.is-scrubbable {
   cursor: ew-resize;
