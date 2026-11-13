@@ -248,6 +248,31 @@
   pointer-events: none;
 }
 
+/* Undo for the commit the toast reports ("Added box."), a pill of its own
+   beside it: the toast's body is the activity log's button. */
+.workspace-toast-undo {
+  height: 28px;
+  margin-left: 6px;
+  padding: 0 12px;
+  color: var(--color-text);
+  background: color-mix(in srgb, var(--color-surface-2) 94%, transparent);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-2);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  cursor: pointer;
+  animation: oz-fade var(--dur-fast) var(--ease-out);
+}
+
+.workspace-toast:not(.hidden) .workspace-toast-undo {
+  pointer-events: auto;
+}
+
+.workspace-toast-undo:hover {
+  background: var(--color-surface-hover);
+}
+
 /* Where the toast, the selection chip and the Undo toast stand is the notice
    lane's business (quiet-stage.css): one stack on the search bar, not a
    fixed offset per state. */

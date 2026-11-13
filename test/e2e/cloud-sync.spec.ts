@@ -1176,7 +1176,7 @@ test('does not restore an unreadable account document from an older device copy'
   await page.getByRole('button', { name: 'Repair needed' }).click();
   await expect(
     page.getByRole('button', {
-      name: /Open activity log\. Current status: The account record is newer/
+      name: /Open activity log — current status: The account record is newer/
     })
   ).toBeVisible();
   expect(documentWrites).toBe(0);

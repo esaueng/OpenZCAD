@@ -308,7 +308,11 @@ export function CommandBar({
     if (!onAsk || !question) {
       return;
     }
-    dismiss();
+    // The prompt keeps focus once the question is sent: closing the bar
+    // left it on <body>, so when the answer landed the next key went to the
+    // workspace's single-key shortcuts (13 November review I9). The follow-up
+    // is typed here, and Escape still hands focus back as before.
+    reset();
     onAsk(question);
   }
 

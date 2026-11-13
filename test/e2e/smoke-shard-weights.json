@@ -92,6 +92,7 @@
   "tangent-edge-setting.spec.ts": 40,
   "text-authoring.spec.ts": 6,
   "through-hole-chamfer-resize.spec.ts": 37,
+  "toast-outcomes.spec.ts": 12,
   "tool-rail-pins.spec.ts": 5,
   "touch-navigation.spec.ts": 9,
   "upside-down-view-reload.spec.ts": 7,

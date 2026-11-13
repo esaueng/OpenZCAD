@@ -398,7 +398,10 @@ import {
 } from './lib/e2ee/encryptedInvitationLink';
 import { requestContactVerification } from './lib/e2ee/contactFocus';
 import { watchBuildVersion } from './lib/buildVersionWatch';
-import { commandOutcomeMessage } from './lib/commandOutcome';
+import {
+  commandOutcomeMessage,
+  historyStepMessage
+} from './lib/commandOutcome';
 import { tintPreviewResultBodies } from './lib/previewBodyTint';
 import { remappedBlendEdge } from './lib/inPlace/blendEdgeRemap';
 import { cancelCommandChipEntry } from './lib/inPlace/chipCancel';
@@ -3209,6 +3212,8 @@ export function App() {
    * status is set, not when the toast is raised.
    */
   const lastStatusAtRef = useRef(statusEntry.at);
+  /** The status stamp of a commit's outcome, which offers Undo while shown. */
+  const [undoableStatusAt, setUndoableStatusAt] = useState<number | null>(null);
   /**
    * Informational messages expire (lib/statusLifetime); `sticky` is for text
    * that describes a mode the user is still in, such as sketching on a plane.
@@ -9780,6 +9785,7 @@ export function App() {
     // includes the armed operation: an edge picked for the Fillet tool arms
     // one, and leaving it armed kept its "Fillet · Ready" chip and its lane
     // instructions up over the fillet they had just made.
+    offerUndoForCommit();
     dispatchInteraction({ type: 'commit-complete' });
     setTool(null);
     setSelectedFeatureNode(null);
@@ -9787,6 +9793,17 @@ export function App() {
     setSelectedEdges([]);
     setSelectedBodyIds([]);
     setSelectedSketchProfileId(null);
+  }
+
+  /**
+   * "Added box." offered no Undo, though Delete and Duplicate do (13 November
+   * review I22). A toast per add would break the rule that only outcomes the
+   * viewport cannot show raise one, so the status line itself offers Undo
+   * while it still reports the commit. The success status is set just after
+   * a validated commit's `onSuccess` returns, hence the microtask.
+   */
+  function offerUndoForCommit(): void {
+    queueMicrotask(() => setUndoableStatusAt(lastStatusAtRef.current));
   }
 
   /**
@@ -15367,7 +15384,7 @@ export function App() {
     } else {
       setToast(null);
     }
-    setStatus(label ? `Undo ${label}` : 'Undo');
+    setStatus(historyStepMessage('undo', label));
   }
 
   function handleRedo() {
@@ -15423,7 +15440,7 @@ export function App() {
       };
     }
     setToast(null);
-    setStatus(label ? `Redo ${label}` : 'Redo');
+    setStatus(historyStepMessage('redo', label));
   }
 
   /**
@@ -15796,7 +15813,7 @@ export function App() {
                 ? 'synced'
                 : 'syncing'
             );
-            setStatus('Saved revision.');
+            setStatus('Made a save point.');
           }
         } catch (error) {
           if (isCurrent()) {
@@ -15859,7 +15876,7 @@ export function App() {
         await saveLocalProject(savingDocument);
         if (isCurrentProject())
           setStatus(
-            'Saved revision on this device · sharing through the room.'
+            'Made a save point on this device · sharing through the room.'
           );
         return;
       }
@@ -15927,7 +15944,13 @@ export function App() {
         }
         setCloudAvailable(false);
         setSaveState('local');
-        setStatus('Saved on this device.');
+        // Autosave already says "Saved on this device."; this save also made
+        // a save point in Revisions, so it says so (I22).
+        setStatus(
+          reason === DEFAULT_SAVE_REASON
+            ? 'Made a save point on this device.'
+            : `Made save point “${reason}” on this device.`
+        );
         return;
       }
       // A queued autosave writing the same document behind this one would race
@@ -15987,7 +16010,7 @@ export function App() {
         // controller gives it to writes already queued; this, to the model.
         showAccountEcho(withEchoedSavePoints(savingManager.document, saved));
         setCloudAvailable(true);
-        setStatus(sourceWarning ?? 'Saved revision.');
+        setStatus(sourceWarning ?? 'Made a save point.');
         return;
       }
       const restored = withLocalDerived(saved, savingManager.document);
@@ -16004,7 +16027,7 @@ export function App() {
       if (savingManager.document.version !== savingDocument.version) {
         await saveLocalProject(savingManager.document);
       }
-      setStatus(sourceWarning ?? 'Saved revision.');
+      setStatus(sourceWarning ?? 'Made a save point.');
     } catch (error) {
       if (!isCurrentProject()) {
         return;
@@ -34014,6 +34037,11 @@ export function App() {
               sketchPlaneCardShown
             }
             onOpenLog={openActivityLog}
+            onUndo={
+              undoableStatusAt === statusEntry.at && managerRef.current?.canUndo
+                ? handleUndo
+                : undefined
+            }
             prompt={workspacePrompt}
             promptResting={workspacePrompt === idleHint}
             instructionDetails={
