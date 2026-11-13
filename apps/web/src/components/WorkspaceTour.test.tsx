@@ -47,6 +47,43 @@ describe('WorkspaceTour', () => {
     expect(screen.getByText('The history is the model')).toBeTruthy();
   });
 
+  it('comes back at the step it had reached after leaving the stage', () => {
+    // The card unmounts while a command or a sketch runs. It used to count
+    // its steps again from the first on return: past "Select to edit" by
+    // hand, then a Box, and it was back at "Select to edit".
+    let reached = 0;
+    const props = {
+      ...idle,
+      featureCount: 1,
+      onDismiss: vi.fn(),
+      onIndexChange: (index: number) => {
+        reached = index;
+      }
+    };
+    const first = render(<WorkspaceTour {...props} />);
+    expect(screen.getByText('Select to edit')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /^Next/ }));
+    fireEvent.click(screen.getByRole('button', { name: /^Next/ }));
+    expect(screen.getByText('Take it with you')).toBeTruthy();
+    expect(reached).toBe(3);
+    first.unmount();
+
+    render(<WorkspaceTour {...props} featureCount={2} startIndex={reached} />);
+    expect(screen.getByText('Take it with you')).toBeTruthy();
+  });
+
+  it('still skips ahead from the step it kept', () => {
+    render(
+      <WorkspaceTour
+        {...idle}
+        featureCount={1}
+        startIndex={0}
+        onDismiss={vi.fn()}
+      />
+    );
+    expect(screen.getByText('Select to edit')).toBeTruthy();
+  });
+
   it('starts past the steps a resumed session already did', () => {
     render(<WorkspaceTour {...idle} featureCount={3} onDismiss={vi.fn()} />);
     expect(screen.getByText('Select to edit')).toBeTruthy();

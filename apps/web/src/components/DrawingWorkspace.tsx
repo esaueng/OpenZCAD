@@ -257,6 +257,12 @@ export interface DrawingWorkspaceProps {
    */
   onAssistantSource?: (source: DrawingAssistantSource | null) => void;
   /**
+   * The sheet on screen, or null when there is none (and when the workspace
+   * closes). The stage's guidance reads it: which sheet is open is this
+   * workspace's own state.
+   */
+  onActiveSheetChange?: (sheetId: DrawingSheetId | null) => void;
+  /**
    * An assistant proposal's annotations for one sheet, drawn in place of
    * the sheet's own while the proposal is previewed.
    */
@@ -1806,6 +1812,13 @@ export function DrawingWorkspace(props: DrawingWorkspaceProps) {
     retainedFor(document.projectId).selectedSheetId = sheet.sheetId;
     if (selectedSheetId !== sheet.sheetId) setSelectedSheetId(sheet.sheetId);
   }, [document.projectId, geometryPending, selectedSheetId, sheet]);
+  const { onActiveSheetChange } = props;
+  const shownSheetId = sheet?.sheetId ?? null;
+  useEffect(() => {
+    if (!onActiveSheetChange) return;
+    onActiveSheetChange(shownSheetId);
+    return () => onActiveSheetChange(null);
+  }, [onActiveSheetChange, shownSheetId]);
   const [selectedViewId, setSelectedViewId] = useState<DrawingViewId | null>(
     null
   );

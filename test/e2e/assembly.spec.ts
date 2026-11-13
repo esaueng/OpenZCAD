@@ -99,6 +99,78 @@ const assemble = (page: Page) =>
 const panel = (page: Page) =>
   page.getByRole('complementary', { name: 'Assembly' });
 
+// Before an assembly exists Assemble's own viewport does not hold the
+// pointer, and a click on a body fell through to Build's pick: a face was
+// selected and its edit armed under the hood, so the handle stood ready the
+// moment the workspace changed. A click there picks the whole part.
+test(
+  'a click on a part before an assembly exists picks the part, not a face to edit',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    let document = createProjectDocument('Part pick', toUserId('user_e2e'));
+    document = addPrimitiveFeature(document, {
+      name: 'Block',
+      bodyName: 'Block',
+      primitiveKind: 'box',
+      dimensions: { width: 40, height: 30, depth: 20 }
+    });
+    await openDocument(page, document);
+    const canvas = page.locator('.viewer-host canvas');
+    const picked = (name: string) =>
+      canvas.evaluate(
+        (element, key) => (element as HTMLElement).dataset[key] ?? null,
+        name
+      );
+    const clickPart = async () => {
+      const box = (await canvas.boundingBox())!;
+      const [at] = await canvas.evaluate(
+        (element) =>
+          new Promise<{ x: number; y: number }[]>((resolve) => {
+            element.dispatchEvent(
+              new CustomEvent('openzcad:e2e-project-points', {
+                detail: {
+                  points: [[20, 15, 20]],
+                  resolve: (state: { points: { x: number; y: number }[] }) =>
+                    resolve(state.points)
+                }
+              })
+            );
+          })
+      );
+      expect(at!.x).toBeGreaterThan(box.x);
+      await page.mouse.click(at!.x, at!.y);
+    };
+
+    // Build, for contrast: the same click picks a face.
+    await clickPart();
+    await expect.poll(() => picked('e2eSelectedFace')).not.toBeNull();
+    await page.keyboard.press('Escape');
+    await expect.poll(() => picked('e2eSelectedFace')).toBeNull();
+
+    await assemble(page);
+    await expect(page.getByText('Start an assembly')).toBeVisible({
+      timeout: 30_000
+    });
+    await clickPart();
+    await expect.poll(() => picked('e2eSelectedBodies')).not.toBeNull();
+    expect(await picked('e2eSelectedFace')).toBeNull();
+    await expect(page.locator('.selection-callout')).not.toContainText(
+      /face|edge/i
+    );
+    // Nothing was armed behind the workspace: Build opens on the part with
+    // no face's handle or value chip waiting.
+    await page.getByRole('button', { name: 'Build', exact: true }).click();
+    await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible();
+    await page.waitForTimeout(1_000);
+    expect(await picked('e2eSelectedFace')).toBeNull();
+    expect(await picked('e2eHandleX')).toBeNull();
+    await expect(page.locator('.selection-readout')).not.toContainText(
+      /face|edge/i
+    );
+  }
+);
+
 test(
   'groups rigid copies and retains a missing assembly part in the BOM and CSV',
   { tag: '@ci-smoke' },

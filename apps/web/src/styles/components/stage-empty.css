@@ -28,6 +28,29 @@
   animation: stage-empty-in var(--dur-slow) var(--ease-out);
 }
 
+/* The Tools drawer stands beside the tool rail, over the left of that
+   lane: left open on an empty project it covered the invitation's first
+   words and half of "Box". The invitation centres in the stage the drawer
+   leaves clear, by the drawer's own width (quiet-stage.css: 236px for the
+   catalogue, 400px in a short window where it takes two columns, 196px for
+   the short list). A phone's drawer lies across the whole stage and is put
+   away to use it, so nothing moves there. */
+@media (min-width: 721px) {
+  .workspace:has(.command-flyout.is-advanced) .stage-empty {
+    left: calc(var(--lane-inset, 12px) + 236px);
+  }
+
+  .workspace:has(.command-flyout.is-simple) .stage-empty {
+    left: calc(var(--lane-inset, 12px) + 196px);
+  }
+}
+
+@media (min-width: 721px) and (max-height: 600px) {
+  .workspace:has(.command-flyout.is-advanced) .stage-empty {
+    left: calc(var(--lane-inset, 12px) + 400px);
+  }
+}
+
 /* Durations collapse under reduced motion (tokens.css), OS-level or the
    in-app switch, so this is then a plain appearance. */
 @keyframes stage-empty-in {

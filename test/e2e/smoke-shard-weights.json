@@ -44,6 +44,7 @@
   "gear-mesh.spec.ts": 16,
   "gear-stale-reference.spec.ts": 111,
   "gear.spec.ts": 12,
+  "hint-lane.spec.ts": 42,
   "history-local-append.spec.ts": 26,
   "import-formats.spec.ts": 2,
   "in-place-primitives.spec.ts": 16,
