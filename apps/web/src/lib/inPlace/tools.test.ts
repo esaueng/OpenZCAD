@@ -2237,3 +2237,19 @@ describe('hints before the first pick', () => {
     );
   });
 });
+
+describe('a new primitive over a model that has bodies', () => {
+  it('says Done adds a separate body where it previews', () => {
+    // 13 November review: Cylinder, Sphere, Cone and Torus previewed at the
+    // origin inside an existing box, and nothing said what Done would make.
+    const cylinder = IN_PLACE_TOOL_SPECS.cylinder;
+    const ctx = (ids: string[]) =>
+      ({ liveBodyIds: () => ids as BodyId[] }) as never;
+    expect(cylinder.hint(EMPTY, {}, ctx([]))).toBe(
+      'Drag a footprint on the ground or a face'
+    );
+    expect(cylinder.hint(EMPTY, {}, ctx(['box']))).toBe(
+      'Drag a footprint on the ground or a face · Done adds it as a separate body where it shows'
+    );
+  });
+});

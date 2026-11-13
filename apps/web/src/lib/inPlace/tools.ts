@@ -373,6 +373,8 @@ export interface InPlaceContext {
   linearSnap?: number | null;
   /** A body's bounding box, for references measured on it (a draft's base). */
   bodyBounds?(bodyId: BodyId): { min: Vector3; max: Vector3 } | null;
+  /** The bodies already in the model (live, not hidden). */
+  liveBodyIds?(): readonly BodyId[];
   /**
    * The stored data of the feature being edited, for whatever the command
    * keeps as stored rather than showing (a hole's position until it is
@@ -5241,9 +5243,12 @@ function primitiveSpec(kind: PrimitiveKind): InPlaceToolSpec {
       },
       { label: 'Position', boxed: true, compact: true, items: ['x', 'y', 'z'] }
     ],
-    hint(slots) {
-      return slots.placement
-        ? 'Drag the arrows, or tap a size to type'
+    hint(slots, _options, ctx) {
+      if (slots.placement) return 'Drag the arrows, or tap a size to type';
+      // It previews at the origin, inside whatever stands there already:
+      // nothing said Done would make a separate body where it shows.
+      return (ctx?.liveBodyIds?.().length ?? 0) > 0
+        ? 'Drag a footprint on the ground or a face · Done adds it as a separate body where it shows'
         : 'Drag a footprint on the ground or a face';
     },
     // It stands on the ground at the origin until a drag places it, so

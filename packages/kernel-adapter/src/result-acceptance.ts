@@ -32,6 +32,7 @@ import { MEASUREMENT_DEFLECTION } from './exact-witnesses';
 /** The adapter's codes for a result it refused after the kernel built it. */
 export type ResultAcceptanceCode =
   | 'cut_kept_tool_material'
+  | 'intersect_kept_outside_material'
   | 'resize_left_blend_behind'
   | 'resize_volume_mismatch';
 
@@ -152,6 +153,121 @@ export function cutKeptToolMaterialRefusal(
     detail:
       `the kernel reported the cut as built, but point ${formatPoint(point)} ` +
       'lies inside the target, the tool and the result.'
+  });
+}
+
+/** Which operand an intersect witness lies outside of. */
+export type IntersectWitnessOperand = 'target' | 'tool';
+
+export interface IntersectOutsideMaterialWitness {
+  point: readonly [number, number, number];
+  outside: IntersectWitnessOperand;
+}
+
+/**
+ * Boundary band, as a fraction of the searched box's diagonal, inside which
+ * a classification is not a witness. A part per million is far above the
+ * kernel's own precision and far below any material a defect keeps.
+ */
+const INTERSECT_WITNESS_BAND = 1e-6;
+
+/**
+ * A point the kernel classifies inside an intersect result but outside one of
+ * its operands — proof that the intersection kept material it is defined to
+ * exclude — or null when the search finds none.
+ *
+ * Measured on Remus 2026.1.122 (issue #1244): a torus R 7, r 3 intersected
+ * with a holed block (24 × 18 × 12, r 3 through-hole, scaled 0.82, moved to
+ * (6, 1, 0.5)) came back `ok` in both orders, closed and valid, holding
+ * (6, 1, 0.5): inside the torus, inside the block's hole. Every structural
+ * check passes on such a body; only a classification against the operands
+ * sees it. Remus 2026.1.130 (remus d9d51f52) partitions that case exactly and
+ * refuses the layouts it cannot certify; this gate stays as the consumer's
+ * own check, as `cutRetainedToolMaterialWitness` does for cuts.
+ *
+ * The search is a deterministic grid over the RESULT's bounding box, the
+ * only place kept material can be. A candidate must be clear of every
+ * boundary by {@link INTERSECT_WITNESS_BAND} of the box diagonal under
+ * `classifyPoint`, and is then confirmed by the kernel's independent
+ * dual-method `classifyPointRobust`; a classification that throws or lands
+ * on a boundary is not a witness. Like the cut gate it can miss material
+ * between grid points; missing it accepts, it never refuses a correct body.
+ */
+export function intersectKeptOutsideMaterialWitness(
+  kernel: RemusKernel,
+  target: number,
+  tool: number,
+  result: number
+): IntersectOutsideMaterialWitness | null {
+  let bounds: ArrayLike<number>;
+  try {
+    bounds = kernel.boundingBox(result);
+  } catch {
+    return null;
+  }
+  const low = [0, 1, 2].map((axis) => bounds[axis]!);
+  const spans = low.map((value, axis) => bounds[axis + 3]! - value);
+  if (spans.some((span) => !(span > 0) || !Number.isFinite(span))) {
+    return null;
+  }
+  const band = Math.max(Math.hypot(...spans) * INTERSECT_WITNESS_BAND, 1e-12);
+  const classify = (
+    method: 'classifyPoint' | 'classifyPointRobust',
+    solid: number,
+    point: readonly number[]
+  ): string | null => {
+    try {
+      return kernel[method](solid, point[0]!, point[1]!, point[2]!, band);
+    } catch {
+      return null;
+    }
+  };
+  const operands: ReadonlyArray<[IntersectWitnessOperand, number]> = [
+    ['target', target],
+    ['tool', tool]
+  ];
+  for (let i = 0; i < WITNESS_GRID; i += 1) {
+    for (let j = 0; j < WITNESS_GRID; j += 1) {
+      for (let k = 0; k < WITNESS_GRID; k += 1) {
+        const point = [i, j, k].map(
+          (step, axis) =>
+            low[axis]! + ((step + 0.5) / WITNESS_GRID) * spans[axis]!
+        ) as [number, number, number];
+        if (classify('classifyPoint', result, point) !== 'inside') continue;
+        for (const [outside, solid] of operands) {
+          if (
+            classify('classifyPoint', solid, point) === 'outside' &&
+            classify('classifyPointRobust', solid, point) === 'outside' &&
+            classify('classifyPointRobust', result, point) === 'inside'
+          ) {
+            return { point, outside };
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/** The refusal for an intersect that kept material outside an operand. */
+export function intersectKeptOutsideMaterialRefusal(
+  witness: IntersectOutsideMaterialWitness,
+  operandNames?: readonly [string, string]
+): ResultAcceptanceRefusal {
+  const index = witness.outside === 'target' ? 0 : 1;
+  const operand = operandNames?.[index]
+    ? `"${operandNames[index]}"`
+    : `the ${witness.outside}`;
+  return new ResultAcceptanceRefusal({
+    code: 'intersect_kept_outside_material',
+    category: 'internal',
+    headline:
+      'Intersect refused: the exact kernel returned material that lies ' +
+      `outside ${operand}. The target and tools were left unchanged.`,
+    detail:
+      'the kernel reported the intersection as built, but point ' +
+      `${formatPoint(witness.point)} lies inside the result and outside ` +
+      `the ${witness.outside}.`
   });
 }
 

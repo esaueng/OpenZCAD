@@ -2691,7 +2691,11 @@ export function SettingsPage({
             </Section>
           )}
 
-          {active === 'activity' && anyMatch && <ActivityLogSettings />}
+          {active === 'activity' && anyMatch && (
+            <ActivityLogSettings
+              confirmDestructive={settings.general.confirmDestructiveActions}
+            />
+          )}
 
           {active === 'advanced' && anyMatch && (
             <Section

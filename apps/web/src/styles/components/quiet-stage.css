@@ -4785,7 +4785,9 @@ button.model-panel-grip[aria-expanded='true'] {
 }
 
 .move-command .in-place-command-hint {
-  max-width: 34ch;
+  /* The body's name and the whole instruction, rings and Shift included:
+     it is the only place the step is said. */
+  max-width: 52ch;
 }
 
 /* What the Move turns, named in its hint: the body (or sketch) itself. */

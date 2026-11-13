@@ -34,9 +34,12 @@ export function DeleteFeatureDialog({
   onDelete
 }: DeleteFeatureDialogProps) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
-  const deleteRef = useRef<HTMLButtonElement | null>(null);
-  useModalFocus(dialogRef, { autoFocus: true, initialFocusRef: deleteRef });
+  // Focus starts on Cancel: the dialog only opens when later features build
+  // on this one, so a reflex Enter (Del, Enter) must not rebuild them all.
+  const cancelRef = useRef<HTMLButtonElement | null>(null);
+  useModalFocus(dialogRef, { autoFocus: true, initialFocusRef: cancelRef });
 
+  const source = count > 1 ? 'them' : 'it';
   const named = dependents.slice(0, NAMED_DEPENDENTS);
   const unnamed = dependents.length - named.length;
 
@@ -63,7 +66,7 @@ export function DeleteFeatureDialog({
         </h2>
         <div id="delete-feature-dialog-body" className="delete-feature-body">
           <p>
-            {`${dependents.length === 1 ? '1 later feature builds' : `${dependents.length} later features build`} on ${count > 1 ? 'them' : 'it'} and will rebuild without ${count > 1 ? 'them' : 'it'}:`}
+            {`${dependents.length === 1 ? '1 later feature builds' : `${dependents.length} later features build`} on ${source}:`}
           </p>
           <ul className="delete-feature-dependents">
             {named.map((dependent, index) => (
@@ -71,14 +74,27 @@ export function DeleteFeatureDialog({
             ))}
             {unnamed > 0 && <li>and {unnamed} more</li>}
           </ul>
-          <p>Undo brings everything back.</p>
+          <p>
+            {/* What deleting does to them, in Suppress's own terms: they
+                stay and rebuild, and one that needed it fails. This said
+                they "will rebuild without it" while Suppress, of the same
+                features, said they "cannot rebuild without it". */}
+            {dependents.length === 1
+              ? `It stays in History, and shows an error if it cannot rebuild without ${source}.`
+              : `They stay in History, and any that cannot rebuild without ${source} shows an error.`}{' '}
+            Undo brings everything back.
+          </p>
         </div>
         <div className="delete-feature-actions">
-          <button type="button" className="secondary" onClick={onCancel}>
+          <button
+            ref={cancelRef}
+            type="button"
+            className="secondary"
+            onClick={onCancel}
+          >
             Cancel
           </button>
           <button
-            ref={deleteRef}
             type="button"
             className="delete-feature-confirm"
             onClick={onDelete}
