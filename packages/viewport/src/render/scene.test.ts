@@ -380,26 +380,122 @@ describe('updateStudioGrid', () => {
 });
 
 describe('updateAxesGizmo', () => {
-  it('stretches receding axes far while clamping axes aimed at the camera', () => {
-    const axes = createAxesGizmo();
-    const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 4000);
+  type AxisLine = THREE.Object3D & {
+    userData: { axisDirection: THREE.Vector3 };
+  };
+
+  /** Where each visible half-line starts and ends in world space. */
+  function spans(axes: THREE.Group) {
+    return (axes.children as AxisLine[])
+      .filter((line) => line.visible)
+      .map((line) => ({
+        name: line.name,
+        start: line.position.clone(),
+        end: line.position
+          .clone()
+          .addScaledVector(line.userData.axisDirection, line.scale.x)
+      }));
+  }
+
+  /**
+   * True when a world point is past the viewport edge, or on the near or far
+   * plane — the two places a visible line may legitimately end.
+   */
+  function endsOffScreen(point: THREE.Vector3, camera: THREE.Camera) {
+    const ndc = point.clone().project(camera);
+    return (
+      Math.max(Math.abs(ndc.x), Math.abs(ndc.y)) >= 1 ||
+      Math.abs(Math.abs(ndc.z) - 1) < 1e-3
+    );
+  }
+
+  function perspectiveAt(
+    position: THREE.Vector3,
+    target = new THREE.Vector3()
+  ) {
+    const camera = new THREE.PerspectiveCamera(45, 16 / 9, 0.1, 4000);
     camera.up.set(0, 0, 1);
-    // From (+x, -y, +z), +Y recedes from the camera while +X and +Z angle
-    // toward it and must stop short of the camera plane.
+    camera.position.copy(position);
+    camera.lookAt(target);
+    camera.updateMatrixWorld();
+    return camera;
+  }
+
+  it('draws both halves of every axis from the origin', () => {
+    const axes = createAxesGizmo();
+    const camera = perspectiveAt(new THREE.Vector3(90, -90, 80));
+    updateAxesGizmo(axes, camera);
+    const names = spans(axes).map((span) => span.name);
+    expect(names.sort()).toEqual(
+      ['axis-+x', 'axis--x', 'axis-+y', 'axis--y', 'axis-+z', 'axis--z'].sort()
+    );
+    for (const span of spans(axes)) {
+      // The origin is in view, so every half starts on it.
+      expect(span.start.length()).toBeLessThan(1e-9);
+    }
+  });
+
+  it.each([
+    ['iso', perspectiveAt(new THREE.Vector3(90, -90, 80))],
+    // Nearly straight down: +Z points almost at the camera. The old fixed
+    // clamp stopped it in the middle of the screen.
+    [
+      'near top',
+      perspectiveAt(
+        new THREE.Vector3(30, -20, 150),
+        new THREE.Vector3(10, 5, 0)
+      )
+    ],
+    ['front', perspectiveAt(new THREE.Vector3(5, -150, 3))],
+    [
+      'panned away from the origin',
+      perspectiveAt(
+        new THREE.Vector3(260, -60, 90),
+        new THREE.Vector3(200, 0, 0)
+      )
+    ]
+  ])(
+    'runs every visible axis off screen in a perspective %s view',
+    (_, camera) => {
+      const axes = createAxesGizmo();
+      updateAxesGizmo(axes, camera);
+      const visible = spans(axes);
+      expect(visible.length).toBeGreaterThan(0);
+      for (const span of visible) {
+        expect(endsOffScreen(span.end, camera), span.name).toBe(true);
+      }
+    }
+  );
+
+  it('runs every axis off screen in a zoomed-out orthographic view', () => {
+    const camera = new THREE.OrthographicCamera(-90, 90, 50, -50, -2000, 4000);
+    camera.up.set(0, 0, 1);
     camera.position.set(90, -90, 80);
     camera.lookAt(0, 0, 0);
+    // Zooming out widens the frustum without moving the camera: an axis
+    // aimed toward it used to end at a fixed length well inside the frame.
+    camera.zoom = 0.2;
+    camera.updateProjectionMatrix();
     camera.updateMatrixWorld();
-
+    const axes = createAxesGizmo();
     updateAxesGizmo(axes, camera);
+    const visible = spans(axes);
+    expect(visible).toHaveLength(6);
+    for (const span of visible) {
+      expect(endsOffScreen(span.end, camera), span.name).toBe(true);
+    }
+  });
 
-    const [x, y, z] = axes.children as [THREE.Line, THREE.Line, THREE.Line];
-    expect(y.scale.x).toBe(100000);
-    // +X and +Z both angle toward the camera from this pose: finite, past the
-    // orbit distance (off screen), well short of the far plane.
-    const originDepth = camera.position.length();
-    for (const clamped of [x, z]) {
-      expect(clamped.scale.x).toBeGreaterThan(originDepth);
-      expect(clamped.scale.x).toBeLessThan(originDepth * 2);
+  it('keeps every end in front of the camera so the fat line stays exact', () => {
+    const camera = perspectiveAt(new THREE.Vector3(0.5, -0.4, 150));
+    const axes = createAxesGizmo();
+    updateAxesGizmo(axes, camera);
+    const forward = camera.getWorldDirection(new THREE.Vector3());
+    for (const span of spans(axes)) {
+      for (const point of [span.start, span.end]) {
+        const depth = point.clone().sub(camera.position).dot(forward);
+        expect(depth, span.name).toBeGreaterThan(camera.near);
+      }
     }
   });
 });
