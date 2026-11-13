@@ -207,6 +207,7 @@ function feature(data: FeatureData, rewrite: Rewrite): void {
         data,
         [
           'faceWidth',
+          'offset',
           'backlash',
           'boreDiameter',
           'rimDiameter',

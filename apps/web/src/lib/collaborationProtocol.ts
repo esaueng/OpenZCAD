@@ -1,7 +1,7 @@
 import {
   isDocumentHistory,
   MAX_CHECKPOINT_REASON_LENGTH,
-  isUnsupportedProjectSchema,
+  PROJECT_DOCUMENT_SCHEMA_VERSION,
   type CollaborationMember,
   type CollaborationServerMessage,
   type ProjectAccessRole,
@@ -162,7 +162,8 @@ function refuseUnopenable(
   const document =
     'document' in message && message.document ? message.document : null;
   if (!document) return message;
-  if (isUnsupportedProjectSchema(document.schemaVersion ?? 0)) return message;
+  if ((document.schemaVersion ?? 0) > PROJECT_DOCUMENT_SCHEMA_VERSION)
+    return message;
   const opened = openRoomDocument(document);
   if ('reason' in opened) {
     const { reason } = opened;

@@ -28,9 +28,7 @@ async function preservedWorkspace(page: Page, timeOrigin: number) {
   await expectBodyCount(page, 1);
   await expect(page.locator('.error-page')).toHaveCount(0);
   await expect(page.getByText('OpenZCAD has been updated')).toHaveCount(0);
-  await expect(
-    page.getByText('A newer OpenZCAD build is available.')
-  ).toHaveCount(0);
+  await expect(page.locator('.topbar-reload-chip.is-update')).toHaveCount(0);
   expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin);
 }
 

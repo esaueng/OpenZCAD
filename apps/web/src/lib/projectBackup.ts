@@ -12,7 +12,7 @@ import {
 } from '@openzcad/document-core';
 import type { StoredMeasurementRecord } from './measurementRecord';
 import {
-  isUnsupportedProjectSchema,
+  PROJECT_DOCUMENT_SCHEMA_VERSION,
   toProjectId,
   toArtifactId,
   isImportedSourceReference,
@@ -59,7 +59,7 @@ function validateDocument(value: unknown): asserts value is ProjectDocument {
   if (
     !Number.isInteger(doc.schemaVersion) ||
     Number(doc.schemaVersion) < 4 ||
-    isUnsupportedProjectSchema(Number(doc.schemaVersion))
+    Number(doc.schemaVersion) > PROJECT_DOCUMENT_SCHEMA_VERSION
   ) {
     throw new Error(
       'Unsupported project schema. Update OpenZCAD to open this backup.'

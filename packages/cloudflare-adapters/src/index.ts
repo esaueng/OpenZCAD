@@ -100,7 +100,7 @@ import {
   persistedDocumentBytes,
   projectBranchPoint,
   projectOrganization,
-  isUnsupportedProjectSchema,
+  PROJECT_DOCUMENT_SCHEMA_VERSION,
   PROJECT_STATUSES,
   sanitizeFileName,
   toArtifactId,
@@ -11208,7 +11208,7 @@ function checkClientDocument(value: unknown): CollaborationRejection | null {
   if (envelope) return { code: 'document-invalid', message: envelope };
   if (
     typeof value.schemaVersion !== 'number' ||
-    isUnsupportedProjectSchema(value.schemaVersion) ||
+    value.schemaVersion > PROJECT_DOCUMENT_SCHEMA_VERSION ||
     (value.editHistory !== undefined &&
       !isDocumentHistory(value.editHistory, String(value.projectId))) ||
     !Array.isArray(value.revisions) ||

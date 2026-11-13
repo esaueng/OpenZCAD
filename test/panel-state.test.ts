@@ -135,6 +135,19 @@ describe('workspace panel state', () => {
     );
   });
 
+  it('opens the drawer at its head until a section is remembered', () => {
+    expect(defaultPanelState().toolDrawerSection).toBeNull();
+    expect(
+      normalizePanelState({ toolDrawerSection: 'pattern' }).toolDrawerSection
+    ).toBe('pattern');
+    expect(
+      normalizePanelState({ toolDrawerSection: 'Pattern' }).toolDrawerSection
+    ).toBeNull();
+    expect(
+      normalizePanelState({ toolDrawerSection: 3 }).toolDrawerSection
+    ).toBeNull();
+  });
+
   it('returns independent pin lists', () => {
     defaultPanelState().pinnedTools.push('gear');
     expect(defaultPanelState().pinnedTools).not.toContain('gear');

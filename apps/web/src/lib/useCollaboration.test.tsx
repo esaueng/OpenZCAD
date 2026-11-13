@@ -10,7 +10,6 @@ import {
 import {
   KEPT_LOCAL_VERSION_REASON,
   PROJECT_DOCUMENT_SCHEMA_VERSION,
-  previousProjectSchemaVersion,
   toUserId,
   type AuthSession,
   type CollaborationServerMessage,
@@ -2065,9 +2064,7 @@ describe('parseServerMessage', () => {
       ({
         ...structuredClone(document),
         version,
-        // The newest older schema this build opens (not simply the number
-        // before its own, which may belong to work it does not contain).
-        schemaVersion: previousProjectSchemaVersion()
+        schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION - 1
       }) as unknown as ProjectDocument;
     const frame = parseServerMessage(
       JSON.stringify({

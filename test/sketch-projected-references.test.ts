@@ -14,7 +14,6 @@ import {
 } from '@openzcad/document-core';
 import {
   PROJECT_DOCUMENT_SCHEMA_VERSION,
-  isUnsupportedProjectSchema,
   documentNodesWithHistory,
   resolveSketchReferenceDimension,
   toUserId,
@@ -195,8 +194,6 @@ describe('S02 projected reference persistence', () => {
       version < PROJECT_DOCUMENT_SCHEMA_VERSION;
       version++
     ) {
-      // Not an earlier schema this build opens: it is refused like a newer one.
-      if (isUnsupportedProjectSchema(version)) continue;
       const saved = JSON.parse(JSON.stringify(absolute)) as ProjectDocument;
       saved.schemaVersion = version as typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
       const loaded = normalizeDocument(saved);

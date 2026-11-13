@@ -222,8 +222,9 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // grounding, joints with values and limits, saved positions and motion
 // studies. An older client would drop the section on its next save, so it
 // must refuse.
-// v55 is claimed by M14 partial-span teeth (PR #1389), which this build
-// does not contain: see UNIMPLEMENTED_PROJECT_SCHEMA_VERSIONS below.
+// v55 adds M14 partial-span teeth: gear teeth cut over part of a body's
+// cylindrical face (`faceWidth`, `offset` and `anchor` on teeth on a body).
+// An older client would cut them along the whole face, so it must refuse.
 // v56 adds AS02 joint couplings (`assembly.couplings`): two joint values tied
 // by a ratio and an offset, so meshed gears and a rack and its pinion move
 // together. Absent means none, so every v54 assembly loads unchanged. An
@@ -233,37 +234,6 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 export const PROJECT_DOCUMENT_SCHEMA_VERSION = 56 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
-
-/**
- * Schema numbers below this build's own whose content it does not
- * implement, so a document declaring one is refused like a newer one.
- *
- * v55 is M14 partial-span teeth (PR #1389). Couplings took v56 while that
- * work was still open, so a v55 document can hold teeth cut along part of
- * a face that this build would cut along the whole face. Whoever merges
- * second resolves it: with partial-span teeth merged in, drop 55 from this
- * list; if that work lands later under another number, 55 stays refused.
- */
-export const UNIMPLEMENTED_PROJECT_SCHEMA_VERSIONS: readonly number[] = [55];
-
-/** Whether this build must refuse a document that declares `version`. */
-export function isUnsupportedProjectSchema(version: number): boolean {
-  return (
-    version > PROJECT_DOCUMENT_SCHEMA_VERSION ||
-    UNIMPLEMENTED_PROJECT_SCHEMA_VERSIONS.includes(version)
-  );
-}
-
-/**
- * The newest schema older than this build's that it still opens: what "a
- * document from an older build" declares (tests use it instead of a
- * literal or `version − 1`, which may be a number this build refuses).
- */
-export function previousProjectSchemaVersion(): number {
-  let version = PROJECT_DOCUMENT_SCHEMA_VERSION - 1;
-  while (UNIMPLEMENTED_PROJECT_SCHEMA_VERSIONS.includes(version)) version -= 1;
-  return version;
-}
 
 export type UnitSystem = 'mm' | 'cm' | 'm' | 'inch';
 /** F05: what a typed parameter measures. Absent on a node is unitless. */
@@ -299,7 +269,10 @@ export type GearHand = 'right' | 'left';
 export type ThreadProfile = 'iso-metric' | 'printable' | 'custom';
 /** Which way a thread winds: a right hand advances turning counter-clockwise. */
 export type ThreadHand = 'right' | 'left';
-/** Which end of the face a thread's `offset` is measured from. */
+/**
+ * Which end of a cylindrical face a thread's or partial gear teeth's
+ * `offset` is measured from.
+ */
 export type ThreadAnchor = 'start' | 'end';
 export type FeatureKind =
   | 'primitive'
@@ -1913,10 +1886,12 @@ export type FeatureData =
        * axis (a rack runs along `xDirection` with its teeth pointing along
        * `axis × xDirection`).
        *
-       * With `targetBodyId` the teeth are cut along the whole length of that
-       * body's cylindrical face (`faceHash`, anchored by `faceReference`): a
-       * boss takes external teeth, a bore internal ones, and the body is
-       * consumed. The face's own length is the face width.
+       * With `targetBodyId` the teeth are cut into that body's cylindrical
+       * face (`faceHash`, anchored by `faceReference`): a boss takes external
+       * teeth, a bore internal ones, and the body is consumed. They run the
+       * whole face unless `faceWidth`, `offset` or `anchor` (schema v55)
+       * place them over part of it, leaving the cylinder beside them as
+       * collars.
        */
       featureKind: 'gear';
       gearType: GearType;
@@ -1934,8 +1909,23 @@ export type FeatureData =
       pitch?: ParamValue;
       /** The tooth count; a worm's or enveloping worm's thread starts. */
       teeth: ParamValue;
-      /** New bodies only; teeth on a cylinder span the whole face. */
+      /**
+       * Along the axis. Required on a new body. Teeth on a body (schema v55):
+       * the teeth's length along the face; absent runs from `offset` to the
+       * face's far end.
+       */
       faceWidth?: ParamValue;
+      /**
+       * Teeth on a body (schema v55): distance from `anchor` to the teeth's
+       * near end; absent is 0.
+       */
+      offset?: ParamValue;
+      /**
+       * Teeth on a body (schema v55): which end of the face `offset` is
+       * measured from. Absent is `'start'`, the face's lower end along its
+       * axis.
+       */
+      anchor?: ThreadAnchor;
       /** Degrees; absent is 20. */
       pressureAngleDeg?: ParamValue;
       /** Profile shift coefficient; absent is 0. */

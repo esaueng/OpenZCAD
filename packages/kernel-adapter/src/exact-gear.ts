@@ -1,7 +1,8 @@
 /**
  * M14 gear features: a new spur, helical, herringbone or straight bevel gear,
  * worm or worm wheel body from the kernel's gear generator, or teeth cut
- * along the whole length of a body's cylindrical face.
+ * along a body's cylindrical face: the whole of it, or part of it with the
+ * cylinder kept as collars either side (schema v55).
  *
  * The kernel owns the gear: the involute, its certified flank fit, the
  * tooth-form checks and the boolean that cuts teeth into a body. This module
@@ -141,6 +142,8 @@ const GEAR_REFUSALS: Readonly<Record<string, string>> = {
     'The picked cylinder is neither a boss nor a bore.',
   'gear:partial-span-unsupported':
     'Gear teeth must span the whole cylindrical face.',
+  'gear:span-outside-face':
+    'The teeth run past an end of the cylindrical face. Shorten them or reduce the offset.',
   'gear:cylinder-too-small':
     'The gear is larger than the picked cylinder. Use a smaller module or fewer teeth, or keep the cylinder’s diameter.',
   'gear:features-in-tooth-region':
@@ -672,6 +675,32 @@ function buildNewGearBody(
   });
 }
 
+/**
+ * Where teeth on a body run along its face, from the face's lower end (the
+ * kernel's `offset`) and for how long. Without `faceWidth`, `offset` or
+ * `anchor` they run the whole face; without `faceWidth` they run from the
+ * offset to the far end. Teeth that would leave the face are the kernel's
+ * refusal (`gear:span-outside-face`), which names both lengths.
+ */
+export function gearTeethSpan(
+  data: Pick<FeatureDataOf<'gear'>, 'faceWidth' | 'offset' | 'anchor'>,
+  faceLength: number,
+  values: Pick<GearValues, 'optional'>
+): { offset: number; width: number } {
+  const offset = values.optional(data.offset, 'offset') ?? 0;
+  const width =
+    values.optional(data.faceWidth, 'face width') ?? faceLength - offset;
+  if (!(width > 0)) {
+    throw new Error(
+      'The teeth offset reaches the end of the cylindrical face, leaving no teeth.'
+    );
+  }
+  return {
+    offset: (data.anchor ?? 'start') === 'end' ? faceLength - offset - width : offset,
+    width
+  };
+}
+
 function buildGearTeethOnBody(
   ctx: FeatureBuildContext,
   feature: FeatureNode,
@@ -719,10 +748,12 @@ function buildGearTeethOnBody(
   if (fit === 'module' && module === undefined) {
     throw new Error('A gear sized by module needs a pitch.');
   }
+  const span = gearTeethSpan(data, geometry.axialLength, values);
   const spec = {
     kind: data.gearType,
-    // The teeth span the whole face; the kernel refuses any other width.
-    faceWidth: geometry.axialLength,
+    faceWidth: span.width,
+    // From the face's lower end; absent is 0, the whole-face request.
+    ...(span.offset !== 0 ? { offset: span.offset } : {}),
     fit: fit === 'module' ? 'module' : 'keepDiameter',
     ...(fit === 'module' ? { module } : {}),
     ...toothForm,
@@ -739,31 +770,270 @@ function buildGearTeethOnBody(
     ),
     'Gear'
   );
-  const details = unifyGearCaps(kernel, solid, cutDetails);
+  const tolerance = spanTolerance(geometry.axialLength);
+  const partial =
+    span.offset > tolerance ||
+    span.offset + span.width < geometry.axialLength - tolerance;
+  // The body's other faces keep their names through a unique analytic
+  // carrier, as across a boolean; the gear's own faces take their roles.
+  const carried = () =>
+    deriveRemusBooleanCarrierLineage({
+      producingFeatureId: feature.featureId,
+      operands: [
+        {
+          lineage: shape.lineage,
+          candidates: topologyCandidatesForSolid(kernel, targetSolid),
+          role: 'target'
+        }
+      ],
+      resultCandidates: topologyCandidatesForSolid(kernel, solid)
+    });
+  let details: GearOkDetails;
+  let kept: RemusLineageState;
+  if (partial) {
+    // Unifying a partial band would also merge each tip land into the collar
+    // it stands on, which the kernel reverts or leaves unmeasurable; its
+    // shoulders, collars and any end it reaches are named instead.
+    kept = carried();
+    details = nameGearSpanFaces(kernel, solid, cutDetails, {
+      start: geometry.axisStart!,
+      end: geometry.axisEnd!,
+      radius: geometry.radius!,
+      from: span.offset,
+      to: span.offset + span.width
+    });
+  } else {
+    details = unifyGearCaps(kernel, solid, cutDetails);
+    kept = carried();
+  }
   validateGeneratedSolid(kernel, solid, 'Gear');
   raiseGearWarnings(ctx, feature, details);
   result.consumed.add(targetBodyId);
-  // The body's other faces keep their names through a unique analytic
-  // carrier, as across a boolean; the gear's own faces take their roles.
-  const carried = deriveRemusBooleanCarrierLineage({
-    producingFeatureId: feature.featureId,
-    operands: [
-      {
-        lineage: shape.lineage,
-        candidates: topologyCandidatesForSolid(kernel, targetSolid),
-        role: 'target'
-      }
-    ],
-    resultCandidates: topologyCandidatesForSolid(kernel, solid)
-  });
   result.shapes.set(feature.bodyId!, {
     solids: [solid],
     lineage: mergeRemusLineageStates([
-      carried,
+      kept,
       gearRoleLineage(kernel, solid, feature.featureId, details)
     ])
   });
   inheritMeshOrigin(result, targetBodyId, feature.bodyId);
+}
+
+/** Axial lengths this close are one position along a face of `length`. */
+function spanTolerance(length: number): number {
+  return 1e-7 * Math.max(1, length);
+}
+
+/**
+ * Teeth over part of a face end at shoulders and leave the cylinder beside
+ * them as collars, faces the kernel gives no role. Name them from where they
+ * stand: a coaxial cylinder of the face's radius before or after the teeth is
+ * `collar.start|end`; a plane across the axis at either end of the teeth that
+ * borders a gear face is `shoulder.start|end`, or `shoulder.start[k]` per
+ * tooth space where the tips stand on the collar and split it, `k` the root
+ * it borders. The face's cap at either end is `cap.start|end`, as the
+ * whole-face cut names it: at an end the teeth stop short of, the plane
+ * there that bounds the collar; where the teeth reach the end, the cap is
+ * split, the gear's toothed ring keeps `cap.*` and the body's part of it,
+ * inside (a boss) or outside (a bore) the ring, is `cap.start|end.body`.
+ * Collars are only
+ * what remains of the picked face, and always take their role, so a span
+ * edit that splits or rejoins them keeps their names. Other faces keep the
+ * body's lineage.
+ */
+function nameGearSpanFaces(
+  kernel: RemusKernel,
+  solid: number,
+  details: GearOkDetails,
+  band: {
+    start: { x: number; y: number; z: number };
+    end: { x: number; y: number; z: number };
+    radius: number;
+    from: number;
+    to: number;
+  }
+): GearOkDetails {
+  const roles = details.faceRoles ?? [];
+  const roleOf = new Map(roles.map(({ face, role }) => [face, role] as const));
+  const run = {
+    x: band.end.x - band.start.x,
+    y: band.end.y - band.start.y,
+    z: band.end.z - band.start.z
+  };
+  const length = Math.hypot(run.x, run.y, run.z);
+  if (!(length > 0)) return details;
+  const axis = { x: run.x / length, y: run.y / length, z: run.z / length };
+  const at = (point: { x: number; y: number; z: number }) =>
+    (point.x - band.start.x) * axis.x +
+    (point.y - band.start.y) * axis.y +
+    (point.z - band.start.z) * axis.z;
+  const parallel = (direction: { x: number; y: number; z: number }) => {
+    const size = Math.hypot(direction.x, direction.y, direction.z);
+    return (
+      size > 0 &&
+      Math.abs(
+        (direction.x * axis.x + direction.y * axis.y + direction.z * axis.z) /
+          size
+      ) >
+        1 - 1e-9
+    );
+  };
+  const tolerance = spanTolerance(length);
+  // Each gear face's edges, to find the shoulders that border the teeth.
+  const gearEdges = new Map<number, string>();
+  for (const { face, role } of roles) {
+    for (const edge of kernel.getFaceEdges(face)) gearEdges.set(edge, role);
+  }
+  const added: { face: number; role: string }[] = [];
+  const shoulders = { start: [] as number[], end: [] as number[] };
+  const ends = { start: [] as number[], end: [] as number[] };
+  const collars = { start: [] as number[], end: [] as number[] };
+  const endPlanes = { start: [] as number[], end: [] as number[] };
+  const shoulderRoot = new Map<number, number | undefined>();
+  // Whether a point lies on the picked face's axis line.
+  const onAxis = (point: { x: number; y: number; z: number }) => {
+    const t = at(point);
+    return (
+      Math.hypot(
+        point.x - band.start.x - axis.x * t,
+        point.y - band.start.y - axis.y * t,
+        point.z - band.start.z - axis.z * t
+      ) <= tolerance
+    );
+  };
+  for (const face of kernel.getSolidFaces(solid)) {
+    if (roleOf.has(face)) continue;
+    const geometry = measureFaceGeometry(kernel, face);
+    if (!geometry) continue;
+    if (
+      geometry.surfaceType === 'cylinder' &&
+      geometry.axisStart &&
+      geometry.axisEnd &&
+      geometry.radius !== undefined &&
+      Math.abs(geometry.radius - band.radius) <= tolerance &&
+      parallel({
+        x: geometry.axisEnd.x - geometry.axisStart.x,
+        y: geometry.axisEnd.y - geometry.axisStart.y,
+        z: geometry.axisEnd.z - geometry.axisStart.z
+      }) &&
+      onAxis(geometry.axisStart)
+    ) {
+      // Only what is left of the picked face: on its axis line and within
+      // its length, so a coaxial step of the same diameter elsewhere on the
+      // body keeps its own name. A collar is named by its role even where
+      // the body's lineage could carry the face's old name (a single
+      // collar), so the name holds as an offset or length edit makes one
+      // collar two, or two one.
+      const a = at(geometry.axisStart);
+      const b = at(geometry.axisEnd);
+      if (Math.min(a, b) < -tolerance || Math.max(a, b) > length + tolerance) {
+        continue;
+      }
+      const middle = (a + b) / 2;
+      if (middle < band.from - tolerance) collars.start.push(face);
+      else if (middle > band.to + tolerance) collars.end.push(face);
+      continue;
+    }
+    if (
+      geometry.surfaceType !== 'plane' ||
+      !geometry.normal ||
+      !parallel(geometry.normal)
+    ) {
+      continue;
+    }
+    const position = at(geometry.center);
+    // A plane at an end of the picked face the teeth stop short of: the
+    // face's cap there, once it is seen to bound that end's collar.
+    if (Math.abs(position) <= tolerance && band.from > tolerance) {
+      endPlanes.start.push(face);
+      continue;
+    }
+    if (
+      Math.abs(position - length) <= tolerance &&
+      band.to < length - tolerance
+    ) {
+      endPlanes.end.push(face);
+      continue;
+    }
+    const side =
+      Math.abs(position - band.from) <= tolerance
+        ? 'start'
+        : Math.abs(position - band.to) <= tolerance
+          ? 'end'
+          : undefined;
+    if (!side) continue;
+    const atFaceEnd =
+      side === 'start' ? band.from <= tolerance : band.to >= length - tolerance;
+    let root: number | undefined;
+    let borders = false;
+    for (const edge of kernel.getFaceEdges(face)) {
+      const role = gearEdges.get(edge);
+      if (role === undefined) continue;
+      borders = true;
+      const index = /^root\[(\d+)\]/.exec(role)?.[1];
+      if (index !== undefined) root = Number(index);
+    }
+    if (!borders) continue;
+    if (atFaceEnd) {
+      ends[side].push(face);
+      continue;
+    }
+    shoulders[side].push(face);
+    shoulderRoot.set(face, root);
+  }
+  for (const side of ['start', 'end'] as const) {
+    // The face's cap at an end the teeth stop short of keeps the name the
+    // whole-face cut gives it, `cap.start|end`, so a span edit either way
+    // leaves a reference to it in place.
+    const collarEdges = new Set(
+      collars[side].flatMap((face) => Array.from(kernel.getFaceEdges(face)))
+    );
+    const caps = endPlanes[side].filter((face) =>
+      kernel.getFaceEdges(face).some((edge) => collarEdges.has(edge))
+    );
+    caps.forEach((face, order) => {
+      added.push({
+        face,
+        role: caps.length === 1 ? `cap.${side}` : `cap.${side}[${order}]`
+      });
+    });
+    collars[side].forEach((face, order) => {
+      added.push({
+        face,
+        role:
+          collars[side].length === 1
+            ? `collar.${side}`
+            : `collar.${side}[${order}]`
+      });
+    });
+    ends[side].forEach((face, order) => {
+      added.push({
+        face,
+        role:
+          ends[side].length === 1
+            ? `cap.${side}.body`
+            : `cap.${side}.body[${order}]`
+      });
+    });
+    const faces = shoulders[side];
+    if (faces.length === 1) {
+      added.push({ face: faces[0]!, role: `shoulder.${side}` });
+      continue;
+    }
+    // One per tooth space: indexed by the root each borders, unless a root
+    // is missing or shared, where the order around the axis stands in.
+    const indices = faces.map((face) => shoulderRoot.get(face));
+    const unique =
+      indices.every((index) => index !== undefined) &&
+      new Set(indices).size === indices.length;
+    faces.forEach((face, order) => {
+      added.push({
+        face,
+        role: `shoulder.${side}[${unique ? indices[order]! : order}]`
+      });
+    });
+  }
+  return { ...details, faceRoles: [...roles, ...added] };
 }
 
 /**

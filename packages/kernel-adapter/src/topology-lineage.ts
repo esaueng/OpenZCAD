@@ -1478,8 +1478,23 @@ export function resolveTopologyReference(
   return {
     status: 'failed',
     reason: 'lineage-not-found',
-    message: `The selected ${reference.kind} lineage no longer exists.`
+    message:
+      reference.kind === 'face' && splitGearCapPart(identity.lineageName)
+        ? "The selected part of the gear's end cap no longer exists. Re-pick the face."
+        : `The selected ${reference.kind} lineage no longer exists.`
   };
+}
+
+/**
+ * The body's part of an end cap that partial gear teeth split (M14, schema
+ * v55), `gear.face.cap.start|end.body`, under whatever later feature carries
+ * the name. Only the refusal's wording reads it: once the caps rejoin, a
+ * reference to that part refuses rather than resolving to any other face.
+ */
+function splitGearCapPart(lineageName: string): boolean {
+  return /(?:^|\.)gear\.face\.cap\.(?:start|end)\.body(?:\[\d+\])?$/.test(
+    lineageName
+  );
 }
 
 /**

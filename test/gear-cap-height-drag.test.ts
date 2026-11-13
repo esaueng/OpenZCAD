@@ -1,9 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CommandManager } from '@openzcad/command-system';
 import {
+  addDatumPlane,
   addPrimitiveFeature,
   createProjectDocument,
-  gearBody
+  gearBody,
+  listFeaturesInOrder,
+  updateFeature
 } from '@openzcad/document-core';
 import {
   createExactKernelAdapter,
@@ -13,7 +16,9 @@ import {
   toUserId,
   type BodyId,
   type BodyRepresentation,
+  type FacePlaneSource,
   type FaceTopology,
+  type FeatureId,
   type ProjectDocument
 } from '@openzcad/shared';
 import {
@@ -21,6 +26,7 @@ import {
   planFaceOffset
 } from '../apps/web/src/lib/interaction/faceOffsetPlan';
 import { primitiveCylinderRadiusAncestor } from '../apps/web/src/lib/interaction/cylinderPrimitiveAncestry';
+import { faceSketchAttachment } from '../apps/web/src/lib/faceSketchAttachment';
 
 /** Every planar face whose normal points along `sense` × Z. */
 function caps(body: BodyRepresentation, sense: number): FaceTopology[] {
@@ -138,5 +144,260 @@ describe('teeth cut along a cylinder', { timeout: 60_000 }, () => {
 
   it('leaves the radius to the gear', () => {
     expect(primitiveCylinderRadiusAncestor(document, gearBodyId)).toBeNull();
+  });
+});
+
+describe('teeth over part of a cylinder (v55)', { timeout: 60_000 }, () => {
+  let adapter: ExactKernelAdapter;
+
+  beforeAll(async () => {
+    adapter = await createExactKernelAdapter();
+  }, 60_000);
+
+  afterAll(() => adapter.dispose());
+
+  it('keeps a cap drag off the cylinder’s height: the teeth end at shoulders', async () => {
+    const base = addPrimitiveFeature(
+      createProjectDocument('Shaft', toUserId('user_gear')),
+      {
+        name: 'Blank',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 11, height: 12 }
+      }
+    );
+    const blankId = base.bodyOrder[0]!;
+    const blank = (await adapter.syncDocument(base)).bodyRepresentations[
+      blankId
+    ]!;
+    const wall = blank.topology!.faces.find(
+      (face) => face.geometry?.surfaceType === 'cylinder'
+    )!;
+    // Teeth over the bottom 4 of the 12: the bottom cap is the gear's.
+    const cut = gearBody(base, {
+      name: 'Teeth',
+      gearType: 'external',
+      sizing: 'module',
+      teeth: 20,
+      faceWidth: 4,
+      targetBodyId: blankId,
+      faceHash: wall.hash,
+      ...(wall.reference ? { faceReference: wall.reference } : {})
+    });
+    const document = cut.document;
+    const derived = await adapter.syncDocument(document);
+    expect(derived.warnings).toEqual([]);
+    document.derived = derived;
+    const body = derived.bodyRepresentations[cut.bodyId]!;
+    const ring = body.topology!.faces.find(
+      (face) => face.reference?.lineageName === 'gear.face.cap.start'
+    )!;
+    expect(ring).toBeDefined();
+    // Growing the cylinder from this end would slide the stored span along
+    // it, so the drag is not read as the cylinder's height.
+    const plan = planFaceOffset({
+      document,
+      bodyId: cut.bodyId,
+      face: ring,
+      faceHash: ring.hash,
+      offset: 2
+    });
+    expect(plan?.kind).not.toBe('primitive-dimension');
+  });
+});
+
+describe('end caps across whole-face and partial teeth (v55)', { timeout: 300_000 }, () => {
+  let adapter: ExactKernelAdapter;
+
+  beforeAll(async () => {
+    adapter = await createExactKernelAdapter();
+  }, 60_000);
+
+  afterAll(() => adapter.dispose());
+
+  it('keeps each cap’s name and the datum planes on it through span edits either way', async () => {
+    const base = addPrimitiveFeature(
+      createProjectDocument('Shaft', toUserId('user_gear')),
+      {
+        name: 'Blank',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 11, height: 12 }
+      }
+    );
+    const blankId = base.bodyOrder[0]!;
+    const blank = (await adapter.syncDocument(base)).bodyRepresentations[
+      blankId
+    ]!;
+    const wall = blank.topology!.faces.find(
+      (face) => face.geometry?.surfaceType === 'cylinder'
+    )!;
+    // Whole-face teeth, set module 0.9.
+    const cut = gearBody(base, {
+      name: 'Teeth',
+      gearType: 'external',
+      sizing: 'module',
+      pitch: 0.9,
+      fit: 'module',
+      teeth: 20,
+      targetBodyId: blankId,
+      faceHash: wall.hash,
+      ...(wall.reference ? { faceReference: wall.reference } : {})
+    });
+    let document = cut.document;
+    document.derived = await adapter.syncDocument(document);
+    const gear = document.derived.bodyRepresentations[cut.bodyId]!;
+    // A datum plane on each cap, from the face as a pick gives it.
+    const planes: Record<string, FeatureId> = {};
+    for (const role of ['start', 'end'] as const) {
+      const face = gear.topology!.faces.find(
+        (candidate) =>
+          candidate.reference?.lineageName === `gear.face.cap.${role}`
+      )!;
+      const attachment = faceSketchAttachment({
+        bodyId: cut.bodyId,
+        pickedHash: face.hash,
+        face
+      });
+      if (!attachment.ok) throw new Error(attachment.reason);
+      const planed = addDatumPlane(document, {
+        name: `Cap ${role}`,
+        definition: {
+          kind: 'offset',
+          source: attachment.planeRef as FacePlaneSource,
+          offset: 0
+        }
+      });
+      document = planed.document;
+      planes[role] = planed.featureId;
+    }
+    const gearId = listFeaturesInOrder(document).find(
+      (feature) => feature.data.featureKind === 'gear'
+    )!.featureId;
+    const whole = { clearData: ['faceWidth', 'offset', 'anchor'] };
+    // Reaching the start, reaching the end, reaching neither; whole between.
+    for (const step of [
+      { data: { faceWidth: 6 } },
+      whole,
+      { data: { faceWidth: 6, anchor: 'end' as const } },
+      whole,
+      { data: { faceWidth: 6, offset: 3 } },
+      whole
+    ]) {
+      document = updateFeature(document, { featureId: gearId, ...step });
+      const derived = await adapter.syncDocument(document);
+      expect(derived.warnings).toEqual([]);
+      const names = derived.bodyRepresentations[
+        cut.bodyId
+      ]!.topology!.faces.map((face) => face.reference?.lineageName);
+      expect(new Set(names).size).toBe(names.length);
+      expect(names).toContain('gear.face.cap.start');
+      expect(names).toContain('gear.face.cap.end');
+      expect(derived.datumFrames?.[planes.start!]?.origin.z).toBeCloseTo(0, 6);
+      expect(derived.datumFrames?.[planes.end!]?.origin.z).toBeCloseTo(12, 6);
+    }
+  });
+
+  it('refuses a datum on the body’s part of a split cap once the caps rejoin, and keeps it while they stay split', async () => {
+    for (const [end, z, reach] of [
+      ['start', 0, { faceWidth: 6 }],
+      ['end', 12, { faceWidth: 6, anchor: 'end' as const }]
+    ] as const) {
+      const base = addPrimitiveFeature(
+        createProjectDocument('Shaft', toUserId('user_gear')),
+        {
+          name: 'Blank',
+          primitiveKind: 'cylinder',
+          dimensions: { radius: 11, height: 12 }
+        }
+      );
+      const blankId = base.bodyOrder[0]!;
+      const blank = (await adapter.syncDocument(base)).bodyRepresentations[
+        blankId
+      ]!;
+      const wall = blank.topology!.faces.find(
+        (face) => face.geometry?.surfaceType === 'cylinder'
+      )!;
+      // Teeth 6 long reaching this end: its cap is the ring and the body's
+      // part, `cap.<end>.body`.
+      const cut = gearBody(base, {
+        name: 'Teeth',
+        gearType: 'external',
+        sizing: 'module',
+        pitch: 0.9,
+        fit: 'module',
+        teeth: 20,
+        ...reach,
+        targetBodyId: blankId,
+        faceHash: wall.hash,
+        ...(wall.reference ? { faceReference: wall.reference } : {})
+      });
+      let document = cut.document;
+      document.derived = await adapter.syncDocument(document);
+      const part = document.derived.bodyRepresentations[
+        cut.bodyId
+      ]!.topology!.faces.find(
+        (face) => face.reference?.lineageName === `gear.face.cap.${end}.body`
+      )!;
+      expect(part).toBeDefined();
+      const attachment = faceSketchAttachment({
+        bodyId: cut.bodyId,
+        pickedHash: part.hash,
+        face: part
+      });
+      if (!attachment.ok) throw new Error(attachment.reason);
+      const planed = addDatumPlane(document, {
+        name: 'Body cap',
+        definition: {
+          kind: 'offset',
+          source: attachment.planeRef as FacePlaneSource,
+          offset: 0
+        }
+      });
+      document = planed.document;
+      const gearId = listFeaturesInOrder(document).find(
+        (feature) => feature.data.featureKind === 'gear'
+      )!.featureId;
+      // Each step keeps the anchor it was given, so the teeth reach this end
+      // exactly where `split` says.
+      for (const [step, split] of [
+        // The whole face: one cap again, so the part is gone.
+        [{ clearData: ['faceWidth', 'offset', 'anchor'] }, false],
+        // Back as created: split again, the part resolves.
+        [{ data: reach }, true],
+        // Shorter, still reaching this end: the part persists.
+        [{ data: { faceWidth: 4 } }, true],
+        // Set off from this end: the cap is one face here.
+        [{ data: { faceWidth: 6, offset: 3 } }, false],
+        // Reaching it again.
+        [{ data: { faceWidth: 6, offset: 0 } }, true]
+      ] as const) {
+        document = updateFeature(document, { featureId: gearId, ...step });
+        const derived = await adapter.syncDocument(document);
+        const names = derived.bodyRepresentations[
+          cut.bodyId
+        ]!.topology!.faces.map((face) => face.reference?.lineageName);
+        expect(names.includes(`gear.face.cap.${end}.body`)).toBe(split);
+        if (split) {
+          expect(derived.warnings, `${end} ${JSON.stringify(step)}`).toEqual(
+            []
+          );
+          expect(
+            derived.datumFrames?.[planed.featureId]?.origin.z
+          ).toBeCloseTo(z, 6);
+        } else {
+          // Refused by name, never moved onto the ring or the rejoined cap.
+          expect(derived.datumFrames?.[planed.featureId]).toBeUndefined();
+          expect(derived.warnings.join(' ')).toMatch(
+            /The selected part of the gear's end cap no longer exists\. Re-pick the face\./
+          );
+        }
+      }
+      // The end case finished anchored at the end it reaches.
+      const gear = listFeaturesInOrder(document).find(
+        (feature) => feature.featureId === gearId
+      )!;
+      expect(gear.data.featureKind === 'gear' && gear.data.anchor).toBe(
+        end === 'end' ? 'end' : undefined
+      );
+    }
   });
 });

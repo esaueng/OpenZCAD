@@ -49,8 +49,9 @@ joint's details and the reopened card warn and ask for the pair to be placed
 again. The coupling records its gear pair (`gears`, component ids), so the
 check reads the real gears also when one is keyed to a shaft or two share a
 shaft, and the coupling goes when either gear leaves the assembly; removing
-a part or a joint in the sidebar names the couplings that went with it. v55 belongs to M14 partial-span teeth, which this slice does not
-contain, so every version gate refuses a v55 document. The three coupling
+a part or a joint in the sidebar names the couplings that went with it.
+v56 sits on top of v55 (M14 partial-span teeth, which merged first): a v55
+document opens with its span, and only couplings need v56. The three coupling
 commands are in the analytics operation vocabulary. Not in this slice: a
 coupling editor outside the card, couplings for non-gear joints, screw
 couplings and bevel or worm pairs (AS08, M14). Evidence:
@@ -64,7 +65,8 @@ on either joint, a pose saved with its drivers, limit conflicts, fixing a
 coupled gear refused and rejected in storage, pruning with a joint,
 component or kind change, the recorded gear pair validated and the coupling
 dropped with a keyed gear, replay, save and reopen; v54 documents opening
-unchanged, couplings requiring v56 and v55 refused),
+unchanged, a v55 partial-span document opening with its span, and couplings
+refused below v56),
 `test/gear-coupling.test.ts` (CI smoke selection: the saved joints and
 coupling land the second gear exactly where the fixed placement does; at the
 pitch point both parts move at the same velocity for external, flipped-axis,

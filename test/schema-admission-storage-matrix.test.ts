@@ -16,7 +16,6 @@ import {
 import { computeSketchProfileAnalysis } from '@openzcad/geometry';
 import {
   PROJECT_DOCUMENT_SCHEMA_VERSION,
-  isUnsupportedProjectSchema,
   createSketchCompositeCornerTarget,
   toUserId,
   type CreateProjectResponse,
@@ -301,9 +300,6 @@ describe.each(families)(
           version <= PROJECT_DOCUMENT_SCHEMA_VERSION;
           version++
         ) {
-          // A number claimed by work this build does not contain is not a
-          // supported version: it is refused like a newer one.
-          if (isUnsupportedProjectSchema(version)) continue;
           const document = carried(f, carrier, version);
           const before = clone(document);
           const opened = normalizeDocument(document);

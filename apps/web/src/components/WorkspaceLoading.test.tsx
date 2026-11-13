@@ -203,9 +203,11 @@ describe('coordinated workspace reveal', () => {
     });
     frame();
     frame();
-    expect(screen.queryByRole('status')).toBeNull();
-    expect(screen.getByRole('alert')).toHaveTextContent(
-      'History could not be rendered.'
+    expect(
+      screen.queryByRole('status', { name: 'Restoring workspace' })
+    ).toBeNull();
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'History did not load.'
     );
     expect(
       screen.getByRole('button', { name: 'Reload workspace' })

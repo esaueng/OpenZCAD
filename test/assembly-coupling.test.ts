@@ -7,8 +7,10 @@ import {
   replayCommands
 } from '@openzcad/command-system';
 import {
+  addPrimitiveFeature,
   assertStorableDocument,
   createProjectDocument,
+  gearBody,
   normalizeDocument
 } from '@openzcad/document-core';
 import {
@@ -25,10 +27,8 @@ import {
   couplingLimitsConflict,
   couplingOffsetAtPose,
   dragSpecFor,
-  isUnsupportedProjectSchema,
   motionStudyDrivers,
   motionStudyValues,
-  previousProjectSchemaVersion,
   solveAssembly,
   toUserId,
   unsolvedAssemblyJoints,
@@ -40,6 +40,7 @@ import {
   type AssemblyMotionStudy,
   type AssemblySet,
   type BodyId,
+  type FeatureNode,
   type ProjectDocument,
   type RigidTransform,
   type Vector3
@@ -983,35 +984,49 @@ describe('coupling commands (schema v56)', () => {
     expect(() => assertStorableDocument(broken)).toThrow(/unusable ratio/);
   });
 
-  it('refuses a v55 document: partial-span teeth are not in this build', () => {
-    // v55 belongs to work this build does not contain. A document that
-    // declares it may hold teeth this build would cut along the whole face,
-    // so it is refused like a newer one, with or without an assembly.
-    expect(isUnsupportedProjectSchema(55)).toBe(true);
-    expect(isUnsupportedProjectSchema(54)).toBe(false);
-    expect(isUnsupportedProjectSchema(PROJECT_DOCUMENT_SCHEMA_VERSION)).toBe(
-      false
-    );
-    expect(
-      isUnsupportedProjectSchema(PROJECT_DOCUMENT_SCHEMA_VERSION + 1)
-    ).toBe(true);
-    expect(previousProjectSchemaVersion()).toBe(54);
-    const plain = JSON.parse(
-      JSON.stringify(createProjectDocument('Plain', owner))
-    ) as ProjectDocument;
-    const claimed = {
-      ...plain,
+  it('opens a v55 document with its partial-span teeth; couplings stay v56', () => {
+    // v55 (M14 partial-span teeth) is part of this build: its documents
+    // open like any earlier one and keep the span, which the kernel cuts
+    // (`gear-feature.test.ts`). Only couplings need v56.
+    const blank = addPrimitiveFeature(createProjectDocument('Shaft', owner), {
+      name: 'Blank',
+      primitiveKind: 'cylinder',
+      dimensions: { radius: 11, height: 12 }
+    });
+    const cut = gearBody(blank, {
+      name: 'Teeth',
+      gearType: 'external',
+      sizing: 'module',
+      teeth: 20,
+      targetBodyId: blank.bodyOrder[0]!,
+      faceHash: 1,
+      faceWidth: 6,
+      offset: 3
+    }).document;
+    const saved = {
+      ...(JSON.parse(JSON.stringify(cut)) as ProjectDocument),
       schemaVersion: 55
     } as unknown as ProjectDocument;
-    expect(() => normalizeDocument(claimed)).toThrow(
-      /Unsupported project schema \(v55\)/
-    );
-    expect(() => assertStorableDocument(claimed)).toThrow(/schema 55/);
-    expect(() =>
-      normalizeDocument({
-        ...plain,
-        schemaVersion: previousProjectSchemaVersion()
-      } as unknown as ProjectDocument)
-    ).not.toThrow();
+    expect(() => assertStorableDocument(saved)).not.toThrow();
+    const opened = normalizeDocument(saved);
+    expect(opened.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
+    const teeth = Object.values(opened.nodes).find(
+      (node) => node.kind === 'feature' && node.featureKind === 'gear'
+    ) as FeatureNode;
+    expect(teeth.data).toMatchObject({ faceWidth: 6, offset: 3 });
+
+    // A coupling in a document that declares v55 is still refused.
+    const manager = assembled();
+    manager.execute(couple());
+    const coupled = JSON.parse(
+      JSON.stringify(manager.document)
+    ) as ProjectDocument;
+    for (const schemaVersion of [54, 55])
+      expect(() =>
+        normalizeDocument({
+          ...coupled,
+          schemaVersion
+        } as unknown as ProjectDocument)
+      ).toThrow(/schema v56/);
   });
 });

@@ -34,6 +34,7 @@ import {
   createZoomProjectionScratch,
   wheelDeltaToLogScale
 } from './wheelZoom';
+import { cameraScreenFrame, installFreeOrbit, orbitUpFor } from './freeOrbit';
 import {
   ORBIT_GLIDE_MAX_MS,
   orbitGlideElapsedMs,
@@ -479,7 +480,7 @@ export class CameraController {
     // would tumble, so a rotate hands roll back to world up. Pan and zoom
     // keep it, so a sketch stays right-way-up while it is navigated.
     if (orbitGestureRotates(this.orbit)) {
-      this.restoreWorldUp();
+      this.releaseRoll();
     }
     this.gestureActive = true;
     this.orbitGlide = null;
@@ -579,6 +580,8 @@ export class CameraController {
     camera.up.copy(heldUp);
     orbit.enableDamping = true;
     orbit.dampingFactor = DRAG_DAMPING;
+    // No polar clamp: an orbit carries straight over the top and bottom.
+    installFreeOrbit(orbit, (up) => this.holdUp(up));
     orbit.zoomToCursor = this.options.zoomToCursor();
     this.applyPointerBindings(orbit);
     orbit.addEventListener('start', this.beginGesture);
@@ -805,7 +808,8 @@ export class CameraController {
     if (tween.up) {
       this.holdUp(tween.up);
     } else {
-      this.restoreWorldUp();
+      // A glide from an upside-down view, cut short, is still upside down.
+      this.releaseRoll();
     }
   }
 
@@ -832,6 +836,23 @@ export class CameraController {
   }
 
   /**
+   * Drops a held roll for an orbit without turning the view over: a view
+   * the orbit has carried past a pole stays upside down (world −Z up), and
+   * one looking straight up or down keeps its screen up, where world Z would
+   * be the view axis itself and `lookAt` would snap the roll. Anything else
+   * goes back on world up exactly, as `restoreWorldUp` puts it.
+   */
+  private releaseRoll() {
+    const { viewDirection, screenUp } = cameraScreenFrame(this.active);
+    const up = orbitUpFor(viewDirection, screenUp);
+    if (up.z === 1) {
+      this.restoreWorldUp();
+    } else {
+      this.holdUp(up);
+    }
+  }
+
+  /**
    * Starts an orbit owned by an external viewport control such as the view
    * cube. This mirrors OrbitControls' pointer lifecycle without synthesizing
    * DOM events onto the canvas.
@@ -843,7 +864,7 @@ export class CameraController {
     this.cancelTween();
     // The view cube orbits even while canvas rotation is off (a sketch), so
     // it always releases a held roll.
-    this.restoreWorldUp();
+    this.releaseRoll();
     this.externalOrbitActive = true;
     this.beginGesture();
   }

@@ -1358,19 +1358,21 @@ export function updateStudioGrid(
   grid.scale.set(fadeRadius, fadeRadius, 1);
 }
 
+/** The negative half of each axis: present, but quieter than the positive. */
+const AXIS_NEGATIVE_OPACITY = 0.4;
+
 /**
- * Origin axis triad. THREE.AxesHelper draws native GL lines, which are stuck
- * at one hard device pixel; these are fat lines for the same reason every
- * other viewport polyline is. Picking stays off — the triad is decoration, and
- * Line2 raycasts against a screen-space radius that would make it an easy
- * accidental hit where the thin native lines were practically unhittable.
+ * World axis lines through the origin. THREE.AxesHelper draws native GL lines,
+ * which are stuck at one hard device pixel; these are fat lines for the same
+ * reason every other viewport polyline is. Picking stays off — the axes are
+ * decoration, and Line2 raycasts against a screen-space radius that would
+ * make them an easy accidental hit.
  *
- * Each axis is a unit segment that `updateAxesGizmo` stretches per frame, so
- * on screen every axis runs past the viewport edge and reads as infinite. The
- * length is dynamic rather than a huge constant because LineMaterial's
- * near-plane trimming visibly corrupts a segment whose far endpoint sits deep
- * behind the camera — an axis pointing toward the camera would dim to nothing
- * — while endpoints kept in front of the camera plane render exactly.
+ * Each axis is two half-lines from the origin: the positive half bold, the
+ * negative half fainter, so the line reads as an infinite axis while its
+ * positive direction stays obvious. Every half is a unit segment that
+ * `updateAxesGizmo` re-seats per frame on the part of it the camera can see,
+ * so on screen each runs past the viewport edge at any zoom or projection.
  */
 export function createAxesGizmo(resolution?: FatLineResolution): THREE.Group {
   const group = new THREE.Group();
@@ -1383,21 +1385,25 @@ export function createAxesGizmo(resolution?: FatLineResolution): THREE.Group {
     { direction: new THREE.Vector3(0, 0, 1), color: '#4477ff' }
   ];
   for (const axis of axes) {
-    const line = createFatLine([new THREE.Vector3(), axis.direction], {
-      color: axis.color,
-      linewidth: 1.8,
-      opacity: 0.9,
-      resolution
-    });
-    Object.assign(line.material, DECORATION_STENCIL_TEST);
-    line.raycast = () => undefined;
-    // Draw after the grid plane. Distance sorting puts these quads at their
-    // distant midpoints — behind everything — and lets the grid's translucent
-    // fragments wash over them.
-    line.renderOrder = 1;
-    line.frustumCulled = false;
-    line.userData.axisDirection = axis.direction.clone();
-    group.add(line);
+    for (const sign of [1, -1] as const) {
+      const direction = axis.direction.clone().multiplyScalar(sign);
+      const line = createFatLine([new THREE.Vector3(), direction], {
+        color: axis.color,
+        linewidth: sign > 0 ? 1.8 : 1.4,
+        opacity: sign > 0 ? 0.9 : AXIS_NEGATIVE_OPACITY,
+        resolution
+      });
+      Object.assign(line.material, DECORATION_STENCIL_TEST);
+      line.raycast = () => undefined;
+      // Draw after the grid plane. Distance sorting puts these quads at their
+      // distant midpoints — behind everything — and lets the grid's
+      // translucent fragments wash over them.
+      line.renderOrder = 1;
+      line.frustumCulled = false;
+      line.userData.axisDirection = direction;
+      line.name = `axis-${sign > 0 ? '+' : '-'}${'xyz'[axes.indexOf(axis)]}`;
+      group.add(line);
+    }
   }
   return group;
 }
@@ -1406,31 +1412,102 @@ export function createAxesGizmo(resolution?: FatLineResolution): THREE.Group {
 const AXIS_EXTENT_MAX = 100000;
 
 /**
- * Per-frame drive for the axis triad. Axes that recede from the camera get
- * the full extent; an axis pointing toward the camera is clamped to a hair in
- * front of the camera plane, where its endpoint already projects far outside
- * the viewport — visually still infinite, numerically still exact.
+ * How far past the viewport edge, in NDC, each axis is carried: enough that
+ * a fat line's square end never shows inside the frame.
+ */
+const AXIS_SCREEN_MARGIN = 1.25;
+
+const axisFrustum = new THREE.Frustum();
+const axisClipMatrix = new THREE.Matrix4();
+const axisMarginScale = new THREE.Matrix4().makeScale(
+  1 / AXIS_SCREEN_MARGIN,
+  1 / AXIS_SCREEN_MARGIN,
+  1
+);
+
+/**
+ * The span of the half-line `origin + t·direction`, t in [0, max], that lies
+ * inside `frustum`, or null when none of it does.
+ */
+function clipRayToFrustum(
+  frustum: THREE.Frustum,
+  origin: THREE.Vector3,
+  direction: THREE.Vector3,
+  max: number
+): [number, number] | null {
+  let low = 0;
+  let high = max;
+  for (const plane of frustum.planes) {
+    const start = plane.distanceToPoint(origin);
+    const rate = plane.normal.dot(direction);
+    if (Math.abs(rate) < 1e-12) {
+      if (start < 0) {
+        return null;
+      }
+      continue;
+    }
+    const crossing = -start / rate;
+    if (rate > 0) {
+      low = Math.max(low, crossing);
+    } else {
+      high = Math.min(high, crossing);
+    }
+    if (low > high) {
+      return null;
+    }
+  }
+  return [low, high];
+}
+
+/**
+ * Per-frame drive for the axis lines. Each half-line is clipped against the
+ * camera's view volume — widened sideways past the viewport edge, pulled in a
+ * hair from the near and far planes — and its segment set to exactly that
+ * span, so it always runs off screen and never ends inside the frame.
+ *
+ * Both ends stay inside the volume, which also keeps LineMaterial exact: its
+ * near-plane trimming visibly corrupts a segment with an endpoint deep behind
+ * the camera, and an endpoint close to the camera plane projects to clip
+ * coordinates extreme enough to degenerate the screen-space quad. A half the
+ * camera cannot see at all is hidden.
  */
 export function updateAxesGizmo(group: THREE.Group, camera: THREE.Camera) {
-  const forward = camera.getWorldDirection(new THREE.Vector3());
-  const originDepth = forward.dot(
-    new THREE.Vector3().sub(camera.getWorldPosition(new THREE.Vector3()))
-  );
+  axisClipMatrix
+    .copy(camera.projectionMatrix)
+    .premultiply(axisMarginScale)
+    .multiply(camera.matrixWorldInverse);
+  axisFrustum.setFromProjectionMatrix(axisClipMatrix);
+  const { near, far } = camera as THREE.Camera & {
+    near?: number;
+    far?: number;
+  };
+  const depthInset =
+    near !== undefined && far !== undefined && far > near
+      ? (far - near) * 1e-6
+      : 0;
+  // Frustum.planes: 4 is far, 5 is near; inset both so neither end lands on
+  // a clip plane, where rounding could drop it to the wrong side.
+  axisFrustum.planes[4]!.constant -= depthInset;
+  axisFrustum.planes[5]!.constant -= depthInset;
+  const origin = new THREE.Vector3();
   for (const child of group.children) {
     const direction = child.userData.axisDirection as THREE.Vector3 | undefined;
     if (!direction) {
       continue;
     }
-    const towardCamera = direction.dot(forward);
-    let extent = AXIS_EXTENT_MAX;
-    if (towardCamera < -1e-6 && originDepth > 0) {
-      // 0.65, not ~1: an endpoint approaching the camera plane projects to
-      // extreme clip coordinates, and the screen-space quad Line2 builds from
-      // them degenerates. At 65% of the way there the endpoint still lands
-      // far outside any viewport, so the axis reads as infinite regardless.
-      extent = Math.min(extent, (originDepth * 0.65) / -towardCamera);
+    const span = clipRayToFrustum(
+      axisFrustum,
+      origin,
+      direction,
+      AXIS_EXTENT_MAX
+    );
+    if (span === null || span[1] - span[0] < 1e-9) {
+      child.visible = false;
+      continue;
     }
-    child.scale.setScalar(Math.max(extent, 1e-3));
+    child.visible = true;
+    child.position.copy(direction).multiplyScalar(span[0]);
+    child.scale.setScalar(span[1] - span[0]);
   }
 }
 

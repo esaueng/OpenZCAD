@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import {
   Fragment,
+  useEffect,
   useId,
   useLayoutEffect,
   useRef,
@@ -43,10 +44,12 @@ import {
   type ToolDrawerView
 } from '../lib/toolRail';
 import {
+  TOOL_GROUPS,
   TOOL_META,
   toolDisabledReason,
   toolTitle,
   type ToolAvailability,
+  type ToolGroup,
   type ToolId
 } from '../lib/tools';
 import { toolCommandId, useKeymap } from '../lib/keymap';
@@ -57,6 +60,14 @@ import { SelectionRail, useHeldPick } from './SelectionRail';
 import { Tooltip } from './Tooltip';
 
 const TOOL_COUNT = Object.keys(TOOL_META).length;
+
+/** A drawer section's id by the heading it is listed under. */
+const SECTION_BY_LABEL = new Map(
+  TOOL_GROUPS.map((group) => [group.label, group.id] as const)
+);
+
+/** The breathing room left above a heading scrolled to the list's top. */
+const HEADING_GAP_PX = 4;
 
 /**
  * The rail's stops for the arrow keys: its tools, the pick's verbs and the
@@ -135,6 +146,12 @@ interface CommandCardProps {
    */
   drawerView?: ToolDrawerView;
   onDrawerViewChange?(view: ToolDrawerView): void;
+  /**
+   * The drawer's section last scrolled to, remembered as the list scrolls
+   * and opened on again. Without a handler nothing is remembered.
+   */
+  drawerSection?: ToolGroup | null;
+  onDrawerSectionChange?(section: ToolGroup): void;
 }
 
 type DragSource = 'pin' | 'suggested' | 'drawer';
@@ -193,7 +210,9 @@ export function CommandCard({
   drawerFilter = 'all',
   onDrawerFilterChange,
   drawerView = 'advanced',
-  onDrawerViewChange
+  onDrawerViewChange,
+  drawerSection = null,
+  onDrawerSectionChange
 }: CommandCardProps) {
   const context = commandContextFor(selection);
   // A pick that drops out mid-drag is still drawn, held, for a moment: the
@@ -268,6 +287,14 @@ export function CommandCard({
     drawerOpen,
     groups.map((group) => group.tools.join()).join('|')
   );
+  // A search narrows the sections to its matches: scrolling those says
+  // nothing about where the full list was left.
+  useRememberedSection(
+    listRef,
+    drawerOpen,
+    drawerSection,
+    advanced && query ? undefined : onDrawerSectionChange
+  );
   const canPin = onPinnedToolsChange !== undefined;
   const moreToggleRef = useRef<HTMLButtonElement>(null);
   const flyoutRef = useRef<HTMLDivElement>(null);
@@ -282,6 +309,13 @@ export function CommandCard({
   const closeDrawer = () => {
     onToggleMore();
     moreToggleRef.current?.focus();
+  };
+  /** Back to the drawer's button, unless something else took the keyboard. */
+  const restoreFocusToToggle = () => {
+    const toggle = moreToggleRef.current;
+    const active = toggle?.ownerDocument.activeElement;
+    if (toggle && (!active || active === toggle.ownerDocument.body))
+      toggle.focus();
   };
   // The drawer's name and its way out, at the head in both views: a drawer
   // that stays through clicks elsewhere needs a close button on itself, not
@@ -541,8 +575,23 @@ export function CommandCard({
           draggable={canPin}
           onDragStart={(event) => startDrag(event, tool, 'drawer')}
           onDragEnd={endDrag}
-          onClick={() => {
-            if (disabledReason === null) onLaunchTool(tool);
+          onClick={(event) => {
+            if (disabledReason !== null) return;
+            const hadFocus =
+              event.currentTarget.ownerDocument.activeElement ===
+              event.currentTarget;
+            onLaunchTool(tool);
+            if (!drawerOpen) return;
+            // A tool taken from the drawer ends the browsing: the drawer
+            // goes away rather than waiting out the command and coming
+            // back over the stage. A greyed row leaves it open, as its
+            // reason is what the reader came for.
+            onToggleMore();
+            // The row goes with the drawer. A command that takes the
+            // keyboard (its bar, its panel) has it by the next frame; one
+            // that does not (Move) would leave it on the page, so it goes
+            // back to the button that opens the drawer again.
+            if (hadFocus) requestAnimationFrame(restoreFocusToToggle);
           }}
         >
           {meta.icon}
@@ -777,6 +826,7 @@ export function CommandCard({
                   <span
                     className="command-flyout-heading"
                     data-group={group.label}
+                    data-section={SECTION_BY_LABEL.get(group.label)}
                   >
                     {group.label}
                   </span>
@@ -813,7 +863,7 @@ export function CommandCard({
                   ).find((candidate) => candidate.dataset.group === below[0]);
                   if (!list || !heading) return;
                   list.scrollTo({
-                    top: heading.offsetTop - 4,
+                    top: heading.offsetTop - HEADING_GAP_PX,
                     behavior: 'smooth'
                   });
                 }}
@@ -979,6 +1029,94 @@ function useFlyoutAtToggle(
       flyout.style.removeProperty('--flyout-lift');
     };
   }, [flyoutRef, toggleRef, active, listKey]);
+}
+
+/**
+ * The section someone has scrolled to: the last one whose heading has
+ * reached the list's top, or the last section once the list is scrolled to
+ * its end (it may be too short to reach the top). None before the list has
+ * any heading.
+ */
+function sectionAtTop(list: HTMLElement): ToolGroup | null {
+  const headings = Array.from(
+    list.querySelectorAll<HTMLElement>('.command-flyout-heading[data-section]')
+  );
+  if (headings.length === 0) return null;
+  const atEnd =
+    list.scrollHeight > list.clientHeight + 1 &&
+    list.scrollTop + list.clientHeight >= list.scrollHeight - 1;
+  let reached = headings[0]!;
+  for (const heading of headings) {
+    if (atEnd || heading.offsetTop - HEADING_GAP_PX <= list.scrollTop + 1)
+      reached = heading;
+  }
+  return (reached.dataset.section as ToolGroup | undefined) ?? null;
+}
+
+/** What a person scrolls the drawer with: anything else is the drawer's own. */
+const SCROLL_INTENT_EVENTS = [
+  'wheel',
+  'touchstart',
+  'pointerdown',
+  'keydown'
+] as const;
+
+/**
+ * Opens the drawer on the section it was left at, and remembers the section
+ * as the list is scrolled. A section the list does not carry now (the
+ * simple view, a filter) opens at the head and is kept until the list is
+ * scrolled. Only a scroll someone made counts: the drawer's own (opening
+ * on the section, a list that settles its height) would otherwise record
+ * where it happened to land, an earlier section when the list was short.
+ */
+function useRememberedSection(
+  listRef: { readonly current: HTMLDivElement | null },
+  open: boolean,
+  section: ToolGroup | null,
+  onChange: ((section: ToolGroup) => void) | undefined
+) {
+  const remembered = useRef(section);
+  remembered.current = section;
+  const change = useRef(onChange);
+  change.current = onChange;
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    const target = remembered.current;
+    if (!open || !list || !target) return;
+    const heading = list.querySelector<HTMLElement>(
+      `.command-flyout-heading[data-section="${target}"]`
+    );
+    if (heading)
+      list.scrollTop = Math.max(0, heading.offsetTop - HEADING_GAP_PX);
+  }, [listRef, open]);
+  const tracking = onChange !== undefined;
+  useEffect(() => {
+    const list = listRef.current;
+    if (!open || !list || !tracking) return;
+    // The drawer's head and foot count too: its "More" cue scrolls the
+    // list, and the keyboard moves into it from the search.
+    const drawer = list.parentElement ?? list;
+    let intent = false;
+    const intend = () => {
+      intent = true;
+    };
+    const record = () => {
+      if (!intent) return;
+      const top = sectionAtTop(list);
+      if (top && top !== remembered.current) {
+        remembered.current = top;
+        change.current?.(top);
+      }
+    };
+    for (const type of SCROLL_INTENT_EVENTS)
+      drawer.addEventListener(type, intend, { passive: true });
+    list.addEventListener('scroll', record, { passive: true });
+    return () => {
+      for (const type of SCROLL_INTENT_EVENTS)
+        drawer.removeEventListener(type, intend);
+      list.removeEventListener('scroll', record);
+    };
+  }, [listRef, open, tracking]);
 }
 
 function useGroupsBelowFold(

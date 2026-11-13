@@ -18,7 +18,6 @@ import {
 } from '@openzcad/document-core';
 import {
   PROJECT_DOCUMENT_SCHEMA_VERSION,
-  isUnsupportedProjectSchema,
   createSketchCompositeCornerTarget,
   createSketchCompositeSideTarget,
   documentNodesWithHistory,
@@ -516,8 +515,6 @@ describe('S04 composite reference commands', () => {
       version < PROJECT_DOCUMENT_SCHEMA_VERSION;
       version++
     ) {
-      // Not an earlier schema this build opens: it is refused like a newer one.
-      if (isUnsupportedProjectSchema(version)) continue;
       const saved = structuredClone(f.document);
       saved.schemaVersion = version as typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
       const loaded = normalizeDocument(saved);

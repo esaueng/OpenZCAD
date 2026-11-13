@@ -479,6 +479,10 @@ export function inPlaceEditSeed(
         else missing.push('face');
         seed.options.side = data.gearType === 'internal' ? 'inside' : 'outside';
         seed.options.fit = data.fit ?? 'keep-diameter';
+        // Teeth over part of the face (schema v55): their stored length and
+        // offset; the end they start at is read back from `anchor`.
+        value('faceWidth', data.faceWidth);
+        value('offset', data.offset);
         break;
       }
       seed.options.gearType = data.gearType;
@@ -1038,7 +1042,10 @@ export function inPlaceFeatureUpdate(
         'xDirection',
         'boreDiameter',
         'rimDiameter',
-        'fit'
+        'fit',
+        'faceWidth',
+        'offset',
+        'anchor'
       ] as const;
       const clear = optional.filter(
         (key) => saved[key] !== undefined && request.gear[key] === undefined

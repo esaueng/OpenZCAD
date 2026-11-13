@@ -12,7 +12,8 @@ import {
   setSelectionFilter,
   stubApi,
   test,
-  waitForStillViewport
+  waitForStillViewport,
+  pressTool
 } from './openzcad-fixtures';
 
 /**
@@ -163,7 +164,7 @@ test('datum axes drive a revolve, a rotate about axis and a circular pattern', a
 
   // Axis 1: where Front (XZ) meets Right (YZ), the world Z axis. U09: the
   // Axis runs in place; the two ghost planes are clicked in that order.
-  await page.getByRole('button', { name: /^Axis — / }).click();
+  await pressTool(page, /^Axis — /);
   const axisBar = page.getByRole('group', { name: 'Axis command' });
   await expect(axisBar).toContainText('Pick an edge, cylinder');
   await clickGhostPlane(page, 'XZ');
@@ -207,7 +208,7 @@ test('datum axes drive a revolve, a rotate about axis and a circular pattern', a
   // U09: Revolve runs in place. The circle is the profile; Axis 1 lies
   // along the sketch's vertical axis, so its line stands in for that axis
   // and a click on it picks the datum.
-  await page.getByRole('button', { name: /^Revolve \(R\)/ }).click();
+  await pressTool(page, /^Revolve \(R\)/);
   const revolveBar = page.getByRole('group', { name: 'Revolve command' });
   await expect
     .poll(async () => {
@@ -275,7 +276,7 @@ test('datum axes drive a revolve, a rotate about axis and a circular pattern', a
   // it closes it, and Axis is a tool only the drawer lists.
   await page.keyboard.press('Escape');
   await ensureToolsDrawerOpen(page);
-  await page.getByRole('button', { name: /^Axis — / }).click();
+  await pressTool(page, /^Axis — /);
   await expect(axisBar).toContainText('Pick an edge, cylinder');
   await setSelectionFilter(page, 'Edge');
   await clickWorldPoint(page, [2, 2, 1]);
@@ -301,7 +302,7 @@ test('datum axes drive a revolve, a rotate about axis and a circular pattern', a
   // The 2 mm block turned half a turn about Axis 2 lands at x 18..20.
   // U09: Rotate about axis runs in place: the body, then a click on the
   // Axis 2 line (x = 10, vertical), then the angle on its chip's keypad.
-  await page.getByRole('button', { name: /^Rotate about axis — / }).click();
+  await pressTool(page, /^Rotate about axis — /);
   await pickObjectsBody(page, 'Box 1');
   const rotateBar = page.getByRole('group', {
     name: 'Rotate about axis command'
@@ -334,7 +335,7 @@ test('datum axes drive a revolve, a rotate about axis and a circular pattern', a
   // Four copies about Axis 2 ring it: x 0..20, y −10..10.
   // U09: Circular pattern runs in place: the body, a click on Axis 2, the
   // count on its chip's keypad.
-  await page.getByRole('button', { name: /^Circular pattern/ }).click();
+  await pressTool(page, /^Circular pattern/);
   await pickObjectsBody(page, 'Box 1');
   const patternBar = page.getByRole('group', {
     name: 'Circular pattern command'

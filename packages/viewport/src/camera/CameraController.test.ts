@@ -426,9 +426,10 @@ describe('CameraController external orbit lifecycle', () => {
       controller.perspective.up.distanceTo(new THREE.Vector3(0, 0, 1))
     ).toBeLessThan(1e-12);
 
-    // The view cube orbits even with canvas rotation off, so it releases too.
+    // The view cube orbits even with canvas rotation off, so it releases too:
+    // a front view rolled a quarter turn goes back on world up.
     controller.startTween({
-      position: new THREE.Vector3(0, 0, 150),
+      position: new THREE.Vector3(0, -150, 0),
       target: new THREE.Vector3(0, 0, 0),
       near: 0.1,
       far: 4000,
@@ -441,6 +442,135 @@ describe('CameraController external orbit lifecycle', () => {
       controller.perspective.up.distanceTo(new THREE.Vector3(0, 0, 1))
     ).toBeLessThan(1e-12);
     controller.endOrbitDrag();
+    controller.dispose();
+  });
+
+  it('starts an orbit from a view straight down without snapping its roll', () => {
+    const { controller } = createController(false);
+    // Exactly on the pole, world Z is the view axis and fixes no roll, so
+    // releasing to it would spin the picture at the first touch.
+    const v = new THREE.Vector3(1, 0, 0);
+    controller.startTween({
+      position: new THREE.Vector3(0, 0, 150),
+      target: new THREE.Vector3(0, 0, 0),
+      near: 0.1,
+      far: 4000,
+      up: v
+    });
+    controller.stepTween(performance.now() + 10_000);
+    const before = controller.activeCamera.quaternion.clone();
+    controller.beginOrbitDrag();
+    controller.controls.update();
+    expect(controller.activeCamera.quaternion.angleTo(before)).toBeLessThan(
+      1e-5
+    );
+    controller.endOrbitDrag();
+    controller.dispose();
+  });
+
+  it('orbits over the top without stopping at the pole', () => {
+    const { controller } = createController(true);
+    controller.startTween({
+      position: new THREE.Vector3(0, -150, 0),
+      target: new THREE.Vector3(0, 0, 0),
+      near: 0.1,
+      far: 4000
+    });
+    const camera = controller.activeCamera;
+    const height = Math.max(
+      (controller.controls.domElement as HTMLElement).clientHeight,
+      1
+    );
+    // A downward drag worth 135° in OrbitControls' scale: up past the top
+    // view and down the far side.
+    const pixels = ((3 * Math.PI) / 4) * (height / (2 * Math.PI));
+    controller.beginOrbitDrag();
+    for (let step = 0; step < 30; step += 1) {
+      controller.orbitByPixels(0, pixels / 30);
+    }
+    controller.endOrbitDrag();
+    const offset = camera.position.clone().sub(controller.controls.target);
+    const distance = offset.length();
+    expect(distance).toBeCloseTo(150, 6);
+    // From the front (−Y), 135° over the top lands behind (+Y) and above.
+    expect(offset.y / distance).toBeCloseTo(Math.SQRT1_2, 6);
+    expect(offset.z / distance).toBeCloseTo(Math.SQRT1_2, 6);
+    expect(Math.abs(offset.x)).toBeLessThan(1e-9);
+    // Over the top, the view is upside down: screen up points at world −Z.
+    const screenUp = new THREE.Vector3(0, 1, 0).applyQuaternion(
+      camera.quaternion
+    );
+    expect(screenUp.z).toBeLessThan(-0.5);
+    expect(camera.up.z).toBe(-1);
+
+    // Keep going the whole way round: back to the front view, right way up.
+    controller.beginOrbitDrag();
+    const rest = ((5 * Math.PI) / 4) * (height / (2 * Math.PI));
+    for (let step = 0; step < 50; step += 1) {
+      controller.orbitByPixels(0, rest / 50);
+    }
+    controller.endOrbitDrag();
+    const back = camera.position.clone().sub(controller.controls.target);
+    expect(
+      back.normalize().distanceTo(new THREE.Vector3(0, -1, 0))
+    ).toBeLessThan(1e-6);
+    expect(
+      new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion).z
+    ).toBeCloseTo(1, 6);
+    controller.dispose();
+  });
+
+  it('keeps a horizontal drag moving the model with the hand when upside down', () => {
+    const { controller } = createController(true);
+    const camera = controller.activeCamera;
+    controller.startTween({
+      position: new THREE.Vector3(0, -150, 0),
+      target: new THREE.Vector3(0, 0, 0),
+      near: 0.1,
+      far: 4000
+    });
+    const screenX = (point: THREE.Vector3) => {
+      camera.updateMatrixWorld(true);
+      return point.clone().project(camera).x;
+    };
+    // A point on the near side of the target, toward the camera.
+    const marker = () =>
+      camera.position
+        .clone()
+        .sub(controller.controls.target)
+        .setZ(0)
+        .setLength(10);
+    const dragRight = () => {
+      controller.beginOrbitDrag();
+      controller.orbitByPixels(20, 0);
+      controller.endOrbitDrag();
+    };
+    let point = marker();
+    let before = screenX(point);
+    dragRight();
+    const uprightShift = screenX(point) - before;
+    expect(uprightShift).toBeGreaterThan(0);
+
+    // Over the top to an upside-down view from behind.
+    const height = Math.max(
+      (controller.controls.domElement as HTMLElement).clientHeight,
+      1
+    );
+    controller.beginOrbitDrag();
+    for (let step = 0; step < 30; step += 1) {
+      controller.orbitByPixels(
+        0,
+        (((3 * Math.PI) / 4) * (height / (2 * Math.PI))) / 30
+      );
+    }
+    controller.endOrbitDrag();
+    expect(
+      new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion).z
+    ).toBeLessThan(0);
+    point = marker();
+    before = screenX(point);
+    dragRight();
+    expect(screenX(point) - before).toBeGreaterThan(0);
     controller.dispose();
   });
 

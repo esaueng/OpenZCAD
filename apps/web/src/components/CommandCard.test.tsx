@@ -6,6 +6,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within
 } from '@testing-library/react';
 import {
@@ -667,10 +668,140 @@ describe('CommandCard', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Move \(M\)/ }));
     openDrawer();
     fireEvent.click(screen.getByRole('button', { name: /^Sphere/ }));
+    openDrawer();
     fireEvent.click(screen.getByRole('button', { name: /^On rail: Box/ }));
     expect(onLaunchTool).toHaveBeenNthCalledWith(1, 'transform');
     expect(onLaunchTool).toHaveBeenNthCalledWith(2, 'sphere');
     expect(onLaunchTool).toHaveBeenNthCalledWith(3, 'box');
+  });
+
+  it('closes the drawer when a tool is taken from it, not when one is refused', () => {
+    const { onLaunchTool } = renderCard();
+    const toggle = screen.getByRole('button', { name: /^More tools/ });
+    // A rail tool leaves an open drawer where it is.
+    openDrawer();
+    fireEvent.click(screen.getByRole('button', { name: /^Sketch \(S\)/ }));
+    expect(screen.getByRole('group', { name: 'Tools drawer' })).toBeVisible();
+    // A greyed row is refused and keeps the drawer, its reason in view.
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: /^Revolve \(R\) — Create a sketch first/
+      })
+    );
+    expect(screen.getByRole('group', { name: 'Tools drawer' })).toBeVisible();
+    // A row that runs puts the drawer away.
+    fireEvent.click(screen.getByRole('button', { name: /^Sphere/ }));
+    expect(onLaunchTool).toHaveBeenLastCalledWith('sphere');
+    expect(screen.queryByRole('group', { name: 'Tools drawer' })).toBeNull();
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  describe('the section the drawer was left at', () => {
+    /** Where each section's heading stands in a 1000px list, 200px tall. */
+    const HEADING_TOPS: Record<string, number> = {
+      create: 0,
+      'from-sketch': 150,
+      'edges-faces': 300,
+      bodies: 500,
+      pattern: 800
+    };
+    let offsetTop: { mockRestore(): void } | undefined;
+    beforeEach(() => {
+      offsetTop = vi
+        .spyOn(HTMLElement.prototype, 'offsetTop', 'get')
+        .mockImplementation(function (this: HTMLElement) {
+          return HEADING_TOPS[this.dataset.section ?? ''] ?? 0;
+        });
+    });
+    afterEach(() => offsetTop?.mockRestore());
+
+    const sizeList = () => {
+      const list = document.querySelector<HTMLElement>('.command-flyout-list')!;
+      Object.defineProperty(list, 'scrollHeight', { value: 1000 });
+      Object.defineProperty(list, 'clientHeight', { value: 200 });
+      return list;
+    };
+    /** A scroll someone made: the wheel, then the list moving. */
+    const scrollTo = (list: HTMLElement, top: number) => {
+      fireEvent.wheel(list);
+      list.scrollTop = top;
+      fireEvent.scroll(list);
+    };
+
+    it('remembers the section scrolled to the top, and the last at the end', () => {
+      const onDrawerSectionChange = vi.fn();
+      renderCard(NOTHING, { onDrawerSectionChange });
+      openDrawer();
+      const list = sizeList();
+      scrollTo(list, 120);
+      expect(onDrawerSectionChange).toHaveBeenLastCalledWith('create');
+      scrollTo(list, 510);
+      expect(onDrawerSectionChange).toHaveBeenLastCalledWith('bodies');
+      // Pattern's heading never reaches the top of so short a list: the
+      // end of the list is Pattern.
+      scrollTo(list, 800);
+      expect(onDrawerSectionChange).toHaveBeenLastCalledWith('pattern');
+      expect(onDrawerSectionChange).toHaveBeenCalledTimes(3);
+    });
+
+    it('opens on the remembered section, and its own scroll records nothing', () => {
+      const onDrawerSectionChange = vi.fn();
+      renderCard(NOTHING, {
+        drawerSection: 'pattern',
+        onDrawerSectionChange
+      });
+      openDrawer();
+      const list = sizeList();
+      expect(list.scrollTop).toBe(HEADING_TOPS.pattern! - 4);
+      // The list settling short of Pattern is not someone scrolling to
+      // Edges & faces.
+      list.scrollTop = 310;
+      fireEvent.scroll(list);
+      expect(onDrawerSectionChange).not.toHaveBeenCalled();
+    });
+
+    it('leaves the memory alone while a search narrows the list', () => {
+      const onDrawerSectionChange = vi.fn();
+      renderCard(NOTHING, { onDrawerSectionChange });
+      openDrawer();
+      fireEvent.change(screen.getByRole('searchbox', { name: 'Find a tool' }), {
+        target: { value: 'pattern' }
+      });
+      scrollTo(sizeList(), 510);
+      expect(onDrawerSectionChange).not.toHaveBeenCalled();
+    });
+  });
+
+  it('hands the keyboard back to the drawer button when a launch does not take it', async () => {
+    renderCard({ ...NOTHING, bodyCount: 1 });
+    const toggle = screen.getByRole('button', { name: /^More tools/ });
+    openDrawer();
+    // The stub launch takes no focus, as Move does not: the row would
+    // leave it on the page.
+    const sphere = screen.getByRole('button', { name: /^Sphere/ });
+    sphere.focus();
+    fireEvent.click(sphere);
+    expect(screen.queryByRole('group', { name: 'Tools drawer' })).toBeNull();
+    await waitFor(() => expect(toggle).toHaveFocus());
+  });
+
+  it('leaves the keyboard where a launched command put it', async () => {
+    const field = document.createElement('input');
+    document.body.append(field);
+    try {
+      renderCard(
+        { ...NOTHING, bodyCount: 1 },
+        { onLaunchTool: () => field.focus() }
+      );
+      openDrawer();
+      const sphere = screen.getByRole('button', { name: /^Sphere/ });
+      sphere.focus();
+      fireEvent.click(sphere);
+      await new Promise((done) => requestAnimationFrame(() => done(null)));
+      expect(field).toHaveFocus();
+    } finally {
+      field.remove();
+    }
   });
 
   it.each([
