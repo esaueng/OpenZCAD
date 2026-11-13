@@ -31401,6 +31401,10 @@ export function App() {
         onDrawerViewChange={(toolDrawerView) =>
           setPanelState((current) => ({ ...current, toolDrawerView }))
         }
+        drawerSection={panelState.toolDrawerSection}
+        onDrawerSectionChange={(toolDrawerSection) =>
+          setPanelState((current) => ({ ...current, toolDrawerSection }))
+        }
         moreOpen={toolFold.commandFoldOpen}
         onToggleMore={() => {
           // Suspended, the fold shows closed, so a press opens it — and
