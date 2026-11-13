@@ -153,6 +153,7 @@ import {
   CirclePause,
   CirclePlay,
   Combine,
+  Cog,
   Copy,
   Crosshair,
   Download,
@@ -160,6 +161,7 @@ import {
   FolderOpen,
   Grid3x3,
   History as HistoryIcon,
+  Keyboard,
   Layers3,
   Maximize2,
   Monitor,
@@ -570,6 +572,10 @@ import {
   type CommandSelection
 } from './lib/commandContext';
 import { WorkspaceColumn } from './components/WorkspaceColumn';
+import {
+  LIVE_SESSION_CONNECTING,
+  LiveSessionNotice
+} from './components/LiveSessionNotice';
 import { WorkspaceEmptyState } from './components/WorkspaceEmptyState';
 import {
   ActivityLogButton,
@@ -6028,8 +6034,8 @@ export function App() {
                     : collaborationRollout.editLeasesEnforced &&
                         !activeCollaborationLease
                       ? collaboration.status === 'lease-denied'
-                        ? 'Another collaborator holds the edit lease'
-                        : 'Waiting for the project edit lease'
+                        ? 'Someone else is editing this project right now'
+                        : LIVE_SESSION_CONNECTING
                       : null;
   // Being encrypted locks the document as firmly as a second tab does; the
   // second tab keeps its own notice.
@@ -6055,6 +6061,9 @@ export function App() {
           : assembleMode
             ? 'Assemble mode edits the assembly only — switch to Build to model'
             : projectEditDisabledReason;
+  // The seat is waiting for the live session: one notice says so, and the
+  // tools keep their own descriptions (design review I10).
+  const liveSessionConnecting = editDisabledReason === LIVE_SESSION_CONNECTING;
   // D01 sheet edits answer to the project's own locks in Draw and Build (a
   // read-only seat or a second tab refuses them), and to the reading
   // workspaces' locks in View and Tweak, where a drawing-only undo or redo
@@ -6113,6 +6122,11 @@ export function App() {
   const projectRenameDisabledReasonRef = useRef(projectRenameDisabledReason);
   projectRenameDisabledReasonRef.current = projectRenameDisabledReason;
 
+  /** "Cannot use Box: …": one stop, even after a reason that ends in "…". */
+  function cannotSentence(action: string, reason: string): string {
+    return `Cannot ${action}: ${reason}${/[.…!?]$/.test(reason) ? '' : '.'}`;
+  }
+
   function ensureCanEdit(action = 'edit this project'): boolean {
     const reason = editDisabledReasonRef.current;
     if (!reason) {
@@ -6121,7 +6135,7 @@ export function App() {
     setStatus(
       projectOpenElsewhereRef.current
         ? PROJECT_OPEN_ELSEWHERE_NOTICE
-        : `Cannot ${action}: ${reason}.`
+        : cannotSentence(action, reason)
     );
     return false;
   }
@@ -6141,7 +6155,7 @@ export function App() {
     setStatus(
       projectOpenElsewhereRef.current
         ? PROJECT_OPEN_ELSEWHERE_NOTICE
-        : `Cannot ${action}: ${reason}.`
+        : cannotSentence(action, reason)
     );
     return false;
   }
@@ -6162,7 +6176,7 @@ export function App() {
     setStatus(
       projectOpenElsewhereRef.current
         ? PROJECT_OPEN_ELSEWHERE_NOTICE
-        : `Cannot ${action}: ${reason}.`
+        : cannotSentence(action, reason)
     );
     return false;
   }
@@ -6175,7 +6189,7 @@ export function App() {
     setStatus(
       projectOpenElsewhereRef.current
         ? PROJECT_OPEN_ELSEWHERE_NOTICE
-        : `Cannot ${action}: ${reason}.`
+        : cannotSentence(action, reason)
     );
     return false;
   }
@@ -8884,6 +8898,7 @@ export function App() {
   );
   const availability: ToolAvailability = {
     editDisabledReason,
+    editDisabledExplained: liveSessionConnecting,
     sketchCount: sketchOptions.length,
     closedProfileSketchCount,
     liveBodyCount: committedBodyCount,
@@ -12070,6 +12085,14 @@ export function App() {
       persistSectionView(undefined);
       clearSectionOutline();
       setStatus('Section view off.', { immediate: true });
+      return;
+    }
+    // An empty stage has nothing to cut; the palette says so rather than
+    // leaving a cut on with no controls to carry into the next mode (I49).
+    if (!viewerBodies.some((body) => !body.consumed)) {
+      setStatus('Nothing to cut yet · add or show a body first.', {
+        immediate: true
+      });
       return;
     }
     // Switching the cut on brings its controls back, even when they were
@@ -29552,7 +29575,10 @@ export function App() {
       if (global === 'command-palette') {
         event.preventDefault();
         setShortcutsOpen(false);
-        setPaletteOpen((open) => !open);
+        // Opening lists the commands that run here (an empty draft), so the
+        // key visibly does something before a word is typed (I20).
+        if (paletteOpen) setPaletteOpen(false);
+        else draftPrompt('');
         return;
       }
       if (paletteOpen || shortcutsOpen) {
@@ -30596,7 +30622,8 @@ export function App() {
       ? 'warning'
       : !exactGeometryReady
         ? 'running'
-        : /fail|error|invalid|unable|denied|not changed|not applied|no change|refus/i.test(
+        : // A refusal is a warning, not a "ready" dot (design review I77).
+          /fail|error|invalid|unable|denied|cannot|can't|not changed|not applied|no change|refus/i.test(
               status
             )
           ? 'warning'
@@ -31140,7 +31167,9 @@ export function App() {
       // palette is the other way to them, found by what they are for.
       id: 'file-export-diagnostics',
       label: 'Export diagnostics',
-      group: 'File',
+      // Not "File": the File menu no longer holds it (I24). Settings ›
+      // Advanced does, under troubleshooting.
+      group: 'Support',
       keywords: ['troubleshooting', 'support', 'sanitized', 'json', 'report'],
       icon: <Download size={16} aria-hidden="true" />,
       run: handleExportDiagnostics
@@ -31148,7 +31177,7 @@ export function App() {
     {
       id: 'file-export-interaction-log',
       label: 'Export interaction log',
-      group: 'File',
+      group: 'Support',
       keywords: [
         'troubleshooting',
         'support',
@@ -31171,6 +31200,8 @@ export function App() {
       id: 'file-home',
       label: 'Back to projects',
       group: 'File',
+      // The library is where a new project starts and every project opens.
+      keywords: ['home', 'library', 'projects', 'new', 'open', 'start'],
       icon: <FolderOpen size={16} aria-hidden="true" />,
       run: () => void handleGoHome()
     },
@@ -31182,6 +31213,7 @@ export function App() {
             id: 'workspace-mode-view',
             label: 'Switch to View mode',
             group: 'General',
+            keywords: ['read', 'inspect', 'mode', 'workspace'],
             shortcut: modeShortcut('view'),
             icon: <Eye size={16} aria-hidden="true" />,
             run: () => handleWorkspaceMode('view')
@@ -31194,6 +31226,7 @@ export function App() {
             id: 'workspace-mode-tweak',
             label: 'Switch to Tweak mode',
             group: 'General',
+            keywords: ['parameters', 'mode', 'workspace'],
             shortcut: modeShortcut('tweak'),
             icon: <SlidersHorizontal size={16} aria-hidden="true" />,
             disabledReason: tweakModeDisabledReason,
@@ -31207,10 +31240,26 @@ export function App() {
             id: 'workspace-mode-build',
             label: 'Switch to Build mode',
             group: 'General',
+            keywords: ['model', 'modeling', 'edit', 'mode', 'workspace'],
             shortcut: modeShortcut('build'),
             icon: <Box size={16} aria-hidden="true" />,
             disabledReason: buildModeDisabledReason,
             run: () => handleWorkspaceMode('build')
+          } satisfies PaletteCommand
+        ]
+      : []),
+    // The mode switch offers Assemble; the bar did not (I20).
+    ...(!assembleMode
+      ? [
+          {
+            id: 'workspace-mode-assemble',
+            label: 'Switch to Assemble mode',
+            group: 'General',
+            keywords: ['assembly', 'joints', 'motion', 'mode', 'workspace'],
+            shortcut: modeShortcut('assemble'),
+            icon: <Cog size={16} aria-hidden="true" />,
+            disabledReason: assembleModeDisabledReason,
+            run: () => handleWorkspaceMode('assemble')
           } satisfies PaletteCommand
         ]
       : []),
@@ -31220,10 +31269,66 @@ export function App() {
             id: 'workspace-mode-drawing',
             label: 'Switch to Draw mode',
             group: 'General',
+            keywords: ['drawing', 'sheet', '2d', 'mode', 'workspace'],
             shortcut: modeShortcut('drawing'),
             icon: <DraftingCompass size={16} aria-hidden="true" />,
             disabledReason: drawingModeDisabledReason,
             run: () => handleWorkspaceMode('drawing')
+          } satisfies PaletteCommand
+        ]
+      : []),
+    {
+      // The overlay the ? key opens, under the words people search for it
+      // by (I20: "help", "shortcuts" and "keyboard" found nothing).
+      id: 'app-help',
+      label: 'Help & keyboard shortcuts',
+      group: 'General',
+      keywords: [
+        'help',
+        'shortcuts',
+        'keyboard',
+        'keys',
+        'controls',
+        'hotkeys'
+      ],
+      shortcut: keymap.label('shortcut-reference'),
+      icon: <Keyboard size={16} aria-hidden="true" />,
+      run: () => setShortcutsOpen(true)
+    },
+    ...(doc && !shareSession
+      ? [
+          {
+            // The project name in the top bar is the rename field; the
+            // command opens it as a click on the name does.
+            id: 'project-rename',
+            label: 'Rename project',
+            group: 'File',
+            keywords: ['rename', 'name', 'title'],
+            icon: <PenLine size={16} aria-hidden="true" />,
+            run: () =>
+              document
+                .querySelector<HTMLButtonElement>('.project-title-button')
+                ?.click()
+          } satisfies PaletteCommand,
+          {
+            id: 'project-duplicate',
+            label: 'Duplicate project',
+            group: 'File',
+            keywords: ['duplicate', 'copy', 'clone'],
+            icon: <Copy size={16} aria-hidden="true" />,
+            disabledReason: projectTransferBusy
+              ? 'Project transfer in progress'
+              : null,
+            run: () => {
+              const current = managerRef.current?.document;
+              if (!current) return;
+              void handleDuplicateProject(
+                projects.find(
+                  (summary) => summary.projectId === current.projectId
+                ) ??
+                  summarizeLocalDocument(current, DEFAULT_PROJECT_ORGANIZATION)
+              );
+            }
           } satisfies PaletteCommand
         ]
       : []),
@@ -32133,6 +32238,12 @@ export function App() {
           }
           collaborationStatus={collaboration.status}
           collaborationFailure={collaboration.failureReason}
+          readOnlySeat={
+            activeProjectIsCloud &&
+            !shareSession &&
+            (collaboration.role === 'viewer' ||
+              collaboration.status === 'read-only')
+          }
           collaboratorCount={collaboration.members.length}
           projectSharingEnabled={
             cloudFunctionsEnabled && projectSharingPreferenceEnabled
@@ -33263,6 +33374,7 @@ export function App() {
                 : null
             }
             onToggleSection={toggleSectionView}
+            nothingToSection={!viewerBodies.some((body) => !body.consumed)}
             sectionPanelOpen={panelState.sectionPanelOpen}
             onSectionPanelOpenChange={(open) =>
               setPanelState((current) =>
@@ -33931,7 +34043,13 @@ export function App() {
             // the guidance row: the same line, remedies and Why? the control
             // shows, where the eye returns when the model has nothing to say.
             notice={
-              !keypad && calloutWithOperation?.operation?.error ? (
+              liveSessionConnecting &&
+              !(!keypad && calloutWithOperation?.operation?.error) ? (
+                <LiveSessionNotice
+                  key={doc.projectId}
+                  onRetry={collaboration.reconnect}
+                />
+              ) : !keypad && calloutWithOperation?.operation?.error ? (
                 <EditRefusal
                   operation={calloutWithOperation.operation}
                   variant="bar"

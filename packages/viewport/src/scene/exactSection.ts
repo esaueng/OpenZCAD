@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { DEFAULT_BODY_COLOR } from '@openzcad/shared';
 import { STUDIO_RIG } from '../render/studio';
 import type { DisplayMode } from '../types';
+import { CUT_LIGHTNESS_SHIFT, withSectionHatch } from './sectionHatch';
 
 /**
  * Kernel-computed section geometry, drawn instead of the display caps.
@@ -18,14 +19,6 @@ import type { DisplayMode } from '../types';
 
 /** Kernel-computed section geometry, never a document face or a pick target. */
 export const EXACT_SECTION = 'viewport-exact-section';
-
-/**
- * How far a cut surface sits below its body's colour in lightness. The cut
- * takes the colour of the body it cuts — a pale slate blue used to fill every
- * cut, a colour nothing else on the stage used — and is shaded down from it,
- * so it reads as the inside of that body and never as more of its outside.
- */
-const CUT_LIGHTNESS_SHIFT = -0.14;
 
 /**
  * The fill for a cut through a body of `bodyColor`; a body whose colour is
@@ -138,24 +131,26 @@ export function applyExactSection(
       const opacity = readOpacity();
       // Lit like the body it cuts (render/studio.ts), so the cut face sits
       // in the same light rather than reading as a flat sticker on it.
-      const fill = new THREE.MeshStandardMaterial({
-        color: sectionCutColor(bodyColor),
-        roughness: STUDIO_RIG.material.roughness,
-        metalness: STUDIO_RIG.material.metalness,
-        side: THREE.DoubleSide,
-        opacity,
-        transparent: opacity < 1,
-        depthWrite: opacity >= 1,
-        // Wireframe shows outlines, and the cut surface is not one. The
-        // The display-mode pass writes the same flag when mode or X-ray
-        // changes. A newly arriving cut must already match both settings.
-        visible: displayMode !== 'wireframe' || xray,
-        // The cut surface lies in the clipping plane itself; without the
-        // offset it fights the clipped body's own edge for the same depth.
-        polygonOffset: true,
-        polygonOffsetFactor: -1,
-        polygonOffsetUnits: -1
-      });
+      const fill = withSectionHatch(
+        new THREE.MeshStandardMaterial({
+          color: sectionCutColor(bodyColor),
+          roughness: STUDIO_RIG.material.roughness,
+          metalness: STUDIO_RIG.material.metalness,
+          side: THREE.DoubleSide,
+          opacity,
+          transparent: opacity < 1,
+          depthWrite: opacity >= 1,
+          // Wireframe shows outlines, and the cut surface is not one. The
+          // The display-mode pass writes the same flag when mode or X-ray
+          // changes. A newly arriving cut must already match both settings.
+          visible: displayMode !== 'wireframe' || xray,
+          // The cut surface lies in the clipping plane itself; without the
+          // offset it fights the clipped body's own edge for the same depth.
+          polygonOffset: true,
+          polygonOffsetFactor: -1,
+          polygonOffsetUnits: -1
+        })
+      );
       const mesh = new THREE.Mesh(geometry, fill);
       // Follow live appearance previews and their cleanup without rebuilding
       // section geometry. This runs in place whenever the cut is drawn.

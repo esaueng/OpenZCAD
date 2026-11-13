@@ -320,6 +320,13 @@ describe('boolean geometry is the plain pipeline, not the evolution one', () => 
       // Plain: 523.545492 mm^3 (523.553418 since Remus 2026.1.69, nearer the
       // closed-form octant 500π/3 ≈ 523.5988). Evolution: 523.528813 mm^3 — a silent
       // geometric change on a path advertised as changing provenance only.
+      //
+      // Since Remus 2026.1.125 the measured volume is 523.592254 mm^3 for both
+      // entry points. The body did not change: the kernel's deflection-free
+      // `massProperties` integral was already 523.5922535 for the plain and
+      // the evolution result on 2026.1.124. Only `volume(solid, 0.08)` moved,
+      // from a polyline-biased mesh reading (523.553418 plain, 523.539600
+      // evolution) to that integral. The case still pins the shipped value.
       const { document, bodyId } = operandDocument(
         'Ball corner',
         [
@@ -336,7 +343,7 @@ describe('boolean geometry is the plain pipeline, not the evolution one', () => 
       const body = derived.bodyRepresentations[bodyId];
       expect(body, 'the intersection body').toBeDefined();
       expect(body!.faceCount).toBe(4);
-      expect(body!.volume).toBeCloseTo(523.553418, 4);
+      expect(body!.volume).toBeCloseTo(523.592254, 4);
     },
     120_000
   );
