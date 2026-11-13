@@ -17,12 +17,22 @@
  * synchronously, before anything is sent; free of any crypto import for the
  * same reason. Pins are per device, by project id (ids are unique across
  * accounts), and like the version pins (`versionPins.ts`) are not cleared at
- * sign-out. Storage that is blocked or cleared loses the pins; this page
- * still keeps the ones it learned until it is reloaded.
+ * sign-out.
+ *
+ * Each pin is its own storage key, so tabs never read-modify-write a shared
+ * list (one tab's write cannot drop another's pin), and there is no limit
+ * past which old pins are dropped (a listing cannot push a pin out by
+ * naming many other encrypted projects). When storage cannot be read or
+ * written, nothing here can say which projects were pinned, so the store is
+ * `degraded` and holds every project as encrypted: writes then fail on the
+ * encrypted routes instead of going out in plaintext.
  */
 
 export interface EncryptedProjectPinStore {
-  /** Whether this device holds the project as encrypted. */
+  /**
+   * Whether this device holds the project as encrypted; always true while
+   * the store is degraded.
+   */
   has(projectId: string): boolean;
   /** Pins the project as encrypted on this device. */
   pin(projectId: string): void;
@@ -31,89 +41,109 @@ export interface EncryptedProjectPinStore {
    * over to plaintext.
    */
   forget(projectId: string): void;
+  /**
+   * Whether pins could not be read or saved on this page, so every project
+   * is held as encrypted.
+   */
+  readonly degraded: boolean;
 }
 
-export const ENCRYPTED_PROJECT_PINS_KEY = 'openzcad:e2ee-encrypted-projects:v1';
+/** One key per pinned project: `<prefix><projectId>` = `"1"`. */
+export const ENCRYPTED_PROJECT_PIN_PREFIX =
+  'openzcad:e2ee-encrypted-project:v1:';
 
-/**
- * Most pins one device keeps; the oldest go first past it (judgment: tens
- * of thousands of project ids stay well within a localStorage quota).
- */
-export const MAX_ENCRYPTED_PROJECT_PINS = 20_000;
+const PROBE_KEY = 'openzcad:e2ee-encrypted-project-probe';
 
 const PROJECT_ID = /^[!-~]{1,128}$/;
 
-type PinStorage = Pick<Storage, 'getItem' | 'setItem'>;
+type PinStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 
-interface StorageEvents {
-  addEventListener(
-    type: 'storage',
-    listener: (event: { key: string | null }) => void
-  ): void;
+/** Pins that last as long as the page, where there is no browser storage. */
+function memoryStorage(): PinStorage {
+  const values = new Map<string, string>();
+  return {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => {
+      values.set(key, value);
+    },
+    removeItem: (key) => {
+      values.delete(key);
+    }
+  };
 }
 
+/**
+ * The page's localStorage; `null` (degraded) when a browser blocks it. Off
+ * the browser (tests, tooling) there is no reload to remember pins across,
+ * so memory is enough.
+ */
 function defaultStorage(): PinStorage | null {
+  if (typeof window === 'undefined') return memoryStorage();
   try {
-    return typeof window === 'undefined' ? null : window.localStorage;
+    return window.localStorage;
   } catch {
     return null;
   }
 }
 
 /**
- * Pins in `storage`, mirrored in memory so a check reads no storage. The
- * mirror learns the pins other tabs write (`storage` events); a pin another
- * tab forgets stays pinned here until this page reloads, which only keeps
- * the project on the encrypted routes meanwhile.
+ * Pins in `storage`, one key each. This page's own pins are also kept in
+ * memory, so a pin made while storage refuses writes still holds here.
  */
 export function localStorageEncryptedProjectPins(
-  storage: PinStorage | null = defaultStorage(),
-  events: StorageEvents | null = typeof window === 'undefined' ? null : window
+  storage: PinStorage | null = defaultStorage()
 ): EncryptedProjectPinStore {
-  const stored = (): string[] => {
+  const own = new Set<string>();
+  let degraded = storage === null;
+  if (storage) {
     try {
-      const value: unknown = JSON.parse(
-        storage?.getItem(ENCRYPTED_PROJECT_PINS_KEY) ?? '[]'
-      );
-      return Array.isArray(value)
-        ? value.filter(
-            (id): id is string => typeof id === 'string' && PROJECT_ID.test(id)
-          )
-        : [];
+      // Storage that refuses a write (blocked, or full) cannot keep a pin
+      // made later on this page either.
+      storage.setItem(PROBE_KEY, '1');
+      storage.removeItem(PROBE_KEY);
     } catch {
-      return [];
+      degraded = true;
+    }
+  }
+  const stored = (projectId: string): boolean => {
+    if (!storage) return false;
+    try {
+      // Any value at the key is a pin: only `forget` removes one.
+      return storage.getItem(ENCRYPTED_PROJECT_PIN_PREFIX + projectId) !== null;
+    } catch {
+      degraded = true;
+      return true;
     }
   };
-  const write = (ids: readonly string[]) => {
-    try {
-      storage?.setItem(
-        ENCRYPTED_PROJECT_PINS_KEY,
-        JSON.stringify(ids.slice(-MAX_ENCRYPTED_PROJECT_PINS))
-      );
-    } catch {
-      // Blocked or full: this page's mirror still holds the pin.
-    }
-  };
-  const mirror = new Set(stored());
-  events?.addEventListener('storage', (event) => {
-    if (event.key !== null && event.key !== ENCRYPTED_PROJECT_PINS_KEY) return;
-    for (const id of stored()) mirror.add(id);
-  });
   return {
-    has: (projectId) => mirror.has(projectId),
+    get degraded() {
+      return degraded;
+    },
+    has(projectId) {
+      if (degraded) return true;
+      if (!PROJECT_ID.test(projectId)) return false;
+      return own.has(projectId) || stored(projectId);
+    },
     pin(projectId) {
-      // Every listing pins its encrypted projects again: once is enough.
-      if (mirror.has(projectId) || !PROJECT_ID.test(projectId)) return;
-      mirror.add(projectId);
-      // Storage, not the mirror, is written back, so a pin another tab
-      // forgot is not restored from this page's mirror.
-      const ids = stored();
-      if (!ids.includes(projectId)) write([...ids, projectId]);
+      if (!PROJECT_ID.test(projectId)) return;
+      own.add(projectId);
+      if (!storage) return;
+      try {
+        storage.setItem(ENCRYPTED_PROJECT_PIN_PREFIX + projectId, '1');
+      } catch {
+        // Not saved, so a reload would not know it: hold everything as
+        // encrypted on this page rather than lose track of this one.
+        degraded = true;
+      }
     },
     forget(projectId) {
-      mirror.delete(projectId);
-      const ids = stored();
-      if (ids.includes(projectId)) write(ids.filter((id) => id !== projectId));
+      own.delete(projectId);
+      if (!storage) return;
+      try {
+        storage.removeItem(ENCRYPTED_PROJECT_PIN_PREFIX + projectId);
+      } catch {
+        // Still pinned in storage: it stays encrypted, which is safe.
+      }
     }
   };
 }

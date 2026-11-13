@@ -222,6 +222,68 @@ describe('an encrypted project stays encrypted on this device', () => {
     ).toEqual([]);
   });
 
+  it('sends nothing in plaintext when the pins cannot be read', async () => {
+    const projectId = 'proj_pin_unreadable';
+    await listAs(projectId, 2);
+
+    // After a reload, storage throws on read: the pin cannot be seen.
+    const real = window.localStorage;
+    const unreadable = {
+      getItem: () => {
+        throw new Error('SecurityError');
+      },
+      setItem: (key: string, value: string) => real.setItem(key, value),
+      removeItem: (key: string) => real.removeItem(key)
+    };
+    const descriptor = Object.getOwnPropertyDescriptor(window, 'localStorage');
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      get: () => unreadable
+    });
+    const storageOverride = {
+      restore: () => {
+        if (descriptor)
+          Object.defineProperty(window, 'localStorage', descriptor);
+        else delete (window as { localStorage?: Storage }).localStorage;
+      }
+    };
+    try {
+      vi.resetModules();
+      const reloaded = await import('./api');
+      const { desktopFetch: fetchAfterReload } =
+        await import('./desktopBridge');
+      vi.mocked(fetchAfterReload).mockResolvedValue(
+        json({ projects: [summary(projectId, 1)] })
+      );
+      await reloaded.api.listProjects();
+      vi.mocked(fetchAfterReload).mockReset();
+      vi.mocked(fetchAfterReload).mockResolvedValue(json({}));
+      store.saveProjectDocument.mockRejectedValue(
+        new ApiError(404, 'No encrypted head')
+      );
+
+      await expect(
+        reloaded.api.saveProjectDocument({
+          projectId: toProjectId(projectId),
+          expectedVersion: 3,
+          document: documentOf(projectId)
+        })
+      ).rejects.toMatchObject({
+        code: reloaded.E2EE_PIN_STORAGE_UNAVAILABLE_CODE
+      });
+      expect(reloaded.isEncryptedProject(projectId)).toBe(true);
+      expect(
+        vi
+          .mocked(fetchAfterReload)
+          .mock.calls.filter(
+            ([input]) => typeof input === 'string' && input.includes(projectId)
+          )
+      ).toEqual([]);
+    } finally {
+      storageOverride.restore();
+    }
+  });
+
   it('is unpinned by this device’s own decrypt run', async () => {
     const plaintext = createProjectDocument(
       'Decrypted',

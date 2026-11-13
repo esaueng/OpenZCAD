@@ -404,13 +404,23 @@ export function forgetEncryptedProject(projectId: string): void {
 }
 
 export const E2EE_FORMAT_MISMATCH_CODE = 'E2EE_FORMAT_MISMATCH';
+export const E2EE_PIN_STORAGE_UNAVAILABLE_CODE = 'E2EE_PIN_STORAGE_UNAVAILABLE';
 
 /**
  * A pinned project's encrypted write or read failed while the account
- * lists it as not encrypted: said plainly, since nothing went to the
- * plaintext routes instead.
+ * lists it as not encrypted, or while this device cannot read or save its
+ * pins and so holds every project as encrypted: said plainly, since
+ * nothing went to the plaintext routes instead.
  */
 function withFormatMismatch(projectId: string, error: unknown): unknown {
+  if (encryptedProjectPins().degraded) {
+    return new ApiError(
+      409,
+      'This browser’s site storage is blocked or full, so this device cannot tell which projects are end-to-end encrypted. It treats every project as encrypted, so nothing was sent without encryption. Allow or free up site storage, then reload.',
+      E2EE_PIN_STORAGE_UNAVAILABLE_CODE,
+      error instanceof ApiError ? error.details : undefined
+    );
+  }
   if (!formatMismatchIds.has(projectId)) return error;
   return new ApiError(
     409,

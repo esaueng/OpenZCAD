@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  ENCRYPTED_PROJECT_PINS_KEY,
-  MAX_ENCRYPTED_PROJECT_PINS,
+  ENCRYPTED_PROJECT_PIN_PREFIX,
   localStorageEncryptedProjectPins
 } from './encryptedProjectPins';
 
@@ -12,21 +11,9 @@ function memoryStorage() {
     getItem: (key: string) => values.get(key) ?? null,
     setItem: (key: string, value: string) => {
       values.set(key, value);
-    }
-  };
-}
-
-function storageEvents() {
-  const listeners: ((event: { key: string | null }) => void)[] = [];
-  return {
-    addEventListener: (
-      _type: 'storage',
-      listener: (event: { key: string | null }) => void
-    ) => {
-      listeners.push(listener);
     },
-    fire: (key: string | null) => {
-      for (const listener of listeners) listener({ key });
+    removeItem: (key: string) => {
+      values.delete(key);
     }
   };
 }
@@ -34,88 +21,101 @@ function storageEvents() {
 describe('encrypted project pins', () => {
   it('keeps a pin across a reload until it is forgotten', () => {
     const storage = memoryStorage();
-    localStorageEncryptedProjectPins(storage, null).pin('proj_a');
+    localStorageEncryptedProjectPins(storage).pin('proj_a');
 
-    const reloaded = localStorageEncryptedProjectPins(storage, null);
+    const reloaded = localStorageEncryptedProjectPins(storage);
+    expect(reloaded.degraded).toBe(false);
     expect(reloaded.has('proj_a')).toBe(true);
     expect(reloaded.has('proj_b')).toBe(false);
 
     reloaded.forget('proj_a');
     expect(reloaded.has('proj_a')).toBe(false);
-    expect(localStorageEncryptedProjectPins(storage, null).has('proj_a')).toBe(
-      false
+    expect(localStorageEncryptedProjectPins(storage).has('proj_a')).toBe(false);
+  });
+
+  it('keeps both tabs’ pins when they pin at the same time', () => {
+    const storage = memoryStorage();
+    const first = localStorageEncryptedProjectPins(storage);
+    const second = localStorageEncryptedProjectPins(storage);
+    first.pin('proj_first');
+    second.pin('proj_second');
+
+    const reloaded = localStorageEncryptedProjectPins(storage);
+    expect(reloaded.has('proj_first')).toBe(true);
+    expect(reloaded.has('proj_second')).toBe(true);
+    // Each tab also sees the other's pin without a reload.
+    expect(first.has('proj_second')).toBe(true);
+  });
+
+  it('never drops a pin however many others are added', () => {
+    const storage = memoryStorage();
+    localStorageEncryptedProjectPins(storage).pin('proj_target');
+    const pins = localStorageEncryptedProjectPins(storage);
+    for (let i = 0; i < 25_000; i += 1) pins.pin(`proj_${i}`);
+    expect(localStorageEncryptedProjectPins(storage).has('proj_target')).toBe(
+      true
     );
   });
 
-  it('learns another tab’s pins without restoring one it forgot', () => {
+  it('treats any stored value as a pin and ignores invalid ids', () => {
     const storage = memoryStorage();
-    const events = storageEvents();
-    const here = localStorageEncryptedProjectPins(storage, events);
-    const other = localStorageEncryptedProjectPins(storage, null);
-    here.pin('proj_both');
-
-    other.pin('proj_other');
-    events.fire(ENCRYPTED_PROJECT_PINS_KEY);
-    expect(here.has('proj_other')).toBe(true);
-
-    // The other tab's decrypt run forgets one; this tab's next pin writes
-    // storage as it is, not its own mirror.
-    other.forget('proj_both');
-    here.pin('proj_new');
-    expect(
-      localStorageEncryptedProjectPins(storage, null).has('proj_both')
-    ).toBe(false);
-  });
-
-  it('ignores invalid ids and unreadable storage', () => {
-    const storage = memoryStorage();
-    storage.setItem(
-      ENCRYPTED_PROJECT_PINS_KEY,
-      JSON.stringify(['proj_ok', 7, '', 'has space'])
-    );
-    const pins = localStorageEncryptedProjectPins(storage, null);
-    expect(pins.has('proj_ok')).toBe(true);
+    storage.setItem(`${ENCRYPTED_PROJECT_PIN_PREFIX}proj_odd`, '{not json');
+    const pins = localStorageEncryptedProjectPins(storage);
+    expect(pins.has('proj_odd')).toBe(true);
     pins.pin('');
+    pins.pin('has space');
     expect(pins.has('')).toBe(false);
-
-    storage.setItem(ENCRYPTED_PROJECT_PINS_KEY, '{not json');
-    expect(localStorageEncryptedProjectPins(storage, null).has('proj_ok')).toBe(
-      false
-    );
+    expect(pins.has('has space')).toBe(false);
   });
 
-  it('still holds a pin in memory when storage refuses writes', () => {
-    const pins = localStorageEncryptedProjectPins(
-      {
-        getItem: () => null,
-        setItem: () => {
-          throw new Error('QuotaExceededError');
-        }
-      },
-      null
-    );
-    pins.pin('proj_unsaved');
-    expect(pins.has('proj_unsaved')).toBe(true);
-    expect(localStorageEncryptedProjectPins(null, null).has('proj_x')).toBe(
-      false
-    );
+  it('holds every project as encrypted when storage is blocked', () => {
+    const blocked = localStorageEncryptedProjectPins(null);
+    expect(blocked.degraded).toBe(true);
+    expect(blocked.has('proj_never_seen')).toBe(true);
   });
 
-  it('keeps the newest pins past the limit', () => {
+  it('holds every project as encrypted when storage cannot be read', () => {
     const storage = memoryStorage();
-    storage.setItem(
-      ENCRYPTED_PROJECT_PINS_KEY,
-      JSON.stringify(
-        Array.from(
-          { length: MAX_ENCRYPTED_PROJECT_PINS },
-          (_, i) => `proj_${i}`
-        )
-      )
-    );
-    localStorageEncryptedProjectPins(storage, null).pin('proj_newest');
-    const reloaded = localStorageEncryptedProjectPins(storage, null);
-    expect(reloaded.has('proj_newest')).toBe(true);
-    expect(reloaded.has('proj_0')).toBe(false);
-    expect(reloaded.has('proj_1')).toBe(true);
+    const pins = localStorageEncryptedProjectPins({
+      ...storage,
+      getItem: () => {
+        throw new Error('SecurityError');
+      }
+    });
+    expect(pins.has('proj_never_seen')).toBe(true);
+    expect(pins.degraded).toBe(true);
+  });
+
+  it('holds every project as encrypted when storage refuses writes', () => {
+    const refusing = {
+      getItem: () => null,
+      setItem: () => {
+        throw new Error('QuotaExceededError');
+      },
+      removeItem: () => undefined
+    };
+    const pins = localStorageEncryptedProjectPins(refusing);
+    expect(pins.degraded).toBe(true);
+    expect(pins.has('proj_other')).toBe(true);
+  });
+
+  it('degrades when a pin cannot be saved after the page loaded', () => {
+    const storage = memoryStorage();
+    let full = false;
+    const pins = localStorageEncryptedProjectPins({
+      ...storage,
+      setItem: (key: string, value: string) => {
+        if (full) throw new Error('QuotaExceededError');
+        storage.setItem(key, value);
+      }
+    });
+    expect(pins.degraded).toBe(false);
+    expect(pins.has('proj_plain')).toBe(false);
+
+    full = true;
+    pins.pin('proj_unsaved');
+    expect(pins.degraded).toBe(true);
+    expect(pins.has('proj_unsaved')).toBe(true);
+    expect(pins.has('proj_plain')).toBe(true);
   });
 });
