@@ -80,7 +80,7 @@ export function ToastHost({ toast, onDismiss }: ToastHostProps) {
       {rendered ? (
         <div
           ref={cardRef}
-          className={`toast${closing ? ' closing' : ''}`}
+          className={`toast${rendered.tone === 'warning' ? ' warning' : ''}${closing ? ' closing' : ''}`}
           inert={closing}
           onMouseEnter={() => setHeld(true)}
           onMouseLeave={() => setHeld(false)}
