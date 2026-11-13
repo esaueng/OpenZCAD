@@ -156,13 +156,9 @@ describe('useInPlaceCommand: preview warning disposition', () => {
       expect(hook.result.current.hint).toContain(
         'Note: The crest is under a 0.4 mm extrusion line.'
       );
-      expect(publishPreview).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          derived: expect.objectContaining({
-            featureWarnings: [warning('advisory')]
-          })
-        })
-      );
+      expect(publishPreview.mock.lastCall?.[0]).toMatchObject({
+        derived: { featureWarnings: [warning('advisory')] }
+      });
       act(() => {
         expect(hook.result.current.done()).toBe(true);
       });
