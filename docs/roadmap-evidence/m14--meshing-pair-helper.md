@@ -18,8 +18,10 @@ Joints-entry and selected-pair browser journeys.
 
 Queue integration with U11: the combined entry bundle reproduced the required
 Cloudflare build failure at 1,050,503 bytes against the unchanged 1,048,576-byte
-budget. The assembly sidebar is now its own chunk. It starts loading when the
-pointer or keyboard focus reaches the Assemble switch, or on entry; until it
+budget. The assembly sidebar is now its own chunk. Its module is imported when
+the pointer or keyboard focus reaches the Assemble switch, or on entry (in
+production the existing idle prefetcher may already have fetched the file in
+the background, as it does for every dynamic chunk); until it
 arrives a sidebar-shaped Assembly panel says it is loading (the workspace's
 one-time reveal does not cover a load after the project opened), and a chunk
 that cannot load reports through the stale-chunk notice. An E2E regression
@@ -28,7 +30,8 @@ loading panel on entering Assemble, and the sidebar once it arrives
 (`gear-mesh.spec.ts`; `TopBar.test.tsx`, `AssemblyPanelPending.test.tsx`). With the loading
 panel and preload, the production build's entry is 1,015,791 bytes (32,785
 bytes below the same limit). The gear browser
-regression verifies no sidebar request in Build, one when opening Assemble,
-and no second request after returning through Build. Gear placement, selection,
+regression, run on the E2E build where background prefetch is off, verifies
+no sidebar request in Build, one when opening Assemble, and no second request
+after returning through Build. Gear placement, selection,
 BOM and motion behavior are preserved; the exact geometry and joint code are
 unchanged by this load-boundary fix.
