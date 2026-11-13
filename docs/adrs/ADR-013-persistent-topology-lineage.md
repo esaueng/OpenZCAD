@@ -549,6 +549,52 @@ Names for fillet and chamfer bands and other entities the kernel reports no
 construction history for remain the kernel's to supply (see the coverage table
 above); this amendment only carries a name the body already publishes.
 
+## Amendment (M14, 2026-11-13): gear edges are named from their two faces
+
+A gear body published a name for every face (the kernel's tooth roles, and
+the collar, shoulder and cap roles of partial-span teeth) and for no edge, so
+a fillet or chamfer on a gear edge was a hash-only pick that any span, module
+or tooth-count edit orphaned.
+
+A gear body's edges are now named at publication
+(`exact-gear-edges.ts`): an edge the result solid's own topology puts between
+exactly two faces, both named and each name held by one face, is
+`gear.edge.between.<face>|<face>`, the two face names in string order. This
+is the pair rule `boolean.edge.between.*` already follows, with the pair read
+from the built solid rather than from kernel history, so it needs no carrier
+check: the adjacency is the claim. Faces the teeth leave on the body count by
+their carried names. Tooth edges are named like any other, so they follow
+the tooth index their faces carry: `…tooth[3].flank.plus|…tooth[3].tip` is
+tooth 3's edge at any tooth count that still has a tooth 3.
+
+Where one pair of faces shares several edges, none is the edge between them.
+Each is `….piece.<i>.of.<n>`, ordered along the gear's axis, each edge
+standing at the middle of its ends or a closed edge's centre. The count is in
+the name, so a reference to one of two pieces cannot resolve to the single
+edge an edit leaves, or the reverse. Pieces at one height publish no name:
+around the axis there is no origin every edit leaves alone (the gear's x
+direction is a parameter, and the blank can be turned under the teeth), so
+an angular count could hand one piece's name to its neighbour. That is the
+case of a collar's seam cutting the arc it shares with a flush tooth tip in
+two, a smooth edge no blend applies to. An edge with an unsupported witness,
+and any pair that includes one, publishes no name either. Seams, which bound
+one face twice, stay unnamed as on every other body, so a gear body with a
+collar or a bore is `partial` for edges and its unnamed edges keep step 2 of
+the resolution order; a named edge resolves by name alone.
+
+Nothing in resolution changes. A stored edge name the body no longer
+publishes refuses as `reference_missing` ("The selected edge lineage no
+longer exists."): teeth run up to an end remove that end's collar and its
+rim, and fewer teeth remove the higher tooth indices. Hash-only edge picks
+stored on gear bodies before this resolve as before and take the existing
+all-or-nothing upgrade once they resolve.
+
+Limits: an edge beside the body's part of a split end cap
+(`gear.face.cap.*.body`) is named after that part and so shares its known
+limit, refusing once the caps rejoin; and a name is no promise that the
+kernel can blend the edge (it refuses a chamfer on a shoulder's rim and both
+blends on a cap's edge at one tooth, as geometry, with the edge resolved).
+
 ## Consequences
 
 - Schema-v5 references are additive inside current schema-v6 documents, and

@@ -24,6 +24,7 @@ import { resolveParamValue } from '@openzcad/document-core';
 import { collapseShape } from './exact-boolean-helpers';
 import type { FeatureBuildContext, FeatureDataOf } from './exact-build-loop';
 import { raiseFeatureWarning } from './exact-feature-warnings';
+import { gearEdgeFrame, withGearEdgeLineage } from './exact-gear-edges';
 import { topologyCandidatesForSolid } from './exact-lineage-builders';
 import { measureFaceGeometry } from './exact-measure';
 import { resolveFeatureFaces } from './exact-reference-resolution';
@@ -236,6 +237,29 @@ function gearRoleLineage(
 }
 
 /**
+ * A new gear's lineage: every face by its role and every edge by the two
+ * faces it lies between (see `exact-gear-edges`).
+ */
+function newGearLineage(
+  kernel: RemusKernel,
+  solid: number,
+  featureId: FeatureId,
+  details: GearOkDetails,
+  spec: {
+    readonly origin: [number, number, number];
+    readonly axis: [number, number, number];
+  }
+): RemusLineageState {
+  return withGearEdgeLineage(
+    kernel,
+    solid,
+    featureId,
+    gearRoleLineage(kernel, solid, featureId, details),
+    gearEdgeFrame(spec.origin, spec.axis)
+  );
+}
+
+/**
  * The module in document units. A diametral pitch counts teeth per inch of
  * pitch diameter in every unit system, so its module is one inch over it.
  * Shared with the meshing-pair helper, which sizes pairs the same way.
@@ -409,7 +433,7 @@ function buildBevelGearBody(
   raiseGearWarnings(ctx, feature, details);
   result.shapes.set(feature.bodyId!, {
     solids: [solid],
-    lineage: gearRoleLineage(kernel, solid, feature.featureId, details)
+    lineage: newGearLineage(kernel, solid, feature.featureId, details, spec)
   });
 }
 
@@ -485,7 +509,7 @@ function buildWormGearBody(
   raiseGearWarnings(ctx, feature, details);
   result.shapes.set(feature.bodyId!, {
     solids: [solid],
-    lineage: gearRoleLineage(kernel, solid, feature.featureId, details)
+    lineage: newGearLineage(kernel, solid, feature.featureId, details, spec)
   });
 }
 
@@ -550,7 +574,7 @@ function buildEnvelopingWormBody(
   raiseGearWarnings(ctx, feature, details);
   result.shapes.set(feature.bodyId!, {
     solids: [solid],
-    lineage: gearRoleLineage(kernel, solid, feature.featureId, details)
+    lineage: newGearLineage(kernel, solid, feature.featureId, details, spec)
   });
 }
 
@@ -622,7 +646,7 @@ function buildEnvelopingWheelBody(
   raiseGearWarnings(ctx, feature, details);
   result.shapes.set(feature.bodyId!, {
     solids: [solid],
-    lineage: gearRoleLineage(kernel, solid, feature.featureId, details)
+    lineage: newGearLineage(kernel, solid, feature.featureId, details, spec)
   });
 }
 
@@ -671,7 +695,7 @@ function buildNewGearBody(
   raiseGearWarnings(ctx, feature, details);
   result.shapes.set(feature.bodyId!, {
     solids: [solid],
-    lineage: gearRoleLineage(kernel, solid, feature.featureId, details)
+    lineage: newGearLineage(kernel, solid, feature.featureId, details, spec)
   });
 }
 
@@ -809,12 +833,32 @@ function buildGearTeethOnBody(
   validateGeneratedSolid(kernel, solid, 'Gear');
   raiseGearWarnings(ctx, feature, details);
   result.consumed.add(targetBodyId);
+  // Edges take their names from the faces either side, the body's carried
+  // ones included, so a fillet on a rim, a shoulder or a bore follows a span,
+  // module or tooth-count edit. Several edges between one pair of faces are
+  // counted along the picked face's axis, from its lower end.
+  const { axisStart, axisEnd } = geometry;
   result.shapes.set(feature.bodyId!, {
     solids: [solid],
-    lineage: mergeRemusLineageStates([
-      kept,
-      gearRoleLineage(kernel, solid, feature.featureId, details)
-    ])
+    lineage: withGearEdgeLineage(
+      kernel,
+      solid,
+      feature.featureId,
+      mergeRemusLineageStates([
+        kept,
+        gearRoleLineage(kernel, solid, feature.featureId, details)
+      ]),
+      axisStart && axisEnd
+        ? gearEdgeFrame(
+            [axisStart.x, axisStart.y, axisStart.z],
+            [
+              axisEnd.x - axisStart.x,
+              axisEnd.y - axisStart.y,
+              axisEnd.z - axisStart.z
+            ]
+          )
+        : null
+    )
   });
   inheritMeshOrigin(result, targetBodyId, feature.bodyId);
 }
