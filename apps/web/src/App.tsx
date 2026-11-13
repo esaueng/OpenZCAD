@@ -31504,6 +31504,9 @@ export function App() {
           : null
       }
       onDropFiles={(files) => void handleDroppedFiles(files)}
+      onRefuseDroppedFiles={() =>
+        setStatus('Finish or cancel the open dialog, then drop the file again.')
+      }
       sidebarWidth={sidebarWidth}
       assistantWidth={assistantWidth}
       sidebarResizer={
@@ -31648,6 +31651,7 @@ export function App() {
             {...(savedViewsControl ? { savedViews: savedViewsControl } : {})}
             onCycleDisplayMode={cycleDisplayMode}
             onToggleProjection={toggleProjection}
+            onToggleOrbitMode={toggleOrbitMode}
           />
         ) : // The sketch session brings its own tool rail. Before it, while
         // the plane is being picked, the plane chooser in the command slot
@@ -33669,6 +33673,7 @@ export function App() {
             warningCount={diagnostics.length}
             documentVersion={doc.version}
             saveState={presentedSaveState}
+            orbitMode={appSettings.viewport.orbitMode}
             repeatingToast={statusRepeatedByToast(toast)}
             searchBar={
               <CommandBar

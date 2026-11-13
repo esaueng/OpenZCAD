@@ -407,6 +407,39 @@ describe('WorkspaceReadout', () => {
     );
   });
 
+  it('carries the orbit mode in the summary for assistive tech', () => {
+    const { rerender } = render(
+      <WorkspaceReadout
+        status=""
+        tone="ready"
+        onOpenLog={vi.fn()}
+        {...SUMMARY}
+        orbitMode="free"
+      />
+    );
+    const summary = screen.getByRole('group', { name: 'Workspace status' });
+    expect(summary).toHaveTextContent('orbitFree');
+    rerender(
+      <WorkspaceReadout
+        status=""
+        tone="ready"
+        onOpenLog={vi.fn()}
+        {...SUMMARY}
+        orbitMode="turntable"
+      />
+    );
+    expect(summary).toHaveTextContent('orbitTurntable');
+    rerender(
+      <WorkspaceReadout
+        status=""
+        tone="ready"
+        onOpenLog={vi.fn()}
+        {...SUMMARY}
+      />
+    );
+    expect(summary).not.toHaveTextContent('orbit');
+  });
+
   it('hides while a tool card carries the message, or with none, but stays the landmark', () => {
     const { rerender } = render(
       <WorkspaceReadout
