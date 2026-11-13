@@ -667,6 +667,13 @@ test('Tab moves from the rail through the panel headers, gaps and the menu witho
   ];
   await railPanelButton(page, 'Objects').focus();
   const seen = new Set<string>();
+  // The instrument rail is one tab stop: the arrow keys walk its buttons,
+  // the menu's among them, and Tab then leaves it for the panels.
+  for (let step = 0; step < 20; step += 1) {
+    await page.keyboard.press('ArrowDown');
+    seen.add(await focusName());
+    await expect(panels).toHaveCount(4);
+  }
   for (let step = 0; step < 150; step += 1) {
     await page.keyboard.press('Tab');
     seen.add(await focusName());

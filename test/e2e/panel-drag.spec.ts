@@ -518,7 +518,7 @@ async function modelShare(page: Page) {
     const leftEdge = Math.max(
       stage.left,
       ...rects(
-        '.panel-column[data-side="left"], nav[aria-label="Feature tools"]'
+        '.panel-column[data-side="left"], [role="toolbar"][aria-label="Feature tools"]'
       ).map((rect) => rect.right)
     );
     const rightEdge = Math.min(

@@ -1471,7 +1471,7 @@ test('keeps a shared-project viewer visibly read-only', { tag: '@ci-smoke' }, as
     workspaceMode.getByRole('button', { name: 'View' })
   ).toHaveAttribute('aria-pressed', 'true');
   await expect(
-    page.getByRole('navigation', { name: 'Feature tools' })
+    page.getByRole('toolbar', { name: 'Feature tools' })
   ).toHaveCount(0);
   await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toHaveCount(0);
   await expect(

@@ -56,7 +56,13 @@ import type {
   ViewRequestTarget,
   WheelDevice
 } from '@openzcad/viewport';
-import { SECTION_PLANE_LABELS, ViewerToolbar } from './ViewerToolbar';
+import {
+  SECTION_PLANE_LABELS,
+  VIEWER_RAIL_STOPS,
+  VIEWER_RAIL_STOPS_EXCEPT,
+  ViewerToolbar
+} from './ViewerToolbar';
+import { useRovingToolbar } from '../hooks/useRovingToolbar';
 import type { SavedViewsSectionProps } from './SavedViewsSection';
 import {
   measurementAnnotationsOnScreen,
@@ -647,6 +653,16 @@ export function ViewerShell({
   // Workspace-local, like a held key: a reload starts with neither on.
   const [touchModifiers, setTouchModifiers] =
     useState<TouchModifiers>(NO_TOUCH_MODIFIERS);
+  // The instrument rail is one tab stop: the viewer bar, the relations
+  // beside it while sketching, and the panel buttons, walked with the arrow
+  // keys. Fourteen stops stood here between the top bar and the first
+  // modeling tool.
+  const instrumentRailRef = useRef<HTMLDivElement | null>(null);
+  useRovingToolbar(instrumentRailRef, {
+    items: VIEWER_RAIL_STOPS,
+    except: VIEWER_RAIL_STOPS_EXCEPT,
+    orient: '.viewer-rail'
+  });
   const datumHandleKey = datumHandle
     ? JSON.stringify({ ...datumHandle, draftShift, gesture: datumGesture })
     : '';
@@ -717,6 +733,7 @@ export function ViewerShell({
       onExportSectionDxf={onExportSectionDxf}
       sectionOutline={drawnSection}
       units={units}
+      roving={!dockLayout}
     />
   );
   return (
@@ -946,7 +963,7 @@ export function ViewerShell({
           {/* How you look at the model: icon instruments down the right edge,
               under the top islands. They never change with the selection. */}
           {!viewMode && (
-            <div className="instrument-rail">
+            <div className="instrument-rail" ref={instrumentRailRef}>
               {viewerToolbar}
               {railExtras}
               {/* The sketch snap and grid spacing: one quiet readout over

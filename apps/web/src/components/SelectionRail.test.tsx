@@ -28,6 +28,13 @@ import {
   VALIDATING_ANNOUNCE_MS
 } from './SelectionRail';
 
+/**
+ * Greyed, as the rail greys: by `aria-disabled`, never `disabled`, so the
+ * arrow keys still reach the verb and it keeps the keyboard's focus.
+ */
+const greyed = (element: Element) =>
+  element.getAttribute('aria-disabled') === 'true';
+
 function operation(
   overrides: Partial<SelectionCalloutOperation> = {}
 ): SelectionCalloutOperation {
@@ -144,7 +151,7 @@ describe('SelectionRail', () => {
         .getAllByRole('button')
         .map((button) => [
           button.getAttribute('aria-label'),
-          (button as HTMLButtonElement).disabled
+          greyed(button)
         ])
     ).toEqual([
       ['Deselect all', true],
@@ -216,7 +223,7 @@ describe('SelectionRail', () => {
     rerender(view('armed'));
     expect(rail).not.toHaveAttribute('data-hold');
     for (const button of within(rail).getAllByRole('button')) {
-      expect(button).toBeEnabled();
+      expect(greyed(button)).toBe(false);
     }
   });
 
@@ -238,8 +245,8 @@ describe('SelectionRail', () => {
       />
     );
     expect(
-      screen.getByRole('button', { name: 'Selection: Edit face' })
-    ).toBeEnabled();
+      greyed(screen.getByRole('button', { name: 'Selection: Edit face' }))
+    ).toBe(false);
   });
 
   it('clears the selection from its head', () => {
@@ -269,6 +276,60 @@ describe('SelectionRail', () => {
     );
   });
 
+  it('refuses the press of a verb it holds, and keeps it focusable', () => {
+    const onVerb = vi.fn();
+    const onClear = vi.fn();
+    render(
+      <SelectionRail
+        summary="1 face"
+        content={content({
+          onVerb,
+          onClear,
+          operation: operation({ phase: 'validating' })
+        })}
+      />
+    );
+    const hole = screen.getByRole('button', { name: 'Selection: Hole' });
+    // Not `disabled`: that would drop the keyboard's focus and hide the
+    // verb from the arrow keys.
+    expect(hole).not.toBeDisabled();
+    expect(greyed(hole)).toBe(true);
+    fireEvent.click(hole);
+    fireEvent.click(screen.getByRole('button', { name: 'Deselect all' }));
+    expect(onVerb).not.toHaveBeenCalled();
+    expect(onClear).not.toHaveBeenCalled();
+    hole.focus();
+    expect(hole).toHaveFocus();
+  });
+
+  it('heads the verbs with what they act on', () => {
+    const { rerender } = render(
+      <SelectionRail summary="1 face" kind="Face" content={content()} />
+    );
+    const rail = screen.getByRole('group', { name: 'Selection' });
+    const heading = rail.querySelector('.selection-rail-heading')!;
+    expect(rail.firstElementChild).toBe(heading);
+    expect(heading).toHaveTextContent('Face');
+    expect(heading.querySelector('.selection-rail-heading-count')).toBeNull();
+    expect(rail).toHaveAccessibleDescription(
+      'Tools for the selection: 1 face'
+    );
+    rerender(
+      <SelectionRail
+        summary="8 edges"
+        kind="Edge"
+        count={8}
+        content={content()}
+      />
+    );
+    expect(
+      heading.querySelector('.selection-rail-heading-count')
+    ).toHaveTextContent('×8');
+    expect(rail).toHaveAccessibleDescription(
+      'Tools for the selection: 8 edges'
+    );
+  });
+
   it('holds every verb while the exact check validates', () => {
     render(
       <SelectionRail
@@ -279,7 +340,7 @@ describe('SelectionRail', () => {
     const card = screen.getByRole('region', { name: 'Offset Face operation' });
     expect(card).toHaveAttribute('aria-busy', 'true');
     for (const button of within(card).getAllByRole('button')) {
-      expect(button).toBeDisabled();
+      expect(greyed(button)).toBe(true);
     }
   });
 
@@ -298,7 +359,7 @@ describe('SelectionRail', () => {
         name: 'Offset Face operation'
       });
       for (const button of within(card).getAllByRole('button')) {
-        expect(button).toBeDisabled();
+        expect(greyed(button)).toBe(true);
       }
       // Still the drag's dot and the drag's look: most checks answer
       // within a frame or two.
@@ -609,13 +670,13 @@ describe('selectionRailToolHoldReason', () => {
         // enabled; otherwise the rail does not stand in a launch's way.
         if (phase === 'dragging' || phase === 'validating') {
           expect(selectionRailToolHoldReason(pick, tool) === null).toBe(
-            !(button as HTMLButtonElement).disabled
+            !greyed(button)
           );
         } else {
           expect(selectionRailToolHoldReason(pick, tool)).toBeNull();
         }
         expect(selectionRailVerbEnabled(pick, verb)).toBe(
-          !(button as HTMLButtonElement).disabled
+          !greyed(button)
         );
       }
       unmount();
