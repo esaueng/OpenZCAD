@@ -16,6 +16,7 @@ import {
   type ProjectDocument
 } from '@openzcad/shared';
 import {
+  removeAssemblyComponent,
   toggleComponentGrounded,
   toggleJointPlayback,
   type AssemblyExecute
@@ -501,13 +502,7 @@ export function ComponentDetails({
           type="button"
           className="assembly-link-button is-danger"
           onClick={() => {
-            if (
-              execute(
-                commandFactories.deleteAssemblyComponent({
-                  componentId: component.id
-                })
-              )
-            )
+            if (removeAssemblyComponent(app, component.id))
               assemblyRuntime.selectComponent(null);
           }}
         >

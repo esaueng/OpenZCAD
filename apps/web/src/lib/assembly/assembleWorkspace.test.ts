@@ -13,6 +13,9 @@ import {
   jointFromToolState,
   runAssembleKey,
   useAssembleWorkspace,
+  couplingsRemovedWith,
+  removeAssemblyComponent,
+  removeAssemblyJoint,
   type AssembleWorkspaceApp
 } from './assembleWorkspace';
 import {
@@ -22,6 +25,7 @@ import {
 } from './assemblyRuntime';
 import { getAnimatePrefs, setAnimatePrefs } from './assemblyUi';
 import { playbackFrame } from './assemblyPlayback';
+import { coupledPairProject } from '../../components/assembly/motionTestFixture';
 
 function tool(a: BodyId, b: BodyId): AssemblyJointToolState {
   return {
@@ -328,5 +332,93 @@ describe('Assemble workspace actions', () => {
     });
     expect(runAssembleKey(app(), 'escape')).toBe(true);
     expect(getAssemblyRuntime().playback).toBeNull();
+  });
+});
+
+describe('removing what a coupling depends on', () => {
+  /** The coupled pair, with part `c` recorded as the driver's gear. */
+  function keyed() {
+    const manager = coupledPairProject({ third: true });
+    manager.execute(
+      commandFactories.deleteAssemblyCoupling({ couplingId: 'mesh' })
+    );
+    manager.execute(
+      commandFactories.addAssemblyCoupling({
+        coupling: {
+          id: 'mesh',
+          name: 'Gear ratio',
+          driver: { jointId: 'turn_a', dof: 0 },
+          driven: { jointId: 'turn_b', dof: 0 },
+          ratio: -0.5,
+          offset: 0,
+          gears: { driver: 'c', driven: 'b' }
+        }
+      })
+    );
+    const status: string[] = [];
+    const { commands, execute } = recordingExecute(manager);
+    const app = () => ({
+      document: manager.document,
+      execute,
+      onStatus: (message: string) => status.push(message)
+    });
+    return { manager, status, commands, app };
+  }
+
+  it('names the coupling that goes with a keyed gear, and with a joint', () => {
+    const { manager, status, app } = keyed();
+    const set = () => manager.document.assembly;
+    expect(couplingsRemovedWith(set(), { componentId: 'c' })).toEqual([
+      'Gear ratio'
+    ]);
+    expect(couplingsRemovedWith(set(), { componentId: 'plate' })).toEqual([
+      'Gear ratio'
+    ]);
+    expect(couplingsRemovedWith(set(), { jointId: 'turn_c' })).toEqual([]);
+    expect(couplingsRemovedWith(undefined, { jointId: 'turn_a' })).toEqual([]);
+
+    // `c` is not an end of either coupled joint: both stay, the coupling goes.
+    expect(removeAssemblyComponent(app(), 'c')).toBe(true);
+    expect(status).toEqual([
+      'Removed c from the assembly. Gear ratio was removed with it: it coupled it to another part, and one undo brings both back.'
+    ]);
+    expect(set()?.couplings).toBeUndefined();
+    expect(set()?.joints.map((j) => j.id)).toEqual(['turn_a', 'turn_b']);
+    manager.undo();
+    expect(set()?.couplings).toHaveLength(1);
+
+    status.length = 0;
+    expect(removeAssemblyJoint(app(), 'turn_c')).toBe(true);
+    expect(status).toEqual([]);
+    expect(removeAssemblyJoint(app(), 'turn_b')).toBe(true);
+    expect(status).toEqual([
+      'Removed Turn B. Gear ratio was removed with it: it coupled it to another part, and one undo brings both back.'
+    ]);
+  });
+
+  it('lists several couplings, and says nothing when the removal is refused', () => {
+    const { manager, status, app } = keyed();
+    manager.execute(
+      commandFactories.addAssemblyCoupling({
+        coupling: {
+          id: 'mesh_2',
+          name: 'Gear ratio 2',
+          driver: { jointId: 'turn_b', dof: 0 },
+          driven: { jointId: 'turn_c', dof: 0 },
+          ratio: 2
+        }
+      })
+    );
+    expect(removeAssemblyComponent(app(), 'b')).toBe(true);
+    expect(status).toEqual([
+      'Removed b from the assembly. Gear ratio and Gear ratio 2 were removed with it: they coupled it to another part, and one undo brings both back.'
+    ]);
+    status.length = 0;
+    const refused = {
+      ...app(),
+      execute: () => false
+    };
+    expect(removeAssemblyComponent(refused, 'a')).toBe(false);
+    expect(status).toEqual([]);
   });
 });

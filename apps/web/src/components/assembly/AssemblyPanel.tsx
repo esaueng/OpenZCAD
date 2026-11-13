@@ -26,6 +26,8 @@ import {
   type ProjectDocument
 } from '@openzcad/shared';
 import {
+  removeAssemblyComponent,
+  removeAssemblyJoint,
   toggleComponentGrounded,
   toggleJointPlayback,
   type AssemblyExecute
@@ -306,9 +308,7 @@ function AssemblyLists({
       if (itemId === 'ground') toggleComponentGrounded(app, target.id);
       if (itemId === 'remove') {
         if (
-          execute(
-            commandFactories.deleteAssemblyComponent({ componentId: target.id })
-          ) &&
+          removeAssemblyComponent(app, target.id) &&
           selectedComponentIds.includes(target.id)
         )
           assemblyRuntime.selectComponent(null);
@@ -317,10 +317,7 @@ function AssemblyLists({
     }
     if (itemId === 'delete') {
       if (playingJointId === target.id) assemblyRuntime.stop();
-      if (
-        execute(commandFactories.deleteAssemblyJoint({ jointId: target.id })) &&
-        selectedJointId === target.id
-      )
+      if (removeAssemblyJoint(app, target.id) && selectedJointId === target.id)
         assemblyRuntime.selectJoint(null);
     }
   };

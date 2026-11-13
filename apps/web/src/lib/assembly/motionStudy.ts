@@ -161,7 +161,8 @@ export const POSE_VALUE_TOLERANCE = 1e-6;
  *
  * A group is keyed only when the pose really moved it: what it shows with
  * the pose applied is compared with what the study shows there, both with
- * limits and couplings applied. The values handed in include every joint a
+ * limits and couplings applied, on whichever member moved most. Once it
+ * has, the key is written whatever the step comes to on the keyed motion. The values handed in include every joint a
  * scrub left on screen, and a key a limit holds short of (a track keyed to
  * 80° that its mate stops at 40°) reads differently raw than shown; moving
  * some other joint must never rewrite that key.
@@ -177,7 +178,14 @@ export function keyPoseAt(
   let next: AssemblyMotionStudy = study;
   let changed = false;
   let full = false;
-  const key = (joint: AssemblyJoint, dof: number, value: number) => {
+  // `moved` says the caller already knows the pose moved this motion, so
+  // the key is written however small the step is on this motion's scale.
+  const key = (
+    joint: AssemblyJoint,
+    dof: number,
+    value: number,
+    moved = false
+  ) => {
     let index = next.tracks.findIndex(
       (track) => track.jointId === joint.id && track.dof === dof
     );
@@ -185,7 +193,7 @@ export function keyPoseAt(
       index >= 0
         ? evaluateTrack(next.tracks[index] as AssemblyTrack, at)
         : (joint.values[dof] ?? 0);
-    if (Math.abs(value - shown) <= POSE_VALUE_TOLERANCE) return;
+    if (!moved && Math.abs(value - shown) <= POSE_VALUE_TOLERANCE) return;
     changed = true;
     if (index < 0) {
       const added = addTrack(set, next, joint.id, dof, shown);
@@ -262,8 +270,12 @@ export function keyPoseAt(
         drivers.find(inGroup) ?? { jointId: joint.id, dof };
       const targetJoint = joints.get(target.jointId);
       const targetValue = settle().posed.get(target.jointId)?.[target.dof];
+      // The group moved, judged on the member that moved most. The keyed
+      // motion may be geared far down from it (four stages at 1 : 20 turn
+      // 0.1° into 6e-7°), so its own step is not tested again: a second
+      // tolerance check here would drop the edit.
       if (targetJoint && targetValue !== undefined)
-        key(targetJoint, target.dof, targetValue);
+        key(targetJoint, target.dof, targetValue, true);
     }
     if (full) return { study: null, changed };
   }

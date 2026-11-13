@@ -128,8 +128,11 @@ relates values, it never closes a kinematic loop.
   that group (with the value the dragged pose gives it) rather than adding a
   track the first would overrule. A group is keyed only when the pose moved
   it: what it shows with the pose applied is compared with what the study
-  shows there, both with limits and couplings applied. Moving some other
-  joint never rewrites a key, also one a limit holds short of.
+  shows there, both with limits and couplings applied, on whichever member
+  moved most. Moving some other joint never rewrites a key, also one a limit
+  holds short of. Once a group has moved its key is written however small
+  the step is on the keyed motion, which may be geared far down from the
+  part that was moved.
 - **Limits bound the pair.** The lead value is clamped into the range every
   member's limit allows: a driven joint's limit stops its driver. A drag,
   an Animate sweep and View's playback of a joint all read that narrowed
@@ -149,7 +152,9 @@ relates values, it never closes a kinematic loop.
 - A coupling goes with either of its joints: deleting the joint or its
   component, or changing the joint's kind, removes it. A gear coupling also
   goes with either of its gears (`gears`): a gear keyed to a shaft is not an
-  end of the coupled joint, so the joint outlives it.
+  end of the coupled joint, so the joint outlives it. Removing a part or a
+  joint in the sidebar names the couplings that went with it in the status
+  line (no confirmation; one undo restores them).
 
 Commands: `assembly.coupling.add` (without an offset it holds the current
 pose), `assembly.coupling.update`, `assembly.coupling.delete`.

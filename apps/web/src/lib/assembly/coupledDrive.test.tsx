@@ -7,11 +7,15 @@ import {
 } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  IDENTITY_PLACEMENT,
   motionStudyDrivers,
   motionStudyValues,
   solveAssembly,
+  type AssemblyFrame,
+  type AssemblyJoint,
   type AssemblyMotionStudy,
-  type AssemblySet
+  type AssemblySet,
+  type BodyId
 } from '@openzcad/shared';
 import { AssemblyPlayer } from '../../components/assembly/AssemblyPlayer';
 import { coupledPairProject } from '../../components/assembly/motionTestFixture';
@@ -223,6 +227,95 @@ describe('the motion being moved drives its coupled mates', () => {
       t: 2,
       value: 20
     });
+  });
+
+  it('keys a move that is tiny on the tracked shaft of a geared-down train', () => {
+    // Five shafts, four stages at −0.05 each; the study tracks the last.
+    // Moving the first by 0.1° turns the last by 0.1 × 0.05⁴ = 6.25e-7°,
+    // under the 1e-6° "same pose" tolerance. The group did move, so the key
+    // must be written: dropped, playback would put the first shaft back.
+    const joints: AssemblyJoint[] = [1, 2, 3, 4, 5].map((n) => {
+      const frame: AssemblyFrame = {
+        origin: { x: 50 * n, y: 0, z: 0 },
+        zAxis: { x: 0, y: 0, z: 1 },
+        xAxis: { x: 1, y: 0, z: 0 }
+      };
+      return {
+        id: `shaft_${n}`,
+        name: `Shaft ${n}`,
+        kind: 'revolute',
+        parent: { componentId: 'plate', frame },
+        child: { componentId: `part_${n}`, frame },
+        values: [0],
+        limits: [null]
+      };
+    });
+    const train: AssemblySet = {
+      components: [
+        'plate',
+        'part_1',
+        'part_2',
+        'part_3',
+        'part_4',
+        'part_5'
+      ].map((id) => ({
+        id,
+        name: id,
+        bodyId: `body_${id}` as BodyId,
+        grounded: id === 'plate',
+        placement: IDENTITY_PLACEMENT
+      })),
+      joints,
+      positions: [],
+      studies: [],
+      couplings: [1, 2, 3, 4].map((n) => ({
+        id: `stage_${n}`,
+        name: `Stage ${n}`,
+        driver: { jointId: `shaft_${n}`, dof: 0 },
+        driven: { jointId: `shaft_${n + 1}`, dof: 0 },
+        ratio: -0.05,
+        offset: 0
+      }))
+    };
+    const study: AssemblyMotionStudy = {
+      id: 'study_out',
+      name: 'Output',
+      durationS: 2,
+      playback: 'once',
+      tracks: [
+        {
+          jointId: 'shaft_5',
+          dof: 0,
+          keys: [{ t: 0, value: 0, easing: 'linear' }]
+        }
+      ]
+    };
+    const first = { jointId: 'shaft_1', dof: 0 };
+    const pose = Object.fromEntries(motionStudyValues(train, study, 1));
+    const { study: keyed, changed } = keyPoseAt(
+      train,
+      study,
+      1,
+      { ...pose, shaft_1: [0.1] },
+      [first, ...motionStudyDrivers(study)]
+    );
+    expect(changed).toBe(true);
+    expect(keyed?.tracks.map((t) => t.jointId)).toEqual(['shaft_5']);
+    const key = keyed?.tracks[0]?.keys.at(-1);
+    expect(key?.t).toBe(1);
+    expect(key?.value).toBeCloseTo(6.25e-7, 15);
+    // Played back, the first shaft stands where it was put.
+    const played = solveAssembly(
+      train,
+      motionStudyValues(train, keyed!, 1),
+      motionStudyDrivers(keyed!)
+    ).values;
+    expect(played.get('shaft_1')?.[0]).toBeCloseTo(0.1, 9);
+    // A pose that moves nothing is still no edit, at any scale.
+    expect(
+      keyPoseAt(train, study, 1, pose, [first, ...motionStudyDrivers(study)])
+        .changed
+    ).toBe(false);
   });
 
   it('gives a coupled pair one track, and reads the values on screen', () => {

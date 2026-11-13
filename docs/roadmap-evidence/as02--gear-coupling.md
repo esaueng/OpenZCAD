@@ -19,8 +19,9 @@ carry them: viewport drag and its cancel, the joint's slider and number,
 Animate, study playback and scrubbing, View playback, and keying a pose in an
 open study (which keys the motion the study already tracks in that group,
 so coupled joints share one track, and only a group the pose really moved:
-moving an unrelated joint never rewrites a key that a limit holds short
-of). The lead is clamped to the range every
+moving an unrelated joint never rewrites a key that a limit holds short of,
+while a real move is keyed however small it is on a geared-down tracked
+shaft). The lead is clamped to the range every
 member's limit allows (a driven joint's limit stops its driver); a drag, an
 Animate sweep and View's joint playback all read that narrowed range.
 Refused by code (`coupling:*`): an unknown joint, a joint coupled to itself,
@@ -47,7 +48,8 @@ is fixed when the pair is placed; when a gear's teeth no longer give it, the
 joint's details and the reopened card warn and ask for the pair to be placed
 again. The coupling records its gear pair (`gears`, component ids), so the
 check reads the real gears also when one is keyed to a shaft or two share a
-shaft, and the coupling goes when either gear leaves the assembly. v55 belongs to M14 partial-span teeth, which this slice does not
+shaft, and the coupling goes when either gear leaves the assembly; removing
+a part or a joint in the sidebar names the couplings that went with it. v55 belongs to M14 partial-span teeth, which this slice does not
 contain, so every version gate refuses a v55 document. The three coupling
 commands are in the analytics operation vocabulary. Not in this slice: a
 coupling editor outside the card, couplings for non-gear joints, screw
@@ -80,13 +82,18 @@ with the ratio's sign reversed collides),
 after a scrub leads and is saved with its driver; drivers follow the values
 on screen; a drag in an open study re-keys the tracked gear; moving an
 unrelated joint at the end of a study whose track a limit holds at 40° of
-its 80° key leaves that key exactly; one track per coupled group; Animate and the View player sweep the same ±40° of a pair
+its 80° key leaves that key exactly; a 0.1° move of the first of five
+shafts geared 1 : 20 four times is keyed on the tracked last shaft at
+6.25e-7° and plays back; one track per coupled group; Animate and the View player sweep the same ±40° of a pair
 whose mate is limited to ±20°),
 `apps/web/src/components/assembly/GearMeshCard.test.tsx` (Turn together is
 the default with a mount and saves one transaction, Fixed together one
 choice away and the default for a bare pair; the joint's details name the
 coupling and Remove deletes it; the stale-ratio warning on the joint and in
-the reopened card, also for a pinion keyed to its shaft), `apps/web/src/lib/assembly/assemblyView.test.ts` (both
+the reopened card, also for a pinion keyed to its shaft; removing that
+pinion from the row menu or its details says Gear ratio went with it),
+`apps/web/src/lib/assembly/assembleWorkspace.test.ts` (the removal message
+for a keyed gear, a joint and several couplings, and none when refused), `apps/web/src/lib/assembly/assemblyView.test.ts` (both
 bodies move when either joint is overridden; a sweep covers only the coupled
 range) and `test/e2e/gear-mesh.spec.ts` (CI smoke: two gears on a plate
 start on Turn together, 40° on the pinion reads −20° on the wheel and back,
