@@ -1290,9 +1290,13 @@ test('reset settings revokes analytics consent and persists the default', async 
     exact: true
   });
   await consent.check();
-  page.once('dialog', (dialog) => dialog.accept());
   await page.getByRole('button', { name: 'Advanced', exact: true }).click();
   await page
+    .getByRole('button', { name: 'Reset settings', exact: true })
+    .click();
+  // Asked in-page, never with a native confirm.
+  await page
+    .getByRole('alertdialog', { name: 'Reset settings on this device?' })
     .getByRole('button', { name: 'Reset settings', exact: true })
     .click();
   await page

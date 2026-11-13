@@ -3,7 +3,8 @@ import {
   fireEvent,
   render,
   screen,
-  waitFor
+  waitFor,
+  within
 } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ComponentProps } from 'react';
@@ -130,25 +131,37 @@ afterEach(() => {
  * by document undo, which knows about geometry rather than about the thread.
  */
 describe('clearing the assistant conversation', () => {
-  it('asks first, and keeps the thread when the answer is no', async () => {
-    const confirm = vi.fn().mockReturnValue(false);
-    vi.stubGlobal('confirm', confirm);
+  // In-page, never `window.confirm()`: embedded and automated browsers answer
+  // a native confirm with Cancel unseen, so Clear did nothing there.
+  it('asks in-page with focus on Cancel, and keeps the thread on Cancel', async () => {
+    const native = vi.fn().mockReturnValue(true);
+    vi.stubGlobal('confirm', native);
     const { user, clear } = await renderPanel();
 
     await user.click(clear);
 
-    expect(confirm).toHaveBeenCalledOnce();
+    const dialog = await screen.findByRole('alertdialog', {
+      name: 'Clear the conversation?'
+    });
+    expect(native).not.toHaveBeenCalled();
+    const cancel = within(dialog).getByRole('button', { name: 'Cancel' });
+    expect(cancel).toHaveFocus();
+    // A reflex Enter keeps the conversation.
+    await user.keyboard('{Enter}');
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
     expect(loadAssistantThread(doc.projectId)).toHaveLength(2);
     expect(
       screen.getByText('Put a 6 mm hole through the boss')
     ).toBeInTheDocument();
   });
 
-  it('clears the thread when the answer is yes', async () => {
-    vi.stubGlobal('confirm', vi.fn().mockReturnValue(true));
+  it('clears the thread when Clear conversation is confirmed', async () => {
     const { user, clear } = await renderPanel();
 
     await user.click(clear);
+    await user.click(
+      await screen.findByRole('button', { name: 'Clear conversation' })
+    );
 
     await waitFor(() =>
       expect(loadAssistantThread(doc.projectId)).toHaveLength(0)
@@ -157,13 +170,11 @@ describe('clearing the assistant conversation', () => {
   });
 
   it('does not ask when the user has turned confirmations off', async () => {
-    const confirm = vi.fn().mockReturnValue(true);
-    vi.stubGlobal('confirm', confirm);
     const { user, clear } = await renderPanel({ confirmDestructive: false });
 
     await user.click(clear);
 
-    expect(confirm).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alertdialog')).toBeNull();
     await waitFor(() =>
       expect(loadAssistantThread(doc.projectId)).toHaveLength(0)
     );

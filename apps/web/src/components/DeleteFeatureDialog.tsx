@@ -34,8 +34,10 @@ export function DeleteFeatureDialog({
   onDelete
 }: DeleteFeatureDialogProps) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
-  const deleteRef = useRef<HTMLButtonElement | null>(null);
-  useModalFocus(dialogRef, { autoFocus: true, initialFocusRef: deleteRef });
+  // Focus starts on Cancel: the dialog only opens when later features build
+  // on this one, so a reflex Enter (Del, Enter) must not rebuild them all.
+  const cancelRef = useRef<HTMLButtonElement | null>(null);
+  useModalFocus(dialogRef, { autoFocus: true, initialFocusRef: cancelRef });
 
   const named = dependents.slice(0, NAMED_DEPENDENTS);
   const unnamed = dependents.length - named.length;
@@ -74,11 +76,15 @@ export function DeleteFeatureDialog({
           <p>Undo brings everything back.</p>
         </div>
         <div className="delete-feature-actions">
-          <button type="button" className="secondary" onClick={onCancel}>
+          <button
+            ref={cancelRef}
+            type="button"
+            className="secondary"
+            onClick={onCancel}
+          >
             Cancel
           </button>
           <button
-            ref={deleteRef}
             type="button"
             className="delete-feature-confirm"
             onClick={onDelete}

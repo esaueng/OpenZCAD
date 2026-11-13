@@ -769,6 +769,7 @@ import {
   resolveImportedBlendFace
 } from './lib/interaction/filletFaceEdit';
 import { ToastHost } from './components/Toast';
+import { useConfirm } from './components/ConfirmDialog';
 import {
   commandPaletteShortcut,
   idleWorkspaceHint,
@@ -3210,6 +3211,9 @@ export function App() {
   // The status line is the log; a toast is the notice. Only actions whose
   // outcome is otherwise invisible in the viewport raise one.
   const [toast, setToast] = useState<ToastModel | null>(null);
+  // Every destructive confirm in the app shell (library deletes, demo reset,
+  // settings reset) asks in-page; see ConfirmDialog for why never natively.
+  const { confirm: confirmInPage, dialog: confirmDialog } = useConfirm();
   /**
    * A confirmed update and an interrupted download are separate facts. Keep
    * their Reload offers on the start screen after the toast expires.
@@ -12795,7 +12799,11 @@ export function App() {
   async function handleDeleteAssistantCredential() {
     if (
       appSettings.general.confirmDestructiveActions &&
-      !window.confirm('Remove the saved personal AI credential?')
+      !(await confirmInPage({
+        title: 'Remove the saved personal AI credential?',
+        body: 'The assistant stops using it until you add a credential again.',
+        confirmLabel: 'Remove'
+      }))
     ) {
       return;
     }
@@ -13227,12 +13235,14 @@ export function App() {
     }
   }
 
-  function handleResetAppSettings() {
+  async function handleResetAppSettings() {
     if (
       appSettings.general.confirmDestructiveActions &&
-      !window.confirm(
-        'Reset application settings on this device? Projects are not deleted.'
-      )
+      !(await confirmInPage({
+        title: 'Reset settings on this device?',
+        body: 'Every setting goes back to its default. Projects are not deleted.',
+        confirmLabel: 'Reset settings'
+      }))
     ) {
       return;
     }
@@ -14391,9 +14401,57 @@ export function App() {
             ? `Archived ${project.name}.`
             : `Restored ${project.name}.`
       );
+      announceShelfMove([project], project.name, status);
     } catch (error) {
       setStatus(errorMessage(error, `Could not move ${project.name}.`));
     }
+  }
+
+  /**
+   * Move to trash and Archive take a project off the shelf in view, so they
+   * answer with a toast that names what went and an Undo that puts each one
+   * back on the shelf it came from; a Restore needs neither.
+   */
+  function announceShelfMove(
+    moved: readonly ProjectSummary[],
+    what: string,
+    status: ProjectStatus
+  ) {
+    if (moved.length === 0 || (status !== 'deleted' && status !== 'archived')) {
+      return;
+    }
+    const previous = moved.map((project) => ({
+      project,
+      status: project.organization?.status ?? 'active'
+    }));
+    announce(
+      status === 'deleted'
+        ? `Moved ${what} to the trash.`
+        : `Archived ${what}.`,
+      {
+        label: 'Undo',
+        run: () => {
+          void (async () => {
+            let failure: unknown;
+            for (const { project, status: back } of previous) {
+              try {
+                await persistOrganization(project.projectId, (current) =>
+                  applyOrganizationUpdate(current, { status: back })
+                );
+              } catch (error) {
+                failure ??= error;
+              }
+            }
+            setStatus(
+              failure
+                ? errorMessage(failure, `Could not put back ${what}.`)
+                : `Put back ${what}.`
+            );
+          })();
+        }
+      },
+      { repeatsStatusAt: lastStatusAtRef.current }
+    );
   }
 
   /** Several projects onto one shelf, from the library's selection. */
@@ -14402,6 +14460,7 @@ export function App() {
     status: ProjectStatus
   ) {
     let moved = 0;
+    const movedProjects: ProjectSummary[] = [];
     let failure: unknown;
     for (const project of targets) {
       try {
@@ -14409,6 +14468,7 @@ export function App() {
           applyOrganizationUpdate(current, { status })
         );
         moved += 1;
+        movedProjects.push(project);
       } catch (error) {
         failure ??= error;
       }
@@ -14433,6 +14493,7 @@ export function App() {
           ? `Archived ${what}.`
           : `Restored ${what}.`
     );
+    announceShelfMove(movedProjects, what, status);
   }
 
   /** Pins or unpins several projects, from the library's selection. */
@@ -14952,9 +15013,11 @@ export function App() {
   async function handleDeleteProjectForever(project: ProjectSummary) {
     if (
       appSettings.general.confirmDestructiveActions &&
-      !window.confirm(
-        `Permanently delete “${project.name}”? This cannot be undone.`
-      )
+      !(await confirmInPage({
+        title: `Delete “${project.name}” forever?`,
+        body: 'This cannot be undone.',
+        confirmLabel: 'Delete forever'
+      }))
     ) {
       return;
     }
@@ -14978,9 +15041,11 @@ export function App() {
     if (
       targets.length === 0 ||
       (appSettings.general.confirmDestructiveActions &&
-        !window.confirm(
-          `Permanently delete ${countLabel(targets.length, 'project', 'projects')}? This cannot be undone.`
-        ))
+        !(await confirmInPage({
+          title: `Delete ${countLabel(targets.length, 'project', 'projects')} forever?`,
+          body: 'This cannot be undone.',
+          confirmLabel: 'Delete forever'
+        })))
     ) {
       return;
     }
@@ -15008,9 +15073,11 @@ export function App() {
     const name = definition.name.replace('Demo · ', '');
     if (
       appSettings.general.confirmDestructiveActions &&
-      !window.confirm(
-        `Reset the ${name} sample? Your changes to it are discarded; save a copy first to keep them.`
-      )
+      !(await confirmInPage({
+        title: `Reset the ${name} sample?`,
+        body: 'Your changes to it are discarded. Save a copy first to keep them.',
+        confirmLabel: 'Reset sample'
+      }))
     ) {
       return false;
     }
@@ -15033,9 +15100,11 @@ export function App() {
     }
     if (
       appSettings.general.confirmDestructiveActions &&
-      !window.confirm(
-        `Permanently delete ${countLabel(trashed.length, 'project', 'projects')} in the trash? This cannot be undone.`
-      )
+      !(await confirmInPage({
+        title: 'Empty the trash?',
+        body: `${countLabel(trashed.length, 'project is', 'projects are')} deleted forever. This cannot be undone.`,
+        confirmLabel: 'Empty trash'
+      }))
     ) {
       return;
     }
@@ -15441,9 +15510,12 @@ export function App() {
       return;
     }
     if (
-      !window.confirm(
-        `Restore ${localDocument.name} in your account from the copy saved on this device?\n\nThe unreadable current account copy will be replaced. Existing revisions are not changed.`
-      )
+      !(await confirmInPage({
+        title: `Restore ${localDocument.name} in your account from the copy saved on this device?`,
+        body: 'The unreadable current account copy will be replaced. Existing revisions are not changed.',
+        confirmLabel: 'Restore from this device',
+        tone: 'default'
+      }))
     ) {
       setStatus(
         'Account restore canceled. Your work remains saved on this device.'
@@ -29902,7 +29974,7 @@ export function App() {
           onApproveDesktopLogin={handleApproveDesktopLogin}
           onLogout={handleLogout}
           onDeleteCloudData={handleDeleteCloudData}
-          onReset={handleResetAppSettings}
+          onReset={() => void handleResetAppSettings()}
           onApplyViewportDefaults={applyViewportDefaults}
           onExportDiagnostics={handleExportDiagnostics}
           onExportInteractionLog={() => void handleExportInteractionLog()}
@@ -30003,6 +30075,7 @@ export function App() {
           workspace="Projects"
         />
         {settingsOverlay}
+        {confirmDialog}
         <ToastHost toast={toast} onDismiss={dismissToast} />
       </>
     );
@@ -30133,18 +30206,23 @@ export function App() {
         setActiveMeasurementId((current) => (current === id ? null : current));
         setStatus('Measurement removed.');
       }}
-      onClear={() => {
-        if (
-          appSettings.general.confirmDestructiveActions &&
-          !window.confirm('Clear every measurement in this project?')
-        ) {
-          return;
-        }
-        setMeasurements([]);
-        setActiveMeasurementId(null);
-        clearMeasurementPicks();
-        setStatus('Measurement list cleared.');
-      }}
+      onClear={() =>
+        void (async () => {
+          if (
+            appSettings.general.confirmDestructiveActions &&
+            !(await confirmInPage({
+              title: 'Clear every measurement in this project?',
+              confirmLabel: 'Clear measurements'
+            }))
+          ) {
+            return;
+          }
+          setMeasurements([]);
+          setActiveMeasurementId(null);
+          clearMeasurementPicks();
+          setStatus('Measurement list cleared.');
+        })()
+      }
       onCopy={(measurement) => void copyMeasurements(measurement)}
       onExport={exportMeasurements}
     />
@@ -34114,6 +34192,7 @@ export function App() {
             />
           )}
           {settingsOverlay}
+          {confirmDialog}
         </>
       }
     />
