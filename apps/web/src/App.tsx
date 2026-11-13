@@ -15950,6 +15950,13 @@ export function App() {
   useEffect(() => {
     if (sectionControlsShown) setClearStageRequest((request) => request + 1);
   }, [sectionControlsShown]);
+  // The measurement workbench floats over View's and Tweak's stage (a
+  // phone's sheet across its foot, I47): what it measures stays in view.
+  // Build's workbench is a command card and never moves the camera.
+  const measuringOverStage = measuring && modelingLocked;
+  useEffect(() => {
+    if (measuringOverStage) setClearStageRequest((request) => request + 1);
+  }, [measuringOverStage]);
 
   /** D06 slice E: a proposal that edits a drawing sheet, not the model. */
   function isDrawingProposal(proposal: CadPatchProposal): boolean {

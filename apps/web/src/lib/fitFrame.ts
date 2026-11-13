@@ -8,10 +8,12 @@ import { SELECTION_CALLOUT_OBSTACLES } from './selectionCalloutView';
 
 /**
  * What covers the stage as well as the panels a selection chip keeps out
- * from under: the flyouts the rails open (the section controls, the views)
- * and the View and Tweak flyouts.
+ * from under: the flyouts the rails open (the section controls, the views),
+ * the View and Tweak flyouts, and the measurement workbench View and Tweak
+ * float over the stage (a phone's sheet across its foot). Build's
+ * workbench is a command card, already in the right lane.
  */
-const CLEAR_STAGE_OBSTACLES = `${SELECTION_CALLOUT_OBSTACLES}, .tweak-flyouts, .view-flyouts, [data-rail-flyout]`;
+const CLEAR_STAGE_OBSTACLES = `${SELECTION_CALLOUT_OBSTACLES}, .tweak-flyouts, .view-flyouts, [data-rail-flyout], .viewer-shell .measurement-dock`;
 
 /**
  * Surfaces outside the viewer area that still stand over the canvas: the

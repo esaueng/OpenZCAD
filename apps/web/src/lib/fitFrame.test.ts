@@ -270,6 +270,17 @@ describe('measureClearStage', () => {
     expect(measureClearStage(canvas)!.rect.bottom).toBe(900);
   });
 
+  it('frames above View’s measurement sheet across a phone’s foot', () => {
+    const { area, canvas } = workspaceStage();
+    const shell = document.createElement('section');
+    shell.className = 'viewer-shell';
+    const sheet = document.createElement('section');
+    sheet.className = 'measurement-dock';
+    shell.append(placed(sheet, 10, 600, 1430, 860));
+    area.append(shell);
+    expect(measureClearStage(canvas)!.rect.bottom).toBe(600 - 12);
+  });
+
   it('takes a band off the top for a flyout standing over the middle', () => {
     const { area, canvas } = workspaceStage();
     const flyout = document.createElement('div');
