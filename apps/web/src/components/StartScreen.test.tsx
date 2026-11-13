@@ -1125,7 +1125,7 @@ describe('StartScreen update notice', () => {
     const onReload = vi.fn();
     renderStartScreen({ onReloadForLoadFailure: onReload });
     const notice = screen.getByRole('alert');
-    expect(notice).toHaveTextContent('Check your connection');
+    expect(notice).toHaveTextContent(/check your connection/i);
     expect(notice).not.toHaveTextContent(/new version/i);
     fireEvent.click(within(notice).getByRole('button', { name: 'Reload' }));
     expect(onReload).toHaveBeenCalledOnce();

@@ -367,7 +367,9 @@ import {
   preloadableLazy,
   onStaleChunk,
   watchPreloadErrors,
-  STALE_CHUNK_MESSAGE
+  NEW_VERSION_MESSAGE,
+  STALE_CHUNK_MESSAGE,
+  type ReloadPrompt
 } from './lib/staleChunk';
 import { lockAccountsExcept } from './lib/e2ee/unlockedKeys';
 import {
@@ -2835,9 +2837,7 @@ export function App() {
    * The step that project's tour has reached. The card unmounts while a
    * command or a sketch runs, so the step is kept here, by project.
    */
-  const tourStepRef = useRef<{ projectId: string; index: number } | null>(
-    null
-  );
+  const tourStepRef = useRef<{ projectId: string; index: number } | null>(null);
   /** The export dialog has been opened this session — the tour's last signal. */
   const [tourExportSeen, setTourExportSeen] = useState(false);
   const [settingsBusy, setSettingsBusy] = useState(false);
@@ -3247,32 +3247,65 @@ export function App() {
   }, []);
   // A deploy while this tab is open renames every chunk. The version watch
   // usually notices first; if a panel's chunk goes missing before it does,
-  // the same notice lands beside the panel's own fallback. The reload is
-  // the user's call either way: the workspace may hold unsaved edits.
+  // the failure asks the watch to look now. In the workspace the offer is one
+  // quiet top-bar chip rather than a toast: the reload is the user's call,
+  // since the workspace may hold unsaved edits, and a notice per failed chunk
+  // only got in the way of the work it could not help with.
+  // The library has no top bar, and on a phone its foot line is out of view
+  // below the shelf, so a click there that fails (a demo) answers once with a
+  // toast. Warm-ups never report, so a report there follows a user action.
+  const onStartScreenRef = useRef(doc === null);
   useEffect(() => {
-    const reloadNotice = {
-      label: 'Reload',
-      run: () => window.location.reload()
-    };
-    const stopWatch = watchBuildVersion({
+    onStartScreenRef.current = doc === null;
+  }, [doc]);
+  useEffect(() => {
+    let stopped = false;
+    const watch = watchBuildVersion({
       onNewVersion: () => {
+        if (stopped) return;
         setNewBuildAvailable(true);
-        announce('A newer OpenZCAD build is available.', reloadNotice);
+        recordActivity({
+          level: 'ready',
+          source: 'notice',
+          message: NEW_VERSION_MESSAGE
+        });
       }
     });
+    let interruptionRecorded = false;
+    let libraryAnswered = false;
     const stopStale = onStaleChunk(() => {
-      // A failed download alone also occurs offline. Only the version watch
-      // above can prove that an update exists and enable the update control.
+      // A failed download alone also occurs offline; only the version watch
+      // can prove that an update exists, so ask it rather than assume.
       setDownloadInterrupted(true);
-      announce(STALE_CHUNK_MESSAGE, reloadNotice);
+      watch.checkNow();
+      if (onStartScreenRef.current && !libraryAnswered) {
+        libraryAnswered = true;
+        announce(STALE_CHUNK_MESSAGE, {
+          label: 'Reload',
+          run: () => window.location.reload()
+        });
+      }
+      if (interruptionRecorded) return;
+      interruptionRecorded = true;
+      recordActivity({
+        level: 'warning',
+        source: 'notice',
+        message: STALE_CHUNK_MESSAGE
+      });
     });
     const stopPreload = watchPreloadErrors();
     return () => {
-      stopWatch();
+      stopped = true;
+      watch();
       stopStale();
       stopPreload();
     };
   }, [announce]);
+  const reloadPrompt: ReloadPrompt | null = newBuildAvailable
+    ? 'update'
+    : downloadInterrupted
+      ? 'interrupted'
+      : null;
   // Load what a click opens while the page is idle, so its first open is not
   // an empty frame. A failure here is left to the surface's own load, which
   // reports a stale chunk where the user is looking.
@@ -29650,7 +29683,7 @@ export function App() {
           }
           // Assemble picks parts whatever the filter was left at.
           if (assembleMode) {
-            setStatus('Assemble picks whole parts; the filter is Build\'s.', {
+            setStatus("Assemble picks whole parts; the filter is Build's.", {
               unlogged: true
             });
             return;
@@ -31441,6 +31474,7 @@ export function App() {
           // The model panels (Diagnostics among them) exist while modeling.
           warningCount={modelingLocked ? 0 : diagnostics.length}
           onShowWarnings={() => showModelPanel('diagnostics')}
+          reloadPrompt={reloadPrompt}
           editPending={
             isOperationState(interaction) && interaction.phase === 'validating'
           }

@@ -183,6 +183,35 @@
   justify-self: center;
 }
 
+/* A panel whose code did not download: one muted line with a text Reload,
+   no card. The reload is optional and the top bar offers it too. */
+.error-boundary.is-quiet {
+  grid-auto-flow: column;
+  align-items: center;
+  gap: var(--sp-1);
+  min-height: 6rem;
+  font-size: var(--fs-sm);
+  background: transparent;
+  border-color: transparent;
+}
+
+.error-boundary-reload {
+  min-height: 0;
+  height: 26px;
+  padding: 0 6px;
+  color: var(--color-accent);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+}
+
+.error-boundary-reload:hover,
+.error-boundary-reload:focus-visible {
+  background: var(--color-surface-hover);
+}
+
 /* The whole-app boundary: when it trips nothing else is on screen, so the
    fallback owns the viewport instead of leaving a strip above a blank page. */
 .error-page {

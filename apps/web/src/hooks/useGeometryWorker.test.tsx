@@ -10,6 +10,7 @@ import { CommandManager } from '@openzcad/command-system';
 import type { GeometryWorkerResult } from '../worker/geometryWorker';
 import { useGeometryWorker } from './useGeometryWorker';
 import { ProjectionSender } from '../lib/projectionStream';
+import { STALE_CHUNK_MESSAGE } from '../lib/staleChunk';
 import { geometryContentKey } from '../worker/exactRebuildCache';
 
 class FakeWorker {
@@ -908,9 +909,7 @@ describe('useGeometryWorker', () => {
       })
     );
     const pending = result.current.syncOnce(document);
-    const rejected = expect(pending).rejects.toThrow(
-      'Check your connection, then reload the workspace'
-    );
+    const rejected = expect(pending).rejects.toThrow(STALE_CHUNK_MESSAGE);
     await act(async () => {
       FakeWorker.instances[0]!.onerror?.({} as ErrorEvent);
     });
@@ -921,10 +920,9 @@ describe('useGeometryWorker', () => {
     expect(result.current.isReadyFor(document)).toBe(false);
     expect(onDerived).not.toHaveBeenCalled();
     expect(onError).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'Check your connection, then reload the workspace'
-      )
+      expect.stringContaining(STALE_CHUNK_MESSAGE)
     );
+    expect(STALE_CHUNK_MESSAGE).toMatch(/reload.*check your connection/i);
   });
 
   it('routes request-tagged states to that request and not the live document', async () => {

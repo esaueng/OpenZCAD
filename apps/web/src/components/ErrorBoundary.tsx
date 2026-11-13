@@ -96,12 +96,20 @@ export class ErrorBoundary extends Component<
       return this.renderPage();
     }
     if (this.state.staleChunk) {
+      // Not a crash: the panel's code did not download. One muted line and a
+      // text Reload, since the rest of the workspace still works and the top
+      // bar keeps the same offer; the full reason is the button's tooltip.
       return (
-        <section className="error-boundary" role="alert">
-          <strong>{this.props.label} could not be rendered.</strong>
-          <span>{STALE_CHUNK_MESSAGE}</span>
-          <button type="button" className="secondary" onClick={reload}>
-            Reload workspace
+        <section className="error-boundary is-quiet" role="status">
+          <span>{this.props.label} did not load.</span>
+          <button
+            type="button"
+            className="error-boundary-reload"
+            title={STALE_CHUNK_MESSAGE}
+            aria-label="Reload workspace"
+            onClick={reload}
+          >
+            Reload
           </button>
         </section>
       );
@@ -153,7 +161,7 @@ export class ErrorBoundary extends Component<
           </h1>
           <p role="alert">
             {stale
-              ? STALE_CHUNK_MESSAGE
+              ? 'Check your connection, then reload the workspace to try again.'
               : 'An unexpected error stopped the workspace. Reload to recover.'}
           </p>
           <p className="error-page-note">

@@ -5,6 +5,7 @@ import { platformShortcutLabel } from '../lib/platformShortcut';
 import {
   type ChangeEvent,
   useEffect,
+  useId,
   useLayoutEffect,
   useRef,
   useState
@@ -19,6 +20,7 @@ import {
   FolderOpen,
   LoaderCircle,
   Pencil,
+  RotateCw,
   Save,
   Settings as SettingsIcon,
   TriangleAlert,
@@ -48,6 +50,11 @@ import {
   type SaveGlyph
 } from '../lib/topBarPresentation';
 import { createLazyPanel } from './LazyPanel';
+import {
+  NEW_VERSION_MESSAGE,
+  STALE_CHUNK_MESSAGE,
+  type ReloadPrompt
+} from '../lib/staleChunk';
 import type { UnusedMeshPayloadsProps } from './UnusedMeshPayloads';
 
 const UnusedMeshPayloads = createLazyPanel<UnusedMeshPayloadsProps>(
@@ -158,6 +165,12 @@ interface TopBarProps {
    * project (ADR-024 Phase 4). Absent or null, nothing is shown.
    */
   encryption?: EncryptionIndicatorProps | null;
+  /**
+   * A newer build is out, or part of the app did not download. The reload is
+   * the user's call (the workspace may hold unsaved edits), so this is one
+   * quiet chip that waits rather than a notice that interrupts.
+   */
+  reloadPrompt?: ReloadPrompt | null;
 }
 
 /**
@@ -256,6 +269,7 @@ export function TopBar({
   onReviewEditFailure,
   warningCount = 0,
   onShowWarnings,
+  reloadPrompt = null,
   localOnlySourceCount,
   artifacts: storedArtifacts,
   meshCleanup,
@@ -632,13 +646,28 @@ export function TopBar({
     }
   }, [workspaceMode]);
 
+  const reloadDescriptionId = useId();
+  const reloadMessage =
+    reloadPrompt === 'update'
+      ? NEW_VERSION_MESSAGE
+      : reloadPrompt === 'interrupted'
+        ? STALE_CHUNK_MESSAGE
+        : '';
+
   // What the island holds changes its need without resizing the header.
   const encrypted = encryption !== null;
   useLayoutEffect(() => {
     if (topbarRef.current) {
       fitProjectName(topbarRef.current);
     }
-  }, [projectName, editingProjectName, saveText, saveChipActs, encrypted]);
+  }, [
+    projectName,
+    editingProjectName,
+    saveText,
+    saveChipActs,
+    encrypted,
+    reloadPrompt
+  ]);
 
   return (
     <header ref={topbarRef} className="topbar">
@@ -707,6 +736,28 @@ export function TopBar({
             <TriangleAlert size={14} aria-hidden="true" />
             <span aria-hidden="true">
               {warningCount > 99 ? '99+' : warningCount}
+            </span>
+          </button>
+        ) : null}
+        {/* Polite, not an alert: the chip appears and waits. The live
+            region is always present (and out of the flow), so its first
+            message is announced; the chip beside it takes room only when
+            there is something to reload for. */}
+        <span className="visually-hidden" role="status">
+          {reloadMessage}
+        </span>
+        {reloadPrompt ? (
+          <button
+            type="button"
+            className={`topbar-reload-chip is-${reloadPrompt}`}
+            title={reloadMessage}
+            aria-describedby={reloadDescriptionId}
+            onClick={() => window.location.reload()}
+          >
+            <RotateCw size={12} aria-hidden="true" />
+            <span>{reloadPrompt === 'update' ? 'Update' : 'Reload'}</span>
+            <span id={reloadDescriptionId} hidden>
+              {reloadMessage}
             </span>
           </button>
         ) : null}

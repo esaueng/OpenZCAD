@@ -30,7 +30,17 @@ export function isChunkLoadError(error: unknown): boolean {
 }
 
 export const STALE_CHUNK_MESSAGE =
-  'Part of OpenZCAD could not load. Check your connection, then reload the workspace to try again.';
+  'Part of OpenZCAD did not load. Reload when convenient, or check your connection if it keeps happening.';
+
+/**
+ * What the workspace offers to reload for: a confirmed newer deployment, or
+ * a download that failed without one (possibly just the connection).
+ */
+export type ReloadPrompt = 'update' | 'interrupted';
+
+/** A confirmed newer deployment: optional, never urgent. */
+export const NEW_VERSION_MESSAGE =
+  'A newer OpenZCAD version is available. Reload when you are ready to use it.';
 
 /** Avoid poisoning the browser module cache with a known-offline download. */
 export async function loadWhenOnline<T>(load: () => Promise<T>): Promise<T> {

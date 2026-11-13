@@ -1,11 +1,7 @@
 import { test, expect, stubApi } from './openzcad-fixtures';
-import {
-  TOAST_EXIT_MS,
-  TOAST_LIFETIME_MS
-} from '../../apps/web/src/lib/toasts';
 
 for (const width of [1440, 390]) {
-  test(`a failed demo download offers reload without claiming an update at ${width}px`, async ({
+  test(`a failed demo download answers in view and offers reload without claiming an update at ${width}px`, async ({
     page
   }, testInfo) => {
     await page.setViewportSize({ width, height: 900 });
@@ -25,25 +21,23 @@ for (const width of [1440, 390]) {
     await expect(demo).toBeEnabled();
     const timeOrigin = await page.evaluate(() => performance.timeOrigin);
     await demo.click();
-    await expect(page.locator('.toast')).toContainText('Check your connection');
+    // The click is answered where the user is looking, without scrolling:
+    // the library has no top bar, and on a phone its foot line is below the
+    // shelf. One toast with Reload, then the quiet foot line keeps the offer.
+    const toast = page.locator('.toast');
+    await expect(toast).toContainText(/check your connection/i);
     await expect(
-      page.locator('.toast').getByRole('button', { name: 'Reload' })
-    ).toBeVisible();
+      toast.getByRole('button', { name: 'Reload' })
+    ).toBeInViewport();
     expect(failedDownloads).toBeGreaterThan(0);
-    await expect(
-      page.getByText('A newer OpenZCAD build is available.')
-    ).toHaveCount(0);
+    const notice = page.locator('.start-update');
+    await expect(notice).toBeAttached();
+    await expect(page.getByText(/newer OpenZCAD/i)).toHaveCount(0);
     await expect(page.locator('.error-page, vite-error-overlay')).toHaveCount(
       0
     );
     await expect(page.locator('.start-screen')).toBeVisible();
     expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin);
-    // A failed browser module can remain cached after the transient notice
-    // expires. Recovery must remain available without waiting for a poll.
-    await expect(page.locator('.toast')).toHaveCount(0, {
-      timeout: TOAST_LIFETIME_MS + TOAST_EXIT_MS + 2000
-    });
-    const notice = page.locator('.start-update');
     // Two words in the column; the full sentence is the tooltip and the
     // screen-reader text.
     await expect(notice.locator('.start-update-text')).toHaveText(
@@ -51,9 +45,9 @@ for (const width of [1440, 390]) {
     );
     await expect(notice.locator('.start-update-text')).toHaveAttribute(
       'title',
-      /Check your connection/
+      /check your connection/i
     );
-    await expect(notice).toContainText('Check your connection');
+    await expect(notice).toContainText(/check your connection/i);
     await expect(notice).not.toContainText(/new version/i);
     const reload = notice.getByRole('button', { name: 'Reload' });
     await reload.scrollIntoViewIfNeeded();
