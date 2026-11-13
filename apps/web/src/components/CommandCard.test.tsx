@@ -783,8 +783,23 @@ describe('CommandCard', () => {
   });
 
   it('opens with the search it was left with, selected so typing replaces it', () => {
-    const onDrawerQueryChange = vi.fn();
-    renderCard(NOTHING, { drawerQuery: 'pattern', onDrawerQueryChange });
+    const saved: string[] = [];
+    /** The search held the way App holds it: in state the card reports to. */
+    function RememberedSearch() {
+      const [query, setQuery] = useState('pattern');
+      return (
+        <Harness
+          selection={NOTHING}
+          onLaunchTool={vi.fn()}
+          drawerQuery={query}
+          onDrawerQueryChange={(next) => {
+            saved.push(next);
+            setQuery(next);
+          }}
+        />
+      );
+    }
+    render(<RememberedSearch />);
     openDrawer();
     const search = screen.getByRole<HTMLInputElement>('searchbox', {
       name: 'Find a tool'
@@ -793,12 +808,26 @@ describe('CommandCard', () => {
     expect(search).toHaveFocus();
     expect([search.selectionStart, search.selectionEnd]).toEqual([0, 7]);
     expect(screen.queryByRole('button', { name: /^Sphere/ })).toBeNull();
+    // Edit after edit, each one kept and each one narrowing the list.
+    fireEvent.change(search, { target: { value: 's' } });
     fireEvent.change(search, { target: { value: 'sph' } });
-    expect(onDrawerQueryChange).toHaveBeenLastCalledWith('sph');
+    expect(saved).toEqual(['s', 'sph']);
+    expect(search.value).toBe('sph');
+    expect(screen.getByRole('button', { name: /^Sphere/ })).toBeTruthy();
+    // Closed and opened again, it still reads what was typed.
+    openDrawer();
+    expect(screen.queryByRole('searchbox', { name: 'Find a tool' })).toBeNull();
+    openDrawer();
+    const reopened = screen.getByRole<HTMLInputElement>('searchbox', {
+      name: 'Find a tool'
+    });
+    expect(reopened.value).toBe('sph');
     // Escape clears the search before it closes anything, and the clear is
     // remembered too.
-    fireEvent.keyDown(search, { key: 'Escape' });
-    expect(onDrawerQueryChange).toHaveBeenLastCalledWith('');
+    fireEvent.keyDown(reopened, { key: 'Escape' });
+    expect(saved.at(-1)).toBe('');
+    expect(reopened.value).toBe('');
+    expect(screen.getByRole('group', { name: 'Tools drawer' })).toBeTruthy();
   });
 
   it('hands the keyboard back to the drawer button when a launch does not take it', async () => {
