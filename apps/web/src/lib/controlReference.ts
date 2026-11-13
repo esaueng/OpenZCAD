@@ -234,6 +234,13 @@ export const KEYBOARD_CONTROL_GROUPS = [
           'See through faces to hidden edges, and pick or box-select through them.'
       },
       {
+        id: 'orbit-mode',
+        ...bound('view-orbit-mode'),
+        action: 'Toggle orbit mode',
+        detail:
+          'Switch between free orbiting, which carries over the top and bottom, and a turntable that keeps Z up.'
+      },
+      {
         id: 'hide-panels',
         ...bound('panels-hide-all'),
         action: 'Hide or show the model panels',

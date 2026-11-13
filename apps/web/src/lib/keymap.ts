@@ -121,6 +121,13 @@ export const KEYMAP_COMMANDS: readonly KeymapCommand[] = [
   command('view-display', 'Cycle display mode', 'view-display', 'model', 'W'),
   command('view-projection', 'Toggle projection', 'view-display', 'model', 'P'),
   command('view-xray', 'Toggle X-ray', 'view-display', 'model', 'Shift+X'),
+  command(
+    'view-orbit-mode',
+    'Toggle orbit mode',
+    'view-display',
+    'model',
+    'Shift+O'
+  ),
   // Not Tab, which moves focus: a Ctrl chord also works from a field.
   command(
     'panels-hide-all',
