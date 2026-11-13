@@ -575,7 +575,12 @@ export function ViewerToolbar({
             <button
               type="button"
               className={`rail-button ${measuring ? 'active' : ''}`}
-              onClick={() => onMeasure(!measuring)}
+              onClick={() => {
+                onMeasure(!measuring);
+                // Its panel opens where the rest of a phone's rail was
+                // drawn; left out, the rail hid Angle and Ø/R (I47).
+                setMoreOpen(false);
+              }}
               aria-label="Measure"
               aria-pressed={measuring}
             >

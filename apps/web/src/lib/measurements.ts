@@ -955,6 +955,36 @@ export function createSmartMeasurement(
     if (!edge || !measured || measured.value <= 0) {
       return null;
     }
+    // A circular edge is read the way a drawing reads it: by its diameter
+    // (or radius, with Ø/R), the length along it as the detail. "Hole edge
+    // Ø6 — 18.85 mm" gave the circumference, and Ø/R did nothing (I50).
+    const circle = edge.curve?.circle;
+    if (circle && Number.isFinite(circle.radius) && circle.radius > 0) {
+      const full =
+        Math.abs(measured.value - 2 * Math.PI * circle.radius) <=
+        1e-6 * Math.max(1, measured.value);
+      return {
+        ...common,
+        id: `diameter:${targetKey(target)}`,
+        kind: 'diameter',
+        label: target.label.replace(/ center$| midpoint$/, ''),
+        result: {
+          value: circle.radius * 2,
+          dimension: 'length',
+          secondary: {
+            label: full ? 'Circumference' : 'Arc length',
+            value: measured.value,
+            dimension: 'length'
+          }
+        },
+        // The kernel publishes a circle only for an exact CIRCLE curve.
+        quality: 'exact-analytic',
+        annotation: {
+          anchor: target.point ?? circle.center,
+          segments: []
+        }
+      };
+    }
     return {
       ...common,
       id: `edge:${targetKey(target)}`,
