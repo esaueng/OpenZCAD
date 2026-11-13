@@ -398,6 +398,7 @@ import { watchBuildVersion } from './lib/buildVersionWatch';
 import { commandOutcomeMessage } from './lib/commandOutcome';
 import { tintPreviewResultBodies } from './lib/previewBodyTint';
 import { remappedBlendEdge } from './lib/inPlace/blendEdgeRemap';
+import { cancelCommandChipEntry } from './lib/inPlace/chipCancel';
 import { commandChipName } from './lib/inPlace/chipNames';
 import {
   presentedDiagnostics,
@@ -10783,6 +10784,18 @@ export function App() {
       ...(geometry?.normal ? { normal: geometry.normal } : {}),
       ...(geometry?.centroid ? { centroid: geometry.centroid } : {}),
       ...(geometry?.center ? { center: geometry.center } : {}),
+      ...(geometry?.surfaceType === 'cylinder' &&
+      geometry.axisStart &&
+      geometry.axisEnd &&
+      geometry.radius !== undefined
+        ? {
+            cylinder: {
+              axisStart: geometry.axisStart,
+              axisEnd: geometry.axisEnd,
+              radius: geometry.radius
+            }
+          }
+        : {}),
       ...(point ? { point } : {})
     };
   }
@@ -22735,15 +22748,28 @@ export function App() {
     return {
       sections,
       values,
-      summary: inPlaceSpec.summary?.(state, inPlaceUnits) ?? null
+      summary:
+        inPlaceSpec.summary?.(
+          { ...state, raws: inPlace.raws },
+          inPlaceUnits,
+          inPlace.slots,
+          {
+            touched: inPlace.touched,
+            raws: inPlace.raws,
+            ...(inPlace.editing ? { saved: inPlace.editing.data } : {})
+          }
+        ) ?? null
     };
   }, [
     inPlaceSpec,
+    inPlace.slots,
     inPlace.options,
     inPlace.values,
     inPlace.raws,
     inPlace.handles,
     inPlace.optionSpecs,
+    inPlace.touched,
+    inPlace.editing,
     inPlaceUnits
   ]);
   /**
@@ -22835,7 +22861,9 @@ export function App() {
           ...handle,
           value: inPlace.values[handle.valueId] ?? valueSpec?.initial ?? 0,
           ...(valueSpec?.min === undefined ? {} : { min: valueSpec.min }),
-          ...(valueSpec?.max === undefined ? {} : { max: valueSpec.max }),
+          ...(handle.max === undefined && valueSpec?.max === undefined
+            ? {}
+            : { max: handle.max ?? valueSpec!.max! }),
           format,
           describe: (value: number) =>
             commandChipName(label, round(value), valueSpec?.unit, inPlaceUnits)
@@ -25842,7 +25870,9 @@ export function App() {
       const baseline = open.baseline ?? inPlaceRef.current.values[valueId] ?? 0;
       commandSetterRef.current?.(valueId, baseline);
       // Unset stays unset: a step that followed its bore still follows it.
-      inPlaceRef.current.restoreValue(
+      // A refused entry of it (the chip reopened on a refusal) goes too.
+      cancelCommandChipEntry(
+        inPlaceRef.current,
         valueId,
         baseline,
         open.baselineRaw,
@@ -33144,6 +33174,7 @@ export function App() {
                   summary={inPlacePanel?.summary ?? null}
                   values={inPlacePanel?.values ?? []}
                   onValueCommit={commitInPlacePanelValue}
+                  onValueRestore={inPlace.dropRefusal}
                   onValuePreview={previewInPlacePanelValue}
                   onDone={() => inPlace.done()}
                   onCancel={cancelInPlaceCommand}

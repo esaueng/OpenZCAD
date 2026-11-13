@@ -172,6 +172,12 @@ export interface FacePick {
   /** Where the click landed on it (a hole goes there). */
   point?: Vector3;
   /**
+   * A cylinder's axis through the trimmed face, end to end, and its radius:
+   * where a thread on it starts, how long it may run, and what it is sized
+   * from. `axisStart` is the face's start (its lower end along the axis).
+   */
+  cylinder?: { axisStart: Vector3; axisEnd: Vector3; radius: number };
+  /**
    * `point` is where an edited hole already stands, not a click: its stored
    * position is kept, expressions and all, until the face is clicked again.
    */
@@ -284,6 +290,22 @@ export interface InPlacePanelState {
   options: Readonly<Record<string, string>>;
   /** Each value as a number, its initial one where none is set. */
   numbers: Readonly<Record<string, number>>;
+  /** Values held as typed expressions, where the reader is given them. */
+  raws?: Readonly<Record<string, string>>;
+}
+
+/**
+ * How the session holds its values, for a check that depends on more than
+ * the numbers: which the user set, which are expressions, and the stored
+ * feature an edit started from.
+ */
+export interface InPlaceValueContext {
+  /** The values the user has set (an edit's stored ones among them). */
+  touched?: readonly string[];
+  /** Values held as typed expressions. */
+  raws?: Readonly<Record<string, string>>;
+  /** The edited feature's stored data; absent when creating. */
+  saved?: FeatureData;
 }
 
 export type ValueUnit = 'angle' | 'length' | 'count';
@@ -643,6 +665,11 @@ export type HandleSpec = (
    * the value's fixed label.
    */
   label?: string;
+  /**
+   * How far the handle drags when the picks bound it (a thread's length,
+   * up to the face's end), in place of the value's own `max`.
+   */
+  max?: number;
 };
 
 export interface InPlaceToolSpec {
@@ -736,9 +763,15 @@ export interface InPlaceToolSpec {
   layout?: readonly InPlacePanelSection[];
   /**
    * What the choices come to, read-only over the panel's rows (a gear's
-   * module and pitch diameter when it is sized by pitch), else null.
+   * module and pitch diameter when it is sized by pitch; what a thread's
+   * picked face and dragged end decide), else null.
    */
-  summary?(state: InPlacePanelState, units: UnitSystem): string | null;
+  summary?(
+    state: InPlacePanelState,
+    units: UnitSystem,
+    slots?: InPlaceSlots,
+    context?: InPlaceValueContext
+  ): string | null;
   /**
    * Values an option's change carries with it, from the values as they
    * were (a gear sized by another pitch keeps its tooth size), each with the
@@ -771,7 +804,8 @@ export interface InPlaceToolSpec {
     valueId: string,
     value: number,
     values: Readonly<Record<string, number>>,
-    slots: InPlaceSlots
+    slots: InPlaceSlots,
+    context?: InPlaceValueContext
   ): Record<string, number> | null;
   /**
    * Why `value` cannot stand beside the other values, when each alone is in
@@ -780,7 +814,15 @@ export interface InPlaceToolSpec {
   refuseValue?(
     valueId: string,
     value: number,
-    values: Readonly<Record<string, number>>
+    values: Readonly<Record<string, number>>,
+    /** The picks, for a bound they set (a thread's length, its face's). */
+    slots?: Pick<InPlaceSlots, 'faces'>,
+    /**
+     * How the values are held: one the user set (or an edit stored, or an
+     * expression) is held to, one they did not follows the picks (a
+     * thread's untouched length).
+     */
+    context?: InPlaceValueContext
   ): string | null;
   hint(
     slots: InPlaceSlots,
@@ -4101,8 +4143,7 @@ const mirror: InPlaceToolSpec = {
   values: [PLANE_OFFSET, ...TYPED_PLANE_VALUES],
   options: [PLANE_MODE_OPTION],
   hint: (slots, options) =>
-    planeHint(slots, 'mirror', options) ??
-    'Slide the plane, or pick another',
+    planeHint(slots, 'mirror', options) ?? 'Slide the plane, or pick another',
   ready: (slots, options) =>
     slots.bodies.length > 0 &&
     (slots.plane !== null || options?.planeMode === 'typed'),
@@ -4148,8 +4189,7 @@ const split: InPlaceToolSpec = {
     }
   ],
   hint: (slots, options) =>
-    planeHint(slots, 'split', options) ??
-    'Slide the plane, or pick another',
+    planeHint(slots, 'split', options) ?? 'Slide the plane, or pick another',
   ready: (slots, options) =>
     slots.bodies.length > 0 &&
     (slots.plane !== null || options?.planeMode === 'typed'),
@@ -4331,8 +4371,7 @@ const axisRotate: InPlaceToolSpec = {
   options: [COPY_OPTION],
   hint(slots) {
     if (slots.bodies.length === 0) return 'Click the body to rotate';
-    if (!slots.axis)
-      return 'Pick an axis: edge, cylinder, X/Y/Z or datum';
+    if (!slots.axis) return 'Pick an axis: edge, cylinder, X/Y/Z or datum';
     return 'Drag the angle, or tap it to type';
   },
   ready: (slots) => slots.bodies.length > 0 && slots.axis !== null,

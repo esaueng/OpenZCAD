@@ -328,9 +328,10 @@ test('Extrude in place: the back arrow, Symmetric under Options, and Enter to fi
     [40, 0, 0],
     [40, 0, -4]
   ]);
-  // At zero its chip sits just past the head, down the screen: press the
-  // head's upper half, which the chip leaves clear.
-  const press = { x: grip.x, y: grip.y - 6 };
+  // At zero its chip would be lifted back over the head, just past it down
+  // the screen; it hangs clear below the head instead, so the head itself
+  // takes the press.
+  const press = { x: grip.x, y: grip.y };
   await page.mouse.move(press.x, press.y);
   await page.mouse.down();
   await page.mouse.move(

@@ -1,9 +1,20 @@
-import { act, renderHook, waitFor } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  waitFor
+} from '@testing-library/react';
+import { useEffect, useRef } from 'react';
+import { InPlaceCommandBar } from '../components/InPlaceCommandBar';
+import { cancelCommandChipEntry } from '../lib/inPlace/chipCancel';
 import { describe, expect, it, vi } from 'vitest';
 import type { PlaneBasis } from '@openzcad/geometry';
 import type {
   BodyId,
   FeatureId,
+  FeatureWarning,
   ProjectDocument,
   SketchId
 } from '@openzcad/shared';
@@ -109,6 +120,130 @@ function setup(overrides: Partial<UseInPlaceCommandOptions> = {}) {
   const hook = renderHook(() => useInPlaceCommand(options));
   return { hook, commit, publishPreview, built };
 }
+
+describe('useInPlaceCommand: preview warning disposition', () => {
+  const warning = (kind: FeatureWarning['kind']): FeatureWarning => ({
+    featureId: 'feature_preview' as FeatureId,
+    featureName: 'Preview',
+    kind,
+    message: 'Feature "Preview": The crest is under a 0.4 mm extrusion line.'
+  });
+  const derivedWith = (entries: FeatureWarning[], body = true) => ({
+    ...fakeDocument(body).derived,
+    warnings: entries.map((entry) => entry.message),
+    featureWarnings: entries
+  });
+
+  it.each(['box', 'gear'] as const)(
+    'allows Done for a %s advisory and keeps the note visible',
+    async (tool) => {
+      const { hook, commit, publishPreview } = setup({
+        derive: async () => derivedWith([warning('advisory')])
+      });
+      act(() => hook.result.current.start(tool));
+      if (tool === 'gear') {
+        act(() => {
+          hook.result.current.pickPlane({
+            kind: 'principal',
+            plane: 'XY',
+            origin: { x: 0, y: 0, z: 0 },
+            normal: { x: 0, y: 0, z: 1 }
+          });
+        });
+      }
+      await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+      expect(hook.result.current.refusal).toBeNull();
+      expect(hook.result.current.hint).toContain(
+        'Note: The crest is under a 0.4 mm extrusion line.'
+      );
+      expect(publishPreview.mock.lastCall?.[0]).toMatchObject({
+        derived: { featureWarnings: [warning('advisory')] }
+      });
+      act(() => {
+        expect(hook.result.current.done()).toBe(true);
+      });
+      expect(commit).toHaveBeenCalledOnce();
+    }
+  );
+
+  it.each(['build-failed', 'refusal'] as const)(
+    'blocks a %s even when a body and an advisory are also present',
+    async (kind) => {
+      const failure = {
+        ...warning(kind),
+        message: 'Feature "Preview": Invalid geometry.'
+      };
+      const { hook, commit } = setup({
+        derive: async () => derivedWith([warning('advisory'), failure])
+      });
+      act(() => hook.result.current.start('box'));
+      await waitFor(() =>
+        expect(hook.result.current.refusal).toContain('Invalid geometry')
+      );
+      expect(hook.result.current.canFinish).toBe(false);
+      act(() => {
+        expect(hook.result.current.done()).toBe(false);
+      });
+      expect(commit).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['suppressed', 'history-fork'] as const)(
+    'does not turn a %s diagnostic into a refusal',
+    async (kind) => {
+      const { hook } = setup({
+        derive: async () => derivedWith([warning(kind)])
+      });
+      act(() => hook.result.current.start('box'));
+      await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+      expect(hook.result.current.refusal).toBeNull();
+    }
+  );
+
+  it('still blocks a missing result body when the only message is an advisory', async () => {
+    const { hook } = setup({
+      derive: async () => derivedWith([warning('advisory')], false)
+    });
+    act(() => hook.result.current.start('box'));
+    await waitFor(() =>
+      expect(hook.result.current.refusal).toMatch(/valid body/)
+    );
+    expect(hook.result.current.canFinish).toBe(false);
+  });
+
+  it('counts legacy warning occurrences instead of hiding a new duplicate', async () => {
+    const base = fakeDocument(true);
+    base.derived.warnings = ['Legacy failure'];
+    const { hook } = setup({
+      baseDocument: () => base,
+      derive: async () => ({
+        ...base.derived,
+        warnings: ['Legacy failure', 'Legacy failure']
+      })
+    });
+    act(() => hook.result.current.start('box'));
+    await waitFor(() =>
+      expect(hook.result.current.refusal).toBe('Legacy failure')
+    );
+    expect(hook.result.current.canFinish).toBe(false);
+  });
+
+  it('removes the previous preview advisory as soon as the request changes', async () => {
+    let advisory = true;
+    const { hook } = setup({
+      derive: async () => derivedWith(advisory ? [warning('advisory')] : [])
+    });
+    act(() => hook.result.current.start('box'));
+    await waitFor(() => expect(hook.result.current.hint).toContain('Note:'));
+    advisory = false;
+    act(() => {
+      hook.result.current.setValue('width', 31);
+    });
+    expect(hook.result.current.hint).not.toContain('Note:');
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    expect(hook.result.current.hint).not.toContain('Note:');
+  });
+});
 
 describe('useInPlaceCommand: revolve', () => {
   it('walks profile → axis → angle in its hint', () => {
@@ -653,6 +788,528 @@ describe('useInPlaceCommand: helical sweep', () => {
     await waitFor(() =>
       expect(built.at(-1)).toMatchObject({ pitch: 10, turns: 3 })
     );
+  });
+});
+
+describe('useInPlaceCommand: thread', () => {
+  // An M6 boss 12 tall up +Z, clicked on its side near the top.
+  const BOSS: FacePick = {
+    bodyId: 'body_a' as BodyId,
+    hash: 31,
+    topologyId: 'f31',
+    surfaceType: 'cylinder',
+    cylinder: {
+      axisStart: { x: 0, y: 0, z: 0 },
+      axisEnd: { x: 0, y: 0, z: 12 },
+      radius: 3
+    },
+    point: { x: 0, y: -3, z: 10 }
+  };
+
+  it('takes the face, runs it whole, and stops short where its end is dragged', async () => {
+    const { hook, built } = setup();
+    act(() => hook.result.current.start('thread'));
+    expect(hook.result.current.hint).toMatch(/cylindrical face/);
+    let taken = false;
+    act(() => {
+      taken = hook.result.current.pickFace(BOSS);
+    });
+    expect(taken).toBe(true);
+    expect(hook.result.current.hint).toMatch(/Drag the arrow/);
+    // The face gives the length: the whole of it, until the end moves.
+    await waitFor(() => expect(hook.result.current.values.length).toBe(12));
+    expect(hook.result.current.handles).toEqual([
+      expect.objectContaining({
+        valueId: 'length',
+        kind: 'linear',
+        params: {
+          origin: { x: 0, y: -3, z: 12 },
+          direction: { x: -0, y: -0, z: -1 }
+        },
+        max: 12
+      })
+    ]);
+    await waitFor(() =>
+      expect(built.at(-1)).toEqual({
+        tool: 'thread',
+        thread: {
+          targetBodyId: 'body_a',
+          faceHash: 31,
+          profile: 'printable',
+          clearance: 0.1,
+          // Picked near the top: it starts there, whole or not.
+          anchor: 'end',
+          chamferStart: true,
+          chamferEnd: true
+        }
+      })
+    );
+    // The arrow dragged 4 up from the bottom: 8 threaded down from the top.
+    act(() => {
+      hook.result.current.previewValue('length', 8);
+    });
+    await waitFor(() =>
+      expect(built.at(-1)).toMatchObject({
+        thread: { length: 8, anchor: 'end' }
+      })
+    );
+    expect(
+      (built.at(-1) as { thread: { chamferStart?: true } }).thread.chamferStart
+    ).toBeUndefined();
+    // And back out to the end: whole again.
+    act(() => {
+      hook.result.current.previewValue('length', 12);
+    });
+    await waitFor(() =>
+      expect(built.at(-1)).toMatchObject({
+        thread: { chamferStart: true, chamferEnd: true }
+      })
+    );
+    expect(
+      (built.at(-1) as { thread: { length?: number } }).thread.length
+    ).toBeUndefined();
+    // Whole, it still starts at the top it was picked near.
+    expect(built.at(-1)).toMatchObject({ thread: { anchor: 'end' } });
+  });
+
+  it('refuses a typed length past the face end instead of threading the whole face', async () => {
+    const { hook, built } = setup();
+    act(() => hook.result.current.start('thread', [], [BOSS]));
+    await waitFor(() => expect(hook.result.current.values.length).toBe(12));
+    let taken = true;
+    act(() => {
+      taken = hook.result.current.setValue('length', 20);
+    });
+    expect(taken).toBe(false);
+    expect(hook.result.current.refusal).toMatch(
+      /^20; a thread here runs at most 12/
+    );
+    expect(hook.result.current.canFinish).toBe(false);
+    expect(hook.result.current.values.length).toBe(12);
+    // As an expression too.
+    act(() => {
+      taken = hook.result.current.setValue('length', 15, 'boss_h + 3');
+    });
+    expect(taken).toBe(false);
+    expect(hook.result.current.refusal).toMatch(/^boss_h \+ 3 is 15; /);
+    // The far end itself is taken, and runs the whole face.
+    act(() => {
+      taken = hook.result.current.setValue('length', 12);
+    });
+    expect(taken).toBe(true);
+    expect(hook.result.current.refusal).toBeNull();
+    await waitFor(() =>
+      expect(built.at(-1)).toMatchObject({
+        thread: { chamferStart: true, chamferEnd: true, anchor: 'end' }
+      })
+    );
+    expect(
+      (built.at(-1) as { thread: { length?: number } }).thread.length
+    ).toBeUndefined();
+  });
+
+  it('refuses an offset that would push a set length past the face end (re-check #1)', async () => {
+    const { hook, built } = setup();
+    act(() => hook.result.current.start('thread', [], [BOSS]));
+    await waitFor(() => expect(hook.result.current.values.length).toBe(12));
+    let taken = false;
+    act(() => {
+      taken = hook.result.current.setValue('length', 10);
+    });
+    expect(taken).toBe(true);
+    // 3 + 10 overshoots the 12 face: refused, never a quiet 9 mm thread.
+    act(() => {
+      taken = hook.result.current.setValue('offset', 3);
+    });
+    expect(taken).toBe(false);
+    expect(hook.result.current.refusal).toMatch(
+      /^3; with the length at 10, the offset can be at most 2\./
+    );
+    expect(hook.result.current.values.offset).toBe(0);
+    expect(hook.result.current.values.length).toBe(10);
+    // An offset that fits is taken, and the length kept as set.
+    act(() => {
+      taken = hook.result.current.setValue('offset', 1);
+    });
+    expect(taken).toBe(true);
+    await waitFor(() =>
+      expect(built.at(-1)).toMatchObject({
+        thread: { length: 10, offset: 1, anchor: 'end' }
+      })
+    );
+  });
+
+  it('runs a whole-face thread on to the far end as its offset moves', async () => {
+    const { hook, built } = setup();
+    act(() => hook.result.current.start('thread', [], [BOSS]));
+    await waitFor(() => expect(hook.result.current.values.length).toBe(12));
+    // Untouched, the length follows the offset.
+    act(() => {
+      hook.result.current.setValue('offset', 3);
+    });
+    await waitFor(() => expect(hook.result.current.values.length).toBe(9));
+    expect(hook.result.current.refusal).toBeNull();
+    // Dragged back out to the end, it still runs there when the offset moves.
+    act(() => {
+      hook.result.current.previewValue('length', 9);
+    });
+    act(() => {
+      hook.result.current.setValue('offset', 5);
+    });
+    expect(hook.result.current.values.length).toBe(7);
+    expect(hook.result.current.refusal).toBeNull();
+    await waitFor(() =>
+      expect(built.at(-1)).toMatchObject({ thread: { offset: 5 } })
+    );
+    expect(
+      (built.at(-1) as { thread: { length?: number } }).thread.length
+    ).toBeUndefined();
+  });
+
+  it('keeps an Options refusal and holds Done while the row applies (re-check #2)', async () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('thread', [], [BOSS]));
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    let taken = true;
+    act(() => {
+      taken = hook.result.current.setValue('offset', 12);
+    });
+    expect(taken).toBe(false);
+    // The offset has no handle, only its Options row: the reason stays.
+    expect(hook.result.current.handles.map((h) => h.valueId)).toEqual([
+      'length'
+    ]);
+    expect(hook.result.current.refusal).toMatch(
+      /^12; the face is only 12 long\./
+    );
+    expect(hook.result.current.canFinish).toBe(false);
+    act(() => {
+      taken = hook.result.current.setValue('offset', 2);
+    });
+    expect(taken).toBe(true);
+    expect(hook.result.current.refusal).toBeNull();
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+  });
+
+  /** The thread command wired to its Options bar, as the app wires it. */
+  function ThreadWithOptions(props: { options: UseInPlaceCommandOptions }) {
+    const command = useInPlaceCommand(props.options);
+    const started = useRef(false);
+    useEffect(() => {
+      if (started.current) return;
+      started.current = true;
+      command.start('thread', [], [BOSS]);
+    }, [command]);
+    const offset = command.values.offset ?? 0;
+    return (
+      <>
+        {/* The length's chip keypad, as the app routes a typed entry. */}
+        {[13, 8].map((length) => (
+          <button
+            key={length}
+            type="button"
+            onClick={() => command.setValue('length', length)}
+          >
+            {`Chip length ${length}`}
+          </button>
+        ))}
+        <InPlaceCommandBar
+          title="Thread"
+          hint={command.hint}
+          refusal={command.refusal}
+          canFinish={command.canFinish}
+          values={[
+            {
+              id: 'offset',
+              label: 'Offset',
+              text: String(offset),
+              value: offset,
+              step: 0.1,
+              min: 0
+            }
+          ]}
+          onValueCommit={(id, text) => command.setValue(id, Number(text))}
+          onValueRestore={command.dropRefusal}
+          onDone={vi.fn()}
+          onCancel={vi.fn()}
+        />
+      </>
+    );
+  }
+
+  it('keeps a chip refusal when another Options entry is abandoned (third re-check)', async () => {
+    render(<ThreadWithOptions options={setupOptions([], vi.fn())} />);
+    const done = screen.getByRole('button', { name: /Done/ });
+    const bar = () =>
+      screen.getByRole('group', { name: 'Thread command' }).textContent ?? '';
+    await waitFor(() => expect(done).toBeEnabled());
+    // 1. Length 13 on its chip: refused, Done held.
+    fireEvent.click(screen.getByRole('button', { name: 'Chip length 13' }));
+    await waitFor(() => expect(done).toBeDisabled());
+    expect(bar()).toContain('a thread here runs at most 12');
+    // 2. Offset 12 typed in Options, refused, then abandoned by leaving.
+    const field = screen.getByRole('textbox', { name: 'Offset' });
+    fireEvent.focus(field);
+    fireEvent.change(field, { target: { value: '12' } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+    expect(bar()).toContain('the face is only 12 long');
+    fireEvent.blur(field);
+    expect(field).toHaveValue('0');
+    // 3. The length's refusal still stands: shown, and Done held.
+    await waitFor(() =>
+      expect(bar()).toContain('a thread here runs at most 12')
+    );
+    expect(bar()).not.toContain('the face is only 12 long');
+    expect(done).toBeDisabled();
+    // The length fixed on its chip: nothing refused, Done back.
+    fireEvent.click(screen.getByRole('button', { name: 'Chip length 8' }));
+    await waitFor(() => expect(done).toBeEnabled());
+    expect(bar()).not.toContain('runs at most');
+  });
+
+  it('lets a refused Options entry go when its field is put back (second re-check #1)', async () => {
+    render(<ThreadWithOptions options={setupOptions([], vi.fn())} />);
+    const done = screen.getByRole('button', { name: /Done/ });
+    await waitFor(() => expect(done).toBeEnabled());
+    const field = screen.getByRole('textbox', { name: 'Offset' });
+    const refuse = () => {
+      fireEvent.focus(field);
+      fireEvent.change(field, { target: { value: '12' } });
+      fireEvent.keyDown(field, { key: 'Enter' });
+      expect(field).toHaveAttribute('aria-invalid', 'true');
+      expect(done).toBeDisabled();
+      expect(
+        screen.getByRole('group', { name: 'Thread command' }).textContent
+      ).toContain('the face is only 12 long');
+    };
+    // Escape puts the field back to 0: Done no longer waits on the 12.
+    refuse();
+    fireEvent.keyDown(field, { key: 'Escape' });
+    fireEvent.blur(field);
+    expect(field).toHaveValue('0');
+    await waitFor(() => expect(done).toBeEnabled());
+    // Leaving the field drops the refused entry the same way.
+    refuse();
+    fireEvent.blur(field);
+    expect(field).toHaveValue('0');
+    await waitFor(() => expect(done).toBeEnabled());
+    // The held value entered again clears it too, though nothing changes.
+    refuse();
+    fireEvent.change(field, { target: { value: '0' } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+    expect(field).not.toHaveAttribute('aria-invalid');
+    await waitFor(() => expect(done).toBeEnabled());
+  });
+
+  it('drops the refusal of a chip when it is reopened and canceled, and only then (fourth re-check)', async () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('thread', [], [BOSS]));
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    // Length 13 entered on its chip: refused. The app then puts the chip's
+    // baseline back, which leaves the refusal standing.
+    act(() => {
+      hook.result.current.setValue('length', 13);
+    });
+    act(() => {
+      hook.result.current.restoreValue('length', 12, undefined, false);
+    });
+    expect(hook.result.current.refusal).toMatch(/^13; a thread here runs/);
+    expect(hook.result.current.canFinish).toBe(false);
+    // An offset refused in Options as well: its refusal is its own.
+    act(() => {
+      hook.result.current.setValue('offset', 12);
+    });
+    expect(hook.result.current.refusal).toMatch(/^12; the face is only/);
+    // The length chip reopened and canceled (Escape, untyped): its refusal
+    // goes, and only its own; the offset's still holds Done.
+    act(() => {
+      cancelCommandChipEntry(
+        hook.result.current,
+        'length',
+        12,
+        undefined,
+        false
+      );
+    });
+    expect(hook.result.current.refusal).toMatch(/^12; the face is only/);
+    expect(hook.result.current.canFinish).toBe(false);
+    expect(hook.result.current.values.length).toBe(12);
+    act(() => {
+      hook.result.current.dropRefusal('offset');
+    });
+    expect(hook.result.current.refusal).toBeNull();
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+  });
+
+  /** A stored partial thread, 10 long from 2 up, reopened from History. */
+  const STORED: InPlaceEditSeed = {
+    featureId: 'feat_t' as FeatureId,
+    nodeId: 'node_t',
+    name: 'Thread 1',
+    data: {
+      featureKind: 'thread',
+      targetBodyId: 'body_a' as BodyId,
+      faceHash: 31,
+      profile: 'printable',
+      clearance: 0.1,
+      length: 10,
+      offset: 2
+    },
+    resultBodyId: BODY,
+    ownBodyIds: [BODY],
+    slots: {
+      profiles: [],
+      axisId: null,
+      path: [],
+      guide: [],
+      faces: [{ ...BOSS, point: undefined }],
+      bodies: [],
+      plane: null,
+      edges: []
+    },
+    values: { length: 10, offset: 2 },
+    raws: {},
+    touched: ['length', 'offset'],
+    options: {
+      profile: 'printable',
+      size: 'auto',
+      fit: 'print',
+      chamfer: 'none',
+      hand: 'right'
+    },
+    axes: [],
+    choices: {},
+    lockedOptions: [],
+    notice: null
+  };
+
+  it('keeps an existing printing advisory visible while editing its thread', async () => {
+    const base = fakeDocument(true);
+    const advisory: FeatureWarning = {
+      featureId: STORED.featureId,
+      featureName: STORED.name,
+      kind: 'advisory',
+      message: 'Feature "Thread 1": The crest is narrow.'
+    };
+    base.derived.warnings = [advisory.message];
+    base.derived.featureWarnings = [advisory];
+    const { hook } = setup({
+      baseDocument: () => base,
+      derive: async () => base.derived
+    });
+    act(() => hook.result.current.edit('thread', STORED));
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    expect(hook.result.current.hint).toContain('Note: The crest is narrow.');
+    expect(hook.result.current.refusal).toBeNull();
+  });
+
+  it('blocks an edited thread that still has its baseline failure despite a pass-through body', async () => {
+    const base = fakeDocument(true);
+    const failure: FeatureWarning = {
+      featureId: STORED.featureId,
+      featureName: STORED.name,
+      kind: 'build-failed',
+      message: 'Feature "Thread 1": The thread did not build.'
+    };
+    base.derived.warnings = [failure.message];
+    base.derived.featureWarnings = [failure];
+    const { hook } = setup({
+      baseDocument: () => base,
+      derive: async () => base.derived
+    });
+    act(() => hook.result.current.edit('thread', STORED));
+    await waitFor(() =>
+      expect(hook.result.current.refusal).toContain('thread did not build')
+    );
+    expect(hook.result.current.canFinish).toBe(false);
+  });
+
+  it('keeps a stored length that reaches the face end, refusing an offset that would cut it (second re-check #2)', async () => {
+    const { hook, built } = setup();
+    act(() => hook.result.current.edit('thread', STORED));
+    // Untouched, it goes back as stored.
+    await waitFor(() =>
+      expect(built.at(-1)).toMatchObject({
+        thread: { length: 10, offset: 2 }
+      })
+    );
+    let taken = true;
+    act(() => {
+      taken = hook.result.current.setValue('offset', 3);
+    });
+    expect(taken).toBe(false);
+    expect(hook.result.current.refusal).toMatch(
+      /^3; with the length at 10, the offset can be at most 2\./
+    );
+    expect(hook.result.current.values.length).toBe(10);
+    expect(hook.result.current.values.offset).toBe(2);
+    // A smaller offset keeps the stored length as stored.
+    act(() => {
+      taken = hook.result.current.setValue('offset', 1);
+    });
+    expect(taken).toBe(true);
+    expect(hook.result.current.values.length).toBe(10);
+    await waitFor(() =>
+      expect(built.at(-1)).toMatchObject({
+        thread: { length: 10, offset: 1 }
+      })
+    );
+  });
+
+  it('refuses an offset a length expression cannot follow, and keeps the expression (second re-check #3)', async () => {
+    const { hook, built } = setup();
+    act(() => hook.result.current.start('thread', [], [BOSS]));
+    await waitFor(() => expect(hook.result.current.values.length).toBe(12));
+    let taken = false;
+    act(() => {
+      taken = hook.result.current.setValue('length', 12, 'face_h');
+    });
+    expect(taken).toBe(true);
+    // Typed as an expression, it is stored as written, even at the end.
+    await waitFor(() =>
+      expect(built.at(-1)).toMatchObject({ thread: { length: 'face_h' } })
+    );
+    act(() => {
+      taken = hook.result.current.setValue('offset', 3);
+    });
+    expect(taken).toBe(false);
+    expect(hook.result.current.refusal).toMatch(
+      /^3; the length is face_h \(12\), so the offset can be at most 0; change the length too\./
+    );
+    expect(hook.result.current.values.length).toBe(12);
+    expect(hook.result.current.raws.length).toBe('face_h');
+    expect(built.at(-1)).toMatchObject({ thread: { length: 'face_h' } });
+    expect(
+      (built.at(-1) as { thread: { offset?: number } }).thread.offset
+    ).toBeUndefined();
+  });
+});
+
+describe('Options-only refusals in another tool (gear)', () => {
+  it('keeps a refused Options value until it is taken or its row hides', () => {
+    const { hook } = setup();
+    act(() => hook.result.current.start('gear'));
+    act(() => hook.result.current.setOption('gearType', 'worm'));
+    let taken = true;
+    act(() => {
+      taken = hook.result.current.setValue('starts', 20);
+    });
+    expect(taken).toBe(false);
+    expect(hook.result.current.refusal).toMatch(/^20; /);
+    // A choice that hides the row lets the refusal go, as a hidden chip's.
+    act(() => hook.result.current.setOption('gearType', 'spur'));
+    expect(hook.result.current.refusal).toBeNull();
+    // A row that stays shown keeps it until a value is taken.
+    act(() => {
+      taken = hook.result.current.setValue('pressureAngleDeg', 60);
+    });
+    expect(taken).toBe(false);
+    expect(hook.result.current.refusal).toMatch(/^60; /);
+    act(() => {
+      taken = hook.result.current.setValue('pressureAngleDeg', 25);
+    });
+    expect(taken).toBe(true);
+    expect(hook.result.current.refusal).toBeNull();
   });
 });
 

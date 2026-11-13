@@ -50,6 +50,20 @@ describe('the linear rig', () => {
     expect(handle.valueFromRay?.(far, 5)).toBe(10);
   });
 
+  it('snaps before it clamps, so a drag reaches an end that is no step', () => {
+    // A thread's 12.04 face: a drag past it ends on 12.04, not 12.
+    const handle = rig(5, 0, 12.04);
+    const across = (z: number) =>
+      new THREE.Ray(new THREE.Vector3(10, 0, z), new THREE.Vector3(-1, 0, 0));
+    expect(handle.valueFromRay?.(across(12.3), 5, 0.1)).toBe(12.04);
+    // Short of the end, tenths as before; with no step, the free value.
+    expect(handle.valueFromRay?.(across(11.93), 5, 0.1)).toBeCloseTo(11.9, 9);
+    expect(handle.valueFromRay?.(across(11.93), 5)).toBeCloseTo(11.93, 9);
+    // The low end the same way.
+    const low = rig(5, 0.37, 10);
+    expect(low.valueFromRay?.(across(0.1), 5, 0.1)).toBe(0.37);
+  });
+
   it('scales its value onto the line (a diameter at its radius)', () => {
     const handle = buildLinearHandle({
       origin: { x: 0, y: 0, z: 0 },
