@@ -405,6 +405,7 @@ import {
   shownFeatureWarnings
 } from './lib/diagnosticsRows';
 import { sweepFacetingAdvisories } from './lib/sweepFaceting';
+import { loftFacetingAdvisories } from './lib/loftFaceting';
 import { primitiveDimensionLabel } from './lib/primitiveDimensionLabel';
 import { useRememberedSection } from './hooks/useRememberedSection';
 import { newBlendFacePick } from './lib/blendRearm';
@@ -7838,7 +7839,12 @@ export function App() {
       currentFaceGeometryPreview?.geometry.bodyRepresentations ??
       currentGeometrySnapshot?.bodyRepresentations ??
       shown?.derived.bodyRepresentations;
-    const faceting = shown ? sweepFacetingAdvisories(shown, shownBodies) : [];
+    const faceting = shown
+      ? [
+          ...sweepFacetingAdvisories(shown, shownBodies),
+          ...loftFacetingAdvisories(shown, shownBodies)
+        ]
+      : [];
     const featureWarnings = currentFaceGeometryPreview
       ? currentFaceGeometryPreview.geometry.featureWarnings
       : currentGeometrySnapshot
