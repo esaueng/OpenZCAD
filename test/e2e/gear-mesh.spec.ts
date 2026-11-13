@@ -10,8 +10,8 @@ import { expect, expectBodyCount, stubApi, test } from './openzcad-fixtures';
 
 /**
  * M14 meshing-pair helper in a real browser: two gear parts in Assemble,
- * Gears opens Mesh gears with the working centre distance, Mesh fixes the
- * base and saves one revolute joint, and one undo takes the joint back.
+ * Place gears opens its card with the working centre distance, Place fixes the
+ * base and saves one rigid joint, and one undo takes the joint back.
  */
 function gear(name: string, overrides: Partial<GearInput> = {}): GearInput {
   return {
@@ -79,24 +79,65 @@ test(
     await openDocument(page, gearPair());
     await page.getByRole('button', { name: 'Assemble', exact: true }).click();
     await panel(page)
-      .getByRole('button', { name: 'Gears', exact: true })
+      .getByRole('region', { name: 'Joints' })
+      .getByRole('button', { name: 'Place gears', exact: true })
       .click();
-    const card = panel(page).getByRole('region', { name: 'Mesh gears' });
+    const card = panel(page).getByRole('region', { name: 'Place gears' });
     await expect(
       card.getByRole('combobox', { name: 'Gear that stays put' })
     ).toHaveValue('comp_a');
     const readout = card.getByRole('definition');
     await expect(readout.nth(0)).toHaveText('60 mm');
     await expect(readout.nth(3)).toHaveText('0.2 mm');
-    await card.getByRole('button', { name: 'Mesh', exact: true }).click();
+    await card.getByRole('button', { name: 'Place', exact: true }).click();
     await expect(card).toHaveCount(0);
     const joints = panel(page).getByRole('region', { name: 'Joints' });
-    await expect(joints).toContainText('Gear mesh');
+    await expect(joints).toContainText('Gear placement');
+    await expect(joints.getByRole('group', { name: 'Animate' })).toHaveCount(0);
+    await expect(joints.getByRole('slider')).toHaveCount(0);
     await expect(
       panel(page).getByRole('button', { name: 'Pinion is fixed' })
     ).toBeVisible();
     // One undo takes the joint back out; the base stays fixed.
     await page.keyboard.press('ControlOrMeta+z');
-    await expect(joints).not.toContainText('Gear mesh');
+    await expect(joints).not.toContainText('Gear placement');
+  }
+);
+
+test(
+  'places the two selected gears in selection order',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await openDocument(page, gearPair());
+    await page.getByRole('button', { name: 'Assemble', exact: true }).click();
+    const parts = panel(page).getByRole('region', {
+      name: 'Parts',
+      exact: true
+    });
+    await parts.getByRole('button', { name: /^Wheel\b/ }).click();
+    await parts
+      .getByRole('button', { name: /^Pinion\b/ })
+      .click({ modifiers: ['ControlOrMeta'] });
+    await expect(
+      parts.getByRole('button', { name: /^Wheel\b/ })
+    ).toHaveAttribute('aria-pressed', 'true');
+    await panel(page)
+      .getByRole('button', { name: 'Place selected gears' })
+      .click();
+    const card = panel(page).getByRole('region', { name: 'Place gears' });
+    await expect(
+      card.getByRole('combobox', { name: 'Gear that stays put' })
+    ).toHaveValue('comp_b');
+    await expect(
+      card.getByRole('combobox', { name: 'Gear that meshes with it' })
+    ).toHaveValue('comp_a');
+    await expect(card).toContainText('pair stays fixed together');
+    await card.getByRole('button', { name: 'Place', exact: true }).click();
+    const joints = panel(page).getByRole('region', { name: 'Joints' });
+    await expect(joints).toContainText('Gear placement');
+    await expect(joints.getByRole('group', { name: 'Animate' })).toHaveCount(0);
+    await expect(
+      panel(page).getByRole('button', { name: 'Wheel is fixed' })
+    ).toBeVisible();
   }
 );

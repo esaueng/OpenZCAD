@@ -25,10 +25,10 @@ export interface GearMeshCardProps {
 }
 
 /**
- * Mesh gears (M14 meshing-pair helper): pick the gear that stays put and
+ * Place gears (M14 meshing-pair helper): pick the gear that stays put and
  * the one that meshes with it; the card shows the working centre distance,
- * pressure angle, ratio and play, or why the pair cannot mesh, and Mesh
- * saves a revolute joint that places the second gear there. Loaded lazily
+ * pressure angle, ratio and play, or why the pair cannot mesh, and Place
+ * saves a rigid joint that places the second gear there. Loaded lazily
  * by the Assembly panel: the entry chunk keeps only `gearMeshEntry`.
  */
 export function GearMeshCard(props: GearMeshCardProps) {
@@ -58,13 +58,13 @@ function GearMeshForm({
   const units = unitLabel('length', document.units);
 
   return (
-    <section className="assembly-joint-tool" aria-label="Mesh gears">
+    <section className="assembly-joint-tool" aria-label="Place gears">
       <header className="assembly-joint-tool-header">
-        <h2 className="assembly-panel-title">Mesh gears</h2>
+        <h2 className="assembly-panel-title">Place gears</h2>
         <button
           type="button"
           className="assembly-icon-button"
-          aria-label="Close Mesh gears"
+          aria-label="Close Place gears"
           title="Cancel (Esc)"
           onClick={() => assemblyRuntime.closeGearMesh()}
         >
@@ -97,7 +97,7 @@ function GearMeshForm({
           </select>
           {base && !base.grounded && 'joint' in result && result.groundBase ? (
             <span className="assembly-muted">
-              Not fixed yet — Mesh fixes it in place.
+              Not fixed yet — Place fixes it in place.
             </span>
           ) : null}
         </Step>
@@ -121,8 +121,8 @@ function GearMeshForm({
               ))}
           </select>
           <span className="assembly-muted">
-            Placed beside it, mid-faces level, teeth between teeth; it turns on
-            its own axis.
+            Placed beside it with mid-faces level and teeth between teeth. The
+            pair stays fixed together; linked rotation is not available yet.
           </span>
         </Step>
       </ol>
@@ -155,7 +155,7 @@ function GearMeshForm({
             )
           }
         >
-          Mesh
+          Place
         </button>
       </div>
     </section>
@@ -180,9 +180,9 @@ function MeshReadout({
     ],
     ['Working pressure angle', `${round(mesh.workingPressureAngleDeg)}°`],
     mesh.travelPerTurn !== null
-      ? ['Travel per turn', `${round(mesh.travelPerTurn)} ${units}`]
+      ? ['Calculated travel per turn', `${round(mesh.travelPerTurn)} ${units}`]
       : [
-          'Turns per base turn',
+          'Calculated turns per base turn',
           `${round(Math.abs(mesh.ratio ?? 0))}, ${
             (mesh.ratio ?? 0) < 0 ? 'the other way' : 'the same way'
           }`

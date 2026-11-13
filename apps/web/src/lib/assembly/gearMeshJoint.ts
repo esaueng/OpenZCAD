@@ -27,12 +27,12 @@ import type { GearMeshContext, GearMeshDraft } from './gearMesh';
  * the Mesh gears card, so the entry chunk carries only the gear check.
  */
 
-/** "Gear mesh", "Gear mesh 2"…: an unused joint name. */
+/** "Gear placement", "Gear placement 2"…: an unused joint name. */
 export function gearMeshJointName(set: AssemblySet): string {
   const names = new Set(set.joints.map((j) => j.name));
-  if (!names.has('Gear mesh')) return 'Gear mesh';
+  if (!names.has('Gear placement')) return 'Gear placement';
   for (let n = 2; ; n += 1)
-    if (!names.has(`Gear mesh ${n}`)) return `Gear mesh ${n}`;
+    if (!names.has(`Gear placement ${n}`)) return `Gear placement ${n}`;
 }
 
 /** Why Mesh cannot place the pair; `refusal` keeps the helper's details. */
@@ -68,10 +68,10 @@ function midFrame(frame: AssemblyFrame, faceWidth: number): AssemblyFrame {
 }
 
 /**
- * The joint that meshes the pair, or why it cannot. A revolute joint on the
+ * The joint that meshes the pair, or why it cannot. A rigid joint on the
  * moving gear's axis through its mid-face: the parent frame where that axis
  * lands in the base gear's coordinates, the child frame on the moving
- * gear's own axis, so value 0 is the meshed pose.
+ * gear's own axis, so the pair retains its meshed pose without independent rotation.
  */
 export function gearMeshJoint(
   context: GearMeshContext,
@@ -126,11 +126,11 @@ export function gearMeshJoint(
   const joint: AssemblyJoint = {
     id,
     name,
-    kind: 'revolute',
+    kind: 'rigid',
     parent: { componentId: base.id, frame: landed, source },
     child: { componentId: moving.id, frame: own, source },
-    values: [0],
-    limits: [null]
+    values: [],
+    limits: []
   };
   const groundBase =
     !base.grounded && (solution.roles.get(base.id) ?? 'free') === 'free';
@@ -185,6 +185,8 @@ export function createGearMeshFromSetup(
     return null;
   assemblyRuntime.closeGearMesh();
   assemblyRuntime.selectJoint(id);
-  app.onStatus(`${result.joint.name} is in place: the gears mesh.`);
+  app.onStatus(
+    `${result.joint.name} is in place: the gears are fixed in mesh.`
+  );
   return id;
 }

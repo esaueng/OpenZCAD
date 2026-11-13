@@ -45,7 +45,7 @@ import {
 /**
  * M14 meshing-pair helper: the working centre distance and tooth phase of a
  * parallel-axis pair (external, internal, rack and pinion), its refusals,
- * the gear a body shows, and the revolute joint Assemble saves.
+ * the gear a body shows, and the rigid joint Assemble saves.
  */
 
 const Z: Vector3 = { x: 0, y: 0, z: 1 };
@@ -726,7 +726,7 @@ describe('Mesh gears in an assembly', () => {
     return { ...fixture, context };
   }
 
-  it('saves a revolute joint that places the wheel in mesh', () => {
+  it('saves a rigid joint that places the wheel in mesh', () => {
     const { manager, context } = assembled();
     const result = gearMeshJoint(
       context,
@@ -734,9 +734,10 @@ describe('Mesh gears in an assembly', () => {
       'joint_mesh'
     );
     if ('error' in result) throw new Error(result.error);
-    expect(result.joint.kind).toBe('revolute');
-    expect(result.joint.name).toBe('Gear mesh');
-    expect(result.joint.values).toEqual([0]);
+    expect(result.joint.kind).toBe('rigid');
+    expect(result.joint.name).toBe('Gear placement');
+    expect(result.joint.values).toEqual([]);
+    expect(result.joint.limits).toEqual([]);
     expect(result.groundBase).toBe(true);
     expect(result.mesh.centerDistance).toBeCloseTo(60, 12);
     expect(result.mesh.backlash).toBeCloseTo(0.2, 12);
@@ -761,20 +762,15 @@ describe('Mesh gears in an assembly', () => {
     });
     expectVector(landed.origin, result.mesh.frame.origin);
     expectVector(landed.xAxis, result.mesh.frame.xAxis);
-    // Turning the joint turns the wheel about its own axis, in place.
-    const turned = solveAssembly({
-      ...manager.document.assembly!,
-      joints: manager.document.assembly!.joints.map((j) => ({
-        ...j,
-        values: [90]
-      }))
-    });
-    const centre = transformPoint(turned.poses.get('comp_b')!, {
-      x: 0,
-      y: 0,
-      z: 2.5
-    });
-    expectVector(centre, { x: 60, y: 0, z: 2.5 });
+    // A placement has no independent rotation: even an attempted transient
+    // override cannot turn the wheel out of phase with its mate.
+    const overridden = solveAssembly(
+      manager.document.assembly!,
+      new Map([['joint_mesh', [90]]])
+    );
+    expect(overridden.poses.get('comp_b')).toEqual(
+      solution.poses.get('comp_b')
+    );
   });
 
   it('places a gear stored with a non-unit axis where the helper says', () => {

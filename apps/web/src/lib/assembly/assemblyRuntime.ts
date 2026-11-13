@@ -86,7 +86,9 @@ export interface AssemblyMotionSetupState {
 export interface AssemblyRuntimeState {
   /** True while the Assemble workspace (or a playing View) shows the assembly. */
   active: boolean;
+  /** Active part for details and grounding; the last member of the selection. */
   selectedComponentId: string | null;
+  selectedComponentIds: readonly string[];
   selectedJointId: string | null;
   selectedStudyId: string | null;
   /** Joint values shown instead of the saved ones; never saved. */
@@ -116,6 +118,7 @@ export interface AssemblyCommitHandlers {
 const INITIAL: AssemblyRuntimeState = {
   active: false,
   selectedComponentId: null,
+  selectedComponentIds: [],
   selectedJointId: null,
   selectedStudyId: null,
   overrides: new Map(),
@@ -201,15 +204,24 @@ export const assemblyRuntime = {
           }
     );
   },
-  selectComponent(componentId: string | null): void {
+  selectComponent(componentId: string | null, additive = false): void {
+    const ids = !componentId
+      ? []
+      : additive
+        ? state.selectedComponentIds.includes(componentId)
+          ? state.selectedComponentIds.filter((id) => id !== componentId)
+          : [...state.selectedComponentIds, componentId]
+        : [componentId];
     patch({
-      selectedComponentId: componentId,
+      selectedComponentIds: ids,
+      selectedComponentId: ids.at(-1) ?? null,
       selectedJointId: componentId ? null : state.selectedJointId
     });
   },
   selectJoint(jointId: string | null): void {
     patch({
       selectedJointId: jointId,
+      selectedComponentIds: jointId ? [] : state.selectedComponentIds,
       selectedComponentId: jointId ? null : state.selectedComponentId
     });
   },

@@ -28,10 +28,30 @@ export function assemblyGearCount(document: ProjectDocument): number {
   return context ? gearComponentIds(context).length : 0;
 }
 
-/** Opens Mesh gears on the fixed gear and the first free one. */
-export function openGearMesh(document: ProjectDocument): boolean {
+/** A selected pair, preserving pick order unless one gear is already fixed. */
+export function selectedGearMesh(
+  document: ProjectDocument,
+  selectedIds: readonly string[]
+): ReturnType<typeof defaultGearMesh> | null {
+  if (selectedIds.length !== 2 || selectedIds[0] === selectedIds[1])
+    return null;
+  const context = gearMeshCardContext(document);
+  if (!context) return null;
+  const gears = new Set(gearComponentIds(context));
+  return selectedIds.every((id) => gears.has(id))
+    ? defaultGearMesh(context, selectedIds)
+    : null;
+}
+
+/** Opens Place gears on the selected pair, or the fixed and first free gears. */
+export function openGearMesh(
+  document: ProjectDocument,
+  selectedIds: readonly string[] = []
+): boolean {
   const context = gearMeshCardContext(document);
   if (!context || gearComponentIds(context).length < 2) return false;
-  assemblyRuntime.openGearMesh(defaultGearMesh(context));
+  assemblyRuntime.openGearMesh(
+    selectedGearMesh(document, selectedIds) ?? defaultGearMesh(context)
+  );
   return true;
 }

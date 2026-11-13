@@ -93,24 +93,88 @@ const LAZY_TEST_TIMEOUT_MS = 20_000;
 const card = () =>
   screen.findByRole(
     'region',
-    { name: 'Mesh gears' },
+    { name: 'Place gears' },
     // The first open imports the card's chunk, slow under a parallel run.
     { timeout: LAZY_LOOKUP_MS }
   );
 
-describe('Mesh gears card', () => {
+describe('Place gears card', () => {
   it(
-    'offers Gears once two parts are gears, and lists only the gears',
+    'offers the action in Joints, and preselects an additive gear pair',
+    async () => {
+      renderGears();
+      const joints = screen.getByRole('region', { name: 'Joints' });
+      expect(
+        within(joints).getByRole('button', { name: 'Place gears' })
+      ).toBeVisible();
+      expect(
+        screen.queryByRole('button', { name: 'Place selected gears' })
+      ).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: /^Wheel\b/ }));
+      fireEvent.click(screen.getByRole('button', { name: /^Pinion\b/ }), {
+        ctrlKey: true
+      });
+      expect(getAssemblyRuntime().selectedComponentIds).toEqual([
+        'comp_b',
+        'comp_a'
+      ]);
+      expect(screen.getByRole('button', { name: /^Wheel\b/ })).toHaveAttribute(
+        'aria-pressed',
+        'true'
+      );
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Place selected gears' })
+      );
+      const form = await card();
+      expect(
+        within(form).getByRole('combobox', { name: 'Gear that stays put' })
+      ).toHaveValue('comp_b');
+      expect(
+        within(form).getByRole('combobox', { name: 'Gear that meshes with it' })
+      ).toHaveValue('comp_a');
+      expect(within(form).getByText(/pair stays fixed together/)).toBeVisible();
+    },
+    LAZY_TEST_TIMEOUT_MS
+  );
+
+  it('drops the shortcut for a non-gear, deselection, or a third part', () => {
+    renderGears();
+    const wheel = screen.getByRole('button', { name: /^Wheel\b/ });
+    const pinion = screen.getByRole('button', { name: /^Pinion\b/ });
+    const plate = screen.getByRole('button', { name: /^Plate\b/ });
+    const shortcut = () =>
+      screen.queryByRole('button', { name: 'Place selected gears' });
+    fireEvent.click(wheel);
+    fireEvent.click(plate, { metaKey: true });
+    expect(shortcut()).toBeNull();
+    fireEvent.click(wheel);
+    fireEvent.click(pinion, { metaKey: true });
+    expect(shortcut()).toBeVisible();
+    fireEvent.click(plate, { ctrlKey: true });
+    expect(shortcut()).toBeNull();
+    fireEvent.click(plate, { ctrlKey: true });
+    expect(shortcut()).toBeVisible();
+    fireEvent.click(pinion, { metaKey: true });
+    expect(shortcut()).toBeNull();
+    expect(getAssemblyRuntime().selectedComponentId).toBe('comp_b');
+    act(() => assemblyRuntime.selectJoint('joint_test'));
+    expect(getAssemblyRuntime().selectedComponentIds).toEqual([]);
+  });
+
+  it(
+    'offers Place gears in Joints once two parts are gears, and lists only the gears',
     { timeout: LAZY_TEST_TIMEOUT_MS },
     async () => {
       renderGears();
-      fireEvent.click(screen.getByRole('button', { name: 'Gears' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Place gears' }));
       const form = await card();
       const base = within(form).getByRole('combobox', {
         name: 'Gear that stays put'
       });
       expect(base).toHaveValue('comp_a');
-      expect(within(base).queryByRole('option', { name: 'Plate' })).toBeNull();
+      expect(
+        within(base).queryByRole('option', { name: /^Plate\b/ })
+      ).toBeNull();
       expect(
         within(form).getByRole('combobox', { name: 'Gear that meshes with it' })
       ).toHaveValue('comp_b');
@@ -121,13 +185,13 @@ describe('Mesh gears card', () => {
   );
 
   it(
-    'fixes the base and saves one meshing revolute joint',
+    'fixes the base and saves one meshing rigid joint',
     { timeout: LAZY_TEST_TIMEOUT_MS },
     async () => {
       const { commands, rerender, status } = renderGears();
-      fireEvent.click(screen.getByRole('button', { name: 'Gears' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Place gears' }));
       fireEvent.click(
-        within(await card()).getByRole('button', { name: 'Mesh' })
+        within(await card()).getByRole('button', { name: 'Place' })
       );
       expect(commands.map((c) => c.kind)).toEqual([
         'assembly.component.update',
@@ -136,26 +200,30 @@ describe('Mesh gears card', () => {
       const joint = (
         commands[1]!.payload as { joint: { kind: string; name: string } }
       ).joint;
-      expect(joint.kind).toBe('revolute');
-      expect(joint.name).toBe('Gear mesh');
+      expect(joint.kind).toBe('rigid');
+      expect(joint.name).toBe('Gear placement');
       expect(getAssemblyRuntime().gearMesh).toBeNull();
-      expect(status.at(-1)).toBe('Gear mesh is in place: the gears mesh.');
+      expect(status.at(-1)).toBe(
+        'Gear placement is in place: the gears are fixed in mesh.'
+      );
       rerender();
-      expect(screen.queryByRole('region', { name: 'Mesh gears' })).toBeNull();
+      expect(screen.queryByRole('region', { name: 'Place gears' })).toBeNull();
     }
   );
 
   it(
-    'explains why a pair cannot mesh and keeps Mesh off',
+    'explains why a pair cannot mesh and keeps Place off',
     { timeout: LAZY_TEST_TIMEOUT_MS },
     async () => {
       renderGears({ pitch: 2.5 });
-      fireEvent.click(screen.getByRole('button', { name: 'Gears' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Place gears' }));
       const form = await card();
       expect(within(form).getByRole('alert')).toHaveTextContent(
         'Their modules differ (2 and 2.5); meshing gears need the same module or pitch.'
       );
-      expect(within(form).getByRole('button', { name: 'Mesh' })).toBeDisabled();
+      expect(
+        within(form).getByRole('button', { name: 'Place' })
+      ).toBeDisabled();
       fireEvent.click(within(form).getByRole('button', { name: 'Cancel' }));
       expect(getAssemblyRuntime().gearMesh).toBeNull();
     }
@@ -167,12 +235,14 @@ describe('Mesh gears card', () => {
     async () => {
       // The wheel's shallow roots leave the pinion's tips 1 mm too long.
       renderGears({ teeth: 20, dedendum: 0.5 });
-      fireEvent.click(screen.getByRole('button', { name: 'Gears' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Place gears' }));
       const form = await card();
       expect(within(form).getByRole('alert')).toHaveTextContent(
         /^The gear that stays put reaches 1 mm past the other gear’s root circle/
       );
-      expect(within(form).getByRole('button', { name: 'Mesh' })).toBeDisabled();
+      expect(
+        within(form).getByRole('button', { name: 'Place' })
+      ).toBeDisabled();
     }
   );
 });

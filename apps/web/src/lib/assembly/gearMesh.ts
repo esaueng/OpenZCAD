@@ -14,8 +14,8 @@ import {
  * Mesh gears (M14 meshing-pair helper, AS02 joints): pick the gear that
  * stays put and the one that meshes with it; the helper works out the
  * working centre distance and the tooth phase and saves an ordinary
- * revolute joint that places the second gear there, turning on its own
- * axis. Value 0 is the meshed pose. Pure: the card and the tests share it.
+ * rigid joint that places the second gear there and retains the tooth
+ * phase. Ratio-linked motion is deferred. Pure: the card and tests share it.
  * This module only reads which parts are gears; the pair math and the joint
  * live in `gearMeshJoint.ts`, loaded with the card.
  */
@@ -70,9 +70,14 @@ export function gearComponentIds(context: GearMeshContext): string[] {
 }
 
 /** The fixed gear as the base, the first free gear as the one that meshes. */
-export function defaultGearMesh(context: GearMeshContext): GearMeshDraft {
-  const ids = gearComponentIds(context);
-  const components = context.set.components.filter((c) => ids.includes(c.id));
+export function defaultGearMesh(
+  context: GearMeshContext,
+  ids: readonly string[] = gearComponentIds(context)
+): GearMeshDraft {
+  const components = ids.flatMap((id) => {
+    const component = context.set.components.find((c) => c.id === id);
+    return component ? [component] : [];
+  });
   const base = components.find((c) => c.grounded) ?? components[0] ?? null;
   const moving =
     components.find(

@@ -128,7 +128,12 @@ function harness(
     clearHover: () => undefined,
     hud: new HudLayer(host)
   });
-  const pointer = (type: string, x: number, y: number) =>
+  const pointer = (
+    type: string,
+    x: number,
+    y: number,
+    modifiers: PointerEventInit = {}
+  ) =>
     canvas.dispatchEvent(
       new PointerEvent(type, {
         bubbles: true,
@@ -137,7 +142,8 @@ function harness(
         buttons: type === 'pointerup' ? 0 : 1,
         pointerId: 1,
         clientX: x,
-        clientY: y
+        clientY: y,
+        ...modifiers
       })
     );
   return { viewport, objects, buildEvents, pointer, host };
@@ -168,6 +174,28 @@ afterEach(() => {
 });
 
 describe('Assemble viewport', () => {
+  it('adds a Ctrl/Command-picked part without starting a drag', () => {
+    const { document: doc, b } = scissors();
+    assemblyRuntime.setActive(true);
+    assemblyRuntime.selectComponent('comp_a');
+    const { viewport, pointer } = harness(b, () =>
+      onBlade(b, new THREE.Vector3(40, 0, 1))
+    );
+    viewport.setView(buildAssemblyView(doc, { ...VIEW_RUNTIME, overrides: new Map() }));
+    pointer('pointerdown', 40, 0, { ctrlKey: true });
+    pointer('pointermove', 0, 40);
+    pointer('pointerup', 0, 40);
+    expect(getAssemblyRuntime().selectedComponentIds).toEqual([
+      'comp_a',
+      'comp_b'
+    ]);
+    expect(getAssemblyRuntime().overrides.size).toBe(0);
+    pointer('pointerdown', 40, 0, { metaKey: true });
+    pointer('pointerup', 40, 0);
+    expect(getAssemblyRuntime().selectedComponentIds).toEqual(['comp_a']);
+    viewport.dispose();
+  });
+
   it('poses a component body by its matrix and restores it after', () => {
     const { document: doc, b } = scissors();
     const { viewport, objects } = harness(b, () => null);
