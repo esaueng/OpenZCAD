@@ -14249,9 +14249,10 @@ export function App() {
   }
 
   /**
-   * Make a copy, from Tweak's rail or (for an encrypted link) View's: an
-   * encrypted link's signed-in visitor chooses between the account and this
-   * device (slice 5-11); every other visitor gets the device copy, as before.
+   * Make a copy, from Tweak's rail or (for an encrypted link) View's: a
+   * signed-in visitor chooses between the account and this device, whatever
+   * the link (slice 5-11; design review I85, where a plaintext link copied
+   * to the device unasked). A signed-out visitor gets the device copy.
    */
   const [shareCopyChoice, setShareCopyChoice] = useState<{
     accountEncrypts: boolean | null;
@@ -14260,7 +14261,7 @@ export function App() {
   function requestShareCopy() {
     const active = shareSessionRef.current;
     if (!active) return;
-    if (!active.encryptedMode || !session) {
+    if (!session) {
       void handleMakeShareCopy();
       return;
     }

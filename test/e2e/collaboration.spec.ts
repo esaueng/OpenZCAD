@@ -1033,6 +1033,39 @@ for (const departure of ['fragment', 'home'] as const) {
   });
 }
 
+// Design review I85: a signed-in visitor of a plaintext link got a device
+// copy unasked, while an encrypted link asked where to put it. Both ask.
+test('asks a signed-in visitor of a plaintext link where to put the copy', async ({
+  page
+}) => {
+  await stubApi(page);
+  const document = createProjectDocument('Signed-in source', toUserId('owner'));
+  await page.route('**/api/share/*', (route) =>
+    route.fulfill({
+      json: { document, project: { projectId: document.projectId, name: document.name }, mode: 'tweak' }
+    })
+  );
+  await page.goto(`/#share=${'p'.repeat(43)}`);
+  await page.getByRole('button', { name: 'Make a copy', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Make a copy', exact: true });
+  await expect(dialog).toBeVisible();
+  await expect(
+    dialog.getByRole('button', { name: 'Copy to your account' })
+  ).toBeEnabled();
+  await dialog
+    .getByRole('button', { name: 'Keep on this device only' })
+    .click();
+  await expect(dialog).toHaveCount(0);
+  await expect(
+    page.getByRole('button', { name: 'Rename project' })
+  ).toContainText('Signed-in source');
+  await expect(
+    page
+      .getByRole('group', { name: 'Workspace mode' })
+      .getByRole('button', { name: 'Build' })
+  ).toBeEnabled();
+});
+
 test('makes a durable share copy without storing the owner snapshot', async ({
   page
 }) => {
