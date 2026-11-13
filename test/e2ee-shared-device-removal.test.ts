@@ -1440,5 +1440,21 @@ describe('device removal across shared encrypted projects (slice 5-7)', () => {
     expect(status.members.map((m) => m.deviceId)).not.toContain(phoneId);
     await saveEdit(alice, projectId, 'Owner after removal');
     expect(headRow(srv, projectId).signer_user_id).toBe(ALICE);
+
+    // Only a Commit its device signed counts as Bob's rotation: the same
+    // Commit without the signature (as one sequenced before migration
+    // 0048 is) leaves the rotation owed, and the fence holds again.
+    srv.db
+      .prepare(
+        'UPDATE e2ee_mls_commits SET sender_signature = NULL WHERE project_id = ? AND sender_user_id = ?'
+      )
+      .run(projectId, BOB);
+    await expect(
+      memberRotationFence(
+        srv.env.DB as D1Database,
+        projectId,
+        keyEpochOf(srv, projectId)
+      )
+    ).rejects.toMatchObject({ code: 'E2EE_MEMBER_ROTATION_PENDING' });
   });
 });
