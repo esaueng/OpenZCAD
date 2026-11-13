@@ -137,6 +137,11 @@ export interface PanelState {
    */
   toolDrawerSection: ToolGroup | null;
   /**
+   * What was last typed in the drawer's search, which it opens with again.
+   * Empty to begin with: the full list.
+   */
+  toolDrawerQuery: string;
+  /**
    * The sketch palette flyout (overview, snapping, grid, constraints)
    * beside the sketch rail. Closed to begin with, and remembered across
    * sketch sessions: leaving a sketch and editing it again should not fold
@@ -185,10 +190,14 @@ export const DEFAULT_PANEL_STATE: PanelState = {
   toolDrawerFilter: 'all',
   toolDrawerView: 'advanced',
   toolDrawerSection: null,
+  toolDrawerQuery: '',
   sketchPaletteOpen: false,
   tweakPanelOpen: true,
   sectionPanelOpen: true
 };
+
+/** A saved search longer than any tool name is cut to this. */
+export const TOOL_DRAWER_QUERY_MAX_LENGTH = 64;
 
 export const TOOL_GROUP_KEYS = Object.keys(
   DEFAULT_PANEL_STATE.toolGroups
@@ -210,6 +219,7 @@ function copyDefaults(): PanelState {
     toolDrawerFilter: DEFAULT_PANEL_STATE.toolDrawerFilter,
     toolDrawerView: DEFAULT_PANEL_STATE.toolDrawerView,
     toolDrawerSection: DEFAULT_PANEL_STATE.toolDrawerSection,
+    toolDrawerQuery: DEFAULT_PANEL_STATE.toolDrawerQuery,
     sketchPaletteOpen: DEFAULT_PANEL_STATE.sketchPaletteOpen,
     tweakPanelOpen: DEFAULT_PANEL_STATE.tweakPanelOpen,
     sectionPanelOpen: DEFAULT_PANEL_STATE.sectionPanelOpen
@@ -261,6 +271,12 @@ export function normalizePanelState(value: unknown): PanelState {
   }
   if (TOOL_GROUP_KEYS.includes(root.toolDrawerSection as ToolGroup)) {
     state.toolDrawerSection = root.toolDrawerSection as ToolGroup;
+  }
+  if (typeof root.toolDrawerQuery === 'string') {
+    state.toolDrawerQuery = root.toolDrawerQuery.slice(
+      0,
+      TOOL_DRAWER_QUERY_MAX_LENGTH
+    );
   }
   if (typeof root.sketchPaletteOpen === 'boolean') {
     state.sketchPaletteOpen = root.sketchPaletteOpen;

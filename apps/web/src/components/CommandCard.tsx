@@ -152,6 +152,12 @@ interface CommandCardProps {
    */
   drawerSection?: ToolGroup | null;
   onDrawerSectionChange?(section: ToolGroup): void;
+  /**
+   * The drawer's search, kept as it is typed and opened with again. Without
+   * a handler the search is the drawer's own and starts empty.
+   */
+  drawerQuery?: string;
+  onDrawerQueryChange?(query: string): void;
 }
 
 type DragSource = 'pin' | 'suggested' | 'drawer';
@@ -212,7 +218,9 @@ export function CommandCard({
   drawerView = 'advanced',
   onDrawerViewChange,
   drawerSection = null,
-  onDrawerSectionChange
+  onDrawerSectionChange,
+  drawerQuery = '',
+  onDrawerQueryChange
 }: CommandCardProps) {
   const context = commandContextFor(selection);
   // A pick that drops out mid-drag is still drawn, held, for a moment: the
@@ -247,7 +255,9 @@ export function CommandCard({
   const keymap = useKeymap();
   const listRef = useRef<HTMLDivElement>(null);
   const railRef = useRef<HTMLDivElement>(null);
-  const [query, setQuery] = useState('');
+  const [ownQuery, setOwnQuery] = useState('');
+  const query = onDrawerQueryChange ? drawerQuery : ownQuery;
+  const setQuery = onDrawerQueryChange ?? setOwnQuery;
   const [drag, setDrag] = useState<{
     tool: ToolId;
     from: DragSource;
@@ -288,12 +298,14 @@ export function CommandCard({
     groups.map((group) => group.tools.join()).join('|')
   );
   // A search narrows the sections to its matches: scrolling those says
-  // nothing about where the full list was left.
+  // nothing about where the full list was left, and a drawer that opens on
+  // a search opens on its first match.
+  const searching = advanced && query !== '';
   useRememberedSection(
     listRef,
     drawerOpen,
-    drawerSection,
-    advanced && query ? undefined : onDrawerSectionChange
+    searching ? null : drawerSection,
+    searching ? undefined : onDrawerSectionChange
   );
   const canPin = onPinnedToolsChange !== undefined;
   const moreToggleRef = useRef<HTMLButtonElement>(null);
@@ -356,9 +368,13 @@ export function CommandCard({
   useLayoutEffect(() => {
     if (!drawerOpen || !focusOnOpen.current) return;
     focusOnOpen.current = false;
-    flyoutRef.current
-      ?.querySelector<HTMLElement>('input[type="search"]')
-      ?.focus();
+    const search = flyoutRef.current?.querySelector<HTMLInputElement>(
+      'input[type="search"]'
+    );
+    search?.focus();
+    // A remembered search is selected, so typing starts a new one while
+    // the arrow keys keep it.
+    search?.select();
   }, [drawerOpen]);
   useFlyoutAtToggle(
     flyoutRef,
