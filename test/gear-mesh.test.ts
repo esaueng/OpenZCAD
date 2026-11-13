@@ -17,6 +17,7 @@ import {
   inverseInvolute,
   involute,
   gearMeshRefusalText,
+  GEAR_X_DIRECTION_MIN_REMAINDER,
   gearPlacementFrame,
   gearToothCircles,
   isGearMeshRefusal,
@@ -50,6 +51,12 @@ import {
 const Z: Vector3 = { x: 0, y: 0, z: 1 };
 const X: Vector3 = { x: 1, y: 0, z: 0 };
 const ORIGIN: Vector3 = { x: 0, y: 0, z: 0 };
+/**
+ * A raw placement the kernel builds whose x direction is within rounding of
+ * its axis: its projection's remainder is about 1e-15 of its length.
+ */
+const TILTED_AXIS: Vector3 = { x: 10, y: 4, z: 4 };
+const TILTED_X: Vector3 = { x: 9.999999999999988, y: 4, z: 3.9999999999999964 };
 
 function refused(a: GearMeshGear, b: GearMeshGear): GearMeshRefusal {
   const result = meshGearPair(a, b, IDENTITY_TRANSFORM);
@@ -498,7 +505,7 @@ describe('meshing-pair refusals', () => {
     ).toBe('gear-mesh:tip-clearance');
   });
 
-  it('reads a placement as the kernel does, never substituting an x direction', () => {
+  it('reads a placement as the kernel builds it, never substituting an x direction', () => {
     const origin = { x: 1, y: 2, z: 3 };
     // Almost along the axis: the tiny perpendicular part is the x direction.
     const near = gearPlacementFrame(
@@ -519,12 +526,22 @@ describe('meshing-pair refusals', () => {
       { x: 0.2 / Math.hypot(0.2, 1), y: 1 / Math.hypot(0.2, 1), z: 0 },
       12
     );
-    // The kernel refuses only when the projection has no length at all:
-    // 1e-160 still places (its square is subnormal), 1e-200 does not.
+    // Below a remainder of 1e-6 of the x direction's length the phase is
+    // ill-conditioned (rounding decides it), so the gear is refused even
+    // where the kernel would build it; 1e-5 is well clear of that.
+    expect(GEAR_X_DIRECTION_MIN_REMAINDER).toBe(1e-6);
     expect(
-      gearPlacementFrame(origin, Z, { x: 0, y: 1e-160, z: 1 })
+      gearPlacementFrame(origin, Z, { x: 0, y: 2e-6, z: 1 })
     ).not.toBeNull();
-    expect(gearPlacementFrame(origin, Z, { x: 0, y: 1e-200, z: 1 })).toBeNull();
+    expect(gearPlacementFrame(origin, Z, { x: 0, y: 5e-7, z: 1 })).toBeNull();
+    // Relative to the x direction's length, not absolute.
+    expect(
+      gearPlacementFrame(origin, Z, { x: 0, y: 2e-3, z: 1000 })
+    ).not.toBeNull();
+    expect(
+      gearPlacementFrame(origin, Z, { x: 0, y: 5e-4, z: 1000 })
+    ).toBeNull();
+    expect(gearPlacementFrame(origin, TILTED_AXIS, TILTED_X)).toBeNull();
     expect(gearPlacementFrame(origin, Z, { x: 0, y: 0, z: -2 })).toBeNull();
     expect(gearPlacementFrame(origin, { x: 0, y: 0, z: 0 }, X)).toBeNull();
     const parallel = meshGearPair(
@@ -534,6 +551,18 @@ describe('meshing-pair refusals', () => {
     );
     expect(isGearMeshRefusal(parallel) && parallel.code).toBe(
       'gear-mesh:invalid-placement'
+    );
+    // The tilted raw placement the kernel builds but rounding mis-phases.
+    const tilted2 = meshGearPair(
+      gear({
+        teeth: 22,
+        frame: { origin, zAxis: TILTED_AXIS, xAxis: TILTED_X }
+      }),
+      gear({ teeth: 27 }),
+      IDENTITY_TRANSFORM
+    );
+    expect(isGearMeshRefusal(tilted2) && tilted2.message).toBe(
+      'A gear cannot be placed: its axis has no direction, or its reference (x) direction lies almost along the axis; re-pick the reference direction.'
     );
   });
 
@@ -626,6 +655,22 @@ describe('the gear a body shows', () => {
     );
     if (isGearMeshRefusal(read)) throw new Error(read.message);
     expectVector(read.frame.xAxis, { x: 0, y: 1, z: 0 }, 12);
+    // Within rounding of the axis, the phase is ill-conditioned: refused.
+    manager.execute(
+      commandFactories.gearBody(
+        gearInput('Tilted', { axis: TILTED_AXIS, xDirection: TILTED_X })
+      )
+    );
+    const tilted = gearMeshGearOfBody(
+      manager.document,
+      manager.document.bodyOrder[1] as BodyId
+    );
+    expect(isGearMeshRefusal(tilted) && tilted.code).toBe(
+      'gear-mesh:invalid-placement'
+    );
+    expect(isGearMeshRefusal(tilted) && tilted.message).toMatch(
+      /^Tilted cannot be placed: .*re-pick the reference direction\.$/
+    );
   });
 
   it('refuses a body that is not a gear, or a gear moved after it was made', () => {
@@ -773,6 +818,28 @@ describe('Mesh gears in an assembly', () => {
     }
   });
 
+  it('refuses an ill-conditioned raw placement on the joint path too', () => {
+    const { context } = assembled();
+    const wheel = context.gearOf('comp_b');
+    if (isGearMeshRefusal(wheel)) throw new Error(wheel.message);
+    const raw = {
+      ...context,
+      gearOf: (id: string) =>
+        id === 'comp_b'
+          ? {
+              ...wheel,
+              frame: { origin: ORIGIN, zAxis: TILTED_AXIS, xAxis: TILTED_X }
+            }
+          : context.gearOf(id)
+    };
+    const result = gearMeshJoint(
+      raw,
+      { baseId: 'comp_a', movingId: 'comp_b' },
+      'joint_mesh'
+    );
+    expect('code' in result && result.code).toBe('gear-mesh:invalid-placement');
+  });
+
   it('refuses a mismatched pair and a part that is not a gear, by reason', () => {
     const { context } = assembled({ pitch: 2.5 });
     const result = gearMeshJoint(
@@ -854,6 +921,20 @@ describe('meshed pairs on the exact kernel', { timeout: 120_000 }, () => {
       expect(circles.tip * 2).toBeCloseTo(geometry.tipDiameter, 9);
       expect(circles.root * 2).toBeCloseTo(geometry.rootDiameter, 9);
     }
+  });
+
+  it('refuses a placement the kernel builds but rounding would mis-phase', () => {
+    // Remus builds the tilted raw placement; the helper refuses it.
+    const a = gear({
+      teeth: 22,
+      backlash: 0.2,
+      frame: { origin: ORIGIN, zAxis: TILTED_AXIS, xAxis: TILTED_X }
+    });
+    expect(build(a, a.frame)).toBeGreaterThan(0);
+    const refusal = meshGearPair(a, gear({ teeth: 27 }), IDENTITY_TRANSFORM);
+    expect(isGearMeshRefusal(refusal) && refusal.code).toBe(
+      'gear-mesh:invalid-placement'
+    );
   });
 
   it('phases a gear whose x direction is stored almost along its axis', () => {

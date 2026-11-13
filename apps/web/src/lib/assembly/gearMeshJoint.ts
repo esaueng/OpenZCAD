@@ -5,6 +5,7 @@ import {
   invertTransform,
   isGearMeshRefusal,
   jointAddError,
+  GEAR_PLACEMENT_UNUSABLE,
   gearMeshFrame,
   gearMeshRefusalText,
   meshGearPair,
@@ -116,7 +117,7 @@ export function gearMeshJoint(
   const ownFrame = gearMeshFrame(b.frame);
   if (!ownFrame)
     return {
-      error: `${moving.name}’s axis has no direction, or its x direction runs along it.`,
+      error: `${moving.name} cannot be placed: ${GEAR_PLACEMENT_UNUSABLE}.`,
       code: 'gear-mesh:invalid-placement'
     };
   const own = midFrame(ownFrame, b.faceWidth);

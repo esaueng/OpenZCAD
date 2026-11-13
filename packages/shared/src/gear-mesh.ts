@@ -15,7 +15,7 @@ import type {
   GearMeshRefusalCode,
   GearMeshSolution
 } from './gear-mesh-types';
-import { gearPlacementFrame } from './gear-mesh-types';
+import { GEAR_PLACEMENT_UNUSABLE, gearPlacementFrame } from './gear-mesh-types';
 
 /**
  * M14 meshing-pair helper: where a second gear goes so that it meshes with a
@@ -335,7 +335,7 @@ export function meshGearPair(
   if (!frameA || !frameB)
     return refusal(
       'gear-mesh:invalid-placement',
-      'A gear’s axis has no direction, or its x direction runs along it.'
+      `A gear cannot be placed: ${GEAR_PLACEMENT_UNUSABLE}.`
     );
   const sense =
     dot3(frameInWorld(current, frameB).zAxis, frameA.zAxis) < 0 ? -1 : 1;

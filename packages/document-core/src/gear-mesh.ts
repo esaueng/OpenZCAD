@@ -1,5 +1,6 @@
 import {
   defaultGearXDirection,
+  GEAR_PLACEMENT_UNUSABLE,
   gearModule,
   gearPlacementFrame,
   isFeatureSuppressed,
@@ -147,7 +148,7 @@ export function gearMeshGearOfBody(
     const helix = optional(data.helixAngleDeg, 'helix angle', 0);
     // The frame the kernel builds from what the adapter sends it (the
     // stored x direction, else the adapter's default), so the helper phases
-    // the teeth the kernel cut.
+    // the teeth the kernel cut; refused where that phase is ill-conditioned.
     const frame = gearPlacementFrame(
       vector(data.origin, 'origin'),
       axis,
@@ -158,7 +159,7 @@ export function gearMeshGearOfBody(
     if (!frame)
       return refusal(
         'gear-mesh:invalid-placement',
-        `${gear.name}’s axis has no direction, or its x direction runs along it.`
+        `${gear.name} cannot be placed: ${GEAR_PLACEMENT_UNUSABLE}.`
       );
     return {
       gearType: data.gearType,

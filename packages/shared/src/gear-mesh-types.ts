@@ -146,11 +146,31 @@ export function defaultGearXDirection(axis: Vector3): Vector3 {
 }
 
 /**
- * A gear's placement frame exactly as the kernel builds it: the axis made
- * unit length, and the stored x direction with its component along the
- * axis removed, made unit length. Like the kernel, it never substitutes
- * another direction: it is null only when the axis or that projection has
- * no length at all (its squared length is zero), which the kernel refuses.
+ * The smallest share of a gear's x direction that may remain once its part
+ * along the axis is removed. Below it the projection is dominated by
+ * rounding: the kernel and this helper compute it in different (equally
+ * valid) floating-point orders and can disagree on the tooth phase by whole
+ * pitches. At 1e-6 the rounding of the projection (a few units in the last
+ * place of |x|, about 1e-16·|x|) turns the x direction by at most ~1e-10
+ * rad, far inside any backlash, while any direction more than about 0.2
+ * arc-seconds off the axis is still accepted.
+ */
+export const GEAR_X_DIRECTION_MIN_REMAINDER = 1e-6;
+
+/** Why a gear's placement cannot be read. */
+export const GEAR_PLACEMENT_UNUSABLE =
+  'its axis has no direction, or its reference (x) direction lies almost along the axis; re-pick the reference direction';
+
+/**
+ * A gear's placement frame the way the kernel builds it from the same
+ * values: the axis made unit length, and the stored x direction with its
+ * component along the axis removed, made unit length. It never substitutes
+ * another direction. It is null when the axis has no length, or when the
+ * x direction's remainder off the axis is under
+ * {@link GEAR_X_DIRECTION_MIN_REMAINDER} of its length: there the tooth
+ * phase is ill-conditioned (the kernel may still build it, but the helper
+ * cannot promise the same phase), so the gear is refused rather than
+ * placed on a guess.
  */
 export function gearPlacementFrame(
   origin: Vector3,
@@ -168,8 +188,13 @@ export function gearPlacementFrame(
     z: xDirection.z - z.z * along
   };
   const pp = p.x * p.x + p.y * p.y + p.z * p.z;
-  if (!(pp > 0) || !Number.isFinite(pp)) return null;
+  const xx =
+    xDirection.x * xDirection.x +
+    xDirection.y * xDirection.y +
+    xDirection.z * xDirection.z;
+  if (!(pp > 0) || !Number.isFinite(pp) || !Number.isFinite(xx)) return null;
   const pl = Math.sqrt(pp);
+  if (pl < GEAR_X_DIRECTION_MIN_REMAINDER * Math.sqrt(xx)) return null;
   return {
     origin: { ...origin },
     zAxis: z,
