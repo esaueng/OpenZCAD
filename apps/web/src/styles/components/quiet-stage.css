@@ -2901,6 +2901,15 @@ button.command-rail.is-suggested {
     transform: none;
   }
 
+  /* Above the open sheet the bar has room for seven controls, not eight:
+     Section waits for View and Build here, as it waits behind More on
+     Build's short phone rail. The order of the rest is unchanged (I52). */
+  .workspace.column-layout:has(.tweak-flyouts.is-open)
+    .view-mode-bar
+    .view-mode-section-toggle {
+    display: none;
+  }
+
   .tweak-flyouts {
     top: auto;
     bottom: 0;

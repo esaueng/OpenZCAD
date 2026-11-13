@@ -242,7 +242,9 @@ export function ViewModeBar({
         >
           <button
             type="button"
-            className={`view-mode-button${sectionOn ? ' active' : ''}`}
+            className={`view-mode-button view-mode-section-toggle${
+              sectionOn ? ' active' : ''
+            }`}
             onClick={() => {
               // Greyed by aria, as on Build's rail: a disabled button
               // cannot take focus or show the tooltip that says why.
