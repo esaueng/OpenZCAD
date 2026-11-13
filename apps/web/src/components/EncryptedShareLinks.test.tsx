@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -56,25 +56,39 @@ const active: EncryptedShareLinksState = {
 };
 
 describe('EncryptedShareLinks (slice 5-10)', () => {
-  it('requires confirmation before creating a link, then enables creation', async () => {
+  // Design review I79: a red banner, a disabled Create link and a separate
+  // "Confirm sharing…" made two steps of one action. Create link now asks for
+  // the confirmation itself, then makes the link.
+  it('confirms sharing as part of Create link, and creates nothing on Cancel', async () => {
     const client = fakeClient([
+      { links: [], retired: [], needsConfirmation: true },
       { links: [], retired: [], needsConfirmation: true },
       { links: [], retired: [], needsConfirmation: false }
     ]);
     render(<EncryptedShareLinks projectId="proj_x" client={client} />);
-    await screen.findByRole('button', { name: 'Confirm sharing…' });
-    expect(screen.getByRole('button', { name: 'Create link' })).toBeDisabled();
+    const create = await screen.findByRole('button', { name: 'Create link' });
+    expect(create).toBeEnabled();
+    // Without links there is no separate confirm step to find.
+    expect(
+      screen.queryByRole('button', { name: 'Confirm sharing…' })
+    ).not.toBeInTheDocument();
+    await userEvent.click(create);
+    let group = screen.getByRole('group', { name: 'Confirm sharing' });
+    expect(group).toHaveTextContent('To create the link');
+    await userEvent.click(
+      within(group).getByRole('button', { name: 'Cancel' })
+    );
+    expect(client.confirm).not.toHaveBeenCalled();
     expect(client.create).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Create link' }));
+    group = screen.getByRole('group', { name: 'Confirm sharing' });
     await userEvent.click(
-      screen.getByRole('button', { name: 'Confirm sharing…' })
+      within(group).getByRole('button', { name: 'Confirm with passkey' })
     );
-    await userEvent.click(
-      screen.getByRole('button', { name: 'Confirm with passkey' })
-    );
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Create link' })).toBeEnabled()
-    );
+    await waitFor(() => expect(client.create).toHaveBeenCalledOnce());
     expect(client.confirm).toHaveBeenCalledWith('proj_x', 'passkey');
+    expect(client.create).toHaveBeenCalledWith('proj_x', 'view');
   });
 
   it.each(['not-published', 'needs-confirming', 'revocation-pending'] as const)(

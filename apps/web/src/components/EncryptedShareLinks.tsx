@@ -260,6 +260,8 @@ export function EncryptedShareLinks({
   const [created, setCreated] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
+  // The confirmation was asked for by Create link, which finishes after it.
+  const [createAfterConfirm, setCreateAfterConfirm] = useState(false);
   const [recoveryKey, setRecoveryKey] = useState('');
   const [transientRemoval, setTransientRemoval] = useState<{
     projectId: string;
@@ -320,6 +322,18 @@ export function EncryptedShareLinks({
     } finally {
       setBusy(null);
     }
+  };
+
+  const createLink = async () => {
+    setCreated(null);
+    setCopied(null);
+    setCreated((await client.create(projectId, 'view')).url);
+  };
+  // Inside the confirmation's own run: a refused confirmation creates nothing.
+  const finishConfirm = async () => {
+    if (!createAfterConfirm) return;
+    setCreateAfterConfirm(false);
+    await createLink();
   };
 
   const copy = async (url: string, key: string) => {
@@ -389,14 +403,17 @@ export function EncryptedShareLinks({
         <button
           type="button"
           className={links.length > 0 ? 'secondary' : 'primary'}
-          disabled={disabled || state?.needsConfirmation}
-          onClick={() =>
-            void run('create', async () => {
-              setCreated(null);
-              setCopied(null);
-              setCreated((await client.create(projectId, 'view')).url);
-            })
-          }
+          disabled={disabled || confirming}
+          onClick={() => {
+            // One action (design review I79): Create link asks for the
+            // confirmation sharing needs, then makes the link.
+            if (state?.needsConfirmation) {
+              setCreateAfterConfirm(true);
+              setConfirming(true);
+              return;
+            }
+            void run('create', createLink);
+          }}
         >
           Create link
         </button>
@@ -416,8 +433,11 @@ export function EncryptedShareLinks({
             aria-label="Confirm sharing"
           >
             <p className="sharing-tag">
-              Confirm with your passkey or recovery key. Visitors trust a link
-              only while you have confirmed it in the last 30 days.
+              {createAfterConfirm
+                ? 'To create the link, confirm with your passkey or recovery key.'
+                : 'Confirm with your passkey or recovery key.'}{' '}
+              Visitors trust a link only while you have confirmed it in the last
+              30 days.
             </p>
             <input
               className="sharing-share-url"
@@ -441,6 +461,7 @@ export function EncryptedShareLinks({
                     });
                     setRecoveryKey('');
                     setConfirming(false);
+                    await finishConfirm();
                   })
                 }
               >
@@ -453,6 +474,7 @@ export function EncryptedShareLinks({
                   void run('confirm', async () => {
                     await client.confirm(projectId, 'passkey');
                     setConfirming(false);
+                    await finishConfirm();
                   })
                 }
               >
@@ -463,6 +485,7 @@ export function EncryptedShareLinks({
                 disabled={disabled}
                 onClick={() => {
                   setConfirming(false);
+                  setCreateAfterConfirm(false);
                   setRecoveryKey('');
                 }}
               >
@@ -470,11 +493,12 @@ export function EncryptedShareLinks({
               </button>
             </div>
           </div>
-        ) : (
+        ) : links.length > 0 ? (
+          // Without links, Create link asks for this itself; only existing
+          // links need a separate nudge to keep opening.
           <div className="sharing-share-notice" role="status">
             <span className="sharing-tag">
-              Confirm sharing before creating a link. Existing links also need
-              confirmation to keep opening for visitors.
+              Your links need your confirmation to keep opening for visitors.
             </span>
             <button
               type="button"
@@ -485,7 +509,7 @@ export function EncryptedShareLinks({
               Confirm sharing…
             </button>
           </div>
-        )
+        ) : null
       ) : null}
 
       {created ? (
