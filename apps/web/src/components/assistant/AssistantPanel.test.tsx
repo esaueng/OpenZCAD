@@ -487,6 +487,11 @@ describe('asking from the prompt line', () => {
     // The hand-back fires on mount, before the status load settles, so the
     // reason arrives later than the draft does.
     expect(await screen.findAllByRole('status')).not.toHaveLength(0);
+    // And the panel says where the question went (I8: a signed-out ask
+    // looked like a search that found nothing).
+    expect(
+      await screen.findByText(/Your question is back in the prompt line\./)
+    ).toBeVisible();
   });
 
   it('offers its openers as drafts for the prompt line', async () => {

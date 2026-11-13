@@ -1144,7 +1144,7 @@ export function SettingsPage({
                 {!cloudFunctionsEnabled
                   ? 'Offline mode'
                   : authConfigStatus === 'unavailable'
-                    ? 'Cloud unreachable'
+                    ? 'Cloud unavailable'
                     : accountResolving && !accountState
                       ? 'Checking account…'
                       : session
@@ -1757,9 +1757,17 @@ export function SettingsPage({
               {/* Until the account is known these hold their saved values
                   but stay disabled: a live switch beside a footer that
                   still says "Device only" claimed a sync nothing runs. */}
+              {/* Signed out, these are settings for later: they say so
+                  rather than read as running (I8). */}
               <Group
                 title="Cloud"
-                note={cloudPending ? 'Checking account…' : undefined}
+                note={
+                  cloudPending
+                    ? 'Checking account…'
+                    : cloudFunctionsEnabled && !session
+                      ? 'Applies after sign-in. Until then everything saves on this device only.'
+                      : undefined
+                }
               >
                 <SettingRow
                   title="Cloud autosave"
@@ -2335,8 +2343,8 @@ export function SettingsPage({
                           </button>
                         }
                       >
-                        Sign-in could not be reached. Local projects are
-                        unaffected.
+                        Cloud unavailable: sign-in could not be reached.
+                        Projects keep saving on this device.
                       </Notice>
                     ) : desktopApp ? (
                       authConfig?.desktopAuthEnabled ? (
@@ -2536,7 +2544,11 @@ export function SettingsPage({
                     </SettingRow>
                     <SettingRow
                       title="Preference synchronization"
-                      hint="Preferences follow your account."
+                      hint={
+                        session
+                          ? 'Preferences follow your account.'
+                          : 'After sign-in, preferences follow your account. Until then they stay on this device.'
+                      }
                     >
                       {cloudPending ? (
                         <Status>Checking…</Status>
