@@ -201,7 +201,9 @@ export function ViewerToolbar({
       }
     }
     function onClick(event: MouseEvent) {
-      if ((event.target as Element | null)?.closest('[data-model-panel-rail]')) {
+      if (
+        (event.target as Element | null)?.closest('[data-model-panel-rail]')
+      ) {
         setMoreOpen(false);
       }
     }

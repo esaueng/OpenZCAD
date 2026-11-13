@@ -200,6 +200,15 @@ rail's own buttons.
        by resizing — is projected into that lane: only the panel opened or
        focused most recently shows, and the stored layout (including the
        unpinned panel) is kept for a wider window.
+     - A workspace opened at 520 px and narrower, where the lane's panel
+       stands over the stage between the rails rather than in a column of
+       its own, opens with the lane at rest (2026-11-12 review): nothing is
+       projected until a rail button or a search result asks for a panel
+       there, a second press on the panel the lane shows rests it again
+       instead of closing the panel, and a panel that was only opened
+       unpinned for the lane closes as it leaves. The choice is per page
+       load and never stored. A workspace opened wider and then narrowed
+       keeps the projection above.
        The layout stores that recency (an ordered list of panel ids, updated
        on open, focus and rail press), so the choice survives a reload and is
        the same after any resize.

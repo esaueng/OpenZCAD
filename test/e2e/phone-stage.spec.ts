@@ -47,9 +47,9 @@ async function openDemo(page: Page) {
   await expect(page.locator('.viewer-host canvas')).toBeVisible({
     timeout: 120_000
   });
-  await expect(
-    page.getByRole('button', { name: /^More tools/ })
-  ).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByRole('button', { name: /^More tools/ })).toBeVisible({
+    timeout: 60_000
+  });
   await expect(page.getByRole('contentinfo')).not.toContainText(
     /Preparing model|Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Exact geometry is still rebuilding/i,
     { timeout: 60_000 }
@@ -84,10 +84,12 @@ function stageReport(page: Page): Promise<StageReport> {
       ['panels pill', '.panels-hidden-pill']
     ];
     const boxes = chrome.flatMap(([name, selector]) =>
-      [...document.querySelectorAll(selector)].filter(visible).map((element) => {
-        const box = element.getBoundingClientRect();
-        return { name, x: box.x, y: box.y, w: box.width, h: box.height };
-      })
+      [...document.querySelectorAll(selector)]
+        .filter(visible)
+        .map((element) => {
+          const box = element.getBoundingClientRect();
+          return { name, x: box.x, y: box.y, w: box.width, h: box.height };
+        })
     );
     const overlaps: string[] = [];
     for (let a = 0; a < boxes.length; a += 1) {
@@ -196,7 +198,8 @@ function stageReport(page: Page): Promise<StageReport> {
         toolsBox.bottom <= innerHeight &&
         // The label under the glyph, inside the button it names.
         tools.querySelector('.command-rail-label')!.getBoundingClientRect()
-          .bottom <= toolsBox.bottom + 0.5
+          .bottom <=
+          toolsBox.bottom + 0.5
     };
   });
 }
@@ -285,17 +288,15 @@ test.describe('the workspace on an upright phone', () => {
           'Open activity log'
         ]) {
           await expect(
-            page
-              .locator('.instrument-rail')
-              .getByRole('button', { name })
+            page.locator('.instrument-rail').getByRole('button', { name })
           ).toBeInViewport({ ratio: 1 });
         }
         const expanded = await stageReport(page);
         expect(expanded.offScreen).toEqual([]);
         expect(expanded.smallTargets).toEqual([]);
         expect(
-          expanded.overlaps.filter(
-            (overlap) => /search bar|top bar/.test(overlap)
+          expanded.overlaps.filter((overlap) =>
+            /search bar|top bar/.test(overlap)
           )
         ).toEqual([]);
 

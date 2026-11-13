@@ -12,7 +12,8 @@ const stripComments = (text: string) => text.replace(/\/\*[\s\S]*?\*\//g, '');
 const css = stripComments(
   readFileSync(join(stylesDir, 'components', 'phone-stage.css'), 'utf8')
 );
-const PHONE = '(pointer: coarse) and (max-width: 520px) and (min-height: 541px)';
+const PHONE =
+  '(pointer: coarse) and (max-width: 520px) and (min-height: 541px)';
 
 /** The body of the first `@media` block whose prelude is exactly `query`. */
 function mediaBlock(query: string): string {
@@ -61,8 +62,9 @@ describe('the phone stage', () => {
 
   it('follows target-size.css, whose touch grids it undoes', () => {
     const app = readFileSync(join(stylesDir, 'app.css'), 'utf8');
-    const order = [...app.matchAll(/@import '\.\/components\/([\w-]+)\.css'/g)]
-      .map((match) => match[1]!);
+    const order = [
+      ...app.matchAll(/@import '\.\/components\/([\w-]+)\.css'/g)
+    ].map((match) => match[1]!);
     expect(order.indexOf('phone-stage')).toBeGreaterThan(
       order.indexOf('target-size')
     );

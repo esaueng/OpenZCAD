@@ -2864,7 +2864,8 @@ describe('a phone lane at rest', () => {
     expect('phoneLane' in loaded).toBe(false);
     expect(lane(loaded)).toBe('parameters');
     expect(
-      'phoneLane' in normalizePanelLayout(openPanel(restPhoneLane(essentials()), 'bodies'))
+      'phoneLane' in
+        normalizePanelLayout(openPanel(restPhoneLane(essentials()), 'bodies'))
     ).toBe(false);
   });
 
