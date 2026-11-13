@@ -366,9 +366,12 @@ import {
 import { textPlacementBudgetError } from './lib/sketch/textPlacement';
 import { prefersSavingData } from './lib/saveData';
 import { useSurfaceReady } from './hooks/useSurfaceReady';
+import { useOnline } from './hooks/useOnline';
 import {
   lazyWithStaleChunkNotice,
+  isOffline,
   loadWhenOnline,
+  OFFLINE_CHUNK_MESSAGE,
   preloadableLazy,
   onStaleChunk,
   watchPreloadErrors,
@@ -3323,7 +3326,35 @@ export function App() {
     });
     let interruptionRecorded = false;
     let libraryAnswered = false;
+    let offlineAnswered = false;
+    // 13 November review I5: a download that failed offline used to raise
+    // "Load failed · Reload", and it stayed after the connection returned.
+    // Offline, a reload could lose the app shell itself, so none is offered;
+    // the lazy surfaces retry their own download on reconnect, and anything
+    // that fails again once online reports through the ordinary path below.
+    // Reconnecting only asks the version watch whether an update explains it.
+    let failedOffline = false;
+    const onOnline = () => {
+      if (!failedOffline) return;
+      failedOffline = false;
+      offlineAnswered = false;
+      watch.checkNow();
+    };
+    window.addEventListener('online', onOnline);
     const stopStale = onStaleChunk(() => {
+      if (isOffline()) {
+        failedOffline = true;
+        if (offlineAnswered) return;
+        offlineAnswered = true;
+        if (onStartScreenRef.current) announce(OFFLINE_CHUNK_MESSAGE);
+        else
+          recordActivity({
+            level: 'warning',
+            source: 'notice',
+            message: OFFLINE_CHUNK_MESSAGE
+          });
+        return;
+      }
       // A failed download alone also occurs offline; only the version watch
       // can prove that an update exists, so ask it rather than assume.
       setDownloadInterrupted(true);
@@ -3346,14 +3377,18 @@ export function App() {
     const stopPreload = watchPreloadErrors();
     return () => {
       stopped = true;
+      window.removeEventListener('online', onOnline);
       watch();
       stopStale();
       stopPreload();
     };
   }, [announce]);
+  // Never suggest a reload while offline: it could lose the app shell.
+  const browserOnline = useOnline();
+  const loadFailureShown = downloadInterrupted && browserOnline;
   const reloadPrompt: ReloadPrompt | null = newBuildAvailable
     ? 'update'
-    : downloadInterrupted
+    : loadFailureShown
       ? 'interrupted'
       : null;
   // Load what a click opens while the page is idle, so its first open is not
@@ -30542,7 +30577,7 @@ export function App() {
             newBuildAvailable ? () => window.location.reload() : undefined
           }
           onReloadForLoadFailure={
-            downloadInterrupted ? () => window.location.reload() : undefined
+            loadFailureShown ? () => window.location.reload() : undefined
           }
           // Discovery must finish before a new/opened part can commit: the
           // startup result would otherwise replace its session and listing.
