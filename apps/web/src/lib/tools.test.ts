@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { toolDisabledReason } from './tools';
+import { toolDescription, toolDisabledReason } from './tools';
 
 describe('finish tool selection order', () => {
   it('allows launching fillet before an edge is selected', () => {
@@ -116,5 +116,47 @@ describe('finish tool selection order', () => {
         closedProfileSketchCount: 1
       })
     ).toBeNull();
+  });
+});
+
+// Design review I10: while the workspace's own notice explains the shared
+// lock, tool rows keep their descriptions; other reasons still show.
+describe('toolDescription', () => {
+  const base = {
+    sketchCount: 1,
+    liveBodyCount: 1,
+    exactGeometryReady: true,
+    hasEdgeSelected: false
+  };
+  it('keeps the hint while the workspace explains the lock', () => {
+    expect(
+      toolDescription(
+        'box',
+        {
+          ...base,
+          editDisabledReason: 'Connecting to the live session…',
+          editDisabledExplained: true
+        },
+        'Rectangular solid'
+      )
+    ).toBe('Rectangular solid');
+  });
+  it('shows a lock the workspace does not explain elsewhere', () => {
+    expect(
+      toolDescription(
+        'box',
+        { ...base, editDisabledReason: 'This shared project is read-only' },
+        'Rectangular solid'
+      )
+    ).toBe('This shared project is read-only');
+  });
+  it('still shows a tool-specific reason under an explained lock', () => {
+    expect(
+      toolDescription(
+        'fillet',
+        { ...base, exactGeometryReady: false },
+        'Round an edge'
+      )
+    ).toBe('Waiting for exact geometry');
   });
 });

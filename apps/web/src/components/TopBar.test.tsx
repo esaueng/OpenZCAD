@@ -14,6 +14,7 @@ function renderTopBar(
     knownDeviceOnly?: boolean;
     collaborationStatus?: 'offline' | 'rejected' | 'connecting';
     collaborationFailure?: string;
+    readOnlySeat?: boolean;
     geometryPending?: boolean;
     geometryFailed?: boolean;
     editPending?: boolean;
@@ -69,6 +70,7 @@ function renderTopBar(
       accountState={options.signedIn ? 'signed-in' : 'signed-out'}
       collaborationStatus={options.collaborationStatus ?? 'offline'}
       collaborationFailure={options.collaborationFailure}
+      readOnlySeat={options.readOnlySeat}
       collaboratorCount={0}
       projectSharingEnabled
       workspaceMode="build"
@@ -83,6 +85,12 @@ function renderTopBar(
     />
   );
   return handlers;
+}
+
+/** The help a chip opens on keyboard focus (and hover, and long-press). */
+function tooltipFor(element: HTMLElement): HTMLElement {
+  fireEvent.focus(element);
+  return screen.getByRole('tooltip');
 }
 
 describe('TopBar workspace mode help', () => {
@@ -179,10 +187,7 @@ describe('TopBar save chip', () => {
       const chip = screen.getByRole('status', { name: 'Checking' });
       expect(chip).toHaveTextContent('Checking');
       expect(chip.querySelector('.spin')).not.toBeNull();
-      expect(chip).toHaveAttribute(
-        'title',
-        expect.stringContaining('proposed edit')
-      );
+      expect(tooltipFor(chip)).toHaveTextContent('proposed edit');
     }
   );
 
@@ -199,14 +204,9 @@ describe('TopBar save chip', () => {
     const chip = screen.getByRole('status', {
       name: 'Saved · preparing model'
     });
-    expect(chip).toHaveAttribute(
-      'title',
-      expect.stringContaining('Saved on this device and in your account.')
-    );
-    expect(chip).toHaveAttribute(
-      'title',
-      expect.stringContaining('Face and edge edits become available')
-    );
+    const help = tooltipFor(chip);
+    expect(help).toHaveTextContent('Saved on this device and in your account.');
+    expect(help).toHaveTextContent('Face and edge edits become available');
   });
   it('does not describe a failed rebuild as ongoing preparation', () => {
     renderTopBar({
@@ -216,8 +216,10 @@ describe('TopBar save chip', () => {
       geometryFailed: true
     });
     expect(
-      screen.getByRole('status', { name: 'Saved · model unavailable' })
-    ).toHaveAttribute('title', expect.stringContaining('activity log'));
+      tooltipFor(
+        screen.getByRole('status', { name: 'Saved · model unavailable' })
+      )
+    ).toHaveTextContent('activity log');
   });
   it('shows no preparing cube once the model has failed', () => {
     renderTopBar({
@@ -453,13 +455,28 @@ describe('TopBar sharing chip', () => {
       collaborationStatus: 'rejected',
       collaborationFailure: 'The room could not confirm this edit.'
     });
-    expect(
-      screen.getByRole('button', { name: 'Open project sharing · Unavailable' })
-    ).toHaveAttribute(
-      'title',
+    // Design review I77: the reason opens on focus or long-press, not
+    // only in a hover-only title.
+    const chip = screen.getByRole('button', {
+      name: 'Open project sharing · Unavailable'
+    });
+    expect(chip).not.toHaveAttribute('title');
+    expect(tooltipFor(chip)).toHaveTextContent(
       'Connection refused: The room could not confirm this edit.'
     );
     expect(screen.queryByText('Not shared')).toBeNull();
+  });
+  it('names a read-only seat in words on the sharing chip', () => {
+    renderTopBar({
+      signedIn: true,
+      collaborationStatus: 'connecting',
+      readOnlySeat: true
+    });
+    const chip = screen.getByRole('button', {
+      name: 'Open project sharing · Read-only'
+    });
+    expect(chip).toHaveTextContent('Read-only');
+    expect(tooltipFor(chip)).toHaveTextContent('not edit it');
   });
   it('says to sign in, and goes to sign-in, when signed out', () => {
     const { onOpenSharing, onSignIn } = renderTopBar();
@@ -468,7 +485,7 @@ describe('TopBar sharing chip', () => {
       name: 'Offline · Sign in to share'
     });
     expect(chip).toHaveTextContent('Offline');
-    expect(chip).toHaveAttribute('title', 'Sign in to share');
+    expect(tooltipFor(chip)).toHaveTextContent('Sign in to share');
     // A live control now, not an aria-disabled one that did nothing.
     expect(chip).not.toHaveAttribute('aria-disabled');
     expect(chip).not.toBeDisabled();

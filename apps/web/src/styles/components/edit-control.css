@@ -644,3 +644,42 @@
   align-items: center;
   gap: 6px 10px;
 }
+
+/* ── Waiting for the live session (design review I10) ──────
+   One notice in the guidance row instead of a lease reason on every tool. */
+
+.live-session-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  min-width: 0;
+  padding: 1px 3px 2px 6px;
+  font-size: var(--fs-xs);
+  color: var(--color-text);
+}
+
+.live-session-notice-line {
+  display: inline-flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 6px;
+  min-width: 0;
+  line-height: 1.35;
+}
+
+.live-session-notice-detail {
+  color: var(--color-text-muted);
+}
+
+.live-session-notice-spinner {
+  flex: none;
+  animation: oz-spin 0.9s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-session-notice-spinner {
+    animation: none;
+  }
+}

@@ -560,6 +560,10 @@ import {
   type CommandSelection
 } from './lib/commandContext';
 import { WorkspaceColumn } from './components/WorkspaceColumn';
+import {
+  LIVE_SESSION_CONNECTING,
+  LiveSessionNotice
+} from './components/LiveSessionNotice';
 import { WorkspaceEmptyState } from './components/WorkspaceEmptyState';
 import {
   ActivityLogButton,
@@ -5977,8 +5981,8 @@ export function App() {
                     : collaborationRollout.editLeasesEnforced &&
                         !activeCollaborationLease
                       ? collaboration.status === 'lease-denied'
-                        ? 'Another collaborator holds the edit lease'
-                        : 'Waiting for the project edit lease'
+                        ? 'Someone else is editing this project right now'
+                        : LIVE_SESSION_CONNECTING
                       : null;
   // Being encrypted locks the document as firmly as a second tab does; the
   // second tab keeps its own notice.
@@ -6004,6 +6008,9 @@ export function App() {
           : assembleMode
             ? 'Assemble mode edits the assembly only — switch to Build to model'
             : projectEditDisabledReason;
+  // The seat is waiting for the live session: one notice says so, and the
+  // tools keep their own descriptions (design review I10).
+  const liveSessionConnecting = editDisabledReason === LIVE_SESSION_CONNECTING;
   // D01 sheet edits answer to the project's own locks in Draw and Build (a
   // read-only seat or a second tab refuses them), and to the reading
   // workspaces' locks in View and Tweak, where a drawing-only undo or redo
@@ -6062,6 +6069,11 @@ export function App() {
   const projectRenameDisabledReasonRef = useRef(projectRenameDisabledReason);
   projectRenameDisabledReasonRef.current = projectRenameDisabledReason;
 
+  /** "Cannot use Box: …": one stop, even after a reason that ends in "…". */
+  function cannotSentence(action: string, reason: string): string {
+    return `Cannot ${action}: ${reason}${/[.…!?]$/.test(reason) ? '' : '.'}`;
+  }
+
   function ensureCanEdit(action = 'edit this project'): boolean {
     const reason = editDisabledReasonRef.current;
     if (!reason) {
@@ -6070,7 +6082,7 @@ export function App() {
     setStatus(
       projectOpenElsewhereRef.current
         ? PROJECT_OPEN_ELSEWHERE_NOTICE
-        : `Cannot ${action}: ${reason}.`
+        : cannotSentence(action, reason)
     );
     return false;
   }
@@ -6090,7 +6102,7 @@ export function App() {
     setStatus(
       projectOpenElsewhereRef.current
         ? PROJECT_OPEN_ELSEWHERE_NOTICE
-        : `Cannot ${action}: ${reason}.`
+        : cannotSentence(action, reason)
     );
     return false;
   }
@@ -6111,7 +6123,7 @@ export function App() {
     setStatus(
       projectOpenElsewhereRef.current
         ? PROJECT_OPEN_ELSEWHERE_NOTICE
-        : `Cannot ${action}: ${reason}.`
+        : cannotSentence(action, reason)
     );
     return false;
   }
@@ -6124,7 +6136,7 @@ export function App() {
     setStatus(
       projectOpenElsewhereRef.current
         ? PROJECT_OPEN_ELSEWHERE_NOTICE
-        : `Cannot ${action}: ${reason}.`
+        : cannotSentence(action, reason)
     );
     return false;
   }
@@ -8824,6 +8836,7 @@ export function App() {
   );
   const availability: ToolAvailability = {
     editDisabledReason,
+    editDisabledExplained: liveSessionConnecting,
     sketchCount: sketchOptions.length,
     closedProfileSketchCount,
     liveBodyCount: committedBodyCount,
@@ -30063,7 +30076,8 @@ export function App() {
       ? 'warning'
       : !exactGeometryReady
         ? 'running'
-        : /fail|error|invalid|unable|denied|not changed|not applied|no change|refus/i.test(
+        : // A refusal is a warning, not a "ready" dot (design review I77).
+          /fail|error|invalid|unable|denied|cannot|can't|not changed|not applied|no change|refus/i.test(
               status
             )
           ? 'warning'
@@ -31582,6 +31596,12 @@ export function App() {
           }
           collaborationStatus={collaboration.status}
           collaborationFailure={collaboration.failureReason}
+          readOnlySeat={
+            activeProjectIsCloud &&
+            !shareSession &&
+            (collaboration.role === 'viewer' ||
+              collaboration.status === 'read-only')
+          }
           collaboratorCount={collaboration.members.length}
           projectSharingEnabled={
             cloudFunctionsEnabled && projectSharingPreferenceEnabled
@@ -33363,7 +33383,13 @@ export function App() {
             // the guidance row: the same line, remedies and Why? the control
             // shows, where the eye returns when the model has nothing to say.
             notice={
-              !keypad && calloutWithOperation?.operation?.error ? (
+              liveSessionConnecting &&
+              !(!keypad && calloutWithOperation?.operation?.error) ? (
+                <LiveSessionNotice
+                  key={doc.projectId}
+                  onRetry={collaboration.reconnect}
+                />
+              ) : !keypad && calloutWithOperation?.operation?.error ? (
                 <EditRefusal
                   operation={calloutWithOperation.operation}
                   variant="bar"

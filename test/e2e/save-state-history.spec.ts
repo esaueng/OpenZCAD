@@ -353,14 +353,20 @@ test('the top-bar status chips only report, and saving lives on File', async ({
     identity.getByRole('button', { name: 'Local only' })
   ).toHaveCount(0);
   const chip = identity.getByRole('status', { name: 'Local only' });
-  await expect(chip).toHaveAttribute('title', /Save a revision from File/);
+  // Its reason opens in the app's own help (hover, keyboard focus or a
+  // long-press), not only in a hover-only title (I77).
+  await chip.hover();
+  await expect(page.getByRole('tooltip')).toContainText(
+    /Save a revision from File/
+  );
   await chip.click();
 
   const sharing = actions.getByRole('button', {
     name: 'Offline · Sign in to share'
   });
   await expect(sharing).not.toHaveAttribute('aria-disabled', 'true');
-  await expect(sharing).toHaveAttribute('title', 'Sign in to share');
+  await sharing.hover();
+  await expect(page.getByRole('tooltip')).toContainText('Sign in to share');
   // Signed out, the chip goes where signing in happens: Settings › Account.
   await sharing.click();
   const settings = page.getByRole('dialog', { name: 'Settings' });
