@@ -2,7 +2,6 @@ import { ProjectImportButton } from './ProjectImportButton';
 import { labelWithKey, useKeymap } from '../lib/keymap';
 import {
   Fragment,
-  lazy,
   Suspense,
   useEffect,
   useLayoutEffect,
@@ -52,7 +51,10 @@ import {
   type LucideIcon
 } from 'lucide-react';
 import { isLibraryModeStatus } from '../lib/libraryStatus';
-import { STALE_CHUNK_MESSAGE } from '../lib/staleChunk';
+import {
+  lazyWithStaleChunkNotice,
+  STALE_CHUNK_MESSAGE
+} from '../lib/staleChunk';
 import {
   daysUntilPurge,
   MAX_PROJECT_NAME_LENGTH,
@@ -101,10 +103,10 @@ import { DemoModelIcon } from './DemoModelIcon';
 import { PartThumbnail } from './PartThumbnail';
 import type { ProjectProperties } from '../lib/projectProperties';
 
-const ProjectPropertiesDialog = lazy(async () => ({
+const ProjectPropertiesDialog = lazyWithStaleChunkNotice(async () => ({
   default: (await import('./ProjectPropertiesDialog')).ProjectPropertiesDialog
 }));
-const FolderCoverDialog = lazy(async () => ({
+const FolderCoverDialog = lazyWithStaleChunkNotice(async () => ({
   default: (await import('./FolderCoverDialog')).FolderCoverDialog
 }));
 
