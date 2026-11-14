@@ -159,6 +159,7 @@
     "test/recovery-snapshot.test.ts",
     "test/redact-path.test.ts",
     "test/refusal-reproduction.test.ts",
+    "test/remus-artifacts.test.ts",
     "test/remus-owned-mesh.test.ts",
     "test/remus-wasm-load-baseline.test.ts",
     "test/retained-fillet-package.test.ts",

@@ -7,6 +7,8 @@
   "main": "./apps/web/worker/index.ts",
   "compatibility_date": "2026-04-12",
   "compatibility_flags": ["nodejs_compat"],
+  // Refuses to deploy a build that did not pass the Remus package gate.
+  "build": { "command": "pnpm -w run check:release-build" },
   "preview_urls": false,
   "observability": {
     "enabled": true,
