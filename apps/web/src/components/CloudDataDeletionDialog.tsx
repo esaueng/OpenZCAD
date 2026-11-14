@@ -8,7 +8,7 @@ import type {
 } from '@openzcad/shared';
 import { api, ApiError } from '../lib/api';
 import { useModalFocus } from '../lib/useModalFocus';
-import { PersonalInfoToggle } from './PersonalInfoToggle';
+import { PrivateText } from './PersonalInfo';
 
 interface CloudDataDeletionDialogProps {
   scope: AccountDeletionScope;
@@ -244,18 +244,26 @@ export function CloudDataDeletionDialog({
                 retention window.
               </small>
             </div>
-            <label className="cloud-deletion-confirmation">
-              {/* Mono marks text to type verbatim; the masked prompt is a
-                  description of it, not the text itself. */}
-              {preview.confirmationKind === 'email' && !personalInfoVisible ? (
-                <span>Type your email address to confirm</span>
-              ) : (
-                <span>
-                  Type{' '}
-                  <strong className="mono">{preview.confirmationText}</strong>{' '}
-                  to confirm
-                </span>
-              )}
+            {/* Not a <label>: it would take the email's reveal button, its
+                first labelable descendant, as its control. The field carries
+                its own name. */}
+            <div className="cloud-deletion-confirmation">
+              {/* Mono marks text to type verbatim. An email stays blurred
+                  until clicked, and that click also unmasks the field. */}
+              <span>
+                Type{' '}
+                {preview.confirmationKind === 'email' ? (
+                  <PrivateText
+                    className="mono"
+                    value={preview.confirmationText}
+                    visible={personalInfoVisible}
+                    onChange={setPersonalInfoVisible}
+                  />
+                ) : (
+                  <strong className="mono">{preview.confirmationText}</strong>
+                )}{' '}
+                to confirm
+              </span>
               <input
                 ref={inputRef}
                 type={
@@ -279,19 +287,13 @@ export function CloudDataDeletionDialog({
                 aria-label="Deletion confirmation"
                 onChange={(event) => setConfirmation(event.currentTarget.value)}
               />
-            </label>
+            </div>
             {mismatch ? (
               <p id="cloud-deletion-mismatch" className="cloud-deletion-error">
                 {preview.confirmationKind === 'email'
                   ? 'That doesn’t match your account’s email address.'
                   : 'That doesn’t match. Type it exactly as shown.'}
               </p>
-            ) : null}
-            {preview.confirmationKind === 'email' ? (
-              <PersonalInfoToggle
-                visible={personalInfoVisible}
-                onChange={setPersonalInfoVisible}
-              />
             ) : null}
           </>
         ) : error ? null : (

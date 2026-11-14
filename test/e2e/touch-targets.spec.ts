@@ -138,6 +138,37 @@ test(
 );
 
 test(
+  'a hidden profile name and email are each a 44 px reveal target',
+  async ({ page }) => {
+    await stubApi(page);
+    await page.route('**/api/session', (route) =>
+      route.fulfill({
+        json: {
+          userId: 'user_touch',
+          displayName: 'Touch Person',
+          email: 'touch@example.com',
+          mode: 'email-code'
+        }
+      })
+    );
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Open settings' }).click();
+    await page.getByRole('button', { name: 'Account', exact: true }).click();
+    const reveal = page.locator('.setting-copy .private-text');
+    await expect(reveal).toHaveCount(2);
+    await expectTouchSized(
+      page,
+      'profile name and email',
+      '.setting-copy:has(.private-text)'
+    );
+    // Stacked, neither reaches over the other.
+    expect(overlaps(await box(reveal.first()), await box(reveal.last()))).toBe(
+      false
+    );
+  }
+);
+
+test(
   'every workspace control is a 44 px touch target in Build, View, Measure and Tweak',
   { tag: '@ci-smoke' },
   async ({ page }) => {

@@ -187,7 +187,6 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
     settings: [
       'Cloud features',
       'Membership',
-      'Personal information',
       'Preference synchronization',
       'Project sharing',
       'Account storage',
