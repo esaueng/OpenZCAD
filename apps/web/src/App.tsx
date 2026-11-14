@@ -463,6 +463,7 @@ import {
   sourceUploadMessage
 } from './lib/accountImportSources';
 import type { ArchiveArtifactInput } from './lib/archiveArtifact';
+import { cloudArchivable } from './lib/cloudArchivable';
 import {
   archiveLocalOnlyImportSources,
   createInFlightImportChecksums,
@@ -16568,7 +16569,13 @@ export function App() {
     // Local-first imports/exports keep their bytes on this device. A protected
     // upload cannot succeed before this project has an account copy, and its
     // failed request would add a console error to an otherwise valid import.
-    if (!sessionRef.current || !remoteVersionsRef.current.has(doc.projectId)) {
+    if (
+      !cloudArchivable(
+        Boolean(sessionRef.current),
+        doc.projectId,
+        remoteVersionsRef.current
+      )
+    ) {
       throw new Error(
         'Cloud archival needs an account project. The file stays on this device.'
       );
@@ -30622,9 +30629,7 @@ export function App() {
             boxSelectedFaces.length > 1
           ) {
             event.preventDefault();
-            if (
-              new Set(boxSelectedFaces.map((face) => face.bodyId)).size > 1
-            ) {
+            if (new Set(boxSelectedFaces.map((face) => face.bodyId)).size > 1) {
               setStatus(
                 'Faces on different bodies cannot be deleted together. Select faces on one body.'
               );
@@ -34561,7 +34566,18 @@ export function App() {
                   run={importRun}
                   onCancel={cancelImportRun}
                   onDismiss={dismissImportRun}
-                  onArchiveNow={archiveImportSourcesFromCard}
+                  // The same test archiveArtifact applies: signed out, or
+                  // signed in with a device-only project, the upload can
+                  // only fail (I8), so there is no Archive now.
+                  onArchiveNow={
+                    cloudArchivable(
+                      Boolean(session),
+                      doc.projectId,
+                      remoteVersionsRef.current
+                    )
+                      ? archiveImportSourcesFromCard
+                      : undefined
+                  }
                 />
               </Suspense>
             )}
