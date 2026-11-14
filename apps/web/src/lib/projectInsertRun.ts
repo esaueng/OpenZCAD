@@ -44,7 +44,17 @@ export interface ProjectInsertRunDeps {
 export async function runProjectInsert(
   deps: ProjectInsertRunDeps
 ): Promise<void> {
-  const { file, signal, progress, setStatus } = deps;
+  const { file, signal, setStatus } = deps;
+  // The card starts here, before the STEP import's own run; a run that
+  // declines early (busy, storage blocked, too large) never finishes it.
+  let finished = false;
+  const progress: ImportProgressSink = {
+    ...deps.progress,
+    finish: (outcome) => {
+      finished = true;
+      deps.progress.finish(outcome);
+    }
+  };
   progress.start({ fileName: file.name, phases: ['reading', 'building'] });
   try {
     const prepared = await prepareProjectInsertInWorker(
@@ -61,6 +71,7 @@ export async function runProjectInsert(
     let dropped: string[] = [];
     await runStepImport({
       ...deps.stepImport,
+      stillCurrent: deps.stillCurrent,
       file: new File(
         [prepared.stepText],
         `${exportFileStem(prepared.projectName)}.step`,
@@ -80,6 +91,10 @@ export async function runProjectInsert(
         (archived ? '.' : ' (source saved on this device only).') +
         projectInsertLeftOut(prepared, dropped)
     });
+    // Its reason is already in the status line.
+    if (!finished) {
+      progress.finish({ tone: 'warning', message: 'nothing was added' });
+    }
   } catch (error) {
     if (signal.aborted) {
       progress.finish({ tone: 'cancelled', message: 'nothing was added' });

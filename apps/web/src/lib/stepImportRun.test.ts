@@ -146,3 +146,60 @@ describe('runStepImport layout', () => {
     expect(finished).toEqual(['2 bodies']);
   });
 });
+
+describe('runStepImport project guard', () => {
+  // Review P1 (#1506): the commit hook binds to whichever project is open
+  // when it starts, so a switch during solid discovery landed the bodies in
+  // the project switched to.
+  it('lands nothing when the project changes during solid discovery', async () => {
+    const original = new CommandManager(
+      createProjectDocument('Original', toUserId('user_step_guard'))
+    );
+    const other = new CommandManager(
+      createProjectDocument('Other', toUserId('user_step_guard'))
+    );
+    let open = original;
+    let ran = false;
+    const statuses: string[] = [];
+    const result = await runStepImport({
+      file: new File([STEP_TEXT], 'Gearbox.step'),
+      contentType: 'model/step',
+      inspectSolids: async () => {
+        open = other;
+        return [0];
+      },
+      stillCurrent: () => open === original,
+      store: {
+        ...localStepImportSourceStore,
+        ensureLocalProjectStorage: async () => 'unavailable'
+      },
+      archive: async () => 'artifact_gearbox',
+      validatedFeature: {
+        reserve: () => ({ release() {} }),
+        run: async (_command, options) => {
+          ran = true;
+          open.execute(await options.finalize!());
+          return 'committed';
+        }
+      },
+      status: {
+        setStatus: (message) => statuses.push(message),
+        setFeatureFormError() {}
+      },
+      marks: {
+        inFlight: createInFlightImportChecksums(),
+        abandoned: new Set()
+      },
+      currentDocument: () => open.document,
+      editDisabledReason: () => null,
+      newId: () => crypto.randomUUID()
+    });
+    expect(result.outcome).toBe('failed');
+    expect(ran).toBe(false);
+    expect(listNodesByKind(original.document, 'feature')).toEqual([]);
+    expect(listNodesByKind(other.document, 'feature')).toEqual([]);
+    expect(statuses.at(-1)).toContain(
+      'the project changed before it could land'
+    );
+  });
+});

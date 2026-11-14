@@ -232,6 +232,14 @@ export interface StepImportRunDeps {
   currentDocument(): ProjectDocument | null;
   /** Non-null while editing is blocked: View mode, or another tab's lease. */
   editDisabledReason(): string | null;
+  /**
+   * False once the project this import was started for is no longer the one
+   * open. Checked just before the commit hook takes the run over: the hook
+   * binds to whichever project is open when it starts, so a switch during
+   * the storage write or solid discovery would otherwise land the bodies in
+   * the project switched to.
+   */
+  stillCurrent?(): boolean;
   /** Unique per call. `crypto.randomUUID` in the app. */
   newId(): string;
   /** Alternate atomic command for imports that carry additional evidence. */
@@ -593,6 +601,11 @@ export async function runStepImport(
     // fallback. So a candidate validated against a provisional local id
     // rebuilds identically once the finalized id replaces it.
     const localArtifactId = `artifact_local_${deps.newId()}`;
+    if (deps.stillCurrent && !deps.stillCurrent()) {
+      throw new Error(
+        `${file.name} was not imported: the project changed before it could land.`
+      );
+    }
     outcome = await deps.validatedFeature.run(makeImport(localArtifactId), {
       featureName: layout?.label ?? name,
       resultBodyId: payloads[0]!.ids.bodyId,
