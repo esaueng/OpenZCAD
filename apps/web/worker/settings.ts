@@ -23,7 +23,8 @@ import {
   type AssistantProvider,
   type EffectiveAssistantSettings,
   type UpdateAppSettingsRequest,
-  type UserId
+  type UserId,
+  normalizeSpaceMouseSettings
 } from '@openzcad/shared';
 import type { CloudflareEnv } from '@openzcad/cloudflare-adapters';
 import {
@@ -371,7 +372,11 @@ export function parseUpdateAppSettingsRequest(
         pencilDrawsOnly:
           typeof viewport.pencilDrawsOnly === 'boolean'
             ? viewport.pencilDrawsOnly
-            : DEFAULT_APP_SETTINGS.viewport.pencilDrawsOnly
+            : DEFAULT_APP_SETTINGS.viewport.pencilDrawsOnly,
+        // Optional and read leniently, like the panel widths: an older client
+        // omits it and its save carries the stored value forward
+        // (CarriedViewportField); a newer one's unknown parts fall back.
+        spaceMouse: normalizeSpaceMouseSettings(viewport.spaceMouse)
       },
       sketching: {
         gridVisible:
@@ -995,7 +1000,8 @@ export type CarriedViewportField =
   | 'touchHistoryGestures'
   | 'pencilDrawsOnly'
   | 'tangentEdges'
-  | 'orbitMode';
+  | 'orbitMode'
+  | 'spaceMouse';
 
 /**
  * The viewport preferences a settings PATCH leaves out because its client
@@ -1010,7 +1016,8 @@ export function settingsRequestOmittedViewportFields(
     'touchHistoryGestures',
     'pencilDrawsOnly',
     'tangentEdges',
-    'orbitMode'
+    'orbitMode',
+    'spaceMouse'
   ];
   if (!body || typeof body !== 'object') return fields;
   const settings = (body as Record<string, unknown>).settings;
