@@ -363,6 +363,18 @@ export class ProjectQuotaError extends Error {
   }
 }
 
+/**
+ * A save refused only because replaced heads are still being pruned: each
+ * attempt prunes a bounded number, so retrying makes progress (migration
+ * 0049). Retryable, unlike {@link ProjectQuotaError}.
+ */
+export class ProjectStorageCleanupPendingError extends Error {
+  constructor() {
+    super('Freeing space from earlier saves. Saving again shortly.');
+    this.name = 'ProjectStorageCleanupPendingError';
+  }
+}
+
 export class RevisionConflictError extends Error {
   constructor(
     readonly projectId: string,

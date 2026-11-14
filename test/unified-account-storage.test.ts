@@ -10,7 +10,9 @@ import {
 } from '@openzcad/cloudflare-adapters';
 import {
   ArtifactQuotaError,
-  prepareProjectStorageSnapshot
+  prepareProjectStorageSnapshot,
+  ProjectQuotaError,
+  ProjectStorageCleanupPendingError
 } from '@openzcad/persistence';
 import { toUserId } from '@openzcad/shared';
 import { migratedDatabase, sqliteD1 } from './support/sqlite-d1';
@@ -901,6 +903,118 @@ describe('a head-replacing save releases the head it replaces (migration 0049)',
     ).length;
     expect(removedStale).toBeGreaterThan(0);
     expect(stale()).toBe(500 - removedStale);
+  });
+
+  it('answers a save held back by a draining backlog retryably, and saves once it drains', async () => {
+    const db = migratedDatabase();
+    db.prepare(
+      `INSERT INTO users (id, email, created_at) VALUES (?, 'owner@example.com', ?)`
+    ).run(OWNER, CREATED);
+    const r2 = bucket();
+    const service = new D1R2PersistenceService({
+      DB: sqliteD1(db),
+      PROJECT_STORAGE: r2.bucket
+    });
+    let name = randomBytes(5_000).toString('hex');
+    let { document } = await service.createProject(toUserId(OWNER), { name });
+    // 25 replaced heads left behind by earlier failed deletes.
+    const insert = db.prepare(
+      `INSERT INTO project_document_objects
+         (id, project_id, object_key, checksum_sha256, logical_bytes,
+          stored_bytes, content_encoding, state, created_at)
+       VALUES (?, ?, ?, 'x', 1, 1, 'identity', 'committed', ?)`
+    );
+    for (let index = 0; index < 25; index += 1) {
+      insert.run(
+        `stale_${index}`,
+        document.projectId,
+        `stale/${index}`,
+        CREATED
+      );
+    }
+    const stored = () =>
+      (
+        db
+          .prepare(
+            `SELECT COALESCE((SELECT bytes FROM account_project_storage
+                              WHERE user_id = ?1), 0)
+                  + COALESCE((SELECT finalized_bytes + reserved_bytes
+                              FROM artifact_account_usage
+                              WHERE owner_user_id = ?1), 0) AS bytes`
+          )
+          .get(OWNER) as { bytes: number }
+      ).bytes;
+    const limit = (
+      db
+        .prepare(
+          'SELECT project_storage_limit_bytes AS bytes FROM users WHERE id = ?'
+        )
+        .get(OWNER) as { bytes: number }
+    ).bytes;
+    db.prepare(
+      `INSERT INTO artifacts
+         (id, project_id, kind, name, object_key, content_type, bytes,
+          metadata_json, created_at)
+       VALUES ('a_fill', ?, 'snapshot', 'fill.step', 'fill', 'model/step', ?,
+               '{}', ?)`
+    ).run(document.projectId, limit - stored(), CREATED);
+    const stale = () =>
+      (
+        db
+          .prepare(
+            `SELECT COUNT(*) AS n FROM project_document_objects
+             WHERE id LIKE 'stale\\_%' ESCAPE '\\'`
+          )
+          .get() as { n: number }
+      ).n;
+    const nextName = name.slice(0, -1_000);
+    const next = {
+      ...(JSON.parse(
+        JSON.stringify(document).replaceAll(name, nextName)
+      ) as typeof document),
+      version: document.version + 1
+    };
+    const shrink = () =>
+      service.saveDocument(toUserId(OWNER), {
+        projectId: document.projectId,
+        expectedVersion: document.version,
+        document: next
+      });
+    // Each attempt drains a bounded share and answers retryably, not with
+    // a final quota refusal the client would halt on.
+    for (const left of [17, 9, 1]) {
+      await expect(shrink()).rejects.toBeInstanceOf(
+        ProjectStorageCleanupPendingError
+      );
+      expect(stale()).toBe(left);
+    }
+    // The last attempt drains the rest, is credited, and saves.
+    await shrink();
+    expect(stale()).toBe(0);
+    const head = db
+      .prepare('SELECT document_version AS version FROM projects WHERE id = ?')
+      .get(document.projectId) as { version: number };
+    expect(head.version).toBe(next.version);
+    expect(stored()).toBeLessThanOrEqual(limit);
+    document = next;
+    name = nextName;
+    // With nothing left to prune, genuine growth is still a final refusal.
+    const grown = {
+      ...(JSON.parse(
+        JSON.stringify(document).replaceAll(
+          name,
+          name + randomBytes(4_000).toString('hex')
+        )
+      ) as typeof document),
+      version: document.version + 1
+    };
+    await expect(
+      service.saveDocument(toUserId(OWNER), {
+        projectId: document.projectId,
+        expectedVersion: document.version,
+        document: grown
+      })
+    ).rejects.toBeInstanceOf(ProjectQuotaError);
   });
 
   it('refuses further credited saves once pruning fails, so storage stays within one replacement', async () => {

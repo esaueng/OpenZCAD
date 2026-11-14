@@ -1082,6 +1082,41 @@ describe('cloud project autosave — refusals', () => {
     controller.dispose();
   });
 
+  it('retries a save held back while earlier saves free space, then saves', async () => {
+    const document = documentAt(2);
+    const respond = vi
+      .fn<
+        (input: {
+          expectedVersion: number;
+          document: ProjectDocument;
+        }) => Promise<SaveProjectDocumentResponse>
+      >()
+      .mockRejectedValueOnce(
+        new ApiError(
+          503,
+          'Freeing space from earlier saves. Saving again shortly.',
+          'PROJECT_STORAGE_CLEANUP_PENDING'
+        )
+      )
+      .mockImplementation(async (input) => ({
+        projectId: input.document.projectId,
+        version: input.document.version,
+        updatedAt: '2026-01-01T00:00:00.000Z'
+      }));
+    const { controller, statuses } = harness({ respond });
+    controller.openProject(document.projectId, 2);
+    controller.schedule(documentAt(3, document));
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+    await controller.whenIdle();
+    expect(lastState(statuses)).not.toBe('refused');
+    // No further edit: the controller retries on its own.
+    await vi.advanceTimersByTimeAsync(60_000);
+    await controller.whenIdle();
+    expect(respond).toHaveBeenCalledTimes(2);
+    expect(controller.hasPendingChanges).toBe(false);
+    controller.dispose();
+  });
+
   it.each([
     [403, 'FORBIDDEN'],
     [403, 'PROJECT_UPDATE_REQUIRED'],

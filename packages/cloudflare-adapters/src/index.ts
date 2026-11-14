@@ -36,6 +36,7 @@ import {
   getInMemoryPersistence,
   ProjectAdoptionError,
   ProjectQuotaError,
+  ProjectStorageCleanupPendingError,
   PROJECT_ACTIVE_INVITATION_CAP,
   PROJECT_INVITATION_RATE_LIMIT,
   PROJECT_INVITATION_RATE_WINDOW_SECONDS,
@@ -6789,27 +6790,44 @@ export class D1R2PersistenceService implements PersistenceService {
       }
     }
 
-    if (options?.replacesHead) {
-      // A replaced head whose pruning failed (an R2 delete that did not go
-      // through) withholds the credit of every later replacement (migration
-      // 0049): prune again before measuring, so a temporary failure does
-      // not block the project's saves for good. Document object keys are
-      // random, so this is the same safe prune that follows every save.
-      await this.pruneUnreferencedProjectObjects(
-        document.projectId,
-        PRE_SAVE_OBJECT_PRUNE_LIMIT
-      );
-    }
+    // A replaced head whose pruning failed (an R2 delete that did not go
+    // through) withholds the credit of every later replacement (migration
+    // 0049): prune again before measuring, so a temporary failure does not
+    // block the project's saves for good. Document object keys are random,
+    // so this is the same safe prune that follows every save. Bounded; a
+    // larger backlog drains over retries (see the refusal below).
+    const pruned = options?.replacesHead
+      ? await this.pruneUnreferencedProjectObjects(
+          document.projectId,
+          PRE_SAVE_OBJECT_PRUNE_LIMIT
+        )
+      : null;
     const released = options?.replacesHead
       ? await this.releasedHead(document.projectId)
       : null;
     const linksAssets = await isObjectSupersedesReady(this.env.DB);
     if (!options?.stagedForDecryption) {
-      await this.assertAccountProjectStorageCapacity(
-        document.ownerUserId,
-        prepared.storedBytes + newAssetBytes,
-        released?.storedBytes ?? 0
-      );
+      try {
+        await this.assertAccountProjectStorageCapacity(
+          document.ownerUserId,
+          prepared.storedBytes + newAssetBytes,
+          released?.storedBytes ?? 0
+        );
+      } catch (error) {
+        // The bounded prune made progress but left replaced heads behind,
+        // and those withhold this save's credit: the refusal is not final.
+        // Answer retryably so the client tries again and the next prune
+        // drains more, instead of halting on a quota it may not exceed.
+        if (
+          error instanceof ProjectQuotaError &&
+          pruned &&
+          pruned.deleted > 0 &&
+          pruned.remaining
+        ) {
+          throw new ProjectStorageCleanupPendingError();
+        }
+        throw error;
+      }
     }
 
     await Promise.all(
@@ -7196,10 +7214,11 @@ export class D1R2PersistenceService implements PersistenceService {
   private async pruneUnreferencedProjectObjects(
     projectId: string,
     limit: number = OBJECT_PRUNE_LIMIT
-  ): Promise<void> {
+  ): Promise<{ deleted: number; remaining: boolean }> {
+    const none = { deleted: 0, remaining: false };
     const bucket = this.projectStorageBucket();
     if (!bucket) {
-      return;
+      return none;
     }
     try {
       const objects = await this.env
@@ -7215,10 +7234,12 @@ export class D1R2PersistenceService implements PersistenceService {
              )
            LIMIT ?`
         )
-        .bind(projectId, limit)
+        // One more than the bound, to tell whether any are left over.
+        .bind(projectId, limit + 1)
         .all<{ id: string; object_key: string }>();
+      const selected = objects.results ?? [];
       const results = await Promise.allSettled(
-        (objects.results ?? []).map(async (row) => {
+        selected.slice(0, limit).map(async (row) => {
           await bucket.delete(row.object_key);
           return row;
         })
@@ -7235,8 +7256,13 @@ export class D1R2PersistenceService implements PersistenceService {
           )
         );
       }
+      return {
+        deleted: deleted.length,
+        remaining: selected.length > deleted.length
+      };
     } catch {
       // Object cleanup is retryable housekeeping; the committed save wins.
+      return none;
     }
   }
 
