@@ -27,7 +27,7 @@
     {"name":"SHARE_LINK_LIMITER", "namespace_id":"2026111304", "simple":{"limit":300,"period":60}},
     {"name":"ACCOUNT_READ_LIMITER", "namespace_id":"2026111305", "simple":{"limit":1200,"period":60}},
     {"name":"DESKTOP_START_LIMITER", "namespace_id":"2026111306", "simple":{"limit":10,"period":60}},
-    {"name":"SHARE_READ_CEILING_LIMITER", "namespace_id":"2026111307", "simple":{"limit":6000,"period":60}}
+    {"name":"SHARE_READ_CEILING_LIMITER", "namespace_id":"2026111307", "simple":{"limit":30000,"period":60}}
   ],
   "assets": {
     "directory": "./apps/web/dist",

@@ -42,6 +42,10 @@ import {
   enforcePublicRequestRateLimit,
   enforceRequestLimit,
   enforceWorkersCeiling,
+  SHARED_LOAD_GRANT_SECONDS,
+  SHARED_LOAD_MAX_LOADS,
+  SHARED_LOAD_SLACK,
+  SHARED_LOAD_SOURCE_FACTOR,
   isApiRateLimitSpent,
   markApiRateLimitSpent,
   publicRequestBucket,
@@ -253,10 +257,6 @@ const MAX_AUTH_BODY_BYTES = 4 * 1024;
  * within the grant's lifetime adds another load's worth, up to a cap, so
  * several viewers behind one address can open the link together.
  */
-const SHARED_LOAD_SOURCE_FACTOR = 2;
-const SHARED_LOAD_SLACK = 32;
-const SHARED_LOAD_MAX_LOADS = 8;
-const SHARED_LOAD_GRANT_SECONDS = 15 * 60;
 /** Cache only a proven-ready schema; failures stay retryable without a deploy. */
 const projectStorageReadyEnvironments = new WeakSet<Env>();
 const d1ProjectStorageReadyEnvironments = new WeakSet<Env>();

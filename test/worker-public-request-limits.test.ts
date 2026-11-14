@@ -6,6 +6,10 @@ import { D1R2PersistenceService } from '@openzcad/cloudflare-adapters';
 import worker from '../apps/web/worker/index';
 import {
   REQUEST_LIMITS,
+  SHARED_LOAD_CEILING_SOURCES,
+  SHARED_LOAD_MAX_LOADS,
+  SHARED_LOAD_SLACK,
+  SHARED_LOAD_SOURCE_FACTOR,
   publicRequestBucket,
   purgeStaleRateLimitBuckets
 } from '../apps/web/worker/apiRateLimit';
@@ -682,6 +686,38 @@ describe('plaintext share-link loads', () => {
       const response = await get(env, `/api/share/sources/artifact_${index}`);
       expect(response.status, `source ${index}`).toBe(200);
     }
+  });
+
+  it('admit the supported concurrent large-model loads under the share-read ceiling', () => {
+    const perViewer =
+      1 +
+      SHARED_LOAD_CEILING_SOURCES * SHARED_LOAD_SOURCE_FACTOR +
+      SHARED_LOAD_SLACK;
+    expect(SHARED_LOAD_MAX_LOADS * perViewer).toBeLessThanOrEqual(
+      REQUEST_LIMITS.SHARE_READ_CEILING_LIMITER
+    );
+  });
+
+  it('load a large model through an active, counting ceiling binding', async () => {
+    fixMinute();
+    sharedLink(320);
+    const { env } = hostedEnv();
+    let used = 0;
+    const ceiling = {
+      limit: vi.fn(async () => ({
+        success: ++used <= REQUEST_LIMITS.SHARE_READ_CEILING_LIMITER
+      }))
+    };
+    const limitedEnv = { ...env, SHARE_READ_CEILING_LIMITER: ceiling };
+    expect((await get(limitedEnv, '/api/share')).status).toBe(200);
+    for (let index = 0; index < 320; index += 1) {
+      const response = await get(
+        limitedEnv,
+        `/api/share/sources/artifact_${index}`
+      );
+      expect(response.status, `source ${index}`).toBe(200);
+    }
+    expect(ceiling.limit).toHaveBeenCalledTimes(321);
   });
 
   it('count reads past the load budget, or of a link never loaded, per address', async () => {

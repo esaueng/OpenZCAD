@@ -92,6 +92,23 @@ export interface WorkersRateLimit {
 }
 
 /**
+ * The plaintext share-link load budget (documented where index.ts grants
+ * it): reads per source, slack, loads per grant and the grant's lifetime.
+ */
+export const SHARED_LOAD_SOURCE_FACTOR = 2;
+export const SHARED_LOAD_SLACK = 32;
+export const SHARED_LOAD_MAX_LOADS = 8;
+export const SHARED_LOAD_GRANT_SECONDS = 15 * 60;
+
+/**
+ * The largest model, in import sources, that `SHARED_LOAD_MAX_LOADS`
+ * viewers behind one address can each open within one minute under the
+ * share-read ceiling (judgment: well above the sources of models seen so
+ * far).
+ */
+export const SHARED_LOAD_CEILING_SOURCES = 1_800;
+
+/**
  * Requests per minute for each Workers rate-limit binding, keyed by binding
  * name. The bindings are checked before any D1 work; their `simple.limit`
  * (with a 60-second `period`) in wrangler.jsonc and
@@ -130,10 +147,13 @@ export const REQUEST_LIMITS = {
   /**
    * Every plaintext share-link read per address, checked in the Workers
    * binding alone before a load's own budget is looked up in D1, so a
-   * flood of reads never reaches D1 (judgment: eight loads of a model with
-   * a few thousand sources stay well under it).
+   * flood of reads never reaches D1. Sized so `SHARED_LOAD_MAX_LOADS`
+   * viewers behind one address can each open a model of
+   * `SHARED_LOAD_CEILING_SOURCES` sources within one minute (8 × (1800 × 2
+   * + 32) + 8 = 29,064), which test/worker-public-request-limits.test.ts
+   * checks.
    */
-  SHARE_READ_CEILING_LIMITER: 6_000,
+  SHARE_READ_CEILING_LIMITER: 30_000,
   /**
    * Signed-in GET and HEAD requests, per account. Writes keep their tighter
    * `api:` budget; reads get one generous enough for loading a large
