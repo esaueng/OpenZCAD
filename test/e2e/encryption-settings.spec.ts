@@ -182,6 +182,10 @@ test('sets up encryption only after the recovery key is confirmed', async ({
   await expect(settings).toContainText(
     'your encrypted cloud projects cannot be recovered, by you or by us'
   );
+  // A passkey added later is a way back too, so the warning names it.
+  await expect(settings).toContainText(
+    'every device, any passkey you add, and this recovery key'
+  );
   const proceed = settings.getByRole('button', { name: 'Continue' });
   await expect(proceed).toBeDisabled();
   await settings
@@ -205,6 +209,10 @@ test('sets up encryption only after the recovery key is confirmed', async ({
   await expect(settings.getByText('Certified', { exact: true })).toBeVisible();
   await expect(settings.getByLabel('Your fingerprint')).toHaveText(
     /^(\d{5} ){7}\d{5}$/
+  );
+  // Replacing keys makes a new identity, so the hint must not call it fixed.
+  await expect(settings).toContainText(
+    'Your identity. It changes only when you replace your keys.'
   );
   await expect(settings.getByText('Unlocked', { exact: true })).toBeVisible();
   // The server holds wrapped keys only.
