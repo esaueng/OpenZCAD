@@ -38,6 +38,27 @@ describe('workspace tour', () => {
     );
   });
 
+  it('speaks to a finger on a touch-only device (I12)', () => {
+    for (const step of WORKSPACE_TOUR_STEPS) {
+      const touch = tourStepBody(step, () => 'B', true);
+      expect(touch.length).toBeGreaterThan(0);
+      // No key to press, nothing to click or right-click.
+      expect(touch).not.toMatch(/\bpress\b|\bclick|right-click|\bEnter\b/i);
+    }
+    const [create, , history] = WORKSPACE_TOUR_STEPS;
+    expect(tourStepBody(create!, () => 'B', true)).toContain(
+      'Tap Box (the cube)'
+    );
+    expect(tourStepBody(create!, () => 'B', true)).toContain('then Done');
+    expect(tourStepBody(history!, () => 'B', true)).toContain(
+      'touch and hold a row'
+    );
+    // The desktop wording is unchanged.
+    expect(tourStepBody(history!, () => 'B')).toContain(
+      'right-click a row for actions'
+    );
+  });
+
   it('advances exactly through the steps the user already did', () => {
     expect(advanceThroughCompleted(0, signals())).toBe(0);
     expect(advanceThroughCompleted(0, signals({ featureCount: 1 }))).toBe(1);

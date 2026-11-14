@@ -5,7 +5,12 @@ import {
   useState,
   type CSSProperties
 } from 'react';
-import { ArrowLeftRight, Crosshair, Download, Slice } from 'lucide-react';
+import {
+  ArrowLeftRight,
+  Crosshair,
+  Download,
+  SquareSplitVertical
+} from 'lucide-react';
 import type { SectionPlaneId, SectionViewSettings } from '@openzcad/viewport';
 import {
   describeSectionOutline,
@@ -245,7 +250,11 @@ export function SectionToolbox({
       aria-labelledby={headingId}
     >
       <div className="rail-section-heading">
-        <Slice size={14} className="rail-section-glyph" aria-hidden="true" />
+        <SquareSplitVertical
+          size={14}
+          className="rail-section-glyph"
+          aria-hidden="true"
+        />
         <strong id={headingId}>Section view</strong>
         <span
           className={`rail-section-state is-${stateKind}`}

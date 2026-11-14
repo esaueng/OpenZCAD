@@ -1295,8 +1295,8 @@
 
 /* View's bar stands on the right at the stage's middle, a vertical rail
    like Build's instruments (View and Tweak have no instrument rail of their
-   own): Measure, then fit, views, grid, display, projection and orbit mode, icons only
-   with their names as tooltips. The views panel opens beside it, leftward. */
+   own): Measure, then fit, grid, projection, orbit mode, section, display
+   and views, Build's order (I52), icons only with their names as tooltips. The views panel opens beside it, leftward. */
 .workspace.column-layout .palette-float:has(.view-mode-bar) {
   top: var(--stage-middle);
   right: var(--island-gap);
@@ -1316,9 +1316,9 @@
 }
 
 /* Keep the lazy fallback in the same right-hand slot as the loaded rail.
-   Its seven 30px controls, divider, gaps and padding occupy 241px. */
+   Its eight 30px controls, divider, gaps and padding occupy 273px. */
 .workspace.column-layout .view-tools-loading {
-  min-height: 241px;
+  min-height: 273px;
   justify-content: center;
 }
 
@@ -2899,6 +2899,15 @@ button.command-rail.is-suggested {
     .palette-float:has(.view-mode-bar) {
     top: var(--stage-top);
     transform: none;
+  }
+
+  /* Above the open sheet the bar has room for seven controls, not eight:
+     Section waits for View and Build here, as it waits behind More on
+     Build's short phone rail. The order of the rest is unchanged (I52). */
+  .workspace.column-layout:has(.tweak-flyouts.is-open)
+    .view-mode-bar
+    .view-mode-section-toggle {
+    display: none;
   }
 
   .tweak-flyouts {

@@ -728,6 +728,8 @@ async function writeGeneration(
     history: E2eeAccountKeyHistoryInput | null;
     /** For a replacement: what must still hold when the identity lands. */
     fence?: { sql: string; binds: string[] };
+    /** A replacement that drops devices ends the other sessions. */
+    endSessions?: boolean;
   }
 ): Promise<boolean> {
   const now = new Date().toISOString();
@@ -827,7 +829,8 @@ async function writeGeneration(
         `DELETE FROM e2ee_identities
          WHERE user_id = ? AND generation < ? AND ${guard.sql}`
       )
-      .bind(userId, input.generation - PREVIOUS_GENERATIONS, ...guard.binds)
+      .bind(userId, input.generation - PREVIOUS_GENERATIONS, ...guard.binds),
+    ...(input.endSessions ? endOtherSessions(db, userId, guard) : [])
   ];
   const results = await db.batch(statements);
   return (results[0]?.meta?.changes ?? 0) === 1;
@@ -974,8 +977,9 @@ async function handleReplaceIdentity(
     }
     throw error;
   }
+  const dropped = removedDevices(oldList.devices, list.head.devices);
   const signerFence = await projectSignerFence(db, userId, [
-    ...removedDevices(oldList.devices, list.head.devices),
+    ...dropped,
     // Devices already revoked in this generation: their cutoffs name this
     // generation's list, which the new genesis no longer carries.
     ...oldList.revoked
@@ -998,7 +1002,8 @@ async function handleReplaceIdentity(
       entryHash: toHex(oldList.headHash)
     },
     history,
-    fence: signerFence
+    fence: signerFence,
+    endSessions: dropped.length > 0
   });
   if (!written) {
     await refuseIfSigned(db, signerFence);
@@ -1218,6 +1223,49 @@ async function refuseIfSigned(
   }
 }
 
+/**
+ * Ends every other session of the account once a device-list write that
+ * removes a device lands (guarded like that write's other statements):
+ * browser sessions are deleted and desktop sessions revoked, except the
+ * one making the write. Sessions are not tied to devices, so the removed
+ * device's own session cannot be told apart; signing the others out is
+ * what keeps a removed device from acting through a session it still
+ * holds. The account's remaining devices sign in again and keep their
+ * device keys.
+ */
+function endOtherSessions(
+  db: WriteDatabase,
+  userId: string,
+  guard: { sql: string; binds: readonly unknown[] }
+): D1PreparedStatement[] {
+  const credential = db.authorization.credential;
+  const browserHash =
+    credential?.table === 'auth_sessions' ? credential.tokenHash : '';
+  const desktopHash =
+    credential?.table === 'desktop_access_tokens' ? credential.tokenHash : '';
+  const timestamp = Math.floor(Date.now() / 1000);
+  const keptDesktop = `session_id NOT IN (SELECT session_id FROM desktop_access_tokens
+                                          WHERE token_hash = ? AND user_id = ?)`;
+  return [
+    db
+      .prepare(
+        `DELETE FROM auth_sessions
+         WHERE user_id = ? AND token_hash <> ? AND ${guard.sql}`
+      )
+      .bind(userId, browserHash, ...guard.binds),
+    ...(['desktop_access_tokens', 'desktop_refresh_tokens'] as const).map(
+      (table) =>
+        db
+          .prepare(
+            `UPDATE ${table} SET revoked_at = COALESCE(revoked_at, ?)
+             WHERE user_id = ? AND revoked_at IS NULL AND ${keptDesktop}
+               AND ${guard.sql}`
+          )
+          .bind(timestamp, userId, desktopHash, userId, ...guard.binds)
+    )
+  ];
+}
+
 async function handleAppend(
   db: WriteDatabase,
   userId: string,
@@ -1431,7 +1479,11 @@ async function handleAppend(
       )
     ),
     ...(history ? [insertHistory(db, userId, history, now, guard)] : []),
-    ...(cutoffs ? [cutoffs.insert(guard, now)] : [])
+    ...(cutoffs ? [cutoffs.insert(guard, now)] : []),
+    // A removed device keeps no session to act through.
+    ...(list.head.revoked.some((revocation) => revocation.kind === 'device')
+      ? endOtherSessions(db, userId, guard)
+      : [])
   ];
   const results = await db.batch(statements);
   if ((results[0]?.meta?.changes ?? 0) !== 1) {

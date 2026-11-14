@@ -28,10 +28,16 @@ export interface WorkspaceTourSignals {
 /** A command's live key as shown, or undefined when it is unbound. */
 export type TourKeyLabel = (commandId: string) => string | undefined;
 
+/**
+ * A step's words: the touch wording on a device that only takes touch
+ * (`touch`), where there is no key to press or button to right-click.
+ */
 export function tourStepBody(
   step: WorkspaceTourStep,
-  keyLabel: TourKeyLabel
+  keyLabel: TourKeyLabel,
+  touch = false
 ): string {
+  if (touch) return step.touchBody;
   return typeof step.body === 'function' ? step.body(keyLabel) : step.body;
 }
 
@@ -43,6 +49,11 @@ export interface WorkspaceTourStep {
    * is what the tour teaches; read it through `tourStepBody`.
    */
   body: string | ((keyLabel: TourKeyLabel) => string);
+  /**
+   * The same lesson for a finger: tap rather than click, the card's Done
+   * rather than Enter, a held row rather than a right-click (I12).
+   */
+  touchBody: string;
   /** Chrome region the step points at; highlighted while the step is up. */
   targetSelector: string | null;
   /** True when the signals show the user already did this step's action. */
@@ -67,6 +78,8 @@ export const WORKSPACE_TOUR_STEPS: readonly WorkspaceTourStep[] = [
       const boxKey = keyLabel('tool-box');
       return `Pick a tool from the rail on the left — click Box (the cube)${boxKey ? `, or press ${boxKey},` : ''} then press Enter to create it. Select a face, edge or body and the rail shows that pick's tools instead, under its name; Tools at its foot opens the rest.`;
     },
+    touchBody:
+      'Tap Box (the cube) in the rail on the left, then Done on its card to create it. Tap a face, edge or body and the rail shows that pick’s tools instead; Tools at its foot opens the rest.',
     targetSelector: '.tool-palette',
     isComplete: (signals) => signals.featureCount > 0
   },
@@ -74,6 +87,8 @@ export const WORKSPACE_TOUR_STEPS: readonly WorkspaceTourStep[] = [
     id: 'inspect',
     title: 'Select to edit',
     body: 'Click a face or an edge on the model. The tool card that appears offers the exact edits that surface supports — drag the handle, or tap the value to type.',
+    touchBody:
+      'Tap a face or an edge on the model. The tool card that appears offers the exact edits that surface supports — drag the handle, or tap the value to type it.',
     targetSelector: null,
     isComplete: (signals) => signals.hasSelection
   },
@@ -81,6 +96,8 @@ export const WORKSPACE_TOUR_STEPS: readonly WorkspaceTourStep[] = [
     id: 'history',
     title: 'The history is the model',
     body: 'Open History from the rail on the right. Every feature lands there and replays in order. Drag the grip to reorder, right-click a row for actions, and roll back with the clock on a row.',
+    touchBody:
+      'Tap History in the rail on the right. Every feature lands there and replays in order. Drag the grip to reorder, touch and hold a row for its actions, and roll back with the clock on a row.',
     targetSelector: '.rail-panels [aria-label="History panel"]',
     // Never done ahead of time: the step is how the user learns the history
     // is the model, so it is always shown. Opening History from it is the
@@ -92,6 +109,8 @@ export const WORKSPACE_TOUR_STEPS: readonly WorkspaceTourStep[] = [
     id: 'export',
     title: 'Take it with you',
     body: 'Export writes STEP for CAD, STL and 3MF for printing, and DXF from any planar face. Autosave keeps the project on this device while you work.',
+    touchBody:
+      'File › Export writes STEP for CAD, STL and 3MF for printing, and DXF from any planar face. Autosave keeps the project on this device while you work.',
     targetSelector: null,
     isComplete: (signals) => signals.exportSeen
   }

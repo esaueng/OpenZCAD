@@ -611,6 +611,17 @@ export const isE2eeProjectGroupStorageReady = cachedSchemaProbe(
   (row) => row?.ready === E2EE_PROJECT_GROUP_TABLES.length
 );
 
+/**
+ * Migration 0048: each MLS Commit keeps its submitting device's signature.
+ * Commits are refused (503) until it exists, since only signed Commits
+ * count as a device removal's rotation.
+ */
+export const isE2eeCommitSignatureStorageReady = cachedSchemaProbe(
+  `SELECT COUNT(*) AS ready FROM pragma_table_info('e2ee_mls_commits')
+   WHERE name = 'sender_signature'`,
+  (row) => row?.ready === 1
+);
+
 /** Migration 0044: account-authenticated MLS roots and membership state. */
 export const isE2eeProjectAuthorityStorageReady = cachedSchemaProbe(
   `SELECT COUNT(*) AS ready FROM pragma_table_info('e2ee_project_authority')
