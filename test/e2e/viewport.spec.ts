@@ -2359,10 +2359,16 @@ test('the sketch status does not promise an exit Escape will not make', async ({
   // First Escape: still in the sketch, now on the select tool.
   await page.keyboard.press('Escape');
   await expect(finish).toBeVisible();
-  await expect(status).toContainText('leaves the sketch');
+  await expect(status).toContainText('Esc twice leaves the sketch');
 
-  // Second Escape leaves, and says so rather than leaving the "Sketching on"
-  // message standing over a workspace the sketch has already been left.
+  // I43: the second Escape only asks, so a reflex double press never drops
+  // out of the sketch.
+  await page.keyboard.press('Escape');
+  await expect(finish).toBeVisible();
+  await expect(status).toContainText('Press Esc again to leave the sketch');
+
+  // The confirming press leaves, and says so rather than leaving the
+  // "Sketching on" message standing over a workspace already left.
   await page.keyboard.press('Escape');
   await expect(finish).toBeHidden();
   await expect(status).toContainText('Sketch closed');
