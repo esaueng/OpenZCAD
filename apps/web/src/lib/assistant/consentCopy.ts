@@ -173,5 +173,13 @@ function endpointHost(endpoint: string | undefined): string | null {
 /** The sentences around the list; shown in the dialog and on Settings. */
 export const ASSISTANT_CONSENT_TRANSIT =
   'OpenZCAD’s server reads each request in plaintext to pass it on, adding its own instructions, any custom instructions from your settings, and an identifier derived from your account.';
+/**
+ * What the provider may keep. OpenRouter takes an encrypted project's
+ * request only to providers whose policy is not to store or train on it
+ * (`data_collection: 'deny'`, ADR-024 amendment 2026-11-14); other routes
+ * follow their own terms.
+ */
+export const ASSISTANT_CONSENT_RETENTION =
+  'Through OpenRouter, it goes only to providers whose policy is not to store or train on it; OpenAI is asked not to store it; any other provider’s own terms decide what it keeps.';
 export const ASSISTANT_CONSENT_FINALITY =
   'What has been sent cannot be recalled. Stopping only prevents later requests.';

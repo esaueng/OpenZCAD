@@ -1353,6 +1353,76 @@ describe('assistant integration', () => {
     });
   });
 
+  it('routes an encrypted project only to providers that do not collect it', async () => {
+    const reply = () =>
+      Response.json({
+        choices: [
+          {
+            finish_reason: 'stop',
+            message: {
+              content: JSON.stringify({
+                replyKind: 'message',
+                proposal: null,
+                questions: null,
+                message: 'Ready.',
+                readings: null
+              })
+            }
+          }
+        ]
+      });
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) => reply()
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const env = {
+      ENVIRONMENT: 'beta' as const,
+      AI_PROVIDER: 'openrouter' as const,
+      OPENROUTER_API_KEY: 'openrouter-test-key'
+    };
+    const providerOf = (call: number) =>
+      (
+        JSON.parse(fetchMock.mock.calls[call]![1]?.body as string) as {
+          provider: Record<string, unknown>;
+        }
+      ).provider;
+
+    await streamAssistantProposal(
+      { ...input, encryptedProject: true },
+      env,
+      'user_test'
+    );
+    expect(providerOf(0)).toMatchObject({
+      require_parameters: true,
+      data_collection: 'deny'
+    });
+    // A plaintext project's request is unchanged.
+    await streamAssistantProposal(input, env, 'user_test');
+    expect(providerOf(1)).not.toHaveProperty('data_collection');
+    // The Responses route too, with a personal key and strict schema model.
+    fetchMock.mockImplementation(
+      async () => new Response('upstream down', { status: 500 })
+    );
+    await streamAssistantProposal(
+      { ...input, encryptedProject: true },
+      { ENVIRONMENT: 'beta' as const },
+      'user_personal',
+      {
+        provider: 'openrouter',
+        apiKey: 'personal-key',
+        model: 'openai/gpt-5.6-sol',
+        reasoningEffort: 'high',
+        maxOutputTokens: 32_000,
+        timeoutMs: 30_000,
+        customInstructions: ''
+      }
+    );
+    expect(fetchMock.mock.calls[2]![0]).toBe(
+      'https://openrouter.ai/api/v1/responses'
+    );
+    expect(providerOf(2)).toMatchObject({ data_collection: 'deny' });
+  });
+
   it('does not fall back to a paid provider when the public free key is missing', async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);

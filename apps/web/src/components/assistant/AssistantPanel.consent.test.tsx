@@ -242,6 +242,9 @@ describe('assistant consent on an encrypted project (ADR-024 6-1)', () => {
       expect(dialog.textContent).toContain(label);
     }
     expect(dialog.textContent).toContain('cannot be recalled');
+    expect(dialog.textContent).toContain(
+      'only to providers whose policy is not to store or train on it'
+    );
     await user.click(within(dialog).getByRole('button', { name: 'Not now' }));
     expect(await screen.findByText(ASSISTANT_CONSENT_NOT_GIVEN)).toBeTruthy();
     expect(proposals).toEqual([]);
