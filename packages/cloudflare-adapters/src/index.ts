@@ -802,6 +802,17 @@ export const isE2eeProjectMigrationStorageReady = cachedSchemaProbe(
  * until the cutover. Only the reverse routes and the usage reads that must
  * agree with its triggers name it, each after asking this.
  */
+/**
+ * Whether migration 0049's `project_document_objects.supersedes_object_id`
+ * exists: a head-replacing write names the head it releases there, and its
+ * admission credits it.
+ */
+export const isObjectSupersedesReady = cachedSchemaProbe(
+  `SELECT COUNT(*) AS ready FROM pragma_table_info('project_document_objects')
+   WHERE name = 'supersedes_object_id'`,
+  (row) => row?.ready === 1
+);
+
 export const isE2eeReverseStorageReady = cachedSchemaProbe(
   `SELECT COUNT(*) AS ready FROM sqlite_master WHERE type = 'view'
    AND name = 'e2ee_decrypt_staged_projects'`,
@@ -3137,7 +3148,10 @@ export class D1R2PersistenceService implements PersistenceService {
         access.ownerUserId,
         request.expectedVersion
       );
-      const write = await this.putProjectStorageObjects(document, { storage });
+      const write = await this.putProjectStorageObjects(document, {
+        storage,
+        replacesHead: true
+      });
       const updatedAt = nowIso();
       const envelope = projectObjectEnvelope(document, write.objectId);
       const assetStatements = this.projectAssetStatements(
@@ -4260,7 +4274,8 @@ export class D1R2PersistenceService implements PersistenceService {
         request.expectedVersion
       );
       const write = await this.putProjectStorageObjects(normalized, {
-        storage
+        storage,
+        replacesHead: true
       });
       const envelope = projectObjectEnvelope(normalized, write.objectId);
       const assetStatements = this.projectAssetStatements(
@@ -6688,6 +6703,12 @@ export class D1R2PersistenceService implements PersistenceService {
        * toward no quota until the cutover (migration 0043).
        */
       stagedForDecryption?: boolean;
+      /**
+       * The write moves the project's head to this object (an autosave or
+       * named save): it releases the current head once nothing else names
+       * it, so its admission credits that head (migration 0049).
+       */
+      replacesHead?: boolean;
     }
   ): Promise<ProjectStorageWrite> {
     const bucket = this.projectStorageBucket();
@@ -6760,10 +6781,14 @@ export class D1R2PersistenceService implements PersistenceService {
       }
     }
 
+    const released = options?.replacesHead
+      ? await this.releasedHead(document.projectId)
+      : null;
     if (!options?.stagedForDecryption) {
       await this.assertAccountProjectStorageCapacity(
         document.ownerUserId,
-        prepared.storedBytes + newAssetBytes
+        prepared.storedBytes + newAssetBytes,
+        released?.storedBytes ?? 0
       );
     }
 
@@ -6787,8 +6812,42 @@ export class D1R2PersistenceService implements PersistenceService {
       objectKey,
       createdAt,
       prepared,
-      missingAssets
+      missingAssets,
+      supersedesObjectId: released?.objectId ?? null
     };
+  }
+
+  /**
+   * The head a head-replacing write releases, as migration 0049's object
+   * admission credits it: the project's current head object, named by no
+   * save state and claimed by no pending object. Null before migration 0049
+   * or when there is none.
+   */
+  private async releasedHead(
+    projectId: string
+  ): Promise<{ objectId: string; storedBytes: number } | null> {
+    if (!(await isObjectSupersedesReady(this.env.DB))) return null;
+    const row = await this.env
+      .DB!.prepare(
+        `SELECT head.id AS object_id, head.stored_bytes AS stored_bytes
+         FROM projects hp
+         JOIN project_document_objects head ON head.id = hp.document_object_id
+         WHERE hp.id = ?1 AND head.project_id = ?1
+           AND NOT EXISTS (
+             SELECT 1 FROM revisions hr WHERE hr.document_object_id = head.id
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM project_document_objects claim
+             WHERE claim.project_id = ?1
+               AND claim.supersedes_object_id = head.id
+               AND claim.state = 'pending'
+           )`
+      )
+      .bind(projectId)
+      .first<{ object_id: string; stored_bytes: number }>();
+    return row
+      ? { objectId: row.object_id, storedBytes: row.stored_bytes }
+      : null;
   }
 
   private async assertAccountProjectCount(userId: UserId): Promise<void> {
@@ -6817,7 +6876,9 @@ export class D1R2PersistenceService implements PersistenceService {
    */
   private async assertAccountProjectStorageCapacity(
     userId: UserId,
-    incomingBytes: number
+    incomingBytes: number,
+    /** What the write releases (a replaced head), as its admission credits. */
+    releasedBytes = 0
   ): Promise<void> {
     const projects = await this.accountProjectStorageBytes(userId);
     const files = await this.accountArtifactQuotaBytes(userId);
@@ -6831,7 +6892,10 @@ export class D1R2PersistenceService implements PersistenceService {
       throw new ProjectObjectStorageError('Project storage usage is invalid.');
     }
     const limits = await this.ownerEntitlements(userId);
-    if (projects + files + incomingBytes > limits.storageLimitBytes) {
+    // Only growth is refused: a save that releases at least what it adds
+    // passes even at or over the allowance.
+    const growth = incomingBytes - releasedBytes;
+    if (growth > 0 && projects + files + growth > limits.storageLimitBytes) {
       throw new ProjectQuotaError('storage', limits.storageLimitBytes);
     }
   }
@@ -6892,12 +6956,17 @@ export class D1R2PersistenceService implements PersistenceService {
     write: ProjectStorageWrite,
     state: 'pending' | 'committed'
   ): D1PreparedStatement {
+    // A head-replacing write names the head it releases (migration 0049);
+    // `releasedHead` found one only when the column exists.
+    const supersedes = write.supersedesObjectId
+      ? { column: ', supersedes_object_id', value: ', ?' }
+      : { column: '', value: '' };
     return this.env
       .DB!.prepare(
         `INSERT INTO project_document_objects
            (id, project_id, object_key, checksum_sha256, logical_bytes,
-            stored_bytes, content_encoding, state, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            stored_bytes, content_encoding, state, created_at${supersedes.column})
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?${supersedes.value})`
       )
       .bind(
         write.objectId,
@@ -6908,7 +6977,8 @@ export class D1R2PersistenceService implements PersistenceService {
         write.prepared.storedBytes,
         write.prepared.contentEncoding,
         state,
-        write.createdAt
+        write.createdAt,
+        ...(write.supersedesObjectId ? [write.supersedesObjectId] : [])
       );
   }
 
@@ -7984,6 +8054,8 @@ interface ProjectStorageWrite {
   createdAt: string;
   prepared: PreparedProjectStorageSnapshot;
   missingAssets: ProjectStorageAssetObject[];
+  /** The head this write releases, credited at its admission (0049). */
+  supersedesObjectId: string | null;
 }
 
 interface ProjectStorageWriteResolutionRow {

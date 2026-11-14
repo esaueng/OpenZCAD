@@ -488,6 +488,156 @@ describe('migration staging is bounded by projected storage (migration 0049)', (
   });
 });
 
+describe('a head-replacing save releases the head it replaces (migration 0049)', () => {
+  function bucket() {
+    const objects = new Map<string, Uint8Array<ArrayBuffer>>();
+    return {
+      objects,
+      bucket: {
+        put: async (key: string, body: BodyInit) => {
+          objects.set(
+            key,
+            new Uint8Array(await new Response(body).arrayBuffer())
+          );
+          return null;
+        },
+        get: async (key: string) => {
+          const bytes = objects.get(key);
+          return bytes
+            ? {
+                size: bytes.length,
+                body: new Response(bytes).body,
+                arrayBuffer: async () => bytes.slice().buffer
+              }
+            : null;
+        },
+        head: async (key: string) => {
+          const bytes = objects.get(key);
+          return bytes ? { size: bytes.length } : null;
+        },
+        delete: async (key: string | string[]) => {
+          for (const item of typeof key === 'string' ? [key] : key)
+            objects.delete(item);
+        }
+      } as unknown as R2Bucket
+    };
+  }
+
+  it('saves a shrinking autosave at a full account, and refuses a growing one', async () => {
+    const db = migratedDatabase();
+    db.prepare(
+      `INSERT INTO users (id, email, created_at) VALUES (?, 'owner@example.com', ?)`
+    ).run(OWNER, CREATED);
+    const service = new D1R2PersistenceService({
+      DB: sqliteD1(db),
+      PROJECT_STORAGE: bucket().bucket
+    });
+    const longName = `Long name ${'7dc6b0f86bd2'.repeat(6)}`;
+    const { document } = await service.createProject(toUserId(OWNER), {
+      name: longName
+    });
+    const stored = () =>
+      (
+        db
+          .prepare(
+            `SELECT COALESCE((SELECT bytes FROM account_project_storage
+                              WHERE user_id = ?1), 0)
+                  + COALESCE((SELECT finalized_bytes + reserved_bytes
+                              FROM artifact_account_usage
+                              WHERE owner_user_id = ?1), 0) AS bytes`
+          )
+          .get(OWNER) as { bytes: number }
+      ).bytes;
+    const limit = (
+      db
+        .prepare(
+          'SELECT project_storage_limit_bytes AS bytes FROM users WHERE id = ?'
+        )
+        .get(OWNER) as { bytes: number }
+    ).bytes;
+    // Files fill the account to exactly its allowance.
+    db.prepare(
+      `INSERT INTO artifacts
+         (id, project_id, kind, name, object_key, content_type, bytes,
+          metadata_json, created_at)
+       VALUES ('a_fill', ?, 'snapshot', 'fill.step', 'fill', 'model/step', ?,
+               '{}', ?)`
+    ).run(document.projectId, limit - stored(), CREATED);
+    expect(stored()).toBe(limit);
+
+    // The same project under a short name: a smaller head replacing the
+    // larger one. It does not grow the account, so it is saved.
+    const shortened = JSON.parse(
+      JSON.stringify(document).replaceAll(longName, 'x')
+    ) as typeof document;
+    const saved = await service.saveDocument(toUserId(OWNER), {
+      projectId: document.projectId,
+      expectedVersion: document.version,
+      document: { ...shortened, version: document.version + 1 }
+    });
+    expect(saved.version).toBe(document.version + 1);
+    expect(stored()).toBeLessThanOrEqual(limit);
+
+    // Growing it back past the allowance is refused.
+    await expect(
+      service.saveDocument(toUserId(OWNER), {
+        projectId: document.projectId,
+        expectedVersion: document.version + 1,
+        document: {
+          ...(JSON.parse(
+            JSON.stringify(shortened).replaceAll(
+              '"x"',
+              JSON.stringify(`${longName}${'y'.repeat(4000)}`)
+            )
+          ) as typeof document),
+          version: document.version + 2
+        }
+      })
+    ).rejects.toMatchObject({ kind: 'storage' });
+  });
+
+  it('credits a replaced head once: a second pending write claiming it is not credited', () => {
+    const db = account(10_000);
+    db.prepare(
+      `INSERT INTO project_document_objects
+         (id, project_id, object_key, checksum_sha256, logical_bytes,
+          stored_bytes, content_encoding, state, created_at)
+       VALUES ('o_head', ?, 'o_head', 'sha', 900, 900, 'gzip', 'committed', ?)`
+    ).run(PROJECT, CREATED);
+    db.prepare(
+      "UPDATE projects SET document_object_id = 'o_head', document_bytes = 0 WHERE id = ?"
+    ).run(PROJECT);
+    project(db, 'p_other', 0);
+    db.prepare(
+      `INSERT INTO artifacts
+         (id, project_id, kind, name, object_key, content_type, bytes,
+          metadata_json, created_at)
+       VALUES ('a_fill', 'p_other', 'snapshot', 'fill.step', 'fill',
+               'model/step', 9_100, '{}', ?)`
+    ).run(CREATED);
+    const pending = (id: string, bytes: number, supersedes: string | null) =>
+      db
+        .prepare(
+          `INSERT INTO project_document_objects
+             (id, project_id, object_key, checksum_sha256, logical_bytes,
+              stored_bytes, content_encoding, state, created_at,
+              supersedes_object_id)
+           VALUES (?, ?, ?, 'sha', ?, ?, 'gzip', 'pending', ?, ?)`
+        )
+        .run(id, PROJECT, id, bytes, bytes, CREATED, supersedes);
+    // Full: 900 + 9,100. A smaller replacement of the head is admitted...
+    pending('o_next', 800, 'o_head');
+    // ...but a second one claiming the same head is not credited.
+    expect(() => pending('o_again', 800, 'o_head')).toThrow(
+      'project_account_storage_quota'
+    );
+    // Nor is a write that names no head (a checkpoint, say).
+    expect(() => pending('o_checkpoint', 1, null)).toThrow(
+      'project_account_storage_quota'
+    );
+  });
+});
+
 describe('account storage usage (one bucket)', () => {
   it('reports combined usage against the one limit, trashed projects counted apart', async () => {
     const db = account(10 * GIB);

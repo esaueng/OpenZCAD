@@ -152,6 +152,13 @@ WHERE m.state IN ('staging', 'abandoned');
 -- the sum out for one owner: a view correlated on the owner would keep
 -- SQLite from narrowing the project storage view to that owner.
 
+-- The head a pending document object replaces, when the write that adds it
+-- moves the project's head to it (an autosave or named save). A save that
+-- replaces a head releases the old one once nothing names it, so the
+-- object's admission credits it (below) and a save that does not grow what
+-- the account stores is never refused. A checkpoint or copy names none.
+ALTER TABLE project_document_objects ADD COLUMN supersedes_object_id TEXT;
+
 -- ---------------------------------------------------------------------------
 -- Cloud file side: artifact usage plus the owner's project storage.
 -- ---------------------------------------------------------------------------
@@ -658,11 +665,46 @@ BEGIN
     AND COALESCE((SELECT SUM(bytes) FROM migration_staging_growth
                   WHERE user_id = (SELECT user_id FROM projects WHERE id = NEW.project_id)), 0)
       + NEW.stored_bytes > 0;
+  -- A head-replacing write is credited the head it releases: still the
+  -- project's head, named by no save state, and claimed by no other pending
+  -- object (so a retried or conflicting save cannot claim it twice). Only
+  -- growth is refused.
   SELECT RAISE(ABORT, 'project_account_storage_quota')
   WHERE NEW.project_id NOT IN (
       SELECT project_id FROM e2ee_decrypt_staged_projects
     )
-    AND NEW.stored_bytes +
+    AND NEW.stored_bytes - COALESCE((
+      SELECT head.stored_bytes FROM project_document_objects head
+      JOIN projects hp ON hp.id = head.project_id
+        AND hp.document_object_id = head.id
+      WHERE head.id = NEW.supersedes_object_id
+        AND head.project_id = NEW.project_id
+        AND NOT EXISTS (
+          SELECT 1 FROM revisions hr WHERE hr.document_object_id = head.id
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM project_document_objects claim
+          WHERE claim.project_id = NEW.project_id
+            AND claim.supersedes_object_id = head.id
+            AND claim.state = 'pending'
+        )
+    ), 0) > 0
+    AND NEW.stored_bytes - COALESCE((
+      SELECT head.stored_bytes FROM project_document_objects head
+      JOIN projects hp ON hp.id = head.project_id
+        AND hp.document_object_id = head.id
+      WHERE head.id = NEW.supersedes_object_id
+        AND head.project_id = NEW.project_id
+        AND NOT EXISTS (
+          SELECT 1 FROM revisions hr WHERE hr.document_object_id = head.id
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM project_document_objects claim
+          WHERE claim.project_id = NEW.project_id
+            AND claim.supersedes_object_id = head.id
+            AND claim.state = 'pending'
+        )
+    ), 0) +
     COALESCE((
       SELECT bytes FROM account_project_storage
       WHERE user_id = (SELECT user_id FROM projects WHERE id = NEW.project_id)

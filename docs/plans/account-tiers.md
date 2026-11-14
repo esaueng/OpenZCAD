@@ -129,6 +129,12 @@ Staging is not abandoned automatically for being idle: the projected rule
 already bounds and charges what a staging holds, and an abandoned staging is
 cleaned up by its owner's browser or by the existing sweeps.
 
+A save that moves a project's head to a new R2 document object names the
+head it replaces (`project_document_objects.supersedes_object_id`, added by
+migration 0049). The object's admission and the Worker's preflight credit
+that head when nothing else names it, so a save that does not grow what the
+account stores is never refused, even at or over the allowance.
+
 Downgrades do not delete files. Existing reads, downloads and cleanup remain
 available. Over-limit accounts cannot increase storage; shrinking an existing
 reservation or document, finalizing already-reserved bytes and deleting
