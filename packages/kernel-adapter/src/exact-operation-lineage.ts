@@ -33,7 +33,16 @@ import {
 import { faceVertexCentroid } from './exact-brep';
 import { GEOMETRY_LINEAR_TOLERANCE, type Vec3 } from '@openzcad/geometry';
 
-/** Unique exact analytic carriers preserve face identity when only trims change. */
+/**
+ * Unique exact analytic carriers preserve face identity when only trims change.
+ *
+ * The carrier fallback counts faces by their measured carrier, so a face of
+ * the same surface type whose carrier could not be read (`analytic.kind:
+ * 'none'`) might sit on the very same one. Any such face, in the source or
+ * the result, leaves every carrier match unproven: the fallback names nothing
+ * rather than trust a count it cannot complete. An exact witness match is
+ * unaffected, since an unreadable carrier is part of a different witness.
+ */
 export function carryAnalyticFaces(
   kernel: RemusKernel,
   sourceSolid: number,
@@ -54,6 +63,12 @@ export function carryAnalyticFaces(
   );
   const identity = (r: FaceTopologyReferenceV5) =>
     JSON.stringify([r.producingFeatureId, r.lineageName]);
+  const unreadCarriers = new Set(
+    [...before, ...after]
+      .map((c) => c.witness as FaceWitnessV1)
+      .filter((w) => w.analytic.kind === 'none')
+      .map((w) => w.surfaceType)
+  );
   for (const [handle, reference] of source.faceReferences) {
     const origin = before.find((c) => c.handle === handle);
     if (
@@ -75,6 +90,7 @@ export function carryAnalyticFaces(
         reference.witness.analytic.kind !== 'cylinder'
       )
         continue;
+      if (unreadCarriers.has(reference.witness.surfaceType)) continue;
       const matchesCarrier = (c: (typeof before)[number]) =>
         sameAnalyticCarrier(
           (c.witness as FaceWitnessV1).analytic,
@@ -245,6 +261,30 @@ export function holeLineage(
     );
   }
   return withBoundaryEdgeLineage(kernel, resultSolid, producer, state);
+}
+
+/**
+ * The most faces either solid may have for Shell or Draft to name anything.
+ *
+ * Their naming is quadratic in faces: the shared carrier carry, the
+ * contention scan and the result uniqueness checks each compare faces in
+ * pairs. On a mocked kernel the whole step took 76 ms at 200 planar faces,
+ * 1.3 s at 1000 and 12 s at 3000, before the real kernel's witness reads.
+ * Enclosures and housings, the parts these features shape, sit well under
+ * 200. Above it the operation publishes no names: exactly the hash-only
+ * lineage every Shell and Draft published before.
+ */
+export const SHELL_DRAFT_LINEAGE_FACE_LIMIT = 200;
+
+function overLineageFaceLimit(
+  kernel: RemusKernel,
+  sourceSolid: number,
+  resultSolid: number
+): boolean {
+  return (
+    kernel.getSolidFaces(sourceSolid).length > SHELL_DRAFT_LINEAGE_FACE_LIMIT ||
+    kernel.getSolidFaces(resultSolid).length > SHELL_DRAFT_LINEAGE_FACE_LIMIT
+  );
 }
 
 /** A planar face read in its own orientation: outward normal and a point on it. */
@@ -457,7 +497,11 @@ export function shellLineage(
   openingFaces: readonly number[],
   thickness: number
 ): RemusLineageState | null {
-  if (!source || !(Math.abs(thickness) > GEOMETRY_LINEAR_TOLERANCE))
+  if (
+    !source ||
+    !(Math.abs(thickness) > GEOMETRY_LINEAR_TOLERANCE) ||
+    overLineageFaceLimit(kernel, sourceSolid, resultSolid)
+  )
     return null;
   const openings = new Set(openingFaces);
   const carried = carryAnalyticFaces(
@@ -547,7 +591,14 @@ export function draftLineage(
 ): RemusLineageState | null {
   const pull = normalized(pullDirection);
   const angle = (angleDegrees * Math.PI) / 180;
-  if (!source || !pull || !Number.isFinite(angle) || angle === 0) return null;
+  if (
+    !source ||
+    !pull ||
+    !Number.isFinite(angle) ||
+    angle === 0 ||
+    overLineageFaceLimit(kernel, sourceSolid, resultSolid)
+  )
+    return null;
   const drafted = new Set(draftedFaces);
   const carried = carryAnalyticFaces(
     kernel,

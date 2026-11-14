@@ -14,6 +14,7 @@ import { topologyCandidatesForSolid } from './exact-lineage-builders';
 import {
   carryAnalyticFaces,
   draftLineage,
+  SHELL_DRAFT_LINEAGE_FACE_LIMIT,
   shellLineage,
   withBoundaryEdgeLineage
 } from './exact-operation-lineage';
@@ -167,10 +168,15 @@ interface PlaneFace {
   normal: [number, number, number];
   point: [number, number, number];
   /** A measurement the kernel fails to give for this face. */
-  unmeasured?: 'vertices' | 'normal';
+  unmeasured?: 'vertices' | 'normal' | 'analytic';
 }
 
-const planeWitness = (face: PlaneFace): FaceWitnessV1 => ({
+const planeWitness = (face: PlaneFace): FaceWitnessV1 =>
+  face.unmeasured === 'analytic'
+    ? { ...measuredPlaneWitness(face), analytic: { kind: 'none' } }
+    : measuredPlaneWitness(face);
+
+const measuredPlaneWitness = (face: PlaneFace): FaceWitnessV1 => ({
   surfaceType: 'plane',
   perimeter: 40 + face.handle,
   centroid: face.point.map((value) => Math.round(value * 1e6)) as [
@@ -525,5 +531,176 @@ describe('constructed names beside an unmeasurable result face', () => {
     );
     expect(constructedNames(state)).toEqual([]);
     expect(state?.faceReferences.get(20)?.lineageName).toBe('top');
+  });
+});
+
+describe('carried names beside an unreadable carrier', () => {
+  const producer = toFeatureId('feature_unread');
+  // Source top at z = 10; the result keeps it trimmed (another witness, so
+  // only the carrier fallback can carry it).
+  const top: PlaneFace = { handle: 1, normal: [0, 0, 1], point: [5, 5, 10] };
+  const trimmed: PlaneFace = {
+    handle: 20,
+    normal: [0, 0, 1],
+    point: [4, 4, 10]
+  };
+  // A coplanar patch whose carrier the kernel would not report.
+  const unread: PlaneFace = {
+    handle: 21,
+    normal: [0, 0, 1],
+    point: [25, 5, 10],
+    unmeasured: 'analytic'
+  };
+  const carriedTop = (state: ReturnType<typeof shellLineage>) =>
+    [...(state?.faceReferences ?? [])]
+      .filter(([, reference]) => reference.lineageName === 'top')
+      .map(([handle]) => handle);
+
+  it('carries a trimmed face by its carrier only when every carrier is read', () => {
+    const source = () => named([top], { 1: 'top' });
+    const carried = (kernel: RemusKernel) =>
+      carriedTop(carryAnalyticFaces(kernel, 1, 2, source()));
+    expect(carried(planeKernel([top], [trimmed]))).toEqual([20]);
+    // A result patch of the same type with no carrier could be its twin.
+    expect(carried(planeKernel([top], [trimmed, unread]))).toEqual([]);
+    // So could a source patch.
+    expect(
+      carried(planeKernel([top, { ...unread, handle: 3 }], [trimmed]))
+    ).toEqual([]);
+    // A surface of another type cannot share a plane's carrier.
+    const cylinder: PlaneFace = { ...unread };
+    vi.mocked(topologyCandidatesForSolid).mockImplementation(
+      (_kernel, solid) =>
+        solid === 1
+          ? [f(1, planeWitness(top))]
+          : [
+              f(20, planeWitness(trimmed)),
+              f(21, { ...planeWitness(cylinder), surfaceType: 'cylinder' })
+            ]
+    );
+    expect(carriedTop(carryAnalyticFaces(kernel, 1, 2, source()))).toEqual([
+      20
+    ]);
+  });
+
+  it('withholds a shell’s carried name beside an unreadable carrier', () => {
+    const shell = (kernel: RemusKernel) =>
+      carriedTop(
+        shellLineage(kernel, 1, 2, named([top], { 1: 'top' }), producer, [], 2)
+      );
+    expect(shell(planeKernel([top], [trimmed]))).toEqual([20]);
+    expect(shell(planeKernel([top], [trimmed, unread]))).toEqual([]);
+  });
+
+  it('withholds a draft’s carried name beside an unreadable carrier', () => {
+    const side: PlaneFace = { handle: 2, normal: [1, 0, 0], point: [10, 5, 5] };
+    const angle = (10 * Math.PI) / 180;
+    const turned: PlaneFace = {
+      handle: 22,
+      normal: [Math.cos(angle), 0, Math.sin(angle)],
+      point: [10, 5, 0]
+    };
+    const draft = (kernel: RemusKernel) =>
+      carriedTop(
+        draftLineage(
+          kernel,
+          1,
+          2,
+          named([top, side], { 1: 'top', 2: 'side' }),
+          producer,
+          [2],
+          { x: 0, y: 0, z: 1 },
+          { x: 0, y: 0, z: 0 },
+          10
+        )
+      );
+    expect(draft(planeKernel([top, side], [trimmed, turned]))).toEqual([20]);
+    expect(draft(planeKernel([top, side], [trimmed, turned, unread]))).toEqual(
+      []
+    );
+  });
+});
+
+describe('the shell and draft naming face limit', () => {
+  const producer = toFeatureId('feature_limit');
+  const top: PlaneFace = { handle: 1, normal: [0, 0, 1], point: [5, 5, 10] };
+  const inner: PlaneFace = {
+    handle: 100_000,
+    normal: [0, 0, 1],
+    point: [5, 5, 8]
+  };
+  /** Planes facing +x, far apart, kept unchanged through the shell. */
+  const filler = (count: number, from: number): PlaneFace[] =>
+    Array.from({ length: count }, (_, index) => ({
+      handle: from + index,
+      normal: [1, 0, 0],
+      point: [100 + index * 10, 0, 0]
+    }));
+  const shellNames = (sourceCount: number, resultCount: number) => {
+    const sourceFill = filler(sourceCount - 1, 2);
+    const resultFill = filler(resultCount - 1, 2);
+    const kernel = planeKernel([top, ...sourceFill], [inner, ...resultFill]);
+    return constructedNames(
+      shellLineage(kernel, 1, 2, named([top], { 1: 'top' }), producer, [], 2)
+    );
+  };
+  const limit = SHELL_DRAFT_LINEAGE_FACE_LIMIT;
+
+  it('names a shell at the limit and nothing past it in either body', () => {
+    expect(limit).toBe(200);
+    expect(shellNames(limit, limit)).toEqual([
+      `shell.face.inner.${JSON.stringify([feature, 'top'])}`
+    ]);
+    expect(shellNames(limit + 1, limit)).toEqual([]);
+    expect(shellNames(limit, limit + 1)).toEqual([]);
+  });
+
+  it('names a draft at the limit and nothing past it', () => {
+    const side: PlaneFace = { handle: 1, normal: [1, 0, 0], point: [10, 5, 5] };
+    const angle = (10 * Math.PI) / 180;
+    const turned: PlaneFace = {
+      handle: 100_000,
+      normal: [Math.cos(angle), 0, Math.sin(angle)],
+      point: [10, 5, 0]
+    };
+    /** Planes facing +y, far from the drafted side. */
+    const fill = (count: number): PlaneFace[] =>
+      Array.from({ length: count }, (_, index) => ({
+        handle: 2 + index,
+        normal: [0, 1, 0],
+        point: [0, 100 + index * 10, 0]
+      }));
+    const draftNames = (sourceCount: number, resultCount: number) =>
+      constructedNames(
+        draftLineage(
+          planeKernel(
+            [side, ...fill(sourceCount - 1)],
+            [turned, ...fill(resultCount - 1)]
+          ),
+          1,
+          2,
+          named([side], { 1: 'side' }),
+          producer,
+          [1],
+          { x: 0, y: 0, z: 1 },
+          { x: 0, y: 0, z: 0 },
+          10
+        )
+      );
+    expect(draftNames(limit, limit)).toEqual([
+      `draft.face.${JSON.stringify([feature, 'side'])}`
+    ]);
+    expect(draftNames(limit + 1, limit)).toEqual([]);
+    expect(draftNames(limit, limit + 1)).toEqual([]);
+  });
+
+  it('returns no lineage past the limit, so the builder stays hash-only', () => {
+    const kernel = planeKernel(
+      [top, ...filler(limit, 2)],
+      [inner, ...filler(limit, 2)]
+    );
+    expect(
+      shellLineage(kernel, 1, 2, named([top], { 1: 'top' }), producer, [], 2)
+    ).toBeNull();
   });
 });

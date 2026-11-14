@@ -18,6 +18,7 @@ import {
 import {
   carryAnalyticFaces,
   draftLineage,
+  SHELL_DRAFT_LINEAGE_FACE_LIMIT,
   shellLineage,
   holeLineage,
   withBoundaryEdgeLineage
@@ -1769,7 +1770,7 @@ function buildShellFeature(
       ? lineage
       : remusHashOnlyLineage(
           'shell',
-          'No kept, rim or inner face passed the exact carrier and uniqueness checks.'
+          `No kept, rim or inner face passed the exact carrier and uniqueness checks, or a body has more than ${SHELL_DRAFT_LINEAGE_FACE_LIMIT} faces.`
         )
   });
   inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
@@ -1870,7 +1871,7 @@ function buildDraftFeature(
       ? lineage
       : remusHashOnlyLineage(
           'draft',
-          'No kept or drafted face passed the exact carrier and uniqueness checks.'
+          `No kept or drafted face passed the exact carrier and uniqueness checks, or a body has more than ${SHELL_DRAFT_LINEAGE_FACE_LIMIT} faces.`
         )
   });
   inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
