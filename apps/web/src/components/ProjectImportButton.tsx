@@ -1,9 +1,10 @@
-import { fileAccept } from '../lib/appleTouch';
+import { CAD_IMPORT_ACCEPT, fileAccept } from '../lib/appleTouch';
 import { useRef } from 'react';
 import { Upload } from 'lucide-react';
 
 export function ProjectImportButton({
   onImport,
+  onImportFiles,
   disabled = false,
   className = 'topbar-menu-item',
   hint,
@@ -11,6 +12,11 @@ export function ProjectImportButton({
   shortLabel
 }: {
   onImport(file: File): void;
+  /**
+   * Takes CAD files as well as a backup, several at once (a .shapr + STEP
+   * pair): the start screen makes a project from them. Replaces `onImport`.
+   */
+  onImportFiles?(files: File[]): void;
   disabled?: boolean;
   className?: string;
   /** A second line under the label, for the menu's format column. */
@@ -39,13 +45,18 @@ export function ProjectImportButton({
       <input
         ref={input}
         type="file"
-        accept={fileAccept('.openzcad')}
+        accept={fileAccept(
+          onImportFiles ? `.openzcad,${CAD_IMPORT_ACCEPT}` : '.openzcad'
+        )}
+        multiple={onImportFiles !== undefined}
         aria-label="Import project backup"
         hidden
         onChange={(event) => {
-          const file = event.currentTarget.files?.[0];
+          const files = Array.from(event.currentTarget.files ?? []);
           event.currentTarget.value = '';
-          if (file) onImport(file);
+          if (files.length === 0) return;
+          if (onImportFiles) onImportFiles(files);
+          else onImport(files[0]!);
         }}
       />
     </>

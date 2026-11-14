@@ -149,6 +149,23 @@ const displayButton = (page: Page) =>
     .getByRole('toolbar', { name: 'Viewer bar' })
     .getByRole('button', { name: /^Display mode/ });
 
+/** Picks `mode` from the rail's Display menu, which closes behind it. */
+async function chooseDisplayMode(
+  page: Page,
+  mode: 'Shaded + edges' | 'Shaded' | 'Wireframe'
+) {
+  const display = displayButton(page);
+  await display.click();
+  const menu = page.getByRole('group', { name: 'Display', exact: true });
+  await menu.getByRole('button', { name: mode, exact: true }).click();
+  await expect(menu).toHaveCount(0);
+  await expect(display).toHaveAttribute(
+    'aria-label',
+    new RegExp(`now: ${mode.replace('+', '\\+')}$`)
+  );
+  return display;
+}
+
 test('a box takes edges by its direction, and through faces in X-ray', async ({
   page
 }) => {
@@ -203,16 +220,7 @@ test('wireframe edge sweeps select the rear edges drawn without X-ray', async ({
   page.on('pageerror', (error) => errors.push(error.message));
   await createBox(page, 'Wireframe Edge Sweep Part');
   await topView(page);
-  const display = displayButton(page);
-  for (
-    let count = 0;
-    count < 3 &&
-    !/now: Wireframe$/.test((await display.getAttribute('aria-label')) ?? '');
-    count += 1
-  ) {
-    await display.click();
-  }
-  await expect(display).toHaveAttribute('aria-label', /now: Wireframe$/);
+  await chooseDisplayMode(page, 'Wireframe');
   await expect(canvas(page)).not.toHaveAttribute('data-e2e-xray', /.*/);
   await setSelectionFilter(page, 'Edge');
   const { minX, minY, maxY, maxZ, pad, midX } = await boxExtent(page);
@@ -243,16 +251,7 @@ test('shaded edge sweeps take only the edges made visible by X-ray', async ({
 }) => {
   await createBox(page, 'Shaded Edge Sweep');
   await topView(page);
-  const display = displayButton(page);
-  for (
-    let count = 0;
-    count < 3 &&
-    !/now: Shaded$/.test((await display.getAttribute('aria-label')) ?? '');
-    count += 1
-  ) {
-    await display.click();
-  }
-  await expect(display).toHaveAttribute('aria-label', /now: Shaded$/);
+  await chooseDisplayMode(page, 'Shaded');
   await expect(canvas(page)).not.toHaveAttribute('data-e2e-xray', /.*/);
   await setSelectionFilter(page, 'Edge');
   const { minX, minY, maxY, maxZ, pad, midX } = await boxExtent(page);
@@ -303,16 +302,7 @@ test('wireframe face sweeps take only the faces made visible by X-ray', async ({
         })
     );
   await topView(page);
-  const display = displayButton(page);
-  for (
-    let count = 0;
-    count < 3 &&
-    !/now: Wireframe$/.test((await display.getAttribute('aria-label')) ?? '');
-    count += 1
-  ) {
-    await display.click();
-  }
-  await expect(display).toHaveAttribute('aria-label', /now: Wireframe$/);
+  await chooseDisplayMode(page, 'Wireframe');
   await expect.poll(facePolicy).toEqual([{ visible: false, opacity: 1 }]);
   await setSelectionFilter(page, 'Face');
   const { minX, minY, maxX, maxY, maxZ, pad } = await boxExtent(page);
@@ -618,18 +608,7 @@ test('X-ray keeps shaded edges after installing new body geometry', async ({
   page
 }) => {
   await createBox(page, 'Rebuilt X-ray Part');
-  const display = page
-    .getByRole('toolbar', { name: 'Viewer bar' })
-    .getByRole('button', { name: /^Display mode/ });
-  for (
-    let count = 0;
-    count < 3 &&
-    !/now: Shaded$/.test((await display.getAttribute('aria-label')) ?? '');
-    count += 1
-  ) {
-    await display.click();
-  }
-  await expect(display).toHaveAttribute('aria-label', /now: Shaded$/);
+  await chooseDisplayMode(page, 'Shaded');
   await toggleXray(page);
   await page.locator('.feature-row-main', { hasText: 'Box' }).click();
   const inspector = page.getByRole('region', { name: 'Feature inspector' });
@@ -749,16 +728,7 @@ test('a pending Move copy follows X-ray opacity and edge styling', async ({
   page
 }) => {
   await createBox(page, 'X-ray Copy Part');
-  const display = page
-    .getByRole('toolbar', { name: 'Viewer bar' })
-    .getByRole('button', { name: /^Display mode/ });
-  for (
-    let count = 0;
-    count < 3 &&
-    !/now: Shaded$/.test((await display.getAttribute('aria-label')) ?? '');
-    count += 1
-  )
-    await display.click();
+  await chooseDisplayMode(page, 'Shaded');
   await toggleXray(page);
   await page.keyboard.press('m');
   const controls = page.getByRole('form', { name: 'Move controls' });

@@ -2126,3 +2126,137 @@ describe('StartScreen open intent', () => {
     expect(onOpenIntent).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('StartScreen rename and import (design review I13, I14)', () => {
+  const lid: ProjectSummary = {
+    projectId: toProjectId('project_lid'),
+    name: 'Lid',
+    revisionCount: 1,
+    updatedAt: '2026-08-04T12:00:00.000Z'
+  };
+
+  function startRename(name: string) {
+    fireEvent.click(
+      screen.getByRole('button', { name: `Actions for ${name}` })
+    );
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }));
+    return screen.getByRole('textbox', { name: `Rename ${name}` });
+  }
+
+  it('renames a project from its tile menu without opening it', () => {
+    const onRename = vi.fn().mockResolvedValue(true);
+    const onOpen = vi.fn();
+    renderStartScreen({ onRename, onOpen });
+    const field = startRename(localProject.name);
+    expect(field).toHaveFocus();
+    expect(field).toHaveValue(localProject.name);
+    fireEvent.change(field, { target: { value: 'Bracket v2' } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+    expect(onRename).toHaveBeenCalledTimes(1);
+    expect(onRename).toHaveBeenCalledWith(localProject, 'Bracket v2');
+    expect(onOpen).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole('textbox', { name: `Rename ${localProject.name}` })
+    ).toBeNull();
+  });
+
+  it('keeps the old name on Escape', () => {
+    const onRename = vi.fn().mockResolvedValue(true);
+    renderStartScreen({ onRename });
+    const field = startRename(localProject.name);
+    fireEvent.change(field, { target: { value: 'Discarded' } });
+    fireEvent.keyDown(field, { key: 'Escape' });
+    expect(onRename).not.toHaveBeenCalled();
+    expect(screen.getByText(localProject.name)).toBeInTheDocument();
+  });
+
+  it('says when another project already has the typed name', () => {
+    renderStartScreen({
+      projects: [localProject, lid],
+      onRename: vi.fn().mockResolvedValue(true)
+    });
+    const field = startRename(localProject.name);
+    fireEvent.change(field, { target: { value: ' lid ' } });
+    expect(field).toHaveAccessibleDescription(
+      'Another project is already called “Lid”.'
+    );
+  });
+
+  it('offers no Rename without a handler', () => {
+    renderStartScreen();
+    fireEvent.click(
+      screen.getByRole('button', { name: `Actions for ${localProject.name}` })
+    );
+    expect(screen.queryByRole('menuitem', { name: 'Rename' })).toBeNull();
+  });
+
+  it('hints at a new project name that is already taken', () => {
+    renderStartScreen({ projects: [localProject, lid] });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Project name' }), {
+      target: { value: 'LID' }
+    });
+    expect(
+      screen.getByText(/You already have a project called “Lid”/)
+    ).toBeInTheDocument();
+    // A hint, not a refusal.
+    expect(screen.getByRole('button', { name: 'New project' })).toBeEnabled();
+  });
+
+  it('renames from Properties, keeping the dialog open', async () => {
+    const onRename = vi.fn().mockResolvedValue(true);
+    renderStartScreen({ projects: [localProject, lid], onRename });
+    fireEvent.click(
+      screen.getByRole('button', { name: `Actions for ${localProject.name}` })
+    );
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Properties' }));
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Project properties'
+    });
+    const field = within(dialog).getByRole('textbox', { name: 'Project name' });
+    fireEvent.change(field, { target: { value: 'Lid' } });
+    expect(field).toHaveAccessibleDescription(
+      'Another project is already called “Lid”.'
+    );
+    fireEvent.change(field, { target: { value: 'Bracket v3' } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+    await waitFor(() =>
+      expect(onRename).toHaveBeenCalledWith(localProject, 'Bracket v3')
+    );
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    // The first Escape puts a changed name back; it does not close.
+    fireEvent.change(field, { target: { value: 'Typo' } });
+    fireEvent.keyDown(field, { key: 'Escape' });
+    expect(field).toHaveValue('Bracket v3');
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+  });
+
+  it('takes CAD files from Import and from a drop, in the form’s units', async () => {
+    const onImportFiles = vi.fn();
+    const { container } = renderStartScreen({
+      onImportProject: vi.fn(),
+      onImportFiles
+    });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Units' }), {
+      target: { value: 'inch' }
+    });
+    const step = new File(['ISO-10303-21;'], 'bracket.step');
+    const input = screen.getByLabelText('Import project backup');
+    expect(input).toHaveAttribute('multiple');
+    expect(input.getAttribute('accept')).toContain('.step');
+    fireEvent.change(input, { target: { files: [step] } });
+    expect(onImportFiles).toHaveBeenLastCalledWith([step], 'inch');
+
+    const screenElement = container.querySelector('.start-screen')!;
+    await waitFor(() =>
+      expect(container.querySelector('.file-drop-target')).not.toBeNull()
+    );
+    const dataTransfer = { types: ['Files'], files: [step], dropEffect: '' };
+    fireEvent.dragEnter(screenElement, { dataTransfer });
+    expect(container.querySelector('.file-drop-target.active')).not.toBeNull();
+    expect(screen.getByText('Drop to make a project')).toBeInTheDocument();
+    const drop = fireEvent.drop(screenElement, { dataTransfer });
+    // Default prevented: the browser no longer opens the file in place.
+    expect(drop).toBe(false);
+    expect(onImportFiles).toHaveBeenCalledTimes(2);
+  });
+});

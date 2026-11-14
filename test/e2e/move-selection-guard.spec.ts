@@ -17,7 +17,8 @@ import {
   createPrimitiveInPlace,
   finishInPlaceCommand,
   openMoveOptions,
-  ensureToolsDrawerOpen
+  ensureToolsDrawerOpen,
+  pressTool
 } from './openzcad-fixtures';
 
 async function makePart(page: Page, name: string) {
@@ -44,7 +45,7 @@ async function makePart(page: Page, name: string) {
 }
 
 async function startMove(page: Page) {
-  await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+  await pressTool(page, /^Move \(M\)/);
   const move = page.getByRole('form', { name: 'Move controls' });
   await openMoveOptions(move);
   await move.getByLabel('Move X in mm').fill('5');
@@ -174,7 +175,7 @@ test('a viewport body pick settles the typed Move once before changing selection
   await page.keyboard.press('Escape');
 
   // Zero Move gives way without asking or adding a history step.
-  await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+  await pressTool(page, /^Move \(M\)/);
   await pickBody();
   await expect(ask).toHaveCount(0);
   await expect(move).toHaveCount(0);
@@ -191,7 +192,7 @@ test('a connected edge run settles the typed Move before replacing its target', 
     'Edge run Move guard'
   );
   // U09 phase 7: in place, every edge from Options, the default radius.
-  await page.getByRole('button', { name: /^Fillet/ }).click();
+  await pressTool(page, /^Fillet/);
   const filletBar = page.getByRole('group', { name: 'Fillet command' });
   await filletBar.locator('summary').click();
   await filletBar.getByRole('button', { name: 'Select all 12 edges' }).click();
@@ -264,7 +265,7 @@ test('a connected edge run settles the typed Move before replacing its target', 
   );
 
   // Zero Move closes, then the complete eight-edge run lands without a question.
-  await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+  await pressTool(page, /^Move \(M\)/);
   await pickRun();
   await expect(ask).toHaveCount(0);
   await expect(move).toHaveCount(0);
@@ -682,7 +683,7 @@ test('an Items body pick settles the original Move and preserves Shift selection
   expect(originalId).not.toBe(otherId);
   const maxCards = await watchCardCount(page);
   const startOriginalMove = async () => {
-    await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+    await pressTool(page, /^Move \(M\)/);
     await openMoveOptions(move);
     await expect(
       move.getByRole('combobox', { name: 'Body', exact: true })
