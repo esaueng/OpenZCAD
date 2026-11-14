@@ -1391,16 +1391,25 @@ describe('in-place thread edits keep a stored end kind (review #1458)', () => {
       options?: Record<string, string>;
       values?: Record<string, ParamValue>;
       units?: 'mm' | 'inch';
+      face?: FacePick;
     } = {}
   ) => {
     const units = changes.units ?? 'mm';
+    const face = changes.face ?? BOSS;
     const values = {
       ...initialValues({
-        length: saved.length ?? 12,
+        length: saved.length ?? threadFace(face)!.length,
         offset: saved.offset ?? 0
       }),
       ...(changes.values ?? {})
     };
+    // The document's evaluator, as the build uses it.
+    const formulas: Record<string, number> = { '2+3': 5, '0*1': 0 };
+    const calculate = (value: ParamValue) =>
+      typeof value === 'number' ? value : (formulas[value] ?? null);
+    const numbers = Object.fromEntries(
+      Object.entries(values).map(([id, value]) => [id, calculate(value) ?? 0])
+    );
     const options = {
       ...defaults(),
       ...threadEditOptions(saved, evaluate, units),
@@ -1410,18 +1419,58 @@ describe('in-place thread edits keep a stored end kind (review #1458)', () => {
       ...CTX,
       saved,
       units,
+      evaluate: calculate,
       touched: ['length', 'offset', ...Object.keys(changes.values ?? {})]
     };
     return (
       threadSpec.request(
-        { ...SLOTS, faces: [BOSS] },
+        { ...SLOTS, faces: [face] },
         values,
         options,
         ctx,
-        numbersOf(values)
+        numbers
       ) as { thread: ThreadRequest }
     ).thread;
   };
+
+  it('keeps the runout when an expression evaluates to the stored extent', () => {
+    // Length `2+3` is the stored 5; offset `0*1` the absent 0.
+    const edits: Record<string, ParamValue>[] = [
+      { length: '2+3' },
+      { offset: '0*1' }
+    ];
+    for (const values of edits) {
+      const thread = finish(stored(), { values });
+      expect(thread.runoutStart, JSON.stringify(values)).toBe(true);
+      expect(thread.chamferStart, JSON.stringify(values)).toBeUndefined();
+    }
+    // Stored as expressions, an untouched edit keeps it too.
+    const written = stored({ length: '2+3', offset: '0*1' });
+    expect(finish(written).runoutStart).toBe(true);
+  });
+
+  it('lets the reach decide when an end crosses the build’s snap, however small the move', () => {
+    // A Ø6 × 20 boss: its snap is 1e-9 × 20 = 2e-8. A chamfer stored with
+    // the span 1.99e-8 off its start reaches that end; moved to 2.01e-8 it
+    // stops short, and keeping the chamfer would fail the build.
+    const long: FacePick = {
+      ...BOSS,
+      cylinder: { ...BOSS.cylinder!, axisEnd: { x: 0, y: 0, z: 20 } }
+    };
+    const chamfered = stored({
+      offset: 1.99e-8,
+      runoutStart: undefined,
+      chamferStart: true
+    });
+    const kept = finish(chamfered, { face: long });
+    expect(kept.chamferStart).toBe(true);
+    const crossed = finish(chamfered, {
+      face: long,
+      values: { offset: 2.01e-8 }
+    });
+    expect(crossed.chamferStart).toBeUndefined();
+    expect(crossed.runoutStart).toBe(true);
+  });
 
   it('keeps the runout with an explicit zero offset, which the request leaves out', () => {
     const thread = finish(stored({ offset: 0 }));

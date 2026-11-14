@@ -937,46 +937,68 @@ export function threadRequestFields(
 
 /**
  * An edit keeps each finished end's stored kind, a chamfer or (schema v57)
- * a runout, while the span stands as stored: the same face, length, offset
- * and anchor. The one Ends row cannot tell the two apart, and working the
- * kind out again from where the span reaches would turn a runout stored at
- * an end of the face (a thread against a shoulder) into a chamfer. Once the
- * extent is edited, or an end is no longer asked for, the reach decides.
+ * a runout, while the span stands as stored. The one Ends row cannot tell
+ * the two apart, and working the kind out again from where the span reaches
+ * would turn a runout stored at an end of the face (a thread against a
+ * shoulder) into a chamfer.
+ *
+ * "As stored" is judged as the span builds, never as it is written: the
+ * same face and anchor, an offset and length that evaluate (with the
+ * build's evaluator) to the stored ones within rounding, an absent offset
+ * being 0 and an absent length the rest of the face, and each end on the
+ * same side of the build's snap (it reaches its end of the face, or stops
+ * short of it). A value that does not evaluate, a moved extent, or an end
+ * that crossed the snap lets the reach decide again, as does an end no
+ * longer asked for.
  */
 export function keepStoredEndKinds(
   thread: ThreadRequest,
   saved: FeatureData | undefined,
-  /** The face's length, which an absent length runs to from the offset. */
-  faceLength?: number
+  face: Pick<ThreadFace, 'length' | 'radius'> | null,
+  evaluate: ((value: ParamValue) => number | null) | undefined
 ): ThreadRequest {
-  if (saved?.featureKind !== 'thread') return thread;
+  if (saved?.featureKind !== 'thread' || !face) return thread;
   const sameFace =
     thread.faceHash === saved.faceHash ||
     (thread.faceReference !== undefined &&
       saved.faceReference !== undefined &&
       thread.faceReference.lineageName === saved.faceReference.lineageName);
-  // Compared as they build, not as they are written: an absent offset is
-  // 0 and an absent anchor the start, an absent length the rest of the
-  // face from the offset, and numbers that differ only by rounding (a value
-  // typed in another unit) are the same. Expressions compare as written.
-  const offsetOf = (data: Pick<ThreadRequest, 'offset'>) => data.offset ?? 0;
-  const lengthOf = (data: Pick<ThreadRequest, 'offset' | 'length'>) => {
-    if (data.length !== undefined) return data.length;
-    const offset = offsetOf(data);
-    return faceLength !== undefined && typeof offset === 'number'
-      ? faceLength - offset
-      : undefined;
+  if (!sameFace || (thread.anchor ?? 'start') !== (saved.anchor ?? 'start')) {
+    return thread;
+  }
+  const number = (value: ParamValue | undefined, absent: number) =>
+    value === undefined
+      ? absent
+      : typeof value === 'number'
+        ? value
+        : (evaluate?.(value) ?? null);
+  /** The span as it builds, along the face from the end it starts at. */
+  const span = (data: Pick<ThreadRequest, 'offset' | 'length'>) => {
+    const offset = number(data.offset, 0);
+    if (offset === null || !Number.isFinite(offset)) return null;
+    const length = number(data.length, face.length - offset);
+    return length === null || !Number.isFinite(length)
+      ? null
+      : { offset, length };
   };
-  const same = (a: ParamValue | undefined, b: ParamValue | undefined) =>
-    typeof a === 'number' && typeof b === 'number'
-      ? Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(a), Math.abs(b))
-      : a === b;
-  const sameExtent =
-    sameFace &&
-    same(offsetOf(thread), offsetOf(saved)) &&
-    same(lengthOf(thread), lengthOf(saved)) &&
-    (thread.anchor ?? 'start') === (saved.anchor ?? 'start');
-  if (!sameExtent) return thread;
+  const now = span(thread);
+  const before = span(saved);
+  if (!now || !before) return thread;
+  const close = (a: number, b: number) =>
+    Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(a), Math.abs(b));
+  // The build's snap, within which a span reaches an end of the face
+  // (`threadReach`, and the adapter's `threadChamfersShortOfFace`).
+  const reach = ({ offset, length }: { offset: number; length: number }) =>
+    threadReach({ held: true, offset, length, face });
+  const [reachNow, reachBefore] = [reach(now), reach(before)];
+  if (
+    !close(now.offset, before.offset) ||
+    !close(now.length, before.length) ||
+    reachNow.near !== reachBefore.near ||
+    reachNow.far !== reachBefore.far
+  ) {
+    return thread;
+  }
   const next: ThreadRequest = { ...thread };
   const keys = {
     start: { chamfer: 'chamferStart', runout: 'runoutStart' },
@@ -1325,7 +1347,8 @@ export const threadSpec: InPlaceToolSpec = {
           )
         },
         ctx.saved,
-        threadFace(face)?.length
+        threadFace(face),
+        ctx.evaluate
       )
     };
   },
