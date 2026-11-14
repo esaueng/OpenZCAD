@@ -4,6 +4,8 @@ import {
   Copy,
   Info,
   LoaderCircle,
+  Lock,
+  LockOpen,
   TriangleAlert,
   X
 } from 'lucide-react';
@@ -18,12 +20,15 @@ import {
   formatProjectBytes,
   type ProjectProperties
 } from '../lib/projectProperties';
+import type { ProjectEncryptionStatus } from '../lib/projectEncryptionStatus';
 import { useModalFocus } from '../lib/useModalFocus';
 import { projectNameProblem, sameNamedProject } from '../lib/projectNameHints';
 
 export interface ProjectPropertiesDialogProps {
   project: ProjectSummary;
   accountStatus: string;
+  /** How the project is stored; absent where the host does not know. */
+  encryption?: ProjectEncryptionStatus;
   loadProperties(project: ProjectSummary): Promise<ProjectProperties | null>;
   /**
    * Makes the name editable: resolves true once the new name is stored.
@@ -50,6 +55,7 @@ function dateLabel(value: string | undefined): string {
 export function ProjectPropertiesDialog({
   project,
   accountStatus,
+  encryption,
   loadProperties,
   onRename,
   projects = [],
@@ -122,6 +128,29 @@ export function ProjectPropertiesDialog({
     ['Pinned', organization.pinned ? 'Yes' : 'No'],
     ['Account copy', accountStatus]
   ];
+  if (encryption) {
+    const Icon = {
+      encrypted: Lock,
+      encrypting: LoaderCircle,
+      plaintext: LockOpen,
+      unreadable: Lock
+    }[encryption.state];
+    library.push([
+      'Encryption',
+      <span
+        key="encryption"
+        className={`project-properties-encryption is-${encryption.state}`}
+      >
+        <Icon
+          size={12}
+          className={encryption.state === 'encrypting' ? 'spin' : undefined}
+          aria-hidden="true"
+        />
+        {encryption.label}
+      </span>,
+      encryption.detail
+    ]);
+  }
   if (organization.archivedAt)
     library.push(['Archived', dateLabel(organization.archivedAt)]);
   if (organization.deletedAt)
@@ -138,8 +167,6 @@ export function ProjectPropertiesDialog({
     ['Last edited', dateLabel(properties?.updatedAt ?? project.updatedAt)]
   ];
   if (properties) {
-    // The caveats ride on the label as a tooltip: as a line of their own
-    // they pushed the dialog past the screen.
     history.push([
       properties.branchedFrom
         ? 'Branched'
@@ -387,11 +414,7 @@ export function ProjectPropertiesDialog({
             <PropertySection title="Library" rows={library} />
             <PropertySection title="History" rows={history} />
             {storage.length > 0 && (
-              <PropertySection
-                title="Storage"
-                rows={storage}
-                hint="Excludes previews, thumbnails, backups and save-point snapshots."
-              />
+              <PropertySection title="Storage" rows={storage} />
             )}
             <PropertySection title="Technical" rows={technical} />
           </div>
@@ -412,31 +435,53 @@ export function ProjectPropertiesDialog({
   );
 }
 
-/** Label, value, and an optional caveat shown as the label's tooltip. */
+/** Label, value, and an optional caveat the label's info button reveals. */
 type Row = [string, ReactNode, string?];
 
-function PropertySection({
-  title,
-  rows,
-  hint
-}: {
-  title: string;
-  rows: Row[];
-  hint?: string | null;
-}) {
+function PropertySection({ title, rows }: { title: string; rows: Row[] }) {
   const headingId = useId();
+  const noteId = useId();
+  // A caveat opens under its row on demand: shown always, they pushed the
+  // dialog past the screen; as a hover tooltip, keyboard and touch could
+  // not reach them.
+  const [openNote, setOpenNote] = useState<string | null>(null);
   return (
     <section className="project-properties-section" aria-labelledby={headingId}>
       <h3 id={headingId}>{title}</h3>
       <dl className="project-properties-list">
-        {rows.map(([label, value, note]) => (
+        {rows.map(([label, value, note], index) => (
           <div key={label}>
-            <dt title={note}>{label}</dt>
+            <dt>
+              {label}
+              {note && (
+                <button
+                  type="button"
+                  className="icon-button project-properties-note-toggle"
+                  aria-label={`About ${label}`}
+                  aria-expanded={openNote === label}
+                  aria-controls={`${noteId}-${index}`}
+                  title={note}
+                  onClick={() =>
+                    setOpenNote((open) => (open === label ? null : label))
+                  }
+                >
+                  <Info size={12} aria-hidden="true" />
+                </button>
+              )}
+            </dt>
             <dd>{value}</dd>
+            {note && (
+              <dd
+                id={`${noteId}-${index}`}
+                className="project-properties-note"
+                hidden={openNote !== label}
+              >
+                {note}
+              </dd>
+            )}
           </div>
         ))}
       </dl>
-      {hint && <p className="project-properties-hint">{hint}</p>}
     </section>
   );
 }

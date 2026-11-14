@@ -95,6 +95,9 @@ describe('StartScreen properties', () => {
     expect(screen.queryByRole('menu')).toBeNull();
     expect(within(dialog).getByText(localProject.name)).toBeInTheDocument();
     expect(within(dialog).getByText('This device only')).toBeInTheDocument();
+    expect(
+      within(dialog).getByText('Encryption').nextElementSibling
+    ).toHaveTextContent('Not encrypted');
     expect(within(dialog).getByText('Millimeters (mm)')).toBeInTheDocument();
     fireEvent.keyDown(dialog, { key: 'Escape' });
     expect(screen.queryByRole('dialog')).toBeNull();

@@ -178,18 +178,59 @@
 
 .project-properties-list dt {
   color: var(--color-text-muted);
+  display: flex;
+  align-items: center;
+  gap: 2px;
 }
 
-.project-properties-list dt[title] {
-  text-decoration: underline dotted;
-  text-underline-offset: 3px;
-  cursor: help;
+.project-properties-note-toggle {
+  width: 20px;
+  height: 20px;
+  min-height: 0;
+  margin-block: -4px;
+  color: var(--color-text-subtle);
+}
+
+.project-properties-note-toggle[aria-expanded='true'] {
+  color: var(--color-accent);
+}
+
+/* The caveat a label's info button opens: the row's full width. */
+.project-properties-list dd.project-properties-note {
+  grid-column: 1 / -1;
+  color: var(--color-text-subtle);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+  text-align: left;
+}
+
+.project-properties-list dd.project-properties-note[hidden] {
+  display: none;
 }
 
 .project-properties-list dd {
   margin: 0;
   overflow-wrap: anywhere;
   text-align: right;
+}
+
+.project-properties-encryption {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.project-properties-encryption.is-encrypted svg {
+  color: var(--color-success);
+}
+
+.project-properties-encryption.is-plaintext svg,
+.project-properties-encryption.is-unreadable svg {
+  color: var(--color-text-subtle);
+}
+
+.project-properties-encryption.is-encrypting svg {
+  color: var(--color-accent);
 }
 
 .project-properties-id {
@@ -214,13 +255,6 @@
   width: 24px;
   height: 24px;
   min-height: 0;
-}
-
-.project-properties-hint {
-  margin: 0;
-  color: var(--color-text-subtle);
-  font-size: var(--fs-xs);
-  line-height: 1.4;
 }
 
 .project-properties-actions {

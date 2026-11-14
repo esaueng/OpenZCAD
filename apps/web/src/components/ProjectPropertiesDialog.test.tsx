@@ -111,10 +111,21 @@ describe('ProjectPropertiesDialog', () => {
     expect(headings).toEqual(['Library', 'History', 'Storage', 'Technical']);
     const history = screen.getByRole('region', { name: 'History' });
     expect(within(history).getByText('Save points')).toBeInTheDocument();
-    // The caveat is the label's tooltip, not a line that grows the dialog.
-    expect(within(history).getByText('First recorded save')).toHaveAttribute(
-      'title',
-      'A duplicated project keeps the save history of its original.'
+    // The caveat opens from a button, so keyboard and touch reach it, and
+    // stays out of the way until asked for.
+    const caveat =
+      'A duplicated project keeps the save history of its original.';
+    expect(within(history).getByText(caveat)).not.toBeVisible();
+    const about = within(history).getByRole('button', {
+      name: 'About First recorded save'
+    });
+    expect(about).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(about);
+    expect(about).toHaveAttribute('aria-expanded', 'true');
+    expect(within(history).getByText(caveat)).toBeVisible();
+    expect(about).toHaveAttribute(
+      'aria-controls',
+      within(history).getByText(caveat).id
     );
     const storage = screen.getByRole('region', { name: 'Storage' });
     expect(within(storage).getByText('Project data size')).toBeInTheDocument();
@@ -204,5 +215,37 @@ describe('ProjectPropertiesDialog', () => {
         name: 'Could not copy project ID; select it to copy'
       })
     ).toBeInTheDocument();
+  });
+
+  it('states how the project is stored, with the reason one press away', async () => {
+    render(
+      <ProjectPropertiesDialog
+        project={project}
+        accountStatus="Saved to my account"
+        encryption={{
+          state: 'encrypted',
+          label: 'End-to-end encrypted',
+          detail: 'Encrypted on this device before it is saved.'
+        }}
+        loadProperties={vi.fn().mockResolvedValue(details)}
+        onClose={vi.fn()}
+      />
+    );
+    const library = await screen.findByRole('region', { name: 'Library' });
+    const value = within(library).getByText('Encryption').nextElementSibling;
+    expect(value).toHaveTextContent('End-to-end encrypted');
+    expect(value?.querySelector('svg')).not.toBeNull();
+    fireEvent.click(
+      within(library).getByRole('button', { name: 'About Encryption' })
+    );
+    expect(
+      within(library).getByText('Encrypted on this device before it is saved.')
+    ).toBeVisible();
+  });
+
+  it('leaves the encryption row out when the host does not say', async () => {
+    renderDialog();
+    await screen.findByRole('alert');
+    expect(screen.queryByText('Encryption')).toBeNull();
   });
 });
