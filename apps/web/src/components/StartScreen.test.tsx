@@ -1575,6 +1575,31 @@ describe('StartScreen folders and selection', () => {
     expect(names()).toEqual(['Fixtures', 'Alpha plate', 'Delta plate']);
   });
 
+  it('highlights the open folder in the column, not also the Projects shelf', () => {
+    // 14 Nov 2026 recording: opening a folder left Projects lit beside it.
+    seedFolder([parts[1]!.projectId, parts[2]!.projectId]);
+    renderStartScreen({ projects: parts });
+    const projectsTab = document.getElementById('start-shelf-tab-active')!;
+    const folderLink = document.querySelector('.start-folder-link')!;
+    expect(projectsTab).toHaveClass('is-active');
+    expect(folderLink).not.toHaveClass('is-active');
+
+    fireEvent.click(folderLink);
+    expect(folderLink).toHaveClass('is-active');
+    expect(folderLink).toHaveAttribute('aria-current', 'page');
+    expect(projectsTab).not.toHaveClass('is-active');
+    // Still the shelf the folder is on, for the strip and assistive tech.
+    expect(projectsTab).toHaveClass('is-parent');
+    expect(projectsTab).toHaveAttribute('aria-selected', 'true');
+
+    fireEvent.click(projectsTab);
+    expect(projectsTab).toHaveClass('is-active');
+    expect(projectsTab).not.toHaveClass('is-parent');
+    expect(document.querySelector('.start-folder-link')).not.toHaveClass(
+      'is-active'
+    );
+  });
+
   it('looks through folders while searching', () => {
     seedFolder([parts[1]!.projectId]);
     renderStartScreen({ projects: parts });
@@ -1713,6 +1738,57 @@ describe('StartScreen folders and selection', () => {
     expect(folder.querySelector('.start-tile-rev')).toHaveTextContent(
       '2 projects'
     );
+  });
+
+  it('shows each row’s saved size in the list’s Size column', () => {
+    const sized = parts.map((part, index) =>
+      index < 2 ? { ...part, documentBytes: (index + 1) * 1536 } : part
+    );
+    seedFolder([sized[0]!.projectId, sized[1]!.projectId]);
+    renderStartScreen({ projects: sized });
+    fireEvent.click(screen.getByRole('button', { name: 'List' }));
+
+    expect(
+      Array.from(document.querySelectorAll('.start-list-head span')).map(
+        (cell) => cell.textContent
+      )
+    ).toEqual(['Name', 'Status', 'Edited', 'Size', 'Saves']);
+    // A folder totals its members once every one of them has a size.
+    const folder = screen
+      .getByRole('button', { name: 'Open folder Fixtures, 2 projects' })
+      .closest('.start-tile')!;
+    expect(folder.querySelector('.start-tile-size')).toHaveTextContent(
+      '4.5 KiB'
+    );
+    // The exact count stays readable behind the rounded label.
+    expect(folder.querySelector('data.start-tile-size')).toHaveAttribute(
+      'value',
+      '4608'
+    );
+    // A project with no measured size reads as a dash, and says why.
+    const unsized = screen
+      .getByRole('button', { name: /^Charlie plate, edited/ })
+      .closest('.start-tile')!;
+    const cell = unsized.querySelector('.start-tile-size');
+    expect(cell).toHaveTextContent('—');
+    expect(cell).toHaveAttribute(
+      'title',
+      expect.stringMatching(/^Not measured yet/)
+    );
+  });
+
+  it('leaves a folder’s size out until every member is measured', () => {
+    seedFolder([parts[0]!.projectId, parts[1]!.projectId]);
+    renderStartScreen({
+      projects: parts.map((part, index) =>
+        index === 0 ? { ...part, documentBytes: 2048 } : part
+      )
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'List' }));
+    const folder = screen
+      .getByRole('button', { name: 'Open folder Fixtures, 2 projects' })
+      .closest('.start-tile')!;
+    expect(folder.querySelector('.start-tile-size')).toHaveTextContent('—');
   });
 
   it('counts a folder card’s projects once, under its name', () => {
