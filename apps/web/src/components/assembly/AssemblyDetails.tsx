@@ -221,12 +221,7 @@ export function JointDetails({
 
       {units.map((unit, dof) => {
         const value = values[dof] ?? 0;
-        const range = sliderRange(
-          unit,
-          joint.limits[dof],
-          value,
-          lengthUnit
-        );
+        const range = sliderRange(unit, joint.limits[dof], value, lengthUnit);
         const label = dofLabel(joint.kind, dof);
         const limit = joint.limits[dof] ?? null;
         const withLimit = (next: AssemblyDofLimit | null) =>

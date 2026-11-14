@@ -254,8 +254,7 @@ export function defaultMotionSetup(
     ...set.components.filter((c) => c.id !== preferred?.id)
   ];
   const base =
-    bases.find((c) => motionSetupMovers(context, c.id).length > 0) ??
-    preferred;
+    bases.find((c) => motionSetupMovers(context, c.id).length > 0) ?? preferred;
   const moving =
     motionSetupMovers(context, base?.id ?? null)[0] ??
     set.components.find((c) => c.id !== base?.id && !c.grounded) ??

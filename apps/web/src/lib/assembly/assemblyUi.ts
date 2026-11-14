@@ -109,7 +109,9 @@ export function formatAssemblyValue(
   const scale = 10 ** decimals;
   const rounded = Math.round(value * scale) / scale;
   const text = (Object.is(rounded, -0) ? 0 : rounded).toFixed(decimals);
-  return unit === 'deg' ? `${text}°` : `${text} ${unitSymbol(unit, lengthUnit)}`;
+  return unit === 'deg'
+    ? `${text}°`
+    : `${text} ${unitSymbol(unit, lengthUnit)}`;
 }
 
 /** A joint's current values on one line; a rigid joint has none to show. */

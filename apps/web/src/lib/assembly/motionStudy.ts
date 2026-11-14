@@ -659,7 +659,9 @@ export function formatDofValue(
 ): string {
   const rounded = Math.round(value * 100) / 100;
   const text = Object.is(rounded, -0) ? '0' : String(rounded);
-  return unit === 'deg' ? `${text}°` : `${text} ${unitSymbol(unit, lengthUnit)}`;
+  return unit === 'deg'
+    ? `${text}°`
+    : `${text} ${unitSymbol(unit, lengthUnit)}`;
 }
 
 const DOF_NAMES: Readonly<Record<AssemblyJointKind, readonly string[]>> = {
