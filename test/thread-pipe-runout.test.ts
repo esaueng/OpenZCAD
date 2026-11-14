@@ -479,17 +479,22 @@ describe('schema v57 migration', () => {
     const v56 = (patch: Record<string, unknown>, nest = false) => {
       const saved = JSON.parse(
         JSON.stringify(manager.document)
-      ) as ProjectDocument & { commandLog: unknown[] };
+      ) as ProjectDocument;
       // The patch names no feature kind, as an edit's partial update need
       // not; the node itself is left a v53 thread, so only the log carries
-      // the v57 field.
+      // the v57 field. Each entry is the log's own last one, re-aimed.
+      const last = saved.commandLog.at(-1)!;
       const update = {
+        ...last,
         kind: 'feature.update',
+        label: 'Edit feature',
         payload: { featureId, data: patch }
       };
       saved.commandLog = [
         ...saved.commandLog,
-        nest ? { kind: 'transaction', payload: [update] } : update
+        nest
+          ? { ...last, kind: 'transaction', label: 'Edit', payload: [update] }
+          : update
       ];
       return { ...saved, schemaVersion: 56 } as unknown as ProjectDocument;
     };
