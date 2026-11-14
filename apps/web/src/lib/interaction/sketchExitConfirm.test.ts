@@ -12,8 +12,9 @@ describe('sketchExitEscape (I43)', () => {
   });
 
   it('arms again, rather than leaving, once the confirmation has lapsed', () => {
-    expect(
-      sketchExitEscape(1_000, 1_001 + SKETCH_EXIT_CONFIRM_MS)
-    ).toEqual({ leave: false, armedAt: 1_001 + SKETCH_EXIT_CONFIRM_MS });
+    expect(sketchExitEscape(1_000, 1_001 + SKETCH_EXIT_CONFIRM_MS)).toEqual({
+      leave: false,
+      armedAt: 1_001 + SKETCH_EXIT_CONFIRM_MS
+    });
   });
 });
