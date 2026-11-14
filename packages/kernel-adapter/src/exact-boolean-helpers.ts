@@ -556,51 +556,56 @@ function releaseScratchSolid(kernel: RemusKernel, solid: number): void {
   }
 }
 
-/** Signed volume of one face's display triangles (outward-wound). */
-function faceSignedVolume(kernel: RemusKernel, face: number): number {
-  const mesh = kernel.tessellateFace(face, MEASUREMENT_DEFLECTION);
-  try {
-    const p = mesh.positions;
-    const index = mesh.indices;
-    let volume = 0;
-    for (let t = 0; t + 2 < index.length; t += 3) {
-      const a = index[t]! * 3;
-      const b = index[t + 1]! * 3;
-      const c = index[t + 2]! * 3;
-      volume +=
-        (p[a]! * (p[b + 1]! * p[c + 2]! - p[b + 2]! * p[c + 1]!) -
-          p[a + 1]! * (p[b]! * p[c + 2]! - p[b + 2]! * p[c]!) +
-          p[a + 2]! * (p[b]! * p[c + 1]! - p[b + 1]! * p[c]!)) /
-        6;
-    }
-    return volume;
-  } finally {
-    mesh.free();
-  }
+/**
+ * What one solid's boundary says about how many pieces of material it holds.
+ *
+ * `components` is exact: face-connected boundary components from the
+ * kernel's edge-to-face map. `pieces` counts the components that enclose
+ * POSITIVE volume, or is null when any component's sign cannot be trusted.
+ *
+ * Raw components are not pieces. A body with an enclosed cavity has a second
+ * boundary component — the void's — and it is legitimate: its faces point
+ * into the void, away from the material, so it encloses negative volume. Two
+ * pieces of material that should have merged each enclose positive volume.
+ */
+export interface MaterialCensus {
+  readonly components: number;
+  readonly pieces: number | null;
 }
 
+/** Rounding allowance per unit of summed |determinant|, in units of ε. */
+const SIGNED_VOLUME_ROUNDING_ULPS = 64;
+
 /**
- * How many pieces of material one solid holds: its face-connected boundary
- * components that enclose POSITIVE volume. Null when the kernel cannot say.
+ * Count a solid's pieces of material. Null only when the kernel cannot
+ * describe the boundary at all.
  *
- * Counting raw components is not enough. A body with an enclosed cavity has
- * a second boundary component too — the void's — and it is legitimate. Its
- * faces point into the void, away from the material, so it encloses negative
- * volume and is not a piece. Two pieces of material that should have merged
- * each enclose positive volume. A solid in one component is one piece
- * without tessellating anything, which is every ordinary result.
+ * The enclosed volume of each component is the divergence-theorem sum over
+ * its display triangles, taken about the body's own box centre rather than
+ * the world origin: about the world origin a body parked at (1e7, 1e7, 1e7)
+ * sums determinants of order 1e21 to a volume of order 1e5, and cancellation
+ * left nothing of the sign. Each sum then carries an uncertainty band — the
+ * floating-point rounding of its terms, plus, on curved faces only, the
+ * measurement deflection times the face's area, which bounds how far a chord
+ * mesh can move the enclosed volume (planar faces tessellate exactly). A
+ * component whose volume is inside its band has no trustworthy sign, and
+ * makes `pieces` null — UNKNOWN, never a guess either way.
+ *
+ * A solid in one component is one piece without tessellating anything, which
+ * is every ordinary result.
  */
-export function solidMaterialPieces(
+export function materialCensus(
   kernel: RemusKernel,
   solid: number
-): number | null {
+): MaterialCensus | null {
   try {
     const faces = Array.from<number>(kernel.getSolidFaces(solid));
     const edgeToFaces = JSON.parse(kernel.edgeToFaceMap(solid)) as Record<
       string,
       number[]
     >;
-    if (countFaceConnectedComponents(faces, edgeToFaces) <= 1) return 1;
+    const components = countFaceConnectedComponents(faces, edgeToFaces);
+    if (components <= 1) return { components, pieces: components };
     const parent = new Map(faces.map((face) => [face, face]));
     const root = (face: number): number => {
       let current = face;
@@ -614,28 +619,100 @@ export function solidMaterialPieces(
         if (left !== right) parent.set(right, left);
       }
     }
-    const enclosed = new Map<number, number>();
+    const box = kernel.boundingBox(solid);
+    const origin = [
+      (box[0]! + box[3]!) / 2,
+      (box[1]! + box[4]!) / 2,
+      (box[2]! + box[5]!) / 2
+    ] as const;
+    const sums = new Map<number, { volume: number; band: number }>();
     for (const face of faces) {
+      const curved = kernel.getSurfaceType(face) !== 'plane';
+      const mesh = kernel.tessellateFace(face, MEASUREMENT_DEFLECTION);
+      let volume = 0;
+      let magnitude = 0;
+      let area = 0;
+      try {
+        const p = mesh.positions;
+        const index = mesh.indices;
+        for (let t = 0; t + 2 < index.length; t += 3) {
+          const a = index[t]! * 3;
+          const b = index[t + 1]! * 3;
+          const c = index[t + 2]! * 3;
+          const ax = p[a]! - origin[0];
+          const ay = p[a + 1]! - origin[1];
+          const az = p[a + 2]! - origin[2];
+          const bx = p[b]! - origin[0];
+          const by = p[b + 1]! - origin[1];
+          const bz = p[b + 2]! - origin[2];
+          const cx = p[c]! - origin[0];
+          const cy = p[c + 1]! - origin[1];
+          const cz = p[c + 2]! - origin[2];
+          const det =
+            ax * (by * cz - bz * cy) -
+            ay * (bx * cz - bz * cx) +
+            az * (bx * cy - by * cx);
+          volume += det / 6;
+          magnitude += Math.abs(det) / 6;
+          if (curved) {
+            const ux = bx - ax;
+            const uy = by - ay;
+            const uz = bz - az;
+            const vx = cx - ax;
+            const vy = cy - ay;
+            const vz = cz - az;
+            area +=
+              Math.hypot(
+                uy * vz - uz * vy,
+                uz * vx - ux * vz,
+                ux * vy - uy * vx
+              ) / 2;
+          }
+        }
+      } finally {
+        mesh.free();
+      }
       const component = root(face);
-      enclosed.set(
-        component,
-        (enclosed.get(component) ?? 0) + faceSignedVolume(kernel, face)
-      );
+      const sum = sums.get(component) ?? { volume: 0, band: 0 };
+      sum.volume += volume;
+      sum.band +=
+        magnitude * Number.EPSILON * SIGNED_VOLUME_ROUNDING_ULPS +
+        area * MEASUREMENT_DEFLECTION;
+      sums.set(component, sum);
     }
-    return [...enclosed.values()].filter((volume) => volume > 0).length;
+    let pieces = 0;
+    for (const { volume, band } of sums.values()) {
+      if (!Number.isFinite(volume) || Math.abs(volume) <= band) {
+        return { components, pieces: null };
+      }
+      if (volume > 0) pieces += 1;
+    }
+    return { components, pieces };
   } catch {
     return null;
   }
 }
 
+/** Pieces of material, or null when unknown. See {@link materialCensus}. */
+export function solidMaterialPieces(
+  kernel: RemusKernel,
+  solid: number
+): number | null {
+  return materialCensus(kernel, solid)?.pieces ?? null;
+}
+
 /** Operand count above which the contact repair is not attempted. */
 export const MAX_CONTACT_REPAIR_OPERANDS = 12;
+
+/** Relative volume agreement a repair must keep with what it replaces. */
+const REPAIR_VOLUME_TOLERANCE = 1e-6;
 
 interface RepairPart {
   readonly id: number;
   readonly solid: number;
   readonly owned: boolean;
-  readonly pieces: number;
+  readonly components: number;
+  readonly volume: number;
   readonly box: readonly number[];
 }
 
@@ -652,6 +729,37 @@ function boxesMeet(
   );
 }
 
+function boxesEqual(
+  left: readonly number[],
+  right: readonly number[],
+  tolerance: number
+): boolean {
+  return left.every(
+    (value, index) => Math.abs(value - right[index]!) <= tolerance
+  );
+}
+
+/** The smallest box holding both. */
+function boxUnion(left: readonly number[], right: readonly number[]): number[] {
+  return [0, 1, 2, 3, 4, 5].map((index) =>
+    index < 3
+      ? Math.min(left[index]!, right[index]!)
+      : Math.max(left[index]!, right[index]!)
+  );
+}
+
+/** Tolerance for comparing positions on bodies of this extent. */
+function boxTolerance(box: readonly number[]): number {
+  return Math.max(1, ...box.map(Math.abs)) * 1e-7;
+}
+
+function volumesAgree(left: number, right: number): boolean {
+  return (
+    Math.abs(left - right) <=
+    REPAIR_VOLUME_TOLERANCE * Math.max(Math.abs(left), Math.abs(right), 1e-12)
+  );
+}
+
 /**
  * Re-fuse operands that `fuseAll` left in more pieces than they should be,
  * grouping them rather than folding them in a fixed order.
@@ -663,14 +771,19 @@ function boxesMeet(
  * flange needs both, in the right order: no fixed fold of the pairwise fuse
  * builds it, while `fuseAll` of the two bosses, then of that with the flange,
  * does. So pairs merge one at a time — `fuseAll` on any pair first, the
- * pairwise fuse only when no pair merges that way — and a merge counts only
- * when it leaves fewer pieces of material than its two parts held.
+ * pairwise fuse only when no pair merges that way.
+ *
+ * A merge is counted on exact topology — the candidate has fewer boundary
+ * components than its two parts together — and is accepted only if it also
+ * PRESERVES their material: a union's box is exactly the box of its parts,
+ * and its volume lies between the larger part's and their sum. A candidate
+ * that loses a part fails both, however few components it has.
  *
  * Bounded: only pairs whose boxes meet are candidates, at most
  * {@link MAX_CONTACT_REPAIR_OPERANDS} operands are taken, and no pair of
  * parts is tried twice with the same entry point, so a run costs at most two
  * fuses per pair of parts that ever coexist — O(n²) for n operands — and it
- * runs only when the plain `fuseAll` result is already in pieces.
+ * runs only when the plain `fuseAll` result is in pieces or cannot be read.
  *
  * Returns the regrouped solid, owned by the caller, or null when nothing
  * merged.
@@ -681,19 +794,24 @@ function regroupTouchingOperands(
 ): number | null {
   let nextId = 0;
   let parts: RepairPart[] = [];
-  for (const solid of solids) {
-    const pieces = solidMaterialPieces(kernel, solid);
-    if (pieces === null) return null;
-    parts.push({
+  const describe = (solid: number, owned: boolean): RepairPart | null => {
+    const census = materialCensus(kernel, solid);
+    if (census === null) return null;
+    return {
       id: nextId++,
       solid,
-      owned: false,
-      pieces,
+      owned,
+      components: census.components,
+      volume: kernel.volume(solid, MEASUREMENT_DEFLECTION),
       box: Array.from<number>(kernel.boundingBox(solid))
-    });
+    };
+  };
+  for (const solid of solids) {
+    const part = describe(solid, false);
+    if (part === null) return null;
+    parts.push(part);
   }
-  const scale = Math.max(1, ...parts.flatMap((part) => part.box.map(Math.abs)));
-  const tolerance = scale * 1e-7;
+  const tolerance = Math.max(...parts.map((part) => boxTolerance(part.box)));
   const tried = { fuseAll: new Set<string>(), fuse: new Set<string>() };
   const attempt = (
     strategy: 'fuseAll' | 'fuse',
@@ -714,6 +832,19 @@ function regroupTouchingOperands(
     } catch {
       return null;
     }
+  };
+  const preserves = (
+    part: RepairPart,
+    left: RepairPart,
+    right: RepairPart
+  ): boolean => {
+    const slack =
+      REPAIR_VOLUME_TOLERANCE * Math.max(left.volume + right.volume, 1e-12);
+    return (
+      boxesEqual(part.box, boxUnion(left.box, right.box), tolerance) &&
+      part.volume >= Math.max(left.volume, right.volume) - slack &&
+      part.volume <= left.volume + right.volume + slack
+    );
   };
   let merges = 0;
   try {
@@ -738,19 +869,13 @@ function regroupTouchingOperands(
             tried[strategy].add(key);
             const solid = attempt(strategy, left, right);
             if (solid === null) continue;
-            const pieces = solidMaterialPieces(kernel, solid);
-            if (pieces !== null && pieces < left.pieces + right.pieces) {
-              merged = {
-                left,
-                right,
-                part: {
-                  id: nextId++,
-                  solid,
-                  owned: true,
-                  pieces,
-                  box: Array.from<number>(kernel.boundingBox(solid))
-                }
-              };
+            const part = describe(solid, true);
+            if (
+              part !== null &&
+              part.components < left.components + right.components &&
+              preserves(part, left, right)
+            ) {
+              merged = { left, right, part };
             } else {
               releaseScratchSolid(kernel, solid);
             }
@@ -825,17 +950,27 @@ function operandContactGroups(
  * hub. Box-on-box, a cylinder on a box and a cone on a cylinder merge
  * correctly.
  *
- * A result holding more pieces of material than the operands form contact
- * groups is that defect; enclosed cavities and genuinely separate operands
- * are not (see {@link solidMaterialPieces}). Such a result is regrouped
- * ({@link regroupTouchingOperands}) and replaced only by one with fewer
- * pieces. If pieces the operands prove are in contact are still apart, the
- * union is refused (`union_unmerged_contact`): a body with a hidden internal
- * wall is never returned silently. The refusal needs certainty — operands
- * whose contact cannot be proved keep the existing behaviour.
+ * The fused result is read with {@link materialCensus}:
  *
- * Every ordinary union (one piece) pays only an edge-to-face read. Kept off
- * `collapseShape`, where a disjoint pattern tool is in pieces by design.
+ * - One piece (including any enclosed cavities): returned as it is. Every
+ *   ordinary union pays only an edge-to-face read.
+ * - More than one piece, or pieces UNKNOWN (a boundary in several components
+ *   whose signs cannot be trusted): regrouped
+ *   ({@link regroupTouchingOperands}). The regrouped solid replaces the
+ *   fused one only with fewer boundary components AND the same material —
+ *   the same box and the same volume, which an internal wall never changes.
+ * - Still more pieces than the operands form contact groups, with both
+ *   counts certain: refused (`union_unmerged_contact`) — a hidden internal
+ *   wall is never returned silently.
+ *
+ * Unknown never refuses: a measurement that cannot be trusted is not
+ * evidence against a body, and refusing on it would block legitimate parts
+ * far from the origin or with tiny cavities. It still gets the repair, so the
+ * only remaining path to a wall is one where the census is unreadable AND
+ * the repair fails — which leaves exactly what shipped before this gate.
+ *
+ * Kept off `collapseShape`, where a disjoint pattern tool is in pieces by
+ * design.
  */
 export function fuseAllMergingFaceContacts(
   kernel: RemusKernel,
@@ -845,26 +980,40 @@ export function fuseAllMergingFaceContacts(
 ): number {
   const fused = exactFuseAll(kernel, solids, labels);
   if (solids.length < 2) return fused;
-  const pieces = solidMaterialPieces(kernel, fused);
-  if (pieces === null || pieces <= 1) return fused;
+  const census = materialCensus(kernel, fused);
+  if (census === null || census.components <= 1) return fused;
+  if (census.pieces !== null && census.pieces <= 1) return fused;
   let result = fused;
-  let resultPieces = pieces;
+  let resultCensus = census;
   if (solids.length <= MAX_CONTACT_REPAIR_OPERANDS) {
     const regrouped = regroupTouchingOperands(kernel, solids);
     if (regrouped !== null) {
-      const regroupedPieces = solidMaterialPieces(kernel, regrouped);
-      if (regroupedPieces !== null && regroupedPieces < pieces) {
+      const regroupedCensus = materialCensus(kernel, regrouped);
+      const fusedBox = Array.from<number>(kernel.boundingBox(fused));
+      if (
+        regroupedCensus !== null &&
+        regroupedCensus.components < census.components &&
+        boxesEqual(
+          Array.from<number>(kernel.boundingBox(regrouped)),
+          fusedBox,
+          boxTolerance(fusedBox)
+        ) &&
+        volumesAgree(
+          kernel.volume(regrouped, MEASUREMENT_DEFLECTION),
+          kernel.volume(fused, MEASUREMENT_DEFLECTION)
+        )
+      ) {
         releaseScratchSolid(kernel, fused);
         result = regrouped;
-        resultPieces = regroupedPieces;
+        resultCensus = regroupedCensus;
       } else {
         releaseScratchSolid(kernel, regrouped);
       }
     }
   }
-  if (resultPieces <= 1) return result;
+  if (resultCensus.pieces === null || resultCensus.pieces <= 1) return result;
   const groups = contactGroups ?? operandContactGroups(kernel, solids);
-  if (groups !== null && resultPieces > groups) {
+  if (groups !== null && resultCensus.pieces > groups) {
     releaseScratchSolid(kernel, result);
     throw new AdapterRefusal(
       'union_unmerged_contact',

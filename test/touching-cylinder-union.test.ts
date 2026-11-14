@@ -26,6 +26,7 @@ import { transformMatrix } from '../packages/kernel-adapter/src/exact-math';
 import {
   fuseAllMergingFaceContacts,
   isFaceConnectedSolid,
+  materialCensus,
   solidMaterialPieces
 } from '../packages/kernel-adapter/src/exact-boolean-helpers';
 import { AdapterRefusal } from '../packages/kernel-adapter/src/adapter-refusal';
@@ -441,6 +442,172 @@ describe('several bodies standing on one flange', () => {
     );
     expect(solidMaterialPieces(kernel, united)).toBe(1);
     expect(kernel.volume(united, 0.01)).toBeCloseTo(15000, 6);
+  });
+});
+
+describe('reading a fused body for unmerged pieces', () => {
+  /** A copy of `solid` moved by `by` on every axis. */
+  const far = (kernel: RemusKernel, solid: number, by: number) =>
+    lifted(kernel, solid, by, by, by);
+  const hubOnFlange = (kernel: RemusKernel, by: number) => [
+    far(kernel, kernel.makeCylinder(FLANGE_R, FLANGE_H), by),
+    far(
+      kernel,
+      lifted(kernel, kernel.makeCylinder(HUB_R, TOP - FLANGE_H), 0, FLANGE_H),
+      by
+    )
+  ];
+
+  it.each([0, 1e5, 1e7])(
+    'counts the two pieces fuseAll leaves of a hub on a flange at %s',
+    (by) => {
+      const kernel = new RemusKernel();
+      // About the world origin the 1e7 case summed to ZERO pieces: the wall
+      // was then never repaired and never refused.
+      const census = materialCensus(
+        kernel,
+        kernel.fuseAll(Uint32Array.from(hubOnFlange(kernel, by)))
+      );
+      expect(census).toEqual({ components: 2, pieces: 2 });
+    }
+  );
+
+  it.each([0, 1e5, 1e7])(
+    'never returns the hub-on-flange wall silently at %s',
+    (by) => {
+      const kernel = new RemusKernel();
+      let result: number | undefined;
+      try {
+        result = fuseAllMergingFaceContacts(
+          kernel,
+          hubOnFlange(kernel, by),
+          undefined,
+          1
+        );
+      } catch (error) {
+        expect((error as AdapterRefusal).adapterCode).toBe(
+          'union_unmerged_contact'
+        );
+        return;
+      }
+      expect(materialCensus(kernel, result)).toEqual({
+        components: 1,
+        pieces: 1
+      });
+      expect(kernel.getSolidFaces(result)).toHaveLength(5);
+    }
+  );
+
+  it.each([0, 1e5])(
+    'unites a tiny hollow cube with its neighbour at %s without refusing',
+    (by) => {
+      const kernel = new RemusKernel();
+      const hollow = kernel.cut(
+        far(kernel, kernel.makeBox(0.2, 0.2, 0.2), by),
+        far(
+          kernel,
+          lifted(kernel, kernel.makeBox(0.1, 0.1, 0.1), 0.05, 0.05, 0.05),
+          by
+        )
+      );
+      const neighbour = far(
+        kernel,
+        lifted(kernel, kernel.makeBox(0.2, 0.2, 0.2), 0.2, 0),
+        by
+      );
+      // Before: at 1e5 the cavity read as a second piece of material and the
+      // union was refused as `union_unmerged_contact`.
+      const united = fuseAllMergingFaceContacts(
+        kernel,
+        [hollow, neighbour],
+        undefined,
+        1
+      );
+      expect(kernel.volume(united, 0.01)).toBeCloseTo(0.015, 9);
+    }
+  );
+
+  it('accepts no retry that drops material, however few pieces it has', () => {
+    const kernel = new RemusKernel();
+    const operands = hubOnFlange(kernel, 0);
+    const flange = operands[0]!;
+    // A pairwise fuse that "merges" by returning the flange alone: one
+    // piece, no wall — and no hub. Before: accepted, 50265.48 mm³ shipped
+    // for an 87964.59 mm³ union.
+    const bad = vi
+      .spyOn(RemusKernel.prototype, 'fuseDetailed')
+      .mockImplementation(function (this: RemusKernel) {
+        return { status: 'ok', value: this.copySolid(flange) } as never;
+      });
+    try {
+      expect(() =>
+        fuseAllMergingFaceContacts(kernel, operands, undefined, 1)
+      ).toThrow(AdapterRefusal);
+    } finally {
+      bad.mockRestore();
+    }
+  });
+
+  it('counts several cavities as one piece and unites the body', () => {
+    const kernel = new RemusKernel();
+    // Two voids: three boundary components, one piece of material. (An
+    // island floating inside a void — a cavity nested in a cavity — cannot
+    // be built on the pin: every exact route to it is refused.)
+    const voided = kernel.cut(
+      kernel.cut(
+        kernel.makeBox(30, 30, 30),
+        lifted(kernel, kernel.makeBox(5, 5, 5), 5, 5, 5)
+      ),
+      lifted(kernel, kernel.makeBox(5, 5, 5), 20, 20, 20)
+    );
+    expect(materialCensus(kernel, voided)).toEqual({
+      components: 3,
+      pieces: 1
+    });
+    const united = fuseAllMergingFaceContacts(
+      kernel,
+      [voided, lifted(kernel, kernel.makeBox(30, 30, 30), 30, 0)],
+      undefined,
+      1
+    );
+    expect(materialCensus(kernel, united)).toEqual({
+      components: 3,
+      pieces: 1
+    });
+    expect(kernel.volume(united, 0.01)).toBeCloseTo(
+      2 * 30 ** 3 - 2 * 5 ** 3,
+      6
+    );
+  });
+
+  it('treats a sign inside its uncertainty band as unknown, never as a verdict', () => {
+    const kernel = new RemusKernel();
+    // A curved void smaller than the measurement deflection: its chord mesh
+    // cannot say which way it encloses.
+    const pitted = kernel.cut(
+      kernel.makeBox(10, 10, 10),
+      lifted(kernel, kernel.makeSphere(0.04, 16), 5, 5, 5)
+    );
+    expect(materialCensus(kernel, pitted)).toEqual({
+      components: 2,
+      pieces: null
+    });
+    // Unknown is not evidence against a body: even told the operands are
+    // one group, the gate does not refuse it, and returns what fuseAll made.
+    const united = fuseAllMergingFaceContacts(
+      kernel,
+      [pitted, lifted(kernel, kernel.makeBox(10, 10, 10), 30, 0)],
+      undefined,
+      1
+    );
+    expect(materialCensus(kernel, united)).toEqual({
+      components: 3,
+      pieces: null
+    });
+    expect(kernel.volume(united, 0.01)).toBeCloseTo(
+      2000 - (4 / 3) * Math.PI * 0.04 ** 3,
+      3
+    );
   });
 });
 
