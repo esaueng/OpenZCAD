@@ -158,7 +158,14 @@ export function StartupScreen({
         {slow && !offline && (
           <p className="startup-hint">Complex models take longer to rebuild.</p>
         )}
-        <button type="button" onClick={onBack} disabled={!onBack}>
+        {/* A secondary button, not grey text: it is the only way out of an
+            open that is taking too long. */}
+        <button
+          type="button"
+          className="secondary startup-back"
+          onClick={onBack}
+          disabled={!onBack}
+        >
           {backLabel}
         </button>
       </div>

@@ -1252,7 +1252,8 @@ describe('StartScreen shelf filters, order and layout', () => {
       projects: [{ ...projects[0]!, storageFormat: 99 }, ...projects.slice(1)],
       onReorder
     });
-    const locked = screen.getByRole('group', { name: 'Bracket' });
+    // Named with its date and why it does not open, as an openable card is.
+    const locked = screen.getByRole('group', { name: /^Bracket, edited / });
     expect(locked).toHaveAttribute('tabindex', '0');
     fireEvent.keyDown(locked, { key: 'ArrowRight', altKey: true });
     expect(onReorder).toHaveBeenCalledWith([
@@ -1556,6 +1557,106 @@ describe('StartScreen folders and selection', () => {
     expect(
       screen.getByRole('button', { name: 'Open folder Holders, 2 projects' })
     ).toBeInTheDocument();
+  });
+
+  // 13 November design review I17: Escape kept a folder called "New folder",
+  // and the "Made a folder" notice stayed after the folder was named.
+  it('unmakes a just-made folder on Escape, and keeps a named one', () => {
+    renderStartScreen({ projects: parts });
+    fireEvent.click(
+      screen.getByRole('checkbox', { name: 'Select Alpha plate' })
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Move to' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'New folder' }));
+    const field = screen.getByRole('textbox', { name: 'Folder name' });
+    fireEvent.keyDown(field, { key: 'Escape' });
+    fireEvent.blur(field);
+    expect(names()).toEqual([
+      'Alpha plate',
+      'Bravo plate',
+      'Charlie plate',
+      'Delta plate'
+    ]);
+    expect(
+      screen.getByText('No folder made; the projects are back on the shelf.')
+    ).toBeInTheDocument();
+  });
+
+  it('keeps an existing folder’s name on Escape', () => {
+    seedFolder([parts[0]!.projectId]);
+    renderStartScreen({ projects: parts });
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Actions for folder Fixtures' })
+    );
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }));
+    const field = screen.getByRole('textbox', { name: 'Folder name' });
+    fireEvent.change(field, { target: { value: 'Discarded' } });
+    fireEvent.keyDown(field, { key: 'Escape' });
+    expect(
+      screen.getByRole('button', { name: 'Open folder Fixtures, 1 project' })
+    ).toBeInTheDocument();
+  });
+
+  it('does not colour Ungroup as destructive', () => {
+    seedFolder([parts[0]!.projectId]);
+    renderStartScreen({ projects: parts });
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Actions for folder Fixtures' })
+    );
+    expect(screen.getByRole('menuitem', { name: 'Ungroup' })).not.toHaveClass(
+      'is-destructive'
+    );
+  });
+
+  // I15: a folder row put "2 projects · date" in Status and left Edited and
+  // Saves empty.
+  it('lays a folder out in the list’s own columns', () => {
+    seedFolder([parts[0]!.projectId, parts[1]!.projectId]);
+    renderStartScreen({ projects: parts });
+    fireEvent.click(screen.getByRole('button', { name: 'List' }));
+    const folder = screen
+      .getByRole('button', { name: 'Open folder Fixtures, 2 projects' })
+      .closest('.start-tile')!;
+    expect(folder.querySelector('.start-tile-flags')).toBeEmptyDOMElement();
+    expect(folder.querySelector('.start-tile-when')).toHaveTextContent(
+      formatLastEdited(parts[1]!.updatedAt)
+    );
+    expect(folder.querySelector('.start-tile-rev')).toHaveTextContent(
+      '2 projects'
+    );
+    expect(folder.querySelector('.start-folder-count')).toBeNull();
+  });
+
+  // I17: a card took four Tab stops and was announced "No geometryLidNov 13".
+  it('makes each card one Tab stop, named in words, with arrows to its controls', () => {
+    renderStartScreen({ projects: parts });
+    const open = screen.getByRole('button', {
+      name: `Alpha plate, edited ${formatLastEdited(parts[0]!.updatedAt)}, on this device only`
+    });
+    const tile = open.closest('.start-tile')!;
+    const others = Array.from(
+      tile.querySelectorAll<HTMLElement>('button, [tabindex]')
+    ).filter((element) => element !== open);
+    expect(others.length).toBeGreaterThan(0);
+    for (const element of others) {
+      expect(element).toHaveAttribute('tabindex', '-1');
+    }
+    open.focus();
+    fireEvent.keyDown(open, { key: 'ArrowRight' });
+    expect(
+      screen.getByRole('checkbox', { name: 'Select Alpha plate' })
+    ).toHaveFocus();
+    fireEvent.keyDown(document.activeElement!, { key: 'ArrowRight' });
+    expect(
+      screen.getByRole('button', { name: 'Pin Alpha plate' })
+    ).toHaveFocus();
+    fireEvent.keyDown(document.activeElement!, { key: 'ArrowLeft' });
+    fireEvent.keyDown(document.activeElement!, { key: 'ArrowLeft' });
+    expect(open).toHaveFocus();
+    fireEvent.keyDown(open, { key: 'F10', shiftKey: true });
+    expect(
+      within(screen.getByRole('menu')).getAllByRole('menuitem')[0]
+    ).toHaveFocus();
   });
 
   it.each(['Archive', 'Trash'])(
