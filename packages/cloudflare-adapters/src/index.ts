@@ -565,6 +565,117 @@ export function cachedSchemaProbe(
   };
 }
 
+/** Whether migration 0050's R2 key tombstones are installed. */
+export const isR2KeyTombstoneReady = cachedSchemaProbe(
+  `SELECT COUNT(*) AS ready FROM sqlite_master
+   WHERE type = 'table' AND name = 'r2_key_tombstones'`,
+  (row) => row?.ready === 1
+);
+
+/** How long a key claim blocks writers and lets its deleter delete. */
+export const R2_KEY_TOMBSTONE_TTL_MS = 60 * 60 * 1000;
+
+/** Rows a deleter is removing: they do not keep their own keys alive. */
+export interface OwnObjectRows {
+  readonly uploadSessions?: readonly string[];
+  readonly blobs?: readonly string[];
+  readonly assets?: readonly string[];
+  readonly artifacts?: readonly string[];
+  readonly documentObjects?: readonly string[];
+}
+
+/** The keys a deleter may remove from R2, until it releases them. */
+export interface ObjectKeyClaim {
+  readonly keys: ReadonlySet<string>;
+  release(): Promise<void>;
+}
+
+/**
+ * Claims `keys` for deletion (migration 0050's protocol), in one statement:
+ * a key is claimed only while `fence` holds (one SQL condition and its
+ * binds, which must use `?` placeholders only) and no row other than `own`
+ * names it. Delete from R2 only the returned keys, then remove the rows,
+ * then `release()`. While a claim is fresh, no new row can name its key, so
+ * the delete can never remove bytes a newer row stores. Before migration
+ * 0050 every key is returned, as before.
+ */
+export async function claimObjectKeysForDelete(
+  db: D1Database,
+  keys: readonly string[],
+  own: OwnObjectRows = {},
+  fence?: { sql: string; binds: readonly unknown[] }
+): Promise<ObjectKeyClaim> {
+  const unique = [...new Set(keys)];
+  const none = async () => {};
+  if (!unique.length) return { keys: new Set(), release: none };
+  if (!(await isR2KeyTombstoneReady(db))) {
+    return { keys: new Set(unique), release: none };
+  }
+  const token = crypto.randomUUID();
+  const now = Date.now();
+  const listed = JSON.stringify(unique);
+  const ids = (values?: readonly string[]) => JSON.stringify(values ?? []);
+  // A claim that outlived its deleter blocks nothing; it is dropped here
+  // so the key can be claimed again.
+  await db
+    .prepare(
+      `DELETE FROM r2_key_tombstones WHERE created_at <= ?
+       AND object_key IN (SELECT value FROM json_each(?))`
+    )
+    .bind(now - R2_KEY_TOMBSTONE_TTL_MS, listed)
+    .run();
+  await db
+    .prepare(
+      `INSERT INTO r2_key_tombstones (object_key, token, created_at)
+       SELECT k.value, ?1, ?2 FROM json_each(?3) k
+       WHERE NOT EXISTS (SELECT 1 FROM upload_sessions s
+                         WHERE s.object_key = k.value
+                           AND s.id NOT IN (SELECT value FROM json_each(?4)))
+         AND NOT EXISTS (SELECT 1 FROM e2ee_content_blobs b
+                         WHERE b.object_key = k.value
+                           AND b.blob_id NOT IN (SELECT value FROM json_each(?5)))
+         AND NOT EXISTS (SELECT 1 FROM project_storage_assets a
+                         WHERE a.object_key = k.value
+                           AND a.id NOT IN (SELECT value FROM json_each(?6)))
+         AND NOT EXISTS (SELECT 1 FROM artifacts f
+                         WHERE f.object_key = k.value
+                           AND f.id NOT IN (SELECT value FROM json_each(?7)))
+         AND NOT EXISTS (SELECT 1 FROM project_document_objects o
+                         WHERE o.object_key = k.value
+                           AND o.id NOT IN (SELECT value FROM json_each(?8)))
+         AND ${fence ? fence.sql : '1'}
+       ON CONFLICT (object_key) DO NOTHING`
+    )
+    .bind(
+      token,
+      now,
+      listed,
+      ids(own.uploadSessions),
+      ids(own.blobs),
+      ids(own.assets),
+      ids(own.artifacts),
+      ids(own.documentObjects),
+      ...(fence?.binds ?? [])
+    )
+    .run();
+  const { results } = await db
+    .prepare(
+      `SELECT object_key FROM r2_key_tombstones
+       WHERE token = ? AND created_at > ?`
+    )
+    .bind(token, Date.now() - R2_KEY_TOMBSTONE_TTL_MS)
+    .all<{ object_key: string }>();
+  return {
+    keys: new Set((results ?? []).map((row) => row.object_key)),
+    release: async () => {
+      await db
+        .prepare('DELETE FROM r2_key_tombstones WHERE token = ?')
+        .bind(token)
+        .run();
+    }
+  };
+}
+
 /**
  * Whether migration 0031's `projects.storage_format` exists (ADR-024 Phase
  * 4). Ordinary project traffic must never depend on that migration: until
@@ -3237,6 +3348,7 @@ export class D1R2PersistenceService implements PersistenceService {
         );
         if (resolution.state === 'committed') {
           await this.pruneRevisions(request.projectId);
+          await this.ensureWrittenAssets(write);
           await this.pruneUnreferencedProjectObjects(request.projectId);
           return document;
         }
@@ -3255,6 +3367,7 @@ export class D1R2PersistenceService implements PersistenceService {
         );
       }
       await this.pruneRevisions(request.projectId);
+      await this.ensureWrittenAssets(write);
       await this.pruneUnreferencedProjectObjects(request.projectId);
       return document;
     }
@@ -4048,6 +4161,7 @@ export class D1R2PersistenceService implements PersistenceService {
       await this.discardStagedWrite(input.projectId, write);
       throw new DecryptStagingLeaseError();
     }
+    await this.ensureWrittenAssets(write);
     return {
       objectId: write.objectId,
       checksumSha256: write.prepared.checksumSha256,
@@ -4071,22 +4185,20 @@ export class D1R2PersistenceService implements PersistenceService {
         .bind(write.objectId)
         .first<{ named: number }>();
       if (named) return;
-      const orphans = await Promise.all(
-        write.missingAssets.map(async (asset) =>
-          (await this.env
-            .DB!.prepare(
-              'SELECT 1 AS named FROM project_storage_assets WHERE project_id = ? AND object_key = ?'
-            )
-            .bind(projectId, asset.objectKey)
-            .first<{ named: number }>())
-            ? null
-            : asset.objectKey
-        )
+      // Content-addressed asset keys only under a claim (migration 0050):
+      // a concurrent write of the same source may name them meanwhile.
+      const claim = await claimObjectKeysForDelete(
+        this.env.DB!,
+        write.missingAssets.map((asset) => asset.objectKey)
       );
-      await Promise.allSettled([
-        bucket.delete(write.objectKey),
-        ...orphans.flatMap((key) => (key ? [bucket.delete(key)] : []))
-      ]);
+      try {
+        await Promise.allSettled([
+          bucket.delete(write.objectKey),
+          ...[...claim.keys].map((key) => bucket.delete(key))
+        ]);
+      } finally {
+        await claim.release();
+      }
     } catch {
       // An orphaned object is harmless; the project's purge sweeps it.
     }
@@ -4271,6 +4383,7 @@ export class D1R2PersistenceService implements PersistenceService {
           write
         );
         if (resolution.state === 'committed') {
+          await this.ensureWrittenAssets(write);
           await this.pruneUnreferencedProjectObjects(request.projectId);
           return {
             projectId: request.projectId,
@@ -4292,6 +4405,7 @@ export class D1R2PersistenceService implements PersistenceService {
           resolution.currentVersion
         );
       }
+      await this.ensureWrittenAssets(write);
       await this.pruneUnreferencedProjectObjects(request.projectId);
       return {
         projectId: request.projectId,
@@ -5060,20 +5174,35 @@ export class D1R2PersistenceService implements PersistenceService {
         upload.multipartUploadId
       );
     }
-    await this.env.ARTIFACTS.delete(upload.objectKey);
-    const results = await this.env.DB!.batch([
-      this.env
-        .DB!.prepare(
-          `DELETE FROM artifact_upload_parts WHERE upload_session_id = ?`
-        )
-        .bind(upload.uploadSessionId),
-      this.env
-        .DB!.prepare(
-          `DELETE FROM upload_sessions
+    // Migration 0050: the session's key is deleted only while no other row
+    // names it. An encrypted blob's key is reused by a retried upload, so a
+    // cleanup that paused here must not remove a newer upload's bytes.
+    const claim = await claimObjectKeysForDelete(
+      this.env.DB!,
+      [upload.objectKey],
+      { uploadSessions: [upload.uploadSessionId] }
+    );
+    let results: Awaited<ReturnType<D1Database['batch']>>;
+    try {
+      if (claim.keys.has(upload.objectKey)) {
+        await this.env.ARTIFACTS.delete(upload.objectKey);
+      }
+      results = await this.env.DB!.batch([
+        this.env
+          .DB!.prepare(
+            `DELETE FROM artifact_upload_parts WHERE upload_session_id = ?`
+          )
+          .bind(upload.uploadSessionId),
+        this.env
+          .DB!.prepare(
+            `DELETE FROM upload_sessions
          WHERE id = ? AND reservation_state = 'aborting'`
-        )
-        .bind(upload.uploadSessionId)
-    ]);
+          )
+          .bind(upload.uploadSessionId)
+      ]);
+    } finally {
+      await claim.release();
+    }
     if (results[1]?.meta?.changes === 1) return true;
     return (await this.loadUploadSession(upload.uploadSessionId)) === null;
   }
@@ -6606,6 +6735,26 @@ export class D1R2PersistenceService implements PersistenceService {
     assertPersistableDocument(document, this.projectDocumentLimitBytes());
   }
 
+  /**
+   * After a write's rows commit: stores again any source asset this write
+   * put whose object is gone (migration 0050). A cleanup may have deleted a
+   * content-addressed key between this write's put and its row, under a
+   * claim it released before the row landed; once the row exists, no claim
+   * on the key can be taken, so this check is the last one needed.
+   */
+  private async ensureWrittenAssets(write: ProjectStorageWrite): Promise<void> {
+    const bucket = this.projectStorageBucket();
+    if (!bucket || typeof bucket.head !== 'function') return;
+    for (const asset of write.missingAssets) {
+      if (await bucket.head(asset.objectKey)) continue;
+      await bucket.put(
+        asset.objectKey,
+        Uint8Array.from(asset.storedBody).buffer,
+        { httpMetadata: { contentType: asset.contentType } }
+      );
+    }
+  }
+
   private async putProjectStorageObjects(
     document: ProjectDocument,
     options?: {
@@ -6992,24 +7141,20 @@ export class D1R2PersistenceService implements PersistenceService {
 
       const bucket = this.projectStorageBucket();
       if (bucket) {
-        const orphanedAssetKeys = await Promise.all(
-          write.missingAssets.map(async (asset) => {
-            const reference = await this.env
-              .DB!.prepare(
-                `SELECT 1 AS referenced FROM project_storage_assets
-                 WHERE project_id = ? AND object_key = ? LIMIT 1`
-              )
-              .bind(projectId, asset.objectKey)
-              .first<{ referenced: number }>();
-            return reference ? null : asset.objectKey;
-          })
+        // Content-addressed asset keys only under a claim (migration
+        // 0050): a concurrent write of the same source may name them.
+        const claim = await claimObjectKeysForDelete(
+          this.env.DB!,
+          write.missingAssets.map((asset) => asset.objectKey)
         );
-        await Promise.allSettled([
-          bucket.delete(write.objectKey),
-          ...orphanedAssetKeys.flatMap((key) =>
-            key === null ? [] : [bucket.delete(key)]
-          )
-        ]);
+        try {
+          await Promise.allSettled([
+            bucket.delete(write.objectKey),
+            ...[...claim.keys].map((key) => bucket.delete(key))
+          ]);
+        } finally {
+          await claim.release();
+        }
       }
       return { state: 'uncommitted', currentVersion };
     } catch {
@@ -7148,6 +7293,7 @@ export class D1R2PersistenceService implements PersistenceService {
           throw projectQuotaError(error, await this.ownerEntitlements(userId));
         }
       }
+      await this.ensureWrittenAssets(write);
       return {
         projectId: document.projectId,
         name: document.name,
@@ -7729,6 +7875,12 @@ function projectQuotaError(
   limits?: { projectLimit: number; projectStorageLimitBytes: number }
 ): unknown {
   const message = error instanceof Error ? error.message : String(error);
+  // Migration 0050: a source asset's stored bytes are being removed.
+  if (message.includes('r2_key_deleting')) {
+    return new ProjectObjectStorageError(
+      'A stored file of this project is still being removed. Try again in a moment.'
+    );
+  }
   // Decision D2, enforced by 0031's trigger inside the insert itself.
   if (message.includes('ENCRYPTED_PROJECTS_REQUIRED')) {
     return new EncryptedProjectsRequiredError();
@@ -7767,6 +7919,12 @@ function artifactAccountingError(
   limitBytes = MAX_ACCOUNT_ARTIFACT_BYTES
 ): Error {
   const message = error instanceof Error ? error.message : String(error);
+  // Migration 0050: a cleanup is removing this key's stored bytes.
+  if (message.includes('r2_key_deleting')) {
+    return new ArtifactStorageError(
+      'This file is still being removed. Try again in a moment.'
+    );
+  }
   if (
     message.includes('artifact_account_quota') ||
     message.includes('artifact_reserved_byte_limit')

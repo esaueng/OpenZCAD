@@ -54,6 +54,7 @@ import {
   type E2eeUploadableBlobKind
 } from '@openzcad/shared';
 import {
+  claimObjectKeysForDelete,
   D1R2PersistenceService,
   EncryptedBlobError,
   isE2eeContentBlobStorageReady,
@@ -599,14 +600,32 @@ export async function collectContentBlobs(
       )
       .bind(projectId, COLLECT_BATCH)
       .all<{ blob_id: string; object_key: string }>();
+    const rows = results ?? [];
+    // Migration 0050: a blob's key is reused by a retried upload of the
+    // same blob id, so its bytes are deleted only under a claim taken while
+    // no row but these names it. A key named elsewhere now holds a newer
+    // upload's bytes: the row goes, the object stays.
+    const claim = await claimObjectKeysForDelete(
+      db,
+      rows.map((row) => row.object_key),
+      { blobs: rows.map((row) => row.blob_id) }
+    );
     const removed: string[] = [];
-    for (const row of results ?? []) {
-      try {
-        await bucket.delete(row.object_key);
-        removed.push(row.blob_id);
-      } catch {
-        // Kept as `deleting`: the next pass deletes the object again.
+    try {
+      for (const row of rows) {
+        if (!claim.keys.has(row.object_key)) {
+          removed.push(row.blob_id);
+          continue;
+        }
+        try {
+          await bucket.delete(row.object_key);
+          removed.push(row.blob_id);
+        } catch {
+          // Kept as `deleting`: the next pass deletes the object again.
+        }
       }
+    } finally {
+      await claim.release();
     }
     if (removed.length) {
       await db

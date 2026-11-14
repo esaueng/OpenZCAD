@@ -9,7 +9,15 @@
  * ciphertext row, object or room key remains.
  */
 import { createHash } from 'node:crypto';
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import {
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock
+} from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
   DECRYPT_STAGED_BLOB_METADATA_KEY,
@@ -2475,5 +2483,187 @@ describe('reverse engine helpers', () => {
         })
       ]).map((p) => p.projectId)
     ).toEqual(['proj_new', 'proj_old']);
+  });
+});
+
+// --- Cleanups that resume after a newer write (migration 0050) ------------------
+
+describe('a stale cleanup never deletes bytes a newer row stores under the same key', () => {
+  it('keeps a content-addressed source asset a newer decryption stored after a paused sweep listed the old one', async () => {
+    const { sweepProjectMigrations } =
+      await import('../apps/web/worker/e2eeProjectMigrations');
+    const srv = roomServer();
+    const { projectId } = await encryptedProject(srv, { revisions: 1 });
+    // A first decryption stages its plaintext, an embedded STEP source
+    // among it, then stops before the cutover and lets its lease lapse.
+    const first = reverseOn(srv, owner, 'owner_desktop', {
+      beforeStep: (step) => {
+        if (step === 'cutover') throw new Error('pause first');
+      }
+    });
+    await expect(decryptFully(first, projectId)).rejects.toThrow('pause first');
+    const key = `project-storage/${projectId}/assets/${'c'.repeat(64)}.step.txt.gz`;
+    const storeAsset = async (id: string) => {
+      srv.bucket.objects.set(
+        key,
+        text('ISO-10303-21; staged source').slice().buffer
+      );
+      srv.db
+        .prepare(
+          `INSERT INTO project_storage_assets
+             (id, project_id, kind, object_key, checksum_sha256,
+              logical_bytes, stored_bytes, content_encoding, created_at)
+           VALUES (?, ?, 'step-source', ?, ?, 27, 27, 'gzip', 'now')`
+        )
+        .run(id, projectId, key, 'c'.repeat(64));
+    };
+    await storeAsset('asset_first_attempt');
+    srv.db
+      .prepare(
+        'UPDATE e2ee_project_migrations SET lease_expires_at = ? WHERE project_id = ?'
+      )
+      .run(Date.now() - 60_000, projectId);
+    // The sweep abandons it (its owner left the rollout), lists the staged
+    // source asset, then pauses before deleting it.
+    const db = srv.env.DB as D1Database;
+    const prepare = db.prepare.bind(db);
+    let entered!: () => void;
+    let release!: () => void;
+    const listed = new Promise<void>((resolve) => (entered = resolve));
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let intercept = true;
+    const wrap = (
+      statement: D1PreparedStatement,
+      sql: string
+    ): D1PreparedStatement =>
+      new Proxy(statement, {
+        get(target, property) {
+          if (property === 'bind')
+            return (...args: unknown[]) => wrap(target.bind(...args), sql);
+          if (property === 'all')
+            return async () => {
+              const result = await target.all();
+              if (
+                intercept &&
+                /FROM project_storage_assets WHERE project_id/.test(sql)
+              ) {
+                intercept = false;
+                entered();
+                await released;
+              }
+              return result;
+            };
+          const value = Reflect.get(target, property) as unknown;
+          return typeof value === 'function'
+            ? (value as (...args: unknown[]) => unknown).bind(target)
+            : value;
+        }
+      });
+    db.prepare = (sql: string) => wrap(prepare(sql), sql);
+    const sweep = sweepProjectMigrations(srv.env, true, () => false);
+    await listed;
+    db.prepare = prepare;
+    // The returning owner cleans the abandoned attempt up and completes a
+    // fresh decryption, whose live head stores the same source under the
+    // same content-addressed key.
+    await first.engine.cancel(projectId);
+    const second = reverseOn(srv, owner, 'owner_desktop', { from: first.d });
+    await decryptFully(second, projectId);
+    expect(migrationRow(srv, projectId)).toMatchObject({ state: 'done' });
+    await storeAsset('asset_live');
+    // The paused cleanup resumes: it claims nothing, so deletes nothing.
+    release();
+    await sweep;
+    expect(srv.bucket.objects.has(key)).toBe(true);
+    expect(
+      rows(
+        srv,
+        'SELECT id FROM project_storage_assets WHERE object_key = ?',
+        key
+      )
+    ).toEqual([{ id: 'asset_live' }]);
+  });
+
+  it('keeps a re-uploaded blob that a paused upload cleanup was about to delete', async () => {
+    const { D1R2PersistenceService } =
+      await import('@openzcad/cloudflare-adapters');
+    const { EnvelopeKey, encryptContentBlob } =
+      await import('@openzcad/crypto');
+    const { createContentBlobsApi } =
+      await import('../apps/web/src/lib/e2ee/encryptedContentBlobs');
+    const srv = roomServer();
+    const { projectId, encryptor } = await encryptedProject(srv, {
+      revisions: 1
+    });
+    const api = createContentBlobsApi(encryptor.fetcher);
+    const good = await encryptContentBlob(
+      EnvelopeKey.generate(),
+      'import-source',
+      STEP,
+      { compression: 'none' }
+    );
+    const blobId = good.reference.blobId;
+    const upload = async () => {
+      const started = await api.startUpload(projectId, {
+        blobId,
+        kind: 'import-source'
+      });
+      if (started.committed) throw new Error('unexpected existing blob');
+      const put = await encryptor.fetcher(started.session.uploadUrl, {
+        method: 'PUT',
+        body: good.envelope
+      });
+      expect(put.status).toBe(204);
+      return started.session;
+    };
+    await upload();
+    const service = new D1R2PersistenceService(srv.env);
+    const deleteMock = srv.bucket.delete as unknown as Mock<
+      (key: string) => Promise<void>
+    >;
+    const remove = deleteMock.getMockImplementation()!;
+    let entered!: () => void;
+    let release!: () => void;
+    const atDelete = new Promise<void>((resolve) => (entered = resolve));
+    const released = new Promise<void>((resolve) => (release = resolve));
+    deleteMock.mockImplementationOnce(async (key: string) => {
+      entered();
+      await released;
+      return remove(key);
+    });
+    // Cleanup A claims the upload's key and pauses just before deleting it.
+    const stale = service.discardProjectUploadSessions(projectId, true, 20);
+    await atDelete;
+    // Cleanup B finishes the same session: it cannot claim the key A holds,
+    // so it removes the row and leaves the object to A.
+    await service.discardProjectUploadSessions(projectId, true, 20);
+    // While A holds the key, a re-upload under it is refused, never left to
+    // be deleted afterwards.
+    await expect(upload()).rejects.toThrow();
+    release();
+    await stale;
+    // Once A is done, the re-upload lands, is finalized and saved, and its
+    // bytes stay.
+    const second = await upload();
+    await api.finalize(projectId, blobId, {
+      uploadSessionId: second.uploadSessionId
+    });
+    encryptor.references.remember(projectId, good.reference, sha256(STEP));
+    const head = await encryptor.store.loadProject(projectId);
+    await encryptor.store.saveProjectDocument({
+      projectId: head.projectId,
+      expectedVersion: head.version,
+      document: { ...withImport(head, blobId), version: head.version + 1 }
+    });
+    expect(
+      rows(
+        srv,
+        'SELECT blob_id FROM e2ee_version_blobs WHERE blob_id = ?',
+        blobId
+      ).length
+    ).toBeGreaterThan(0);
+    // Every later cleanup leaves it: a live row names its key.
+    await service.discardProjectUploadSessions(projectId, true, 20);
+    expect(srv.bucket.objects.has(`e2ee/${projectId}/${blobId}`)).toBe(true);
   });
 });
