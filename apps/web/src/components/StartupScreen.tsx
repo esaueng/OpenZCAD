@@ -1,19 +1,6 @@
 import prismFold from '../assets/prism-fold.json';
-import {
-  useEffect,
-  useState,
-  useSyncExternalStore,
-  type CSSProperties
-} from 'react';
-
-function subscribeOnline(changed: () => void) {
-  window.addEventListener('online', changed);
-  window.addEventListener('offline', changed);
-  return () => {
-    window.removeEventListener('online', changed);
-    window.removeEventListener('offline', changed);
-  };
-}
+import { useEffect, useState, type CSSProperties } from 'react';
+import { useOnline } from '../hooks/useOnline';
 
 /**
  * The real handoffs a part goes through before the workspace appears: App
@@ -102,10 +89,7 @@ export function StartupScreen({
   stage?: StartupStage;
   backLabel?: string;
 }) {
-  const online = useSyncExternalStore(
-    subscribeOnline,
-    () => navigator.onLine !== false
-  );
+  const online = useOnline();
   const [slowStage, setSlowStage] = useState<StartupStage | null>(null);
   useEffect(() => {
     if (stage !== 'model') return;

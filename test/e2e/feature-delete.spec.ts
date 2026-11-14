@@ -193,7 +193,7 @@ test('deleting a history feature raises an undoable toast that counts its depend
   ).toBeVisible({
     timeout: 60_000
   });
-  await expect(status).toContainText('Undo Delete Boss');
+  await expect(status).toContainText('Undid Delete Boss.');
 });
 
 /**

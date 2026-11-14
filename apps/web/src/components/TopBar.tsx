@@ -1037,7 +1037,11 @@ export function TopBar({
               >
                 <Save size={13} aria-hidden="true" />
                 <span>Save revision</span>
-                {saveKey && <small>{platformShortcutLabel(saveKey)}</small>}
+                {saveKey && (
+                  <small className="topbar-menu-key">
+                    {platformShortcutLabel(saveKey)}
+                  </small>
+                )}
               </button>
               <button
                 type="button"
@@ -1049,7 +1053,9 @@ export function TopBar({
                 <Save size={13} aria-hidden="true" />
                 <span>Save revision as…</span>
                 {saveNamedKey && (
-                  <small>{platformShortcutLabel(saveNamedKey)}</small>
+                  <small className="topbar-menu-key">
+                    {platformShortcutLabel(saveNamedKey)}
+                  </small>
                 )}
               </button>
               <div className="topbar-menu-sep" />
