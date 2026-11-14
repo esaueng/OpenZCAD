@@ -230,11 +230,11 @@ export class CloudProjectAutosave {
    */
   #halted: 'conflict' | 'repair' | 'refused' | null = null;
   /**
-   * The last halting state announced (conflict, repair, refused) and the
-   * failure it carried, kept through later pause or connectivity
-   * announcements so a re-announced halt still explains itself.
+   * Why autosave halted: the failure the halt was announced with, set and
+   * cleared together with `#halted`, so re-announcing the halt explains it
+   * the same way whatever was announced in between.
    */
-  #haltStatus: { state: CloudProjectSyncState; error?: unknown } | null = null;
+  #haltCause: unknown = undefined;
   /**
    * The browser refused to upload an edit other devices could not open
    * (ADR-024 Phase 1). Like a size refusal, a newer edit that passes the same
@@ -307,11 +307,7 @@ export class CloudProjectAutosave {
    */
   reannounceHalt(): boolean {
     if (!this.#halted) return false;
-    const cause = this.#haltStatus;
-    this.#emit(
-      this.#halted,
-      cause?.state === this.#halted ? cause.error : undefined
-    );
+    this.#emit(this.#halted, this.#haltCause);
     return true;
   }
 
@@ -384,6 +380,7 @@ export class CloudProjectAutosave {
       epoch: ++this.#projectEpoch
     };
     this.#halted = this.#conflictProjectId === projectId ? 'conflict' : null;
+    this.#haltCause = undefined;
     this.#migrationHalt = false;
     this.#sizeRefusal = null;
     this.#contentRefusal = null;
@@ -413,6 +410,7 @@ export class CloudProjectAutosave {
     this.#conflictProjectId = projectId;
     if (!this.#project || this.#project.projectId === projectId) {
       this.#halted = 'conflict';
+      this.#haltCause = undefined;
       this.#migrationHalt = false;
       this.#emit('conflict');
     }
@@ -428,6 +426,7 @@ export class CloudProjectAutosave {
     if (this.#project?.projectId !== projectId) return;
     this.#clearTimer();
     this.#halted = 'repair';
+    this.#haltCause = error;
     this.#migrationHalt = false;
     this.#emit('repair', error);
   }
@@ -447,17 +446,18 @@ export class CloudProjectAutosave {
     if (this.#halted && !this.#migrationHalt) return;
     this.#clearTimer();
     const already = this.#migrationHalt;
+    const migrating = new ApiError(
+      409,
+      'This project is being end-to-end encrypted, so it takes no edits until that finishes.',
+      PROJECT_MIGRATING_CODE
+    );
     this.#halted = 'refused';
+    // Recorded even when nothing is announced now, so a later re-announce
+    // never replays an earlier halt's cause.
+    if (!already) this.#haltCause = migrating;
     this.#migrationHalt = true;
     if (this.#pending && !already) {
-      this.#emit(
-        'refused',
-        new ApiError(
-          409,
-          'This project is being end-to-end encrypted, so it takes no edits until that finishes.',
-          PROJECT_MIGRATING_CODE
-        )
-      );
+      this.#emit('refused', migrating);
     }
   }
 
@@ -471,6 +471,7 @@ export class CloudProjectAutosave {
     if (!this.#migrationHalt || this.#project?.projectId !== projectId) return;
     this.#migrationHalt = false;
     this.#halted = null;
+    this.#haltCause = undefined;
     this.#automaticRetries = 0;
     if (!this.#pending) {
       this.#emit('synced');
@@ -498,6 +499,7 @@ export class CloudProjectAutosave {
     this.#pending = null;
     this.#pendingSince = null;
     this.#halted = null;
+    this.#haltCause = undefined;
     this.#migrationHalt = false;
     this.#sizeRefusal = null;
     this.#contentRefusal = null;
@@ -530,6 +532,7 @@ export class CloudProjectAutosave {
     this.#pending = null;
     this.#pendingSince = null;
     this.#halted = null;
+    this.#haltCause = undefined;
     this.#migrationHalt = false;
     this.#sizeRefusal = null;
     this.#contentRefusal = null;
@@ -596,6 +599,7 @@ export class CloudProjectAutosave {
           }))
       ) {
         this.#halted = null;
+        this.#haltCause = undefined;
         this.#sizeRefusal = null;
       }
     }
@@ -607,6 +611,7 @@ export class CloudProjectAutosave {
       try {
         assertStorableDocument(document);
         this.#halted = null;
+        this.#haltCause = undefined;
         this.#contentRefusal = null;
       } catch {
         // Still refused; keep waiting for an edit that fixes it.
@@ -845,6 +850,7 @@ export class CloudProjectAutosave {
     if (error instanceof UnstorableDocumentError) {
       this.#requeue(next);
       this.#halted = 'refused';
+      this.#haltCause = error;
       this.#migrationHalt = false;
       this.#contentRefusal = { editEpoch: next.editEpoch };
       this.#emit('refused', error);
@@ -865,6 +871,7 @@ export class CloudProjectAutosave {
     ) {
       this.#requeue(next);
       this.#halted = 'refused';
+      this.#haltCause = error;
       this.#migrationHalt = true;
       this.#emit('refused', error);
       return { state: 'halted' };
@@ -875,6 +882,7 @@ export class CloudProjectAutosave {
     if (status === 409) {
       this.#requeue(next);
       this.#halted = 'conflict';
+      this.#haltCause = undefined;
       this.#migrationHalt = false;
       const accountVersion =
         error instanceof ApiError ? currentVersionOf(error) : null;
@@ -894,6 +902,7 @@ export class CloudProjectAutosave {
     if (isProjectDocumentUnavailableError(error)) {
       this.#requeue(next);
       this.#halted = 'repair';
+      this.#haltCause = error;
       this.#migrationHalt = false;
       this.#emit('repair', error);
       return { state: 'halted' };
@@ -906,8 +915,12 @@ export class CloudProjectAutosave {
     const overValueCeiling =
       status === 400 && (error as ApiError).message === DOCUMENT_VALUES_REFUSAL;
     if (status === 413 || status === 403 || overValueCeiling) {
+      const refusal = overValueCeiling
+        ? new Error(PROJECT_TOO_LARGE_FOR_ACCOUNT)
+        : error;
       this.#requeue(next);
       this.#halted = 'refused';
+      this.#haltCause = refusal;
       this.#migrationHalt = false;
       const complexity =
         status === 413 &&
@@ -934,10 +947,7 @@ export class CloudProjectAutosave {
           complexity
         };
       }
-      this.#emit(
-        'refused',
-        overValueCeiling ? new Error(PROJECT_TOO_LARGE_FOR_ACCOUNT) : error
-      );
+      this.#emit('refused', refusal);
       // A reduced edit can arrive while the oversized request is in flight.
       if (
         this.#sizeRefusal &&
@@ -1048,9 +1058,6 @@ export class CloudProjectAutosave {
   }
 
   #emit(state: CloudProjectSyncState, error?: unknown): void {
-    if (state === 'conflict' || state === 'repair' || state === 'refused') {
-      this.#haltStatus = { state, error };
-    }
     this.#options.onStatus?.({
       state,
       projectId: this.#project?.projectId ?? this.#pending?.projectId ?? null,

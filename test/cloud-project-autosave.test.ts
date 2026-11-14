@@ -304,6 +304,69 @@ describe('explicit checkpoints', () => {
     controller.dispose();
   });
 
+  it('keeps the halting failure when a later edit re-announces the halt', async () => {
+    const refusal = new ApiError(
+      413,
+      'Account storage limit reached.',
+      'PROJECT_STORAGE_QUOTA',
+      { limitBytes: 1_000 }
+    );
+    const respond = vi.fn().mockRejectedValue(refusal);
+    const { controller, statuses } = harness({ respond });
+    const base = documentAt(2);
+    controller.openProject(base.projectId, 2);
+    controller.schedule(documentAt(3, base));
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+    await controller.whenIdle();
+    expect(lastState(statuses)).toBe('refused');
+    // Another edit while halted announces the halt without its failure...
+    controller.schedule(documentAt(4, base));
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+    // ...but re-announcing it still explains it.
+    expect(controller.reannounceHalt()).toBe(true);
+    expect(statuses.at(-1)).toMatchObject({ state: 'refused', error: refusal });
+    controller.dispose();
+  });
+
+  it('never replays a cleared halt’s failure for a later, silent halt', async () => {
+    const refusal = new ApiError(
+      413,
+      'Account storage limit reached.',
+      'PROJECT_STORAGE_QUOTA',
+      { limitBytes: 1_000 }
+    );
+    const respond = vi
+      .fn()
+      .mockRejectedValueOnce(refusal)
+      .mockImplementation(async (input: { document: ProjectDocument }) => ({
+        projectId: input.document.projectId,
+        version: input.document.version,
+        updatedAt: '2026-01-01T00:00:00.000Z'
+      }));
+    const { controller, statuses } = harness({ respond });
+    const base = documentAt(2);
+    controller.openProject(base.projectId, 2);
+    controller.schedule(documentAt(3, base));
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+    await controller.whenIdle();
+    expect(lastState(statuses)).toBe('refused');
+    // Reopened and saved: the refusal is cleared.
+    controller.openProject(base.projectId, 2);
+    controller.schedule(documentAt(3, base));
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+    await controller.whenIdle();
+    expect(controller.isHalted).toBe(false);
+    // A move to encrypted storage halts with nothing pending: no notice now,
+    // and a re-announce names the migration, not the old quota refusal.
+    controller.haltForMigration(base.projectId);
+    expect(controller.reannounceHalt()).toBe(true);
+    expect(statuses.at(-1)).toMatchObject({
+      state: 'refused',
+      error: { code: PROJECT_MIGRATING_CODE }
+    });
+    controller.dispose();
+  });
+
   it('announces nothing for a checkpoint whose project moved on', async () => {
     const { controller, statuses } = harness();
     const base = documentAt(2);
