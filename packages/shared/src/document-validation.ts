@@ -13,6 +13,8 @@ import type {
   GearType,
   PatternKind,
   PrimitiveKind,
+  ProjectDocument,
+  ProjectNode,
   RevolveAxis,
   SketchObjectData,
   TextFontStyle,
@@ -381,22 +383,114 @@ const FEATURE_DATA_ENUMS: Readonly<
   })
 };
 
+const FEATURE_KINDS = valuesOf<FeatureKind>({
+  primitive: true,
+  sketch: true,
+  extrude: true,
+  revolve: true,
+  loft: true,
+  sweep: true,
+  'helical-sweep': true,
+  boolean: true,
+  transform: true,
+  mirror: true,
+  shell: true,
+  'solid-offset': true,
+  draft: true,
+  thicken: true,
+  fillet: true,
+  chamfer: true,
+  pattern: true,
+  split: true,
+  hole: true,
+  gear: true,
+  thread: true,
+  'direct-edit': true,
+  'imported-step': true,
+  'imported-mesh': true,
+  'datum-plane': true,
+  'datum-axis': true
+});
+
 /**
- * The feature enums whose name means one union across every feature kind.
- * A stored command's payload (a creation input such as `PrimitiveInput` or
- * `ExtrudeInput`) and a `feature.update` command's `data` carry them under
- * the same names and unions as the feature data they create or change.
+ * The feature kind each feature-creating command creates. Its payload is that
+ * feature's creation input (`PatternInput`, `BooleanInput`, ...), which
+ * carries the feature data's enums under the same names and unions, so a
+ * stored command is held to the enums of the feature it creates. Every
+ * `feature.<kind>` command creates a `<kind>` feature; command-system checks
+ * this table against its `CommandKind` union (`COMMAND_CREATED_FEATURE_KINDS`),
+ * so a new creation command cannot be left out.
  */
-const COMMAND_INPUT_ENUMS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
-  ['primitiveKind', PRIMITIVE_KINDS],
-  ['patternKind', PATTERN_KINDS],
-  ['gearType', GEAR_TYPES],
-  ['sizing', GEAR_SIZINGS],
-  ['endCondition', END_CONDITIONS],
-  ['throughAllSide', THROUGH_ALL_SIDES],
-  ['depthMode', HOLE_DEPTH_MODES],
-  ['radiusLaw', RADIUS_LAWS],
-  ['assumedUnits', UNIT_SYSTEMS]
+export const COMMAND_FEATURE_KINDS = {
+  'primitive.add': 'primitive',
+  'sketch.add': 'sketch',
+  'feature.extrude': 'extrude',
+  'feature.revolve': 'revolve',
+  'feature.loft': 'loft',
+  'feature.sweep': 'sweep',
+  'feature.helical-sweep': 'helical-sweep',
+  'feature.boolean': 'boolean',
+  'feature.transform': 'transform',
+  'feature.mirror': 'mirror',
+  'feature.split': 'split',
+  'feature.datum-plane': 'datum-plane',
+  'feature.datum-axis': 'datum-axis',
+  'feature.hole': 'hole',
+  'feature.gear': 'gear',
+  'feature.thread': 'thread',
+  'feature.shell': 'shell',
+  'feature.solid-offset': 'solid-offset',
+  'feature.draft': 'draft',
+  'feature.thicken': 'thicken',
+  'feature.direct-edit': 'direct-edit',
+  'feature.fillet': 'fillet',
+  'feature.chamfer': 'chamfer',
+  'feature.pattern': 'pattern',
+  'import.mesh': 'imported-mesh',
+  'import.step': 'imported-step'
+} as const satisfies Readonly<Record<string, FeatureKind>>;
+
+/** The enums a feature of `kind` defines, if `kind` is a feature kind. */
+function featureDataEnums(
+  kind: unknown
+): ReadonlyMap<string, ReadonlySet<string>> | undefined {
+  return typeof kind === 'string' && Object.hasOwn(FEATURE_DATA_ENUMS, kind)
+    ? FEATURE_DATA_ENUMS[kind as FeatureKind]
+    : undefined;
+}
+
+/**
+ * Each feature enum's values across every feature kind that defines it. A
+ * stored `feature.update` whose target feature is no longer known (removed
+ * since, or judged without its document) is held to these: a string there
+ * must be a value the field has on some feature. A non-string is left alone,
+ * since the same name is an object on other kinds (a gear's `axis` vector, a
+ * direct edit's `operation`, an extrude's `profile` reference).
+ */
+const FEATURE_UPDATE_FALLBACK_ENUMS: ReadonlyMap<
+  string,
+  ReadonlySet<string>
+> = (() => {
+  const union = new Map<string, Set<string>>();
+  for (const fields of Object.values(FEATURE_DATA_ENUMS))
+    for (const [field, members] of fields)
+      for (const member of members)
+        (union.get(field) ?? union.set(field, new Set()).get(field)!).add(
+          member
+        );
+  return union;
+})();
+
+/** The enums the document itself defines. */
+const DOCUMENT_ENUMS = enumsOf<ProjectDocument>({ units: UNIT_SYSTEMS });
+
+/** The enums a project node (`kind: 'project'`) defines. */
+const PROJECT_NODE_ENUMS = enumsOf<ProjectNode>({ units: UNIT_SYSTEMS });
+
+/** A history change restoring the document's `units` holds a unit on each side. */
+const UNITS_CHANGE_ENUMS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ['before', UNIT_SYSTEMS],
+  ['after', UNIT_SYSTEMS]
 ]);
 
 /** The enums a body node (`kind: 'body'`) defines. */
@@ -651,19 +745,122 @@ interface WalkEntry {
   idMap?: { entryField?: string };
   /** The union this value must belong to, when its owner defines one. */
   members?: ReadonlySet<string>;
+  /** `members` binds only a string value: other types are left alone. */
+  membersIfString?: boolean;
+}
+
+/** The enums a record defines; `loose` holds only its strings to them. */
+interface OwnedEnums {
+  fields: ReadonlyMap<string, ReadonlySet<string>>;
+  loose?: boolean;
+}
+
+/** Feature id -> feature kind, for the features a document knows of. */
+export type FeatureKinds = ReadonlyMap<string, FeatureKind>;
+type FeatureKindOf = (featureId: string) => FeatureKind | undefined;
+
+function indexFeatureNode(into: Map<string, FeatureKind>, node: unknown): void {
+  if (
+    !isDocumentRecord(node) ||
+    node.kind !== 'feature' ||
+    typeof node.featureId !== 'string'
+  )
+    return;
+  const kind = isDocumentRecord(node.data)
+    ? node.data.featureKind
+    : node.featureKind;
+  if (typeof kind === 'string' && FEATURE_KINDS.has(kind))
+    into.set(node.featureId, kind as FeatureKind);
+}
+
+function indexNodeMap(into: Map<string, FeatureKind>, nodes: unknown): void {
+  if (isDocumentRecord(nodes))
+    for (const node of Object.values(nodes)) indexFeatureNode(into, node);
+}
+
+/** The features stored creation commands create, transactions included. */
+function indexCommands(
+  into: Map<string, FeatureKind>,
+  commands: unknown,
+  depth = 0
+): void {
+  if (!Array.isArray(commands) || depth > MAX_DOCUMENT_DEPTH) return;
+  for (const command of commands) {
+    if (!isDocumentRecord(command) || typeof command.kind !== 'string')
+      continue;
+    if (command.kind === 'transaction') {
+      indexCommands(into, command.payload, depth + 1);
+      continue;
+    }
+    const payload = command.payload;
+    if (
+      Object.hasOwn(COMMAND_FEATURE_KINDS, command.kind) &&
+      isDocumentRecord(payload) &&
+      isDocumentRecord(payload.ids) &&
+      typeof payload.ids.featureId === 'string'
+    )
+      into.set(
+        payload.ids.featureId,
+        COMMAND_FEATURE_KINDS[
+          command.kind as keyof typeof COMMAND_FEATURE_KINDS
+        ]
+      );
+  }
+}
+
+/** The node snapshots and command lists one history change restores. */
+function indexHistoryChange(
+  into: Map<string, FeatureKind>,
+  change: unknown
+): void {
+  if (!isDocumentRecord(change)) return;
+  for (const side of [change.before, change.after]) {
+    if (change.field === 'commandLog') indexCommands(into, side);
+    else if (change.field === 'nodes') {
+      if (change.key === undefined) indexNodeMap(into, side);
+      else indexFeatureNode(into, side);
+    }
+  }
 }
 
 /**
- * The enums `record` defines, identified by what it is: the `data` of a
- * feature node (by its `featureKind`), a stored command's payload or a
- * `feature.update` command's data, a body node, or a text sketch object's
- * data. Any other record, a map or freeform data defines none.
+ * The kind of every feature `document` knows of: its live feature nodes,
+ * the features its stored commands create, and those its edit history
+ * restores. Live nodes win.
+ */
+function indexDocument(
+  into: Map<string, FeatureKind>,
+  document: unknown
+): void {
+  if (!isDocumentRecord(document)) return;
+  const history = document.editHistory;
+  if (isDocumentRecord(history) && Array.isArray(history.entries))
+    for (const entry of history.entries)
+      if (isDocumentRecord(entry) && Array.isArray(entry.changes))
+        for (const change of entry.changes) indexHistoryChange(into, change);
+  indexCommands(into, document.commandLog);
+  indexNodeMap(into, document.nodes);
+}
+
+/**
+ * The enums `record` defines, identified by what it is: the document (its
+ * `units`), the `data` of a feature node (by its `featureKind`), a stored
+ * creation command's payload (by the feature its kind creates), a
+ * `feature.update` command's data (by the kind of the feature it changes), a
+ * history change restoring `units`, a project node, a body node, or a text
+ * sketch object's data. Any other record, a map or freeform data defines
+ * none.
  */
 function enumsOwnedBy(
   entry: WalkEntry,
-  record: Readonly<Record<string, unknown>>
-): ReadonlyMap<string, ReadonlySet<string>> | undefined {
+  record: Readonly<Record<string, unknown>>,
+  featureKindOf: FeatureKindOf
+): OwnedEnums | undefined {
+  const owned = (
+    fields: ReadonlyMap<string, ReadonlySet<string>> | undefined
+  ): OwnedEnums | undefined => fields && { fields };
   const parent = entry.parent;
+  if (entry.shape === 'document') return owned(DOCUMENT_ENUMS);
   if (
     entry.field === 'data' &&
     parent &&
@@ -672,21 +869,49 @@ function enumsOwnedBy(
     isDocumentRecord(parent.value) &&
     parent.value.kind === 'feature'
   )
-    return typeof record.featureKind === 'string' &&
-      Object.hasOwn(FEATURE_DATA_ENUMS, record.featureKind)
-      ? FEATURE_DATA_ENUMS[record.featureKind as FeatureKind]
-      : undefined;
+    return owned(featureDataEnums(record.featureKind));
   if (
-    (entry.field === 'payload' && parent?.shape === 'command') ||
-    entry.shape === 'featureUpdateData'
-  )
-    return COMMAND_INPUT_ENUMS;
-  if (record.kind === 'body') return BODY_NODE_ENUMS;
-  if (record.objectKind === 'text') return TEXT_OBJECT_ENUMS;
+    entry.field === 'payload' &&
+    parent?.shape === 'command' &&
+    isDocumentRecord(parent.value)
+  ) {
+    const kind = parent.value.kind;
+    return typeof kind === 'string' &&
+      Object.hasOwn(COMMAND_FEATURE_KINDS, kind)
+      ? owned(
+          featureDataEnums(
+            COMMAND_FEATURE_KINDS[kind as keyof typeof COMMAND_FEATURE_KINDS]
+          )
+        )
+      : undefined;
+  }
+  if (entry.shape === 'featureUpdateData') {
+    // The kind of the feature it changes, else the kind the data names.
+    const featureId = isDocumentRecord(parent?.value)
+      ? parent.value.featureId
+      : undefined;
+    const kind =
+      (typeof featureId === 'string' ? featureKindOf(featureId) : undefined) ??
+      (typeof record.featureKind === 'string' &&
+      FEATURE_KINDS.has(record.featureKind)
+        ? record.featureKind
+        : undefined);
+    return kind !== undefined
+      ? owned(featureDataEnums(kind))
+      : { fields: FEATURE_UPDATE_FALLBACK_ENUMS, loose: true };
+  }
+  if (entry.shape === 'change' && record.field === 'units')
+    return owned(UNITS_CHANGE_ENUMS);
+  if (record.kind === 'project') return owned(PROJECT_NODE_ENUMS);
+  if (record.kind === 'body') return owned(BODY_NODE_ENUMS);
+  if (record.objectKind === 'text') return owned(TEXT_OBJECT_ENUMS);
   return undefined;
 }
 
-function walkIdentifiers(root: WalkEntry): string | null {
+function walkIdentifiers(
+  root: WalkEntry,
+  featureKindOf: FeatureKindOf
+): string | null {
   const path = (entry: WalkEntry): string => {
     const parts: string[] = [];
     for (let at: WalkEntry | null = entry; at; at = at.parent)
@@ -698,7 +923,12 @@ function walkIdentifiers(root: WalkEntry): string | null {
     const entry = pending.pop()!;
     const current = entry.value;
     // An enum field holds one member of its union, never another type.
-    if (entry.members && current !== undefined && typeof current !== 'string')
+    if (
+      entry.members &&
+      !entry.membersIfString &&
+      current !== undefined &&
+      typeof current !== 'string'
+    )
       return `"${path(entry)}" must be one of its known values.`;
     if (typeof current === 'string') {
       if (entry.freeform) continue;
@@ -737,7 +967,9 @@ function walkIdentifiers(root: WalkEntry): string | null {
       }
       continue;
     }
-    const owned = entry.freeform ? undefined : enumsOwnedBy(entry, current);
+    const owned = entry.freeform
+      ? undefined
+      : enumsOwnedBy(entry, current, featureKindOf);
     for (const key of Object.keys(current)) {
       if (RESERVED_RECORD_KEYS.has(key))
         return `"${path(entry)}" uses the reserved key "${key}".`;
@@ -763,7 +995,8 @@ function walkIdentifiers(root: WalkEntry): string | null {
         freeform,
         shape: position.shape,
         idMap: position.idMap,
-        members: freeform ? undefined : owned?.get(key)
+        members: freeform ? undefined : owned?.fields.get(key),
+        membersIfString: owned?.loose
       });
     }
     if (entry.freeform) continue;
@@ -795,39 +1028,76 @@ function walkIdentifiers(root: WalkEntry): string | null {
  * `value` is a whole document, or with `field` the value of that document
  * field (`commandLog`, a history change's bare `nodes` map or id), judged as
  * that field. Other strings, such as display names, descriptions and
- * metadata values, are not keys and may be anything.
+ * metadata values, are not keys and may be anything. A stored
+ * `feature.update` is judged by the kind of the feature it changes, looked
+ * up in the document (`value` itself when whole, else `document`, the one
+ * the field belongs to) and in what `value` creates.
  */
 export function reservedIdentifierError(
   value: unknown,
-  field?: string
+  field?: string,
+  document?: unknown
 ): string | null {
   const position: Position =
     field === undefined ? { shape: 'document' } : documentFieldPosition(field);
-  return walkIdentifiers({
-    value,
-    label: field,
-    field,
-    parent: null,
-    freeform: field !== undefined && FREEFORM_FIELDS.has(field),
-    shape: position.shape,
-    idMap: position.idMap
-  });
+  const features = new Map<string, FeatureKind>();
+  if (field === undefined) indexDocument(features, value);
+  else {
+    indexDocument(features, document);
+    if (field === 'commandLog') indexCommands(features, value);
+    else if (field === 'nodes') indexNodeMap(features, value);
+  }
+  return walkIdentifiers(
+    {
+      value,
+      label: field,
+      field,
+      parent: null,
+      freeform: field !== undefined && FREEFORM_FIELDS.has(field),
+      shape: position.shape,
+      idMap: position.idMap,
+      members: field === 'units' ? UNIT_SYSTEMS : undefined
+    },
+    (featureId) => features.get(featureId)
+  );
+}
+
+/**
+ * The kind of every feature `document` knows of (its feature nodes, the
+ * features its stored commands create and those its edit history restores),
+ * by feature id, for {@link historyChangeIdentifierError}. `document` may be
+ * a partial one, such as `{ editHistory }`.
+ */
+export function documentFeatureKinds(document: unknown): FeatureKinds {
+  const features = new Map<string, FeatureKind>();
+  indexDocument(features, document);
+  return features;
 }
 
 /**
  * {@link reservedIdentifierError} for one edit-history change: its `before`
  * and `after` are judged by the change's `field` and `key` (one node
- * snapshot, a whole node map, a command list or a bare id).
+ * snapshot, a whole node map, a command list or a bare id). A stored
+ * `feature.update` it restores is judged by the kind of its feature in
+ * `features` (see {@link documentFeatureKinds}) or in the change itself.
  */
-export function historyChangeIdentifierError(change: unknown): string | null {
-  return walkIdentifiers({
-    value: change,
-    label: undefined,
-    field: undefined,
-    parent: null,
-    freeform: false,
-    shape: 'change'
-  });
+export function historyChangeIdentifierError(
+  change: unknown,
+  features: FeatureKinds = new Map()
+): string | null {
+  const own = new Map<string, FeatureKind>();
+  indexHistoryChange(own, change);
+  return walkIdentifiers(
+    {
+      value: change,
+      label: undefined,
+      field: undefined,
+      parent: null,
+      freeform: false,
+      shape: 'change'
+    },
+    (featureId) => features.get(featureId) ?? own.get(featureId)
+  );
 }
 
 /**

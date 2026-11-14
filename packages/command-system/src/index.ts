@@ -90,7 +90,9 @@ import {
   isDatumPlaneRef,
   isFeatureRollbackSuppressed,
   ownEntry,
-  reservedIdentifierError
+  reservedIdentifierError,
+  COMMAND_FEATURE_KINDS,
+  type FeatureKind
 } from '@openzcad/shared';
 import {
   assertFeatureProfileProvenance,
@@ -406,6 +408,34 @@ export type CommandKind =
   | 'reference-image.update'
   | 'reference-image.delete';
 
+/**
+ * The feature kind each feature-creating command creates: every
+ * `feature.<kind>` command a `<kind>` feature, and the few named otherwise.
+ */
+type CommandFeatureKinds = {
+  readonly [
+    K in Extract<CommandKind, `feature.${FeatureKind}`>
+  ]: K extends `feature.${infer F}` ? F : never;
+} & {
+  readonly 'primitive.add': 'primitive';
+  readonly 'sketch.add': 'sketch';
+  readonly 'import.mesh': 'imported-mesh';
+  readonly 'import.step': 'imported-step';
+};
+
+/**
+ * Stored-command validation reads a creation command's payload by the
+ * feature it creates, from `@openzcad/shared`'s `COMMAND_FEATURE_KINDS`
+ * (shared cannot depend on this package). This typing holds that table to
+ * {@link CommandKind} both ways: it must name every feature-creating command
+ * with the kind it creates, and nothing else.
+ */
+export const COMMAND_CREATED_FEATURE_KINDS: CommandFeatureKinds &
+  Record<
+    Exclude<keyof typeof COMMAND_FEATURE_KINDS, keyof CommandFeatureKinds>,
+    never
+  > = COMMAND_FEATURE_KINDS;
+
 export interface CommandDefinition<TPayload> {
   kind: CommandKind;
   label: string;
@@ -555,13 +585,17 @@ function serializedLeaves(command: AnyCommand): SerializedCommand[] {
 
 /**
  * Refuses commands whose payload uses a reserved name as an id, a key or a
- * parameter name (see `reservedIdentifierError`), before any of them runs:
- * the ids a creation command supplies become keys of `nodes` and other maps.
+ * parameter name, or an enum value outside the union of the feature it
+ * creates or changes (see `reservedIdentifierError`), before any of them
+ * runs: the ids a creation command supplies become keys of `nodes` and other
+ * maps, and its enums the feature data a save then refuses. A
+ * `feature.update` is judged by its feature's kind in `document`.
  */
 function assertCommandIdentifiers(
-  commands: readonly SerializedCommand[]
+  commands: readonly SerializedCommand[],
+  document: ProjectDocument
 ): void {
-  const error = reservedIdentifierError(commands, 'commandLog');
+  const error = reservedIdentifierError(commands, 'commandLog', document);
   if (error) throw new Error(`The command cannot run: ${error}`);
 }
 
@@ -933,7 +967,10 @@ function validateExtrudeInput(
 }
 
 function validateDirectEditReference(input: DirectEditInput): void {
-  const faces: { faceHash: number; faceReference?: { kind: string; currentHash: number } }[] = [
+  const faces: {
+    faceHash: number;
+    faceReference?: { kind: string; currentHash: number };
+  }[] = [
     input.operation,
     ...(input.operation.kind === 'remove-faces'
       ? input.operation.additionalFaces
@@ -5423,7 +5460,7 @@ export class CommandManager {
   }
 
   execute(command: AnyCommand): ProjectDocument {
-    assertCommandIdentifiers(serializedLeaves(command));
+    assertCommandIdentifiers(serializedLeaves(command), this.document);
     command.validate(this.document);
     const previous = this.document;
     let next = command.apply(this.document);
@@ -5471,7 +5508,7 @@ export class CommandManager {
    * undo/redo still matches the document.
    */
   normalize(command: AnyCommand): ProjectDocument {
-    assertCommandIdentifiers(serializedLeaves(command));
+    assertCommandIdentifiers(serializedLeaves(command), this.document);
     command.validate(this.document);
     let next = command.apply(this.document);
     assertDocumentTextBudget(next);
@@ -5541,7 +5578,7 @@ export class CommandManager {
     const previous = this.document;
     let next = this.document;
     const serialized: SerializedCommand[] = [];
-    assertCommandIdentifiers(commands.flatMap(serializedLeaves));
+    assertCommandIdentifiers(commands.flatMap(serializedLeaves), this.document);
     for (const command of commands) {
       command.validate(next);
       next = command.apply(next);
@@ -5627,7 +5664,7 @@ export function replayCommands(
     commandLog: serializedCommands,
     editHistory: undefined
   });
-  assertCommandIdentifiers(serializedCommands);
+  assertCommandIdentifiers(serializedCommands, initialDocument);
   const commandCarrier = {
     schemaVersion: initialDocument.schemaVersion,
     commandLog: serializedCommands

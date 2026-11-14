@@ -87,7 +87,7 @@ import {
   BODY_OPACITY_METADATA_KEY,
   chosenBodyColor,
   MAX_CHECKPOINT_REASON_LENGTH,
-  UNIT_TO_MM,
+  millimetresPerUnit,
   documentNodesWithHistory,
   type ProjectId,
   createId,
@@ -6296,7 +6296,11 @@ function parseExpressionQuantity(
           `A "${suffix}" length needs the document's units, which this field does not know; enter the value in document units.`
         );
       }
-      return quantity((raw * millimeters) / UNIT_TO_MM[documentUnits], 1, 0);
+      return quantity(
+        (raw * millimeters) / millimetresPerUnit(documentUnits),
+        1,
+        0
+      );
     }
     const degrees = EXPRESSION_ANGLE_UNITS[lowered];
     if (degrees !== undefined) {

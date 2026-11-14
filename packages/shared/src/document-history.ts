@@ -3,9 +3,11 @@ import { drawingSetError } from './drawings';
 import { objectFolderSetError } from './object-folders';
 import { assemblySetError } from './assembly';
 import {
+  documentFeatureKinds,
   historyChangeIdentifierError,
   isReservedRecordKey,
-  nodeMapKeyError
+  nodeMapKeyError,
+  type FeatureKinds
 } from './document-validation';
 import {
   referenceImageSetError,
@@ -115,6 +117,7 @@ export function isDocumentHistory(
   )
     return false;
   const ids = new Set<string>();
+  let features: FeatureKinds | undefined;
   for (const entry of value.entries) {
     if (
       !record(entry) ||
@@ -220,7 +223,10 @@ export function isDocumentHistory(
       // Undo and redo publish these values as they are: a root reference,
       // an id list, a node snapshot or a whole map. None may use a reserved
       // name as an id or key; the change's field and key say which it is.
-      if (historyChangeIdentifierError(change) !== null) return false;
+      // A stored feature.update is judged by its feature's kind, which any
+      // entry may restore.
+      features ??= documentFeatureKinds({ editHistory: value });
+      if (historyChangeIdentifierError(change, features) !== null) return false;
     }
   }
   try {

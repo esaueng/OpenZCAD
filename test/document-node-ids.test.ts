@@ -24,13 +24,17 @@ import {
   UnstorableDocumentError
 } from '@openzcad/document-core';
 import {
+  COMMAND_CREATED_FEATURE_KINDS,
   CommandManager,
   commandFactories,
   replayCommands
 } from '@openzcad/command-system';
 import {
+  COMMAND_FEATURE_KINDS,
   documentEnvelopeError,
+  drawingPaperPerModelUnit,
   isDocumentHistory,
+  millimetresPerUnit,
   ownEntry,
   reservedIdentifierError,
   toBodyId,
@@ -38,7 +42,8 @@ import {
   type EntityId,
   type ProjectDocument,
   type SerializedCommand,
-  type SketchConstraintId
+  type SketchConstraintId,
+  type UnitSystem
 } from '@openzcad/shared';
 import {
   solveSketchWithGcs,
@@ -967,7 +972,7 @@ describe('persisted enum selectors and freeform values', () => {
       /primitiveKind" has the unknown value "__proto__"/
     );
     const pattern = {
-      kind: 'pattern.add',
+      kind: 'feature.pattern',
       payload: { patternKind: 'toString', axis: 'x' }
     };
     expect(reservedIdentifierError([pattern], 'commandLog')).toMatch(
@@ -1526,5 +1531,396 @@ describe('enum rules by schema position, not by property name', () => {
     ).toMatch(
       /after\.bodyType\.representationSource" has the unknown value "hologram"/
     );
+  });
+});
+
+describe('stored command enums by the feature they create or change', () => {
+  const command = (kind: string, payload: unknown): SerializedCommand => ({
+    kind,
+    payload,
+    replayVersion: 1,
+    label: kind,
+    timestamp: new Date(0).toISOString()
+  });
+
+  /** The reported payload: a grid pattern whose second axis is no axis. */
+  function gridPattern(document: ProjectDocument, axis2: unknown) {
+    return {
+      name: 'Grid',
+      targetBodyId: document.bodyOrder[0]!,
+      patternKind: 'grid' as const,
+      count: 2,
+      axis: 'x' as const,
+      spacing: 10,
+      axis2: axis2 as 'y'
+    };
+  }
+
+  /** A box patterned along x, and the pattern's feature id. */
+  function patterned() {
+    const document = valid();
+    const next = patternBody(document, gridPattern(document, 'y')).document;
+    const feature = Object.values(next.nodes).find(
+      (node) => node.kind === 'feature' && node.featureKind === 'pattern'
+    ) as { featureId: string };
+    return { document: next, featureId: feature.featureId };
+  }
+
+  it('refuses the reported grid pattern before it runs, stored or replayed', () => {
+    const document = valid();
+    const manager = new CommandManager(document);
+    expect(() =>
+      manager.execute(
+        commandFactories.patternBody(gridPattern(document, 'constructor'))
+      )
+    ).toThrow(/axis2" has the unknown value "constructor"/);
+    // Nothing ran: no pattern feature, no stored command.
+    expect(manager.document.commandLog).toHaveLength(0);
+    const stored = command('feature.pattern', {
+      ...gridPattern(document, 'constructor'),
+      ids: { featureId: 'feature_grid', featureNodeId: 'node_grid' }
+    });
+    expect(reservedIdentifierError([stored], 'commandLog')).toMatch(
+      /payload\.axis2" has the unknown value "constructor"/
+    );
+    expect(() => replayCommands(document, [stored])).toThrow(
+      /axis2" has the unknown value "constructor"/
+    );
+    // In a document's log, nested in a transaction, or in its undo history.
+    const json = JSON.parse(JSON.stringify(document)) as ProjectDocument;
+    expect(refusal({ ...json, commandLog: [stored] })).toMatch(
+      /axis2" has the unknown value "constructor"/
+    );
+    expect(
+      refusal({
+        ...json,
+        commandLog: [command('transaction', [command('transaction', [stored])])]
+      })
+    ).toMatch(/axis2" has the unknown value "constructor"/);
+    const history = {
+      schemaVersion: 1,
+      projectId: document.projectId,
+      actorUserId: owner,
+      entries: [
+        {
+          id: 'entry_1',
+          label: 'Grid',
+          changes: [
+            {
+              kind: 'splice',
+              field: 'commandLog',
+              index: 0,
+              before: [],
+              after: [stored]
+            }
+          ]
+        }
+      ],
+      cursor: 1,
+      trimmed: 0
+    };
+    expect(isDocumentHistory(history, document.projectId)).toBe(false);
+    expect(refusal({ ...json, editHistory: history })).toMatch(
+      /axis2" has the unknown value "constructor"/
+    );
+    // The valid grid still runs and saves.
+    manager.execute(commandFactories.patternBody(gridPattern(document, 'z')));
+    const saved = JSON.parse(JSON.stringify(manager.document)) as unknown;
+    expect(() => assertStorableDocument(saved)).not.toThrow();
+  });
+
+  it.each([
+    ['feature.boolean', { operation: 'constructor', targetBodyIds: [] }],
+    ['feature.boolean', { operation: 'union', keepOriginals: 'none' }],
+    ['feature.extrude', { operation: 'merge' }],
+    ['feature.revolve', { axis: 'x' }],
+    ['feature.loft', { mode: 'toString', sections: [] }],
+    ['feature.sweep', { mode: 'ruled' }],
+    ['feature.hole', { style: 'tapped', depthMode: 'blind' }],
+    ['feature.gear', { gearType: 'external', hand: 'both' }],
+    ['feature.thread', { profile: 'acme' }],
+    ['feature.pattern', { patternKind: 'linear', axis: 'horizontal' }],
+    ['feature.fillet', { radiusLaw: 'cubic' }],
+    ['import.mesh', { assumedUnits: 'parsec' }]
+  ])('refuses %s with %j', (kind, payload) => {
+    const error = reservedIdentifierError(
+      [command(kind, payload)],
+      'commandLog'
+    );
+    expect(error).toMatch(/has the unknown value/);
+    expect(
+      reservedIdentifierError(
+        [command('transaction', [command(kind, payload)])],
+        'commandLog'
+      )
+    ).toMatch(/has the unknown value/);
+  });
+
+  it('holds a field only to the enums of the feature its command creates', () => {
+    // A revolve's axis is horizontal or vertical; a pattern's is x, y or z.
+    expect(
+      reservedIdentifierError(
+        [
+          command('feature.revolve', { axis: 'horizontal' }),
+          command('feature.pattern', { patternKind: 'grid', axis: 'x' })
+        ],
+        'commandLog'
+      )
+    ).toBeNull();
+    // A direct edit's operation and a gear's axis are objects, not enums.
+    expect(
+      reservedIdentifierError(
+        [
+          command('feature.direct-edit', { operation: { kind: 'move-face' } }),
+          command('feature.gear', {
+            gearType: 'external',
+            axis: { x: 0, y: 0, z: 1 }
+          })
+        ],
+        'commandLog'
+      )
+    ).toBeNull();
+    // Other commands define no feature enums.
+    expect(
+      reservedIdentifierError(
+        [command('drawing.view.add', { style: 'anything', mode: 'shaded' })],
+        'commandLog'
+      )
+    ).toBeNull();
+  });
+
+  it('judges a feature.update by the kind of the feature it changes', () => {
+    const { document, featureId } = patterned();
+    const update = (data: Record<string, unknown>) =>
+      command('feature.update', { featureId, data });
+    // With the document, the pattern's own enums apply.
+    for (const data of [
+      { axis2: 'constructor' },
+      { axis: 'horizontal' },
+      { axis: { x: 1, y: 0, z: 0 } }
+    ]) {
+      expect(
+        reservedIdentifierError([update(data)], 'commandLog', document)
+      ).not.toBeNull();
+      expect(() =>
+        new CommandManager(document).execute(
+          commandFactories.updateFeature({
+            featureId: featureId as never,
+            data: data as never
+          })
+        )
+      ).toThrow(/The command cannot run/);
+      expect(
+        refusal({
+          ...(JSON.parse(JSON.stringify(document)) as object),
+          commandLog: [command('transaction', [update(data)])]
+        })
+      ).toMatch(/axis2?" (has the unknown value|must be one of)/);
+    }
+    expect(
+      reservedIdentifierError([update({ axis2: 'z' })], 'commandLog', document)
+    ).toBeNull();
+    // The feature a log creates is known to its later updates.
+    const created = command('feature.pattern', {
+      ...gridPattern(document, 'y'),
+      ids: { featureId: 'feature_later', featureNodeId: 'node_later' }
+    });
+    expect(
+      reservedIdentifierError(
+        [
+          created,
+          command('feature.update', {
+            featureId: 'feature_later',
+            data: { axis: 'vertical' }
+          })
+        ],
+        'commandLog'
+      )
+    ).toMatch(/axis" has the unknown value "vertical"/);
+    // Without its feature, a string must be a value the field has on some
+    // feature; a non-string, an object on other kinds, is left alone.
+    const unknown = (data: Record<string, unknown>) =>
+      reservedIdentifierError(
+        [command('feature.update', { featureId: 'feature_gone', data })],
+        'commandLog'
+      );
+    expect(unknown({ axis2: 'constructor' })).toMatch(
+      /axis2" has the unknown value "constructor"/
+    );
+    expect(unknown({ mode: 'sideways' })).toMatch(
+      /mode" has the unknown value "sideways"/
+    );
+    expect(unknown({ axis: 'vertical' })).toBeNull();
+    expect(unknown({ operation: { kind: 'move-face' } })).toBeNull();
+    // Data naming its kind is judged by it.
+    expect(unknown({ featureKind: 'pattern', axis: 'vertical' })).toMatch(
+      /axis" has the unknown value "vertical"/
+    );
+  });
+
+  it('judges a feature.update in undo history by its feature', () => {
+    const { document, featureId } = patterned();
+    const manager = new CommandManager(document);
+    manager.execute(
+      commandFactories.updateFeature({
+        featureId: featureId as never,
+        data: { axis2: 'z' }
+      })
+    );
+    const saved = JSON.parse(JSON.stringify(manager.document)) as {
+      editHistory: unknown;
+      commandLog: unknown;
+    };
+    expect(() => assertStorableDocument(saved)).not.toThrow();
+    const forge = (part: unknown) =>
+      JSON.parse(
+        JSON.stringify(part).replaceAll('"axis2":"z"', '"axis2":"horizontal"')
+      ) as unknown;
+    // "horizontal" is a revolve's axis: the pattern's feature refuses it.
+    expect(
+      refusal({ ...saved, editHistory: forge(saved.editHistory) })
+    ).toMatch(/axis2" has the unknown value "horizontal"/);
+    expect(refusal({ ...saved, commandLog: forge(saved.commandLog) })).toMatch(
+      /axis2" has the unknown value "horizontal"/
+    );
+  });
+
+  it('lists every feature-creating command with the kind it creates', () => {
+    expect(COMMAND_CREATED_FEATURE_KINDS).toBe(COMMAND_FEATURE_KINDS);
+    const document = valid();
+    const manager = new CommandManager(document);
+    for (const created of [
+      commandFactories.patternBody(gridPattern(document, 'y')),
+      commandFactories.addPrimitive({
+        name: 'Ball',
+        primitiveKind: 'sphere',
+        dimensions: { radius: 1 }
+      })
+    ]) {
+      const before = new Set(manager.document.featureOrder);
+      manager.execute(created);
+      const feature = Object.values(manager.document.nodes).find(
+        (node) => node.kind === 'feature' && !before.has(node.featureId)
+      ) as { featureKind: string };
+      expect(
+        COMMAND_FEATURE_KINDS[
+          created.kind as keyof typeof COMMAND_FEATURE_KINDS
+        ]
+      ).toBe(feature.featureKind);
+    }
+  });
+});
+
+describe('document units', () => {
+  type Json = Record<string, unknown> & {
+    nodes: Record<string, Record<string, unknown>>;
+    rootNodeId: string;
+  };
+  const json = () => JSON.parse(JSON.stringify(valid())) as Json;
+
+  it('still accepts every unit system, on the document and its project', () => {
+    for (const units of ['mm', 'cm', 'm', 'inch']) {
+      const value = json();
+      value.units = units;
+      value.nodes[value.rootNodeId]!.units = units;
+      expect(() => assertStorableDocument(value)).not.toThrow();
+    }
+  });
+
+  it.each([
+    ['parsec'],
+    ['constructor'],
+    ['__proto__'],
+    [null],
+    [3],
+    [{}],
+    [['mm']]
+  ])('refuses document units %j', (units) => {
+    const value = json();
+    value.units = units;
+    expect(refusal(value)).toMatch(
+      /"units" (has the unknown value|must be one of its known values)/
+    );
+  });
+
+  it.each([['parsec'], ['toString'], [null], [{ mm: 1 }]])(
+    'refuses project node units %j',
+    (units) => {
+      const value = json();
+      expect(value.nodes[value.rootNodeId]!.kind).toBe('project');
+      value.nodes[value.rootNodeId]!.units = units;
+      expect(refusal(value)).toMatch(
+        /\.units" (has the unknown value|must be one of its known values)/
+      );
+    }
+  );
+
+  it('refuses undo history that restores unknown units', () => {
+    const value = json();
+    const history = (changes: unknown[]) => ({
+      schemaVersion: 1,
+      projectId: value.projectId,
+      actorUserId: owner,
+      entries: [{ id: 'entry_1', label: 'Units', changes }],
+      cursor: 1,
+      trimmed: 0
+    });
+    const project = value.nodes[value.rootNodeId]!;
+    const good = history([
+      { kind: 'value', field: 'units', before: 'mm', after: 'inch' },
+      {
+        kind: 'value',
+        field: 'nodes',
+        key: value.rootNodeId,
+        before: project,
+        after: { ...project, units: 'inch' }
+      }
+    ]);
+    expect(isDocumentHistory(good, value.projectId as string)).toBe(true);
+    expect(() =>
+      assertStorableDocument({ ...value, editHistory: good })
+    ).not.toThrow();
+    for (const change of [
+      { kind: 'value', field: 'units', before: 'mm', after: 'parsec' },
+      { kind: 'value', field: 'units', before: null, after: 'mm' },
+      {
+        kind: 'value',
+        field: 'nodes',
+        key: value.rootNodeId,
+        before: project,
+        after: { ...project, units: 'parsec' }
+      },
+      {
+        kind: 'value',
+        field: 'nodes',
+        before: value.nodes,
+        after: {
+          ...value.nodes,
+          [value.rootNodeId]: { ...project, units: 'parsec' }
+        }
+      }
+    ]) {
+      const forged = history([change]);
+      expect(isDocumentHistory(forged, value.projectId as string)).toBe(false);
+      expect(refusal({ ...value, editHistory: forged })).toMatch(
+        /(units|before|after)" (has the unknown value|must be one of its known values)/
+      );
+    }
+    expect(reservedIdentifierError('parsec', 'units')).toMatch(
+      /"units" has the unknown value "parsec"/
+    );
+  });
+
+  it('never reads an unknown unit as a number', () => {
+    const scale = { numerator: 1, denominator: 2 };
+    expect(drawingPaperPerModelUnit(scale, 'inch')).toBe(12.7);
+    for (const units of ['parsec', 'constructor', '__proto__']) {
+      expect(() => millimetresPerUnit(units as UnitSystem)).toThrow(
+        /Unknown units/
+      );
+      expect(() =>
+        drawingPaperPerModelUnit(scale, units as UnitSystem)
+      ).toThrow(/Unknown units/);
+    }
   });
 });

@@ -14,7 +14,7 @@
  */
 import {
   PIPE_THREAD_TAPER,
-  UNIT_TO_MM,
+  millimetresPerUnit,
   isoMetricThreadForBore,
   nearestIsoMetricThread,
   pipeThreadOnFace,
@@ -642,7 +642,7 @@ export function buildThreadFeature(
         ? undefined
         : resolveParamValue(value, scope, `thread ${label}`, document.units)
   };
-  const mm = UNIT_TO_MM[document.units];
+  const mm = millimetresPerUnit(document.units);
   const thread = resolveThread(
     data,
     values,

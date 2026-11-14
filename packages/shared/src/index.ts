@@ -5635,6 +5635,18 @@ export const UNIT_TO_MM: Record<UnitSystem, number> = {
   inch: 25.4
 };
 
+/**
+ * Millimetres per `units`. Anything but a unit system is refused rather than
+ * read as `UNIT_TO_MM[units]`, which turns an unknown value into NaN geometry
+ * and an inherited name into a prototype member.
+ */
+export function millimetresPerUnit(units: UnitSystem): number {
+  const millimetres = ownEntry(UNIT_TO_MM, units);
+  if (millimetres === undefined)
+    throw new RangeError(`Unknown units "${String(units)}".`);
+  return millimetres;
+}
+
 /** One ISO 261 coarse-pitch metric thread size, in millimetres. */
 export interface IsoMetricThreadSize {
   /** Nominal (major) diameter. */

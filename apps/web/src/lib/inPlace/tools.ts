@@ -30,6 +30,7 @@ import {
   type UnitSystem,
   type VariableFilletLaw,
   UNIT_TO_MM,
+  millimetresPerUnit,
   type Vector3
 } from '@openzcad/shared';
 import {
@@ -2251,7 +2252,7 @@ export function gearModuleOf(
   const pitch = numbers[id] ?? GEAR_PITCH_INITIALS[id];
   if (id === 'circularPitch') return pitch / Math.PI;
   if (id === 'diametralPitch') {
-    return UNIT_TO_MM.inch / UNIT_TO_MM[units] / pitch;
+    return UNIT_TO_MM.inch / millimetresPerUnit(units) / pitch;
   }
   return pitch;
 }
@@ -2264,7 +2265,7 @@ function gearPitchFor(
 ): number {
   if (id === 'circularPitch') return module * Math.PI;
   if (id === 'diametralPitch') {
-    return UNIT_TO_MM.inch / UNIT_TO_MM[units] / module;
+    return UNIT_TO_MM.inch / millimetresPerUnit(units) / module;
   }
   return module;
 }

@@ -1,4 +1,4 @@
-import { UNIT_TO_MM, type UnitSystem } from '@openzcad/shared';
+import { millimetresPerUnit, type UnitSystem } from '@openzcad/shared';
 
 /**
  * Export units and mesh tolerances.
@@ -35,7 +35,7 @@ export function exportLengthScale(
   documentUnits: UnitSystem,
   exportUnits: UnitSystem
 ): number {
-  return UNIT_TO_MM[documentUnits] / UNIT_TO_MM[exportUnits];
+  return millimetresPerUnit(documentUnits) / millimetresPerUnit(exportUnits);
 }
 
 /**
