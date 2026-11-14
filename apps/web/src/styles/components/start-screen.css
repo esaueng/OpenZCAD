@@ -533,12 +533,12 @@
   cursor: pointer;
 }
 
-/* Centred on the 30px select from the label's foot. */
+/* Centred on the select, which is the label's whole height at any size. */
 .start-field-units::after {
   content: '';
   position: absolute;
   right: 10px;
-  bottom: 12px;
+  top: calc(50% - 3px);
   width: 10px;
   height: 6px;
   background: var(--color-text-muted);
