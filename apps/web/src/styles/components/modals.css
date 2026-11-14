@@ -4,8 +4,11 @@
 
 /* ── Modals (command palette, shortcuts) ─────────────────── */
 
+/* Project properties fits on one screen: two columns of sections on a
+   desktop, one on a phone, with no scrolling at 1280 x 800 or 390 x 844.
+   The body still scrolls as a fallback on shorter screens. */
 .project-properties-dialog {
-  width: min(520px, 100%);
+  width: min(720px, 100%);
   max-height: calc(100dvh - 12vh - 32px);
   display: flex;
   flex-direction: column;
@@ -29,7 +32,7 @@
 }
 
 .project-properties-dialog > .project-properties-header {
-  padding: var(--sp-3) var(--sp-4);
+  padding: var(--sp-2) var(--sp-2) var(--sp-2) var(--sp-4);
   border-bottom: var(--border-thin);
 }
 
@@ -38,13 +41,11 @@
   font-size: var(--fs-lg);
 }
 
-/* Only the body scrolls: the title and Close stay put while a long list
-   of details moves between them. */
 .project-properties-body {
   display: grid;
-  gap: var(--sp-4);
+  gap: var(--sp-3);
   min-height: 0;
-  padding: var(--sp-4);
+  padding: var(--sp-3) var(--sp-4) var(--sp-4);
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -59,13 +60,13 @@
   width: 100%;
   min-height: 34px;
   font-size: var(--fs-md);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 
 .project-properties-name p {
   margin: 0;
   font-size: var(--fs-md);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   overflow-wrap: anywhere;
 }
 
@@ -95,7 +96,8 @@
   font-size: var(--fs-xs);
 }
 
-/* What the model holds, read at a glance before the bookkeeping. */
+/* What the model holds, read at a glance before the bookkeeping: each
+   count beside its label, one row of four. */
 .project-properties-counts {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -105,10 +107,12 @@
 
 .project-properties-counts > div {
   display: flex;
-  flex-direction: column-reverse;
-  gap: 2px;
+  flex-direction: row-reverse;
+  justify-content: flex-end;
+  align-items: baseline;
+  gap: var(--sp-2);
   min-width: 0;
-  padding: var(--sp-2) var(--sp-3);
+  padding: 6px var(--sp-3);
   background: var(--color-surface-2);
   border: var(--border-thin);
   border-radius: var(--radius-md);
@@ -124,22 +128,30 @@
 
 .project-properties-counts dd {
   margin: 0;
-  font-size: var(--fs-xl);
-  font-weight: 600;
+  font-size: var(--fs-lg);
+  font-weight: var(--fw-semibold);
   font-variant-numeric: tabular-nums;
   line-height: 1.2;
 }
 
+.project-properties-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-3) var(--sp-5);
+  align-items: start;
+}
+
 .project-properties-section {
   display: grid;
-  gap: var(--sp-1);
+  gap: 2px;
+  min-width: 0;
 }
 
 .project-properties-section h3 {
   margin: 0;
   color: var(--color-text-muted);
   font-size: var(--fs-xs);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
@@ -149,12 +161,14 @@
   font-size: var(--fs-sm);
 }
 
+/* Label at its own width, value right-aligned in the rest, so short values
+   line up on the right edge whatever the label's length. */
 .project-properties-list > div {
   display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  grid-template-columns: auto minmax(0, 1fr);
   gap: var(--sp-3);
   align-items: baseline;
-  padding: 6px 0;
+  padding: 5px 0;
   border-bottom: var(--border-thin);
 }
 
@@ -166,14 +180,22 @@
   color: var(--color-text-muted);
 }
 
+.project-properties-list dt[title] {
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+  cursor: help;
+}
+
 .project-properties-list dd {
   margin: 0;
   overflow-wrap: anywhere;
+  text-align: right;
 }
 
 .project-properties-id {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: var(--sp-1);
   min-width: 0;
 }
@@ -187,13 +209,16 @@
 
 .project-properties-id .icon-button {
   flex: none;
+  width: 24px;
+  height: 24px;
+  min-height: 0;
 }
 
 .project-properties-hint {
   margin: 0;
   color: var(--color-text-subtle);
   font-size: var(--fs-xs);
-  line-height: 1.5;
+  line-height: 1.4;
 }
 
 .project-properties-actions {
@@ -201,8 +226,22 @@
   align-items: center;
   justify-content: flex-end;
   gap: var(--sp-3);
-  padding: var(--sp-3) var(--sp-4);
+  padding: var(--sp-2) var(--sp-4);
   border-top: var(--border-thin);
+}
+
+/* Close is this dialog's only action, so it is its answer: it keeps the
+   whole button the bare-secondary rule below takes from a Cancel beside a
+   filled primary. It read as stray text in the corner. */
+.modal-backdrop
+  .project-properties-actions
+  > .secondary:not(:hover:not(:disabled), :focus-visible) {
+  background: var(--color-surface-2);
+  border-color: var(--color-border-strong);
+}
+
+.project-properties-actions > .secondary {
+  min-width: 84px;
 }
 
 .project-properties-source {
@@ -211,27 +250,32 @@
   font-size: var(--fs-xs);
 }
 
+@media (max-width: 640px) {
+  .project-properties-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 @media (max-width: 480px) {
-  /* Two across, each count beside its label: four stacked tiles took a
-     third of a phone's dialog before the first detail. */
+  /* A phone gives the dialog the screen's height, not the 12vh drop the
+     command palette sits under. */
+  .modal-backdrop:has(> .project-properties-dialog) {
+    padding-top: 16px;
+  }
+
+  .project-properties-dialog {
+    max-height: calc(100dvh - 32px);
+  }
+
   .project-properties-counts {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
   }
 
   .project-properties-counts > div {
-    flex-direction: row-reverse;
-    justify-content: flex-end;
-    align-items: baseline;
-    gap: var(--sp-2);
-    padding: 6px var(--sp-3);
-  }
-
-  .project-properties-counts dd {
-    font-size: var(--fs-lg);
-  }
-
-  .project-properties-list > div {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr);
+    flex-direction: column-reverse;
+    align-items: flex-start;
+    gap: 0;
+    padding: 4px var(--sp-2);
   }
 }
 

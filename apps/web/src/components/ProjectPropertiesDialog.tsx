@@ -122,13 +122,20 @@ export function ProjectPropertiesDialog({
     ['Last edited', dateLabel(properties?.updatedAt ?? project.updatedAt)]
   ];
   if (properties) {
+    // The caveats ride on the label as a tooltip: as a line of their own
+    // they pushed the dialog past the screen.
     history.push([
       properties.branchedFrom
         ? 'Branched'
         : properties.startedAt
           ? 'First recorded save'
           : 'Oldest retained save',
-      dateLabel(properties.startedAt ?? properties.oldestSaveAt)
+      dateLabel(properties.startedAt ?? properties.oldestSaveAt),
+      properties.branchedFrom
+        ? undefined
+        : properties.startedAt
+          ? 'A duplicated project keeps the save history of its original.'
+          : 'The original creation date is no longer recorded; this is the oldest retained save.'
     ]);
     if (properties.branchedFrom) {
       history.push([
@@ -141,13 +148,6 @@ export function ProjectPropertiesDialog({
     'Save points',
     properties?.savePoints ?? project.revisionCount
   ]);
-  const historyHint = !properties
-    ? null
-    : !properties.startedAt
-      ? 'The original creation date is no longer recorded; the oldest retained save is shown.'
-      : !properties.branchedFrom
-        ? 'A duplicated project keeps the save history of its original.'
-        : null;
 
   const storage: Row[] = [];
   const technical: Row[] = [];
@@ -156,7 +156,12 @@ export function ProjectPropertiesDialog({
       'Project data size',
       formatProjectBytes(
         properties.documentBytes + properties.referencedSourceBytes
-      )
+      ),
+      `Saved model data and undo history, embedded files included${
+        properties.referencedSourceBytes
+          ? '; each referenced source file counts once'
+          : ''
+      }. Excludes geometry previews, thumbnails, backups and separate save-point snapshots.`
     ]);
     // The split only says something when a source file adds to the total;
     // without one, both rows repeated the same size.
@@ -333,20 +338,18 @@ export function ProjectPropertiesDialog({
               ))}
             </dl>
           )}
-          <PropertySection title="Library" rows={library} />
-          <PropertySection title="History" rows={history} hint={historyHint} />
-          {storage.length > 0 && (
-            <PropertySection
-              title="Storage"
-              rows={storage}
-              hint={`Saved model data and undo history, embedded files included${
-                properties?.referencedSourceBytes
-                  ? '; each referenced source file counts once'
-                  : ''
-              }. Excludes geometry previews, thumbnails, backups and separate save-point snapshots.`}
-            />
-          )}
-          <PropertySection title="Technical" rows={technical} />
+          <div className="project-properties-grid">
+            <PropertySection title="Library" rows={library} />
+            <PropertySection title="History" rows={history} />
+            {storage.length > 0 && (
+              <PropertySection
+                title="Storage"
+                rows={storage}
+                hint="Excludes previews, thumbnails, backups and save-point snapshots."
+              />
+            )}
+            <PropertySection title="Technical" rows={technical} />
+          </div>
         </div>
         <footer className="project-properties-actions">
           {properties && (
@@ -364,7 +367,8 @@ export function ProjectPropertiesDialog({
   );
 }
 
-type Row = [string, ReactNode];
+/** Label, value, and an optional caveat shown as the label's tooltip. */
+type Row = [string, ReactNode, string?];
 
 function PropertySection({
   title,
@@ -380,9 +384,9 @@ function PropertySection({
     <section className="project-properties-section" aria-labelledby={headingId}>
       <h3 id={headingId}>{title}</h3>
       <dl className="project-properties-list">
-        {rows.map(([label, value]) => (
+        {rows.map(([label, value, note]) => (
           <div key={label}>
-            <dt>{label}</dt>
+            <dt title={note}>{label}</dt>
             <dd>{value}</dd>
           </div>
         ))}

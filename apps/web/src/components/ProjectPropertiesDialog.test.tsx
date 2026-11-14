@@ -111,9 +111,11 @@ describe('ProjectPropertiesDialog', () => {
     expect(headings).toEqual(['Library', 'History', 'Storage', 'Technical']);
     const history = screen.getByRole('region', { name: 'History' });
     expect(within(history).getByText('Save points')).toBeInTheDocument();
-    expect(
-      within(history).getByText('First recorded save')
-    ).toBeInTheDocument();
+    // The caveat is the label's tooltip, not a line that grows the dialog.
+    expect(within(history).getByText('First recorded save')).toHaveAttribute(
+      'title',
+      'A duplicated project keeps the save history of its original.'
+    );
     const storage = screen.getByRole('region', { name: 'Storage' });
     expect(within(storage).getByText('Project data size')).toBeInTheDocument();
     expect(screen.getByText('Details from this device')).toBeInTheDocument();
