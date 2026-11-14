@@ -88,7 +88,7 @@ describe('StartScreen properties', () => {
       name: 'Project properties'
     });
     await waitFor(() =>
-      expect(within(dialog).getByText('Document size')).toBeInTheDocument()
+      expect(within(dialog).getByText('Project data size')).toBeInTheDocument()
     );
     expect(loadProperties).toHaveBeenCalledTimes(1);
     expect(onOpen).not.toHaveBeenCalled();
@@ -121,7 +121,7 @@ describe('StartScreen properties', () => {
       screen.getByText('Unknown — account listing unavailable')
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
-    await screen.findByText('Document size');
+    await screen.findByText('Project data size');
     expect(screen.queryByRole('alert')).toBeNull();
   });
 

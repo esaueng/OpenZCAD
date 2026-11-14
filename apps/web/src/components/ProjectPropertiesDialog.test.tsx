@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { toProjectId, type ProjectSummary } from '@openzcad/shared';
 import type { ProjectProperties } from '../lib/projectProperties';
@@ -9,6 +9,22 @@ const project: ProjectSummary = {
   name: 'Bracket',
   revisionCount: 1,
   updatedAt: '2026-10-08T01:59:30.000Z'
+};
+
+const details: ProjectProperties = {
+  source: 'device',
+  olderDeviceCopy: false,
+  updatedAt: '2026-10-08T01:59:30.000Z',
+  startedAt: '2026-10-07T01:59:30.000Z',
+  units: 'mm',
+  documentVersion: 204,
+  documentBytes: 3 * 1024 * 1024,
+  referencedSourceBytes: 0,
+  bodies: 13,
+  features: 31,
+  sketches: 18,
+  parameters: 23,
+  savePoints: 5
 };
 
 function renderDialog(
@@ -77,5 +93,64 @@ describe('ProjectPropertiesDialog', () => {
     expect(screen.getByRole('button', { name: 'Close' })).toHaveClass(
       'secondary'
     );
+  });
+
+  /**
+   * One flat grid of twenty label/value cells mixed counts, dates and sizes
+   * with no order a reader could scan; the details now sit under headings.
+   */
+  it('groups the details under headed sections, counts first', async () => {
+    renderDialog(vi.fn().mockResolvedValue(details));
+    const contents = await screen.findByLabelText('Contents');
+    expect(
+      [...contents.querySelectorAll('div')].map((tile) => tile.textContent)
+    ).toEqual(['Bodies13', 'Features31', 'Sketches18', 'Parameters23']);
+    const headings = screen
+      .getAllByRole('heading', { level: 3 })
+      .map((heading) => heading.textContent);
+    expect(headings).toEqual(['Library', 'History', 'Storage', 'Technical']);
+    const history = screen.getByRole('region', { name: 'History' });
+    expect(within(history).getByText('Save points')).toBeInTheDocument();
+    expect(
+      within(history).getByText('First recorded save')
+    ).toBeInTheDocument();
+    const storage = screen.getByRole('region', { name: 'Storage' });
+    expect(within(storage).getByText('Project data size')).toBeInTheDocument();
+    expect(screen.getByText('Details from this device')).toBeInTheDocument();
+  });
+
+  /** Without a referenced source, document and total sizes were the same row twice. */
+  it('splits the size only when referenced source files add to it', async () => {
+    renderDialog(vi.fn().mockResolvedValue(details));
+    const total = await screen.findByText('Project data size');
+    expect(total.nextElementSibling).toHaveTextContent('3 MiB');
+    expect(screen.queryByText('Document size')).toBeNull();
+    expect(screen.queryByText('Referenced source files')).toBeNull();
+  });
+
+  it('lists referenced source files when present, inside the total', async () => {
+    renderDialog(
+      vi.fn().mockResolvedValue({ ...details, referencedSourceBytes: 1024 })
+    );
+    const label = await screen.findByText('Referenced source files');
+    expect(label.nextElementSibling).toHaveTextContent('1 KiB');
+    expect(
+      screen.getByText('Document size').nextElementSibling
+    ).toHaveTextContent('3 MiB');
+  });
+
+  it('copies the project ID', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText }
+    });
+    renderDialog();
+    await screen.findByRole('alert');
+    fireEvent.click(screen.getByRole('button', { name: 'Copy project ID' }));
+    expect(writeText).toHaveBeenCalledWith(project.projectId);
+    expect(
+      await screen.findByRole('button', { name: 'Copied project ID' })
+    ).toBeInTheDocument();
   });
 });
