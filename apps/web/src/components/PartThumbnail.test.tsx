@@ -1,7 +1,11 @@
 import { act, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { toArtifactId, type ProjectSummary } from '@openzcad/shared';
-import { PartThumbnail, preparePartThumbnails } from './PartThumbnail';
+import {
+  PartThumbnail,
+  preparePartThumbnails,
+  rememberCapturedThumbnail
+} from './PartThumbnail';
 import {
   allowKeySession,
   blockKeySession,
@@ -227,6 +231,164 @@ describe('PartThumbnail', () => {
     );
     expect(second.container.querySelector('svg')).toBeNull();
     expect(load).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the card the workspace just captured before the listing refreshes', async () => {
+    // The shelf first renders the listing from before the project was opened.
+    // Its tile used to answer that stale key from memory with the old card
+    // until the refreshed listing arrived.
+    const project = summary({ documentVersion: 3 });
+    const first = render(
+      <PartThumbnail
+        project={project}
+        loadThumbnail={vi.fn().mockResolvedValue('data:image/webp;base64,OLD')}
+        publishThumbnail={vi.fn().mockResolvedValue(undefined)}
+      />
+    );
+    await waitFor(() =>
+      expect(first.container.querySelector('img')).toHaveAttribute(
+        'src',
+        'data:image/webp;base64,OLD'
+      )
+    );
+    first.unmount();
+
+    rememberCapturedThumbnail({
+      projectId: project.projectId,
+      source: 'data:image/webp;base64,NEW',
+      accountId: null,
+      protected: false
+    });
+
+    const reread = deferred<string | null | undefined>();
+    const load = vi.fn(() => reread.promise);
+    const second = render(
+      <PartThumbnail
+        project={project}
+        loadThumbnail={load}
+        publishThumbnail={vi.fn().mockResolvedValue(undefined)}
+      />
+    );
+    expect(second.container.querySelector('img')).toHaveAttribute(
+      'src',
+      'data:image/webp;base64,NEW'
+    );
+    // The tile still confirms against the device record for its own key.
+    expect(load).toHaveBeenCalledOnce();
+    await act(async () => reread.resolve('data:image/webp;base64,NEW'));
+    expect(second.container.querySelector('img')).toHaveAttribute(
+      'src',
+      'data:image/webp;base64,NEW'
+    );
+  });
+
+  it.each([
+    ['an older image', 'data:image/webp;base64,OLD'],
+    ['a stale empty answer', null]
+  ])(
+    'keeps the captured card when a read started before it settles with %s',
+    async (_label, stale) => {
+      // The shelf asked for a card, then the project was opened before the
+      // read finished. Returning under the same listing must not reuse that
+      // read, nor let it land over the card the workspace just drew.
+      const project = summary({ documentVersion: 3 });
+      const before = deferred<string | null | undefined>();
+      const first = render(
+        <PartThumbnail
+          project={project}
+          loadThumbnail={() => before.promise}
+          publishThumbnail={vi.fn().mockResolvedValue(undefined)}
+        />
+      );
+      first.unmount();
+
+      rememberCapturedThumbnail({
+        projectId: project.projectId,
+        source: 'data:image/webp;base64,NEW',
+        accountId: null,
+        protected: false
+      });
+
+      const after = deferred<string | null | undefined>();
+      const load = vi.fn(() => after.promise);
+      const second = render(
+        <PartThumbnail
+          project={project}
+          loadThumbnail={load}
+          publishThumbnail={vi.fn().mockResolvedValue(undefined)}
+        />
+      );
+      expect(load).toHaveBeenCalledOnce();
+      await act(async () => before.resolve(stale));
+      expect(second.container.querySelector('img')).toHaveAttribute(
+        'src',
+        'data:image/webp;base64,NEW'
+      );
+      await act(async () => after.resolve('data:image/webp;base64,NEW'));
+      expect(second.container.querySelector('img')).toHaveAttribute(
+        'src',
+        'data:image/webp;base64,NEW'
+      );
+    }
+  );
+
+  it('keeps the captured card when an older image finishes decoding after it', async () => {
+    const project = summary({ documentVersion: 3 });
+    const decoding = deferred<void>();
+    vi.spyOn(HTMLImageElement.prototype, 'decode').mockReturnValueOnce(
+      decoding.promise
+    );
+    const load = vi.fn().mockResolvedValue('data:image/webp;base64,OLD');
+    const first = render(
+      <PartThumbnail
+        project={project}
+        loadThumbnail={load}
+        publishThumbnail={vi.fn().mockResolvedValue(undefined)}
+      />
+    );
+    await waitFor(() => expect(load).toHaveBeenCalledOnce());
+    first.unmount();
+
+    rememberCapturedThumbnail({
+      projectId: project.projectId,
+      source: 'data:image/webp;base64,NEW',
+      accountId: null,
+      protected: false
+    });
+    await act(async () => decoding.resolve());
+
+    const second = render(
+      <PartThumbnail
+        project={project}
+        loadThumbnail={() => new Promise(() => undefined)}
+        publishThumbnail={vi.fn().mockResolvedValue(undefined)}
+      />
+    );
+    expect(second.container.querySelector('img')).toHaveAttribute(
+      'src',
+      'data:image/webp;base64,NEW'
+    );
+  });
+
+  it('does not seed an encrypted card while the key session is locked', async () => {
+    const project = summary({ storageFormat: 2 });
+    blockKeySession();
+    rememberCapturedThumbnail({
+      projectId: project.projectId,
+      source: 'data:image/webp;base64,PRIVATE',
+      accountId: 'account_1',
+      protected: true
+    });
+    allowKeySession(getKeySessionRevision());
+    const view = render(
+      <PartThumbnail
+        project={project}
+        accountId="account_1"
+        loadThumbnail={() => new Promise(() => undefined)}
+        publishThumbnail={vi.fn().mockResolvedValue(undefined)}
+      />
+    );
+    expect(view.container.querySelector('img')).toBeNull();
   });
 
   it('shows a real empty result and retries it when the document changes', async () => {
