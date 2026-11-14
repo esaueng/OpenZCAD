@@ -870,7 +870,7 @@ describe('an untouched edit writes the feature back as stored', () => {
       thread: wholeFields
     });
     // Its end dragged 4 up from the bottom: a partial thread from the start,
-    // which keeps its chamfer there and stops plain.
+    // which keeps its chamfer there and runs out where it stops.
     expect(untouched(feature(whole), { length: 4 }, ctx)).toEqual({
       tool: 'thread',
       thread: {
@@ -879,7 +879,8 @@ describe('an untouched edit writes the feature back as stored', () => {
         profile: 'printable',
         clearance: 0.1,
         length: 4,
-        chamferStart: true
+        chamferStart: true,
+        runoutEnd: true
       }
     });
     // A stored length that runs the whole face is held as given, and still
@@ -937,6 +938,53 @@ describe('an untouched edit writes the feature back as stored', () => {
         pitch: 1,
         offset: 2,
         anchor: 'end'
+      }
+    });
+    // Schema v57 (review #1458): a runout stored at an end of the face (a
+    // thread against a shoulder, written by a command) goes back a runout,
+    // though the panel would chamfer an end the span reaches. The probe's
+    // Ø6 × 20 boss: an untouched edit used to store `chamferStart` instead.
+    const shoulder: FeatureData = {
+      featureKind: 'thread',
+      targetBodyId: BODY,
+      faceHash: 31,
+      profile: 'iso-metric',
+      length: 5,
+      runoutStart: true
+    };
+    const { featureKind: _r, ...shoulderFields } = shoulder;
+    expect(untouched(feature(shoulder), {}, ctx)).toEqual({
+      tool: 'thread',
+      thread: shoulderFields
+    });
+    // A chamfer stored at a stopped-short end (a v53 thread is never one,
+    // but a command may write it) is one the build refuses: the edit
+    // finishes that end as a runout instead.
+    const stoppedChamfer: FeatureData = {
+      ...shoulder,
+      runoutStart: undefined,
+      chamferEnd: true
+    };
+    expect(untouched(feature(stoppedChamfer), {}, ctx)).toEqual({
+      tool: 'thread',
+      thread: {
+        targetBodyId: BODY,
+        faceHash: 31,
+        profile: 'iso-metric',
+        length: 5,
+        runoutEnd: true
+      }
+    });
+    // A stored runout is valid wherever it stands: its extent edited, it
+    // stays a runout.
+    expect(untouched(feature(shoulder), { length: 4 }, ctx)).toEqual({
+      tool: 'thread',
+      thread: {
+        targetBodyId: BODY,
+        faceHash: 31,
+        profile: 'iso-metric',
+        length: 4,
+        runoutStart: true
       }
     });
   });

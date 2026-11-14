@@ -113,7 +113,15 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'Orbit',
       'Zoom toward the pointer',
       'Undo with two fingers',
-      'Only Apple Pencil draws'
+      'Only Apple Pencil draws',
+      '3D mouse',
+      'Pan and zoom speed',
+      'Rotation speed',
+      'Dead zone',
+      'One motion at a time',
+      'Rotate around',
+      'Roll',
+      'Reverse'
     ],
     searchTerms: [
       'shortcuts',
@@ -126,6 +134,10 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'free orbit',
       'rotate',
       'upside down',
+      'spacemouse pro',
+      'space mouse',
+      '3dconnexion',
+      '6dof',
       ...CONTROL_REFERENCE_SEARCH_TERMS,
       // Every remappable command by name, so "fillet" finds where to give
       // Fillet a key, and the words people use for remapping.

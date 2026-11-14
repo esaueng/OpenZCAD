@@ -20,6 +20,7 @@ import {
   Download,
   Files,
   FolderOpen,
+  Link2,
   LoaderCircle,
   Pencil,
   RotateCw,
@@ -807,6 +808,9 @@ export function TopBar({
               aria-label={`Shared model · ${shareSession.mode === 'view' ? 'View only' : 'Tweak only'}`}
               tabIndex={0}
             >
+              {/* The glyph stays when a phone's bar drops every chip's
+                  words (responsive.css), so the chip is never an empty box. */}
+              <Link2 size={14} aria-hidden="true" />
               Shared model ·{' '}
               {shareSession.mode === 'view' ? 'View only' : 'Tweak only'}
             </span>
@@ -997,7 +1001,9 @@ export function TopBar({
             >
               <button
                 type="button"
-                className={`collaboration-state ${collaborationStatus}${readOnlySeat ? ' is-read-only' : ''}`}
+                // `is-read-only` keeps "Read-only" in words where the wide
+                // bar shows only the glyph (topbar.css, design review I77).
+                className={`collaboration-state ${collaborationStatus}${namesReadOnlySeat ? ' is-read-only' : ''}`}
                 // Each name carries the label the chip shows (WCAG 2.5.3).
                 aria-label={
                   session

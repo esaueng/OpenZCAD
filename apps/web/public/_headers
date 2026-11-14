@@ -13,6 +13,9 @@
 # script and frame from challenges.cloudflare.com, the geometry and pdf.js
 # workers come from this origin (blob: covers Vite's dev-time worker), and the
 # injected text-preview @font-face block needs style-src 'unsafe-inline'.
+# Permissions-Policy denies every device API except WebHID, which this origin
+# (never an embedded frame) uses to read a 3Dconnexion SpaceMouse; the
+# browser still asks before any device is shared.
 /*
   Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://challenges.cloudflare.com https://static.cloudflareinsights.com; connect-src 'self' https://challenges.cloudflare.com https://cloudflareinsights.com; font-src 'self' data:; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; worker-src 'self' blob:; frame-src https://challenges.cloudflare.com; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'
   Strict-Transport-Security: max-age=15552000
@@ -20,7 +23,7 @@
   Referrer-Policy: strict-origin-when-cross-origin
   Cross-Origin-Opener-Policy: same-origin
   Cross-Origin-Resource-Policy: same-origin
-  Permissions-Policy: camera=(), microphone=(), geolocation=(), usb=(), serial=(), hid=(), bluetooth=(), payment=()
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), usb=(), serial=(), hid=(self), bluetooth=(), payment=()
 
 /assets/*
   Cache-Control: public, max-age=31536000, immutable

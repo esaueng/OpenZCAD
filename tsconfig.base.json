@@ -43,6 +43,9 @@
       "@openzcad/viewport/move-transform": [
         "./packages/viewport/src/gizmo/moveTransform.ts"
       ],
+      "@openzcad/viewport/space-mouse": [
+        "./packages/viewport/src/input/spaceMouse.ts"
+      ],
       "@openzcad/viewport/types": ["./packages/viewport/src/types.ts"],
       "@openzcad/viewport/wheel-gesture": [
         "./packages/viewport/src/input/wheelGesture.ts"

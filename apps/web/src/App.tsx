@@ -4,6 +4,12 @@ import {
   persistStorageForInstalledApp
 } from './lib/appleTouch';
 import { registerOfflineShell } from './lib/offlineShell';
+import { spaceMouse } from './lib/spaceMouse';
+import {
+  dispatchEmulatedKey,
+  spaceMouseAction,
+  type SpaceMouseAction
+} from './lib/spaceMouseActions';
 import {
   localHistoryAppend,
   retainLocalHistoryAppend,
@@ -459,6 +465,7 @@ import {
   sourceUploadMessage
 } from './lib/accountImportSources';
 import type { ArchiveArtifactInput } from './lib/archiveArtifact';
+import { cloudArchivable } from './lib/cloudArchivable';
 import {
   archiveLocalOnlyImportSources,
   createInFlightImportChecksums,
@@ -761,6 +768,7 @@ import {
 } from './lib/selectionFeature';
 import { heldFaceSetBody, toggleFaceInSet } from './lib/faceSetSelection';
 import { cylinderResizeFold } from './lib/interaction/cylinderResizeFold';
+import { facePickCylinder, facePickKey } from './lib/inPlace/cylinderSide';
 import {
   cylinderRadialFrame,
   type CylinderRadiusEdit,
@@ -3900,6 +3908,60 @@ export function App() {
     []
   );
   const [fitSignal, setFitSignal] = useState(0);
+  // A 3D mouse this browser already allows reopens with no prompt. Its keys
+  // run the same commands as the keyboard (spaceMouseActions.ts); the roll
+  // key turns the camera, so the viewer answers that one.
+  const spaceMouseActionRef = useRef<(action: SpaceMouseAction) => void>(
+    () => undefined
+  );
+  spaceMouseActionRef.current = (action) => {
+    switch (action.kind) {
+      case 'menu':
+        openSettingsAt('controls');
+        return;
+      case 'fit':
+        setFitSignal((value) => value + 1);
+        return;
+      case 'view':
+        requestView(action.view);
+        return;
+      case 'normal-to-face':
+        requestNormalToSelectedFace();
+        return;
+      case 'projection':
+        toggleProjection();
+        return;
+      case 'display':
+        cycleDisplayMode();
+        return;
+      case 'rotation-lock':
+        setStatus(
+          spaceMouse.isRotationLocked
+            ? '3D mouse rotation locked: pan and zoom only.'
+            : '3D mouse rotation unlocked.',
+          { unlogged: true }
+        );
+        return;
+      case 'key':
+        dispatchEmulatedKey(action.key, action.pressed);
+        return;
+      case 'roll':
+        return;
+    }
+  };
+  // The 3D mouse reads the cap with the account's own settings, applied at
+  // once to a cap that is held.
+  const spaceMouseSettings = appSettings.viewport.spaceMouse;
+  useEffect(() => {
+    spaceMouse.setPreferences(spaceMouseSettings);
+  }, [spaceMouseSettings]);
+  useEffect(() => {
+    void spaceMouse.restore();
+    return spaceMouse.subscribeButtons((event) => {
+      const action = spaceMouseAction(event);
+      if (action) spaceMouseActionRef.current(action);
+    });
+  }, []);
   const [presentedGeometry, setPresentedGeometry] = useState<{
     projectId: string;
     generation: number;
@@ -11125,6 +11187,11 @@ export function App() {
     }
     if (!face) return null;
     const geometry = face.geometry;
+    const cylinder = facePickCylinder(
+      geometry,
+      representations[resolvedBodyId]?.mesh,
+      face
+    );
     return {
       bodyId: resolvedBodyId,
       hash: face.hash,
@@ -11135,18 +11202,7 @@ export function App() {
       ...(geometry?.normal ? { normal: geometry.normal } : {}),
       ...(geometry?.centroid ? { centroid: geometry.centroid } : {}),
       ...(geometry?.center ? { center: geometry.center } : {}),
-      ...(geometry?.surfaceType === 'cylinder' &&
-      geometry.axisStart &&
-      geometry.axisEnd &&
-      geometry.radius !== undefined
-        ? {
-            cylinder: {
-              axisStart: geometry.axisStart,
-              axisEnd: geometry.axisEnd,
-              radius: geometry.radius
-            }
-          }
-        : {}),
+      ...(cylinder ? { cylinder } : {}),
       ...(point ? { point } : {})
     };
   }
@@ -16523,7 +16579,13 @@ export function App() {
     // Local-first imports/exports keep their bytes on this device. A protected
     // upload cannot succeed before this project has an account copy, and its
     // failed request would add a console error to an otherwise valid import.
-    if (!sessionRef.current || !remoteVersionsRef.current.has(doc.projectId)) {
+    if (
+      !cloudArchivable(
+        Boolean(sessionRef.current),
+        doc.projectId,
+        remoteVersionsRef.current
+      )
+    ) {
       throw new Error(
         'Cloud archival needs an account project. The file stays on this device.'
       );
@@ -24352,15 +24414,7 @@ export function App() {
     // hash, its plane, a saved hole's place on it), so its handles follow
     // a face an update moved.
     let facesMoved = false;
-    const placed = (pick: FacePick) =>
-      JSON.stringify([
-        pick.hash,
-        pick.topologyId,
-        pick.normal,
-        pick.centroid,
-        pick.center,
-        pick.point
-      ]);
+    const placed = facePickKey;
     const faces = inPlaceEditPicks.faces.flatMap((pick) => {
       const body = representations[pick.bodyId];
       if (!body?.topology) return [pick];
@@ -30601,9 +30655,7 @@ export function App() {
             boxSelectedFaces.length > 1
           ) {
             event.preventDefault();
-            if (
-              new Set(boxSelectedFaces.map((face) => face.bodyId)).size > 1
-            ) {
+            if (new Set(boxSelectedFaces.map((face) => face.bodyId)).size > 1) {
               setStatus(
                 'Faces on different bodies cannot be deleted together. Select faces on one body.'
               );
@@ -34540,7 +34592,18 @@ export function App() {
                   run={importRun}
                   onCancel={cancelImportRun}
                   onDismiss={dismissImportRun}
-                  onArchiveNow={archiveImportSourcesFromCard}
+                  // The same test archiveArtifact applies: signed out, or
+                  // signed in with a device-only project, the upload can
+                  // only fail (I8), so there is no Archive now.
+                  onArchiveNow={
+                    cloudArchivable(
+                      Boolean(session),
+                      doc.projectId,
+                      remoteVersionsRef.current
+                    )
+                      ? archiveImportSourcesFromCard
+                      : undefined
+                  }
                 />
               </Suspense>
             )}

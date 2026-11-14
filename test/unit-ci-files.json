@@ -188,6 +188,7 @@
     "test/synthetic-holder-fixtures.test.ts",
     "test/test-tools.test.ts",
     "test/thread-feature.test.ts",
+    "test/thread-pipe-runout.test.ts",
     "test/three-box-union-grouping.test.ts",
     "test/through-hole-chamfer-resize.test.ts",
     "test/trusted-pr-policy.test.ts",

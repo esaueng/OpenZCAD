@@ -271,7 +271,7 @@ test('a server failure does not blame the connection', async ({ page }) => {
   // 13 November review I3: a 500 read "Internal error." over "Check your
   // connection and try again".
   await stubAnonymousApi(page);
-  await page.route('**/api/share/*', (route) =>
+  await page.route('**/api/share', (route) =>
     route.fulfill({ status: 500, json: { error: 'Internal error' } })
   );
   await page.goto(`/#share=${token}`);
