@@ -1659,6 +1659,12 @@
   color: var(--color-accent);
 }
 
+/* Plaintext in an account whose projects are encrypted: the one mark that
+   asks for a look, in the warning hue the Needs attention count uses. */
+.start-tile-mark.is-plaintext {
+  color: var(--color-warning);
+}
+
 /* Room for the copies count beside the actions button. */
 .start-tile-project:has(> .start-tile-copies) .start-tile-meta {
   padding-right: 34px;
