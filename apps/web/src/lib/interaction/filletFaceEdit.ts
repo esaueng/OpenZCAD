@@ -90,7 +90,8 @@ function dot(left: Vector3, right: Vector3): number {
   return left.x * right.x + left.y * right.y + left.z * right.z;
 }
 
-function distanceToAxis(
+/** A point's distance from the line through `axisPoint` along `axisDirection`. */
+export function distanceToAxis(
   point: Vector3,
   axisPoint: Vector3,
   axisDirection: Vector3

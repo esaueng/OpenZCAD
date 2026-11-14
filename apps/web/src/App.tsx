@@ -3186,6 +3186,8 @@ export function App() {
   const pendingBlendRearmRef = useRef<{
     bodyId: BodyId;
     before: BodyTopology['faces'] | undefined;
+    /** The new Fillet, so a band an earlier one owns is never re-armed. */
+    featureId: string | undefined;
   } | null>(null);
   const [sketchConstruction, setSketchConstruction] = useState(false);
   /** When a first Escape armed leaving the sketch (I43), or null. */
@@ -18482,7 +18484,12 @@ export function App() {
     // A later Move owns the lane. An automatic re-pick must neither ask a
     // user-selection question nor replace the values that card now holds.
     if (movePreview) return;
-    const pick = newBlendFacePick(pending.bodyId, pending.before, faces);
+    const pick = newBlendFacePick(
+      pending.bodyId,
+      pending.before,
+      faces,
+      pending.featureId
+    );
     if (pick) {
       // The pick is the app's, not the user's: it must not retire the
       // commit's own message ("Filleted 2 edges at 1 mm.") the way a real
@@ -26324,6 +26331,7 @@ export function App() {
     const op = interaction.op;
     const resultBodyId =
       command.payload.ids?.bodyId ?? command.payload.targetBodyId;
+    const newFeatureId = command.payload.ids?.featureId;
     const facesBefore =
       representations[command.payload.targetBodyId]?.topology?.faces;
     // Judged as the preview judges it: the kernel names a refusal after the
@@ -26339,7 +26347,8 @@ export function App() {
         if (op === 'fillet') {
           pendingBlendRearmRef.current = {
             bodyId: resultBodyId,
-            before: facesBefore
+            before: facesBefore,
+            featureId: newFeatureId
           };
         }
       },
