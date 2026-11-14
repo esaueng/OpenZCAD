@@ -192,6 +192,7 @@
     "test/through-hole-chamfer-resize.test.ts",
     "test/trusted-pr-policy.test.ts",
     "test/typed-parameters.test.ts",
+    "test/unified-account-storage.test.ts",
     "test/unit-global-setup.test.ts",
     "test/unit-runtime-budget.test.ts",
     "test/unit-suites.test.ts",

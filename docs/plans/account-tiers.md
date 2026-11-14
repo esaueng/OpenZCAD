@@ -26,14 +26,19 @@ requests already running on an older configuration may finish under that policy.
 
 ## Allowances
 
-| Allowance                                       | Free default | Premium default |
-| ----------------------------------------------- | ------------ | --------------- |
-| Hosted AI requests per 10 minutes               | 6            | 600             |
-| Weighted AI units per 10 minutes                | 24           | 2,400           |
-| Cloud projects                                  | 100          | 10,000          |
-| Cloud project document/asset storage            | 1 GiB        | 25 GiB          |
-| Concurrent AI requests                          | 2            | 8               |
-| Cloud artifacts, including pending reservations | 1 GiB        | 25 GiB          |
+| Allowance                         | Free default | Premium default |
+| --------------------------------- | ------------ | --------------- |
+| Hosted AI requests per 10 minutes | 6            | 600             |
+| Weighted AI units per 10 minutes  | 24           | 2,400           |
+| Cloud projects                    | 100          | 10,000          |
+| Storage (one bucket, see below)   | 1 GiB        | 25 GiB          |
+| Concurrent AI requests            | 2            | 8               |
+
+Storage is one allowance per account (migration
+`0049_unified_account_storage.sql`): projects, save states and source assets
+(plaintext or encrypted) and imports, exports and encrypted files, including
+pending upload reservations, all count against the same bucket. Free is
+1 GiB in total, not 1 GiB for projects plus 1 GiB for files.
 
 Account buckets remain the same across tier changes so an upgrade or downgrade
 cannot reset consumption. Accounts sharing an IP have independent allowances.
@@ -41,8 +46,10 @@ The existing `AI_RATE_LIMIT_WINDOW_SECONDS` controls both tiers' window length.
 Existing Free configuration names are retained. Premium overrides are:
 
 - `PREMIUM_PROJECT_LIMIT` (positive integer, at most 100,000)
-- `PREMIUM_PROJECT_STORAGE_LIMIT_BYTES` (positive integer, at most 1 TiB)
-- `PREMIUM_ARTIFACT_LIMIT_BYTES` (positive integer, at most 1 TiB)
+- `PREMIUM_STORAGE_LIMIT_BYTES` (positive integer, at most 1 TiB): the one
+  storage allowance. When it is unset, the names from before storage was one
+  allowance still apply, in this order: `PREMIUM_PROJECT_STORAGE_LIMIT_BYTES`,
+  then `PREMIUM_ARTIFACT_LIMIT_BYTES`.
 - `AI_PREMIUM_ACCOUNT_RATE_LIMIT_REQUESTS` (at most 1,000)
 - `AI_PREMIUM_ACCOUNT_COST_LIMIT_UNITS` (at most 10,000)
 - `AI_PREMIUM_ACCOUNT_CONCURRENCY_LIMIT` (at most 100)
@@ -85,22 +92,80 @@ hard-code it; the in-flight reservation ceiling stays 2 GiB for every tier. Atom
 Workers, single-part finalization and multipart reservations. Direct database
 writers must not treat a stale derived value as a current membership lookup.
 
+Migration `0049_unified_account_storage.sql` makes storage one allowance. It
+adds no column: both `artifact_limit_bytes` and `project_storage_limit_bytes`
+hold the same unified value (the Worker writes it to both; the migration
+copies the larger into both for any row where they differ), and every quota
+trigger compares the account's combined usage with
+`project_storage_limit_bytes`. Combined usage is the view
+`account_project_storage` (inline D1 documents and revisions, R2 document
+objects and source assets except plaintext staged for decryption, and
+retained envelopes of encrypted projects) plus `artifact_account_usage`'s
+finalized and reserved bytes. The per-account in-flight reservation check
+keeps reading `artifact_limit_bytes`, which mirrors the same value. The
+triggers redefined are `artifact_upload_session_before_insert`,
+`artifact_usage_before_artifact_insert`, `artifact_upload_part_before_insert`,
+`artifact_upload_part_before_update`, `e2ee_content_blob_usage_before_insert`,
+`project_account_d1_project_bytes_before_insert`/`_update`,
+`project_account_d1_revision_bytes_before_insert`/`_update`,
+`project_account_object_bytes_before_insert`,
+`project_account_asset_bytes_before_insert` and `e2ee_project_version_quota`;
+each keeps its other checks verbatim.
+
+Encryption migrations stage rows that count only from their cutover on
+(decision M10): ciphertext beside a plaintext project, or plaintext beside
+an encrypted one. These are bounded by the owner's projected storage:
+counted usage plus what every live staging would add at its cutover, less
+what that cutover's purge frees (view `migration_staging_growth`). Staging
+upload sessions, part reservations, staged blobs and versions, and staged
+files, documents and assets are refused once that would pass the allowance,
+so staging is cumulative and bounded. A full account can still stage a
+migration that shrinks it, because the purge credit makes the room. Both
+cutovers (`encryptCutoverQuota` and `decryptCutoverQuota` in
+`apps/web/worker/e2eeProjectMigrations.ts`) refuse, in their own statement,
+a cutover that grows the combined measure past the allowance. The forward
+cutover credits the plaintext upload reservations its purge discards.
+Staging is not abandoned automatically for being idle: the projected rule
+already bounds and charges what a staging holds, and an abandoned staging is
+cleaned up by its owner's browser or by the existing sweeps.
+
+A save that moves a project's head to a new R2 document object names the
+head it replaces (`project_document_objects.supersedes_object_id`, added by
+migration 0049). The object's admission and the Worker's preflight credit
+that head when nothing else names it, so a save that does not grow what the
+account stores is never refused, even at or over the allowance. The credit
+is granted only while the project holds no other unreclaimed object (a
+replaced head whose pruning failed), so at most one replacement's bytes are
+ever outstanding. A source asset added by the same save names that save's
+object (`project_storage_assets.added_by_object_id`) and is judged with it:
+the save's assets share the one credit, so the object and all its assets less
+the replaced head is what is checked. A head-replacing save first prunes any
+replaced head an earlier R2 delete left behind, so a temporary failure does
+not withhold credit for good.
+
 Downgrades do not delete files. Existing reads, downloads and cleanup remain
-available. Over-limit accounts cannot increase artifact usage; shrinking an
-existing reservation and finalizing already-reserved bytes remain possible.
-The API reports the current effective quota even before the next storage write.
+available. Over-limit accounts cannot increase storage; shrinking an existing
+reservation or document, finalizing already-reserved bytes and deleting
+remain possible. The API reports the current effective quota even before the
+next storage write.
 
 `/api/session`, browser login and desktop token responses expose only the current
-account's `entitlements`. `/api/account/storage` reports the owner's effective
-artifact allowance and `projectStorageBytes`, project storage measured as the
-quota triggers measure it (inline D1 bytes, stored R2 objects and source assets,
-retained encrypted envelopes). Settings shows membership, AI allowances, and
-project and artifact usage against their allowances.
-Older responses without entitlements remain readable by the frontend.
+account's `entitlements`, with `storageLimitBytes`; the older
+`projectStorageLimitBytes` and `artifactLimitBytes` stay, equal to it, for
+clients that predate the single allowance. `/api/account/storage` reports
+`storageBytes` (everything stored) against `storageLimitBytes`, with the
+breakdown: `projectStorageBytes`, project storage as the quota triggers
+measure it, and `artifactBytes`, finalized files. `projectCount` counts
+projects outside the recycle bin, as the library lists them, and
+`trashedProjectCount` those in it, whose bytes still count. Settings shows
+membership, AI allowances and one storage meter with that breakdown.
+Older responses without entitlements or the combined fields remain readable
+by the frontend.
 
 ## Rollout and verification
 
-Apply migration 0022 before routing traffic to the new Worker. Keep the previous
+Apply migration 0022 (and 0049 for the single allowance) before routing
+traffic to the new Worker. Keep the previous
 migration intact; this is an additive migration with replacement quota triggers.
 Do not deploy the new upload code without the new column. An older Worker remains
 compatible with the migrated schema; when rolling back tier code, also reset

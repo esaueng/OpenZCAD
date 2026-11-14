@@ -69,8 +69,13 @@ describe('account storage usage', () => {
       revisionBytes: 4_300,
       revisionCount: 2,
       // Inline 1,000 + 300; R2 objects 700 + 400; asset 250.
-      projectStorageBytes: 2_650
+      projectStorageBytes: 2_650,
+      trashedProjectCount: 0,
+      // One bucket: project storage plus files (none here).
+      storageBytes: 2_650,
+      storageLimitBytes: 1024 ** 3
     });
+    expect(usage.entitlements?.storageLimitBytes).toBe(1024 ** 3);
     expect(usage.entitlements?.projectStorageLimitBytes).toBe(1024 ** 3);
   });
 });

@@ -95,6 +95,7 @@ import {
   ProjectMigratingError,
   ProjectAdoptionError,
   ProjectQuotaError,
+  ProjectStorageCleanupPendingError,
   ProjectNotFoundError,
   ProjectSharingError,
   RevisionConflictError,
@@ -2993,6 +2994,13 @@ async function dispatchApiRequest(
       return json(
         { error: error.message, code: error.code, projectId: error.projectId },
         409
+      );
+    }
+    if (error instanceof ProjectStorageCleanupPendingError) {
+      // Retryable: the client's autosave retries a 503 after its back-off.
+      return json(
+        { error: error.message, code: 'PROJECT_STORAGE_CLEANUP_PENDING' },
+        503
       );
     }
     if (error instanceof ProjectQuotaError) {

@@ -211,6 +211,28 @@ function roomSnapshotRequest(
   });
 }
 
+/** A copy refused for its file leaves the account as it was. */
+async function expectRefusedCopy(
+  service: PersistenceService,
+  {
+    document: source,
+    artifact
+  }: { document: ProjectDocument; artifact: { artifactId: string } }
+) {
+  const before = await service.getStorageUsage(owner);
+  await expect(
+    service.duplicateProject(owner, { projectId: source.projectId })
+  ).rejects.toBeInstanceOf(ArtifactQuotaError);
+  const after = await service.getStorageUsage(owner);
+  expect(after.projectCount).toBe(before.projectCount);
+  expect(after.artifactBytes).toBe(before.artifactBytes);
+  expect(after.artifactCount).toBe(before.artifactCount);
+  expect(await service.loadProject(owner, source.projectId)).toEqual(source);
+  expect(
+    await service.downloadArtifact(owner, artifact.artifactId)
+  ).not.toBeNull();
+}
+
 async function importedProject(service: PersistenceService) {
   const { document: base } = await service.createProject(owner, {
     name: 'Scan'
@@ -784,26 +806,47 @@ describe.each(['memory', 'D1/R2'] as const)(
     });
 
     it('charges copied bytes to quota and removes the incomplete destination on refusal', async () => {
-      const limit = mesh.byteLength * 2 - 1;
-      const service: PersistenceService =
-        backend === 'memory'
-          ? new InMemoryPersistenceService(limit)
-          : d1Service(limit).service;
-      const { document: source, artifact } = await importedProject(service);
-      const before = await service.getStorageUsage(owner);
-      await expect(
-        service.duplicateProject(owner, { projectId: source.projectId })
-      ).rejects.toBeInstanceOf(ArtifactQuotaError);
-      const after = await service.getStorageUsage(owner);
-      expect(after.projectCount).toBe(before.projectCount);
-      expect(after.artifactBytes).toBe(before.artifactBytes);
-      expect(after.artifactCount).toBe(before.artifactCount);
-      expect(await service.loadProject(owner, source.projectId)).toEqual(
-        source
-      );
-      expect(
-        await service.downloadArtifact(owner, artifact.artifactId)
-      ).not.toBeNull();
+      // Projects share the one storage allowance (migration 0049), so the
+      // allowance is set as the copy uploads its file: room for everything
+      // stored so far, the copy's document included, but not the file.
+      let service: PersistenceService;
+      if (backend === 'memory') {
+        const probe = new InMemoryPersistenceService();
+        const probed = await importedProject(probe);
+        await probe.duplicateProject(owner, {
+          projectId: probed.document.projectId
+        });
+        const projectBytes = (await probe.getStorageUsage(owner))
+          .projectStorageBytes;
+        service = new InMemoryPersistenceService(
+          projectBytes + mesh.byteLength * 2 - 1
+        );
+      } else {
+        const fixture = d1Service(2 ** 40);
+        const env = fixture.env as typeof fixture.env & {
+          PREMIUM_STORAGE_LIMIT_BYTES?: string;
+        };
+        service = fixture.service;
+        const create = service.createUploadSession.bind(service);
+        let armed = false;
+        vi.spyOn(service, 'createUploadSession').mockImplementation(
+          async (...args) => {
+            if (armed) {
+              armed = false;
+              const stored = (await service.getStorageUsage(owner))
+                .storageBytes!;
+              env.PREMIUM_STORAGE_LIMIT_BYTES = String(
+                stored + mesh.byteLength - 1
+              );
+            }
+            return create(...args);
+          }
+        );
+        const imported = await importedProject(service);
+        armed = true;
+        return expectRefusedCopy(service, imported);
+      }
+      return expectRefusedCopy(service, await importedProject(service));
     });
 
     it('publishes owned sources without replacing concurrent destination edits', async () => {

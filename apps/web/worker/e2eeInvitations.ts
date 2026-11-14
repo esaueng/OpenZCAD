@@ -19,7 +19,7 @@
  * - `POST …/invitations/:invitationId/acceptance` (the accepted invitee):
  *   a certified device's signed acceptance ("OZJ"), checked against its
  *   key and the stored statement and kept with the invitation (migration
- *   0049). The owner's browser adds nobody without a valid one.
+ *   0054). The owner's browser adds nobody without a valid one.
  * - `POST /api/e2ee/projects/:id/key-packages` (the accepted invitee): one
  *   KeyPackage per project and certified device, with its certified leaf.
  *   Republishing replaces one that no Add consumed (and resets its claim).
@@ -188,7 +188,7 @@ export interface InvitationRow {
   completed_at: string | null;
   completed_epoch: number | null;
   revoked_at: string | null;
-  /** Migration 0049; absent before it. */
+  /** Migration 0054; absent before it. */
   acceptance_statement?: string | null;
   acceptance_signature?: string | null;
   /** The owner's lists only (slice 5-3b). */
@@ -203,7 +203,7 @@ export const INVITATION_COLUMNS = `invitation_id, project_id, invited_by_user_id
   expires_at, accepted_by_user_id, accepted_at, completed_at,
   completed_epoch, revoked_at`;
 
-/** Migration 0049's columns, selected only once they exist. */
+/** Migration 0054's columns, selected only once they exist. */
 const ACCEPTANCE_COLUMNS = `, acceptance_statement, acceptance_signature`;
 
 /** `INVITATION_COLUMNS`, with the signed acceptance once it is stored. */

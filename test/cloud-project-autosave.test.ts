@@ -25,7 +25,11 @@ import {
   type ProjectDocument,
   type SaveProjectDocumentResponse
 } from '@openzcad/shared';
-import { api, ApiError } from '../apps/web/src/lib/api';
+import {
+  api,
+  ApiError,
+  retryWhileStorageCleanupPending
+} from '../apps/web/src/lib/api';
 import worker from '../apps/web/worker/index';
 import {
   CloudProjectAutosave,
@@ -210,6 +214,226 @@ describe('explicit checkpoints', () => {
       expectedVersion: 3,
       document: live
     });
+    controller.dispose();
+  });
+
+  it.each([
+    [409, 'REVISION_CONFLICT', 'conflict'],
+    [413, 'PROJECT_STORAGE_QUOTA', 'refused'],
+    [503, 'PROJECT_DOCUMENT_UNAVAILABLE', 'repair']
+  ] as const)(
+    'announces again a halt by a %s/%s drain that stopped a checkpoint',
+    async (status, code, state) => {
+      const refusal = new ApiError(status, 'Account write refused.', code, {
+        currentVersion: 5
+      });
+      const respond = vi.fn().mockRejectedValue(refusal);
+      const { controller, statuses } = harness({ respond });
+      const base = documentAt(2);
+      controller.openProject(base.projectId, 2);
+      controller.schedule(documentAt(3, base));
+      const write = vi.fn(
+        async ({ document }: { document: ProjectDocument }) => document
+      );
+      await expect(
+        controller.saveCheckpoint(base.projectId, () => base, write)
+      ).resolves.toBeNull();
+      expect(write).not.toHaveBeenCalled();
+      expect(lastState(statuses)).toBe(state);
+      // The App showed "Saving" meanwhile; the controller puts its state back.
+      const before = statuses.length;
+      expect(controller.reannounceHalt()).toBe(true);
+      expect(statuses.length).toBe(before + 1);
+      expect(statuses.at(-1)?.state).toBe(state);
+      controller.dispose();
+    }
+  );
+
+  it('announces again a refusal that predates the explicit save, with its error', async () => {
+    const refusal = new ApiError(
+      413,
+      'Account storage limit reached.',
+      'PROJECT_STORAGE_QUOTA',
+      { limitBytes: 1_000 }
+    );
+    const respond = vi.fn().mockRejectedValue(refusal);
+    const { controller, statuses } = harness({ respond });
+    const base = documentAt(2);
+    controller.openProject(base.projectId, 2);
+    const edited = documentAt(3, base);
+    controller.schedule(edited);
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+    await controller.whenIdle();
+    expect(lastState(statuses)).toBe('refused');
+    // The user presses Save without editing: the halted controller writes
+    // nothing and answers null; re-scheduling the same document is silent.
+    const write = vi.fn(
+      async ({ document }: { document: ProjectDocument }) => document
+    );
+    await expect(
+      controller.saveCheckpoint(base.projectId, () => edited, write)
+    ).resolves.toBeNull();
+    expect(write).not.toHaveBeenCalled();
+    controller.schedule(edited);
+    expect(controller.reannounceHalt()).toBe(true);
+    expect(statuses.at(-1)).toMatchObject({ state: 'refused', error: refusal });
+    controller.dispose();
+  });
+
+  it('keeps the halting failure through later pause and connectivity announcements', async () => {
+    const refusal = new ApiError(
+      413,
+      'Account storage limit reached.',
+      'PROJECT_STORAGE_QUOTA',
+      { limitBytes: 1_000 }
+    );
+    const respond = vi.fn().mockRejectedValue(refusal);
+    const { controller, statuses, setConnectivity } = harness({ respond });
+    const base = documentAt(2);
+    controller.openProject(base.projectId, 2);
+    controller.schedule(documentAt(3, base));
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+    await controller.whenIdle();
+    expect(lastState(statuses)).toBe('refused');
+    // Later announcements replace what is shown, not why autosave halted.
+    controller.configure({ enabled: false });
+    setConnectivity(false);
+    setConnectivity(true);
+    expect(controller.reannounceHalt()).toBe(true);
+    expect(statuses.at(-1)).toMatchObject({ state: 'refused', error: refusal });
+    controller.dispose();
+  });
+
+  it('keeps the halting failure when a later edit re-announces the halt', async () => {
+    const refusal = new ApiError(
+      413,
+      'Account storage limit reached.',
+      'PROJECT_STORAGE_QUOTA',
+      { limitBytes: 1_000 }
+    );
+    const respond = vi.fn().mockRejectedValue(refusal);
+    const { controller, statuses } = harness({ respond });
+    const base = documentAt(2);
+    controller.openProject(base.projectId, 2);
+    controller.schedule(documentAt(3, base));
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+    await controller.whenIdle();
+    expect(lastState(statuses)).toBe('refused');
+    // Another edit while halted announces the halt without its failure...
+    controller.schedule(documentAt(4, base));
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+    // ...but re-announcing it still explains it.
+    expect(controller.reannounceHalt()).toBe(true);
+    expect(statuses.at(-1)).toMatchObject({ state: 'refused', error: refusal });
+    controller.dispose();
+  });
+
+  it('never replays a cleared halt’s failure for a later, silent halt', async () => {
+    const refusal = new ApiError(
+      413,
+      'Account storage limit reached.',
+      'PROJECT_STORAGE_QUOTA',
+      { limitBytes: 1_000 }
+    );
+    const respond = vi
+      .fn()
+      .mockRejectedValueOnce(refusal)
+      .mockImplementation(async (input: { document: ProjectDocument }) => ({
+        projectId: input.document.projectId,
+        version: input.document.version,
+        updatedAt: '2026-01-01T00:00:00.000Z'
+      }));
+    const { controller, statuses } = harness({ respond });
+    const base = documentAt(2);
+    controller.openProject(base.projectId, 2);
+    controller.schedule(documentAt(3, base));
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+    await controller.whenIdle();
+    expect(lastState(statuses)).toBe('refused');
+    // Reopened and saved: the refusal is cleared.
+    controller.openProject(base.projectId, 2);
+    controller.schedule(documentAt(3, base));
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+    await controller.whenIdle();
+    expect(controller.isHalted).toBe(false);
+    // A move to encrypted storage halts with nothing pending: no notice now,
+    // and a re-announce names the migration, not the old quota refusal.
+    controller.haltForMigration(base.projectId);
+    expect(controller.reannounceHalt()).toBe(true);
+    expect(statuses.at(-1)).toMatchObject({
+      state: 'refused',
+      error: { code: PROJECT_MIGRATING_CODE }
+    });
+    controller.dispose();
+  });
+
+  it('announces nothing for a checkpoint whose project moved on', async () => {
+    const { controller, statuses } = harness();
+    const base = documentAt(2);
+    controller.openProject(base.projectId, 2);
+    await expect(
+      controller.saveCheckpoint(
+        base.projectId,
+        () => null,
+        async ({ document }) => document
+      )
+    ).resolves.toBeNull();
+    const before = statuses.length;
+    expect(controller.reannounceHalt()).toBe(false);
+    expect(statuses.length).toBe(before);
+    controller.dispose();
+  });
+
+  it('drops a queued autosave an explicit checkpoint already carried', async () => {
+    const pending = () =>
+      new ApiError(
+        503,
+        'Freeing space from earlier saves. Try again in a moment.',
+        'PROJECT_STORAGE_CLEANUP_PENDING'
+      );
+    const respond = vi
+      .fn<
+        (input: {
+          expectedVersion: number;
+          document: ProjectDocument;
+        }) => Promise<SaveProjectDocumentResponse>
+      >()
+      .mockRejectedValueOnce(pending())
+      .mockRejectedValueOnce(pending())
+      .mockImplementation(async (input) => ({
+        projectId: input.document.projectId,
+        version: input.document.version,
+        updatedAt: '2026-01-01T00:00:00.000Z'
+      }));
+    const { controller, statuses } = harness({ respond });
+    const base = documentAt(2);
+    controller.openProject(base.projectId, 2);
+    const live = documentAt(3, base);
+    controller.schedule(live);
+    // The autosave is held back and waits to retry.
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+    await controller.whenIdle();
+    expect(respond).toHaveBeenCalledTimes(1);
+    const held = gate();
+    const saving = controller.saveCheckpoint(
+      live.projectId,
+      () => live,
+      async ({ document }) => {
+        await held.wait;
+        return document;
+      }
+    );
+    // The autosave's retry comes due while the checkpoint is in flight and
+    // queues behind it with the very snapshot the checkpoint carries.
+    await vi.advanceTimersByTimeAsync(10_000);
+    held.open();
+    await expect(saving).resolves.toBe(live);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await controller.whenIdle();
+    // It is not uploaded again (which a pinned save point could refuse).
+    expect(respond).toHaveBeenCalledTimes(2);
+    expect(statuses.map((status) => status.state)).not.toContain('refused');
+    expect(controller.hasPendingChanges).toBe(false);
     controller.dispose();
   });
 
@@ -1082,6 +1306,41 @@ describe('cloud project autosave — refusals', () => {
     controller.dispose();
   });
 
+  it('retries a save held back while earlier saves free space, then saves', async () => {
+    const document = documentAt(2);
+    const respond = vi
+      .fn<
+        (input: {
+          expectedVersion: number;
+          document: ProjectDocument;
+        }) => Promise<SaveProjectDocumentResponse>
+      >()
+      .mockRejectedValueOnce(
+        new ApiError(
+          503,
+          'Freeing space from earlier saves. Try again in a moment.',
+          'PROJECT_STORAGE_CLEANUP_PENDING'
+        )
+      )
+      .mockImplementation(async (input) => ({
+        projectId: input.document.projectId,
+        version: input.document.version,
+        updatedAt: '2026-01-01T00:00:00.000Z'
+      }));
+    const { controller, statuses } = harness({ respond });
+    controller.openProject(document.projectId, 2);
+    controller.schedule(documentAt(3, document));
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+    await controller.whenIdle();
+    expect(lastState(statuses)).not.toBe('refused');
+    // No further edit: the controller retries on its own.
+    await vi.advanceTimersByTimeAsync(60_000);
+    await controller.whenIdle();
+    expect(respond).toHaveBeenCalledTimes(2);
+    expect(controller.hasPendingChanges).toBe(false);
+    controller.dispose();
+  });
+
   it.each([
     [403, 'FORBIDDEN'],
     [403, 'PROJECT_UPDATE_REQUIRED'],
@@ -1533,7 +1792,11 @@ describe('cloud project autosave — flushing', () => {
           started.open();
           await held.wait;
         }
-        return { projectId: input.document.projectId, version: input.document.version, updatedAt: '2026-01-01T00:00:00.000Z' };
+        return {
+          projectId: input.document.projectId,
+          version: input.document.version,
+          updatedAt: '2026-01-01T00:00:00.000Z'
+        };
       }
     });
     const document = documentAt(2);
@@ -1552,42 +1815,53 @@ describe('cloud project autosave — flushing', () => {
     controller.dispose();
   });
 
-  it.each(['paused', 'offline', 'conflict'] as const)('rechecks %s eligibility before a queued write starts', async (state) => {
-    const held = gate();
-    const h = harness({
-      respond: async (input) => {
-        if (input.document.version === 3) await held.wait;
-        return { projectId: input.document.projectId, version: input.document.version, updatedAt: '2026-01-01T00:00:00.000Z' };
-      }
-    });
-    const document = documentAt(2);
-    h.controller.openProject(document.projectId, 2);
-    h.controller.schedule(documentAt(3, document));
-    const first = h.controller.flush();
-    await vi.advanceTimersByTimeAsync(0);
-    h.controller.schedule(documentAt(4, document));
-    const queued = h.controller.flush();
-    if (state === 'paused') h.controller.configure({ enabled: false });
-    else if (state === 'offline') h.setConnectivity(false);
-    else h.controller.haltForConflict(document.projectId);
-    held.open();
-    await Promise.all([first, queued]);
+  it.each(['paused', 'offline', 'conflict'] as const)(
+    'rechecks %s eligibility before a queued write starts',
+    async (state) => {
+      const held = gate();
+      const h = harness({
+        respond: async (input) => {
+          if (input.document.version === 3) await held.wait;
+          return {
+            projectId: input.document.projectId,
+            version: input.document.version,
+            updatedAt: '2026-01-01T00:00:00.000Z'
+          };
+        }
+      });
+      const document = documentAt(2);
+      h.controller.openProject(document.projectId, 2);
+      h.controller.schedule(documentAt(3, document));
+      const first = h.controller.flush();
+      await vi.advanceTimersByTimeAsync(0);
+      h.controller.schedule(documentAt(4, document));
+      const queued = h.controller.flush();
+      if (state === 'paused') h.controller.configure({ enabled: false });
+      else if (state === 'offline') h.setConnectivity(false);
+      else h.controller.haltForConflict(document.projectId);
+      held.open();
+      await Promise.all([first, queued]);
 
-    expect(h.saves.map((save) => save.version)).toEqual([3]);
-    expect(h.controller.hasPendingChanges).toBe(true);
-    expect(lastState(h.statuses)).toBe(state);
-    await h.controller.flushPending();
-    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_MAX_WAIT_MS * 2);
-    expect(h.saves).toHaveLength(1);
-    h.controller.dispose();
-  });
+      expect(h.saves.map((save) => save.version)).toEqual([3]);
+      expect(h.controller.hasPendingChanges).toBe(true);
+      expect(lastState(h.statuses)).toBe(state);
+      await h.controller.flushPending();
+      await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_MAX_WAIT_MS * 2);
+      expect(h.saves).toHaveLength(1);
+      h.controller.dispose();
+    }
+  );
 
   it('preserves a newer edit over an ineligible queued snapshot and resumes with the acknowledged fence', async () => {
     const held = gate();
     const { controller, saves } = harness({
       respond: async (input) => {
         if (input.document.version === 3) await held.wait;
-        return { projectId: input.document.projectId, version: input.document.version, updatedAt: '2026-01-01T00:00:00.000Z' };
+        return {
+          projectId: input.document.projectId,
+          version: input.document.version,
+          updatedAt: '2026-01-01T00:00:00.000Z'
+        };
       }
     });
     const document = documentAt(2);
@@ -1605,7 +1879,10 @@ describe('cloud project autosave — flushing', () => {
     controller.configure({ enabled: true });
     await vi.advanceTimersByTimeAsync(0);
     await controller.whenIdle();
-    expect(saves).toEqual([{ version: 3, expectedVersion: 2 }, { version: 5, expectedVersion: 3 }]);
+    expect(saves).toEqual([
+      { version: 3, expectedVersion: 2 },
+      { version: 5, expectedVersion: 3 }
+    ]);
     expect(controller.hasPendingChanges).toBe(false);
     controller.dispose();
   });
@@ -2000,5 +2277,69 @@ describe('cloud project autosave — the encrypted transport', () => {
       code: 'E2EE_READ_ONLY_DEVICE'
     });
     second.controller.dispose();
+  });
+});
+
+describe('retryWhileStorageCleanupPending', () => {
+  const pending = () =>
+    new ApiError(
+      503,
+      'Freeing space from earlier saves. Try again in a moment.',
+      'PROJECT_STORAGE_CLEANUP_PENDING'
+    );
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('retries only the write while space is being freed, then answers', async () => {
+    const write = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(pending())
+      .mockRejectedValueOnce(pending())
+      .mockResolvedValue('saved');
+    const result = retryWhileStorageCleanupPending(write, () => true);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await expect(result).resolves.toBe('saved');
+    expect(write).toHaveBeenCalledTimes(3);
+  });
+
+  it('stops without writing again once the save no longer applies', async () => {
+    const write = vi.fn<() => Promise<string>>().mockRejectedValue(pending());
+    let wanted = true;
+    const result = retryWhileStorageCleanupPending(write, () => wanted);
+    await vi.advanceTimersByTimeAsync(0);
+    wanted = false;
+    await vi.advanceTimersByTimeAsync(5_000);
+    await expect(result).resolves.toBeNull();
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives up after its attempts, and does not retry other failures', async () => {
+    const stuck = vi.fn<() => Promise<string>>().mockRejectedValue(pending());
+    const outcome = expect(
+      retryWhileStorageCleanupPending(stuck, () => true)
+    ).rejects.toMatchObject({ code: 'PROJECT_STORAGE_CLEANUP_PENDING' });
+    await vi.advanceTimersByTimeAsync(60_000);
+    await outcome;
+    expect(stuck).toHaveBeenCalledTimes(8);
+
+    const refused = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValue(
+        new ApiError(
+          413,
+          'Account storage limit reached.',
+          'PROJECT_STORAGE_QUOTA'
+        )
+      );
+    await expect(
+      retryWhileStorageCleanupPending(refused, () => true)
+    ).rejects.toMatchObject({ code: 'PROJECT_STORAGE_QUOTA' });
+    expect(refused).toHaveBeenCalledTimes(1);
   });
 });

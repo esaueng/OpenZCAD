@@ -120,14 +120,18 @@ describe('account storage accounting', () => {
     const usage = await service.getStorageUsage(toUserId('user_empty'));
     expect(usage).toEqual({
       projectCount: 0,
+      trashedProjectCount: 0,
       documentBytes: 0,
       revisionBytes: 0,
       revisionCount: 0,
       projectStorageBytes: 0,
+      storageBytes: 0,
+      storageLimitBytes: MAX_ACCOUNT_ARTIFACT_BYTES,
       documentLimitBytes: MAX_PERSISTED_DOCUMENT_BYTES,
       maxRevisionsPerProject: MAX_PROJECT_REVISIONS,
       artifactBytes: 0,
       artifactCount: 0,
+      artifactReservedBytes: 0,
       artifactLimitBytes: MAX_ACCOUNT_ARTIFACT_BYTES
     });
   });

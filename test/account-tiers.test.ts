@@ -33,9 +33,11 @@ describe('server account tier policy', () => {
   });
 
   it('returns finite effective limits without disclosing the membership list', () => {
+    // One storage bucket per account: Free 1 GiB in total, not 1 GiB each.
     expect(accountEntitlements(env, 'other@example.com')).toEqual({
       tier: 'free',
       projectLimit: 100,
+      storageLimitBytes: 1024 ** 3,
       projectStorageLimitBytes: 1024 ** 3,
       artifactLimitBytes: 1024 ** 3,
       ai: {
@@ -45,9 +47,11 @@ describe('server account tier policy', () => {
         windowSeconds: 600
       }
     });
+    // Premium: 25 GiB for everything, in the same one bucket.
     expect(accountEntitlements(env, 'first@example.com')).toEqual({
       tier: 'premium',
       projectLimit: 10_000,
+      storageLimitBytes: 25 * 1024 ** 3,
       projectStorageLimitBytes: 25 * 1024 ** 3,
       artifactLimitBytes: 25 * 1024 ** 3,
       ai: {
@@ -73,6 +77,37 @@ describe('server account tier policy', () => {
         'first@example.com'
       ).artifactLimitBytes
     ).toBe(8192);
+  });
+
+  it('takes one Premium storage override, the legacy names only when it is unset', () => {
+    const premium = (overrides: Record<string, string>) =>
+      accountEntitlements({ ...env, ...overrides }, 'first@example.com');
+    const unified = premium({
+      PREMIUM_STORAGE_LIMIT_BYTES: '4096',
+      PREMIUM_PROJECT_STORAGE_LIMIT_BYTES: '8192',
+      PREMIUM_ARTIFACT_LIMIT_BYTES: '16384'
+    });
+    expect(unified).toMatchObject({
+      storageLimitBytes: 4096,
+      projectStorageLimitBytes: 4096,
+      artifactLimitBytes: 4096
+    });
+    expect(
+      premium({
+        PREMIUM_PROJECT_STORAGE_LIMIT_BYTES: '8192',
+        PREMIUM_ARTIFACT_LIMIT_BYTES: '16384'
+      }).storageLimitBytes
+    ).toBe(8192);
+    expect(
+      premium({ PREMIUM_ARTIFACT_LIMIT_BYTES: '16384' }).storageLimitBytes
+    ).toBe(16384);
+    // Free never reads a Premium override.
+    expect(
+      accountEntitlements(
+        { ...env, PREMIUM_STORAGE_LIMIT_BYTES: '4096' },
+        'other@example.com'
+      ).storageLimitBytes
+    ).toBe(1024 ** 3);
   });
 
   it('grants premium hosted AI access while retaining the existing Free allowlist', () => {

@@ -254,6 +254,22 @@ first, so a cleanup that resumes late can never delete bytes a newer row
 stores under the same key. Claims expire after an hour, and nothing needs
 operator attention. Migration numbers can have gaps.
 
+**Upgrading across migration 0049** (`0049_unified_account_storage.sql`):
+account storage becomes one allowance. Projects, save states and source assets
+now share a single bucket with imports, exports and encrypted files, where
+before each side had its own allowance: Free accounts get 1 GiB in total and
+Premium 25 GiB, set with `PREMIUM_STORAGE_LIMIT_BYTES` (the older
+`PREMIUM_PROJECT_STORAGE_LIMIT_BYTES` and `PREMIUM_ARTIFACT_LIMIT_BYTES`
+still apply, in that order, while it is unset). The migration redefines the
+quota triggers and adds two object-id columns
+(`project_document_objects.supersedes_object_id`,
+`project_storage_assets.added_by_object_id`); nothing is deleted. An account whose
+combined usage is already over its allowance keeps its data, but saves and
+uploads that would add storage are refused until it frees space.
+Encryption migrations stage within the same allowance, projected to their
+cutover. See
+[account tiers](plans/account-tiers.md#storage-and-downgrade-behavior).
+
 Export D1 before a migration or major upgrade:
 
 ```bash

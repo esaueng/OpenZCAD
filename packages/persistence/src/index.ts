@@ -96,7 +96,7 @@ import {
   importedSourceReferenceOf,
   isPurgeDue,
   MAX_ACTIVE_ARTIFACT_UPLOAD_SESSIONS,
-  MAX_ACCOUNT_ARTIFACT_BYTES,
+  MAX_ACCOUNT_STORAGE_BYTES,
   MAX_ACCOUNT_PROJECTS,
   MAX_ACCOUNT_RESERVED_ARTIFACT_BYTES,
   MAX_ARTIFACT_PART_BYTES,
@@ -335,15 +335,15 @@ export class ArtifactStorageError extends Error {
 }
 
 /**
- * The account's finalized artifacts have reached their byte ceiling. Waiting
- * changes nothing — the remedy is deleting artifacts (or their projects), so
- * the limit travels with the error for the client to name.
+ * A file would take the account over its one storage allowance (files and
+ * projects share it). Waiting changes nothing — the remedy is deleting files
+ * or projects, so the limit travels with the error for the client to name.
  */
 export class ArtifactQuotaError extends Error {
   readonly limitBytes: number;
 
   constructor(limitBytes: number) {
-    super('Account artifact storage limit reached.');
+    super('Account storage limit reached.');
     this.name = 'ArtifactQuotaError';
     this.limitBytes = limitBytes;
   }
@@ -357,9 +357,21 @@ export class ProjectQuotaError extends Error {
     super(
       kind === 'count'
         ? `Account project limit of ${limit} reached.`
-        : `Account project storage limit of ${limit} bytes reached.`
+        : `Account storage limit of ${limit} bytes reached.`
     );
     this.name = 'ProjectQuotaError';
+  }
+}
+
+/**
+ * A save refused only because replaced heads are still being pruned: each
+ * attempt prunes a bounded number, so retrying makes progress (migration
+ * 0049). Retryable, unlike {@link ProjectQuotaError}.
+ */
+export class ProjectStorageCleanupPendingError extends Error {
+  constructor() {
+    super('Freeing space from earlier saves. Try again in a moment.');
+    this.name = 'ProjectStorageCleanupPendingError';
   }
 }
 
@@ -736,13 +748,14 @@ export interface PersistenceService {
 
 export class InMemoryPersistenceService implements PersistenceService {
   /**
-   * The account artifact ceiling, injectable so tests can exercise the quota
-   * without allocating gigabytes. Production construction never passes it.
+   * The account's one storage allowance, for projects and files alike,
+   * injectable so tests can exercise the quota without allocating gigabytes.
+   * Production construction never passes it.
    */
-  private readonly artifactLimitBytes: number;
+  private readonly storageLimitBytes: number;
 
-  constructor(artifactLimitBytes: number = MAX_ACCOUNT_ARTIFACT_BYTES) {
-    this.artifactLimitBytes = artifactLimitBytes;
+  constructor(storageLimitBytes: number = MAX_ACCOUNT_STORAGE_BYTES) {
+    this.storageLimitBytes = storageLimitBytes;
   }
 
   private readonly projects = new Map<string, ProjectDocument>();
@@ -1283,6 +1296,7 @@ export class InMemoryPersistenceService implements PersistenceService {
         : // A pre-Phase 1 client sends no document; kept for one release.
           createProjectDocument(request.name, userId, request.units);
     this.assertProjectCount(userId);
+    this.assertProjectStorageQuota(userId, persistedDocumentBytes(document));
     this.assertMeshSourcesNotDiscarded(document);
     this.projects.set(document.projectId, document);
     if (localProjectId) {
@@ -1384,6 +1398,7 @@ export class InMemoryPersistenceService implements PersistenceService {
       ? await this.prepareClientCopy(userId, request)
       : this.prepareServerCopy(userId, request, head);
     this.assertProjectCount(userId);
+    this.assertProjectStorageQuota(userId, persistedDocumentBytes(document));
     this.assertMeshSourcesNotDiscarded(document);
     this.projects.set(document.projectId, document);
     // A copy lands next to its original rather than at the top of the shelf,
@@ -1793,6 +1808,12 @@ export class InMemoryPersistenceService implements PersistenceService {
     if (!current) throw new ProjectNotFoundError(request.projectId);
     if (current.version !== request.expectedVersion)
       throw new RevisionConflictError(request.projectId, current.version);
+    // The head and the new save state, both a copy of this document.
+    const bytes = persistedDocumentBytes(document);
+    this.assertProjectStorageQuota(
+      access.ownerUserId,
+      2 * bytes - persistedDocumentBytes(current)
+    );
     this.projects.set(request.projectId, document);
     this.recordRevision(request.projectId, document, userId, request.reason);
     return document;
@@ -1915,16 +1936,47 @@ export class InMemoryPersistenceService implements PersistenceService {
   ): void {
     const { bytes } = this.accountArtifacts(ownerUserId);
     const reserved = this.accountReservedArtifactBytes(ownerUserId);
+    // One allowance: the account's project storage counts against it too.
+    const projects = this.projectStorageBytes(ownerUserId);
     if (
       reserved + incomingBytes - reservationCredit >
-        Math.min(
-          this.artifactLimitBytes,
-          MAX_ACCOUNT_RESERVED_ARTIFACT_BYTES
-        ) ||
-      bytes + reserved + incomingBytes - reservationCredit >
-        this.artifactLimitBytes
+        Math.min(this.storageLimitBytes, MAX_ACCOUNT_RESERVED_ARTIFACT_BYTES) ||
+      projects + bytes + reserved + incomingBytes - reservationCredit >
+        this.storageLimitBytes
     ) {
-      throw new ArtifactQuotaError(this.artifactLimitBytes);
+      throw new ArtifactQuotaError(this.storageLimitBytes);
+    }
+  }
+
+  /** Project storage: logical sizes are the stored ones here. */
+  private projectStorageBytes(ownerUserId: UserId): number {
+    let bytes = 0;
+    for (const document of this.ownedProjects(ownerUserId)) {
+      bytes += persistedDocumentBytes(document);
+      for (const revision of this.revisions.get(document.projectId) ?? [])
+        bytes += revision.documentBytes;
+    }
+    return bytes;
+  }
+
+  /**
+   * As migration 0049's triggers: a write that grows the owner's project
+   * storage is refused once everything the account stores (projects and
+   * files, finalized and reserved) would go over the one allowance.
+   */
+  private assertProjectStorageQuota(
+    ownerUserId: UserId,
+    growthBytes: number
+  ): void {
+    if (growthBytes <= 0) return;
+    if (
+      this.projectStorageBytes(ownerUserId) +
+        this.accountArtifacts(ownerUserId).bytes +
+        this.accountReservedArtifactBytes(ownerUserId) +
+        growthBytes >
+      this.storageLimitBytes
+    ) {
+      throw new ProjectQuotaError('storage', this.storageLimitBytes);
     }
   }
 
@@ -1934,8 +1986,18 @@ export class InMemoryPersistenceService implements PersistenceService {
       (document) => this.revisions.get(document.projectId) ?? []
     );
     const artifacts = this.accountArtifacts(userId);
+    // The library lists projects outside the recycle bin; trashed projects
+    // are counted apart, and their bytes still count: they are stored.
+    const trashed = owned.filter(
+      (document) => this.organizationOf(document.projectId).status === 'deleted'
+    ).length;
+    // No R2 objects or encryption here: logical sizes are the stored ones.
+    const projectStorageBytes = this.projectStorageBytes(userId);
+    // In-flight uploads hold their room, as the quota counts them.
+    const artifactReservedBytes = this.accountReservedArtifactBytes(userId);
     return {
-      projectCount: owned.length,
+      projectCount: owned.length - trashed,
+      trashedProjectCount: trashed,
       documentBytes: owned.reduce(
         (total, document) => total + persistedDocumentBytes(document),
         0
@@ -1945,21 +2007,16 @@ export class InMemoryPersistenceService implements PersistenceService {
         0
       ),
       revisionCount: revisions.length,
-      // No R2 objects or encryption here: logical sizes are the stored ones.
-      projectStorageBytes:
-        owned.reduce(
-          (total, document) => total + persistedDocumentBytes(document),
-          0
-        ) +
-        revisions.reduce(
-          (total, revision) => total + revision.documentBytes,
-          0
-        ),
+      projectStorageBytes,
+      storageBytes:
+        projectStorageBytes + artifacts.bytes + artifactReservedBytes,
+      storageLimitBytes: this.storageLimitBytes,
       documentLimitBytes: MAX_PERSISTED_DOCUMENT_BYTES,
       maxRevisionsPerProject: MAX_PROJECT_REVISIONS,
       artifactBytes: artifacts.bytes,
       artifactCount: artifacts.count,
-      artifactLimitBytes: this.artifactLimitBytes
+      artifactReservedBytes,
+      artifactLimitBytes: this.storageLimitBytes
     };
   }
 
@@ -2015,6 +2072,10 @@ export class InMemoryPersistenceService implements PersistenceService {
       (expectedDocument && current !== expectedDocument)
     )
       throw new RevisionConflictError(request.projectId, current.version);
+    this.assertProjectStorageQuota(
+      access.ownerUserId,
+      persistedDocumentBytes(normalized) - persistedDocumentBytes(current)
+    );
     this.projects.set(request.projectId, normalized);
     return {
       projectId: request.projectId,

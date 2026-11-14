@@ -212,6 +212,12 @@ export class CloudProjectAutosave {
   #acknowledgedDocument: ProjectDocument | null = null;
   /** Writes taken off `#pending`, including the active request. */
   readonly #queued = new Set<PendingSave>();
+  /**
+   * Queued writes an explicit checkpoint already carried: queued behind it
+   * with no edit newer than its snapshot. Uploading one again would only
+   * duplicate the checkpoint's write, so it is dropped as stale.
+   */
+  readonly #checkpointed = new WeakSet<PendingSave>();
   #timer: ReturnType<typeof setTimeout> | null = null;
   #queue: Promise<SaveResult> = Promise.resolve({ state: 'stale' });
   #automaticRetries = 0;
@@ -223,6 +229,12 @@ export class CloudProjectAutosave {
    * limit may resume a size refusal; other halts need an explicit new baseline.
    */
   #halted: 'conflict' | 'repair' | 'refused' | null = null;
+  /**
+   * Why autosave halted: the failure the halt was announced with, set and
+   * cleared together with `#halted`, so re-announcing the halt explains it
+   * the same way whatever was announced in between.
+   */
+  #haltCause: unknown = undefined;
   /**
    * The browser refused to upload an edit other devices could not open
    * (ADR-024 Phase 1). Like a size refusal, a newer edit that passes the same
@@ -285,6 +297,18 @@ export class CloudProjectAutosave {
 
   get isHalted(): boolean {
     return this.#halted !== null;
+  }
+
+  /**
+   * Announces the halted state again, with the failure that halted it, so a
+   * caller that showed something else meanwhile (an explicit save's
+   * "Saving") puts back the state and the action it offers. False, and
+   * nothing announced, when the controller is not halted.
+   */
+  reannounceHalt(): boolean {
+    if (!this.#halted) return false;
+    this.#emit(this.#halted, this.#haltCause);
+    return true;
   }
 
   /**
@@ -356,6 +380,7 @@ export class CloudProjectAutosave {
       epoch: ++this.#projectEpoch
     };
     this.#halted = this.#conflictProjectId === projectId ? 'conflict' : null;
+    this.#haltCause = undefined;
     this.#migrationHalt = false;
     this.#sizeRefusal = null;
     this.#contentRefusal = null;
@@ -385,6 +410,7 @@ export class CloudProjectAutosave {
     this.#conflictProjectId = projectId;
     if (!this.#project || this.#project.projectId === projectId) {
       this.#halted = 'conflict';
+      this.#haltCause = undefined;
       this.#migrationHalt = false;
       this.#emit('conflict');
     }
@@ -400,6 +426,7 @@ export class CloudProjectAutosave {
     if (this.#project?.projectId !== projectId) return;
     this.#clearTimer();
     this.#halted = 'repair';
+    this.#haltCause = error;
     this.#migrationHalt = false;
     this.#emit('repair', error);
   }
@@ -419,17 +446,18 @@ export class CloudProjectAutosave {
     if (this.#halted && !this.#migrationHalt) return;
     this.#clearTimer();
     const already = this.#migrationHalt;
+    const migrating = new ApiError(
+      409,
+      'This project is being end-to-end encrypted, so it takes no edits until that finishes.',
+      PROJECT_MIGRATING_CODE
+    );
     this.#halted = 'refused';
+    // Recorded even when nothing is announced now, so a later re-announce
+    // never replays an earlier halt's cause.
+    if (!already) this.#haltCause = migrating;
     this.#migrationHalt = true;
     if (this.#pending && !already) {
-      this.#emit(
-        'refused',
-        new ApiError(
-          409,
-          'This project is being end-to-end encrypted, so it takes no edits until that finishes.',
-          PROJECT_MIGRATING_CODE
-        )
-      );
+      this.#emit('refused', migrating);
     }
   }
 
@@ -443,6 +471,7 @@ export class CloudProjectAutosave {
     if (!this.#migrationHalt || this.#project?.projectId !== projectId) return;
     this.#migrationHalt = false;
     this.#halted = null;
+    this.#haltCause = undefined;
     this.#automaticRetries = 0;
     if (!this.#pending) {
       this.#emit('synced');
@@ -470,6 +499,7 @@ export class CloudProjectAutosave {
     this.#pending = null;
     this.#pendingSince = null;
     this.#halted = null;
+    this.#haltCause = undefined;
     this.#migrationHalt = false;
     this.#sizeRefusal = null;
     this.#contentRefusal = null;
@@ -502,6 +532,7 @@ export class CloudProjectAutosave {
     this.#pending = null;
     this.#pendingSince = null;
     this.#halted = null;
+    this.#haltCause = undefined;
     this.#migrationHalt = false;
     this.#sizeRefusal = null;
     this.#contentRefusal = null;
@@ -568,6 +599,7 @@ export class CloudProjectAutosave {
           }))
       ) {
         this.#halted = null;
+        this.#haltCause = undefined;
         this.#sizeRefusal = null;
       }
     }
@@ -579,6 +611,7 @@ export class CloudProjectAutosave {
       try {
         assertStorableDocument(document);
         this.#halted = null;
+        this.#haltCause = undefined;
         this.#contentRefusal = null;
       } catch {
         // Still refused; keep waiting for an edit that fixes it.
@@ -715,6 +748,14 @@ export class CloudProjectAutosave {
         if (this.#pending && this.#pending.editEpoch <= editEpoch) {
           this.#pending = null;
         }
+        for (const waiting of this.#queued) {
+          if (
+            waiting.projectId === projectId &&
+            waiting.editEpoch <= editEpoch
+          ) {
+            this.#checkpointed.add(waiting);
+          }
+        }
         // Writes debounced or queued behind this checkpoint carry documents
         // edited while it was in flight, without the save point the account
         // just minted; the next of them would replace the account copy and
@@ -752,7 +793,10 @@ export class CloudProjectAutosave {
   }
 
   async #persist(next: PendingSave, epoch: number): Promise<SaveResult> {
-    if (!this.#isActive(epoch, next.projectId)) {
+    if (
+      !this.#isActive(epoch, next.projectId) ||
+      this.#checkpointed.has(next)
+    ) {
       this.#queued.delete(next);
       return { state: 'stale' };
     }
@@ -806,6 +850,7 @@ export class CloudProjectAutosave {
     if (error instanceof UnstorableDocumentError) {
       this.#requeue(next);
       this.#halted = 'refused';
+      this.#haltCause = error;
       this.#migrationHalt = false;
       this.#contentRefusal = { editEpoch: next.editEpoch };
       this.#emit('refused', error);
@@ -826,6 +871,7 @@ export class CloudProjectAutosave {
     ) {
       this.#requeue(next);
       this.#halted = 'refused';
+      this.#haltCause = error;
       this.#migrationHalt = true;
       this.#emit('refused', error);
       return { state: 'halted' };
@@ -836,6 +882,7 @@ export class CloudProjectAutosave {
     if (status === 409) {
       this.#requeue(next);
       this.#halted = 'conflict';
+      this.#haltCause = undefined;
       this.#migrationHalt = false;
       const accountVersion =
         error instanceof ApiError ? currentVersionOf(error) : null;
@@ -855,6 +902,7 @@ export class CloudProjectAutosave {
     if (isProjectDocumentUnavailableError(error)) {
       this.#requeue(next);
       this.#halted = 'repair';
+      this.#haltCause = error;
       this.#migrationHalt = false;
       this.#emit('repair', error);
       return { state: 'halted' };
@@ -867,8 +915,12 @@ export class CloudProjectAutosave {
     const overValueCeiling =
       status === 400 && (error as ApiError).message === DOCUMENT_VALUES_REFUSAL;
     if (status === 413 || status === 403 || overValueCeiling) {
+      const refusal = overValueCeiling
+        ? new Error(PROJECT_TOO_LARGE_FOR_ACCOUNT)
+        : error;
       this.#requeue(next);
       this.#halted = 'refused';
+      this.#haltCause = refusal;
       this.#migrationHalt = false;
       const complexity =
         status === 413 &&
@@ -895,10 +947,7 @@ export class CloudProjectAutosave {
           complexity
         };
       }
-      this.#emit(
-        'refused',
-        overValueCeiling ? new Error(PROJECT_TOO_LARGE_FOR_ACCOUNT) : error
-      );
+      this.#emit('refused', refusal);
       // A reduced edit can arrive while the oversized request is in flight.
       if (
         this.#sizeRefusal &&

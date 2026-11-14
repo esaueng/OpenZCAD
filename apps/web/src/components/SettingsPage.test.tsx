@@ -55,7 +55,10 @@ const storageUsage = {
   maxRevisionsPerProject: 20,
   artifactBytes: 5 * 1_048_576,
   artifactCount: 2,
-  artifactLimitBytes: 100 * 1_048_576
+  artifactLimitBytes: 100 * 1_048_576,
+  trashedProjectCount: 0,
+  storageBytes: 3_072 + 5 * 1_048_576,
+  storageLimitBytes: 100 * 1_048_576
 };
 
 beforeEach(() => {
@@ -1080,7 +1083,9 @@ describe('settings offline mode', () => {
     expect(
       screen.queryByRole('checkbox', { name: 'Project sharing' })
     ).not.toBeInTheDocument();
-    expect(screen.queryByText('Account storage')).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('heading', { name: 'Storage' })
+    ).not.toBeInTheDocument();
     await user.click(screen.getByRole('checkbox', { name: 'Cloud features' }));
     expect(onCloudFunctionsEnabledChange).toHaveBeenCalledWith(true);
   });
@@ -1950,17 +1955,16 @@ describe('settings privacy and data section', () => {
     expect(screen.getByText(/Cloud deletion never touches it/)).toBeVisible();
   });
 
-  it('keeps the file meter in range when the account is over its allowance', async () => {
+  it('keeps the storage meter in range when the account is over its allowance', async () => {
     vi.mocked(api.storageUsage).mockResolvedValue({
       ...storageUsage,
-      artifactBytes: 120 * 1_048_576
+      artifactBytes: 120 * 1_048_576,
+      storageBytes: 120 * 1_048_576
     });
     renderSettings(readyHealth, { initialSection: 'account', session });
 
-    const meter = await screen.findByRole('meter', {
-      name: 'Cloud file storage used'
-    });
-    const limit = String(storageUsage.artifactLimitBytes);
+    const meter = await screen.findByRole('meter', { name: 'Storage used' });
+    const limit = String(storageUsage.storageLimitBytes);
     // The bar is full, never past full; the text says by how much.
     expect(meter).toHaveAttribute('aria-valuemax', limit);
     expect(meter).toHaveAttribute('aria-valuenow', limit);
@@ -1971,14 +1975,23 @@ describe('settings privacy and data section', () => {
     expect(screen.getByText('120 MB of 100 MB · over allowance')).toBeVisible();
   });
 
-  it('reports in-range file usage as it is', async () => {
+  it('shows one storage row: projects and files in one meter, with the breakdown', async () => {
     renderSettings(readyHealth, { initialSection: 'account', session });
 
-    const meter = await screen.findByRole('meter', {
-      name: 'Cloud file storage used'
-    });
-    expect(meter).toHaveAttribute('aria-valuenow', String(5 * 1_048_576));
+    const meter = await screen.findByRole('meter', { name: 'Storage used' });
+    expect(meter).toHaveAttribute(
+      'aria-valuenow',
+      String(5 * 1_048_576 + 3_072)
+    );
     expect(meter).toHaveAttribute('aria-valuetext', '5 MB of 100 MB');
+    expect(
+      screen.getByText(
+        'Projects 3 KB · Imports and exports 5 MB. 3 projects · 4 save states.'
+      )
+    ).toBeVisible();
+    // The two allowances are gone.
+    expect(screen.queryByText('Account storage')).not.toBeInTheDocument();
+    expect(screen.queryByText('Cloud file storage')).not.toBeInTheDocument();
   });
 
   it('formats Premium membership limits and account storage readably', async () => {
@@ -1988,7 +2001,10 @@ describe('settings privacy and data section', () => {
       revisionCount: 0,
       documentLimitBytes: 24 * 1024 ** 2,
       maxRevisionsPerProject: 50,
+      projectStorageBytes: 0,
       artifactBytes: 24 * 1024 ** 2,
+      storageBytes: 24 * 1024 ** 2,
+      storageLimitBytes: 100 * 1024 ** 3,
       artifactLimitBytes: 100 * 1024 ** 3
     });
     renderSettings(readyHealth, {
@@ -1998,6 +2014,7 @@ describe('settings privacy and data section', () => {
         entitlements: {
           tier: 'premium',
           projectLimit: 10_000,
+          storageLimitBytes: 100 * 1024 ** 3,
           projectStorageLimitBytes: 100 * 1024 ** 3,
           artifactLimitBytes: 100 * 1024 ** 3,
           ai: {
@@ -2012,43 +2029,78 @@ describe('settings privacy and data section', () => {
 
     expect(
       screen.getByText(
-        '10,000 cloud projects · 100 GB project storage · 100 GB cloud file storage · 500 hosted AI requests per 10 minutes'
+        '10,000 cloud projects · 100 GB storage · 500 hosted AI requests per 10 minutes'
       )
     ).toBeVisible();
     expect(
       await screen.findByText(
-        '129 projects · 0 revisions. Up to 24 MB and 50 revisions per project.'
+        'Projects 0 B · Imports and exports 24 MB. 129 projects · 0 save states.'
       )
     ).toBeVisible();
-    expect(
-      screen.getByRole('meter', { name: 'Cloud file storage used' })
-    ).toHaveAttribute('aria-valuetext', '24 MB of 100 GB');
+    expect(screen.getByRole('meter', { name: 'Storage used' })).toHaveAttribute(
+      'aria-valuetext',
+      '24 MB of 100 GB'
+    );
     expect(screen.getByText('24 MB of 100 GB')).toBeVisible();
   });
 
-  it('groups large account usage and revision-limit counts', async () => {
+  it('names the membership allowance from an older server by its project storage', () => {
+    renderSettings(readyHealth, {
+      initialSection: 'account',
+      session: {
+        ...session,
+        entitlements: {
+          tier: 'free',
+          projectLimit: 100,
+          projectStorageLimitBytes: 1024 ** 3,
+          artifactLimitBytes: 1024 ** 3,
+          ai: {
+            requestLimit: 6,
+            costLimitUnits: 24,
+            windowSeconds: 600,
+            concurrencyLimit: 2
+          }
+        }
+      }
+    });
+    expect(
+      screen.getByText(
+        '100 cloud projects · 1 GB storage · 6 hosted AI requests per 10 minutes'
+      )
+    ).toBeVisible();
+  });
+
+  it('groups large counts and says trashed projects still count', async () => {
     vi.mocked(api.storageUsage).mockResolvedValue({
       ...storageUsage,
       projectCount: 1_234,
+      trashedProjectCount: 21,
       revisionCount: 12_345,
       maxRevisionsPerProject: 1_000
     });
     renderSettings(readyHealth, { initialSection: 'account', session });
     expect(
       await screen.findByText(
-        '1,234 projects · 12,345 revisions. Up to 10 MB and 1,000 revisions per project.'
+        'Projects 3 KB · Imports and exports 5 MB. 1,234 projects · 21 in trash · 12,345 save states.'
       )
     ).toBeVisible();
+    // Trashed projects are still stored: the row says so, one click away.
+    expect(screen.getByText('Trash counts toward storage')).toBeVisible();
   });
 
-  it('states project storage as the quota measures it, against a GB allowance', async () => {
+  it('states storage as the quota measures it, against a GB allowance', async () => {
     const gibibyte = 1_073_741_824;
+    const projects = Math.round(24.8 * 1_048_576);
+    // An older server: no combined figure or limit, only the parts.
+    const { storageBytes, storageLimitBytes, ...older } = storageUsage;
+    void storageBytes;
+    void storageLimitBytes;
     vi.mocked(api.storageUsage).mockResolvedValue({
-      ...storageUsage,
+      ...older,
       // Logical sizes differ from stored ones; the quota counts stored bytes.
       documentBytes: 40 * 1_048_576,
       revisionBytes: 0,
-      projectStorageBytes: Math.round(24.8 * 1_048_576),
+      projectStorageBytes: projects,
       artifactLimitBytes: 25 * gibibyte,
       entitlements: {
         tier: 'premium',
@@ -2066,27 +2118,29 @@ describe('settings privacy and data section', () => {
     renderSettings(readyHealth, { initialSection: 'account', session });
 
     // Large allowances read in GB, never as "25600.0 MB".
-    const projects = await screen.findByRole('meter', {
-      name: 'Account storage used'
-    });
-    expect(projects).toHaveAttribute(
+    const meter = await screen.findByRole('meter', { name: 'Storage used' });
+    expect(meter).toHaveAttribute(
       'aria-valuenow',
-      String(Math.round(24.8 * 1_048_576))
+      String(projects + 5 * 1_048_576)
     );
-    expect(projects).toHaveAttribute('aria-valuemax', String(25 * gibibyte));
-    expect(screen.getByText('24.8 MB of 25 GB')).toBeVisible();
+    expect(meter).toHaveAttribute('aria-valuemax', String(25 * gibibyte));
+    expect(screen.getByText('29.8 MB of 25 GB')).toBeVisible();
     expect(
-      screen.getByRole('meter', { name: 'Cloud file storage used' })
-    ).toHaveAttribute('aria-valuetext', '5 MB of 25 GB');
+      screen.getByText(/^Projects 24\.8 MB · Imports and exports 5 MB\./)
+    ).toBeVisible();
   });
 
   it('names an account storage overage outright', async () => {
     vi.mocked(api.storageUsage).mockResolvedValue({
       ...storageUsage,
       projectStorageBytes: 2 * 1_073_741_824,
+      artifactBytes: 0,
+      storageBytes: 2 * 1_073_741_824,
+      storageLimitBytes: 1_073_741_824,
       entitlements: {
         tier: 'free',
         projectLimit: 100,
+        storageLimitBytes: 1_073_741_824,
         projectStorageLimitBytes: 1_073_741_824,
         artifactLimitBytes: 1_073_741_824,
         ai: {
@@ -2100,7 +2154,7 @@ describe('settings privacy and data section', () => {
     renderSettings(readyHealth, { initialSection: 'account', session });
 
     expect(
-      await screen.findByRole('meter', { name: 'Account storage used' })
+      await screen.findByRole('meter', { name: 'Storage used' })
     ).toHaveAttribute('aria-valuetext', '2 GB of 1 GB · over allowance');
   });
 
@@ -2116,8 +2170,12 @@ describe('settings privacy and data section', () => {
     } as unknown as typeof storageUsage);
     renderSettings(readyHealth, { initialSection: 'account', session });
 
-    expect(await screen.findByText('Cloud file storage')).toBeVisible();
-    expect(screen.getByText('Account storage')).toBeVisible();
+    expect(
+      await screen.findByText(
+        'Projects 0 B · Imports and exports 0 B. 0 projects · 0 save states.'
+      )
+    ).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Storage' })).toBeVisible();
   });
 
   it('names the diagnostic download for what it downloads', () => {

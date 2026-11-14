@@ -104,7 +104,7 @@ def load_sql(data: bytes):
 
 
 # Migrations above 0050 reviewed one by one (other numbers are still in review).
-REVIEWED_AFTER_0050 = frozenset({53})
+REVIEWED_AFTER_0050 = frozenset({53, 54})
 
 
 def required_objects(db):
@@ -116,12 +116,17 @@ def required_objects(db):
         raise SnapshotError('Unsupported migration ledger.')
     # 0047 adds only glimpse_account_consent.version: no stored objects or keys.
     # 0048 adds only e2ee_mls_commits.sender_signature: no stored objects or keys.
-    # 0049 adds only e2ee_invitations.acceptance_statement and
-    # acceptance_signature (signed public statements): no stored objects or keys.
+    # 0049 adds storage-quota views and triggers,
+    # project_document_objects.supersedes_object_id and
+    # project_storage_assets.added_by_object_id (object ids, not keys):
+    # no stored objects or keys.
     # 0050 adds r2_key_tombstones: transient claims on keys a cleanup is
     # deleting, never objects a restore needs.
-    # 0053 adds only e2ee_project_migrations.attempt (a counter) and the trigger
-    # that moves it on: no stored objects or keys. 0051-0052 are not reviewed.
+    # 0053 adds only e2ee_project_migrations.attempt (a counter): no stored
+    # objects or keys.
+    # 0054 adds only e2ee_invitations.acceptance_statement and
+    # acceptance_signature (signed public statements): no stored objects or keys.
+    # 0051-0052 are not reviewed.
     if any(int(name[:4]) > 50 and int(name[:4]) not in REVIEWED_AFTER_0050
            for name in migrations):
         raise SnapshotError('Review new migrations before using this snapshot tool.')
