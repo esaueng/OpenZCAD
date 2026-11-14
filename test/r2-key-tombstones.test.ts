@@ -402,3 +402,178 @@ describe('a staged decryption revision whose asset repair failed', () => {
     expect(bucket.objects.has(assetKey)).toBe(true);
   });
 });
+
+describe('a project deleted twice and created again under its id', () => {
+  const PROJECT = 'proj_11111111-1111-4111-8111-111111111111';
+
+  async function recreatable() {
+    const { D1R2PersistenceService } =
+      await import('@openzcad/cloudflare-adapters');
+    const { objectBucket } = await import('./support/e2ee-documents');
+    const db = database();
+    db.prepare('DELETE FROM projects').run();
+    const manager = new CommandManager({
+      ...createProjectDocument('Recreated project', OWNER),
+      projectId: PROJECT
+    } as ProjectDocument);
+    manager.execute(
+      commandFactories.importStep({
+        name: 'Source',
+        artifactId: 'artifact_local_source',
+        sourceName: 'source.step',
+        stepText: STEP_TEXT
+      })
+    );
+    const document = withoutDerivedProjection(manager.document);
+    const bucket = objectBucket();
+    const d1 = sqliteD1(db);
+    const service = new D1R2PersistenceService({
+      DB: d1,
+      PROJECT_STORAGE: bucket,
+      ARTIFACTS: bucket
+    } as never);
+    await service.createProject(OWNER, {
+      name: document.name,
+      initialDocument: document
+    });
+    const assetKey = (
+      db.prepare('SELECT object_key FROM project_storage_assets').get() as {
+        object_key: string;
+      }
+    ).object_key;
+    const deleteMock = bucket.delete as unknown as Mock<
+      (key: string | string[]) => Promise<void>
+    >;
+    return { db, d1, bucket, service, document, assetKey, deleteMock };
+  }
+
+  it('a deletion paused at an R2 delete holds its keys: the other deletion waits, and a recreated project keeps its files', async () => {
+    const { db, bucket, service, document, assetKey, deleteMock } =
+      await recreatable();
+    const remove = deleteMock.getMockImplementation()!;
+    let entered!: () => void;
+    let release!: () => void;
+    const atDelete = new Promise<void>((resolve) => (entered = resolve));
+    const released = new Promise<void>((resolve) => (release = resolve));
+    deleteMock.mockImplementationOnce(async (key) => {
+      entered();
+      await released;
+      return remove(key);
+    });
+    const stale = service.deleteProject(OWNER, PROJECT);
+    await atDelete;
+    // Deletion B cannot finish while A holds the project's keys, so the
+    // project cannot be created again under its id meanwhile.
+    await expect(service.deleteProject(OWNER, PROJECT)).rejects.toThrow(
+      ObjectKeyDeleteRetryError
+    );
+    release();
+    await stale;
+    expect(db.prepare('SELECT id FROM projects').all()).toEqual([]);
+    await service.createProject(OWNER, {
+      name: document.name,
+      initialDocument: document
+    });
+    expect(bucket.objects.has(assetKey)).toBe(true);
+    expect(db.prepare('SELECT id FROM projects').all()).toEqual([
+      { id: PROJECT }
+    ]);
+  });
+
+  it('a deletion that stalls before its deletes touches nothing of the project created again after another deletion finished', async () => {
+    const { db, d1, bucket, document, assetKey } = await recreatable();
+    const { D1R2PersistenceService } =
+      await import('@openzcad/cloudflare-adapters');
+    // Deletion A records the generation it destroys, then stalls before it
+    // lists anything.
+    let entered!: () => void;
+    let release!: () => void;
+    const stalled = new Promise<void>((resolve) => (entered = resolve));
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let intercept = true;
+    const wrapped = new Proxy(d1, {
+      get(target, property) {
+        if (property === 'prepare') {
+          return (sql: string) => {
+            const statement = target.prepare(sql);
+            if (
+              !sql.includes(
+                'SELECT id FROM upload_sessions WHERE project_id IN'
+              )
+            ) {
+              return statement;
+            }
+            return new Proxy(statement, {
+              get(inner, key) {
+                if (key === 'bind') {
+                  return (...args: unknown[]) => {
+                    const bound = inner.bind(...args);
+                    return new Proxy(bound, {
+                      get(b, k) {
+                        if (k === 'all' && intercept) {
+                          intercept = false;
+                          return async () => {
+                            entered();
+                            await released;
+                            return b.all();
+                          };
+                        }
+                        const value = Reflect.get(b, k) as unknown;
+                        return typeof value === 'function'
+                          ? (value as (...a: unknown[]) => unknown).bind(b)
+                          : value;
+                      }
+                    });
+                  };
+                }
+                const value = Reflect.get(inner, key) as unknown;
+                return typeof value === 'function'
+                  ? (value as (...a: unknown[]) => unknown).bind(inner)
+                  : value;
+              }
+            });
+          };
+        }
+        const value = Reflect.get(target, property) as unknown;
+        return typeof value === 'function'
+          ? (value as (...a: unknown[]) => unknown).bind(target)
+          : value;
+      }
+    });
+    const staleService = new D1R2PersistenceService({
+      DB: wrapped,
+      PROJECT_STORAGE: bucket,
+      ARTIFACTS: bucket
+    } as never);
+    const service = new D1R2PersistenceService({
+      DB: d1,
+      PROJECT_STORAGE: bucket,
+      ARTIFACTS: bucket
+    } as never);
+    const stale = staleService.deleteProject(OWNER, PROJECT);
+    await stalled;
+    // Deletion B finishes; the project is created again under its id and
+    // stores the same content-addressed source.
+    await service.deleteProject(OWNER, PROJECT);
+    expect(bucket.objects.has(assetKey)).toBe(false);
+    await service.createProject(OWNER, {
+      name: document.name,
+      initialDocument: document
+    });
+    expect(bucket.objects.has(assetKey)).toBe(true);
+    // A resumes: the generation it set out to destroy is gone, so it
+    // deletes no object and no row of the new project.
+    release();
+    await stale;
+    expect(bucket.objects.has(assetKey)).toBe(true);
+    expect(db.prepare('SELECT id FROM projects').all()).toEqual([
+      { id: PROJECT }
+    ]);
+    expect(
+      db.prepare('SELECT object_key FROM project_storage_assets').all()
+    ).toEqual([{ object_key: assetKey }]);
+    expect(
+      db.prepare('SELECT COUNT(*) AS n FROM project_document_objects').get()
+    ).toEqual({ n: 1 });
+  });
+});

@@ -610,6 +610,19 @@ export interface OwnObjectRows {
   readonly assets?: readonly string[];
   readonly artifacts?: readonly string[];
   readonly documentObjects?: readonly string[];
+  /** Encrypted versions whose bodies are being dropped, by row key. */
+  readonly versions?: readonly {
+    readonly projectId: string;
+    readonly documentVersion: number;
+  }[];
+  /**
+   * Whole projects being destroyed: every row of theirs is exempt. Pass
+   * only with a fence that holds just while that very generation of each
+   * project is being destroyed (its cleanup claim), so the rows of a
+   * project recreated under the same id are never treated as the
+   * deleter's own.
+   */
+  readonly projects?: readonly string[];
 }
 
 /** What `ObjectKeyClaim.deleteObjects` did, key by key. */
@@ -656,7 +669,7 @@ export interface ObjectKeyClaim {
 }
 
 /** A claimed R2 delete that failed or could not run yet: retry later. */
-export class ObjectKeyDeleteRetryError extends Error {
+export class ObjectKeyDeleteRetryError extends ProjectObjectStorageError {
   constructor(
     message = 'Stored objects are still being removed. Try again later.'
   ) {
@@ -776,23 +789,35 @@ export async function claimObjectKeysForDelete(
        SELECT k.value, ?1, ?2 FROM json_each(?3) k
        WHERE NOT EXISTS (SELECT 1 FROM upload_sessions s
                          WHERE s.object_key = k.value
-                           AND s.id NOT IN (SELECT value FROM json_each(?4)))
+                           AND s.id NOT IN (SELECT value FROM json_each(?4))
+                           AND s.project_id NOT IN (SELECT value FROM json_each(?11)))
          AND NOT EXISTS (SELECT 1 FROM e2ee_content_blobs b
                          WHERE b.object_key = k.value
                            AND b.blob_id NOT IN (SELECT value FROM json_each(?5))
+                           AND b.project_id NOT IN (SELECT value FROM json_each(?11))
                            AND NOT (b.state = 'deleting' AND EXISTS (
                              SELECT 1 FROM json_each(?9) d
                              WHERE json_extract(d.value, '$[0]') = b.blob_id
                                AND json_extract(d.value, '$[1]') = b.created_at)))
          AND NOT EXISTS (SELECT 1 FROM project_storage_assets a
                          WHERE a.object_key = k.value
-                           AND a.id NOT IN (SELECT value FROM json_each(?6)))
+                           AND a.id NOT IN (SELECT value FROM json_each(?6))
+                           AND a.project_id NOT IN (SELECT value FROM json_each(?11)))
          AND NOT EXISTS (SELECT 1 FROM artifacts f
                          WHERE f.object_key = k.value
-                           AND f.id NOT IN (SELECT value FROM json_each(?7)))
+                           AND f.id NOT IN (SELECT value FROM json_each(?7))
+                           AND f.project_id NOT IN (SELECT value FROM json_each(?11)))
          AND NOT EXISTS (SELECT 1 FROM project_document_objects o
                          WHERE o.object_key = k.value
-                           AND o.id NOT IN (SELECT value FROM json_each(?8)))
+                           AND o.id NOT IN (SELECT value FROM json_each(?8))
+                           AND o.project_id NOT IN (SELECT value FROM json_each(?11)))
+         AND NOT EXISTS (SELECT 1 FROM e2ee_project_versions v
+                         WHERE v.envelope_key = k.value
+                           AND v.project_id NOT IN (SELECT value FROM json_each(?11))
+                           AND NOT EXISTS (
+                             SELECT 1 FROM json_each(?10) w
+                             WHERE json_extract(w.value, '$[0]') = v.project_id
+                               AND json_extract(w.value, '$[1]') = v.document_version))
          AND ${fence ? fence.sql : '1'}
        ON CONFLICT (object_key) DO UPDATE
          SET token = excluded.token, created_at = excluded.created_at
@@ -810,6 +835,10 @@ export async function claimObjectKeysForDelete(
       JSON.stringify(
         (own.deletingBlobs ?? []).map((row) => [row.blobId, row.createdAt])
       ),
+      JSON.stringify(
+        (own.versions ?? []).map((row) => [row.projectId, row.documentVersion])
+      ),
+      ids(own.projects),
       ...(fence?.binds ?? [])
     )
     .run();
@@ -7932,17 +7961,27 @@ export class D1R2PersistenceService implements PersistenceService {
    * user data. Child rows are then removed explicitly so correctness does not
    * depend on D1 foreign-key enforcement being enabled on this connection.
    *
+   * Every step is fenced on the generation of each project it set out to
+   * destroy: the project's cleanup claim, by its `claimed_at`. A deletion
+   * that stalls while another one finishes, after which a project is
+   * created again under the same id, touches nothing of the new project:
+   * its listings, its R2 key claims (migration 0050) and its final D1 batch
+   * all hold only while that very claim does.
+   *
    * Takes at most {@link PROJECT_DESTROY_BATCH_SIZE} ids; larger sets go
    * through {@link destroyProjectsInBatches}.
    */
-  private async destroyProjects(projectIds: string[]): Promise<void> {
-    if (projectIds.length === 0) {
+  private async destroyProjects(requestedIds: string[]): Promise<void> {
+    if (requestedIds.length === 0) {
       return;
     }
-    const placeholders = projectIds.map(() => '?').join(', ');
+    let projectIds = requestedIds;
     // The existing durable cleanup claim fences restoration and writers.
     // Shelf status alone is reversible while object cleanup is in flight.
+    // Its `claimed_at` names the generation of the project being destroyed.
+    let generations: { projectId: string; claimedAt: string }[] | null = null;
     if (await isE2eeShareLinkStorageReady(this.env.DB)) {
+      const placeholders = projectIds.map(() => '?').join(', ');
       await this.env
         .DB!.prepare(
           `INSERT OR IGNORE INTO project_copy_cleanup_claims (project_id, claimed_at)
@@ -7950,7 +7989,57 @@ export class D1R2PersistenceService implements PersistenceService {
         )
         .bind(new Date().toISOString(), ...projectIds)
         .run();
+      const claimed = await this.env
+        .DB!.prepare(
+          `SELECT c.project_id, c.claimed_at
+           FROM project_copy_cleanup_claims c
+           JOIN projects p ON p.id = c.project_id
+           WHERE c.project_id IN (${placeholders})
+           ORDER BY c.project_id`
+        )
+        .bind(...projectIds)
+        .all<{ project_id: string; claimed_at: string }>();
+      generations = (claimed.results ?? []).map((row) => ({
+        projectId: row.project_id,
+        claimedAt: row.claimed_at
+      }));
+      projectIds = generations.map((row) => row.projectId);
+      if (projectIds.length === 0) return;
     }
+    const generationOf = new Map(
+      (generations ?? []).map((row) => [row.projectId, row.claimedAt])
+    );
+    /** One project's generation, as a fence of one condition. */
+    const generationFence = (projectId: string) =>
+      generations
+        ? {
+            sql: `EXISTS (SELECT 1 FROM project_copy_cleanup_claims
+                  WHERE project_id = ? AND claimed_at = ?)`,
+            binds: [projectId, generationOf.get(projectId)] as const
+          }
+        : undefined;
+    const stillCurrent = async (projectId: string) => {
+      const fence = generationFence(projectId);
+      if (!fence) return true;
+      return !!(await this.env
+        .DB!.prepare(`SELECT 1 AS current WHERE ${fence.sql}`)
+        .bind(...fence.binds)
+        .first<{ current: number }>());
+    };
+    // The projects (of the generations being destroyed) a statement may
+    // touch: `IN (…)` with a single JSON bind.
+    const generationIds = JSON.stringify(
+      generations
+        ? generations.map((row) => [row.projectId, row.claimedAt])
+        : projectIds.map((id) => [id, null])
+    );
+    const fencedIds = generations
+      ? `(SELECT json_extract(g.value, '$[0]') FROM json_each(?) g
+          WHERE EXISTS (
+            SELECT 1 FROM project_copy_cleanup_claims c
+            WHERE c.project_id = json_extract(g.value, '$[0]')
+              AND c.claimed_at = json_extract(g.value, '$[1]')))`
+      : `(SELECT json_extract(g.value, '$[0]') FROM json_each(?) g)`;
     // Collaboration rooms keep the latest document and bounded snapshot
     // history in Durable Object storage that no D1/R2 sweep reaches. Erase
     // them before anything else: a failure keeps every database row, so the
@@ -7959,6 +8048,8 @@ export class D1R2PersistenceService implements PersistenceService {
     // erasing the same room first) is harmless.
     if (this.env.PROJECT_ROOM) {
       for (const projectId of projectIds) {
+        // A project recreated under this id has a room of its own.
+        if (!(await stillCurrent(projectId))) continue;
         const response = await this.env.PROJECT_ROOM.getByName(projectId).fetch(
           new Request(
             `https://project-room.internal/?projectId=${encodeURIComponent(projectId)}`,
@@ -7974,11 +8065,14 @@ export class D1R2PersistenceService implements PersistenceService {
       }
     }
     if (this.env.ARTIFACTS) {
+      // Listed only while the generation holds: writers cannot open a
+      // session on a project with a cleanup claim, so each listed session
+      // belongs to the generation being destroyed.
       const uploads = await this.env
         .DB!.prepare(
-          `SELECT id FROM upload_sessions WHERE project_id IN (${placeholders})`
+          `SELECT id FROM upload_sessions WHERE project_id IN ${fencedIds}`
         )
-        .bind(...projectIds)
+        .bind(generationIds)
         .all<{ id: string }>();
       for (const row of uploads.results ?? []) {
         const upload = await this.loadUploadSession(row.id);
@@ -7988,216 +8082,237 @@ export class D1R2PersistenceService implements PersistenceService {
           );
         }
       }
-      const objects = await this.env
-        .DB!.prepare(
-          `SELECT object_key FROM artifacts WHERE project_id IN (${placeholders})`
-        )
-        .bind(...projectIds)
-        .all<{ object_key: string }>();
-      // Keep the database rows when object deletion fails so the operation is
-      // visible, retryable, and cannot strand unreferenced user data in R2.
-      await Promise.all(
-        (objects.results ?? []).map((row) =>
-          this.env.ARTIFACTS!.delete(row.object_key)
-        )
-      );
     }
+    const versionsReady = await isE2eeProjectVersionStorageReady(this.env.DB);
+    const blobsReady = await isE2eeContentBlobStorageReady(this.env.DB);
     const projectBucket = this.projectStorageBucket();
-    if (projectBucket) {
-      const objects = await this.env
-        .DB!.prepare(
-          `SELECT object_key FROM project_document_objects WHERE project_id IN (${placeholders})
-           UNION
-           SELECT object_key FROM project_storage_assets WHERE project_id IN (${placeholders})`
-        )
-        .bind(...projectIds, ...projectIds)
-        .all<{ object_key: string }>();
-      await Promise.all(
-        (objects.results ?? []).map((row) =>
-          projectBucket.delete(row.object_key)
-        )
-      );
-    }
-    // Encrypted projects' MLS group rows (migration 0032), only once the
-    // tables exist: no statement may name a table the database lacks.
-    const groupTables = (await isE2eeProjectGroupStorageReady(this.env.DB))
-      ? E2EE_PROJECT_GROUP_TABLES.map(
-          (table) => `DELETE FROM ${table} WHERE project_id IN`
-        )
-      : [];
-    // Encrypted document versions (migration 0033): their R2 bodies first,
-    // kept like every other object above so a failed delete stays retryable.
-    if (await isE2eeProjectVersionStorageReady(this.env.DB)) {
-      const bodies = await this.env
-        .DB!.prepare(
-          `SELECT envelope_key FROM e2ee_project_versions
-           WHERE project_id IN (${placeholders}) AND envelope_key IS NOT NULL`
-        )
-        .bind(...projectIds)
-        .all<{ envelope_key: string }>();
-      const bucket = this.projectStorageBucket();
-      if ((bodies.results ?? []).length && !bucket) {
-        throw new ProjectObjectStorageError(
-          'Encrypted project storage is unavailable.'
+    // Every key a project's rows name, claimed (migration 0050) under its
+    // generation: rows of this project are its own, any other row keeps
+    // its key alive, and while the claims hold no new row can name a key.
+    // Keep the database rows when object deletion fails so the operation
+    // is visible, retryable, and cannot strand unreferenced user data.
+    const claims: ObjectKeyClaim[] = [];
+    try {
+      for (const projectId of projectIds) {
+        const keysOf = async (sql: string) =>
+          (
+            (
+              await this.env
+                .DB!.prepare(sql)
+                .bind(projectId)
+                .all<{ object_key: string }>()
+            ).results ?? []
+          ).map((row) => row.object_key);
+        const artifactKeys = this.env.ARTIFACTS
+          ? await keysOf(
+              'SELECT object_key FROM artifacts WHERE project_id = ?'
+            )
+          : [];
+        const storageKeys = projectBucket
+          ? await keysOf(
+              `SELECT object_key FROM project_document_objects WHERE project_id = ?1
+               UNION
+               SELECT object_key FROM project_storage_assets WHERE project_id = ?1`
+            )
+          : [];
+        // Encrypted document versions (migration 0033): their R2 bodies.
+        const bodyKeys = versionsReady
+          ? await keysOf(
+              `SELECT envelope_key AS object_key FROM e2ee_project_versions
+               WHERE project_id = ? AND envelope_key IS NOT NULL`
+            )
+          : [];
+        if (bodyKeys.length && !projectBucket) {
+          throw new ProjectObjectStorageError(
+            'Encrypted project storage is unavailable.'
+          );
+        }
+        // Encrypted content blobs (migration 0034): their objects.
+        const blobKeys = blobsReady
+          ? await keysOf(
+              'SELECT object_key FROM e2ee_content_blobs WHERE project_id = ?'
+            )
+          : [];
+        if (blobKeys.length && !this.env.ARTIFACTS) {
+          throw new ArtifactStorageError(
+            'Encrypted project storage is unavailable.'
+          );
+        }
+        const claim = await claimObjectKeysForDelete(
+          this.env.DB!,
+          [...artifactKeys, ...blobKeys, ...storageKeys, ...bodyKeys],
+          { projects: [projectId] },
+          generationFence(projectId)
         );
-      }
-      await Promise.all(
-        (bodies.results ?? []).map((row) => bucket!.delete(row.envelope_key))
-      );
-      groupTables.unshift(
-        ...E2EE_PROJECT_VERSION_TABLES.map(
-          (table) => `DELETE FROM ${table} WHERE project_id IN`
-        )
-      );
-    }
-    // Solo group resets (migration 0036), only once the table exists.
-    if (await isE2eeDeviceRemovalStorageReady(this.env.DB)) {
-      groupTables.push('DELETE FROM e2ee_group_resets WHERE project_id IN');
-    }
-    // Migration state (migration 0042), only once the table exists. It
-    // goes last: since migration 0043 a decrypting project's staged files
-    // are exempt from artifact usage while its row says so, so their rows
-    // must go while it still does.
-    const migrationTables = (await isE2eeProjectMigrationStorageReady(
-      this.env.DB
-    ))
-      ? ['DELETE FROM e2ee_project_migrations WHERE project_id IN']
-      : [];
-    // Encrypted content blobs (migration 0034): their objects first, the
-    // same way. Their rows then go references first, through the claim
-    // migration 0034 requires of every committed blob, before the project
-    // row their accounting trigger reads.
-    if (await isE2eeContentBlobStorageReady(this.env.DB)) {
-      const blobs = await this.env
-        .DB!.prepare(
-          `SELECT object_key FROM e2ee_content_blobs
-           WHERE project_id IN (${placeholders})`
-        )
-        .bind(...projectIds)
-        .all<{ object_key: string }>();
-      if ((blobs.results ?? []).length && !this.env.ARTIFACTS) {
-        throw new ArtifactStorageError(
-          'Encrypted project storage is unavailable.'
-        );
-      }
-      await Promise.all(
-        (blobs.results ?? []).map((row) =>
-          this.env.ARTIFACTS!.delete(row.object_key)
-        )
-      );
-      groupTables.unshift(
-        'DELETE FROM e2ee_version_blobs WHERE project_id IN',
-        `UPDATE e2ee_content_blobs SET state = 'deleting'
-         WHERE state = 'committed' AND project_id IN`,
-        'DELETE FROM e2ee_content_blobs WHERE project_id IN'
-      );
-    }
-    // Assistant consents on encrypted projects (migration 0041).
-    if (await isE2eeAssistantConsentStorageReady(this.env.DB)) {
-      groupTables.push(
-        'DELETE FROM e2ee_assistant_consents WHERE project_id IN'
-      );
-    }
-    // Stored MLS proposals (migration 0039).
-    if (await isE2eeMlsProposalStorageReady(this.env.DB)) {
-      groupTables.push('DELETE FROM e2ee_mls_proposals WHERE project_id IN');
-    }
-    // Encrypted share links (migration 0040): their R2 snapshot bodies
-    // first, kept like every other object above so a failed delete stays
-    // retryable, then the rows, children first.
-    if (await isE2eeShareLinkStorageReady(this.env.DB)) {
-      const snapshots = await this.env
-        .DB!.prepare(
-          `SELECT envelope_key FROM e2ee_share_snapshots
-           WHERE project_id IN (${placeholders}) AND envelope_key IS NOT NULL`
-        )
-        .bind(...projectIds)
-        .all<{ envelope_key: string }>();
-      const bucket = this.projectStorageBucket();
-      if ((snapshots.results ?? []).length && !bucket) {
-        throw new ProjectObjectStorageError(
-          'Encrypted project storage is unavailable.'
-        );
-      }
-      await Promise.all(
-        (snapshots.results ?? []).map((row) => bucket!.delete(row.envelope_key))
-      );
-      if (bucket) {
-        for (const projectId of projectIds) {
-          const prefix = e2eeShareSnapshotPrefix(projectId);
-          // Restart each page after deletion: a storage cursor can otherwise
-          // skip keys when the preceding page has just disappeared. Bound
-          // one request's work; keep D1 rows on failure so a retry continues.
-          let complete = false;
-          for (let page = 0; page < 10; page += 1) {
-            const listed = await bucket.list({ prefix, limit: 1000 });
-            const keys = listed.objects.map((object) => object.key);
-            if (keys.some((key) => !key.startsWith(prefix))) {
-              throw new ProjectObjectStorageError(
-                'Snapshot storage returned an invalid prefix.'
-              );
-            }
-            if (keys.length) await bucket.delete(keys);
-            if (!listed.truncated) {
-              complete = true;
-              break;
-            }
-          }
-          if (!complete) {
-            throw new ProjectObjectStorageError(
-              'Snapshot cleanup must be retried.'
-            );
-          }
+        claims.push(claim);
+        const outcomes = await Promise.all([
+          this.env.ARTIFACTS
+            ? claim.deleteObjects(this.env.ARTIFACTS, [
+                ...artifactKeys,
+                ...blobKeys
+              ])
+            : null,
+          projectBucket
+            ? claim.deleteObjects(projectBucket, [...storageKeys, ...bodyKeys])
+            : null
+        ]);
+        for (const outcome of outcomes) {
+          if (outcome) assertClaimedDeleteComplete(claim, outcome);
         }
       }
-      groupTables.unshift(
-        ...E2EE_SHARE_LINK_TABLES.map(
-          (table) => `DELETE FROM ${table} WHERE project_id IN`
+      // Encrypted projects' MLS group rows (migration 0032), only once the
+      // tables exist: no statement may name a table the database lacks.
+      const groupTables = (await isE2eeProjectGroupStorageReady(this.env.DB))
+        ? E2EE_PROJECT_GROUP_TABLES.map(
+            (table) => `DELETE FROM ${table} WHERE project_id IN`
+          )
+        : [];
+      if (versionsReady) {
+        groupTables.unshift(
+          ...E2EE_PROJECT_VERSION_TABLES.map(
+            (table) => `DELETE FROM ${table} WHERE project_id IN`
+          )
+        );
+      }
+      // Solo group resets (migration 0036), only once the table exists.
+      if (await isE2eeDeviceRemovalStorageReady(this.env.DB)) {
+        groupTables.push('DELETE FROM e2ee_group_resets WHERE project_id IN');
+      }
+      // Migration state (migration 0042), only once the table exists. It
+      // goes last: since migration 0043 a decrypting project's staged files
+      // are exempt from artifact usage while its row says so, so their rows
+      // must go while it still does.
+      const migrationTables = (await isE2eeProjectMigrationStorageReady(
+        this.env.DB
+      ))
+        ? ['DELETE FROM e2ee_project_migrations WHERE project_id IN']
+        : [];
+      // Encrypted content blobs: their rows go references first, through
+      // the claim migration 0034 requires of every committed blob, before
+      // the project row their accounting trigger reads.
+      if (blobsReady) {
+        groupTables.unshift(
+          'DELETE FROM e2ee_version_blobs WHERE project_id IN',
+          `UPDATE e2ee_content_blobs SET state = 'deleting'
+           WHERE state = 'committed' AND project_id IN`,
+          'DELETE FROM e2ee_content_blobs WHERE project_id IN'
+        );
+      }
+      // Assistant consents on encrypted projects (migration 0041).
+      if (await isE2eeAssistantConsentStorageReady(this.env.DB)) {
+        groupTables.push(
+          'DELETE FROM e2ee_assistant_consents WHERE project_id IN'
+        );
+      }
+      // Stored MLS proposals (migration 0039).
+      if (await isE2eeMlsProposalStorageReady(this.env.DB)) {
+        groupTables.push('DELETE FROM e2ee_mls_proposals WHERE project_id IN');
+      }
+      // Encrypted share links (migration 0040): their R2 snapshot bodies
+      // first, kept like every other object above so a failed delete stays
+      // retryable, then the rows, children first. Snapshot keys carry a
+      // per-write nonce: listed while the generation holds, they can only
+      // be that generation's.
+      if (await isE2eeShareLinkStorageReady(this.env.DB)) {
+        const snapshots = await this.env
+          .DB!.prepare(
+            `SELECT envelope_key FROM e2ee_share_snapshots
+             WHERE project_id IN ${fencedIds} AND envelope_key IS NOT NULL`
+          )
+          .bind(generationIds)
+          .all<{ envelope_key: string }>();
+        const bucket = projectBucket;
+        if ((snapshots.results ?? []).length && !bucket) {
+          throw new ProjectObjectStorageError(
+            'Encrypted project storage is unavailable.'
+          );
+        }
+        await Promise.all(
+          (snapshots.results ?? []).map((row) =>
+            bucket!.delete(row.envelope_key)
+          )
+        );
+        if (bucket) {
+          for (const projectId of projectIds) {
+            const prefix = e2eeShareSnapshotPrefix(projectId);
+            // Restart each page after deletion: a storage cursor can
+            // otherwise skip keys when the preceding page has just
+            // disappeared. Bound one request's work; keep D1 rows on
+            // failure so a retry continues.
+            let complete = false;
+            for (let page = 0; page < 10; page += 1) {
+              const listed = await bucket.list({ prefix, limit: 1000 });
+              const keys = listed.objects.map((object) => object.key);
+              if (keys.some((key) => !key.startsWith(prefix))) {
+                throw new ProjectObjectStorageError(
+                  'Snapshot storage returned an invalid prefix.'
+                );
+              }
+              // Listed while the generation still held: no project created
+              // again under this id can have written any of them yet.
+              if (!(await stillCurrent(projectId))) {
+                complete = true;
+                break;
+              }
+              if (keys.length) await bucket.delete(keys);
+              if (!listed.truncated) {
+                complete = true;
+                break;
+              }
+            }
+            if (!complete) {
+              throw new ProjectObjectStorageError(
+                'Snapshot cleanup must be retried.'
+              );
+            }
+          }
+        }
+        groupTables.unshift(
+          ...E2EE_SHARE_LINK_TABLES.map(
+            (table) => `DELETE FROM ${table} WHERE project_id IN`
+          )
+        );
+      }
+      // Encrypted invitations, KeyPackages and Welcomes (migration 0038).
+      if (await isE2eeInvitationStorageReady(this.env.DB)) {
+        groupTables.push(
+          ...E2EE_INVITATION_TABLES.map(
+            (table) => `DELETE FROM ${table} WHERE project_id IN`
+          )
+        );
+      }
+      // The child rows declare ON DELETE CASCADE, but foreign-key enforcement
+      // is a per-connection pragma; deleting them explicitly means a purge
+      // cannot leave orphaned revisions behind if it is ever off. Every
+      // statement is fenced on the generations being destroyed, and their
+      // cleanup claims go last, so the fence holds to the end of the batch.
+      await this.env.DB!.batch(
+        [
+          ...groupTables,
+          'DELETE FROM project_access_events WHERE project_id IN',
+          'DELETE FROM project_share_links WHERE project_id IN',
+          'DELETE FROM project_invitations WHERE project_id IN',
+          'DELETE FROM project_members WHERE project_id IN',
+          'DELETE FROM upload_sessions WHERE project_id IN',
+          'DELETE FROM project_copy_source_archives WHERE project_id IN',
+          'DELETE FROM artifacts WHERE project_id IN',
+          'DELETE FROM artifact_mesh_discards WHERE project_id IN',
+          'DELETE FROM project_measurements WHERE project_id IN',
+          'DELETE FROM project_workspace_sessions WHERE project_id IN',
+          'DELETE FROM revisions WHERE project_id IN',
+          'DELETE FROM project_document_objects WHERE project_id IN',
+          'DELETE FROM project_storage_assets WHERE project_id IN',
+          'DELETE FROM project_adoptions WHERE cloud_project_id IN',
+          ...migrationTables,
+          'DELETE FROM projects WHERE id IN',
+          'DELETE FROM project_copy_cleanup_claims WHERE project_id IN'
+        ].map((statement) =>
+          this.env.DB!.prepare(`${statement} ${fencedIds}`).bind(generationIds)
         )
       );
+    } finally {
+      for (const claim of claims) await claim.release();
     }
-    // Encrypted invitations, KeyPackages and Welcomes (migration 0038).
-    if (await isE2eeInvitationStorageReady(this.env.DB)) {
-      groupTables.push(
-        ...E2EE_INVITATION_TABLES.map(
-          (table) => `DELETE FROM ${table} WHERE project_id IN`
-        )
-      );
-    }
-    // The child rows declare ON DELETE CASCADE, but foreign-key enforcement is
-    // a per-connection pragma; deleting them explicitly means a purge cannot
-    // leave orphaned revisions behind if it is ever off.
-    await this.env.DB!.batch(
-      [
-        ...groupTables,
-        'DELETE FROM project_access_events WHERE project_id IN',
-        'DELETE FROM project_share_links WHERE project_id IN',
-        'DELETE FROM project_invitations WHERE project_id IN',
-        'DELETE FROM project_members WHERE project_id IN',
-        'DELETE FROM upload_sessions WHERE project_id IN',
-        'DELETE FROM project_copy_source_archives WHERE project_id IN',
-        'DELETE FROM artifacts WHERE project_id IN',
-        'DELETE FROM artifact_mesh_discards WHERE project_id IN',
-        'DELETE FROM project_copy_cleanup_claims WHERE project_id IN',
-        'DELETE FROM project_measurements WHERE project_id IN',
-        'DELETE FROM project_workspace_sessions WHERE project_id IN',
-        'DELETE FROM revisions WHERE project_id IN',
-        'DELETE FROM project_document_objects WHERE project_id IN',
-        'DELETE FROM project_storage_assets WHERE project_id IN',
-        'DELETE FROM project_adoptions WHERE cloud_project_id IN',
-        ...migrationTables
-      ]
-        .map((statement) =>
-          this.env
-            .DB!.prepare(`${statement} (${placeholders})`)
-            .bind(...projectIds)
-        )
-        .concat(
-          this.env
-            .DB!.prepare(`DELETE FROM projects WHERE id IN (${placeholders})`)
-            .bind(...projectIds)
-        )
-    );
   }
 
   private async assertProjectOwner(

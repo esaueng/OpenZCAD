@@ -37,7 +37,10 @@ import {
   type E2eeAdoption,
   type E2eeCopyFrom
 } from '@openzcad/shared';
-import { encryptedBlobObjectKey } from '@openzcad/cloudflare-adapters';
+import {
+  claimObjectKeysForDelete,
+  encryptedBlobObjectKey
+} from '@openzcad/cloudflare-adapters';
 import { idField, invalid, record, refuse } from './e2eeProjects';
 
 /** What a copy reads of the source's blob rows. */
@@ -63,6 +66,7 @@ export interface E2eeBlobCopyBucket {
   ): Promise<{ arrayBuffer(): Promise<ArrayBuffer> } | null>;
   put(key: string, body: ArrayBuffer | Uint8Array): Promise<unknown>;
   delete(key: string): Promise<void>;
+  head?(key: string): Promise<unknown>;
   createMultipartUpload?(key: string): Promise<{
     uploadPart(
       partNumber: number,
@@ -387,7 +391,12 @@ export async function copyBlobObjects(
 
 /**
  * The rollback: removes copied objects no committed row names (a winning
- * request with the same id may name them; those stay).
+ * request with the same id may name them; those stay). A retry of the same
+ * copy writes the same keys, so each is deleted only under a migration
+ * 0050 claim taken while no row names it: while the claim holds, the
+ * retry's copied-blob rows are refused, and a retry whose bytes this
+ * removed before its rows landed stores them again after its commit
+ * (`repairCopiedObjects`).
  */
 export async function discardCopiedObjects(
   db: D1Database,
@@ -404,13 +413,61 @@ export async function discardCopiedObjects(
       .bind(JSON.stringify(keys))
       .all<{ object_key: string }>();
     const named = new Set((results ?? []).map((row) => row.object_key));
-    await Promise.all(
-      keys
-        .filter((key) => !named.has(key))
-        .map((key) => bucket.delete(key).catch(() => undefined))
+    const claim = await claimObjectKeysForDelete(
+      db,
+      keys.filter((key) => !named.has(key))
     );
+    try {
+      await claim.deleteObjects(bucket);
+    } finally {
+      await claim.release();
+    }
   } catch {
     // Housekeeping; an orphan costs storage, never correctness.
+  }
+}
+
+/**
+ * After a copy's rows committed (or when a retry finds them committed):
+ * copies again any committed copied blob of `projectId` whose object is
+ * gone. A copy writes its objects before its rows, so a concurrent
+ * attempt's rollback may have removed them under a claim it released
+ * before the rows landed; once the rows exist, no claim can be taken.
+ */
+export async function repairCopiedObjects(
+  db: D1Database,
+  bucket: E2eeBlobCopyBucket | null,
+  projectId: string,
+  sourceProjectId: string,
+  blobIds: readonly string[]
+): Promise<void> {
+  if (!bucket || blobIds.length === 0) return;
+  const { results } = await db
+    .prepare(
+      `SELECT target.object_key AS target_key, source.blob_id, source.kind,
+              source.object_key, source.ciphertext_bytes
+       FROM e2ee_content_blobs target
+       JOIN e2ee_content_blobs source
+         ON source.project_id = ? AND source.blob_id = target.blob_id
+        AND source.state = 'committed'
+       WHERE target.project_id = ? AND target.state = 'committed'
+         AND target.blob_id IN (SELECT value FROM json_each(?))`
+    )
+    .bind(sourceProjectId, projectId, JSON.stringify(blobIds))
+    .all<CopiedBlobRow & { target_key: string }>();
+  const missing: CopiedBlobRow[] = [];
+  for (const row of results ?? []) {
+    // Only the key a copy writes: the target's own blob key.
+    if (row.target_key !== encryptedBlobObjectKey(projectId, row.blob_id)) {
+      continue;
+    }
+    const present = bucket.head
+      ? await bucket.head(row.target_key)
+      : await bucket.get(row.target_key, { range: { offset: 0, length: 1 } });
+    if (!present) missing.push(row);
+  }
+  if (missing.length) {
+    await copyBlobObjects(bucket, projectId, missing, []);
   }
 }
 

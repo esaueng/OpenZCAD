@@ -118,7 +118,9 @@ def required_objects(db):
     # no stored objects or keys.
     # 0050 adds r2_key_tombstones: transient claims on keys a cleanup is
     # deleting, never objects a restore needs.
-    if max(int(name[:4]) for name in migrations) > 50:
+    # 0051 adds only an index and an insert guard on e2ee_project_versions:
+    # no stored objects or keys.
+    if max(int(name[:4]) for name in migrations) > 51:
         raise SnapshotError('Review new migrations before using this snapshot tool.')
     version = max(int(name[:4]) for name in migrations)
     reviewed = sorted(path.name for path in

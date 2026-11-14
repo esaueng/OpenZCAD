@@ -6,7 +6,15 @@
  * says otherwise.
  */
 import { readFileSync } from 'node:fs';
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import {
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock
+} from 'vitest';
 import { createSavedRevision } from '@openzcad/document-core';
 import {
   EnvelopeKey,
@@ -934,7 +942,11 @@ describe('version integrity', () => {
       const captured = createSavedRevision(first, 'Captured point');
       const revisionId = captured.revisions.at(-1)!.revisionId;
       const current = advance
-        ? await save(laptop, edited(first, 'Subsequent autosave'), first.version)
+        ? await save(
+            laptop,
+            edited(first, 'Subsequent autosave'),
+            first.version
+          )
         : first;
       const named = await laptop.store.saveRevision({
         projectId: first.projectId,
@@ -2058,6 +2070,129 @@ describe('heads the Worker accepts but the browser does not trust', () => {
     await integrityRefusal(
       reload(srv, laptop).store.loadProject(projectId),
       'content'
+    );
+  });
+});
+
+describe('version bodies under reused keys (migration 0051)', () => {
+  /** A large next version of a fresh project, so its body goes to R2. */
+  async function largeNext(srv: Server) {
+    const laptop = device(srv, owner, 'owner_laptop');
+    const { document: v1 } = await createEncrypted(laptop);
+    const projectId = v1.projectId;
+    const head = rows<{ version_hash: string }>(
+      srv,
+      'SELECT version_hash FROM e2ee_project_versions WHERE project_id = ?',
+      projectId
+    )[0]!;
+    const payload = new Uint8Array(400_000);
+    for (let offset = 0; offset < payload.length; offset += 65_536) {
+      crypto.getRandomValues(
+        payload.subarray(offset, Math.min(payload.length, offset + 65_536))
+      );
+    }
+    const hand = await handVersion(
+      laptop,
+      projectId,
+      {
+        documentVersion: v1.version + 1,
+        keyEpoch: 0,
+        previousVersionHash: fromHex(head.version_hash)
+      },
+      { expectedVersion: v1.version, plaintext: payload }
+    );
+    return {
+      projectId,
+      version: v1.version + 1,
+      hand,
+      key: `e2ee/${projectId}/v/${hand.hash}`
+    };
+  }
+
+  it('never lets a failed save’s rollback delete the body an identical retry committed', async () => {
+    const srv = server();
+    const { projectId, version, hand, key } = await largeNext(srv);
+    const db = srv.env.DB as D1Database;
+    const batch = db.batch.bind(db);
+    let fail = true;
+    db.batch = async (statements: D1PreparedStatement[]) => {
+      if (
+        fail &&
+        statements.some((statement) =>
+          (statement as unknown as { sql?: string }).sql?.includes(
+            'UPDATE projects SET document_version'
+          )
+        )
+      ) {
+        fail = false;
+        throw new Error('simulated D1 failure before commit');
+      }
+      return batch(statements);
+    };
+    const deleteMock = srv.bucket.delete as unknown as Mock<
+      (key: string) => Promise<void>
+    >;
+    const remove = deleteMock.getMockImplementation()!;
+    let entered!: () => void;
+    let release!: () => void;
+    const atDelete = new Promise<void>((resolve) => (entered = resolve));
+    const released = new Promise<void>((resolve) => (release = resolve));
+    deleteMock.mockImplementationOnce(async (deleted: string) => {
+      expect(deleted).toBe(key);
+      entered();
+      await released;
+      return remove(deleted);
+    });
+    // Save A fails before its commit and its rollback starts deleting the
+    // body it stored.
+    const failed = putVersion(srv, projectId, hand);
+    await atDelete;
+    db.batch = batch;
+    // An identical retry while A's claim holds is refused, never left with
+    // a row naming bytes A is about to remove.
+    const refused = await putVersion(srv, projectId, hand);
+    expect(refused.status).toBe(503);
+    expect(await refused.json()).toMatchObject({
+      code: 'STORAGE_CLEANUP_BUSY'
+    });
+    release();
+    await failed;
+    // Once A is done, the retry lands, and its body stays.
+    expect((await putVersion(srv, projectId, hand)).status).toBe(200);
+    expect(
+      rows(
+        srv,
+        `SELECT envelope_key FROM e2ee_project_versions
+         WHERE project_id = ? AND document_version = ?`,
+        projectId,
+        version
+      )
+    ).toEqual([{ envelope_key: key }]);
+    expect(srv.bucket.objects.has(key)).toBe(true);
+    expect(rows(srv, 'SELECT object_key FROM r2_key_tombstones')).toEqual([]);
+  });
+
+  it('stores a body again after the commit when a rollback removed it before the row landed', async () => {
+    const srv = server();
+    const { projectId, hand, key } = await largeNext(srv);
+    const putMock = srv.bucket.put as unknown as Mock<
+      (key: string, body: ArrayBuffer | Uint8Array) => Promise<void>
+    >;
+    const put = putMock.getMockImplementation()!;
+    let dropped = false;
+    putMock.mockImplementation(async (written, body) => {
+      // A concurrent identical attempt's rollback removed the bytes between
+      // this save's put and its row.
+      if (written === key && !dropped) {
+        dropped = true;
+        return;
+      }
+      return put(written, body);
+    });
+    expect((await putVersion(srv, projectId, hand)).status).toBe(200);
+    expect(dropped).toBe(true);
+    expect(new Uint8Array(srv.bucket.objects.get(key)!)).toEqual(
+      new Uint8Array(hand.envelope)
     );
   });
 });

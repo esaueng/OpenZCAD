@@ -917,6 +917,15 @@ export async function runBatch(
         'Cloud data deletion is in progress. Retry that deletion before making other cloud changes.'
       );
     }
+    // Migrations 0050/0051: a cleanup is removing a stored object under a
+    // key this write names (an identical retry's body, a copy's blob).
+    if (message.includes('r2_key_deleting')) {
+      refuse(
+        503,
+        'STORAGE_CLEANUP_BUSY',
+        'A stored file of this project is still being removed. Try again in a moment.'
+      );
+    }
     if (/UNIQUE constraint|PRIMARY KEY|E2EE_GROUP_EPOCH/i.test(message)) {
       await onConflict?.();
       refuse(

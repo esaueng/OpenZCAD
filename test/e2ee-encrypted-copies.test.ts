@@ -7,7 +7,15 @@
  * migration applied unless a case says otherwise.
  */
 import { createHash } from 'node:crypto';
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import {
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock
+} from 'vitest';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import { fromBase64Url, parseEnvelope, toHex } from '@openzcad/crypto';
 import {
@@ -1109,5 +1117,108 @@ describe('plaintext projects', () => {
     )) {
       expect(sql, sql).toMatch(/FROM sqlite_master/);
     }
+  });
+});
+
+describe('copied objects under reused keys (migration 0050)', () => {
+  it('a copy rollback never deletes the bytes a same-id copy commits meanwhile', async () => {
+    const srv = server();
+    const laptop = device(srv, owner, 'owner_laptop');
+    const { projectId, blobId } = await projectWithImport(srv, laptop);
+    const request = await buildCopy(laptop, projectId, 'Bracket');
+    const copyId = request.document!.projectId;
+    const key = `e2ee/${copyId}/${blobId}`;
+    // Rollback A of a failed copy found no row naming the key, claimed it
+    // and is about to delete it.
+    srv.bucket.objects.set(key, text('copy A').slice().buffer);
+    const deleteMock = srv.bucket.delete as unknown as Mock<
+      (key: string) => Promise<void>
+    >;
+    const remove = deleteMock.getMockImplementation()!;
+    let entered!: () => void;
+    let release!: () => void;
+    const atDelete = new Promise<void>((resolve) => (entered = resolve));
+    const released = new Promise<void>((resolve) => (release = resolve));
+    deleteMock.mockImplementationOnce(async (deleted: string) => {
+      entered();
+      await released;
+      return remove(deleted);
+    });
+    const stale = discardCopiedObjects(
+      srv.env.DB as D1Database,
+      srv.bucket as never,
+      [key]
+    );
+    await atDelete;
+    // A retry of the same copy, meanwhile, is refused while A holds the
+    // key: no copied-blob row can come to name bytes A is removing.
+    await refusedWith(
+      laptop.store.copyProject({
+        sourceProjectId: projectId,
+        document: request.document!
+      }),
+      503,
+      'STORAGE_CLEANUP_BUSY'
+    );
+    release();
+    await stale;
+    // Once A is done the retry lands, and its bytes stay.
+    const { document } = await laptop.store.copyProject({
+      sourceProjectId: projectId,
+      document: request.document!
+    });
+    expect(document.projectId).toBe(copyId);
+    expect(objectKeys(srv, copyId)).toEqual([key]);
+    expect(rows(srv, 'SELECT object_key FROM r2_key_tombstones')).toEqual([]);
+  });
+
+  it('copies a blob again when a rollback removed it before the copy’s rows landed, also on the create’s retry', async () => {
+    const srv = server();
+    const laptop = device(srv, owner, 'owner_laptop');
+    const { projectId, blobId, step } = await projectWithImport(srv, laptop);
+    const request = await buildCopy(laptop, projectId, 'Bracket');
+    const copyId = request.document!.projectId;
+    const key = `e2ee/${copyId}/${blobId}`;
+    // The copy's object is removed twice: once right after its put (before
+    // its rows land), and once more after the commit, as if the repair
+    // itself had failed and the client retried the create.
+    const putMock = srv.bucket.put as unknown as Mock<
+      (key: string, body: ArrayBuffer | Uint8Array) => Promise<void>
+    >;
+    const put = putMock.getMockImplementation()!;
+    let firstPut = true;
+    putMock.mockImplementation(async (written, body) => {
+      if (written === key && firstPut) {
+        firstPut = false;
+        return;
+      }
+      return put(written, body);
+    });
+    let dropped = 0;
+    laptop.answer = async (path, init, response) => {
+      if (
+        path === '/api/e2ee/projects' &&
+        init.method === 'POST' &&
+        !dropped++
+      ) {
+        expect(response.status).toBe(201);
+        // The first request repaired its object after the commit.
+        expect(srv.bucket.objects.has(key)).toBe(true);
+        srv.bucket.objects.delete(key);
+        throw new TypeError('Failed to fetch');
+      }
+      return response;
+    };
+    const { document } = await laptop.store.copyProject({
+      sourceProjectId: projectId,
+      document: request.document!
+    });
+    laptop.answer = undefined;
+    expect(document.projectId).toBe(copyId);
+    // The retry found the copy committed and copied the missing blob again.
+    expect(objectKeys(srv, copyId)).toEqual([key]);
+    const desktop = device(srv, owner, 'owner_desktop');
+    await desktop.store.loadProject(copyId);
+    expect(await desktop.blobs.read(copyId, blobId)).toEqual(step);
   });
 });

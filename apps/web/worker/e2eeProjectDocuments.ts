@@ -59,6 +59,7 @@ import {
   type E2eeProjectState,
   type E2eeRevisionMetadata,
   type E2eeRevisionsResponse,
+  type E2eeCopyFrom,
   type E2eeSaveVersionResponse,
   type E2eeStoredVersion,
   type E2eeVersionLogEntry,
@@ -67,6 +68,7 @@ import {
   type ProjectStatus
 } from '@openzcad/shared';
 import {
+  claimObjectKeysForDelete,
   isE2eeContentBlobStorageReady,
   isE2eeProjectGroupStorageReady,
   isE2eeProjectVersionStorageReady,
@@ -114,6 +116,7 @@ import {
   copyBucket,
   copyFromField,
   discardCopiedObjects,
+  repairCopiedObjects,
   insertAdoption,
   insertCopiedBlobs,
   prepareCopy,
@@ -157,6 +160,7 @@ export interface E2eeObjectBucket {
   put(key: string, body: ArrayBuffer | Uint8Array): Promise<unknown>;
   get(key: string): Promise<{ arrayBuffer(): Promise<ArrayBuffer> } | null>;
   delete(key: string): Promise<void>;
+  head?(key: string): Promise<unknown>;
 }
 
 interface Context {
@@ -672,7 +676,14 @@ async function storeBody(
   return { key, inline: null };
 }
 
-/** After a refused write: drop an R2 body no row references. */
+/**
+ * After a refused write: drop an R2 body no row references. A body's key is
+ * its version hash, which an identical retry writes again, so it is deleted
+ * only under a migration 0050 claim taken while no version row names it
+ * (migration 0051): while the claim holds, the retry's version row is
+ * refused; a retry whose bytes this removed before its row landed stores
+ * them again after its commit (`ensureStoredBody`).
+ */
 async function discardBody(ctx: Context, body: StoredBody): Promise<void> {
   if (!body.key || !ctx.bucket) return;
   try {
@@ -682,10 +693,52 @@ async function discardBody(ctx: Context, body: StoredBody): Promise<void> {
       )
       .bind(body.key)
       .first<{ used: number }>();
-    if (!used) await ctx.bucket.delete(body.key);
+    if (!used) await deleteBodies(ctx, [body.key]);
   } catch {
     // Housekeeping; an orphan costs storage, never correctness.
   }
+}
+
+/** Deletes version bodies no row names any more, each under a claim. */
+async function deleteBodies(
+  ctx: Context,
+  keys: readonly string[]
+): Promise<void> {
+  if (!ctx.bucket || keys.length === 0) return;
+  const claim = await claimObjectKeysForDelete(ctx.db, keys);
+  try {
+    await claim.deleteObjects(ctx.bucket);
+  } finally {
+    await claim.release();
+  }
+}
+
+/**
+ * After a version's row committed (or a retry found it committed): stores
+ * its body again if the object is gone. The body reaches R2 before its
+ * row, so a concurrent rollback of an identical attempt may have deleted
+ * it under a claim released before the row landed; once the row exists,
+ * no claim on the key can be taken.
+ */
+async function ensureStoredBody(
+  ctx: Context,
+  projectId: string,
+  version: CheckedVersion
+): Promise<void> {
+  const bucket = ctx.bucket;
+  if (!bucket) return;
+  const row = await ctx.db
+    .prepare(
+      `SELECT envelope_key FROM e2ee_project_versions
+       WHERE project_id = ? AND version_hash = ? AND envelope_key IS NOT NULL`
+    )
+    .bind(projectId, version.hash)
+    .first<{ envelope_key: string }>();
+  if (!row) return;
+  const present = bucket.head
+    ? await bucket.head(row.envelope_key)
+    : await bucket.get(row.envelope_key);
+  if (!present) await bucket.put(row.envelope_key, version.envelope);
 }
 
 function insertVersion(
@@ -931,16 +984,16 @@ async function retain(ctx: Context, projectId: string): Promise<void> {
           projectId
         )
     ]);
-    if (ctx.bucket) {
-      // Only bodies whose row this request actually cleared.
-      await Promise.all(
-        orphanRows.flatMap((row, index) =>
-          row.envelope_key && (pruned[index]?.meta?.changes ?? 0) === 1
-            ? [ctx.bucket!.delete(row.envelope_key)]
-            : []
-        )
-      );
-    }
+    // Only bodies whose row this request actually cleared, each under a
+    // claim (migration 0051).
+    await deleteBodies(
+      ctx,
+      orphanRows.flatMap((row, index) =>
+        row.envelope_key && (pruned[index]?.meta?.changes ?? 0) === 1
+          ? [row.envelope_key]
+          : []
+      )
+    );
   } catch {
     // Retention is housekeeping. It does not get to fail a save.
   }
@@ -1165,11 +1218,12 @@ async function writeVersion(
     ctx.bucket
   ) {
     try {
-      await ctx.bucket.delete(head.envelope_key);
+      await deleteBodies(ctx, [head.envelope_key]);
     } catch {
       // The row no longer names it; an orphan costs storage only.
     }
   }
+  await ensureStoredBody(ctx, projectId, version);
   await retain(ctx, projectId);
   return { version, updatedAt: now };
 }
@@ -1413,11 +1467,12 @@ async function writeStagedVersion(
     ctx.bucket
   ) {
     try {
-      await ctx.bucket.delete(head.envelope_key);
+      await deleteBodies(ctx, [head.envelope_key]);
     } catch {
       // The row no longer names it; an orphan costs storage only.
     }
   }
+  await ensureStoredBody(ctx, projectId, version);
   await retain(ctx, projectId);
   return { version, updatedAt: now };
 }
@@ -1480,6 +1535,29 @@ async function saveRevision(
  * is this one, by envelope hash (slice 4-8). A retried create whose
  * acknowledgement was lost is answered as created, never refused.
  */
+/**
+ * Once a create's rows are committed: its body and any copied objects are
+ * in R2, stored again if a concurrent attempt's rollback removed them
+ * before the rows landed (migrations 0050 and 0051).
+ */
+async function finishCreated(
+  ctx: Context,
+  projectId: string,
+  version: CheckedVersion,
+  copyFrom: E2eeCopyFrom | null
+): Promise<void> {
+  if (copyFrom && copyFrom.blobIds.length) {
+    await repairCopiedObjects(
+      ctx.db,
+      copyBucket(ctx.blobs.bucket),
+      projectId,
+      copyFrom.projectId,
+      copyFrom.blobIds
+    );
+  }
+  await ensureStoredBody(ctx, projectId, version);
+}
+
 async function storedCreate(
   ctx: Context,
   projectId: string,
@@ -1575,7 +1653,12 @@ async function createProject(
     invalid('The first project info is sequence 1, with no previous one');
   }
   const stored = await storedCreate(ctx, projectId, version);
-  if (stored) return stored;
+  if (stored) {
+    // A first attempt may have committed and then failed to repair its
+    // copied objects or its body: its retry finishes that first.
+    await finishCreated(ctx, projectId, version, copyFrom);
+    return stored;
+  }
   const copy = copyFrom
     ? await prepareCopy(
         ctx.db,
@@ -1748,7 +1831,10 @@ async function createProject(
       error.code === 'E2EE_CONFLICT'
     ) {
       const winner = await storedCreate(ctx, projectId, version);
-      if (winner) return winner;
+      if (winner) {
+        await finishCreated(ctx, projectId, version, copyFrom);
+        return winner;
+      }
       if (adoption) {
         await requireNotAdopted(ctx.db, ctx.userId, adoption.localProjectId);
       }
@@ -1765,7 +1851,10 @@ async function createProject(
   if (!accepted) {
     await rollBack();
     const winner = await storedCreate(ctx, projectId, version);
-    if (winner) return winner;
+    if (winner) {
+      await finishCreated(ctx, projectId, version, copyFrom);
+      return winner;
+    }
     if (await deviceListMoved(db, ctx.userId, account)) {
       refuseDeviceListMoved();
     }
@@ -1801,6 +1890,7 @@ async function createProject(
       'Sign in again before creating an encrypted project.'
     );
   }
+  await finishCreated(ctx, projectId, version, copyFrom);
   return json(
     {
       projectId,
