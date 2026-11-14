@@ -3983,6 +3983,20 @@ export function StartScreen({
                     ? 'This device only'
                     : 'Unknown — account listing unavailable'
             }
+            // Facts only: the dialog's lazy chunk words them, which keeps
+            // the status text out of the start screen's entry bundle. The
+            // format comes from the current listing: `propertiesProject` is
+            // the summary as it was when the dialog opened, and a migration
+            // can change it while the dialog is still open.
+            encryptionFacts={{
+              storageFormat: (
+                projects.find(
+                  (candidate) =>
+                    candidate.projectId === propertiesProject.projectId
+                ) ?? propertiesProject
+              ).storageFormat,
+              inAccount: cloudProjectIds.has(propertiesProject.projectId)
+            }}
             {...(onRename &&
               !projectNeedsUpdate(propertiesProject) && {
                 // The listed project, whose name a rename here has moved on.
