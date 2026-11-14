@@ -137,7 +137,7 @@ export function ViewOptionsList({
     };
     place();
     return () => cancelAnimationFrame(frame);
-  }, [anchorRef]);
+  }, [anchorRef, ref]);
 
   // Tab leaves the menu as it would leave the button: focus goes back to
   // the button first, and the key's own move carries on from there.
