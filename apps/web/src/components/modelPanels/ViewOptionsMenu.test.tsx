@@ -5,9 +5,11 @@ import type { PanelLayoutOptions } from '../../lib/panelLayout';
 import {
   LAYOUT_LOCKED_DETAIL,
   PANEL_LAYOUT_MENU_MARGIN,
+  placePanelLayoutMenu
+} from './ViewOptionsList';
+import {
   PanelsHiddenPill,
   ViewOptionsMenu,
-  placePanelLayoutMenu,
   type ViewOptionsMenuProps
 } from './ViewOptionsMenu';
 
@@ -42,7 +44,10 @@ describe('ViewOptionsMenu', () => {
     expect(button).toHaveAttribute('aria-expanded', 'false');
     await user.click(button);
     expect(button).toHaveAttribute('aria-expanded', 'true');
-    const menu = within(screen.getByRole('menu', { name: 'Panel layout' }));
+    // The list loads on demand: the first press opens it once it arrives.
+    const menu = within(
+      await screen.findByRole('menu', { name: 'Panel layout' })
+    );
 
     const layouts = within(menu.getByRole('group', { name: 'Presets' }));
     expect(
@@ -100,6 +105,7 @@ describe('ViewOptionsMenu', () => {
     const user = userEvent.setup();
     const { props } = renderMenu({ preset: null });
     await user.click(screen.getByRole('button', { name: 'Panel layout' }));
+    await screen.findByRole('menu');
     await user.click(screen.getByRole('menuitemradio', { name: 'Review' }));
     expect(props.onPreset).toHaveBeenCalledWith('review');
     await user.click(
@@ -125,6 +131,7 @@ describe('ViewOptionsMenu', () => {
     const user = userEvent.setup();
     const { props } = renderMenu({ options: { ...OPTIONS, locked: true } });
     await user.click(screen.getByRole('button', { name: 'Panel layout' }));
+    await screen.findByRole('menu');
     const radios = screen.getAllByRole('menuitemradio');
     expect(radios).toHaveLength(8);
     for (const radio of radios) {
@@ -146,7 +153,7 @@ describe('ViewOptionsMenu', () => {
     const button = screen.getByRole('button', { name: 'Panel layout' });
     button.focus();
     await user.keyboard('{Enter}');
-    expect(screen.getByRole('menu')).toHaveFocus();
+    expect(await screen.findByRole('menu')).toHaveFocus();
     // The disabled presets are skipped: the first stop is Hide all.
     await user.keyboard('{ArrowDown}');
     expect(
@@ -172,9 +179,11 @@ describe('ViewOptionsMenu', () => {
     renderMenu();
     const button = screen.getByRole('button', { name: 'Panel layout' });
     await user.click(button);
+    await screen.findByRole('menu');
     await user.click(button);
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
     await user.click(button);
+    await screen.findByRole('menu');
     await user.click(document.body);
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
   });

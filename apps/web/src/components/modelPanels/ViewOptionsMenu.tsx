@@ -1,57 +1,13 @@
-import {
-  useEffect,
-  useId,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type KeyboardEvent as ReactKeyboardEvent,
-  type RefObject
-} from 'react';
+import { Suspense, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, LayoutPanelLeft } from 'lucide-react';
-import {
-  PANEL_COLUMN_WIDTHS,
-  PANEL_PRESET_IDS,
-  type PanelLayoutOptions,
-  type PanelPresetId,
-  type PanelWidth
+import { LayoutPanelLeft } from 'lucide-react';
+import type {
+  PanelLayoutOptions,
+  PanelPresetId,
+  PanelWidth
 } from '../../lib/panelLayout';
-import { platformShortcutLabel } from '../../lib/platformShortcut';
-import { useMenuKeyboard } from '../../lib/useMenuKeyboard';
+import { preloadableLazy } from '../../lib/staleChunk';
 import { Tooltip } from '../Tooltip';
-
-/** What a locked layout's presets and width say instead of what they do. */
-export const LAYOUT_LOCKED_DETAIL = 'Unlock the layout to change it';
-
-const PRESETS: Readonly<
-  Record<PanelPresetId, { label: string; detail: string }>
-> = {
-  essentials: {
-    label: 'Essentials',
-    detail: 'Objects left, Parameters right'
-  },
-  full: {
-    label: 'Full workspace',
-    detail: 'Objects over History left, Parameters over Revisions right'
-  },
-  modeling: {
-    label: 'Modeling',
-    detail: 'Objects over a taller History left, Parameters right'
-  },
-  review: { label: 'Review', detail: 'History over Revisions, right' },
-  // A layout with no panels in it, which differs from Hide all panels
-  // below: that hides whatever layout is open and gives it back (I24).
-  'model-only': {
-    label: 'Model only',
-    detail: 'Closes every panel; open one from the rail'
-  }
-};
-
-const WIDTHS: ReadonlyArray<{ id: PanelWidth; label: string }> = [
-  { id: 'narrow', label: 'Small' },
-  { id: 'regular', label: 'Medium' },
-  { id: 'wide', label: 'Large' }
-];
 
 export type ViewOptionsToggle = 'hidden' | 'locked' | 'compact' | 'hug';
 
@@ -66,36 +22,19 @@ export interface ViewOptionsMenuProps {
   onWidth(width: PanelWidth): void;
 }
 
-/** The menu keeps this far from the window's top and foot. */
-export const PANEL_LAYOUT_MENU_MARGIN = 16;
-
 /**
- * Where the Panel layout menu opens: to the rail's left, hanging from the
- * button's top. Where that would run past the window's foot it rises from
- * the button's foot instead, so it reads as the button's menu rather than
- * something pressed against the window's edge (it used to stop 8px short of
- * it, lower than every island on the stage). Taller than the window allows,
- * it is held `PANEL_LAYOUT_MENU_MARGIN` from the top and scrolls inside
- * (CSS caps its height by the same margin).
+ * The menu loads on the button's first press, or as the pointer reaches the
+ * button, so it opens in the same frame: an open menu stays out of the
+ * entry chunk until someone asks for it.
  */
-export function placePanelLayoutMenu(
-  anchor: { left: number; top: number; bottom: number },
-  menu: { width: number; height: number },
-  viewport: { width: number; height: number }
-): { x: number; y: number } {
-  const margin = PANEL_LAYOUT_MENU_MARGIN;
-  // Sideways it keeps the 8px it always has: a phone has none to spare.
-  const x = Math.max(
-    8,
-    Math.min(anchor.left - 10 - menu.width, viewport.width - 8)
-  );
-  const foot = viewport.height - margin;
-  const hanging = anchor.top - 4;
-  const y =
-    hanging + menu.height <= foot
-      ? hanging
-      : Math.min(anchor.bottom + 4, foot) - menu.height;
-  return { x, y: Math.max(margin, y) };
+const ViewOptionsList = preloadableLazy(() =>
+  import('./ViewOptionsList').then((module) => ({
+    default: module.ViewOptionsList
+  }))
+);
+/** A failed warm-up is left to the press, which reports a stale chunk. */
+function warmViewOptionsList() {
+  ViewOptionsList.preload().catch(() => undefined);
 }
 
 /**
@@ -122,6 +61,8 @@ export function ViewOptionsMenu(props: ViewOptionsMenuProps) {
           aria-label="Panel layout"
           aria-haspopup="menu"
           aria-expanded={open}
+          onPointerEnter={warmViewOptionsList}
+          onFocus={warmViewOptionsList}
           onClick={() => setOpen((current) => !current)}
         >
           <LayoutPanelLeft size={16} aria-hidden="true" />
@@ -129,241 +70,16 @@ export function ViewOptionsMenu(props: ViewOptionsMenuProps) {
       </Tooltip>
       {open &&
         createPortal(
-          <ViewOptionsList
-            {...props}
-            anchorRef={buttonRef}
-            onClose={() => setOpen(false)}
-          />,
+          <Suspense fallback={null}>
+            <ViewOptionsList
+              {...props}
+              anchorRef={buttonRef}
+              onClose={() => setOpen(false)}
+            />
+          </Suspense>,
           document.body
         )}
     </>
-  );
-}
-
-function ViewOptionsList({
-  options,
-  preset,
-  hideShortcut,
-  onPreset,
-  onToggle,
-  onWidth,
-  anchorRef,
-  onClose
-}: ViewOptionsMenuProps & {
-  anchorRef: RefObject<HTMLButtonElement | null>;
-  onClose(): void;
-}) {
-  const ref = useRef<HTMLDivElement | null>(null);
-  const id = useId();
-  const [position, setPosition] = useState<{ x: number; y: number } | null>(
-    null
-  );
-  useMenuKeyboard(ref);
-
-  // To the rail's left, beside the button, and inside the window with a
-  // margin (`placePanelLayoutMenu`). It follows the button every frame
-  // while open: Hide all, Model only or a
-  // width change moves the rail, which slides to its new place.
-  useLayoutEffect(() => {
-    let frame = 0;
-    let placed = '';
-    const place = () => {
-      const menu = ref.current?.getBoundingClientRect();
-      const anchor = anchorRef.current?.getBoundingClientRect();
-      if (menu && anchor) {
-        const { x, y } = placePanelLayoutMenu(anchor, menu, {
-          width: window.innerWidth,
-          height: window.innerHeight
-        });
-        if (`${x},${y}` !== placed) {
-          placed = `${x},${y}`;
-          setPosition({ x, y });
-        }
-      }
-      frame = requestAnimationFrame(place);
-    };
-    place();
-    return () => cancelAnimationFrame(frame);
-  }, [anchorRef]);
-
-  useEffect(() => {
-    const onPointerDown = (event: PointerEvent) => {
-      const target = event.target as Node;
-      // The button toggles the menu itself.
-      if (
-        ref.current?.contains(target) ||
-        anchorRef.current?.contains(target)
-      ) {
-        return;
-      }
-      onClose();
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.stopPropagation();
-        onClose();
-      }
-    };
-    window.addEventListener('pointerdown', onPointerDown, true);
-    window.addEventListener('keydown', onKeyDown, true);
-    return () => {
-      window.removeEventListener('pointerdown', onPointerDown, true);
-      window.removeEventListener('keydown', onKeyDown, true);
-    };
-  }, [anchorRef, onClose]);
-
-  // Tab leaves the menu as it would leave the button: focus goes back to
-  // the button first, and the key's own move carries on from there.
-  const onMenuKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (event.key !== 'Tab') return;
-    anchorRef.current?.focus({ preventScroll: true });
-    onClose();
-  };
-
-  const locked = options.locked;
-  return (
-    <div
-      ref={ref}
-      className="context-menu view-options-menu"
-      role="menu"
-      aria-labelledby={`${id}-heading`}
-      tabIndex={-1}
-      // Unseen until measured, but not `visibility: hidden`: the menu takes
-      // focus as it mounts, and a hidden element cannot.
-      style={
-        position
-          ? { left: position.x, top: position.y }
-          : { left: 0, top: 0, opacity: 0 }
-      }
-      onKeyDown={onMenuKeyDown}
-    >
-      <div id={`${id}-heading`} className="context-menu-heading">
-        Panel layout
-      </div>
-      <div role="group" aria-labelledby={`${id}-layouts`}>
-        {/* "Presets", not a second "Layout" under the "Panel layout"
-            heading (I24). */}
-        <div id={`${id}-layouts`} className="view-options-group-label">
-          Presets
-        </div>
-        {PANEL_PRESET_IDS.map((name) => (
-          <ViewOptionsItem
-            key={name}
-            role="menuitemradio"
-            label={PRESETS[name].label}
-            detail={locked ? LAYOUT_LOCKED_DETAIL : PRESETS[name].detail}
-            checked={preset === name}
-            disabled={locked}
-            onSelect={() => onPreset(name)}
-          />
-        ))}
-      </div>
-      <div
-        role="group"
-        aria-labelledby={`${id}-settings`}
-        className="context-menu-section"
-      >
-        <div id={`${id}-settings`} className="view-options-group-label">
-          Settings
-        </div>
-        <ViewOptionsItem
-          role="menuitemcheckbox"
-          label="Hide all panels"
-          detail="For now; turn off to bring this layout back"
-          checked={options.hidden}
-          shortcut={hideShortcut && platformShortcutLabel(hideShortcut)}
-          onSelect={() => onToggle('hidden')}
-        />
-        <ViewOptionsItem
-          role="menuitemcheckbox"
-          label="Lock layout"
-          checked={locked}
-          onSelect={() => onToggle('locked')}
-        />
-        <ViewOptionsItem
-          role="menuitemcheckbox"
-          label="Compact rows"
-          checked={options.compact}
-          onSelect={() => onToggle('compact')}
-        />
-        <ViewOptionsItem
-          role="menuitemcheckbox"
-          label="Fit panels to content"
-          checked={options.hug}
-          onSelect={() => onToggle('hug')}
-        />
-      </div>
-      <div
-        role="group"
-        aria-labelledby={`${id}-width`}
-        className="context-menu-section"
-      >
-        <div id={`${id}-width`} className="view-options-group-label">
-          Panel width
-        </div>
-        {WIDTHS.map((width) => (
-          <ViewOptionsItem
-            key={width.id}
-            role="menuitemradio"
-            label={width.label}
-            detail={
-              locked
-                ? LAYOUT_LOCKED_DETAIL
-                : `${PANEL_COLUMN_WIDTHS[width.id]} px`
-            }
-            checked={options.width === width.id}
-            disabled={locked}
-            onSelect={() => onWidth(width.id)}
-          />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function ViewOptionsItem({
-  role,
-  label,
-  detail,
-  shortcut,
-  checked,
-  disabled = false,
-  onSelect
-}: {
-  role: 'menuitemradio' | 'menuitemcheckbox';
-  label: string;
-  detail?: string;
-  shortcut?: string | undefined;
-  checked: boolean;
-  disabled?: boolean;
-  onSelect(): void;
-}) {
-  const detailId = useId();
-  return (
-    <button
-      type="button"
-      role={role}
-      aria-checked={checked}
-      // The label alone names it; the detail describes it.
-      aria-label={label}
-      aria-describedby={detail ? detailId : undefined}
-      className="context-menu-item"
-      disabled={disabled}
-      onClick={onSelect}
-    >
-      <span className="context-menu-icon view-options-check" aria-hidden="true">
-        {checked && <Check size={13} />}
-      </span>
-      <span className="context-menu-label">
-        {label}
-        {detail && (
-          <span id={detailId} className="context-menu-detail">
-            {detail}
-          </span>
-        )}
-      </span>
-      {shortcut && <kbd>{shortcut}</kbd>}
-    </button>
   );
 }
 

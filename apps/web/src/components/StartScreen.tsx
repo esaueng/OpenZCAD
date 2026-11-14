@@ -54,8 +54,10 @@ import {
 import { isLibraryModeStatus } from '../lib/libraryStatus';
 import {
   lazyWithStaleChunkNotice,
+  preloadableLazy,
   STALE_CHUNK_MESSAGE
 } from '../lib/staleChunk';
+import { prefersSavingData } from '../lib/saveData';
 import {
   daysUntilPurge,
   MAX_PROJECT_NAME_LENGTH,
@@ -91,7 +93,6 @@ import {
   type LibraryFolder
 } from '../lib/libraryFolders';
 import { useLibraryFolderCloudSync } from '../lib/useLibraryFolderCloudSync';
-import { LibrarySelectionBar } from './LibrarySelectionBar';
 import {
   bucketProjectsByShelf,
   moveItem,
@@ -114,6 +115,14 @@ const FileDropTarget = lazyWithStaleChunkNotice(async () => ({
 }));
 const FolderCoverDialog = lazyWithStaleChunkNotice(async () => ({
   default: (await import('./FolderCoverDialog')).FolderCoverDialog
+}));
+/**
+ * The bar that acts on several selected projects. Only a multi-select draws
+ * it, so it loads apart from the library; the library warms it once idle, so
+ * the first selection shows it in the same frame.
+ */
+export const LibrarySelectionBar = preloadableLazy(async () => ({
+  default: (await import('./LibrarySelectionBar')).LibrarySelectionBar
 }));
 
 interface StartScreenProps {
@@ -565,6 +574,19 @@ export function StartScreen({
     initialDraft?.units ?? defaultUnits
   );
   const unitsEdited = useRef(initialDraft !== null);
+  // Warm the selection bar once the library is idle; Save-Data asks for
+  // nothing speculative, and there it loads on the first selection.
+  useEffect(() => {
+    if (LibrarySelectionBar.isLoaded() || prefersSavingData()) return;
+    const warm = () =>
+      void LibrarySelectionBar.preload().catch(() => undefined);
+    if (typeof window.requestIdleCallback === 'function') {
+      const idle = window.requestIdleCallback(warm, { timeout: 5_000 });
+      return () => window.cancelIdleCallback(idle);
+    }
+    const timer = window.setTimeout(warm, 2_000);
+    return () => window.clearTimeout(timer);
+  }, []);
   useEffect(() => {
     try {
       sessionStorage.setItem(
@@ -3640,45 +3662,47 @@ export function StartScreen({
           </div>
         </section>
         {selecting && (
-          <LibrarySelectionBar
-            count={selectedOnScreen().length}
-            total={shownProjectCount}
-            shelf={shelf}
-            busy={busy}
-            folders={folders}
-            inFolderId={openFolder?.id ?? null}
-            allPinned={selectedOnScreen().every(
-              (project) => projectOrganization(project).pinned
-            )}
-            moveMenuOpen={moveMenuOpen}
-            onMoveMenuOpenChange={setMoveMenuOpen}
-            onSelectAll={() => setSelected(new Set(visibleProjectIds()))}
-            onClear={clearSelection}
-            onMoveToFolder={(folderId) => {
-              setMoveMenuOpen(false);
-              fileProjects(
-                selectedOnScreen().map((project) => project.projectId),
-                folderId
-              );
-            }}
-            onNewFolder={() => {
-              makeFolder(
-                selectedOnScreen().map((project) => project.projectId)
-              );
-              setNotice(
-                'Made a folder. Name it, or press Enter to keep the name.'
-              );
-            }}
-            onRemoveFromFolder={() =>
-              fileProjects(
-                selectedOnScreen().map((project) => project.projectId),
-                null
-              )
-            }
-            onPin={pinSelected}
-            onMoveToShelf={moveSelectedToShelf}
-            onDeleteForever={deleteSelectedForever}
-          />
+          <Suspense fallback={null}>
+            <LibrarySelectionBar
+              count={selectedOnScreen().length}
+              total={shownProjectCount}
+              shelf={shelf}
+              busy={busy}
+              folders={folders}
+              inFolderId={openFolder?.id ?? null}
+              allPinned={selectedOnScreen().every(
+                (project) => projectOrganization(project).pinned
+              )}
+              moveMenuOpen={moveMenuOpen}
+              onMoveMenuOpenChange={setMoveMenuOpen}
+              onSelectAll={() => setSelected(new Set(visibleProjectIds()))}
+              onClear={clearSelection}
+              onMoveToFolder={(folderId) => {
+                setMoveMenuOpen(false);
+                fileProjects(
+                  selectedOnScreen().map((project) => project.projectId),
+                  folderId
+                );
+              }}
+              onNewFolder={() => {
+                makeFolder(
+                  selectedOnScreen().map((project) => project.projectId)
+                );
+                setNotice(
+                  'Made a folder. Name it, or press Enter to keep the name.'
+                );
+              }}
+              onRemoveFromFolder={() =>
+                fileProjects(
+                  selectedOnScreen().map((project) => project.projectId),
+                  null
+                )
+              }
+              onPin={pinSelected}
+              onMoveToShelf={moveSelectedToShelf}
+              onDeleteForever={deleteSelectedForever}
+            />
+          </Suspense>
         )}
       </div>
 

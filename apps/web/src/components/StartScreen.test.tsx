@@ -11,9 +11,18 @@ import { toUserId } from '@openzcad/shared';
 import { describeProject } from '../lib/projectProperties';
 import { DEMO_DEFINITIONS } from '../lib/demoDefinitions';
 import type { ComponentProps } from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { toProjectId, type ProjectSummary } from '@openzcad/shared';
-import { formatLastEdited, recoveryCopyOf, StartScreen } from './StartScreen';
+import {
+  formatLastEdited,
+  LibrarySelectionBar,
+  recoveryCopyOf,
+  StartScreen
+} from './StartScreen';
+
+// The selection bar loads on demand; the library warms it once idle. Load it
+// up front so a selection here draws it in the same render, as warmed.
+beforeAll(() => LibrarySelectionBar.preload());
 
 const localProject: ProjectSummary = {
   projectId: toProjectId('project_local'),
