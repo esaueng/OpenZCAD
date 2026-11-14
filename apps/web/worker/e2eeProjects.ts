@@ -926,6 +926,15 @@ export async function runBatch(
         'A stored file of this project is still being removed. Try again in a moment.'
       );
     }
+    // Migration 0051: this write's body was drained as abandoned before
+    // its version could commit; the save stores it again on retry.
+    if (message.includes('e2ee_body_not_pending')) {
+      refuse(
+        503,
+        'PROJECT_STORAGE_UNAVAILABLE',
+        'The account copy of this project could not be stored right now. Try again.'
+      );
+    }
     if (/UNIQUE constraint|PRIMARY KEY|E2EE_GROUP_EPOCH/i.test(message)) {
       await onConflict?.();
       refuse(

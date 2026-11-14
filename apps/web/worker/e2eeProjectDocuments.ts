@@ -69,6 +69,8 @@ import {
 } from '@openzcad/shared';
 import {
   claimObjectKeysForDelete,
+  drainPendingBodies,
+  isPendingBodyStorageReady,
   isE2eeContentBlobStorageReady,
   isE2eeProjectGroupStorageReady,
   isE2eeProjectVersionStorageReady,
@@ -676,6 +678,19 @@ async function storeBody(
   // body a committed row names.
   const key = `e2ee/${projectId}/v/${version.hash}.${crypto.randomUUID()}`;
   const bucket = ctx.bucket;
+  // Recorded before the put (migration 0051): a body this attempt cannot
+  // remove after a failure stays discoverable, and is deleted by retention
+  // or with its project. Its version row clears the record when it commits.
+  const pending = await isPendingBodyStorageReady(ctx.db);
+  if (pending) {
+    await ctx.db
+      .prepare(
+        `INSERT INTO e2ee_pending_bodies (object_key, project_id, created_at)
+         VALUES (?, ?, ?)`
+      )
+      .bind(key, projectId, Date.now())
+      .run();
+  }
   try {
     await bucket.put(key, version.envelope);
     // No row may name a body R2 does not hold: checked before the commit,
@@ -683,7 +698,12 @@ async function storeBody(
     const stored = bucket.head ? await bucket.head(key) : await bucket.get(key);
     if (!stored) throw new Error('The stored body is missing.');
   } catch {
-    await bucket.delete(key).catch(() => undefined);
+    try {
+      await bucket.delete(key);
+      if (pending) await forgetPendingBody(ctx, key);
+    } catch {
+      // Left pending: retention or the project's deletion removes it.
+    }
     refuse(
       503,
       'PROJECT_STORAGE_UNAVAILABLE',
@@ -709,25 +729,45 @@ async function discardBody(ctx: Context, body: StoredBody): Promise<void> {
       )
       .bind(body.key)
       .first<{ used: number }>();
-    if (!used) await deleteBodies(ctx, [body.key]);
+    if (!used && (await deleteBodies(ctx, [body.key])).has(body.key)) {
+      await forgetPendingBody(ctx, body.key);
+    }
   } catch {
-    // Housekeeping; an orphan costs storage, never correctness.
+    // Left pending: retention or the project's deletion removes it.
   }
 }
 
-/** Deletes version bodies no row names any more, each under a claim. */
+/** Drops a body's pending record (migration 0051) once its object is gone. */
+async function forgetPendingBody(ctx: Context, key: string): Promise<void> {
+  if (!(await isPendingBodyStorageReady(ctx.db))) return;
+  await ctx.db
+    .prepare('DELETE FROM e2ee_pending_bodies WHERE object_key = ?')
+    .bind(key)
+    .run();
+}
+
+/**
+ * Deletes version bodies no row names any more, each under a claim; the
+ * keys it deleted.
+ */
 async function deleteBodies(
   ctx: Context,
   keys: readonly string[]
-): Promise<void> {
-  if (!ctx.bucket || keys.length === 0) return;
+): Promise<ReadonlySet<string>> {
+  if (!ctx.bucket || keys.length === 0) return new Set();
   const claim = await claimObjectKeysForDelete(ctx.db, keys);
   try {
-    await claim.deleteObjects(ctx.bucket);
+    return (await claim.deleteObjects(ctx.bucket)).deleted;
   } finally {
     await claim.release();
   }
 }
+
+/**
+ * Bodies left pending this long belong to no save still in flight: one that
+ * old can no longer commit them (its record is gone once drained).
+ */
+const PENDING_BODY_GRACE_MS = 60 * 60 * 1000;
 
 function insertVersion(
   ctx: Context,
@@ -984,6 +1024,15 @@ async function retain(ctx: Context, projectId: string): Promise<void> {
     );
   } catch {
     // Retention is housekeeping. It does not get to fail a save.
+  }
+  // Bodies failed saves could not remove (migration 0051).
+  try {
+    await drainPendingBodies(ctx.db, ctx.bucket, projectId, {
+      olderThanMs: PENDING_BODY_GRACE_MS,
+      limit: 16
+    });
+  } catch {
+    // Housekeeping: the next save, or the project's deletion, retries.
   }
   // Blobs only versions with retained bodies keep alive (migration 0034).
   if (ctx.blobs.ready) {

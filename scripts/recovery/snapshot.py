@@ -35,6 +35,9 @@ OBJECT_COLUMNS = {
     'artifact_mesh_discards': {'object_key'},
     # Migration 0050: a cleanup's claim on a key it is deleting.
     'r2_key_tombstones': {'object_key'},
+    # Migration 0051: a body being written, or one a failed save left to
+    # cleanup; never a committed object a restore needs.
+    'e2ee_pending_bodies': {'object_key'},
 }
 
 
@@ -118,8 +121,8 @@ def required_objects(db):
     # no stored objects or keys.
     # 0050 adds r2_key_tombstones: transient claims on keys a cleanup is
     # deleting, never objects a restore needs.
-    # 0051 adds only an index and an insert guard on e2ee_project_versions:
-    # no stored objects or keys.
+    # 0051 adds an index and insert guards on e2ee_project_versions and
+    # e2ee_pending_bodies (keys of bodies being written): no committed objects.
     # 0052 adds project_instances: a random id per project row, no objects.
     if max(int(name[:4]) for name in migrations) > 52:
         raise SnapshotError('Review new migrations before using this snapshot tool.')

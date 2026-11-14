@@ -186,6 +186,7 @@ import {
   sha256Hex,
   type ClientProjectStorage,
   type PreparedProjectStorageSnapshot,
+  type OwnedProjectInstance,
   type ProjectStorageAssetObject,
   type ProjectStorageAssetReference
 } from '@openzcad/persistence';
@@ -591,6 +592,69 @@ export async function projectInstanceId(
     .bind(projectId)
     .first<{ instance_id: string }>();
   return row?.instance_id ?? null;
+}
+
+/** Whether migration 0051's pending version bodies are installed. */
+export const isPendingBodyStorageReady = cachedSchemaProbe(
+  `SELECT COUNT(*) AS ready FROM sqlite_master
+   WHERE type = 'table' AND name = 'e2ee_pending_bodies'`,
+  (row) => row?.ready === 1
+);
+
+/**
+ * Deletes the R2 objects of version bodies a failed save left recorded as
+ * pending (migration 0051), each under a key claim (fenced on `fence` when
+ * given), then their rows. Only rows at least `olderThanMs` old: a younger
+ * one may belong to a save still in flight (one older than that cannot
+ * commit it any more, since its row is gone). True while more are left.
+ */
+export async function drainPendingBodies(
+  db: D1Database,
+  bucket: { delete(key: string): Promise<unknown> } | null,
+  projectId: string,
+  options: {
+    olderThanMs?: number;
+    fence?: { sql: string; binds: readonly unknown[] };
+    limit?: number;
+  } = {}
+): Promise<boolean> {
+  if (!bucket || !(await isPendingBodyStorageReady(db))) return false;
+  const limit = options.limit ?? 64;
+  const { results } = await db
+    .prepare(
+      `SELECT object_key FROM e2ee_pending_bodies
+       WHERE project_id = ? AND created_at <= ?
+       ORDER BY created_at LIMIT ?`
+    )
+    .bind(projectId, Date.now() - (options.olderThanMs ?? 0), limit + 1)
+    .all<{ object_key: string }>();
+  const keys = (results ?? []).slice(0, limit).map((row) => row.object_key);
+  if (!keys.length) return false;
+  const claim = await claimObjectKeysForDelete(db, keys, {}, options.fence);
+  try {
+    const outcome = await claim.deleteObjects(bucket);
+    // A key a version names was committed (its row should have gone with
+    // that commit): only the row goes.
+    const done = keys.filter(
+      (key) =>
+        outcome.deleted.has(key) ||
+        (!claim.keys.has(key) && !claim.contended.has(key))
+    );
+    if (done.length) {
+      await db
+        .prepare(
+          `DELETE FROM e2ee_pending_bodies
+           WHERE object_key IN (SELECT value FROM json_each(?))${
+             options.fence ? ` AND ${options.fence.sql}` : ''
+           }`
+        )
+        .bind(JSON.stringify(done), ...(options.fence?.binds ?? []))
+        .run();
+    }
+    return (results ?? []).length > limit || done.length < keys.length;
+  } finally {
+    await claim.release();
+  }
 }
 
 /** Whether migration 0050's R2 key tombstones are installed. */
@@ -3344,15 +3408,35 @@ export class D1R2PersistenceService implements PersistenceService {
     }));
   }
 
-  async deleteOwnedProjects(userId: UserId): Promise<ProjectId[]> {
+  async deleteOwnedProjects(
+    userId: UserId,
+    instances?: readonly OwnedProjectInstance[]
+  ): Promise<ProjectId[]> {
     if (!this.env.DB) {
       return getInMemoryPersistence().deleteOwnedProjects(userId);
     }
-    const targets = await this.ownedDestroyTargets(
-      `SELECT p.id, ${await this.instanceColumn()} AS instance_id
-       FROM projects p WHERE p.user_id = ? ORDER BY p.id`,
-      [userId]
-    );
+    // With `instances` (the account-erasure coordinator), exactly the
+    // projects it listed, as the instances it listed: never one created
+    // again under an id since, and never one listed anew here.
+    const targets = instances
+      ? (
+          await this.ownedDestroyTargets(
+            `SELECT p.id, ${await this.instanceColumn()} AS instance_id
+             FROM projects p WHERE p.user_id = ?
+               AND p.id IN (SELECT value FROM json_each(?)) ORDER BY p.id`,
+            [userId, JSON.stringify(instances.map((row) => row.projectId))]
+          )
+        ).flatMap((row) => {
+          const listed = instances.find((item) => item.projectId === row.id);
+          return listed && (listed.instance ?? '') === row.instance
+            ? [{ id: row.id, instance: listed.instance ?? '' }]
+            : [];
+        })
+      : await this.ownedDestroyTargets(
+          `SELECT p.id, ${await this.instanceColumn()} AS instance_id
+           FROM projects p WHERE p.user_id = ? ORDER BY p.id`,
+          [userId]
+        );
     await this.destroyProjectsInBatches(targets);
     return targets.map((target) => toProjectId(target.id));
   }
@@ -8194,6 +8278,7 @@ export class D1R2PersistenceService implements PersistenceService {
       }
     }
     const versionsReady = await isE2eeProjectVersionStorageReady(this.env.DB);
+    const pendingReady = await isPendingBodyStorageReady(this.env.DB);
     const blobsReady = await isE2eeContentBlobStorageReady(this.env.DB);
     const projectBucket = this.projectStorageBucket();
     // Every key a project's rows name, claimed (migration 0050) under its
@@ -8232,6 +8317,14 @@ export class D1R2PersistenceService implements PersistenceService {
                WHERE project_id = ? AND envelope_key IS NOT NULL`
             )
           : [];
+        // Bodies failed saves left pending (migration 0051).
+        if (pendingReady) {
+          bodyKeys.push(
+            ...(await keysOf(
+              'SELECT object_key FROM e2ee_pending_bodies WHERE project_id = ?'
+            ))
+          );
+        }
         if (bodyKeys.length && !projectBucket) {
           throw new ProjectObjectStorageError(
             'Encrypted project storage is unavailable.'
@@ -8414,6 +8507,9 @@ export class D1R2PersistenceService implements PersistenceService {
           'DELETE FROM project_storage_assets WHERE project_id IN',
           'DELETE FROM project_adoptions WHERE cloud_project_id IN',
           ...migrationTables,
+          ...(pendingReady
+            ? ['DELETE FROM e2ee_pending_bodies WHERE project_id IN']
+            : []),
           'DELETE FROM projects WHERE id IN',
           'DELETE FROM project_copy_cleanup_claims WHERE project_id IN'
         ].map((statement) =>
@@ -9731,12 +9827,25 @@ export class ProjectCollaborationRoom extends DurableObject {
         // Decided inside the room's queue, so no write of the room can come
         // between: a room holding another instance's state (the project was
         // created again under its id) is not this deletion's to erase.
-        if (
-          expectedInstance &&
-          this.instanceId &&
-          this.instanceId !== expectedInstance
-        ) {
-          return new Response(null, { status: 204 });
+        if (expectedInstance) {
+          let held = this.instanceId;
+          if (!held && this.projectId && this.roomEnv.DB) {
+            // State stored before the room recorded an instance: attribute
+            // it to the instance D1 now holds under this id, or refuse (the
+            // deletion retries) when that cannot be read.
+            try {
+              held = (await isProjectInstanceReady(this.roomEnv.DB))
+                ? await projectInstanceId(this.roomEnv.DB, this.projectId)
+                : null;
+            } catch {
+              return new Response('Project identity is unavailable.', {
+                status: 503
+              });
+            }
+          }
+          if (held && held !== expectedInstance) {
+            return new Response(null, { status: 204 });
+          }
         }
         await this.eraseRoomState();
         return new Response(null, { status: 204 });
@@ -11936,15 +12045,21 @@ export class ProjectCollaborationRoom extends DurableObject {
     }
     const evicted = this.trimHistory();
     // The first state stored for a project records which instance of it
-    // (migration 0052) the room serves.
+    // (migration 0052) the room serves. Fail closed: state is never stored,
+    // or acknowledged, without its instance once instances exist, since a
+    // delayed erasure of an earlier instance could not tell it apart.
     if (this.projectId && !this.instanceId && this.roomEnv.DB) {
-      try {
-        this.instanceId = await projectInstanceId(
+      if (await isProjectInstanceReady(this.roomEnv.DB)) {
+        const instance = await projectInstanceId(
           this.roomEnv.DB,
           this.projectId
         );
-      } catch {
-        this.instanceId = null;
+        if (!instance) {
+          throw new ArtifactStorageError(
+            'This project could not be identified; its room keeps no state.'
+          );
+        }
+        this.instanceId = instance;
       }
     }
     const entries: Record<string, unknown> = {};

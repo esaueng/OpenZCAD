@@ -61,9 +61,14 @@ function database(
         return null;
       },
       async all() {
-        if (query.includes('SELECT id FROM projects WHERE user_id')) {
+        // The account's projects, as listed with their instances
+        // (migration 0052, "not installed" here).
+        if (
+          query.includes('SELECT id FROM projects WHERE user_id') ||
+          query.includes('FROM projects p WHERE p.user_id')
+        ) {
           const ids = projectPasses[projectPass++] ?? [];
-          return { results: ids.map((id) => ({ id })) };
+          return { results: ids.map((id) => ({ id, instance_id: null })) };
         }
         return { results: [] };
       },
@@ -252,7 +257,10 @@ describe('account cloud-data deletion', () => {
         'x-openzcad-internal-project-erasure'
       )
     ).toBe('v1');
-    expect(store.deleteOwnedProjects).toHaveBeenCalledWith(session.userId);
+    // Exactly the projects it listed, as the instances it listed.
+    expect(store.deleteOwnedProjects).toHaveBeenCalledWith(session.userId, [
+      { projectId, instance: null }
+    ]);
     expect(calls.at(-1)?.query).toContain(
       'DELETE FROM account_erasure_requests'
     );

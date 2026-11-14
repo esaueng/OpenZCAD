@@ -2318,3 +2318,128 @@ describe('version bodies under reused keys (migration 0051)', () => {
     expect(srv.bucket.objects.has(key!)).toBe(true);
   });
 });
+
+describe('bodies a failed save could not remove (PR #1477 review, round 2)', () => {
+  async function failedBody(srv: Server) {
+    const laptop = device(srv, owner, 'owner_laptop');
+    const { document: v1 } = await createEncrypted(laptop);
+    const projectId = v1.projectId;
+    const head = rows<{ version_hash: string }>(
+      srv,
+      'SELECT version_hash FROM e2ee_project_versions WHERE project_id = ?',
+      projectId
+    )[0]!;
+    const payload = new Uint8Array(400_000);
+    for (let offset = 0; offset < payload.length; offset += 65_536) {
+      crypto.getRandomValues(
+        payload.subarray(offset, Math.min(payload.length, offset + 65_536))
+      );
+    }
+    const hand = await handVersion(
+      laptop,
+      projectId,
+      {
+        documentVersion: v1.version + 1,
+        keyEpoch: 0,
+        previousVersionHash: fromHex(head.version_hash)
+      },
+      { expectedVersion: v1.version, plaintext: payload }
+    );
+    const prefix = `e2ee/${projectId}/v/${hand.hash}.`;
+    // The put lands, then confirming it and removing it both fail.
+    const bucket = srv.bucket as unknown as {
+      head?: (key: string) => Promise<unknown>;
+    };
+    const head0 = bucket.head;
+    bucket.head = async (key: string) => {
+      if (key.startsWith(prefix)) throw new Error('transient head outage');
+      return head0 ? head0(key) : null;
+    };
+    const deleteMock = srv.bucket.delete as unknown as Mock<
+      (key: string) => Promise<void>
+    >;
+    const remove = deleteMock.getMockImplementation()!;
+    let orphan = '';
+    deleteMock.mockImplementation(async (key: string) => {
+      if (key.startsWith(prefix)) {
+        orphan = key;
+        throw new Error('transient delete outage');
+      }
+      return remove(key);
+    });
+    const failed = await putVersion(srv, projectId, hand);
+    expect(failed.status).toBe(503);
+    expect(srv.bucket.objects.has(orphan)).toBe(true);
+    // The failed attempt's body stays recorded, so it can be found again.
+    expect(rows(srv, 'SELECT object_key FROM e2ee_pending_bodies')).toEqual([
+      { object_key: orphan }
+    ]);
+    deleteMock.mockImplementation(remove);
+    bucket.head = head0;
+    // The same save succeeds with its own new body.
+    expect((await putVersion(srv, projectId, hand)).status).toBe(200);
+    expect(srv.bucket.objects.has(orphan)).toBe(true);
+    return { projectId, orphan };
+  }
+
+  it('removes such a body with its project', async () => {
+    const srv = server();
+    const { projectId, orphan } = await failedBody(srv);
+    expect(
+      (await srv.call('DELETE', `/api/projects/${projectId}`)).status
+    ).toBe(204);
+    expect(srv.bucket.objects.has(orphan)).toBe(false);
+    expect(rows(srv, 'SELECT object_key FROM e2ee_pending_bodies')).toEqual([]);
+  });
+
+  it('removes such a body once it is old enough that no save can still commit it', async () => {
+    const srv = server();
+    const { projectId, orphan } = await failedBody(srv);
+    srv.db
+      .prepare('UPDATE e2ee_pending_bodies SET created_at = ?')
+      .run(Date.now() - 2 * 60 * 60 * 1000);
+    // The next save's retention drains it.
+    const laptop = device(srv, owner, 'owner_laptop');
+    const current = rows<{ version_hash: string; document_version: number }>(
+      srv,
+      `SELECT version_hash, document_version FROM e2ee_project_versions
+       WHERE project_id = ? ORDER BY document_version DESC LIMIT 1`,
+      projectId
+    )[0]!;
+    const next = await handVersion(
+      laptop,
+      projectId,
+      {
+        documentVersion: current.document_version + 1,
+        keyEpoch: 0,
+        previousVersionHash: fromHex(current.version_hash)
+      },
+      {
+        expectedVersion: current.document_version,
+        plaintext: new TextEncoder().encode('after the failed save')
+      }
+    );
+    expect((await putVersion(srv, projectId, next)).status).toBe(200);
+    expect(srv.bucket.objects.has(orphan)).toBe(false);
+    expect(rows(srv, 'SELECT object_key FROM e2ee_pending_bodies')).toEqual([]);
+    // A drained body can never be committed afterwards.
+    expect(() =>
+      srv.db
+        .prepare(
+          `INSERT INTO e2ee_project_versions
+             (project_id, document_version, version_hash, key_epoch, prefix,
+              signature, signer_device_id, envelope_key, envelope_bytes,
+              wrapped_version_key, created_at)
+           VALUES (?, 99, ?, 0, ?, ?, 'device', ?, 10, ?, 'now')`
+        )
+        .run(
+          projectId,
+          'f'.repeat(64),
+          'p'.repeat(11),
+          's'.repeat(98),
+          orphan,
+          'w'.repeat(55)
+        )
+    ).toThrow('e2ee_body_not_pending');
+  });
+});

@@ -21,11 +21,15 @@ import type {
   ProjectId,
   UserId
 } from '@openzcad/shared';
-import type {
-  CloudflareEnv,
-  ProjectCollaborationRoom
+import {
+  isProjectInstanceReady,
+  type CloudflareEnv,
+  type ProjectCollaborationRoom
 } from '@openzcad/cloudflare-adapters';
-import type { PersistenceService } from '@openzcad/persistence';
+import type {
+  OwnedProjectInstance,
+  PersistenceService
+} from '@openzcad/persistence';
 import {
   authEmailRateLimitBucket,
   authKnownDeviceAllowanceBucket
@@ -224,28 +228,85 @@ async function beginErasure(
   );
 }
 
-async function ownedProjectIds(
+/**
+ * The account's projects, each with its instance (migration 0052): listed
+ * once, and then the only projects this erasure attempt touches, so a
+ * project created again under one of their ids is never erased by it.
+ */
+async function ownedProjectInstances(
   db: D1Database,
   userId: UserId
-): Promise<ProjectId[]> {
+): Promise<OwnedProjectInstance[]> {
+  const instances = await isProjectInstanceReady(db);
   const rows = await db
-    .prepare(`SELECT id FROM projects WHERE user_id = ? ORDER BY id`)
+    .prepare(
+      `SELECT p.id, ${
+        instances
+          ? `(SELECT i.instance_id FROM project_instances i
+              WHERE i.project_id = p.id)`
+          : 'NULL'
+      } AS instance_id
+       FROM projects p WHERE p.user_id = ? ORDER BY p.id`
+    )
     .bind(userId)
-    .all<{ id: ProjectId }>();
-  return (rows.results ?? []).map((row) => row.id);
+    .all<{ id: string; instance_id: string | null }>();
+  return (rows.results ?? []).map((row) => ({
+    projectId: row.id,
+    instance: row.instance_id
+  }));
+}
+
+/** Which of `listed` still exist as the very instance listed. */
+async function remainingInstances(
+  db: D1Database,
+  userId: UserId,
+  listed: readonly OwnedProjectInstance[]
+): Promise<OwnedProjectInstance[]> {
+  const now = await ownedProjectInstances(db, userId);
+  return now.filter((row) =>
+    listed.some(
+      (item) =>
+        item.projectId === row.projectId &&
+        (item.instance ?? '') === (row.instance ?? '')
+    )
+  );
+}
+
+/**
+ * Whether this erasure request (by its `started_at`, migration 0014) is
+ * still the one in progress: a retry that completed it removed its row, so
+ * a stale attempt that resumes afterwards stops instead of continuing.
+ */
+async function erasureStillCurrent(
+  db: D1Database,
+  userId: UserId,
+  startedAt: number | null
+): Promise<boolean> {
+  if (startedAt === null) return true;
+  return !!(await db
+    .prepare(
+      `SELECT 1 AS current FROM account_erasure_requests
+       WHERE user_id = ? AND started_at = ?`
+    )
+    .bind(userId, startedAt)
+    .first<{ current: number }>());
 }
 
 async function eraseProjectRooms(
   env: AccountDeletionEnv,
-  projectIds: readonly ProjectId[]
+  projects: readonly OwnedProjectInstance[]
 ): Promise<void> {
-  for (const projectId of projectIds) {
+  for (const { projectId, instance } of projects) {
     const response = await env.PROJECT_ROOM!.getByName(projectId).fetch(
       new Request(
         `https://project-room.internal/?projectId=${encodeURIComponent(projectId)}`,
         {
           method: 'DELETE',
-          headers: { 'x-openzcad-internal-project-erasure': 'v1' }
+          headers: {
+            'x-openzcad-internal-project-erasure': 'v1',
+            // The room erases only while it serves this very instance.
+            ...(instance ? { 'x-openzcad-project-instance': instance } : {})
+          }
         }
       )
     );
@@ -437,15 +498,45 @@ export async function deleteAccountData(
 
   const db = env.DB!;
   await beginErasure(db, session.userId, input.scope);
+  // This attempt's request, by when it started: an overlapping retry that
+  // completes the request removes it, and this attempt then stops.
+  const startedAt =
+    (
+      await db
+        .prepare(
+          `SELECT started_at FROM account_erasure_requests WHERE user_id = ?`
+        )
+        .bind(session.userId)
+        .first<{ started_at: number }>()
+    )?.started_at ?? null;
+  const completedElsewhere = (projectIds: ProjectId[]) =>
+    ({
+      ok: true,
+      scope: input.scope,
+      deletedProjectIds: projectIds,
+      signedOut: input.scope !== 'projects'
+    }) satisfies DeleteAccountDataResponse;
   let deletedProjectIds: ProjectId[] = [];
   if (input.scope === 'projects' || input.scope === 'all') {
-    const before = await ownedProjectIds(db, session.userId);
+    const before = await ownedProjectInstances(db, session.userId);
+    const beforeIds = before.map((row) => row.projectId as ProjectId);
     await eraseProjectRooms(env, before);
-    const removed = await persistence.deleteOwnedProjects(session.userId);
-    deletedProjectIds = Array.from(new Set<ProjectId>([...before, ...removed]));
-    if ((await ownedProjectIds(db, session.userId)).length > 0) {
+    if (!(await erasureStillCurrent(db, session.userId, startedAt))) {
+      return completedElsewhere(beforeIds);
+    }
+    const removed = await persistence.deleteOwnedProjects(
+      session.userId,
+      before
+    );
+    deletedProjectIds = Array.from(
+      new Set<ProjectId>([...beforeIds, ...removed])
+    );
+    if ((await remainingInstances(db, session.userId, before)).length > 0) {
       throw new Error('Owned cloud projects remain after deletion.');
     }
+  }
+  if (!(await erasureStillCurrent(db, session.userId, startedAt))) {
+    return completedElsewhere(deletedProjectIds);
   }
 
   if (input.scope === 'projects') {
