@@ -34574,7 +34574,11 @@ export function App() {
                   run={importRun}
                   onCancel={cancelImportRun}
                   onDismiss={dismissImportRun}
-                  onArchiveNow={archiveImportSourcesFromCard}
+                  // Signed out the upload can only fail, as File's
+                  // Archive local sources says (I8): no Archive now.
+                  onArchiveNow={
+                    session ? archiveImportSourcesFromCard : undefined
+                  }
                 />
               </Suspense>
             )}
