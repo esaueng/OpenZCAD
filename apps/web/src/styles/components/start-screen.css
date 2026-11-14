@@ -3166,6 +3166,15 @@
   outline: none;
 }
 
+/* On narrow screens the account card follows the brand at the page's top. */
+@media (max-width: 900px) {
+  .storage-panel {
+    top: calc(100% + var(--sp-2));
+    bottom: auto;
+    left: var(--sp-3);
+  }
+}
+
 .storage-panel:focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 1px;

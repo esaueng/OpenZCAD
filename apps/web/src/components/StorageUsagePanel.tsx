@@ -39,18 +39,26 @@ export function useAccountStorageUsage(
   const [usage, setUsage] = useState<AccountStorageUsage | null>(null);
   const [state, setState] = useState<StorageUsageState>('idle');
   const [manual, setManual] = useState(0);
-  const lastKey = useRef<string | null>(null);
+  const [automaticRefresh, setAutomaticRefresh] = useState({
+    key: refreshKey,
+    generation: 0
+  });
+  // Suspending automatic refresh keeps the request already in flight alive.
+  // Manual refresh and account changes still start their own request.
+  if (refreshKey !== automaticRefresh.key) {
+    setAutomaticRefresh({
+      key: refreshKey,
+      generation: automaticRefresh.generation + (refreshKey === null ? 0 : 1)
+    });
+  }
 
   useEffect(() => {
     setUsage(null);
     setState('idle');
-    lastKey.current = null;
   }, [load, accountKey]);
 
   useEffect(() => {
     if (!load) return;
-    if (refreshKey === null && lastKey.current !== null) return;
-    lastKey.current = refreshKey ?? '';
     let cancelled = false;
     setState((current) => (current === 'ready' ? current : 'loading'));
     load()
@@ -67,7 +75,7 @@ export function useAccountStorageUsage(
     return () => {
       cancelled = true;
     };
-  }, [load, accountKey, refreshKey, manual]);
+  }, [load, accountKey, automaticRefresh.generation, manual]);
 
   const refresh = useCallback(() => setManual((count) => count + 1), []);
   return { usage, state, refresh };

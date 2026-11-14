@@ -4027,7 +4027,10 @@ export function StartScreen({
               localOnlyCount={localOnlyProjects.length}
               anchorRef={storageButtonRef}
               onClose={() => setStorageOpen(false)}
-              onShowTrash={() => selectShelf('deleted')}
+              onShowTrash={() => {
+                selectShelf('deleted');
+                document.getElementById('start-shelf-tab-deleted')?.focus();
+              }}
               {...((onOpenAccountSettings ?? onSignIn) && {
                 onOpenAccountSettings: onOpenAccountSettings ?? onSignIn
               })}

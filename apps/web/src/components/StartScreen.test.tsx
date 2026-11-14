@@ -2,6 +2,7 @@ import {
   act,
   fireEvent,
   render,
+  renderHook,
   screen,
   waitFor,
   within
@@ -18,6 +19,7 @@ import {
   type ProjectSummary
 } from '@openzcad/shared';
 import { formatLastEdited, recoveryCopyOf, StartScreen } from './StartScreen';
+import { useAccountStorageUsage } from './StorageUsagePanel';
 
 const localProject: ProjectSummary = {
   projectId: toProjectId('project_local'),
@@ -2474,6 +2476,70 @@ describe('StartScreen storage readout', () => {
     expect(loadStorageUsage).toHaveBeenCalled();
   });
 
+  it('keeps an in-flight report during sync and refreshes when sync ends', async () => {
+    let resolve!: (usage: AccountStorageUsage) => void;
+    const load = vi.fn(
+      () =>
+        new Promise<AccountStorageUsage>((done) => {
+          resolve = done;
+        })
+    );
+    const { result, rerender } = renderHook(
+      ({ key }) => useAccountStorageUsage(load, 'account', key),
+      { initialProps: { key: '1:0:0' as string | null } }
+    );
+    rerender({ key: null });
+    await act(async () => resolve(storageReport()));
+    expect(result.current.usage?.storageBytes).toBe(42 * MB);
+    expect(result.current.state).toBe('ready');
+    expect(load).toHaveBeenCalledTimes(1);
+    rerender({ key: '1:0:0' });
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries explicitly during sync without starting a refresh loop', async () => {
+    const load = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValue(storageReport());
+    const { result, rerender } = renderHook(() =>
+      useAccountStorageUsage(load, 'account', null)
+    );
+    await waitFor(() => expect(result.current.state).toBe('failed'));
+    act(() => result.current.refresh());
+    await waitFor(() => expect(result.current.state).toBe('ready'));
+    rerender();
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it('clears reports on account changes and sign-out and ignores stale answers', async () => {
+    const pending: Array<(usage: AccountStorageUsage) => void> = [];
+    const load = vi.fn(
+      () =>
+        new Promise<AccountStorageUsage>((resolve) => {
+          pending.push(resolve);
+        })
+    );
+    const { result, rerender } = renderHook(
+      ({ account, enabled }) =>
+        useAccountStorageUsage(enabled ? load : undefined, account, '1'),
+      { initialProps: { account: 'first', enabled: true } }
+    );
+    await act(async () => pending[0]!(storageReport()));
+    act(() => result.current.refresh());
+    rerender({ account: 'second', enabled: true });
+    expect(result.current.usage).toBeNull();
+    await act(async () => pending[1]!(storageReport()));
+    expect(result.current.usage).toBeNull();
+    await act(async () => pending[2]!(storageReport({ storageBytes: MB })));
+    expect(result.current.usage?.storageBytes).toBe(MB);
+    act(() => result.current.refresh());
+    rerender({ account: 'second', enabled: false });
+    await act(async () => pending[3]!(storageReport()));
+    expect(result.current.usage).toBeNull();
+    expect(result.current.state).toBe('idle');
+  });
+
   it('opens a breakdown of the account and this device, and closes on Escape', async () => {
     const onShowTrashTarget = vi.fn();
     renderStartScreen({
@@ -2524,7 +2590,7 @@ describe('StartScreen storage readout', () => {
     expect(screen.queryByRole('dialog', { name: 'Storage' })).toBeNull();
     expect(
       screen.getByRole('tab', { name: /Trash/, selected: true })
-    ).toBeInTheDocument();
+    ).toHaveFocus();
 
     fireEvent.click(screen.getByRole('button', { name: /^Storage details/ }));
     fireEvent.click(
