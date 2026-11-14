@@ -6820,7 +6820,9 @@ export class D1R2PersistenceService implements PersistenceService {
   /**
    * The head a head-replacing write releases, as migration 0049's object
    * admission credits it: the project's current head object, named by no
-   * save state and claimed by no pending object. Null before migration 0049
+   * save state and claimed by no pending object, while the project holds
+   * no other unreclaimed object (a replaced head whose pruning failed), so
+   * at most one replacement's credit is ever outstanding. Null before migration 0049
    * or when there is none.
    */
   private async releasedHead(
@@ -6841,6 +6843,15 @@ export class D1R2PersistenceService implements PersistenceService {
              WHERE claim.project_id = ?1
                AND claim.supersedes_object_id = head.id
                AND claim.state = 'pending'
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM project_document_objects spare
+             WHERE spare.project_id = ?1 AND spare.state = 'committed'
+               AND spare.id <> head.id
+               AND NOT EXISTS (
+                 SELECT 1 FROM revisions sr
+                 WHERE sr.document_object_id = spare.id
+               )
            )`
       )
       .bind(projectId)

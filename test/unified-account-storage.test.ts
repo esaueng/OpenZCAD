@@ -1,12 +1,17 @@
+import { randomBytes } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
+import { CommandManager, commandFactories } from '@openzcad/command-system';
 import { describe, expect, it } from 'vitest';
 import {
   accountEntitlements,
   D1R2PersistenceService,
   syncStoredAccountLimits
 } from '@openzcad/cloudflare-adapters';
-import { ArtifactQuotaError } from '@openzcad/persistence';
+import {
+  ArtifactQuotaError,
+  prepareProjectStorageSnapshot
+} from '@openzcad/persistence';
 import { toUserId } from '@openzcad/shared';
 import { migratedDatabase, sqliteD1 } from './support/sqlite-d1';
 
@@ -489,7 +494,7 @@ describe('migration staging is bounded by projected storage (migration 0049)', (
 });
 
 describe('a head-replacing save releases the head it replaces (migration 0049)', () => {
-  function bucket() {
+  function bucket(failDelete = false) {
     const objects = new Map<string, Uint8Array<ArrayBuffer>>();
     return {
       objects,
@@ -516,6 +521,7 @@ describe('a head-replacing save releases the head it replaces (migration 0049)',
           return bytes ? { size: bytes.length } : null;
         },
         delete: async (key: string | string[]) => {
+          if (failDelete) throw new Error('injected R2 delete failure');
           for (const item of typeof key === 'string' ? [key] : key)
             objects.delete(item);
         }
@@ -635,6 +641,212 @@ describe('a head-replacing save releases the head it replaces (migration 0049)',
     expect(() => pending('o_checkpoint', 1, null)).toThrow(
       'project_account_storage_quota'
     );
+  });
+
+  it('keeps at most one replacement credited while a replaced head waits to be pruned', () => {
+    const db = account(10_000);
+    db.prepare(
+      `INSERT INTO project_document_objects
+         (id, project_id, object_key, checksum_sha256, logical_bytes,
+          stored_bytes, content_encoding, state, created_at)
+       VALUES ('o_head', ?, 'o_head', 'sha', 900, 900, 'gzip', 'committed', ?)`
+    ).run(PROJECT, CREATED);
+    db.prepare(
+      "UPDATE projects SET document_object_id = 'o_head', document_bytes = 0 WHERE id = ?"
+    ).run(PROJECT);
+    project(db, 'p_other', 0);
+    db.prepare(
+      `INSERT INTO artifacts
+         (id, project_id, kind, name, object_key, content_type, bytes,
+          metadata_json, created_at)
+       VALUES ('a_fill', 'p_other', 'snapshot', 'fill.step', 'fill',
+               'model/step', 9_100, '{}', ?)`
+    ).run(CREATED);
+    // Each save inserts a same-size replacement, moves the head to it and
+    // commits it, and its pruning of the old head fails.
+    const replace = (id: string, supersedes: string) => {
+      db.prepare(
+        `INSERT INTO project_document_objects
+           (id, project_id, object_key, checksum_sha256, logical_bytes,
+            stored_bytes, content_encoding, state, created_at,
+            supersedes_object_id)
+         VALUES (?, ?, ?, 'sha', 900, 900, 'gzip', 'pending', ?, ?)`
+      ).run(id, PROJECT, id, CREATED, supersedes);
+      db.prepare('UPDATE projects SET document_object_id = ? WHERE id = ?').run(
+        id,
+        PROJECT
+      );
+      db.prepare(
+        "UPDATE project_document_objects SET state = 'committed' WHERE id = ?"
+      ).run(id);
+    };
+    replace('o_second', 'o_head');
+    // o_head was not pruned: the next replacement is charged in full.
+    expect(() => replace('o_third', 'o_second')).toThrow(
+      'project_account_storage_quota'
+    );
+    // Once the old head is pruned, replacements are credited again.
+    db.prepare(
+      "DELETE FROM project_document_objects WHERE id = 'o_head'"
+    ).run();
+    replace('o_third', 'o_second');
+  });
+
+  it('refuses further credited saves once pruning fails, so storage stays within one replacement', async () => {
+    const db = migratedDatabase();
+    db.prepare(
+      `INSERT INTO users (id, email, created_at) VALUES (?, 'owner@example.com', ?)`
+    ).run(OWNER, CREATED);
+    const r2 = bucket(true);
+    const service = new D1R2PersistenceService({
+      DB: sqliteD1(db),
+      PROJECT_STORAGE: r2.bucket
+    });
+    let name = randomBytes(5_000).toString('hex');
+    let { document } = await service.createProject(toUserId(OWNER), { name });
+    const used = () =>
+      (
+        db
+          .prepare(
+            `SELECT COALESCE((SELECT bytes FROM account_project_storage
+                              WHERE user_id = ?1), 0)
+                  + COALESCE((SELECT finalized_bytes + reserved_bytes
+                              FROM artifact_account_usage
+                              WHERE owner_user_id = ?1), 0) AS bytes`
+          )
+          .get(OWNER) as { bytes: number }
+      ).bytes;
+    const limit = (
+      db
+        .prepare(
+          'SELECT project_storage_limit_bytes AS bytes FROM users WHERE id = ?'
+        )
+        .get(OWNER) as { bytes: number }
+    ).bytes;
+    db.prepare(
+      `INSERT INTO artifacts
+         (id, project_id, kind, name, object_key, content_type, bytes,
+          metadata_json, created_at)
+       VALUES ('a_fill', ?, 'snapshot', 'fill.step', 'fill', 'model/step', ?,
+               '{}', ?)`
+    ).run(document.projectId, limit - used(), CREATED);
+    const outcomes: string[] = [];
+    const usage: number[] = [used()];
+    for (let save = 0; save < 5; save++) {
+      const nextName = name.slice(0, -1_000);
+      const next = {
+        ...(JSON.parse(
+          JSON.stringify(document).replaceAll(name, nextName)
+        ) as typeof document),
+        version: document.version + 1
+      };
+      try {
+        await service.saveDocument(toUserId(OWNER), {
+          projectId: document.projectId,
+          expectedVersion: document.version,
+          document: next
+        });
+        document = next;
+        name = nextName;
+        outcomes.push('saved');
+      } catch (error) {
+        outcomes.push((error as { kind?: string }).kind ?? 'error');
+      }
+      usage.push(used());
+    }
+    // The first shrinking save is credited; its replaced head cannot be
+    // pruned, so every later one is charged in full and refused.
+    expect(outcomes).toEqual([
+      'saved',
+      'storage',
+      'storage',
+      'storage',
+      'storage'
+    ]);
+    // At most one replacement's bytes stay outstanding.
+    expect(new Set(usage.slice(1)).size).toBe(1);
+    expect(
+      (
+        db
+          .prepare('SELECT COUNT(*) AS n FROM project_document_objects')
+          .get() as { n: number }
+      ).n
+    ).toBe(2);
+  });
+
+  it('judges a save that adds a source asset on its net change', async () => {
+    const run = async (stepText: string) => {
+      const db = migratedDatabase();
+      db.prepare(
+        `INSERT INTO users (id, email, created_at) VALUES (?, 'owner@example.com', ?)`
+      ).run(OWNER, CREATED);
+      const service = new D1R2PersistenceService({
+        DB: sqliteD1(db),
+        PROJECT_STORAGE: bucket().bucket
+      });
+      const name = randomBytes(5_000).toString('hex');
+      const { document } = await service.createProject(toUserId(OWNER), {
+        name
+      });
+      const old = await prepareProjectStorageSnapshot(document);
+      const manager = new CommandManager(
+        JSON.parse(
+          JSON.stringify(document).replaceAll(name, 'x')
+        ) as typeof document
+      );
+      manager.execute(
+        commandFactories.importStep({
+          name: 'source',
+          artifactId: 'artifact_source',
+          sourceName: 'source.step',
+          stepText
+        })
+      );
+      const next = manager.document;
+      const prepared = await prepareProjectStorageSnapshot(next);
+      const limit = (
+        db
+          .prepare(
+            'SELECT project_storage_limit_bytes AS bytes FROM users WHERE id = ?'
+          )
+          .get(OWNER) as { bytes: number }
+      ).bytes;
+      // Files fill the account to exactly its allowance.
+      db.prepare(
+        `INSERT INTO artifacts
+           (id, project_id, kind, name, object_key, content_type, bytes,
+            metadata_json, created_at)
+         VALUES ('a_fill', ?, 'snapshot', 'fill.step', 'fill', 'model/step',
+                 ?, '{}', ?)`
+      ).run(document.projectId, limit - old.storedBytes, CREATED);
+      const added =
+        prepared.storedBytes +
+        prepared.assets.reduce((total, asset) => total + asset.storedBytes, 0);
+      expect(prepared.assets.length).toBeGreaterThan(0);
+      return {
+        old: old.storedBytes,
+        added,
+        save: () =>
+          service.saveDocument(toUserId(OWNER), {
+            projectId: document.projectId,
+            expectedVersion: document.version,
+            document: next
+          })
+      };
+    };
+    // A 6 KB head replaced by a 1.4 KB head and a small STEP source: the
+    // save shrinks the account, so it is saved at the allowance.
+    const shrinking = await run(
+      `ISO-10303-21;\n${'CARTESIAN_POINT'.repeat(100)}\nEND-ISO-10303-21;`
+    );
+    expect(shrinking.added).toBeLessThan(shrinking.old);
+    await expect(shrinking.save()).resolves.toBeTruthy();
+    // A STEP source larger than the head it replaces grows it: refused.
+    const growing = await run(
+      `ISO-10303-21;\n${randomBytes(20_000).toString('hex')}\nEND-ISO-10303-21;`
+    );
+    expect(growing.added).toBeGreaterThan(growing.old);
+    await expect(growing.save()).rejects.toMatchObject({ kind: 'storage' });
   });
 });
 

@@ -133,7 +133,11 @@ A save that moves a project's head to a new R2 document object names the
 head it replaces (`project_document_objects.supersedes_object_id`, added by
 migration 0049). The object's admission and the Worker's preflight credit
 that head when nothing else names it, so a save that does not grow what the
-account stores is never refused, even at or over the allowance.
+account stores is never refused, even at or over the allowance. The credit
+is granted only while the project holds no other unreclaimed object (a
+replaced head whose pruning failed), so at most one replacement's bytes are
+ever outstanding. A source asset added by the same save is judged with it, on
+the save's net change.
 
 Downgrades do not delete files. Existing reads, downloads and cleanup remain
 available. Over-limit accounts cannot increase storage; shrinking an existing

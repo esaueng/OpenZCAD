@@ -666,9 +666,11 @@ BEGIN
                   WHERE user_id = (SELECT user_id FROM projects WHERE id = NEW.project_id)), 0)
       + NEW.stored_bytes > 0;
   -- A head-replacing write is credited the head it releases: still the
-  -- project's head, named by no save state, and claimed by no other pending
-  -- object (so a retried or conflicting save cannot claim it twice). Only
-  -- growth is refused.
+  -- project's head, named by no save state, claimed by no other pending
+  -- object (so a retried or conflicting save cannot claim it twice), and
+  -- only while the project holds no other unreclaimed object (a replaced
+  -- head whose pruning failed), so at most one replacement's credit is
+  -- ever outstanding per project. Only growth is refused.
   SELECT RAISE(ABORT, 'project_account_storage_quota')
   WHERE NEW.project_id NOT IN (
       SELECT project_id FROM e2ee_decrypt_staged_projects
@@ -688,6 +690,15 @@ BEGIN
             AND claim.supersedes_object_id = head.id
             AND claim.state = 'pending'
         )
+        AND NOT EXISTS (
+          SELECT 1 FROM project_document_objects spare
+          WHERE spare.project_id = NEW.project_id
+            AND spare.state = 'committed'
+            AND spare.id <> head.id
+            AND NOT EXISTS (
+              SELECT 1 FROM revisions sr WHERE sr.document_object_id = spare.id
+            )
+        )
     ), 0) > 0
     AND NEW.stored_bytes - COALESCE((
       SELECT head.stored_bytes FROM project_document_objects head
@@ -703,6 +714,15 @@ BEGIN
           WHERE claim.project_id = NEW.project_id
             AND claim.supersedes_object_id = head.id
             AND claim.state = 'pending'
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM project_document_objects spare
+          WHERE spare.project_id = NEW.project_id
+            AND spare.state = 'committed'
+            AND spare.id <> head.id
+            AND NOT EXISTS (
+              SELECT 1 FROM revisions sr WHERE sr.document_object_id = spare.id
+            )
         )
     ), 0) +
     COALESCE((
@@ -752,7 +772,53 @@ BEGIN
       SELECT 1 FROM project_storage_assets
       WHERE project_id = NEW.project_id
         AND checksum_sha256 = NEW.checksum_sha256 AND kind = NEW.kind
-    ) AND NEW.stored_bytes +
+    )
+    -- A source asset of the save that just moved the head is judged with
+    -- that save: what the account stores once the replaced head is pruned
+    -- (under the object's credit rules), refused only if the save as a
+    -- whole grows it.
+    AND NEW.stored_bytes - COALESCE((
+      SELECT old.stored_bytes - cur.stored_bytes FROM projects rp
+      JOIN project_document_objects cur
+        ON cur.id = rp.document_object_id AND cur.project_id = rp.id
+      JOIN project_document_objects old
+        ON old.id = cur.supersedes_object_id AND old.project_id = rp.id
+      WHERE rp.id = NEW.project_id
+        AND old.state = 'committed'
+        AND NOT EXISTS (
+          SELECT 1 FROM revisions orr WHERE orr.document_object_id = old.id
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM project_document_objects spare
+          WHERE spare.project_id = rp.id
+            AND spare.state = 'committed'
+            AND spare.id NOT IN (cur.id, old.id)
+            AND NOT EXISTS (
+              SELECT 1 FROM revisions sr WHERE sr.document_object_id = spare.id
+            )
+        )
+    ), 0) > 0
+    AND NEW.stored_bytes - COALESCE((
+      SELECT old.stored_bytes FROM projects rp
+      JOIN project_document_objects cur
+        ON cur.id = rp.document_object_id AND cur.project_id = rp.id
+      JOIN project_document_objects old
+        ON old.id = cur.supersedes_object_id AND old.project_id = rp.id
+      WHERE rp.id = NEW.project_id
+        AND old.state = 'committed'
+        AND NOT EXISTS (
+          SELECT 1 FROM revisions orr WHERE orr.document_object_id = old.id
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM project_document_objects spare
+          WHERE spare.project_id = rp.id
+            AND spare.state = 'committed'
+            AND spare.id NOT IN (cur.id, old.id)
+            AND NOT EXISTS (
+              SELECT 1 FROM revisions sr WHERE sr.document_object_id = spare.id
+            )
+        )
+    ), 0) +
     COALESCE((
       SELECT bytes FROM account_project_storage
       WHERE user_id = (SELECT user_id FROM projects WHERE id = NEW.project_id)
