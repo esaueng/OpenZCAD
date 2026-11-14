@@ -84,7 +84,7 @@ describe('MotionStudyTimeline', () => {
   it('shows the selected study with its transport, ruler and tracks', () => {
     mount();
     const timeline = screen.getByRole('region', {
-      name: 'Motion study Motion 1'
+      name: 'Animation Motion 1'
     });
     expect(timeline).toBeTruthy();
     expect(screen.getByLabelText('Playhead').textContent).toBe('0.00');
@@ -361,7 +361,7 @@ describe('MotionStudyTimeline', () => {
     expect(commitPose).toHaveBeenCalledTimes(1);
     view.unmount();
     const { executed } = mount();
-    fireEvent.click(screen.getByRole('button', { name: 'Close motion study' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close animation' }));
     act(() => {
       assemblyRuntime.setOverride('j_pivot', [20]);
       assemblyRuntime.commitOverrides();
@@ -404,7 +404,7 @@ describe('MotionStudyTimeline', () => {
   it('closes: stops playback, deselects the study and reports it', () => {
     const { onClose } = mount();
     fireEvent.click(screen.getByRole('button', { name: 'Play' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Close motion study' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close animation' }));
     expect(getAssemblyRuntime().playback).toBeNull();
     expect(getAssemblyRuntime().selectedStudyId).toBeNull();
     expect(onClose).toHaveBeenCalled();

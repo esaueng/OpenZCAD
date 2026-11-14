@@ -378,6 +378,12 @@
   cursor: default;
 }
 
+/* A row with nothing to click (the bill of materials) shows no hover fill,
+   which would promise an action it does not have (review I66). */
+.assembly-row-line:has(> .assembly-row-main.is-static:only-child):hover {
+  background: none;
+}
+
 .assembly-row.is-selected .assembly-row-main {
   color: var(--color-selected-text);
 }
