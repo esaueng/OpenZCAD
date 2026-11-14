@@ -604,6 +604,9 @@ import { recordActivity } from './lib/activityLog';
 import { WORKSPACE_MODE_OPTIONS } from './lib/topBarPresentation';
 import { PanelResizer } from './components/PanelResizer';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { PatternProgressSlot } from './components/PatternProgressSlot';
+import { rebuildInDisposableWorker } from './lib/disposableRebuild';
+import { MotionStudyTimelineSlot } from './components/assembly/MotionStudyTimelineSlot';
 import { createLazyPanel } from './components/LazyPanel';
 import type { ModelPanel as ModelPanelComponent } from './components/modelPanels/ModelPanel';
 import type * as ModelPanelModule from './components/modelPanels/ModelPanel';
@@ -1447,18 +1450,6 @@ const LazyImageExportDialog = lazyWithStaleChunkNotice(() =>
 );
 // Off the entry chunk: nothing shows for the first 600 ms of a run anyway,
 // and most sessions never move a file at all.
-// The motion study timeline is drawn only in Assemble.
-const LazyMotionStudyTimeline = lazyWithStaleChunkNotice(() =>
-  import('./components/assembly/MotionStudyTimeline').then((module) => ({
-    default: module.MotionStudyTimeline
-  }))
-);
-// A pattern's rebuild notice, shown only while a pattern Done rebuilds.
-const LazyPatternProgress = lazyWithStaleChunkNotice(() =>
-  import('./components/PatternProgress').then((module) => ({
-    default: module.PatternProgress
-  }))
-);
 const LazyActivityPill = lazyWithStaleChunkNotice(() =>
   import('./components/ActivityPill').then((module) => ({
     default: module.ActivityPill
@@ -5531,11 +5522,8 @@ export function App() {
   const validatedFeature = useValidatedFeatureCommit({
     manager: () => managerRef.current,
     derive: (document) => syncCandidate(document),
-    // Loaded with the first import or pattern Done that needs it.
     deriveCancellable: (document, signal) =>
-      import('./lib/importRebuildWorkerClient').then((module) =>
-        module.rebuildImportInDisposableWorker(document, signal)
-      ),
+      rebuildInDisposableWorker(document, signal),
     commit: (command, derived) => executeCommand(command, derived ?? undefined),
     commitTransaction: (label, commands, derived) =>
       executeTransaction(label, commands, derived ?? undefined),
@@ -33752,14 +33740,13 @@ export function App() {
                     />
                   )}
                   {assembleMode && (
-                    <Suspense fallback={null}>
-                      <LazyMotionStudyTimeline
-                        floating
-                        assembly={doc.assembly}
-                        lengthUnit={doc.units}
-                        execute={executeCommand}
-                      />
-                    </Suspense>
+                    <MotionStudyTimelineSlot
+                      resetKey={doc.projectId}
+                      floating
+                      assembly={doc.assembly}
+                      lengthUnit={doc.units}
+                      execute={executeCommand}
+                    />
                   )}
                   {measurementDock}
                 </>
@@ -34731,12 +34718,10 @@ export function App() {
               file is moving, the pill is the one notice about it. */}
           <div className="activity-lane">
             {patternProgress && (
-              <Suspense fallback={null}>
-                <LazyPatternProgress
-                  name={patternProgress.name}
-                  onCancel={cancelPattern}
-                />
-              </Suspense>
+              <PatternProgressSlot
+                name={patternProgress.name}
+                onCancel={cancelPattern}
+              />
             )}
             {importRun && !patternProgress && (
               <Suspense fallback={null}>

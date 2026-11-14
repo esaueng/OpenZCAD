@@ -200,6 +200,12 @@ export function InPlaceCommandBar({
 }: InPlaceCommandBarProps) {
   const commandRef = useRef<HTMLDivElement>(null);
   const pendingEntries = useRef<PendingEntries>(new Set()).current;
+  /**
+   * The Done press under way found an entry it could not apply: that press
+   * finishes nothing, even once leaving the field gives the entry up and
+   * Done is enabled again with the value held before it.
+   */
+  const refusedPress = useRef(false);
   useLayoutEffect(() => {
     const command = commandRef.current;
     if (!command) return;
@@ -529,11 +535,31 @@ export function InPlaceCommandBar({
           // lost and the count typed seemed ignored. Applied here, Done
           // waits for that preview and then finishes, as a queued Enter does.
           let applied = false;
-          for (const flush of pendingEntries)
-            if (flush() === 'applied') applied = true;
+          let refused = false;
+          for (const flush of pendingEntries) {
+            const outcome = flush();
+            if (outcome === 'applied') applied = true;
+            else if (outcome === 'refused') refused = true;
+          }
+          refusedPress.current = refused;
+          if (refused) return;
           if (applied) setQueued(true);
         }}
-        onClick={onDone}
+        // A press whose click never came (the button was disabled under
+        // it) must not swallow a later keyboard Done.
+        onPointerCancel={() => {
+          refusedPress.current = false;
+        }}
+        onKeyDown={() => {
+          refusedPress.current = false;
+        }}
+        onClick={() => {
+          if (refusedPress.current) {
+            refusedPress.current = false;
+            return;
+          }
+          onDone();
+        }}
         disabled={locked || !canFinish}
         aria-keyshortcuts="Enter"
       >

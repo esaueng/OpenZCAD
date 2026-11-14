@@ -750,12 +750,15 @@ describe('Done with a number still being typed in Options', () => {
   function GridPattern({ onDone }: { onDone(count: number): void }) {
     const [count, setCount] = useState(3);
     const [previewed, setPreviewed] = useState(true);
+    // As the app holds a refused entry: Done waits until it is taken or the
+    // field gives it up (`inPlace.refuseValue` / `dropRefusal`).
+    const [refused, setRefused] = useState(false);
     return (
       <>
         <InPlaceCommandBar
           title="Grid pattern"
           hint="Drag the spacings · tap the counts"
-          canFinish={previewed}
+          canFinish={previewed && !refused}
           previewPending
           values={[
             {
@@ -771,12 +774,17 @@ describe('Done with a number still being typed in Options', () => {
           ]}
           onValueCommit={(_id, text) => {
             const next = Number(text);
-            if (!Number.isInteger(next)) return false;
+            if (!Number.isInteger(next)) {
+              setRefused(true);
+              return false;
+            }
+            setRefused(false);
             setCount(next);
             // A new request: Done waits for its own preview.
             setPreviewed(false);
             return true;
           }}
+          onValueRestore={() => setRefused(false)}
           onDone={() => onDone(count)}
           onCancel={vi.fn()}
         />
@@ -825,7 +833,10 @@ describe('Done with a number still being typed in Options', () => {
     expect(onDone).toHaveBeenCalledWith(3);
   });
 
-  it('does not finish over a refused entry', () => {
+  it('does not finish over a refused entry, even once leaving the field gives it up', () => {
+    // Review of #1501: 3 held, 2.5 typed, Done pressed. The refusal held
+    // Done at pointerdown, but leaving the field on mousedown gave the entry
+    // up and cleared it, and the click then finished with 3.
     const onDone = vi.fn();
     render(<GridPattern onDone={onDone} />);
     const field = screen.getByRole('textbox', { name: 'Count' });
@@ -834,8 +845,25 @@ describe('Done with a number still being typed in Options', () => {
     const done = screen.getByRole('button', { name: /Done/ });
     fireEvent.pointerDown(done, { button: 0 });
     expect(field).toHaveAttribute('aria-invalid', 'true');
+    fireEvent.mouseDown(done, { button: 0 });
+    // Leaving the field gives the entry up and restores 3, enabling Done
+    // again; the press that was refused still finishes nothing.
+    fireEvent.blur(field);
+    expect(done).toBeEnabled();
+    fireEvent.pointerUp(done, { button: 0 });
+    fireEvent.mouseUp(done, { button: 0 });
+    fireEvent.click(done);
+    expect(onDone).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'preview built' }));
     expect(onDone).not.toHaveBeenCalled();
+    // A press refused with no click to follow does not swallow the keyboard.
+    fireEvent.focus(field);
+    fireEvent.change(field, { target: { value: '2.5' } });
+    fireEvent.pointerDown(done, { button: 0 });
+    fireEvent.blur(field);
+    fireEvent.keyDown(done, { key: 'Enter' });
+    fireEvent.click(done);
+    expect(onDone).toHaveBeenCalledWith(3);
   });
 });
 
