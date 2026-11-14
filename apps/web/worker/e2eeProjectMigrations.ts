@@ -97,7 +97,9 @@ import {
   isE2eeProjectGroupStorageReady,
   isE2eeProjectMigrationStorageReady,
   isE2eeProjectVersionStorageReady,
+  assertClaimedDeleteComplete,
   claimObjectKeysForDelete,
+  ObjectKeyDeleteRetryError,
   isE2eeReverseStorageReady,
   isE2eeShareLinkStorageReady,
   isProjectStorageFormatReady,
@@ -1237,11 +1239,8 @@ async function dropStaged(
     );
     try {
       // Objects first: a failed delete keeps the rows, so a retry finds them.
-      await Promise.all(
-        blobRows
-          .filter((row) => claim.keys.has(row.object_key))
-          .map((row) => bucket.delete(row.object_key))
-      );
+      // Every started delete settles before any claim is released.
+      assertClaimedDeleteComplete(claim, await claim.deleteObjects(bucket));
     } catch (error) {
       await claim.release();
       throw error;
@@ -1533,10 +1532,12 @@ async function purgeObjects(
         : { documentObjects: listedIds },
     { sql: fence, binds: [projectId] }
   );
-  const deleted = owned.filter((row) => claim.keys.has(row.object_key));
   try {
     // Objects first: a failed delete keeps the rows, so a retry finds them.
-    await Promise.all(deleted.map((row) => bucket.delete(row.object_key)));
+    // Every started delete settles before any claim is released, and a
+    // key whose delete failed stays claimed until its claim lapses.
+    const outcome = await claim.deleteObjects(bucket);
+    assertClaimedDeleteComplete(claim, outcome);
     const ids = JSON.stringify(listedIds);
     await runBatch(db, [
       ...extraDeletes.map((sql) =>
@@ -1551,14 +1552,14 @@ async function purgeObjects(
         )
         .bind(projectId, ids, projectId)
     ]);
+    return {
+      more: (results ?? []).length > MIGRATION_STEP_OBJECTS,
+      rows: rows.length,
+      objects: outcome.deleted.size
+    };
   } finally {
     await claim.release();
   }
-  return {
-    more: (results ?? []).length > MIGRATION_STEP_OBJECTS,
-    rows: rows.length,
-    objects: deleted.length
-  };
 }
 
 async function purgeStep(
@@ -3119,6 +3120,10 @@ export async function handleE2eeProjectMigrationRequest(
         { error: error.message, code: error.code, ...error.extra },
         error.status
       );
+    }
+    // Migration 0050: another cleanup still holds a key this one deletes.
+    if (error instanceof ObjectKeyDeleteRetryError) {
+      return json({ error: error.message, code: 'STORAGE_CLEANUP_BUSY' }, 503);
     }
     throw error;
   }

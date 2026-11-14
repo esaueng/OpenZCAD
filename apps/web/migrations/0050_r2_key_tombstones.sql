@@ -16,8 +16,15 @@
 --    fence holds and no row other than the ones it is removing names the
 --    key (upload sessions, encrypted blobs, source assets, artifacts,
 --    document objects).
--- 2. It deletes from R2 only the keys it holds a fresh claim on.
--- 3. It removes its rows, then releases its claims.
+-- 2. It deletes from R2 only the keys it holds a fresh claim on: it
+--    re-reads its claim right before, starts every delete within 15
+--    minutes of claiming, and waits for all of them to settle.
+-- 3. It removes its rows, then releases its claims. A claim on a key
+--    whose R2 delete failed (or that an earlier failed delete left) is not
+--    released but left `settling`: that call may still remove the bytes,
+--    so the key keeps blocking writers until the claim lapses. Another
+--    cleanup may take a settling claim over and delete the key again: no
+--    row can have come to name it meanwhile.
 --
 -- While a claim is fresh, the triggers below refuse any new row that names
 -- the key, so no writer can come to rely on bytes the deleter is about to
@@ -28,11 +35,13 @@
 -- exists.
 --
 -- A claim is fresh for an hour. An older one (a cleanup that died between
--- steps) no longer blocks writers, and its deleter no longer deletes.
+-- steps) no longer blocks writers. Its deleter stopped starting deletes
+-- 45 minutes before that, far longer than one R2 call can stay in flight.
 CREATE TABLE IF NOT EXISTS r2_key_tombstones (
   object_key TEXT PRIMARY KEY CHECK (length(object_key) BETWEEN 1 AND 1024),
   token TEXT NOT NULL CHECK (length(token) BETWEEN 1 AND 64),
-  created_at INTEGER NOT NULL CHECK (created_at >= 0)
+  created_at INTEGER NOT NULL CHECK (created_at >= 0),
+  settling INTEGER NOT NULL DEFAULT 0 CHECK (settling IN (0, 1))
 ) WITHOUT ROWID;
 
 CREATE INDEX IF NOT EXISTS r2_key_tombstones_token

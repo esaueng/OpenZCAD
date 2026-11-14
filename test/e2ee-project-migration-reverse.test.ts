@@ -2667,3 +2667,252 @@ describe('a stale cleanup never deletes bytes a newer row stores under the same 
     expect(srv.bucket.objects.has(`e2ee/${projectId}/${blobId}`)).toBe(true);
   });
 });
+
+describe('claimed R2 deletes settle before their claims go (PR #1473 review)', () => {
+  it('keeps every key claimed until all of a step’s deletes settled, even when one of them failed', async () => {
+    const { sweepProjectMigrations } =
+      await import('../apps/web/worker/e2eeProjectMigrations');
+    const srv = roomServer();
+    const { projectId } = await encryptedProject(srv, { revisions: 1 });
+    const first = reverseOn(srv, owner, 'owner_desktop', {
+      beforeStep: (step) => {
+        if (step === 'cutover') throw new Error('pause first');
+      }
+    });
+    await expect(decryptFully(first, projectId)).rejects.toThrow('pause first');
+    const key1 = `project-storage/${projectId}/assets/${'a'.repeat(64)}.step.txt.gz`;
+    const key2 = `project-storage/${projectId}/assets/${'b'.repeat(64)}.step.txt.gz`;
+    const insertRow = (id: string, key: string, checksum: string) =>
+      srv.db
+        .prepare(
+          `INSERT INTO project_storage_assets
+             (id, project_id, kind, object_key, checksum_sha256,
+              logical_bytes, stored_bytes, content_encoding, created_at)
+           VALUES (?, ?, 'step-source', ?, ?, 12, 12, 'gzip', 'now')`
+        )
+        .run(id, projectId, key, checksum);
+    const store = (id: string, key: string, checksum: string) => {
+      srv.bucket.objects.set(key, text('source bytes').slice().buffer);
+      insertRow(id, key, checksum);
+    };
+    store('asset_first', key1, 'a'.repeat(64));
+    store('asset_second', key2, 'b'.repeat(64));
+    srv.db
+      .prepare(
+        'UPDATE e2ee_project_migrations SET lease_expires_at = ? WHERE project_id = ?'
+      )
+      .run(Date.now() - 60_000, projectId);
+    const deleteMock = srv.bucket.delete as unknown as Mock<
+      (key: string) => Promise<void>
+    >;
+    const remove = deleteMock.getMockImplementation()!;
+    let entered!: () => void;
+    let release!: () => void;
+    let failed!: () => void;
+    const atDelete = new Promise<void>((resolve) => (entered = resolve));
+    const released = new Promise<void>((resolve) => (release = resolve));
+    const secondFailed = new Promise<void>((resolve) => (failed = resolve));
+    let blocked = false;
+    let broke = false;
+    deleteMock.mockImplementation(async (key: string) => {
+      if (key === key1 && !blocked) {
+        blocked = true;
+        entered();
+        await released;
+        return remove(key);
+      }
+      if (key === key2 && !broke) {
+        broke = true;
+        failed();
+        throw new Error('parallel R2 delete failed');
+      }
+      return remove(key);
+    });
+    // The sweep's purge deletes both keys in parallel: key 2's delete
+    // fails while key 1's is still in flight.
+    let settled = false;
+    const sweep = sweepProjectMigrations(srv.env, true, () => false).finally(
+      () => (settled = true)
+    );
+    await atDelete;
+    await secondFailed;
+    for (let tick = 0; tick < 20; tick++) await Promise.resolve();
+    // The step waits for key 1's delete, so its claim still holds: no
+    // writer can come to rely on bytes that delete is about to remove.
+    expect(settled).toBe(false);
+    expect(
+      rows(
+        srv,
+        'SELECT object_key FROM r2_key_tombstones WHERE object_key = ?',
+        key1
+      )
+    ).toHaveLength(1);
+    expect(() => insertRow('asset_refused', key1, 'a'.repeat(64))).toThrow(
+      'r2_key_deleting'
+    );
+    release();
+    await sweep;
+    // Key 1's delete finished, so its claim is released; key 2's failed
+    // delete may still remove its bytes, so its claim is left settling and
+    // keeps blocking writers until it lapses. Both rows stay for the retry.
+    expect(rows(srv, 'SELECT object_key FROM r2_key_tombstones')).toEqual([
+      { object_key: key2 }
+    ]);
+    expect(
+      rows(
+        srv,
+        'SELECT id FROM project_storage_assets WHERE project_id = ? ORDER BY id',
+        projectId
+      )
+    ).toEqual([{ id: 'asset_first' }, { id: 'asset_second' }]);
+    expect(() => insertRow('asset_refused', key2, 'b'.repeat(64))).toThrow(
+      'r2_key_deleting'
+    );
+    deleteMock.mockImplementation(remove);
+    // The owner cleans the attempt up at once (taking the settling claim
+    // over), a fresh decryption completes, and a live row stores key 1
+    // again: no delete of the old cleanup is left to remove it.
+    await first.engine.cancel(projectId);
+    expect(srv.bucket.objects.has(key2)).toBe(false);
+    expect(rows(srv, 'SELECT object_key FROM r2_key_tombstones')).toEqual([
+      { object_key: key2 }
+    ]);
+    const second = reverseOn(srv, owner, 'owner_desktop', { from: first.d });
+    await decryptFully(second, projectId);
+    store('asset_live', key1, 'a'.repeat(64));
+    expect(
+      rows(
+        srv,
+        'SELECT id FROM project_storage_assets WHERE object_key = ?',
+        key1
+      )
+    ).toEqual([{ id: 'asset_live' }]);
+    expect(srv.bucket.objects.has(key1)).toBe(true);
+  });
+
+  it('a stale deleting-blob collector never deletes a re-uploaded, committed blob of the same id', async () => {
+    const { collectContentBlobs } =
+      await import('../apps/web/worker/e2eeContentBlobs');
+    const { EnvelopeKey, encryptContentBlob } =
+      await import('@openzcad/crypto');
+    const { createContentBlobsApi } =
+      await import('../apps/web/src/lib/e2ee/encryptedContentBlobs');
+    const srv = roomServer();
+    const { projectId, encryptor } = await encryptedProject(srv, {
+      revisions: 1
+    });
+    const api = createContentBlobsApi(encryptor.fetcher);
+    const good = await encryptContentBlob(
+      EnvelopeKey.generate(),
+      'import-source',
+      STEP,
+      { compression: 'none' }
+    );
+    const blobId = good.reference.blobId;
+    const upload = async () => {
+      const started = await api.startUpload(projectId, {
+        blobId,
+        kind: 'import-source'
+      });
+      if (started.committed) throw new Error('unexpected existing blob');
+      const put = await encryptor.fetcher(started.session.uploadUrl, {
+        method: 'PUT',
+        body: good.envelope
+      });
+      expect(put.status).toBe(204);
+      await api.finalize(projectId, blobId, {
+        uploadSessionId: started.session.uploadSessionId
+      });
+    };
+    await upload();
+    const db = srv.env.DB as D1Database;
+    const prepare = db.prepare.bind(db);
+    let entered!: () => void;
+    let release!: () => void;
+    const listed = new Promise<void>((resolve) => (entered = resolve));
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let intercept = true;
+    const wrap = (
+      statement: D1PreparedStatement,
+      sql: string
+    ): D1PreparedStatement =>
+      new Proxy(statement, {
+        get(target, property) {
+          if (property === 'bind')
+            return (...args: unknown[]) => wrap(target.bind(...args), sql);
+          if (property === 'all')
+            return async () => {
+              const result = await target.all();
+              if (
+                intercept &&
+                /FROM e2ee_content_blobs\s+WHERE project_id = \? AND state = 'deleting'/.test(
+                  sql
+                )
+              ) {
+                intercept = false;
+                entered();
+                await released;
+              }
+              return result;
+            };
+          const value = Reflect.get(target, property) as unknown;
+          return typeof value === 'function'
+            ? (value as (...args: unknown[]) => unknown).bind(target)
+            : value;
+        }
+      });
+    db.prepare = (sql: string) => wrap(prepare(sql), sql);
+    // Collector A marks the unreferenced blob `deleting`, lists it, and
+    // pauses before claiming its key.
+    const later = Date.now() + 8 * 24 * 60 * 60 * 1000;
+    const stale = collectContentBlobs(
+      db,
+      srv.env.ARTIFACTS as never,
+      projectId,
+      later
+    );
+    await listed;
+    db.prepare = prepare;
+    // Collector B removes the blob and its bytes; the client uploads the
+    // same blob id again and saves a version that references it.
+    await collectContentBlobs(db, srv.env.ARTIFACTS as never, projectId, later);
+    expect(
+      rows(
+        srv,
+        'SELECT blob_id FROM e2ee_content_blobs WHERE project_id = ? AND blob_id = ?',
+        projectId,
+        blobId
+      )
+    ).toHaveLength(0);
+    await upload();
+    encryptor.references.remember(projectId, good.reference, sha256(STEP));
+    const head = await encryptor.store.loadProject(projectId);
+    await encryptor.store.saveProjectDocument({
+      projectId: head.projectId,
+      expectedVersion: head.version,
+      document: { ...withImport(head, blobId), version: head.version + 1 }
+    });
+    expect(
+      rows(
+        srv,
+        'SELECT blob_id FROM e2ee_version_blobs WHERE project_id = ? AND blob_id = ?',
+        projectId,
+        blobId
+      ).length
+    ).toBeGreaterThan(0);
+    // A resumes: the committed row is not the `deleting` row it listed, so
+    // it claims and deletes nothing, and removes no row.
+    release();
+    await stale;
+    expect(
+      rows(
+        srv,
+        'SELECT state FROM e2ee_content_blobs WHERE project_id = ? AND blob_id = ?',
+        projectId,
+        blobId
+      )
+    ).toEqual([{ state: 'committed' }]);
+    expect(srv.bucket.objects.has(`e2ee/${projectId}/${blobId}`)).toBe(true);
+    expect(rows(srv, 'SELECT object_key FROM r2_key_tombstones')).toEqual([]);
+  });
+});

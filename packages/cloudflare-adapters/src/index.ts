@@ -572,32 +572,169 @@ export const isR2KeyTombstoneReady = cachedSchemaProbe(
   (row) => row?.ready === 1
 );
 
-/** How long a key claim blocks writers and lets its deleter delete. */
+/**
+ * How long a key claim blocks writers (migration 0050's triggers). Only
+ * once it has lapsed can another claim on the key be taken, or a row
+ * naming it inserted.
+ */
 export const R2_KEY_TOMBSTONE_TTL_MS = 60 * 60 * 1000;
+
+/**
+ * How long after taking its claim a deleter may still start an R2 delete
+ * under it. Every delete starts inside this window, right after a re-read
+ * of the stored claim, so it is issued at least
+ * `R2_KEY_TOMBSTONE_TTL_MS - R2_KEY_DELETE_WINDOW_MS` (45 minutes) before
+ * any writer can reuse its key: far longer than one R2 call of a Worker
+ * invocation can stay in flight.
+ */
+export const R2_KEY_DELETE_WINDOW_MS = 15 * 60 * 1000;
 
 /** Rows a deleter is removing: they do not keep their own keys alive. */
 export interface OwnObjectRows {
   readonly uploadSessions?: readonly string[];
   readonly blobs?: readonly string[];
+  /**
+   * Encrypted blobs a garbage collector listed in state `deleting`, by row
+   * identity: only a row that is still that very row (blob id and
+   * `created_at`), still `deleting`, is exempt. A committed re-upload of the
+   * same blob id, a newer row under the same key, keeps the key alive.
+   */
+  readonly deletingBlobs?: readonly {
+    readonly blobId: string;
+    readonly createdAt: string;
+  }[];
   readonly assets?: readonly string[];
   readonly artifacts?: readonly string[];
   readonly documentObjects?: readonly string[];
 }
 
+/** What `ObjectKeyClaim.deleteObjects` did, key by key. */
+export interface ClaimedDeleteOutcome {
+  /** Deleted from R2. */
+  readonly deleted: ReadonlySet<string>;
+  /** The R2 delete failed; the claim is left settling on these keys. */
+  readonly failed: ReadonlyMap<string, unknown>;
+  /**
+   * Not deleted: the claim was no longer held, or its delete window had
+   * passed. Keep their rows; a later pass claims them again.
+   */
+  readonly lapsed: ReadonlySet<string>;
+}
+
 /** The keys a deleter may remove from R2, until it releases them. */
 export interface ObjectKeyClaim {
+  /** Keys this claim holds. */
   readonly keys: ReadonlySet<string>;
+  /**
+   * Keys not claimed because another deleter holds a fresh claim on them
+   * (not because a row names them). Keep their rows for a retry: that
+   * deleter may yet fail. A claim an earlier failed delete left settling
+   * is taken over instead, so it never makes a key contended.
+   */
+  readonly contended: ReadonlySet<string>;
+  /**
+   * Deletes `keys` (default: every claimed key) from R2. Immediately before
+   * starting, it re-reads the claim and skips any key it no longer holds
+   * inside the delete window; it then waits for every started delete to
+   * settle, so no delete is still in flight when the claim is released.
+   */
+  deleteObjects(
+    bucket: { delete(key: string): Promise<unknown> },
+    keys?: Iterable<string>
+  ): Promise<ClaimedDeleteOutcome>;
+  /**
+   * Releases the claim, except on keys whose R2 delete failed, now or in
+   * a claim this one took over: a failed call may still remove the bytes,
+   * so those are left settling and keep blocking writers until the claim
+   * lapses on its own. Any later cleanup may take them over.
+   */
   release(): Promise<void>;
+}
+
+/** A claimed R2 delete that failed or could not run yet: retry later. */
+export class ObjectKeyDeleteRetryError extends Error {
+  constructor(
+    message = 'Stored objects are still being removed. Try again later.'
+  ) {
+    super(message);
+    this.name = 'ObjectKeyDeleteRetryError';
+  }
+}
+
+/**
+ * Throws when a claimed delete pass left work for a retry: an R2 delete
+ * failed (with its error), a claim lapsed, or another deleter holds a key.
+ */
+export function assertClaimedDeleteComplete(
+  claim: ObjectKeyClaim,
+  outcome: ClaimedDeleteOutcome
+): void {
+  for (const failure of outcome.failed.values()) {
+    throw failure instanceof Error ? failure : new ObjectKeyDeleteRetryError();
+  }
+  if (outcome.lapsed.size || claim.contended.size) {
+    throw new ObjectKeyDeleteRetryError();
+  }
+}
+
+function settledClaim(
+  keys: ReadonlySet<string>,
+  contended: ReadonlySet<string>,
+  claimedAt: number,
+  verify: (keys: readonly string[]) => Promise<Set<string>>,
+  release: (keep: readonly string[]) => Promise<void>
+): ObjectKeyClaim {
+  const failedKeys = new Set<string>();
+  return {
+    keys,
+    contended,
+    async deleteObjects(bucket, requested = keys) {
+      const wanted = [...new Set(requested)].filter((key) => keys.has(key));
+      const held = wanted.length ? await verify(wanted) : new Set<string>();
+      const lapsed = new Set<string>();
+      const started: { key: string; result: Promise<unknown> }[] = [];
+      for (const key of wanted) {
+        // The window is checked again as each delete starts.
+        if (
+          !held.has(key) ||
+          Date.now() - claimedAt >= R2_KEY_DELETE_WINDOW_MS
+        ) {
+          lapsed.add(key);
+          continue;
+        }
+        started.push({
+          key,
+          result: (async () => bucket.delete(key))()
+        });
+      }
+      const settled = await Promise.allSettled(
+        started.map((entry) => entry.result)
+      );
+      const deleted = new Set<string>();
+      const failed = new Map<string, unknown>();
+      settled.forEach((result, index) => {
+        const key = started[index]!.key;
+        if (result.status === 'fulfilled') {
+          deleted.add(key);
+        } else {
+          failed.set(key, result.reason);
+          failedKeys.add(key);
+        }
+      });
+      return { deleted, failed, lapsed };
+    },
+    release: () => release([...failedKeys])
+  };
 }
 
 /**
  * Claims `keys` for deletion (migration 0050's protocol), in one statement:
  * a key is claimed only while `fence` holds (one SQL condition and its
  * binds, which must use `?` placeholders only) and no row other than `own`
- * names it. Delete from R2 only the returned keys, then remove the rows,
- * then `release()`. While a claim is fresh, no new row can name its key, so
- * the delete can never remove bytes a newer row stores. Before migration
- * 0050 every key is returned, as before.
+ * names it. Delete from R2 only through `deleteObjects`, then remove the
+ * rows, then `release()`. While a claim is fresh, no new row can name its
+ * key, so the delete can never remove bytes a newer row stores. Before
+ * migration 0050 every key is returned, as before.
  */
 export async function claimObjectKeysForDelete(
   db: D1Database,
@@ -606,13 +743,18 @@ export async function claimObjectKeysForDelete(
   fence?: { sql: string; binds: readonly unknown[] }
 ): Promise<ObjectKeyClaim> {
   const unique = [...new Set(keys)];
-  const none = async () => {};
-  if (!unique.length) return { keys: new Set(), release: none };
-  if (!(await isR2KeyTombstoneReady(db))) {
-    return { keys: new Set(unique), release: none };
+  const claimedAt = Date.now();
+  if (!unique.length || !(await isR2KeyTombstoneReady(db))) {
+    // Before migration 0050 there is nothing to hold or re-read.
+    return settledClaim(
+      new Set(unique),
+      new Set(),
+      claimedAt,
+      async (wanted) => new Set(wanted),
+      async () => {}
+    );
   }
   const token = crypto.randomUUID();
-  const now = Date.now();
   const listed = JSON.stringify(unique);
   const ids = (values?: readonly string[]) => JSON.stringify(values ?? []);
   // A claim that outlived its deleter blocks nothing; it is dropped here
@@ -622,7 +764,7 @@ export async function claimObjectKeysForDelete(
       `DELETE FROM r2_key_tombstones WHERE created_at <= ?
        AND object_key IN (SELECT value FROM json_each(?))`
     )
-    .bind(now - R2_KEY_TOMBSTONE_TTL_MS, listed)
+    .bind(claimedAt - R2_KEY_TOMBSTONE_TTL_MS, listed)
     .run();
   await db
     .prepare(
@@ -633,7 +775,11 @@ export async function claimObjectKeysForDelete(
                            AND s.id NOT IN (SELECT value FROM json_each(?4)))
          AND NOT EXISTS (SELECT 1 FROM e2ee_content_blobs b
                          WHERE b.object_key = k.value
-                           AND b.blob_id NOT IN (SELECT value FROM json_each(?5)))
+                           AND b.blob_id NOT IN (SELECT value FROM json_each(?5))
+                           AND NOT (b.state = 'deleting' AND EXISTS (
+                             SELECT 1 FROM json_each(?9) d
+                             WHERE json_extract(d.value, '$[0]') = b.blob_id
+                               AND json_extract(d.value, '$[1]') = b.created_at)))
          AND NOT EXISTS (SELECT 1 FROM project_storage_assets a
                          WHERE a.object_key = k.value
                            AND a.id NOT IN (SELECT value FROM json_each(?6)))
@@ -644,36 +790,73 @@ export async function claimObjectKeysForDelete(
                          WHERE o.object_key = k.value
                            AND o.id NOT IN (SELECT value FROM json_each(?8)))
          AND ${fence ? fence.sql : '1'}
-       ON CONFLICT (object_key) DO NOTHING`
+       ON CONFLICT (object_key) DO UPDATE
+         SET token = excluded.token, created_at = excluded.created_at
+         WHERE r2_key_tombstones.settling = 1`
     )
     .bind(
       token,
-      now,
+      claimedAt,
       listed,
       ids(own.uploadSessions),
       ids(own.blobs),
       ids(own.assets),
       ids(own.artifacts),
       ids(own.documentObjects),
+      JSON.stringify(
+        (own.deletingBlobs ?? []).map((row) => [row.blobId, row.createdAt])
+      ),
       ...(fence?.binds ?? [])
     )
     .run();
   const { results } = await db
     .prepare(
-      `SELECT object_key FROM r2_key_tombstones
-       WHERE token = ? AND created_at > ?`
+      `SELECT object_key, token, settling FROM r2_key_tombstones
+       WHERE object_key IN (SELECT value FROM json_each(?)) AND created_at > ?`
     )
-    .bind(token, Date.now() - R2_KEY_TOMBSTONE_TTL_MS)
-    .all<{ object_key: string }>();
-  return {
-    keys: new Set((results ?? []).map((row) => row.object_key)),
-    release: async () => {
-      await db
-        .prepare('DELETE FROM r2_key_tombstones WHERE token = ?')
-        .bind(token)
-        .run();
+    .bind(listed, Date.now() - R2_KEY_TOMBSTONE_TTL_MS)
+    .all<{ object_key: string; token: string; settling: number }>();
+  const claimed = new Set<string>();
+  const contended = new Set<string>();
+  for (const row of results ?? []) {
+    if (row.token === token) claimed.add(row.object_key);
+    else if (!row.settling) contended.add(row.object_key);
+  }
+  return settledClaim(
+    claimed,
+    contended,
+    claimedAt,
+    async (wanted) => {
+      const { results: held } = await db
+        .prepare(
+          `SELECT object_key FROM r2_key_tombstones
+           WHERE token = ? AND created_at > ?
+             AND object_key IN (SELECT value FROM json_each(?))`
+        )
+        .bind(
+          token,
+          Date.now() - R2_KEY_DELETE_WINDOW_MS,
+          JSON.stringify(wanted)
+        )
+        .all<{ object_key: string }>();
+      return new Set((held ?? []).map((row) => row.object_key));
+    },
+    async (failed) => {
+      await db.batch([
+        db
+          .prepare(
+            `UPDATE r2_key_tombstones SET settling = 1 WHERE token = ?
+             AND object_key IN (SELECT value FROM json_each(?))`
+          )
+          .bind(token, JSON.stringify(failed)),
+        db
+          .prepare(
+            'DELETE FROM r2_key_tombstones WHERE token = ? AND settling = 0'
+          )
+          .bind(token)
+      ]);
     }
-  };
+  );
 }
 
 /**
@@ -4035,6 +4218,16 @@ export class D1R2PersistenceService implements PersistenceService {
         ) {
           throw new RevisionIdCollisionError();
         }
+        // A first attempt may have committed these rows and then failed to
+        // store a source asset again (`ensureWrittenAssets`): its retry
+        // repairs it before answering staged.
+        await this.repairStoredAssets(
+          input.projectId,
+          (input.storage
+            ? await prepareClientProjectStorageSnapshot(document, input.storage)
+            : await prepareProjectStorageSnapshot(document)
+          ).assets
+        );
         return {
           objectId: existing.object_id,
           checksumSha256: existing.checksum_sha256,
@@ -4060,6 +4253,7 @@ export class D1R2PersistenceService implements PersistenceService {
           .bind(input.projectId, journaled.checksumSha256)
           .first<{ id: string }>();
         if (existing) {
+          await this.repairStoredAssets(input.projectId, prepared.assets);
           return {
             objectId: existing.id,
             checksumSha256: journaled.checksumSha256,
@@ -4194,7 +4388,7 @@ export class D1R2PersistenceService implements PersistenceService {
       try {
         await Promise.allSettled([
           bucket.delete(write.objectKey),
-          ...[...claim.keys].map((key) => bucket.delete(key))
+          claim.deleteObjects(bucket)
         ]);
       } finally {
         await claim.release();
@@ -5184,9 +5378,12 @@ export class D1R2PersistenceService implements PersistenceService {
     );
     let results: Awaited<ReturnType<D1Database['batch']>>;
     try {
-      if (claim.keys.has(upload.objectKey)) {
-        await this.env.ARTIFACTS.delete(upload.objectKey);
-      }
+      // Another deleter still holds the key, or this claim lapsed before
+      // its delete could start: the session stays `aborting` for a retry.
+      if (claim.contended.size) return false;
+      const outcome = await claim.deleteObjects(this.env.ARTIFACTS);
+      for (const error of outcome.failed.values()) throw error;
+      if (outcome.lapsed.size) return false;
       results = await this.env.DB!.batch([
         this.env
           .DB!.prepare(
@@ -6755,6 +6952,40 @@ export class D1R2PersistenceService implements PersistenceService {
     }
   }
 
+  /**
+   * Stores again any of a document's source assets that a row of the
+   * project names but whose object is gone: what an idempotent retry of a
+   * write that committed its rows, then failed `ensureWrittenAssets`, does
+   * before treating that write as complete.
+   */
+  private async repairStoredAssets(
+    projectId: string,
+    assets: readonly ProjectStorageAssetObject[]
+  ): Promise<void> {
+    const bucket = this.projectStorageBucket();
+    if (!bucket || typeof bucket.head !== 'function' || !assets.length) {
+      return;
+    }
+    const { results } = await this.env
+      .DB!.prepare(
+        `SELECT object_key FROM project_storage_assets
+         WHERE project_id = ?
+           AND object_key IN (SELECT value FROM json_each(?))`
+      )
+      .bind(projectId, JSON.stringify(assets.map((asset) => asset.objectKey)))
+      .all<{ object_key: string }>();
+    const named = new Set((results ?? []).map((row) => row.object_key));
+    for (const asset of assets) {
+      if (!named.has(asset.objectKey)) continue;
+      if (await bucket.head(asset.objectKey)) continue;
+      await bucket.put(
+        asset.objectKey,
+        Uint8Array.from(asset.storedBody).buffer,
+        { httpMetadata: { contentType: asset.contentType } }
+      );
+    }
+  }
+
   private async putProjectStorageObjects(
     document: ProjectDocument,
     options?: {
@@ -7150,7 +7381,7 @@ export class D1R2PersistenceService implements PersistenceService {
         try {
           await Promise.allSettled([
             bucket.delete(write.objectKey),
-            ...[...claim.keys].map((key) => bucket.delete(key))
+            claim.deleteObjects(bucket)
           ]);
         } finally {
           await claim.release();
