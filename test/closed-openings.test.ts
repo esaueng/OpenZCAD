@@ -108,7 +108,13 @@ function planeFace(
 }
 
 /** Offsets one face and reports what `openingsClosedByEdit` sees. */
-async function offset(built: Built, face: FaceTopology, distance: number) {
+async function offset(
+  built: Built,
+  face: FaceTopology,
+  distance: number,
+  /** Stands in for a kernel that dropped some faces' names in the edit. */
+  degrade: (derived: DerivedState) => DerivedState = (derived) => derived
+) {
   const next = new CommandManager(built.document).execute(
     commandFactories.directEditBody({
       name: 'Offset face',
@@ -125,8 +131,9 @@ async function offset(built: Built, face: FaceTopology, distance: number) {
       }
     })
   );
-  const derived = await adapter.syncDocument(next);
-  expect(derived.warnings ?? []).toEqual([]);
+  const built_ = await adapter.syncDocument(next);
+  expect(built_.warnings ?? []).toEqual([]);
+  const derived = degrade(built_);
   const closed = openingsClosedByEdit(
     built.document,
     next,
@@ -161,6 +168,40 @@ describe('openings a face offset closes', () => {
     expect(await offset(built, planeFace(built, 'z', 10), 6)).toEqual([]);
     // The wall's own top, away from the window.
     expect(await offset(built, planeFace(built, 'z', 40), 5)).toEqual([]);
+  }, 120_000);
+
+  it('does not name an open window whose faces only lost their names', async () => {
+    // Closing A removes faces, so the face count lets the check run. If the
+    // same edit dropped open window B's names (its faces fall back to
+    // hash-only) while the wall keeps its own, every origin check passes:
+    // B looks gone too. Its faces still stand where they were, untraced,
+    // and that is what keeps B out of the notice.
+    const built = await windowedWall([
+      { name: 'Window A', x: 6 },
+      { name: 'Window B', x: 40 }
+    ]);
+    const dropWindowBNames = (derived: DerivedState): DerivedState => {
+      const body = derived.bodyRepresentations[built.bodyId]!;
+      const faces = body.topology!.faces.map((face) =>
+        face.reference?.lineageName.includes('operand.2.')
+          ? { ...face, reference: undefined }
+          : face
+      );
+      expect(faces.filter((face) => !face.reference).length).toBeGreaterThan(
+        body.topology!.faces.filter((face) => !face.reference).length
+      );
+      return {
+        ...derived,
+        bodyRepresentations: {
+          ...derived.bodyRepresentations,
+          [built.bodyId]: { ...body, topology: { ...body.topology!, faces } }
+        }
+      };
+    };
+    const jamb = planeFace(built, 'x', 6, 6);
+    expect(await offset(built, jamb, 14, dropWindowBNames)).toEqual([
+      'Window A'
+    ]);
   }, 120_000);
 
   it('names only the window closed when one subtract cut two', async () => {

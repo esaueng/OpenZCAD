@@ -9764,16 +9764,26 @@ export function App() {
       // Advice only: the commit has already landed.
     }
     if (advisory) announce(advisory);
-    if (!derived) return;
+    const manager = managerRef.current;
+    if (!derived || !manager) return;
+    // The check lands a moment later. It speaks only about this commit, so
+    // it stays silent once anything moved on: an undo, redo or later edit
+    // (each moves the edit history; the rebuild's own repairs do not),
+    // another project or a reopen (another manager), or a newer notice.
+    const historyAt = (document: ProjectDocument) =>
+      `${document.editHistory?.cursor}/${document.editHistory?.entries.length}`;
+    const position = historyAt(manager.document);
+    const toastId = toastIdRef.current;
     void closedOpenings()
       .then(({ closedOpeningsAdvisory }) => {
-        const notice = closedOpeningsAdvisory(before, after, derived);
-        // Only while the model it speaks about is still the one open.
         if (
-          notice &&
-          managerRef.current?.document.projectId === after.projectId
+          managerRef.current !== manager ||
+          historyAt(manager.document) !== position ||
+          toastIdRef.current !== toastId
         )
-          announce(notice, undefined, { tone: 'warning' });
+          return;
+        const notice = closedOpeningsAdvisory(before, after, derived);
+        if (notice) announce(notice, undefined, { tone: 'warning' });
       })
       .catch(() => {
         // Advice only, as above.

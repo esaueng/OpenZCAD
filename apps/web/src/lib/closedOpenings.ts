@@ -3,8 +3,10 @@ import {
   ownEntry,
   type BodyId,
   type DerivedState,
+  type FaceTopology,
   type FeatureId,
-  type ProjectDocument
+  type ProjectDocument,
+  type Vector3
 } from '@openzcad/shared';
 import { faceLineageTracer } from './historyFocus';
 
@@ -23,7 +25,9 @@ import { faceLineageTracer } from './historyFocus';
  * before the edit cannot be traced, so an opening drawn only by such faces is
  * not reported (a quiet miss, never a false alarm). If the edit left the body
  * with no traceable face from an origin it had before, its lineage fell back
- * wholesale and every origin would look gone: nothing is reported then.
+ * wholesale and every origin would look gone: nothing is reported then. A
+ * fallback for some faces alone is caught per opening: one whose face could
+ * still stand untraced in the result (`mayBeSameFace`) is not reported.
  */
 export function openingsClosedByEdit(
   before: ProjectDocument,
@@ -49,7 +53,7 @@ export function openingsClosedByEdit(
   };
 
   const traceBefore = faceLineageTracer(before);
-  const cutOrigins = new Set<FeatureId>();
+  const cutOrigins = new Map<FeatureId, FaceTopology[]>();
   const originsBefore = new Set<FeatureId>();
   for (const face of beforeFaces) {
     const reference = face.reference;
@@ -57,17 +61,25 @@ export function openingsClosedByEdit(
     const trace = traceBefore(reference);
     if (!trace?.origin) continue;
     originsBefore.add(trace.origin);
-    if (isCutOrigin(trace.origin, trace.cutBy)) cutOrigins.add(trace.origin);
+    if (isCutOrigin(trace.origin, trace.cutBy)) {
+      const faces = cutOrigins.get(trace.origin) ?? [];
+      faces.push(face);
+      cutOrigins.set(trace.origin, faces);
+    }
   }
   if (cutOrigins.size === 0) return [];
 
   const traceAfter = faceLineageTracer(after);
   const originsAfter = new Set<FeatureId>();
+  const untracedAfter: FaceTopology[] = [];
   for (const face of afterFaces) {
     const reference = face.reference;
-    if (!reference || reference.currentHash !== face.hash) continue;
-    const origin = traceAfter(reference)?.origin;
+    const origin =
+      reference && reference.currentHash === face.hash
+        ? traceAfter(reference)?.origin
+        : null;
     if (origin) originsAfter.add(origin);
+    else untracedAfter.push(face);
   }
   // The lineage survived the edit: some origin is still traced on both sides.
   if (![...originsAfter].some((origin) => originsBefore.has(origin))) {
@@ -75,11 +87,44 @@ export function openingsClosedByEdit(
   }
 
   return [...cutOrigins]
-    .filter((origin) => !originsAfter.has(origin))
-    .flatMap((origin) => {
+    .filter(
+      ([origin, faces]) =>
+        !originsAfter.has(origin) &&
+        // A face of the opening may still stand with its name lost (the
+        // edit's lineage fell back for it alone): where an untraced face
+        // could be one of them, the opening is not reported as closed.
+        !faces.some((face) =>
+          untracedAfter.some((candidate) => mayBeSameFace(face, candidate))
+        )
+    )
+    .flatMap(([origin]) => {
       const feature = features.get(origin);
       return feature ? [{ featureId: origin, name: feature.name }] : [];
     });
+}
+
+/**
+ * Whether `after` could be `before` with its name lost: on the same plane
+ * for planar faces; for any other surface, only the same surface class, as
+ * nothing cheaper rules a curved face out.
+ */
+function mayBeSameFace(before: FaceTopology, after: FaceTopology): boolean {
+  const a = before.geometry;
+  const b = after.geometry;
+  if (!a || !b) return true;
+  if (a.surfaceType !== b.surfaceType) return false;
+  if (a.surfaceType !== 'plane' || !a.normal || !b.normal) return true;
+  const dot = (u: Vector3, v: Vector3) => u.x * v.x + u.y * v.y + u.z * v.z;
+  if (dot(a.normal, b.normal) < 1 - 1e-6) return false;
+  const scale = Math.max(
+    1,
+    Math.abs(a.center.x),
+    Math.abs(a.center.y),
+    Math.abs(a.center.z)
+  );
+  return (
+    Math.abs(dot(a.normal, a.center) - dot(a.normal, b.center)) <= 1e-6 * scale
+  );
 }
 
 /** The notice for openings a face edit closed, or null when it closed none. */
