@@ -1,8 +1,6 @@
 import {
-  useEffect,
   useId,
   useLayoutEffect,
-  useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type RefObject
@@ -97,12 +95,18 @@ export function ViewOptionsList({
   onToggle,
   onWidth,
   anchorRef,
+  menuRef: ref,
   onClose
 }: ViewOptionsMenuProps & {
   anchorRef: RefObject<HTMLButtonElement | null>;
+  /**
+   * The menu element, for the button's shell: Escape, a press outside and
+   * focus leaving are handled there, so they also work while this list is
+   * still loading.
+   */
+  menuRef: RefObject<HTMLDivElement | null>;
   onClose(): void;
 }) {
-  const ref = useRef<HTMLDivElement | null>(null);
   const id = useId();
   const [position, setPosition] = useState<{ x: number; y: number } | null>(
     null
@@ -134,32 +138,6 @@ export function ViewOptionsList({
     place();
     return () => cancelAnimationFrame(frame);
   }, [anchorRef]);
-
-  useEffect(() => {
-    const onPointerDown = (event: PointerEvent) => {
-      const target = event.target as Node;
-      // The button toggles the menu itself.
-      if (
-        ref.current?.contains(target) ||
-        anchorRef.current?.contains(target)
-      ) {
-        return;
-      }
-      onClose();
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.stopPropagation();
-        onClose();
-      }
-    };
-    window.addEventListener('pointerdown', onPointerDown, true);
-    window.addEventListener('keydown', onKeyDown, true);
-    return () => {
-      window.removeEventListener('pointerdown', onPointerDown, true);
-      window.removeEventListener('keydown', onKeyDown, true);
-    };
-  }, [anchorRef, onClose]);
 
   // Tab leaves the menu as it would leave the button: focus goes back to
   // the button first, and the key's own move carries on from there.

@@ -54,9 +54,9 @@ import {
 import { isLibraryModeStatus } from '../lib/libraryStatus';
 import {
   lazyWithStaleChunkNotice,
-  preloadableLazy,
   STALE_CHUNK_MESSAGE
 } from '../lib/staleChunk';
+import { preloadableSlot } from './PreloadableSlot';
 import { prefersSavingData } from '../lib/saveData';
 import {
   daysUntilPurge,
@@ -119,11 +119,17 @@ const FolderCoverDialog = lazyWithStaleChunkNotice(async () => ({
 /**
  * The bar that acts on several selected projects. Only a multi-select draws
  * it, so it loads apart from the library; the library warms it once idle, so
- * the first selection shows it in the same frame.
+ * the first selection usually shows it in the same frame. A selection that
+ * beats the warm-up (or Save-Data, which skips it) shows the bar once its
+ * chunk arrives, and a chunk that cannot load leaves the library standing
+ * with the bar's own "did not load" line in its place.
  */
-export const LibrarySelectionBar = preloadableLazy(async () => ({
-  default: (await import('./LibrarySelectionBar')).LibrarySelectionBar
-}));
+export const LibrarySelectionBar = preloadableSlot(
+  'Selection actions',
+  async () => ({
+    default: (await import('./LibrarySelectionBar')).LibrarySelectionBar
+  })
+);
 
 interface StartScreenProps {
   projects: ProjectSummary[];
@@ -3662,47 +3668,45 @@ export function StartScreen({
           </div>
         </section>
         {selecting && (
-          <Suspense fallback={null}>
-            <LibrarySelectionBar
-              count={selectedOnScreen().length}
-              total={shownProjectCount}
-              shelf={shelf}
-              busy={busy}
-              folders={folders}
-              inFolderId={openFolder?.id ?? null}
-              allPinned={selectedOnScreen().every(
-                (project) => projectOrganization(project).pinned
-              )}
-              moveMenuOpen={moveMenuOpen}
-              onMoveMenuOpenChange={setMoveMenuOpen}
-              onSelectAll={() => setSelected(new Set(visibleProjectIds()))}
-              onClear={clearSelection}
-              onMoveToFolder={(folderId) => {
-                setMoveMenuOpen(false);
-                fileProjects(
-                  selectedOnScreen().map((project) => project.projectId),
-                  folderId
-                );
-              }}
-              onNewFolder={() => {
-                makeFolder(
-                  selectedOnScreen().map((project) => project.projectId)
-                );
-                setNotice(
-                  'Made a folder. Name it, or press Enter to keep the name.'
-                );
-              }}
-              onRemoveFromFolder={() =>
-                fileProjects(
-                  selectedOnScreen().map((project) => project.projectId),
-                  null
-                )
-              }
-              onPin={pinSelected}
-              onMoveToShelf={moveSelectedToShelf}
-              onDeleteForever={deleteSelectedForever}
-            />
-          </Suspense>
+          <LibrarySelectionBar
+            count={selectedOnScreen().length}
+            total={shownProjectCount}
+            shelf={shelf}
+            busy={busy}
+            folders={folders}
+            inFolderId={openFolder?.id ?? null}
+            allPinned={selectedOnScreen().every(
+              (project) => projectOrganization(project).pinned
+            )}
+            moveMenuOpen={moveMenuOpen}
+            onMoveMenuOpenChange={setMoveMenuOpen}
+            onSelectAll={() => setSelected(new Set(visibleProjectIds()))}
+            onClear={clearSelection}
+            onMoveToFolder={(folderId) => {
+              setMoveMenuOpen(false);
+              fileProjects(
+                selectedOnScreen().map((project) => project.projectId),
+                folderId
+              );
+            }}
+            onNewFolder={() => {
+              makeFolder(
+                selectedOnScreen().map((project) => project.projectId)
+              );
+              setNotice(
+                'Made a folder. Name it, or press Enter to keep the name.'
+              );
+            }}
+            onRemoveFromFolder={() =>
+              fileProjects(
+                selectedOnScreen().map((project) => project.projectId),
+                null
+              )
+            }
+            onPin={pinSelected}
+            onMoveToShelf={moveSelectedToShelf}
+            onDeleteForever={deleteSelectedForever}
+          />
         )}
       </div>
 

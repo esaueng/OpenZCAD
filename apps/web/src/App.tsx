@@ -1159,24 +1159,23 @@ const NumericKeypad = withSuspense(LazyNumericKeypad);
 // U09: an in-place command's Cancel / Done bar. Lazy, like the keypad: only
 // a running command needs it, and the entry chunk runs at its budget.
 // Preloadable, so the first command after the idle warm-up opens its bar in
-// the same frame instead of suspending for one.
-const LazyInPlaceCommandBar = preloadableLazy(() =>
-  import('./components/InPlaceCommandBar').then((module) => ({
-    default: module.InPlaceCommandBar
-  }))
+// the same frame instead of suspending for one; behind its own boundary, so
+// a chunk that cannot load leaves the workspace standing (Escape and Enter
+// still cancel and finish the command).
+const InPlaceCommandBar = preloadableSlot(
+  'Command bar',
+  () =>
+    import('./components/InPlaceCommandBar').then((module) => ({
+      default: module.InPlaceCommandBar
+    })),
+  { pending: <WorkspacePending /> }
 );
-const InPlaceCommandBar = withSuspense(LazyInPlaceCommandBar);
 // The in-place Extrude bar (region extrude and editing a stored extrude).
 // It shares the command bar's chunk, so loading it on demand is what lets the
 // bar above leave the entry chunk at all. Warmed with the keypad as soon as a
-// sketch or command is up, and with the idle warm-up, so selecting a region
-// opens it without a gap.
-const LazyExtrudeCommand = preloadableLazy(() =>
-  import('./components/ExtrudeCommand').then((module) => ({
-    default: module.ExtrudeCommand
-  }))
-);
-const ExtrudeCommand = withSuspense(LazyExtrudeCommand);
+// sketch or command is up, and with the idle warm-up; a distance the region's
+// arrow sets before a cold load finishes is held for it (see the slot).
+const ExtrudeCommand = extrudeCommandSlot();
 
 const LazyViewerShell = preloadableLazy(() =>
   import('./components/ViewerShell').then((module) => ({
@@ -1436,8 +1435,8 @@ const FIRST_USE_SURFACES = [
   LazySettingsPage,
   LazyMoveOverlay,
   LazyNumericKeypad,
-  LazyInPlaceCommandBar,
-  LazyExtrudeCommand
+  InPlaceCommandBar,
+  ExtrudeCommand
 ];
 const LazyProjectSharingDialog = lazyWithStaleChunkNotice(() =>
   import('./components/ProjectSharingDialog').then((module) => ({
@@ -1969,6 +1968,8 @@ const AssemblyPlayer = createAssemblyPlayer(() =>
   }))
 );
 import { createAssemblyPlayer } from './components/assembly/AssemblyPlayerSlot';
+import { extrudeCommandSlot } from './components/ExtrudeCommandSlot';
+import { preloadableSlot } from './components/PreloadableSlot';
 import {
   assembleKeyFor,
   runAssembleKey,
@@ -23398,8 +23399,8 @@ export function App() {
     if (!keypadWithinReach || prefersSavingData()) return;
     LazyNumericKeypad.preload().catch(() => undefined);
     // The command bars a sketch region or running command opens next.
-    LazyInPlaceCommandBar.preload().catch(() => undefined);
-    LazyExtrudeCommand.preload().catch(() => undefined);
+    InPlaceCommandBar.preload().catch(() => undefined);
+    ExtrudeCommand.preload().catch(() => undefined);
   }, [keypadWithinReach]);
   const inPlaceRef = useRef(inPlace);
   inPlaceRef.current = inPlace;
