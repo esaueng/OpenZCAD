@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
-import { CameraController } from './CameraController';
+import {
+  CameraController,
+  SIX_DOF_RATES,
+  type CameraControllerOptions
+} from './CameraController';
 import { updateCameraClipping } from './depthRange';
 import { computeFitPose } from '../render/scene';
 import type { OrbitMode } from '../types';
@@ -43,7 +47,11 @@ const WHEEL_NOTCH_DELTA = 120;
 /** The exact log-scale one notch queues at OrbitControls' base speed. */
 const NOTCH_LOG_SCALE = -Math.log(0.95) * 1.2;
 
-function createController(reducedMotion = true, orbitMode?: () => OrbitMode) {
+function createController(
+  reducedMotion = true,
+  orbitMode?: () => OrbitMode,
+  extra: Partial<CameraControllerOptions> = {}
+) {
   const requestRender = vi.fn();
   const onViewChange = vi.fn();
   const onViewSettled = vi.fn();
@@ -57,7 +65,8 @@ function createController(reducedMotion = true, orbitMode?: () => OrbitMode) {
     reducedMotion: () => reducedMotion,
     zoomToCursor: () => true,
     middleDrag: () => 'pan',
-    ...(orbitMode ? { orbitMode } : {})
+    ...(orbitMode ? { orbitMode } : {}),
+    ...extra
   });
   const wheelListener = (
     host.addEventListener as unknown as ReturnType<typeof vi.fn>
@@ -1611,5 +1620,420 @@ describe('CameraController saved up', () => {
       expect(controller.perspective.up.toArray()).toEqual([0, 0, 1]);
       controller.dispose();
     }
+  });
+});
+
+describe('CameraController 3D mouse motion', () => {
+  const FRAME_MS = 1000 / 60;
+  const IDLE = { tx: 0, ty: 0, tz: 0, rx: 0, ry: 0, rz: 0 };
+
+  function frontView(controller: CameraController) {
+    controller.startTween({
+      position: new THREE.Vector3(0, -150, 0),
+      target: new THREE.Vector3(0, 0, 0),
+      near: 0.1,
+      far: 4000
+    });
+  }
+
+  /** Holds `axes` for `frames` frames, then releases the cap. */
+  function hold(
+    controller: CameraController,
+    axes: Partial<typeof IDLE>,
+    frames: number,
+    start = 1_000
+  ) {
+    controller.setSixDofInput({ ...IDLE, ...axes });
+    let now = start;
+    for (let frame = 0; frame < frames; frame += 1) {
+      expect(controller.stepSixDof(now)).toBe(true);
+      controller.stepOrbit(now);
+      now += FRAME_MS;
+    }
+    controller.setSixDofInput(IDLE);
+    expect(controller.stepSixDof(now)).toBe(false);
+    controller.stepOrbit(now);
+    return now;
+  }
+
+  /** The drag-equivalent pixels of a held turn over `frames` frames. */
+  function dragPixelsFor(axis: number, frames: number) {
+    // The first frame assumes a 60 Hz step, so every frame is FRAME_MS.
+    const radians =
+      (axis * SIX_DOF_RATES.rotationRadPerSecond * (frames * FRAME_MS)) / 1000;
+    return (radians * 600) / (2 * Math.PI);
+  }
+
+  it('turns a twist like a horizontal drag and a tilt like a vertical one', () => {
+    for (const [axes, drag] of [
+      [{ ry: 0.5 }, [dragPixelsFor(0.5, 20), 0]],
+      [{ rx: -0.75 }, [0, dragPixelsFor(-0.75, 20)]]
+    ] as const) {
+      const device = createController();
+      const mouse = createController();
+      frontView(device.controller);
+      frontView(mouse.controller);
+
+      hold(device.controller, axes, 20);
+      mouse.controller.beginOrbitDrag();
+      mouse.controller.orbitByPixels(drag[0], drag[1]);
+      mouse.controller.endOrbitDrag();
+
+      expect(
+        device.controller.activeCamera.position.distanceTo(
+          mouse.controller.activeCamera.position
+        )
+      ).toBeLessThan(1e-6);
+      expect(
+        device.controller.activeCamera.quaternion.angleTo(
+          mouse.controller.activeCamera.quaternion
+        )
+      ).toBeLessThan(1e-6);
+      device.controller.dispose();
+      mouse.controller.dispose();
+    }
+  });
+
+  it('pans the model with the cap and keeps the view direction', () => {
+    const { controller } = createController();
+    frontView(controller);
+    const before = controller.activeCamera.quaternion.clone();
+    // Push right and lift: the model goes right and up, so the camera and
+    // its target go left (−X) and down (−Z) from the front view.
+    hold(controller, { tx: 1, ty: 1 }, 30);
+    const target = controller.controls.target;
+    expect(target.x).toBeLessThan(-1);
+    expect(target.z).toBeLessThan(-1);
+    expect(target.y).toBeCloseTo(0, 9);
+    expect(orbitDistance(controller)).toBeCloseTo(150, 6);
+    expect(controller.activeCamera.quaternion.angleTo(before)).toBeLessThan(
+      1e-9
+    );
+    controller.dispose();
+  });
+
+  it.each(['perspective', 'orthographic'] as const)(
+    'zooms in when the cap is pulled toward the user (%s)',
+    (projection) => {
+      const { controller } = createController();
+      frontView(controller);
+      controller.applyProjection(projection);
+      const scale = () =>
+        projection === 'perspective'
+          ? 1 / orbitDistance(controller)
+          : controller.orthographic.zoom;
+      const start = scale();
+      hold(controller, { tz: 1 }, 30);
+      const zoomedIn = scale();
+      expect(zoomedIn).toBeGreaterThan(start * 1.5);
+      hold(controller, { tz: -1 }, 30, 5_000);
+      expect(scale()).toBeCloseTo(start, 6);
+      controller.dispose();
+    }
+  );
+
+  it('rolls the view about its own axis, holding the roll', () => {
+    const { controller } = createController();
+    frontView(controller);
+    const before = controller.capture();
+    const frames = 20;
+    hold(controller, { rz: 1 }, frames);
+    const angle =
+      (SIX_DOF_RATES.rotationRadPerSecond * frames * FRAME_MS) / 1000;
+    const after = controller.capture();
+    // The camera stays put and keeps looking at the target…
+    after.position.forEach((value, axis) =>
+      expect(value).toBeCloseTo(before.position[axis]!, 6)
+    );
+    expect(after.target).toEqual(before.target);
+    // …while the picture turns anticlockwise: the screen up leans right
+    // (world +X from the front view) by the held angle.
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(
+      controller.activeCamera.quaternion
+    );
+    expect(up.x).toBeCloseTo(Math.sin(angle), 6);
+    expect(up.z).toBeCloseTo(Math.cos(angle), 6);
+    expect(after.up?.[0]).toBeCloseTo(Math.sin(angle), 6);
+    controller.dispose();
+  });
+
+  it('turns about all three screen axes at once and keeps the distance', () => {
+    const { controller } = createController();
+    frontView(controller);
+    const start = controller.activeCamera.quaternion.clone();
+    hold(controller, { rx: 0.6, ry: -0.8, rz: 0.4 }, 90);
+    const camera = controller.activeCamera;
+    expect(orbitDistance(controller)).toBeCloseTo(150, 6);
+    expect(camera.quaternion.angleTo(start)).toBeGreaterThan(1);
+    // Still aimed at the target.
+    const toTarget = controller.controls.target
+      .clone()
+      .sub(camera.position)
+      .normalize();
+    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(
+      camera.quaternion
+    );
+    expect(forward.distanceTo(toTarget)).toBeLessThan(1e-9);
+    controller.dispose();
+  });
+
+  it('keeps a turntable upright: no roll, and twist turns about world Z', () => {
+    const { controller } = createController(true, () => 'turntable');
+    frontView(controller);
+    hold(controller, { rz: 1 }, 30);
+    const screenUp = () =>
+      new THREE.Vector3(0, 1, 0).applyQuaternion(
+        controller.activeCamera.quaternion
+      );
+    expect(screenUp().z).toBeCloseTo(1, 9);
+    hold(controller, { ry: 1 }, 30, 5_000);
+    expect(screenUp().z).toBeCloseTo(1, 9);
+    expect(Math.abs(controller.activeCamera.position.x)).toBeGreaterThan(10);
+    expect(controller.activeCamera.position.z).toBeCloseTo(0, 6);
+    controller.dispose();
+  });
+
+  /** Where `point` lands on screen, in normalized device coordinates. */
+  function onScreen(controller: CameraController, point: THREE.Vector3) {
+    controller.activeCamera.updateMatrixWorld();
+    return point.clone().project(controller.activeCamera);
+  }
+
+  it.each(['free', 'turntable'] as const)(
+    'turns the model in place about its own centre (%s)',
+    (mode) => {
+      // The model sits away from the orbit target, as the recorded bracket
+      // sat beside the world origin.
+      const centre = new THREE.Vector3(30, 10, 12);
+      const { controller } = createController(true, () => mode, {
+        sixDofPivot: () => centre
+      });
+      frontView(controller);
+      const before = onScreen(controller, centre);
+      hold(controller, { rx: 0.5, ry: 0.8 }, 40);
+      const after = onScreen(controller, centre);
+      // The centre stays where it was on screen while the view turned.
+      expect(after.x).toBeCloseTo(before.x, 6);
+      expect(after.y).toBeCloseTo(before.y, 6);
+      expect(controller.activeCamera.position.distanceTo(centre)).toBeCloseTo(
+        new THREE.Vector3(0, -150, 0).distanceTo(centre),
+        6
+      );
+      // The orbit target is still straight ahead.
+      const camera = controller.activeCamera;
+      const toTarget = controller.controls.target
+        .clone()
+        .sub(camera.position)
+        .normalize();
+      const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(
+        camera.quaternion
+      );
+      expect(forward.distanceTo(toTarget)).toBeLessThan(1e-9);
+      controller.dispose();
+    }
+  );
+
+  it('zooms toward the model, which holds its place on screen', () => {
+    const centre = new THREE.Vector3(30, 0, 12);
+    const { controller } = createController(true, undefined, {
+      sixDofPivot: () => centre
+    });
+    frontView(controller);
+    const before = onScreen(controller, centre);
+    const distance = controller.activeCamera.position.distanceTo(centre);
+    hold(controller, { tz: 1 }, 30);
+    const after = onScreen(controller, centre);
+    expect(after.x).toBeCloseTo(before.x, 6);
+    expect(after.y).toBeCloseTo(before.y, 6);
+    expect(controller.activeCamera.position.distanceTo(centre)).toBeLessThan(
+      distance * 0.7
+    );
+    controller.dispose();
+  });
+
+  it('stops a turntable tilt at the top view and keeps spinning', () => {
+    const { controller } = createController(true, () => 'turntable');
+    frontView(controller);
+    // Tilt the top toward the viewer far past the top view.
+    hold(controller, { rx: 1 }, 120);
+    const camera = controller.activeCamera;
+    const back = new THREE.Vector3(0, 0, 1).applyQuaternion(camera.quaternion);
+    expect(back.z).toBeGreaterThan(0.999);
+    expect(back.z).toBeLessThanOrEqual(1);
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
+    hold(controller, { ry: 1 }, 30, 10_000);
+    const spun = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
+    expect(spun.angleTo(up)).toBeGreaterThan(0.5);
+    controller.dispose();
+  });
+
+  it('rolls a quarter turn on the roll key, clockwise or back', () => {
+    const { controller } = createController();
+    frontView(controller);
+    const position = controller.activeCamera.position.clone();
+    controller.rollView(1);
+    // Clockwise: what was on the left (world −X from the front) is now on top.
+    const up = () =>
+      new THREE.Vector3(0, 1, 0).applyQuaternion(
+        controller.activeCamera.quaternion
+      );
+    expect(up().distanceTo(new THREE.Vector3(-1, 0, 0))).toBeLessThan(1e-9);
+    expect(controller.activeCamera.position.distanceTo(position)).toBeLessThan(
+      1e-9
+    );
+    controller.rollView(-1);
+    expect(up().distanceTo(new THREE.Vector3(0, 0, 1))).toBeLessThan(1e-9);
+    // Not while rotation is off (a sketch).
+    controller.controls.enableRotate = false;
+    controller.rollView(1);
+    expect(up().distanceTo(new THREE.Vector3(0, 0, 1))).toBeLessThan(1e-9);
+    controller.dispose();
+  });
+
+  it('pans but does not turn while rotation is off, keeping a held roll', () => {
+    const { controller } = createController();
+    controller.startTween({
+      position: new THREE.Vector3(0, 0, 150),
+      target: new THREE.Vector3(0, 0, 0),
+      near: 0.1,
+      far: 4000,
+      up: new THREE.Vector3(1, 0, 0)
+    });
+    const heldUp = controller.perspective.up.clone();
+    const direction = controller.viewDirection();
+    controller.controls.enableRotate = false;
+    hold(controller, { rx: 1, ry: 1, tx: 1 }, 30);
+    expect(controller.viewDirection().angleTo(direction)).toBeLessThan(1e-9);
+    expect(controller.perspective.up.toArray()).toEqual(heldUp.toArray());
+    expect(controller.controls.target.length()).toBeGreaterThan(1);
+    controller.dispose();
+  });
+
+  it('lets a view glide land before a held cap takes over', () => {
+    const { controller } = createController(false);
+    const landed = vi.fn();
+    controller.startTween(
+      {
+        position: new THREE.Vector3(0, -150, 0),
+        target: new THREE.Vector3(0, 0, 0),
+        near: 0.1,
+        far: 4000
+      },
+      landed
+    );
+    controller.setSixDofInput({ ...IDLE, tx: 1 });
+    // The cap keeps the loop awake but leaves the glide alone…
+    expect(controller.stepSixDof(1_000)).toBe(true);
+    expect(controller.hasActiveTween).toBe(true);
+    expect(controller.sixDofMoving).toBe(false);
+    // …which lands with its completion, then the cap moves the view.
+    controller.stepTween(performance.now() + 10_000);
+    expect(landed).toHaveBeenCalledTimes(1);
+    const target = controller.controls.target.clone();
+    controller.stepSixDof(2_000);
+    controller.stepOrbit(2_000);
+    expect(controller.sixDofMoving).toBe(true);
+    expect(controller.controls.target.distanceTo(target)).toBeGreaterThan(0);
+    controller.dispose();
+  });
+
+  it('ignores a tilt while rotation is off, so a sketch entry still lands', () => {
+    const { controller } = createController(false);
+    const landed = vi.fn();
+    controller.startTween(
+      {
+        position: new THREE.Vector3(0, 0, 150),
+        target: new THREE.Vector3(0, 0, 0),
+        near: 0.1,
+        far: 4000,
+        up: new THREE.Vector3(0, 1, 0)
+      },
+      landed
+    );
+    controller.controls.enableRotate = false;
+    controller.setSixDofInput({ ...IDLE, rx: 1, rz: 1 });
+    expect(controller.stepSixDof(1_000)).toBe(false);
+    expect(controller.sixDofMoving).toBe(false);
+    expect(controller.hasActiveTween).toBe(true);
+    controller.stepTween(performance.now() + 10_000);
+    expect(landed).toHaveBeenCalledTimes(1);
+    controller.dispose();
+  });
+
+  it('integrates at most 50 ms per frame', () => {
+    const { controller } = createController();
+    frontView(controller);
+    controller.setSixDofInput({ ...IDLE, tx: 1 });
+    controller.stepSixDof(1_000);
+    controller.stepOrbit(1_000);
+    controller.controls.enableDamping = false;
+    controller.controls.update();
+    const afterFirst = controller.controls.target.clone();
+    // A ten-second stall moves the camera by one capped step, not ten seconds.
+    controller.stepSixDof(11_000);
+    controller.stepOrbit(11_000);
+    controller.controls.update();
+    const step = controller.controls.target.distanceTo(afterFirst);
+    const firstStep = afterFirst.length();
+    expect(step).toBeCloseTo(firstStep * (50 / FRAME_MS), 6);
+    controller.dispose();
+  });
+
+  it('never steps a turntable tilt across the pole', () => {
+    const { controller } = createController(true, () => 'turntable');
+    frontView(controller);
+    controller.setSixDofInput({ ...IDLE, rx: 1 });
+    const camera = controller.activeCamera;
+    let previous = camera.quaternion.clone();
+    let now = 1_000;
+    let largest = 0;
+    for (let frame = 0; frame < 120; frame += 1) {
+      controller.stepSixDof(now);
+      controller.stepOrbit(now);
+      largest = Math.max(largest, camera.quaternion.angleTo(previous));
+      previous = camera.quaternion.clone();
+      now += FRAME_MS;
+    }
+    // One frame turns about 0.04 rad; a crossing flips the view half a turn.
+    expect(largest).toBeLessThan(0.1);
+    const back = new THREE.Vector3(0, 0, 1).applyQuaternion(camera.quaternion);
+    expect(back.z).toBeGreaterThan(0.999);
+    controller.dispose();
+  });
+
+  it('persists the pose once, after the cap comes to rest', () => {
+    const { controller, onViewSettled } = createController();
+    frontView(controller);
+    vi.runAllTimers();
+    onViewSettled.mockClear();
+    controller.setSixDofInput({ ...IDLE, ry: 1 });
+    let now = 1_000;
+    for (let frame = 0; frame < 30; frame += 1) {
+      controller.stepSixDof(now);
+      controller.stepOrbit(now);
+      now += FRAME_MS;
+      // Far longer than the settle delay: a held cap is still a gesture.
+      vi.advanceTimersByTime(FRAME_MS * 10);
+    }
+    expect(controller.sixDofMoving).toBe(true);
+    expect(onViewSettled).not.toHaveBeenCalled();
+    controller.setSixDofInput(IDLE);
+    expect(controller.stepSixDof(now)).toBe(false);
+    expect(controller.sixDofMoving).toBe(false);
+    vi.runAllTimers();
+    expect(onViewSettled).toHaveBeenCalledTimes(1);
+    expect(onViewSettled).toHaveBeenLastCalledWith(controller.capture());
+    controller.dispose();
+  });
+
+  it('ignores non-finite axes and input after dispose', () => {
+    const { controller, requestRender } = createController();
+    controller.setSixDofInput({ ...IDLE, tx: Number.NaN, ry: Infinity });
+    expect(controller.stepSixDof(1_000)).toBe(false);
+    controller.dispose();
+    requestRender.mockClear();
+    controller.setSixDofInput({ ...IDLE, tx: 1 });
+    expect(requestRender).not.toHaveBeenCalled();
+    expect(controller.stepSixDof(2_000)).toBe(false);
   });
 });

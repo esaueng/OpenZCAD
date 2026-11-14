@@ -22,16 +22,54 @@ export function importedFaceDeletion(
   document: ProjectDocument,
   selection: TopologySelection
 ) {
-  const body = document.derived.bodyRepresentations[selection.bodyId];
   const imported = listFeaturesInOrder(document).find(
     (feature) =>
       feature.bodyId === selection.bodyId &&
       feature.data.featureKind === 'imported-step' &&
       !isFeatureSuppressed(feature)
   );
-  const resolved = resolveSelectionTopology(body, selection);
-  if (!imported || !body || body.consumed || resolved?.kind !== 'face') {
+  if (!imported) {
     throw new Error('Select a current face on an imported STEP part.');
+  }
+  return singleFaceDeletion(document, selection, {
+    missing: 'Select a current face on an imported STEP part.',
+    blend: ['Remove imported fillet', 'Removed the selected imported fillet.'],
+    face: ['Remove imported feature', 'Removed the selected imported feature.']
+  });
+}
+
+/**
+ * A face a subtract cut (the wall of a hole a cylinder cut through a part):
+ * healed in place, as an imported face is. Deleting the feature the face is
+ * inferred to — the cutting tool — would leave the subtract with nothing to
+ * cut and every step after it unbuilt; the heal closes just this cut.
+ */
+export function cutFaceDeletion(
+  document: ProjectDocument,
+  selection: TopologySelection
+) {
+  return singleFaceDeletion(document, selection, {
+    missing: 'Select a current face of a cut.',
+    blend: ['Remove fillet', 'Removed the selected fillet.'],
+    face: ['Fill the cut', 'Filled the cut and healed the body.']
+  });
+}
+
+/** One face healed by a replayable direct edit: a blend resized away, or
+ * the face removed and its neighbours extended over it. */
+function singleFaceDeletion(
+  document: ProjectDocument,
+  selection: TopologySelection,
+  names: {
+    missing: string;
+    blend: [name: string, success: string];
+    face: [name: string, success: string];
+  }
+) {
+  const body = document.derived.bodyRepresentations[selection.bodyId];
+  const resolved = resolveSelectionTopology(body, selection);
+  if (!body || body.consumed || resolved?.kind !== 'face') {
+    throw new Error(names.missing);
   }
   const face = body.topology!.faces.find(
     (candidate) => candidate.topologyId === resolved.topologyId
@@ -63,7 +101,7 @@ export function importedFaceDeletion(
         sourceAxisStart: geometry.axisStart,
         sourceAxisEnd: geometry.axisEnd
       };
-  const name = blend ? 'Remove imported fillet' : 'Remove imported feature';
+  const [name, successMessage] = blend ? names.blend : names.face;
   const command = commandFactories.directEditBody({
     name,
     targetBodyId: selection.bodyId,
@@ -78,9 +116,7 @@ export function importedFaceDeletion(
         : {}),
       resultBodyId: selection.bodyId
     },
-    successMessage: blend
-      ? 'Removed the selected imported fillet.'
-      : 'Removed the selected imported feature.'
+    successMessage
   };
 }
 

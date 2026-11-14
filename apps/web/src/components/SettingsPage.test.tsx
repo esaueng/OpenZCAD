@@ -1114,6 +1114,8 @@ describe('settings controls section', () => {
     // meaning everywhere, then the pointer.
     expect([...headers].map((header) => header.textContent)).toEqual([
       'Navigation',
+      expect.stringContaining('3D mouse'),
+      'SpaceMouse keys',
       expect.stringContaining('Keyboard'),
       expect.stringContaining('Fixed keys'),
       'Mouse & pointer'
@@ -1122,7 +1124,7 @@ describe('settings controls section', () => {
       screen.getByRole('button', { name: 'Reset all shortcuts' })
     ).toBeDisabled();
     // The banner's guidance lives on beside the one header.
-    expect(headers[1]).toHaveTextContent(
+    expect(headers[3]).toHaveTextContent(
       'Workspace shortcuts pause while you type in a field'
     );
   });
@@ -2121,10 +2123,56 @@ describe('settings privacy and data section', () => {
     renderSettings(readyHealth, { initialSection: 'privacy', session });
 
     await user.click(screen.getByText('What’s collected'));
-    expect(screen.getByText(/Local operations require opt-in\./)).toBeVisible();
     expect(
-      screen.getByText(/This expanded scope requires a fresh choice\./)
+      screen.getByText(
+        /Local operations are counted only with this switch on\./
+      )
     ).toBeVisible();
+    expect(
+      screen.getByText(/this expanded scope requires a fresh choice\./)
+    ).toBeVisible();
+  });
+
+  // I10 (13 November review): one paragraph of jargon became a plain list of
+  // what is sent, what never is, and how to stop — every statement kept.
+  it('says what analytics send, never send, and how to stop', async () => {
+    const user = userEvent.setup();
+    renderSettings(readyHealth, { initialSection: 'privacy', session });
+
+    await user.click(screen.getByText('What’s collected'));
+    const disclosure = screen.getByText('What’s collected').closest('details')!;
+    for (const heading of ['Sent', 'Never sent', 'How to stop']) {
+      expect(within(disclosure).getByText(heading)).toBeVisible();
+    }
+    // Glimpse is named, and said what it is.
+    expect(disclosure).toHaveTextContent(
+      'Glimpse, the usage-counting service OpenZCAD runs for itself'
+    );
+    for (const statement of [
+      'feature categories, workflow steps and exports',
+      'Diagnostic codes',
+      'part count, project file size and transfer size',
+      'Coarse timings',
+      'Model contents or geometry',
+      'File names or project names',
+      'Anything that identifies you',
+      'It is off until you turn it on.',
+      'Turn it off here and sending stops at once.',
+      'Do Not Track or Global Privacy Control',
+      'turning off Cloud features, pauses sending and keeps this choice',
+      'kept in this browser only, and separately for each app',
+      'cannot be traced back to you or removed',
+      'basic server counters measure API activity and reliability'
+    ]) {
+      expect(disclosure).toHaveTextContent(statement);
+    }
+    expect(
+      within(disclosure).getByRole('link', { name: 'privacy policy' })
+    ).toHaveAttribute('href', expect.stringContaining('/privacy'));
+    // Wording only: the switch still starts off.
+    expect(
+      screen.getByRole('checkbox', { name: 'Optional usage analytics' })
+    ).not.toBeChecked();
   });
 
   it('shows storage usage on Account, where the profile that owns it is', async () => {

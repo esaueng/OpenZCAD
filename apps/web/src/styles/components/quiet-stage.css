@@ -3930,7 +3930,10 @@ button.model-panel-grip[aria-expanded='true'] {
 }
 
 /* The sketch's state as a chip under Solve, coloured like the edges it
-   describes: free (blue), fully constrained (green), in conflict (red). */
+   describes: free (blue), fully constrained (green), in conflict (red).
+   "4 DOF" just fits the rail's 30px on one line; a count of 10 or more
+   wraps "DOF" under it, two 10px lines in the same 22px, rather than
+   running "12 DOF" out past the chip's right border. */
 .workspace-column .sketch-rail button.sketch-dof-chip {
   width: 30px;
   height: 22px;
@@ -3943,7 +3946,8 @@ button.model-panel-grip[aria-expanded='true'] {
   font-weight: var(--fw-medium);
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.02em;
-  white-space: nowrap;
+  line-height: 10px;
+  white-space: normal;
 }
 
 .workspace-column .sketch-rail button.sketch-dof-chip[data-state='defined'] {

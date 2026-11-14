@@ -12,7 +12,8 @@ import {
   normalizeKeymapOverrides,
   type AppSettings,
   type PanelWidthLimits,
-  type UnitSystem
+  type UnitSystem,
+  normalizeSpaceMouseSettings
 } from '@openzcad/shared';
 
 export const APP_SETTINGS_STORAGE_KEY = 'openzcad-app-settings:v1';
@@ -265,7 +266,8 @@ export function normalizeAppSettings(value: unknown): AppSettings {
       pencilDrawsOnly: boolean(
         viewport.pencilDrawsOnly,
         defaults.viewport.pencilDrawsOnly
-      )
+      ),
+      spaceMouse: normalizeSpaceMouseSettings(viewport.spaceMouse)
     },
     sketching: {
       gridVisible: boolean(
