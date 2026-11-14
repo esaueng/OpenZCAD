@@ -67,7 +67,7 @@ describe('AssemblyPanel (one left sidebar)', () => {
     const joints = screen.getByRole('region', { name: 'Joints' });
     expect(within(joints).getByText('Pivot')).toBeInTheDocument();
     expect(within(joints).getByText('12.0°')).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: 'Motion' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Animations' })).toBeInTheDocument();
   });
 
   it('lists the bill of materials and downloads it as CSV (AS03)', () => {
@@ -281,7 +281,7 @@ describe('AssemblyPanel (one left sidebar)', () => {
     });
     rerender();
     expect(screen.getByRole('note')).toHaveTextContent(
-      'Recording into Motion 1: a value set here is keyed at 2.00 s.'
+      'Recording into Animation 1: a value set here is keyed at 2.00 s.'
     );
   });
 
@@ -376,12 +376,12 @@ describe('AssemblyPanel (one left sidebar)', () => {
     });
   });
 
-  it('says why Motion has nothing to set up when every part is fixed or joined (I55)', () => {
+  it('says why Make it move has nothing to set up when every part is fixed or joined (I55)', () => {
     const fixture = scissorsManager({ joint: true });
     const { onStatus } = renderPanel(fixture);
     const reason =
       'Every part is fixed or already moves on a joint. Open a joint to change its motion.';
-    const motion = screen.getByRole('button', { name: 'Motion' });
+    const motion = screen.getByRole('button', { name: 'Make it move' });
     expect(motion).toHaveAttribute('aria-disabled', 'true');
     expect(motion).toHaveAttribute('title', reason);
     fireEvent.click(motion);

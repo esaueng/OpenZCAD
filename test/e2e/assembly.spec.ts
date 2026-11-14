@@ -614,7 +614,7 @@ test(
     await expect(joints).not.toContainText(' mm');
 
     const motion = panel(page).getByRole('button', {
-      name: 'Motion',
+      name: 'Make it move',
       exact: true
     });
     await expect(motion).toHaveAttribute('aria-disabled', 'true');
