@@ -430,8 +430,9 @@ the browser side first, then the Worker's defense in depth.
   signed acceptance
   (`signInvitationAcceptance`, `verifyInvitationAcceptance`, "OZJ") in
   `packages/crypto/src/invitations.ts`.
-- Browser: `inviteToEncryptedProject` (binds the identity of the one
-  verified contact listed under the address, when there is one),
+- Browser: `inviteToEncryptedProject` (email-only unless the owner
+  explicitly picks a verified contact, which `invitableContacts` offers by
+  contact code for the typed address; then binds that identity),
   `acceptEncryptedInvitation` (records intent only when the returned
   statement names the opened link's token, and keeps that token's hash: a
   link intent without it counts for nothing), `confirmEncryptedInvitation`
@@ -472,7 +473,11 @@ the browser side first, then the Worker's defense in depth.
   `projectMigrations.ts` (Web Lock per account), reads through
   `migrationPlaintextSource.ts`; shared projects re-add members first
   (`prepareMigrationMembers`, `readdMigrationMembers` in
-  `migrationMembers.ts`). UI `ExistingProjectEncryption.tsx`.
+  `migrationMembers.ts`) only as the owner approved them: each ready
+  member's contact code and signed role are shown, and
+  `requireMembersApproved` stops before staging and again before the
+  re-add unless the approval names exactly the current roster, identities
+  and roles. UI `ExistingProjectEncryption.tsx`.
 - Worker: `apps/web/worker/e2eeProjectMigrations.ts` (`start`, `renew`,
   `cutover`, `abandon`, `purge` and `purgeStep` are internal;
   `purgeMigratedProject` and `sweepProjectMigrations` are exported), lease
@@ -687,13 +692,14 @@ and on the scenario and archive tests.
 
 ## 6. Known limitations and deferrals
 
-- **Which contact an address belongs to.** An invitation is bound to a
-  verified contact's identity when Contacts lists exactly one verified
-  contact under the typed address. Contacts' addresses are the server's
-  labels (the signed contacts list names identities, not addresses), so the
-  binding narrows automatic adds to the owner's verified contacts rather
-  than proving the address. Every unbound acceptance needs the owner's
-  confirmation by contact code.
+- **Which contact an address belongs to.** Contacts' addresses are the
+  server's labels (the signed contacts list names identities, not
+  addresses), so an address match is never bound by itself: it is only
+  offered to the owner as an explicit choice, shown by that contact's code,
+  and the default is an email-only invitation. Every unbound acceptance
+  needs the owner's confirmation by contact code. A migration's member
+  roster is likewise approved by contact code and signed role before
+  cutover.
 - **Removal history on other owner devices.** Only an owner device that
   created a project's group (with this version) adds automatically there;
   a device that joined

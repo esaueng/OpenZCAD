@@ -26,7 +26,10 @@ import {
   setMigratingProjects
 } from '../lib/migrationStatus';
 import type * as MigrationMembersModule from '../lib/e2ee/migrationMembers';
-import type { MigrationMember } from '../lib/e2ee/migrationMembers';
+import {
+  MIGRATION_APPROVAL_CODE,
+  type MigrationMember
+} from '../lib/e2ee/migrationMembers';
 import { reissuePlaintextShareLinks } from '../lib/e2ee/migrationMembers';
 import { ExistingProjectEncryption } from './ExistingProjectEncryption';
 
@@ -98,13 +101,14 @@ function fakeEngine(
   behave: (
     project: ProjectSummary,
     report: (change: Partial<MigrationProgress>) => void,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    options?: Parameters<ProjectMigrationEngine['migrate']>[2]
   ) => Promise<void>
 ) {
   const migrated: string[] = [];
   let onProgress: (progress: MigrationProgress) => void = () => undefined;
   const engine: ProjectMigrationEngine = {
-    async migrate(summary, signal) {
+    async migrate(summary, signal, options) {
       migrated.push(summary.projectId);
       let progress: MigrationProgress = {
         projectId: summary.projectId,
@@ -120,7 +124,7 @@ function fakeEngine(
         onProgress(progress);
       };
       report({});
-      await behave(summary, report, signal);
+      await behave(summary, report, signal, options);
     },
     cancel: vi.fn(async () => undefined)
   };
@@ -1194,6 +1198,99 @@ describe('a shared project (slice 7-4)', () => {
     expect(
       within(older).queryByRole('button', { name: 'Invite again' })
     ).toBeNull();
+  });
+
+  it('shows each ready member by contact code and signed role, and encrypts only once the owner approves exactly them', async () => {
+    const ready = (
+      email: string,
+      role: MigrationMember['role'],
+      code: string
+    ): MigrationMember => ({
+      ...member(email, role, 'ready'),
+      signedRole: role,
+      acceptor: {
+        userId: `user_${email}`,
+        identityKeyHash: code.replace(/\D/g, ''),
+        code,
+        email
+      }
+    });
+    const roster = [
+      ready('editor@example.com', 'editor', '11111 22222'),
+      ready('viewer@example.com', 'viewer', '33333 44444')
+    ];
+    const approvals: unknown[] = [];
+    const fake = fakeEngine(async (summary, report, _signal, options) => {
+      if (summary.projectId !== 'proj_old') {
+        report({ phase: 'done' });
+        return;
+      }
+      approvals.push(options?.approvedMembers);
+      if (!options?.approvedMembers) {
+        report({
+          phase: 'members',
+          members: roster,
+          error: {
+            code: MIGRATION_APPROVAL_CODE,
+            message:
+              'Check each member’s contact code and role below, then approve.',
+            retryable: false
+          }
+        });
+        throw new Error('approve');
+      }
+      report({
+        phase: 'done',
+        error: undefined,
+        members: roster.map((m) => ({ ...m, state: 'readded' as const }))
+      });
+    });
+    const controller = controllerWith(fake);
+    render(
+      <ExistingProjectEncryption
+        userId="user_alice"
+        unlocked
+        controller={controller}
+        isOpen={async () => true}
+      />
+    );
+    await clickEncryptProjects();
+    const older = await screen.findByRole('listitem', {
+      name: 'Older bracket'
+    });
+    const members = await within(older).findByRole('list', {
+      name: 'Members of Older bracket'
+    });
+    expect(
+      within(members).getByLabelText('Contact code of editor@example.com')
+    ).toHaveTextContent('11111 22222');
+    expect(
+      within(members).getByLabelText('Contact code of viewer@example.com')
+    ).toHaveTextContent('33333 44444');
+    expect(members).toHaveTextContent('viewer@example.com · Viewer ·');
+    expect(within(older).getByRole('alert')).toHaveTextContent(
+      'Check each member’s contact code and role below, then approve.'
+    );
+    expect(approvals).toEqual([undefined]);
+
+    fireEvent.click(
+      within(older).getByRole('button', { name: 'Approve and encrypt' })
+    );
+    await waitFor(() =>
+      expect(within(older).getByText('Encrypted')).toBeTruthy()
+    );
+    expect(approvals.at(-1)).toEqual([
+      {
+        userId: 'user_editor@example.com',
+        role: 'editor',
+        identityKeyHash: '1111122222'
+      },
+      {
+        userId: 'user_viewer@example.com',
+        role: 'viewer',
+        identityKeyHash: '3333344444'
+      }
+    ]);
   });
 
   it('keeps a resumed staging that waits for a member read-only, and cancellable', async () => {

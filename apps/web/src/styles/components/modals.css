@@ -1323,6 +1323,24 @@
   font-size: var(--fs-xs);
 }
 
+/* The owner's explicit choice of a verified contact for an encrypted
+   invitation, each named by the contact code Contacts shows. */
+.sharing-invite-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+.sharing-invite-option input {
+  margin-top: 3px;
+}
+
+.sharing-invite-option .encryption-code {
+  display: inline;
+}
+
 .sharing-invite-sent {
   margin: 0;
   color: var(--color-text-muted);

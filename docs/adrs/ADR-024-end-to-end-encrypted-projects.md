@@ -584,12 +584,19 @@ comparison, which is safe only because of its commitment step.
   account whose device signed one. An invitation the server merely lists,
   or one whose statement names no link, is joined only on the invitee's
   explicit confirmation of the verified statement. The server delivers the
-  email, so the address alone never decides who is added: when the owner
-  invites an address that belongs to a contact they verified, the
-  statement (version 3) also names that contact's identity key, and the
-  owner's browser adds automatically only an acceptance by that identity.
-  Every other acceptance waits for the owner to confirm the accepting
-  contact, shown by the same contact code Contacts shows, or to decline it.
+  email and labels contacts with their addresses, so the address alone
+  never decides who is added. An invitation is email-only by default. When
+  the typed address matches a verified contact, the owner's browser offers
+  that contact as an explicit choice, shown by the contact code Contacts
+  shows; only when the owner picks it does the statement (version 3) name
+  that contact's identity key, and the owner's browser then adds
+  automatically only an acceptance by that identity. Every other acceptance
+  waits for the owner to confirm the accepting contact, shown by the same
+  contact code, or to decline it. Migrating a shared project works the same
+  way: before anything is staged, the owner approves each member to be
+  added back by contact code and signed role, and the cutover adds exactly
+  those identities, stopping to ask again if the roster, an identity or a
+  role changed.
   Automatic adds also require that the owner's browser saw every removal
   from the project since its group began (it created the group); a device
   that joined from the project's history asks the owner for every Add.

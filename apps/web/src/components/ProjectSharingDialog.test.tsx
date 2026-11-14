@@ -1233,13 +1233,85 @@ describe('ProjectSharingDialog for an encrypted project (slice 5-3b)', () => {
       expect(encrypted.invite).toHaveBeenCalledWith(
         'proj_encrypted',
         'New@Example.com',
-        'viewer'
+        'viewer',
+        undefined
       )
     );
     expect(sharingClient.createInvitation).not.toHaveBeenCalled();
     expect(
       await screen.findByText('Invitation sent to new@example.com.')
     ).toBeVisible();
+    setPersonalInfoVisible(false);
+  });
+
+  it('offers a contact listed under the address only as an explicit choice, by contact code', async () => {
+    setPersonalInfoVisible(true);
+    const listed = {
+      userId: 'user_carol',
+      identityKeyHash: 'cc'.repeat(32),
+      code: '33333 44444',
+      // The server's label: it may name someone other than who was meant.
+      email: 'bob@example.com'
+    };
+    const encrypted: EncryptedSharingClient = {
+      ...encryptedClient([]),
+      contactsFor: vi.fn(async () => [listed])
+    };
+    const user = userEvent.setup();
+    render(
+      <ProjectSharingDialog
+        projectId="proj_encrypted"
+        role="owner"
+        collaborationStatus="live"
+        lease={null}
+        client={client()}
+        shareLinkClient={shareLinkClient()}
+        encrypted
+        encryptedClient={encrypted}
+        encryptedShareLinkClient={encryptedShareLinkClient()}
+        onClose={vi.fn()}
+      />
+    );
+    await user.type(await screen.findByLabelText('Email'), 'Bob@Example.com');
+    const choice = await screen.findByRole('radiogroup', {
+      name: 'Who to add'
+    });
+    expect(encrypted.contactsFor).toHaveBeenLastCalledWith('bob@example.com');
+    // An email-only invitation unless the owner picks the contact.
+    expect(
+      within(choice).getByRole('radio', {
+        name: 'Email only: you confirm whoever accepts'
+      })
+    ).toBeChecked();
+    expect(choice).toHaveTextContent('33333 44444');
+    await user.click(screen.getByRole('button', { name: 'Invite' }));
+    await waitFor(() =>
+      expect(encrypted.invite).toHaveBeenLastCalledWith(
+        'proj_encrypted',
+        'Bob@Example.com',
+        'viewer',
+        undefined
+      )
+    );
+
+    await user.type(screen.getByLabelText('Email'), 'bob@example.com');
+    await user.click(
+      within(
+        await screen.findByRole('radiogroup', { name: 'Who to add' })
+      ).getByRole('radio', {
+        name: /^Invite bob@example\.com \(code 33333 44444 ?\)$/
+      })
+    );
+    await user.click(screen.getByRole('button', { name: 'Invite' }));
+    await waitFor(() =>
+      expect(encrypted.invite).toHaveBeenLastCalledWith(
+        'proj_encrypted',
+        'bob@example.com',
+        'viewer',
+        { userId: 'user_carol', identityKeyHash: 'cc'.repeat(32) }
+      )
+    );
+    expect(encrypted.invite).toHaveBeenCalledTimes(2);
     setPersonalInfoVisible(false);
   });
 

@@ -26,7 +26,8 @@ import type { InvitationContext } from './invitations';
 import { getKeySessionRevision } from './keySession';
 import {
   reinviteToEncryptedProject,
-  reissuePlaintextShareLinks
+  reissuePlaintextShareLinks,
+  type MigrationMemberApproval
 } from './migrationMembers';
 import {
   createMigrationPlaintextSource,
@@ -113,6 +114,15 @@ export interface MigrationController {
     options?: { readonly resumeStopped?: boolean }
   ): Promise<void>;
   pause(): void;
+  /**
+   * Slice 7-4: the owner's approval of a shared project's members as shown
+   * (contact code and signed role of each), which the next run of that
+   * project adds back exactly; a changed roster asks again.
+   */
+  approveMembers(
+    projectId: string,
+    approval: readonly MigrationMemberApproval[]
+  ): void;
   /** Drops a project's staging and unlocks its plaintext. */
   cancel(projectId: string): Promise<void>;
   /**
@@ -248,6 +258,8 @@ export function createMigrationController(
    * only listed.
    */
   const driven = new Set<string>();
+  /** The owner's approval of each shared project's members, as shown. */
+  const approvals = new Map<string, readonly MigrationMemberApproval[]>();
 
   /**
    * A sequence bumped on every {@link update}, and its value when each
@@ -542,7 +554,12 @@ export function createMigrationController(
         // its members is checked again on every run).
         if (!wanted && progress?.phase === 'error') continue;
         try {
-          await (await engineFor()).migrate(project, signal);
+          await (
+            await engineFor()
+          ).migrate(project, signal, {
+            approvedMembers: approvals.get(project.projectId)
+          });
+          approvals.delete(project.projectId);
         } catch (error) {
           if (error instanceof MigrationPausedError) break;
           // Reported on the project by the engine (an error, or members
@@ -584,6 +601,9 @@ export function createMigrationController(
   }
 
   return {
+    approveMembers(projectId, approval) {
+      approvals.set(projectId, [...approval]);
+    },
     getState: () => state,
     subscribe(listener) {
       listeners.add(listener);

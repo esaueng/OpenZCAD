@@ -8,6 +8,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   decodeDeviceApprovalGrant,
+  decodeProjectInvitation,
   fromBase64Url,
   generateRecoveryKey,
   generateSigningKeyPair,
@@ -19,7 +20,11 @@ import {
   toBase64Url,
   type Bytes
 } from '@openzcad/crypto';
-import type { E2eeContactsResponse } from '@openzcad/shared';
+import type {
+  E2eeContactsResponse,
+  E2eeCreateInvitationRequest,
+  E2eeInvitationsApi
+} from '@openzcad/shared';
 import {
   EncryptionFlowError,
   advanceApprovalAsNewDevice,
@@ -53,6 +58,14 @@ import {
   memoryContactPins,
   type ContactPinStore
 } from '../apps/web/src/lib/e2ee/contactPins';
+import {
+  contactInvitationPeople,
+  invitableContacts,
+  inviteToEncryptedProject,
+  type InvitationContext
+} from '../apps/web/src/lib/e2ee/invitations';
+import { memoryInvitationStore } from '../apps/web/src/lib/e2ee/invitationStore';
+import type { ProjectGroupContext } from '../apps/web/src/lib/e2ee/projectGroups';
 import {
   databaseBefore,
   newServer,
@@ -866,6 +879,117 @@ describe('verifying contacts in the browser', () => {
       (error: unknown) => error instanceof E2eeApiError && error.status === 404
     );
     expect(book.contacts.map((c) => c.userId)).not.toContain(STRANGER);
+  });
+});
+
+describe('inviting a verified contact to an encrypted project (#1465 review)', () => {
+  /**
+   * Alice has verified Bob and Carol. The server answers her contacts
+   * lookup with Carol labelled with Bob's address (and Bob with another):
+   * the real lookup (`contactInvitationPeople`) over that answer. Her
+   * invitations are signed by her device and captured instead of posted.
+   */
+  async function relabelled() {
+    const srv = serverWith();
+    const alice = await person(srv, ALICE);
+    const bob = await person(srv, BOB);
+    const carol = await person(srv, CAROL);
+    share(srv);
+    let book = await loadContacts(alice.contacts, alice.account);
+    for (const contact of [BOB, CAROL]) {
+      book = await verifyContact(
+        alice.contacts,
+        alice.account,
+        book,
+        await inspectContact(alice.contacts, book, contact),
+        alice.recovery.secret
+      );
+    }
+    const contacts: ContactsContext = {
+      ...alice.contacts,
+      api: {
+        ...alice.contacts.api,
+        async contacts() {
+          const answer = await alice.contacts.api.contacts();
+          return {
+            ...answer,
+            people: answer.people.map((p) =>
+              p.userId === CAROL
+                ? { ...p, email: EMAILS[BOB]! }
+                : p.userId === BOB
+                  ? { ...p, email: 'elsewhere@example.com' }
+                  : p
+            )
+          };
+        }
+      }
+    };
+    const created: E2eeCreateInvitationRequest[] = [];
+    const ctx: InvitationContext = {
+      groups: {
+        account: alice.account,
+        device: alice.account.device
+      } as unknown as ProjectGroupContext,
+      api: {
+        async create(_projectId: string, request: E2eeCreateInvitationRequest) {
+          created.push(request);
+          return { invitation: { invitationId: `inv_${created.length}` } };
+        }
+      } as unknown as E2eeInvitationsApi,
+      people: contactInvitationPeople(contacts, alice.account),
+      store: memoryInvitationStore()
+    };
+    const signed = (index: number) =>
+      decodeProjectInvitation(fromBase64Url(created[index]!.statement));
+    return { alice, bob, carol, ctx, signed };
+  }
+
+  it('never binds the contact the server lists under the address typed', async () => {
+    const { bob, carol, ctx, signed } = await relabelled();
+    // Typing Bob's address offers the contact listed under it, named by
+    // their own contact code: Carol's, not Bob's.
+    const offered = await invitableContacts(ctx, EMAILS[BOB]!);
+    expect(offered).toEqual([
+      {
+        userId: CAROL,
+        identityKeyHash: toHex(carol.account.list.identityKeyHash),
+        code: (await ownVerificationCode(carol.account)).code,
+        email: EMAILS[BOB]
+      }
+    ]);
+    expect(offered[0]!.code).not.toBe(
+      (await ownVerificationCode(bob.account)).code
+    );
+    // Invited by address alone, the statement names no identity: whoever
+    // accepts waits for Alice's confirmation.
+    await inviteToEncryptedProject(ctx, 'proj_shared', EMAILS[BOB]!, 'editor');
+    expect(signed(0).inviteeIdentityKeyHash).toBeUndefined();
+    expect(signed(0).linkTokenHash).toBeDefined();
+  });
+
+  it('binds only the contact the owner picked, by the identity its code showed', async () => {
+    const { bob, carol, ctx, signed } = await relabelled();
+    const bobIdentity = toHex(bob.account.list.identityKeyHash);
+    await inviteToEncryptedProject(ctx, 'proj_shared', EMAILS[BOB]!, 'viewer', {
+      contact: { userId: BOB, identityKeyHash: bobIdentity }
+    });
+    expect(toHex(signed(0).inviteeIdentityKeyHash!)).toBe(bobIdentity);
+    // A pick whose identity is not that account's verified one (another
+    // contact's, or a key that changed since) sends nothing.
+    await expect(
+      inviteToEncryptedProject(ctx, 'proj_shared', EMAILS[BOB]!, 'viewer', {
+        contact: {
+          userId: BOB,
+          identityKeyHash: toHex(carol.account.list.identityKeyHash)
+        }
+      })
+    ).rejects.toMatchObject({ code: 'not-verified' });
+    await expect(
+      inviteToEncryptedProject(ctx, 'proj_shared', EMAILS[BOB]!, 'viewer', {
+        contact: { userId: STRANGER, identityKeyHash: bobIdentity }
+      })
+    ).rejects.toMatchObject({ code: 'not-verified' });
+    expect(() => signed(1)).toThrow();
   });
 });
 

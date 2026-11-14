@@ -208,14 +208,15 @@ function invitationsOf(
     email: EMAILS[d.account.userId] ?? null,
     people: {
       inspect: async (userId) => personOf(w, d.account.userId, userId),
-      // The contact Contacts lists under an address (the server's word).
-      verifiedByEmail: async (email) => {
-        const userId = Object.entries(EMAILS).find(
-          ([, address]) => address === email.trim().toLowerCase()
-        )?.[0];
-        const person = userId ? personOf(w, d.account.userId, userId) : null;
-        return person?.status === 'verified' ? person : null;
-      }
+      // The contacts Contacts lists under an address (the server's word):
+      // only ever offered to the owner, never bound by itself.
+      verifiedContacts: async (email) =>
+        Object.entries(EMAILS)
+          .filter(([, address]) => address === email.trim().toLowerCase())
+          .map(([userId]) => personOf(w, d.account.userId, userId))
+          .filter((person): person is InvitationPerson =>
+            Boolean(person?.status === 'verified')
+          )
     }
   };
 }
@@ -237,6 +238,17 @@ function personOf(
 
 /** The owner's explicit confirmation of the invitee's identity. */
 const otherIdentity = () => toHex(other.list.identityKeyHash);
+
+/**
+ * The owner's explicit pick of a verified contact when inviting, by the
+ * identity its contact code showed: the statement then names them.
+ */
+const pick = (account: Account) => ({
+  contact: {
+    userId: account.userId,
+    identityKeyHash: toHex(account.list.identityKeyHash)
+  }
+});
 
 function verify(w: World, by: string, whom: string) {
   const set = w.verified.get(by) ?? new Set<string>();
@@ -277,9 +289,10 @@ async function ownersProject(w: World) {
 }
 
 /**
- * Invited and accepted. By default the owner verified the invitee first,
- * so the statement names their identity and the sweep adds them; with
- * `bind: false` it names none, and the owner confirms whoever accepted.
+ * Invited and accepted. By default the owner verified the invitee first
+ * and picked them as that contact, so the statement names their identity
+ * and the sweep adds them; with `bind: false` it names none, and the owner
+ * confirms whoever accepted.
  */
 async function invited(
   w: World,
@@ -293,7 +306,8 @@ async function invited(
     ownerCtx,
     project.projectId,
     INVITEE_EMAIL,
-    role
+    role,
+    bind ? pick(other) : {}
   );
   const laptop = emailDevice(w, other, 'other_laptop', { members: [owner] });
   const inviteeCtx = invitationsOf(w, laptop);
@@ -981,7 +995,8 @@ describe('the invitee’s signed acceptance', () => {
       ownerCtx,
       projectId,
       INVITEE_EMAIL,
-      'viewer'
+      'viewer',
+      pick(other)
     );
     const fresh = emailDevice(w, other, 'other_desktop', { members: [owner] });
     const freshCtx = invitationsOf(w, fresh);
@@ -1135,7 +1150,8 @@ describe('the invitee’s signed acceptance', () => {
       ownerCtx,
       projectId,
       INVITEE_EMAIL,
-      'viewer'
+      'viewer',
+      pick(other)
     );
     const fresh = emailDevice(w, other, 'other_tablet', { members: [owner] });
     const freshCtx = invitationsOf(w, fresh);
@@ -1226,7 +1242,8 @@ describe('the invitee’s signed acceptance', () => {
       ownerCtx,
       projectId,
       INVITEE_EMAIL,
-      'viewer'
+      'viewer',
+      pick(other)
     );
     const fresh = emailDevice(w, other, 'other_desktop', { members: [owner] });
     const freshCtx = invitationsOf(w, fresh);
@@ -1554,7 +1571,8 @@ describe('the owner’s confirmation: the server delivers the email', () => {
       ownerCtx,
       project.projectId,
       INVITEE_EMAIL,
-      'editor'
+      'editor',
+      bindBob ? pick(other) : {}
     );
     const token = w.mail.at(-1)!.token;
     w.srv.db

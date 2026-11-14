@@ -279,6 +279,20 @@ test('encrypts a shared project once its member is ready, and the member opens i
   settings = await openEncryptionSettings(alice);
   const again = settings.getByRole('listitem', { name: NAME });
   await again.getByRole('button', { name: 'Check again' }).click();
+  // Ready: nothing is staged until Alice approves Bob as shown, by the
+  // contact code Contacts shows for him and the role she signed.
+  const approve = again.getByRole('button', { name: 'Approve and encrypt' });
+  await expect(approve).toBeVisible({ timeout: SYNC_BUDGET_MS });
+  await expect(again.getByLabel(`Contact code of ${BOB_EMAIL}`)).toHaveText(
+    /^(\d{5} ){7}\d{5}$/
+  );
+  await expect(
+    again.getByRole('list', { name: `Members of ${NAME}` })
+  ).toContainText(`${BOB_EMAIL} · Editor · Ready`);
+  expect(
+    server.db.prepare('SELECT COUNT(*) AS n FROM e2ee_project_migrations').get()
+  ).toEqual({ n: 0 });
+  await approve.click();
   await expect(again.getByText('Encrypted', { exact: true })).toBeVisible({
     timeout: COMMIT_BUDGET_MS
   });

@@ -33,9 +33,11 @@ import {
 } from '../apps/web/worker/e2eeWriteAuthorization';
 import { ProjectCollaborationRoom } from '../apps/web/worker/e2eeRoom';
 import { forgetAllProjectKeys } from '../apps/web/src/lib/e2ee/unlockedProjectKeys';
+import { toHex } from '@openzcad/crypto';
 import {
   acceptedInvitations,
   confirmEncryptedInvitation,
+  contactCodeOf,
   joinWelcomedProjects,
   publishInvitationKeyPackages,
   type InvitationContext,
@@ -51,8 +53,12 @@ import {
   type MigrationProgress
 } from '../apps/web/src/lib/e2ee/projectMigrationEngine';
 import {
+  MIGRATION_APPROVAL_CODE,
+  MigrationApprovalNeededError,
   MigrationMembersNotReadyError,
+  approvalOf,
   migrationMemberAction,
+  type MigrationMemberApproval,
   reinviteToEncryptedProject,
   reissuePlaintextShareLinks
 } from '../apps/web/src/lib/e2ee/migrationMembers';
@@ -228,7 +234,15 @@ interface Owner {
   d: Device;
   invitations: InvitationContext;
   progress: MigrationProgress[];
+  /** Runs the engine with the owner's approval of the members, if any. */
   migrate(projectId: string): Promise<void>;
+  /**
+   * The owner reviews the ready members the engine shows (contact code
+   * and signed role of each) and approves exactly them.
+   */
+  approve(projectId: string): Promise<MigrationMemberApproval[]>;
+  /** Sets the approval the next runs carry (null: none). */
+  approved: MigrationMemberApproval[] | null;
 }
 
 function ownerEngine(
@@ -267,17 +281,29 @@ function ownerEngine(
     onProgress: (p) => progress.push(p),
     ...(options.beforeStep ? { beforeStep: options.beforeStep } : {})
   });
-  return {
+  const side: Owner = {
     d,
     invitations,
     progress,
+    approved: null,
     async migrate(projectId) {
       const summary = (await plaintext.listProjects()).find(
         (p) => p.projectId === projectId
       )!;
-      await engine.migrate(summary);
+      await engine.migrate(
+        summary,
+        undefined,
+        side.approved ? { approvedMembers: side.approved } : {}
+      );
+    },
+    async approve(projectId) {
+      const asked = await failure(side.migrate(projectId));
+      expect(asked).toBeInstanceOf(MigrationApprovalNeededError);
+      side.approved = approvalOf(progress.at(-1)!.members!);
+      return side.approved;
     }
   };
+  return side;
 }
 
 // --- The shared plaintext project ----------------------------------------------------
@@ -456,7 +482,48 @@ describe('migrating a shared plaintext project (slice 7-4)', () => {
     verify(w, OWNER, THIRD);
     expect((await publishKeys(w, viewer)).length).toBe(1);
 
-    // Ready: staged, both re-added by Welcome, cut over, purged.
+    // Ready: the owner approves both by contact code and signed role
+    // before anything is staged.
+    const asked = await failure(ownerSide.migrate(projectId));
+    expect(asked).toBeInstanceOf(MigrationApprovalNeededError);
+    expect(migrationErrorOf(asked)).toMatchObject({
+      code: MIGRATION_APPROVAL_CODE,
+      retryable: false
+    });
+    const shown = ownerSide.progress.at(-1)!;
+    expect(shown.phase).toBe('members');
+    expect(
+      shown.members!.map((m) => [
+        m.userId,
+        m.state,
+        m.signedRole,
+        m.acceptor?.code
+      ])
+    ).toEqual([
+      [OTHER, 'ready', 'editor', await contactCodeOf(other.list)],
+      [THIRD, 'ready', 'viewer', await contactCodeOf(third.list)]
+    ]);
+    expect(
+      rows(
+        srv,
+        'SELECT * FROM e2ee_project_migrations WHERE project_id = ?',
+        projectId
+      )
+    ).toEqual([]);
+    expect(await ownerSide.approve(projectId)).toEqual([
+      {
+        userId: OTHER,
+        role: 'editor',
+        identityKeyHash: toHex(other.list.identityKeyHash)
+      },
+      {
+        userId: THIRD,
+        role: 'viewer',
+        identityKeyHash: toHex(third.list.identityKeyHash)
+      }
+    ]);
+
+    // Approved: staged, both re-added by Welcome, cut over, purged.
     await ownerSide.migrate(projectId);
     expect(formatOf(srv, projectId)).toBe(2);
     const done = ownerSide.progress.at(-1)!;
@@ -531,6 +598,7 @@ describe('migrating a shared plaintext project (slice 7-4)', () => {
     await failure(ownerSide.migrate(projectId));
     await publishKeys(w, editor);
     await publishKeys(w, viewer);
+    await ownerSide.approve(projectId);
     await ownerSide.migrate(projectId);
 
     expect(
@@ -610,6 +678,7 @@ describe('migrating a shared plaintext project (slice 7-4)', () => {
     await failure(ownerSide.migrate(projectId));
     await publishKeys(w, memberDevice(w, other, 'other_laptop'));
     await publishKeys(w, memberDevice(w, third, 'third_laptop'));
+    await ownerSide.approve(projectId);
     await failure(ownerSide.migrate(projectId));
     expect(lease).not.toBe(null);
     // Staged: the members' plaintext copy is read-only too (main's 7-1
@@ -666,6 +735,102 @@ describe('migrating a shared plaintext project (slice 7-4)', () => {
     expect(formatOf(srv, projectId)).toBe(2);
   });
 
+  it('adds back only the members the owner approved, and stops and asks again when the roster, an identity or a role changes', async () => {
+    const w = world();
+    const { srv } = w;
+    const { projectId } = await sharedPlaintext(w);
+    for (const [a, b] of [
+      [OWNER, OTHER],
+      [OTHER, OWNER],
+      [OWNER, THIRD],
+      [THIRD, OWNER]
+    ] as const) {
+      verify(w, a, b);
+    }
+    let substitute = false;
+    const ownerSide = ownerEngine(w, {
+      beforeStep: (step) => {
+        // Staged: the server now drops the approved viewer from the
+        // roster it lists, before the re-add.
+        if (step === 'readd' && substitute) {
+          substitute = false;
+          srv.db
+            .prepare(
+              'DELETE FROM project_members WHERE project_id = ? AND user_id = ?'
+            )
+            .run(projectId, THIRD);
+        }
+      }
+    });
+    await failure(ownerSide.migrate(projectId));
+    await publishKeys(w, memberDevice(w, other, 'other_laptop'));
+    await publishKeys(w, memberDevice(w, third, 'third_laptop'));
+    const shown = await ownerSide.approve(projectId);
+    const staged = () =>
+      rows(
+        srv,
+        'SELECT * FROM e2ee_project_migrations WHERE project_id = ?',
+        projectId
+      );
+    const noAdds = () =>
+      expect(
+        rows(srv, 'SELECT * FROM e2ee_welcomes WHERE project_id = ?', projectId)
+      ).toEqual([]);
+
+    // Approvals that differ from the roster shown stage nothing: another
+    // identity for a member (the code of someone else), another role, a
+    // member left out.
+    for (const approval of [
+      shown.map((entry) =>
+        entry.userId === THIRD
+          ? { ...entry, identityKeyHash: toHex(other.list.identityKeyHash) }
+          : entry
+      ),
+      shown.map((entry) =>
+        entry.userId === THIRD ? { ...entry, role: 'editor' as const } : entry
+      ),
+      shown.filter((entry) => entry.userId === OTHER)
+    ]) {
+      ownerSide.approved = approval;
+      const changed = await failure(ownerSide.migrate(projectId));
+      expect(changed).toBeInstanceOf(MigrationApprovalNeededError);
+      expect(changed).toMatchObject({ changed: true });
+      expect(ownerSide.progress.at(-1)).toMatchObject({
+        phase: 'members',
+        error: { code: MIGRATION_APPROVAL_CODE }
+      });
+      expect(staged()).toEqual([]);
+      noAdds();
+    }
+
+    // Approved as shown, but the roster changes once staged: nobody is
+    // added and nothing is switched over; the owner is asked again.
+    ownerSide.approved = shown;
+    substitute = true;
+    const stopped = await failure(ownerSide.migrate(projectId));
+    expect(stopped).toBeInstanceOf(MigrationApprovalNeededError);
+    expect(stopped).toMatchObject({ changed: true });
+    noAdds();
+    expect(formatOf(srv, projectId)).toBe(1);
+    expect(ownerSide.progress.at(-1)).toMatchObject({
+      phase: 'members',
+      error: { code: MIGRATION_APPROVAL_CODE }
+    });
+    // The roster as it is now, approved again, goes ahead.
+    expect(await ownerSide.approve(projectId)).toEqual([
+      shown.find((entry) => entry.userId === OTHER)
+    ]);
+    await ownerSide.migrate(projectId);
+    expect(formatOf(srv, projectId)).toBe(2);
+    expect(
+      rows<{ user_id: string }>(
+        srv,
+        'SELECT user_id FROM e2ee_welcomes WHERE project_id = ?',
+        projectId
+      ).map((row) => row.user_id)
+    ).toEqual([OTHER]);
+  });
+
   it('drops the re-adds with an abandoned staging, so a new one adds the members again', async () => {
     const w = world();
     const { srv } = w;
@@ -687,6 +852,7 @@ describe('migrating a shared plaintext project (slice 7-4)', () => {
     await failure(ownerSide.migrate(projectId));
     await publishKeys(w, memberDevice(w, other, 'other_laptop'));
     await publishKeys(w, memberDevice(w, third, 'third_laptop'));
+    await ownerSide.approve(projectId);
     await failure(ownerSide.migrate(projectId));
     // Both were re-added in the staged group, then the owner abandons.
     expect(
@@ -781,6 +947,7 @@ describe('migrating a shared plaintext project (slice 7-4)', () => {
     await failure(ownerSide.migrate(projectId));
     await publishKeys(w, memberDevice(w, other, 'other_laptop'));
     await publishKeys(w, memberDevice(w, third, 'third_laptop'));
+    await ownerSide.approve(projectId);
     const refused = await failure(ownerSide.migrate(projectId));
     expect(refused.code).toBe('E2EE_ADD_MISMATCH');
     expect(moved.size).toBe(2);
@@ -938,6 +1105,7 @@ describe(
       await failure(ownerSide.migrate(projectId));
       await publishKeys(w, editor);
       await publishKeys(w, viewer);
+      await ownerSide.approve(projectId);
       await ownerSide.migrate(projectId);
       expect(formatOf(srv, projectId)).toBe(2);
       await joinWelcomedProjects(invitationsOf(w, editor));

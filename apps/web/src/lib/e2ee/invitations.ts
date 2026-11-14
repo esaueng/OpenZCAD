@@ -8,10 +8,12 @@
  *   owner, a hash of the invitee's email, the role, seven days of validity,
  *   this device and its key hash, and a hash of the link's token) and posts
  *   it with the email and token, which the Worker mails and forgets (it
- *   keeps hashes). This browser keeps the email for the pending list. When
- *   the address is that of exactly one verified contact, the statement
- *   (version 3) also names that contact's identity key: only they are then
- *   added without asking.
+ *   keeps hashes). This browser keeps the email for the pending list. Only
+ *   when the owner explicitly picks a verified contact, shown by the
+ *   contact code Contacts shows (`invitableContacts` offers those listed
+ *   under the address typed; the label is the server's word), does the
+ *   statement (version 3) also name that contact's identity key: only they
+ *   are then added without asking. An address alone never binds anyone.
  * - **Invitee: accept, verify, publish.** Accepting binds the account; the
  *   invitee's browser checks the statement against the owner's device list
  *   and, once the owner is a verified contact (slice 5-1, the mutual
@@ -129,11 +131,11 @@ export interface InvitationPeople {
   /** Null when the server will not look them up (no relation, M2). */
   inspect(userId: string): Promise<InvitationPerson | null>;
   /**
-   * The one verified contact Contacts lists under `email`, or null (none,
-   * or more than one). The owner's invitation to that address names their
-   * identity key, so nobody else is added without the owner's say.
+   * The verified contacts Contacts lists under `email`. The address is the
+   * server's label, so a match is only offered to the owner, by contact
+   * code, never bound by itself.
    */
-  verifiedByEmail?(email: string): Promise<InvitationPerson | null>;
+  verifiedContacts?(email: string): Promise<InvitationPerson[]>;
 }
 
 export interface InvitationContext {
@@ -177,17 +179,21 @@ export function contactInvitationPeople(
     async inspect(userId) {
       return inspect(await loadContacts(contacts, account), userId);
     },
-    async verifiedByEmail(email) {
+    async verifiedContacts(email) {
       const address = email.trim().toLowerCase();
       const book = await loadContacts(contacts, account);
-      const matches = book.contacts.filter(
-        (contact) =>
-          contact.standing === 'verified' &&
-          contact.email?.trim().toLowerCase() === address
-      );
-      if (matches.length !== 1) return null;
-      const person = await inspect(book, matches[0]!.userId);
-      return person?.status === 'verified' && person.list ? person : null;
+      const out: InvitationPerson[] = [];
+      for (const contact of book.contacts) {
+        if (
+          contact.standing !== 'verified' ||
+          contact.email?.trim().toLowerCase() !== address
+        ) {
+          continue;
+        }
+        const person = await inspect(book, contact.userId);
+        if (person?.status === 'verified' && person.list) out.push(person);
+      }
+      return out;
     }
   };
 }
@@ -570,31 +576,89 @@ function addGate(
 // --- Owner ------------------------------------------------------------------
 
 /**
+ * A verified contact the owner may invite by identity: named by the
+ * contact code Contacts shows, which is what the owner checks. `email` is
+ * the address Contacts lists them under, the server's word.
+ */
+export interface InvitableContact {
+  readonly userId: string;
+  /** Hex `publicKeyHash` of their identity key. */
+  readonly identityKeyHash: string;
+  readonly code: string;
+  readonly email: string | null;
+}
+
+/**
+ * The verified contacts listed under `email`, offered to the owner as an
+ * explicit choice when inviting. The server labels contacts with their
+ * addresses, so it could list another contact under this one: the owner
+ * picks by contact code, and the default stays an email-only invitation.
+ */
+export async function invitableContacts(
+  ctx: InvitationContext,
+  email: string
+): Promise<InvitableContact[]> {
+  const address = email.trim().toLowerCase();
+  if (!address || !ctx.people.verifiedContacts) return [];
+  const people = await ctx.people.verifiedContacts(address).catch(() => []);
+  const out: InvitableContact[] = [];
+  for (const person of people) {
+    if (person.status !== 'verified' || !person.list) continue;
+    out.push({
+      userId: person.userId,
+      identityKeyHash: toHex(person.list.identityKeyHash),
+      code: await contactCodeOf(person.list),
+      email: person.email
+    });
+  }
+  return out;
+}
+
+/**
  * Invite `email` to an encrypted project this account owns, as `role`: this
  * device signs the statement, the Worker mails the link. The email stays in
- * this browser only. When `email` is the address of one verified contact,
- * the statement names their identity key: only an acceptance by them is
+ * this browser only. Without `options.contact` the statement names no
+ * identity, and the owner confirms whoever accepts. With it (the owner's
+ * explicit pick of a verified contact, by the identity its code showed),
+ * the statement names that identity key: only an acceptance by them is
  * added without the owner's confirmation.
  */
 export async function inviteToEncryptedProject(
   ctx: InvitationContext,
   projectId: string,
   email: string,
-  role: E2eeInvitationRole
+  role: E2eeInvitationRole,
+  options: {
+    readonly contact?: {
+      readonly userId: string;
+      readonly identityKeyHash: string;
+    };
+  } = {}
 ): Promise<E2eeInvitationRecord> {
   const address = email.trim().toLowerCase();
   // The link's token is made here and signed into the statement, so the
   // invitee's browser can tell the server answered its link with it.
   const token = randomToken();
-  // Without a contact to bind, the owner confirms whoever accepts.
-  const contact = ctx.people.verifiedByEmail
-    ? await ctx.people.verifiedByEmail(address).catch(() => null)
-    : null;
+  let identity: Uint8Array | undefined;
+  if (options.contact) {
+    // The contact the owner picked, still verified with the very identity
+    // the code they saw stood for.
+    const person = await ctx.people.inspect(options.contact.userId);
+    if (
+      person?.status !== 'verified' ||
+      !person.list ||
+      toHex(person.list.identityKeyHash) !== options.contact.identityKeyHash
+    ) {
+      throw new InvitationError(
+        'not-verified',
+        'This contact changed since you picked them. Nothing was sent; check their code and try again.'
+      );
+    }
+    identity = person.list.identityKeyHash;
+  }
   const signed = await signInvitationStatement(ctx, projectId, address, role, {
     linkToken: token,
-    ...(contact?.status === 'verified' && contact.list
-      ? { inviteeIdentityKeyHash: contact.list.identityKeyHash }
-      : {})
+    ...(identity ? { inviteeIdentityKeyHash: identity } : {})
   });
   const { invitation } = await ctx.api.create(projectId, {
     email: address,
@@ -801,6 +865,25 @@ async function acceptedBy(
       email: person.email
     }
   };
+}
+
+/**
+ * `record`'s statement, when this account's device signed it, and the
+ * verified contact whose device signed a valid acceptance of it (looked up
+ * now): what the owner reviews before confirming an Add, as the migration
+ * cutover's member approval does.
+ */
+export async function reviewAcceptance(
+  ctx: InvitationContext,
+  record: E2eeInvitationRecord
+): Promise<{
+  statement: ProjectInvitation | null;
+  acceptor: InvitationAcceptor | null;
+}> {
+  const person = record.acceptedByUserId
+    ? await ctx.people.inspect(record.acceptedByUserId).catch(() => null)
+    : null;
+  return acceptedBy(ctx, record, person, now(ctx));
 }
 
 async function describe(

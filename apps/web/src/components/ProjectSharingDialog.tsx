@@ -41,7 +41,10 @@ import {
   EncryptedShareLinks,
   type EncryptedShareLinkClient
 } from './EncryptedShareLinks';
-import type { OwnerInvitation } from '../lib/e2ee/invitations';
+import type {
+  InvitableContact,
+  OwnerInvitation
+} from '../lib/e2ee/invitations';
 import { useEncryptionStatus } from '../lib/e2ee/encryptionStatus';
 import { describeFailure, type PlainFailure } from '../lib/plainFailure';
 import { FailureDetails } from './FailureDetails';
@@ -62,11 +65,23 @@ const defaultShareLinkClient = createProjectShareLinkClient();
 export interface EncryptedSharingClient {
   /** The project's open invitations, after adding every ready invitee. */
   list(projectId: string): Promise<OwnerInvitation[]>;
+  /**
+   * `contact` is the verified contact the owner explicitly picked, by the
+   * identity its contact code showed: the invitation then names them, and
+   * only they are added without asking. Without it, the owner confirms
+   * whoever accepts.
+   */
   invite(
     projectId: string,
     email: string,
-    role: ProjectMemberRole
+    role: ProjectMemberRole,
+    contact?: Pick<InvitableContact, 'userId' | 'identityKeyHash'>
   ): Promise<void>;
+  /**
+   * The verified contacts Contacts lists under `email` (the server's
+   * label), offered by contact code as an explicit choice.
+   */
+  contactsFor?(email: string): Promise<InvitableContact[]>;
   /** Revokes an invitation, or declines one someone accepted. */
   revoke(projectId: string, invitationId: string): Promise<void>;
   /**
@@ -115,7 +130,7 @@ export const pageEncryptedSharingClient: EncryptedSharingClient = {
       ? invitations.projectInvitations(ctx, projectId)
       : listed;
   },
-  async invite(projectId, email, role) {
+  async invite(projectId, email, role, contact) {
     const [{ encryptedInvitations }, { inviteToEncryptedProject }] =
       await Promise.all([
         import('../lib/e2ee/encryptedProjects'),
@@ -125,8 +140,18 @@ export const pageEncryptedSharingClient: EncryptedSharingClient = {
       await encryptedInvitations(),
       projectId,
       email,
-      role
+      role,
+      contact ? { contact } : {}
     );
+  },
+  async contactsFor(email) {
+    const [{ encryptedInvitations }, { invitableContacts }] = await Promise.all(
+      [
+        import('../lib/e2ee/encryptedProjects'),
+        import('../lib/e2ee/invitations')
+      ]
+    );
+    return invitableContacts(await encryptedInvitations(), email);
   },
   async revoke(projectId, invitationId) {
     const [{ encryptedInvitations }, { declineInvitation }] = await Promise.all(
@@ -431,6 +456,13 @@ export function ProjectSharingDialog({
   const [email, setEmail] = useState('');
   const personalInfoVisible = usePersonalInfoVisible();
   const [inviteRole, setInviteRole] = useState<ProjectMemberRole>('viewer');
+  // Verified contacts listed under the address typed (the server's label):
+  // offered by contact code, never picked for the owner.
+  const [contactMatches, setContactMatches] = useState<{
+    email: string;
+    contacts: InvitableContact[];
+  } | null>(null);
+  const [pickedContact, setPickedContact] = useState<string | null>(null);
   const [invitationSentTo, setInvitationSentTo] = useState<string | null>(null);
   const [hydrating, setHydrating] = useState(role === 'owner');
   const [busy, setBusy] = useState<string | null>(null);
@@ -528,6 +560,41 @@ export function ProjectSharingDialog({
     // action-status row after the dialog has already painted.
     void refresh('hydrate');
   }, [refresh]);
+
+  const contactLookup =
+    encrypted &&
+    !localProject &&
+    role === 'owner' &&
+    encryptedClient.contactsFor
+      ? encryptedClient
+      : null;
+  useEffect(() => {
+    setPickedContact(null);
+    const address = email.trim().toLowerCase();
+    if (!contactLookup?.contactsFor || !address.includes('@')) {
+      setContactMatches(null);
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      contactLookup.contactsFor!(address).then(
+        (contacts) => {
+          if (!cancelled) setContactMatches({ email: address, contacts });
+        },
+        () => {
+          if (!cancelled) setContactMatches(null);
+        }
+      );
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [email, contactLookup]);
+  const offeredContacts =
+    contactMatches?.email === email.trim().toLowerCase()
+      ? contactMatches.contacts
+      : [];
 
   const mutate = async (key: string, action: () => Promise<void>) => {
     actionOriginRef.current =
@@ -829,10 +896,20 @@ export function ProjectSharingDialog({
                   void mutate('invite', async () => {
                     setInvitationSentTo(null);
                     if (encrypted) {
+                      // Only the owner's explicit pick binds a contact.
+                      const contact = offeredContacts.find(
+                        (candidate) => candidate.userId === pickedContact
+                      );
                       await encryptedClient.invite(
                         projectId,
                         email,
-                        inviteRole
+                        inviteRole,
+                        contact
+                          ? {
+                              userId: contact.userId,
+                              identityKeyHash: contact.identityKeyHash
+                            }
+                          : undefined
                       );
                       setInvitationSentTo(email.trim().toLowerCase());
                     } else {
@@ -884,6 +961,53 @@ export function ProjectSharingDialog({
                   Invite
                 </button>
               </form>
+              {offeredContacts.length ? (
+                <div
+                  className="sharing-confirm"
+                  role="radiogroup"
+                  aria-label="Who to add"
+                >
+                  <p className="sharing-confirm-title">
+                    Contacts lists a verified contact under this address.
+                  </p>
+                  <label className="sharing-invite-option">
+                    <input
+                      type="radio"
+                      name="sharing-invite-contact"
+                      checked={pickedContact === null}
+                      disabled={interactionBusy}
+                      onChange={() => setPickedContact(null)}
+                    />
+                    <span>Email only: you confirm whoever accepts</span>
+                  </label>
+                  {offeredContacts.map((contact) => (
+                    <label
+                      key={contact.userId}
+                      className="sharing-invite-option"
+                    >
+                      <input
+                        type="radio"
+                        name="sharing-invite-contact"
+                        checked={pickedContact === contact.userId}
+                        disabled={interactionBusy}
+                        onChange={() => setPickedContact(contact.userId)}
+                      />
+                      <span>
+                        Invite{' '}
+                        {personalInfoVisible && contact.email
+                          ? contact.email
+                          : 'your verified contact'}{' '}
+                        (code{' '}
+                        <code className="encryption-code">{contact.code}</code>)
+                      </span>
+                    </label>
+                  ))}
+                  <p className="sharing-hint">
+                    A contact you pick is added once they accept. Pick them only
+                    if this is the code Contacts shows for them.
+                  </p>
+                </div>
+              ) : null}
               {invitationSentTo && (
                 <p className="sharing-invite-sent" role="status">
                   {personalInfoVisible

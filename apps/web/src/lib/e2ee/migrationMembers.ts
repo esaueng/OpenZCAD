@@ -17,10 +17,18 @@
  *   the owner verified them (slice 5-1). Until every member is, nothing is
  *   staged: the project is not locked while the owner waits (decision
  *   M7(a): block the cutover until every member is verified and re-added).
+ * - **Approval.** The server lists the members and labels them with their
+ *   addresses, so a ready roster is shown to the owner first: each member's
+ *   contact code (from the verified device list whose device signed the
+ *   acceptance) and the role this account signed. Nothing is staged until
+ *   the owner approves exactly that roster (`MigrationMemberApproval`), and
+ *   the cutover stops and asks again if the roster, an identity or a role
+ *   changed since.
  * - **Re-add.** Once the staging is complete, just before the cutover, the
  *   owner adds each member by Welcome with their current role, one Add
- *   Commit per member (`addInvitedMember`), under the migration lease. The
- *   Worker's cutover refuses unless every member was re-added this way.
+ *   Commit per member (`addInvitedMember`), under the migration lease, each
+ *   confirmed as exactly the identity the owner approved. The Worker's
+ *   cutover refuses unless every member was re-added this way.
  * - **After the cutover.** The plaintext links and pending invitations the
  *   cutover revoked can be reissued: links as new encrypted links of the
  *   same modes (slice 5-10, whose URLs differ and must be shared again),
@@ -32,12 +40,13 @@ import {
   type E2eeMigrationMemberRecord,
   type E2eeMigrationMembersResponse
 } from '@openzcad/shared';
-import { toHex } from '@openzcad/crypto';
 import { ApiError } from '../api';
 import {
   addInvitedMember,
   inviteToEncryptedProject,
+  reviewAcceptance,
   signInvitationStatement,
+  type InvitationAcceptor,
   type InvitationContext
 } from './invitations';
 import type { ProjectMigrationsApi } from './projectMigrationsApi';
@@ -65,11 +74,32 @@ export type MigrationMemberState =
 
 export interface MigrationMember {
   readonly userId: string;
+  /** The server's label: shown, never relied on. */
   readonly email: string | null;
   readonly role: 'editor' | 'viewer';
   readonly state: MigrationMemberState;
   readonly invitation: E2eeInvitationRecord | null;
+  /**
+   * Once `ready`: the verified contact whose device signed the acceptance,
+   * with the contact code Contacts shows. What the owner approves.
+   */
+  readonly acceptor?: InvitationAcceptor | null;
+  /** Once `ready`: the role the re-add statement this account signed names. */
+  readonly signedRole?: 'editor' | 'viewer' | null;
 }
+
+/**
+ * One member as the owner approved them for the cutover: the account, the
+ * signed role and the identity (hex `publicKeyHash`) their code showed.
+ */
+export interface MigrationMemberApproval {
+  readonly userId: string;
+  readonly role: 'editor' | 'viewer';
+  readonly identityKeyHash: string;
+}
+
+/** Client-side: the owner has not approved the ready roster as it is now. */
+export const MIGRATION_APPROVAL_CODE = 'E2EE_MIGRATION_MEMBERS_UNAPPROVED';
 
 /** What a shared project's migration carries over, or offers to reissue. */
 export interface MigrationSharing {
@@ -95,7 +125,7 @@ export function migrationMemberAction(member: MigrationMember): string {
     case 'verify':
       return `Compare codes with ${member.email ?? 'them'} in Settings › Encryption › Contacts.`;
     case 'ready':
-      return 'Ready to be added back with their current role.';
+      return 'Ready. Approve only if this is the code Contacts shows for them.';
     case 'readded':
       return 'Added back to the encrypted project.';
   }
@@ -112,6 +142,80 @@ export class MigrationMembersNotReadyError extends Error {
         : `${members.length} members are not ready to be added to the encrypted project yet.`
     );
   }
+}
+
+/**
+ * The owner has not approved the members about to be added back, or the
+ * roster, an identity or a role changed since they did: nothing is staged
+ * or switched over until they approve the roster shown now.
+ */
+export class MigrationApprovalNeededError extends Error {
+  override readonly name = 'MigrationApprovalNeededError';
+  readonly code = MIGRATION_APPROVAL_CODE;
+  constructor(readonly changed: boolean) {
+    super(
+      changed
+        ? 'The members changed since you approved them. Nothing was switched over; check them again.'
+        : 'Check each member’s contact code and role below, then approve.'
+    );
+  }
+}
+
+/** The approval of `members` as shown: every ready member, by code. */
+export function approvalOf(
+  members: readonly MigrationMember[]
+): MigrationMemberApproval[] {
+  return members.flatMap((member) =>
+    member.state === 'ready' && member.acceptor && member.signedRole
+      ? [
+          {
+            userId: member.userId,
+            role: member.signedRole,
+            identityKeyHash: member.acceptor.identityKeyHash
+          }
+        ]
+      : []
+  );
+}
+
+/**
+ * The owner's approval of each member still to be re-added, by account;
+ * throws {@link MigrationApprovalNeededError} unless `approved` is exactly
+ * the ready roster as it stands: the same accounts, each with the identity
+ * and signed role approved (members already re-added are left out).
+ */
+export function requireMembersApproved(
+  sharing: MigrationSharing,
+  approved: readonly MigrationMemberApproval[] | undefined
+): Map<string, MigrationMemberApproval> {
+  const ready = sharing.members.filter((member) => member.state === 'ready');
+  const byUser = new Map<string, MigrationMemberApproval>();
+  if (!ready.length) return byUser;
+  if (!approved) throw new MigrationApprovalNeededError(false);
+  const readded = new Set(
+    sharing.members
+      .filter((member) => member.state === 'readded')
+      .map((member) => member.userId)
+  );
+  for (const entry of approved) {
+    if (readded.has(entry.userId)) continue;
+    if (byUser.has(entry.userId)) throw new MigrationApprovalNeededError(true);
+    byUser.set(entry.userId, entry);
+  }
+  if (byUser.size !== ready.length)
+    throw new MigrationApprovalNeededError(true);
+  for (const member of ready) {
+    const entry = byUser.get(member.userId);
+    if (
+      !entry ||
+      entry.role !== member.role ||
+      entry.role !== member.signedRole ||
+      entry.identityKeyHash !== member.acceptor?.identityKeyHash
+    ) {
+      throw new MigrationApprovalNeededError(true);
+    }
+  }
+  return byUser;
 }
 
 const usable = (
@@ -133,21 +237,31 @@ async function stateOf(
   ctx: InvitationContext,
   record: E2eeMigrationMemberRecord,
   at: number
-): Promise<MigrationMemberState> {
-  if (record.readded) return 'readded';
-  if (!record.hasKeys) return 'needs-encryption';
+): Promise<Pick<MigrationMember, 'state' | 'acceptor' | 'signedRole'>> {
+  if (record.readded) return { state: 'readded' };
+  if (!record.hasKeys) return { state: 'needs-encryption' };
   const invitation = usable(record, at);
-  if (!invitation) return 'needs-invitation';
+  if (!invitation) return { state: 'needs-invitation' };
   if (
     (invitation.keyPackages ?? 0) + (invitation.claimedKeyPackages ?? 0) ===
       0 ||
     // Their browser signs an acceptance with its keys; an older one did not.
     !invitation.acceptance
   ) {
-    return 'waiting-for-keys';
+    return { state: 'waiting-for-keys' };
   }
   const person = await ctx.people.inspect(record.userId).catch(() => null);
-  return person?.status === 'verified' && person.list ? 'ready' : 'verify';
+  if (person?.status !== 'verified' || !person.list) return { state: 'verify' };
+  // Ready only with what the owner approves: the verified contact whose
+  // device signed the acceptance, and the role this account signed.
+  const { statement, acceptor } = await reviewAcceptance(ctx, invitation);
+  if (!statement || statement.role !== record.role) {
+    return { state: 'needs-invitation' };
+  }
+  if (!acceptor || acceptor.userId !== record.userId) {
+    return { state: 'waiting-for-keys' };
+  }
+  return { state: 'ready', acceptor, signedRole: statement.role };
 }
 
 async function describeSharing(
@@ -161,7 +275,7 @@ async function describeSharing(
       userId: record.userId,
       email: record.email,
       role: record.role,
-      state: await stateOf(ctx, record, at),
+      ...(await stateOf(ctx, record, at)),
       invitation: record.invitation
     });
   }
@@ -223,31 +337,32 @@ export function requireMembersReady(sharing: MigrationSharing): void {
  * Re-adds every member not yet re-added, each by an Add Commit with their
  * current role and a Welcome (slice 5-3b's `addInvitedMember`, which checks
  * the statement, that the member is a verified contact and each claimed
- * KeyPackage). `ctx` writes through the staging's leased clients. Throws
- * {@link MigrationMembersNotReadyError} when a member is no longer ready.
+ * KeyPackage), confirmed as exactly the identity the owner approved
+ * (`approved`). `ctx` writes through the staging's leased clients. Throws
+ * {@link MigrationMembersNotReadyError} when a member is no longer ready,
+ * and {@link MigrationApprovalNeededError} when the roster, an identity or
+ * a role is not the one approved.
  */
 export async function readdMigrationMembers(
   ctx: InvitationContext,
   migrations: ProjectMigrationsApi,
   projectId: string,
-  leaseId: string
+  leaseId: string,
+  approved: readonly MigrationMemberApproval[] | undefined
 ): Promise<MigrationSharing> {
   const current = await describeSharing(
     ctx,
     await migrations.members(projectId, leaseId)
   );
   requireMembersReady(current);
+  const approvals = requireMembersApproved(current, approved);
   for (const member of current.members) {
     if (member.state !== 'ready') continue;
-    // Starting the cutover with this member list is the owner's explicit
-    // action, for each member as the verified contact they are now:
-    // someone this browser once saw removed is added back too.
-    const person = await ctx.people.inspect(member.userId);
-    if (person?.status !== 'verified' || !person.list) {
-      throw new MigrationMembersNotReadyError([{ ...member, state: 'verify' }]);
-    }
+    // The owner approved this member by code and role: the Add confirms
+    // exactly that identity, so someone this browser once saw removed is
+    // added back too, and nobody the owner did not approve is.
     await addInvitedMember(ctx, member.invitation!, {
-      confirmedIdentity: toHex(person.list.identityKeyHash)
+      confirmedIdentity: approvals.get(member.userId)!.identityKeyHash
     });
   }
   const after = await describeSharing(

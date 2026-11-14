@@ -78,10 +78,14 @@ import { meshPayloadArchive } from '../importArchival';
 import type { InvitationContext } from './invitations';
 import {
   MigrationMembersNotReadyError,
+  MIGRATION_APPROVAL_CODE,
+  MigrationApprovalNeededError,
   prepareMigrationMembers,
   readdMigrationMembers,
+  requireMembersApproved,
   requireMembersReady,
   type MigrationMember,
+  type MigrationMemberApproval,
   type MigrationSharing
 } from './migrationMembers';
 import type { ProjectGroupContext } from './projectGroups';
@@ -268,6 +272,8 @@ export function migrationErrorOf(error: unknown): MigrationError {
             ? `${message} Encryption starts once everyone listed below is ready.`
             : message
       };
+    case MIGRATION_APPROVAL_CODE:
+      return { code, retryable: false, message };
     case E2EE_MIGRATION_CODES.leased:
       return {
         code,
@@ -371,9 +377,19 @@ export function migratableProjects(
 export interface ProjectMigrationEngine {
   /**
    * Encrypts one project end to end, resuming whatever was staged. Rejects
-   * with {@link MigrationPausedError} when `signal` aborts.
+   * with {@link MigrationPausedError} when `signal` aborts. A shared
+   * project's members are added back only as `options.approvedMembers`
+   * names them (the owner's approval of the roster shown, by contact code
+   * and signed role); without it, or once the roster differs, it stops
+   * before staging or the cutover and asks for approval.
    */
-  migrate(project: ProjectSummary, signal?: AbortSignal): Promise<void>;
+  migrate(
+    project: ProjectSummary,
+    signal?: AbortSignal,
+    options?: {
+      readonly approvedMembers?: readonly MigrationMemberApproval[];
+    }
+  ): Promise<void>;
   /** Drops a staging and unlocks the plaintext (the lease holder only). */
   cancel(projectId: string): Promise<void>;
 }
@@ -455,7 +471,10 @@ export function createProjectMigrationEngine(
 
   async function migrate(
     project: ProjectSummary,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    options: {
+      readonly approvedMembers?: readonly MigrationMemberApproval[];
+    } = {}
   ): Promise<void> {
     const projectId = project.projectId;
     let progress: MigrationProgress = {
@@ -484,14 +503,23 @@ export function createProjectMigrationEngine(
     let resumes = 0;
     for (;;) {
       try {
-        await runOnce(project, check, report, () => progress);
+        await runOnce(
+          project,
+          check,
+          report,
+          () => progress,
+          options.approvedMembers
+        );
         return;
       } catch (error) {
         if (error instanceof MigrationPausedError) {
           report({ phase: 'paused' });
           throw error;
         }
-        if (error instanceof MigrationMembersNotReadyError) {
+        if (
+          error instanceof MigrationMembersNotReadyError ||
+          error instanceof MigrationApprovalNeededError
+        ) {
           report({ phase: 'members', error: migrationErrorOf(error) });
           throw error;
         }
@@ -521,7 +549,8 @@ export function createProjectMigrationEngine(
     project: ProjectSummary,
     check: (step: string) => Promise<void>,
     report: (change: Partial<MigrationProgress>) => void,
-    current: () => MigrationProgress
+    current: () => MigrationProgress,
+    approvedMembers: readonly MigrationMemberApproval[] | undefined
   ): Promise<void> {
     const projectId = project.projectId;
     await check('status');
@@ -559,6 +588,9 @@ export function createProjectMigrationEngine(
         ...(sharing.members.length ? { members: sharing.members } : {})
       });
       requireMembersReady(sharing);
+      // The owner approves the roster shown, by contact code and signed
+      // role, before anything is staged or locked.
+      requireMembersApproved(sharing, approvedMembers);
     }
     report({ phase: 'starting', error: undefined, plaintextLocked });
     const { lease, migration } = await acquire(projectId, status);
@@ -582,7 +614,8 @@ export function createProjectMigrationEngine(
           invitations,
           migrations,
           projectId,
-          lease
+          lease,
+          approvedMembers
         );
         report({ members: sharing.members });
       } else if (invitations) {
