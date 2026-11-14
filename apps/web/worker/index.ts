@@ -171,6 +171,7 @@ import {
   isProjectSharingPreferenceEnabled,
   markAssistantCredentialValidated,
   parseAssistantCredential,
+  parseSealedSettings,
   parseUpdateAppSettingsRequest,
   settingsRequestOmitsKeymap,
   settingsRequestOmitsHiddenRelationGlyphs,
@@ -178,7 +179,8 @@ import {
   settingsRequestOmittedViewportFields,
   resolveUserAssistant,
   saveAssistantCredential,
-  updateAppSettings
+  updateAppSettings,
+  withRequestCustomInstructions
 } from './settings';
 import {
   acceptInvitation,
@@ -226,7 +228,9 @@ import {
   E2EE_MIGRATION_CODES,
   ENCRYPTED_PROJECT_ASSISTANT_CONSENT_REQUIRED_CODE,
   ENCRYPTED_PROJECT_ASSISTANT_UNAVAILABLE_CODE,
+  holdsOnlyAccountServerSettings,
   MAX_ARTIFACT_PART_BYTES,
+  SETTINGS_ENCRYPTION_REQUIRED_CODE,
   MAX_ARTIFACT_UPLOAD_PARTS,
   MAX_CLOUD_PROJECT_WRITE_BYTES,
   LEGACY_PROJECT_FRAME_CONTENT_TYPE,
@@ -1671,7 +1675,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
         payload,
         env,
         assistantSafetyIdentifier(providerIdentity, payload.retryAttempt),
-        assistant.runtime ?? undefined
+        withRequestCustomInstructions(assistant.runtime, payload)
       );
     } catch (error) {
       await permit.release();
@@ -1871,9 +1875,39 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       env.ENVIRONMENT,
       env.AI_ALLOWED_BASE_URL_HOSTS
     );
+    const sealedSettings = parseSealedSettings(body);
+    // ADR-024 amendment 2026-11-14: an account whose library is encrypted
+    // stores only what the Worker acts on readable; the rest arrives sealed
+    // under its account key, or stays as last sealed.
+    const libraryEncrypted =
+      isE2eeDefaultOn(env, session.email ?? undefined) ||
+      (isE2eeProjectsEnabled(env, session.email ?? undefined) &&
+        (await accountRequiresEncryptedLibrary(env.DB, userId)));
+    const keepStoredKeymap = settingsRequestOmitsKeymap(body);
+    const keepStoredRelationGlyphs = settingsRequestOmitsRelationGlyphs(body);
+    const keepStoredHiddenRelationGlyphs =
+      settingsRequestOmitsHiddenRelationGlyphs(body);
+    const keepStoredViewportFields = settingsRequestOmittedViewportFields(body);
+    if (
+      libraryEncrypted &&
+      (!holdsOnlyAccountServerSettings(payload.settings) ||
+        keepStoredKeymap ||
+        keepStoredRelationGlyphs ||
+        keepStoredHiddenRelationGlyphs ||
+        keepStoredViewportFields.length > 0)
+    ) {
+      return json(
+        {
+          error:
+            'This account encrypts its settings. Update OpenZCAD to save them.',
+          code: SETTINGS_ENCRYPTION_REQUIRED_CODE
+        },
+        409
+      );
+    }
     const { response: updated, previous } = await updateAppSettings(
       userId,
-      payload,
+      sealedSettings === undefined ? payload : { ...payload, sealedSettings },
       env,
       session.email,
       // A client from before remapping sends no keymap, one from before
@@ -1881,11 +1915,11 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       // one from before the field of view or X-ray no value for them: keep
       // the stored ones.
       {
-        keepStoredKeymap: settingsRequestOmitsKeymap(body),
-        keepStoredRelationGlyphs: settingsRequestOmitsRelationGlyphs(body),
-        keepStoredHiddenRelationGlyphs:
-          settingsRequestOmitsHiddenRelationGlyphs(body),
-        keepStoredViewportFields: settingsRequestOmittedViewportFields(body)
+        keepStoredKeymap,
+        keepStoredRelationGlyphs,
+        keepStoredHiddenRelationGlyphs,
+        keepStoredViewportFields,
+        libraryEncrypted
       }
     );
     // Only the switch turning off is news to the rooms. Settings save on every

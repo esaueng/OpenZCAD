@@ -1448,3 +1448,43 @@ that may be "Keep both" or recovery copies of them.
   read while encrypted projects are open refuses
   (`E2EE_PREFERENCE_UNVERIFIED`) rather than reading as no. A folder sync
   that meets the refusal mid-visit seals from its next round.
+
+### Account settings
+
+Settings are the user's own words and habits: custom assistant
+instructions, units, theme, keymap, viewport and sketching preferences. An
+account whose library is encrypted (the rule above) stores them sealed.
+
+- **What stays readable.** The Worker acts on two parts of the settings: the
+  sharing switch, which authorizes invitations and live connections, and the
+  assistant's route (on or off, whose credential, provider, endpoint, model,
+  reasoning effort, output and time limits), which it uses to call the
+  provider. `settings_json` holds only those (`accountServerSettings`),
+  every other field at its default.
+- **Sealed record.** The whole settings are one record in
+  `user_settings.sealed_settings` (migration 0055), with the library-folder
+  layout under its own key: HKDF-SHA-256 of the account key, empty salt, info
+  `OpenZCAD E2EE v1 account settings key`, additional-data label
+  `OpenZCAD E2EE v1 account settings`. Plaintext is at most 32 KiB. The
+  shared code is `sealed-records.ts`; the folder record now uses it too,
+  with its bytes unchanged (pinned by its fixed vector).
+- **Reads.** The browser opens the record and takes the readable part from
+  `settings_json`, which wins for the fields the Worker acts on. A record it
+  cannot use (another account key, a sequence below its pin, failed
+  authentication), or locked keys, leaves this device's own values for the
+  sealed fields. Readable settings left from before the account encrypted
+  are sealed by the first read that holds the account key.
+- **Writes.** The browser sends the readable part and a new record. A device
+  with locked keys sends the readable part alone and the Worker keeps the
+  stored record. The Worker refuses a write that carries more than the
+  readable part, or that omits fields it would fill from the stored copy
+  (`SETTINGS_ENCRYPTION_REQUIRED`); an account that stores settings readable
+  drops any sealed record on its next write.
+- **Custom instructions** travel with each assistant request
+  (`customInstructions`) instead of being read from the stored settings, so
+  the Worker still adds them for the provider. The request gained a field,
+  so the consent copy lists it and moves to version 3, which asks again on
+  every encrypted project; the transit sentence no longer says the server
+  adds them from settings.
+- **What the server sees.** The readable part, the record's length, write
+  times, revision and the account-key commitment in its header.

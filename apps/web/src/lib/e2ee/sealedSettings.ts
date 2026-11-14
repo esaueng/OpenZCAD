@@ -1,0 +1,140 @@
+import {
+  ACCOUNT_SETTINGS_RECORD,
+  accountKeyCommitment,
+  fromBase64Url,
+  isE2eeError,
+  openRecord,
+  readSealedRecordHeader,
+  sealRecord,
+  toBase64Url,
+  toHex
+} from '@openzcad/crypto';
+import type { AppSettings } from '@openzcad/shared';
+import { normalizeAppSettings } from '../appSettings';
+
+/**
+ * Account settings sealed under the account key (ADR-024 amendment
+ * 2026-11-14), for an account whose library is encrypted. Loaded only by
+ * such an account, so the crypto stays out of the settings chunk.
+ */
+export interface SettingsSequencePins {
+  read(): number;
+  write(sequence: number): void;
+}
+
+const SEQUENCE_PREFIX = 'openzcad.settings.sealed.sequence.v1';
+/** Shared across reads even when persistent storage refuses a pin. */
+const sequenceFloors = new Map<string, number>();
+
+/** The highest sealed-settings sequence this device opened or wrote. */
+export function localStorageSettingsSequencePins(
+  userId: string
+): SettingsSequencePins {
+  const key = `${SEQUENCE_PREFIX}:${userId}`;
+  const remember = (value: number) => {
+    const floor = Math.max(
+      sequenceFloors.get(userId) ?? 0,
+      Number.isSafeInteger(value) && value > 0 ? value : 0
+    );
+    sequenceFloors.set(userId, floor);
+    return floor;
+  };
+  const read = (): number => {
+    try {
+      return remember(Number(globalThis.localStorage?.getItem(key) ?? 0));
+    } catch {
+      return remember(0);
+    }
+  };
+  return {
+    read,
+    write(sequence: number) {
+      const floor = remember(Math.max(read(), sequence));
+      try {
+        globalThis.localStorage?.setItem(key, String(floor));
+      } catch {
+        // The memory floor still protects this visit.
+      }
+    }
+  };
+}
+
+export interface SealedSettingsKeys {
+  accountKey: Uint8Array;
+  userId: string;
+  pins: SettingsSequencePins;
+}
+
+/**
+ * Seals the whole settings at the next sequence. `commit` pins it once the
+ * Worker stored it, so a refused write does not raise the floor.
+ */
+export async function sealSettings(
+  keys: SealedSettingsKeys,
+  settings: AppSettings
+): Promise<{ record: string; commit(): void }> {
+  const sequence = keys.pins.read() + 1;
+  const sealed = await sealRecord(
+    ACCOUNT_SETTINGS_RECORD,
+    keys.accountKey,
+    keys.userId,
+    sequence,
+    new TextEncoder().encode(JSON.stringify(normalizeAppSettings(settings)))
+  );
+  return {
+    record: toBase64Url(sealed),
+    commit: () => {
+      if (keys.pins.read() < sequence) keys.pins.write(sequence);
+    }
+  };
+}
+
+/**
+ * The settings in a sealed record, or null when this device cannot use it:
+ * another account key sealed it (a device removal rotated the key), it is
+ * older than a record this device already opened or wrote (a rollback), or
+ * it fails authentication. The caller then keeps this device's own values.
+ */
+export async function openSettings(
+  keys: SealedSettingsKeys,
+  record: string
+): Promise<AppSettings | null> {
+  let sealed: Uint8Array;
+  let sequence: number;
+  try {
+    sealed = fromBase64Url(record);
+    const header = readSealedRecordHeader(ACCOUNT_SETTINGS_RECORD, sealed);
+    if (
+      toHex(header.commitment) !==
+      toHex(await accountKeyCommitment(keys.accountKey))
+    )
+      return null;
+    if (header.sequence < keys.pins.read()) return null;
+    sequence = header.sequence;
+  } catch (error) {
+    if (isE2eeError(error) || error instanceof Error) return null;
+    throw error;
+  }
+  let plaintext: Uint8Array;
+  try {
+    ({ plaintext } = await openRecord(
+      ACCOUNT_SETTINGS_RECORD,
+      keys.accountKey,
+      keys.userId,
+      sealed
+    ));
+  } catch (error) {
+    if (isE2eeError(error)) return null;
+    throw error;
+  }
+  let settings: AppSettings;
+  try {
+    settings = normalizeAppSettings(
+      JSON.parse(new TextDecoder().decode(plaintext))
+    );
+  } catch {
+    return null;
+  }
+  keys.pins.write(sequence);
+  return settings;
+}

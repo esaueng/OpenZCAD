@@ -9,6 +9,7 @@ import {
   type CadDocumentDigest
 } from '@openzcad/ai-contracts';
 import { isEncryptedProject } from './api';
+import { loadLocalAppSettings } from './appSettings';
 import { ENCRYPTED_PROJECT_ASSISTANT_NOTICE } from './assistant/encryptedProject';
 import { desktopFetch } from './desktopBridge';
 
@@ -356,7 +357,10 @@ async function streamAssistantReplyAttempt(
       history: request.history ?? [],
       attachments: request.attachments ?? [],
       retryAttempt,
-      operations: CAD_PATCH_OPERATION_KINDS
+      operations: CAD_PATCH_OPERATION_KINDS,
+      // This device's own: an account whose library is encrypted keeps them
+      // sealed, so the Worker no longer reads them from its settings.
+      customInstructions: loadLocalAppSettings().assistant.customInstructions
     }),
     signal: options.signal
   });

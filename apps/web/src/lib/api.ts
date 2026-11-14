@@ -58,9 +58,13 @@ import {
   withoutDerivedProjection
 } from '@openzcad/document-core';
 import {
+  accountServerSettings,
   createId,
   compareProjectSummaries,
   ENCRYPTED_PROJECTS_REQUIRED_CODE,
+  holdsOnlyAccountServerSettings,
+  SETTINGS_ENCRYPTION_REQUIRED_CODE,
+  withAccountServerSettings,
   PROJECT_FORMAT_UNSUPPORTED_CODE,
   PROJECT_FORMAT_UNSUPPORTED_MESSAGE,
   PROJECT_STORAGE_FORMAT_E2EE_V1,
@@ -77,6 +81,7 @@ import { unlockedAccount } from './e2ee/unlockedKeys';
 import type { EncryptedProjectStore } from './e2ee/encryptedProjectStore';
 import { getKeySessionRevision, isCurrentKeySession } from './e2ee/keySession';
 import { prioritizeShelfEntries } from './projectShelf';
+import { loadLocalAppSettings } from './appSettings';
 
 /** Optional presentation updates; document opens still perform full verification. */
 export interface ProjectListingProgress {
@@ -542,6 +547,140 @@ export async function encryptsAccountLibrary(): Promise<boolean> {
   return false;
 }
 
+// --- Account settings (ADR-024 amendment 2026-11-14) ------------------------
+
+async function sessionUserId(): Promise<string | null> {
+  const session = await readOptionalJson('/api/session');
+  return typeof session?.userId === 'string' ? session.userId : null;
+}
+
+async function sealedSettingsKeys(userId: string | null) {
+  const account = userId === null ? undefined : unlockedAccount(userId);
+  if (!userId || !account) return null;
+  const sealing = await import('./e2ee/sealedSettings');
+  return {
+    sealing,
+    keys: {
+      accountKey: account.accountKey,
+      userId,
+      pins: sealing.localStorageSettingsSequencePins(userId)
+    }
+  };
+}
+
+/** Per visit: whether an account's library is encrypted, for reads only. */
+const libraryEncryptedForReads = new Map<string, Promise<boolean>>();
+
+function libraryEncryptedForRead(userId: string): Promise<boolean> {
+  let known = libraryEncryptedForReads.get(userId);
+  if (!known) {
+    known = encryptsAccountLibrary().catch(() => false);
+    libraryEncryptedForReads.set(userId, known);
+  }
+  return known;
+}
+
+/**
+ * The account's settings. Where the library is encrypted the Worker holds
+ * only what it acts on readable (`accountServerSettings`) and the rest in a
+ * record sealed under the account key: this device opens it, and keeps its
+ * own values for those fields while its keys are locked or the record is
+ * one it cannot use. Readable settings left from before the account
+ * encrypted are sealed on the first read that can, once per visit.
+ */
+async function readAccountSettings(): Promise<AppSettingsResponse> {
+  const response = await requestJson<AppSettingsResponse>('/api/settings');
+  const userId = await sessionUserId();
+  if (response.sealedSettings) {
+    const sealed = await sealedSettingsKeys(userId);
+    const opened = sealed
+      ? await sealed.sealing.openSettings(sealed.keys, response.sealedSettings)
+      : null;
+    return {
+      ...response,
+      settings: withAccountServerSettings(
+        opened ?? loadLocalAppSettings(),
+        response.settings
+      )
+    };
+  }
+  if (!userId || !response.synced || response.revision === 0) return response;
+  const readable = !holdsOnlyAccountServerSettings(response.settings);
+  if (!(await libraryEncryptedForRead(userId))) return response;
+  if (!readable) {
+    // Encrypted, but no sealed record yet (only a device with locked keys
+    // has written): the rest is this device's own.
+    return {
+      ...response,
+      settings: withAccountServerSettings(
+        loadLocalAppSettings(),
+        response.settings
+      )
+    };
+  }
+  if (!(await sealedSettingsKeys(userId))) return response;
+  try {
+    return await writeAccountSettings(
+      { settings: response.settings, expectedRevision: response.revision },
+      true
+    );
+  } catch {
+    return response;
+  }
+}
+
+/**
+ * Saves the account's settings. Where its library is encrypted only
+ * `accountServerSettings` is sent readable, with the whole settings sealed
+ * under the account key; a device whose keys are locked sends the readable
+ * part alone and the Worker keeps the sealed record it has. An account whose
+ * library rule cannot be read refuses (`E2EE_PREFERENCE_UNVERIFIED`) rather
+ * than sending everything readable on a guess.
+ */
+async function writeAccountSettings(
+  payload: UpdateAppSettingsRequest,
+  knownLibrary?: boolean
+): Promise<AppSettingsResponse> {
+  const library = knownLibrary ?? (await encryptsAccountLibrary());
+  if (!library) {
+    try {
+      return await requestJson<AppSettingsResponse>('/api/settings', {
+        method: 'PATCH',
+        body: JSON.stringify({
+          settings: payload.settings,
+          expectedRevision: payload.expectedRevision
+        })
+      });
+    } catch (error) {
+      // The account started encrypting since it was asked.
+      if (
+        error instanceof ApiError &&
+        error.code === SETTINGS_ENCRYPTION_REQUIRED_CODE
+      ) {
+        return writeAccountSettings(payload, true);
+      }
+      throw error;
+    }
+  }
+  const sealed = await sealedSettingsKeys(await sessionUserId());
+  const sealing = sealed
+    ? await sealed.sealing.sealSettings(sealed.keys, payload.settings)
+    : null;
+  const response = await requestJson<AppSettingsResponse>('/api/settings', {
+    method: 'PATCH',
+    body: JSON.stringify({
+      settings: accountServerSettings(payload.settings),
+      expectedRevision: payload.expectedRevision,
+      ...(sealing ? { sealedSettings: sealing.record } : {})
+    })
+  });
+  sealing?.commit();
+  return {
+    ...response,
+    settings: withAccountServerSettings(payload.settings, response.settings)
+  };
+}
+
 /**
  * Runs `plaintext` unless the project is known to be encrypted; a
  * plaintext route that answers PROJECT_FORMAT_UNSUPPORTED marks it and the
@@ -640,7 +779,7 @@ export const api = {
       method: 'POST',
       body: '{}'
     }),
-  getSettings: () => requestJson<AppSettingsResponse>('/api/settings'),
+  getSettings: () => readAccountSettings(),
   getLibraryFolders: () =>
     requestJson<LibraryFolderSnapshot>('/api/library-folders'),
   saveLibraryFolders: (payload: SaveLibraryFolderRequest) =>
@@ -649,10 +788,7 @@ export const api = {
       body: JSON.stringify(payload)
     }),
   updateSettings: (payload: UpdateAppSettingsRequest) =>
-    requestJson<AppSettingsResponse>('/api/settings', {
-      method: 'PATCH',
-      body: JSON.stringify(payload)
-    }),
+    writeAccountSettings(payload),
   saveAssistantCredential: (payload: SaveAssistantCredentialRequest) =>
     requestJson<AppSettingsResponse>('/api/settings/assistant-credential', {
       method: 'PUT',

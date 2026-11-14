@@ -21,6 +21,17 @@ export { ASSISTANT_CONSENT_COPY_VERSION, assistantConsentRoute };
 /** The request body's top-level fields, sorted. */
 export const ASSISTANT_CONSENT_REQUEST_FIELDS = [
   'attachments',
+  'customInstructions',
+  'digest',
+  'history',
+  'operations',
+  'prompt',
+  'retryAttempt'
+] as const;
+
+/** Copy versions 1 and 2's request fields, before custom instructions. */
+const REQUEST_FIELDS_BEFORE_CUSTOM_INSTRUCTIONS = [
+  'attachments',
   'digest',
   'history',
   'operations',
@@ -53,7 +64,7 @@ export const ASSISTANT_CONSENT_FIELDS_BY_COPY_VERSION: Readonly<
   Record<number, { request: readonly string[]; digest: readonly string[] }>
 > = {
   1: {
-    request: ASSISTANT_CONSENT_REQUEST_FIELDS,
+    request: REQUEST_FIELDS_BEFORE_CUSTOM_INSTRUCTIONS,
     digest: [
       'bodies',
       'editCatalog',
@@ -70,6 +81,12 @@ export const ASSISTANT_CONSENT_FIELDS_BY_COPY_VERSION: Readonly<
   },
   // D06 slice E: an ask from Draw also sends the sheet the user is on.
   2: {
+    request: REQUEST_FIELDS_BEFORE_CUSTOM_INSTRUCTIONS,
+    digest: ASSISTANT_CONSENT_DIGEST_FIELDS
+  },
+  // ADR-024 amendment 2026-11-14: the browser sends the custom instructions,
+  // which an encrypted library keeps sealed away from the Worker.
+  3: {
     request: ASSISTANT_CONSENT_REQUEST_FIELDS,
     digest: ASSISTANT_CONSENT_DIGEST_FIELDS
   }
@@ -134,6 +151,12 @@ export const ASSISTANT_CONSENT_ITEMS: readonly AssistantConsentItem[] = [
     detail: 'Each attached image or drawing page, with its file name.'
   },
   {
+    fields: ['customInstructions'],
+    label: 'Your custom instructions',
+    detail:
+      'The modeling preferences you wrote in Settings › Assistant, if any. Nothing from the project.'
+  },
+  {
     fields: ['operations', 'retryAttempt'],
     label: 'Request details',
     detail:
@@ -172,6 +195,6 @@ function endpointHost(endpoint: string | undefined): string | null {
 
 /** The sentences around the list; shown in the dialog and on Settings. */
 export const ASSISTANT_CONSENT_TRANSIT =
-  'OpenZCAD’s server reads each request in plaintext to pass it on, adding its own instructions, any custom instructions from your settings, and an identifier derived from your account.';
+  'OpenZCAD’s server reads each request in plaintext to pass it on, adding its own instructions and an identifier derived from your account.';
 export const ASSISTANT_CONSENT_FINALITY =
   'What has been sent cannot be recalled. Stopping only prevents later requests.';

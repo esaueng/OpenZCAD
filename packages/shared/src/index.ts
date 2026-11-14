@@ -5062,11 +5062,98 @@ export interface AppSettingsResponse {
   synced: boolean;
   credential: AssistantCredentialMetadata;
   effectiveAssistant: EffectiveAssistantSettings;
+  /**
+   * The account's whole settings sealed under its account key (base64url,
+   * ADR-024 amendment 2026-11-14), where its library is encrypted. `settings`
+   * then holds only what the Worker acts on (`accountServerSettings`); the
+   * browser opens this record for the rest. Absent from an older Worker and
+   * for an account that stores its settings readable.
+   */
+  sealedSettings?: string | null;
 }
 
 export interface UpdateAppSettingsRequest {
   settings: AppSettings;
   expectedRevision: number;
+  /**
+   * The whole settings sealed under the account key. Sent with `settings`
+   * reduced to `accountServerSettings`; omitted, the stored record is kept,
+   * as a device whose keys are locked does.
+   */
+  sealedSettings?: string;
+}
+
+/** Characters of a base64url sealed settings record the Worker stores. */
+export const MAX_SEALED_SETTINGS_CHARS = 64 * 1024;
+
+/**
+ * A settings write that carries more than `accountServerSettings` for an
+ * account whose library is encrypted (ADR-024 amendment 2026-11-14).
+ */
+export const SETTINGS_ENCRYPTION_REQUIRED_CODE = 'SETTINGS_ENCRYPTION_REQUIRED';
+
+/**
+ * What the Worker reads from an account's settings to act for it: the
+ * sharing switch, which authorizes invitations and live connections, and the
+ * assistant's route (whether it is on, whose credential, which provider,
+ * endpoint, model and limits), which it uses to call the provider. Every
+ * other field, the user's custom assistant instructions included, is
+ * reset to its default: an account whose library is encrypted keeps those
+ * in its sealed settings record only (ADR-024 amendment 2026-11-14).
+ */
+export function accountServerSettings(settings: AppSettings): AppSettings {
+  const server = structuredClone(DEFAULT_APP_SETTINGS);
+  server.collaboration = structuredClone(settings.collaboration);
+  server.assistant = {
+    ...structuredClone(settings.assistant),
+    customInstructions: DEFAULT_APP_SETTINGS.assistant.customInstructions
+  };
+  return server;
+}
+
+/** `sealed` with the fields the Worker acts on taken from `server`. */
+export function withAccountServerSettings(
+  sealed: AppSettings,
+  server: AppSettings
+): AppSettings {
+  const merged = structuredClone(sealed);
+  merged.collaboration = structuredClone(server.collaboration);
+  merged.assistant = {
+    ...structuredClone(server.assistant),
+    customInstructions: sealed.assistant.customInstructions
+  };
+  return merged;
+}
+
+function sameJsonValue(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  if (
+    typeof left !== 'object' ||
+    typeof right !== 'object' ||
+    left === null ||
+    right === null ||
+    Array.isArray(left) !== Array.isArray(right)
+  ) {
+    return false;
+  }
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every(
+      (key) =>
+        Object.prototype.hasOwnProperty.call(right, key) &&
+        sameJsonValue(
+          (left as Record<string, unknown>)[key],
+          (right as Record<string, unknown>)[key]
+        )
+    )
+  );
+}
+
+/** Whether `settings` carries nothing beyond `accountServerSettings`. */
+export function holdsOnlyAccountServerSettings(settings: AppSettings): boolean {
+  return sameJsonValue(settings, accountServerSettings(settings));
 }
 
 export interface SaveAssistantCredentialRequest {
