@@ -73,28 +73,89 @@ SET project_storage_limit_bytes = MAX(project_storage_limit_bytes, artifact_limi
     artifact_limit_bytes = MAX(project_storage_limit_bytes, artifact_limit_bytes)
 WHERE project_storage_limit_bytes <> artifact_limit_bytes;
 
--- Upload sessions whose bytes stage a migration rather than add storage:
--- a decrypt staging's plaintext files (migration 0043's view) and an
--- encrypt staging's ciphertext blobs (an encrypted blob session of a
--- plaintext project, decision M10). Their finalized rows are already
--- exempt; their sessions and reservations are exempt here too, so an
--- account at or over its allowance can still stage a migration that would
--- shrink it. Each cutover checks the account's combined usage instead and
--- refuses one that would grow it past the allowance (the Worker's
--- `encryptCutoverQuota` and `decryptCutoverQuota`). Selected by `id`, it
--- is one primary-key lookup.
+-- Upload sessions whose bytes stage a migration rather than add counted
+-- storage: a decrypt staging's plaintext files (migration 0043's view) and
+-- an encrypt staging's ciphertext blobs (an encrypted blob session of a
+-- plaintext project, decision M10). Their finalized rows count toward the
+-- allowance only from the cutover on, so they are checked against the
+-- account's projected storage instead (below). Selected by `id`, it is one
+-- primary-key lookup.
 CREATE VIEW IF NOT EXISTS migration_staging_upload_sessions AS
 SELECT s.id AS id
 FROM upload_sessions s JOIN projects p ON p.id = s.project_id
 WHERE s.project_id IN (SELECT project_id FROM e2ee_decrypt_staged_projects)
    OR (s.e2ee_blob_kind IS NOT NULL AND p.storage_format = 1);
 
+-- What each live migration staging would add to the counted storage once
+-- it cuts over and its purge has run: everything it staged that does not
+-- count yet, less (while it is still staging) what the purge removes.
+--
+-- - Encrypt (a plaintext project staging ciphertext): its encrypted
+--   versions and blobs, less its plaintext: the inline head and save
+--   states, document objects, source assets, files and the reservations of
+--   its plaintext uploads (the purge discards them).
+-- - Decrypt (an encrypted project staging plaintext): its staged files,
+--   document objects and assets, less its encrypted blobs and retained
+--   envelopes.
+--
+-- An abandoned staging is credited nothing: it will not cut over, and
+-- holds its staged rows until its cleanup drops them.
+CREATE VIEW IF NOT EXISTS migration_staging_growth AS
+SELECT m.owner_user_id AS user_id, m.project_id AS project_id,
+  CASE
+    WHEN m.direction = 'encrypt' AND p.storage_format = 1 THEN
+      (SELECT COALESCE(SUM(v.envelope_bytes), 0) FROM e2ee_project_versions v
+       WHERE v.project_id = m.project_id
+         AND (v.envelope_key IS NOT NULL OR v.envelope_inline IS NOT NULL))
+      + (SELECT COALESCE(SUM(b.ciphertext_bytes), 0) FROM e2ee_content_blobs b
+         WHERE b.project_id = m.project_id)
+      - (m.state = 'staging') * (
+          p.document_bytes * (p.document_object_id IS NULL)
+          + (SELECT COALESCE(SUM(r.document_bytes), 0) FROM revisions r
+             WHERE r.project_id = m.project_id
+               AND +r.document_object_id IS NULL)
+          + (SELECT COALESCE(SUM(o.stored_bytes), 0)
+             FROM project_document_objects o WHERE o.project_id = m.project_id)
+          + (SELECT COALESCE(SUM(a.stored_bytes), 0)
+             FROM project_storage_assets a WHERE a.project_id = m.project_id)
+          + (SELECT COALESCE(SUM(f.bytes), 0) FROM artifacts f
+             WHERE f.project_id = m.project_id)
+          + (SELECT COALESCE(SUM(s.reserved_bytes), 0) FROM upload_sessions s
+             WHERE s.project_id = m.project_id AND s.e2ee_blob_kind IS NULL))
+    WHEN m.direction = 'decrypt' AND p.storage_format = 2 THEN
+      (SELECT COALESCE(SUM(f.bytes), 0) FROM artifacts f
+       WHERE f.project_id = m.project_id)
+      + (SELECT COALESCE(SUM(o.stored_bytes), 0)
+         FROM project_document_objects o WHERE o.project_id = m.project_id)
+      + (SELECT COALESCE(SUM(a.stored_bytes), 0)
+         FROM project_storage_assets a WHERE a.project_id = m.project_id)
+      - (m.state = 'staging') * (
+          (SELECT COALESCE(SUM(b.ciphertext_bytes), 0) FROM e2ee_content_blobs b
+           WHERE b.project_id = m.project_id)
+          + (SELECT COALESCE(SUM(v.envelope_bytes), 0)
+             FROM e2ee_project_versions v
+             WHERE v.project_id = m.project_id
+               AND (v.envelope_key IS NOT NULL OR v.envelope_inline IS NOT NULL)))
+    ELSE 0
+  END AS bytes
+FROM e2ee_project_migrations m JOIN projects p ON p.id = m.project_id
+WHERE m.state IN ('staging', 'abandoned');
+
+-- An owner's projected storage is everything counted (project storage
+-- and file usage, finalized and reserved) plus what their live stagings
+-- would add at their cutovers (`migration_staging_growth`). A migration
+-- staging is admitted while it stays within the allowance, so staging is
+-- cumulative and bounded, and a full account can still stage a migration
+-- that shrinks it (its credit makes the room). The triggers below spell
+-- the sum out for one owner: a view correlated on the owner would keep
+-- SQLite from narrowing the project storage view to that owner.
+
 -- ---------------------------------------------------------------------------
 -- Cloud file side: artifact usage plus the owner's project storage.
 -- ---------------------------------------------------------------------------
 
--- Migration 0022's upload-session admission; a migration staging's
--- session is admitted at any usage (see the view above).
+-- Migration 0022's upload-session admission. A migration staging's
+-- session is admitted against the owner's projected storage instead.
 DROP TRIGGER IF EXISTS artifact_upload_session_before_insert;
 CREATE TRIGGER artifact_upload_session_before_insert
 BEFORE INSERT ON upload_sessions
@@ -118,6 +179,20 @@ BEGIN
       FROM artifact_account_usage
       WHERE owner_user_id = NEW.owner_user_id
     ) >= 16;
+
+  SELECT RAISE(ABORT, 'artifact_account_quota')
+  WHERE (
+      NEW.project_id IN (SELECT project_id FROM e2ee_decrypt_staged_projects)
+      OR (
+        NEW.e2ee_blob_kind IS NOT NULL
+        AND (SELECT storage_format FROM projects WHERE id = NEW.project_id) = 1
+      )
+    )
+    AND (COALESCE((SELECT bytes FROM account_project_storage WHERE user_id = NEW.owner_user_id), 0)
+      + COALESCE((SELECT finalized_bytes + reserved_bytes FROM artifact_account_usage
+                  WHERE owner_user_id = NEW.owner_user_id), 0)
+      + COALESCE((SELECT SUM(bytes) FROM migration_staging_growth
+                  WHERE user_id = NEW.owner_user_id), 0)) >= COALESCE((SELECT project_storage_limit_bytes FROM users WHERE id = NEW.owner_user_id), 2147483648);
 
   SELECT RAISE(ABORT, 'artifact_account_quota')
   WHERE NEW.project_id NOT IN (
@@ -183,12 +258,34 @@ BEGIN
       WHERE artifact_id = NEW.id AND project_id = NEW.project_id
         AND reservation_state = 'completed' AND reserved_bytes = NEW.bytes
     ), 0);
+
+  -- A decrypt staging's file: against the owner's projected storage, less
+  -- the reservation it releases.
+  SELECT RAISE(ABORT, 'artifact_account_quota')
+  WHERE NEW.project_id IN (
+      SELECT project_id FROM e2ee_decrypt_staged_projects
+    )
+    AND (COALESCE((SELECT bytes FROM account_project_storage WHERE user_id = (SELECT user_id FROM projects WHERE id = NEW.project_id)), 0)
+      + COALESCE((SELECT finalized_bytes + reserved_bytes FROM artifact_account_usage
+                  WHERE owner_user_id = (SELECT user_id FROM projects WHERE id = NEW.project_id)), 0)
+      + COALESCE((SELECT SUM(bytes) FROM migration_staging_growth
+                  WHERE user_id = (SELECT user_id FROM projects WHERE id = NEW.project_id)), 0)) + NEW.bytes
+      - COALESCE((
+          SELECT reserved_bytes FROM upload_sessions
+          WHERE artifact_id = NEW.id AND project_id = NEW.project_id
+            AND reservation_state = 'completed' AND reserved_bytes = NEW.bytes
+        ), 0) > COALESCE((SELECT project_storage_limit_bytes FROM users WHERE id = (SELECT user_id FROM projects WHERE id = NEW.project_id)), 2147483648)
+    AND NEW.bytes > COALESCE((
+      SELECT reserved_bytes FROM upload_sessions
+      WHERE artifact_id = NEW.id AND project_id = NEW.project_id
+        AND reservation_state = 'completed' AND reserved_bytes = NEW.bytes
+    ), 0);
 END;
 
 -- Migration 0022's multipart part reservation. The in-flight reservation
 -- check (`artifact_reserved_byte_limit`) is unchanged: it bounds reserved
 -- bytes alone, against the mirrored `artifact_limit_bytes`. A migration
--- staging's part is not checked against the allowance (see the view).
+-- staging's part is checked against the owner's projected storage.
 DROP TRIGGER IF EXISTS artifact_upload_part_before_insert;
 CREATE TRIGGER artifact_upload_part_before_insert
 BEFORE INSERT ON artifact_upload_parts
@@ -260,6 +357,23 @@ BEGIN
       WHERE user_id = (SELECT owner_user_id FROM upload_sessions WHERE id = NEW.upload_session_id)
     ), 0) > COALESCE((SELECT project_storage_limit_bytes FROM users WHERE id = (SELECT owner_user_id FROM upload_sessions WHERE id = NEW.upload_session_id)), 2147483648)
     AND NEW.bytes > COALESCE((SELECT bytes FROM artifact_upload_parts WHERE upload_session_id = NEW.upload_session_id AND part_number = NEW.part_number), 0);
+
+  SELECT RAISE(ABORT, 'artifact_account_quota')
+  WHERE EXISTS (
+      SELECT 1 FROM migration_staging_upload_sessions
+      WHERE id = NEW.upload_session_id
+    )
+    AND (COALESCE((SELECT bytes FROM account_project_storage WHERE user_id = (SELECT owner_user_id FROM upload_sessions WHERE id = NEW.upload_session_id)), 0)
+      + COALESCE((SELECT finalized_bytes + reserved_bytes FROM artifact_account_usage
+                  WHERE owner_user_id = (SELECT owner_user_id FROM upload_sessions WHERE id = NEW.upload_session_id)), 0)
+      + COALESCE((SELECT SUM(bytes) FROM migration_staging_growth
+                  WHERE user_id = (SELECT owner_user_id FROM upload_sessions WHERE id = NEW.upload_session_id)), 0)) + NEW.bytes
+      - COALESCE((
+        SELECT bytes FROM artifact_upload_parts
+        WHERE upload_session_id = NEW.upload_session_id
+          AND part_number = NEW.part_number
+      ), 0) > COALESCE((SELECT project_storage_limit_bytes FROM users WHERE id = (SELECT owner_user_id FROM upload_sessions WHERE id = NEW.upload_session_id)), 2147483648)
+    AND NEW.bytes > COALESCE((SELECT bytes FROM artifact_upload_parts WHERE upload_session_id = NEW.upload_session_id AND part_number = NEW.part_number), 0);
 END;
 
 DROP TRIGGER IF EXISTS artifact_upload_part_before_update;
@@ -318,6 +432,19 @@ BEGIN
       WHERE user_id = (SELECT owner_user_id FROM upload_sessions WHERE id = NEW.upload_session_id)
     ), 0) > COALESCE((SELECT project_storage_limit_bytes FROM users WHERE id = (SELECT owner_user_id FROM upload_sessions WHERE id = NEW.upload_session_id)), 2147483648)
     AND NEW.bytes > OLD.bytes;
+
+  SELECT RAISE(ABORT, 'artifact_account_quota')
+  WHERE EXISTS (
+      SELECT 1 FROM migration_staging_upload_sessions
+      WHERE id = NEW.upload_session_id
+    )
+    AND (COALESCE((SELECT bytes FROM account_project_storage WHERE user_id = (SELECT owner_user_id FROM upload_sessions WHERE id = NEW.upload_session_id)), 0)
+      + COALESCE((SELECT finalized_bytes + reserved_bytes FROM artifact_account_usage
+                  WHERE owner_user_id = (SELECT owner_user_id FROM upload_sessions WHERE id = NEW.upload_session_id)), 0)
+      + COALESCE((SELECT SUM(bytes) FROM migration_staging_growth
+                  WHERE user_id = (SELECT owner_user_id FROM upload_sessions WHERE id = NEW.upload_session_id)), 0)) + NEW.bytes - OLD.bytes
+      > COALESCE((SELECT project_storage_limit_bytes FROM users WHERE id = (SELECT owner_user_id FROM upload_sessions WHERE id = NEW.upload_session_id)), 2147483648)
+    AND NEW.bytes > OLD.bytes;
 END;
 
 -- Migration 0042's encrypted content blob check (format-1 staging exempt).
@@ -354,6 +481,36 @@ BEGIN
       SELECT bytes FROM account_project_storage
       WHERE user_id = (SELECT user_id FROM projects WHERE id = NEW.project_id)
     ), 0) > COALESCE((SELECT project_storage_limit_bytes FROM users WHERE id = (SELECT user_id FROM projects WHERE id = NEW.project_id)), 2147483648)
+    AND NEW.ciphertext_bytes > COALESCE((
+      SELECT reserved_bytes FROM upload_sessions
+      WHERE artifact_id = NEW.blob_id AND project_id = NEW.project_id
+        AND reservation_state = 'completed'
+        AND reserved_bytes = NEW.ciphertext_bytes
+    ), 0);
+END;
+
+-- An encrypt staging's blob (decision M10: it counts from the cutover on)
+-- is checked against the owner's projected storage, less the reservation
+-- it releases.
+DROP TRIGGER IF EXISTS e2ee_staged_blob_quota_before_insert;
+CREATE TRIGGER e2ee_staged_blob_quota_before_insert
+BEFORE INSERT ON e2ee_content_blobs
+WHEN (SELECT storage_format FROM projects WHERE id = NEW.project_id) = 1
+BEGIN
+  SELECT RAISE(ABORT, 'artifact_account_quota')
+  WHERE (COALESCE((SELECT bytes FROM account_project_storage WHERE user_id = (SELECT user_id FROM projects WHERE id = NEW.project_id)), 0)
+      + COALESCE((SELECT finalized_bytes + reserved_bytes FROM artifact_account_usage
+                  WHERE owner_user_id = (SELECT user_id FROM projects WHERE id = NEW.project_id)), 0)
+      + COALESCE((SELECT SUM(bytes) FROM migration_staging_growth
+                  WHERE user_id = (SELECT user_id FROM projects WHERE id = NEW.project_id)), 0)) + NEW.ciphertext_bytes
+      - COALESCE((
+          SELECT sessions.reserved_bytes
+          FROM upload_sessions sessions
+          WHERE sessions.artifact_id = NEW.blob_id
+            AND sessions.project_id = NEW.project_id
+            AND sessions.reservation_state = 'completed'
+            AND sessions.reserved_bytes = NEW.ciphertext_bytes
+        ), 0) > COALESCE((SELECT project_storage_limit_bytes FROM users WHERE id = (SELECT user_id FROM projects WHERE id = NEW.project_id)), 2147483648)
     AND NEW.ciphertext_bytes > COALESCE((
       SELECT reserved_bytes FROM upload_sessions
       WHERE artifact_id = NEW.blob_id AND project_id = NEW.project_id
@@ -459,6 +616,18 @@ BEGIN
   SELECT RAISE(ABORT, 'project_account_storage_invalid')
   WHERE typeof(NEW.stored_bytes) <> 'integer' OR NEW.stored_bytes < 0
     OR NOT EXISTS (SELECT 1 FROM projects WHERE id = NEW.project_id);
+  -- A decrypt staging's document: against the projected storage.
+  SELECT RAISE(ABORT, 'project_account_storage_quota')
+  WHERE NEW.project_id IN (
+      SELECT project_id FROM e2ee_decrypt_staged_projects
+    )
+    AND NEW.stored_bytes > 0
+    AND (COALESCE((SELECT bytes FROM account_project_storage WHERE user_id = (SELECT user_id FROM projects WHERE id = NEW.project_id)), 0)
+      + COALESCE((SELECT finalized_bytes + reserved_bytes FROM artifact_account_usage
+                  WHERE owner_user_id = (SELECT user_id FROM projects WHERE id = NEW.project_id)), 0)
+      + COALESCE((SELECT SUM(bytes) FROM migration_staging_growth
+                  WHERE user_id = (SELECT user_id FROM projects WHERE id = NEW.project_id)), 0)) + NEW.stored_bytes
+      > COALESCE((SELECT project_storage_limit_bytes FROM users WHERE id = (SELECT user_id FROM projects WHERE id = NEW.project_id)), 2147483648);
   SELECT RAISE(ABORT, 'project_account_storage_quota')
   WHERE NEW.project_id NOT IN (
       SELECT project_id FROM e2ee_decrypt_staged_projects
@@ -481,6 +650,23 @@ BEGIN
   SELECT RAISE(ABORT, 'project_account_storage_invalid')
   WHERE typeof(NEW.stored_bytes) <> 'integer' OR NEW.stored_bytes < 0
     OR NOT EXISTS (SELECT 1 FROM projects WHERE id = NEW.project_id);
+  -- A decrypt staging's source asset: against the projected storage.
+  SELECT RAISE(ABORT, 'project_account_storage_quota')
+  WHERE NEW.project_id IN (
+      SELECT project_id FROM e2ee_decrypt_staged_projects
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM project_storage_assets
+      WHERE project_id = NEW.project_id
+        AND checksum_sha256 = NEW.checksum_sha256 AND kind = NEW.kind
+    )
+    AND NEW.stored_bytes > 0
+    AND (COALESCE((SELECT bytes FROM account_project_storage WHERE user_id = (SELECT user_id FROM projects WHERE id = NEW.project_id)), 0)
+      + COALESCE((SELECT finalized_bytes + reserved_bytes FROM artifact_account_usage
+                  WHERE owner_user_id = (SELECT user_id FROM projects WHERE id = NEW.project_id)), 0)
+      + COALESCE((SELECT SUM(bytes) FROM migration_staging_growth
+                  WHERE user_id = (SELECT user_id FROM projects WHERE id = NEW.project_id)), 0)) + NEW.stored_bytes
+      > COALESCE((SELECT project_storage_limit_bytes FROM users WHERE id = (SELECT user_id FROM projects WHERE id = NEW.project_id)), 2147483648);
   SELECT RAISE(ABORT, 'project_account_storage_quota')
   WHERE NEW.project_id NOT IN (
       SELECT project_id FROM e2ee_decrypt_staged_projects
@@ -520,4 +706,21 @@ BEGIN
       SELECT project_storage_limit_bytes FROM users
       WHERE id = (SELECT user_id FROM projects WHERE id = NEW.project_id)
     ), 2147483648);
+END;
+
+-- An encrypt staging's version (decision M10: it counts from the cutover
+-- on) is checked against the owner's projected storage.
+DROP TRIGGER IF EXISTS e2ee_staged_version_quota;
+CREATE TRIGGER e2ee_staged_version_quota
+BEFORE INSERT ON e2ee_project_versions
+WHEN (SELECT storage_format FROM projects WHERE id = NEW.project_id) = 1
+BEGIN
+  SELECT RAISE(ABORT, 'project_account_storage_quota')
+  WHERE NEW.envelope_bytes > 0
+    AND (COALESCE((SELECT bytes FROM account_project_storage WHERE user_id = (SELECT user_id FROM projects WHERE id = NEW.project_id)), 0)
+      + COALESCE((SELECT finalized_bytes + reserved_bytes FROM artifact_account_usage
+                  WHERE owner_user_id = (SELECT user_id FROM projects WHERE id = NEW.project_id)), 0)
+      + COALESCE((SELECT SUM(bytes) FROM migration_staging_growth
+                  WHERE user_id = (SELECT user_id FROM projects WHERE id = NEW.project_id)), 0)) + NEW.envelope_bytes
+      > COALESCE((SELECT project_storage_limit_bytes FROM users WHERE id = (SELECT user_id FROM projects WHERE id = NEW.project_id)), 2147483648);
 END;

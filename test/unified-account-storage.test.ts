@@ -249,6 +249,173 @@ describe('one storage allowance per account (migration 0049)', () => {
   });
 });
 
+describe('migration staging is bounded by projected storage (migration 0049)', () => {
+  function migration(
+    db: DatabaseSync,
+    projectId: string,
+    direction: 'encrypt' | 'decrypt',
+    state = 'staging'
+  ) {
+    db.prepare(
+      `INSERT INTO e2ee_project_migrations
+         (project_id, direction, state, owner_user_id, source_version,
+          started_at, updated_at)
+       VALUES (?, ?, ?, ?, 0, ?, ?)`
+    ).run(projectId, direction, state, OWNER, CREATED, CREATED);
+  }
+  function blob(
+    db: DatabaseSync,
+    projectId: string,
+    id: string,
+    bytes: number
+  ) {
+    db.prepare(
+      `INSERT INTO e2ee_content_blobs
+         (project_id, blob_id, kind, object_key, ciphertext_bytes, created_at)
+       VALUES (?, ?, 'import-source', ?, ?, ?)`
+    ).run(projectId, id.padEnd(32, '0'), `blobs/${id}`, bytes, CREATED);
+  }
+  const counted = (db: DatabaseSync) =>
+    (
+      db
+        .prepare(
+          `SELECT COALESCE((SELECT bytes FROM account_project_storage
+                            WHERE user_id = ?1), 0)
+                + COALESCE((SELECT finalized_bytes + reserved_bytes
+                            FROM artifact_account_usage
+                            WHERE owner_user_id = ?1), 0) AS bytes`
+        )
+        .get(OWNER) as { bytes: number }
+    ).bytes;
+
+  it('admits an encrypt staging up to its credit at a full account, then refuses every further staged byte', () => {
+    const db = account(10_000);
+    // 3,000 plaintext bytes in the project being encrypted, 7,000 of files
+    // elsewhere: the account is full.
+    db.prepare('UPDATE projects SET document_bytes = 3_000 WHERE id = ?').run(
+      PROJECT
+    );
+    project(db, 'p_other', 0);
+    db.prepare(
+      `INSERT INTO artifacts
+         (id, project_id, kind, name, object_key, content_type, bytes,
+          metadata_json, created_at)
+       VALUES ('a_other', 'p_other', 'snapshot', 'other.step', 'other',
+               'model/step', 7_000, '{}', ?)`
+    ).run(CREATED);
+    expect(counted(db)).toBe(10_000);
+    migration(db, PROJECT, 'encrypt');
+
+    // The cutover's purge would free the 3,000 plaintext bytes: that much
+    // ciphertext may be staged, no more.
+    blob(db, PROJECT, 'b1', 2_000);
+    blob(db, PROJECT, 'b2', 1_000);
+    expect(() => blob(db, PROJECT, 'b3', 1)).toThrow('artifact_account_quota');
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO e2ee_project_versions
+             (project_id, document_version, version_hash, key_epoch, prefix,
+              signature, signer_device_id, envelope_inline, envelope_bytes,
+              wrapped_version_key, created_at)
+           VALUES (?, 1, ?, 0, ?, ?, 'device', 'x', 1, ?, ?)`
+        )
+        .run(
+          PROJECT,
+          'a'.repeat(64),
+          'p'.repeat(11),
+          's'.repeat(98),
+          'w'.repeat(55),
+          CREATED
+        )
+    ).toThrow('project_account_storage_quota');
+    // Staged bytes still count toward nothing counted.
+    expect(counted(db)).toBe(10_000);
+
+    // An abandoned staging is credited nothing until its cleanup drops it.
+    db.prepare(
+      "UPDATE e2ee_project_migrations SET state = 'abandoned' WHERE project_id = ?"
+    ).run(PROJECT);
+    expect(() => blob(db, PROJECT, 'b4', 1)).toThrow('artifact_account_quota');
+  });
+
+  it('bounds a decrypt staging of plaintext files and documents by the ciphertext it replaces', () => {
+    const db = account(10_000);
+    // An encrypted project holding 5,000 bytes of blobs; the account full.
+    db.prepare(
+      `INSERT INTO projects (id, user_id, name, document_json, updated_at,
+         document_bytes, storage_format)
+       VALUES ('p_enc', ?, 'Encrypted', '{}', ?, 0, 2)`
+    ).run(OWNER, CREATED);
+    blob(db, 'p_enc', 'enc', 5_000);
+    db.prepare(
+      `INSERT INTO artifacts
+         (id, project_id, kind, name, object_key, content_type, bytes,
+          metadata_json, created_at)
+       VALUES ('a_fill', ?, 'snapshot', 'fill.step', 'fill', 'model/step',
+               4_900, '{}', ?)`
+    ).run(PROJECT, CREATED);
+    expect(counted(db)).toBe(10_000);
+    migration(db, 'p_enc', 'decrypt');
+    const staged = (id: string, bytes: number) =>
+      db
+        .prepare(
+          `INSERT INTO artifacts
+             (id, project_id, kind, name, object_key, content_type, bytes,
+              metadata_json, created_at)
+           VALUES (?, 'p_enc', 'snapshot', 'staged.step', ?, 'model/step',
+                   ?, '{}', ?)`
+        )
+        .run(id, `staged/${id}`, bytes, CREATED);
+
+    // A staging session is admitted while there is projected room.
+    db.prepare(
+      `INSERT INTO upload_sessions
+         (id, artifact_id, project_id, object_key, file_name, content_type,
+          kind, metadata_json, expires_at, owner_user_id, reserved_bytes,
+          reservation_state, upload_protocol_version)
+       VALUES ('s_stage', 'artifact_s_stage', 'p_enc', 'uploads/s_stage',
+               'f.step', 'model/step', 'snapshot', '{}',
+               '2099-01-01T00:00:00.000Z', ?, 0, 'open', 1)`
+    ).run(OWNER);
+    staged('f1', 3_000);
+    db.prepare(
+      `INSERT INTO project_document_objects
+         (id, project_id, object_key, checksum_sha256, logical_bytes,
+          stored_bytes, content_encoding, state, created_at)
+       VALUES ('o_staged', 'p_enc', 'o_staged', 'sha', 2_000, 2_000, 'gzip',
+               'committed', ?)`
+    ).run(CREATED);
+    expect(() => staged('f2', 1)).toThrow('artifact_account_quota');
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO project_storage_assets
+             (id, project_id, kind, object_key, checksum_sha256, logical_bytes,
+              stored_bytes, content_encoding, created_at)
+           VALUES ('s_staged', 'p_enc', 'step-source', 's_staged', 's', 1, 1,
+                   'gzip', ?)`
+        )
+        .run(CREATED)
+    ).toThrow('project_account_storage_quota');
+    // At the projected limit, a further staging session is refused too.
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO upload_sessions
+             (id, artifact_id, project_id, object_key, file_name,
+              content_type, kind, metadata_json, expires_at, owner_user_id,
+              reserved_bytes, reservation_state, upload_protocol_version)
+           VALUES ('s_more', 'artifact_s_more', 'p_enc', 'uploads/s_more',
+                   'f.step', 'model/step', 'snapshot', '{}',
+                   '2099-01-01T00:00:00.000Z', ?, 0, 'open', 1)`
+        )
+        .run(OWNER)
+    ).toThrow('artifact_account_quota');
+    expect(counted(db)).toBe(10_000);
+  });
+});
+
 describe('account storage usage (one bucket)', () => {
   it('reports combined usage against the one limit, trashed projects counted apart', async () => {
     const db = account(10 * GIB);

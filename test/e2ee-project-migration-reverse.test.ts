@@ -831,8 +831,10 @@ describe('turning an encrypted project back into plaintext', () => {
         // Every file is staged, none of it counts yet.
         expect(count(srv, 'artifacts', projectId)).toBe(3);
         expect(usage(srv)).toBe(before);
-        // Nor do the staged documents (migration 0043): at a one-byte
-        // storage limit a staged object still lands, another project's not.
+        // Nor do the staged documents (migration 0043): they are checked
+        // against the projected storage instead (migration 0049), which
+        // credits the ciphertext the cutover replaces. With room for a
+        // staged object there, another project's object is still refused.
         const plain = (
           (await (
             await srv.call('POST', '/api/projects', {
@@ -840,11 +842,19 @@ describe('turning an encrypted project back into plaintext', () => {
             })
           ).json()) as { document: ProjectDocument }
         ).document.projectId;
+        const projected = (
+          srv.db
+            .prepare(
+              'SELECT COALESCE(SUM(bytes), 0) AS bytes FROM migration_staging_growth WHERE user_id = ?'
+            )
+            .get(OWNER) as { bytes: number }
+        ).bytes;
+        expect(projected).toBeLessThan(0);
         srv.db
           .prepare(
-            'UPDATE users SET project_storage_limit_bytes = 1 WHERE id = ?'
+            'UPDATE users SET project_storage_limit_bytes = ? WHERE id = ?'
           )
-          .run(OWNER);
+          .run(storedNow(srv) + projected + 10, OWNER);
         const object = (id: string, project: string) =>
           srv.db
             .prepare(

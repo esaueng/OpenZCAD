@@ -2018,10 +2018,58 @@ function encryptGrowth(srv: Server, projectId: string): number {
          - (SELECT COALESCE(SUM(stored_bytes), 0)
             FROM project_storage_assets WHERE project_id = ?1)
          - (SELECT COALESCE(SUM(bytes), 0) FROM artifacts WHERE project_id = ?1)
+         - (SELECT COALESCE(SUM(reserved_bytes), 0) FROM upload_sessions
+            WHERE project_id = ?1 AND e2ee_blob_kind IS NULL)
            AS bytes`
       )
       .get(projectId) as { bytes: number }
   ).bytes;
+}
+
+/** {@link storedNow} plus what the owner's live stagings would add. */
+function projectedNow(srv: Server): number {
+  return (
+    storedNow(srv) +
+    (
+      srv.db
+        .prepare(
+          'SELECT COALESCE(SUM(bytes), 0) AS bytes FROM migration_staging_growth WHERE user_id = ?'
+        )
+        .get(OWNER) as { bytes: number }
+    ).bytes
+  );
+}
+
+/**
+ * Fills the account with another project's file: to exactly its allowance
+ * of counted storage, or to `projectedRoom` short of it in projected terms.
+ * Returns the allowance (the tier's, which every account write refreshes).
+ */
+async function fillAccount(
+  srv: Server,
+  { projectedRoom }: { projectedRoom?: number } = {}
+): Promise<number> {
+  const filler = await plaintextProject(srv, 'Filler');
+  const limit = (
+    srv.db
+      .prepare(
+        'SELECT project_storage_limit_bytes AS bytes FROM users WHERE id = ?'
+      )
+      .get(OWNER) as { bytes: number }
+  ).bytes;
+  const bytes =
+    projectedRoom === undefined
+      ? limit - storedNow(srv)
+      : limit - projectedRoom - projectedNow(srv);
+  srv.db
+    .prepare(
+      `INSERT INTO artifacts (id, project_id, kind, name, object_key,
+         content_type, metadata_json, created_at, bytes)
+       VALUES ('artifact_filler', ?, 'step-import', 'filler.step',
+               'filler-key', 'model/step', '{}', 'now', ?)`
+    )
+    .run(filler.projectId, bytes);
+  return limit;
 }
 
 describe('quota (decision M10, one allowance)', () => {
@@ -2047,9 +2095,7 @@ describe('quota (decision M10, one allowance)', () => {
     const plaintextArtifacts = usage();
     const s = await startStaging(srv, plain.projectId);
     const before = storedNow(srv);
-    // An account with no room beyond its plaintext still stages: staged
-    // versions and blobs count toward nothing.
-    setLimit(srv, before);
+    // Staged versions and blobs count toward nothing counted.
     await stage(s, plain);
     await s.d.blobs.archive(plain.projectId, noiseInput(1));
     await s.d.blobs.archive(plain.projectId, noiseInput(2));
@@ -2094,7 +2140,7 @@ describe('quota (decision M10, one allowance)', () => {
     expect(storedNow(srv)).toBe(before + growth);
   });
 
-  it('cuts over an encryption that shrinks the account, even over its allowance', async () => {
+  it('stages and cuts over an encryption that shrinks a full account, even over its allowance', async () => {
     const srv = server();
     const plain = await plaintextProject(srv);
     // A large plaintext file the encrypted project does not carry over.
@@ -2107,6 +2153,9 @@ describe('quota (decision M10, one allowance)', () => {
       )
       .run(plain.projectId);
     const s = await startStaging(srv, plain.projectId);
+    // Full: the purge's credit leaves the staging its room.
+    const limit = await fillAccount(srv);
+    expect(storedNow(srv)).toBe(limit);
     await stage(s, plain);
     expect(encryptGrowth(srv, plain.projectId)).toBeLessThan(0);
     // Far over its allowance: only growth is refused.
@@ -2116,6 +2165,74 @@ describe('quota (decision M10, one allowance)', () => {
     expect(migrationRow(srv, plain.projectId)).toMatchObject({
       state: 'cutover'
     });
+  });
+
+  it('credits the plaintext upload reservations the purge discards', async () => {
+    const srv = server();
+    const plain = await plaintextProject(srv);
+    // A 1,000,000-byte plaintext upload, reserved and never finalized.
+    srv.db
+      .prepare(
+        `INSERT INTO upload_sessions
+           (id, artifact_id, project_id, object_key, file_name, content_type,
+            kind, metadata_json, expires_at, owner_user_id, reserved_bytes,
+            reservation_state, upload_protocol_version)
+         VALUES ('session_big', 'artifact_session_big', ?, 'uploads/big',
+                 'big.step', 'model/step', 'snapshot', '{}',
+                 '2099-01-01T00:00:00.000Z', ?, 0, 'open', 1)`
+      )
+      .run(plain.projectId, OWNER);
+    srv.db
+      .prepare(
+        `UPDATE upload_sessions SET reservation_state = 'uploading',
+           multipart_upload_id = 'mp_big' WHERE id = 'session_big'`
+      )
+      .run();
+    srv.db
+      .prepare(
+        `INSERT INTO artifact_upload_parts
+           (upload_session_id, part_number, bytes, reservation_token)
+         VALUES ('session_big', 1, 1000000, 'token')`
+      )
+      .run();
+    const s = await startStaging(srv, plain.projectId);
+    await stage(s, plain);
+    // Usage equals the allowance, the reservation included.
+    const limit = await fillAccount(srv);
+    expect(storedNow(srv)).toBe(limit);
+    // The cutover's purge discards the reservation: encrypting shrinks the
+    // account by nearly all of it, so the cutover is accepted.
+    expect(encryptGrowth(srv, plain.projectId)).toBeLessThan(-900000);
+    await s.api.cutover(plain.projectId, s.lease);
+    expect(formatOf(srv, plain.projectId).storage_format).toBe(2);
+  });
+
+  it('bounds what an encrypt staging may stage, however many uploads it makes', async () => {
+    const srv = server();
+    const plain = await plaintextProject(srv);
+    const s = await startStaging(srv, plain.projectId);
+    await stage(s, plain);
+    // Room for about three 6,000-byte blobs in projected storage.
+    const limit = await fillAccount(srv, { projectedRoom: 20000 });
+    const counted = storedNow(srv);
+    let accepted = 0;
+    let refusal: ApiError | undefined;
+    for (let seed = 1; seed <= 12 && !refusal; seed++) {
+      try {
+        await s.d.blobs.archive(plain.projectId, noiseInput(seed));
+        accepted += 1;
+      } catch (error) {
+        refusal = error as ApiError;
+      }
+    }
+    // Each finalize released its reservation, yet the staged blobs stay
+    // bounded: the projected storage never passes the allowance.
+    expect(accepted).toBeGreaterThan(0);
+    expect(accepted).toBeLessThan(4);
+    expect(refusal).toBeInstanceOf(ApiError);
+    expect(refusal!.status).toBe(413);
+    expect(projectedNow(srv)).toBeLessThanOrEqual(limit);
+    expect(storedNow(srv)).toBe(counted);
   });
 });
 
@@ -2287,16 +2404,18 @@ describe('erasure, deletion and the sweep', () => {
         )
         .run(id, ownerId, updatedAt, updatedAt);
     // Sixty lapsed stagings, older than any other, whose owner may still
-    // migrate: more than one page of candidates.
+    // migrate: more than one page of candidates. Lapsed for hours, not the
+    // day after which the sweep abandons any staging.
+    const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
     for (let i = 0; i < 60; i++) {
       const id = `${plain.projectId}_eligible_${String(i).padStart(2, '0')}`;
       copy(id, OWNER);
-      staging(id, OWNER, '2000-01-01T00:00:00.000Z');
+      staging(id, OWNER, ago(2 * 60 * 60 * 1000));
     }
     // And one, newer, whose owner left the rollout.
     const withdrawn = `${plain.projectId}_withdrawn`;
     copy(withdrawn, OTHER);
-    staging(withdrawn, OTHER, '2001-01-01T00:00:00.000Z');
+    staging(withdrawn, OTHER, ago(60 * 60 * 1000));
     const otherEmail = 'withdrawn@example.com';
     srv.db
       .prepare('UPDATE users SET email = ? WHERE id = ?')
@@ -2313,6 +2432,43 @@ describe('erasure, deletion and the sweep', () => {
         "SELECT project_id FROM e2ee_project_migrations WHERE state = 'staging'"
       )
     ).toHaveLength(60);
+  });
+
+  it('abandons a staging left lapsed for a day and drops what it staged', async () => {
+    const srv = server();
+    const plain = await plaintextProject(srv);
+    const s = await startStaging(srv, plain.projectId);
+    await stage(s, plain);
+    await s.d.blobs.archive(plain.projectId, noiseInput(1));
+    const blobKeys = rows<{ object_key: string }>(
+      srv,
+      'SELECT object_key FROM e2ee_content_blobs WHERE project_id = ?',
+      plain.projectId
+    ).map((row) => row.object_key);
+    expect(blobKeys).toHaveLength(1);
+    // Lapsed for an hour: the owner may come back, so it is kept.
+    await sweepProjectMigrations(
+      srv.env,
+      true,
+      () => true,
+      Date.now() + 60 * 60 * 1000
+    );
+    expect(migrationRow(srv, plain.projectId)!.state).toBe('staging');
+    // A day on, the sweep abandons it and drops every staged row and
+    // object; the project stays plaintext.
+    const later = Date.now() + 25 * 60 * 60 * 1000;
+    for (let sweep = 0; sweep < 10; sweep++) {
+      await sweepProjectMigrations(srv.env, true, () => true, later);
+      if (
+        JSON.stringify(stagedRows(srv, plain.projectId)) ===
+        JSON.stringify(nothingStaged)
+      )
+        break;
+    }
+    expect(migrationRow(srv, plain.projectId)!.state).toBe('abandoned');
+    expect(stagedRows(srv, plain.projectId)).toEqual(nothingStaged);
+    for (const key of blobKeys) expect(srv.bucket.objects.has(key)).toBe(false);
+    expect(formatOf(srv, plain.projectId).storage_format).toBe(1);
   });
 });
 

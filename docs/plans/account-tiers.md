@@ -110,8 +110,23 @@ triggers redefined are `artifact_upload_session_before_insert`,
 `project_account_d1_revision_bytes_before_insert`/`_update`,
 `project_account_object_bytes_before_insert`,
 `project_account_asset_bytes_before_insert` and `e2ee_project_version_quota`;
-each keeps its other checks verbatim. The decrypt cutover (slice 7-3) checks
-the same combined measure.
+each keeps its other checks verbatim.
+
+Encryption migrations stage rows that count only from their cutover on
+(decision M10): ciphertext beside a plaintext project, or plaintext beside
+an encrypted one. These are bounded by the owner's projected storage:
+counted usage plus what every live staging would add at its cutover, less
+what that cutover's purge frees (view `migration_staging_growth`). Staging
+upload sessions, part reservations, staged blobs and versions, and staged
+files, documents and assets are refused once that would pass the allowance,
+so staging is cumulative and bounded. A full account can still stage a
+migration that shrinks it, because the purge credit makes the room. Both
+cutovers (`encryptCutoverQuota` and `decryptCutoverQuota` in
+`apps/web/worker/e2eeProjectMigrations.ts`) refuse, in their own statement,
+a cutover that grows the combined measure past the allowance. The forward
+cutover credits the plaintext upload reservations its purge discards. The
+sweep abandons a staging whose lease lapsed a day ago
+(`MIGRATION_STALE_STAGING_MS`) and drops what it staged.
 
 Downgrades do not delete files. Existing reads, downloads and cleanup remain
 available. Over-limit accounts cannot increase storage; shrinking an existing
