@@ -69,7 +69,7 @@ describe('opt-in cloud census SQL against the actual migrations', () => {
     const db = fixture(true);
     try {
       db.exec(
-        "INSERT INTO project_document_objects VALUES('o','yes','private/key','sha',100,25,'gzip','committed','2026-01-01')"
+        "INSERT INTO project_document_objects (id, project_id, object_key, checksum_sha256, logical_bytes, stored_bytes, content_encoding, state, created_at) VALUES('o','yes','private/key','sha',100,25,'gzip','committed','2026-01-01')"
       );
       db.exec("UPDATE projects SET document_object_id='o' WHERE id='yes'");
       db.exec(
