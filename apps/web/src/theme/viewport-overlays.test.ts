@@ -126,6 +126,21 @@ describe('viewport overlay text tokens', () => {
     expect(block).toBeDefined();
     expect(block!.body).toMatch(/background:\s*var\(--color-surface/);
     expect(block!.body).toMatch(/(^|[^-])color:\s*var\(--color-text\)/m);
+    // Its title, rows and hover keep to chrome too: a viewport hue on the
+    // light surface would be pale on pale.
+    const viewportHued = ruleBlocks(css)
+      .filter((rule) =>
+        subjects(rule.selector).some((subject) =>
+          /\.topology-pick-list[\w-]*\b/.test(subject)
+        )
+      )
+      .filter((rule) =>
+        /var\(--color-(viewport|select|preselect|preview)[\w-]*\)/.test(
+          rule.body
+        )
+      )
+      .map((rule) => rule.selector);
+    expect(viewportHued).toEqual([]);
   });
 
   it('paints the viewport HUD in viewport hues, never re-themed chrome ones', () => {
