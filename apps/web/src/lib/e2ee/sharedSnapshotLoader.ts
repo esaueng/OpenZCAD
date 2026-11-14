@@ -106,6 +106,8 @@ const REASONS: Partial<Record<ShareLinkFailure, SharedLinkRefusalReason>> = {
   'authority-expired': 'not-confirmed',
   'delegation-not-yet-valid': 'not-yet-valid',
   'authority-not-yet-valid': 'not-yet-valid',
+  // The owner's browser republishes the snapshot with its next statement.
+  'snapshot-predates-authority': 'not-confirmed',
   'owner-mismatch': 'wrong-link',
   'link-mismatch': 'wrong-link'
 };

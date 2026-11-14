@@ -14,7 +14,6 @@ import {
   signStatement,
   statementValid,
   verifyingKey,
-  decodeGroupReset,
   verifyGroupReset,
   type VerifiedDeviceList,
   type SignedStatement
@@ -225,13 +224,30 @@ export async function mlsAuthorityResetHash(
   );
 }
 
-/** Verify a reset's identity approval without trusting its server metadata. */
+/**
+ * Verify a reset's identity approval without trusting its server metadata.
+ * `owner` is the owner's verified current device list: the reset must be
+ * signed by its identity key and name its identity generation, which is
+ * `ownerGeneration` when given, else `owner.generation`. Neither: refused,
+ * since the statement's own generation would be checked against itself.
+ * The check is as strong as the caller's generation: the browser takes a
+ * co-member's from the unsigned lookup that served the list, so it binds
+ * the reset to the owner's identity key and to the generation the server
+ * reported, not to an independently authenticated one.
+ */
 export async function verifyMlsAuthorityReset(
   manifest: MlsAuthorityManifest,
   generation: number,
-  owner: VerifiedDeviceList
+  owner: VerifiedDeviceList,
+  ownerGeneration: number | undefined = owner.generation
 ) {
   const root = manifest.roots[generation];
+  if (
+    ownerGeneration === undefined ||
+    !uint(ownerGeneration) ||
+    ownerGeneration < 1
+  )
+    fail('The owner identity generation is unknown.');
   if (
     !root?.previousGroupInfo ||
     !root.resetAuthority ||
@@ -245,7 +261,7 @@ export async function verifyMlsAuthorityReset(
     signature: fromBase64Url(root.resetAuthority.signature)
   };
   const value = await verifyGroupReset(signed, owner, {
-    generation: decodeGroupReset(signed.statement).generation
+    generation: ownerGeneration
   });
   const expected = await mlsAuthorityResetHash(
     { ...manifest, roots: manifest.roots.slice(0, generation) },

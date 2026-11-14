@@ -21,6 +21,7 @@ import {
 } from 'vitest';
 import worker from '../apps/web/worker/index';
 import {
+  SHARE_CLOCK_SKEW_MS,
   ShareLinkError,
   EnvelopeKey,
   decryptProjectEnvelope,
@@ -1532,9 +1533,21 @@ describe(
       expect(statedAuthors(srv, projectId, created.shareId)).toEqual(
         keyHashesOf(owner).sort()
       );
-      // The removed editor's snapshot is no longer one visitors accept...
-      await refusedFor(visit(srv, created.url), 'author-not-named');
-      // ...until the owner's next save republishes it.
+      // The removed editor's snapshot is replaced at once: a new statement
+      // takes a snapshot signed after it, here by the owner.
+      expect(
+        rows<{ signer_device_id: string }>(
+          srv,
+          `SELECT signer_device_id FROM e2ee_share_snapshots
+           WHERE project_id = ? AND share_id = ?`,
+          projectId,
+          created.shareId
+        )
+      ).toEqual([{ signer_device_id: 'owner_laptop' }]);
+      expect((await visit(srv, created.url)).document.name).toBe(
+        'Before removal'
+      );
+      // The owner's next save republishes it as usual.
       const read = await laptop.store.loadProject(projectId);
       await laptop.store.saveProjectDocument({
         projectId,
@@ -1897,6 +1910,83 @@ describe('share-key wraps (slice 5-10)', { timeout: 120_000 }, () => {
     );
   });
 });
+
+describe(
+  'snapshot ordering after a new statement (slice 5-10)',
+  { timeout: 120_000 },
+  () => {
+    it('republishes, at the next upkeep, a snapshot visitors refuse by its signed time after a failed renewal publication', async () => {
+      const MINUTE = 60_000;
+      // The editor's clock runs five minutes slow; the owner's is right.
+      let ownerAhead = 0;
+      const shared = await sharedProject(accounts(), owner, other, 'editor');
+      const { srv, projectId } = shared;
+      const laptop = page(srv, shared.laptop, () => Date.now() + ownerAhead);
+      const member = page(srv, shared.member, () => Date.now() - 5 * MINUTE);
+      await delegate(laptop);
+      const created = await createShareLink(
+        laptop.shareLinks,
+        projectId,
+        'view'
+      );
+      const opened = await member.store.loadProject(projectId);
+      await member.store.saveProjectDocument({
+        projectId,
+        expectedVersion: opened.version,
+        document: edited(opened, 'Edited on a slow clock')
+      });
+      await Promise.all(member.shareWork);
+      expect((await visit(srv, created.url)).document.name).toBe(
+        'Edited on a slow clock'
+      );
+      // Six minutes on, the owner renews the statement and cannot republish
+      // the snapshot under it. Stored under ten minutes before the statement,
+      // the snapshot was signed over ten minutes before it.
+      ownerAhead = 6 * MINUTE;
+      const renewal = await issueShareAuthorities(
+        {
+          ...laptop.shareLinks,
+          api: {
+            ...laptop.shareLinks.api,
+            putSnapshot: async () => {
+              throw new Error('Snapshot unavailable');
+            }
+          }
+        },
+        projectId,
+        { force: true }
+      );
+      expect(renewal.issued).toEqual([created.shareId]);
+      expect(renewal.snapshots).toEqual({
+        published: [],
+        failed: [{ shareId: created.shareId, reason: 'Snapshot unavailable' }]
+      });
+      await refusedFor(visit(srv, created.url), 'snapshot-predates-authority');
+      // The next upkeep republishes it with no edit and no new statement.
+      const upkeep = await maintainShareLinks(laptop.shareLinks, projectId);
+      expect(upkeep.authorities.issued).toEqual([]);
+      expect(upkeep.authorities.current).toEqual([created.shareId]);
+      expect(upkeep.authorities.snapshots).toEqual({
+        published: [created.shareId],
+        failed: []
+      });
+      expect(upkeep.snapshots).toEqual({ published: [], failed: [] });
+      const seen = await visit(srv, created.url);
+      expect(seen.document.name).toBe('Edited on a slow clock');
+      expect(
+        seen.verified.signedAt + SHARE_CLOCK_SKEW_MS
+      ).toBeGreaterThanOrEqual(seen.verified.authority.issuedAt);
+      // Current by its signed time now: the editor's next publication and
+      // the owner's next upkeep leave it alone.
+      expect(
+        (await publishShareSnapshots(member.shareLinks, projectId)).published
+      ).toEqual([]);
+      const again = await maintainShareLinks(laptop.shareLinks, projectId);
+      expect(again.authorities.snapshots.published).toEqual([]);
+      expect(again.snapshots.published).toEqual([]);
+    });
+  }
+);
 
 describe('the delegation (slice 5-10)', { timeout: 120_000 }, () => {
   it('needs confirming without one, and visitors refuse links once it expires', async () => {
