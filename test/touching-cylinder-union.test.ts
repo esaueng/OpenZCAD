@@ -26,6 +26,7 @@ import { transformMatrix } from '../packages/kernel-adapter/src/exact-math';
 import {
   fuseAllMergingFaceContacts,
   isFaceConnectedSolid,
+  MAX_CONTACT_REPAIR_OPERANDS,
   materialCensus,
   solidMaterialPieces
 } from '../packages/kernel-adapter/src/exact-boolean-helpers';
@@ -43,10 +44,13 @@ import { AdapterRefusal } from '../packages/kernel-adapter/src/adapter-refusal';
  *
  * The cause is the pinned Remus `fuseAll`, which joins groups it judges
  * disjoint without a boolean and misjudges cap-on-cap contact between two
- * cylinders. The pairwise `fuse` merges the same pair correctly, and the
- * union gate now refolds a result `fuseAll` left in pieces with it. The same
- * gate serves extrude Add, so a circular boss extruded from a cylinder's top
- * face had the identical defect.
+ * cylinders (esaueng/remus#1738). The pairwise `fuse` merges the same pair
+ * correctly, though it refuses parallel cylinders overlapping by 1 mm or less
+ * (esaueng/remus#1742), and the union gate now regroups a result `fuseAll`
+ * left in pieces with both. The same gate serves extrude Add, so a circular
+ * boss extruded from a cylinder's top face had the identical defect. Once
+ * both issues are fixed upstream, these cases are the oracles the plain
+ * `fuseAll` must pass before the workaround goes.
  *
  * Every expectation is a closed form. The overlapping hub (base at z = 5) is
  * the control the QA pass used and was always correct.
@@ -468,7 +472,13 @@ describe('reading a fused body for unmerged pieces', () => {
         kernel,
         kernel.fuseAll(Uint32Array.from(hubOnFlange(kernel, by)))
       );
-      expect(census).toEqual({ components: 2, pieces: 2 });
+      expect(census).toEqual({
+        components: 2,
+        certainPieces: 2,
+        certainCavities: 0,
+        uncertain: 0,
+        pieces: 2
+      });
     }
   );
 
@@ -490,7 +500,7 @@ describe('reading a fused body for unmerged pieces', () => {
         );
         return;
       }
-      expect(materialCensus(kernel, result)).toEqual({
+      expect(materialCensus(kernel, result)).toMatchObject({
         components: 1,
         pieces: 1
       });
@@ -548,6 +558,71 @@ describe('reading a fused body for unmerged pieces', () => {
     }
   });
 
+  it('accepts no retry that drops a small feature off a large body far away', () => {
+    const kernel = new RemusKernel();
+    // A 2 m flange at (1e7, 1e7, 1e7) with a 0.5 mm r20 boss on top. Before:
+    // the coordinate-scaled box tolerance exceeded 1 mm and the volume
+    // allowance (1e-6 of 3.1e9 mm³) exceeded 3141 mm³, so a retry returning
+    // the flange alone passed both and 628.32 mm³ of boss was lost.
+    const flange = far(kernel, kernel.makeCylinder(1000, 1000), 1e7);
+    const boss = far(
+      kernel,
+      lifted(kernel, kernel.makeCylinder(20, 0.5), 0, 1000),
+      1e7
+    );
+    const census = materialCensus(
+      kernel,
+      kernel.fuseAll(
+        Uint32Array.from([kernel.copySolid(flange), kernel.copySolid(boss)])
+      )
+    );
+    expect(census?.certainPieces).toBe(2);
+    const bad = vi
+      .spyOn(RemusKernel.prototype, 'fuseDetailed')
+      .mockImplementation(function (this: RemusKernel) {
+        return { status: 'ok', value: this.copySolid(flange) } as never;
+      });
+    try {
+      expect(() =>
+        fuseAllMergingFaceContacts(kernel, [flange, boss], undefined, 1)
+      ).toThrow(AdapterRefusal);
+    } finally {
+      bad.mockRestore();
+    }
+  });
+
+  it.each([
+    ['eleven r1 pins and one r0.1 pin', 0.1],
+    ['twelve r1 pins', 1]
+  ])('refuses a flange with %s rather than ship their caps', (_label, last) => {
+    const kernel = new RemusKernel();
+    // Thirteen operands: past the repair cap, so the census decides. The
+    // r0.1 pin used to read as unknown and silence the refusal for all.
+    const operands = [kernel.makeCylinder(FLANGE_R, FLANGE_H)];
+    for (let index = 0; index < 12; index += 1) {
+      const angle = (index * Math.PI) / 6;
+      operands.push(
+        lifted(
+          kernel,
+          kernel.makeCylinder(index === 11 ? last : 1, 3),
+          30 * Math.cos(angle),
+          FLANGE_H,
+          30 * Math.sin(angle)
+        )
+      );
+    }
+    expect(operands.length).toBeGreaterThan(MAX_CONTACT_REPAIR_OPERANDS);
+    let refusal: unknown;
+    try {
+      fuseAllMergingFaceContacts(kernel, operands);
+    } catch (error) {
+      refusal = error;
+    }
+    expect((refusal as AdapterRefusal | undefined)?.adapterCode).toBe(
+      'union_unmerged_contact'
+    );
+  });
+
   it('counts several cavities as one piece and unites the body', () => {
     const kernel = new RemusKernel();
     // Two voids: three boundary components, one piece of material. (An
@@ -562,6 +637,9 @@ describe('reading a fused body for unmerged pieces', () => {
     );
     expect(materialCensus(kernel, voided)).toEqual({
       components: 3,
+      certainPieces: 1,
+      certainCavities: 2,
+      uncertain: 0,
       pieces: 1
     });
     const united = fuseAllMergingFaceContacts(
@@ -572,6 +650,9 @@ describe('reading a fused body for unmerged pieces', () => {
     );
     expect(materialCensus(kernel, united)).toEqual({
       components: 3,
+      certainPieces: 1,
+      certainCavities: 2,
+      uncertain: 0,
       pieces: 1
     });
     expect(kernel.volume(united, 0.01)).toBeCloseTo(
@@ -580,34 +661,94 @@ describe('reading a fused body for unmerged pieces', () => {
     );
   });
 
-  it('treats a sign inside its uncertainty band as unknown, never as a verdict', () => {
+  it('judges a fine feature at its own scale', () => {
     const kernel = new RemusKernel();
-    // A curved void smaller than the measurement deflection: its chord mesh
-    // cannot say which way it encloses.
+    // A Ø0.08 spherical void is smaller than the 0.08 measurement
+    // deflection; at the body's deflection its sign was unknown. Measured
+    // again at its own extent it is a certain cavity.
     const pitted = kernel.cut(
       kernel.makeBox(10, 10, 10),
       lifted(kernel, kernel.makeSphere(0.04, 16), 5, 5, 5)
     );
     expect(materialCensus(kernel, pitted)).toEqual({
       components: 2,
+      certainPieces: 1,
+      certainCavities: 1,
+      uncertain: 0,
+      pieces: 1
+    });
+  });
+
+  it('treats a sign inside its uncertainty band as unknown, never as a verdict', () => {
+    const kernel = new RemusKernel();
+    // A 1 µm wall on an r20 tube: even at its own scale the chord error of
+    // its 750 mm² of curved faces exceeds its 0.38 mm³ of material.
+    const tube = lifted(
+      kernel,
+      kernel.cut(kernel.makeCylinder(20.001, 3), kernel.makeCylinder(20, 3)),
+      100,
+      0
+    );
+    const apart = kernel.fuseAll(
+      Uint32Array.from([kernel.makeBox(10, 10, 10), kernel.copySolid(tube)])
+    );
+    expect(materialCensus(kernel, apart)).toEqual({
+      components: 2,
+      certainPieces: 1,
+      certainCavities: 0,
+      uncertain: 1,
       pieces: null
     });
     // Unknown is not evidence against a body: even told the operands are
-    // one group, the gate does not refuse it, and returns what fuseAll made.
+    // one group, the gate does not refuse it.
     const united = fuseAllMergingFaceContacts(
       kernel,
-      [pitted, lifted(kernel, kernel.makeBox(10, 10, 10), 30, 0)],
+      [kernel.makeBox(10, 10, 10), tube],
       undefined,
       1
     );
-    expect(materialCensus(kernel, united)).toEqual({
-      components: 3,
-      pieces: null
-    });
     expect(kernel.volume(united, 0.01)).toBeCloseTo(
-      2000 - (4 / 3) * Math.PI * 0.04 ** 3,
-      3
+      1000 + kernel.volume(tube, 0.01),
+      6
     );
+  });
+
+  it('lets no uncertain component mask the certain pieces beside it', () => {
+    const kernel = new RemusKernel();
+    // Two pins left standing on a flange, and apart from them a tube whose
+    // sign cannot be read. Before: the one uncertain component made the
+    // whole count unknown, and the two unmerged pins shipped in silence.
+    const operands = [
+      kernel.makeCylinder(FLANGE_R, FLANGE_H),
+      lifted(kernel, kernel.makeCylinder(1, 3), 30, FLANGE_H),
+      lifted(kernel, kernel.makeCylinder(1, 3), -30, FLANGE_H),
+      lifted(
+        kernel,
+        kernel.cut(kernel.makeCylinder(20.001, 3), kernel.makeCylinder(20, 3)),
+        200,
+        0
+      )
+    ];
+    // No repair can merge anything: the pairwise fuse refuses.
+    const refuse = vi
+      .spyOn(RemusKernel.prototype, 'fuseDetailed')
+      .mockImplementation(
+        () =>
+          ({
+            status: 'error',
+            code: 'exact_only_unattainable',
+            category: 'quality_refused',
+            details: {}
+          }) as never
+      );
+    try {
+      // Flange-and-pins, and the tube: two groups.
+      expect(() =>
+        fuseAllMergingFaceContacts(kernel, operands, undefined, 2)
+      ).toThrow(AdapterRefusal);
+    } finally {
+      refuse.mockRestore();
+    }
   });
 });
 
