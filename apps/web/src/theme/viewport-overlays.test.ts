@@ -129,11 +129,9 @@ describe('viewport overlay text tokens', () => {
     // Its title, rows and hover keep to chrome too: a viewport hue on the
     // light surface would be pale on pale.
     const viewportHued = ruleBlocks(css)
-      .filter((rule) =>
-        subjects(rule.selector).some((subject) =>
-          /\.topology-pick-list[\w-]*\b/.test(subject)
-        )
-      )
+      // The whole selector, not its subject: `.topology-pick-list-row small`
+      // styles the row's key hint, whose subject alone reads `small`.
+      .filter((rule) => /\.topology-pick-list[\w-]*\b/.test(rule.selector))
       .filter((rule) =>
         /var\(--color-(viewport|select|preselect|preview)[\w-]*\)/.test(
           rule.body
