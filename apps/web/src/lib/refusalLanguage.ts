@@ -346,6 +346,12 @@ function looksLikeKernelText(sentence: string): boolean {
  * (`corner 139`, `vertex 2685`). Kept case-sensitive for the entity names, so
  * a face label the product shows ("Face 18") is not mistaken for one. QA
  * 2026-11-14 finding #18 found each of these in a refusal's headline.
+ *
+ * `solid N` is not on the list: the STEP importer numbers a file's solids
+ * that way on purpose ("STEP file contains no closed solids: solid 1 (5
+ * faces): it is an open shell…"), so the user can find the bad one in the
+ * file, and treating it as kernel text replaced that sentence with "The
+ * exact kernel could not build this result."
  */
 function hasKernelNotation(sentence: string): boolean {
   // A name the user gave a body or feature is quoted, and is theirs to spell
@@ -353,7 +359,7 @@ function hasKernelNotation(sentence: string): boolean {
   const unquoted = sentence.replace(/"[^"]*"|“[^”]*”/g, '""');
   return (
     /::|\bwasm\b|\[object |\(F=|\bhandle \d|_[a-z]+:/i.test(unquoted) ||
-    /\bSome\(|\b(?:face|edge) None\b|\bId\(\d|\b[a-z]+(?:_[a-z]+)+\b|\b[a-z]+(?:-[a-z]+)+: |\b(?:face|edge|vertex|wire|corner|loop|shell|solid) \d+\b/.test(
+    /\bSome\(|\b(?:face|edge) None\b|\bId\(\d|\b[a-z]+(?:_[a-z]+)+\b|\b[a-z]+(?:-[a-z]+)+: |\b(?:face|edge|vertex|wire|corner|loop|shell) \d+\b/.test(
       unquoted
     )
   );
