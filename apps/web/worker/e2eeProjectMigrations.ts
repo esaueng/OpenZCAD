@@ -156,13 +156,6 @@ const MIGRATION_STEP_ROWS = 200;
 const MAX_BODY_CHARS = 4096;
 /** The sweep leaves a browser this long before it finishes for it. */
 export const MIGRATION_SWEEP_IDLE_MS = 60 * 60 * 1000;
-/**
- * A staging whose lease lapsed this long ago is abandoned by the sweep,
- * which then drops what it staged: staged rows count toward the owner's
- * projected storage, not their usage, so an unattended staging must not
- * hold storage indefinitely. A browser that returns later starts again.
- */
-export const MIGRATION_STALE_STAGING_MS = 24 * 60 * 60 * 1000;
 const MIGRATION_SWEEP_ROWS = 5;
 const MIGRATION_SWEEP_STEPS = 3;
 
@@ -1341,12 +1334,14 @@ async function dropStaged(
   );
   objects += sessions.discarded;
   if (sessions.remaining) return { complete: false, objects };
+  // Listed under the fence, as `purgeObjects` lists: never another
+  // attempt's live blobs.
   const blobs = await db
     .prepare(
       `SELECT blob_id, object_key FROM e2ee_content_blobs
-       WHERE project_id = ? ORDER BY blob_id LIMIT ?`
+       WHERE project_id = ? AND ${fence} ORDER BY blob_id LIMIT ?`
     )
-    .bind(projectId, MIGRATION_STEP_OBJECTS + 1)
+    .bind(projectId, projectId, MIGRATION_STEP_OBJECTS + 1)
     .all<{ blob_id: string; object_key: string }>();
   const blobRows = (blobs.results ?? []).slice(0, MIGRATION_STEP_OBJECTS);
   if (blobRows.length) {
@@ -1390,10 +1385,10 @@ async function dropStaged(
   const bodies = await db
     .prepare(
       `SELECT document_version, envelope_key FROM e2ee_project_versions
-       WHERE project_id = ? AND envelope_key IS NOT NULL
+       WHERE project_id = ? AND envelope_key IS NOT NULL AND ${fence}
        ORDER BY document_version LIMIT ?`
     )
-    .bind(projectId, MIGRATION_STEP_OBJECTS + 1)
+    .bind(projectId, projectId, MIGRATION_STEP_OBJECTS + 1)
     .all<{ document_version: number; envelope_key: string }>();
   const bodyRows = (bodies.results ?? []).slice(0, MIGRATION_STEP_OBJECTS);
   if (bodyRows.length) {
@@ -1606,12 +1601,16 @@ async function purgeObjects(
    */
   fence: string = PURGING_FENCE
 ): Promise<StepOutcome> {
+  // Listed under the fence too: only while this purge or cleanup still owns
+  // the project's rows. A cleanup that resumes after the owner abandoned
+  // and finished a newer attempt lists nothing, so it never deletes the
+  // newer attempt's live objects before its own fenced delete would refuse.
   const { results } = await db
     .prepare(
-      `SELECT id, object_key FROM ${table} WHERE project_id = ?
+      `SELECT id, object_key FROM ${table} WHERE project_id = ? AND ${fence}
        ORDER BY id LIMIT ?`
     )
-    .bind(projectId, MIGRATION_STEP_OBJECTS + 1)
+    .bind(projectId, projectId, MIGRATION_STEP_OBJECTS + 1)
     .all<{ id: string; object_key: string }>();
   const rows = (results ?? []).slice(0, MIGRATION_STEP_OBJECTS);
   if (rows.length === 0) return { more: false, rows: 0, objects: 0 };
@@ -3301,15 +3300,6 @@ export async function sweepProjectMigrations(
   try {
     if (!(await isE2eeProjectMigrationStorageReady(db))) return;
     const withdrawn = await abandonWithdrawnStagings(db, eligible, now);
-    if (withdrawn.length < MIGRATION_SWEEP_ROWS) {
-      withdrawn.push(
-        ...(await abandonStaleStagings(
-          db,
-          now,
-          MIGRATION_SWEEP_ROWS - withdrawn.length
-        ))
-      );
-    }
     if (defaultOn && withdrawn.length < MIGRATION_SWEEP_ROWS) {
       withdrawn.push(
         ...(await abandonClosedDecryptStagings(
@@ -3508,58 +3498,6 @@ async function abandonClosedDecryptStagings(
     }
     if (candidates.length < MIGRATION_SWEEP_CANDIDATES) break;
     after = candidates[candidates.length - 1];
-  }
-  return abandoned;
-}
-
-/**
- * Abandons, a few per sweep, the stagings (either direction) whose lease
- * lapsed at least {@link MIGRATION_STALE_STAGING_MS} ago and that have not
- * moved since. The abandon is fenced on the row still staging with its
- * lease that long lapsed, so an owner who took a fresh lease meanwhile
- * keeps it. Returns the rows it abandoned, for the sweep to drop what they
- * staged.
- */
-async function abandonStaleStagings(
-  db: D1Database,
-  now: number,
-  limit: number
-): Promise<{ project_id: string; state: string; direction: string }[]> {
-  const cutoff = now - MIGRATION_STALE_STAGING_MS;
-  const cutoffIso = new Date(cutoff).toISOString();
-  const { results } = await db
-    .prepare(
-      `SELECT project_id, direction FROM e2ee_project_migrations
-       WHERE state = 'staging' AND COALESCE(lease_expires_at, 0) <= ?
-         AND updated_at < ?
-       ORDER BY updated_at, project_id LIMIT ?`
-    )
-    .bind(cutoff, cutoffIso, limit)
-    .all<{ project_id: string; direction: string }>();
-  const abandoned: { project_id: string; state: string; direction: string }[] =
-    [];
-  for (const row of results ?? []) {
-    try {
-      const result = await db
-        .prepare(
-          `UPDATE e2ee_project_migrations
-           SET state = 'abandoned', lease_id = NULL, lease_expires_at = NULL,
-               purge_cursor = 'cleanup', updated_at = ?
-           WHERE project_id = ? AND state = 'staging'
-             AND COALESCE(lease_expires_at, 0) <= ? AND updated_at < ?`
-        )
-        .bind(new Date(now).toISOString(), row.project_id, cutoff, cutoffIso)
-        .run();
-      if ((result.meta?.changes ?? 0) === 1) {
-        abandoned.push({
-          project_id: row.project_id,
-          state: 'abandoned',
-          direction: row.direction
-        });
-      }
-    } catch {
-      // An account being erased, say: its erasure abandons it instead.
-    }
   }
   return abandoned;
 }

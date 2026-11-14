@@ -124,9 +124,10 @@ migration that shrinks it, because the purge credit makes the room. Both
 cutovers (`encryptCutoverQuota` and `decryptCutoverQuota` in
 `apps/web/worker/e2eeProjectMigrations.ts`) refuse, in their own statement,
 a cutover that grows the combined measure past the allowance. The forward
-cutover credits the plaintext upload reservations its purge discards. The
-sweep abandons a staging whose lease lapsed a day ago
-(`MIGRATION_STALE_STAGING_MS`) and drops what it staged.
+cutover credits the plaintext upload reservations its purge discards.
+Staging is not abandoned automatically for being idle: the projected rule
+already bounds and charges what a staging holds, and an abandoned staging is
+cleaned up by its owner's browser or by the existing sweeps.
 
 Downgrades do not delete files. Existing reads, downloads and cleanup remain
 available. Over-limit accounts cannot increase storage; shrinking an existing

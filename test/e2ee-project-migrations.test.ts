@@ -2404,18 +2404,16 @@ describe('erasure, deletion and the sweep', () => {
         )
         .run(id, ownerId, updatedAt, updatedAt);
     // Sixty lapsed stagings, older than any other, whose owner may still
-    // migrate: more than one page of candidates. Lapsed for hours, not the
-    // day after which the sweep abandons any staging.
-    const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
+    // migrate: more than one page of candidates.
     for (let i = 0; i < 60; i++) {
       const id = `${plain.projectId}_eligible_${String(i).padStart(2, '0')}`;
       copy(id, OWNER);
-      staging(id, OWNER, ago(2 * 60 * 60 * 1000));
+      staging(id, OWNER, '2000-01-01T00:00:00.000Z');
     }
     // And one, newer, whose owner left the rollout.
     const withdrawn = `${plain.projectId}_withdrawn`;
     copy(withdrawn, OTHER);
-    staging(withdrawn, OTHER, ago(60 * 60 * 1000));
+    staging(withdrawn, OTHER, '2001-01-01T00:00:00.000Z');
     const otherEmail = 'withdrawn@example.com';
     srv.db
       .prepare('UPDATE users SET email = ? WHERE id = ?')
@@ -2432,43 +2430,6 @@ describe('erasure, deletion and the sweep', () => {
         "SELECT project_id FROM e2ee_project_migrations WHERE state = 'staging'"
       )
     ).toHaveLength(60);
-  });
-
-  it('abandons a staging left lapsed for a day and drops what it staged', async () => {
-    const srv = server();
-    const plain = await plaintextProject(srv);
-    const s = await startStaging(srv, plain.projectId);
-    await stage(s, plain);
-    await s.d.blobs.archive(plain.projectId, noiseInput(1));
-    const blobKeys = rows<{ object_key: string }>(
-      srv,
-      'SELECT object_key FROM e2ee_content_blobs WHERE project_id = ?',
-      plain.projectId
-    ).map((row) => row.object_key);
-    expect(blobKeys).toHaveLength(1);
-    // Lapsed for an hour: the owner may come back, so it is kept.
-    await sweepProjectMigrations(
-      srv.env,
-      true,
-      () => true,
-      Date.now() + 60 * 60 * 1000
-    );
-    expect(migrationRow(srv, plain.projectId)!.state).toBe('staging');
-    // A day on, the sweep abandons it and drops every staged row and
-    // object; the project stays plaintext.
-    const later = Date.now() + 25 * 60 * 60 * 1000;
-    for (let sweep = 0; sweep < 10; sweep++) {
-      await sweepProjectMigrations(srv.env, true, () => true, later);
-      if (
-        JSON.stringify(stagedRows(srv, plain.projectId)) ===
-        JSON.stringify(nothingStaged)
-      )
-        break;
-    }
-    expect(migrationRow(srv, plain.projectId)!.state).toBe('abandoned');
-    expect(stagedRows(srv, plain.projectId)).toEqual(nothingStaged);
-    for (const key of blobKeys) expect(srv.bucket.objects.has(key)).toBe(false);
-    expect(formatOf(srv, plain.projectId).storage_format).toBe(1);
   });
 });
 

@@ -339,6 +339,78 @@ describe('migration staging is bounded by projected storage (migration 0049)', (
     expect(() => blob(db, PROJECT, 'b4', 1)).toThrow('artifact_account_quota');
   });
 
+  it('lets an account over its allowance stage a migration that shrinks it, in either direction', () => {
+    // Usage 10,000 against an allowance of 5,000: 3,000 in the project being
+    // migrated, 7,000 of files elsewhere. A replacement of 100 bytes lands
+    // the account at 7,100, still over, but smaller: staging is admitted up
+    // to the 3,000 the cutover frees, and refused past it.
+    const encrypt = account(10_000);
+    encrypt
+      .prepare('UPDATE projects SET document_bytes = 3_000 WHERE id = ?')
+      .run(PROJECT);
+    project(encrypt, 'p_other', 0);
+    encrypt
+      .prepare(
+        `INSERT INTO artifacts
+           (id, project_id, kind, name, object_key, content_type, bytes,
+            metadata_json, created_at)
+         VALUES ('a_other', 'p_other', 'snapshot', 'other.step', 'other',
+                 'model/step', 7_000, '{}', ?)`
+      )
+      .run(CREATED);
+    encrypt
+      .prepare(
+        'UPDATE users SET artifact_limit_bytes = 5_000, project_storage_limit_bytes = 5_000'
+      )
+      .run();
+    migration(encrypt, PROJECT, 'encrypt');
+    blob(encrypt, PROJECT, 'small', 100);
+    blob(encrypt, PROJECT, 'rest', 2_900);
+    expect(() => blob(encrypt, PROJECT, 'more', 1)).toThrow(
+      'artifact_account_quota'
+    );
+    expect(counted(encrypt)).toBe(10_000);
+
+    const decrypt = account(10_000);
+    decrypt
+      .prepare(
+        `INSERT INTO projects (id, user_id, name, document_json, updated_at,
+           document_bytes, storage_format)
+         VALUES ('p_enc', ?, 'Encrypted', '{}', ?, 0, 2)`
+      )
+      .run(OWNER, CREATED);
+    blob(decrypt, 'p_enc', 'enc', 3_000);
+    decrypt
+      .prepare(
+        `INSERT INTO artifacts
+           (id, project_id, kind, name, object_key, content_type, bytes,
+            metadata_json, created_at)
+         VALUES ('a_fill', ?, 'snapshot', 'fill.step', 'fill', 'model/step',
+                 6_900, '{}', ?)`
+      )
+      .run(PROJECT, CREATED);
+    expect(counted(decrypt)).toBe(10_000);
+    decrypt
+      .prepare(
+        'UPDATE users SET artifact_limit_bytes = 5_000, project_storage_limit_bytes = 5_000'
+      )
+      .run();
+    migration(decrypt, 'p_enc', 'decrypt');
+    const object = (id: string, bytes: number) =>
+      decrypt
+        .prepare(
+          `INSERT INTO project_document_objects
+             (id, project_id, object_key, checksum_sha256, logical_bytes,
+              stored_bytes, content_encoding, state, created_at)
+           VALUES (?, 'p_enc', ?, 'sha', ?, ?, 'gzip', 'committed', ?)`
+        )
+        .run(id, id, bytes, bytes, CREATED);
+    object('o_small', 100);
+    object('o_rest', 2_900);
+    expect(() => object('o_more', 1)).toThrow('project_account_storage_quota');
+    expect(counted(decrypt)).toBe(10_000);
+  });
+
   it('bounds a decrypt staging of plaintext files and documents by the ciphertext it replaces', () => {
     const db = account(10_000);
     // An encrypted project holding 5,000 bytes of blobs; the account full.

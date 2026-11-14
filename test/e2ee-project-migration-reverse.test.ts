@@ -1508,6 +1508,96 @@ async function stageExtraFile(
   });
 }
 
+describe('cleanup never reaches a newer attempt', () => {
+  it('lists nothing to delete once the owner finished a newer decryption while a sweep cleanup was paused', async () => {
+    const { sweepProjectMigrations } =
+      await import('../apps/web/worker/e2eeProjectMigrations');
+    const srv = roomServer();
+    const { projectId } = await encryptedProject(srv, { revisions: 1 });
+    // A first decryption stages its plaintext, then stops before the cutover
+    // and lets its lease lapse.
+    const first = reverseOn(srv, owner, 'owner_desktop', {
+      beforeStep: (step) => {
+        if (step === 'cutover') throw new Error('pause first');
+      }
+    });
+    await expect(decryptFully(first, projectId)).rejects.toThrow('pause first');
+    srv.db
+      .prepare(
+        'UPDATE e2ee_project_migrations SET lease_expires_at = ? WHERE project_id = ?'
+      )
+      .run(Date.now() - 60_000, projectId);
+    // The sweep abandons it (its owner left the rollout) and starts the
+    // cleanup, then pauses just before listing the staged files.
+    const db = srv.env.DB as D1Database;
+    const prepare = db.prepare.bind(db);
+    let entered!: () => void;
+    let release!: () => void;
+    const enteredSweep = new Promise<void>((resolve) => (entered = resolve));
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let intercept = true;
+    const wrap = (
+      statement: D1PreparedStatement,
+      sql: string
+    ): D1PreparedStatement =>
+      new Proxy(statement, {
+        get(target, key) {
+          if (key === 'bind')
+            return (...args: unknown[]) => wrap(target.bind(...args), sql);
+          if (key === 'all')
+            return async () => {
+              if (
+                intercept &&
+                /SELECT id, object_key FROM artifacts WHERE project_id/.test(
+                  sql
+                )
+              ) {
+                intercept = false;
+                entered();
+                await released;
+              }
+              return target.all();
+            };
+          const value = Reflect.get(target, key) as unknown;
+          return typeof value === 'function'
+            ? (value as (...args: unknown[]) => unknown).bind(target)
+            : value;
+        }
+      });
+    db.prepare = (sql: string) => wrap(prepare(sql), sql);
+    const sweep = sweepProjectMigrations(srv.env, true, () => false);
+    await enteredSweep;
+    expect(migrationRow(srv, projectId)).toMatchObject({
+      state: 'abandoned',
+      purge_cursor: 'cleanup'
+    });
+    // The returning owner cleans the abandoned attempt up and completes a
+    // fresh decryption, whose files are now the project's live files.
+    await first.engine.cancel(projectId);
+    const second = reverseOn(srv, owner, 'owner_desktop', { from: first.d });
+    await decryptFully(second, projectId);
+    expect(migrationRow(srv, projectId)).toMatchObject({
+      state: 'done',
+      direction: 'decrypt'
+    });
+    expect(formatOf(srv, projectId)).toBe(1);
+    const keys = rows<{ object_key: string }>(
+      srv,
+      'SELECT object_key FROM artifacts WHERE project_id = ?',
+      projectId
+    ).map((row) => row.object_key);
+    expect(keys.length).toBeGreaterThan(0);
+    // The paused cleanup resumes: its fence no longer holds, so it lists
+    // and deletes nothing of the live project.
+    release();
+    await sweep;
+    db.prepare = prepare;
+    expect(keys.filter((key) => !srv.bucket.objects.has(key))).toEqual([]);
+    expect(count(srv, 'artifacts', projectId)).toBe(keys.length);
+    expect(formatOf(srv, projectId)).toBe(1);
+  });
+});
+
 describe('the owner’s limits at the cutover', () => {
   it('refuses a cutover that would publish staged files over the artifact limit; the project stays encrypted and can be abandoned', async () => {
     const srv = roomServer();

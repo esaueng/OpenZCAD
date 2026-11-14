@@ -144,9 +144,11 @@ WHERE m.state IN ('staging', 'abandoned');
 -- An owner's projected storage is everything counted (project storage
 -- and file usage, finalized and reserved) plus what their live stagings
 -- would add at their cutovers (`migration_staging_growth`). A migration
--- staging is admitted while it stays within the allowance, so staging is
--- cumulative and bounded, and a full account can still stage a migration
--- that shrinks it (its credit makes the room). The triggers below spell
+-- staging write is admitted while the projected storage stays within the
+-- allowance, or while the owner's stagings together, with the write, still
+-- shrink what the account stores (the cutover's own growth-only rule), so
+-- staging is cumulative and bounded, and an account at or over its
+-- allowance can still stage a migration that shrinks it. The triggers below spell
 -- the sum out for one owner: a view correlated on the owner would keep
 -- SQLite from narrowing the project storage view to that owner.
 
@@ -192,7 +194,10 @@ BEGIN
       + COALESCE((SELECT finalized_bytes + reserved_bytes FROM artifact_account_usage
                   WHERE owner_user_id = NEW.owner_user_id), 0)
       + COALESCE((SELECT SUM(bytes) FROM migration_staging_growth
-                  WHERE user_id = NEW.owner_user_id), 0)) >= COALESCE((SELECT project_storage_limit_bytes FROM users WHERE id = NEW.owner_user_id), 2147483648);
+                  WHERE user_id = NEW.owner_user_id), 0)) >= COALESCE((SELECT project_storage_limit_bytes FROM users WHERE id = NEW.owner_user_id), 2147483648)
+    -- ...unless the owner's stagings together still shrink what it stores.
+    AND COALESCE((SELECT SUM(bytes) FROM migration_staging_growth
+                  WHERE user_id = NEW.owner_user_id), 0) >= 0;
 
   SELECT RAISE(ABORT, 'artifact_account_quota')
   WHERE NEW.project_id NOT IN (
@@ -279,7 +284,12 @@ BEGIN
       SELECT reserved_bytes FROM upload_sessions
       WHERE artifact_id = NEW.id AND project_id = NEW.project_id
         AND reservation_state = 'completed' AND reserved_bytes = NEW.bytes
-    ), 0);
+    ), 0)
+    -- ...unless the owner's stagings together, with this write, still
+    -- shrink what it stores (only growth is refused).
+    AND COALESCE((SELECT SUM(bytes) FROM migration_staging_growth
+                  WHERE user_id = (SELECT user_id FROM projects WHERE id = NEW.project_id)), 0)
+      + NEW.bytes - COALESCE((SELECT reserved_bytes FROM upload_sessions WHERE artifact_id = NEW.id AND project_id = NEW.project_id AND reservation_state = 'completed' AND reserved_bytes = NEW.bytes), 0) > 0;
 END;
 
 -- Migration 0022's multipart part reservation. The in-flight reservation
@@ -373,7 +383,12 @@ BEGIN
         WHERE upload_session_id = NEW.upload_session_id
           AND part_number = NEW.part_number
       ), 0) > COALESCE((SELECT project_storage_limit_bytes FROM users WHERE id = (SELECT owner_user_id FROM upload_sessions WHERE id = NEW.upload_session_id)), 2147483648)
-    AND NEW.bytes > COALESCE((SELECT bytes FROM artifact_upload_parts WHERE upload_session_id = NEW.upload_session_id AND part_number = NEW.part_number), 0);
+    AND NEW.bytes > COALESCE((SELECT bytes FROM artifact_upload_parts WHERE upload_session_id = NEW.upload_session_id AND part_number = NEW.part_number), 0)
+    -- ...unless the owner's stagings together, with this write, still
+    -- shrink what it stores (only growth is refused).
+    AND COALESCE((SELECT SUM(bytes) FROM migration_staging_growth
+                  WHERE user_id = (SELECT owner_user_id FROM upload_sessions WHERE id = NEW.upload_session_id)), 0)
+      + NEW.bytes - COALESCE((SELECT bytes FROM artifact_upload_parts WHERE upload_session_id = NEW.upload_session_id AND part_number = NEW.part_number), 0) > 0;
 END;
 
 DROP TRIGGER IF EXISTS artifact_upload_part_before_update;
@@ -444,7 +459,12 @@ BEGIN
       + COALESCE((SELECT SUM(bytes) FROM migration_staging_growth
                   WHERE user_id = (SELECT owner_user_id FROM upload_sessions WHERE id = NEW.upload_session_id)), 0)) + NEW.bytes - OLD.bytes
       > COALESCE((SELECT project_storage_limit_bytes FROM users WHERE id = (SELECT owner_user_id FROM upload_sessions WHERE id = NEW.upload_session_id)), 2147483648)
-    AND NEW.bytes > OLD.bytes;
+    AND NEW.bytes > OLD.bytes
+    -- ...unless the owner's stagings together, with this write, still
+    -- shrink what it stores (only growth is refused).
+    AND COALESCE((SELECT SUM(bytes) FROM migration_staging_growth
+                  WHERE user_id = (SELECT owner_user_id FROM upload_sessions WHERE id = NEW.upload_session_id)), 0)
+      + NEW.bytes - OLD.bytes > 0;
 END;
 
 -- Migration 0042's encrypted content blob check (format-1 staging exempt).
@@ -516,7 +536,12 @@ BEGIN
       WHERE artifact_id = NEW.blob_id AND project_id = NEW.project_id
         AND reservation_state = 'completed'
         AND reserved_bytes = NEW.ciphertext_bytes
-    ), 0);
+    ), 0)
+    -- ...unless the owner's stagings together, with this write, still
+    -- shrink what it stores (only growth is refused).
+    AND COALESCE((SELECT SUM(bytes) FROM migration_staging_growth
+                  WHERE user_id = (SELECT user_id FROM projects WHERE id = NEW.project_id)), 0)
+      + NEW.ciphertext_bytes - COALESCE((SELECT reserved_bytes FROM upload_sessions WHERE artifact_id = NEW.blob_id AND project_id = NEW.project_id AND reservation_state = 'completed' AND reserved_bytes = NEW.ciphertext_bytes), 0) > 0;
 END;
 
 -- ---------------------------------------------------------------------------
@@ -627,7 +652,12 @@ BEGIN
                   WHERE owner_user_id = (SELECT user_id FROM projects WHERE id = NEW.project_id)), 0)
       + COALESCE((SELECT SUM(bytes) FROM migration_staging_growth
                   WHERE user_id = (SELECT user_id FROM projects WHERE id = NEW.project_id)), 0)) + NEW.stored_bytes
-      > COALESCE((SELECT project_storage_limit_bytes FROM users WHERE id = (SELECT user_id FROM projects WHERE id = NEW.project_id)), 2147483648);
+      > COALESCE((SELECT project_storage_limit_bytes FROM users WHERE id = (SELECT user_id FROM projects WHERE id = NEW.project_id)), 2147483648)
+    -- ...unless the owner's stagings together, with this write, still
+    -- shrink what it stores (only growth is refused).
+    AND COALESCE((SELECT SUM(bytes) FROM migration_staging_growth
+                  WHERE user_id = (SELECT user_id FROM projects WHERE id = NEW.project_id)), 0)
+      + NEW.stored_bytes > 0;
   SELECT RAISE(ABORT, 'project_account_storage_quota')
   WHERE NEW.project_id NOT IN (
       SELECT project_id FROM e2ee_decrypt_staged_projects
@@ -666,7 +696,12 @@ BEGIN
                   WHERE owner_user_id = (SELECT user_id FROM projects WHERE id = NEW.project_id)), 0)
       + COALESCE((SELECT SUM(bytes) FROM migration_staging_growth
                   WHERE user_id = (SELECT user_id FROM projects WHERE id = NEW.project_id)), 0)) + NEW.stored_bytes
-      > COALESCE((SELECT project_storage_limit_bytes FROM users WHERE id = (SELECT user_id FROM projects WHERE id = NEW.project_id)), 2147483648);
+      > COALESCE((SELECT project_storage_limit_bytes FROM users WHERE id = (SELECT user_id FROM projects WHERE id = NEW.project_id)), 2147483648)
+    -- ...unless the owner's stagings together, with this write, still
+    -- shrink what it stores (only growth is refused).
+    AND COALESCE((SELECT SUM(bytes) FROM migration_staging_growth
+                  WHERE user_id = (SELECT user_id FROM projects WHERE id = NEW.project_id)), 0)
+      + NEW.stored_bytes > 0;
   SELECT RAISE(ABORT, 'project_account_storage_quota')
   WHERE NEW.project_id NOT IN (
       SELECT project_id FROM e2ee_decrypt_staged_projects
@@ -722,5 +757,10 @@ BEGIN
                   WHERE owner_user_id = (SELECT user_id FROM projects WHERE id = NEW.project_id)), 0)
       + COALESCE((SELECT SUM(bytes) FROM migration_staging_growth
                   WHERE user_id = (SELECT user_id FROM projects WHERE id = NEW.project_id)), 0)) + NEW.envelope_bytes
-      > COALESCE((SELECT project_storage_limit_bytes FROM users WHERE id = (SELECT user_id FROM projects WHERE id = NEW.project_id)), 2147483648);
+      > COALESCE((SELECT project_storage_limit_bytes FROM users WHERE id = (SELECT user_id FROM projects WHERE id = NEW.project_id)), 2147483648)
+    -- ...unless the owner's stagings together, with this write, still
+    -- shrink what it stores (only growth is refused).
+    AND COALESCE((SELECT SUM(bytes) FROM migration_staging_growth
+                  WHERE user_id = (SELECT user_id FROM projects WHERE id = NEW.project_id)), 0)
+      + NEW.envelope_bytes > 0;
 END;

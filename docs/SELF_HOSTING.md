@@ -245,8 +245,7 @@ quota triggers and adds no column; nothing is deleted. An account whose
 combined usage is already over its allowance keeps its data, but saves and
 uploads that would add storage are refused until it frees space.
 Encryption migrations stage within the same allowance, projected to their
-cutover. The scheduled sweep abandons a staging whose lease lapsed more
-than a day ago and deletes what it staged. See
+cutover. See
 [account tiers](plans/account-tiers.md#storage-and-downgrade-behavior).
 
 Export D1 before a migration or major upgrade:
