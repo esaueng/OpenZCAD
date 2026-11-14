@@ -21,7 +21,17 @@ import {
   topologyHashOfWitness,
   topologyWitnessesEqual
 } from './topology-lineage';
-import { add, scale } from './exact-math';
+import {
+  add,
+  cross,
+  dot,
+  length,
+  normalized,
+  scale,
+  subtract
+} from './exact-math';
+import { faceVertexCentroid } from './exact-brep';
+import { GEOMETRY_LINEAR_TOLERANCE, type Vec3 } from '@openzcad/geometry';
 
 /** Unique exact analytic carriers preserve face identity when only trims change. */
 export function carryAnalyticFaces(
@@ -235,4 +245,298 @@ export function holeLineage(
     );
   }
   return withBoundaryEdgeLineage(kernel, resultSolid, producer, state);
+}
+
+/** A planar face read in its own orientation: outward normal and a point on it. */
+interface OrientedPlane {
+  normal: Vec3;
+  point: Vec3;
+}
+
+/**
+ * Sine of the largest angle two plane normals may differ by and still be one
+ * carrier. Draft carriers are computed with a sine and cosine, so they cannot
+ * match a quantised witness bit for bit; uniqueness, not closeness, names.
+ */
+const PARALLEL_SINE = 1e-9;
+
+function orientedPlaneOf(
+  kernel: RemusKernel,
+  face: number
+): OrientedPlane | null {
+  try {
+    const raw = kernel.getFaceNormal(face);
+    const normal = normalized({
+      x: Number(raw[0]),
+      y: Number(raw[1]),
+      z: Number(raw[2])
+    });
+    const point = faceVertexCentroid(kernel, face);
+    if (
+      !normal ||
+      !point ||
+      ![normal.x, normal.y, normal.z, point.x, point.y, point.z].every(
+        Number.isFinite
+      )
+    )
+      return null;
+    return { normal, point };
+  } catch {
+    return null;
+  }
+}
+
+function liesOnPlane(face: OrientedPlane, normal: Vec3, point: Vec3): boolean {
+  return (
+    length(cross(face.normal, normal)) <= PARALLEL_SINE &&
+    Math.abs(dot(normal, subtract(face.point, point))) <=
+      GEOMETRY_LINEAR_TOLERANCE
+  );
+}
+
+/**
+ * A source face's reference when it is evidence about that face: its stored
+ * hash is its own witness's, the witness is the face's, and no other face in
+ * the source carries the same identity.
+ */
+function verifiedSourceFace(
+  source: RemusLineageState,
+  handle: number,
+  witness: FaceWitnessV1 | undefined
+): FaceTopologyReferenceV5 | null {
+  const reference = source.faceReferences.get(handle);
+  if (
+    !reference ||
+    !witness ||
+    reference.currentHash !==
+      topologyHashOfWitness('face', reference.witness) ||
+    !topologyWitnessesEqual('face', reference.witness, witness)
+  )
+    return null;
+  let count = 0;
+  for (const other of source.faceReferences.values()) {
+    if (
+      other.producingFeatureId === reference.producingFeatureId &&
+      other.lineageName === reference.lineageName
+    )
+      count += 1;
+  }
+  return count === 1 ? reference : null;
+}
+
+function withoutFaces(
+  source: RemusLineageState,
+  handles: ReadonlySet<number>
+): RemusLineageState {
+  return {
+    faceReferences: new Map(
+      [...source.faceReferences].filter(([handle]) => !handles.has(handle))
+    ),
+    edgeReferences: new Map(),
+    diagnostics: []
+  };
+}
+
+function identityOf(reference: FaceTopologyReferenceV5): string {
+  return JSON.stringify([reference.producingFeatureId, reference.lineageName]);
+}
+
+/**
+ * Of several candidate carriers, the one result face that lies on exactly
+ * one of them, or null. Any second match — a face on another candidate, or
+ * two faces on the same one — leaves the face unnamed.
+ */
+function uniqueFaceOn(
+  planes: ReadonlyMap<number, OrientedPlane>,
+  carriers: readonly { normal: Vec3; point: Vec3 }[]
+): number | null {
+  const matches = new Set<number>();
+  for (const carrier of carriers) {
+    for (const [handle, plane] of planes) {
+      if (liesOnPlane(plane, carrier.normal, carrier.point))
+        matches.add(handle);
+    }
+  }
+  return matches.size === 1 ? [...matches][0]! : null;
+}
+
+function resultPlanes(
+  kernel: RemusKernel,
+  candidates: readonly { handle: number; kind: string; witness: unknown }[]
+): Map<number, OrientedPlane> {
+  const planes = new Map<number, OrientedPlane>();
+  for (const candidate of candidates) {
+    if (
+      candidate.kind !== 'face' ||
+      (candidate.witness as FaceWitnessV1).surfaceType !== 'plane'
+    )
+      continue;
+    const plane = orientedPlaneOf(kernel, candidate.handle);
+    if (plane) planes.set(candidate.handle, plane);
+  }
+  return planes;
+}
+
+/**
+ * Shell: the faces the shell kept outside carry their identity by exact
+ * witness or unique carrier, as a hole's do. Two kinds of face are new, and
+ * take a name the shell owns only when one result face alone lies on the
+ * carrier the operation constructs for it:
+ *
+ * - `shell.face.rim.<source>`: the band left on an opening face's plane;
+ * - `shell.face.inner.<source>`: the wall one thickness inside a kept planar
+ *   face. The side is not assumed — both offsets are tried, and a face on
+ *   either one, or two faces, leave the wall unnamed.
+ *
+ * Edges between two named faces then take boundary roles, so a later fillet
+ * or chamfer on a shelled body follows an upstream dimension edit by name
+ * instead of by a geometry hash the edit moves.
+ */
+export function shellLineage(
+  kernel: RemusKernel,
+  sourceSolid: number,
+  resultSolid: number,
+  source: RemusLineageState | undefined,
+  producer: FeatureId,
+  openingFaces: readonly number[],
+  thickness: number
+): RemusLineageState | null {
+  if (!source || !(Math.abs(thickness) > GEOMETRY_LINEAR_TOLERANCE))
+    return null;
+  const openings = new Set(openingFaces);
+  const carried = carryAnalyticFaces(
+    kernel,
+    sourceSolid,
+    resultSolid,
+    withoutFaces(source, openings)
+  );
+  const sourceWitnesses = new Map(
+    topologyCandidatesForSolid(kernel, sourceSolid)
+      .filter((c) => c.kind === 'face')
+      .map((c) => [c.handle, c.witness as FaceWitnessV1])
+  );
+  const candidates = topologyCandidatesForSolid(kernel, resultSolid);
+  // Every planar face counts against uniqueness, named or not; only an
+  // unnamed one can take the constructed name.
+  const planes = resultPlanes(kernel, candidates);
+  const assignments: RemusSemanticAssignment[] = [];
+  for (const handle of source.faceReferences.keys()) {
+    const witness = sourceWitnesses.get(handle);
+    if (witness?.surfaceType !== 'plane') continue;
+    const reference = verifiedSourceFace(source, handle, witness);
+    const plane = reference ? orientedPlaneOf(kernel, handle) : null;
+    if (!reference || !plane) continue;
+    const opening = openings.has(handle);
+    const face = opening
+      ? uniqueFaceOn(planes, [plane])
+      : uniqueFaceOn(
+          planes,
+          [-thickness, thickness].map((step) => ({
+            normal: plane.normal,
+            point: add(plane.point, scale(plane.normal, step))
+          }))
+        );
+    if (face === null || carried.faceReferences.has(face)) continue;
+    const candidate = candidates.find(
+      (c) => c.kind === 'face' && c.handle === face
+    );
+    if (!candidate) continue;
+    assignments.push({
+      ...candidate,
+      lineageName: `shell.face.${opening ? 'rim' : 'inner'}.${identityOf(reference)}`
+    });
+  }
+  return withBoundaryEdgeLineage(
+    kernel,
+    resultSolid,
+    producer,
+    mergeRemusLineageStates([
+      createRemusSemanticLineage(producer, 'boolean', assignments),
+      carried
+    ])
+  );
+}
+
+/**
+ * Draft: undrafted faces carry their identity by exact witness or unique
+ * carrier. A drafted planar face perpendicular to the pull direction turns
+ * about its hinge — the line where it meets the neutral plane — by the draft
+ * angle, toward or away from the pull. It takes `draft.face.<source>` only
+ * when exactly one result face lies on either of those two constructed
+ * carriers. A face the pull is not perpendicular to stays unnamed.
+ */
+export function draftLineage(
+  kernel: RemusKernel,
+  sourceSolid: number,
+  resultSolid: number,
+  source: RemusLineageState | undefined,
+  producer: FeatureId,
+  draftedFaces: readonly number[],
+  pullDirection: Vec3,
+  neutralPoint: Vec3,
+  angleDegrees: number
+): RemusLineageState | null {
+  const pull = normalized(pullDirection);
+  const angle = (angleDegrees * Math.PI) / 180;
+  if (!source || !pull || !Number.isFinite(angle) || angle === 0) return null;
+  const drafted = new Set(draftedFaces);
+  const carried = carryAnalyticFaces(
+    kernel,
+    sourceSolid,
+    resultSolid,
+    withoutFaces(source, drafted)
+  );
+  const sourceWitnesses = new Map(
+    topologyCandidatesForSolid(kernel, sourceSolid)
+      .filter((c) => c.kind === 'face')
+      .map((c) => [c.handle, c.witness as FaceWitnessV1])
+  );
+  const candidates = topologyCandidatesForSolid(kernel, resultSolid);
+  // Every planar face counts against uniqueness, named or not; only an
+  // unnamed one can take the constructed name.
+  const planes = resultPlanes(kernel, candidates);
+  const assignments: RemusSemanticAssignment[] = [];
+  for (const handle of drafted) {
+    const witness = sourceWitnesses.get(handle);
+    if (witness?.surfaceType !== 'plane') continue;
+    const reference = verifiedSourceFace(source, handle, witness);
+    const plane = reference ? orientedPlaneOf(kernel, handle) : null;
+    if (!reference || !plane) continue;
+    if (Math.abs(dot(plane.normal, pull)) > PARALLEL_SINE) continue;
+    const hinge = add(
+      neutralPoint,
+      scale(
+        plane.normal,
+        dot(plane.normal, subtract(plane.point, neutralPoint))
+      )
+    );
+    const face = uniqueFaceOn(
+      planes,
+      [1, -1].map((sense) => ({
+        normal: add(
+          scale(plane.normal, Math.cos(angle)),
+          scale(pull, sense * Math.sin(angle))
+        ),
+        point: hinge
+      }))
+    );
+    if (face === null || carried.faceReferences.has(face)) continue;
+    const candidate = candidates.find(
+      (c) => c.kind === 'face' && c.handle === face
+    );
+    if (!candidate) continue;
+    assignments.push({
+      ...candidate,
+      lineageName: `draft.face.${identityOf(reference)}`
+    });
+  }
+  return withBoundaryEdgeLineage(
+    kernel,
+    resultSolid,
+    producer,
+    mergeRemusLineageStates([
+      createRemusSemanticLineage(producer, 'boolean', assignments),
+      carried
+    ])
+  );
 }
