@@ -4473,6 +4473,11 @@ export interface E2eeProjectPreferenceRecord {
 
 export interface E2eeProjectPreferenceResponse {
   preference: E2eeProjectPreferenceRecord | null;
+  /**
+   * Whether the account's library must be encrypted: opted in, or owning or
+   * a member of an encrypted project. Absent from an older Worker.
+   */
+  libraryEncrypted?: boolean;
 }
 
 export interface E2eeSaveProjectPreferenceRequest {

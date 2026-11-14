@@ -368,11 +368,11 @@ export async function syncAccountLibraryFolders(
   cancelled: () => boolean
 ): Promise<boolean> {
   try {
-    const { api, encryptsNewProjects } = await import('./api');
+    const { api, encryptsAccountLibrary } = await import('./api');
     const host = browserFolderSyncHost(accountId, api, async () => {
       let encrypts = encrypting.get(accountId);
       if (!encrypts) {
-        encrypts = encryptsNewProjects().catch(() => true);
+        encrypts = encryptsAccountLibrary().catch(() => true);
         encrypting.set(accountId, encrypts);
       }
       if (!(await encrypts)) return plaintextFolderCodec;
@@ -387,6 +387,13 @@ export async function syncAccountLibraryFolders(
     });
     return (await syncLibraryFolders(host)) === 'unsupported';
   } catch (error) {
+    // The account started encrypting during this visit (a project was
+    // encrypted, or an encrypted invitation accepted): seal from the next
+    // round on instead of stopping on the plaintext refusal.
+    if (errorCode(error) === 'LIBRARY_FOLDERS_ENCRYPTION_REQUIRED') {
+      encrypting.set(accountId, Promise.resolve(true));
+      return false;
+    }
     return STOP_CODES.has(errorCode(error) ?? '');
   }
 }
