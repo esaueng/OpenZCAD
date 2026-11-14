@@ -279,8 +279,9 @@ describe('assistant consent on encrypted projects (ADR-024 6-1)', () => {
     expect(await stored.json()).toMatchObject({
       consent: { projectId, allowed: true, sequence: 1, revokedAt: null }
     });
+    // The client cannot opt out: the Worker decides from the consent.
     const sent = await call('POST', '/api/assistant/proposals', {
-      body: proposal(projectId)
+      body: { ...proposal(projectId), encryptedProject: false }
     });
     expect(sent.status).toBe(200);
     await sent.text();

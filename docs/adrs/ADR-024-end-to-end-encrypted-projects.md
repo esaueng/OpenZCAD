@@ -900,12 +900,15 @@ and text.
 
 Provider retention (2026-11-14). An encrypted project's request through
 OpenRouter carries `provider.data_collection: 'deny'`, so OpenRouter routes it
-only to providers whose policy is not to store or train on prompts, and
+only to providers whose policy is not to train on or store prompts, and
 refuses it (reported as no eligible route) rather than falling back to one
-that does. Requests to OpenAI's Responses API already carry `store: false`.
-Any other route, such as a user's own Responses-compatible endpoint, follows
-that provider's terms. The consent dialog says so. A plaintext project's
-request is unchanged.
+that does. That is not zero retention: a provider may still keep a request
+for a while for abuse monitoring (OpenRouter's stricter `zdr` routing would
+narrow that further, at the cost of fewer eligible providers). Requests to
+OpenAI's Responses API already carry `store: false`, which leaves OpenAI's
+own abuse-monitoring retention. Any other route, such as a user's own
+Responses-compatible endpoint, follows that provider's terms. The consent
+dialog says all of this. A plaintext project's request is unchanged.
 
 ### Settled product decisions
 

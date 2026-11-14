@@ -175,11 +175,13 @@ export const ASSISTANT_CONSENT_TRANSIT =
   'OpenZCAD’s server reads each request in plaintext to pass it on, adding its own instructions, any custom instructions from your settings, and an identifier derived from your account.';
 /**
  * What the provider may keep. OpenRouter takes an encrypted project's
- * request only to providers whose policy is not to store or train on it
- * (`data_collection: 'deny'`, ADR-024 amendment 2026-11-14); other routes
+ * request only to providers whose policy is not to train on or store
+ * prompts (`data_collection: 'deny'`, ADR-024 amendment 2026-11-14), which
+ * still lets a provider keep it for a while for abuse monitoring; OpenAI's
+ * `store: false` leaves its own abuse-monitoring retention; other routes
  * follow their own terms.
  */
 export const ASSISTANT_CONSENT_RETENTION =
-  'Through OpenRouter, it goes only to providers whose policy is not to store or train on it; OpenAI is asked not to store it; any other provider’s own terms decide what it keeps.';
+  'Through OpenRouter, it goes only to providers whose policy is not to train on or store prompts, though a provider may still keep it for a while to check for abuse. OpenAI is asked not to store it, apart from its own abuse monitoring. Any other provider’s terms decide what it keeps.';
 export const ASSISTANT_CONSENT_FINALITY =
   'What has been sent cannot be recalled. Stopping only prevents later requests.';
