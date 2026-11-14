@@ -71,7 +71,6 @@ test(
     await expect(folder.locator('.start-tile-rev')).toHaveText('2 projects');
     await expect(folder.locator('.start-tile-when')).toHaveText('Nov 13, 2026');
     await expect(folder.locator('.start-tile-flags')).toBeEmpty();
-    await expect(folder.locator('.start-folder-count')).toHaveCount(0);
     // No tab drawn over the row above it.
     expect(
       await folder.evaluate(

@@ -2696,34 +2696,14 @@
   color: var(--color-text-dim);
 }
 
-/* How many parts it holds, on the preview's lower-left corner. */
-.start-folder-count {
-  position: absolute;
-  left: 8px;
-  bottom: 8px;
-  z-index: 1;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 6px;
-  color: var(--color-text);
-  background: color-mix(in srgb, var(--color-surface) 88%, transparent);
-  border: var(--border-thin);
-  border-radius: 999px;
-  font-family: var(--font-mono);
-  font-size: var(--fs-mini);
-  font-variant-numeric: tabular-nums;
-}
-
 /* A folder in the list is a row like the rest: no tab over the row above
-   (it was a 300–480px strip across the list), no count over its 52px thumb
-   (the Saves column has it), and the list's own background. */
+   (it was a 300–480px strip across the list) and the list's own
+   background. */
 .start-tile-grid.is-list .start-tile-folder {
   background: transparent;
 }
 
-.start-tile-grid.is-list .start-tile-folder::before,
-.start-tile-grid.is-list .start-folder-count {
+.start-tile-grid.is-list .start-tile-folder::before {
   display: none;
 }
 
