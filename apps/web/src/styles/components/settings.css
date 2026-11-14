@@ -1254,11 +1254,17 @@
 
 .keymap-editor-bar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--sp-3);
   padding: 10px var(--sp-4);
   border-bottom: var(--border-thin);
+}
+
+.keymap-editor-bar > button {
+  flex: none;
+  white-space: nowrap;
 }
 
 .keymap-editor-bar p {
@@ -1330,6 +1336,16 @@
 @media (max-width: 760px) {
   .keymap-editor .settings-control-group dl {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* A long binding (Ctrl/Cmd+Shift+Z) and its Add key overran the card at
+     phone width; the button drops under the keys instead. */
+  .keymap-editor .settings-control-row dd {
+    flex-wrap: wrap;
+  }
+
+  .keymap-editor .keymap-actions {
+    margin-left: auto;
   }
 }
 
@@ -1420,12 +1436,30 @@
 }
 
 @media (max-width: 580px) {
-  .settings-page .settings-head .settings-save-message {
-    flex: 1 0 100%;
+  /* One row of options however narrow: wrapped, a choice's last option sat
+     alone on a second line ("Auto Mouse" over "Trackpad", "Shaded + edges
+     Shaded" over "Wireframe") and read as a separate control. Options
+     narrow to their longest word and wrap their names inside instead. */
+  .settings-segmented {
+    display: inline-grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(min-content, max-content);
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+
+  .settings-segmented label,
+  .settings-segmented span {
+    min-width: 0;
+  }
+
+  .settings-segmented span {
+    width: 100%;
+    box-sizing: border-box;
+    padding-inline: 6px;
+    line-height: 1.15;
+    text-align: center;
     white-space: normal;
-    overflow: visible;
-    order: 2;
-    padding-bottom: 6px;
   }
 
   .settings-segmented[aria-label='Library card size'] {
@@ -1450,11 +1484,15 @@
      a phone reader guessing which was Saving and which Account. */
   .settings-layout {
     --settings-inline: var(--sp-3);
-    grid-template-columns: calc(var(--island-gap) + 64px) minmax(0, 1fr);
+    /* At 64px the names broke mid-word ("Appeara" over "nce"). 70px, less
+       the 8px of padding and borders below, holds every name but one whole
+       at 12px (Encryption, 61px); Appearance (69px) hyphenates. Wider would
+       cost the rows: a setting's text keeps over 200px at 390px. */
+    grid-template-columns: calc(var(--island-gap) + 70px) minmax(0, 1fr);
   }
 
   .settings-nav {
-    padding: var(--sp-1);
+    padding: var(--sp-1) 2px;
   }
 
   .settings-nav-group {
@@ -1466,7 +1504,7 @@
     place-items: center;
     gap: 2px;
     min-height: 48px;
-    padding: 5px 2px;
+    padding: 5px 0;
     text-align: center;
   }
 
@@ -1475,6 +1513,10 @@
     font-size: var(--fs-mini);
     line-height: 1.15;
     white-space: normal;
+    /* At a syllable: the soft hyphen SettingsPage puts in Appearance, or a
+       dictionary's where the browser has one (the page is lang="en"). The
+       anywhere break is left only for a name with neither. */
+    hyphens: auto;
     overflow-wrap: anywhere;
   }
 
@@ -1577,6 +1619,15 @@
 
 .settings-nav-head .brand {
   margin: 0;
+  /* The workspace's narrow-window rule (responsive.css) cuts the brand to
+     its mark to make room for the project name; this column has no project
+     name beside it and room for the wordmark down to the phone's rail. */
+  gap: 7px;
+  font-size: var(--fs-md);
+}
+
+.settings-nav-head .brand .beta-tag {
+  display: inline-flex;
 }
 
 /* The page's head: its name, the save note and the search, on one ruled
@@ -1598,6 +1649,11 @@
 }
 
 .settings-head-title {
+  /* The head's first line is as tall as a lone head, so a head that wraps
+     still centres the title on the way back's line (corner-slot.css). */
+  min-height: 40px;
+  display: flex;
+  align-items: center;
   margin: 0;
   color: var(--color-text);
   font-size: 18px;
@@ -1608,6 +1664,27 @@
 .settings-head .settings-save-message {
   flex: 1;
   text-align: left;
+  /* The head's news (an error, a sign-in step) wraps to a second line
+     before it is cut: on one line it said "Cloud profile connecte…" in a
+     1000px window. Two lines of it fit the head's 40px, so the rule under
+     the head never moves when a message arrives. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: 1.35;
+  white-space: normal;
+}
+
+/* A phone gives the message a line of its own under the title, read whole. */
+@media (max-width: 580px) {
+  .settings-page .settings-head .settings-save-message {
+    flex: 1 0 100%;
+    order: 2;
+    display: block;
+    -webkit-line-clamp: none;
+    overflow: visible;
+    padding-bottom: 6px;
+  }
 }
 
 .settings-head .settings-search {
@@ -1651,6 +1728,15 @@
   }
 }
 
+/* Under the common phone width a three-way choice of long names (Shaded +
+   edges, Shaded, Wireframe) is wider than the row even word by word; it
+   wraps there rather than running off the card. */
+@media (max-width: 359px) {
+  .settings-segmented:not([aria-label='Library card size']) {
+    display: inline-flex;
+  }
+}
+
 /* ── Activity log ──
    Settings › Activity log: filters over a live list of the session's
    entries. The list scrolls inside its card so the filters stay in reach. */
@@ -1658,6 +1744,9 @@
 .activity-log {
   min-width: 0;
   display: grid;
+  /* The card's width, never the filter field's: the field's input has an
+     intrinsic width and overran a 340px phone with it. */
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--sp-3);
 }
 
@@ -1670,6 +1759,7 @@
 
 .activity-log-search {
   flex: 1 1 220px;
+  min-width: 0;
   min-height: 30px;
   display: flex;
   align-items: center;
@@ -1911,6 +2001,14 @@
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 4px;
+}
+
+/* A row stacked under its label starts at the label's edge, as every other
+   stacked control does. */
+@media (max-width: 860px) {
+  .space-mouse-axis-filter {
+    justify-content: flex-start;
+  }
 }
 
 .space-mouse-axis-toggle {
