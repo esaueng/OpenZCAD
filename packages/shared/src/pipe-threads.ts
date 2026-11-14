@@ -241,3 +241,72 @@ export function pipeThreadReach(input: {
     : gaugeFromFittingEnd +
         (majorAtGauge - 2 * depth - diameter) / PIPE_THREAD_TAPER;
 }
+
+/** A pipe thread resolved against its face, in document units. */
+export interface PipeThreadOnFace {
+  spec: PipeThreadSpec;
+  pitch: number;
+  form: PipeThreadForm;
+  /** The major diameter on the gauge plane, clearance included. */
+  majorAtGauge: number;
+  gaugeFromFittingEnd: number;
+  standardLength: number;
+  reach: number;
+  /**
+   * Where a band left to the standard ends, from the fitting face: the
+   * standard's thread, within the face, no further than the crest can go
+   * before it meets the cylinder. One that does not fit at all keeps the
+   * standard's end, and the kernel names why. A band starts `offset` in, so
+   * its length is `end − offset`.
+   */
+  end: number;
+}
+
+/**
+ * The one resolution the thread build and the Thread panel share: a pipe
+ * thread's size (stored, or the face's nearest), form, gauge plane and the
+ * end of a band left to its standard. `mm` is millimetres per document
+ * unit; `radius`, `faceLength` and `clearance` are in document units.
+ */
+export function pipeThreadOnFace(input: {
+  standard: PipeThreadStandard;
+  size: PipeThreadSize | undefined;
+  kind: 'external' | 'internal';
+  radius: number;
+  faceLength: number;
+  clearance: number;
+  mm: number;
+}): PipeThreadOnFace {
+  const { standard, size, kind, radius, faceLength, clearance, mm } = input;
+  const spec =
+    size === undefined
+      ? pipeThreadForFace(standard, kind, 2 * radius * mm)
+      : pipeThreadSpec(standard, size);
+  const pitch = spec.pitch / mm;
+  const form = pipeThreadForm(standard, pitch);
+  const majorAtGauge =
+    spec.gaugeMajor / mm + (kind === 'external' ? -2 : 2) * clearance;
+  const gaugeFromFittingEnd = pipeGaugeFromFittingEnd(spec, kind) / mm;
+  const standardLength = spec.threadLength / mm;
+  const reach = pipeThreadReach({
+    kind,
+    majorAtGauge,
+    depth: form.depth,
+    gaugeFromFittingEnd,
+    diameter: 2 * radius
+  });
+  return {
+    spec,
+    pitch,
+    form,
+    majorAtGauge,
+    gaugeFromFittingEnd,
+    standardLength,
+    reach,
+    end: Math.min(
+      standardLength,
+      faceLength,
+      reach > 0 ? reach : standardLength
+    )
+  };
+}

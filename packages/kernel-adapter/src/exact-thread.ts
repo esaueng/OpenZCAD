@@ -17,11 +17,7 @@ import {
   UNIT_TO_MM,
   isoMetricThreadForBore,
   nearestIsoMetricThread,
-  pipeGaugeFromFittingEnd,
-  pipeThreadForFace,
-  pipeThreadForm,
-  pipeThreadReach,
-  pipeThreadSpec,
+  pipeThreadOnFace,
   threadSpanOnFace,
   type FeatureId,
   type FeatureNode,
@@ -347,26 +343,27 @@ function resolvePipeThread(
   mm: number
 ): ResolvedThread {
   const { kind, radius, faceLength } = face;
-  const pipe =
-    data.pipeSize === undefined
-      ? pipeThreadForFace(standard, kind, 2 * radius * mm)
-      : pipeThreadSpec(standard, data.pipeSize);
-  const pitch = pipe.pitch / mm;
-  const form = pipeThreadForm(standard, pitch);
-  const clearance = values.optional(data.clearance, 'clearance') ?? 0;
-  const majorAtGauge =
-    pipe.gaugeMajor / mm + (kind === 'external' ? -2 : 2) * clearance;
-  const gaugeFromFittingEnd = pipeGaugeFromFittingEnd(pipe, kind) / mm;
+  // The resolution the Thread panel shares (`pipeThreadOnFace`).
+  const {
+    spec: pipe,
+    pitch,
+    form,
+    majorAtGauge,
+    gaugeFromFittingEnd,
+    standardLength,
+    reach,
+    end
+  } = pipeThreadOnFace({
+    standard,
+    size: data.pipeSize,
+    kind,
+    radius,
+    faceLength,
+    clearance: values.optional(data.clearance, 'clearance') ?? 0,
+    mm
+  });
   const offset = values.optional(data.offset, 'offset') ?? 0;
   const typedLength = values.optional(data.length, 'length');
-  const standardLength = pipe.threadLength / mm;
-  const reach = pipeThreadReach({
-    kind,
-    majorAtGauge,
-    depth: form.depth,
-    gaugeFromFittingEnd,
-    diameter: 2 * radius
-  });
   // Every distance here is from the fitting face (the end of the face the
   // thread is anchored at), as the standards measure the gauge plane and
   // the thread's length from the pipe's end or the fitting's face: an
@@ -374,11 +371,6 @@ function resolvePipeThread(
   // the band ends where the standard's thread ends, within the face, and
   // where its crest meets the cylinder. One that does not fit at all keeps
   // the standard's end, and the kernel names why.
-  const end = Math.min(
-    standardLength,
-    faceLength,
-    reach > 0 ? reach : standardLength
-  );
   const slack = (size: number) => 1e-9 * Math.max(size, 1);
   if (typedLength === undefined && end - offset <= slack(end)) {
     throw new Error(

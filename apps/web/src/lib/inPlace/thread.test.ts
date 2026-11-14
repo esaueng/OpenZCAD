@@ -1409,7 +1409,8 @@ describe('in-place thread edits keep a stored end kind (review #1458)', () => {
       '0*1': 0,
       // A parameter the user has since set to 2.
       gap: 2,
-      '19.99999998+0': 19.99999998
+      '19.99999998+0': 19.99999998,
+      '20+0': 20
     };
     const calculate = (value: ParamValue) =>
       typeof value === 'number' ? value : (formulas[value] ?? null);
@@ -1587,6 +1588,40 @@ describe('in-place thread edits keep a stored end kind (review #1458)', () => {
     ).toBe(true);
     // The first repro: a runout at the start the span reaches, untouched.
     expect(finish(stored(), { face: long }).runoutStart).toBe(true);
+  });
+
+  it('resolves a pipe thread’s standard length before applying the runout rule (re-check of 7f28f427)', () => {
+    // A radius-7.7 × 20 boss storing NPT 1/4 with no length: it runs its
+    // standard 10.20572 and its end stops short of the face, run out. Edited
+    // to `20+0` the end reaches the face's end, so it is chamfered.
+    const pipeBoss: FacePick = {
+      ...BOSS,
+      cylinder: {
+        axisStart: { x: 0, y: 0, z: 0 },
+        axisEnd: { x: 0, y: 0, z: 20 },
+        radius: 7.7,
+        boss: true
+      }
+    };
+    const pipe = stored({
+      profile: 'npt',
+      pipeSize: '1/4',
+      length: undefined,
+      runoutStart: undefined,
+      runoutEnd: true
+    });
+    const extended = finish(pipe, {
+      face: pipeBoss,
+      values: { length: '20+0' }
+    });
+    expect(extended.chamferEnd).toBe(true);
+    expect(extended.runoutEnd).toBeUndefined();
+    // Edited elsewhere, it still stops short at its standard length: a runout.
+    const kept = finish(pipe, {
+      face: pipeBoss,
+      values: { length: 10.20572 }
+    });
+    expect(kept.runoutEnd).toBe(true);
   });
 
   it('holds to the snap in an inch document, where it is under any rounding tolerance', () => {

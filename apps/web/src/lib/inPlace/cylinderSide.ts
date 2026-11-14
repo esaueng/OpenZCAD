@@ -2,6 +2,24 @@ import type { FaceGeometry, MeshGeometry, Vector3 } from '@openzcad/shared';
 import type { FacePick } from './tools';
 
 /**
+ * What an open command's face pick stands on, for telling whether a rebuild
+ * moved it: its identity and placement, and its cylinder (axis, radius, the
+ * kernel's axial length, boss or bore). A resize that leaves the rest
+ * unchanged still refreshes what a thread settles its ends from.
+ */
+export function facePickKey(pick: FacePick): string {
+  return JSON.stringify([
+    pick.hash,
+    pick.topologyId,
+    pick.normal,
+    pick.centroid,
+    pick.center,
+    pick.point,
+    pick.cylinder
+  ]);
+}
+
+/**
  * A cylindrical face as an in-place pick carries it: its axis ends, its
  * radius, the kernel's axial length and (from the mesh) boss or bore. The
  * one place picks are built from face geometry.

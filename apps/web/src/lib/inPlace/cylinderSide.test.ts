@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { MeshGeometry } from '@openzcad/shared';
-import { cylinderFaceIsBoss } from './cylinderSide';
+import { cylinderFaceIsBoss, facePickKey } from './cylinderSide';
+import type { FacePick } from './tools';
 
 /**
  * A closed thick-walled tube up +Z, wound outward: its outer wall is a boss
@@ -83,5 +84,34 @@ describe('cylinderFaceIsBoss', () => {
     const empty = { ...mesh, indices: new Uint32Array(0) };
     expect(cylinderFaceIsBoss(empty, outerWall, ...AXIS)).toBeNull();
     expect(cylinderFaceIsBoss(mesh, outerWall, AXIS[0], AXIS[0])).toBeNull();
+  });
+});
+
+describe('facePickKey (review #1458)', () => {
+  it('changes when only a picked cylinder’s axial length or radius does', () => {
+    // Sol's resize: a boss 20 → 20.00000004 tall moved to keep its middle,
+    // where hash, placement and click stay as they were.
+    const pick: FacePick = {
+      bodyId: 'body_a' as FacePick['bodyId'],
+      hash: 9,
+      topologyId: 't',
+      center: { x: 0, y: 0, z: 10 },
+      cylinder: {
+        axisStart: { x: 0, y: 0, z: 0 },
+        axisEnd: { x: 0, y: 0, z: 20 },
+        radius: 3,
+        axialLength: 20,
+        boss: true
+      }
+    };
+    const resized: FacePick = {
+      ...pick,
+      cylinder: { ...pick.cylinder!, axialLength: 20.00000004 }
+    };
+    expect(facePickKey(resized)).not.toBe(facePickKey(pick));
+    expect(
+      facePickKey({ ...pick, cylinder: { ...pick.cylinder!, radius: 3.1 } })
+    ).not.toBe(facePickKey(pick));
+    expect(facePickKey({ ...pick })).toBe(facePickKey(pick));
   });
 });

@@ -4,11 +4,9 @@ import {
   UNIT_TO_MM,
   isPipeThreadSize,
   isoMetricThreadLabel,
-  pipeGaugeFromFittingEnd,
   pipeThreadForFace,
-  pipeThreadForm,
   pipeThreadLabel,
-  pipeThreadReach,
+  pipeThreadOnFace,
   pipeThreadSpec,
   threadSpanOnFace,
   type FeatureData,
@@ -225,27 +223,18 @@ export function pipeThreadDefaultLength(
   offset: number
 ): number | null {
   const geometry = threadFace(face);
-  const spec = pipeSpecFor(standard, size, face, units);
-  if (!geometry || !spec) return null;
-  const mm = UNIT_TO_MM[units];
-  const kind = threadFaceKind(face);
-  const standardLength = spec.threadLength / mm;
-  const reach = pipeThreadReach({
-    kind,
-    majorAtGauge:
-      spec.gaugeMajor / mm + (kind === 'external' ? -2 : 2) * clearance,
-    depth: pipeThreadForm(standard, spec.pitch / mm).depth,
-    gaugeFromFittingEnd: pipeGaugeFromFittingEnd(spec, kind) / mm,
-    diameter: 2 * geometry.radius
+  if (!geometry) return null;
+  // The build's own resolution (`pipeThreadOnFace`).
+  const { end } = pipeThreadOnFace({
+    standard,
+    size: isPipeThreadSize(size) ? size : undefined,
+    kind: threadFaceKind(face),
+    radius: geometry.radius,
+    faceLength: geometry.length,
+    clearance,
+    mm: UNIT_TO_MM[units]
   });
-  return Math.max(
-    Math.min(
-      standardLength,
-      geometry.length,
-      reach > 0 ? reach : standardLength
-    ) - Math.max(offset, 0),
-    0
-  );
+  return Math.max(end - Math.max(offset, 0), 0);
 }
 
 /**
@@ -957,7 +946,12 @@ export function keepStoredEndKinds(
   thread: ThreadRequest,
   saved: FeatureData | undefined,
   face: Pick<ThreadFace, 'length' | 'radius'> | null,
-  evaluate: ((value: ParamValue) => number | null) | undefined
+  evaluate: ((value: ParamValue) => number | null) | undefined,
+  /**
+   * Boss or bore and the document's unit, which a pipe thread left to its
+   * standard length is resolved by; without a known side it is not.
+   */
+  pipe?: { kind: 'external' | 'internal' | null; units: UnitSystem }
 ): ThreadRequest {
   const number = (value: ParamValue | undefined) =>
     value === undefined
@@ -969,16 +963,28 @@ export function keepStoredEndKinds(
   const spanOf = (data: ThreadRequest) => {
     const offset = number(data.offset) ?? 0;
     const typed = number(data.length);
-    const pipe = data.profile === 'npt' || data.profile === 'bspt';
+    const standard = pipeStandard(data.profile);
     // An absent length is the rest of the face from the offset, as the
-    // build reads it; a pipe thread's is its standard's, which only the
-    // build knows.
-    const length =
-      typed === undefined
-        ? !face || pipe || offset === null
-          ? null
-          : face.length - offset
-        : typed;
+    // build reads it; a pipe thread's is its standard's, resolved as the
+    // build resolves it.
+    const clearance = number(data.clearance) ?? 0;
+    const implicit = (): number | null => {
+      if (!face || offset === null) return null;
+      if (!standard) return face.length - offset;
+      if (!pipe?.kind || clearance === null) return null;
+      const { end } = pipeThreadOnFace({
+        standard,
+        size: data.pipeSize,
+        kind: pipe.kind,
+        radius: face.radius,
+        faceLength: face.length,
+        clearance,
+        mm: UNIT_TO_MM[pipe.units]
+      });
+      // One the offset leaves no length is refused by the build.
+      return end - offset > 1e-9 * Math.max(end, 1) ? end - offset : null;
+    };
+    const length = typed === undefined ? implicit() : typed;
     return face &&
       offset !== null &&
       Number.isFinite(offset) &&
@@ -1356,7 +1362,8 @@ export const threadSpec: InPlaceToolSpec = {
         },
         ctx.saved,
         threadFace(face),
-        ctx.evaluate
+        ctx.evaluate,
+        { kind: threadFaceKnownKind(face), units: ctx.units ?? 'mm' }
       )
     };
   },
