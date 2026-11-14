@@ -279,6 +279,13 @@ export function ViewportScaleIndicator({
         ? null
         : new ResizeObserver(measure);
     const watch = () => {
+      // View and Tweak mount their measurement workbench inside the viewer
+      // shell, not beside it, so the shell's own children are watched too:
+      // without it the rule kept the length it had before a phone's sheet
+      // opened and drew over the sheet's text (I47). Observing a node again
+      // only replaces its options; a remounted shell is new.
+      const shell = area?.querySelector('.viewer-shell');
+      if (shell) mounts?.observe(shell, { childList: true });
       // Observing an element twice is a no-op; a remounted rail is new.
       for (const target of [
         area,
@@ -293,7 +300,6 @@ export function ViewportScaleIndicator({
       }
       measure();
     };
-    watch();
     // The tool rail and the command float (the measurement workbench's)
     // mount and unmount beside the viewer.
     const mounts =
@@ -301,6 +307,7 @@ export function ViewportScaleIndicator({
         ? new MutationObserver(watch)
         : null;
     if (area) mounts?.observe(area, { childList: true });
+    watch();
     window.addEventListener('resize', measure);
     return () => {
       resizes?.disconnect();

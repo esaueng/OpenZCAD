@@ -81,3 +81,35 @@ test('View’s Measure on a phone keeps the rule and the cube off its sheet', as
   await expect(workbench).toBeHidden();
   await expect(cube).toBeVisible();
 });
+
+test('View’s Measure on a tall phone shortens the rule to the room under its sheet', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  // Tall enough that the rule stays on screen with the sheet up: it has to
+  // re-measure when the sheet opens, without waiting for a window resize.
+  await openBracket(page, 390, 844);
+  await page
+    .getByRole('group', { name: 'Workspace mode' })
+    .getByRole('button', { name: 'View' })
+    .tap();
+  const rule = page.getByTestId('viewport-scale-indicator');
+  await expect(rule).toBeVisible();
+  await page.getByRole('button', { name: 'Measure', exact: true }).tap();
+  const workbench = page.locator('.measurement-dock');
+  await expect(workbench).toBeVisible();
+  await expect(rule).toBeVisible();
+  await expect
+    .poll(async () => {
+      const scale = await rule.boundingBox();
+      const dock = await workbench.boundingBox();
+      return (
+        scale !== null &&
+        dock !== null &&
+        (scale.y + scale.height <= dock.y ||
+          scale.y >= dock.y + dock.height ||
+          scale.x >= dock.x + dock.width)
+      );
+    })
+    .toBe(true);
+});
