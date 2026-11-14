@@ -12,7 +12,9 @@ test(
       .getByLabel('Import project backup')
       .first()
       .setInputFiles({
-        name: 'bracket.step',
+        // A STEP file given a backup's name: a real .step now makes a
+        // project of its own (I13), so only a misnamed one reaches here.
+        name: 'bracket.openzcad',
         mimeType: 'application/octet-stream',
         buffer: Buffer.from('ISO-10303-21;\nHEADER;\nENDSEC;\n')
       });

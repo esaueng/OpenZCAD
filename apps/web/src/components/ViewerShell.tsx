@@ -43,6 +43,7 @@ import {
   type OffsetHandleTarget
 } from './ModelViewer';
 import type {
+  DisplayMode,
   ExactSectionRegionDisplay,
   MovePreview,
   MoveSnap,
@@ -411,7 +412,8 @@ interface ViewerShellProps {
   onView(view: ViewTarget): void;
   /** The project's saved views, shown in the Standard views panel. */
   savedViews?: SavedViewsSectionProps;
-  onCycleDisplayMode(): void;
+  onDisplayMode(mode: DisplayMode): void;
+  onToggleXray(): void;
   onToggleProjection(): void;
   /** Flips orbiting between Free and Turntable; absent, no rail button. */
   onToggleOrbitMode?(): void;
@@ -587,7 +589,8 @@ export function ViewerShell({
   onMeasure,
   onView,
   savedViews,
-  onCycleDisplayMode,
+  onDisplayMode,
+  onToggleXray,
   onToggleProjection,
   onToggleOrbitMode,
   fieldOfView,
@@ -731,7 +734,8 @@ export function ViewerShell({
       {...(onMeasure ? { onMeasure } : {})}
       onView={onView}
       {...(savedViews ? { savedViews } : {})}
-      onCycleDisplayMode={onCycleDisplayMode}
+      onDisplayMode={onDisplayMode}
+      onToggleXray={onToggleXray}
       onToggleProjection={onToggleProjection}
       {...(onToggleOrbitMode ? { onToggleOrbitMode } : {})}
       sectionRange={sectionRange}
