@@ -17,6 +17,14 @@
  * sweeps, whether the sides are parallel to the push (a prism) or lean in or
  * out (a drafted window's floor, growing or shrinking as it rises).
  *
+ * **Reflex corners.** A face that is not convex (the L-shaped floor of a
+ * window cut across a thicker strip of wall) is not the intersection of its
+ * sides' half-spaces. Between sides parallel to the push its sweep is still
+ * its prism, built as the union of the prisms of convex pieces of it, each
+ * the same box cut by exact side planes. Each piece is cut off along the
+ * extension of an edge, so every piece is bounded by the face's own side
+ * planes and nothing new.
+ *
  * **Blended corners.** A face whose edges are rounded by proven blends (a
  * window with filleted corners) moves together with them, between sides
  * parallel to the push. The chain of face and blends is a graph over the
@@ -37,9 +45,10 @@
  * The union only ever re-closes the body inside its own extent: a result
  * whose bounds grow past the body's (a window floor pushed out through the
  * top of its wall) is not the opening closing, and keeps the refusal, as
- * does everything outside the conditions above — a face with holes or a
- * reflex corner, curved neighbours that are not blends, an inward
- * (material-removing) push, a push shorter than its blends.
+ * does everything outside the conditions above — a face with holes, a
+ * reflex corner beside a leaning side or a blend, curved neighbours that are
+ * not blends, an inward (material-removing) push, a push shorter than its
+ * blends.
  */
 import type { Vec3 } from '@openzcad/geometry';
 import { exactFuse } from './exact-boolean-refusal';
@@ -70,6 +79,11 @@ function unit(vector: Vec3): Vec3 | null {
 }
 
 const dot = (a: Vec3, b: Vec3) => a.x * b.x + a.y * b.y + a.z * b.z;
+const cross = (a: Vec3, b: Vec3): Vec3 => ({
+  x: a.y * b.z - a.z * b.y,
+  y: a.z * b.x - a.x * b.z,
+  z: a.x * b.y - a.y * b.x
+});
 const along = (point: Vec3, direction: Vec3, distance: number): Vec3 => ({
   x: point.x + direction.x * distance,
   y: point.y + direction.y * distance,
@@ -128,16 +142,161 @@ function isSingleFaceBlend(
   }
 }
 
+/** A plane bounding a swept region, and the side of it the region is on. */
+interface Side {
+  plane: Plane;
+  keepPositive: boolean;
+}
+
 /** What the push sweeps, read off the face's neighbourhood. */
 interface SweepPlan {
   /** The face's own plane, its normal along the push. */
   base: Plane;
   /** The planes bounding the swept region, each kept on the face's side. */
-  sides: { plane: Plane; keepPositive: boolean }[];
+  sides: Side[];
   /** The blends that travel with the face. */
   blends: number[];
   /** How far the blend chain rises above the face plane; 0 without blends. */
   blendHeight: number;
+  /**
+   * A face with a reflex corner is not the intersection of its sides'
+   * half-spaces: its sweep is the union of convex pieces of it instead, each
+   * bounded by its own `sides`. Null for a convex face.
+   */
+  pieces: Side[][] | null;
+}
+
+/** A corner of a face outline in the face's plane, and the side after it. */
+interface OutlineCorner {
+  u: number;
+  v: number;
+  /** Index of the side plane the edge from this corner to the next lies on. */
+  line: number;
+}
+
+/** sin of the turn from `a - o` to `b - a`: negative turns right. */
+function turn(o: OutlineCorner, a: OutlineCorner, b: OutlineCorner): number {
+  const du = a.u - o.u;
+  const dv = a.v - o.v;
+  const eu = b.u - a.u;
+  const ev = b.v - a.v;
+  const size = Math.hypot(du, dv) * Math.hypot(eu, ev);
+  return size > 0 ? (du * ev - dv * eu) / size : 0;
+}
+
+/** The outline without corners where it runs straight on. */
+function withoutStraightCorners(outline: OutlineCorner[]): OutlineCorner[] {
+  let corners = outline;
+  while (corners.length > 3) {
+    const n = corners.length;
+    const index = corners.findIndex(
+      (corner, i) =>
+        Math.abs(
+          turn(corners[(i + n - 1) % n]!, corner, corners[(i + 1) % n]!)
+        ) <= 1e-9
+    );
+    if (index < 0) break;
+    // The merged edge keeps the line of the one before: they share it.
+    corners = corners.filter((_, i) => i !== index);
+  }
+  return corners;
+}
+
+/**
+ * A simple counter-clockwise outline cut into convex pieces. At a reflex
+ * corner the edge arriving there is carried on into the outline until it
+ * meets the boundary, and that chord splits off the corner; every chord
+ * extends an edge, so every side of every piece lies on one of the
+ * outline's own lines. Null when the outline does not cut cleanly.
+ */
+function convexPieces(
+  outline: OutlineCorner[],
+  tolerance: number
+): OutlineCorner[][] | null {
+  const pieces: OutlineCorner[][] = [];
+  const pending = [withoutStraightCorners(outline)];
+  while (pending.length > 0) {
+    if (pieces.length + pending.length > 64) return null;
+    const corners = pending.pop()!;
+    const n = corners.length;
+    if (n < 3) return null;
+    const reflex = corners.findIndex(
+      (corner, i) =>
+        turn(corners[(i + n - 1) % n]!, corner, corners[(i + 1) % n]!) < -1e-9
+    );
+    if (reflex < 0) {
+      pieces.push(corners);
+      continue;
+    }
+    const from = corners[reflex]!;
+    const previous = corners[(reflex + n - 1) % n]!;
+    const length = Math.hypot(from.u - previous.u, from.v - previous.v);
+    const du = (from.u - previous.u) / length;
+    const dv = (from.v - previous.v) / length;
+    let hit: { edge: number; t: number; s: number } | null = null;
+    for (let edge = 0; edge < n; edge += 1) {
+      if (edge === reflex || edge === (reflex + n - 1) % n) continue;
+      const a = corners[edge]!;
+      const b = corners[(edge + 1) % n]!;
+      const eu = b.u - a.u;
+      const ev = b.v - a.v;
+      const denominator = du * ev - dv * eu;
+      if (Math.abs(denominator) <= 1e-12 * Math.hypot(eu, ev)) continue;
+      const wu = a.u - from.u;
+      const wv = a.v - from.v;
+      const t = (wu * ev - wv * eu) / denominator;
+      const s = (wu * dv - wv * du) / denominator;
+      const span = Math.hypot(eu, ev);
+      if (
+        t > tolerance &&
+        s * span >= -tolerance &&
+        (1 - s) * span >= -tolerance &&
+        (hit === null || t < hit.t)
+      ) {
+        hit = { edge, t, s };
+      }
+    }
+    if (hit === null) return null;
+    const a = corners[hit.edge]!;
+    const b = corners[(hit.edge + 1) % n]!;
+    const span = Math.hypot(b.u - a.u, b.v - a.v);
+    // Walks the outline forward from corner `start` to corner `end`.
+    const walk = (start: number, end: number) => {
+      const path: OutlineCorner[] = [];
+      for (let i = start; ; i = (i + 1) % n) {
+        path.push(corners[i]!);
+        if (i === end) return path;
+      }
+    };
+    // The chord leaves `from` along the line the arriving edge lies on.
+    const chord = previous.line;
+    let ahead: OutlineCorner[];
+    let behind: OutlineCorner[];
+    if (hit.s * span <= tolerance) {
+      // The chord ends on corner `edge`.
+      ahead = walk(reflex, hit.edge);
+      behind = walk(hit.edge, reflex);
+    } else if ((1 - hit.s) * span <= tolerance) {
+      const end = (hit.edge + 1) % n;
+      ahead = walk(reflex, end);
+      behind = walk(end, reflex);
+    } else {
+      const point = {
+        u: from.u + du * hit.t,
+        v: from.v + dv * hit.t
+      };
+      ahead = [...walk(reflex, hit.edge), { ...point, line: chord }];
+      behind = [
+        { ...point, line: a.line },
+        ...walk((hit.edge + 1) % n, reflex)
+      ];
+    }
+    // Each half closes along the chord, which lies on the arriving line.
+    ahead[ahead.length - 1] = { ...ahead.at(-1)!, line: chord };
+    behind[behind.length - 1] = { ...behind.at(-1)!, line: chord };
+    pending.push(withoutStraightCorners(ahead), withoutStraightCorners(behind));
+  }
+  return pieces;
 }
 
 function planSweep(
@@ -169,26 +328,50 @@ function planSweep(
       if (!chain.has(neighbour)) sideFaces.add(neighbour);
     }
   }
-  const sides: SweepPlan['sides'] = [];
+  const sides: Side[] = [];
   const corners = positions(kernel, kernel.getFaceVertices(face));
+  let convex = true;
+  let parallel = true;
   for (const sideFace of sideFaces) {
     const plane = planeOf(kernel, sideFace);
     if (!plane) return null;
     const cos = dot(plane.normal, direction);
+    if (Math.abs(cos) > PARALLEL_TOLERANCE) parallel = false;
     // Blends travel with the face only between sides parallel to the push.
-    if (blends.length > 0 && Math.abs(cos) > PARALLEL_TOLERANCE) return null;
+    if (blends.length > 0 && !parallel) return null;
     // A side nearly along the face itself is a step, not a re-limit.
     if (Math.abs(cos) > 1 - 1e-6) return null;
     const side = height(plane, center);
-    if (Math.abs(side) <= 1e-9) return null;
     const keepPositive = side > 0;
     // Convex: the whole face lies on the side its centre does.
     const tolerance = 1e-7 * Math.max(1, Math.abs(side));
-    for (const corner of corners) {
-      const reach = height(plane, corner);
-      if ((keepPositive ? reach : -reach) < -tolerance) return null;
+    if (
+      Math.abs(side) <= 1e-9 ||
+      corners.some((corner) => {
+        const reach = height(plane, corner);
+        return (keepPositive ? reach : -reach) < -tolerance;
+      })
+    ) {
+      convex = false;
     }
     sides.push({ plane, keepPositive });
+  }
+  if (!convex) {
+    // A reflex corner (the floor of a window cut across a thicker strip of
+    // wall is an L). Between sides parallel to the push the sweep is the
+    // face's prism, the union of the prisms of convex pieces of it; leaning
+    // sides or blends keep the refusal.
+    if (!parallel || blends.length > 0) return null;
+    // Each edge of the face lies on the side face across it.
+    const lineOf = new Map<number, number>();
+    Array.from(sideFaces).forEach((sideFace, index) => {
+      for (const edge of kernel.sharedEdges(face, sideFace)) {
+        lineOf.set(edge, index);
+      }
+    });
+    const planes = sides.map(({ plane }) => plane);
+    const pieces = convexSides(kernel, face, direction, planes, lineOf);
+    return pieces && { base, sides: [], blends, blendHeight: 0, pieces };
   }
   let blendHeight = 0;
   for (const blend of blends) {
@@ -199,7 +382,112 @@ function planSweep(
   // A blend that drops below the face (a rounded outside edge) is not a
   // chain the slab covers.
   if (blends.length > 0 && !(blendHeight > 0)) return null;
-  return { base, sides, blends, blendHeight };
+  return { base, sides, blends, blendHeight, pieces: null };
+}
+
+/**
+ * The sides of each convex piece of a face with a reflex corner, every one
+ * the exact plane of a side face of the face (`planes`, indexed per edge by
+ * `lineOf`); null when an edge has no side face or the outline does not cut
+ * cleanly.
+ */
+function convexSides(
+  kernel: RemusKernel,
+  face: number,
+  direction: Vec3,
+  planes: readonly Plane[],
+  lineOf: ReadonlyMap<number, number>
+): Side[][] | null {
+  const wire = kernel.getFaceWires(face)[0]!;
+  const loop = Array.from(kernel.getWireEdges(wire), (edge) => {
+    const ends = kernel.getEdgeVertices(edge);
+    const start = kernel.isEdgeForwardInWire(edge, wire) ? 0 : 3;
+    const end = 3 - start;
+    return {
+      edge,
+      start: { x: ends[start]!, y: ends[start + 1]!, z: ends[start + 2]! },
+      end: { x: ends[end]!, y: ends[end + 1]!, z: ends[end + 2]! }
+    };
+  });
+  if (loop.length < 3) return null;
+  // Lengths in the outline are measured from its first corner. The
+  // tolerance follows the face's own size, plus what rounding leaves of
+  // coordinates far from the origin: an absolute size would grow past a
+  // thin rib's width on a part placed far away.
+  const origin = loop[0]!.start;
+  let extent = 0;
+  let magnitude = 0;
+  for (const { start } of loop) {
+    extent = Math.max(
+      extent,
+      Math.hypot(start.x - origin.x, start.y - origin.y, start.z - origin.z)
+    );
+    magnitude = Math.max(
+      magnitude,
+      Math.abs(start.x),
+      Math.abs(start.y),
+      Math.abs(start.z)
+    );
+  }
+  const tolerance = 1e-7 * Math.max(1, extent) + 1e-12 * magnitude;
+  // In-plane axes: any direction across the push, and the one across both.
+  const axis =
+    Math.abs(direction.x) < 0.6 ? { x: 1, y: 0, z: 0 } : { x: 0, y: 1, z: 0 };
+  const across = unit(cross(direction, axis))!;
+  const third = cross(direction, across);
+  const outline: OutlineCorner[] = [];
+  for (const { edge, start } of loop) {
+    const line = lineOf.get(edge);
+    if (line === undefined) return null;
+    const offset = {
+      x: start.x - origin.x,
+      y: start.y - origin.y,
+      z: start.z - origin.z
+    };
+    outline.push({ u: dot(offset, across), v: dot(offset, third), line });
+  }
+  let area = 0;
+  for (let i = 0; i < outline.length; i += 1) {
+    const a = outline[i]!;
+    const b = outline[(i + 1) % outline.length]!;
+    area += a.u * b.v - b.u * a.v;
+  }
+  if (Math.abs(area) <= tolerance * tolerance) return null;
+  if (area < 0) {
+    // Made counter-clockwise: reversed, each edge keeps its line but now
+    // starts at what was its end corner.
+    const reversed = outline.slice().reverse();
+    const n = reversed.length;
+    outline.splice(
+      0,
+      n,
+      ...reversed.map((corner, i) => ({
+        ...corner,
+        line: reversed[(i + 1) % n]!.line
+      }))
+    );
+  }
+  const pieces = convexPieces(outline, tolerance);
+  if (!pieces) return null;
+  return pieces.map((piece) => {
+    // A point inside the convex piece says which side of each plane it is.
+    const inside = piece.reduce(
+      (sum, corner) => ({
+        u: sum.u + corner.u / piece.length,
+        v: sum.v + corner.v / piece.length
+      }),
+      { u: 0, v: 0 }
+    );
+    const probe = {
+      x: origin.x + across.x * inside.u + third.x * inside.v,
+      y: origin.y + across.y * inside.u + third.y * inside.v,
+      z: origin.z + across.z * inside.u + third.z * inside.v
+    };
+    return [...new Set(piece.map((corner) => corner.line))].map((line) => {
+      const plane = planes[line]!;
+      return { plane, keepPositive: height(plane, probe) > 0 };
+    });
+  });
 }
 
 /** Whether `point` lies in the closed swept region `sweepHeight` high. */
@@ -344,15 +632,20 @@ export function sweepFaceIntoBody(
       before[5]! - before[2]!
     );
     const slack = 1e-7 * Math.max(1, extent);
+    // A face with a reflex corner sweeps the union of its convex pieces.
+    const parts = (plan.pieces ?? [plan.sides]).map((sides) => ({
+      ...plan,
+      sides
+    }));
+    const swept = (point: Vec3) =>
+      parts.some((part) => inSweep(part, offset, point, slack));
     // Blends the sweep swallows: the face's own, and any lying wholly in it.
     const swallowed = new Set(plan.blends);
     for (const candidate of kernel.getSolidFaces(solid)) {
       if (
         !swallowed.has(candidate) &&
         kernel.getSurfaceType(candidate) !== 'plane' &&
-        positions(kernel, kernel.getFaceVertices(candidate)).every((point) =>
-          inSweep(plan, offset, point, slack)
-        ) &&
+        positions(kernel, kernel.getFaceVertices(candidate)).every(swept) &&
         isSingleFaceBlend(kernel, solid, candidate)
       ) {
         swallowed.add(candidate);
@@ -373,14 +666,29 @@ export function sweepFaceIntoBody(
               point.z - other.z
             ) > slack
         );
-        if (isNew && !inSweep(plan, offset, point, slack)) return null;
+        if (isNew && !swept(point)) return null;
       }
     }
-    const fused = exactFuse(
-      kernel,
-      base,
-      sweptRegion(kernel, solid, plan, offset)
-    );
+    let region = sweptRegion(kernel, solid, parts[0]!, offset);
+    if (parts.length > 1) {
+      // The pieces are fused into one prism first: the exact boolean takes
+      // that against the window's walls and ceiling where it refuses each
+      // piece in turn, and where a prism extruded from the face itself
+      // comes out with inconsistently oriented edges at the ceiling.
+      for (const part of parts.slice(1)) {
+        region = exactFuse(
+          kernel,
+          region,
+          sweptRegion(kernel, solid, part, offset)
+        );
+      }
+      unifyAndRequireValidSolid(
+        kernel,
+        region,
+        'The swept region of the face did not build as a valid solid.'
+      );
+    }
+    const fused = exactFuse(kernel, base, region);
     unifyAndRequireValidSolid(
       kernel,
       fused,
