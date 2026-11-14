@@ -122,8 +122,8 @@ export function sixDofPreferencesFor(
 
 /** The page-lifecycle events that must stop a held motion. */
 interface FocusSource {
-  addEventListener(type: 'blur', listener: () => void): void;
-  removeEventListener(type: 'blur', listener: () => void): void;
+  addEventListener(type: 'blur' | 'focus', listener: () => void): void;
+  removeEventListener(type: 'blur' | 'focus', listener: () => void): void;
 }
 
 function matchesFilter(device: HidDeviceLike, filter: HidDeviceFilter) {
@@ -206,9 +206,21 @@ export class SpaceMouseHub {
   private opening: Promise<void> | null = null;
   private watching = false;
 
-  constructor(hid: HidLike | null, focus: FocusSource | null = null) {
+  /**
+   * Whether this window has focus. The device keeps reporting to a page in
+   * the background; those reports are tracked but never acted on, so another
+   * app's use of the cap cannot move this view or run its commands.
+   */
+  private focused: boolean;
+
+  constructor(
+    hid: HidLike | null,
+    focus: FocusSource | null = null,
+    initiallyFocused = true
+  ) {
     this.hid = hid;
     this.focus = focus;
+    this.focused = initiallyFocused;
     this.status = hid ? { state: 'disconnected' } : { state: 'unsupported' };
   }
 
@@ -355,16 +367,22 @@ export class SpaceMouseHub {
     }
   }
 
-  /**
-   * Drops the current device and stops any motion it was holding. Keys it
-   * held are let go, so nothing it pressed (a Shift) stays down.
-   */
+  /** Drops the current device and stops any motion it was holding. */
   private release() {
     this.device?.removeEventListener('inputreport', this.handleInputReport);
     this.device = null;
-    const heldButtons = pressedButtons(0, this.raw.buttons);
+    this.releaseHeldButtons();
     this.raw = SPACE_MOUSE_IDLE;
     this.emitAxes(SIX_DOF_IDLE);
+  }
+
+  /**
+   * Lets go of every key the device holds, so nothing it pressed (a Shift)
+   * stays down once its reports can no longer be trusted to release it.
+   */
+  private releaseHeldButtons() {
+    const heldButtons = pressedButtons(0, this.raw.buttons);
+    this.raw = { ...this.raw, buttons: 0 };
     for (const button of heldButtons) {
       const event: SpaceMouseButtonEvent = {
         button,
@@ -387,6 +405,7 @@ export class SpaceMouseHub {
     this.hid.addEventListener('connect', this.handleConnect);
     this.hid.addEventListener('disconnect', this.handleDisconnect);
     this.focus?.addEventListener('blur', this.handleBlur);
+    this.focus?.addEventListener('focus', this.handleFocus);
   }
 
   /** Stops listening entirely; for tests and teardown. */
@@ -396,6 +415,7 @@ export class SpaceMouseHub {
       this.hid.removeEventListener('connect', this.handleConnect);
       this.hid.removeEventListener('disconnect', this.handleDisconnect);
       this.focus?.removeEventListener('blur', this.handleBlur);
+      this.focus?.removeEventListener('focus', this.handleFocus);
     }
     this.watching = false;
     this.statusListeners.clear();
@@ -414,6 +434,10 @@ export class SpaceMouseHub {
     }
     const previousButtons = this.raw.buttons;
     this.raw = next;
+    if (!this.focused) {
+      // Tracked, so the right state is waiting when focus returns.
+      return;
+    }
     const pressed = pressedButtons(previousButtons, next.buttons);
     if (pressed.includes(SPACE_MOUSE_BUTTON.rotationLock)) {
       this.toggleRotationLock();
@@ -464,6 +488,10 @@ export class SpaceMouseHub {
   }
 
   private emitShapedAxes() {
+    if (!this.focused) {
+      this.emitAxes(SIX_DOF_IDLE);
+      return;
+    }
     this.emitAxes(
       sixDofFromRawWithPreferences(this.raw, {
         ...this.preferences,
@@ -489,12 +517,19 @@ export class SpaceMouseHub {
   };
 
   /**
-   * Another window took focus. A device that stops reporting while held
-   * would otherwise leave the camera turning; the next report resumes.
+   * Another window took focus: the view stops, held keys are let go, and
+   * reports are only tracked until focus comes back.
    */
   private handleBlur = () => {
-    this.raw = { ...this.raw, translation: [0, 0, 0], rotation: [0, 0, 0] };
+    this.focused = false;
+    this.releaseHeldButtons();
     this.emitAxes(SIX_DOF_IDLE);
+  };
+
+  /** Back in focus: a cap still held moves the view again. */
+  private handleFocus = () => {
+    this.focused = true;
+    this.emitShapedAxes();
   };
 
   private emitAxes(axes: SixDofAxes) {
@@ -526,5 +561,6 @@ function browserHid(): HidLike | null {
 /** The page's one connection; every consumer subscribes to this. */
 export const spaceMouse = new SpaceMouseHub(
   browserHid(),
-  typeof window === 'undefined' ? null : window
+  typeof window === 'undefined' ? null : window,
+  typeof document === 'undefined' ? true : document.hasFocus()
 );

@@ -1909,13 +1909,62 @@ describe('CameraController 3D mouse motion', () => {
     controller.dispose();
   });
 
-  it('cancels a glide in flight and integrates at most 50 ms per frame', () => {
+  it('lets a view glide land before a held cap takes over', () => {
     const { controller } = createController(false);
-    frontView(controller);
+    const landed = vi.fn();
+    controller.startTween(
+      {
+        position: new THREE.Vector3(0, -150, 0),
+        target: new THREE.Vector3(0, 0, 0),
+        near: 0.1,
+        far: 4000
+      },
+      landed
+    );
+    controller.setSixDofInput({ ...IDLE, tx: 1 });
+    // The cap keeps the loop awake but leaves the glide alone…
+    expect(controller.stepSixDof(1_000)).toBe(true);
     expect(controller.hasActiveTween).toBe(true);
+    expect(controller.sixDofMoving).toBe(false);
+    // …which lands with its completion, then the cap moves the view.
+    controller.stepTween(performance.now() + 10_000);
+    expect(landed).toHaveBeenCalledTimes(1);
+    const target = controller.controls.target.clone();
+    controller.stepSixDof(2_000);
+    controller.stepOrbit(2_000);
+    expect(controller.sixDofMoving).toBe(true);
+    expect(controller.controls.target.distanceTo(target)).toBeGreaterThan(0);
+    controller.dispose();
+  });
+
+  it('ignores a tilt while rotation is off, so a sketch entry still lands', () => {
+    const { controller } = createController(false);
+    const landed = vi.fn();
+    controller.startTween(
+      {
+        position: new THREE.Vector3(0, 0, 150),
+        target: new THREE.Vector3(0, 0, 0),
+        near: 0.1,
+        far: 4000,
+        up: new THREE.Vector3(0, 1, 0)
+      },
+      landed
+    );
+    controller.controls.enableRotate = false;
+    controller.setSixDofInput({ ...IDLE, rx: 1, rz: 1 });
+    expect(controller.stepSixDof(1_000)).toBe(false);
+    expect(controller.sixDofMoving).toBe(false);
+    expect(controller.hasActiveTween).toBe(true);
+    controller.stepTween(performance.now() + 10_000);
+    expect(landed).toHaveBeenCalledTimes(1);
+    controller.dispose();
+  });
+
+  it('integrates at most 50 ms per frame', () => {
+    const { controller } = createController();
+    frontView(controller);
     controller.setSixDofInput({ ...IDLE, tx: 1 });
     controller.stepSixDof(1_000);
-    expect(controller.hasActiveTween).toBe(false);
     controller.stepOrbit(1_000);
     controller.controls.enableDamping = false;
     controller.controls.update();
@@ -1927,6 +1976,28 @@ describe('CameraController 3D mouse motion', () => {
     const step = controller.controls.target.distanceTo(afterFirst);
     const firstStep = afterFirst.length();
     expect(step).toBeCloseTo(firstStep * (50 / FRAME_MS), 6);
+    controller.dispose();
+  });
+
+  it('never steps a turntable tilt across the pole', () => {
+    const { controller } = createController(true, () => 'turntable');
+    frontView(controller);
+    controller.setSixDofInput({ ...IDLE, rx: 1 });
+    const camera = controller.activeCamera;
+    let previous = camera.quaternion.clone();
+    let now = 1_000;
+    let largest = 0;
+    for (let frame = 0; frame < 120; frame += 1) {
+      controller.stepSixDof(now);
+      controller.stepOrbit(now);
+      largest = Math.max(largest, camera.quaternion.angleTo(previous));
+      previous = camera.quaternion.clone();
+      now += FRAME_MS;
+    }
+    // One frame turns about 0.04 rad; a crossing flips the view half a turn.
+    expect(largest).toBeLessThan(0.1);
+    const back = new THREE.Vector3(0, 0, 1).applyQuaternion(camera.quaternion);
+    expect(back.z).toBeGreaterThan(0.999);
     controller.dispose();
   });
 

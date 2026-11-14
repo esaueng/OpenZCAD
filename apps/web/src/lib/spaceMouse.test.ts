@@ -267,8 +267,8 @@ describe('SpaceMouseHub', () => {
     );
   });
 
-  it('stops a held motion when the window loses focus', async () => {
-    const { hid, focus, hub, motion } = setup();
+  it('ignores the device while the window is in the background', async () => {
+    const { hid, focus, hub, motion, buttons } = setup();
     active = hub;
     const device = new FakeDevice();
     hid.chooser = async () => [device];
@@ -277,9 +277,49 @@ describe('SpaceMouseHub', () => {
     expect(motion.at(-1)?.tz).toBe(1);
     focus.dispatchEvent(new Event('blur'));
     expect(motion.at(-1)?.tz).toBe(0);
-    // The next report resumes.
-    device.sendAxes(1, 0, 350, 0);
-    expect(motion.at(-1)?.tz).toBe(1);
+    // Reports and keys from another app's use of the cap act on nothing.
+    const seen = motion.length;
+    device.sendAxes(1, 350, 350, 0);
+    device.sendButtons(1 << SPACE_MOUSE_BUTTON.fit);
+    hub.setPreferences({ ...DEFAULT_SPACE_MOUSE_SETTINGS, panZoomSpeed: 200 });
+    expect(motion).toHaveLength(seen);
+    expect(buttons).toEqual([]);
+    // Back in focus, the cap still held moves the view again.
+    focus.dispatchEvent(new Event('focus'));
+    expect(motion.at(-1)).toMatchObject({ tx: 2, tz: 2 });
+  });
+
+  it('lets go of held keys when the window loses focus', async () => {
+    const { hid, focus, hub, buttons } = setup();
+    active = hub;
+    const device = new FakeDevice();
+    hid.chooser = async () => [device];
+    await hub.connect();
+    device.sendButtons(1 << SPACE_MOUSE_BUTTON.control);
+    focus.dispatchEvent(new Event('blur'));
+    expect(buttons.at(-1)).toEqual({
+      button: SPACE_MOUSE_BUTTON.control,
+      pressed: false,
+      shift: false,
+      control: false,
+      alt: false
+    });
+  });
+
+  it('starts out of focus when the page loads in the background', async () => {
+    const hid = new FakeHid();
+    const focus = new EventTarget();
+    const hub = new SpaceMouseHub(hid, focus, false);
+    active = hub;
+    const motion: SixDofAxes[] = [];
+    hub.subscribeMotion((axes) => motion.push(axes));
+    const device = new FakeDevice();
+    hid.granted = [device];
+    await hub.restore();
+    device.sendAxes(1, 350, 0, 0);
+    expect(motion).toEqual([]);
+    focus.dispatchEvent(new Event('focus'));
+    expect(motion.at(-1)?.tx).toBe(1);
   });
 
   it('applies saved preferences at once, to a held cap too', async () => {
