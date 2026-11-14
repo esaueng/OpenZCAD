@@ -166,14 +166,14 @@ export function decryptionErrorOf(error: unknown): MigrationError {
         code: 'ARTIFACT_QUOTA_EXCEEDED',
         retryable: false,
         message:
-          'Your account does not have room for this project’s files as plaintext. Nothing was changed; the project stays encrypted. Cancel, free up file storage, then try again.'
+          'Your account does not have room for this project’s files as plaintext. Nothing was changed; the project stays encrypted. Cancel, free up storage, then try again.'
       };
     case 'PROJECT_STORAGE_QUOTA':
       return {
         code: 'PROJECT_STORAGE_QUOTA',
         retryable: false,
         message:
-          'Your account does not have project storage left for this project as plaintext. Nothing was changed; the project stays encrypted. Cancel, free up project storage, then try again.'
+          'Your account does not have storage left for this project as plaintext. Nothing was changed; the project stays encrypted. Cancel, free up storage, then try again.'
       };
   }
   return migrationErrorOf(error);

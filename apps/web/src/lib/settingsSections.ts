@@ -178,8 +178,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'Personal information',
       'Preference synchronization',
       'Project sharing',
-      'Account storage',
-      'Cloud file storage'
+      'Storage'
     ],
     searchTerms: [
       ...CLOUD_SWITCH_SEARCH_TERMS,
@@ -195,6 +194,12 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'sync preferences',
       'collaboration',
       'storage usage',
+      'storage used',
+      'account storage',
+      'cloud file storage',
+      'imports and exports',
+      'save states',
+      'trash',
       'cloud profile',
       'email sign-in'
     ]

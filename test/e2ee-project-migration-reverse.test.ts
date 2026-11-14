@@ -1426,14 +1426,57 @@ function storedBytesOf(srv: Server): number {
   return sum('project_document_objects') + sum('project_storage_assets');
 }
 
-function setLimit(
-  srv: Server,
-  column: 'artifact_limit_bytes' | 'project_storage_limit_bytes',
-  bytes: number
-) {
+/** Sets the owner's one storage allowance (both columns, migration 0048). */
+function setLimit(srv: Server, bytes: number) {
   srv.db
-    .prepare(`UPDATE users SET ${column} = ? WHERE id = ?`)
+    .prepare(
+      'UPDATE users SET artifact_limit_bytes = ?1, project_storage_limit_bytes = ?1 WHERE id = ?2'
+    )
     .run(bytes, OWNER);
+}
+
+/**
+ * Everything the owner stores, as migration 0048's triggers measure it:
+ * project storage (staged plaintext excluded) plus file usage.
+ */
+function storedNow(srv: Server): number {
+  return (
+    srv.db
+      .prepare(
+        `SELECT COALESCE((SELECT bytes FROM account_project_storage
+                          WHERE user_id = ?1), 0)
+              + COALESCE((SELECT finalized_bytes + reserved_bytes
+                          FROM artifact_account_usage
+                          WHERE owner_user_id = ?1), 0) AS bytes`
+      )
+      .get(OWNER) as { bytes: number }
+  ).bytes;
+}
+
+/**
+ * What a decrypt cutover adds to {@link storedNow}: the staged files less
+ * the encrypted blobs, the staged documents and assets less the retained
+ * envelopes.
+ */
+function cutoverGrowth(srv: Server, projectId: string): number {
+  return (
+    srv.db
+      .prepare(
+        `SELECT
+           (SELECT COALESCE(SUM(bytes), 0) FROM artifacts WHERE project_id = ?1)
+         - (SELECT COALESCE(SUM(ciphertext_bytes), 0) FROM e2ee_content_blobs
+            WHERE project_id = ?1)
+         + (SELECT COALESCE(SUM(stored_bytes), 0)
+            FROM project_document_objects WHERE project_id = ?1)
+         + (SELECT COALESCE(SUM(stored_bytes), 0)
+            FROM project_storage_assets WHERE project_id = ?1)
+         - (SELECT COALESCE(SUM(envelope_bytes), 0) FROM e2ee_project_versions
+            WHERE project_id = ?1
+              AND (envelope_key IS NOT NULL OR envelope_inline IS NOT NULL))
+           AS bytes`
+      )
+      .get(projectId) as { bytes: number }
+  ).bytes;
 }
 
 /** Stages a file no encrypted blob names, under the decrypt lease. */
@@ -1483,9 +1526,12 @@ describe('the owner’s limits at the cutover', () => {
         expect(count(srv, 'artifacts', projectId)).toBe(6);
         expect(usage(srv)).toBe(before);
         // Once the files staged so far would already leave the account at
-        // its limit after the cutover, a further staged file is refused.
+        // its limit after the cutover, a further staged file is refused:
+        // everything stored now (one allowance), plus the staged files,
+        // less the blobs they replace.
         const room =
-          2147483648 - (before + fileBytesOf(srv, projectId) - blobBytes);
+          2147483648 -
+          (storedNow(srv) + fileBytesOf(srv, projectId) - blobBytes);
         const bump = (bytes: number) =>
           srv.db
             .prepare(
@@ -1501,7 +1547,7 @@ describe('the owner’s limits at the cutover', () => {
         bump(-room);
         expect(count(srv, 'artifacts', projectId)).toBe(6);
         // The owner has room for one more file of that size, not three.
-        setLimit(srv, 'artifact_limit_bytes', before + extra.byteLength);
+        setLimit(srv, storedNow(srv) + extra.byteLength);
       }
     });
     expect(await errorOf(decryptFully(desktop, projectId))).toMatchObject({
@@ -1533,7 +1579,7 @@ describe('the owner’s limits at the cutover', () => {
     expect(formatOf(srv, projectId)).toBe(2);
   });
 
-  it('completes a reverse whose staged files fit the artifact limit exactly', async () => {
+  it('completes a reverse whose staged files fit the storage limit exactly', async () => {
     const srv = roomServer();
     const { projectId } = await encryptedProject(srv, { revisions: 1 });
     const before = usage(srv);
@@ -1551,7 +1597,10 @@ describe('the owner’s limits at the cutover', () => {
         );
         after = before + fileBytesOf(srv, projectId) - blobBytes;
         expect(after).toBeGreaterThan(before);
-        setLimit(srv, 'artifact_limit_bytes', after);
+        // Everything the account stores after the cutover, exactly.
+        const growth = cutoverGrowth(srv, projectId);
+        expect(growth).toBeGreaterThan(0);
+        setLimit(srv, storedNow(srv) + growth);
       }
     });
     await decryptFully(desktop, projectId);
@@ -1561,12 +1610,14 @@ describe('the owner’s limits at the cutover', () => {
     expectNoCiphertext(srv, projectId);
   });
 
-  it('refuses a cutover over the project storage limit, in its own batch, then completes once there is room', async () => {
+  it('refuses a cutover over the storage limit, in its own batch, then completes once there is room', async () => {
     const srv = roomServer();
     const { projectId } = await encryptedProject(srv, { revisions: 1 });
     // The staged documents count toward nothing yet; at the cutover they
-    // all would. The limit drops to one byte short of them after the
-    // cutover's checks and before its batch lands: the batch refuses.
+    // all would. A large staged source asset makes the cutover grow the
+    // account's storage (only growth is refused). The limit drops to one
+    // byte short of what the cutover leaves after its checks and before
+    // its batch lands: the batch refuses.
     const db = srv.env.DB as D1Database;
     const batch = db.batch.bind(db);
     let armed = true;
@@ -1578,11 +1629,27 @@ describe('the owner’s limits at the cutover', () => {
       );
       if (armed && cut) {
         armed = false;
-        setLimit(srv, 'project_storage_limit_bytes', storedBytesOf(srv) - 1);
+        setLimit(srv, storedNow(srv) + cutoverGrowth(srv, projectId) - 1);
       }
       return batch(statements);
     };
-    const desktop = reverseOn(srv, owner, 'owner_desktop');
+    let staged = false;
+    const desktop = reverseOn(srv, owner, 'owner_desktop', {
+      beforeStep: async (step) => {
+        if (step !== 'cutover' || staged) return;
+        staged = true;
+        srv.db
+          .prepare(
+            `INSERT INTO project_storage_assets
+               (id, project_id, kind, object_key, checksum_sha256,
+                logical_bytes, stored_bytes, content_encoding, created_at)
+             VALUES ('asset_staged_large', ?, 'step-source', 'key-large', ?,
+                     1048576, 1048576, 'gzip', 'now')`
+          )
+          .run(projectId, 'd'.repeat(64));
+        expect(cutoverGrowth(srv, projectId)).toBeGreaterThan(0);
+      }
+    });
     expect(await errorOf(decryptFully(desktop, projectId))).toMatchObject({
       status: 413,
       code: 'PROJECT_STORAGE_QUOTA'
@@ -1595,7 +1662,7 @@ describe('the owner’s limits at the cutover', () => {
     expect(migrationRow(srv, projectId)).toMatchObject({ state: 'staging' });
     // With exactly enough room, a retry resumes (reusing the staged head,
     // so it needs no more) and cuts over.
-    setLimit(srv, 'project_storage_limit_bytes', storedBytesOf(srv));
+    setLimit(srv, storedNow(srv) + cutoverGrowth(srv, projectId));
     await decryptFully(desktop, projectId);
     expect(formatOf(srv, projectId)).toBe(1);
     expect(migrationRow(srv, projectId)).toMatchObject({ state: 'done' });

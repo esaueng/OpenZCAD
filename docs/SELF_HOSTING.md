@@ -234,6 +234,18 @@ The deploy command applies forward D1 migrations before publishing code. Do not
 delete or recreate D1, R2, or the Worker to update OpenZCAD. Review migration
 files before upgrading and test a backup when an update changes storage.
 
+**Upgrading across migration 0048** (`0048_unified_account_storage.sql`):
+account storage becomes one allowance. Projects, save states and source assets
+now share a single bucket with imports, exports and encrypted files, where
+before each side had its own allowance: Free accounts get 1 GiB in total and
+Premium 25 GiB, set with `PREMIUM_STORAGE_LIMIT_BYTES` (the older
+`PREMIUM_PROJECT_STORAGE_LIMIT_BYTES` and `PREMIUM_ARTIFACT_LIMIT_BYTES`
+still apply, in that order, while it is unset). The migration redefines the
+quota triggers and adds no column; nothing is deleted. An account whose
+combined usage is already over its allowance keeps its data, but saves and
+uploads that would add storage are refused until it frees space. See
+[account tiers](plans/account-tiers.md#storage-and-downgrade-behavior).
+
 Export D1 before a migration or major upgrade:
 
 ```bash
