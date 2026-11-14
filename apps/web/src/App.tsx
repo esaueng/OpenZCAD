@@ -31404,6 +31404,9 @@ export function App() {
           loadThumbnail={loadThumbnail}
           thumbnailAccountId={thumbnailAccountUserId ?? null}
           publishThumbnail={publishThumbnail}
+          {...(session &&
+            cloudFunctionsEnabled && { loadStorageUsage: api.storageUsage })}
+          onOpenAccountSettings={() => openSettingsAt('account')}
         />
         <StatusActivityLog
           status={status}

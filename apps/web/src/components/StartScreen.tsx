@@ -4,6 +4,7 @@ import {
   Fragment,
   Suspense,
   useEffect,
+  useId,
   useLayoutEffect,
   useRef,
   useState,
@@ -62,6 +63,7 @@ import {
   PROJECT_STORAGE_FORMAT_E2EE_V1,
   projectOrganization,
   TRASH_RETENTION_DAYS,
+  type AccountStorageUsage,
   type LibraryCardSize,
   type ProjectStatus,
   type ProjectSummary,
@@ -106,6 +108,15 @@ import { DemoModelIcon } from './DemoModelIcon';
 import { PartThumbnail } from './PartThumbnail';
 import type { ProjectProperties } from '../lib/projectProperties';
 import { formatBytes } from '../lib/formatBytes';
+import {
+  StorageBar,
+  StorageUsagePanel,
+  storageFigure,
+  storageSegments,
+  useAccountStorageUsage,
+  useDeviceStorageEstimate
+} from './StorageUsagePanel';
+import { storageLevel, storageLimitOf, storedBytes } from '../lib/storageUsage';
 
 const ProjectPropertiesDialog = lazyWithStaleChunkNotice(async () => ({
   default: (await import('./ProjectPropertiesDialog')).ProjectPropertiesDialog
@@ -239,6 +250,14 @@ interface StartScreenProps {
    * Called as tiles approach the viewport, without rebuilding documents.
    */
   publishThumbnail(project: ProjectSummary): Promise<string | null | undefined>;
+  /**
+   * The account's storage report, for the footer's meter and its details.
+   * Absent signed out or without cloud functions: the footer then measures
+   * this device alone.
+   */
+  loadStorageUsage?(): Promise<AccountStorageUsage>;
+  /** Settings at its Account section, where storage is managed. */
+  onOpenAccountSettings?(): void;
 }
 
 const LOADING_PROJECT_TILES = 10;
@@ -559,7 +578,9 @@ export function StartScreen({
   onEmptyTrash,
   loadThumbnail,
   thumbnailAccountId,
-  publishThumbnail
+  publishThumbnail,
+  loadStorageUsage,
+  onOpenAccountSettings
 }: StartScreenProps) {
   const projects = scopePending ? [] : discoveredProjects;
   const settingsKey = useKeymap().label('app-settings');
@@ -2850,6 +2871,34 @@ export function StartScreen({
     partsElsewhere === null;
 
   const cloud = describeCloud();
+
+  // The footer's storage meter, and the details it opens. Asked again when
+  // what the account holds changes — not during a save run, only once it ends.
+  const [storageOpen, setStorageOpen] = useState(false);
+  const storageButtonRef = useRef<HTMLButtonElement>(null);
+  const storagePanelId = useId();
+  const storage = useAccountStorageUsage(
+    signedIn ? loadStorageUsage : undefined,
+    thumbnailAccountId ?? folderAccountId,
+    syncTotals?.active
+      ? null
+      : `${savedToAccountCount}:${shelves.archived.length}:${shelves.deleted.length}`
+  );
+  const deviceStorage = useDeviceStorageEstimate(storageOpen);
+  const storageUsed = storage.usage ? storedBytes(storage.usage) : 0;
+  const storageLimit = storageLimitOf(storage.usage);
+  const storageMeter =
+    storage.usage && storageLimit && !cloud.progress
+      ? {
+          segments: storageSegments(storage.usage),
+          level: storageLevel(storageUsed, storageLimit),
+          figure: storageFigure(storageUsed, storageLimit)
+        }
+      : null;
+  const refreshStorage = storage.refresh;
+  useEffect(() => {
+    if (storageOpen) refreshStorage();
+  }, [storageOpen, refreshStorage]);
   // A run's outcome is in the sentence, and the startup mode texts restate
   // what the sentence already says; anything else is news worth a line.
   const statusLine =
@@ -3924,54 +3973,88 @@ export function StartScreen({
             </span>
           ) : null}
           <div
-            className={`start-account is-${cloud.tone}`}
+            className={`start-account is-${cloud.tone}${storageOpen ? ' is-open' : ''}`}
             role="status"
             aria-live="polite"
           >
-            <div className="start-account-row">
-              <cloud.Icon
-                size={14}
-                aria-hidden="true"
-                className={cloud.spin ? 'spin' : undefined}
+            {/* The whole readout opens the storage details: one button
+                drawn under the line and its meter, with the line's own
+                actions standing above it. */}
+            <div className="start-account-head">
+              <button
+                ref={storageButtonRef}
+                type="button"
+                className="start-account-open"
+                aria-label={
+                  storageMeter
+                    ? `Storage details, ${storageMeter.figure} used`
+                    : 'Storage details'
+                }
+                title={cloud.title}
+                aria-haspopup="dialog"
+                aria-expanded={storageOpen}
+                aria-controls={storageOpen ? storagePanelId : undefined}
+                onClick={() => setStorageOpen((open) => !open)}
               />
-              <span className="start-account-text" title={cloud.title}>
-                {cloud.text}
-              </span>
-              {cloud.action && (
-                <button
-                  type="button"
-                  className="start-account-action"
-                  aria-label={cloud.action.label}
-                  title={cloud.action.label}
-                  disabled={cloud.action.needsIdle && busy}
-                  onClick={cloud.action.run}
-                >
-                  {cloud.action.text}
-                </button>
+              <div className="start-account-row">
+                <cloud.Icon
+                  size={14}
+                  aria-hidden="true"
+                  className={cloud.spin ? 'spin' : undefined}
+                />
+                <span className="start-account-text" title={cloud.title}>
+                  {cloud.text}
+                </span>
+                {storageMeter && !cloud.action && (
+                  <span className="start-account-figure" aria-hidden="true">
+                    {storageMeter.figure}
+                  </span>
+                )}
+                {cloud.action && (
+                  <button
+                    type="button"
+                    className="start-account-action"
+                    aria-label={cloud.action.label}
+                    title={cloud.action.label}
+                    disabled={cloud.action.needsIdle && busy}
+                    onClick={cloud.action.run}
+                  >
+                    {cloud.action.text}
+                  </button>
+                )}
+                {syncTotals && !syncTotals.active && (
+                  <button
+                    type="button"
+                    className="start-account-dismiss"
+                    aria-label="Dismiss sync results"
+                    onClick={onDismissSyncRun}
+                  >
+                    <X size={12} aria-hidden="true" />
+                  </button>
+                )}
+              </div>
+              {cloud.progress && (
+                <div className="start-account-track" aria-hidden="true">
+                  <span
+                    className="start-account-fill"
+                    style={{ width: `${cloud.progress.saved * 100}%` }}
+                  />
+                  <span
+                    className="start-account-fill is-failed"
+                    style={{ width: `${cloud.progress.failed * 100}%` }}
+                  />
+                </div>
               )}
-              {syncTotals && !syncTotals.active && (
-                <button
-                  type="button"
-                  className="start-account-dismiss"
-                  aria-label="Dismiss sync results"
-                  onClick={onDismissSyncRun}
-                >
-                  <X size={12} aria-hidden="true" />
-                </button>
+              {storageMeter && (
+                <StorageBar
+                  segments={storageMeter.segments}
+                  limit={storageLimit}
+                  level={storageMeter.level}
+                  label="Account storage used"
+                  valueText={storageMeter.figure}
+                />
               )}
             </div>
-            {cloud.progress && (
-              <div className="start-account-track" aria-hidden="true">
-                <span
-                  className="start-account-fill"
-                  style={{ width: `${cloud.progress.saved * 100}%` }}
-                />
-                <span
-                  className="start-account-fill is-failed"
-                  style={{ width: `${cloud.progress.failed * 100}%` }}
-                />
-              </div>
-            )}
             {/* What the one-line readout cannot hold hangs below it. */}
             {(syncFailures.length > 0 || statusLine) && (
               <div className="start-account-details">
@@ -4007,6 +4090,34 @@ export function StartScreen({
               </div>
             )}
           </div>
+          {storageOpen && (
+            <StorageUsagePanel
+              id={storagePanelId}
+              signedIn={signedIn}
+              usage={storage.usage}
+              usageState={
+                signedIn && !loadStorageUsage ? 'failed' : storage.state
+              }
+              onRetryUsage={storage.refresh}
+              device={deviceStorage}
+              deviceProjectCount={userProjects.length}
+              localOnlyCount={localOnlyProjects.length}
+              anchorRef={storageButtonRef}
+              onClose={() => setStorageOpen(false)}
+              onShowTrash={() => {
+                selectShelf('deleted');
+                // The panel that held focus is going away; the Trash tab
+                // it led to takes it, as a click on the tab would.
+                globalThis.document
+                  .getElementById('start-shelf-tab-deleted')
+                  ?.focus();
+              }}
+              {...((onOpenAccountSettings ?? onSignIn) && {
+                onOpenAccountSettings: onOpenAccountSettings ?? onSignIn
+              })}
+              {...(onSignIn && { onSignIn })}
+            />
+          )}
         </aside>
       </section>
 

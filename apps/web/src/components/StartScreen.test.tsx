@@ -2,6 +2,7 @@ import {
   act,
   fireEvent,
   render,
+  renderHook,
   screen,
   waitFor,
   within
@@ -15,9 +16,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   PROJECT_STORAGE_FORMAT_E2EE_V1,
   toProjectId,
+  type AccountStorageUsage,
   type ProjectSummary
 } from '@openzcad/shared';
 import { formatLastEdited, recoveryCopyOf, StartScreen } from './StartScreen';
+import { useAccountStorageUsage } from './StorageUsagePanel';
 
 // An encrypted project's properties check the assistant consent against the
 // account; nothing here signs in, so the check would reach for a server.
@@ -2548,5 +2551,227 @@ describe('StartScreen rename and import (design review I13, I14)', () => {
     // Default prevented: the browser no longer opens the file in place.
     expect(drop).toBe(false);
     expect(onImportFiles).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('StartScreen storage readout', () => {
+  const MB = 1024 * 1024;
+  const GB = 1024 * MB;
+
+  function storageReport(
+    overrides: Partial<AccountStorageUsage> = {}
+  ): AccountStorageUsage {
+    return {
+      projectCount: 12,
+      trashedProjectCount: 0,
+      documentBytes: 20 * MB,
+      revisionBytes: 30 * MB,
+      revisionCount: 34,
+      projectStorageBytes: 40 * MB,
+      artifactBytes: 2 * MB,
+      artifactReservedBytes: 0,
+      storageBytes: 42 * MB,
+      storageLimitBytes: GB,
+      documentLimitBytes: 16 * MB,
+      maxRevisionsPerProject: 50,
+      artifactCount: 7,
+      artifactLimitBytes: GB,
+      ...overrides
+    };
+  }
+
+  it('draws usage against the allowance under the saved line', async () => {
+    const loadStorageUsage = vi.fn().mockResolvedValue(storageReport());
+    renderStartScreen({
+      cloudProjectIds: new Set([localProject.projectId]),
+      loadStorageUsage
+    });
+
+    expect(await screen.findByText('42 MB of 1 GB')).toBeInTheDocument();
+    expect(
+      screen.getByRole('meter', { name: 'Account storage used' })
+    ).toHaveAttribute('aria-valuetext', '42 MB of 1 GB');
+    expect(loadStorageUsage).toHaveBeenCalled();
+  });
+
+  it('keeps an in-flight report during sync and refreshes when sync ends', async () => {
+    let resolve!: (usage: AccountStorageUsage) => void;
+    const load = vi.fn(
+      () =>
+        new Promise<AccountStorageUsage>((done) => {
+          resolve = done;
+        })
+    );
+    const { result, rerender } = renderHook<
+      ReturnType<typeof useAccountStorageUsage>,
+      { key: string | null }
+    >(({ key }) => useAccountStorageUsage(load, 'account', key), {
+      initialProps: { key: '1:0:0' }
+    });
+    rerender({ key: null });
+    await act(async () => resolve(storageReport()));
+    expect(result.current.usage?.storageBytes).toBe(42 * MB);
+    expect(result.current.state).toBe('ready');
+    expect(load).toHaveBeenCalledTimes(1);
+    rerender({ key: '1:0:0' });
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries explicitly during sync without starting a refresh loop', async () => {
+    const load = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValue(storageReport());
+    const { result, rerender } = renderHook(() =>
+      useAccountStorageUsage(load, 'account', null)
+    );
+    await waitFor(() => expect(result.current.state).toBe('failed'));
+    act(() => result.current.refresh());
+    await waitFor(() => expect(result.current.state).toBe('ready'));
+    rerender();
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it('clears reports on account changes and sign-out and ignores stale answers', async () => {
+    const pending: Array<(usage: AccountStorageUsage) => void> = [];
+    const load = vi.fn(
+      () =>
+        new Promise<AccountStorageUsage>((resolve) => {
+          pending.push(resolve);
+        })
+    );
+    const { result, rerender } = renderHook(
+      ({ account, enabled }) =>
+        useAccountStorageUsage(enabled ? load : undefined, account, '1'),
+      { initialProps: { account: 'first', enabled: true } }
+    );
+    await act(async () => pending[0]!(storageReport()));
+    act(() => result.current.refresh());
+    rerender({ account: 'second', enabled: true });
+    expect(result.current.usage).toBeNull();
+    await act(async () => pending[1]!(storageReport()));
+    expect(result.current.usage).toBeNull();
+    await act(async () => pending[2]!(storageReport({ storageBytes: MB })));
+    expect(result.current.usage?.storageBytes).toBe(MB);
+    act(() => result.current.refresh());
+    rerender({ account: 'second', enabled: false });
+    await act(async () => pending[3]!(storageReport()));
+    expect(result.current.usage).toBeNull();
+    expect(result.current.state).toBe('idle');
+  });
+
+  it('opens a breakdown of the account and this device, and closes on Escape', async () => {
+    const onShowTrashTarget = vi.fn();
+    renderStartScreen({
+      cloudProjectIds: new Set([localProject.projectId]),
+      loadStorageUsage: vi
+        .fn()
+        .mockResolvedValue(storageReport({ trashedProjectCount: 2 })),
+      onOpenAccountSettings: onShowTrashTarget
+    });
+    await screen.findByText('42 MB of 1 GB');
+
+    const opener = screen.getByRole('button', { name: /^Storage details/ });
+    expect(opener).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(opener);
+
+    const panel = await screen.findByRole('dialog', { name: 'Storage' });
+    expect(opener).toHaveAttribute('aria-expanded', 'true');
+    expect(within(panel).getByText('Projects')).toBeInTheDocument();
+    expect(
+      within(panel).getByText('12 projects · 34 save states')
+    ).toBeInTheDocument();
+    expect(within(panel).getByText('Imports and exports')).toBeInTheDocument();
+    expect(within(panel).getByText('7 files')).toBeInTheDocument();
+    expect(within(panel).getByText('982 MB free')).toBeInTheDocument();
+    expect(
+      within(panel).getByText('2 projects in the trash still count.')
+    ).toBeInTheDocument();
+    expect(within(panel).getByText('Only on this device')).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'Storage' })).toBeNull();
+    expect(opener).toHaveFocus();
+  });
+
+  it('takes the details to the trash shelf and to account settings', async () => {
+    const onOpenAccountSettings = vi.fn();
+    renderStartScreen({
+      cloudProjectIds: new Set([localProject.projectId]),
+      loadStorageUsage: vi
+        .fn()
+        .mockResolvedValue(storageReport({ trashedProjectCount: 1 })),
+      onOpenAccountSettings
+    });
+    await screen.findByText('42 MB of 1 GB');
+
+    fireEvent.click(screen.getByRole('button', { name: /^Storage details/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'View trash' }));
+    expect(screen.queryByRole('dialog', { name: 'Storage' })).toBeNull();
+    // The focused panel went away; focus follows to the tab it led to.
+    expect(
+      screen.getByRole('tab', { name: /Trash/, selected: true })
+    ).toHaveFocus();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Storage details/ }));
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Account and storage settings'
+      })
+    );
+    expect(onOpenAccountSettings).toHaveBeenCalledOnce();
+  });
+
+  it('names an overage instead of drawing past the track', async () => {
+    renderStartScreen({
+      cloudProjectIds: new Set([localProject.projectId]),
+      loadStorageUsage: vi
+        .fn()
+        .mockResolvedValue(
+          storageReport({ storageBytes: GB + 10 * MB, projectStorageBytes: GB })
+        )
+    });
+    // At one decimal place this read "1 GB of 1 GB" beside 101%.
+    await screen.findByText('1.01 GB of 1 GB');
+    expect(
+      screen.getByRole('meter', { name: 'Account storage used' })
+    ).toHaveClass('is-over');
+
+    fireEvent.click(screen.getByRole('button', { name: /^Storage details/ }));
+    expect(
+      await screen.findByText('10 MB over your allowance')
+    ).toBeInTheDocument();
+  });
+
+  it('says so when the report cannot be loaded, and retries', async () => {
+    const loadStorageUsage = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValue(storageReport());
+    renderStartScreen({
+      cloudProjectIds: new Set([localProject.projectId]),
+      loadStorageUsage
+    });
+    await waitFor(() => expect(loadStorageUsage).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('button', { name: /^Storage details/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('982 MB free')).toBeInTheDocument();
+  });
+
+  it('measures this device alone when signed out', () => {
+    const onSignIn = vi.fn();
+    const loadStorageUsage = vi.fn();
+    renderStartScreen({ signedIn: false, onSignIn, loadStorageUsage });
+
+    expect(loadStorageUsage).not.toHaveBeenCalled();
+    expect(screen.queryByRole('meter')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Storage details' }));
+    const panel = screen.getByRole('dialog', { name: 'Storage' });
+    expect(within(panel).getByText('Projects')).toBeInTheDocument();
+    expect(within(panel).getByText('1')).toBeInTheDocument();
+    fireEvent.click(within(panel).getByRole('button', { name: 'Sign in' }));
+    expect(onSignIn).toHaveBeenCalledOnce();
   });
 });
