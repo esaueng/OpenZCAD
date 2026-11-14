@@ -489,7 +489,6 @@ import {
   inspectShaprPair,
   type ShaprPairInspection
 } from './lib/shaprImportWorkerClient';
-import { rebuildImportInDisposableWorker } from './lib/importRebuildWorkerClient';
 import { shaprMigrationDraft } from './lib/shaprMigration';
 import {
   autosaveReportedSaveState,
@@ -1448,6 +1447,18 @@ const LazyImageExportDialog = lazyWithStaleChunkNotice(() =>
 );
 // Off the entry chunk: nothing shows for the first 600 ms of a run anyway,
 // and most sessions never move a file at all.
+// The motion study timeline is drawn only in Assemble.
+const LazyMotionStudyTimeline = lazyWithStaleChunkNotice(() =>
+  import('./components/assembly/MotionStudyTimeline').then((module) => ({
+    default: module.MotionStudyTimeline
+  }))
+);
+// A pattern's rebuild notice, shown only while a pattern Done rebuilds.
+const LazyPatternProgress = lazyWithStaleChunkNotice(() =>
+  import('./components/PatternProgress').then((module) => ({
+    default: module.PatternProgress
+  }))
+);
 const LazyActivityPill = lazyWithStaleChunkNotice(() =>
   import('./components/ActivityPill').then((module) => ({
     default: module.ActivityPill
@@ -1678,6 +1689,7 @@ import {
   isInPlaceTool,
   keypadText,
   profileRegionLoops,
+  isInPlacePatternTool,
   requestNewAxis,
   resolveNewAxis,
   valueInRange,
@@ -1746,7 +1758,6 @@ import {
   type ValidatedFeatureOutcome,
   type ValidatedFeatureRunOptions
 } from './hooks/useValidatedFeatureCommit';
-import { PatternProgress } from './components/PatternProgress';
 import { OVERLAY_EXIT_MS, useDelayedUnmount } from './hooks/useDelayedUnmount';
 import {
   affectedFeatureTargets,
@@ -1944,7 +1955,6 @@ function preloadWorkspaceMode(mode: WorkspaceMode) {
 }
 import { AssemblyPanelPending } from './components/assembly/AssemblyPanelPending';
 import { meshBoundsLookup } from './lib/assembly/motionSetup';
-import { MotionStudyTimeline } from './components/assembly/MotionStudyTimeline';
 // The View-mode playback bar draws only for an assembly with something to
 // play, so a part-only session never downloads it. Its slot keeps a failure
 // local and retries on the next project.
@@ -4476,8 +4486,9 @@ export function App() {
     warnings: attributedFeatureWarnings(),
     // A user edit's check may propose carrying a later hash-only pick; the
     // commit stores it in the edit's own revision (`withCarriedSelections`).
-    rebuild: (document, analysis, lineageDemand) =>
+    rebuild: (document, analysis, lineageDemand, options) =>
       geometry.syncOnce(document, analysis, lineageDemand, {
+        ...options,
         proposeCarry: true
       }),
     track: trackKernelRefusal
@@ -5520,7 +5531,11 @@ export function App() {
   const validatedFeature = useValidatedFeatureCommit({
     manager: () => managerRef.current,
     derive: (document) => syncCandidate(document),
-    deriveCancellable: rebuildImportInDisposableWorker,
+    // Loaded with the first import or pattern Done that needs it.
+    deriveCancellable: (document, signal) =>
+      import('./lib/importRebuildWorkerClient').then((module) =>
+        module.rebuildImportInDisposableWorker(document, signal)
+      ),
     commit: (command, derived) => executeCommand(command, derived ?? undefined),
     commitTransaction: (label, commands, derived) =>
       executeTransaction(label, commands, derived ?? undefined),
@@ -10960,6 +10975,18 @@ export function App() {
    */
   function cancelInPlaceCommand() {
     const editing = inPlaceRef.current.editing;
+    // A pattern's Done still rebuilding is stopped by the card's Cancel too,
+    // as by the pill's Cancel pattern: told to wait instead, the card read
+    // as having no way out of a minute-long rebuild. The command stays open
+    // with its picks, since nothing was added.
+    if (
+      patternAbortRef.current &&
+      !editing &&
+      isInPlacePatternTool(inPlaceRef.current.tool)
+    ) {
+      cancelPattern();
+      return;
+    }
     // A Done still validating keeps the command, and its selection, open.
     if (!inPlaceRef.current.cancel()) return;
     if (editing) {
@@ -23276,7 +23303,20 @@ export function App() {
         ? inPlaceEditSeedFor(current, feature)
         : null;
     },
-    derive: (document) => syncCandidate(document),
+    // A pattern's frame is built as the live rebuild after its Done will
+    // be, with the live lineage demand: Done commits the frame's own result
+    // (see `commit`), and that rebuild then restores the frame instead of
+    // replaying the whole history in the other lineage mode, which built a
+    // large grid a second time.
+    derive: (document, signal) =>
+      syncCandidate(
+        document,
+        undefined,
+        isInPlacePatternTool(inPlaceRef.current.tool)
+          ? geometry.liveLineageDemand()
+          : undefined,
+        { signal }
+      ),
     buildCommand: (request, title, edit) => {
       if (edit) {
         const command = inPlaceEditCommand(request, edit);
@@ -23289,10 +23329,16 @@ export function App() {
           resultBodyId: inPlaceEditResultBodyId(request, edit)
         };
       }
-      const command = inPlaceCommandFor(request, title);
+      // A pattern's frame is named as its commit names it, so Done can land
+      // this very command and keep the rebuild the frame already made.
+      const command = inPlaceCommandFor(
+        request,
+        request.tool === 'pattern' ? newFeatureName(title) : title
+      );
       const datum = inPlaceDatum(request, command);
       const base = managerRef.current?.document;
       return {
+        command,
         validate: (document) => command.validate(document),
         apply: (document) => command.apply(document),
         resultBodyId: inPlaceResultBodyId(request, command),
@@ -23304,7 +23350,7 @@ export function App() {
           : {})
       };
     },
-    commit: (request, title, edit, withdrawn) => {
+    commit: (request, title, edit, withdrawn, previewed) => {
       // A command closed while its Done validates (another tool, a new
       // selection) withdraws the candidate: nothing lands after it is gone.
       if (edit) {
@@ -23321,7 +23367,10 @@ export function App() {
         return;
       }
       const name = newFeatureName(title);
-      const command = inPlaceCommandFor(request, name);
+      // The frame Done was pressed on built this pattern already; see below.
+      const previewedPattern =
+        request.tool === 'pattern' ? (previewed?.built.command ?? null) : null;
+      const command = previewedPattern ?? inPlaceCommandFor(request, name);
       const datum = inPlaceDatum(request, command);
       if (datum) {
         // A datum has no body to validate: its resolved frame or line is
@@ -23342,13 +23391,26 @@ export function App() {
       const resultBodyId = inPlaceResultBodyId(request, command);
       if (request.tool === 'pattern' && resultBodyId) {
         // Through the pattern runner, so a large pattern shows its progress
-        // and can be stopped, as the card's did.
+        // and can be stopped, as the card's did. Its rebuild runs in a
+        // disposable worker so Cancel can stop it; that worker starts cold
+        // and replays the whole history, which on a 10 × 10 grid repeated a
+        // minute-long preview. The preview's own exact rebuild of this same
+        // command is judged instead while the model has not moved.
         return runPattern(command, {
           featureName: name,
           resultBodyId,
           successMessage: commandOutcomeMessage(command.label),
           onSuccess: finishFeatureCreation,
-          cancelled: withdrawn
+          cancelled: withdrawn,
+          ...(previewedPattern && previewed
+            ? {
+                prebuilt: {
+                  projectId: previewed.document.projectId,
+                  version: previewed.baseVersion,
+                  derived: previewed.derived
+                }
+              }
+            : {})
         }).then((outcome) => outcome === 'committed');
       }
       // The command stays open until this lands: refused or held off by
@@ -33690,12 +33752,14 @@ export function App() {
                     />
                   )}
                   {assembleMode && (
-                    <MotionStudyTimeline
-                      floating
-                      assembly={doc.assembly}
-                      lengthUnit={doc.units}
-                      execute={executeCommand}
-                    />
+                    <Suspense fallback={null}>
+                      <LazyMotionStudyTimeline
+                        floating
+                        assembly={doc.assembly}
+                        lengthUnit={doc.units}
+                        execute={executeCommand}
+                      />
+                    </Suspense>
                   )}
                   {measurementDock}
                 </>
@@ -34667,10 +34731,12 @@ export function App() {
               file is moving, the pill is the one notice about it. */}
           <div className="activity-lane">
             {patternProgress && (
-              <PatternProgress
-                name={patternProgress.name}
-                onCancel={cancelPattern}
-              />
+              <Suspense fallback={null}>
+                <LazyPatternProgress
+                  name={patternProgress.name}
+                  onCancel={cancelPattern}
+                />
+              </Suspense>
             )}
             {importRun && !patternProgress && (
               <Suspense fallback={null}>

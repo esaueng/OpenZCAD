@@ -742,7 +742,143 @@ describe('Enter while the preview is still being checked', () => {
   });
 });
 
+describe('Done with a number still being typed in Options', () => {
+  // QA 2026-11-14 #16 (P3): a Grid pattern's Count typed in Options and then
+  // Done left the old count's pattern open: leaving the field applied 10 as
+  // the press went on, which disabled Done for that value's preview and
+  // swallowed the click. Enter first worked.
+  function GridPattern({ onDone }: { onDone(count: number): void }) {
+    const [count, setCount] = useState(3);
+    const [previewed, setPreviewed] = useState(true);
+    return (
+      <>
+        <InPlaceCommandBar
+          title="Grid pattern"
+          hint="Drag the spacings · tap the counts"
+          canFinish={previewed}
+          previewPending
+          values={[
+            {
+              id: 'count',
+              label: 'Count',
+              text: String(count),
+              value: count,
+              step: 1,
+              min: 2,
+              max: 100,
+              integer: true
+            }
+          ]}
+          onValueCommit={(_id, text) => {
+            const next = Number(text);
+            if (!Number.isInteger(next)) return false;
+            setCount(next);
+            // A new request: Done waits for its own preview.
+            setPreviewed(false);
+            return true;
+          }}
+          onDone={() => onDone(count)}
+          onCancel={vi.fn()}
+        />
+        <button type="button" onClick={() => setPreviewed(true)}>
+          preview built
+        </button>
+      </>
+    );
+  }
+
+  /** A press as a browser delivers it: the field loses focus on mousedown. */
+  function pressDone(field: HTMLElement) {
+    const done = screen.getByRole('button', { name: /Done/ });
+    fireEvent.pointerDown(done, { button: 0 });
+    fireEvent.mouseDown(done, { button: 0 });
+    fireEvent.blur(field);
+    fireEvent.pointerUp(done, { button: 0 });
+    fireEvent.mouseUp(done, { button: 0 });
+    fireEvent.click(done);
+  }
+
+  it('applies the typed count and finishes once its preview is checked', () => {
+    const onDone = vi.fn();
+    render(<GridPattern onDone={onDone} />);
+    const field = screen.getByRole('textbox', { name: 'Count' });
+    fireEvent.focus(field);
+    fireEvent.change(field, { target: { value: '10' } });
+    pressDone(field);
+    // Not with the old count while the new one is still being previewed.
+    expect(onDone).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole('group', { name: 'Grid pattern command' })
+    ).toHaveTextContent('Applying…');
+    fireEvent.click(screen.getByRole('button', { name: 'preview built' }));
+    expect(onDone).toHaveBeenCalledOnce();
+    expect(onDone).toHaveBeenCalledWith(10);
+  });
+
+  it('finishes at once when the field holds its value unchanged', () => {
+    const onDone = vi.fn();
+    render(<GridPattern onDone={onDone} />);
+    const field = screen.getByRole('textbox', { name: 'Count' });
+    fireEvent.focus(field);
+    pressDone(field);
+    expect(onDone).toHaveBeenCalledOnce();
+    expect(onDone).toHaveBeenCalledWith(3);
+  });
+
+  it('does not finish over a refused entry', () => {
+    const onDone = vi.fn();
+    render(<GridPattern onDone={onDone} />);
+    const field = screen.getByRole('textbox', { name: 'Count' });
+    fireEvent.focus(field);
+    fireEvent.change(field, { target: { value: '2.5' } });
+    const done = screen.getByRole('button', { name: /Done/ });
+    fireEvent.pointerDown(done, { button: 0 });
+    expect(field).toHaveAttribute('aria-invalid', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'preview built' }));
+    expect(onDone).not.toHaveBeenCalled();
+  });
+});
+
 describe('the state pill', () => {
+  it('counts the seconds of a preview that takes a while', () => {
+    // QA 2026-11-14 #16: a 10 x 10 grid's preview built for 72 s behind a
+    // still "Preview".
+    vi.useFakeTimers();
+    try {
+      const props = {
+        title: 'Grid pattern',
+        hint: 'Drag the spacings · tap the counts',
+        onDone: vi.fn(),
+        onCancel: vi.fn()
+      };
+      const { container, rerender } = render(
+        <InPlaceCommandBar {...props} canFinish={false} previewPending />
+      );
+      const pill = container.querySelector('.in-place-command-state');
+      act(() => {
+        vi.advanceTimersByTime(1_000);
+      });
+      expect(pill).toHaveTextContent(/^Preview$/);
+      act(() => {
+        vi.advanceTimersByTime(2_000);
+      });
+      expect(pill).toHaveTextContent('Preview · 3 s');
+      // Built: the count goes.
+      rerender(<InPlaceCommandBar {...props} canFinish previewPending />);
+      expect(pill).toHaveTextContent(/^Preview$/);
+      // The next value's preview counts from nothing again.
+      rerender(
+        <InPlaceCommandBar {...props} canFinish={false} previewPending />
+      );
+      act(() => {
+        vi.advanceTimersByTime(2_000);
+      });
+      expect(pill).toHaveTextContent('Preview · 2 s');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('stays empty until there is something to preview', () => {
     const props = {
       title: 'Fillet',

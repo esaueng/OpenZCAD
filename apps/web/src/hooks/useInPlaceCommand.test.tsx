@@ -22,6 +22,8 @@ import type { InPlaceEditSeed } from '../lib/inPlace/edit';
 import {
   mergeSweptFaces,
   useInPlaceCommand,
+  type InPlaceBuiltCommand,
+  type InPlacePreviewedFrame,
   type UseInPlaceCommandOptions
 } from './useInPlaceCommand';
 import type {
@@ -298,7 +300,9 @@ describe('useInPlaceCommand: revolve', () => {
       full,
       'Revolve',
       null,
-      expect.any(Function)
+      expect.any(Function),
+      // No base version given: no frame can be shown to be current.
+      null
     );
     expect(hook.result.current.active).toBe(false);
     expect(publishPreview).toHaveBeenLastCalledWith(null);
@@ -583,6 +587,68 @@ describe('useInPlaceCommand: revolve', () => {
     expect(hook.result.current.slots.axis?.id).toBe('sketch-vertical');
     act(() => hook.result.current.pickProfile(SECOND));
     expect(hook.result.current.slots.axis).toBeNull();
+  });
+
+  // QA 2026-11-14 #16: a 10 x 10 grid pattern previewed for 72 s, then its
+  // Done rebuilt the same candidate for another 70 s.
+  it('hands Done the frame it shows, with the command that built it', async () => {
+    const commit = vi.fn();
+    const commands: InPlaceBuiltCommand[] = [];
+    const options: UseInPlaceCommandOptions = {
+      ...setupOptions([], commit),
+      baseVersion: 4,
+      buildCommand: () => {
+        const command = {
+          validate: () => undefined,
+          apply: (document: ProjectDocument) => document,
+          resultBodyId: BODY
+        };
+        commands.push(command);
+        return command;
+      }
+    };
+    const hook = renderHook(
+      (props: UseInPlaceCommandOptions) => useInPlaceCommand(props),
+      { initialProps: options }
+    );
+    act(() => hook.result.current.start('revolve', [PICK]));
+    act(() => hook.result.current.pickAxis('sketch-vertical'));
+    await waitFor(() => expect(hook.result.current.canFinish).toBe(true));
+    act(() => {
+      hook.result.current.done();
+    });
+    expect(commit).toHaveBeenCalledOnce();
+    const [request, title, edit, , handed] = commit.mock.calls[0]! as [
+      InPlaceRequest,
+      string,
+      InPlaceEditSeed | null,
+      () => boolean,
+      InPlacePreviewedFrame | null
+    ];
+    expect(request).toMatchObject({ tool: 'revolve' });
+    expect(title).toBe('Revolve');
+    expect(edit).toBeNull();
+    expect(handed?.built).toBe(commands.at(-1));
+    expect(handed?.derived).toEqual(fakeDocument(true).derived);
+    expect(handed?.baseVersion).toBe(4);
+  });
+
+  it("stops the running frame's rebuild when the command closes", async () => {
+    const signals: AbortSignal[] = [];
+    const { hook } = setup({
+      derive: (_document, signal) => {
+        if (signal) signals.push(signal);
+        return new Promise<never>(() => undefined);
+      }
+    });
+    act(() => hook.result.current.start('revolve', [PICK]));
+    act(() => hook.result.current.pickAxis('sketch-vertical'));
+    await waitFor(() => expect(signals).toHaveLength(1));
+    expect(signals[0]!.aborted).toBe(false);
+    act(() => {
+      hook.result.current.cancel();
+    });
+    expect(signals[0]!.aborted).toBe(true);
   });
 
   it('cancels without committing and clears the preview', () => {
@@ -1683,7 +1749,8 @@ describe('useInPlaceCommand: primitives', () => {
       built.at(-1),
       'Box',
       null,
-      expect.any(Function)
+      expect.any(Function),
+      null
     );
   });
 
@@ -1879,7 +1946,8 @@ describe('U09 phase 6: datums and a picture', () => {
       },
       'Plane 1',
       null,
-      expect.any(Function)
+      expect.any(Function),
+      null
     );
   });
 
@@ -2056,7 +2124,9 @@ describe('useInPlaceCommand: editing a stored feature', () => {
       expect.objectContaining({ operation: 'subtract' }),
       'Cut 2',
       SEED,
-      expect.any(Function)
+      expect.any(Function),
+      // An edit rebuilds as the edit, never from a new feature's frame.
+      null
     );
   });
 
