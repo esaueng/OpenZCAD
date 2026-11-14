@@ -1622,7 +1622,8 @@
   padding-right: 34px;
 }
 
-.start-tile-rev {
+.start-tile-rev,
+.start-tile-size {
   flex: none;
   color: var(--color-text-subtle);
   font-family: var(--font-mono);
@@ -1687,12 +1688,13 @@
    row's columns, so every action and menu keeps working. The name is what
    tells two rows apart, so it has the room: Status and Edited give way on a
    narrower window (they were a fixed 330px together, and at 1050px left the
-   name 135px, "QA-20261028-Profil…" on two different parts). */
+   name 135px, "QA-20261028-Profil…" on two different parts). Size holds
+   "1,023.9 KiB" in the mono figures. */
 .start-list-head,
 .start-tile-grid.is-list .start-tile-open {
   grid-template-columns:
     52px minmax(0, 1fr) clamp(7rem, 12vw, 170px) clamp(6.5rem, 11vw, 160px)
-    76px 88px;
+    80px 76px 88px;
 }
 
 .start-list-head {
@@ -1790,7 +1792,9 @@
   order: 3;
 }
 
-/* Wide enough for a folder's "12 projects" as well as a part's saves. */
+/* Size precedes Saves in the markup, so the two share an order. Saves is
+   wide enough for a folder's "12 projects" as well as a part's saves. */
+.start-tile-grid.is-list .start-tile-size,
 .start-tile-grid.is-list .start-tile-rev {
   order: 4;
   white-space: nowrap;
@@ -1843,6 +1847,22 @@
 /* The menu carries Restore and Delete forever; a row has no footer. */
 .start-tile-grid.is-list .start-tile-footer {
   display: none;
+}
+
+/* A narrower shelf gives the Size column back to the name: with it, a
+   1050px window left the name about 100px, the F016 clipping again. */
+@container start-section (max-width: 860px) {
+  .start-list-head,
+  .start-tile-grid.is-list .start-tile-open {
+    grid-template-columns:
+      52px minmax(0, 1fr) clamp(7rem, 12vw, 170px) clamp(6.5rem, 11vw, 160px)
+      76px 88px;
+  }
+
+  .start-list-head .start-list-head-size,
+  .start-tile-grid.is-list .start-tile-size {
+    display: none;
+  }
 }
 
 /* One line above phone width: title, filters and tools stay together and
@@ -2082,7 +2102,8 @@
     display: none;
   }
 
-  .start-tile-grid.is-list .start-tile-rev {
+  .start-tile-grid.is-list .start-tile-rev,
+  .start-tile-grid.is-list .start-tile-size {
     display: none;
   }
 

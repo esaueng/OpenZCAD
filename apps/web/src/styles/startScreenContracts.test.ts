@@ -49,6 +49,26 @@ describe('start screen list names', () => {
     expect(columns!.match(/clamp\(/g)).toHaveLength(2);
   });
 
+  it('gives the Size column back to the name on a narrower shelf', () => {
+    const wide = rule(css, '.start-tile-grid.is-list .start-tile-open').match(
+      /grid-template-columns:\s*([^;]*);/
+    )?.[1];
+    const block =
+      /@container\s+start-section\s*\(max-width:\s*860px\)\s*\{([\s\S]*?\})\s*\}/.exec(
+        css
+      )?.[1];
+    expect(block).toBeDefined();
+    const narrow = /grid-template-columns:\s*([^;]*);/.exec(block!)?.[1];
+    expect(narrow).toBeDefined();
+    // One fixed column fewer, and the Size cells and heading leave with it.
+    expect(narrow!.trim().split(/\s+(?![^(]*\))/)).toHaveLength(
+      wide!.trim().split(/\s+(?![^(]*\))/).length - 1
+    );
+    expect(block).toMatch(
+      /\.start-list-head \.start-list-head-size,\s*\.start-tile-grid\.is-list \.start-tile-size\s*\{[^}]*display:\s*none/
+    );
+  });
+
   it('wraps a long name to two lines instead of one clipped line', () => {
     const name = rule(css, '.start-tile-grid.is-list .start-tile-name');
     expect(name).toMatch(/-webkit-line-clamp:\s*2/);
