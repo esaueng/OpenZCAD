@@ -709,6 +709,10 @@
   animation: oz-spin 0.9s linear infinite;
 }
 
+[data-reduced-motion='true'] .live-session-notice-spinner {
+  animation: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .live-session-notice-spinner {
     animation: none;

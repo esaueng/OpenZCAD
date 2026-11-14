@@ -153,3 +153,11 @@ describe('settings at narrow windows (Settings review, 14 Nov 2026)', () => {
     );
   });
 });
+
+describe('settings heading', () => {
+  it('draws no ring around the heading Settings focuses on open', () => {
+    // After a keyboard reload (Cmd+R) the browser matched :focus-visible on
+    // the programmatically focused "Settings" title and boxed it.
+    expect(rule('.settings-head-title:focus')).toMatch(/outline:\s*none/);
+  });
+});

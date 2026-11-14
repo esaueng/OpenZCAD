@@ -554,6 +554,44 @@ describe('StartScreen library discovery', () => {
     }
   );
 
+  it('selects the suggested name on focus until someone types over it', () => {
+    // 14 Nov 2026: typing a name into the field landed inside "Lucky
+    // Quokka", so the suggestions were kept rather than cleared.
+    const { unmount } = renderStartScreen();
+    const field = screen.getByLabelText<HTMLInputElement>('Project name');
+    const suggestion = field.value;
+    fireEvent.focus(field);
+    expect(field.selectionStart).toBe(0);
+    expect(field.selectionEnd).toBe(suggestion.length);
+    fireEvent.change(field, { target: { value: 'Pump housing' } });
+    fireEvent.blur(field);
+    field.setSelectionRange(4, 4);
+    fireEvent.focus(field);
+    expect(field.selectionStart).toBe(4);
+    expect(field.selectionEnd).toBe(4);
+    unmount();
+    // A typed draft restored on return stays a typed name.
+    renderStartScreen();
+    const restored = screen.getByLabelText<HTMLInputElement>('Project name');
+    expect(restored).toHaveValue('Pump housing');
+    restored.setSelectionRange(2, 2);
+    fireEvent.focus(restored);
+    expect(restored.selectionEnd).toBe(2);
+  });
+
+  it('still selects a suggestion restored from the draft', () => {
+    const first = renderStartScreen();
+    const suggestion =
+      screen.getByLabelText<HTMLInputElement>('Project name').value;
+    first.unmount();
+    renderStartScreen();
+    const field = screen.getByLabelText<HTMLInputElement>('Project name');
+    expect(field).toHaveValue(suggestion);
+    fireEvent.focus(field);
+    expect(field.selectionEnd).toBe(suggestion.length);
+    expect(field.selectionStart).toBe(0);
+  });
+
   it('restores the unfinished project name and units on reload without adopting a later default', () => {
     const { unmount } = renderStartScreen();
     fireEvent.change(screen.getByLabelText('Project name'), {
