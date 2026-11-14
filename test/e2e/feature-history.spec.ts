@@ -522,9 +522,9 @@ test('undo inside a text field edits the text, not the document', { tag: '@ci-sm
   await name.pressSequentially('abc');
   await expect(name).toHaveValue('abc');
   await page.keyboard.press('ControlOrMeta+z');
-  // The document is untouched: same history, no "Undo …" outcome.
+  // The document is untouched: same history, no "Undid …" outcome.
   await expect(rows).toHaveCount(featureCount);
-  await expect(page.getByRole('contentinfo')).not.toContainText(/Undo /);
+  await expect(page.getByRole('contentinfo')).not.toContainText(/Undid /);
   await expectBodyCount(page, 1);
 });
 

@@ -989,7 +989,7 @@ test('extrudes and edits one of multiple closed sketch regions', { tag: '@ci-smo
   // Exercise the same history commands through their supported shortcuts.
   await page.keyboard.press('Control+z');
   await page.keyboard.press('Control+Shift+z');
-  await expect(page.getByRole('contentinfo')).toContainText('Redo');
+  await expect(page.getByRole('contentinfo')).toContainText('Redid');
   const reopened = await editExtrudeFromHistory(
     page,
     page.locator('.feature-row-main', { hasText: 'Extrude' })
