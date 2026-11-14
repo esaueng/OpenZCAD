@@ -278,16 +278,21 @@ function writeShelfLayout(layout: ShelfLayout) {
 const LIBRARY_VIEW_KEY = 'openzcad.start.view';
 const LIBRARY_DRAFT_KEY = 'openzcad.start.draft';
 
-function readLibraryDraft(): { name: string; units: UnitSystem } | null {
+function readLibraryDraft(): {
+  name: string;
+  units: UnitSystem;
+  /** The name is still the suggestion nobody has typed over. */
+  suggested: boolean;
+} | null {
   try {
     const stored: unknown = JSON.parse(
       sessionStorage.getItem(LIBRARY_DRAFT_KEY) ?? 'null'
     );
     if (!stored || typeof stored !== 'object') return null;
-    const { name, units } = stored as Record<string, unknown>;
+    const { name, units, suggested } = stored as Record<string, unknown>;
     return typeof name === 'string' &&
       (units === 'mm' || units === 'cm' || units === 'm' || units === 'inch')
-      ? { name, units }
+      ? { name, units, suggested: suggested === true }
       : null;
   } catch {
     return null;
@@ -565,11 +570,17 @@ export function StartScreen({
     initialDraft?.units ?? defaultUnits
   );
   const unitsEdited = useRef(initialDraft !== null);
+  // The suggested name is selected when the field takes focus, so typing a
+  // real one replaces it rather than landing inside "Lucky Quokka". Once
+  // anything is typed the field behaves as any other, and a click places
+  // the caret.
+  const nameSuggested = useRef(initialDraft?.suggested ?? true);
+  const keepSuggestionSelected = useRef(false);
   useEffect(() => {
     try {
       sessionStorage.setItem(
         LIBRARY_DRAFT_KEY,
-        JSON.stringify({ name, units })
+        JSON.stringify({ name, units, suggested: nameSuggested.current })
       );
     } catch {
       // Draft persistence is optional when browser storage is unavailable.
@@ -3016,7 +3027,25 @@ export function StartScreen({
               placeholder="Project name"
               aria-invalid={nameTooLong || undefined}
               aria-describedby={nameTooLong ? 'project-name-error' : undefined}
-              onChange={(event) => setName(event.target.value)}
+              onFocus={(event) => {
+                if (!nameSuggested.current) return;
+                event.currentTarget.select();
+                keepSuggestionSelected.current = true;
+              }}
+              // The click that focused the field would otherwise collapse
+              // the selection to a caret where it landed.
+              onMouseUp={(event) => {
+                if (keepSuggestionSelected.current) event.preventDefault();
+                keepSuggestionSelected.current = false;
+              }}
+              onBlur={() => {
+                keepSuggestionSelected.current = false;
+              }}
+              onChange={(event) => {
+                nameSuggested.current = false;
+                keepSuggestionSelected.current = false;
+                setName(event.target.value);
+              }}
             />
           </label>
           <label className="start-field start-field-units">
