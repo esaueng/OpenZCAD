@@ -415,9 +415,10 @@ export function plainRefusal(
   // do the STEP importer's own sentences, which name each solid it dropped
   // and why: "it is non-manifold" there is the importer's diagnosis, not the
   // kernel's, and a partial import that succeeded read as "The resulting
-  // body wouldn't be valid."
+  // body wouldn't be valid." The importer does not escape quotes in a body
+  // name, so the name is matched up to the last `" imported, but`.
   if (
-    /no longer exists|^parse error:|^STEP file contains no |^Body "[^"]*" imported, but /.test(
+    /no longer exists|^parse error:|^STEP file contains no |^Body ".*" imported, but /.test(
       sentence
     )
   ) {

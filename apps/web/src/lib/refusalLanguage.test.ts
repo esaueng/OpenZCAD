@@ -496,7 +496,9 @@ describe('kernel refusals named in the 2026-11-14 production QA', () => {
   it("keeps the STEP importer's own diagnosis of each dropped solid", () => {
     for (const sentence of [
       'Body "Part" imported, but 1 of its 2 STEP solids is not a closed solid and was dropped: solid 1 (5 faces): it is non-manifold — 1 edge is shared by more than two faces.',
-      'STEP file contains no closed solids: solid 1 (5 faces): it is non-manifold — 1 edge is shared by more than two faces.'
+      'STEP file contains no closed solids: solid 1 (5 faces): it is non-manifold — 1 edge is shared by more than two faces.',
+      // Body names are not escaped, so one may carry its own quotes.
+      'Body "Part "A"" imported, but 1 of its 2 STEP solids is not a closed solid and was dropped: solid 1 (5 faces): it is non-manifold — 1 edge is shared by more than two faces.'
     ]) {
       expect(plainRefusal(sentence)).toEqual({ message: sentence });
     }
