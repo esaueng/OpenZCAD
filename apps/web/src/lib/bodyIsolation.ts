@@ -139,6 +139,28 @@ export function toggleBodyIsolation(
   };
 }
 
+/**
+ * Hands `bodyIds` to a toggle parameter: the caller drops them from the
+ * user's hidden set, so the isolation record drops them too and stays in
+ * step with it. Without this, a parameter that switches the isolated body
+ * off together with another body changed the user's set out from under the
+ * record, which read as `replaced`: isolation was dropped silently and the
+ * bodies it hid stayed hidden, through a reload.
+ */
+export function releaseIsolationToParameter<T extends BodyIsolation>(
+  recorded: T | null,
+  bodyIds: readonly string[]
+): T | null {
+  if (!recorded) return recorded;
+  const keep = (set: ReadonlySet<string>) =>
+    new Set([...set].filter((id) => !bodyIds.includes(id)));
+  return {
+    ...recorded,
+    priorHidden: keep(recorded.priorHidden),
+    appliedHidden: keep(recorded.appliedHidden)
+  };
+}
+
 function sameSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
   return a.size === b.size && [...a].every((id) => b.has(id));
 }

@@ -97,6 +97,7 @@ import { rebuildProgressLabel } from './lib/rebuildProgressLabel';
 import {
   bodyIsolationState,
   persistedHiddenBodyIds,
+  releaseIsolationToParameter,
   toggleBodyIsolation,
   type BodyIsolation
 } from './lib/bodyIsolation';
@@ -22398,13 +22399,17 @@ export function App() {
         (p) => p.name === name
       )?.toggle;
       // setParameter both adds and changes one; say which happened.
-      if (toggle)
+      if (toggle) {
         setHiddenBodyIds(
           (hidden) =>
             new Set(
               [...hidden].filter((id) => !toggle.bodyIds.includes(id as BodyId))
             )
         );
+        setBodyIsolation((recorded) =>
+          releaseIsolationToParameter(recorded, toggle.bodyIds)
+        );
+      }
       setStatus(
         added ? `Added parameter ${name}.` : `Parameter ${name} updated.`
       );

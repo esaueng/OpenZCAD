@@ -3,6 +3,7 @@ import {
   activeIsolatedBodyId,
   bodyIsolationState,
   persistedHiddenBodyIds,
+  releaseIsolationToParameter,
   toggleBodyIsolation
 } from './bodyIsolation';
 
@@ -211,6 +212,30 @@ describe('isolation across model changes', () => {
         false
       )
     ).toMatchObject({ kind: 'ended', reason: 'hidden' });
+  });
+
+  it('ends, restoring the earlier set, when one parameter switches off the isolated body and another', () => {
+    // App's toggle handler drops the parameter's bodies from the user's set
+    // and hands the same bodies to the record.
+    const toggleBodies = ['a', 'b'];
+    const local = new Set(
+      [...enter.hidden].filter((id) => !toggleBodies.includes(id))
+    );
+    const recorded = releaseIsolationToParameter(enter.isolation, toggleBodies);
+    const state = bodyIsolationState(
+      bodies,
+      new Set([...local, ...toggleBodies]),
+      local,
+      recorded,
+      false
+    );
+    expect(state).toEqual({
+      kind: 'ended',
+      reason: 'hidden',
+      hidden: new Set(['c'])
+    });
+    expect(persistedHiddenBodyIds(local, recorded)).toEqual(new Set(['c']));
+    expect(releaseIsolationToParameter(null, toggleBodies)).toBeNull();
   });
 
   it('waits out a preview that drops the isolated body', () => {
