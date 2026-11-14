@@ -100,6 +100,7 @@
   "upside-down-view-reload.spec.ts": 7,
   "view-cube-orbit-tooltip.spec.ts": 6,
   "viewport-clear-stage.spec.ts": 6,
+  "viewport-rail-polish.spec.ts": 20,
   "viewport.spec.ts": 13,
   "visual-selection-fillet-edit.spec.ts": 12,
   "visual-selection-live-preview.spec.ts": 12,
