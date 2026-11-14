@@ -202,6 +202,8 @@
 
 .project-properties-id code {
   min-width: 0;
+  /* One click selects the whole ID, the fallback when copying fails. */
+  user-select: all;
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   overflow-wrap: anywhere;

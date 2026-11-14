@@ -1,5 +1,12 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import { Check, Copy, Info, LoaderCircle, X } from 'lucide-react';
+import {
+  Check,
+  Copy,
+  Info,
+  LoaderCircle,
+  TriangleAlert,
+  X
+} from 'lucide-react';
 import {
   MAX_PROJECT_NAME_LENGTH,
   PROJECT_STORAGE_FORMAT_E2EE_V1,
@@ -78,7 +85,16 @@ export function ProjectPropertiesDialog({
   const [properties, setProperties] = useState<ProjectProperties | null>(null);
   const [loading, setLoading] = useState(true);
   const [attempt, setAttempt] = useState(0);
-  const [copiedId, setCopiedId] = useState(false);
+  // Copy feedback settles back to Copy, so a later copy elsewhere does not
+  // leave this one claiming the clipboard.
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>(
+    'idle'
+  );
+  useEffect(() => {
+    if (copyState === 'idle') return;
+    const timer = window.setTimeout(() => setCopyState('idle'), 2000);
+    return () => window.clearTimeout(timer);
+  }, [copyState]);
   useModalFocus(ref, { autoFocus: true });
   useEffect(() => {
     let cancelled = false;
@@ -194,21 +210,50 @@ export function ProjectPropertiesDialog({
       <button
         type="button"
         className="icon-button"
-        aria-label={copiedId ? 'Copied project ID' : 'Copy project ID'}
-        title={copiedId ? 'Copied' : 'Copy'}
+        aria-label={
+          copyState === 'copied'
+            ? 'Copied project ID'
+            : copyState === 'failed'
+              ? 'Could not copy project ID; select it to copy'
+              : 'Copy project ID'
+        }
+        title={
+          copyState === 'copied'
+            ? 'Copied'
+            : copyState === 'failed'
+              ? 'Could not copy; select the ID to copy it'
+              : 'Copy'
+        }
         onClick={() => {
-          void navigator.clipboard
-            ?.writeText(project.projectId)
-            .then(() => setCopiedId(true))
-            .catch(() => setCopiedId(false));
+          // A browser without clipboard access, or one that refuses the
+          // write, says so instead of doing nothing.
+          const clipboard = (navigator as Navigator & { clipboard?: Clipboard })
+            .clipboard;
+          if (!clipboard) {
+            setCopyState('failed');
+            return;
+          }
+          void clipboard.writeText(project.projectId).then(
+            () => setCopyState('copied'),
+            () => setCopyState('failed')
+          );
         }}
       >
-        {copiedId ? (
+        {copyState === 'copied' ? (
           <Check size={12} aria-hidden="true" />
+        ) : copyState === 'failed' ? (
+          <TriangleAlert size={12} aria-hidden="true" />
         ) : (
           <Copy size={12} aria-hidden="true" />
         )}
       </button>
+      <span className="visually-hidden" role="status">
+        {copyState === 'copied'
+          ? 'Project ID copied.'
+          : copyState === 'failed'
+            ? 'Could not copy the project ID. Select it to copy it.'
+            : ''}
+      </span>
     </span>
   ]);
 

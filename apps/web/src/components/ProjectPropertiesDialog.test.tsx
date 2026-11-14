@@ -66,8 +66,8 @@ describe('ProjectPropertiesDialog', () => {
 
   it('spins its loading indicator', () => {
     renderDialog(() => new Promise(() => undefined));
-    const status = screen.getByRole('status');
-    expect(status).toHaveTextContent('Loading project details…');
+    const status = screen.getByText('Loading project details…');
+    expect(status).toHaveAttribute('role', 'status');
     expect(status.querySelector('svg')).toHaveClass('spin');
   });
 
@@ -153,6 +153,56 @@ describe('ProjectPropertiesDialog', () => {
     expect(writeText).toHaveBeenCalledWith(project.projectId);
     expect(
       await screen.findByRole('button', { name: 'Copied project ID' })
+    ).toBeInTheDocument();
+  });
+
+  /** Success feedback stayed until the dialog closed, past any later copy. */
+  it('settles Copied back to Copy after a moment', async () => {
+    vi.useFakeTimers();
+    try {
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: { writeText: vi.fn().mockResolvedValue(undefined) }
+      });
+      renderDialog();
+      await act(async () => undefined);
+      fireEvent.click(screen.getByRole('button', { name: 'Copy project ID' }));
+      await act(async () => undefined);
+      expect(screen.getByText('Project ID copied.')).toBeInTheDocument();
+      await act(async () => {
+        vi.advanceTimersByTime(2000);
+      });
+      expect(
+        screen.getByRole('button', { name: 'Copy project ID' })
+      ).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    [
+      'refuses the write',
+      { writeText: vi.fn().mockRejectedValue(new Error('denied')) }
+    ],
+    ['has no clipboard', undefined]
+  ])('says so when the browser %s', async (_case, clipboard) => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: clipboard
+    });
+    renderDialog();
+    await screen.findByRole('alert');
+    fireEvent.click(screen.getByRole('button', { name: 'Copy project ID' }));
+    expect(
+      await screen.findByText(
+        'Could not copy the project ID. Select it to copy it.'
+      )
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', {
+        name: 'Could not copy project ID; select it to copy'
+      })
     ).toBeInTheDocument();
   });
 });
