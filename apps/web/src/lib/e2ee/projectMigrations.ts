@@ -25,19 +25,22 @@
  *   did not finish on this device (`unresolved`): retrying finishes it,
  *   and only the owner's confirmed "Treat as not encrypted on this device"
  *   (`treatAsNotEncrypted`) drops the pin. The record is cleared only when
- *   this device sees the cutover complete: its own run, or a status that
- *   says the migration is cut over or done.
+ *   this device's own cutover call answers success in the same run; a
+ *   status that says the migration is cut over, purging or done does not
+ *   clear it (`finishEncryptCutover` says why nothing else can).
  */
 import type { ProjectSummary } from '@openzcad/shared';
 import {
   beginEncryptCutover,
   encryptCutoverUnresolved,
   finishEncryptCutover,
+  noteEncryptCutoverFound,
   subscribeEncryptedPins,
   treatProjectAsNotEncrypted,
   type OwnerConfirmation
 } from '../api';
 import { desktopFetch } from '../desktopBridge';
+import { ungatedFetch } from '../projectWriteGate';
 import { flushProjectEdits, setMigratingProjects } from '../migrationStatus';
 import type { InvitationContext } from './invitations';
 import { getKeySessionRevision } from './keySession';
@@ -233,11 +236,11 @@ function waiting(project: ProjectSummary): MigrationProgress {
 
 /**
  * The row with whether this device asked for its cutover and has not seen
- * it complete; a finished row never is.
+ * it complete, whatever its phase.
  */
 function withPin(progress: MigrationProgress): MigrationProgress {
-  const unresolved =
-    progress.phase !== 'done' && encryptCutoverUnresolved(progress.projectId);
+  // Also once done: a status that says so does not resolve it here.
+  const unresolved = encryptCutoverUnresolved(progress.projectId);
   if (unresolved === (progress.unresolved === true)) return progress;
   if (unresolved) return { ...progress, unresolved: true };
   const { unresolved: _resolved, ...rest } = progress;
@@ -247,7 +250,9 @@ function withPin(progress: MigrationProgress): MigrationProgress {
 export function createMigrationController(
   deps: MigrationControllerDeps
 ): MigrationController {
-  const fetcher = deps.fetcher ?? desktopFetch;
+  // This run is what resolves an unfinished switch, so its own requests
+  // pass the project write gate (`projectWriteGate.ts`).
+  const fetcher = deps.fetcher ?? ungatedFetch(desktopFetch);
   const migrations = deps.migrations ?? createProjectMigrationsApi(fetcher);
   const plaintext = deps.plaintext ?? createMigrationPlaintextSource(fetcher);
   const locks =
@@ -335,7 +340,10 @@ export function createMigrationController(
       // keep both whatever the answer, since a failed answer does not
       // prove the cutover did not happen.
       beforeCutover: beginEncryptCutover,
+      // Only this run's own cutover answer resolves the switch; a resume
+      // that finds it cut over only pins it.
       onCutover: finishEncryptCutover,
+      onCutoverFound: noteEncryptCutoverFound,
       onProgress: update,
       ...(deps.renewEveryMs ? { renewEveryMs: deps.renewEveryMs } : {})
     });
@@ -378,15 +386,6 @@ export function createMigrationController(
       const { migration } = await migrations.status(projectId);
       const unfinished =
         migration?.state === 'cutover' || migration?.state === 'purging';
-      // Cut over and purged (by another tab or device): this device's
-      // switch is finished too, as a resumed run finds it.
-      if (migration?.state === 'done' && encryptCutoverUnresolved(projectId)) {
-        try {
-          finishEncryptCutover(projectId);
-        } catch {
-          // Pins unavailable: the record stays, which is safe.
-        }
-      }
       if (!unfinished) settled.add(projectId);
       return unfinished;
     } catch (error) {

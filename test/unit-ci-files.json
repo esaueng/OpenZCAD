@@ -302,6 +302,7 @@
     "src/lib/projectShelf.test.ts",
     "src/lib/projectShelfNames.test.ts",
     "src/lib/projectTabOwnership.test.ts",
+    "src/lib/projectWriteGate.test.ts",
     "src/lib/refusalHarvest.test.ts",
     "src/lib/refusalReproduction.test.ts",
     "src/lib/saveFile.test.ts",

@@ -73,6 +73,7 @@ import { splitProjectStorageUpload } from '@openzcad/persistence';
 import { desktopFetch, isDesktopApp } from './desktopBridge';
 import type * as EncryptedProjectsModule from './e2ee/encryptedProjects';
 import { localStoragePreferencePins } from './e2ee/preferencePins';
+import { installProjectWriteGate } from './projectWriteGate';
 import {
   localStorageEncryptedProjectPins,
   type EncryptedProjectPinStore
@@ -448,9 +449,59 @@ export function rememberEncryptedProject(projectId: string): boolean {
  * copied here unless a reload would still hold it as encrypted.
  */
 export function requireDurablePin(projectId: string): void {
-  if (!encryptedProjectPins().pinDurably(projectId)) {
+  const pins = encryptedProjectPins();
+  if (pins.resetElsewhere(projectId)) {
+    throw pinsResetElsewhere({ projectId });
+  }
+  if (!pins.pinDurably(projectId)) {
     throw pinStorageUnavailable();
   }
+}
+
+/**
+ * Why this tab may not write the project now, if it may not: another tab
+ * reset its pin (or the store) since this tab first saw it, or its switch
+ * to end-to-end encryption has not been seen to finish on this device.
+ * Checked before every outbound write of the project
+ * (`projectWriteGate.ts`), and by the room before it submits.
+ */
+export function projectWriteRefusal(
+  projectId: string | null | undefined
+): ApiError | null {
+  if (!projectId) return null;
+  const pins = encryptedProjectPins();
+  if (pins.resetElsewhere(projectId)) return pinsResetElsewhere({ projectId });
+  if (pins.cutoverUnresolved(projectId)) {
+    // Unreadable storage reads as unresolved: say why instead.
+    return pins.degraded
+      ? pinStorageUnavailable({ projectId })
+      : cutoverUnresolvedError({ projectId });
+  }
+  return null;
+}
+
+/** Throws {@link projectWriteRefusal}'s refusal, if there is one. */
+export function requireProjectWritable(projectId: string): void {
+  const refusal = projectWriteRefusal(projectId);
+  if (refusal) throw refusal;
+}
+
+// Every project write through `desktopFetch` asks first.
+installProjectWriteGate(requireProjectWritable);
+
+/**
+ * Whether another tab reset pins this tab still holds in memory, so this
+ * tab writes none of those projects until it reloads.
+ */
+export function encryptedPinsResetElsewhere(): boolean {
+  return encryptedProjectPins().staleTab;
+}
+
+/** Whether another tab reset this project's pin (or the store). */
+export function encryptedProjectResetElsewhere(
+  projectId: string | null | undefined
+): boolean {
+  return projectId ? encryptedProjectPins().resetElsewhere(projectId) : false;
 }
 
 /** Refuses before an encrypted create or copy while pins are unavailable. */
@@ -477,7 +528,9 @@ function pinCreated<
     );
   }
   if (!rememberEncryptedProject(created.document.projectId)) {
-    throw pinStorageUnavailable();
+    throw encryptedProjectPins().resetElsewhere(created.document.projectId)
+      ? pinsResetElsewhere({ projectId: created.document.projectId })
+      : pinStorageUnavailable();
   }
   return created;
 }
@@ -505,6 +558,7 @@ export function forgetEncryptedProject(projectId: string): void {
 export function beginEncryptCutover(projectId: string): void {
   const pins = encryptedProjectPins();
   try {
+    if (pins.resetElsewhere(projectId)) throw pinsResetElsewhere({ projectId });
     if (pins.degraded || !pins.markCutoverUnresolved(projectId)) {
       throw pinStorageUnavailable();
     }
@@ -515,13 +569,31 @@ export function beginEncryptCutover(projectId: string): void {
 }
 
 /**
- * This device saw the project's encrypt cutover complete (its own run, or
- * a resumed one that found it cut over): pinned, and no longer unresolved.
+ * This device's own cutover call, in the run that asked for it, answered
+ * success: pinned, and no longer unresolved. The one way besides the
+ * owner's confirmed reset that the record is cleared.
+ *
+ * A migration status that says the project is cut over, purging or done
+ * never clears it: that answer is not bound to this device's attempt.
+ * Nor can this device check the switch for itself: the encrypted versions
+ * it staged verify and decrypt whether or not the cutover happened (the
+ * account holds them from staging either way), and nothing the account
+ * returns proves its plaintext copy was retired. A resume that finds the
+ * switch done only pins the project ({@link noteEncryptCutoverFound}).
  */
 export function finishEncryptCutover(projectId: string): void {
   if (!rememberEncryptedProject(projectId)) throw pinStorageUnavailable();
   encryptedProjectPins().resolveCutover(projectId);
   pinsChanged();
+}
+
+/**
+ * A migration status says the project is cut over: pinned as encrypted
+ * (the account's word may only add protection), with any unresolved
+ * record kept, since the status is not this device's own cutover answer.
+ */
+export function noteEncryptCutoverFound(projectId: string): void {
+  rememberEncryptedProject(projectId);
 }
 
 /**
@@ -606,6 +678,22 @@ export function resetEncryptedProjectPins(
 export const E2EE_FORMAT_MISMATCH_CODE = 'E2EE_FORMAT_MISMATCH';
 export const E2EE_PIN_STORAGE_UNAVAILABLE_CODE = 'E2EE_PIN_STORAGE_UNAVAILABLE';
 export const E2EE_CUTOVER_UNRESOLVED_CODE = 'E2EE_CUTOVER_UNRESOLVED';
+export const E2EE_PINS_RESET_ELSEWHERE_CODE = 'E2EE_PINS_RESET_ELSEWHERE';
+
+/**
+ * Another tab reset what this tab holds of the project's encryption: this
+ * tab sends nothing for it until it reloads.
+ */
+export function pinsResetElsewhere(
+  details?: Record<string, unknown>
+): ApiError {
+  return new ApiError(
+    409,
+    'This project’s encryption setting was reset in another OpenZCAD tab, so this tab sent nothing. Reload this tab before making changes. Your work on this device is kept.',
+    E2EE_PINS_RESET_ELSEWHERE_CODE,
+    details
+  );
+}
 
 /** The codes whose recovery is "Treat as not encrypted on this device". */
 export function isEncryptedPinProblemError(error: unknown): boolean {
@@ -644,6 +732,11 @@ export function pinStorageUnavailable(
  * nothing went to the plaintext routes instead.
  */
 function withFormatMismatch(projectId: string, error: unknown): unknown {
+  if (encryptedProjectPins().resetElsewhere(projectId)) {
+    return pinsResetElsewhere(
+      error instanceof ApiError ? error.details : undefined
+    );
+  }
   if (encryptedProjectPinsUnavailable()) {
     return pinStorageUnavailable(
       error instanceof ApiError ? error.details : undefined
@@ -1205,6 +1298,8 @@ export const api = {
     projectId: string,
     options: Omit<DuplicateProjectRequest, 'projectId'> = {}
   ) => {
+    // An encrypted copy names its source only inside its frame.
+    requireProjectWritable(projectId);
     if (isEncryptedProject(projectId)) {
       // The page decrypted the source and built the copy; the account
       // copies its files byte for byte (slice 4-8). It cannot build one.
@@ -1324,6 +1419,8 @@ export const api = {
    * the minted records with the trimmed reason it receives.
    */
   saveRevision: async (payload: SaveRevisionRequest) => {
+    // Before anything is sealed or recorded, not only before it is sent.
+    requireProjectWritable(payload.projectId);
     if (isEncryptedProject(payload.projectId)) {
       return viaEncryptedRoute(payload.projectId, async () =>
         (
@@ -1368,6 +1465,8 @@ export const api = {
     payload: SaveProjectDocumentRequest,
     options?: { keepalive?: boolean }
   ) => {
+    // Before anything is sealed or recorded, not only before it is sent.
+    requireProjectWritable(payload.projectId);
     if (isEncryptedProject(payload.projectId)) {
       return viaEncryptedRoute(payload.projectId, async () =>
         (

@@ -577,8 +577,10 @@ function ProjectRow({
             )
           }
         >
-          {pinProblemText('unresolved')} This device keeps it encrypted, so it
-          can’t save or fully back it up until you retry or reset it.
+          {pinProblemText('unresolved')}{' '}
+          {progress.phase === 'done'
+            ? 'Your account reports the switch finished, but this device didn’t see its own request succeed, so it keeps the project read-only and can’t fully back it up until you reset it.'
+            : 'This device keeps it encrypted, so it can’t save or fully back it up until you retry or reset it.'}
         </Notice>
       ) : null}
       {unresolved && !active && confirming ? (

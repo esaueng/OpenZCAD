@@ -56,7 +56,7 @@ function copyOf(target: PinResetTarget) {
     title: 'Treat as not encrypted on this device?',
     body:
       target.reason === 'unresolved'
-        ? `The switch to end-to-end encryption didn’t finish on this device, so it keeps ${name} encrypted. Only reset this if encrypting it failed. This device then follows your account: if it lists the project as not encrypted, your changes are saved readable by the server. Retrying the encryption is safer.`
+        ? `This device didn’t see its switch of ${name} to end-to-end encryption finish, so it keeps the project encrypted and read-only. Resetting makes this device follow your account: if your account lists the project as encrypted, it stays encrypted here; if not, your changes are saved readable by the server. Retrying the encryption is safer while it is offered.`
         : `This device keeps ${name} encrypted, but your account lists it as not encrypted. Only reset this if you stopped encrypting it on another device. This device then follows your account, and your changes are saved readable by the server.`,
     understood:
       'I understand this project’s changes may be saved without end-to-end encryption.',

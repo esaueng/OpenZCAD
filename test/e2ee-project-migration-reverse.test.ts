@@ -30,7 +30,8 @@ import {
 } from '../apps/web/src/lib/e2ee/shareLinks';
 import {
   createProjectMigrationsApi,
-  withMigrationLease
+  withMigrationLease,
+  type ProjectMigrationsApi
 } from '../apps/web/src/lib/e2ee/projectMigrationsApi';
 import { createMigrationPlaintextSource } from '../apps/web/src/lib/e2ee/migrationPlaintextSource';
 import { createMigrationPlaintextTarget } from '../apps/web/src/lib/e2ee/migrationPlaintextTarget';
@@ -512,6 +513,8 @@ function reverseOn(
     from?: Device;
     leases?: MigrationLeaseStore;
     beforeStep?: (step: string, projectId: string) => void | Promise<void>;
+    /** Wraps the device's migration routes (a lost cutover answer). */
+    migrations?: (api: ProjectMigrationsApi) => ProjectMigrationsApi;
   } = {}
 ): ReverseDevice {
   const d = device(
@@ -527,7 +530,9 @@ function reverseOn(
   const engine = createProjectDecryptionEngine({
     deviceId,
     fetcher: base,
-    migrations: createProjectMigrationsApi(base),
+    migrations: (options.migrations ?? ((api) => api))(
+      createProjectMigrationsApi(base)
+    ),
     createReaders: () => ({
       store: d.store,
       blobs: d.blobs,
@@ -714,6 +719,34 @@ function revokeEncryptedShareLinks(srv: Server, projectId: string): void {
 // --- Turning encryption off --------------------------------------------------------
 
 describe('turning an encrypted project back into plaintext', () => {
+  it('unpins only on its own cutover answer, not on a resume that finds it cut over', async () => {
+    const srv = roomServer();
+    const { projectId } = await encryptedProject(srv);
+    let lose = true;
+    const desktop = reverseOn(srv, owner, 'owner_desktop', {
+      migrations: (api) => ({
+        ...api,
+        cutover: async (
+          ...args: Parameters<ProjectMigrationsApi['cutover']>
+        ) => {
+          const answer = await api.cutover(...args);
+          if (lose) throw new Error('The answer was lost.');
+          return answer;
+        }
+      })
+    });
+    await expect(decryptFully(desktop, projectId)).rejects.toThrow(
+      'The answer was lost.'
+    );
+    expect(formatOf(srv, projectId)).toBe(1);
+    lose = false;
+    // Its status says cut over: the account's word, so this device keeps
+    // the project pinned as encrypted until the owner confirms the reset.
+    await desktop.engine.decrypt(await desktop.summary(projectId));
+    expect(migrationRow(srv, projectId)).toMatchObject({ state: 'done' });
+    expect(desktop.cutover).toEqual([]);
+  });
+
   it('stages history, files and details, cuts over, purges every ciphertext, and reopens as plaintext', async () => {
     const srv = roomServer();
     const encrypted = await encryptedProject(srv);

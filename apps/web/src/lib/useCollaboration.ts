@@ -29,6 +29,7 @@ import {
   desktopFetch,
   isDesktopApp
 } from './desktopBridge';
+import { projectWriteBlocked } from './projectWriteGate';
 import { cloudFunctionsAreEnabled } from './cloudMode';
 import { listLocalOnlyImportSources } from './importArchival';
 import { noteProjectMigrating } from './migrationStatus';
@@ -580,6 +581,9 @@ export function useCollaboration({
         conflictRef.current ||
         readUnresolvedConflict(projectId, 'room') ||
         roleRef.current === 'viewer' ||
+        // An unfinished switch to encryption, or a reset in another tab:
+        // the edit stays on this device (`projectWriteGate.ts`).
+        projectWriteBlocked(projectId) ||
         !leaseIdRef.current ||
         (leaseRef.current?.expiresAt ?? 0) <= Date.now() ||
         pendingDocument ||
@@ -807,6 +811,7 @@ export function useCollaboration({
         conflictRef.current ||
         readUnresolvedConflict(projectId, 'room') ||
         roleRef.current === 'viewer' ||
+        projectWriteBlocked(projectId) ||
         (checkpointRef.current && !checkpointDrainRef.current)
       ) {
         return false;

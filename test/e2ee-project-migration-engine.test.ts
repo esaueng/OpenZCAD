@@ -32,6 +32,8 @@ import {
   beginEncryptCutover,
   encryptCutoverUnresolved,
   finishEncryptCutover,
+  noteEncryptCutoverFound,
+  treatProjectAsNotEncrypted,
   isEncryptedProject,
   rememberProjectFormats
 } from '../apps/web/src/lib/api';
@@ -426,6 +428,7 @@ function engineOn(
     beforeStep?: (step: string, projectId: string) => void | Promise<void>;
     beforeCutover?: (projectId: string) => void;
     onCutover?: (projectId: string) => void;
+    onCutoverFound?: (projectId: string) => void;
     /** Wraps the device's migration routes (a failed or lost cutover). */
     migrations?: (api: ProjectMigrationsApi) => ProjectMigrationsApi;
   } = {}
@@ -467,7 +470,10 @@ function engineOn(
     onProgress: (p) => progress.push(p),
     ...(options.beforeStep ? { beforeStep: options.beforeStep } : {}),
     ...(options.beforeCutover ? { beforeCutover: options.beforeCutover } : {}),
-    ...(options.onCutover ? { onCutover: options.onCutover } : {})
+    ...(options.onCutover ? { onCutover: options.onCutover } : {}),
+    ...(options.onCutoverFound
+      ? { onCutoverFound: options.onCutoverFound }
+      : {})
   });
   return {
     d,
@@ -845,7 +851,7 @@ describe('encrypting an existing project', () => {
     expect(isEncryptedProject(projectId)).toBe(true);
   });
 
-  it('finishes an unresolved cutover whose answer was lost when it resumes', async () => {
+  it('keeps a cutover whose answer was lost unresolved when a resume finds it cut over', async () => {
     const srv = roomServer();
     const plain = await plaintextProject(srv, { revisions: 1 });
     const projectId = plain.head.projectId;
@@ -853,6 +859,7 @@ describe('encrypting an existing project', () => {
     const options = {
       beforeCutover: beginEncryptCutover,
       onCutover: finishEncryptCutover,
+      onCutoverFound: noteEncryptCutoverFound,
       migrations: (api: ProjectMigrationsApi): ProjectMigrationsApi => ({
         ...api,
         cutover: async (
@@ -874,9 +881,67 @@ describe('encrypting an existing project', () => {
     const listed = await laptop.summary(projectId);
     expect(listed.storageFormat).toBe(2);
     await laptop.engine.migrate(listed);
-    expect(encryptCutoverUnresolved(projectId)).toBe(false);
+    // Purged and done on the account, but its status is not this run's own
+    // cutover answer: the device keeps the project read-only until the
+    // owner confirms the reset.
+    expect(migrationRow(srv, projectId)?.state).toBe('done');
+    expect(encryptCutoverUnresolved(projectId)).toBe(true);
     expect(isEncryptedProject(projectId)).toBe(true);
+    treatProjectAsNotEncrypted(projectId, { confirmedByOwner: true });
+    expect(encryptCutoverUnresolved(projectId)).toBe(false);
   });
+
+  it.each(['cutover', 'purging', 'done'] as const)(
+    'keeps a failed cutover unresolved when a status says %s',
+    async (state) => {
+      const srv = roomServer();
+      const plain = await plaintextProject(srv, { revisions: 1 });
+      const projectId = plain.head.projectId;
+      let lie = false;
+      const found: string[] = [];
+      const finished: string[] = [];
+      const laptop = engineOn(srv, owner, 'owner_laptop', {
+        beforeCutover: beginEncryptCutover,
+        onCutover: (id) => {
+          finished.push(id);
+          finishEncryptCutover(id);
+        },
+        onCutoverFound: (id) => {
+          found.push(id);
+          noteEncryptCutoverFound(id);
+        },
+        migrations: (api) => ({
+          ...api,
+          cutover: async () => {
+            throw new ApiError(503, 'The cutover failed.');
+          },
+          // A status this device cannot tie to its own attempt.
+          status: async (...args) => {
+            const answer = await api.status(...args);
+            return lie && answer.migration
+              ? { ...answer, migration: { ...answer.migration, state } }
+              : answer;
+          }
+        })
+      });
+      await expect(migrateFully(laptop, projectId)).rejects.toThrow(
+        'The cutover failed.'
+      );
+      expect(encryptCutoverUnresolved(projectId)).toBe(true);
+
+      lie = true;
+      // The listing claims it is encrypted too.
+      const listed = { ...(await laptop.summary(projectId)), storageFormat: 2 };
+      await laptop.engine.migrate(listed).catch(() => undefined);
+
+      expect(finished).toEqual([]);
+      expect(found).toEqual(state === 'done' ? [] : [projectId]);
+      expect(formatOf(srv, projectId)).toBe(1);
+      expect(encryptCutoverUnresolved(projectId)).toBe(true);
+      expect(isEncryptedProject(projectId)).toBe(true);
+      treatProjectAsNotEncrypted(projectId, { confirmedByOwner: true });
+    }
+  );
 
   it('refuses while the room holds edits the account never saved', async () => {
     const srv = roomServer();

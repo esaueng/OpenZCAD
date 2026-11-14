@@ -2,6 +2,7 @@ import { saveFile } from './saveFile';
 import type { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { LEGACY_PROJECT_FRAME_CONTENT_TYPE } from '@openzcad/shared';
 import { assertCloudFunctionsEnabled, cloudRequestSignal } from './cloudMode';
+import { checkOutboundRequest, noteOutboundResponse } from './projectWriteGate';
 
 export type DesktopMenuCommand =
   | 'open-model'
@@ -370,11 +371,24 @@ function tauriCore(): ReturnType<typeof importTauriCore> {
 
 /**
  * Routes cloud requests through Rust so bearer credentials never enter the
- * WebView, localStorage, URLs, logs, or frontend bundles.
+ * WebView, localStorage, URLs, logs, or frontend bundles. A request that
+ * writes a project this tab may not write is refused before it is sent
+ * (`projectWriteGate.ts`).
  */
 export async function desktopFetch(
   input: RequestInfo | URL,
   init: RequestInit = {}
+): Promise<Response> {
+  // Synchronously, before anything is awaited or sent.
+  checkOutboundRequest(input, init);
+  const response = await sendCloudRequest(input, init);
+  noteOutboundResponse(input, init, response);
+  return response;
+}
+
+async function sendCloudRequest(
+  input: RequestInfo | URL,
+  init: RequestInit
 ): Promise<Response> {
   const signal = cloudRequestSignal(init.signal);
   if (!isDesktopApp()) {

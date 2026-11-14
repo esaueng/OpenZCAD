@@ -216,10 +216,16 @@ export interface MigrationEngineDeps {
    */
   beforeCutover?(projectId: string): void;
   /**
-   * After the cutover, or on a resume that finds it cut over: this page
-   * now treats the project as encrypted, its switch finished.
+   * This run's own cutover call answered success: this page now treats
+   * the project as encrypted, its switch finished.
    */
   onCutover?(projectId: string): void;
+  /**
+   * A resume found the project cut over (a status answer, not this run's
+   * own cutover): it may be held as encrypted, but its switch is not
+   * thereby seen to finish here.
+   */
+  onCutoverFound?(projectId: string): void;
   onProgress?(progress: MigrationProgress): void;
   /** Lease renewal period (default a third of the five-minute lease). */
   readonly renewEveryMs?: number;
@@ -547,7 +553,7 @@ export function createProjectMigrationEngine(
       .migration;
     if (status?.state === 'cutover' || status?.state === 'purging') {
       leases.delete(projectId);
-      deps.onCutover?.(projectId);
+      deps.onCutoverFound?.(projectId);
       return purgeAll(projectId, (phase) => report({ phase, cutOver: true }));
     }
     if (status?.state === 'done' && (project.storageFormat ?? 1) === 2) {

@@ -434,6 +434,8 @@ import {
   E2EE_PIN_STORAGE_UNAVAILABLE_CODE,
   api,
   encryptedPinProblem,
+  encryptedPinsResetElsewhere,
+  encryptedProjectResetElsewhere,
   encryptsNewProjects,
   isEncryptedPinProblemError,
   isEncryptedProject,
@@ -5965,11 +5967,35 @@ export function App() {
       ? encryptedPinProblem(openProjectId)
       : null;
   }, [openProjectId, shareSession, pinsRevision]);
+  // Another tab reset what this tab holds of a project's encryption: this
+  // tab writes none of it until it reloads (`encryptedProjectPins.ts`).
+  const pinsResetElsewhere = useMemo(() => {
+    void pinsRevision;
+    return encryptedPinsResetElsewhere();
+  }, [pinsRevision]);
+  const openResetElsewhere = useMemo(() => {
+    void pinsRevision;
+    return openProjectId && !shareSession
+      ? encryptedProjectResetElsewhere(openProjectId)
+      : false;
+  }, [openProjectId, shareSession, pinsRevision]);
   const migrationEditReason = projectMigrating
     ? 'This project is being end-to-end encrypted'
-    : openPinProblem === 'unresolved'
-      ? 'The switch to end-to-end encryption didn’t finish on this device'
-      : null;
+    : openResetElsewhere
+      ? 'Encryption was reset in another tab. Reload this tab'
+      : openPinProblem === 'unresolved'
+        ? 'The switch to end-to-end encryption didn’t finish on this device'
+        : null;
+  useEffect(() => {
+    if (!pinsResetElsewhere) return;
+    const notice =
+      'Encryption settings changed in another OpenZCAD tab. Reload this tab to keep working: until then it sends no changes to the affected projects. Your work on this device is kept.';
+    setStatus(notice, { sticky: true });
+    announce(notice, {
+      label: 'Reload this tab',
+      run: () => window.location.reload()
+    });
+  }, [announce, pinsResetElsewhere, setStatus]);
   // Said once, where the eye goes, with the reset one click away; said
   // again when the project follows the account on this device.
   const pinNoticeShownRef = useRef(false);

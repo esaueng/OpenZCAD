@@ -3,6 +3,8 @@ import {
   ENCRYPTED_PROJECT_PIN_PREFIX,
   ENCRYPTED_PROJECT_PIN_FAILED_KEY,
   ENCRYPTED_PROJECT_PIN_RESERVE_KEY,
+  ENCRYPTED_PROJECT_PINS_RESET_KEY,
+  ENCRYPTED_PROJECT_RESET_PREFIX,
   ENCRYPTED_PROJECT_UNRESOLVED_PREFIX,
   localStorageEncryptedProjectPins
 } from './encryptedProjectPins';
@@ -277,5 +279,147 @@ describe('encrypted project pins', () => {
     expect(pins.degraded).toBe(true);
     expect(pins.has('proj_saved')).toBe(true);
     expect(localStorageEncryptedProjectPins(null).resetDegraded()).toBe(false);
+  });
+
+  describe('resets made in another tab', () => {
+    it('keeps a tab that opened with a saved pin encrypted and stops it once another tab resets it', () => {
+      const storage = memoryStorage();
+      localStorageEncryptedProjectPins(storage).pin('proj_open');
+      // A tab opened later, with the pin already saved.
+      const editor = localStorageEncryptedProjectPins(storage);
+      expect(editor.has('proj_open')).toBe(true);
+      expect(editor.resetElsewhere('proj_open')).toBe(false);
+
+      localStorageEncryptedProjectPins(storage).resetProject('proj_open');
+      expect(
+        storage.values.has(ENCRYPTED_PROJECT_RESET_PREFIX + 'proj_open')
+      ).toBe(true);
+
+      // Still encrypted here, never plaintext, and reported for a reload.
+      expect(editor.has('proj_open')).toBe(true);
+      expect(editor.resetElsewhere('proj_open')).toBe(true);
+      expect(editor.staleTab).toBe(true);
+      // Nothing is pinned again from this tab.
+      expect(editor.pinDurably('proj_open')).toBe(false);
+      expect(
+        storage.values.has(ENCRYPTED_PROJECT_PIN_PREFIX + 'proj_open')
+      ).toBe(false);
+      // Other projects are unaffected.
+      expect(editor.resetElsewhere('proj_other')).toBe(false);
+      expect(editor.pin('proj_other')).toBe(true);
+    });
+
+    it('never recreates a pin another tab reset, from a pin it made itself', () => {
+      const storage = memoryStorage();
+      const shelf = localStorageEncryptedProjectPins(storage);
+      // Pinned from this tab's listing.
+      expect(shelf.pin('proj_listed')).toBe(true);
+      localStorageEncryptedProjectPins(storage).resetProject('proj_listed');
+
+      expect(shelf.pinDurably('proj_listed')).toBe(false);
+      expect(shelf.pin('proj_listed')).toBe(false);
+      expect(shelf.markCutoverUnresolved('proj_listed')).toBe(false);
+      expect(
+        storage.values.has(ENCRYPTED_PROJECT_PIN_PREFIX + 'proj_listed')
+      ).toBe(false);
+      expect(shelf.has('proj_listed')).toBe(true);
+      expect(shelf.resetElsewhere('proj_listed')).toBe(true);
+      // Not a pin failure: nothing degrades.
+      expect(shelf.degraded).toBe(false);
+
+      // A reload starts from what storage holds: the next listing decides.
+      const reloaded = localStorageEncryptedProjectPins(storage);
+      expect(reloaded.resetElsewhere('proj_listed')).toBe(false);
+      expect(reloaded.has('proj_listed')).toBe(false);
+      expect(reloaded.pin('proj_listed')).toBe(true);
+    });
+
+    it('holds a seen pin even when its key goes without a reset', () => {
+      const storage = memoryStorage();
+      const tab = localStorageEncryptedProjectPins(storage);
+      storage.setItem(ENCRYPTED_PROJECT_PIN_PREFIX + 'proj_seen', '1');
+      expect(tab.has('proj_seen')).toBe(true);
+      storage.values.delete(ENCRYPTED_PROJECT_PIN_PREFIX + 'proj_seen');
+      expect(tab.has('proj_seen')).toBe(true);
+    });
+
+    it('treats this device’s decrypt run in another tab as a reset there', () => {
+      const storage = memoryStorage();
+      const editor = localStorageEncryptedProjectPins(storage);
+      editor.pin('proj_decrypted');
+      localStorageEncryptedProjectPins(storage).forget('proj_decrypted');
+      expect(editor.resetElsewhere('proj_decrypted')).toBe(true);
+      expect(editor.has('proj_decrypted')).toBe(true);
+    });
+
+    it('is not stale in the tab that made the reset', () => {
+      const storage = memoryStorage();
+      const tab = localStorageEncryptedProjectPins(storage);
+      tab.pin('proj_mine');
+      tab.markCutoverUnresolved('proj_mine');
+      tab.resetProject('proj_mine');
+      expect(tab.resetElsewhere('proj_mine')).toBe(false);
+      expect(tab.staleTab).toBe(false);
+      expect(tab.has('proj_mine')).toBe(false);
+      expect(tab.cutoverUnresolved('proj_mine')).toBe(false);
+      expect(tab.pin('proj_mine')).toBe(true);
+    });
+
+    it('stops every project in other tabs when the store is reset', () => {
+      const storage = memoryStorage();
+      storage.setItem(ENCRYPTED_PROJECT_PIN_FAILED_KEY, '1');
+      const other = localStorageEncryptedProjectPins(storage);
+      const resetting = localStorageEncryptedProjectPins(storage);
+      expect(other.degraded).toBe(true);
+      expect(resetting.resetDegraded()).toBe(true);
+      expect(storage.values.has(ENCRYPTED_PROJECT_PINS_RESET_KEY)).toBe(true);
+
+      expect(resetting.staleTab).toBe(false);
+      expect(resetting.resetElsewhere('proj_any')).toBe(false);
+      expect(other.staleTab).toBe(true);
+      expect(other.resetElsewhere('proj_any')).toBe(true);
+      expect(other.has('proj_any')).toBe(true);
+      expect(other.pinDurably('proj_any')).toBe(false);
+    });
+
+    it('leaves the resetting tab holding what a reload would', () => {
+      const storage = memoryStorage();
+      let full = false;
+      const nearlyFull = {
+        ...storage,
+        setItem: (key: string, value: string) => {
+          if (
+            full &&
+            (key.startsWith(ENCRYPTED_PROJECT_PIN_PREFIX) ||
+              key.startsWith(ENCRYPTED_PROJECT_UNRESOLVED_PREFIX))
+          ) {
+            throw new Error('QuotaExceededError');
+          }
+          storage.setItem(key, value);
+        }
+      };
+      const pins = localStorageEncryptedProjectPins(nearlyFull);
+      pins.pin('proj_saved');
+      full = true;
+      expect(pins.pin('proj_unsaved')).toBe(false);
+      expect(pins.markCutoverUnresolved('proj_unsaved_switch')).toBe(false);
+      full = false;
+
+      expect(pins.resetDegraded()).toBe(true);
+      const reloaded = localStorageEncryptedProjectPins(storage);
+      for (const projectId of [
+        'proj_saved',
+        'proj_unsaved',
+        'proj_unsaved_switch'
+      ]) {
+        expect(pins.has(projectId)).toBe(reloaded.has(projectId));
+        expect(pins.cutoverUnresolved(projectId)).toBe(
+          reloaded.cutoverUnresolved(projectId)
+        );
+      }
+      expect(pins.has('proj_saved')).toBe(true);
+      expect(pins.has('proj_unsaved')).toBe(false);
+      expect(pins.cutoverUnresolved('proj_unsaved_switch')).toBe(false);
+    });
   });
 });
