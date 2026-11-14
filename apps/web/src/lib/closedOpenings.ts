@@ -94,3 +94,27 @@ export function closedOpeningsNotice(
   const names = closed.map((entry) => `“${entry.name}”`).join(', ');
   return `“${editName}” filled in ${closed.length} openings (${names}); those steps no longer change the shape.`;
 }
+
+/**
+ * The notice for openings the face edits a commit added or changed filled
+ * in, or null. Only `direct-edit` steps new in `after`, or whose data the
+ * commit replaced, are checked.
+ */
+export function closedOpeningsAdvisory(
+  before: ProjectDocument,
+  after: ProjectDocument,
+  derived: DerivedState
+): string | null {
+  for (const feature of listFeaturesInOrder(after)) {
+    if (feature.data.featureKind !== 'direct-edit') continue;
+    const previous = ownEntry(before.nodes, feature.id);
+    if (previous?.kind === 'feature' && previous.data === feature.data)
+      continue;
+    const notice = closedOpeningsNotice(
+      feature.name,
+      openingsClosedByEdit(before, after, derived, feature.data.targetBodyId)
+    );
+    if (notice) return notice;
+  }
+  return null;
+}

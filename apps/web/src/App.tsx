@@ -81,10 +81,6 @@ import {
 } from './lib/topologyReferenceRepairs';
 import { fragileSelectionAdvisory } from './lib/fragileSelections';
 import {
-  closedOpeningsNotice,
-  openingsClosedByEdit
-} from './lib/closedOpenings';
-import {
   parameterMinimums,
   parameterInputError,
   parameterBuildError,
@@ -1133,6 +1129,7 @@ const preflightCadPatch: typeof AiPatchPreflight.preflightCadPatch = (
  * read only for its Settings export, neither of which waits on the result.
  */
 const interactionDiagnostics = () => import('./lib/interactionDiagnostics');
+const closedOpenings = () => import('./lib/closedOpenings');
 /** A refused rebuild saved as a corpus fixture, on its Save reproduction. */
 const refusalReproduction = () => import('./lib/refusalReproduction');
 
@@ -9745,10 +9742,10 @@ export function App() {
    * name: such a pick resolves only by its hash, which an upstream edit to
    * that entity orphans. Never blocks the commit (`lib/fragileSelections`).
    *
-   * A face edit that filled in an opening an earlier cut made says so first:
-   * that cut's step stays in the history but no longer changes the shape
-   * (`lib/closedOpenings`). The toast holds one notice, so the pick advice
-   * then goes to the activity log alone.
+   * A face edit that filled in an opening an earlier cut made then says so,
+   * in the toast's place: that cut's step stays in the history but no longer
+   * changes the shape (`lib/closedOpenings`, loaded on demand). The pick
+   * advice stays in the activity log.
    */
   function announceFragileSelections(
     before: ProjectDocument,
@@ -9756,7 +9753,6 @@ export function App() {
     derived: ProjectDocument['derived'] | undefined
   ): void {
     let advisory: string | null = null;
-    let closed: string | null = null;
     try {
       advisory = fragileSelectionAdvisory(before, after, {
         ...(derived ? { derived } : {}),
@@ -9767,43 +9763,21 @@ export function App() {
     } catch {
       // Advice only: the commit has already landed.
     }
-    try {
-      closed = derived ? closedOpeningsAdvisory(before, after, derived) : null;
-    } catch {
-      // Advice only, as above.
-    }
-    if (closed) {
-      announce(closed, undefined, { tone: 'warning' });
-      if (advisory)
-        recordActivity({ level: 'ready', source: 'notice', message: advisory });
-      return;
-    }
     if (advisory) announce(advisory);
-  }
-
-  /** The notice for openings the face edits this commit wrote filled in. */
-  function closedOpeningsAdvisory(
-    before: ProjectDocument,
-    after: ProjectDocument,
-    derived: ProjectDocument['derived']
-  ): string | null {
-    for (const feature of listFeaturesInOrder(after)) {
-      if (feature.data.featureKind !== 'direct-edit') continue;
-      const previous = ownEntry(before.nodes, feature.id);
-      // Only the steps this commit added or changed.
-      if (
-        previous &&
-        previous.kind === 'feature' &&
-        previous.data === feature.data
-      )
-        continue;
-      const notice = closedOpeningsNotice(
-        feature.name,
-        openingsClosedByEdit(before, after, derived, feature.data.targetBodyId)
-      );
-      if (notice) return notice;
-    }
-    return null;
+    if (!derived) return;
+    void closedOpenings()
+      .then(({ closedOpeningsAdvisory }) => {
+        const notice = closedOpeningsAdvisory(before, after, derived);
+        // Only while the model it speaks about is still the one open.
+        if (
+          notice &&
+          managerRef.current?.document.projectId === after.projectId
+        )
+          announce(notice, undefined, { tone: 'warning' });
+      })
+      .catch(() => {
+        // Advice only, as above.
+      });
   }
 
   function executeCommand(

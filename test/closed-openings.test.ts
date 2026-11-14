@@ -17,6 +17,7 @@ import {
   type ProjectDocument
 } from '@openzcad/shared';
 import {
+  closedOpeningsAdvisory,
   closedOpeningsNotice,
   openingsClosedByEdit
 } from '../apps/web/src/lib/closedOpenings';
@@ -126,9 +127,20 @@ async function offset(built: Built, face: FaceTopology, distance: number) {
   );
   const derived = await adapter.syncDocument(next);
   expect(derived.warnings ?? []).toEqual([]);
-  return openingsClosedByEdit(built.document, next, derived, built.bodyId).map(
-    (entry) => entry.name
+  const closed = openingsClosedByEdit(
+    built.document,
+    next,
+    derived,
+    built.bodyId
+  ).map((entry) => entry.name);
+  // What the app announces is the same finding, found from the commit alone.
+  expect(closedOpeningsAdvisory(built.document, next, derived)).toBe(
+    closedOpeningsNotice(
+      'Offset face',
+      closed.map((name) => ({ name }))
+    )
   );
+  return closed;
 }
 
 describe('openings a face offset closes', () => {
