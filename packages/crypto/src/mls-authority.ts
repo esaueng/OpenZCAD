@@ -230,6 +230,10 @@ export async function mlsAuthorityResetHash(
  * signed by its identity key and name its identity generation, which is
  * `ownerGeneration` when given, else `owner.generation`. Neither: refused,
  * since the statement's own generation would be checked against itself.
+ * The check is as strong as the caller's generation: the browser takes a
+ * co-member's from the unsigned lookup that served the list, so it binds
+ * the reset to the owner's identity key and to the generation the server
+ * reported, not to an independently authenticated one.
  */
 export async function verifyMlsAuthorityReset(
   manifest: MlsAuthorityManifest,

@@ -823,7 +823,11 @@ function currentGeneration(ctx: ProjectGroupContext): number {
 /**
  * The identity generation of a verified device list a reset is checked
  * against: this account's own, or what the lookup that served a
- * co-member's list reported (`VerifiedDeviceList.generation`).
+ * co-member's list reported (`VerifiedDeviceList.generation`). The lookup's
+ * generation is not signed: the server could relabel it. A reset still has
+ * to be signed by the list's identity key and name that generation, so the
+ * server cannot forge one, but the generation is not independently
+ * authenticated (see `inspectContact`).
  */
 function listGeneration(
   ctx: Pick<ProjectGroupContext, 'account'>,

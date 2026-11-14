@@ -52,7 +52,6 @@
  */
 import {
   EnvelopeKey,
-  SHARE_CLOCK_SKEW_MS,
   decodeShareAuthority,
   decodeShareDelegation,
   encodeEncryptedDocumentBody,
@@ -62,6 +61,7 @@ import {
   fromHex,
   openShareKey,
   shareKeyHash,
+  shareSnapshotPredatesAuthority,
   signProjectEnvelope,
   signShareAuthority,
   signShareDelegation,
@@ -563,6 +563,7 @@ export async function refreshOwnerShareAuthorities(
       if (
         snapshots.failed.length ||
         outcome.failed.length ||
+        outcome.snapshots.failed.length ||
         outcome.needsConfirmation.length
       ) {
         failed.push({
@@ -570,6 +571,7 @@ export async function refreshOwnerShareAuthorities(
           reason:
             snapshots.failed[0]?.reason ??
             outcome.failed[0]?.reason ??
+            outcome.snapshots.failed[0]?.reason ??
             'Sharing needs confirmation on a certified owner device.'
         });
       }
@@ -695,6 +697,12 @@ export interface AuthorityOutcome {
   /** Links this device could not state: the delegation needs renewing. */
   readonly needsConfirmation: readonly string[];
   readonly failed: readonly { shareId: string; reason: string }[];
+  /**
+   * Snapshots republished because a statement is newer than them (every
+   * link just `issued`, and any whose stored snapshot visitors would
+   * refuse as older than its statement).
+   */
+  readonly snapshots: PublishOutcome;
 }
 
 /**
@@ -716,11 +724,18 @@ export async function issueShareAuthorities(
   const current: string[] = [];
   const needsConfirmation: string[] = [];
   const failed: { shareId: string; reason: string }[] = [];
+  let snapshots: PublishOutcome = { published: [], failed: [] };
   const head = options.head ?? (await ctx.store.shareHead(projectId));
   const links = (head.shareLinks?.links ?? []).filter(
     (link) => !options.only || options.only.includes(link.shareId)
   );
-  const outcome = () => ({ issued, current, needsConfirmation, failed });
+  const outcome = () => ({
+    issued,
+    current,
+    needsConfirmation,
+    failed,
+    snapshots
+  });
   if (!links.length) return outcome();
   const { device, record: own } = requireDevice(ctx);
   // The owner by the head's roles first: an editor's page stops here.
@@ -802,24 +817,28 @@ export async function issueShareAuthorities(
     })
     .map((link) => link.shareId);
   if (stale.length) {
-    // Best effort: a snapshot left older than its statement is republished
-    // by the next `publishShareSnapshots` (it predates the statement), and
-    // until then visitors see no snapshot rather than an unvouched one.
-    await publishShareSnapshots(ctx, projectId, head, {
+    // A snapshot left older than its statement (this publication failed)
+    // is republished by the next `publishShareSnapshots`, which checks the
+    // stored snapshot's signed time as visitors do; until then visitors see
+    // no snapshot rather than an unvouched one. The failure is reported.
+    snapshots = await publishShareSnapshots(ctx, projectId, head, {
       only: stale,
       republish: stale,
       listed
-    }).catch(() => undefined);
+    }).catch((error: unknown): PublishOutcome => ({
+      published: [],
+      failed: stale.map((shareId) => ({ shareId, reason: describe(error) }))
+    }));
   }
   return outcome();
 }
 
 /**
- * Whether a link's stored snapshot was stored before its statement was
- * issued, so visitors would refuse it (`snapshot-predates-authority`) and
- * it is republished even at the same version. The server's storage time
- * against the statement's `issuedAt` is only a hint for when to republish;
- * visitors check the snapshot's signed time.
+ * Whether visitors would refuse a link's stored snapshot as signed before
+ * the link's statement was issued (`snapshot-predates-authority`), so it
+ * is republished even at the same version. It reads the stored snapshot's
+ * signed time, the one visitors check: the server's storage time differs
+ * from it by the author's clock error.
  */
 function snapshotPredatesAuthority(record: E2eeShareLinkRecord): boolean {
   if (!record.snapshot || !record.authority) return false;
@@ -831,8 +850,14 @@ function snapshotPredatesAuthority(record: E2eeShareLinkRecord): boolean {
   } catch {
     return false;
   }
-  const storedAt = Date.parse(record.snapshot.updatedAt);
-  return Number.isFinite(storedAt) && storedAt + SHARE_CLOCK_SKEW_MS < issuedAt;
+  let signature: Uint8Array;
+  try {
+    signature = fromBase64Url(record.snapshot.signature);
+  } catch {
+    // Not a signature visitors could accept either.
+    return true;
+  }
+  return shareSnapshotPredatesAuthority(signature, issuedAt);
 }
 
 // --- Snapshots ---------------------------------------------------------------------
@@ -1253,7 +1278,8 @@ async function createStoredShareLink(
     issued: [],
     current: [],
     needsConfirmation: [],
-    failed: [{ shareId, reason: describe(error) }]
+    failed: [{ shareId, reason: describe(error) }],
+    snapshots: { published: [], failed: [] }
   }));
   if (!stated.issued.includes(shareId) && !stated.current.includes(shareId))
     pending.push('authority');
@@ -1266,13 +1292,15 @@ async function createStoredShareLink(
   if (!shown.published.includes(shareId)) {
     // The save hook may publish this very version before this explicit
     // attempt. The publisher then correctly skips it as already current.
-    const stored = (
+    const record = (
       await ctx.api.list(projectId).catch(() => null)
-    )?.links.find((link) => link.shareId === shareId)?.snapshot;
+    )?.links.find((link) => link.shareId === shareId);
+    const stored = record?.snapshot;
     if (
       !stored ||
       stored.documentVersion < head.version ||
-      stored.keyEpoch < head.keyEpoch
+      stored.keyEpoch < head.keyEpoch ||
+      snapshotPredatesAuthority(record)
     )
       pending.push('snapshot');
   }
@@ -1602,6 +1630,12 @@ function decodeOr(statement: string): ShareDelegation | null {
 export interface ShareLinkUpkeep {
   readonly authorities: AuthorityOutcome;
   /**
+   * Snapshots published after the statements: links whose stored snapshot
+   * is behind the head, or older than its statement (a republication that
+   * failed when the statement was issued).
+   */
+  readonly snapshots: PublishOutcome;
+  /**
    * Links tombstoned because they name an earlier owner identity: offer to
    * reissue them (their modes).
    */
@@ -1639,7 +1673,14 @@ async function maintainShareLinksUnderLock(
     projectId
   );
   const empty: ShareLinkUpkeep = {
-    authorities: { issued: [], current: [], needsConfirmation: [], failed: [] },
+    authorities: {
+      issued: [],
+      current: [],
+      needsConfirmation: [],
+      failed: [],
+      snapshots: { published: [], failed: [] }
+    },
+    snapshots: { published: [], failed: [] },
     retired: workState.retired,
     revocations: { forgotten: [], failed: [] },
     head: null
@@ -1746,9 +1787,10 @@ async function maintainShareLinksUnderLock(
     head,
     ...(options.force ? { force: true } : {})
   });
-  await publishShareSnapshots(ctx, projectId, head);
+  const snapshots = await publishShareSnapshots(ctx, projectId, head);
   return {
     authorities,
+    snapshots,
     retired: (
       await shareWorkFor(ctx).read(ctx.groups.account.userId, projectId)
     ).retired,

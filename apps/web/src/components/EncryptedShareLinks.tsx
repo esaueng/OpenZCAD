@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Globe } from 'lucide-react';
 import { StableLabel } from './StableLabel';
+import type { ShareLinkUpkeep } from '../lib/e2ee/shareLinks';
 import type { ShareRemovalNotice } from '../lib/e2ee/shareWorkStore';
 import { shareLinkCreationProblem } from '../lib/projectShareLink';
 
@@ -124,7 +125,8 @@ export const pageEncryptedShareLinkClient: EncryptedShareLinkClient = {
         upkeepError ??
         (upkeep?.revocations.failed.length
           ? `A revoked link may still open for visitors: the server did not confirm it stopped serving it (${upkeep.revocations.failed[0]!.reason}). Revoke it again to retry.`
-          : null)
+          : null) ??
+        snapshotProblem(upkeep)
     };
   },
   async create(projectId, mode) {
@@ -240,6 +242,24 @@ function expiryText(row: EncryptedShareLinkRow): string {
     month: 'short',
     day: 'numeric'
   })}`;
+}
+
+/**
+ * A link whose snapshot the upkeep could not publish: after a new statement
+ * visitors refuse the older snapshot, so the link shows nothing until a
+ * later upkeep or save publishes it.
+ */
+export function snapshotProblem(
+  upkeep: Pick<ShareLinkUpkeep, 'authorities' | 'snapshots'> | null
+): string | null {
+  if (!upkeep) return null;
+  const failed = [
+    ...upkeep.authorities.snapshots.failed,
+    ...upkeep.snapshots.failed
+  ].find(({ shareId }) => !upkeep.snapshots.published.includes(shareId));
+  return failed
+    ? `A link's snapshot could not be published, so visitors may not see the project yet (${failed.reason}). Reopen sharing to retry.`
+    : null;
 }
 
 const message = (caught: unknown) =>

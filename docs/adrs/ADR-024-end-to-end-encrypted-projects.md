@@ -612,17 +612,22 @@ comparison, which is safe only because of its commitment step.
   - The visitor's browser checks, in order: the owner hash in the link, the
     identity-signed share delegation and its expiry, that the statement's
     signing device is named in it, the statement's signature and expiry,
-    then that the snapshot's signing credential is one the statement names.
-    The author's own device list is not trusted here, because a visitor has
+    then that the snapshot's signing credential is one the statement names,
+    and that the snapshot was signed no earlier than the statement was
+    issued (ten minutes of clock skew allowed), so a newer statement does
+    not vouch for an older snapshot. The owner's browser republishes a
+    link's snapshot with each new statement, and again on its next upkeep
+    if that publication failed. The author's own device list is not trusted here, because a visitor has
     no pin for it and could be shown a stale one. It accepts the snapshot only if every
     step holds.
   - Any of the owner's devices renews the statement while it is online, and
     issues a new one at once when an editor is removed or the link revoked.
-  - Two bounds follow. A former editor can publish snapshots that visitors
-    accept only until the statement they were listed in expires (seven days
-    by default). A stolen, removed owner device can sign statements that
-    visitors accept only until the last delegation naming it expires (at most
-    30 days). After either expiry, visitors see that the owner has not
+  - Two bounds follow. A former editor, or an editor's revoked device, can
+    publish snapshots that visitors accept only until the statement they were
+    listed in expires (seven days by default). A stolen, removed owner device
+    keeps its signing key, so with a server replaying an earlier delegation
+    that names it, it can keep signing new statements that visitors accept
+    until that delegation expires (at most 30 days after it was issued). After either expiry, visitors see that the owner has not
     recently confirmed the link. These limits are inherent to anonymous
     access. "Make a copy" decrypts in the visitor's browser and saves under
     the visitor's keys, or locally.

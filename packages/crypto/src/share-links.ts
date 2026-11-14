@@ -27,7 +27,10 @@ import {
 import { P256_PUBLIC_KEY_BYTES } from './keys';
 import { KEY_BYTES, sha256, type KeyMaterial } from './primitives';
 import { parseEnvelope } from './envelope';
-import { verifyProjectEnvelopeSignature } from './signing';
+import {
+  parseVersionSignature,
+  verifyProjectEnvelopeSignature
+} from './signing';
 import { unwrapKey } from './wrap';
 import type { SigningPrivateKey } from './external-keys';
 
@@ -844,11 +847,20 @@ export interface VerifiedSharedSnapshot {
  * older snapshot, which is why the owner's browser republishes a link's
  * snapshot whenever it issues the link a new statement. It cannot stop a
  * server from serving an older statement that has not expired yet, with a
- * snapshot signed after that statement by an author it names: an author
- * dropped from the link (a removed editor, a revoked device) can keep such
- * a snapshot visitor-visible until that older statement expires, at most
- * `MAX_SHARE_AUTHORITY_LIFETIME_MS` (7 days) after it was issued. The
- * statement does not name the latest snapshot: editors publish snapshots
+ * snapshot signed after that statement by an author it names. Two bounds
+ * follow, both needing the server's help:
+ *
+ * - An author dropped from the link (a removed editor, a revoked editor
+ *   device) can keep such a snapshot visitor-visible until that older statement expires, at most
+ *   `MAX_SHARE_AUTHORITY_LIFETIME_MS` (7 days) after it was issued.
+ * - A revoked owner device that a delegation named keeps its signing key, so
+ *   with that delegation replayed it can sign new statements, each up to 7
+ *   days long, that visitors accept until the delegation expires: at most
+ *   `MAX_SHARE_DELEGATION_LIFETIME_MS` (30 days) after the delegation was
+ *   issued. Removing the device issues a new delegation without it, but a
+ *   visitor has no pin to tell the new one from the old.
+ *
+ * The statement does not name the latest snapshot: editors publish snapshots
  * after the statement is signed, so it could not, without a new format.
  *
  * Accept the snapshot only if this returns; then open its version key with
@@ -938,7 +950,7 @@ export async function verifySharedSnapshot(
     );
   }
   // 6. Not older than the statement vouching for it (see Freshness above).
-  if (verified.signedAt + SHARE_CLOCK_SKEW_MS < authority.issuedAt) {
+  if (signedBeforeAuthority(verified.signedAt, authority.issuedAt)) {
     refuse(
       'snapshot-predates-authority',
       'The snapshot was signed before the statement that vouches for it'
@@ -954,6 +966,30 @@ export async function verifySharedSnapshot(
     delegation,
     authority
   };
+}
+
+const signedBeforeAuthority = (signedAt: number, issuedAt: number) =>
+  signedAt + SHARE_CLOCK_SKEW_MS < issuedAt;
+
+/**
+ * Whether visitors would refuse a snapshot with this version signature
+ * under a statement issued at `authorityIssuedAt`
+ * (`snapshot-predates-authority`): the signed time the signature claims,
+ * by the rule `verifySharedSnapshot` applies. For publishers deciding to
+ * republish; it does not verify the signature, and a signature that is not
+ * one at all counts as refused.
+ */
+export function shareSnapshotPredatesAuthority(
+  snapshotSignature: Uint8Array,
+  authorityIssuedAt: number
+): boolean {
+  let signedAt: number;
+  try {
+    ({ signedAt } = parseVersionSignature(snapshotSignature));
+  } catch {
+    return true;
+  }
+  return signedBeforeAuthority(signedAt, authorityIssuedAt);
 }
 
 // --- Link grants and tombstones ------------------------------------------

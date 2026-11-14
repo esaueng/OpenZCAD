@@ -558,7 +558,12 @@ export async function inspectContact(
     status: trusted ? 'verified' : 'seen',
     keyChanged,
     keyChangeUnsigned: replacedVerified,
-    // The chain does not carry its identity generation; the lookup does.
+    // The chain does not carry its identity generation; the lookup does,
+    // unsigned, so the server could relabel it. Checks that read it
+    // (`verifyMlsAuthorityReset`) still need the identity key's signature
+    // naming that generation, so a relabel cannot forge a reset, but the
+    // generation itself is only as good as the server's answer.
+    // Follow-up: authenticate the key-to-generation binding.
     list: { ...list, generation: response.identity.generation },
     code,
     codeHash: hash,
