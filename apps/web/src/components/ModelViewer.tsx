@@ -6,6 +6,8 @@ import {
   spokenChipText
 } from '../lib/inPlace/chipNames';
 import type { FrameStatsSink } from '../lib/frameStats';
+import { isDesktopApp, listenForSpaceMouse } from '../lib/desktopBridge';
+import { SpaceMouseNavigation } from './viewer/spaceMouseNavigation';
 import { ParameterPreviewController } from './viewer/parameterPreviewController';
 import {
   useEffect,
@@ -1576,6 +1578,7 @@ export interface SceneContext {
   restoreView(state: ViewportCameraState, projection: ProjectionMode): void;
   /** Invalidates the viewport and schedules a render if it is idle. */
   requestRender(): void;
+  fitView(): void;
   renderer: THREE.WebGLRenderer;
   labelRenderer: CSS2DRenderer;
   bodyGroup: THREE.Group;
@@ -2232,15 +2235,15 @@ type ViewRequest = NonNullable<ModelViewerProps['viewRequest']>;
 function startRequestedView(
   context: SceneContext,
   request: ViewRequest,
-  handled: MutableRefObject<{ context: SceneContext; nonce: number } | null>
+  handled?: MutableRefObject<{ context: SceneContext; nonce: number } | null>
 ) {
   if (
-    handled.current?.context === context &&
+    handled?.current?.context === context &&
     handled.current.nonce === request.nonce
   ) {
     return;
   }
-  handled.current = { context, nonce: request.nonce };
+  if (handled) handled.current = { context, nonce: request.nonce };
   // An explicit view selection owns the camera even if it arrives before the
   // first body. Otherwise that body's automatic fit can cancel this glide.
   context.hasFitCamera = true;
@@ -3544,6 +3547,7 @@ export function ModelViewer({
       captureView: () => cameraRig.capture(),
       restoreView: (state, mode) => cameraRig.restore(state, mode),
       requestRender,
+      fitView,
       renderer,
       labelRenderer,
       bodyGroup,
@@ -12247,10 +12251,51 @@ export function ModelViewer({
      */
     let loopOnlyFading = false;
     const frameMeter = new FrameIntervalMeter();
+    const spaceMouse = isDesktopApp() ? new SpaceMouseNavigation() : null;
+    const acceptsSpaceMouse = () =>
+      document.hasFocus() &&
+      document.visibilityState !== 'hidden' &&
+      cameraRig.controls.enabled;
+    const resetSpaceMouse = () => spaceMouse?.reset();
+    if (spaceMouse) window.addEventListener('blur', resetSpaceMouse);
     const resetAnimationContinuity = () => {
       loopWasAnimating = false;
+      resetSpaceMouse();
     };
     document.addEventListener('visibilitychange', resetAnimationContinuity);
+    function fitView() {
+      // Fit has to include the sketch layer, not just the solids. While a
+      // profile pick is open the app asks the user to click a shaded region it
+      // has not framed — the camera sits on the model, and a sketch drawn away
+      // from it can be off-screen entirely — so fitting to bodies alone answers
+      // the wrong question at the one moment fit is most needed.
+      const fitTargets = [
+        ...context.bodyGroup.children,
+        ...(parameterPreviewController.current?.group.children ?? []),
+        ...(regionGroupRef.current?.children ?? [])
+      ].filter((child) => child.visible);
+      if (fitTargets.length === 0) {
+        return;
+      }
+      // Fit keeps the view the user chose (`4` and the view menu give home)
+      // and frames into the stage the side panels leave clear.
+      const pose = computeFitPose(
+        context.camera,
+        fitTargets,
+        context.viewDirection(),
+        0,
+        measureFitFrame(context.renderer.domElement)
+      );
+      context.startCameraTween(
+        pose,
+        () => {
+          if (context.projection === 'orthographic') {
+            context.syncOrthographic(true);
+          }
+        },
+        { ease: viewJumpEase }
+      );
+    }
     function animate(now: number) {
       animationFrame = null;
       const frameStarted = performance.now();
@@ -12301,6 +12346,15 @@ export function ModelViewer({
         // the scene covers body edges, sketches, previews and handle rigs
         // alike, so no creation site has to remember to register its material.
         syncFatLineResolution(scene, width, height);
+      }
+      let spatiallyNavigating = false;
+      if (spaceMouse?.moving) {
+        if (acceptsSpaceMouse()) {
+          const step = spaceMouse.step(now);
+          if (step) spatiallyNavigating = cameraRig.navigateSpatially(step);
+        } else {
+          resetSpaceMouse();
+        }
       }
       // Camera glide first so controls and the ortho mirror see the result.
       const tweening = cameraRig.stepTween(now);
@@ -12760,6 +12814,7 @@ export function ModelViewer({
         tweening ||
         zooming ||
         controlsChanged ||
+        spatiallyNavigating ||
         hoverAnimating ||
         cubeAnimating ||
         edgesAnimating ||
@@ -12770,7 +12825,7 @@ export function ModelViewer({
         context.fadeIns.size > 0;
       loopWasAnimating = sceneAnimating || occlusionFading;
       loopOnlyFading = occlusionFading && !sceneAnimating;
-      if (loopWasAnimating) {
+      if (loopWasAnimating || spaceMouse?.moving) {
         requestRender();
       }
       const cpuMs = performance.now() - frameStarted;
@@ -12800,6 +12855,42 @@ export function ModelViewer({
         lastPerfFrameAt = now;
       }
     }
+    let stopSpaceMouse: (() => void) | undefined;
+    let sceneDisposed = false;
+    if (spaceMouse) {
+      void listenForSpaceMouse((report) => {
+        if (sceneDisposed) return;
+        const actions = spaceMouse.receive(
+          report,
+          performance.now(),
+          acceptsSpaceMouse()
+        );
+        for (const action of actions) {
+          if (action === 'fit') {
+            context.fitView();
+          } else if (action === 'roll') {
+            cameraRig.navigateSpatially({
+              panX: 0,
+              panY: 0,
+              zoom: 0,
+              pitch: 0,
+              yaw: 0,
+              roll: Math.PI / 2
+            });
+          } else if (action !== 'toggle-rotation' && !sketchModeRef.current) {
+            startRequestedView(context, { view: action, nonce: 0 });
+          }
+        }
+        if (spaceMouse.moving) requestRender();
+      })
+        .then((stop) => {
+          if (sceneDisposed) stop();
+          else stopSpaceMouse = stop;
+        })
+        .catch((error: unknown) => {
+          console.warn('Could not listen for SpaceMouse reports:', error);
+        });
+    }
     // The React chrome can become actionable before this passive setup owns a
     // scene context. Replay a view chosen in that window instead of dropping
     // its one-shot nonce in the earlier request effect.
@@ -12814,6 +12905,9 @@ export function ModelViewer({
     performance.measure?.('oz:viewer.init', 'oz:viewer.init:begin');
 
     return () => {
+      sceneDisposed = true;
+      stopSpaceMouse?.();
+      window.removeEventListener('blur', resetSpaceMouse);
       interactionShaderWarmup.dispose();
       ambientOcclusion?.dispose();
       document.removeEventListener(
@@ -16388,40 +16482,7 @@ export function ModelViewer({
 
   useEffect(() => {
     const context = contextRef.current;
-    // Fit has to include the sketch layer, not just the solids. While a
-    // profile pick is open the app asks the user to click a shaded region it
-    // has not framed — the camera sits on the model, and a sketch drawn away
-    // from it can be off-screen entirely — so fitting to bodies alone answers
-    // the wrong question at the one moment fit is most needed.
-    if (!context || fitSignal === 0) {
-      return;
-    }
-    const fitTargets = [
-      ...context.bodyGroup.children,
-      ...(parameterPreviewController.current?.group.children ?? []),
-      ...(regionGroupRef.current?.children ?? [])
-    ].filter((child) => child.visible);
-    if (fitTargets.length === 0) {
-      return;
-    }
-    // Fit keeps the view the user chose (`4` and the view menu give home)
-    // and frames into the stage the side panels leave clear.
-    const pose = computeFitPose(
-      context.camera,
-      fitTargets,
-      context.viewDirection(),
-      0,
-      measureFitFrame(context.renderer.domElement)
-    );
-    context.startCameraTween(
-      pose,
-      () => {
-        if (context.projection === 'orthographic') {
-          context.syncOrthographic(true);
-        }
-      },
-      { ease: viewJumpEase }
-    );
+    if (fitSignal !== 0) context?.fitView();
   }, [fitSignal]);
 
   // Bring an independently added body into view when needed. Changes to an

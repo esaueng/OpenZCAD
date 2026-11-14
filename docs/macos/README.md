@@ -47,6 +47,28 @@ that native scale and then uses the same debug-only bridge to exercise hit
 testing against a 2x WebGL backing store. Physical two-finger hardware testing
 on the minimum supported macOS version remains a signed-beta release gate.
 
+## Wired SpaceMouse Pro
+
+Connect the 3Dconnexion SpaceMouse Pro (3DX-700040, USB `046d:c62b`) and
+bring the desktop model viewport to the foreground. OpenZCAD reads the
+device directly through macOS IOHID. While OpenZCAD is running, it opens
+this device exclusively so the cap does not move the macOS pointer. Quit
+OpenZCAD to release the SpaceMouse for other apps. If device input is
+unavailable, quit 3DconnexionHelper if it is running, then relaunch OpenZCAD.
+Reconnect the device if macOS has lost the USB connection.
+
+| Control                                 | View action                                    |
+| --------------------------------------- | ---------------------------------------------- |
+| Move the cap left/right or up/down      | Pan                                            |
+| Push the cap away or pull it toward you | Zoom about the orbit target                    |
+| Tilt or twist the cap                   | Orbit or roll about the target                 |
+| Fit, Top, Right, Front                  | Fit or choose the corresponding standard view  |
+| Roll CW                                 | Roll the view 90° clockwise                    |
+| Rotation Toggle                         | Toggle cap rotation while keeping pan and zoom |
+
+During sketch editing, the cap respects the viewport's rotation lock. The
+other device buttons have no OpenZCAD action assigned in this version.
+
 ## Release boundary
 
 The current target is a working local-first desktop MVP. The dedicated native

@@ -2742,6 +2742,7 @@ name = "openzcad-desktop"
 version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
+ "cc",
  "getrandom 0.4.3",
  "openzcad-device-keys",
  "reqwest 0.12.28",

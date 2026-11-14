@@ -9,6 +9,8 @@ use tauri::{
 mod desktop_auth;
 mod device_keys;
 mod external_links;
+#[cfg(target_os = "macos")]
+mod spacemouse;
 
 use desktop_auth::{
     cancel_desktop_sign_in, desktop_api_request, desktop_collaboration_url, poll_desktop_sign_in,
@@ -245,7 +247,7 @@ pub fn run() {
     let builder = tauri::Builder::default().manage(DesktopAuthState::new());
     #[cfg(all(debug_assertions, feature = "webdriver"))]
     let builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
-    builder
+    let app = builder
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .setup(|app| {
             install_menu(app)?;
@@ -300,8 +302,18 @@ pub fn run() {
             device_keys::derive_with_device_key,
             device_keys::delete_device_keys
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running OpenZCAD");
+        .build(tauri::generate_context!())
+        .expect("error while building OpenZCAD");
+    #[cfg(target_os = "macos")]
+    let mut space_mouse = None;
+    app.run(move |_app, _event| {
+        #[cfg(target_os = "macos")]
+        match _event {
+            tauri::RunEvent::Ready => space_mouse = spacemouse::SpaceMouse::start(_app.clone()),
+            tauri::RunEvent::Exit => drop(space_mouse.take()),
+            _ => {}
+        }
+    });
 }
 
 #[cfg(test)]
