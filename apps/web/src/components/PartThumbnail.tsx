@@ -53,6 +53,12 @@ const thumbnailPromises = new Map<
 // one answer per project, bounded independently of the number of refreshes.
 const thumbnails = new Map<string, ThumbnailResult>();
 const latestRequest = new Map<string, string>();
+/**
+ * Bumped when the workspace captures a project's card. A read started before
+ * that belongs to the previous card: it may neither be reused nor land, even
+ * when the shelf asks again under the same listing key.
+ */
+const generations = new Map<string, number>();
 const MAX_RETAINED_THUMBNAILS = 256;
 subscribeKeySession(() => {
   for (const [id, value] of thumbnails)
@@ -113,10 +119,14 @@ function thumbnailFor(
   if (cached) {
     return cached;
   }
+  const generation = generations.get(project.projectId) ?? 0;
+  const live = () =>
+    isCurrent() &&
+    latestRequest.get(project.projectId) === cacheKey &&
+    (generations.get(project.projectId) ?? 0) === generation;
   const pending = loadThumbnail(project)
     .then((source) => {
-      if (!isCurrent() || latestRequest.get(project.projectId) !== cacheKey)
-        return undefined;
+      if (!live()) return undefined;
       // Only a cache miss reaches the publisher. A cached null is an answer —
       // the part is genuinely empty — and re-deriving it every visit would
       // undo the caching this store exists for.
@@ -132,15 +142,9 @@ function thumbnailFor(
       return source;
     })
     .then(async (source) => {
-      if (
-        source === undefined ||
-        !isCurrent() ||
-        latestRequest.get(project.projectId) !== cacheKey
-      )
-        return undefined;
+      if (source === undefined || !live()) return undefined;
       if (source) await decodeThumbnail(source);
-      if (!isCurrent() || latestRequest.get(project.projectId) !== cacheKey)
-        return undefined;
+      if (!live()) return undefined;
       const result = {
         key: cacheKey,
         projectId: project.projectId,
@@ -192,6 +196,9 @@ export function rememberCapturedThumbnail(input: {
   protected: boolean;
 }): void {
   const { projectId, source } = input;
+  generations.set(projectId, (generations.get(projectId) ?? 0) + 1);
+  for (const key of thumbnailPromises.keys())
+    if (key.includes(`:${projectId}:`)) thumbnailPromises.delete(key);
   if (input.protected && (!input.accountId || !isKeySessionActive())) {
     // Nothing may be shown for it here; drop the superseded card instead.
     thumbnails.delete(projectId);
@@ -201,8 +208,6 @@ export function rememberCapturedThumbnail(input: {
   const authorization = input.protected
     ? `protected:${input.accountId}:${getKeySessionVersion()}`
     : 'device';
-  // A read already under way for the old listing would otherwise land after
-  // this and put the superseded card back.
   latestRequest.delete(projectId);
   thumbnails.delete(projectId);
   thumbnails.set(projectId, {

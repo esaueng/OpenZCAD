@@ -201,6 +201,14 @@ export interface ProjectThumbnailRecord {
   /** Document version this was rendered from; only used to avoid re-renders. */
   version: number;
   updatedAt: string;
+  /**
+   * Account cards this device's record is known to be newer than: the
+   * artifacts its earlier records carried when this capture replaced them.
+   * A listing that still names one of them is a refresh behind this device,
+   * not another device's newer card. Version numbers cannot say that — two
+   * devices can each make their own version 9.
+   */
+  supersededArtifactIds?: ArtifactId[];
 }
 
 interface ProjectSyncRecord {
@@ -1469,6 +1477,7 @@ export function saveProjectThumbnail(
     artifactId?: ArtifactId;
     version: number;
     updatedAt: string;
+    supersededArtifactIds?: ArtifactId[];
   }
 ): Promise<void> {
   const record: ProjectThumbnailRecord = { projectId, ...thumbnail };

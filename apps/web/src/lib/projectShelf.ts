@@ -108,15 +108,15 @@ export function cachedThumbnailSource(
   if (!cached) {
     return undefined;
   }
-  // An image this device drew from the exact version the listing names is as
-  // current as any account copy can be. Its artifact id can still disagree:
-  // the workspace uploads each card as it leaves, so a listing fetched while
-  // that upload finalized names the card it superseded. Downloading there
-  // spent a round trip to put the previous card back on the tile.
+  // The workspace uploads each card as it leaves, so a listing fetched while
+  // that upload finalized still names the card it replaced. Downloading that
+  // spent a round trip to put the previous card back on the tile. Only an
+  // artifact this record is known to have replaced counts: equal document
+  // versions do not, because two devices can each make their own version 9.
   if (
     cached.source &&
-    project.documentVersion !== undefined &&
-    cached.version === project.documentVersion
+    project.thumbnailArtifactId &&
+    cached.supersededArtifactIds?.includes(project.thumbnailArtifactId)
   ) {
     return cached.source;
   }

@@ -220,7 +220,7 @@ describe('cachedThumbnailSource', () => {
     ).toBeUndefined();
   });
 
-  it('keeps the card drawn from the listed version when the listing names the one it superseded', () => {
+  it('keeps the device card while the listing still names the card it replaced', () => {
     // Leaving the workspace writes the card and uploads it; a listing fetched
     // while that upload finalized still names the previous artifact.
     expect(
@@ -228,28 +228,33 @@ describe('cachedThumbnailSource', () => {
         {
           ...record('data:image/webp;base64,FRESH', LISTED),
           version: 9,
-          artifactId: toArtifactId('artifact_just_uploaded')
+          artifactId: toArtifactId('artifact_just_uploaded'),
+          supersededArtifactIds: [toArtifactId('artifact_replaced')]
         },
         {
           ...summary(LISTED),
           documentVersion: 9,
-          thumbnailArtifactId: toArtifactId('artifact_superseded')
+          thumbnailArtifactId: toArtifactId('artifact_replaced')
         }
       )
     ).toBe('data:image/webp;base64,FRESH');
   });
 
-  it('still fetches the account card once the listed version moves past the device one', () => {
+  it("fetches another device's card at the same version number", () => {
+    // Two devices each turned version 8 into their own version 9, and this
+    // one then took the account's. Equal versions say nothing about which
+    // card is current, so the account image is fetched.
     expect(
       cachedThumbnailSource(
         {
-          ...record('data:image/webp;base64,OLD', LISTED),
+          ...record('data:image/webp;base64,MINE', LISTED),
           version: 9,
-          artifactId: toArtifactId('artifact_mine')
+          artifactId: toArtifactId('artifact_mine'),
+          supersededArtifactIds: [toArtifactId('artifact_v8')]
         },
         {
           ...summary(LISTED),
-          documentVersion: 12,
+          documentVersion: 9,
           thumbnailArtifactId: toArtifactId('artifact_other_device')
         }
       )

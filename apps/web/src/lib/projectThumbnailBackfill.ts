@@ -11,6 +11,7 @@ interface ThumbnailBackfillHost {
       artifactId?: ArtifactId;
       version: number;
       updatedAt: string;
+      supersededArtifactIds?: ArtifactId[];
     }
   ): Promise<void>;
   publish?: (thumbnail: {
@@ -66,7 +67,10 @@ export async function backfillProjectThumbnail(
         source,
         artifactId,
         version,
-        updatedAt
+        updatedAt,
+        ...(cached?.supersededArtifactIds
+          ? { supersededArtifactIds: cached.supersededArtifactIds }
+          : {})
       });
     }
   }
