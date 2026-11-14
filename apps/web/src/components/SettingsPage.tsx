@@ -256,6 +256,18 @@ const EncryptionSettings = lazyWithStaleChunkNotice(() =>
   }))
 );
 
+/**
+ * Where a section's name may break in the phone rail, which is narrower
+ * than "Appearance" at 12px. A soft hyphen shows only when the name breaks,
+ * and every engine honours it; `hyphens: auto` needs a dictionary that
+ * Chromium on Linux and Windows may not have, which broke the name as
+ * "Appearanc" over "e". Display only: search and the button's accessible
+ * name use the plain label.
+ */
+const SECTION_NAV_LABELS: Partial<Record<SectionId, string>> = {
+  appearance: 'Appear\u00adance'
+};
+
 const SECTION_ICONS: Record<SectionId, ReactNode> = {
   general: <Settings2 size={15} aria-hidden="true" />,
   appearance: <Palette size={15} aria-hidden="true" />,
@@ -1168,7 +1180,7 @@ export function SettingsPage({
                   onClick={() => setActive(section.id)}
                 >
                   {SECTION_ICONS[section.id]}
-                  <span>{section.label}</span>
+                  <span>{SECTION_NAV_LABELS[section.id] ?? section.label}</span>
                 </button>
               </Fragment>
             ))}
@@ -1217,7 +1229,13 @@ export function SettingsPage({
           <h1 ref={headingRef} className="settings-head-title" tabIndex={-1}>
             Settings
           </h1>
-          <span className="settings-save-message" aria-live="polite">
+          <span
+            className="settings-save-message"
+            aria-live="polite"
+            // Two lines of the head hold most messages; a longer one (an
+            // outage, offline mode) is cut there, and reads whole on hover.
+            title={message || undefined}
+          >
             {message}
           </span>
           <label className="settings-search">
