@@ -66,6 +66,7 @@ import {
   type UnitSystem
 } from '@openzcad/shared';
 import { generateCutePartName } from '../lib/cutePartName';
+import { projectNameProblem, sameNamedProject } from '../lib/projectNameHints';
 import {
   readLibraryLayout,
   saveLibraryLayout,
@@ -106,6 +107,9 @@ import type { ProjectProperties } from '../lib/projectProperties';
 const ProjectPropertiesDialog = lazyWithStaleChunkNotice(async () => ({
   default: (await import('./ProjectPropertiesDialog')).ProjectPropertiesDialog
 }));
+const FileDropTarget = lazyWithStaleChunkNotice(async () => ({
+  default: (await import('./FileDropTarget')).FileDropTarget
+}));
 const FolderCoverDialog = lazyWithStaleChunkNotice(async () => ({
   default: (await import('./FolderCoverDialog')).FolderCoverDialog
 }));
@@ -134,6 +138,11 @@ interface StartScreenProps {
   /** The grid's card size (Settings › Appearance); small is the original. */
   cardSize?: LibraryCardSize;
   onImportProject?(file: File): void;
+  /**
+   * Files dropped on the screen or picked through Import: a backup restores,
+   * CAD files start a new project in the units the form shows.
+   */
+  onImportFiles?(files: File[], units: UnitSystem): void;
   onCreate(name: string, units: UnitSystem): void;
   onOpen(projectId: string): void;
   onOpenDemo(definition: DemoDefinition): void;
@@ -146,6 +155,11 @@ interface StartScreenProps {
   /** Settings at its Account section; falls back to plain Settings. */
   onSignIn?(): void;
   onDuplicate(project: ProjectSummary): void;
+  /**
+   * Renames a project without opening it, from its tile or its Properties;
+   * resolves true once the new name is stored.
+   */
+  onRename?(project: ProjectSummary, name: string): Promise<boolean>;
   loadProperties(project: ProjectSummary): Promise<ProjectProperties | null>;
   /**
    * Projects the account holds. Anything absent lives on this device alone —
@@ -502,6 +516,7 @@ export function StartScreen({
   defaultUnits,
   cardSize = 'small',
   onImportProject,
+  onImportFiles,
   onCreate,
   onOpen,
   onOpenDemo,
@@ -509,6 +524,7 @@ export function StartScreen({
   onOpenSettings,
   onSignIn,
   onDuplicate,
+  onRename,
   loadProperties,
   cloudProjectIds,
   accountProjectListReached,
@@ -586,6 +602,23 @@ export function StartScreen({
   renamingFolderRef.current = renamingFolderId;
   // A folder made a moment ago and not yet named: Escape unmakes it.
   const justMadeFolderRef = useRef<string | null>(null);
+  // Files dropped on the screen, held while the library is still loading:
+  // a project made before discovery ends would be replaced by its result.
+  const [droppedFiles, setDroppedFiles] = useState<File[] | null>(null);
+  useEffect(() => {
+    if (!droppedFiles || busy || !onImportFiles) return;
+    setDroppedFiles(null);
+    onImportFiles(droppedFiles, units);
+  }, [droppedFiles, busy, onImportFiles, units]);
+  // A project's name being typed in place on its tile, and what is typed.
+  const [renamingProject, setRenamingProject] = useState<{
+    projectId: string;
+    draft: string;
+  } | null>(null);
+  // Which field is still open, synchronously: Enter and Escape move focus
+  // back to the tile, and the blur that follows must not commit again.
+  const renamingProjectRef = useRef<string | null>(null);
+  renamingProjectRef.current = renamingProject?.projectId ?? null;
   const [coverFolderId, setCoverFolderId] = useState<string | null>(null);
   // Projects picked for a bulk action, by id; only those on screen count.
   const [selected, setSelected] = useState<ReadonlySet<string>>(
@@ -672,6 +705,8 @@ export function StartScreen({
   // it would block names the API accepts (or vice versa).
   const trimmedName = name.trim();
   const nameTooLong = trimmedName.length > MAX_PROJECT_NAME_LENGTH;
+  // Names may repeat; a second "Bracket A" is allowed, but not unannounced.
+  const nameTaken = sameNamedProject(trimmedName, projects);
   const canCreate = !busy && trimmedName.length > 0 && !nameTooLong;
 
   useEffect(() => {
@@ -1500,6 +1535,71 @@ export function StartScreen({
     );
   }
 
+  function commitProjectRename(project: ProjectSummary, name: string) {
+    if (renamingProjectRef.current !== project.projectId) return;
+    renamingProjectRef.current = null;
+    setRenamingProject(null);
+    // Focus goes back to the tile, as it does after a folder is named.
+    tileRefs.current
+      .get(project.projectId)
+      ?.querySelector<HTMLElement>('.start-tile-open')
+      ?.focus({ preventScroll: true });
+    if (!onRename || projectNameProblem(name) || name.trim() === project.name)
+      return;
+    void onRename(project, name);
+  }
+
+  /** The name field a tile's Rename puts in place of its name. */
+  function renderProjectRename(project: ProjectSummary) {
+    if (renamingProject?.projectId !== project.projectId) return null;
+    const { draft } = renamingProject;
+    const problem = projectNameProblem(draft);
+    const taken = problem
+      ? null
+      : sameNamedProject(draft, projects, project.projectId);
+    const hintId = `start-rename-hint-${project.projectId}`;
+    return (
+      <div className="start-folder-rename-field">
+        <input
+          className="start-folder-rename"
+          value={draft}
+          aria-label={`Rename ${project.name}`}
+          aria-invalid={problem ? true : undefined}
+          aria-describedby={problem || taken ? hintId : undefined}
+          maxLength={MAX_PROJECT_NAME_LENGTH}
+          autoFocus
+          onFocus={(event) => event.currentTarget.select()}
+          onChange={(event) =>
+            setRenamingProject({
+              projectId: project.projectId,
+              draft: event.target.value
+            })
+          }
+          onClick={(event) => event.stopPropagation()}
+          onPointerDown={(event) => event.stopPropagation()}
+          onKeyDown={(event) => {
+            event.stopPropagation();
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              commitProjectRename(project, event.currentTarget.value);
+            } else if (event.key === 'Escape') {
+              event.preventDefault();
+              commitProjectRename(project, project.name);
+            }
+          }}
+          onBlur={(event) =>
+            commitProjectRename(project, event.currentTarget.value)
+          }
+        />
+        {(problem || taken) && (
+          <small id={hintId} className="start-rename-hint" role="status">
+            {problem ?? `Another project is already called “${taken}”.`}
+          </small>
+        )}
+      </div>
+    );
+  }
+
   function renderFolderName(folder: LibraryFolder) {
     if (renamingFolderId !== folder.id) {
       return (
@@ -1820,9 +1920,13 @@ export function StartScreen({
         <span className="start-tile-body">
           {/* Clipped names differ only in their ends ("…-Profiles" and
               "…-Profiles copy"), so the whole name is a hover away. */}
-          <strong className="start-tile-name" title={project.name}>
-            {project.name}
-          </strong>
+          {renamingProject?.projectId === project.projectId ? (
+            <span className="start-folder-rename-slot" />
+          ) : (
+            <strong className="start-tile-name" title={project.name}>
+              {project.name}
+            </strong>
+          )}
           <small className="start-tile-meta">
             {/* Quiet marks for the project's standing traits, ahead of the date
                 they qualify: how it is stored, where it lives, what it is. */}
@@ -2044,9 +2148,10 @@ export function StartScreen({
         ]
           .filter(Boolean)
           .join(' ')}
-        onPointerDown={(event) =>
-          reorder.onPointerDown(project.projectId, event)
-        }
+        onPointerDown={(event) => {
+          if (renamingProject?.projectId !== project.projectId)
+            reorder.onPointerDown(project.projectId, event);
+        }}
         // The preview picture is an image, which the browser would otherwise
         // drag out on its own instead of moving the card.
         onDragStart={(event) => event.preventDefault()}
@@ -2093,6 +2198,7 @@ export function StartScreen({
               canReorder ? `${TILE_KEYS} ${REORDER_KEYS}` : TILE_KEYS
             }
             onClick={(event) => {
+              if (renamingProject?.projectId === project.projectId) return;
               if (picks(event)) {
                 event.preventDefault();
                 toggleSelected(project.projectId, event.shiftKey);
@@ -2108,6 +2214,9 @@ export function StartScreen({
             {preview}
           </button>
         )}
+        {/* A sibling of the open button, as a folder's name field is: a
+            field inside the button would open the project on each key. */}
+        {renderProjectRename(project)}
 
         {/* Picks the project for a bulk action. Shown on hover, and on every
             card once anything is picked. */}
@@ -2296,6 +2405,23 @@ export function StartScreen({
                   >
                     <Copy size={13} aria-hidden="true" />
                     Duplicate
+                  </button>
+                )}
+                {!locked && onRename && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    tabIndex={-1}
+                    onClick={() => {
+                      closeMenu(project.projectId);
+                      setRenamingProject({
+                        projectId: project.projectId,
+                        draft: project.name
+                      });
+                    }}
+                  >
+                    <Pencil size={13} aria-hidden="true" />
+                    Rename
                   </button>
                 )}
                 {shelf === 'active' && (
@@ -2844,10 +2970,17 @@ export function StartScreen({
             {onImportProject && (
               <ProjectImportButton
                 onImport={onImportProject}
+                {...(onImportFiles && {
+                  onImportFiles: (files: File[]) => onImportFiles(files, units)
+                })}
                 disabled={busy}
                 className="start-launch-import"
                 shortLabel="Import"
-                title="Import an .openzcad project backup"
+                title={
+                  onImportFiles
+                    ? 'Import an .openzcad project backup, or CAD files as a new project'
+                    : 'Import an .openzcad project backup'
+                }
               />
             )}
           </div>
@@ -2884,6 +3017,11 @@ export function StartScreen({
               role="alert"
             >
               Project name must be at most {MAX_PROJECT_NAME_LENGTH} characters.
+            </small>
+          ) : nameTaken ? (
+            <small className="start-launch-hint is-taken" role="status">
+              You already have a project called “{nameTaken}”. The new one is
+              kept separately.
             </small>
           ) : (
             <small className="start-launch-hint">
@@ -3782,7 +3920,31 @@ export function StartScreen({
                     ? 'This device only'
                     : 'Unknown — account listing unavailable'
             }
+            {...(onRename &&
+              !projectNeedsUpdate(propertiesProject) && {
+                // The listed project, whose name a rename here has moved on.
+                onRename: (name: string) =>
+                  onRename(
+                    projects.find(
+                      (candidate) =>
+                        candidate.projectId === propertiesProject.projectId
+                    ) ?? propertiesProject,
+                    name
+                  ),
+                projects
+              })}
             onClose={() => setPropertiesProject(null)}
+          />
+        </Suspense>
+      )}
+      {onImportFiles && (
+        // Without a target here the browser took a dropped file and opened
+        // or downloaded it in place of the library.
+        <Suspense fallback={null}>
+          <FileDropTarget
+            title="Drop to make a project"
+            hint="STEP, DXF or a mesh file starts a new project; an .openzcad backup restores one"
+            onDrop={setDroppedFiles}
           />
         </Suspense>
       )}

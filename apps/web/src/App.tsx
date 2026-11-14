@@ -175,7 +175,7 @@ import {
   ScanEye,
   Settings as SettingsIcon,
   Scissors,
-  Slice,
+  SquareSplitVertical,
   SlidersHorizontal,
   ListOrdered,
   Spline,
@@ -270,6 +270,7 @@ import type {
   ProjectOrganization,
   ProjectStatus,
   ProjectSummary,
+  SaveProjectDocumentRequest,
   SketchConstraintData,
   SketchId,
   SketchNode,
@@ -636,6 +637,7 @@ import {
 } from './components/WorkspaceLoading';
 import type { AuthConfigStatus } from './components/SettingsPage';
 import {
+  copyBaseName,
   DEMO_DEFINITIONS,
   VISUAL_SELECTION_ACCEPTANCE_DEMO
 } from './lib/demoDefinitions';
@@ -919,7 +921,7 @@ import { useBuildToolNavigation } from './hooks/useBuildToolNavigation';
 import { useResponsiveFraming } from './hooks/useResponsiveFraming';
 import { parameterDisplayName } from './lib/parameterDisplayName';
 import { featurePaletteLabel, withDistinctLabels } from './lib/paletteLabels';
-import { DISPLAY_MODE_LABELS } from './lib/displayMode';
+import { DISPLAY_MODE_LABELS, DISPLAY_MODE_ORDER } from './lib/displayMode';
 import { ContextMenu, type ContextMenuState } from './components/ContextMenu';
 import {
   FACE_VERB_PREFIX,
@@ -2057,11 +2059,6 @@ const DISABLED_COLLABORATION_ROLLOUT: ProjectCollaborationCapabilitiesResponse =
   };
 const projectSharingClient = createProjectSharingClient();
 const localUserId = toUserId('user_local_browser');
-const DISPLAY_MODE_ORDER: DisplayMode[] = [
-  'shaded-edges',
-  'shaded',
-  'wireframe'
-];
 
 interface OffsetEditPlan {
   command: AnyCommand;
@@ -3316,6 +3313,14 @@ export function App() {
   useEffect(() => {
     onStartScreenRef.current = doc === null;
   }, [doc]);
+  /**
+   * CAD files dropped on the start screen, waiting for the project made for
+   * them; `projectId` is that project's once it is on screen.
+   */
+  const pendingStartImportRef = useRef<{
+    files: File[];
+    projectId: string | null;
+  } | null>(null);
   useEffect(() => {
     let stopped = false;
     const watch = watchBuildVersion({
@@ -6163,6 +6168,24 @@ export function App() {
   // mode was entered or the project was opened in a second tab.
   const editDisabledReasonRef = useRef(editDisabledReason);
   editDisabledReasonRef.current = editDisabledReason;
+  // Files dropped on the start screen import into the project made for them
+  // once it is on screen and editable: an account project can wait a moment
+  // for its live session, and importing before then would only be refused.
+  useEffect(() => {
+    const pending = pendingStartImportRef.current;
+    if (!pending || !doc) return;
+    if (pending.projectId === null) {
+      pending.projectId = doc.projectId;
+    } else if (pending.projectId !== doc.projectId) {
+      pendingStartImportRef.current = null;
+      return;
+    }
+    if (editDisabledReason) return;
+    pendingStartImportRef.current = null;
+    void handleImportFiles(pending.files);
+    // handleImportFiles is this render's, which holds the new document.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc?.projectId, editDisabledReason]);
   const parameterEditDisabledReasonRef = useRef(parameterEditDisabledReason);
   parameterEditDisabledReasonRef.current = parameterEditDisabledReason;
   const drawingEditDisabledReasonRef = useRef(drawingEditDisabledReason);
@@ -11941,13 +11964,30 @@ export function App() {
     setStatus(`${normalToFaceTarget.label}: viewing normal to face.`);
   }
 
+  /**
+   * Shows the model in `mode`. The toast names it at once rather than after
+   * the last message's dwell: paced, W pressed three times left "Wireframe"
+   * up while the model already showed Shaded + edges (I54).
+   */
+  function setDisplayMode(mode: DisplayMode) {
+    viewerSettingsRef.current = {
+      ...viewerSettingsRef.current,
+      displayMode: mode
+    };
+    setViewerSettings((current) => ({ ...current, displayMode: mode }));
+    setStatus(`Display: ${DISPLAY_MODE_LABELS[mode]}.`, { immediate: true });
+  }
+
   function cycleDisplayMode() {
-    const index = DISPLAY_MODE_ORDER.indexOf(viewerSettings.displayMode);
-    const next =
+    // From the latest mode, not this render's: two presses before a render
+    // would otherwise both step from the same mode.
+    const index = DISPLAY_MODE_ORDER.indexOf(
+      viewerSettingsRef.current.displayMode
+    );
+    setDisplayMode(
       DISPLAY_MODE_ORDER[(index + 1) % DISPLAY_MODE_ORDER.length] ??
-      'shaded-edges';
-    setViewerSettings((current) => ({ ...current, displayMode: next }));
-    setStatus(`Display: ${DISPLAY_MODE_LABELS[next]}.`);
+        'shaded-edges'
+    );
   }
 
   function toggleProjection() {
@@ -11986,11 +12026,15 @@ export function App() {
 
   function toggleXray() {
     const next = !viewerSettingsRef.current.xray;
+    viewerSettingsRef.current = { ...viewerSettingsRef.current, xray: next };
     setViewerSettings((current) => ({ ...current, xray: next }));
+    // At once, like the display mode it rides over: the Display menu's
+    // X-ray switch and its toast must not disagree.
     setStatus(
       next
         ? `X-ray on · faces at ${appSettings.viewport.xrayOpacity}% · picks and box selection go through them.`
-        : 'X-ray off.'
+        : 'X-ray off.',
+      { immediate: true }
     );
   }
 
@@ -13484,7 +13528,12 @@ export function App() {
     setSettingsMessage('Viewport defaults applied to the current view.');
   }
 
-  async function handleCreateProject(name: string, units: UnitSystem) {
+  /** Resolves true once the new project is the one on screen. */
+  async function handleCreateProject(
+    name: string,
+    units: UnitSystem
+  ): Promise<boolean> {
+    let opened = false;
     const isCurrent = beginProjectNavigation();
     const activeProjectSince = snapshotActiveProject();
     setAssistantCollapsed(true);
@@ -13497,6 +13546,7 @@ export function App() {
       await saveLocalProject(localDocument);
       if (!isCurrent()) return;
       hydrateDocument(localDocument, { activeProjectSince });
+      opened = true;
       setProjects((current) => [
         summarizeLocalDocument(localDocument),
         ...current
@@ -13510,16 +13560,16 @@ export function App() {
       // This is a failed device save, not a cloud-create failure. Do not enter
       // the offline fallback and replace the unsaved project on screen.
       finishBusy();
-      return;
+      return false;
     }
     try {
-      if (!isCurrent()) return;
+      if (!isCurrent()) return false;
       if (!session) {
         // The document effect's flush lands on 'local' once the device write
         // is done; forcing it here would show "Local only" for a frame and
         // then the spinner the effect reports anyway.
         await createLocal(localUserId);
-        return;
+        return opened;
       }
       // The browser builds the new document and the account stores it as
       // sent (ADR-024 Phase 1). The route trims the name it compares with.
@@ -13539,16 +13589,18 @@ export function App() {
         response.document.projectId,
         response.document.version
       );
-      if (!isCurrent()) return;
+      if (!isCurrent()) return false;
       setCloudAvailable(true);
       setCloudProjectIds((current) =>
         new Set(current).add(response.document.projectId)
       );
       hydrateDocument(response.document, { activeProjectSince });
+      opened = true;
       setProjects((current) => [response.project, ...current]);
       setStatus(`Created ${response.project.name}.`);
+      return true;
     } catch (error) {
-      if (!isCurrent()) return;
+      if (!isCurrent()) return false;
       // A refused request is not an unreachable one. Falling back to local mode
       // on a validation failure would persist exactly the project the server
       // just rejected, so surface it and let the user correct the input.
@@ -13559,7 +13611,7 @@ export function App() {
       ) {
         setCloudAvailable(true);
         setStatus(errorMessage(error, 'Could not create the project.'));
-        return;
+        return false;
       }
       const sessionExpired = error instanceof ApiError && error.status === 401;
       if (sessionExpired) {
@@ -13570,6 +13622,7 @@ export function App() {
         sessionExpired ? localUserId : (session?.userId ?? localUserId),
         `${errorMessage(error, 'Cloud unavailable')} Working locally · save it to your account later.`
       );
+      return opened;
     } finally {
       finishBusy();
     }
@@ -14606,6 +14659,81 @@ export function App() {
     }
   }
 
+  /**
+   * Renames a project from the library's tile or its Properties, without
+   * opening it (design review I14: renaming meant opening the project and
+   * waiting on the kernel). An account project is written there first,
+   * fenced on the version just read; see `renameLibraryProject`.
+   */
+  async function handleRenameLibraryProject(
+    project: ProjectSummary,
+    name: string
+  ): Promise<boolean> {
+    if (name.trim() === project.name) return true;
+    const inAccount =
+      Boolean(session) && cloudProjectIds.has(project.projectId);
+    if (session && !inAccount && !accountProjectListReached) {
+      // Unknown, not device-only: renaming this device's copy alone could
+      // leave the account's under the old name.
+      const message = `Your account could not be reached, so ${project.name} was not renamed. Try again once it is back.`;
+      setStatus(message);
+      announce(message, undefined, { tone: 'warning' });
+      return false;
+    }
+    setBusy(true);
+    try {
+      const { renameLibraryProject } =
+        await import('./lib/libraryProjectRename');
+      const stored = await renameLibraryProject(project.projectId, name, {
+        actorUserId: session?.userId ?? localUserId,
+        loadLocal: loadLocalProject,
+        saveLocal: saveLocalProject,
+        ...(inAccount
+          ? {
+              account: {
+                load: (projectId: string) => api.loadProject(projectId),
+                save: (input: SaveProjectDocumentRequest) =>
+                  api.saveProjectDocument(input),
+                markSynced: saveLastSyncedVersion
+              }
+            }
+          : {})
+      });
+      if (inAccount) {
+        remoteVersionsRef.current.set(project.projectId, stored.version);
+      }
+      setProjects((current) =>
+        current.map((candidate) =>
+          candidate.projectId === project.projectId
+            ? {
+                ...candidate,
+                name: stored.name,
+                documentVersion: stored.version
+              }
+            : candidate
+        )
+      );
+      setStatus(`Renamed ${project.name} to ${stored.name}.`);
+      return true;
+    } catch (error) {
+      const { LibraryRenameRefusal } =
+        await import('./lib/libraryProjectRename');
+      if (error instanceof LibraryRenameRefusal) {
+        setStatus(error.message);
+        announce(error.message, undefined, { tone: 'warning' });
+      } else if (error instanceof ApiError && error.status === 409) {
+        const message = `${project.name} changed in your account since this list was loaded. Open it to rename it.`;
+        setStatus(message);
+        announce(message, undefined, { tone: 'warning' });
+      } else {
+        reportLibraryFailure(error, `Could not rename ${project.name}.`);
+      }
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function handleMoveProjectToShelf(
     project: ProjectSummary,
     status: ProjectStatus
@@ -14849,6 +14977,32 @@ export function App() {
    * fallback, the derived-projection rescue and the shelf bookkeeping below,
    * which is where the interesting failure modes live.
    */
+  /**
+   * Gives a copy its source's card picture before its tile mounts. A tile
+   * that reads no picture asks the backfill, which finds none for a project
+   * never opened, and the copy showed the bare placeholder cube until it was.
+   * Never throws: the copy is complete without a picture.
+   */
+  async function seedCopyThumbnail(
+    source: ProjectDocument,
+    copy: ProjectDocument
+  ): Promise<void> {
+    try {
+      const [{ seedRecoveryCopyThumbnail }, { renderPartThumbnail }] =
+        await Promise.all([
+          import('./lib/recoveryCopyThumbnail'),
+          import('./lib/partThumbnail')
+        ]);
+      await seedRecoveryCopyThumbnail(source, copy, {
+        loadCached: loadProjectThumbnail,
+        save: saveProjectThumbnail,
+        render: renderPartThumbnail
+      });
+    } catch {
+      // A placeholder, filled the first time the copy is opened and left.
+    }
+  }
+
   async function handleDuplicateProject(
     project: ProjectSummary,
     saveState?: ProjectCheckpoint
@@ -14951,6 +15105,7 @@ export function App() {
               response.project.organization
             ).catch(() => undefined);
           }
+          await seedCopyThumbnail(localSource ?? localCopy, localCopy);
           setProjects((current) =>
             [...current, response.project].sort(compareProjectSummaries)
           );
@@ -14990,7 +15145,7 @@ export function App() {
       const copy = duplicateProjectDocument(
         source,
         duplicateProjectName(
-          head.name,
+          copyBaseName(head.projectId, head.name),
           projects.map((summary) => summary.name)
         ),
         session?.userId ?? localUserId,
@@ -15012,6 +15167,7 @@ export function App() {
       await saveLocalProjectOrganization(copy.projectId, organization, {
         mirrorPending: true
       }).catch(() => undefined);
+      await seedCopyThumbnail(source, copy);
       setProjects((current) =>
         [...current, summarizeLocalDocument(copy, organization)].sort(
           compareProjectSummaries
@@ -16990,6 +17146,32 @@ export function App() {
     shaprPreviewAbortRef.current?.abort();
     shaprPreviewAbortRef.current = null;
     setPendingShaprImport(null);
+  }
+
+  /**
+   * Files dropped on the start screen, or picked through its Import. A
+   * backup restores as it does from the File menu; CAD files make a new
+   * project named for them, and the import then runs in it once it is on
+   * screen — the same import Import CAD files runs, with its units prompt
+   * and progress card. The workspace's own drop target is not mounted here,
+   * and before this the browser opened or downloaded the file instead.
+   */
+  async function handleStartScreenFiles(files: File[], units: UnitSystem) {
+    const { planStartScreenImport } = await import('./lib/startScreenImport');
+    const plan = planStartScreenImport(files);
+    if (plan.kind === 'refuse') {
+      setStatus(plan.message);
+      announce(plan.message, undefined, { tone: 'warning' });
+      return;
+    }
+    if (plan.kind === 'backup') {
+      await handleImportProject(plan.file);
+      return;
+    }
+    pendingStartImportRef.current = { files: plan.files, projectId: null };
+    if (!(await handleCreateProject(plan.name, units))) {
+      pendingStartImportRef.current = null;
+    }
   }
 
   /**
@@ -30593,6 +30775,9 @@ export function App() {
       <>
         <StartScreen
           onImportProject={(file) => void handleImportProject(file)}
+          onImportFiles={(files, units) =>
+            void handleStartScreenFiles(files, units)
+          }
           projects={projects}
           status={status}
           previousWorkspaceStatus={previousWorkspaceStatus.current}
@@ -30627,6 +30812,7 @@ export function App() {
           onOpenSettings={openSettings}
           onSignIn={() => openSettingsAt('account')}
           onDuplicate={(project) => void handleDuplicateProject(project)}
+          onRename={handleRenameLibraryProject}
           loadProperties={loadProperties}
           cloudProjectIds={cloudProjectIds}
           accountProjectListReached={accountProjectListReached}
@@ -31162,7 +31348,7 @@ export function App() {
         : 'Section view: on',
       group: 'View',
       keywords: ['section', 'cut', 'clip', 'plane'],
-      icon: <Slice size={16} aria-hidden="true" />,
+      icon: <SquareSplitVertical size={16} aria-hidden="true" />,
       disabledReason: viewerBodies.length === 0 ? 'Create a body first' : null,
       run: toggleSectionView
     },
@@ -32423,9 +32609,12 @@ export function App() {
             }
             onView={requestView}
             {...(savedViewsControl ? { savedViews: savedViewsControl } : {})}
-            onCycleDisplayMode={cycleDisplayMode}
+            onDisplayMode={setDisplayMode}
+            onToggleXray={toggleXray}
             onToggleProjection={toggleProjection}
             onToggleOrbitMode={toggleOrbitMode}
+            onToggleSection={toggleSectionView}
+            nothingToSection={!viewerBodies.some((body) => !body.consumed)}
           />
         ) : // The sketch session brings its own tool rail. Before it, while
         // the plane is being picked, the plane chooser in the command slot
@@ -33487,7 +33676,8 @@ export function App() {
             onMeasure={toggleMeasure}
             onView={requestView}
             {...(savedViewsControl ? { savedViews: savedViewsControl } : {})}
-            onCycleDisplayMode={cycleDisplayMode}
+            onDisplayMode={setDisplayMode}
+            onToggleXray={toggleXray}
             onToggleProjection={toggleProjection}
             onToggleOrbitMode={toggleOrbitMode}
             sectionRange={

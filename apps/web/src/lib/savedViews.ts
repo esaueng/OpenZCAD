@@ -178,6 +178,28 @@ export function saveView(
     : { ok: false, reason: 'This browser is not keeping saved views.' };
 }
 
+/** The longest name a saved view keeps; the flyout row is one line. */
+export const SAVED_VIEW_NAME_MAX = 40;
+
+/**
+ * Renames a saved view. A blank name keeps the old one. The views after the
+ * change, or null when the browser refused the write.
+ */
+export function renameSavedView(
+  projectId: string,
+  viewId: string,
+  name: string,
+  storage: StorageLike | null = defaultStorage()
+): SavedView[] | null {
+  const views = loadSavedViews(projectId, storage);
+  const trimmed = name.trim().slice(0, SAVED_VIEW_NAME_MAX);
+  if (!trimmed) return views;
+  const next = views.map((view) =>
+    view.id === viewId ? { ...view, name: trimmed } : view
+  );
+  return write(projectId, next, storage) ? next : null;
+}
+
 /** The remaining views, or null when the browser refused the write. */
 export function deleteSavedView(
   projectId: string,
