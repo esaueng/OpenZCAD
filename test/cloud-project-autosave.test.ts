@@ -32,6 +32,7 @@ import {
 } from '../apps/web/src/lib/api';
 import worker from '../apps/web/worker/index';
 import {
+  checkpointWasCancelled,
   CloudProjectAutosave,
   PROJECT_AUTOSAVE_IDLE_MS,
   PROJECT_AUTOSAVE_IDLE_RETRY_MS,
@@ -214,6 +215,52 @@ describe('explicit checkpoints', () => {
       expectedVersion: 3,
       document: live
     });
+    controller.dispose();
+  });
+
+  it.each([
+    [409, 'REVISION_CONFLICT', 'conflict'],
+    [413, 'PROJECT_STORAGE_QUOTA', 'refused'],
+    [503, 'PROJECT_DOCUMENT_UNAVAILABLE', 'repair']
+  ] as const)(
+    'reports a checkpoint stopped by a %s/%s drain as halted, not cancelled',
+    async (status, code, state) => {
+      const respond = vi.fn().mockRejectedValue(
+        new ApiError(status, 'Account write refused.', code, {
+          currentVersion: 5
+        })
+      );
+      const { controller, statuses } = harness({ respond });
+      const base = documentAt(2);
+      controller.openProject(base.projectId, 2);
+      controller.schedule(documentAt(3, base));
+      const write = vi.fn(
+        async ({ document }: { document: ProjectDocument }) => document
+      );
+      await expect(
+        controller.saveCheckpoint(base.projectId, () => base, write)
+      ).resolves.toBeNull();
+      expect(write).not.toHaveBeenCalled();
+      expect(lastState(statuses)).toBe(state);
+      // The App keeps the controller's state instead of settling to local.
+      expect(checkpointWasCancelled(controller)).toBe(false);
+      controller.dispose();
+    }
+  );
+
+  it('reports a checkpoint whose project moved on as cancelled', async () => {
+    const { controller } = harness();
+    const base = documentAt(2);
+    controller.openProject(base.projectId, 2);
+    await expect(
+      controller.saveCheckpoint(
+        base.projectId,
+        () => null,
+        async ({ document }) => document
+      )
+    ).resolves.toBeNull();
+    expect(checkpointWasCancelled(controller)).toBe(true);
+    expect(checkpointWasCancelled(null)).toBe(true);
     controller.dispose();
   });
 

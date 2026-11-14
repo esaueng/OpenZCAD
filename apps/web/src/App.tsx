@@ -509,6 +509,7 @@ import {
   setCloudFunctionsEnabled
 } from './lib/cloudMode';
 import {
+  checkpointWasCancelled,
   CloudProjectAutosave,
   currentVersionOf,
   PROJECT_TOO_LARGE_FOR_ACCOUNT,
@@ -16212,11 +16213,16 @@ export function App() {
           });
       if (!saved) {
         if (isCurrentProject()) {
-          // The save point was not made (the project changed mode or moved
-          // on meanwhile); settle the indicator rather than leave "Saving".
-          // The device copy was written before the account checkpoint began.
-          setSaveState('local');
-          setStatus('Save point not made. Your work is saved on this device.');
+          // Cancelled (the project changed mode or moved on meanwhile):
+          // settle the indicator rather than leave "Saving". The device copy
+          // was written before the account checkpoint began. A halted
+          // controller has already reported its own state; keep it.
+          if (checkpointWasCancelled(controller)) {
+            setSaveState('local');
+            setStatus(
+              'Save point not made. Your work is saved on this device.'
+            );
+          }
           controller?.schedule(savingManager.document);
         }
         return;

@@ -194,6 +194,19 @@ function browserConnectivity(): CloudProjectAutosaveConnectivity {
  * long session costs a bounded number of row updates instead of one full
  * document snapshot per autosave. Explicit saves still write history.
  */
+/**
+ * Whether an explicit checkpoint that came back without a save was simply
+ * cancelled (the project moved on or changed mode), so the caller should
+ * settle the indicator itself. A halted controller already reported its
+ * own, more specific state (conflict, refused, repair); overwriting it
+ * would hide the action that state offers.
+ */
+export function checkpointWasCancelled(
+  controller: Pick<CloudProjectAutosave, 'isHalted'> | null
+): boolean {
+  return !controller?.isHalted;
+}
+
 export class CloudProjectAutosave {
   readonly #options: CloudProjectAutosaveOptions;
   readonly #connectivity: CloudProjectAutosaveConnectivity;
