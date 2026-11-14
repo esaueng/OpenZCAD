@@ -43,6 +43,7 @@ export * from './e2ee-contacts';
 export * from './e2ee-assistant-consents';
 export * from './e2ee-invitations';
 export * from './e2ee-share-links';
+export * from './share-link-token';
 export * from './e2ee-project-migrations';
 import type { ReferenceImageSet } from './reference-images';
 export type Brand<T, Name extends string> = T & { readonly __brand: Name };

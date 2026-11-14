@@ -50,7 +50,7 @@ for (const action of ['create', 'demo', 'import'] as const) {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    await page.route('**/api/share/*', async (route) => {
+    await page.route('**/api/share', async (route) => {
       requested = true;
       await gate;
       await route.fulfill({
@@ -140,7 +140,7 @@ test('a refused backup import keeps the active share model and URL', async ({
     'Retained active share',
     toUserId('owner')
   );
-  await page.route('**/api/share/*', (route) =>
+  await page.route('**/api/share', (route) =>
     route.fulfill({
       json: { document, project: { projectId: document.projectId, name: document.name }, mode: 'tweak' }
     })
@@ -181,7 +181,7 @@ test('a newer share wins over a held restore that saves locally without opening'
   const gate = new Promise<void>((resolve) => {
     release = resolve;
   });
-  await page.route('**/api/share/*', async (route) => {
+  await page.route('**/api/share', async (route) => {
     requested = true;
     await gate;
     await route.fulfill({
