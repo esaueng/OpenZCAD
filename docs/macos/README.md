@@ -51,9 +51,11 @@ on the minimum supported macOS version remains a signed-beta release gate.
 
 Connect the 3Dconnexion SpaceMouse Pro (3DX-700040, USB `046d:c62b`) and
 bring the desktop model viewport to the foreground. OpenZCAD reads the
-device directly through macOS IOHID. If device input is unavailable, quit
-3DconnexionHelper if it is running. Reconnect the device if macOS has lost the
-USB connection.
+device directly through macOS IOHID. While OpenZCAD is running, it opens
+this device exclusively so the cap does not move the macOS pointer. Quit
+OpenZCAD to release the SpaceMouse for other apps. If device input is
+unavailable, quit 3DconnexionHelper if it is running, then relaunch OpenZCAD.
+Reconnect the device if macOS has lost the USB connection.
 
 | Control                                 | View action                                    |
 | --------------------------------------- | ---------------------------------------------- |

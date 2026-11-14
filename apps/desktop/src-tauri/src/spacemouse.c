@@ -1,6 +1,7 @@
 #include <CoreFoundation/CoreFoundation.h>
 #include <IOKit/hid/IOHIDManager.h>
 #include <stdint.h>
+#include <stdio.h>
 
 typedef void (*ReportSink)(void *, const uint8_t *, size_t);
 
@@ -64,7 +65,12 @@ SpaceMouse *openzcad_spacemouse_start(ReportSink sink, void *context) {
 
     IOHIDManagerRegisterInputReportCallback(reader->manager, input_report, reader);
     IOHIDManagerRegisterDeviceRemovalCallback(reader->manager, removed, reader);
-    if (IOHIDManagerOpen(reader->manager, kIOHIDOptionsTypeNone) != kIOReturnSuccess) {
+    // Give only the matched SpaceMouse to OpenZCAD. A shared open also feeds
+    // the system's pointer mapper, so the cap can move the macOS cursor.
+    IOReturn result = IOHIDManagerOpen(reader->manager, kIOHIDOptionsTypeSeizeDevice);
+    if (result != kIOReturnSuccess) {
+        fprintf(stderr, "OpenZCAD: could not open SpaceMouse Pro exclusively (0x%08x)\n",
+                (unsigned int)result);
         CFRelease(reader->manager);
         free(reader);
         return NULL;
@@ -75,7 +81,7 @@ SpaceMouse *openzcad_spacemouse_start(ReportSink sink, void *context) {
 
 void openzcad_spacemouse_stop(SpaceMouse *reader) {
     IOHIDManagerUnscheduleFromRunLoop(reader->manager, CFRunLoopGetMain(), kCFRunLoopDefaultMode);
-    IOHIDManagerClose(reader->manager, kIOHIDOptionsTypeNone);
+    IOHIDManagerClose(reader->manager, kIOHIDOptionsTypeSeizeDevice);
     CFRelease(reader->manager);
     if (reader->device) CFRelease(reader->device);
     free(reader);
