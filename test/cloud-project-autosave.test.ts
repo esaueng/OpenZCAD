@@ -25,7 +25,11 @@ import {
   type ProjectDocument,
   type SaveProjectDocumentResponse
 } from '@openzcad/shared';
-import { api, ApiError } from '../apps/web/src/lib/api';
+import {
+  api,
+  ApiError,
+  retryWhileStorageCleanupPending
+} from '../apps/web/src/lib/api';
 import worker from '../apps/web/worker/index';
 import {
   CloudProjectAutosave,
@@ -213,61 +217,56 @@ describe('explicit checkpoints', () => {
     controller.dispose();
   });
 
-  it('retries an explicit checkpoint held back while earlier saves free space, with the same snapshot', async () => {
-    const { controller } = harness();
-    const live = documentAt(2);
-    controller.openProject(live.projectId, 1);
+  it('drops a queued autosave an explicit checkpoint already carried', async () => {
     const pending = () =>
       new ApiError(
         503,
         'Freeing space from earlier saves. Try again in a moment.',
         'PROJECT_STORAGE_CLEANUP_PENDING'
       );
-    const checkpoint = vi
-      .fn(async ({ document }: { document: ProjectDocument }) => document)
+    const respond = vi
+      .fn<
+        (input: {
+          expectedVersion: number;
+          document: ProjectDocument;
+        }) => Promise<SaveProjectDocumentResponse>
+      >()
       .mockRejectedValueOnce(pending())
-      .mockRejectedValueOnce(pending());
+      .mockRejectedValueOnce(pending())
+      .mockImplementation(async (input) => ({
+        projectId: input.document.projectId,
+        version: input.document.version,
+        updatedAt: '2026-01-01T00:00:00.000Z'
+      }));
+    const { controller, statuses } = harness({ respond });
+    const base = documentAt(2);
+    controller.openProject(base.projectId, 2);
+    const live = documentAt(3, base);
+    controller.schedule(live);
+    // The autosave is held back and waits to retry.
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+    await controller.whenIdle();
+    expect(respond).toHaveBeenCalledTimes(1);
+    const held = gate();
     const saving = controller.saveCheckpoint(
       live.projectId,
       () => live,
-      checkpoint
+      async ({ document }) => {
+        await held.wait;
+        return document;
+      }
     );
+    // The autosave's retry comes due while the checkpoint is in flight and
+    // queues behind it with the very snapshot the checkpoint carries.
     await vi.advanceTimersByTimeAsync(10_000);
+    held.open();
     await expect(saving).resolves.toBe(live);
-    expect(checkpoint).toHaveBeenCalledTimes(3);
-    for (const [input] of checkpoint.mock.calls) {
-      expect(input).toEqual({
-        projectId: live.projectId,
-        expectedVersion: 1,
-        document: live
-      });
-    }
-    expect(controller.syncedVersion).toBe(2);
-    controller.dispose();
-  });
-
-  it('gives up on an explicit checkpoint that stays held back, and reports it', async () => {
-    const { controller } = harness();
-    const live = documentAt(2);
-    controller.openProject(live.projectId, 1);
-    const checkpoint = vi.fn(async () => {
-      throw new ApiError(
-        503,
-        'Freeing space from earlier saves. Try again in a moment.',
-        'PROJECT_STORAGE_CLEANUP_PENDING'
-      );
-    });
-    const saving = controller.saveCheckpoint(
-      live.projectId,
-      () => live,
-      checkpoint
-    );
-    const outcome = expect(saving).rejects.toMatchObject({
-      code: 'PROJECT_STORAGE_CLEANUP_PENDING'
-    });
-    await vi.advanceTimersByTimeAsync(60_000);
-    await outcome;
-    expect(checkpoint).toHaveBeenCalledTimes(8);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await controller.whenIdle();
+    // It is not uploaded again (which a pinned save point could refuse).
+    expect(respond).toHaveBeenCalledTimes(2);
+    expect(statuses.map((status) => status.state)).not.toContain('refused');
+    expect(controller.hasPendingChanges).toBe(false);
     controller.dispose();
   });
 
@@ -2111,5 +2110,69 @@ describe('cloud project autosave — the encrypted transport', () => {
       code: 'E2EE_READ_ONLY_DEVICE'
     });
     second.controller.dispose();
+  });
+});
+
+describe('retryWhileStorageCleanupPending', () => {
+  const pending = () =>
+    new ApiError(
+      503,
+      'Freeing space from earlier saves. Try again in a moment.',
+      'PROJECT_STORAGE_CLEANUP_PENDING'
+    );
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('retries only the write while space is being freed, then answers', async () => {
+    const write = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(pending())
+      .mockRejectedValueOnce(pending())
+      .mockResolvedValue('saved');
+    const result = retryWhileStorageCleanupPending(write, () => true);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await expect(result).resolves.toBe('saved');
+    expect(write).toHaveBeenCalledTimes(3);
+  });
+
+  it('stops without writing again once the save no longer applies', async () => {
+    const write = vi.fn<() => Promise<string>>().mockRejectedValue(pending());
+    let wanted = true;
+    const result = retryWhileStorageCleanupPending(write, () => wanted);
+    await vi.advanceTimersByTimeAsync(0);
+    wanted = false;
+    await vi.advanceTimersByTimeAsync(5_000);
+    await expect(result).resolves.toBeNull();
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives up after its attempts, and does not retry other failures', async () => {
+    const stuck = vi.fn<() => Promise<string>>().mockRejectedValue(pending());
+    const outcome = expect(
+      retryWhileStorageCleanupPending(stuck, () => true)
+    ).rejects.toMatchObject({ code: 'PROJECT_STORAGE_CLEANUP_PENDING' });
+    await vi.advanceTimersByTimeAsync(60_000);
+    await outcome;
+    expect(stuck).toHaveBeenCalledTimes(8);
+
+    const refused = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValue(
+        new ApiError(
+          413,
+          'Account storage limit reached.',
+          'PROJECT_STORAGE_QUOTA'
+        )
+      );
+    await expect(
+      retryWhileStorageCleanupPending(refused, () => true)
+    ).rejects.toMatchObject({ code: 'PROJECT_STORAGE_QUOTA' });
+    expect(refused).toHaveBeenCalledTimes(1);
   });
 });

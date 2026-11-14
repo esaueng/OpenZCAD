@@ -435,6 +435,7 @@ import {
   isEncryptedProject,
   isProjectDocumentUnavailableError,
   isProjectStorageCleanupPendingError,
+  retryWhileStorageCleanupPending,
   isProjectFormatUnsupportedError
 } from './lib/api';
 import type { ProjectListingProgress } from './lib/api';
@@ -16176,11 +16177,18 @@ export function App() {
         await saveLocalProject(savingDocument);
         if (!readDocument()) return null;
         accountWriteStarted = true;
-        return api.saveRevision({
-          ...input,
-          reason,
-          document: withoutDerivedProjection(savingDocument)
-        });
+        // A save held back while earlier saves' copies are freed is retried
+        // here, account write only: the device copy is already saved, and
+        // edits may have saved newer device copies since.
+        return retryWhileStorageCleanupPending(
+          () =>
+            api.saveRevision({
+              ...input,
+              reason,
+              document: withoutDerivedProjection(savingDocument)
+            }),
+          () => Boolean(readDocument())
+        );
       };
       const currentDocument = readDocument();
       if (!currentDocument) return;

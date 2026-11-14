@@ -143,6 +143,33 @@ export function isProjectStorageCleanupPendingError(
   );
 }
 
+/**
+ * Runs an account write, trying it again while the account answers that
+ * earlier saves' copies are still being freed: each attempt frees a bounded
+ * share, and the refusal comes before anything is written, so a retry never
+ * saves twice. Stops early (null) once `stillWanted` says the save no longer
+ * applies, e.g. the project was closed meanwhile.
+ */
+export async function retryWhileStorageCleanupPending<T>(
+  write: () => Promise<T>,
+  stillWanted: () => boolean,
+  options: { attempts?: number; delayMs?: number } = {}
+): Promise<T | null> {
+  const attempts = options.attempts ?? 8;
+  const delayMs = options.delayMs ?? 1_000;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await write();
+    } catch (error) {
+      if (!isProjectStorageCleanupPendingError(error) || attempt >= attempts) {
+        throw error;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    if (!stillWanted()) return null;
+  }
+}
+
 export function isProjectDocumentUnavailableError(
   error: unknown
 ): error is ApiError {

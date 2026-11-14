@@ -14,20 +14,8 @@ import {
   withEchoedSavePoints,
   withoutDerivedProjection
 } from '@openzcad/document-core';
-import {
-  ApiError,
-  isProjectDocumentUnavailableError,
-  isProjectStorageCleanupPendingError
-} from './api';
+import { ApiError, isProjectDocumentUnavailableError } from './api';
 import { sameLocalProjectContent } from './localProjectAutosave';
-
-/**
- * Attempts, and the pause between them, for an explicit checkpoint held
- * back while earlier saves' replaced copies are freed. Each attempt frees a
- * bounded share, so a handful drains any backlog a failed delete leaves.
- */
-const CHECKPOINT_CLEANUP_ATTEMPTS = 8;
-const CHECKPOINT_CLEANUP_RETRY_MS = 1_000;
 
 /**
  * What a `refused` write says when the account will never hold the document
@@ -224,6 +212,12 @@ export class CloudProjectAutosave {
   #acknowledgedDocument: ProjectDocument | null = null;
   /** Writes taken off `#pending`, including the active request. */
   readonly #queued = new Set<PendingSave>();
+  /**
+   * Queued writes an explicit checkpoint already carried: queued behind it
+   * with no edit newer than its snapshot. Uploading one again would only
+   * duplicate the checkpoint's write, so it is dropped as stale.
+   */
+  readonly #checkpointed = new WeakSet<PendingSave>();
   #timer: ReturnType<typeof setTimeout> | null = null;
   #queue: Promise<SaveResult> = Promise.resolve({ state: 'stale' });
   #automaticRetries = 0;
@@ -713,33 +707,11 @@ export class CloudProjectAutosave {
       const document = readDocument();
       if (!document || document.projectId !== projectId) return null;
       const editEpoch = this.#editEpoch;
-      const input = {
+      const saved = await write({
         projectId: document.projectId,
         expectedVersion: this.#project!.version,
         document
-      };
-      // A checkpoint held back while earlier saves' copies are freed is
-      // retried with the same snapshot (and so the same save point name):
-      // each attempt frees more. The refusal comes before anything is
-      // written, so a retry cannot save twice.
-      let saved: ProjectDocument | null;
-      for (let attempt = 1; ; attempt += 1) {
-        try {
-          saved = await write(input);
-          break;
-        } catch (error) {
-          if (
-            !isProjectStorageCleanupPendingError(error) ||
-            attempt >= CHECKPOINT_CLEANUP_ATTEMPTS ||
-            !this.#isActive(epoch, projectId)
-          ) {
-            throw error;
-          }
-          await new Promise((resolve) =>
-            setTimeout(resolve, CHECKPOINT_CLEANUP_RETRY_MS)
-          );
-        }
-      }
+      });
       if (saved && this.#isActive(epoch, projectId)) {
         this.#project!.version = saved.version;
         this.#acknowledgedDocument = saved;
@@ -748,6 +720,14 @@ export class CloudProjectAutosave {
         // acknowledged fence rather than being cancelled as stale.
         if (this.#pending && this.#pending.editEpoch <= editEpoch) {
           this.#pending = null;
+        }
+        for (const waiting of this.#queued) {
+          if (
+            waiting.projectId === projectId &&
+            waiting.editEpoch <= editEpoch
+          ) {
+            this.#checkpointed.add(waiting);
+          }
         }
         // Writes debounced or queued behind this checkpoint carry documents
         // edited while it was in flight, without the save point the account
@@ -786,7 +766,10 @@ export class CloudProjectAutosave {
   }
 
   async #persist(next: PendingSave, epoch: number): Promise<SaveResult> {
-    if (!this.#isActive(epoch, next.projectId)) {
+    if (
+      !this.#isActive(epoch, next.projectId) ||
+      this.#checkpointed.has(next)
+    ) {
       this.#queued.delete(next);
       return { state: 'stale' };
     }
