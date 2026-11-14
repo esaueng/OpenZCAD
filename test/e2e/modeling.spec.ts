@@ -820,8 +820,25 @@ test('keeps a source circle stable over its coincident extrude edge', async ({
         edge.renderOrder === idleBodyEdges[0]!.renderOrder
     )
   ).toBe(true);
+  // Curved-surface outlines (#1290) are idle ink drawn with the crisp edges:
+  // the same layer and depth contract, not a hover or selection overlay.
+  const silhouetteEdges = renderPolicy.bodyEdges.filter(
+    (edge) => edge.name === 'body-edge-silhouette'
+  );
+  expect(silhouetteEdges.length).toBeGreaterThan(0);
+  expect(
+    silhouetteEdges.every(
+      (edge) =>
+        edge.depthTest &&
+        !edge.depthWrite &&
+        edge.renderOrder === idleBodyEdges[0]!.renderOrder
+    )
+  ).toBe(true);
   const overlayEdges = renderPolicy.bodyEdges.filter(
-    (edge) => edge.name !== 'body-edge' && edge.name !== 'body-edge-tangent'
+    (edge) =>
+      edge.name !== 'body-edge' &&
+      edge.name !== 'body-edge-tangent' &&
+      edge.name !== 'body-edge-silhouette'
   );
   expect(
     overlayEdges.every(

@@ -50,6 +50,19 @@ test('edits a 33-feature history, refuses invalid geometry, undoes, redoes and e
     window.Worker = class extends Original {
       constructor(...args: ConstructorParameters<typeof Worker>) {
         super(...args);
+        // A commit whose validated result is adopted as the live one posts
+        // no broadcast, so no broadcast reports ready: the page tells the
+        // worker what is live instead (#1356). That is the exact result
+        // becoming live, as a broadcast's ready is.
+        const post = this.postMessage.bind(this);
+        this.postMessage = ((
+          message: unknown,
+          transfer?: Transferable[] | StructuredSerializeOptions
+        ) => {
+          if ((message as { type?: string } | null)?.type === 'live-content')
+            window.__historyProbe.ready.push(performance.now());
+          return post(message, transfer as StructuredSerializeOptions);
+        }) as typeof this.postMessage;
         this.addEventListener('message', (event: MessageEvent) => {
           const state = event.data as {
             type?: string;

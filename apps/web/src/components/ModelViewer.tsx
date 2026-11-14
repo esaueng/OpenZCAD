@@ -7811,6 +7811,8 @@ export function ModelViewer({
           delete renderer.domElement.dataset.e2eChipAnchorWorldY;
           delete renderer.domElement.dataset.e2eChipAnchorWorldZ;
           delete renderer.domElement.dataset.e2eChipAnchorRig;
+          delete renderer.domElement.dataset.e2eChipPinX;
+          delete renderer.domElement.dataset.e2eChipPinY;
         }
         return;
       }
@@ -7899,6 +7901,8 @@ export function ModelViewer({
           delete renderer.domElement.dataset.e2eChipAnchorWorldY;
           delete renderer.domElement.dataset.e2eChipAnchorWorldZ;
           delete renderer.domElement.dataset.e2eChipAnchorRig;
+          delete renderer.domElement.dataset.e2eChipPinX;
+          delete renderer.domElement.dataset.e2eChipPinY;
         }
         return;
       }
@@ -8005,6 +8009,15 @@ export function ModelViewer({
         renderer.domElement.dataset.e2eChipAnchorWorldY = String(anchor.y);
         renderer.domElement.dataset.e2eChipAnchorWorldZ = String(anchor.z);
         renderer.domElement.dataset.e2eChipAnchorRig = rig.kind;
+        // Where the pin the label hangs beside projects (the arrow's foot),
+        // as distinct from `e2eHandle*`, a grab point on the arrow's shaft.
+        if (pinScreenAt) {
+          renderer.domElement.dataset.e2eChipPinX = String(pinScreenAt.x);
+          renderer.domElement.dataset.e2eChipPinY = String(pinScreenAt.y);
+        } else {
+          delete renderer.domElement.dataset.e2eChipPinX;
+          delete renderer.domElement.dataset.e2eChipPinY;
+        }
       }
       if (e2eCanvasHooksEnabled && rig?.kind === 'cylinder-radius') {
         const scale =

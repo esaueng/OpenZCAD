@@ -432,9 +432,11 @@ async function expectAnchorMatchesProjection(
     bounds.height
   );
   // The arrow stands on the anchor; its label hangs a fixed gap beside it.
+  // The pin is the arrow's foot (`e2eChipPin*`), not the grab point on its
+  // shaft that `e2eHandle*` reports for drags (#1276).
   const pin = await canvas.evaluate((element) => ({
-    x: Number(element.dataset.e2eHandleX),
-    y: Number(element.dataset.e2eHandleY)
+    x: Number(element.dataset.e2eChipPinX),
+    y: Number(element.dataset.e2eChipPinY)
   }));
   expect(pin.x).toBeCloseTo(expected.x, 1);
   expect(pin.y).toBeCloseTo(expected.y, 1);
