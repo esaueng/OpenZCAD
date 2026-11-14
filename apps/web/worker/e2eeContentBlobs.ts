@@ -54,6 +54,7 @@ import {
   type E2eeUploadableBlobKind
 } from '@openzcad/shared';
 import {
+  claimObjectKeysForDelete,
   D1R2PersistenceService,
   EncryptedBlobError,
   isE2eeContentBlobStorageReady,
@@ -594,29 +595,61 @@ export async function collectContentBlobs(
     if (!bucket) return;
     const { results } = await db
       .prepare(
-        `SELECT blob_id, object_key FROM e2ee_content_blobs
+        `SELECT blob_id, object_key, created_at FROM e2ee_content_blobs
          WHERE project_id = ? AND state = 'deleting' LIMIT ?`
       )
       .bind(projectId, COLLECT_BATCH)
-      .all<{ blob_id: string; object_key: string }>();
-    const removed: string[] = [];
-    for (const row of results ?? []) {
-      try {
-        await bucket.delete(row.object_key);
-        removed.push(row.blob_id);
-      } catch {
-        // Kept as `deleting`: the next pass deletes the object again.
+      .all<{ blob_id: string; object_key: string; created_at: string }>();
+    const rows = results ?? [];
+    // Migration 0050: a blob's key is reused by a retried upload of the
+    // same blob id, so its bytes are deleted only under a claim taken while
+    // no row but these very `deleting` rows names it. A row listed here may
+    // be gone by the claim (another pass collected it) and a re-upload may
+    // have committed the same blob id meanwhile: that newer row is not the
+    // listed one, so it keeps the key alive and nothing is deleted. A key
+    // named elsewhere holds a newer upload's bytes: the row goes, the
+    // object stays.
+    const claim = await claimObjectKeysForDelete(
+      db,
+      rows.map((row) => row.object_key),
+      {
+        deletingBlobs: rows.map((row) => ({
+          blobId: row.blob_id,
+          createdAt: row.created_at
+        }))
       }
-    }
-    if (removed.length) {
-      await db
-        .prepare(
-          `DELETE FROM e2ee_content_blobs
-           WHERE project_id = ? AND state = 'deleting'
-             AND blob_id IN (SELECT value FROM json_each(?))`
-        )
-        .bind(projectId, JSON.stringify(removed))
-        .run();
+    );
+    try {
+      // Every started delete settles before the claim is released.
+      const outcome = await claim.deleteObjects(bucket);
+      // Kept as `deleting`: a failed or lapsed delete, or a key another
+      // deleter holds. The next pass deletes the object again.
+      const removed = rows.filter(
+        (row) =>
+          !claim.contended.has(row.object_key) &&
+          (!claim.keys.has(row.object_key) ||
+            outcome.deleted.has(row.object_key))
+      );
+      if (removed.length) {
+        // Exactly the listed rows: a newer row of the same blob id differs
+        // in `created_at`, and is never removed here.
+        await db
+          .prepare(
+            `DELETE FROM e2ee_content_blobs
+             WHERE project_id = ? AND state = 'deleting'
+               AND EXISTS (SELECT 1 FROM json_each(?) d
+                           WHERE json_extract(d.value, '$[0]') = blob_id
+                             AND json_extract(d.value, '$[1]') = created_at)`
+          )
+          .bind(
+            projectId,
+            JSON.stringify(removed.map((row) => [row.blob_id, row.created_at]))
+          )
+          .run();
+      }
+    } finally {
+      // Rows first, then the claim (migration 0050's order).
+      await claim.release();
     }
   } catch {
     // Housekeeping. It does not get to fail a save.

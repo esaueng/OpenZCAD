@@ -247,6 +247,13 @@ The deploy command applies forward D1 migrations before publishing code. Do not
 delete or recreate D1, R2, or the Worker to update OpenZCAD. Review migration
 files before upgrading and test a backup when an update changes storage.
 
+Migration `0050_r2_key_tombstones.sql` adds a small `r2_key_tombstones` table
+and insert guards. Cleanups that delete R2 objects under reusable keys
+(content-addressed source assets, encrypted blobs) claim each key there
+first, so a cleanup that resumes late can never delete bytes a newer row
+stores under the same key. Claims expire after an hour, and nothing needs
+operator attention. Migration numbers can have gaps.
+
 Export D1 before a migration or major upgrade:
 
 ```bash
