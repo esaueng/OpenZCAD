@@ -1661,6 +1661,16 @@
   letter-spacing: -0.01em;
 }
 
+/* Settings focuses its heading (tabindex="-1") on open and on restore, so
+   Enter does not land on the brand button that closes the page. A reload by
+   keyboard (Cmd+R) leaves the browser in keyboard modality, so that
+   programmatic focus matched :focus-visible and boxed the title. The heading
+   is never a control or a tab stop: Tab moves on from it to the first one,
+   which draws its own ring. */
+.settings-head-title:focus {
+  outline: none;
+}
+
 .settings-head .settings-save-message {
   flex: 1;
   text-align: left;
