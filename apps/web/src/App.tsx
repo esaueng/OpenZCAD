@@ -434,6 +434,7 @@ import {
   encryptsNewProjects,
   isEncryptedProject,
   isProjectDocumentUnavailableError,
+  isProjectStorageCleanupPendingError,
   isProjectFormatUnsupportedError
 } from './lib/api';
 import type { ProjectListingProgress } from './lib/api';
@@ -16262,9 +16263,11 @@ export function App() {
       }
       // A local failure or a server refusal does not mean the account is
       // unreachable. Only an attempted account write with no usable response
-      // should turn the connectivity indicator offline.
+      // should turn the connectivity indicator offline. A save still held
+      // back while earlier copies are freed reached the account too.
       const accountUnreachable =
         accountWriteStarted &&
+        !isProjectStorageCleanupPendingError(error) &&
         (!(error instanceof ApiError) || error.status >= 500);
       if (accountUnreachable) setCloudAvailable(false);
       setSaveState(
@@ -30554,9 +30557,7 @@ export function App() {
             boxSelectedFaces.length > 1
           ) {
             event.preventDefault();
-            if (
-              new Set(boxSelectedFaces.map((face) => face.bodyId)).size > 1
-            ) {
+            if (new Set(boxSelectedFaces.map((face) => face.bodyId)).size > 1) {
               setStatus(
                 'Faces on different bodies cannot be deleted together. Select faces on one body.'
               );

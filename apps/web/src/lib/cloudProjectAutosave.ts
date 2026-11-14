@@ -14,8 +14,20 @@ import {
   withEchoedSavePoints,
   withoutDerivedProjection
 } from '@openzcad/document-core';
-import { ApiError, isProjectDocumentUnavailableError } from './api';
+import {
+  ApiError,
+  isProjectDocumentUnavailableError,
+  isProjectStorageCleanupPendingError
+} from './api';
 import { sameLocalProjectContent } from './localProjectAutosave';
+
+/**
+ * Attempts, and the pause between them, for an explicit checkpoint held
+ * back while earlier saves' replaced copies are freed. Each attempt frees a
+ * bounded share, so a handful drains any backlog a failed delete leaves.
+ */
+const CHECKPOINT_CLEANUP_ATTEMPTS = 8;
+const CHECKPOINT_CLEANUP_RETRY_MS = 1_000;
 
 /**
  * What a `refused` write says when the account will never hold the document
@@ -701,11 +713,33 @@ export class CloudProjectAutosave {
       const document = readDocument();
       if (!document || document.projectId !== projectId) return null;
       const editEpoch = this.#editEpoch;
-      const saved = await write({
+      const input = {
         projectId: document.projectId,
         expectedVersion: this.#project!.version,
         document
-      });
+      };
+      // A checkpoint held back while earlier saves' copies are freed is
+      // retried with the same snapshot (and so the same save point name):
+      // each attempt frees more. The refusal comes before anything is
+      // written, so a retry cannot save twice.
+      let saved: ProjectDocument | null;
+      for (let attempt = 1; ; attempt += 1) {
+        try {
+          saved = await write(input);
+          break;
+        } catch (error) {
+          if (
+            !isProjectStorageCleanupPendingError(error) ||
+            attempt >= CHECKPOINT_CLEANUP_ATTEMPTS ||
+            !this.#isActive(epoch, projectId)
+          ) {
+            throw error;
+          }
+          await new Promise((resolve) =>
+            setTimeout(resolve, CHECKPOINT_CLEANUP_RETRY_MS)
+          );
+        }
+      }
       if (saved && this.#isActive(epoch, projectId)) {
         this.#project!.version = saved.version;
         this.#acknowledgedDocument = saved;

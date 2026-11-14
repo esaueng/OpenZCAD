@@ -213,6 +213,64 @@ describe('explicit checkpoints', () => {
     controller.dispose();
   });
 
+  it('retries an explicit checkpoint held back while earlier saves free space, with the same snapshot', async () => {
+    const { controller } = harness();
+    const live = documentAt(2);
+    controller.openProject(live.projectId, 1);
+    const pending = () =>
+      new ApiError(
+        503,
+        'Freeing space from earlier saves. Try again in a moment.',
+        'PROJECT_STORAGE_CLEANUP_PENDING'
+      );
+    const checkpoint = vi
+      .fn(async ({ document }: { document: ProjectDocument }) => document)
+      .mockRejectedValueOnce(pending())
+      .mockRejectedValueOnce(pending());
+    const saving = controller.saveCheckpoint(
+      live.projectId,
+      () => live,
+      checkpoint
+    );
+    await vi.advanceTimersByTimeAsync(10_000);
+    await expect(saving).resolves.toBe(live);
+    expect(checkpoint).toHaveBeenCalledTimes(3);
+    for (const [input] of checkpoint.mock.calls) {
+      expect(input).toEqual({
+        projectId: live.projectId,
+        expectedVersion: 1,
+        document: live
+      });
+    }
+    expect(controller.syncedVersion).toBe(2);
+    controller.dispose();
+  });
+
+  it('gives up on an explicit checkpoint that stays held back, and reports it', async () => {
+    const { controller } = harness();
+    const live = documentAt(2);
+    controller.openProject(live.projectId, 1);
+    const checkpoint = vi.fn(async () => {
+      throw new ApiError(
+        503,
+        'Freeing space from earlier saves. Try again in a moment.',
+        'PROJECT_STORAGE_CLEANUP_PENDING'
+      );
+    });
+    const saving = controller.saveCheckpoint(
+      live.projectId,
+      () => live,
+      checkpoint
+    );
+    const outcome = expect(saving).rejects.toMatchObject({
+      code: 'PROJECT_STORAGE_CLEANUP_PENDING'
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    await outcome;
+    expect(checkpoint).toHaveBeenCalledTimes(8);
+    controller.dispose();
+  });
+
   it('serializes a newer autosave behind a checkpoint without dropping the edit', async () => {
     const { controller, saves } = harness();
     let live = documentAt(2);
@@ -1094,7 +1152,7 @@ describe('cloud project autosave — refusals', () => {
       .mockRejectedValueOnce(
         new ApiError(
           503,
-          'Freeing space from earlier saves. Saving again shortly.',
+          'Freeing space from earlier saves. Try again in a moment.',
           'PROJECT_STORAGE_CLEANUP_PENDING'
         )
       )

@@ -125,6 +125,24 @@ export class ApiError extends Error {
 
 export const PROJECT_DOCUMENT_UNAVAILABLE_CODE = 'PROJECT_DOCUMENT_UNAVAILABLE';
 
+/**
+ * A save held back while earlier saves' replaced copies are still being
+ * freed (migration 0049): each attempt frees more, so it is retried, not
+ * reported as a quota refusal or an unreachable account.
+ */
+export const PROJECT_STORAGE_CLEANUP_PENDING_CODE =
+  'PROJECT_STORAGE_CLEANUP_PENDING';
+
+export function isProjectStorageCleanupPendingError(
+  error: unknown
+): error is ApiError {
+  return (
+    error instanceof ApiError &&
+    error.status === 503 &&
+    error.code === PROJECT_STORAGE_CLEANUP_PENDING_CODE
+  );
+}
+
 export function isProjectDocumentUnavailableError(
   error: unknown
 ): error is ApiError {

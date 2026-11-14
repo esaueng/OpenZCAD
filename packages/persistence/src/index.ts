@@ -370,7 +370,7 @@ export class ProjectQuotaError extends Error {
  */
 export class ProjectStorageCleanupPendingError extends Error {
   constructor() {
-    super('Freeing space from earlier saves. Saving again shortly.');
+    super('Freeing space from earlier saves. Try again in a moment.');
     this.name = 'ProjectStorageCleanupPendingError';
   }
 }
