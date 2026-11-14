@@ -723,7 +723,7 @@ export const isE2eeInvitationStorageReady = cachedSchemaProbe(
 );
 
 /**
- * Whether migration 0048's signed-acceptance columns of `e2ee_invitations`
+ * Whether migration 0049's signed-acceptance columns of `e2ee_invitations`
  * exist. Invitations must not depend on them: until they are there, no
  * statement names them, every acceptance reads null (so owners add
  * nobody), and only posting an acceptance answers 503.
