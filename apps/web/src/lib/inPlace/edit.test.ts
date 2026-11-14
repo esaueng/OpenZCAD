@@ -940,6 +940,51 @@ describe('an untouched edit writes the feature back as stored', () => {
         anchor: 'end'
       }
     });
+    // Schema v57 (review #1458): a runout stored at an end of the face (a
+    // thread against a shoulder, written by a command) goes back a runout,
+    // though the panel would chamfer an end the span reaches. The probe's
+    // Ø6 × 20 boss: an untouched edit used to store `chamferStart` instead.
+    const shoulder: FeatureData = {
+      featureKind: 'thread',
+      targetBodyId: BODY,
+      faceHash: 31,
+      profile: 'iso-metric',
+      length: 5,
+      runoutStart: true
+    };
+    const { featureKind: _r, ...shoulderFields } = shoulder;
+    expect(untouched(feature(shoulder), {}, ctx)).toEqual({
+      tool: 'thread',
+      thread: shoulderFields
+    });
+    // A stored chamfer at a stopped-short end (a v53 thread is never one,
+    // but a command may write it) stays a chamfer the same way.
+    const stoppedChamfer: FeatureData = {
+      ...shoulder,
+      runoutStart: undefined,
+      chamferEnd: true
+    };
+    const {
+      featureKind: _c,
+      runoutStart: _s2,
+      ...stoppedFields
+    } = stoppedChamfer;
+    expect(untouched(feature(stoppedChamfer), {}, ctx)).toEqual({
+      tool: 'thread',
+      thread: stoppedFields
+    });
+    // Its extent edited, the reach decides again: from the face's start the
+    // span reaches that end, which takes the chamfer.
+    expect(untouched(feature(shoulder), { length: 4 }, ctx)).toEqual({
+      tool: 'thread',
+      thread: {
+        targetBodyId: BODY,
+        faceHash: 31,
+        profile: 'iso-metric',
+        length: 4,
+        chamferStart: true
+      }
+    });
   });
 
   it('helical sweep: an edit keeps how the helix was built', () => {

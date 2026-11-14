@@ -419,6 +419,81 @@ describe('thread command validation (schema v57)', () => {
     );
   });
 
+  it('refuses writing runouts and pipe threads into a document that declares v56 (review #1458)', () => {
+    const v56 = {
+      ...addPrimitiveFeature(
+        createProjectDocument('Old', toUserId('user_thread')),
+        {
+          name: 'Blank',
+          primitiveKind: 'cylinder',
+          dimensions: { radius: 3, height: 20 }
+        }
+      ),
+      schemaVersion: 56
+    } as unknown as ProjectDocument;
+    const target = v56.bodyOrder[0]!;
+    const refused =
+      /Thread runouts and pipe threads require project schema v57/;
+    // Creating a pipe thread, live.
+    expect(() =>
+      new CommandManager(v56).execute(
+        commandFactories.threadBody({
+          name: 'Thread',
+          targetBodyId: target,
+          faceHash: 1,
+          profile: 'npt',
+          pipeSize: '1/4'
+        })
+      )
+    ).toThrow(refused);
+    // A v53 thread still writes, and a partial patch adding a runout to it
+    // is refused; the document is left as it was.
+    const manager = new CommandManager(v56);
+    manager.execute(
+      commandFactories.threadBody({
+        name: 'Thread',
+        targetBodyId: target,
+        faceHash: 1,
+        profile: 'iso-metric',
+        length: 5
+      })
+    );
+    const before = manager.document;
+    expect(() =>
+      manager.execute(
+        commandFactories.updateFeature({
+          featureId: before.featureOrder.at(-1)!,
+          data: { runoutEnd: true }
+        })
+      )
+    ).toThrow(refused);
+    expect(manager.document).toBe(before);
+    expect(manager.document.schemaVersion).toBe(56);
+    expect(() => normalizeDocument(manager.document)).not.toThrow();
+    // A v57 document takes both.
+    const current = new CommandManager({
+      ...v56,
+      schemaVersion: PROJECT_DOCUMENT_SCHEMA_VERSION
+    });
+    current.execute(
+      commandFactories.threadBody({
+        name: 'Thread',
+        targetBodyId: target,
+        faceHash: 1,
+        profile: 'iso-metric',
+        length: 5
+      })
+    );
+    expect(() =>
+      current.execute(
+        commandFactories.updateFeature({
+          featureId: current.document.featureOrder.at(-1)!,
+          data: { runoutEnd: true }
+        })
+      )
+    ).not.toThrow();
+  });
+
   it('refuses a chamfer and a runout on one end', () => {
     expect(() =>
       apply({ profile: 'printable', chamferStart: true, runoutStart: true })

@@ -936,6 +936,50 @@ export function threadRequestFields(
 }
 
 /**
+ * An edit keeps each finished end's stored kind, a chamfer or (schema v57)
+ * a runout, while the span stands as stored: the same face, length, offset
+ * and anchor. The one Ends row cannot tell the two apart, and working the
+ * kind out again from where the span reaches would turn a runout stored at
+ * an end of the face (a thread against a shoulder) into a chamfer. Once the
+ * extent is edited, or an end is no longer asked for, the reach decides.
+ */
+export function keepStoredEndKinds(
+  thread: ThreadRequest,
+  saved: FeatureData | undefined
+): ThreadRequest {
+  if (saved?.featureKind !== 'thread') return thread;
+  const sameFace =
+    thread.faceHash === saved.faceHash ||
+    (thread.faceReference !== undefined &&
+      saved.faceReference !== undefined &&
+      thread.faceReference.lineageName === saved.faceReference.lineageName);
+  const sameExtent =
+    sameFace &&
+    thread.length === saved.length &&
+    thread.offset === saved.offset &&
+    (thread.anchor ?? 'start') === (saved.anchor ?? 'start');
+  if (!sameExtent) return thread;
+  const next: ThreadRequest = { ...thread };
+  const keys = {
+    start: { chamfer: 'chamferStart', runout: 'runoutStart' },
+    end: { chamfer: 'chamferEnd', runout: 'runoutEnd' }
+  } as const;
+  for (const end of ['start', 'end'] as const) {
+    const { chamfer, runout } = keys[end];
+    const stored = saved[chamfer]
+      ? chamfer
+      : saved[runout]
+        ? runout
+        : undefined;
+    if (!stored || !(next[chamfer] || next[runout])) continue;
+    delete next[chamfer];
+    delete next[runout];
+    next[stored] = true;
+  }
+  return next;
+}
+
+/**
  * An extent along a picked cylindrical face from one of its ends, `lengthId`
  * long after an `offset`: a thread's, or gear teeth's over part of a face
  * (schema v55). Until its end is dragged or typed short it runs the rest of
@@ -1250,17 +1294,20 @@ export const threadSpec: InPlaceToolSpec = {
     if (!face) return null;
     return {
       tool: 'thread',
-      thread: {
-        targetBodyId: face.bodyId,
-        faceHash: face.hash,
-        ...(face.reference ? { faceReference: face.reference } : {}),
-        ...threadRequestFields(
-          values,
-          options,
-          ctx.units ?? 'mm',
-          threadSpan.extent(face, values, ctx, numbers)
-        )
-      }
+      thread: keepStoredEndKinds(
+        {
+          targetBodyId: face.bodyId,
+          faceHash: face.hash,
+          ...(face.reference ? { faceReference: face.reference } : {}),
+          ...threadRequestFields(
+            values,
+            options,
+            ctx.units ?? 'mm',
+            threadSpan.extent(face, values, ctx, numbers)
+          )
+        },
+        ctx.saved
+      )
     };
   },
   handles(

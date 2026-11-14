@@ -48,7 +48,8 @@ import {
 export { assertSketchBoundaryTopologyPreserved } from './sketch-boundary-dependencies';
 import {
   assertDocumentContentSchema,
-  assertSketchObjectContentSchema
+  assertSketchObjectContentSchema,
+  assertThreadContentSchema
 } from './document-content-schema';
 export * from './sketch-composites';
 export * from './sketch-projections';
@@ -3667,6 +3668,10 @@ export function threadBody(
   input: ThreadInput
 ): { document: ProjectDocument; bodyId: BodyId } {
   const { name, ids, ...parameters } = input;
+  // Schema v57 runouts and pipe threads are refused on a document that
+  // declares an older schema, as v56 couplings are: written there, the
+  // document would no longer open.
+  assertThreadContentSchema(parameters, document.schemaVersion);
   return addBodyResultFeature(
     document,
     name,
@@ -4926,6 +4931,9 @@ export function updateFeature(
   }
   if (input.data) {
     assertFeatureProfileProvenance(input.data, document);
+    if (feature.featureKind === 'thread') {
+      assertThreadContentSchema(input.data, document.schemaVersion);
+    }
     const patch = { ...input.data } as Record<string, unknown>;
     if (
       'featureKind' in patch &&
