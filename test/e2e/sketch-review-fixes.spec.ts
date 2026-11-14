@@ -118,3 +118,34 @@ test('a sketch re-opened from History starts in Select', async ({ page }) => {
     'false'
   );
 });
+
+test('a value prompt in a sketch says Esc cancels it, and its Escape stays in the sketch (I43)', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  await newSketch(page);
+  const edges = await drawRectangle(page);
+  const status = page.getByRole('contentinfo');
+  const finish = page.getByRole('button', {
+    name: 'Finish Sketch',
+    exact: true
+  });
+
+  await page.mouse.click(edges.top.x, edges.top.y);
+  await page.keyboard.press('d');
+  const keypad = page.getByRole('dialog', { name: 'Distance value' });
+  await expect(keypad).toBeVisible();
+  // The hint is the open prompt's keys, not the sketch ladder's last rung.
+  await expect(status).toContainText('Enter apply · Esc cancel');
+  await expect(status).not.toContainText('leaves the sketch');
+
+  // Escape cancels the value only: the sketch stays open.
+  await keypad.getByRole('textbox').press('Escape');
+  await expect(keypad).toBeHidden();
+  await expect(finish).toBeVisible();
+  await expect(status).not.toContainText('Press Esc again');
+
+  // Finish leaves in one click.
+  await finish.click();
+  await expect(finish).toBeHidden();
+});

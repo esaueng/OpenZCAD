@@ -468,6 +468,14 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
         '@openzcad/viewport/types': fileURLToPath(
           new URL('../../packages/viewport/src/types.ts', import.meta.url)
         ),
+        // The drawing chunk reads the wheel the way Build does; the package
+        // index would bring three into it.
+        '@openzcad/viewport/wheel-gesture': fileURLToPath(
+          new URL(
+            '../../packages/viewport/src/input/wheelGesture.ts',
+            import.meta.url
+          )
+        ),
         // Same reason as the text loader above: the io-shapr index pulls the
         // zip reader, SQLite-WASM and the MessagePack decoder, and the module
         // that wants this one pure string helper is in the entry chunk.
