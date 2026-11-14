@@ -8,6 +8,7 @@ import {
   documentStructureError
 } from '@openzcad/shared';
 import {
+  assertSafeDocumentIdentifiers,
   normalizeDocument,
   withoutDerivedProjection
 } from '@openzcad/document-core';
@@ -55,6 +56,9 @@ function record(value: unknown): Record<string, unknown> {
 function validateDocument(value: unknown): asserts value is ProjectDocument {
   const complexity = documentStructureError(value);
   if (complexity) throw new Error(complexity);
+  // Before anything indexes a map by one of its names: a reserved name such
+  // as "__proto__" as a key, id or selector would reach inherited members.
+  assertSafeDocumentIdentifiers(value);
   const doc = record(value);
   assertDocumentHistory(value as ProjectDocument);
   if (
@@ -376,6 +380,9 @@ export function importProjectCopy(
     copy.document,
     ...(copy.saveStates ?? []).map((state) => state.document)
   ]) {
+    // Also checked here, as this is where the copy is normalized and
+    // published; `parseProjectBackup` normally refused it already.
+    assertSafeDocumentIdentifiers(document);
     const normalized = withoutDerivedProjection(normalizeDocument(document));
     Object.assign(document, normalized, { projectId, ownerUserId });
     if (document.editHistory) {

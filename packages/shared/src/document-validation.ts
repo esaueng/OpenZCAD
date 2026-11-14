@@ -177,6 +177,38 @@ const ID_LIST_FIELDS: ReadonlySet<string> = new Set([
   'shaprImportOrder'
 ]);
 
+/**
+ * Enum-like selector fields. Their values index lookup tables and handle maps
+ * (a constraint's `point` picks a solver handle, `kind` and `featureKind`
+ * pick a table entry, `axis` picks a coordinate), so a reserved name there
+ * would resolve an inherited member too. No legitimate value of these fields
+ * is a reserved name.
+ */
+const SELECTOR_FIELDS: ReadonlySet<string> = new Set([
+  'point',
+  'axis',
+  'side',
+  'end',
+  'kind',
+  'featureKind',
+  'constraintKind',
+  'objectKind',
+  'units',
+  'unit',
+  'mode',
+  'direction',
+  'operation',
+  'role'
+]);
+
+/** Whether a string under `field` is a key, id or selector: never reserved. */
+function isKeyLikeField(field: string | undefined): boolean {
+  return (
+    isIdentifierField(field) ||
+    (field !== undefined && SELECTOR_FIELDS.has(field))
+  );
+}
+
 /** A parameter name is a key of the expression scope. */
 function parameterNamesOf(value: Record<string, unknown>): unknown[] {
   if (value.kind === 'parameter') return [value.name];
@@ -192,7 +224,8 @@ function parameterNamesOf(value: Record<string, unknown>): unknown[] {
 /**
  * Refuses a reserved name used where a document keeps a key: any object key
  * (every map in a document, its history and its command payloads), any id
- * field (see {@link isIdentifierField}) and any parameter name, including
+ * field (see {@link isIdentifierField}), any enum-like selector such as a
+ * constraint's `point` (see `SELECTOR_FIELDS`) and any parameter name, including
  * those in stored `parameter.*` commands. `field` names the property `value`
  * sits under, so a bare id such as a history change's `before` is judged by
  * its change's field. Other strings, such as display names, are not keys and
@@ -218,16 +251,19 @@ export function reservedIdentifierError(
     const entry = pending.pop()!;
     const current = entry.value;
     if (typeof current === 'string') {
-      if (RESERVED_RECORD_KEYS.has(current) && isIdentifierField(entry.field))
+      if (RESERVED_RECORD_KEYS.has(current) && isKeyLikeField(entry.field))
         return `"${path(entry)}" uses the reserved id "${current}".`;
       continue;
     }
     if (Array.isArray(current)) {
+      // Numbers hold no names; skipping them keeps dense persisted meshes
+      // (an imported mesh's `number[]` payload) cheap to walk.
       for (const item of current)
-        pending.push({ value: item, field: entry.field, parent: entry });
+        if (typeof item !== 'number')
+          pending.push({ value: item, field: entry.field, parent: entry });
       continue;
     }
-    if (!isDocumentRecord(current)) continue;
+    if (!isDocumentRecord(current) || ArrayBuffer.isView(current)) continue;
     for (const key of Object.keys(current)) {
       if (RESERVED_RECORD_KEYS.has(key))
         return `"${path(entry)}" uses the reserved key "${key}".`;
@@ -257,6 +293,94 @@ export function nodeMapKeyError(nodes: unknown): string | null {
     )
       return `Project document node "${key}" has an invalid id.`;
   }
+  return null;
+}
+
+/** The points a sketch constraint can name: `SketchPointRef['point']`. */
+const SKETCH_POINT_ROLES: ReadonlySet<unknown> = new Set([
+  'start',
+  'end',
+  'center'
+]);
+
+/**
+ * Per constraint kind: the fields holding a point reference, an object id,
+ * an optional point reference, and a dimensional value.
+ */
+const SKETCH_CONSTRAINT_FIELDS: Readonly<
+  Record<
+    string,
+    {
+      points?: readonly string[];
+      objects?: readonly string[];
+      optionalPoints?: readonly string[];
+      values?: readonly string[];
+    }
+  >
+> = {
+  coincident: { points: ['a', 'b'] },
+  horizontal: { objects: ['objectId'] },
+  vertical: { objects: ['objectId'] },
+  parallel: { objects: ['a', 'b'] },
+  perpendicular: { objects: ['a', 'b'] },
+  equal: { objects: ['a', 'b'] },
+  tangent: { objects: ['a', 'b'], optionalPoints: ['at'] },
+  concentric: { objects: ['a', 'b'] },
+  midpoint: { points: ['point'], objects: ['line'] },
+  distance: { points: ['a', 'b'], values: ['value'] },
+  radius: { objects: ['objectId'], values: ['value'] },
+  angle: { objects: ['a', 'b'], values: ['valueDeg'] },
+  symmetric: { points: ['a', 'b'], objects: ['axis'] },
+  'point-on-object': { points: ['point'], objects: ['objectId'] },
+  lock: { points: ['point'] }
+};
+
+function isSketchPointSelector(value: unknown): boolean {
+  return (
+    isDocumentRecord(value) &&
+    typeof value.objectId === 'string' &&
+    !RESERVED_RECORD_KEYS.has(value.objectId) &&
+    SKETCH_POINT_ROLES.has(value.point)
+  );
+}
+
+/**
+ * Why a stored sketch constraint's data has the wrong shape, or null. Point
+ * references must name an object and one of its points (`start`, `end` or
+ * `center`): the solver picks the point's handle by that name, so anything
+ * else would read a member that is not a point.
+ */
+export function sketchConstraintShapeError(data: unknown): string | null {
+  if (!isDocumentRecord(data))
+    return 'Sketch constraint data must be an object.';
+  const kind = data.constraintKind;
+  const fields =
+    typeof kind === 'string' && Object.hasOwn(SKETCH_CONSTRAINT_FIELDS, kind)
+      ? SKETCH_CONSTRAINT_FIELDS[kind]
+      : undefined;
+  if (typeof kind !== 'string' || !fields)
+    return `Unknown sketch constraint kind "${String(kind)}".`;
+  for (const field of fields.points ?? [])
+    if (!isSketchPointSelector(data[field]))
+      return `Sketch ${kind} constraint has an invalid point "${field}".`;
+  for (const field of fields.optionalPoints ?? [])
+    if (data[field] !== undefined && !isSketchPointSelector(data[field]))
+      return `Sketch ${kind} constraint has an invalid point "${field}".`;
+  for (const field of fields.objects ?? []) {
+    const objectId = data[field];
+    if (typeof objectId !== 'string' || RESERVED_RECORD_KEYS.has(objectId))
+      return `Sketch ${kind} constraint has an invalid object "${field}".`;
+  }
+  for (const field of fields.values ?? []) {
+    const value = data[field];
+    if (typeof value !== 'number' && typeof value !== 'string')
+      return `Sketch ${kind} constraint has an invalid value "${field}".`;
+  }
+  if (
+    kind === 'lock' &&
+    (typeof data.x !== 'number' || typeof data.y !== 'number')
+  )
+    return 'Sketch lock constraint needs a numeric position.';
   return null;
 }
 

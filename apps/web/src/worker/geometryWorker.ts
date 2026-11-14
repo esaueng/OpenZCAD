@@ -1184,11 +1184,14 @@ async function execute(job: GeometryWorkerJob): Promise<void> {
         // The face reference is resolved worker-side against the rebuilt
         // document: the main thread's pick carries rebuild-local identity
         // (hash + topology id) that only matches the live derived topology.
+        // Own entries only (inline, to keep this chunk within its budget):
+        // a body id such as "__proto__" must not resolve an inherited member.
+        const representations = document.derived.bodyRepresentations;
         const faceReference =
-          request.topologyId !== undefined
-            ? document.derived.bodyRepresentations[
-                request.bodyId
-              ]?.topology?.faces.find(
+          request.topologyId !== undefined &&
+          typeof request.bodyId === 'string' &&
+          Object.hasOwn(representations, request.bodyId)
+            ? representations[request.bodyId]?.topology?.faces.find(
                 (face) => face.topologyId === request.topologyId
               )?.reference
             : undefined;

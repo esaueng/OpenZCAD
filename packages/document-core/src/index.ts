@@ -18,8 +18,10 @@ export { localizeImportedSourceArtifacts } from './imported-source-artifacts';
 import { mergeJsonRecords } from './collaboration-merge';
 export { hasJsonPrefix, sameJson } from './collaboration-merge';
 export {
+  assertSafeDocumentIdentifiers,
   assertStorableDocument,
   documentIdentifierError,
+  reservedDocumentIdentifierError,
   UnstorableDocumentError
 } from './storable-document';
 import {
@@ -1934,6 +1936,12 @@ function requireConstraintPoint(
   sketch: SketchNode,
   ref: SketchPointRef
 ): void {
+  // The point names a solver handle, so only the three point names are
+  // accepted; checked before the object, whose kind rules assume one of them.
+  const point: unknown = ref?.point;
+  if (point !== 'start' && point !== 'end' && point !== 'center') {
+    throw new Error('A constraint point is a start, end or center point.');
+  }
   const kind = requireConstrainableObject(document, sketch, ref.objectId, [
     'line',
     'arc',

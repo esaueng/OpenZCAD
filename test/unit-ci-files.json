@@ -302,6 +302,7 @@
     "src/lib/projectTabOwnership.test.ts",
     "src/lib/refusalHarvest.test.ts",
     "src/lib/refusalReproduction.test.ts",
+    "src/lib/reservedProjectNames.test.ts",
     "src/lib/saveFile.test.ts",
     "src/lib/savedViews.test.ts",
     "src/lib/selectionFeature.test.ts",

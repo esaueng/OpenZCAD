@@ -4,6 +4,7 @@ import {
   assertDocumentHistory,
   assertDocumentTextBudget,
   documentEnvelopeError,
+  documentNodesWithHistory,
   documentStructureError,
   drawingSetError,
   hasValidImportedMeshSources,
@@ -16,6 +17,7 @@ import {
   assemblySetError,
   referenceImageSetError,
   reservedIdentifierError,
+  sketchConstraintShapeError,
   type ProjectDocument
 } from '@openzcad/shared';
 import { assertDocumentContentSchema } from './document-content-schema';
@@ -87,17 +89,124 @@ function nodeReferenceError(record: Record<string, unknown>): string | null {
 }
 
 /**
+ * The received derived projection is never walked whole (a dense mesh is
+ * typed arrays, or numbers once serialized), but its names are: body ids key
+ * `bodyRepresentations` and fill `exportableBodyIds`, and a representation's
+ * `bodyId` and topology references become picking ids. A forged projection
+ * must not supply a reserved one before the next rebuild replaces it. The
+ * mesh is skipped except for its persistent `reference`.
+ */
+function derivedProjectionError(value: object): string | null {
+  const derived = (value as { derived?: unknown }).derived;
+  if (derived === undefined) return null;
+  if (typeof derived !== 'object' || derived === null || Array.isArray(derived))
+    return '"document.derived" must be an object.';
+  const { bodyRepresentations, exportableBodyIds } = derived as Record<
+    string,
+    unknown
+  >;
+  if (bodyRepresentations !== undefined) {
+    if (
+      typeof bodyRepresentations !== 'object' ||
+      bodyRepresentations === null ||
+      Array.isArray(bodyRepresentations)
+    )
+      return '"document.derived.bodyRepresentations" must be an object.';
+    for (const [bodyId, representation] of Object.entries(
+      bodyRepresentations
+    )) {
+      if (isReservedRecordKey(bodyId))
+        return `"document.derived.bodyRepresentations" uses the reserved key "${bodyId}".`;
+      if (
+        typeof representation !== 'object' ||
+        representation === null ||
+        Array.isArray(representation)
+      )
+        return `"document.derived.bodyRepresentations.${bodyId}" must be an object.`;
+      const { mesh, ...rest } = representation as Record<string, unknown>;
+      const reference =
+        typeof mesh === 'object' && mesh !== null
+          ? (mesh as { reference?: unknown }).reference
+          : undefined;
+      const error = reservedIdentifierError(
+        { ...rest, mesh: { reference } },
+        undefined
+      );
+      if (error)
+        return `"document.derived.bodyRepresentations.${bodyId}": ${error}`;
+    }
+  }
+  if (
+    exportableBodyIds !== undefined &&
+    (!Array.isArray(exportableBodyIds) ||
+      !exportableBodyIds.every(
+        (id) => typeof id === 'string' && !isReservedRecordKey(id)
+      ))
+  )
+    return '"document.derived.exportableBodyIds" holds an invalid body id.';
+  return null;
+}
+
+/**
+ * No reserved name as a key, id or selector anywhere in the document: its
+ * maps, nodes, history, stored commands (see `reservedIdentifierError`) and
+ * the names its derived projection carries ({@link derivedProjectionError}).
+ * Unlike {@link documentIdentifierError} it does not require node references
+ * to resolve, so a device copy or backup with an ordinary dangling reference
+ * still opens. Returns the refusal, or null.
+ */
+export function reservedDocumentIdentifierError(value: object): string | null {
+  return (
+    reservedIdentifierError(storedProjection(value)) ??
+    derivedProjectionError(value)
+  );
+}
+
+/**
+ * Throws `UnstorableDocumentError` unless the document passes
+ * {@link reservedDocumentIdentifierError}. Run on every document read from
+ * outside the running app (a backup, a device copy, a save state) before it
+ * is normalized or published.
+ */
+export function assertSafeDocumentIdentifiers(value: unknown): void {
+  if (typeof value !== 'object' || value === null || Array.isArray(value))
+    throw new UnstorableDocumentError(
+      'The project document must be an object.'
+    );
+  const error = reservedDocumentIdentifierError(value);
+  if (error) throw new UnstorableDocumentError(error);
+}
+
+/**
  * The key and reference checks a document must pass wherever it is published:
- * no reserved name as a key or id anywhere in it (its maps, nodes, history
- * and stored commands; see `reservedIdentifierError`), and node references
- * that name nodes as {@link nodeReferenceError} requires. Returns the
- * refusal, or null. Live derived geometry is skipped, as it is never stored.
+ * no reserved name as a key, id or selector anywhere in it
+ * ({@link reservedDocumentIdentifierError}), and node references that name
+ * nodes as {@link nodeReferenceError} requires. Returns the refusal, or null.
  */
 export function documentIdentifierError(value: object): string | null {
   return (
     nodeReferenceError(value as Record<string, unknown>) ??
-    reservedIdentifierError(storedProjection(value))
+    reservedDocumentIdentifierError(value)
   );
+}
+
+/** Every stored sketch constraint, live or in undo history, has a valid shape. */
+function assertSketchConstraintShapes(document: ProjectDocument): void {
+  for (const node of documentNodesWithHistory(document)) {
+    if (node.kind !== 'sketch') continue;
+    const constraints: unknown = node.constraints;
+    if (constraints === undefined) continue;
+    if (!Array.isArray(constraints))
+      throw new Error(`Sketch "${node.id}" has invalid constraints.`);
+    for (const constraint of constraints) {
+      const data =
+        typeof constraint === 'object' && constraint !== null
+          ? (constraint as { data?: unknown }).data
+          : undefined;
+      const error = sketchConstraintShapeError(data);
+      if (error) throw new Error(`Sketch "${node.id}": ${error}`);
+    }
+  }
 }
 
 function check(condition: unknown, message: string): void {
@@ -192,6 +301,10 @@ export function assertStorableDocument(value: unknown): ProjectDocument {
   attempt(
     () => assertSketchProvenance(document),
     'The project has invalid sketch provenance.'
+  );
+  attempt(
+    () => assertSketchConstraintShapes(document),
+    'The project has an invalid sketch constraint.'
   );
   attempt(
     () => assertReferenceDocumentSchema(document),

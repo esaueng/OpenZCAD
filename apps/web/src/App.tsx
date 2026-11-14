@@ -224,6 +224,7 @@ import {
   listParameters,
   suggestParameterQuantities,
   normalizeDocument,
+  reservedDocumentIdentifierError,
   numberedBodyName,
   numberedFeatureName,
   extrudeToFaceUnresolved,
@@ -9365,6 +9366,12 @@ export function App() {
   ) {
     let normalized: ProjectDocument;
     try {
+      // Every document published here, from any source, is checked first: a
+      // reserved name such as "__proto__" as a key, id or selector would make
+      // map lookups reach inherited members. The project is not opened and the
+      // reason is shown; whatever was open stays open.
+      const refused = reservedDocumentIdentifierError(nextDocument);
+      if (refused) throw new Error(`This project cannot be opened: ${refused}`);
       normalized = normalizeDocument(nextDocument);
       // Shares are ephemeral; every persistence path still rejects owner writes.
       if (shareSessionRef.current) {

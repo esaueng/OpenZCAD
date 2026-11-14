@@ -1,14 +1,18 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   addPrimitiveFeature,
+  addSketchConstraint,
+  addSketchFeature,
   assertStorableDocument,
   createProjectDocument,
+  findSketch,
   evaluateExpression,
   getNode,
   getParameterScope,
   isLiveAssemblyBody,
   normalizeDocument,
   renameNode,
+  reservedDocumentIdentifierError,
   setNodeMetadata,
   setParameter,
   UnstorableDocumentError
@@ -25,9 +29,15 @@ import {
   reservedIdentifierError,
   toBodyId,
   toUserId,
+  type EntityId,
   type ProjectDocument,
-  type SerializedCommand
+  type SerializedCommand,
+  type SketchConstraintId
 } from '@openzcad/shared';
+import {
+  solveSketchWithGcs,
+  type GcsKernelSurface
+} from '../packages/kernel-adapter/src/gcs-sketch';
 
 const owner = toUserId('user_node_ids');
 const RESERVED = ['__proto__', 'constructor', 'prototype', 'toString'] as const;
@@ -519,4 +529,244 @@ describe('supplied creation ids', () => {
     }
     expect(prototypeNames()).not.toContain('kind');
   });
+});
+
+describe('derived projections', () => {
+  /** A received document carrying a forged projection under `bodyKey`. */
+  function withProjection(
+    bodyKey: string,
+    representation: Record<string, unknown>,
+    exportableBodyIds: string[] = []
+  ): unknown {
+    const document = valid();
+    const placeholder = 'projection_body_placeholder';
+    return withName(
+      {
+        ...document,
+        derived: {
+          ...document.derived,
+          bodyRepresentations: { [placeholder]: representation },
+          exportableBodyIds
+        }
+      },
+      placeholder,
+      bodyKey
+    );
+  }
+  const representation = (bodyId: string, extra = {}) => ({
+    bodyId,
+    name: 'Box',
+    mesh: { kind: 'mesh', vertices: [], indices: [] },
+    ...extra
+  });
+
+  it.each(RESERVED)('refuses a projection keyed by "%s"', (id) => {
+    expect(refusal(withProjection(id, representation('ent_body')))).toMatch(
+      /bodyRepresentations" uses the reserved key/
+    );
+  });
+
+  it('refuses a reserved body id, exportable id or picking reference', () => {
+    expect(
+      refusal(withProjection('ent_body', representation('constructor')))
+    ).toMatch(/reserved id "constructor"/);
+    expect(
+      refusal(
+        withProjection('ent_body', representation('ent_body'), ['__proto__'])
+      )
+    ).toMatch(/exportableBodyIds/);
+    const topology = {
+      faces: [
+        {
+          topologyId: 'face_1',
+          reference: { kind: 'face', featureId: 'toString' }
+        }
+      ],
+      edges: []
+    };
+    expect(
+      refusal(
+        withProjection('ent_body', representation('ent_body', { topology }))
+      )
+    ).toMatch(/reserved id "toString"/);
+    const mesh = {
+      kind: 'mesh',
+      vertices: [],
+      indices: [],
+      reference: { featureId: 'valueOf' }
+    };
+    expect(
+      refusal(withProjection('ent_body', representation('ent_body', { mesh })))
+    ).toMatch(/reserved id "valueOf"/);
+  });
+
+  it('keeps accepting a live projection with typed-array meshes', () => {
+    const document = valid();
+    const bodyId = document.bodyOrder[0]!;
+    const live = {
+      ...document,
+      derived: {
+        ...document.derived,
+        bodyRepresentations: {
+          [bodyId]: {
+            ...representation(bodyId),
+            mesh: {
+              kind: 'mesh',
+              vertices: new Float32Array(9),
+              indices: new Uint32Array(3)
+            }
+          }
+        },
+        exportableBodyIds: [bodyId]
+      }
+    } as unknown as ProjectDocument;
+    expect(() => assertStorableDocument(live)).not.toThrow();
+    expect(reservedDocumentIdentifierError(live)).toBeNull();
+  });
+});
+
+describe('sketch point selectors', () => {
+  function sketchWithLineAndArc() {
+    const { document, sketchId } = addSketchFeature(
+      createProjectDocument('Selectors', owner),
+      {
+        name: 'Profile',
+        planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+        objects: [
+          { objectKind: 'line', x1: 0, y1: 0, x2: 10, y2: 0 },
+          {
+            objectKind: 'arc',
+            centerX: 20,
+            centerY: 0,
+            radius: 5,
+            startAngleDeg: 0,
+            endAngleDeg: 90
+          }
+        ]
+      }
+    );
+    const [line, arc] = findSketch(document, sketchId)!.objectIds;
+    return { document, sketchId, line: line!, arc: arc! };
+  }
+
+  it.each([...RESERVED, 'middle'])(
+    'refuses to add a constraint naming point "%s"',
+    (point) => {
+      const { document, sketchId, line, arc } = sketchWithLineAndArc();
+      for (const objectId of [line, arc])
+        expect(() =>
+          addSketchConstraint(document, {
+            sketchId,
+            constraint: {
+              constraintKind: 'coincident',
+              a: { objectId, point: point as 'start' },
+              b: { objectId: objectId === line ? arc : line, point: 'start' }
+            }
+          })
+        ).toThrow(/start, end or center/);
+    }
+  );
+
+  interface StoredSketchJson {
+    nodes: Record<
+      string,
+      { kind: string; constraints?: { data: { a: { point: string } } }[] }
+    >;
+  }
+
+  /** A stored coincident constraint, then its first point renamed. */
+  function storedWithPoint(point: string): unknown {
+    const { document, sketchId, line, arc } = sketchWithLineAndArc();
+    const added = addSketchConstraint(document, {
+      sketchId,
+      constraint: {
+        constraintKind: 'coincident',
+        a: { objectId: line, point: 'end' },
+        b: { objectId: arc, point: 'start' }
+      }
+    }).document;
+    expect(() => assertStorableDocument(added)).not.toThrow();
+    const json = JSON.parse(JSON.stringify(added)) as StoredSketchJson;
+    const sketch = Object.values(json.nodes).find(
+      (node) => node.kind === 'sketch' && node.constraints?.length
+    )!;
+    sketch.constraints![0]!.data.a.point = point;
+    return json;
+  }
+
+  it.each(RESERVED)(
+    'refuses a stored constraint naming point "%s"',
+    (point) => {
+      expect(refusal(storedWithPoint(point))).toMatch(
+        new RegExp(`reserved id "${point}"`)
+      );
+    }
+  );
+
+  it('refuses a stored constraint with a point outside start, end and center', () => {
+    expect(refusal(storedWithPoint('middle'))).toMatch(/invalid point "a"/);
+  });
+
+  it('refuses a reserved name in any enum-like selector, not in display text', () => {
+    expect(reservedIdentifierError({ kind: 'toString' })).toMatch(/reserved/);
+    expect(reservedIdentifierError({ featureKind: '__proto__' })).toMatch(
+      /reserved/
+    );
+    expect(reservedIdentifierError({ axis: 'constructor' })).toMatch(
+      /reserved/
+    );
+    expect(reservedIdentifierError({ name: 'toString' })).toBeNull();
+    expect(reservedIdentifierError({ text: 'constructor' })).toBeNull();
+  });
+
+  it.each([...RESERVED, 'valueOf', 'middle'])(
+    'never sends the solver anything but a point handle for "%s"',
+    (point) => {
+      let next = 0;
+      const sent: string[] = [];
+      const kernel: GcsKernelSurface = {
+        gcsNew: () => ++next,
+        gcsAddPoint: () => ++next,
+        gcsAddLine: () => ++next,
+        gcsAddCircle: () => ++next,
+        gcsAddArc: () => ++next,
+        gcsAddEllipse: () => ++next,
+        gcsEllipseParams: () => new Float64Array(5),
+        gcsAddConstraint: (_sketch, json) => {
+          sent.push(json);
+          return ++next;
+        },
+        gcsSolveDetailed: () => ({}),
+        gcsPointPosition: () => new Float64Array(2),
+        gcsCircleRadius: () => 1,
+        gcsDof: () => 0
+      };
+      const line = (objectId: string, y: number) => ({
+        objectId: objectId as EntityId,
+        kind: 'line' as const,
+        x1: 0,
+        y1: y,
+        x2: 10,
+        y2: y
+      });
+      expect(() =>
+        solveSketchWithGcs(
+          kernel,
+          [line('line_a', 0), line('line_b', 5)],
+          [
+            {
+              constraintId: 'scon_1' as SketchConstraintId,
+              data: {
+                constraintKind: 'coincident',
+                a: { objectId: 'line_a' as EntityId, point: point as 'start' },
+                b: { objectId: 'line_b' as EntityId, point: 'start' }
+              }
+            }
+          ],
+          (value) => Number(value)
+        )
+      ).toThrow(/has no '.*' point to constrain/);
+      expect(sent).toEqual([]);
+    }
+  );
 });
