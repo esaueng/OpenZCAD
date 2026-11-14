@@ -379,6 +379,17 @@ async function openStore(
     // The share-link reissue hook (slice 5-5, for slice 5-10): the owner's
     // page issues new statements at once, and the dialog offers reissue.
     onMembersRemoved: (removal: MembersRemoved) => {
+      // Never added back by the invitation sweep: the owner confirms that.
+      const removedAt = Date.now();
+      for (const userId of removal.userIds) {
+        void invitationStore()
+          .rememberRemoved(account.userId, {
+            projectId: removal.projectId,
+            userId,
+            removedAt
+          })
+          .catch(() => undefined);
+      }
       const notify = removalNotifier(removal);
       void import('./shareLinks')
         .then(({ shareLinksAfterRemoval }) => {

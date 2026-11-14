@@ -1237,6 +1237,63 @@ describe('ProjectSharingDialog for an encrypted project (slice 5-3b)', () => {
     setPersonalInfoVisible(false);
   });
 
+  it('adds back someone removed before only when the owner confirms', async () => {
+    setPersonalInfoVisible(true);
+    const encrypted = {
+      ...encryptedClient([
+        {
+          record: encryptedRecord('inv_again', { acceptedByUserId: invitee }),
+          state: 'confirm-re-add',
+          email: 'again@example.com'
+        },
+        {
+          record: encryptedRecord('inv_older', { acceptedByUserId: invitee }),
+          state: 'needs-acceptance',
+          email: 'older@example.com'
+        }
+      ]),
+      addBack: vi.fn(async () => undefined)
+    };
+    const user = userEvent.setup();
+    render(
+      <ProjectSharingDialog
+        projectId="proj_encrypted"
+        role="owner"
+        collaborationStatus="live"
+        lease={null}
+        client={client()}
+        shareLinkClient={shareLinkClient()}
+        encrypted
+        encryptedClient={encrypted}
+        encryptedShareLinkClient={encryptedShareLinkClient()}
+        onClose={vi.fn()}
+      />
+    );
+    expect(
+      await screen.findByText(
+        /^Removed before: confirm to add back · Editor · \d+d$/
+      )
+    ).toBeVisible();
+    expect(
+      screen.getByText(/^Waiting for them to accept again · Editor · \d+d$/)
+    ).toBeVisible();
+    // Nothing happens until the owner asks for it.
+    expect(encrypted.addBack).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole('button', { name: 'Add older@example.com back' })
+    ).not.toBeInTheDocument();
+    await user.click(
+      screen.getByRole('button', { name: 'Add again@example.com back' })
+    );
+    await waitFor(() =>
+      expect(encrypted.addBack).toHaveBeenCalledWith(
+        'proj_encrypted',
+        'inv_again'
+      )
+    );
+    setPersonalInfoVisible(false);
+  });
+
   it('lets a member leave after saying what that means (slice 5-5)', async () => {
     const sharingClient = client();
     const encrypted = encryptedClient([]);

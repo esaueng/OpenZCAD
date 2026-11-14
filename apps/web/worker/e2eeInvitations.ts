@@ -13,6 +13,10 @@
  *   Add Commit does. `GET /api/e2ee/invitations` lists this account's
  *   accepted, unfinished invitations; `GET …/invitations/sent` the
  *   owner's (slice 5-3b).
+ * - `POST …/invitations/:invitationId/acceptance` (the accepted invitee):
+ *   a certified device's signed acceptance ("OZJ"), checked against its
+ *   key and the stored statement and kept with the invitation (migration
+ *   0048). The owner's browser adds nobody without a valid one.
  * - `POST /api/e2ee/projects/:id/key-packages` (the accepted invitee): one
  *   KeyPackage per project and certified device, with its certified leaf.
  *   Republishing replaces one that no Add consumed (and resets its claim).
@@ -38,10 +42,17 @@
  * unknown to them.
  */
 import {
+  E2eeError,
+  MAX_INVITATION_ACCEPTANCE_BYTES,
   ProjectInvitationError,
+  decodeInvitationAcceptance,
   decodeProjectInvitation,
+  fromBase64Url,
+  fromHex,
   invitationEmailHash,
+  invitationStatementHash,
   toHex,
+  verifyInvitationAcceptance,
   verifyProjectInvitation,
   type ProjectInvitation
 } from '@openzcad/crypto';
@@ -56,6 +67,7 @@ import type {
   E2eeWelcomeResponse
 } from '@openzcad/shared';
 import {
+  isE2eeInvitationAcceptanceReady,
   isE2eeInvitationStorageReady,
   isE2eeProjectGroupStorageReady,
   isProjectStorageFormatReady
@@ -92,7 +104,7 @@ import {
 } from './sharing';
 
 const PROJECT_ROUTE =
-  /^\/api\/e2ee\/projects\/([^/]+)\/(invitations|invitations\/[^/]+|key-packages|key-packages\/claim|welcome)$/;
+  /^\/api\/e2ee\/projects\/([^/]+)\/(invitations|invitations\/[^/]+|invitations\/[^/]+\/acceptance|key-packages|key-packages\/claim|welcome)$/;
 export const E2EE_INVITATIONS_ROUTE = '/api/e2ee/invitations';
 export const E2EE_INVITATION_ACCEPT_ROUTE = '/api/e2ee/invitations/accept';
 export const E2EE_SENT_INVITATIONS_ROUTE = '/api/e2ee/invitations/sent';
@@ -171,6 +183,9 @@ export interface InvitationRow {
   completed_at: string | null;
   completed_epoch: number | null;
   revoked_at: string | null;
+  /** Migration 0048; absent before it. */
+  acceptance_statement?: string | null;
+  acceptance_signature?: string | null;
   /** The owner's lists only (slice 5-3b). */
   key_packages?: number;
   claimed_key_packages?: number;
@@ -182,6 +197,16 @@ export const INVITATION_COLUMNS = `invitation_id, project_id, invited_by_user_id
   email_hash, role, statement, signature, signer_device_id, created_at,
   expires_at, accepted_by_user_id, accepted_at, completed_at,
   completed_epoch, revoked_at`;
+
+/** Migration 0048's columns, selected only once they exist. */
+const ACCEPTANCE_COLUMNS = `, acceptance_statement, acceptance_signature`;
+
+/** `INVITATION_COLUMNS`, with the signed acceptance once it is stored. */
+export async function invitationColumns(db: D1Database): Promise<string> {
+  return (await isE2eeInvitationAcceptanceReady(db))
+    ? `${INVITATION_COLUMNS}${ACCEPTANCE_COLUMNS}`
+    : INVITATION_COLUMNS;
+}
 
 export const invitationRecord = (row: InvitationRow): E2eeInvitationRecord => ({
   invitationId: row.invitation_id,
@@ -199,6 +224,13 @@ export const invitationRecord = (row: InvitationRow): E2eeInvitationRecord => ({
   completedAt: row.completed_at,
   completedEpoch: row.completed_epoch,
   revokedAt: row.revoked_at,
+  acceptance:
+    row.acceptance_statement && row.acceptance_signature
+      ? {
+          statement: row.acceptance_statement,
+          signature: row.acceptance_signature
+        }
+      : null,
   ...(row.key_packages === undefined
     ? {}
     : {
@@ -266,7 +298,7 @@ async function invitationRow(
 ): Promise<InvitationRow | null> {
   return db
     .prepare(
-      `SELECT ${INVITATION_COLUMNS} FROM e2ee_invitations WHERE invitation_id = ?`
+      `SELECT ${await invitationColumns(db)} FROM e2ee_invitations WHERE invitation_id = ?`
     )
     .bind(invitationId)
     .first<InvitationRow>();
@@ -552,7 +584,7 @@ async function listProjectInvitations(
   await requireOwnedEncryptedProject(db, userId, projectId);
   const { results } = await db
     .prepare(
-      `SELECT ${INVITATION_COLUMNS}${KEY_PACKAGE_COUNTS} FROM e2ee_invitations
+      `SELECT ${await invitationColumns(db)}${KEY_PACKAGE_COUNTS} FROM e2ee_invitations
        WHERE project_id = ? ORDER BY created_at DESC, invitation_id LIMIT ?`
     )
     .bind(projectId, LIST_LIMIT)
@@ -661,7 +693,7 @@ async function acceptInvitation(
   ]);
   const row = await db
     .prepare(
-      `SELECT ${INVITATION_COLUMNS}${GROUP_EPOCH} FROM e2ee_invitations
+      `SELECT ${await invitationColumns(db)}${GROUP_EPOCH} FROM e2ee_invitations
        WHERE token_hash = ? AND email_hash = ?`
     )
     .bind(tokenHash, emailHex)
@@ -689,7 +721,7 @@ async function listAcceptedInvitations(
 ): Promise<Response> {
   const { results } = await db
     .prepare(
-      `SELECT ${INVITATION_COLUMNS}${GROUP_EPOCH} FROM e2ee_invitations
+      `SELECT ${await invitationColumns(db)}${GROUP_EPOCH} FROM e2ee_invitations
        WHERE accepted_by_user_id = ? AND ${OPEN_ACCEPTED}
        ORDER BY accepted_at, invitation_id LIMIT ?`
     )
@@ -712,7 +744,7 @@ async function listSentInvitations(
 ): Promise<Response> {
   const { results } = await db
     .prepare(
-      `SELECT ${INVITATION_COLUMNS}${KEY_PACKAGE_COUNTS} FROM e2ee_invitations
+      `SELECT ${await invitationColumns(db)}${KEY_PACKAGE_COUNTS} FROM e2ee_invitations
        WHERE invited_by_user_id = ? AND ${OPEN_ACCEPTED}
          AND EXISTS (SELECT 1 FROM projects p
            WHERE p.id = e2ee_invitations.project_id AND p.user_id = ?
@@ -724,6 +756,107 @@ async function listSentInvitations(
   return json({
     invitations: (results ?? []).map(invitationRecord)
   } satisfies E2eeInvitationsResponse);
+}
+
+/**
+ * `POST …/invitations/:invitationId/acceptance` (the accepted invitee): a
+ * certified device's signed acceptance ("OZJ") of the invitation, checked
+ * against the device's key in the invitee's newest device list and the
+ * stored statement, then kept with the invitation (the newest replaces an
+ * earlier one). The owner's browser checks it again against its own pins
+ * before an Add, and adds nobody without one.
+ */
+async function storeAcceptance(
+  db: D1Database,
+  userId: string,
+  projectId: string,
+  invitationId: string,
+  authorization: Authorization,
+  body: Record<string, unknown>
+): Promise<Response> {
+  if (!(await isE2eeInvitationAcceptanceReady(db))) {
+    refuse(
+      503,
+      'E2EE_UNAVAILABLE',
+      'Signed invitation acceptances are unavailable until the database is updated.'
+    );
+  }
+  const statement = bytesField(body.statement, 'statement', {
+    max: MAX_INVITATION_ACCEPTANCE_BYTES
+  });
+  const signature = bytesField(body.signature, 'signature', {
+    exact: SIGNATURE_BYTES
+  });
+  const nowMs = Date.now();
+  const invitation = await invitationRow(db, invitationId);
+  if (
+    !invitation ||
+    invitation.project_id !== projectId ||
+    invitation.accepted_by_user_id !== userId
+  ) {
+    refuse(
+      404,
+      'INVITATION_NOT_FOUND',
+      'Project invitation is invalid or expired.'
+    );
+  }
+  if (
+    invitation.completed_at !== null ||
+    invitation.revoked_at !== null ||
+    invitation.expires_at <= nowMs
+  ) {
+    unavailableInvitation();
+  }
+  let signerDeviceId: string;
+  try {
+    signerDeviceId = decodeInvitationAcceptance(statement.bytes).signerDeviceId;
+  } catch {
+    invalid('The acceptance is malformed');
+  }
+  // Only a device the invitee's newest list certifies accepts for them.
+  const signer = await requireCertifiedDevice(db, userId, signerDeviceId);
+  try {
+    await verifyInvitationAcceptance(
+      { statement: statement.bytes, signature: signature.bytes },
+      signer.signingKey,
+      {
+        projectId,
+        invitationId,
+        invitationHash: await invitationStatementHash(
+          fromBase64Url(invitation.statement)
+        ),
+        inviteeEmailHash: fromHex(invitation.email_hash),
+        inviteeUserId: userId
+      }
+    );
+  } catch (error) {
+    if (error instanceof E2eeError) {
+      invalid(`The acceptance does not verify: ${error.message}`);
+    }
+    throw error;
+  }
+  const [stored] = await runBatch(db, [
+    db
+      .prepare(
+        `UPDATE e2ee_invitations SET acceptance_statement = ?,
+           acceptance_signature = ?
+         WHERE invitation_id = ? AND project_id = ? AND accepted_by_user_id = ?
+           AND ${OPEN_ACCEPTED} AND ${authorization.sql}`
+      )
+      .bind(
+        statement.text,
+        signature.text,
+        invitationId,
+        projectId,
+        userId,
+        nowMs,
+        ...authorization.binds
+      )
+  ]);
+  if ((stored?.meta?.changes ?? 0) !== 1) unavailableInvitation();
+  return json({
+    invitation: invitationRecord((await invitationRow(db, invitationId))!)
+  } satisfies E2eeInvitationResponse);
 }
 
 // --- KeyPackages ---------------------------------------------------------------
@@ -1434,7 +1567,32 @@ export async function handleE2eeInvitationRequest(
       if (method === 'GET') {
         return await listProjectInvitations(db, userId, projectId);
       }
-    } else if (rest.startsWith('invitations/') && method === 'DELETE') {
+    } else if (
+      rest.startsWith('invitations/') &&
+      rest.endsWith('/acceptance') &&
+      method === 'POST'
+    ) {
+      let invitationId: string;
+      try {
+        invitationId = decodeURIComponent(
+          rest.slice('invitations/'.length, -'/acceptance'.length)
+        );
+      } catch {
+        refuse(404, 'INVITATION_NOT_FOUND', 'Project invitation not found.');
+      }
+      return await storeAcceptance(
+        db,
+        userId,
+        projectId,
+        idField(invitationId, 'invitationId'),
+        authorization,
+        await readBody()
+      );
+    } else if (
+      rest.startsWith('invitations/') &&
+      !rest.endsWith('/acceptance') &&
+      method === 'DELETE'
+    ) {
       let invitationId: string;
       try {
         invitationId = decodeURIComponent(rest.slice('invitations/'.length));

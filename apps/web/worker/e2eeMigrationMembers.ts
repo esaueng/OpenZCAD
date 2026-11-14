@@ -45,8 +45,8 @@ import {
 } from '@openzcad/shared';
 import { isE2eeInvitationStorageReady } from '@openzcad/cloudflare-adapters';
 import {
-  INVITATION_COLUMNS,
   KEY_PACKAGE_COUNTS,
+  invitationColumns,
   invitationRecord,
   type InvitationRow
 } from './e2eeInvitations';
@@ -352,7 +352,7 @@ export async function listMigrationMembers(
       // the newest at all.
       invitation = await db
         .prepare(
-          `SELECT ${INVITATION_COLUMNS}${KEY_PACKAGE_COUNTS}
+          `SELECT ${await invitationColumns(db)}${KEY_PACKAGE_COUNTS}
            FROM e2ee_invitations
            WHERE project_id = ? AND accepted_by_user_id = ?
            ORDER BY (completed_at IS NOT NULL AND completed_at >= ?) DESC,
@@ -613,7 +613,7 @@ export async function createMigrationInvitation(
   }
   const row = await db
     .prepare(
-      `SELECT ${INVITATION_COLUMNS}${KEY_PACKAGE_COUNTS} FROM e2ee_invitations
+      `SELECT ${await invitationColumns(db)}${KEY_PACKAGE_COUNTS} FROM e2ee_invitations
        WHERE invitation_id = ?`
     )
     .bind(decoded.invitationId)

@@ -134,7 +134,7 @@ const ENCRYPTED_CONTENT_WRITE_ROUTE =
  * staging from being undone by a write it cannot see.
  */
 const ENCRYPTED_SHARING_WRITE_ROUTE =
-  /^\/api\/e2ee\/projects\/([^/]+)\/(?:share-links(?:\/.*)?|mls\/proposals|invitations|key-packages(?:\/claim)?)$/;
+  /^\/api\/e2ee\/projects\/([^/]+)\/(?:share-links(?:\/.*)?|mls\/proposals|invitations(?:\/[^/]+\/acceptance)?|key-packages(?:\/claim)?)$/;
 
 interface WriteDatabase extends D1Database {
   authorization: E2eeWriteAuthorization;

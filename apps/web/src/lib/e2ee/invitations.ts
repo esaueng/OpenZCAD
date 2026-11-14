@@ -14,15 +14,23 @@
  *   comparison), each of its online certified devices makes a leaf for the
  *   project certified from the group's current epoch and publishes one
  *   KeyPackage (decision M3: every device that published one is added).
+ * - **Invitee: sign the acceptance.** Before its KeyPackage, a device signs
+ *   an acceptance ("OZJ"): the invitation, by the hash of its statement,
+ *   and the account and identity accepting it as the recipient of the
+ *   email hash the statement names. The Worker keeps it with the invitation.
  * - **Owner: verify and add.** The owner's next session lists accepted
  *   invitations: "waiting for keys" until KeyPackages arrive, "waiting for
- *   you to verify" until the invitee is a verified contact. Only then, and
- *   only for a statement this account's device signed, are the KeyPackages
- *   claimed (once; kept locally until the Add lands), each checked (the
- *   invitee's account, a device of their verified list, its leaf
- *   certification), and one Add Commit with the statement's role travels
- *   with the Welcome and the owner's wraps of the new epoch
- *   (`addInvitee`).
+ *   you to verify" until the invitee is a verified contact, "waiting for
+ *   them to accept again" until a valid signed acceptance is there (one an
+ *   older app version accepted has none). Only then, and only for a
+ *   statement this account's device signed, are the KeyPackages claimed
+ *   (once; kept locally until the Add lands), each checked (the invitee's
+ *   account, a device of their verified list, its leaf certification), and
+ *   one Add Commit with the statement's role travels with the Welcome and
+ *   the owner's wraps of the new epoch (`addInvitee`). The account added is
+ *   the one whose device signed the acceptance, never merely the one the
+ *   server names; an account this browser saw removed from the project is
+ *   added back only on the owner's explicit confirmation.
  * - **Invitee: join.** A device whose KeyPackage was added joins by its
  *   Welcome, verifying the whole history (`joinProjectByWelcome`, #817),
  *   and posts its account's wraps of the joined epoch; the account's other
@@ -33,15 +41,20 @@
  * lagging member device (no KeyPackage route outside invitations yet).
  */
 import {
+  decodeInvitationAcceptance,
   decodeProjectInvitation,
   fromBase64Url,
   invitationEmailHash,
+  invitationStatementHash,
   MAX_PROJECT_INVITATION_LIFETIME_MS,
   publicKeyHash,
+  signInvitationAcceptance,
   signProjectInvitation,
   toBase64Url,
   toHex,
+  verifyInvitationAcceptance,
   verifyProjectInvitation,
+  type InvitationAcceptance,
   type ProjectInvitation,
   type VerifiedDeviceList
 } from '@openzcad/crypto';
@@ -62,7 +75,7 @@ import {
   type ProjectGroupContext,
   type ProjectGroupState
 } from './projectGroups';
-import type { InvitationStore } from './invitationStore';
+import type { InvitationStore, RemovedMember } from './invitationStore';
 import { rememberExpectedProjectOwner } from './projectAuthority';
 
 // --- Context ----------------------------------------------------------------
@@ -131,7 +144,19 @@ export type InvitationErrorCode =
   /** No KeyPackage to add yet. */
   | 'no-key-packages'
   /** This browser has no certified device to sign or hold a leaf with. */
-  | 'device-not-certified';
+  | 'device-not-certified'
+  /**
+   * The invitee has no signed acceptance yet (an older app version
+   * accepted): it comes once they open OpenZCAD again.
+   */
+  | 'acceptance-missing'
+  /** The acceptance does not verify, or accepts something else. */
+  | 'acceptance-invalid'
+  /**
+   * This account was removed from the project: adding it back takes the
+   * owner's explicit confirmation (`confirmReAdd`).
+   */
+  | 'removed-member';
 
 export class InvitationError extends Error {
   override readonly name = 'InvitationError';
@@ -229,6 +254,83 @@ async function verifiedStatement(
   }
 }
 
+/**
+ * The invitee's signed acceptance of `record`, verified against `list`
+ * (their verified device list): signed by a device it certifies now, by the
+ * account `record` says accepted and the identity `list` pins, for exactly
+ * this invitation statement and the email hash `statement` names.
+ */
+async function verifiedAcceptance(
+  record: E2eeInvitationRecord,
+  statement: ProjectInvitation,
+  list: VerifiedDeviceList
+): Promise<InvitationAcceptance> {
+  if (!record.acceptance) {
+    throw new InvitationError(
+      'acceptance-missing',
+      'They have not confirmed this invitation on a device of theirs yet. It completes once they open OpenZCAD again.'
+    );
+  }
+  const invalid = (why: string): never => {
+    throw new InvitationError(
+      'acceptance-invalid',
+      `The invitee’s acceptance does not verify: ${why}`
+    );
+  };
+  let signed: { statement: Uint8Array; signature: Uint8Array };
+  let decoded: InvitationAcceptance;
+  try {
+    signed = {
+      statement: fromBase64Url(record.acceptance.statement),
+      signature: fromBase64Url(record.acceptance.signature)
+    };
+    decoded = decodeInvitationAcceptance(signed.statement);
+  } catch {
+    return invalid('it is malformed.');
+  }
+  const signer = list.devices.find(
+    (device) => device.deviceId === decoded.signerDeviceId
+  );
+  if (!signer || list.userId !== record.acceptedByUserId) {
+    return invalid('it is not signed by a device of the invitee.');
+  }
+  try {
+    return await verifyInvitationAcceptance(signed, signer.signingKey, {
+      projectId: record.projectId,
+      invitationId: record.invitationId,
+      invitationHash: await invitationStatementHash(
+        fromBase64Url(record.statement)
+      ),
+      inviteeUserId: list.userId,
+      inviteeIdentityKeyHash: list.identityKeyHash,
+      inviteeEmailHash: statement.inviteeEmailHash
+    });
+  } catch (error) {
+    return invalid(error instanceof Error ? error.message : String(error));
+  }
+}
+
+/**
+ * The accounts this browser saw removed from projects, or null when its
+ * store cannot say: then everyone counts as removed (fail closed), so the
+ * sweep adds nobody and the owner confirms each Add.
+ */
+async function removedMembers(
+  ctx: InvitationContext
+): Promise<readonly RemovedMember[] | null> {
+  return ctx.store.removedMembers(ctx.groups.account.userId).catch(() => null);
+}
+
+const isRemoved = (
+  removed: readonly RemovedMember[] | null,
+  projectId: string,
+  memberUserId: string | null
+) =>
+  removed === null ||
+  removed.some(
+    (entry) => entry.projectId === projectId && entry.userId === memberUserId
+  );
+
 // --- Owner ------------------------------------------------------------------
 
 /**
@@ -301,7 +403,17 @@ export type OwnerInvitationState =
   | 'waiting-for-keys'
   /** KeyPackages are waiting; the invitee is not a verified contact yet. */
   | 'waiting-for-verification'
-  /** Verified, with KeyPackages: this browser adds them. */
+  /**
+   * Verified, with KeyPackages, but no valid signed acceptance (an older
+   * app version accepted): they need to open OpenZCAD again.
+   */
+  | 'needs-acceptance'
+  /**
+   * Verified and accepted, but removed from this project before: only the
+   * owner's explicit confirmation adds them back.
+   */
+  | 'confirm-re-add'
+  /** Verified, accepted, with KeyPackages: this browser adds them. */
   | 'ready'
   | 'completed'
   | 'revoked'
@@ -317,8 +429,12 @@ export interface OwnerInvitation {
 function ownerState(
   record: E2eeInvitationRecord,
   at: number,
-  verified: boolean,
-  claimedHere: boolean
+  standing: {
+    readonly verified: boolean;
+    readonly claimedHere: boolean;
+    readonly accepted: boolean;
+    readonly removed: boolean;
+  }
 ): OwnerInvitationState {
   if (record.completedAt) return 'completed';
   if (record.revokedAt) return 'revoked';
@@ -326,9 +442,37 @@ function ownerState(
   if (!record.acceptedByUserId) return 'invited';
   const waiting =
     (record.keyPackages ?? 0) +
-    (claimedHere ? (record.claimedKeyPackages ?? 0) : 0);
+    (standing.claimedHere ? (record.claimedKeyPackages ?? 0) : 0);
   if (waiting === 0) return 'waiting-for-keys';
-  return verified ? 'ready' : 'waiting-for-verification';
+  if (!standing.verified) return 'waiting-for-verification';
+  if (!standing.accepted) return 'needs-acceptance';
+  return standing.removed ? 'confirm-re-add' : 'ready';
+}
+
+/**
+ * Whether `record` carries a valid signed acceptance by `person`, for a
+ * statement this account signed: what `addInvitedMember` checks again.
+ */
+async function acceptedBy(
+  ctx: InvitationContext,
+  record: E2eeInvitationRecord,
+  person: InvitationPerson | null,
+  at: number
+): Promise<boolean> {
+  if (!record.acceptance || person?.status !== 'verified' || !person.list) {
+    return false;
+  }
+  try {
+    const statement = await verifiedStatement(
+      record,
+      ctx.groups.account.list,
+      at
+    );
+    await verifiedAcceptance(record, statement, person.list);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function describe(
@@ -343,6 +487,7 @@ async function describe(
     ])
   );
   const at = now(ctx);
+  const removed = await removedMembers(ctx);
   const out: OwnerInvitation[] = [];
   for (const record of records) {
     // Only an open, accepted invitation needs the invitee's standing.
@@ -359,12 +504,12 @@ async function describe(
       .catch(() => null);
     out.push({
       record,
-      state: ownerState(
-        record,
-        at,
-        person?.status === 'verified',
-        claimed !== null
-      ),
+      state: ownerState(record, at, {
+        verified: person?.status === 'verified',
+        claimedHere: claimed !== null,
+        accepted: await acceptedBy(ctx, record, person, at),
+        removed: isRemoved(removed, record.projectId, record.acceptedByUserId)
+      }),
       email: emails.get(record.invitationId) ?? person?.email ?? null
     });
   }
@@ -457,13 +602,18 @@ async function checkedKeyPackage(
  * Add the invitee of one accepted invitation (owner only): the statement
  * must be this account's, signed by one of its certified devices and still
  * valid; the invitee must be a verified contact (an unverified one is never
- * added, whatever the server says); their KeyPackages are claimed once (or
- * taken from this browser's earlier claim), each checked, and added in one
- * Commit with the statement's role. The claim is dropped once the Add lands.
+ * added, whatever the server says) whose certified device signed an
+ * acceptance of exactly this statement as the recipient of its email hash;
+ * an account this browser saw removed from the project is added back only
+ * with `confirmReAdd` (the owner's explicit action, never the sweep); their
+ * KeyPackages are claimed once (or taken from this browser's earlier
+ * claim), each checked, and added in one Commit with the statement's role.
+ * The claim is dropped once the Add lands.
  */
 export async function addInvitedMember(
   ctx: InvitationContext,
-  invitation: E2eeInvitationRecord
+  invitation: E2eeInvitationRecord,
+  options: { readonly confirmReAdd?: boolean } = {}
 ): Promise<ProjectGroupState> {
   const userId = ctx.groups.account.userId;
   certifiedDevice(ctx);
@@ -490,6 +640,19 @@ export async function addInvitedMember(
     throw new InvitationError(
       'not-verified',
       'Verify this person first: compare your codes with them in Settings › Encryption › Contacts.'
+    );
+  }
+  // The account added is the one whose device accepted this statement.
+  await verifiedAcceptance(invitation, statement, person.list);
+  const removed = isRemoved(
+    await removedMembers(ctx),
+    invitation.projectId,
+    invitee
+  );
+  if (removed && !options.confirmReAdd) {
+    throw new InvitationError(
+      'removed-member',
+      'This person was removed from the project. Confirm adding them back in the project’s sharing settings.'
     );
   }
   let claimed = await ctx.store
@@ -557,13 +720,18 @@ export async function addInvitedMember(
   await ctx.store
     .dropClaim(userId, invitation.invitationId)
     .catch(() => undefined);
+  if (removed) {
+    await ctx.store
+      .forgetRemoved(userId, invitation.projectId, invitee)
+      .catch(() => undefined);
+  }
   return state;
 }
 
 /**
- * Add every invitee of `invitations` who is ready (verified, with
- * KeyPackages). One that fails stays pending and is reported; the rest
- * still go ahead.
+ * Add every invitee of `invitations` who is ready (verified, accepted by
+ * signature, with KeyPackages, never removed from the project). One that
+ * fails stays pending and is reported; the rest still go ahead.
  */
 export async function completeReadyInvitations(
   ctx: InvitationContext,
@@ -623,16 +791,14 @@ export interface InviteeInvitation {
  */
 export const KEY_PACKAGE_REFRESH_MS = 24 * 60 * 60 * 1000;
 
-/** The invitations this account accepted that no Add completed yet. */
-export async function acceptedInvitations(
-  ctx: InvitationContext
-): Promise<InviteeInvitation[]> {
-  const { invitations } = await ctx.api.accepted();
-  const userId = ctx.groups.account.userId;
+/** Invitations this device published a KeyPackage for, recently enough. */
+async function recentlyPublished(
+  ctx: InvitationContext,
+  at: number
+): Promise<Set<string>> {
   const device = ctx.groups.device;
-  const at = now(ctx);
-  const published = new Set(
-    (await ctx.store.published(userId).catch(() => []))
+  return new Set(
+    (await ctx.store.published(ctx.groups.account.userId).catch(() => []))
       .filter(
         (entry) =>
           entry.deviceId === device?.deviceId &&
@@ -640,6 +806,41 @@ export async function acceptedInvitations(
       )
       .map((entry) => entry.invitationId)
   );
+}
+
+/**
+ * Whether the server holds an acceptance of `record` by this account's
+ * current identity and a device `list` still certifies (the owner checks
+ * its signature; this only says whether to sign another).
+ */
+function acceptedHere(
+  record: E2eeInvitationRecord,
+  list: VerifiedDeviceList
+): boolean {
+  if (!record.acceptance) return false;
+  try {
+    const value = decodeInvitationAcceptance(
+      fromBase64Url(record.acceptance.statement)
+    );
+    return (
+      value.inviteeUserId === list.userId &&
+      value.invitationId === record.invitationId &&
+      toHex(value.inviteeIdentityKeyHash) === toHex(list.identityKeyHash) &&
+      list.devices.some((device) => device.deviceId === value.signerDeviceId)
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** The invitations this account accepted that no Add completed yet. */
+export async function acceptedInvitations(
+  ctx: InvitationContext
+): Promise<InviteeInvitation[]> {
+  const { invitations } = await ctx.api.accepted();
+  const device = ctx.groups.device;
+  const at = now(ctx);
+  const published = await recentlyPublished(ctx, at);
   const out: InviteeInvitation[] = [];
   for (const record of invitations) {
     const owner = await ctx.people
@@ -657,7 +858,8 @@ export async function acceptedInvitations(
             ? 'verify-owner'
             : !device
               ? 'no-device'
-              : published.has(record.invitationId)
+              : published.has(record.invitationId) &&
+                  acceptedHere(record, ctx.groups.account.list)
                 ? 'waiting-for-owner'
                 : 'ready';
       } catch {
@@ -672,8 +874,11 @@ export async function acceptedInvitations(
 /**
  * Publish this device's KeyPackage for every accepted invitation whose
  * owner is verified and whose statement verifies (each of the invitee's
- * online devices does this for itself, decision M3). The leaf is certified
- * from the group's current epoch as the invitation reports it.
+ * online devices does this for itself, decision M3), after the signed
+ * acceptance the owner checks before adding anyone. The leaf is certified
+ * from the group's current epoch as the invitation reports it. An
+ * invitation this device already published for, but without an acceptance
+ * (an older app version), only gets its acceptance.
  */
 export async function publishInvitationKeyPackages(
   ctx: InvitationContext,
@@ -682,8 +887,9 @@ export async function publishInvitationKeyPackages(
   const listed = invitations ?? (await acceptedInvitations(ctx));
   const ready = listed.filter((entry) => entry.state === 'ready');
   if (ready.length === 0) return [];
-  const { device } = certifiedDevice(ctx);
+  const { device, listed: own } = certifiedDevice(ctx);
   const userId = ctx.groups.account.userId;
+  const recent = await recentlyPublished(ctx, now(ctx));
   const published: string[] = [];
   for (const { record } of ready) {
     // Callers may supply a cached listing. Recheck its signed, recipient-bound
@@ -695,7 +901,7 @@ export async function publishInvitationKeyPackages(
         'Verify the project owner and invitation recipient before joining.'
       );
     }
-    await verifiedStatement(record, owner.list, now(ctx), {
+    const statement = await verifiedStatement(record, owner.list, now(ctx), {
       inviteeEmail: ctx.email
     });
     await rememberExpectedProjectOwner(
@@ -703,6 +909,33 @@ export async function publishInvitationKeyPackages(
       record.projectId,
       owner.list
     );
+    if (!acceptedHere(record, ctx.groups.account.list)) {
+      const acceptance = await signInvitationAcceptance(
+        device.signing.privateKey,
+        {
+          projectId: record.projectId,
+          invitationId: record.invitationId,
+          invitationHash: await invitationStatementHash(
+            fromBase64Url(record.statement)
+          ),
+          inviteeUserId: userId,
+          inviteeIdentityKeyHash: ctx.groups.account.list.identityKeyHash,
+          inviteeEmailHash: statement.inviteeEmailHash,
+          acceptedAt: now(ctx),
+          signerDeviceId: device.deviceId,
+          signerKeyHash: await publicKeyHash(own.signingKey)
+        }
+      );
+      await ctx.api.publishAcceptance(record.projectId, record.invitationId, {
+        statement: toBase64Url(acceptance.statement),
+        signature: toBase64Url(acceptance.signature)
+      });
+    }
+    if (recent.has(record.invitationId)) {
+      // Published before, by an app version that signed no acceptance.
+      published.push(record.invitationId);
+      continue;
+    }
     const ref = {
       userId,
       deviceId: device.deviceId,

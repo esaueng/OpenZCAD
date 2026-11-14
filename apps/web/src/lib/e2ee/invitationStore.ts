@@ -15,6 +15,10 @@
  * - **Published** (the invitee's devices). Which invitations this device
  *   published a KeyPackage for, so it publishes once, and later looks for
  *   its Welcome.
+ * - **Removed** (the owner's browser). Which accounts a Commit this browser
+ *   sent or processed took out of a project (`onMembersRemoved`). An
+ *   invitation for one of them is never completed by the background sweep:
+ *   adding them back takes the owner's explicit confirmation.
  *
  * Everything is kept per account, like the contact pins; a memory store
  * stands in where IndexedDB is unavailable.
@@ -41,6 +45,14 @@ export interface PublishedKeyPackage {
   readonly publishedAt: number;
 }
 
+export interface RemovedMember {
+  readonly projectId: string;
+  /** The account removed from the project. */
+  readonly userId: string;
+  /** Unix milliseconds. */
+  readonly removedAt: number;
+}
+
 export interface InvitationStore {
   rememberEmail(userId: string, entry: InvitationEmail): Promise<void>;
   emails(userId: string): Promise<InvitationEmail[]>;
@@ -50,6 +62,13 @@ export interface InvitationStore {
   markPublished(userId: string, entry: PublishedKeyPackage): Promise<void>;
   published(userId: string): Promise<PublishedKeyPackage[]>;
   dropPublished(userId: string, projectId: string): Promise<void>;
+  rememberRemoved(userId: string, entry: RemovedMember): Promise<void>;
+  removedMembers(userId: string): Promise<RemovedMember[]>;
+  forgetRemoved(
+    userId: string,
+    projectId: string,
+    memberUserId: string
+  ): Promise<void>;
 }
 
 const isText = (value: unknown, max = 512): value is string =>
@@ -99,10 +118,25 @@ function readPublished(value: unknown): PublishedKeyPackage | null {
     : null;
 }
 
+function readRemoved(value: unknown): RemovedMember | null {
+  const entry = value as Partial<RemovedMember> | null;
+  return entry &&
+    isText(entry.projectId) &&
+    isText(entry.userId) &&
+    Number.isSafeInteger(entry.removedAt)
+    ? {
+        projectId: entry.projectId,
+        userId: entry.userId,
+        removedAt: entry.removedAt!
+      }
+    : null;
+}
+
 export function memoryInvitationStore(): InvitationStore {
   const emails = new Map<string, InvitationEmail>();
   const claims = new Map<string, StoredClaim>();
   const published = new Map<string, PublishedKeyPackage>();
+  const removed = new Map<string, RemovedMember>();
   const id = (...parts: string[]) => JSON.stringify(parts);
   const ofUser = <T>(map: Map<string, T>, userId: string) =>
     [...map].filter(([key]) => (JSON.parse(key) as string[])[0] === userId);
@@ -125,6 +159,13 @@ export function memoryInvitationStore(): InvitationStore {
     published: async (userId) => ofUser(published, userId).map(([, v]) => v),
     dropPublished: async (userId, projectId) => {
       published.delete(id(userId, projectId));
+    },
+    rememberRemoved: async (userId, entry) => {
+      removed.set(id(userId, entry.projectId, entry.userId), { ...entry });
+    },
+    removedMembers: async (userId) => ofUser(removed, userId).map(([, v]) => v),
+    forgetRemoved: async (userId, projectId, memberUserId) => {
+      removed.delete(id(userId, projectId, memberUserId));
     }
   };
 }
@@ -133,15 +174,16 @@ export const INVITATION_DATABASE = 'openzcad-e2ee-invitations';
 const EMAILS = 'emails';
 const CLAIMS = 'claims';
 const PUBLISHED = 'published';
+const REMOVED = 'removed';
 
 let opening: Promise<IDBDatabase> | null = null;
 
 function openDatabase(): Promise<IDBDatabase> {
   opening ??= new Promise<IDBDatabase>((resolve, reject) => {
-    const request = indexedDB.open(INVITATION_DATABASE, 1);
+    const request = indexedDB.open(INVITATION_DATABASE, 2);
     request.onupgradeneeded = () => {
       const db = request.result;
-      for (const name of [EMAILS, CLAIMS, PUBLISHED]) {
+      for (const name of [EMAILS, CLAIMS, PUBLISHED, REMOVED]) {
         if (!db.objectStoreNames.contains(name)) db.createObjectStore(name);
       }
     };
@@ -230,7 +272,13 @@ export function indexedDbInvitationStore(): InvitationStore {
     markPublished: (userId, entry) =>
       put(PUBLISHED, [userId, entry.projectId], { ...entry }),
     published: (userId) => all(PUBLISHED, userId, readPublished),
-    dropPublished: (userId, projectId) => remove(PUBLISHED, [userId, projectId])
+    dropPublished: (userId, projectId) =>
+      remove(PUBLISHED, [userId, projectId]),
+    rememberRemoved: (userId, entry) =>
+      put(REMOVED, [userId, entry.projectId, entry.userId], { ...entry }),
+    removedMembers: (userId) => all(REMOVED, userId, readRemoved),
+    forgetRemoved: (userId, projectId, memberUserId) =>
+      remove(REMOVED, [userId, projectId, memberUserId])
   };
 }
 

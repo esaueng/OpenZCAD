@@ -5,13 +5,21 @@ import { E2eeError, type E2eeErrorCode } from './errors';
 import { encodeGroupReset, signStatement } from './devices';
 import {
   INVITATION_CLOCK_SKEW_MS,
+  MAX_INVITATION_ACCEPTANCE_BYTES,
   MAX_PROJECT_INVITATION_LIFETIME_MS,
   ProjectInvitationError,
+  decodeInvitationAcceptance,
   decodeProjectInvitation,
+  encodeInvitationAcceptance,
   encodeProjectInvitation,
   invitationEmailHash,
+  invitationStatementHash,
+  signInvitationAcceptance,
   signProjectInvitation,
+  verifyInvitationAcceptance,
   verifyProjectInvitation,
+  type AcceptanceExpectations,
+  type InvitationAcceptance,
   type InvitationFailure,
   type ProjectInvitation
 } from './invitations';
@@ -241,5 +249,187 @@ describe('owner-signed project invitations (slice 5-3a)', () => {
     throwsCode(() => decodeProjectInvitation(reset), 'malformed');
     expect(encodeProjectInvitation(value)[2]).toBe(0x49);
     expect(() => decodeProjectInvitation(new Uint8Array(0))).toThrow(E2eeError);
+  });
+});
+
+describe('invitee-signed invitation acceptances', () => {
+  async function acceptance() {
+    const owner = await fixture();
+    const invitation = await signProjectInvitation(
+      owner.device.privateKey,
+      owner.value
+    );
+    const device = await generateSigningKeyPair(false);
+    const deviceRaw = await exportPublicKey(device.publicKey);
+    const value: InvitationAcceptance = {
+      projectId: 'proj_1',
+      invitationId: 'inv_1',
+      invitationHash: await invitationStatementHash(invitation.statement),
+      inviteeUserId: 'user_bob',
+      inviteeIdentityKeyHash: patternBytes(32),
+      inviteeEmailHash: owner.value.inviteeEmailHash,
+      acceptedAt: T + DAY,
+      signerDeviceId: 'bob_laptop',
+      signerKeyHash: await publicKeyHash(deviceRaw)
+    };
+    const expected: AcceptanceExpectations = {
+      projectId: 'proj_1',
+      invitationId: 'inv_1',
+      invitationHash: value.invitationHash,
+      inviteeEmailHash: await invitationEmailHash('bob@example.com'),
+      inviteeUserId: 'user_bob',
+      inviteeIdentityKeyHash: patternBytes(32)
+    };
+    return { invitation, device, deviceRaw, value, expected };
+  }
+
+  it('round-trips canonically and verifies under the signing device', async () => {
+    const { device, deviceRaw, value, expected } = await acceptance();
+    const bytes = encodeInvitationAcceptance(value);
+    expect([...bytes.subarray(0, 4)]).toEqual([0x4f, 0x5a, 0x4a, 1]);
+    expect(decodeInvitationAcceptance(bytes)).toEqual(value);
+    const signed = await signInvitationAcceptance(device.privateKey, value);
+    await expect(
+      verifyInvitationAcceptance(signed, deviceRaw, expected)
+    ).resolves.toEqual(value);
+    // The server's check, without an identity hash, and with a CryptoKey.
+    const { inviteeIdentityKeyHash: _, ...withoutIdentity } = expected;
+    await expect(
+      verifyInvitationAcceptance(signed, device.publicKey, withoutIdentity)
+    ).resolves.toEqual(value);
+    const longest = encodeInvitationAcceptance({
+      ...value,
+      projectId: 'p'.repeat(128),
+      invitationId: 'i'.repeat(128),
+      inviteeUserId: 'u'.repeat(128),
+      signerDeviceId: 'd'.repeat(128)
+    });
+    expect(longest.byteLength).toBe(MAX_INVITATION_ACCEPTANCE_BYTES);
+  });
+
+  it('refuses a forged, missing-key or another device’s acceptance', async () => {
+    const { device, deviceRaw, value, expected } = await acceptance();
+    const signed = await signInvitationAcceptance(device.privateKey, value);
+    const intruder = await generateSigningKeyPair(false);
+    // Another device's signature over the same bytes.
+    await refusedWith(
+      verifyInvitationAcceptance(
+        {
+          statement: signed.statement,
+          signature: await signStatement(
+            intruder.privateKey,
+            'invitation acceptance',
+            signed.statement
+          )
+        },
+        deviceRaw,
+        expected
+      ),
+      'signature'
+    );
+    // The same signature under another label (an invitation's).
+    await refusedWith(
+      verifyInvitationAcceptance(
+        {
+          statement: signed.statement,
+          signature: await signStatement(
+            device.privateKey,
+            'project invitation',
+            signed.statement
+          )
+        },
+        deviceRaw,
+        expected
+      ),
+      'signature'
+    );
+    // Checked under a key the statement does not name.
+    await refusedWith(
+      verifyInvitationAcceptance(
+        signed,
+        await exportPublicKey(intruder.publicKey),
+        expected
+      ),
+      'signer-mismatch'
+    );
+    // A changed account under the original signature.
+    await refusedWith(
+      verifyInvitationAcceptance(
+        {
+          statement: encodeInvitationAcceptance({
+            ...value,
+            inviteeUserId: 'user_carol'
+          }),
+          signature: signed.signature
+        },
+        deviceRaw,
+        { ...expected, inviteeUserId: 'user_carol' }
+      ),
+      'signature'
+    );
+    await expect(
+      verifyInvitationAcceptance(
+        { statement: signed.statement, signature: new Uint8Array() },
+        deviceRaw,
+        expected
+      )
+    ).rejects.toBeInstanceOf(E2eeError);
+  });
+
+  it('accepts only the exact invitation, account, identity and email', async () => {
+    const { invitation, device, deviceRaw, value, expected } =
+      await acceptance();
+    const signed = await signInvitationAcceptance(device.privateKey, value);
+    const changed = new Uint8Array(invitation.statement);
+    changed[changed.length - 1]! ^= 1;
+    for (const other of [
+      { projectId: 'proj_2' },
+      { invitationId: 'inv_2' },
+      { invitationHash: await invitationStatementHash(changed) },
+      { inviteeUserId: 'user_carol' },
+      { inviteeIdentityKeyHash: patternBytes(32, 7) },
+      { inviteeEmailHash: await invitationEmailHash('carol@example.com') }
+    ]) {
+      await refusedWith(
+        verifyInvitationAcceptance(signed, deviceRaw, {
+          ...expected,
+          ...other
+        }),
+        'context-mismatch'
+      );
+    }
+  });
+
+  it('refuses malformed and non-canonical bytes', async () => {
+    const { value } = await acceptance();
+    const bytes = encodeInvitationAcceptance(value);
+    throwsCode(
+      () => decodeInvitationAcceptance(bytes.subarray(0, bytes.length - 1)),
+      'malformed'
+    );
+    throwsCode(
+      () => decodeInvitationAcceptance(concatBytes(bytes, Uint8Array.of(0))),
+      'malformed'
+    );
+    const version = new Uint8Array(bytes);
+    version[3] = 2;
+    throwsCode(
+      () => decodeInvitationAcceptance(version),
+      'unsupported-version'
+    );
+    // An invitation's bytes are not an acceptance.
+    const { value: invitation } = await fixture();
+    throwsCode(
+      () => decodeInvitationAcceptance(encodeProjectInvitation(invitation)),
+      'malformed'
+    );
+    throwsCode(
+      () =>
+        encodeInvitationAcceptance({
+          ...value,
+          signerKeyHash: patternBytes(31)
+        }),
+      'invalid-argument'
+    );
   });
 });

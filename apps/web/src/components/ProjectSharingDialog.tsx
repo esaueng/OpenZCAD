@@ -69,6 +69,11 @@ export interface EncryptedSharingClient {
   ): Promise<void>;
   revoke(projectId: string, invitationId: string): Promise<void>;
   /**
+   * The owner's explicit confirmation that adds back someone removed from
+   * the project before (`confirm-re-add`): never done in the background.
+   */
+  addBack?(projectId: string, invitationId: string): Promise<void>;
+  /**
    * The owner's role change of a member (slice 5-4): an MLS Commit the
    * Worker mirrors into the member list.
    */
@@ -122,6 +127,23 @@ export const pageEncryptedSharingClient: EncryptedSharingClient = {
       await import('../lib/e2ee/encryptedProjects');
     await (await encryptedInvitations()).api.revoke(projectId, invitationId);
   },
+  async addBack(projectId, invitationId) {
+    const [{ encryptedInvitations }, invitations] = await Promise.all([
+      import('../lib/e2ee/encryptedProjects'),
+      import('../lib/e2ee/invitations')
+    ]);
+    const ctx = await encryptedInvitations();
+    const listed = await invitations.projectInvitations(ctx, projectId);
+    const invitation = listed.find(
+      (entry) => entry.record.invitationId === invitationId
+    );
+    if (!invitation || invitation.state !== 'confirm-re-add') {
+      throw new Error('This invitation is not waiting to be added back.');
+    }
+    await invitations.addInvitedMember(ctx, invitation.record, {
+      confirmReAdd: true
+    });
+  },
   async changeRole(projectId, userId, role) {
     const { changeEncryptedMemberRole } =
       await import('../lib/e2ee/memberships');
@@ -141,6 +163,8 @@ const ENCRYPTED_STATE_LABELS: Record<OwnerInvitation['state'], string> = {
   invited: 'Invited',
   'waiting-for-keys': 'Waiting for keys',
   'waiting-for-verification': 'Waiting for you to verify',
+  'needs-acceptance': 'Waiting for them to accept again',
+  'confirm-re-add': 'Removed before: confirm to add back',
   ready: 'Adding',
   completed: 'Added',
   revoked: 'Revoked',
@@ -151,6 +175,8 @@ const OPEN_ENCRYPTED_STATES = new Set<OwnerInvitation['state']>([
   'invited',
   'waiting-for-keys',
   'waiting-for-verification',
+  'needs-acceptance',
+  'confirm-re-add',
   'ready'
 ]);
 
@@ -1071,6 +1097,29 @@ export function ProjectSharingDialog({
                                 onClick={() => onVerifyContact(invitee)}
                               >
                                 Verify
+                              </button>
+                            ) : null}
+                            {invitation.state === 'confirm-re-add' &&
+                            encryptedClient.addBack ? (
+                              <button
+                                type="button"
+                                className="secondary sharing-verify"
+                                aria-label={`Add ${label} back`}
+                                disabled={interactionBusy}
+                                onClick={() =>
+                                  void mutate(
+                                    `add-back:${invitation.record.invitationId}`,
+                                    async () => {
+                                      await encryptedClient.addBack!(
+                                        projectId,
+                                        invitation.record.invitationId
+                                      );
+                                      await refresh();
+                                    }
+                                  )
+                                }
+                              >
+                                Add back
                               </button>
                             ) : null}
                             <button

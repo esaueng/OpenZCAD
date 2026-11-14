@@ -139,7 +139,9 @@ async function stateOf(
   if (!invitation) return 'needs-invitation';
   if (
     (invitation.keyPackages ?? 0) + (invitation.claimedKeyPackages ?? 0) ===
-    0
+      0 ||
+    // Their browser signs an acceptance with its keys; an older one did not.
+    !invitation.acceptance
   ) {
     return 'waiting-for-keys';
   }
@@ -236,7 +238,9 @@ export async function readdMigrationMembers(
   requireMembersReady(current);
   for (const member of current.members) {
     if (member.state !== 'ready') continue;
-    await addInvitedMember(ctx, member.invitation!);
+    // Starting the cutover with this member list is the owner's explicit
+    // action: someone this browser once saw removed is added back too.
+    await addInvitedMember(ctx, member.invitation!, { confirmReAdd: true });
   }
   const after = await describeSharing(
     ctx,

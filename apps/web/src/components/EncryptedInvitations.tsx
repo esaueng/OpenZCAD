@@ -40,6 +40,10 @@ const OUTGOING_HINTS: Partial<Record<OwnerInvitation['state'], string>> = {
   'waiting-for-keys': 'Accepted. Waiting for their keys.',
   'waiting-for-verification':
     'Waiting for you to verify them: compare codes, then they are added.',
+  'needs-acceptance':
+    'Waiting for them to open OpenZCAD again and confirm the invitation.',
+  'confirm-re-add':
+    'They were removed from this project before. Add them back from the project’s sharing settings.',
   ready: 'Verified. Adding them…'
 };
 

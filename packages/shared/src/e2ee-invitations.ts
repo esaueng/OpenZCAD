@@ -62,6 +62,13 @@ export interface E2eeInvitationRecord {
   completedEpoch: number | null;
   revokedAt: string | null;
   /**
+   * The invitee's signed acceptance ("OZJ", `@openzcad/crypto`), base64url:
+   * the newest one a device of the accepting account posted. Absent or
+   * null until one is posted (an older app version never posts one); the
+   * owner's browser adds nobody without a valid one.
+   */
+  acceptance?: E2eeInvitationAcceptanceRequest | null;
+  /**
    * The owner's lists (`list`, `sent`; slice 5-3b): the invitee's
    * published KeyPackages no claim took yet, and those the owner claimed
    * that no Add consumed. Absent from the invitee's answers.
@@ -87,6 +94,15 @@ export interface E2eeInvitationsResponse {
 /** `POST /api/e2ee/invitations/accept`: the token from the emailed link. */
 export interface E2eeAcceptInvitationRequest {
   token: string;
+}
+
+/**
+ * `POST /api/e2ee/projects/:id/invitations/:invitationId/acceptance` (the
+ * accepted invitee): a certified device's signed acceptance, base64url.
+ */
+export interface E2eeInvitationAcceptanceRequest {
+  statement: string;
+  signature: string;
 }
 
 /** `POST /api/e2ee/projects/:id/key-packages` (the accepted invitee). */
@@ -191,6 +207,12 @@ export interface E2eeInvitationsApi {
    * session completes.
    */
   sent(): Promise<E2eeInvitationsResponse>;
+  /** The invitee's device posts its signed acceptance. */
+  publishAcceptance(
+    projectId: string,
+    invitationId: string,
+    request: E2eeInvitationAcceptanceRequest
+  ): Promise<E2eeInvitationResponse>;
   publishKeyPackage(
     projectId: string,
     request: E2eePublishKeyPackageRequest
@@ -247,6 +269,12 @@ export function createE2eeInvitationsApi(fetcher: Fetch): E2eeInvitationsApi {
     accept: (request) => call('/api/e2ee/invitations/accept', 'POST', request),
     accepted: () => call('/api/e2ee/invitations'),
     sent: () => call('/api/e2ee/invitations/sent'),
+    publishAcceptance: (projectId, invitationId, request) =>
+      call(
+        `${project(projectId)}/invitations/${encodeURIComponent(invitationId)}/acceptance`,
+        'POST',
+        request
+      ),
     publishKeyPackage: (projectId, request) =>
       call(`${project(projectId)}/key-packages`, 'POST', request),
     claimKeyPackages: (projectId, request) =>

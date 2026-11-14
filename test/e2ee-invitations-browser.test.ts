@@ -27,7 +27,10 @@ import {
   admitDevelopmentE2eeWrite,
   releaseDevelopmentE2eeWrite
 } from '../apps/web/worker/e2eeWriteAuthorization';
-import { createE2eeInvitationsApi } from '@openzcad/shared';
+import {
+  createE2eeInvitationsApi,
+  type E2eeInvitationRecord
+} from '@openzcad/shared';
 import {
   InvitationError,
   acceptEncryptedInvitation,
@@ -50,6 +53,7 @@ import {
   joinProjectGroup,
   postOwnEpochKeys,
   projectKeyForEpoch,
+  removeMember,
   ProjectGroupError
 } from '../apps/web/src/lib/e2ee/projectGroups';
 import { EncryptedProjectIntegrityError } from '../apps/web/src/lib/e2ee/encryptedProjectStore';
@@ -580,7 +584,8 @@ describe('the invitation flow in the browser (slice 5-3b)', () => {
     await expect(
       joinProjectByWelcome(invitee.groups, projectId)
     ).rejects.toSatisfy(
-      (error: unknown) => error instanceof ProjectGroupError && error.code === 'archive-invalid'
+      (error: unknown) =>
+        error instanceof ProjectGroupError && error.code === 'archive-invalid'
     );
     expect(
       await invitee.sessions.status({
@@ -688,6 +693,219 @@ describe('the invitation flow in the browser (slice 5-3b)', () => {
       (error: unknown) =>
         error instanceof InvitationError && error.code === 'statement-invalid'
     );
+  });
+});
+
+describe('the invitee’s signed acceptance', () => {
+  const unclaimed = (w: World, projectId: string) =>
+    rows<{ claimed_at: string | null }>(
+      w.srv,
+      'SELECT claimed_at FROM e2ee_key_packages WHERE project_id = ?',
+      projectId
+    ).every((row) => row.claimed_at === null);
+
+  const refusedWith = (code: string) => (error: unknown) =>
+    error instanceof InvitationError && error.code === code;
+
+  /** Accepted, verified both ways, KeyPackage and acceptance published. */
+  async function published(w: World) {
+    const setup = await invited(w);
+    verify(w, OTHER, OWNER);
+    verify(w, OWNER, OTHER);
+    expect(await publishInvitationKeyPackages(setup.inviteeCtx)).toEqual([
+      setup.invitation.invitationId
+    ]);
+    const stored = rows<{
+      acceptance_statement: string | null;
+      acceptance_signature: string | null;
+    }>(
+      w.srv,
+      `SELECT acceptance_statement, acceptance_signature FROM e2ee_invitations
+       WHERE invitation_id = ?`,
+      setup.invitation.invitationId
+    )[0]!;
+    expect(stored.acceptance_statement).toBeTruthy();
+    return { ...setup, stored };
+  }
+
+  const setAcceptance = (
+    w: World,
+    invitationId: string,
+    statement: string | null,
+    signature: string | null
+  ) =>
+    w.srv.db
+      .prepare(
+        `UPDATE e2ee_invitations SET acceptance_statement = ?,
+           acceptance_signature = ? WHERE invitation_id = ?`
+      )
+      .run(statement, signature, invitationId);
+
+  it('adds nobody whose acceptance is missing, and takes one an older app never signed', async () => {
+    const w = world();
+    const { projectId, ownerCtx, invitation, inviteeCtx } = await published(w);
+    // As an older app version left it: a KeyPackage, no acceptance.
+    setAcceptance(w, invitation.invitationId, null, null);
+    const outgoing = await sentInvitations(ownerCtx);
+    expect(outgoing).toMatchObject([{ state: 'needs-acceptance' }]);
+    expect(await completeReadyInvitations(ownerCtx, outgoing)).toMatchObject({
+      added: []
+    });
+    await expect(
+      addInvitedMember(ownerCtx, outgoing[0]!.record)
+    ).rejects.toSatisfy(refusedWith('acceptance-missing'));
+    expect(unclaimed(w, projectId)).toBe(true);
+    expect(groupEpoch(w.srv, projectId)).toBe(1);
+
+    // The invitee's next session signs it, without a second KeyPackage.
+    expect(await acceptedInvitations(inviteeCtx)).toMatchObject([
+      { state: 'ready' }
+    ]);
+    const before = rows<{ key_package_hash: string }>(
+      w.srv,
+      'SELECT key_package_hash FROM e2ee_key_packages WHERE project_id = ?',
+      projectId
+    );
+    expect(await publishInvitationKeyPackages(inviteeCtx)).toEqual([
+      invitation.invitationId
+    ]);
+    expect(
+      rows<{ key_package_hash: string }>(
+        w.srv,
+        'SELECT key_package_hash FROM e2ee_key_packages WHERE project_id = ?',
+        projectId
+      )
+    ).toEqual(before);
+    expect(await acceptedInvitations(inviteeCtx)).toMatchObject([
+      { state: 'waiting-for-owner' }
+    ]);
+    const sync = await syncInvitations(ownerCtx);
+    expect(sync.errors).toEqual([]);
+    expect(sync.added).toEqual([invitation.invitationId]);
+    expect(memberRole(w.srv, projectId, OTHER)).toBe('editor');
+  });
+
+  it('adds nobody from a forged acceptance or one the server moved to another account', async () => {
+    const w = world();
+    const { projectId, laptop, ownerCtx, invitation, stored } =
+      await published(w);
+    // A signature that is not the invitee device's.
+    const forged = fromBase64Url(stored.acceptance_signature!);
+    forged[forged.length - 1]! ^= 1;
+    setAcceptance(
+      w,
+      invitation.invitationId,
+      stored.acceptance_statement,
+      toBase64Url(forged)
+    );
+    let [pending] = await sentInvitations(ownerCtx);
+    expect(pending).toMatchObject({ state: 'needs-acceptance' });
+    await expect(addInvitedMember(ownerCtx, pending!.record)).rejects.toSatisfy(
+      refusedWith('acceptance-invalid')
+    );
+
+    // The server names another verified contact as the one who accepted,
+    // with the invitee's genuine acceptance and KeyPackage.
+    setAcceptance(
+      w,
+      invitation.invitationId,
+      stored.acceptance_statement,
+      stored.acceptance_signature
+    );
+    verify(w, OWNER, THIRD);
+    laptop.answer = async (path, _init, response) => {
+      if (!/\/invitations(\/sent)?$/.test(path)) return response;
+      const body = (await response.json()) as {
+        invitations: E2eeInvitationRecord[];
+      };
+      return Response.json(
+        {
+          invitations: body.invitations.map((record) => ({
+            ...record,
+            acceptedByUserId: THIRD
+          }))
+        },
+        { status: response.status }
+      );
+    };
+    const listed = await projectInvitations(ownerCtx, projectId);
+    expect(listed).toMatchObject([
+      { state: 'needs-acceptance', email: INVITEE_EMAIL }
+    ]);
+    expect(await completeReadyInvitations(ownerCtx, listed)).toMatchObject({
+      added: []
+    });
+    [pending] = listed;
+    await expect(addInvitedMember(ownerCtx, pending!.record)).rejects.toSatisfy(
+      refusedWith('acceptance-invalid')
+    );
+    expect(unclaimed(w, projectId)).toBe(true);
+    expect(groupEpoch(w.srv, projectId)).toBe(1);
+    expect(memberRole(w.srv, projectId, THIRD)).toBeNull();
+  });
+
+  it('refuses an acceptance the Worker cannot verify', async () => {
+    const w = world();
+    const { projectId, invitation, inviteeCtx, stored } = await published(w);
+    const forged = fromBase64Url(stored.acceptance_signature!);
+    forged[forged.length - 1]! ^= 1;
+    await expect(
+      inviteeCtx.api.publishAcceptance(projectId, invitation.invitationId, {
+        statement: stored.acceptance_statement!,
+        signature: toBase64Url(forged)
+      })
+    ).rejects.toMatchObject({ status: 400 });
+    // Nobody else posts an acceptance for this invitation.
+    const thirdCtx = invitationsOf(w, emailDevice(w, third, 'third_laptop'));
+    await expect(
+      thirdCtx.api.publishAcceptance(projectId, invitation.invitationId, {
+        statement: stored.acceptance_statement!,
+        signature: stored.acceptance_signature!
+      })
+    ).rejects.toMatchObject({ status: 404 });
+  });
+
+  it('never adds back someone removed from the project without the owner’s confirmation', async () => {
+    const w = world();
+    const { projectId, laptop, ownerCtx, inviteeCtx } = await published(w);
+    expect((await syncInvitations(ownerCtx)).added).toHaveLength(1);
+    expect(await joinWelcomedProjects(inviteeCtx)).toEqual([projectId]);
+    // The owner removes them; the page records it (`onMembersRemoved`).
+    await removeMember(laptop.groups, projectId, OTHER);
+    await ownerCtx.store.rememberRemoved(OWNER, {
+      projectId,
+      userId: OTHER,
+      removedAt: Date.now()
+    });
+    expect(memberRole(w.srv, projectId, OTHER)).toBeNull();
+
+    // An invitation to the same address, accepted and published again.
+    const again = await inviteToEncryptedProject(
+      ownerCtx,
+      projectId,
+      INVITEE_EMAIL,
+      'viewer'
+    );
+    const fresh = emailDevice(w, other, 'other_desktop', { members: [owner] });
+    const freshCtx = invitationsOf(w, fresh);
+    await acceptEncryptedInvitation(freshCtx, w.mail.at(-1)!.token);
+    expect(await publishInvitationKeyPackages(freshCtx)).toEqual([
+      again.invitationId
+    ]);
+    const sync = await syncInvitations(ownerCtx);
+    expect(sync.added).toEqual([]);
+    expect(sync.outgoing).toMatchObject([{ state: 'confirm-re-add' }]);
+    await expect(
+      addInvitedMember(ownerCtx, sync.outgoing[0]!.record)
+    ).rejects.toSatisfy(refusedWith('removed-member'));
+    expect(memberRole(w.srv, projectId, OTHER)).toBeNull();
+
+    // The owner confirms: added back, and no longer remembered as removed.
+    await addInvitedMember(ownerCtx, sync.outgoing[0]!.record, {
+      confirmReAdd: true
+    });
+    expect(memberRole(w.srv, projectId, OTHER)).toBe('viewer');
+    expect(await ownerCtx.store.removedMembers(OWNER)).toEqual([]);
   });
 });
 
