@@ -34288,6 +34288,10 @@ export function App() {
                 editDisabledReason={drawingEditDisabledReason}
                 onCommand={(command) => executeCommand(command)}
                 onStatus={(message, options) => setStatus(message, options)}
+                onAnnounceUndoable={(message) =>
+                  announce(message, { label: 'Undo', run: handleUndo })
+                }
+                pointerNavigation={appSettings.viewport.pointerNavigation}
                 onAssistantSource={handleDrawingAssistantSource}
                 onActiveSheetChange={setDrawingActiveSheetId}
                 previewAnnotations={drawingPreview}
