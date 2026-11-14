@@ -20,15 +20,21 @@ import {
   formatProjectBytes,
   type ProjectProperties
 } from '../lib/projectProperties';
-import type { ProjectEncryptionStatus } from '../lib/projectEncryptionStatus';
+import {
+  projectEncryptionStatus,
+  type EncryptionFacts
+} from '../lib/projectEncryptionStatus';
 import { useModalFocus } from '../lib/useModalFocus';
 import { projectNameProblem, sameNamedProject } from '../lib/projectNameHints';
 
 export interface ProjectPropertiesDialogProps {
   project: ProjectSummary;
   accountStatus: string;
-  /** How the project is stored; absent where the host does not know. */
-  encryption?: ProjectEncryptionStatus;
+  /**
+   * What the host knows about how the project is stored; the Encryption
+   * row is left out without it.
+   */
+  encryptionFacts?: EncryptionFacts;
   loadProperties(project: ProjectSummary): Promise<ProjectProperties | null>;
   /**
    * Makes the name editable: resolves true once the new name is stored.
@@ -55,7 +61,7 @@ function dateLabel(value: string | undefined): string {
 export function ProjectPropertiesDialog({
   project,
   accountStatus,
-  encryption,
+  encryptionFacts,
   loadProperties,
   onRename,
   projects = [],
@@ -128,6 +134,8 @@ export function ProjectPropertiesDialog({
     ['Pinned', organization.pinned ? 'Yes' : 'No'],
     ['Account copy', accountStatus]
   ];
+  const encryption =
+    encryptionFacts && projectEncryptionStatus(project, encryptionFacts);
   if (encryption) {
     const Icon = {
       encrypted: Lock,

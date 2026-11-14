@@ -1,6 +1,10 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { toProjectId, type ProjectSummary } from '@openzcad/shared';
+import {
+  PROJECT_STORAGE_FORMAT_E2EE_V1,
+  toProjectId,
+  type ProjectSummary
+} from '@openzcad/shared';
 import type { ProjectProperties } from '../lib/projectProperties';
 import { ProjectPropertiesDialog } from './ProjectPropertiesDialog';
 
@@ -220,13 +224,12 @@ describe('ProjectPropertiesDialog', () => {
   it('states how the project is stored, with the reason one press away', async () => {
     render(
       <ProjectPropertiesDialog
-        project={project}
         accountStatus="Saved to my account"
-        encryption={{
-          state: 'encrypted',
-          label: 'End-to-end encrypted',
-          detail: 'Encrypted on this device before it is saved.'
+        project={{
+          ...project,
+          storageFormat: PROJECT_STORAGE_FORMAT_E2EE_V1
         }}
+        encryptionFacts={{ migrating: false, inAccount: true }}
         loadProperties={vi.fn().mockResolvedValue(details)}
         onClose={vi.fn()}
       />

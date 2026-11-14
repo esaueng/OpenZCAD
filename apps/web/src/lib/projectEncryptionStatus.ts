@@ -4,6 +4,13 @@ import {
 } from '@openzcad/shared';
 import { projectNeedsUpdate } from './projectShelf';
 
+export interface EncryptionFacts {
+  /** Being encrypted in this tab, or paused with its plaintext locked. */
+  migrating: boolean;
+  /** The account listing holds this project. */
+  inAccount: boolean;
+}
+
 export interface ProjectEncryptionStatus {
   state: 'encrypted' | 'encrypting' | 'plaintext' | 'unreadable';
   label: string;
@@ -17,12 +24,7 @@ export interface ProjectEncryptionStatus {
  */
 export function projectEncryptionStatus(
   project: Pick<ProjectSummary, 'storageFormat'>,
-  context: {
-    /** Being encrypted in this tab, or paused with its plaintext locked. */
-    migrating: boolean;
-    /** The account listing holds this project. */
-    inAccount: boolean;
-  }
+  context: EncryptionFacts
 ): ProjectEncryptionStatus {
   if (projectNeedsUpdate(project)) {
     return {

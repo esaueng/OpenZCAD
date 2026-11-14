@@ -92,7 +92,6 @@ import {
 } from '../lib/libraryFolders';
 import { useLibraryFolderCloudSync } from '../lib/useLibraryFolderCloudSync';
 import { LibrarySelectionBar } from './LibrarySelectionBar';
-import { projectEncryptionStatus } from '../lib/projectEncryptionStatus';
 import {
   bucketProjectsByShelf,
   moveItem,
@@ -3955,10 +3954,12 @@ export function StartScreen({
                     ? 'This device only'
                     : 'Unknown — account listing unavailable'
             }
-            encryption={projectEncryptionStatus(propertiesProject, {
+            // Facts only: the dialog's lazy chunk words them, which keeps
+            // the status text out of the start screen's entry bundle.
+            encryptionFacts={{
               migrating: migratingProjectIds.has(propertiesProject.projectId),
               inAccount: cloudProjectIds.has(propertiesProject.projectId)
-            })}
+            }}
             {...(onRename &&
               !projectNeedsUpdate(propertiesProject) && {
                 // The listed project, whose name a rename here has moved on.
