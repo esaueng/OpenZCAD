@@ -62,7 +62,14 @@ describe('adding a parameter', () => {
   it('refuses a name already in the table instead of overwriting it', async () => {
     const user = userEvent.setup();
     const onSet = vi.fn().mockResolvedValue(null);
-    render(<AddParameterRow onSet={onSet} existingNames={['w', 'h']} />);
+    const onRefused = vi.fn();
+    render(
+      <AddParameterRow
+        onSet={onSet}
+        onRefused={onRefused}
+        existingNames={['w', 'h']}
+      />
+    );
     await user.type(screen.getByLabelText('New parameter name'), ' w ');
     await user.type(
       screen.getByLabelText('New parameter expression'),
@@ -74,6 +81,11 @@ describe('adding a parameter', () => {
       'w already exists. Change it in its own row.'
     );
     expect(screen.getByLabelText('New parameter expression')).toHaveValue('99');
+    // The workspace's status says so too: it still read the add before it.
+    expect(onRefused).toHaveBeenCalledWith(
+      'w',
+      'w already exists. Change it in its own row.'
+    );
   });
 
   it('says there are no bodies to bind a new toggle to yet', () => {

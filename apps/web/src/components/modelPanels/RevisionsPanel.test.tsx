@@ -86,13 +86,59 @@ describe('RevisionsPanel', () => {
     );
     expect(reasons).toEqual(['Save c', 'Save b', 'Save a']);
     expect(container.querySelector('.revision-row')).toHaveClass('latest');
-    expect(screen.getByText('not stored')).toBeInTheDocument();
+    expect(screen.getByText('history only')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Restore Save b' })).toBeNull();
     expect(
       screen.getByRole('button', { name: 'Branch Save b into a new project' })
     ).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Restore Save a' }));
     expect(onRestoreCheckpoint).toHaveBeenCalledExactlyOnceWith(older);
+  });
+
+  // Design review I82/I87: a press on a row did nothing, Restore and Branch
+  // were hover-only icons, and "not stored" was explained only in a title.
+  it('opens a row to show its details and labelled actions without hover', async () => {
+    const user = userEvent.setup();
+    const older = checkpoint('a', 1);
+    const unstored = checkpoint('c', 3);
+    const onBranchCheckpoint = vi.fn();
+    const { container } = render(
+      <RevisionsPanel
+        documentVersion={9}
+        restorableCheckpointIds={new Set(['a'])}
+        onRestoreCheckpoint={vi.fn()}
+        onBranchCheckpoint={onBranchCheckpoint}
+        revisions={{
+          visible: [older, unstored],
+          canonicalIds: new Set(['a', 'c']),
+          local: []
+        }}
+      />
+    );
+    expect(container.querySelector('[title]')).toBeNull();
+    const row = screen.getByRole('button', { name: 'Save a' });
+    expect(row).toHaveAttribute('aria-expanded', 'false');
+    await user.click(row);
+    expect(row).toHaveAttribute('aria-expanded', 'true');
+    expect(container.querySelector('.revision-row.is-open')).toHaveTextContent(
+      'Restore brings the project back to it'
+    );
+    expect(
+      screen.getByRole('button', { name: 'Restore Save a' })
+    ).toHaveTextContent('Restore');
+    const branch = screen.getByRole('button', {
+      name: 'Branch Save a into a new project'
+    });
+    expect(branch).toHaveTextContent('Branch');
+    // Its actions act; they do not close the row.
+    await user.click(branch);
+    expect(onBranchCheckpoint).toHaveBeenCalledExactlyOnceWith(older);
+    expect(row).toHaveAttribute('aria-expanded', 'true');
+
+    await user.click(screen.getByRole('button', { name: 'Save c' }));
+    expect(
+      screen.getByText(/Listed in the project’s history only/)
+    ).toBeVisible();
   });
 
   it('merges the save states stored on this device', async () => {

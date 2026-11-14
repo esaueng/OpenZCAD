@@ -232,7 +232,7 @@ describe('Settings while a saved session is restoring', () => {
       })
     );
     expect(screen.getByRole('button', { name: 'Retry' })).toBeVisible();
-    expect(screen.getByText('Cloud unreachable')).toBeVisible();
+    expect(screen.getByText('Cloud unavailable')).toBeVisible();
   });
 
   it('does not offer the cloud saving controls before the account is known', () => {

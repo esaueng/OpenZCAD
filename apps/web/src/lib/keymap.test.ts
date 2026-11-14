@@ -94,6 +94,8 @@ describe('keymap registry', () => {
       'sketch-line': 'L',
       'sketch-arc': 'A',
       'sketch-circle': 'C',
+      'sketch-construction': 'X',
+      'sketch-dimension': 'D',
       'sketch-rectangle': 'R',
       'sketch-polygon': 'P',
       'sketch-ellipse': 'O',

@@ -85,6 +85,7 @@ import {
   MAX_ARCHIVED_KEYS,
   decodeMlsAuthorityManifest,
   signMlsAuthorityManifest,
+  signMlsCommitSubmission,
   mlsAuthorityResetHash,
   verifyMlsAuthorityReset,
   decodeMlsAuthorityTrust,
@@ -1953,13 +1954,27 @@ async function submitPending(
     }
   );
   const leaf = next.external ? await ctx.sessions.leaf(ref) : null;
+  const kind = next.external ? 'external' : 'commit';
+  // The Worker sequences only a Commit this device signed, with the key
+  // its account's device list certifies for it.
+  const signature = await signMlsCommitSubmission(device.signing.privateKey, {
+    userId: ctx.account.userId,
+    projectId,
+    deviceId: device.deviceId,
+    kind,
+    epoch: next.epoch - 1,
+    keyEpoch,
+    message: pending.commit,
+    groupInfo: next.groupInfo
+  });
   try {
     const response = await ctx.api.submitCommit(projectId, {
       epoch: next.epoch - 1,
-      kind: next.external ? 'external' : 'commit',
+      kind,
       deviceId: device.deviceId,
       message: b64(pending.commit),
       groupInfo: b64(next.groupInfo),
+      signature: b64(signature),
       ...(leaf
         ? {
             leaf: {

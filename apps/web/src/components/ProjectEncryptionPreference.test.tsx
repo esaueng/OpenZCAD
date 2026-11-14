@@ -286,3 +286,52 @@ describe('project preference records in the browser', () => {
     expect(current()?.sequence).toBe(10);
   });
 });
+
+// Design review I75: "Encryption is on" right after setup, while new projects
+// were still created unencrypted. Setup ends by asking, ticked by default.
+describe('the last step of encryption setup', () => {
+  it('asks "Encrypt new projects?" ticked, and Done turns it on', async () => {
+    unlock();
+    const { api, current } = fakeApi(OPEN);
+    const onAfterSetupDone = vi.fn();
+    render(
+      <ProjectEncryptionPreference
+        userId={USER}
+        unlocked
+        afterSetup
+        onAfterSetupDone={onAfterSetupDone}
+        api={api}
+        pins={memoryPreferencePins()}
+      />
+    );
+    expect(await screen.findByText('Encrypt new projects?')).toBeVisible();
+    const box = screen.getByRole('checkbox', { name: 'Encrypt new projects' });
+    expect(box).toBeChecked();
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    await waitFor(() => expect(onAfterSetupDone).toHaveBeenCalledOnce());
+    expect(current()).toMatchObject({ encryptNewProjects: true });
+  });
+
+  it('keeps new projects unencrypted when unticked, writing nothing', async () => {
+    unlock();
+    const { api } = fakeApi(OPEN);
+    const onAfterSetupDone = vi.fn();
+    render(
+      <ProjectEncryptionPreference
+        userId={USER}
+        unlocked
+        afterSetup
+        onAfterSetupDone={onAfterSetupDone}
+        api={api}
+        pins={memoryPreferencePins()}
+      />
+    );
+    await screen.findByText('Encrypt new projects?');
+    fireEvent.click(
+      screen.getByRole('checkbox', { name: 'Encrypt new projects' })
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    await waitFor(() => expect(onAfterSetupDone).toHaveBeenCalledOnce());
+    expect(api.save).not.toHaveBeenCalled();
+  });
+});

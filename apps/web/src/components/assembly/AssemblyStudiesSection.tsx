@@ -55,7 +55,7 @@ export interface AddStudyButtonProps {
 }
 
 /**
- * The Motion section's Add: a study keying every moving joint where it
+ * The Animations section's Add: a study keying every moving joint where it
  * stands now, opened with the playhead at its end, so the next part moved
  * becomes the motion. Hidden while nothing can move or the list is full.
  */
@@ -80,7 +80,7 @@ export function AddStudyButton({
       !execute(
         commandFactories.setAssemblyStudy(
           { study },
-          `New motion study ${study.name}`
+          `New animation ${study.name}`
         )
       )
     )
@@ -92,8 +92,8 @@ export function AddStudyButton({
     <button
       type="button"
       className="assembly-link-button"
-      aria-label="Add motion study"
-      title="New motion study"
+      aria-label="Add animation"
+      title="New animation"
       onClick={create}
     >
       <Plus size={12} aria-hidden="true" />
@@ -145,7 +145,7 @@ export function AssemblyStudiesSection({
     execute(
       commandFactories.setAssemblyStudy(
         { study: { ...study, name: trimmed } },
-        `Rename motion study to ${trimmed}`
+        `Rename animation to ${trimmed}`
       )
     );
   }
@@ -156,7 +156,7 @@ export function AssemblyStudiesSection({
   }
 
   return (
-    <ul className="assembly-studies-list" aria-label="Motion studies">
+    <ul className="assembly-studies-list" aria-label="Animations">
       {studies.map((study) => {
         const selected = study.id === selectedStudyId;
         return (

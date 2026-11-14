@@ -1295,8 +1295,8 @@
 
 /* View's bar stands on the right at the stage's middle, a vertical rail
    like Build's instruments (View and Tweak have no instrument rail of their
-   own): Measure, then fit, views, grid, display, projection and orbit mode, icons only
-   with their names as tooltips. The views panel opens beside it, leftward. */
+   own): Measure, then fit, grid, projection, orbit mode, section, display
+   and views, Build's order (I52), icons only with their names as tooltips. The views panel opens beside it, leftward. */
 .workspace.column-layout .palette-float:has(.view-mode-bar) {
   top: var(--stage-middle);
   right: var(--island-gap);
@@ -1316,9 +1316,9 @@
 }
 
 /* Keep the lazy fallback in the same right-hand slot as the loaded rail.
-   Its seven 30px controls, divider, gaps and padding occupy 241px. */
+   Its eight 30px controls, divider, gaps and padding occupy 273px. */
 .workspace.column-layout .view-tools-loading {
-  min-height: 241px;
+  min-height: 273px;
   justify-content: center;
 }
 
@@ -1538,6 +1538,14 @@
     transform: none;
   }
 
+  /* Across a phone's foot the workbench is where the cube stands, and the
+     cube sat under it (I47): it steps aside while the workbench is up.
+     Build's workbench is a command card at the top and keeps it. */
+  .workspace.column-layout:has(.viewer-shell .measurement-dock)
+    .viewer-rail-stack {
+    visibility: hidden;
+  }
+
   .workspace.column-layout:has(.measurement-dock)
     .view-flyouts
     > .view-mode-rail {
@@ -1545,6 +1553,16 @@
       60vh - var(--stage-top) - var(--island-gap) * 4 - var(--command-bar-h) -
         36px
     );
+  }
+}
+
+/* On a short phone the scale rule has no corner under the workbench left
+   either, and drew over its results ("50 mm" across them at 360×640, I47).
+   A taller one keeps it, clear below the sheet (measure.spec.ts). */
+@media (max-width: 620px) and (max-height: 700px) {
+  .workspace.column-layout:has(.viewer-shell .measurement-dock)
+    .viewport-scale-indicator {
+    visibility: hidden;
   }
 }
 
@@ -2708,6 +2726,11 @@ button.command-rail.is-suggested {
   color: var(--color-warning);
 }
 
+/* Nothing previewed yet: the pill keeps its place, unseen. */
+.in-place-command-state:empty {
+  visibility: hidden;
+}
+
 /* ── The Tweak rail ───────────────────────────────────────── */
 
 /* Tweak's left side is the same 40px rail: the parameter table's button
@@ -2876,6 +2899,15 @@ button.command-rail.is-suggested {
     .palette-float:has(.view-mode-bar) {
     top: var(--stage-top);
     transform: none;
+  }
+
+  /* Above the open sheet the bar has room for seven controls, not eight:
+     Section waits for View and Build here, as it waits behind More on
+     Build's short phone rail. The order of the rest is unchanged (I52). */
+  .workspace.column-layout:has(.tweak-flyouts.is-open)
+    .view-mode-bar
+    .view-mode-section-toggle {
+    display: none;
   }
 
   .tweak-flyouts {
@@ -3256,6 +3288,15 @@ button.command-rail.is-suggested {
    float would, and stands over the inspector it covers until it closes. */
 .panel-dock-layer.slot-over-lane .panel-unpinned {
   z-index: calc(var(--z-inspector-float) + 1);
+}
+
+/* A card in the right lane (a command's card, or the feature card a click
+   in a floating History opens) stands over the floating windows: the edit
+   card opened BEHIND the History it was opened from, its labels cut to
+   "e center Y" and its Apply half covered (I7). Under the Tools drawer
+   (+9) and the rail's own flyouts (+10), which are more temporary still. */
+.stage-right:has(> :is(.command-float, .inspector-float)) {
+  z-index: calc(var(--z-panel-float) + 8);
 }
 
 /* A floating window: its panels stacked as in a column, the corner that
@@ -3888,6 +3929,35 @@ button.model-panel-grip[aria-expanded='true'] {
   background: var(--color-warning);
 }
 
+/* The sketch's state as a chip under Solve, coloured like the edges it
+   describes: free (blue), fully constrained (green), in conflict (red). */
+.workspace-column .sketch-rail button.sketch-dof-chip {
+  width: 30px;
+  height: 22px;
+  padding: 0;
+  color: var(--color-accent);
+  background: var(--color-accent-dim);
+  border: 1px solid var(--color-accent-border);
+  border-radius: var(--radius-md);
+  font-size: 10px;
+  font-weight: var(--fw-medium);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+}
+
+.workspace-column .sketch-rail button.sketch-dof-chip[data-state='defined'] {
+  color: var(--color-success);
+  background: color-mix(in srgb, var(--color-success) 14%, transparent);
+  border-color: color-mix(in srgb, var(--color-success) 45%, transparent);
+}
+
+.workspace-column .sketch-rail button.sketch-dof-chip[data-state='conflict'] {
+  color: var(--color-error);
+  background: color-mix(in srgb, var(--color-error) 14%, transparent);
+  border-color: color-mix(in srgb, var(--color-error) 45%, transparent);
+}
+
 /* The circle tool's type strip opens beside the rail, level with the tool.
    Its tiles sit inside the rail, so the rail's 30px icon-button rule (and
    its zero font size) reached them; they are the labelled tiles
@@ -4387,6 +4457,56 @@ button.model-panel-grip[aria-expanded='true'] {
   }
 }
 
+/* I41: on a phone the relations were a third rail, and with the tools and
+   the viewer bar they left the canvas about 205px. Below 600px wide a
+   sketch gives the right column to the relations: the viewer bar keeps
+   only Undo and Redo above them, the panels' buttons step aside until
+   Finish, and the relations stand in the rail's own flow, so the lane is
+   one rail wide on each side. */
+@media (max-width: 600px) {
+  .workspace.column-layout .viewer-area:has(.sketch-relations) {
+    --lane-end: calc(
+      var(--rail-w) + var(--island-gap) * 2 + var(--right-panels-w)
+    );
+  }
+
+  /* Specific enough to win over phone-stage.css's one-column rail. */
+  .workspace.column-layout
+    .viewer-area
+    .instrument-rail:has(> .sketch-relations)
+    > .viewer-rail.rail-panels,
+  .workspace.column-layout
+    .viewer-area
+    .instrument-rail:has(> .sketch-relations)
+    > .viewer-rail
+    > :not(.rail-group[aria-label='Edit']),
+  .workspace.column-layout
+    .viewer-area
+    .instrument-rail:has(> .sketch-relations)
+    .rail-group[aria-label='Edit']
+    > :not([aria-label='Undo'], [aria-label='Redo']) {
+    display: none;
+  }
+
+  .workspace.column-layout
+    .viewer-area
+    .instrument-rail:has(> .sketch-relations)
+    > .viewer-rail:not(.rail-panels) {
+    display: flex;
+    flex-direction: column;
+    width: auto;
+  }
+
+  .viewer-area .instrument-rail > .sketch-relations {
+    position: static;
+    max-height: none;
+  }
+
+  .viewer-area .instrument-rail > .sketch-relations .sketch-relation-name {
+    display: none;
+  }
+}
+
 .sketch-relations-divider {
   flex: 0 0 auto;
   width: 20px;
@@ -4780,7 +4900,9 @@ button.model-panel-grip[aria-expanded='true'] {
 }
 
 .move-command .in-place-command-hint {
-  max-width: 34ch;
+  /* The body's name and the whole instruction, rings and Shift included:
+     it is the only place the step is said. */
+  max-width: 52ch;
 }
 
 /* What the Move turns, named in its hint: the body (or sketch) itself. */
@@ -5226,6 +5348,18 @@ button.model-panel-grip[aria-expanded='true'] {
   padding: 4px 2px;
 }
 
+/* The define offer reads in the panel's own colours; only the line after
+   it, what Done and Esc do meanwhile, stays in the error tone. */
+.in-place-param-define {
+  display: grid;
+  gap: 4px;
+  color: var(--color-text);
+}
+
+.in-place-param-define > span {
+  color: var(--color-error-text);
+}
+
 /* A value's name scrubs it: dragged sideways, it steps the number. */
 .in-place-param-value > .in-place-option-label.is-scrubbable {
   cursor: ew-resize;
@@ -5235,6 +5369,22 @@ button.model-panel-grip[aria-expanded='true'] {
 
 .in-place-param-value.is-vector .in-place-param-field {
   padding: 0 4px;
+}
+
+/* A point's coordinates read like every other number in the panel: right
+   aligned against their unit. Position sat left while Size sat right. */
+.in-place-param-value.is-vector .in-place-param-field input {
+  text-align: right;
+}
+
+/* A point's name may take two lines rather than end in "Base cen…": its
+   fields take the rest of the row either way. */
+.in-place-param-value.is-vector > .in-place-option-label {
+  overflow: visible;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  white-space: normal;
+  line-height: 1.2;
 }
 
 .in-place-params-actions {

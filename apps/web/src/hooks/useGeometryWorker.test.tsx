@@ -810,6 +810,42 @@ describe('useGeometryWorker', () => {
     expect(result.current.isReadyFor(document)).toBe(true);
   });
 
+  it('waits for the connection instead of spending respawns offline', async () => {
+    // 13 November review I5: offline, the worker could not download, three
+    // immediate respawns all failed, and the startup screen stayed at
+    // "Building the model" after the connection came back.
+    installWorker();
+    vi.stubEnv('OZ_BUILD_COMMIT', '');
+    const onLine = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    try {
+      const onError = vi.fn();
+      const { result } = renderHook(() =>
+        useGeometryWorker({
+          manager: () => null,
+          onDerived: vi.fn(),
+          onError
+        })
+      );
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        await act(async () => {
+          FakeWorker.instances.at(-1)!.onerror?.({} as ErrorEvent);
+        });
+      }
+      expect(FakeWorker.instances).toHaveLength(1);
+      expect(result.current.state.phase).toBe('starting');
+      expect(onError).not.toHaveBeenCalled();
+
+      onLine.mockReturnValue(true);
+      act(() => {
+        window.dispatchEvent(new Event('online'));
+      });
+      expect(FakeWorker.instances).toHaveLength(2);
+      expect(result.current.state.phase).toBe('starting');
+    } finally {
+      onLine.mockRestore();
+    }
+  });
+
   it('respawns a crashed worker so later requests still settle', async () => {
     installWorker();
     const document = createProjectDocument('Respawn', toUserId('user'));

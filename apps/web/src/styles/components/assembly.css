@@ -111,6 +111,13 @@
   background: var(--color-selected-fill);
 }
 
+/* Fixed or not reads from the pin's shape as well as its colour: a fixed
+   pin is filled in, a loose one is an outline. */
+.assembly-pin.is-on svg,
+.assembly-row-action.assembly-row-pin.is-on svg {
+  fill: currentColor;
+}
+
 .assembly-pin:disabled {
   opacity: var(--opacity-disabled);
   cursor: not-allowed;
@@ -252,7 +259,8 @@
   border-color: var(--color-accent-border);
 }
 
-.assembly-tool-button:disabled {
+.assembly-tool-button:disabled,
+.assembly-tool-button[aria-disabled='true'] {
   opacity: var(--opacity-disabled);
   cursor: not-allowed;
 }
@@ -330,6 +338,12 @@
   background: var(--color-surface-hover);
 }
 
+/* A list row with nothing to press (the bill of materials) does not light
+   up as though it could be pressed. */
+.assembly-row.is-static > .assembly-row-line:hover {
+  background: none;
+}
+
 .assembly-row.is-selected {
   background: var(--color-bg);
   box-shadow: inset 0 0 0 1px var(--color-border);
@@ -364,6 +378,12 @@
   cursor: default;
 }
 
+/* A row with nothing to click (the bill of materials) shows no hover fill,
+   which would promise an action it does not have (review I66). */
+.assembly-row-line:has(> .assembly-row-main.is-static:only-child):hover {
+  background: none;
+}
+
 .assembly-row.is-selected .assembly-row-main {
   color: var(--color-selected-text);
 }
@@ -389,9 +409,9 @@
 }
 
 .assembly-row-action.assembly-row-pin {
-  color: var(--color-text-dim);
-  /* Faint, not hidden: touch screens have no hover to reveal it. */
-  opacity: 0.45;
+  color: var(--color-text-subtle);
+  /* Quiet, not hidden: touch screens have no hover to reveal it. */
+  opacity: 0.75;
 }
 
 .assembly-row-line:hover .assembly-row-pin,
@@ -514,6 +534,8 @@
 
 .assembly-animate .assembly-play {
   flex: 0 0 auto;
+  /* Wide enough for "Pause", so swapping it for "Play" moves nothing. */
+  min-width: 80px;
   padding: 0 var(--sp-3);
 }
 
@@ -551,7 +573,7 @@
 
 .assembly-position-apply,
 .assembly-position-delete {
-  min-height: 22px;
+  min-height: 24px;
   color: var(--color-text);
   background: none;
   border: 0;
@@ -567,7 +589,7 @@
 .assembly-position-delete {
   display: inline-grid;
   place-items: center;
-  width: 20px;
+  width: 24px;
   padding: 0;
   color: var(--color-text-subtle);
 }
@@ -601,6 +623,19 @@
 
 .assembly-link-button:hover {
   color: var(--color-accent-hi);
+}
+
+.assembly-recording {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.assembly-recording .motion-recording-dot {
+  transform: translateY(-1px);
 }
 
 .assembly-link-button.is-danger {
@@ -798,6 +833,9 @@
 .assembly-kind-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  /* Every tile as tall as the tallest, so a hint that wraps leaves no
+     ragged row. */
+  grid-auto-rows: 1fr;
   gap: var(--sp-1);
 }
 
@@ -851,6 +889,8 @@
   color: var(--color-text-subtle);
   font-size: var(--fs-mini);
   line-height: 1.25;
+  /* "Turns about / an axis", never a lone "axis" on its own line. */
+  text-wrap: balance;
 }
 
 .assembly-kind-suggested {

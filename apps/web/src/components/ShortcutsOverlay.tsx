@@ -1,11 +1,14 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
+import { platformShortcutLabel } from '../lib/platformShortcut';
 import {
   liveKeyboardGroups,
   POINTER_CONTROL_GROUPS
 } from '../lib/controlReference';
 import { useKeymap } from '../lib/keymap';
 import { useModalFocus } from '../lib/useModalFocus';
+import { tourStepBody, WORKSPACE_TOUR_STEPS } from '../lib/workspaceTour';
+import { TOUCH_ONLY_QUERY, useMediaQuery } from '../hooks/useMediaQuery';
 
 interface ShortcutsOverlayProps {
   onClose(): void;
@@ -22,6 +25,17 @@ interface ShortcutsOverlayProps {
  * user who tries the obvious gesture clears their selection rather than
  * turning the model.
  */
+/**
+ * A reference chord as the rest of the workspace writes it on this device:
+ * "Ctrl+S" here (⌘S on a Mac), not the reference's "Ctrl/Cmd+S", which
+ * disagreed with every tooltip and menu (I24).
+ */
+function shownKey(key: string): string {
+  return key.includes('Ctrl/Cmd')
+    ? platformShortcutLabel(key.replaceAll('Ctrl/Cmd', 'Ctrl'))
+    : key;
+}
+
 export function ShortcutsOverlay({
   onClose,
   onTour,
@@ -48,7 +62,9 @@ export function ShortcutsOverlay({
     };
   }, []);
   // The keys as the user has them, remaps included.
-  const keyboardGroups = liveKeyboardGroups(useKeymap());
+  const keymap = useKeymap();
+  const keyboardGroups = liveKeyboardGroups(keymap);
+  const touchOnly = useMediaQuery(TOUCH_ONLY_QUERY);
 
   // Opened by "?" from the workspace, so nothing inside has focus yet.
   // The workspace keymap toggles and closes this sheet, so it must still
@@ -95,31 +111,23 @@ export function ShortcutsOverlay({
         >
           <section>
             <h3 className="section-title">Modeling guide</h3>
+            {/* The guide's own steps, as its button opens them: a separate
+                five-step list here launched a four-step tour (13 November
+                review I17). */}
             <ol className="shortcuts-guide">
-              <li>
-                <strong>Create:</strong> choose Box for a solid, or Sketch, a
-                plane and a closed profile. Extrude turns the profile into a
-                solid.
-              </li>
-              <li>
-                <strong>Edit:</strong> select a face or edge for the edits it
-                supports. Use the value labels or Options for precise
-                dimensions.
-              </li>
-              <li>
-                <strong>Check:</strong> inspect the preview before Done. Cancel
-                discards the preview; Undo restores the previous operation.
-              </li>
-              <li>
-                <strong>Refine:</strong> open History to change feature values.
-                Objects controls visibility; Parameters names reusable
-                dimensions.
-              </li>
-              <li>
-                <strong>Keep:</strong> autosave stays on this device. File saves
-                a revision or exports STEP, a printing mesh or a complete
-                project backup.
-              </li>
+              {WORKSPACE_TOUR_STEPS.map((step) => (
+                <li key={step.id}>
+                  <strong>{step.title}:</strong>{' '}
+                  {tourStepBody(
+                    step,
+                    (id) => {
+                      const chord = keymap.label(id);
+                      return chord ? platformShortcutLabel(chord) : undefined;
+                    },
+                    touchOnly
+                  )}
+                </li>
+              ))}
             </ol>
             {onTour && (
               <button type="button" className="secondary" onClick={onTour}>
@@ -146,7 +154,9 @@ export function ShortcutsOverlay({
                     <dd>
                       <span className="shortcut-key-sequence">
                         {item.keys.length > 0
-                          ? item.keys.map((key) => <kbd key={key}>{key}</kbd>)
+                          ? item.keys.map((key) => (
+                              <kbd key={key}>{shownKey(key)}</kbd>
+                            ))
                           : 'Unassigned'}
                       </span>
                     </dd>

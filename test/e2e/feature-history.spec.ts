@@ -522,9 +522,9 @@ test('undo inside a text field edits the text, not the document', { tag: '@ci-sm
   await name.pressSequentially('abc');
   await expect(name).toHaveValue('abc');
   await page.keyboard.press('ControlOrMeta+z');
-  // The document is untouched: same history, no "Undo …" outcome.
+  // The document is untouched: same history, no "Undid …" outcome.
   await expect(rows).toHaveCount(featureCount);
-  await expect(page.getByRole('contentinfo')).not.toContainText(/Undo /);
+  await expect(page.getByRole('contentinfo')).not.toContainText(/Undid /);
   await expectBodyCount(page, 1);
 });
 
@@ -540,7 +540,7 @@ test('a seeded demo stores every revision it promises, and restores one', async 
     .getByRole('button', { name: /^Open demo: Mounting Bracket/ })
     .click();
   await expectBodyCount(page, 1);
-  await expect(page.getByText('not stored')).toHaveCount(0);
+  await expect(page.getByText('history only')).toHaveCount(0);
   await expect(
     page.getByRole('button', { name: 'Restore Rev A — L-bracket blank' })
   ).toBeVisible();

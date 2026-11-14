@@ -446,3 +446,10 @@ export {
   type MlsAuthorityTrust,
   type SignedMlsAuthorityTrust
 } from './mls-authority';
+export {
+  MLS_COMMIT_SIGNATURE_BYTES,
+  signMlsCommitSubmission,
+  verifyMlsCommitSubmission,
+  type MlsCommitSubmission,
+  type MlsCommitSubmissionKind
+} from './mls-commit';

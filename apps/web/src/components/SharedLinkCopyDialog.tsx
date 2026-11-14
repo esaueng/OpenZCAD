@@ -4,8 +4,8 @@ import { useModalFocus } from '../lib/useModalFocus';
 export type SharedLinkCopyDestination = 'account' | 'device';
 
 /**
- * Where "Make a copy" puts an end-to-end encrypted share link's model
- * (ADR-024 slice 5-11) for a signed-in visitor: into their account, which
+ * Where "Make a copy" puts a share link's model (ADR-024 slice 5-11; every
+ * link since design review I85) for a signed-in visitor: into their account, which
  * stores it encrypted under their own keys when the account encrypts new
  * projects and without end-to-end encryption otherwise, or on this device
  * only. `accountEncrypts` is null while the account is being asked.

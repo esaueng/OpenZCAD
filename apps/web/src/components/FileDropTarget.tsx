@@ -9,6 +9,9 @@ interface FileDropTargetProps {
    * still waiting on its own answer (an STL's units, an export).
    */
   onRefuse?(): void;
+  /** The overlay's two lines; the workspace's import wording by default. */
+  title?: string;
+  hint?: string;
 }
 
 /** Whether a drag carries files from outside the page, as opposed to a row
@@ -32,7 +35,12 @@ function carriesFiles(event: DragEvent): boolean {
  * counter — up on enter, down on leave, reset on drop — is what keeps the
  * overlay steady until the pointer actually leaves the target.
  */
-export function FileDropTarget({ onDrop, onRefuse }: FileDropTargetProps) {
+export function FileDropTarget({
+  onDrop,
+  onRefuse,
+  title = 'Drop to import',
+  hint = 'STEP, DXF, a mesh file, a .shapr + STEP pair, or an .openzcad backup'
+}: FileDropTargetProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const onDropRef = useRef(onDrop);
   onDropRef.current = onDrop;
@@ -135,10 +143,8 @@ export function FileDropTarget({ onDrop, onRefuse }: FileDropTargetProps) {
       aria-hidden="true"
     >
       <div>
-        <strong>Drop to import</strong>
-        <span>
-          STEP, DXF, a mesh file, a .shapr + STEP pair, or an .openzcad backup
-        </span>
+        <strong>{title}</strong>
+        <span>{hint}</span>
       </div>
     </div>
   );

@@ -1,5 +1,6 @@
 import { Check, MoreHorizontal, SlidersHorizontal, X } from 'lucide-react';
 import {
+  useEffect,
   useId,
   useLayoutEffect,
   useRef,
@@ -12,6 +13,17 @@ import { ownedTopologyName } from '../lib/topologyLabels';
 import { modelingRefusalSummary } from '../lib/modelingRefusal';
 import type { InPlacePanelSectionView } from '../lib/inPlace/panel';
 import { spokenValueName } from '../lib/inPlace/chipNames';
+import {
+  blendRefusalText,
+  smallerSizeIn,
+  type SmallerSize
+} from '../lib/inPlace/sizeRefusal';
+import { previewExpression } from '../lib/model';
+import { useParameterDefinition } from './forms/parameterDefinition';
+import {
+  undefinedParameterName,
+  useDefineParameterPrompt
+} from './forms/defineParameterPrompt';
 
 /**
  * The only chrome an in-place command has: its name, the one-line step it
@@ -65,6 +77,7 @@ export interface InPlaceOptionValue {
 const MENU_CHOICES = 6;
 /** Pixels of scrub per step. */
 const SCRUB_PX = 4;
+const EMPTY_SCOPE: Record<string, number> = {};
 
 export interface InPlaceCommandBarProps {
   title: string;
@@ -72,12 +85,24 @@ export interface InPlaceCommandBarProps {
   /** False until every required slot is filled and the preview is valid. */
   canFinish: boolean;
   /**
+   * Every required slot is filled and the preview of what Done would make is
+   * still being checked: Enter now is held until it is, not dropped.
+   */
+  previewPending?: boolean;
+  /**
    * Nothing but Cancel takes input (a Done being validated): what the bar
    * shows must stay what is being committed.
    */
   locked?: boolean;
   /** Shown instead of the hint while a refusal stands, in the warning tone. */
   refusal?: string | null;
+  /** The document's length unit, after each size a refusal quotes. */
+  unitLabel?: string | null;
+  /**
+   * A refusal that names a size that builds ("radius 6.25 builds here")
+   * offers it as one press: "Use 6.25 mm".
+   */
+  onTrySize?(dimension: SmallerSize['dimension'], size: number): void;
   /**
    * Rarely used choices (a hole's style, a draft's pull direction), behind
    * a disclosure: each a short row of mutually exclusive buttons.
@@ -120,6 +145,11 @@ export interface InPlaceCommandBarProps {
   /** A value scrubbed on its label, before the release commits it. */
   onValuePreview?(valueId: string, value: number): void;
   /**
+   * The parameters a typed value reads: a refused entry names what does not
+   * evaluate, and offers to define a name no parameter has yet.
+   */
+  scope?: Record<string, number>;
+  /**
    * How the rows are ordered and grouped (a gear's tooth form folded
    * away); without it the options come first, then the values.
    */
@@ -134,8 +164,11 @@ export function InPlaceCommandBar({
   title,
   hint,
   canFinish,
+  previewPending = false,
   locked = false,
   refusal = null,
+  unitLabel = null,
+  onTrySize,
   options = [],
   onOption,
   onPreciseValues,
@@ -148,6 +181,7 @@ export function InPlaceCommandBar({
   onValueCommit,
   onValueRestore,
   onValuePreview,
+  scope = EMPTY_SCOPE,
   sections,
   summary = null,
   onDone,
@@ -166,13 +200,34 @@ export function InPlaceCommandBar({
           ?.focus({ preventScroll: true });
     };
   }, [title]);
+  // Enter pressed while the preview of the last value typed is still being
+  // checked: Done waits for it rather than dropping the key. "100 Tab 60 Tab
+  // 6 Enter" then Enter again lost the second Enter, and only one pressed
+  // seconds later applied.
+  const [queued, setQueued] = useState(false);
+  useEffect(() => {
+    if (!queued) return;
+    if (canFinish && !locked) {
+      setQueued(false);
+      onDone();
+    } else if (refusal || !previewPending) {
+      // Refused, or no longer waiting on a preview (a pick was taken
+      // back): the Enter goes, rather than finishing something later.
+      setQueued(false);
+    }
+  }, [queued, canFinish, previewPending, locked, refusal, onDone]);
   const refusalSummary = refusal
     ? modelingRefusalSummary(refusal, title)
     : null;
   const shown =
     refusalSummary ??
-    refusal?.replace(/^-?(?:\d+\.?\d*|\.\d+);\s*/, '') ??
-    null;
+    (refusal
+      ? blendRefusalText(
+          refusal.replace(/^-?(?:\d+\.?\d*|\.\d+);\s*/, ''),
+          unitLabel
+        )
+      : null);
+  const smaller = refusal && onTrySize ? smallerSizeIn(refusal) : null;
   const hintRef = useRef<HTMLSpanElement>(null);
   const hintId = useId();
   // A refusal wraps to three lines; one longer than that offers the rest
@@ -210,11 +265,21 @@ export function InPlaceCommandBar({
         event.preventDefault();
         event.stopPropagation();
         if (canFinish && !locked) onDone();
+        else if (previewPending && !locked && !refusal) setQueued(true);
       }}
     >
       <span className="in-place-command-title">{title}</span>
       <span className="in-place-command-state">
-        {locked ? 'Applying…' : refusal ? 'Needs attention' : 'Preview'}
+        {/* Empty, and unseen, until there is something to preview: the
+            pill said "Preview" over a card with nothing picked yet. It keeps
+            its place, so the buttons after it do not move when it fills. */}
+        {locked || queued
+          ? 'Applying…'
+          : refusal
+            ? 'Needs attention'
+            : canFinish || previewPending
+              ? 'Preview'
+              : ''}
       </span>
       <span
         ref={hintRef}
@@ -235,6 +300,17 @@ export function InPlaceCommandBar({
           onClick={() => setExpanded((open) => !open)}
         >
           {expanded ? 'Less' : 'More'}
+        </button>
+      ) : null}
+      {smaller && onTrySize ? (
+        <button
+          type="button"
+          className="in-place-command-cancel"
+          disabled={locked}
+          onClick={() => onTrySize(smaller.dimension, smaller.size)}
+        >
+          Use {smaller.size}
+          {unitLabel ? ` ${unitLabel}` : ''}
         </button>
       ) : null}
       {refusalSummary && (
@@ -378,6 +454,7 @@ export function InPlaceCommandBar({
                       onCommit={onValueCommit}
                       onRestore={onValueRestore}
                       onPreview={onValuePreview}
+                      scope={scope}
                     />
                   );
                 })}
@@ -632,7 +709,8 @@ function ValueRow({
   locked,
   onCommit,
   onRestore,
-  onPreview
+  onPreview,
+  scope
 }: {
   label: string;
   axes: readonly string[] | null;
@@ -641,6 +719,7 @@ function ValueRow({
   onCommit(valueId: string, text: string): boolean;
   onRestore: ((valueId: string) => void) | undefined;
   onPreview: ((valueId: string, value: number) => void) | undefined;
+  scope: Record<string, number>;
 }) {
   const firstId = useId();
   const scrub = useRef<{
@@ -725,6 +804,7 @@ function ValueRow({
             locked={locked}
             onCommit={onCommit}
             onRestore={onRestore}
+            scope={scope}
           />
         ))}
       </div>
@@ -739,7 +819,8 @@ function ValueField({
   label,
   locked,
   onCommit,
-  onRestore
+  onRestore,
+  scope
 }: {
   id: string | undefined;
   field: InPlaceOptionValue;
@@ -748,22 +829,45 @@ function ValueField({
   locked: boolean;
   onCommit(valueId: string, text: string): boolean;
   onRestore: ((valueId: string) => void) | undefined;
+  scope: Record<string, number>;
 }) {
   // The text being typed, while the field has focus; else what is held.
   const [draft, setDraft] = useState<string | null>(null);
   const [refused, setRefused] = useState(false);
   const errorId = useId();
+  const noteId = useId();
+  const wrapperRef = useRef<HTMLSpanElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   // Escape's blur drops the draft rather than committing it.
   const dropOnBlur = useRef(false);
+  // Focus coming back from the define offer: the entry is as it stands.
+  const returning = useRef(false);
   const shown = draft ?? field.text;
   const number = Number(shown);
   const suffix = field.suffix ? ` ${field.suffix}` : '';
+  // A refused name no parameter defines yet is offered for definition in
+  // place, as an expression field offers it; anything else that does not
+  // evaluate says why, rather than only that it was not applied.
+  const definition = useParameterDefinition();
+  const undefinedName = refused
+    ? undefinedParameterName(shown, scope, definition)
+    : null;
+  const DefinePrompt = useDefineParameterPrompt(
+    definition !== null,
+    undefinedName !== null
+  );
+  const unreadable =
+    refused && !Number.isFinite(number)
+      ? previewExpression(shown, scope)
+      : null;
   const rule =
     Number.isFinite(number) && field.min !== undefined && number < field.min
       ? `${label} must be at least ${field.min}${suffix}.`
       : Number.isFinite(number) && field.max !== undefined && number > field.max
         ? `${label} must be at most ${field.max}${suffix}.`
-        : `${label} was not applied.`;
+        : unreadable && !unreadable.ok
+          ? `${label} was not applied: ${unreadable.text.replace(/\.$/, '')}.`
+          : `${label} was not applied.`;
   const commit = (text: string): boolean => {
     if (text.trim() === field.text.trim()) {
       // The held value entered again stands: a refusal left by an entry
@@ -776,6 +880,27 @@ function ValueField({
     setRefused(!accepted);
     return accepted;
   };
+  // The missing name defined (here or in Parameters), the entry is offered
+  // again against the new scope: it was only waiting for that name.
+  const missingName = useRef<string | null>(null);
+  useEffect(() => {
+    if (missingName.current === null || draft === null) return;
+    if (!previewExpression(draft, scope).ok) return;
+    if (commit(draft) && inputRef.current !== document.activeElement) {
+      setDraft(null);
+    }
+    // Only on a new scope; the draft and commit as they stand then.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scope]);
+  useEffect(() => {
+    missingName.current = undefinedName;
+  }, [undefinedName]);
+  /** The entry given up: the field holds its value again, refusal gone. */
+  const giveUp = () => {
+    setDraft(null);
+    setRefused(false);
+    onRestore?.(field.id);
+  };
   const step = (by: number) => {
     const next = bounded(field, (field.value ?? 0) + by);
     if (onCommit(field.id, String(next))) {
@@ -785,8 +910,24 @@ function ValueField({
   };
   return (
     <span
+      ref={wrapperRef}
       className={`in-place-param-field${refused ? ' is-refused' : ''}`}
       title={refused ? `${label} cannot take ${shown}` : undefined}
+      onBlur={(event) => {
+        // Leaving the define offer for anywhere outside the field gives the
+        // entry up, as leaving the field itself does. Not the offer going
+        // away under the focus once its name is defined: the field takes
+        // the focus back right after, and the entry is applied.
+        if (
+          event.target === inputRef.current ||
+          wrapperRef.current?.contains(event.relatedTarget)
+        )
+          return;
+        window.setTimeout(() => {
+          const wrapper = wrapperRef.current;
+          if (wrapper && !wrapper.contains(document.activeElement)) giveUp();
+        });
+      }}
     >
       {axis ? (
         <span className="in-place-param-axis" aria-hidden="true">
@@ -794,6 +935,7 @@ function ValueField({
         </span>
       ) : null}
       <input
+        ref={inputRef}
         id={id}
         type="text"
         inputMode="decimal"
@@ -801,10 +943,22 @@ function ValueField({
         autoComplete="off"
         aria-label={spokenValueName(label)}
         aria-invalid={refused || undefined}
-        aria-describedby={refused ? errorId : undefined}
+        aria-describedby={
+          refused
+            ? undefinedName && DefinePrompt
+              ? noteId
+              : errorId
+            : undefined
+        }
         value={shown}
         disabled={locked}
         onFocus={(event) => {
+          // Back from the define offer, the entry is the one typed, or
+          // (applied already) the value it became.
+          if (returning.current) {
+            returning.current = false;
+            return;
+          }
           setDraft(field.text);
           event.currentTarget.select();
         }}
@@ -812,7 +966,12 @@ function ValueField({
           setDraft(event.target.value);
           setRefused(false);
         }}
-        onBlur={() => {
+        onBlur={(event) => {
+          // Into the define offer under it, the entry waits for the name.
+          if (refused && wrapperRef.current?.contains(event.relatedTarget)) {
+            dropOnBlur.current = false;
+            return;
+          }
           // A refused entry is dropped on leaving, not kept half-applied:
           // the field shows the held value again, and its refusal goes.
           if (draft !== null && !dropOnBlur.current && !commit(draft)) {
@@ -835,9 +994,7 @@ function ValueField({
             event.preventDefault();
             event.stopPropagation();
             dropOnBlur.current = true;
-            setDraft(null);
-            setRefused(false);
-            onRestore?.(field.id);
+            giveUp();
             event.currentTarget.blur();
           } else if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
             event.preventDefault();
@@ -853,12 +1010,46 @@ function ValueField({
           {field.suffix}
         </span>
       ) : null}
-      {refused && (
+      {refused && undefinedName && definition && DefinePrompt ? (
+        <span
+          className="in-place-param-error in-place-param-define"
+          onKeyDown={(event) => {
+            // Escape in the offer gives the entry up, as in the field; the
+            // next one cancels the command.
+            if (event.key !== 'Escape') return;
+            event.preventDefault();
+            event.stopPropagation();
+            giveUp();
+            inputRef.current?.focus();
+          }}
+        >
+          <DefinePrompt
+            key={undefinedName}
+            name={undefinedName}
+            initialValue={field.value === undefined ? '' : String(field.value)}
+            noteId={noteId}
+            definition={definition}
+            onDefined={() => {
+              const input = inputRef.current;
+              if (!input) return;
+              returning.current = true;
+              input.focus();
+              returning.current = false;
+              const end = input.value.length;
+              input.setSelectionRange(end, end);
+            }}
+          />
+          <span id={errorId}>
+            Until then Done waits; Esc restores {field.text}
+            {suffix}.
+          </span>
+        </span>
+      ) : refused ? (
         <span id={errorId} className="in-place-param-error" role="alert">
           {rule} Correct it or press Esc to restore {field.text}
           {suffix}.
         </span>
-      )}
+      ) : null}
     </span>
   );
 }

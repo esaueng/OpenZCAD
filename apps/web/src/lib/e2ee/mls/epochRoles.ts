@@ -218,6 +218,57 @@ export function parseSelfRemoveProposal(message: Uint8Array): SelfRemoveFrame {
   return { groupId: new Uint8Array(groupId), epoch, senderLeaf };
 }
 
+/** RFC 9420 §6: `mls_private_message` in an MLSMessage. */
+const WIRE_FORMAT_PRIVATE_MESSAGE = 2;
+/** RFC 9420 §6.1: `new_member_commit`, an External Commit's sender. */
+const SENDER_NEW_MEMBER_COMMIT = 4;
+/** RFC 9420 §6: `commit`. */
+const CONTENT_COMMIT = 3;
+
+/** The cleartext framing of a Commit: its group, epoch and sender kind. */
+export interface CommitFrame {
+  readonly groupId: Uint8Array;
+  readonly epoch: number;
+  /** An External Commit (sender `new_member_commit`), or a member's. */
+  readonly external: boolean;
+}
+
+/**
+ * The framing of an MLSMessage carrying a Commit (RFC 9420 §6.2, §6.3):
+ * a PublicMessage whose content is a Commit from a member or a new member,
+ * or a PrivateMessage whose cleartext content type is a Commit (always a
+ * member's). Only the cleartext header is read; the content, the
+ * signature and the membership tag are the MLS engine's to check. The
+ * Worker uses it to refuse a Commit for another group or epoch than the
+ * one it is submitted for.
+ */
+export function parseCommitFrame(message: Uint8Array): CommitFrame {
+  const reader = new Reader(message);
+  if (reader.uint(2) !== 1) fail('Not an MLS 1.0 message.');
+  const wireFormat = reader.uint(2);
+  if (
+    wireFormat !== WIRE_FORMAT_PUBLIC_MESSAGE &&
+    wireFormat !== WIRE_FORMAT_PRIVATE_MESSAGE
+  ) {
+    fail('Not a PublicMessage or PrivateMessage.');
+  }
+  const groupId = new Uint8Array(reader.vector());
+  const epoch = reader.uint(8);
+  if (wireFormat === WIRE_FORMAT_PRIVATE_MESSAGE) {
+    if (reader.uint(1) !== CONTENT_COMMIT) fail('Not a Commit.');
+    return { groupId, epoch, external: false };
+  }
+  const sender = reader.uint(1);
+  if (sender === SENDER_MEMBER)
+    reader.uint(4); // leaf index
+  else if (sender !== SENDER_NEW_MEMBER_COMMIT) {
+    fail('A Commit is sent by a member or a new member.');
+  }
+  reader.vector(); // authenticated data
+  if (reader.uint(1) !== CONTENT_COMMIT) fail('Not a Commit.');
+  return { groupId, epoch, external: sender === SENDER_NEW_MEMBER_COMMIT };
+}
+
 /** The MLS group id of a project's group. */
 export function projectGroupId(projectId: string): Uint8Array {
   return new TextEncoder().encode(`${GROUP_ID_PREFIX}${projectId}`);

@@ -626,6 +626,71 @@ describe('SketchToolRail', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Fully constrained');
   });
 
+  it('keeps the sketch state in view as a DOF chip with a colour legend (I38)', async () => {
+    const user = userEvent.setup();
+    const { rerender, props } = renderRail({
+      constraints: [
+        {
+          constraintId: 'scon_1',
+          label: 'Horizontal · Line 1',
+          editable: false
+        }
+      ],
+      solveStatus: {
+        label: '3 DOF remaining',
+        tone: 'info',
+        definedState: 'under-defined'
+      }
+    });
+    const chip = screen.getByRole('button', { name: /^Sketch state:/ });
+    expect(chip).toHaveTextContent('3 DOF');
+    expect(chip).toHaveAttribute('data-state', 'free');
+    expect(chip.getAttribute('aria-label')).toMatch(/green edges are fully/);
+    rerender(
+      <SketchToolRail
+        {...props}
+        solveStatus={{
+          label: 'Fully constrained',
+          tone: 'ok',
+          definedState: 'fully-defined'
+        }}
+      />
+    );
+    expect(chip).toHaveTextContent('0 DOF');
+    expect(chip).toHaveAttribute('data-state', 'defined');
+    // The chip opens the constraint list it summarises.
+    await user.click(chip);
+    expect(
+      screen.getByRole('group', { name: 'Constraints' })
+    ).toBeInTheDocument();
+  });
+
+  it('folds a tool’s type strip on the first canvas press, and the tool brings it back (I37)', async () => {
+    const user = userEvent.setup();
+    const host = document.createElement('div');
+    host.className = 'viewer-host';
+    const canvas = document.createElement('canvas');
+    host.append(canvas);
+    document.body.append(host);
+    try {
+      renderRail({ tool: 'circle' });
+      expect(
+        screen.getByRole('radiogroup', { name: 'Circle type' })
+      ).toBeInTheDocument();
+      canvas.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+      await screen.findByRole('button', { name: /^Circle:/ });
+      expect(
+        screen.queryByRole('radiogroup', { name: 'Circle type' })
+      ).toBeNull();
+      await user.click(screen.getByRole('button', { name: /^Circle:/ }));
+      expect(
+        screen.getByRole('radiogroup', { name: 'Circle type' })
+      ).toBeInTheDocument();
+    } finally {
+      host.remove();
+    }
+  });
+
   it('arms and disarms a modify tool, and disables the group until there is geometry', async () => {
     const user = userEvent.setup();
     const onEditTool = vi.fn();

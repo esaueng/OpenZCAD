@@ -1084,11 +1084,16 @@
   left: calc(100% + var(--island-gap));
   z-index: calc(var(--z-inspector-float) + 4);
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
+  /* One column beside the rail, level with its tool (I37): a row ran out
+     across the middle of the canvas and took the first drawing click. The
+     column keeps to the canvas's edge, and the first canvas press folds it
+     away (SketchToolRail). */
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: stretch;
   gap: 2px;
-  /* One row as wide as its tiles while it fits, wrapped into the room left
-     when it does not. With only its left edge set, past the rail's 40px the
+  /* As wide as its widest tile while it fits, and no wider than the room
+     left when it does not. With only its left edge set, past the rail's 40px the
      strip had no room of its own, so it shrank to min-content and the wrap
      stacked every tile in a column. The right edge is the right lane's
      (the relations and instrument rails), measured from the float that
