@@ -153,3 +153,54 @@ test('a copy of a sample drops "Demo ·" and wears its picture', async ({
   await expect(copy).not.toContainText('Demo ·');
   await expect(copy.locator('.start-tile-thumb img')).toHaveCount(1);
 });
+
+// 14 Nov 2026: New project and then Import kept the suggested name ("Lucky
+// Quokka"), and a library of them could not be searched by what they were.
+test(
+  'a part imported into a new project with its suggested name names it',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(90_000);
+    await stubApi(page);
+    await page.goto('/');
+    const suggested = await page.getByLabel('Project name').inputValue();
+    expect(suggested).toMatch(/^[A-Z][a-z]+ [A-Z][a-z]+$/);
+    await page.getByRole('button', { name: 'New project' }).click();
+    await expect(
+      page.getByRole('button', { name: `Rename project ${suggested}` })
+    ).toBeVisible();
+
+    await page
+      .getByLabel(/^Import STEP or /)
+      .setInputFiles('samples/simple-block.stl');
+    await page
+      .getByRole('dialog', { name: 'Units for simple-block.stl' })
+      .getByRole('button', { name: 'Import in millimeters' })
+      .click();
+    await expectBodyCount(page, 1);
+    await expect(
+      page.getByRole('button', { name: 'Rename project simple-block' })
+    ).toBeVisible();
+  }
+);
+
+test('a part imported into a project someone named keeps that name', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Gearbox lid');
+  await page.getByRole('button', { name: 'New project' }).click();
+  await page
+    .getByLabel(/^Import STEP or /)
+    .setInputFiles('samples/simple-block.stl');
+  await page
+    .getByRole('dialog', { name: 'Units for simple-block.stl' })
+    .getByRole('button', { name: 'Import in millimeters' })
+    .click();
+  await expectBodyCount(page, 1);
+  await expect(
+    page.getByRole('button', { name: 'Rename project Gearbox lid' })
+  ).toBeVisible();
+});
