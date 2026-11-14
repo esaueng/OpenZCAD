@@ -577,6 +577,42 @@ comparison, which is safe only because of its commitment step.
   one comparison per person, not one per project. The comparison is mutual:
   the invitee verifies the owner's fingerprint in the same step, which anchors
   the project's roster for them. Sharing remains owner-only (ADR-019).
+  The owner's statement also names a hash of the emailed link's token, which
+  the owner's browser makes, so the invitee's browser accepts by link only
+  the invitation that names the link it opened. The invitee's device then
+  signs an acceptance of that exact statement, and the owner adds only an
+  account whose device signed one. An invitation the server merely lists,
+  or one whose statement names no link, is joined only on the invitee's
+  explicit confirmation of the verified statement. The server delivers the
+  email and labels contacts with their addresses, so the address alone
+  never decides who is added. An invitation is email-only by default. When
+  the typed address matches a verified contact, the owner's browser offers
+  that contact as an explicit choice, shown by the contact code Contacts
+  shows; only when the owner picks it does the statement (version 3) name
+  that contact's identity key, and the owner's browser then adds
+  automatically only an acceptance by that identity. Every other acceptance
+  waits for the owner to confirm the accepting contact, shown by the same
+  contact code, or to decline it. Migrating a shared project works the same
+  way: before anything is staged, the owner approves each member to be
+  added back by contact code and signed role, and the cutover adds exactly
+  those identities, stopping to ask again if the roster, an identity or a
+  role changed. Every re-add must name the migrating project, in the
+  server's record and in the owner-signed statement alike. A staging
+  resumed after a reload, or one an older app version left, reaches the
+  cutover only with the owner's approval of the whole staged roster,
+  members already re-added included, given again or recorded on that
+  owner's browser for that same staging; a member re-added without an
+  acceptance the owner can review drops the staging, which starts again.
+  The roster checked is the staged MLS group's own, not the server's
+  listing: before a resumed staging is written to, and again just before
+  the cutover, every account in the group besides the owner's must be an
+  approved identity (a verified contact certifying each of its leaves)
+  with the approved role in the group's roles, or the staging is dropped
+  and starts again. An approval is spent once: recorded for the staging it
+  went ahead with, or dropped with that staging or a cancel.
+  Automatic adds also require that the owner's browser saw every removal
+  from the project since its group began (it created the group); a device
+  that joined from the project's history asks the owner for every Add.
 - **Invitation emails** name the sender, not the project.
 - **Share links** become `#share=<token>.<key>.<owner>`, where `<owner>` is
   the full hash of the owner's identity key; the fragment never reaches the

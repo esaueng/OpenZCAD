@@ -31,6 +31,8 @@ const INCOMING_HINTS: Record<InviteeInvitation['state'], string> = {
     'This invitation does not verify against the owner’s keys. Ask them to invite you again.',
   'waiting-for-owner':
     'Your keys are ready. Waiting for them to verify you and add you.',
+  confirm:
+    'Join only if you expected this invitation and the code is the one Contacts shows for them. Joining tells them this account accepted it.',
   ready: 'Preparing your keys for the project…',
   'no-device':
     'Open this invitation on a device that holds your encryption keys.'
@@ -40,8 +42,22 @@ const OUTGOING_HINTS: Partial<Record<OwnerInvitation['state'], string>> = {
   'waiting-for-keys': 'Accepted. Waiting for their keys.',
   'waiting-for-verification':
     'Waiting for you to verify them: compare codes, then they are added.',
+  'needs-acceptance':
+    'Waiting for them to open OpenZCAD again and confirm the invitation.',
+  'confirm-re-add':
+    'You removed them from this project before. Add them only if this is the contact code Contacts shows for them.',
+  'confirm-add':
+    'Add them only if this is the contact code Contacts shows for the person you invited.',
+  'accepted-by-other':
+    'Someone other than the contact you invited accepted. They will not be added: revoke it and invite again.',
   ready: 'Verified. Adding them…'
 };
+
+/** Accepted invitations the owner confirms or declines. */
+const CONFIRMABLE = new Set<OwnerInvitation['state']>([
+  'confirm-add',
+  'confirm-re-add'
+]);
 
 /** The page's invitation context, loaded with the encrypted-project store. */
 async function pageInvitations(): Promise<InvitationContext> {
@@ -138,6 +154,8 @@ export function EncryptedInvitations({ ready }: { ready: boolean }) {
     try {
       const { acceptEncryptedInvitation } =
         await import('../lib/e2ee/invitations');
+      // An invitation whose statement names no link (an older app's) is
+      // listed below for an explicit Join.
       await acceptEncryptedInvitation(await pageInvitations(), token);
       clearPendingEncryptedInvitation();
     } catch (caught) {
@@ -149,6 +167,50 @@ export function EncryptedInvitations({ ready }: { ready: boolean }) {
     // The owner is a contact now (M2): the contacts list and this one read
     // again.
     notifyContactsChanged();
+  };
+
+  // The person's own confirmation of an invitation this device did not
+  // open by link: only then does it sign the acceptance.
+  const confirm = async (invitation: InviteeInvitation) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const { confirmEncryptedInvitation } =
+        await import('../lib/e2ee/invitations');
+      // Exactly the verified statement this row shows.
+      await confirmEncryptedInvitation(await pageInvitations(), invitation);
+    } catch (caught) {
+      setError(messageFor(caught));
+      setBusy(false);
+      return;
+    }
+    setBusy(false);
+    await sync();
+  };
+
+  // The owner's confirmation of the contact who accepted, by the identity
+  // shown, or the decline that closes the invitation.
+  const decide = async (invitation: OwnerInvitation, add: boolean) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const invitations = await import('../lib/e2ee/invitations');
+      const ctx = await pageInvitations();
+      const { projectId, invitationId } = invitation.record;
+      if (add && invitation.acceptor) {
+        await invitations.addInvitedMember(ctx, invitation.record, {
+          confirmedIdentity: invitation.acceptor.identityKeyHash
+        });
+      } else {
+        await invitations.declineInvitation(ctx, projectId, invitationId);
+      }
+    } catch (caught) {
+      setError(messageFor(caught));
+      setBusy(false);
+      return;
+    }
+    setBusy(false);
+    await sync();
   };
 
   const waitingOutgoing = outgoing.filter(
@@ -210,11 +272,36 @@ export function EncryptedInvitations({ ready }: { ready: boolean }) {
       ) : null}
       {incoming.map((invitation) => {
         const owner = invitation.ownerEmail ?? 'The owner';
+        // Role and project from the verified statement, never the server's
+        // listing; the inviter by the contact code Contacts shows for them.
+        const statement = invitation.statement;
+        const code = invitation.ownerCode;
+        const joinable =
+          invitation.state === 'confirm' && statement !== null && code !== null;
+        const title = !statement
+          ? `An invitation from ${owner} that does not verify`
+          : joinable
+            ? `Your verified contact invited you to project ${statement.projectId} as ${ROLE[statement.role]}`
+            : `${owner} invited you as ${ROLE[statement.role]}`;
         return (
           <SettingRow
             key={invitation.record.invitationId}
-            title={`${owner} invited you as ${ROLE[invitation.record.role]}`}
-            hint={INCOMING_HINTS[invitation.state]}
+            title={title}
+            hint={
+              joinable ? (
+                <>
+                  {INCOMING_HINTS.confirm} Their contact code:{' '}
+                  <code
+                    className="encryption-code"
+                    aria-label="Their contact code"
+                  >
+                    {code}
+                  </code>
+                </>
+              ) : (
+                INCOMING_HINTS[invitation.state]
+              )
+            }
           >
             {invitation.state === 'verify-owner' ? (
               <button
@@ -230,12 +317,86 @@ export function EncryptedInvitations({ ready }: { ready: boolean }) {
                 Verify
               </button>
             ) : null}
+            {joinable && statement ? (
+              <>
+                <button
+                  className="secondary"
+                  type="button"
+                  disabled={busy}
+                  onClick={() =>
+                    requestContactVerification(invitation.record.inviterUserId)
+                  }
+                >
+                  Open contact
+                </button>
+                <button
+                  className="primary"
+                  type="button"
+                  disabled={busy}
+                  aria-label={`Join project ${statement.projectId} as ${ROLE[statement.role]}`}
+                  onClick={() => void confirm(invitation)}
+                >
+                  Join
+                </button>
+              </>
+            ) : null}
           </SettingRow>
         );
       })}
       {waitingOutgoing.map((invitation) => {
         const name =
           invitation.email ?? invitation.record.acceptedByUserId ?? 'Invitee';
+        const acceptor = invitation.acceptor;
+        const statement = invitation.statement;
+        if (CONFIRMABLE.has(invitation.state) && acceptor && statement) {
+          // Named from the verified acceptance and this account's own
+          // statement: the contact code Contacts shows, the role signed.
+          const who = acceptor.email ?? 'Your verified contact';
+          return (
+            <SettingRow
+              key={invitation.record.invitationId}
+              title={`${who} accepted your invitation to project ${statement.projectId} as ${ROLE[statement.role]}. Add them?`}
+              hint={
+                <>
+                  {OUTGOING_HINTS[invitation.state]} Their contact code:{' '}
+                  <code
+                    className="encryption-code"
+                    aria-label="Their contact code"
+                  >
+                    {acceptor.code}
+                  </code>
+                </>
+              }
+            >
+              <button
+                className="secondary"
+                type="button"
+                disabled={busy}
+                onClick={() => requestContactVerification(acceptor.userId)}
+              >
+                Open contact
+              </button>
+              <button
+                className="secondary"
+                type="button"
+                disabled={busy}
+                aria-label={`Decline ${who}`}
+                onClick={() => void decide(invitation, false)}
+              >
+                Decline
+              </button>
+              <button
+                className="primary"
+                type="button"
+                disabled={busy}
+                aria-label={`Add ${who}`}
+                onClick={() => void decide(invitation, true)}
+              >
+                Add
+              </button>
+            </SettingRow>
+          );
+        }
         return (
           <SettingRow
             key={invitation.record.invitationId}

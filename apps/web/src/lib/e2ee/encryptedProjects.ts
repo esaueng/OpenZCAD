@@ -105,7 +105,12 @@ import {
 } from '@openzcad/shared';
 import type { ShareDelegationState, ShareLinksContext } from './shareLinks';
 import type { ShareRemovalNotice } from './shareWorkStore';
-import { contactInvitationPeople, type InvitationContext } from './invitations';
+import {
+  contactInvitationPeople,
+  invitationRemovalChecks,
+  recordRemovedMembers,
+  type InvitationContext
+} from './invitations';
 import { invitationStore } from './invitationStore';
 import {
   encryptionStateChanged,
@@ -378,7 +383,16 @@ async function openStore(
     }),
     // The share-link reissue hook (slice 5-5, for slice 5-10): the owner's
     // page issues new statements at once, and the dialog offers reissue.
-    onMembersRemoved: (removal: MembersRemoved) => {
+    onMembersRemoved: async (removal: MembersRemoved) => {
+      // Never added back by the invitation sweep: the owner confirms that.
+      // Awaited by the Commit's caller, so an Add built next sees it; a
+      // write that fails leaves the step's removal check open, so no tab
+      // adds anyone to the project automatically.
+      const recorded = recordRemovedMembers(
+        invitationStore(),
+        account.userId,
+        removal
+      );
       const notify = removalNotifier(removal);
       void import('./shareLinks')
         .then(({ shareLinksAfterRemoval }) => {
@@ -388,7 +402,12 @@ async function openStore(
           return null;
         })
         .catch(() => notify());
+      return recorded;
     },
+    // Each Commit that advances an owned project's state here does so
+    // inside a mark every tab of this browser reads, ended once its
+    // removals are recorded (above).
+    removalChecks: invitationRemovalChecks(invitationStore(), account.userId),
     // A co-member's device removal rotated a project (slice 5-7): the
     // owner's page states its share links again without that device.
     onMemberDevicesRemoved: (removal: MemberDevicesRemoved) => {

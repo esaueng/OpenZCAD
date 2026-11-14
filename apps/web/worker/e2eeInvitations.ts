@@ -6,13 +6,20 @@
  *   owner-signed invitation statement ("OZI", `@openzcad/crypto`) after
  *   checking its signature against the owner's newest device list, keeps a
  *   hash of the invitee's email (not the email) and emails a link that names
- *   the sender, not the project. `GET` lists them; `DELETE …/:invitationId`
+ *   the sender, not the project. A version 2 statement names the hash of
+ *   the link's token (`invitationLinkTokenHash`); the owner's browser made
+ *   the token and posts it, and the Worker mails exactly that token, so the
+ *   invitee's browser can check the statement it gets back for the link. `GET` lists them; `DELETE …/:invitationId`
  *   revokes one that no Add completed.
  * - `POST /api/e2ee/invitations/accept`: binds the signed-in account whose
  *   email hashes to the statement's. It does not make a member: the owner's
  *   Add Commit does. `GET /api/e2ee/invitations` lists this account's
  *   accepted, unfinished invitations; `GET …/invitations/sent` the
  *   owner's (slice 5-3b).
+ * - `POST …/invitations/:invitationId/acceptance` (the accepted invitee):
+ *   a certified device's signed acceptance ("OZJ"), checked against its
+ *   key and the stored statement and kept with the invitation (migration
+ *   0054). The owner's browser adds nobody without a valid one.
  * - `POST /api/e2ee/projects/:id/key-packages` (the accepted invitee): one
  *   KeyPackage per project and certified device, with its certified leaf.
  *   Republishing replaces one that no Add consumed (and resets its claim).
@@ -38,10 +45,19 @@
  * unknown to them.
  */
 import {
+  MAX_PROJECT_INVITATION_BYTES,
+  E2eeError,
+  MAX_INVITATION_ACCEPTANCE_BYTES,
   ProjectInvitationError,
+  decodeInvitationAcceptance,
   decodeProjectInvitation,
+  fromBase64Url,
+  fromHex,
   invitationEmailHash,
+  invitationLinkTokenHash,
+  invitationStatementHash,
   toHex,
+  verifyInvitationAcceptance,
   verifyProjectInvitation,
   type ProjectInvitation
 } from '@openzcad/crypto';
@@ -56,6 +72,7 @@ import type {
   E2eeWelcomeResponse
 } from '@openzcad/shared';
 import {
+  isE2eeInvitationAcceptanceReady,
   isE2eeInvitationStorageReady,
   isE2eeProjectGroupStorageReady,
   isProjectStorageFormatReady
@@ -92,7 +109,7 @@ import {
 } from './sharing';
 
 const PROJECT_ROUTE =
-  /^\/api\/e2ee\/projects\/([^/]+)\/(invitations|invitations\/[^/]+|key-packages|key-packages\/claim|welcome)$/;
+  /^\/api\/e2ee\/projects\/([^/]+)\/(invitations|invitations\/[^/]+|invitations\/[^/]+\/acceptance|key-packages|key-packages\/claim|welcome)$/;
 export const E2EE_INVITATIONS_ROUTE = '/api/e2ee/invitations';
 export const E2EE_INVITATION_ACCEPT_ROUTE = '/api/e2ee/invitations/accept';
 export const E2EE_SENT_INVITATIONS_ROUTE = '/api/e2ee/invitations/sent';
@@ -107,8 +124,8 @@ export function isE2eeInvitationPath(pathname: string): boolean {
   );
 }
 
-/** A canonical invitation statement is at most 601 bytes (crypto). */
-const MAX_STATEMENT_BYTES = 601;
+/** The longest canonical invitation statement (crypto). */
+const MAX_STATEMENT_BYTES = MAX_PROJECT_INVITATION_BYTES;
 const SIGNATURE_BYTES = 65;
 /** Judgment: a P-256 KeyPackage is well under 1 KiB; leave room. */
 const MAX_KEY_PACKAGE_BYTES = 16 * 1024;
@@ -171,6 +188,9 @@ export interface InvitationRow {
   completed_at: string | null;
   completed_epoch: number | null;
   revoked_at: string | null;
+  /** Migration 0054; absent before it. */
+  acceptance_statement?: string | null;
+  acceptance_signature?: string | null;
   /** The owner's lists only (slice 5-3b). */
   key_packages?: number;
   claimed_key_packages?: number;
@@ -182,6 +202,16 @@ export const INVITATION_COLUMNS = `invitation_id, project_id, invited_by_user_id
   email_hash, role, statement, signature, signer_device_id, created_at,
   expires_at, accepted_by_user_id, accepted_at, completed_at,
   completed_epoch, revoked_at`;
+
+/** Migration 0054's columns, selected only once they exist. */
+const ACCEPTANCE_COLUMNS = `, acceptance_statement, acceptance_signature`;
+
+/** `INVITATION_COLUMNS`, with the signed acceptance once it is stored. */
+export async function invitationColumns(db: D1Database): Promise<string> {
+  return (await isE2eeInvitationAcceptanceReady(db))
+    ? `${INVITATION_COLUMNS}${ACCEPTANCE_COLUMNS}`
+    : INVITATION_COLUMNS;
+}
 
 export const invitationRecord = (row: InvitationRow): E2eeInvitationRecord => ({
   invitationId: row.invitation_id,
@@ -199,6 +229,13 @@ export const invitationRecord = (row: InvitationRow): E2eeInvitationRecord => ({
   completedAt: row.completed_at,
   completedEpoch: row.completed_epoch,
   revokedAt: row.revoked_at,
+  acceptance:
+    row.acceptance_statement && row.acceptance_signature
+      ? {
+          statement: row.acceptance_statement,
+          signature: row.acceptance_signature
+        }
+      : null,
   ...(row.key_packages === undefined
     ? {}
     : {
@@ -266,7 +303,7 @@ async function invitationRow(
 ): Promise<InvitationRow | null> {
   return db
     .prepare(
-      `SELECT ${INVITATION_COLUMNS} FROM e2ee_invitations WHERE invitation_id = ?`
+      `SELECT ${await invitationColumns(db)} FROM e2ee_invitations WHERE invitation_id = ?`
     )
     .bind(invitationId)
     .first<InvitationRow>();
@@ -369,6 +406,39 @@ async function createInvitation(
       'The invitation statement does not verify with your device’s key.'
     );
   }
+  // A version 2 statement binds the link: its token is the owner's, and
+  // only that token is mailed. A version 1 statement gets one made here.
+  let token: string;
+  if (decoded.linkTokenHash) {
+    token = tokenField(body.token);
+    if (
+      toHex(await invitationLinkTokenHash(token)) !==
+      toHex(decoded.linkTokenHash)
+    ) {
+      refuse(
+        400,
+        'E2EE_INVITATION_INVALID',
+        'The invitation statement names another link.'
+      );
+    }
+    // A token is one link: the owner's browser makes a fresh one each time.
+    const used = await db
+      .prepare('SELECT 1 AS found FROM e2ee_invitations WHERE token_hash = ?')
+      .bind(await hashProjectInvitationToken(token))
+      .first<{ found: number }>();
+    if (used) {
+      refuse(
+        409,
+        'E2EE_INVITATION_INVALID',
+        'That invitation link is already in use.'
+      );
+    }
+  } else {
+    if (body.token !== undefined) {
+      invalid('token belongs only with a statement that names its link');
+    }
+    token = createProjectInvitationToken();
+  }
   if (
     host.email &&
     toHex(await invitationEmailHash(host.email)) === toHex(emailHash)
@@ -390,7 +460,6 @@ async function createInvitation(
     Math.floor(seconds / PROJECT_INVITATION_RATE_WINDOW_SECONDS) *
     PROJECT_INVITATION_RATE_WINDOW_SECONDS;
   const bucket = `project-invite-account:${userId}`;
-  const token = createProjectInvitationToken();
   const tokenHash = await hashProjectInvitationToken(token);
   const emailHex = toHex(emailHash);
   const now = new Date(nowMs).toISOString();
@@ -552,7 +621,7 @@ async function listProjectInvitations(
   await requireOwnedEncryptedProject(db, userId, projectId);
   const { results } = await db
     .prepare(
-      `SELECT ${INVITATION_COLUMNS}${KEY_PACKAGE_COUNTS} FROM e2ee_invitations
+      `SELECT ${await invitationColumns(db)}${KEY_PACKAGE_COUNTS} FROM e2ee_invitations
        WHERE project_id = ? ORDER BY created_at DESC, invitation_id LIMIT ?`
     )
     .bind(projectId, LIST_LIMIT)
@@ -661,7 +730,7 @@ async function acceptInvitation(
   ]);
   const row = await db
     .prepare(
-      `SELECT ${INVITATION_COLUMNS}${GROUP_EPOCH} FROM e2ee_invitations
+      `SELECT ${await invitationColumns(db)}${GROUP_EPOCH} FROM e2ee_invitations
        WHERE token_hash = ? AND email_hash = ?`
     )
     .bind(tokenHash, emailHex)
@@ -689,7 +758,7 @@ async function listAcceptedInvitations(
 ): Promise<Response> {
   const { results } = await db
     .prepare(
-      `SELECT ${INVITATION_COLUMNS}${GROUP_EPOCH} FROM e2ee_invitations
+      `SELECT ${await invitationColumns(db)}${GROUP_EPOCH} FROM e2ee_invitations
        WHERE accepted_by_user_id = ? AND ${OPEN_ACCEPTED}
        ORDER BY accepted_at, invitation_id LIMIT ?`
     )
@@ -712,7 +781,7 @@ async function listSentInvitations(
 ): Promise<Response> {
   const { results } = await db
     .prepare(
-      `SELECT ${INVITATION_COLUMNS}${KEY_PACKAGE_COUNTS} FROM e2ee_invitations
+      `SELECT ${await invitationColumns(db)}${KEY_PACKAGE_COUNTS} FROM e2ee_invitations
        WHERE invited_by_user_id = ? AND ${OPEN_ACCEPTED}
          AND EXISTS (SELECT 1 FROM projects p
            WHERE p.id = e2ee_invitations.project_id AND p.user_id = ?
@@ -724,6 +793,107 @@ async function listSentInvitations(
   return json({
     invitations: (results ?? []).map(invitationRecord)
   } satisfies E2eeInvitationsResponse);
+}
+
+/**
+ * `POST …/invitations/:invitationId/acceptance` (the accepted invitee): a
+ * certified device's signed acceptance ("OZJ") of the invitation, checked
+ * against the device's key in the invitee's newest device list and the
+ * stored statement, then kept with the invitation (the newest replaces an
+ * earlier one). The owner's browser checks it again against its own pins
+ * before an Add, and adds nobody without one.
+ */
+async function storeAcceptance(
+  db: D1Database,
+  userId: string,
+  projectId: string,
+  invitationId: string,
+  authorization: Authorization,
+  body: Record<string, unknown>
+): Promise<Response> {
+  if (!(await isE2eeInvitationAcceptanceReady(db))) {
+    refuse(
+      503,
+      'E2EE_UNAVAILABLE',
+      'Signed invitation acceptances are unavailable until the database is updated.'
+    );
+  }
+  const statement = bytesField(body.statement, 'statement', {
+    max: MAX_INVITATION_ACCEPTANCE_BYTES
+  });
+  const signature = bytesField(body.signature, 'signature', {
+    exact: SIGNATURE_BYTES
+  });
+  const nowMs = Date.now();
+  const invitation = await invitationRow(db, invitationId);
+  if (
+    !invitation ||
+    invitation.project_id !== projectId ||
+    invitation.accepted_by_user_id !== userId
+  ) {
+    refuse(
+      404,
+      'INVITATION_NOT_FOUND',
+      'Project invitation is invalid or expired.'
+    );
+  }
+  if (
+    invitation.completed_at !== null ||
+    invitation.revoked_at !== null ||
+    invitation.expires_at <= nowMs
+  ) {
+    unavailableInvitation();
+  }
+  let signerDeviceId: string;
+  try {
+    signerDeviceId = decodeInvitationAcceptance(statement.bytes).signerDeviceId;
+  } catch {
+    invalid('The acceptance is malformed');
+  }
+  // Only a device the invitee's newest list certifies accepts for them.
+  const signer = await requireCertifiedDevice(db, userId, signerDeviceId);
+  try {
+    await verifyInvitationAcceptance(
+      { statement: statement.bytes, signature: signature.bytes },
+      signer.signingKey,
+      {
+        projectId,
+        invitationId,
+        invitationHash: await invitationStatementHash(
+          fromBase64Url(invitation.statement)
+        ),
+        inviteeEmailHash: fromHex(invitation.email_hash),
+        inviteeUserId: userId
+      }
+    );
+  } catch (error) {
+    if (error instanceof E2eeError) {
+      invalid(`The acceptance does not verify: ${error.message}`);
+    }
+    throw error;
+  }
+  const [stored] = await runBatch(db, [
+    db
+      .prepare(
+        `UPDATE e2ee_invitations SET acceptance_statement = ?,
+           acceptance_signature = ?
+         WHERE invitation_id = ? AND project_id = ? AND accepted_by_user_id = ?
+           AND ${OPEN_ACCEPTED} AND ${authorization.sql}`
+      )
+      .bind(
+        statement.text,
+        signature.text,
+        invitationId,
+        projectId,
+        userId,
+        nowMs,
+        ...authorization.binds
+      )
+  ]);
+  if ((stored?.meta?.changes ?? 0) !== 1) unavailableInvitation();
+  return json({
+    invitation: invitationRecord((await invitationRow(db, invitationId))!)
+  } satisfies E2eeInvitationResponse);
 }
 
 // --- KeyPackages ---------------------------------------------------------------
@@ -1434,7 +1604,32 @@ export async function handleE2eeInvitationRequest(
       if (method === 'GET') {
         return await listProjectInvitations(db, userId, projectId);
       }
-    } else if (rest.startsWith('invitations/') && method === 'DELETE') {
+    } else if (
+      rest.startsWith('invitations/') &&
+      rest.endsWith('/acceptance') &&
+      method === 'POST'
+    ) {
+      let invitationId: string;
+      try {
+        invitationId = decodeURIComponent(
+          rest.slice('invitations/'.length, -'/acceptance'.length)
+        );
+      } catch {
+        refuse(404, 'INVITATION_NOT_FOUND', 'Project invitation not found.');
+      }
+      return await storeAcceptance(
+        db,
+        userId,
+        projectId,
+        idField(invitationId, 'invitationId'),
+        authorization,
+        await readBody()
+      );
+    } else if (
+      rest.startsWith('invitations/') &&
+      !rest.endsWith('/acceptance') &&
+      method === 'DELETE'
+    ) {
       let invitationId: string;
       try {
         invitationId = decodeURIComponent(rest.slice('invitations/'.length));
