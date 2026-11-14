@@ -1129,6 +1129,7 @@ const preflightCadPatch: typeof AiPatchPreflight.preflightCadPatch = (
  * read only for its Settings export, neither of which waits on the result.
  */
 const interactionDiagnostics = () => import('./lib/interactionDiagnostics');
+const closedOpenings = () => import('./lib/closedOpenings');
 /** A refused rebuild saved as a corpus fixture, on its Save reproduction. */
 const refusalReproduction = () => import('./lib/refusalReproduction');
 
@@ -1819,7 +1820,7 @@ import {
   type ToastModel
 } from './lib/toasts';
 import { PreviewRefusalError, splitRefusal } from './lib/featureValidation';
-import { keptOffsetValue } from './lib/offsetChip';
+import { keptOffsetValue, offsetFaceCommitMessage } from './lib/offsetChip';
 import { useCollaboration } from './lib/useCollaboration';
 import type * as AiPatchPreflight from './lib/aiPatchPreflight';
 import type {
@@ -9740,6 +9741,11 @@ export function App() {
    * Says once, as the commit lands, that it stored a pick with no lineage
    * name: such a pick resolves only by its hash, which an upstream edit to
    * that entity orphans. Never blocks the commit (`lib/fragileSelections`).
+   *
+   * A face edit that filled in an opening an earlier cut made then says so,
+   * in the toast's place: that cut's step stays in the history but no longer
+   * changes the shape (`lib/closedOpenings`, loaded on demand). The pick
+   * advice stays in the activity log.
    */
   function announceFragileSelections(
     before: ProjectDocument,
@@ -9758,6 +9764,30 @@ export function App() {
       // Advice only: the commit has already landed.
     }
     if (advisory) announce(advisory);
+    const manager = managerRef.current;
+    if (!derived || !manager) return;
+    // The check lands a moment later. It speaks only about this commit, so
+    // it stays silent once anything moved on: an undo, redo or later edit
+    // (each moves the edit history; the rebuild's own repairs do not),
+    // another project or a reopen (another manager), or a newer notice.
+    const historyAt = (document: ProjectDocument) =>
+      `${document.editHistory?.cursor}/${document.editHistory?.entries.length}`;
+    const position = historyAt(manager.document);
+    const toastId = toastIdRef.current;
+    void closedOpenings()
+      .then(({ closedOpeningsAdvisory }) => {
+        if (
+          managerRef.current !== manager ||
+          historyAt(manager.document) !== position ||
+          toastIdRef.current !== toastId
+        )
+          return;
+        const notice = closedOpeningsAdvisory(before, after, derived);
+        if (notice) announce(notice, undefined, { tone: 'warning' });
+      })
+      .catch(() => {
+        // Advice only, as above.
+      });
   }
 
   function executeCommand(
@@ -14615,6 +14645,11 @@ export function App() {
     forgetCompleteCommit();
     clearAutoFrame();
     setDoc(null);
+    // A workspace notice speaks about the model just closed, and its action
+    // (an Undo above all) has no document left to act on. The library shares
+    // the toast slot, so one left standing was carried onto the shelf and,
+    // remounted there, started its lifetime over.
+    setToast(null);
     setArtifacts([]);
     setSelectedFeatureNode(null);
     setSelectedTopology(null);
@@ -27257,7 +27292,7 @@ export function App() {
       command: plan.command,
       bodyId,
       editedFeatureId: null,
-      successMessage: `Offset face by ${Math.round(offset * 100) / 100} ${base.units}.`,
+      successMessage: offsetFaceCommitMessage(offset, base.units),
       ...(plan.travelHint ? { travelHint: plan.travelHint } : {})
     };
   }
@@ -27332,7 +27367,11 @@ export function App() {
   function handleOffsetCommit(
     offset: number,
     exact?: ParamValue,
-    options?: { keepingLastValid?: boolean }
+    options?: {
+      keepingLastValid?: boolean;
+      /** The Total the chip read at release, when it read one. */
+      total?: number;
+    }
   ): OffsetCommitOutcome {
     stopOffsetRestCheck();
     // The arrow rig is shared: in region mode its drag is an extrude height.
@@ -27404,10 +27443,22 @@ export function App() {
       if (!retakenRelease.commit(retaken)) return 'blocked';
       return 'started';
     }
+    // A plain face offset released from a Total reading names that Total
+    // beside the change its history row records.
+    const successMessage =
+      plan.editedFeatureId === null && options?.total !== undefined
+        ? offsetFaceCommitMessage(
+            offset,
+            managerRef.current?.document.units ?? '',
+            options.total
+          )
+        : reuse
+          ? reuse.successMessage
+          : plan.successMessage;
     void executeValidatedDirectEdit(
       reuse ? reuse.command : plan.command,
       reuse ? reuse.bodyId : plan.bodyId,
-      reuse ? reuse.successMessage : plan.successMessage,
+      successMessage,
       offset,
       undefined,
       reuse ? reuse.validationTargets : plan.validationTargets
@@ -33246,7 +33297,7 @@ export function App() {
                 : null
             }
             onOffsetPreview={handleOffsetPreview}
-            onOffsetCommit={(value) => {
+            onOffsetCommit={(value, reading) => {
               if (interactionRef.current.mode === 'region') {
                 regionDistanceSetter.current?.(Math.round(value * 1000) / 1000);
                 dispatchInteraction({ type: 'drag-release' });
@@ -33255,7 +33306,11 @@ export function App() {
                 );
                 return 'started';
               }
-              return handleOffsetCommit(value);
+              return handleOffsetCommit(
+                value,
+                undefined,
+                reading ? { total: reading.total } : undefined
+              );
             }}
             onOffsetCancel={handleViewerOffsetCancel}
             offsetPreviewInvalid={holdsRefusal(interaction)}

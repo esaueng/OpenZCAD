@@ -291,6 +291,7 @@ import {
   faceOffsetChipState,
   offsetChipText,
   offsetLimitChipText,
+  offsetTotalReading,
   rearmedChipMode,
   regionChipState,
   type OffsetChipMode
@@ -1178,8 +1179,14 @@ export interface ModelViewerProps {
   offsetDragTarget: Pick<OffsetHandleTarget, 'bodyId' | 'topologyId'> | null;
   /** Streamed signed offset; App coalesces exact rebuilds. */
   onOffsetPreview(offset: number, exactGeometry?: boolean): void;
-  /** Fired when an offset-handle drag releases with a non-zero offset. */
-  onOffsetCommit(offset: number): OffsetCommitOutcome;
+  /**
+   * Fired when an offset-handle drag releases with a non-zero offset.
+   * `reading.total`: the Total the chip showed at release, when it read one.
+   */
+  onOffsetCommit(
+    offset: number,
+    reading?: { total: number }
+  ): OffsetCommitOutcome;
   /**
    * Clears exact preview geometry and restores the original reference.
    * `atOriginal`: the hand let go back on the face's original position,
@@ -11770,7 +11777,23 @@ export function ModelViewer({
           queueOffsetBodyProxy(finalOffset);
           // A refusal may retain the last accepted exact shape. The
           // re-armed handle follows that projection, never the refused input.
-          const outcome = onOffsetCommitRef.current(finalOffset);
+          // The Total the chip read at release, so the commit can name it
+          // beside the change the history records.
+          const total =
+            rig === offsetRigRef.current
+              ? offsetTotalReading({
+                  rawValue: finalOffset,
+                  mode: offsetChipModeRef.current,
+                  span:
+                    offsetHandleRef.current?.totalBaseline ??
+                    offsetExtentRef.current,
+                  sense: offsetHandleRef.current?.totalSense ?? 1
+                })
+              : null;
+          const outcome = onOffsetCommitRef.current(
+            finalOffset,
+            total === null ? undefined : { total }
+          );
           if (outcome === 'blocked') {
             endOffsetDragWithoutCommit(completed.initialOffset, {
               resetRig: true,

@@ -256,6 +256,54 @@ test('shift-click selects a run of history rows that delete and undo together', 
 });
 
 /**
+ * The workspace and the project library share one toast slot. Going back to
+ * the projects used to leave a workspace notice standing on the shelf, over
+ * the cards, its lifetime restarted by the remount — and an Undo there had
+ * no document left to undo in. Leaving the model now takes its notice too.
+ */
+test('going back to the projects leaves the workspace notice behind', async ({
+  page
+}) => {
+  test.setTimeout(120_000);
+  await stubApi(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/');
+  await page
+    .getByRole('button', { name: /^Open demo: Mounting Bracket/ })
+    .click();
+  const status = page.getByRole('contentinfo');
+  await expect(page.locator('.viewer-host canvas')).toBeVisible({
+    timeout: 120_000
+  });
+  await expect(status).not.toContainText(
+    /Preparing model|Starting geometry worker|Loading exact Remus kernel|Rebuilding exact geometry|Waiting for exact geometry|Rebuilding geometry|Exact geometry is still rebuilding/i,
+    { timeout: 60_000 }
+  );
+  const summary = page.getByRole('group', { name: 'Workspace status' });
+  await expect(
+    summary.getByLabel(/ · 17 features · 1 body\. Sync /)
+  ).toBeVisible();
+
+  await page.locator('.history-timeline .feature-row-main').last().click();
+  await page.keyboard.press('Delete');
+  const confirm = page.getByRole('alertdialog', { name: /^Delete “/ });
+  if (await confirm.isVisible().catch(() => false)) {
+    await confirm.getByRole('button', { name: 'Delete' }).click();
+  }
+  const toast = page.locator('.toast');
+  await expect(toast).toHaveText(/Deleted /);
+  // Held under the pointer, as a user reading it would: the toast's own
+  // lifetime must not be what clears it below.
+  await toast.hover();
+
+  await page.getByTitle('Back to projects', { exact: true }).click();
+  await expect(
+    page.getByRole('button', { name: /^Open demo: Mounting Bracket/ })
+  ).toBeVisible({ timeout: 60_000 });
+  await expect(toast).toHaveCount(0);
+});
+
+/**
  * The history list is a CSS grid, and its one implicit `auto` track sized
  * itself to the longest nowrap feature name. A long name (an imported part's
  * "Hammer Holder 46mm v4.step opening: negativeEnd mask placement") widened
