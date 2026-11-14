@@ -611,6 +611,23 @@ export type DirectEditOperation =
       sourceAxisEnd?: Vector3;
     }
   | {
+      /**
+       * Delete several faces of one body together and heal the gap the way
+       * Remus's `defeature` does: the faces around them extend until they
+       * close again. Selecting every wall of an opening closes the opening.
+       * The face fields name the first face, as every direct edit names one;
+       * `additionalFaces` are the rest, each pinned the same way.
+       */
+      kind: 'remove-faces';
+      faceHash: number;
+      faceReference?: FaceTopologyReferenceV5;
+      sourceSurfaceType: string;
+      sourceArea: number;
+      sourceCenter: Vector3;
+      /** The other faces removed with the first; at least one. */
+      additionalFaces: RemovedFaceSnapshot[];
+    }
+  | {
       kind: 'offset-face';
       faceHash: number;
       faceReference?: FaceTopologyReferenceV5;
@@ -682,6 +699,15 @@ export type DirectEditOperation =
       /** Every band to remove, the seed's carrier included. */
       blends: RecordedBlendCarrier[];
     };
+
+/** One face a `remove-faces` edit deletes, pinned as it was when picked. */
+export interface RemovedFaceSnapshot {
+  faceHash: number;
+  faceReference?: FaceTopologyReferenceV5;
+  sourceSurfaceType: string;
+  sourceArea: number;
+  sourceCenter: Vector3;
+}
 
 /** Exact analytic carrier of one blend band, as `resize-blend` records it. */
 export interface RecordedBlendCarrier {
