@@ -251,17 +251,29 @@ export async function verifyListedConsent(
   );
 }
 
+export const ASSISTANT_CONSENT_STOPPED_MESSAGE =
+  'The assistant was stopped for this project while it was being allowed, so it stays stopped and nothing was sent.';
+
 /**
  * Writes the next record, one past everything this device knows of: its
  * pin and the account's last sequence (`floor`). `allowed = false` is a
  * revocation. The answer must be the record just written.
+ *
+ * `current`: for an Allow, whether no Stop came since the Allow was asked
+ * for (`assistantStopGeneration`, read before its first await). Asked again
+ * immediately before the save and before its answer is accepted: a Stop
+ * that came first refuses the Allow, and an Allow the account stored after
+ * it is revoked here, so this device never uses it.
  */
 export async function saveAssistantConsent(
   ctx: AssistantConsentContext,
   projectId: string,
   choice: { allowed: boolean; route: string },
-  floor: number
+  floor: number,
+  current: () => boolean = () => true
 ): Promise<AssistantConsentState> {
+  const stopped = () =>
+    new E2eeApiError(409, ASSISTANT_CONSENT_STOPPED_MESSAGE);
   const [pinned, revoked] = await Promise.all([
     ctx.pins.read(ctx.userId, projectId),
     ctx.pins.revoked(ctx.userId, projectId)
@@ -279,10 +291,16 @@ export async function saveAssistantConsent(
     sequence
   });
   const mac = await macAssistantConsent(ctx.accountKey, record);
+  if (choice.allowed && !current()) throw stopped();
   const { consent } = await ctx.api.save(projectId, {
     record: toBase64Url(record),
     recordMac: toBase64Url(mac)
   });
+  if (choice.allowed && !current()) {
+    // Stored after a Stop this device saw: never used here.
+    await ctx.pins.revoke(ctx.userId, projectId, sequence);
+    throw stopped();
+  }
   if (!consent || consent.record !== toBase64Url(record)) {
     throw new E2eeApiError(
       502,

@@ -1,16 +1,26 @@
-import { useRef, useState, useSyncExternalStore } from 'react';
+import { useRef, useState } from 'react';
 import { LockOpen, TriangleAlert } from 'lucide-react';
 import {
-  encryptedPinsRevision,
+  E2EE_CUTOVER_UNRESOLVED_CODE,
+  E2EE_PIN_STORAGE_UNAVAILABLE_CODE,
+  encryptedPinProblem,
   encryptedProjectPinsUnavailable,
   formatMismatchedProjects,
+  isEncryptedPinProblemError,
   resetEncryptedProjectPins,
-  subscribeEncryptedPins,
   treatProjectAsNotEncrypted,
+  type ApiError,
   type EncryptedPinProblem
 } from '../lib/api';
 import { useModalFocus } from '../lib/useModalFocus';
 import { Group, Notice, SettingRow } from './settingsControls';
+import {
+  pinProblemText,
+  useEncryptedPins,
+  type PinResetTarget
+} from './encryptedPinsState';
+
+export { pinProblemText, useEncryptedPins, type PinResetTarget };
 
 /**
  * "Treat as not encrypted on this device" (PR #1418's confirmed reset):
@@ -19,26 +29,60 @@ import { Group, Notice, SettingRow } from './settingsControls';
  * account's word (`api.ts`, `encryptedProjectPins.ts`).
  */
 
-/** Re-renders when this device's encrypted-project pins change. */
-export function useEncryptedPins(): number {
-  return useSyncExternalStore(
-    subscribeEncryptedPins,
-    encryptedPinsRevision,
-    encryptedPinsRevision
-  );
+const OWNER = { confirmedByOwner: true } as const;
+
+/**
+ * What the page offers with an error that names a stuck encrypted project,
+ * or this device's unsaved pins: the toast's action opens
+ * {@link PinResetDialog}. Null for any other error. The project's reason is
+ * read when the action runs.
+ */
+export function pinResetOffer(
+  error: unknown,
+  projectId: string | null,
+  name: string | null
+): { message: string; label: string; target: () => PinResetTarget } | null {
+  if (!isEncryptedPinProblemError(error)) return null;
+  const { message, code } = error as ApiError;
+  if (code === E2EE_PIN_STORAGE_UNAVAILABLE_CODE) {
+    return {
+      message,
+      label: 'Stop treating every project as encrypted…',
+      target: () => ({ kind: 'device' })
+    };
+  }
+  if (!projectId) return null;
+  return {
+    message,
+    label: 'Treat as not encrypted…',
+    target: () => ({
+      kind: 'project',
+      projectId,
+      name,
+      reason:
+        encryptedPinProblem(projectId) ??
+        (code === E2EE_CUTOVER_UNRESOLVED_CODE ? 'unresolved' : 'mismatch')
+    })
+  };
 }
 
-export type PinResetTarget =
-  | {
-      readonly kind: 'project';
-      readonly projectId: string;
-      readonly name: string | null;
-      readonly reason: EncryptedPinProblem;
-    }
-  /** The whole store, after a pin could not be saved. */
-  | { readonly kind: 'device' };
-
-const OWNER = { confirmedByOwner: true } as const;
+/** The editor's notices of this device's encrypted-project pins. */
+export function pinNotice(
+  kind: EncryptedPinProblem | 'reset-elsewhere' | 'finished' | 'followed'
+): string {
+  switch (kind) {
+    case 'reset-elsewhere':
+      return 'Encryption settings changed in another OpenZCAD tab. Reload this tab to keep working: until then it sends no changes to the affected projects. Your work on this device is kept.';
+    case 'unresolved':
+      return 'Editing is locked: the switch to end-to-end encryption didn’t finish on this device. Retry it in Settings › Encryption, or treat the project as not encrypted here.';
+    case 'mismatch':
+      return 'This device keeps this project end-to-end encrypted, but your account lists it as not encrypted, so changes stay on this device.';
+    case 'finished':
+      return 'The switch to end-to-end encryption finished on this device.';
+    case 'followed':
+      return 'This project now follows your account on this device.';
+  }
+}
 
 function copyOf(target: PinResetTarget) {
   if (target.kind === 'device') {
@@ -63,13 +107,6 @@ function copyOf(target: PinResetTarget) {
     action: 'Treat as not encrypted',
     keep: 'Keep it encrypted'
   };
-}
-
-/** Plain words for what a stuck project's problem is. */
-export function pinProblemText(reason: EncryptedPinProblem): string {
-  return reason === 'unresolved'
-    ? 'The switch to end-to-end encryption didn’t finish on this device.'
-    : 'Your account lists it as not encrypted, but this device keeps it encrypted.';
 }
 
 /**

@@ -388,10 +388,6 @@ import {
 } from './lib/staleChunk';
 import { lockAccountsExcept } from './lib/e2ee/unlockedKeys';
 import {
-  automaticProjectMigration,
-  AUTOMATIC_MIGRATION_LOAD_ERROR
-} from './lib/e2ee/automaticMigration';
-import {
   allowKeySession,
   announceKeySessionChange,
   blockKeySession,
@@ -436,8 +432,6 @@ import type { SketchSolveStatus } from './components/SketchToolRail';
 import type { SharedLinkCopyDestination } from './components/SharedLinkCopyDialog';
 import {
   ApiError,
-  E2EE_CUTOVER_UNRESOLVED_CODE,
-  E2EE_PIN_STORAGE_UNAVAILABLE_CODE,
   api,
   carryEncryptionRequirement,
   encryptedPinProblem,
@@ -450,11 +444,11 @@ import {
   isProjectFormatUnsupportedError
 } from './lib/api';
 import {
-  PinResetDialog,
   useEncryptedPins,
   type PinResetTarget
-} from './components/EncryptedPinReset';
+} from './components/encryptedPinsState';
 import type { ProjectListingProgress } from './lib/api';
+import { saveShareLinkCopy } from './lib/shareLinkCopy';
 import { createCloudConfigurationReads } from './lib/cloudConfigurationReads';
 import { assistantDisabledReason } from './lib/assistant/encryptedProject';
 import {
@@ -1310,6 +1304,15 @@ const LazySelectionReadout = lazyWithStaleChunkNotice(() =>
 const LazyEditRefusal = lazyWithStaleChunkNotice(() =>
   import('./components/EditRefusal').then((module) => ({
     default: module.EditRefusal
+  }))
+);
+const loadPinRecovery = () => import('./components/EncryptedPinReset');
+const ignoreFailure = () => undefined;
+// "Treat as not encrypted on this device" is offered only where a stuck
+// encrypted project is met (PR #1418); nobody else loads it.
+const LazyPinResetDialog = lazyWithStaleChunkNotice(() =>
+  import('./components/EncryptedPinReset').then((module) => ({
+    default: module.PinResetDialog
   }))
 );
 // The first-model tour shows once per device; nobody else pays for it.
@@ -3332,57 +3335,43 @@ export function App() {
   /**
    * Offers the confirmed reset with an error that names a stuck encrypted
    * project, or this device's unsaved pins: the toast's action opens the
-   * dialog, which alone resets anything.
+   * dialog, which alone resets anything. Its words load with the dialog.
    */
   const offerPinReset = useCallback(
     (error: unknown, projectId: string | null, name: string | null) => {
-      if (!isEncryptedPinProblemError(error)) return false;
-      const message = (error as ApiError).message;
-      if ((error as ApiError).code === E2EE_PIN_STORAGE_UNAVAILABLE_CODE) {
-        announce(message, {
-          label: 'Stop treating every project as encrypted…',
-          run: () => setPinReset({ kind: 'device' })
-        });
-        return true;
-      }
-      if (!projectId) return false;
-      announce(message, {
-        label: 'Treat as not encrypted…',
-        run: () =>
-          setPinReset({
-            kind: 'project',
-            projectId,
-            name,
-            reason:
-              encryptedPinProblem(projectId) ??
-              ((error as ApiError).code === E2EE_CUTOVER_UNRESOLVED_CODE
-                ? 'unresolved'
-                : 'mismatch')
-          })
-      });
-      return true;
+      if (!isEncryptedPinProblemError(error)) return;
+      void loadPinRecovery().then(({ pinResetOffer }) => {
+        const offer = pinResetOffer(error, projectId, name);
+        if (offer)
+          announce(offer.message, {
+            label: offer.label,
+            run: () => setPinReset(offer.target())
+          });
+      }, ignoreFailure);
     },
     [announce]
   );
   const offerPinResetRef = useRef(offerPinReset);
   offerPinResetRef.current = offerPinReset;
   const pinResetDialog = pinReset ? (
-    <PinResetDialog
-      target={pinReset}
-      onClose={() => setPinReset(null)}
-      onReset={(result) => {
-        setPinReset(null);
-        setStatus(result.message);
-        announce(result.message);
-        // Saves held back while it was stuck go out as the account
-        // lists the project now.
-        if (result.ok) {
-          void cloudProjectAutosaveRef.current
-            ?.flushPending()
-            .catch(() => undefined);
-        }
-      }}
-    />
+    <Suspense fallback={null}>
+      <LazyPinResetDialog
+        target={pinReset}
+        onClose={() => setPinReset(null)}
+        onReset={(result) => {
+          setPinReset(null);
+          setStatus(result.message);
+          announce(result.message);
+          // Saves held back while it was stuck go out as the account
+          // lists the project now.
+          if (result.ok) {
+            void cloudProjectAutosaveRef.current
+              ?.flushPending()
+              .catch(() => undefined);
+          }
+        }}
+      />
+    </Suspense>
   ) : null;
   // A deploy while this tab is open renames every chunk. The version watch
   // usually notices first; if a panel's chunk goes missing before it does,
@@ -3922,21 +3911,30 @@ export function App() {
     setAutomaticMigrationLoadError(null);
     if (!sessionUserId || !cloudFunctionsEnabled) return;
     let stopped = false;
-    // The small availability controller loads no crypto or migration engine
-    // until the server confirms all four rollout gates.
-    const migration = automaticProjectMigration(sessionUserId, (message) => {
-      if (stopped || sessionRef.current?.userId !== sessionUserId) return;
-      setAutomaticMigrationLoadError(
-        message === AUTOMATIC_MIGRATION_LOAD_ERROR ? message : null
-      );
-      setSettingsMessage(message);
-      updateSettingsViewState({ open: true, activeSection: 'encryption' });
-      setSettingsOpen(true);
-    });
-    void migration.check();
+    let migration: { dispose(): void } | null = null;
+    // The small availability controller loads off the entry chunk, and
+    // loads no crypto or migration engine until the server confirms all
+    // four rollout gates. Not loaded, it waits for the next session.
+    void import('./lib/e2ee/automaticMigration').then(
+      ({ automaticProjectMigration, AUTOMATIC_MIGRATION_LOAD_ERROR }) => {
+        if (stopped) return;
+        const started = automaticProjectMigration(sessionUserId, (message) => {
+          if (stopped || sessionRef.current?.userId !== sessionUserId) return;
+          setAutomaticMigrationLoadError(
+            message === AUTOMATIC_MIGRATION_LOAD_ERROR ? message : null
+          );
+          setSettingsMessage(message);
+          updateSettingsViewState({ open: true, activeSection: 'encryption' });
+          setSettingsOpen(true);
+        });
+        migration = started;
+        void started.check();
+      },
+      ignoreFailure
+    );
     return () => {
       stopped = true;
-      migration.dispose();
+      migration?.dispose();
     };
   }, [sessionUserId, cloudFunctionsEnabled]);
   useEffect(() => {
@@ -6060,47 +6058,56 @@ export function App() {
       : openPinProblem === 'unresolved'
         ? 'The switch to end-to-end encryption didn’t finish on this device'
         : null;
+  // The notices load with the reset dialog; editing is locked (above) and
+  // every send refused (`projectWriteGate.ts`) without waiting for them.
   useEffect(() => {
     if (!pinsResetElsewhere) return;
-    const notice =
-      'Encryption settings changed in another OpenZCAD tab. Reload this tab to keep working: until then it sends no changes to the affected projects. Your work on this device is kept.';
-    setStatus(notice, { sticky: true });
-    announce(notice, {
-      label: 'Reload this tab',
-      run: () => window.location.reload()
-    });
+    let live = true;
+    void loadPinRecovery().then(({ pinNotice }) => {
+      if (!live) return;
+      const notice = pinNotice('reset-elsewhere');
+      setStatus(notice, { sticky: true });
+      announce(notice, {
+        label: 'Reload this tab',
+        run: () => window.location.reload()
+      });
+    }, ignoreFailure);
+    return () => {
+      live = false;
+    };
   }, [announce, pinsResetElsewhere, setStatus]);
   // Said once, where the eye goes, with the reset one click away; said
   // again when the project follows the account on this device.
   const pinNoticeShownRef = useRef(false);
   useEffect(() => {
-    if (!openProjectId || !openPinProblem) {
-      if (pinNoticeShownRef.current) {
-        pinNoticeShownRef.current = false;
+    const problem = openProjectId ? openPinProblem : null;
+    if (!problem && !pinNoticeShownRef.current) return;
+    let live = true;
+    void loadPinRecovery().then(({ pinNotice }) => {
+      if (!live) return;
+      pinNoticeShownRef.current = problem !== null;
+      if (!problem || !openProjectId) {
         setStatus(
-          isEncryptedProject(openProjectId)
-            ? 'The switch to end-to-end encryption finished on this device.'
-            : 'This project now follows your account on this device.'
+          pinNotice(isEncryptedProject(openProjectId) ? 'finished' : 'followed')
         );
+        return;
       }
-      return;
-    }
-    pinNoticeShownRef.current = true;
-    const notice =
-      openPinProblem === 'unresolved'
-        ? 'Editing is locked: the switch to end-to-end encryption didn’t finish on this device. Retry it in Settings › Encryption, or treat the project as not encrypted here.'
-        : 'This device keeps this project end-to-end encrypted, but your account lists it as not encrypted, so changes stay on this device.';
-    setStatus(notice, { sticky: true });
-    announce(notice, {
-      label: 'Treat as not encrypted…',
-      run: () =>
-        setPinReset({
-          kind: 'project',
-          projectId: openProjectId,
-          name: managerRef.current?.document.name ?? null,
-          reason: openPinProblem
-        })
-    });
+      const notice = pinNotice(problem);
+      setStatus(notice, { sticky: true });
+      announce(notice, {
+        label: 'Treat as not encrypted…',
+        run: () =>
+          setPinReset({
+            kind: 'project',
+            projectId: openProjectId,
+            name: managerRef.current?.document.name ?? null,
+            reason: problem
+          })
+      });
+    }, ignoreFailure);
+    return () => {
+      live = false;
+    };
   }, [announce, openPinProblem, openProjectId, setStatus]);
   // Said once, where the eye goes, and kept for as long as it lasts, as the
   // second tab's notice is.
@@ -14567,7 +14574,7 @@ export function App() {
     const finishBusy = startNavigationBusy();
     let copied: ProjectSummary | null = null;
     try {
-      const copy = duplicateProjectDocument(
+      const copy = await saveShareLinkCopy(
         source,
         duplicateProjectName(
           source.name,
@@ -14575,7 +14582,6 @@ export function App() {
         ),
         session?.userId ?? localUserId
       );
-      await saveLocalProject(copy);
       if (!isCurrent()) return;
       setShareSession(null);
       shareSessionRef.current = null;

@@ -99,7 +99,7 @@ import {
 import { syncRunTotals, type SyncEntry } from '../lib/syncRun';
 import { useMigrationLockedProjects } from '../lib/migrationStatus';
 import { encryptedPinProblem, encryptionHeldHere } from '../lib/api';
-import { pinProblemText, useEncryptedPins } from './EncryptedPinReset';
+import { pinProblemText, useEncryptedPins } from './encryptedPinsState';
 import type { DemoDefinition } from '../lib/demoDefinitions';
 import { BrandMark } from './BrandMark';
 import { DemoModelIcon } from './DemoModelIcon';

@@ -33,6 +33,7 @@ import { uploadTransport } from './e2ee/encryptedContentBlobs';
 import { localStorageEncryptedProjectPins } from './e2ee/encryptedProjectPins';
 import {
   assistantConsentPinKey,
+  assistantStopGeneration,
   assistantConsentRevokedKey,
   type VerifiedAssistantConsent
 } from './e2ee/assistantConsentPins';
@@ -652,7 +653,12 @@ describe('an assistant request', () => {
       assistantConsentPinKey('user_ctx', projectId),
       String(sequence)
     );
-    return { userId: 'user_ctx', projectId, sequence };
+    return {
+      userId: 'user_ctx',
+      projectId,
+      sequence,
+      stops: assistantStopGeneration('user_ctx', projectId)
+    };
   }
 
   it('carries only that project’s verified consent', async () => {
@@ -774,7 +780,12 @@ describe('an assistant request', () => {
       streamAssistantReply({
         prompt: 'Hi',
         digest: assistantDigest(projectId),
-        consent: { userId: 'user_ctx', projectId, sequence: 1 }
+        consent: {
+          userId: 'user_ctx',
+          projectId,
+          sequence: 1,
+          stops: assistantStopGeneration('user_ctx', projectId)
+        }
       })
     ).rejects.toBeDefined();
     expect(nativeSends()).toEqual([]);
