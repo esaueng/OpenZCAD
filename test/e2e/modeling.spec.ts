@@ -820,8 +820,25 @@ test('keeps a source circle stable over its coincident extrude edge', async ({
         edge.renderOrder === idleBodyEdges[0]!.renderOrder
     )
   ).toBe(true);
+  // Curved-surface outlines (#1290) are idle ink drawn with the crisp edges:
+  // the same layer and depth contract, not a hover or selection overlay.
+  const silhouetteEdges = renderPolicy.bodyEdges.filter(
+    (edge) => edge.name === 'body-edge-silhouette'
+  );
+  expect(silhouetteEdges.length).toBeGreaterThan(0);
+  expect(
+    silhouetteEdges.every(
+      (edge) =>
+        edge.depthTest &&
+        !edge.depthWrite &&
+        edge.renderOrder === idleBodyEdges[0]!.renderOrder
+    )
+  ).toBe(true);
   const overlayEdges = renderPolicy.bodyEdges.filter(
-    (edge) => edge.name !== 'body-edge' && edge.name !== 'body-edge-tangent'
+    (edge) =>
+      edge.name !== 'body-edge' &&
+      edge.name !== 'body-edge-tangent' &&
+      edge.name !== 'body-edge-silhouette'
   );
   expect(
     overlayEdges.every(
@@ -4728,6 +4745,8 @@ test('sketches on the wall of a drag-style extrusion and on a hash-only face', a
   await expect(
     page.getByRole('toolbar', { name: 'Sketch tools' })
   ).toBeVisible();
+  // Line, then the exit's confirmation (I43), then out.
+  await page.keyboard.press('Escape');
   await page.keyboard.press('Escape');
   await page.keyboard.press('Escape');
   await expect(page.getByRole('contentinfo')).toContainText('Sketch closed');

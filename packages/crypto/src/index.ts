@@ -376,6 +376,7 @@ export {
   openShareKey,
   sameShareLinkSet,
   shareKeyHash,
+  shareSnapshotPredatesAuthority,
   signShareAuthority,
   signShareDelegation,
   signShareKeyWrap,

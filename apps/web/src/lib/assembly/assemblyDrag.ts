@@ -10,8 +10,10 @@ import {
   clampToLimit,
   type AssemblyDragSpec,
   type AssemblyJoint,
+  type UnitSystem,
   type Vector3
 } from '@openzcad/shared';
+import { formatAssemblyValue } from './assemblyUi';
 
 /**
  * Dragging a component through its joint (AS02). Pure pointer-ray math over
@@ -199,10 +201,9 @@ export function assemblyDragReading(
 export function formatAssemblyDragValue(
   value: number,
   unit: 'deg' | 'mm',
-  atLimit: 'min' | 'max' | null
+  atLimit: 'min' | 'max' | null,
+  lengthUnit: UnitSystem = 'mm'
 ): string {
-  const shown = Math.abs(value) < 0.05 ? 0 : value;
-  const text =
-    unit === 'deg' ? `${shown.toFixed(1)}°` : `${shown.toFixed(1)} mm`;
+  const text = formatAssemblyValue(value, unit, lengthUnit);
   return atLimit ? `${text} · ${atLimit}` : text;
 }

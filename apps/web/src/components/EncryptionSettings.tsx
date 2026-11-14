@@ -146,6 +146,8 @@ function AccountEncryptionSettings({ userId }: { userId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [flow, setFlow] = useState<Flow>(null);
+  // Setup just finished here: end it with "Encrypt new projects?" (I75).
+  const [justSetUp, setJustSetUp] = useState(false);
 
   const run = useCallback(
     async (work: () => Promise<EncryptionState | void>) => {
@@ -242,12 +244,14 @@ function AccountEncryptionSettings({ userId }: { userId: string }) {
               {...shared}
               title="Set up encryption"
               finishLabel="Finish setup"
-              onFinish={(secret) =>
-                setUpEncryption(ctx, {
+              onFinish={async (secret) => {
+                const next = await setUpEncryption(ctx, {
                   recoverySecret: secret,
                   label: defaultDeviceLabel(navigator.userAgent)
-                })
-              }
+                });
+                setJustSetUp(true);
+                return next;
+              }}
             />
           ) : (
             <Group>
@@ -287,6 +291,8 @@ function AccountEncryptionSettings({ userId }: { userId: string }) {
               <ProjectEncryptionPreference
                 userId={userId}
                 unlocked={unlocked}
+                afterSetup={justSetUp}
+                onAfterSetupDone={() => setJustSetUp(false)}
               />
               <ExistingProjectEncryption userId={userId} unlocked={unlocked} />
             </>
