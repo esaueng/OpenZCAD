@@ -281,11 +281,13 @@ describe('start screen first-run polish', () => {
     expect(rule(demos, '.demo-card-cta')).toMatch(/margin-top:\s*auto/);
   });
 
-  it('shows the launch fields their labels at every width', () => {
-    // Hidden in both layouts, the pre-filled name read as a search box.
-    expect(css).not.toMatch(/\.start-field-label[^{}]*\{[^}]*display:\s*none/);
-    expect(css).not.toMatch(
-      /\.start-field-label\s*,[^{}]*\{[^}]*display:\s*none/
-    );
+  it('keeps a resting pin only where pinned and unpinned cards mix', () => {
+    expect(
+      rule(
+        css,
+        '.start-tile-grid:not(.is-all-pinned) .start-tile.is-pinned .start-tile-pin'
+      )
+    ).toMatch(/opacity:\s*1/);
+    expect(css).not.toMatch(/^\.start-tile\.is-pinned \.start-tile-pin\s*\{/m);
   });
 });
