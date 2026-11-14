@@ -1532,9 +1532,21 @@ describe(
       expect(statedAuthors(srv, projectId, created.shareId)).toEqual(
         keyHashesOf(owner).sort()
       );
-      // The removed editor's snapshot is no longer one visitors accept...
-      await refusedFor(visit(srv, created.url), 'author-not-named');
-      // ...until the owner's next save republishes it.
+      // The removed editor's snapshot is replaced at once: a new statement
+      // takes a snapshot signed after it, here by the owner.
+      expect(
+        rows<{ signer_device_id: string }>(
+          srv,
+          `SELECT signer_device_id FROM e2ee_share_snapshots
+           WHERE project_id = ? AND share_id = ?`,
+          projectId,
+          created.shareId
+        )
+      ).toEqual([{ signer_device_id: 'owner_laptop' }]);
+      expect((await visit(srv, created.url)).document.name).toBe(
+        'Before removal'
+      );
+      // The owner's next save republishes it as usual.
       const read = await laptop.store.loadProject(projectId);
       await laptop.store.saveProjectDocument({
         projectId,

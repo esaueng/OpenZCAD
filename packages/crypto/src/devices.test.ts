@@ -105,7 +105,9 @@ describe('device-list input boundary', () => {
   ])('refuses an ill-typed signed entry as E2eeError: %j', async (entry) => {
     const identity = await generateSigningKeyPair();
     await rejectsWith(
-      verifyDeviceList(identity.publicKey, [entry] as unknown as SignedDeviceListEntry[]),
+      verifyDeviceList(identity.publicKey, [
+        entry
+      ] as unknown as SignedDeviceListEntry[]),
       'invalid-argument'
     );
   });

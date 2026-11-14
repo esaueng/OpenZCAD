@@ -802,20 +802,14 @@ export async function issueShareAuthorities(
     })
     .map((link) => link.shareId);
   if (stale.length) {
-    const shown = await publishShareSnapshots(ctx, projectId, head, {
-      only: stale
-    }).catch(
-      (error: unknown): PublishOutcome => ({
-        published: [],
-        failed: stale.map((shareId) => ({ shareId, reason: describe(error) }))
-      })
-    );
-    for (const failure of shown.failed) {
-      failed.push({
-        shareId: failure.shareId,
-        reason: `The snapshot for the new statement was not published: ${failure.reason}`
-      });
-    }
+    // Best effort: a snapshot left older than its statement is republished
+    // by the next `publishShareSnapshots` (it predates the statement), and
+    // until then visitors see no snapshot rather than an unvouched one.
+    await publishShareSnapshots(ctx, projectId, head, {
+      only: stale,
+      republish: stale,
+      listed
+    }).catch(() => undefined);
   }
   return outcome();
 }
@@ -858,7 +852,13 @@ export async function publishShareSnapshots(
   ctx: ShareLinksContext,
   projectId: string,
   head?: EncryptedShareHead,
-  options: { readonly only?: readonly string[] } = {}
+  options: {
+    readonly only?: readonly string[];
+    /** Links whose snapshot is republished even when it is current. */
+    readonly republish?: readonly string[];
+    /** The server's links as just listed, instead of listing them again. */
+    readonly listed?: E2eeShareLinksResponse;
+  } = {}
 ): Promise<PublishOutcome> {
   const published: string[] = [];
   const failed: { shareId: string; reason: string }[] = [];
@@ -875,7 +875,7 @@ export async function publishShareSnapshots(
     (entry) => entry.userId === ctx.groups.account.userId
   )?.role;
   if (role !== 'owner' && role !== 'editor') return outcome();
-  const listed = await ctx.api.list(projectId);
+  const listed = options.listed ?? (await ctx.api.list(projectId));
   const projectKey = await projectKeyForEpoch(ctx.groups, projectId, keyEpoch);
   const authenticator = await epochAuthenticatorForEpoch(
     ctx.groups,
@@ -895,6 +895,7 @@ export async function publishShareSnapshots(
       (stored.documentVersion > current.version ||
         (stored.documentVersion === current.version &&
           stored.keyEpoch === keyEpoch &&
+          !options.republish?.includes(link.shareId) &&
           !snapshotPredatesAuthority(record)))
     ) {
       continue;
