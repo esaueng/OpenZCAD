@@ -1687,7 +1687,8 @@ export function StartScreen({
         >
           <span className="start-tile-thumb start-folder-thumb">
             {/* A row's 52px thumb says "folder" rather than shrinking the
-                cover under its count, which the Saves column now holds. */}
+                cover. A card's cover carries no count: the line under its
+                name says how many projects it holds. */}
             {layout === 'list' ? (
               <Folder className="start-folder-empty-icon" aria-hidden="true" />
             ) : cover ? (
@@ -1702,12 +1703,6 @@ export function StartScreen({
                 className="start-folder-empty-icon"
                 aria-hidden="true"
               />
-            )}
-            {layout !== 'list' && (
-              <span className="start-folder-count" aria-hidden="true">
-                <Folder size={11} aria-hidden="true" />
-                {members.length}
-              </span>
             )}
           </span>
           <span className="start-tile-body">

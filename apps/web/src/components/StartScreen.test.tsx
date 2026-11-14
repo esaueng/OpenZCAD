@@ -1627,7 +1627,19 @@ describe('StartScreen folders and selection', () => {
     expect(folder.querySelector('.start-tile-rev')).toHaveTextContent(
       '2 projects'
     );
-    expect(folder.querySelector('.start-folder-count')).toBeNull();
+  });
+
+  it('counts a folder card’s projects once, under its name', () => {
+    // 14 Nov 2026: a "5" chip on the cover repeated "5 projects" below it.
+    seedFolder([parts[0]!.projectId, parts[1]!.projectId]);
+    renderStartScreen({ projects: parts });
+    const folder = screen
+      .getByRole('button', { name: 'Open folder Fixtures, 2 projects' })
+      .closest('.start-tile')!;
+    expect(folder.querySelector('.start-folder-thumb')).toHaveTextContent(/^$/);
+    expect(folder.querySelector('.start-tile-when')).toHaveTextContent(
+      /^2 projects · /
+    );
   });
 
   // I17: a card took four Tab stops and was announced "No geometryLidNov 13".
