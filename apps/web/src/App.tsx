@@ -81,6 +81,10 @@ import {
 } from './lib/topologyReferenceRepairs';
 import { fragileSelectionAdvisory } from './lib/fragileSelections';
 import {
+  closedOpeningsNotice,
+  openingsClosedByEdit
+} from './lib/closedOpenings';
+import {
   parameterMinimums,
   parameterInputError,
   parameterBuildError,
@@ -1819,7 +1823,7 @@ import {
   type ToastModel
 } from './lib/toasts';
 import { PreviewRefusalError, splitRefusal } from './lib/featureValidation';
-import { keptOffsetValue } from './lib/offsetChip';
+import { keptOffsetValue, offsetFaceCommitMessage } from './lib/offsetChip';
 import { useCollaboration } from './lib/useCollaboration';
 import type * as AiPatchPreflight from './lib/aiPatchPreflight';
 import type {
@@ -9740,6 +9744,11 @@ export function App() {
    * Says once, as the commit lands, that it stored a pick with no lineage
    * name: such a pick resolves only by its hash, which an upstream edit to
    * that entity orphans. Never blocks the commit (`lib/fragileSelections`).
+   *
+   * A face edit that filled in an opening an earlier cut made says so first:
+   * that cut's step stays in the history but no longer changes the shape
+   * (`lib/closedOpenings`). The toast holds one notice, so the pick advice
+   * then goes to the activity log alone.
    */
   function announceFragileSelections(
     before: ProjectDocument,
@@ -9747,6 +9756,7 @@ export function App() {
     derived: ProjectDocument['derived'] | undefined
   ): void {
     let advisory: string | null = null;
+    let closed: string | null = null;
     try {
       advisory = fragileSelectionAdvisory(before, after, {
         ...(derived ? { derived } : {}),
@@ -9757,7 +9767,43 @@ export function App() {
     } catch {
       // Advice only: the commit has already landed.
     }
+    try {
+      closed = derived ? closedOpeningsAdvisory(before, after, derived) : null;
+    } catch {
+      // Advice only, as above.
+    }
+    if (closed) {
+      announce(closed, undefined, { tone: 'warning' });
+      if (advisory)
+        recordActivity({ level: 'ready', source: 'notice', message: advisory });
+      return;
+    }
     if (advisory) announce(advisory);
+  }
+
+  /** The notice for openings the face edits this commit wrote filled in. */
+  function closedOpeningsAdvisory(
+    before: ProjectDocument,
+    after: ProjectDocument,
+    derived: ProjectDocument['derived']
+  ): string | null {
+    for (const feature of listFeaturesInOrder(after)) {
+      if (feature.data.featureKind !== 'direct-edit') continue;
+      const previous = ownEntry(before.nodes, feature.id);
+      // Only the steps this commit added or changed.
+      if (
+        previous &&
+        previous.kind === 'feature' &&
+        previous.data === feature.data
+      )
+        continue;
+      const notice = closedOpeningsNotice(
+        feature.name,
+        openingsClosedByEdit(before, after, derived, feature.data.targetBodyId)
+      );
+      if (notice) return notice;
+    }
+    return null;
   }
 
   function executeCommand(
@@ -14615,6 +14661,11 @@ export function App() {
     forgetCompleteCommit();
     clearAutoFrame();
     setDoc(null);
+    // A workspace notice speaks about the model just closed, and its action
+    // (an Undo above all) has no document left to act on. The library shares
+    // the toast slot, so one left standing was carried onto the shelf and,
+    // remounted there, started its lifetime over.
+    setToast(null);
     setArtifacts([]);
     setSelectedFeatureNode(null);
     setSelectedTopology(null);
@@ -27257,7 +27308,7 @@ export function App() {
       command: plan.command,
       bodyId,
       editedFeatureId: null,
-      successMessage: `Offset face by ${Math.round(offset * 100) / 100} ${base.units}.`,
+      successMessage: offsetFaceCommitMessage(offset, base.units),
       ...(plan.travelHint ? { travelHint: plan.travelHint } : {})
     };
   }
@@ -27332,7 +27383,11 @@ export function App() {
   function handleOffsetCommit(
     offset: number,
     exact?: ParamValue,
-    options?: { keepingLastValid?: boolean }
+    options?: {
+      keepingLastValid?: boolean;
+      /** The Total the chip read at release, when it read one. */
+      total?: number;
+    }
   ): OffsetCommitOutcome {
     stopOffsetRestCheck();
     // The arrow rig is shared: in region mode its drag is an extrude height.
@@ -27404,10 +27459,22 @@ export function App() {
       if (!retakenRelease.commit(retaken)) return 'blocked';
       return 'started';
     }
+    // A plain face offset released from a Total reading names that Total
+    // beside the change its history row records.
+    const successMessage =
+      plan.editedFeatureId === null && options?.total !== undefined
+        ? offsetFaceCommitMessage(
+            offset,
+            managerRef.current?.document.units ?? '',
+            options.total
+          )
+        : reuse
+          ? reuse.successMessage
+          : plan.successMessage;
     void executeValidatedDirectEdit(
       reuse ? reuse.command : plan.command,
       reuse ? reuse.bodyId : plan.bodyId,
-      reuse ? reuse.successMessage : plan.successMessage,
+      successMessage,
       offset,
       undefined,
       reuse ? reuse.validationTargets : plan.validationTargets
@@ -33246,7 +33313,7 @@ export function App() {
                 : null
             }
             onOffsetPreview={handleOffsetPreview}
-            onOffsetCommit={(value) => {
+            onOffsetCommit={(value, reading) => {
               if (interactionRef.current.mode === 'region') {
                 regionDistanceSetter.current?.(Math.round(value * 1000) / 1000);
                 dispatchInteraction({ type: 'drag-release' });
@@ -33255,7 +33322,11 @@ export function App() {
                 );
                 return 'started';
               }
-              return handleOffsetCommit(value);
+              return handleOffsetCommit(
+                value,
+                undefined,
+                reading ? { total: reading.total } : undefined
+              );
             }}
             onOffsetCancel={handleViewerOffsetCancel}
             offsetPreviewInvalid={holdsRefusal(interaction)}

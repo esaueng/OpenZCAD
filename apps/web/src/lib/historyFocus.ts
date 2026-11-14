@@ -214,6 +214,16 @@ export function faceLineageTrace(
   return lineageTracer(document)(reference);
 }
 
+/**
+ * `faceLineageTrace` for many faces of one document: the feature index is
+ * built once rather than once per face.
+ */
+export function faceLineageTracer(
+  document: ProjectDocument
+): (reference: FaceTopologyReferenceV5) => FaceLineageTrace | null {
+  return lineageTracer(document);
+}
+
 function lineageTracer(document: ProjectDocument) {
   const features = listFeaturesInOrder(document);
   const byId = new Map(
