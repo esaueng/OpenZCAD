@@ -31,8 +31,15 @@ import { uploadCloudThumbnail } from './cloudThumbnail';
 import { desktopFetch } from './desktopBridge';
 import { uploadTransport } from './e2ee/encryptedContentBlobs';
 import { localStorageEncryptedProjectPins } from './e2ee/encryptedProjectPins';
+import {
+  assistantConsentPinKey,
+  assistantConsentRevokedKey,
+  type VerifiedAssistantConsent
+} from './e2ee/assistantConsentPins';
+import { createEncryptedDocumentsApi } from './e2ee/encryptedDocumentsApi';
 import { projectMeasurementCloudApi } from './measurementCloudSync';
 import {
+  assistantProjectRequest,
   migrationRun,
   projectRequest,
   sendProjectFrame,
@@ -592,7 +599,7 @@ describe('an assistant request', () => {
       {};
     vi.mocked(invoke).mockImplementation(async (command: string) => {
       meanwhile(command);
-      if (command === 'desktop_prepare_access') return true;
+      if (command === 'desktop_prepare_access') return 'handle-assistant';
       return {
         status: 200,
         body: Array.from(new TextEncoder().encode('{}')),
@@ -636,6 +643,18 @@ describe('an assistant request', () => {
     expect(nativeSends()).toEqual([]);
   });
 
+  /** This device accepted `sequence` for the project (`verify` pins it). */
+  function verifiedConsent(
+    projectId: string,
+    sequence = 1
+  ): VerifiedAssistantConsent {
+    window.localStorage.setItem(
+      assistantConsentPinKey('user_ctx', projectId),
+      String(sequence)
+    );
+    return { userId: 'user_ctx', projectId, sequence };
+  }
+
   it('carries only that project’s verified consent', async () => {
     const projectId = 'proj_assistant_consented';
     otherTab().pin(projectId);
@@ -643,7 +662,7 @@ describe('an assistant request', () => {
     await streamAssistantReply({
       prompt: 'Hi',
       digest: assistantDigest(projectId),
-      consentedProjectId: projectId
+      consent: verifiedConsent(projectId)
     }).catch(() => undefined);
     // Sent (an empty reply is retried once).
     expect(nativeSends().length).toBeGreaterThan(0);
@@ -660,6 +679,106 @@ describe('an assistant request', () => {
     ).rejects.toMatchObject({ code: E2EE_PLAINTEXT_REFUSED_CODE });
     expect(nativeSends()).toEqual([]);
   });
+
+  // Review round 10, finding 2: tab A read Allow (sequence 1); tab B then
+  // durably stored Stop (sequence 2); the account released the old Allow to
+  // A late, and A's read still answered "verified, allowed".
+  it('refuses a verified consent another tab revoked before the send', async () => {
+    const projectId = 'proj_assistant_revoked';
+    otherTab().pin(projectId);
+    const consent = verifiedConsent(projectId, 1);
+    desktop((command) => {
+      if (command === 'desktop_prepare_access') {
+        // Tab B's Stop, saved and verified: its pin moves past A's record.
+        window.localStorage.setItem(
+          assistantConsentPinKey('user_ctx', projectId),
+          '2'
+        );
+        window.localStorage.setItem(
+          assistantConsentRevokedKey('user_ctx', projectId),
+          '2'
+        );
+      }
+    });
+    await expect(
+      streamAssistantReply({
+        prompt: 'Hi',
+        digest: assistantDigest(projectId),
+        consent
+      })
+    ).rejects.toBeDefined();
+    expect(nativeSends()).toEqual([]);
+  });
+
+  it('refuses a consent a Stop recorded here outranks, even one whose save failed', async () => {
+    const projectId = 'proj_assistant_stop_unsaved';
+    otherTab().pin(projectId);
+    const consent = verifiedConsent(projectId, 3);
+    desktop((command) => {
+      if (command === 'desktop_prepare_access') {
+        // Recorded before the Stop's save, which never reached the account.
+        window.localStorage.setItem(
+          assistantConsentRevokedKey('user_ctx', projectId),
+          '3'
+        );
+      }
+    });
+    await expect(
+      streamAssistantReply({
+        prompt: 'Hi',
+        digest: assistantDigest(projectId),
+        consent
+      })
+    ).rejects.toBeDefined();
+    expect(nativeSends()).toEqual([]);
+  });
+
+  it('checks the consent again before a native retry', async () => {
+    const projectId = 'proj_assistant_retry_revoked';
+    otherTab().pin(projectId);
+    const consent = verifiedConsent(projectId, 1);
+    (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ =
+      {};
+    let readied = 0;
+    vi.mocked(invoke).mockImplementation(async (command: string) => {
+      if (command === 'desktop_prepare_access') {
+        readied += 1;
+        if (readied > 1) {
+          window.localStorage.setItem(
+            assistantConsentRevokedKey('user_ctx', projectId),
+            '1'
+          );
+        }
+        return `handle-${readied}`;
+      }
+      return { status: 401, body: [], contentType: 'application/json' };
+    });
+    await expect(
+      desktopFetch(
+        '/api/assistant/proposals',
+        assistantProjectRequest(projectId, consent, {
+          method: 'POST',
+          body: '{}'
+        })
+      )
+    ).rejects.toMatchObject({ code: E2EE_PLAINTEXT_REFUSED_CODE });
+    expect(nativeSends()).toHaveLength(1);
+  });
+
+  it('refuses a consent this device can no longer read', async () => {
+    const projectId = 'proj_assistant_pin_lost';
+    otherTab().pin(projectId);
+    desktop();
+    // Verified, but its pin is gone (storage cleared): unknown is not allowed.
+    await expect(
+      streamAssistantReply({
+        prompt: 'Hi',
+        digest: assistantDigest(projectId),
+        consent: { userId: 'user_ctx', projectId, sequence: 1 }
+      })
+    ).rejects.toBeDefined();
+    expect(nativeSends()).toEqual([]);
+  });
 });
 
 describe('the desktop app’s credential for a project request', () => {
@@ -668,7 +787,7 @@ describe('the desktop app’s credential for a project request', () => {
       .mocked(invoke)
       .mock.calls.map(([command, args]) =>
         command === 'desktop_api_request' &&
-        (args as { request: { prepared?: boolean } }).request.prepared
+        (args as { request: { prepared?: string } }).request.prepared
           ? `${command} prepared`
           : command
       );
@@ -684,7 +803,7 @@ describe('the desktop app’s credential for a project request', () => {
       if (command === 'desktop_prepare_access') {
         readied += 1;
         if (readied > 1) meanwhile();
-        return true;
+        return `handle-${readied}`;
       }
       return {
         status: statuses.shift() ?? 200,
@@ -734,6 +853,89 @@ describe('the desktop app’s credential for a project request', () => {
       'desktop_prepare_access',
       'desktop_api_request prepared'
     ]);
+  });
+
+  it('sends each readied credential with the one request it was readied for', async () => {
+    desktop([401, 200]);
+    expect((await save('proj_native_handles')).status).toBe(200);
+    const handles = vi
+      .mocked(invoke)
+      .mock.calls.filter(([command]) => command === 'desktop_api_request')
+      .map(
+        ([, args]) =>
+          (args as { request: { prepared?: string } }).request.prepared
+      );
+    expect(handles).toEqual(['handle-1', 'handle-2']);
+  });
+
+  it('sends a project request without a readied credential as unprepared nowhere', async () => {
+    // Signed out: no handle. The request still goes to Rust as a project
+    // request (answered there with a local 401), never refreshed and
+    // replayed.
+    (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ =
+      {};
+    vi.mocked(invoke).mockImplementation(async (command: string) =>
+      command === 'desktop_prepare_access'
+        ? null
+        : { status: 401, body: [], contentType: 'application/json' }
+    );
+    expect((await save('proj_native_signed_out')).status).toBe(401);
+    const sends = vi
+      .mocked(invoke)
+      .mock.calls.filter(([command]) => command === 'desktop_api_request')
+      .map(
+        ([, args]) =>
+          (args as { request: { prepared?: string } }).request.prepared
+      );
+    expect(sends).toEqual(['']);
+  });
+
+  // Review round 10, finding 6: an encrypted create named no project, so
+  // the desktop host refreshed and replayed it.
+  it('sends an encrypted create as its chosen project’s request', async () => {
+    desktop([200]);
+    const projectId = 'proj_native_encrypted_create';
+    await createEncryptedDocumentsApi(desktopFetch)
+      .create(
+        { projectId } as Parameters<
+          ReturnType<typeof createEncryptedDocumentsApi>['create']
+        >[0],
+        new Uint8Array([1, 2, 3])
+      )
+      .catch(() => undefined);
+    expect(nativeCommands()).toEqual([
+      'desktop_prepare_access',
+      'desktop_api_request prepared'
+    ]);
+  });
+
+  it('refuses an encrypted create that does not name its project', async () => {
+    desktop([200]);
+    await expect(
+      desktopFetch('/api/e2ee/projects', {
+        method: 'POST',
+        body: new Uint8Array([1])
+      })
+    ).rejects.toBeInstanceOf(UndeclaredProjectRequestError);
+    expect(nativeCommands()).toEqual([]);
+  });
+
+  it('refuses an encrypted create of a project whose switch is unresolved', async () => {
+    desktop([200]);
+    const projectId = 'proj_native_create_unresolved';
+    otherTab().pin(projectId);
+    otherTab().markCutoverUnresolved(projectId);
+    expect(
+      await codeOf(
+        createEncryptedDocumentsApi(desktopFetch).create(
+          { projectId } as Parameters<
+            ReturnType<typeof createEncryptedDocumentsApi>['create']
+          >[0],
+          new Uint8Array([1])
+        )
+      )
+    ).toBe(E2EE_CUTOVER_UNRESOLVED_CODE);
+    expect(nativeCommands()).toEqual([]);
   });
 
   it('leaves other requests to Rust as before', async () => {
@@ -840,5 +1042,44 @@ describe('a migration run’s exemption', () => {
       `/api/projects/${projectId}/document`,
       `/api/e2ee/projects/${projectId}/migration/plaintext/details`
     ]);
+  });
+
+  // Review round 10, finding 4: the exemption was checked for liveness
+  // only when it was attached, so a request of the run that left after
+  // the run's window closed still passed.
+  it('checks an encrypt run’s request like any other once its window closed before the send', async () => {
+    desktop();
+    const projectId = 'proj_run_closed_encrypt';
+    otherTab().pin(projectId);
+    otherTab().markCutoverUnresolved(projectId);
+    const run = migrationRun('encrypt');
+    const fetcher = run.fetch(desktopFetch);
+    let pending!: Promise<Response>;
+    await run.during(projectId, async () => {
+      // Attached while the run works on it; sent after it stopped.
+      pending = fetcher(`/api/e2ee/projects/${projectId}/migration/cutover`, {
+        method: 'POST',
+        body: '{}'
+      });
+    });
+    expect(await codeOf(pending)).toBe(E2EE_CUTOVER_UNRESOLVED_CODE);
+    expect(nativePaths()).toEqual([]);
+  });
+
+  it('refuses a decrypt run’s plaintext once its window closed before the send', async () => {
+    desktop();
+    const projectId = 'proj_run_closed_decrypt';
+    otherTab().pin(projectId);
+    const run = migrationRun('decrypt');
+    const fetcher = run.fetch(desktopFetch);
+    let pending!: Promise<Response>;
+    await run.during(projectId, async () => {
+      pending = fetcher(`/api/projects/${projectId}/document`, {
+        method: 'PUT',
+        body: '{}'
+      });
+    });
+    expect(await codeOf(pending)).toBe(E2EE_PLAINTEXT_REFUSED_CODE);
+    expect(nativePaths()).toEqual([]);
   });
 });

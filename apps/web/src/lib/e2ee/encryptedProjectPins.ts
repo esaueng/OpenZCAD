@@ -54,6 +54,17 @@
  * the bare `<prefix><projectId>` (written before records had generation
  * keys) still counts unless it names an older generation, as is safe.
  *
+ * Content this device moves under a new or different project id (a copy,
+ * a branch, a device copy made when the account could not be reached, or
+ * an adoption the account redirected to another project) from a project
+ * this device holds as encrypted carries that requirement with it: the
+ * destination id is recorded as one whose content must stay encrypted
+ * (`requireEncryption`), durably, before anything is written under it.
+ * Unlike a pin, the record says nothing of how the account stores the
+ * project (a device copy has no account copy yet): it only refuses that
+ * project's plaintext anywhere, and makes its adoption encrypted only.
+ * It is kept, generation-keyed and reset, exactly as a pin is.
+ *
  * Each pin is its own storage key, so tabs never read-modify-write a shared
  * list (one tab's write cannot drop another's pin), and there is no limit
  * past which old pins are dropped (a listing cannot push a pin out by
@@ -92,6 +103,17 @@ export interface EncryptedProjectPinStore {
    */
   pinDurably(projectId: string): boolean;
   /**
+   * Records that the project's content must stay encrypted (it came from
+   * one this device holds as encrypted); whether the record is saved (read
+   * back). One that could not be saved degrades the store, as a pin does.
+   */
+  requireEncryption(projectId: string): boolean;
+  /**
+   * Whether the project's content must stay encrypted: recorded so, or
+   * reset in another tab; always true while the store is degraded.
+   */
+  encryptionRequired(projectId: string): boolean;
+  /**
    * Unpins the project: only after this device's own decrypt run cut it
    * over to plaintext. Other tabs see it reset elsewhere.
    */
@@ -115,8 +137,8 @@ export interface EncryptedProjectPinStore {
   cutoverUnresolved(projectId: string): boolean;
   /**
    * The owner's confirmed "Treat as not encrypted on this device" for one
-   * project: drops its pin and its unresolved record. Never called on the
-   * account's word.
+   * project: drops its pin, its unresolved record and its requirement.
+   * Never called on the account's word.
    */
   resetProject(projectId: string): void;
   /**
@@ -157,6 +179,14 @@ export const ENCRYPTED_PROJECT_PIN_PREFIX =
  */
 export const ENCRYPTED_PROJECT_UNRESOLVED_PREFIX =
   'openzcad:e2ee-encrypt-cutover-unresolved:v1:';
+
+/**
+ * One key per project whose content must stay encrypted because it came
+ * from one this device holds as encrypted, and reset generation:
+ * `<prefix><projectId>:<generation>` (`encryptionRequiredKey`).
+ */
+export const ENCRYPTION_REQUIRED_PREFIX =
+  'openzcad:e2ee-encryption-required:v1:';
 
 /**
  * One key per project unpinned on this device (a reset or a decrypt run):
@@ -211,6 +241,21 @@ export function encryptCutoverUnresolvedKey(
 ): string {
   return `${ENCRYPTED_PROJECT_UNRESOLVED_PREFIX}${projectId}:${generation}`;
 }
+
+/** The requirement record of `projectId` under `generation`. */
+export function encryptionRequiredKey(
+  projectId: string,
+  generation: string = NO_RESET
+): string {
+  return `${ENCRYPTION_REQUIRED_PREFIX}${projectId}:${generation}`;
+}
+
+/** Every per-project record a reset retires. */
+const RECORD_PREFIXES = [
+  ENCRYPTED_PROJECT_PIN_PREFIX,
+  ENCRYPTED_PROJECT_UNRESOLVED_PREFIX,
+  ENCRYPTION_REQUIRED_PREFIX
+] as const;
 
 type PinStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> &
   Partial<Pick<Storage, 'key' | 'length'>>;
@@ -391,10 +436,7 @@ export function localStorageEncryptedProjectPins(
   const removeRecords = (projectId: string, generations: Iterable<string>) => {
     if (!storage) return;
     const keys = new Set<string>();
-    for (const prefix of [
-      ENCRYPTED_PROJECT_PIN_PREFIX,
-      ENCRYPTED_PROJECT_UNRESOLVED_PREFIX
-    ]) {
+    for (const prefix of RECORD_PREFIXES) {
       keys.add(prefix + projectId);
       for (const generation of generations) {
         keys.add(`${prefix}${projectId}:${generation}`);
@@ -421,10 +463,7 @@ export function localStorageEncryptedProjectPins(
     if (!storage || typeof storage.key !== 'function') return;
     const savedTime = generationTime(saved);
     if (savedTime === null) return;
-    const prefixes = [
-      `${ENCRYPTED_PROJECT_PIN_PREFIX}${projectId}:`,
-      `${ENCRYPTED_PROJECT_UNRESOLVED_PREFIX}${projectId}:`
-    ];
+    const prefixes = RECORD_PREFIXES.map((prefix) => `${prefix}${projectId}:`);
     const older: string[] = [];
     try {
       const count = storage.length ?? 0;
@@ -498,6 +537,8 @@ export function localStorageEncryptedProjectPins(
   };
   /** This page's own unresolved records, as `own` holds its pins. */
   const ownUnresolved = new Set<string>();
+  /** This page's own requirement records, as `own` holds its pins. */
+  const ownRequired = new Set<string>();
   /** The generation this page wrote each of its unresolved records under. */
   const unresolvedTags = new Map<string, string>();
   /**
@@ -511,6 +552,7 @@ export function localStorageEncryptedProjectPins(
     if (!PROJECT_ID.test(projectId)) return;
     own.delete(projectId);
     ownUnresolved.delete(projectId);
+    ownRequired.delete(projectId);
     const older = new Set<string>();
     const written = writeTag(projectId);
     if (written !== undefined) older.add(written);
@@ -608,6 +650,39 @@ export function localStorageEncryptedProjectPins(
       recordFailure();
       return false;
     },
+    requireEncryption(projectId) {
+      if (!PROJECT_ID.test(projectId)) return false;
+      if (resetElsewhere(projectId)) return false;
+      ownRequired.add(projectId);
+      if (!storage) return false;
+      const tag = writeTag(projectId);
+      if (tag !== undefined) {
+        try {
+          storage.setItem(encryptionRequiredKey(projectId, tag), tag);
+        } catch {
+          // Fall through to the read-back.
+        }
+        if (resetElsewhere(projectId)) return false;
+        if (current(ENCRYPTION_REQUIRED_PREFIX, projectId)) return true;
+      }
+      recordFailure();
+      return false;
+    },
+    encryptionRequired(projectId) {
+      if (isDegraded()) return true;
+      if (!PROJECT_ID.test(projectId)) return false;
+      if (resetElsewhere(projectId)) return true;
+      if (ownRequired.has(projectId)) return true;
+      if (!storage) return false;
+      const saved = current(ENCRYPTION_REQUIRED_PREFIX, projectId);
+      if (saved === undefined) {
+        degraded = true;
+        return true;
+      }
+      // Seen required: held here even if another tab drops its key.
+      if (saved) ownRequired.add(projectId);
+      return saved;
+    },
     resolveCutover,
     cutoverUnresolved(projectId) {
       if (!PROJECT_ID.test(projectId)) return false;
@@ -647,6 +722,11 @@ export function localStorageEncryptedProjectPins(
       for (const projectId of [...ownUnresolved]) {
         if (!current(ENCRYPTED_PROJECT_UNRESOLVED_PREFIX, projectId)) {
           ownUnresolved.delete(projectId);
+        }
+      }
+      for (const projectId of [...ownRequired]) {
+        if (!current(ENCRYPTION_REQUIRED_PREFIX, projectId)) {
+          ownRequired.delete(projectId);
         }
       }
       degraded = failed();

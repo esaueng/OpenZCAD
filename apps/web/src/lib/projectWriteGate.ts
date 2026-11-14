@@ -23,9 +23,11 @@
  * A request's context says which project it writes, whether its payload
  * is the project's content in plaintext or encrypted (`projectRequest`),
  * whether it is an assistant request with that project's verified consent
- * (`assistantProjectRequest`), and whether it is one of this device's own
- * migration requests, bound to the run's project and routes
- * (`migrationRun`). It is attached to the request itself, never kept in
+ * record (`assistantProjectRequest`: its account, project and sequence,
+ * compared at the send with this device's latest consent and revocations),
+ * and whether it is one of this device's own migration requests, bound to
+ * the run's project and routes and to the run still working on that
+ * project when the request leaves (`migrationRun`). It is attached to the request itself, never kept in
  * module state that an await could unwind or another request could see.
  * Any new sender of project content must declare it the same way;
  * `projectRequestContext.test.ts` asserts every content path does, and
@@ -66,21 +68,38 @@ export interface ProjectRequestContext {
  */
 export type MigrationKind = 'encrypt' | 'decrypt';
 
-/** A migration run's exemption, bound to the project it is working on. */
+/**
+ * A migration run's exemption, bound to the project it is working on and
+ * to the run itself: `live` answers, at the send, whether the run is still
+ * working on that project. Once its window closes, a request still
+ * carrying the exemption is checked like any other.
+ */
 interface MigrationContext {
   readonly kind: MigrationKind;
   readonly projectId: string;
+  readonly live: () => boolean;
+}
+
+/**
+ * The consent record an assistant request was verified for, right before
+ * it was sent (`e2ee/assistantConsentPins.ts`).
+ */
+export interface AssistantConsentRecord {
+  readonly userId: string;
+  readonly projectId: string;
+  readonly sequence: number;
 }
 
 interface RequestContext {
   readonly project?: ProjectRequestContext;
   readonly migration?: MigrationContext;
   /**
-   * The project this account's assistant consent verified for, right
+   * The consent record this account's assistant consent verified, right
    * before the request (ADR-024 Phase 6): an assistant request about that
-   * project, and only that project, may then carry its model digest.
+   * project, and only that project, may then carry its model digest, if
+   * the record is still this device's latest word when the request leaves.
    */
-  readonly assistantConsent?: string;
+  readonly assistantConsent?: AssistantConsentRecord;
   /** A create whose body carries no project's content (`contentFreeCreate`). */
   readonly contentFree?: true;
 }
@@ -96,6 +115,8 @@ export type ProjectRequestInit = RequestInit & {
 export interface AssistantRequestConsent {
   /** This account's consent verified for this very project. */
   readonly consented: boolean;
+  /** The verified record, for the check at the send; null when none. */
+  readonly consent: AssistantConsentRecord | null;
 }
 
 /** A request as the gate resolved it, before it is sent. */
@@ -105,6 +126,12 @@ export interface ResolvedProjectRequest {
   readonly payload: ProjectPayload;
   /** This device's own migration run, bound to this project and route. */
   readonly migration: MigrationKind | null;
+  /**
+   * Whether that run is still working on the project: asked again by every
+   * check, so a request resolved during the run and sent after it is
+   * checked like any other.
+   */
+  readonly migrationLive?: () => boolean;
   /** An assistant request about the project, with its consent. */
   readonly assistant: AssistantRequestConsent | null;
 }
@@ -171,18 +198,27 @@ export function projectRequest(
 /**
  * `init` (copied) declared as an assistant request about `projectId`,
  * whose model digest, conversation and attachments are that project's
- * content in plaintext. `consented`: this account's assistant consent for
- * this project verified right before the request; it authorizes this
- * project's request and nothing else (`assistantConsent`).
+ * content in plaintext. `consent`: the record of this account's assistant
+ * consent for this project verified right before the request; it
+ * authorizes this project's request and nothing else, and only while it is
+ * still this device's latest consent when the request leaves.
  */
 export function assistantProjectRequest(
   projectId: string,
-  consented: boolean,
+  consent: AssistantConsentRecord | null,
   init: RequestInit = {}
 ): ProjectRequestInit {
   return withContext(init, {
     project: { projectId, payload: 'plaintext' },
-    ...(consented ? { assistantConsent: projectId } : {})
+    ...(consent && consent.projectId === projectId
+      ? {
+          assistantConsent: {
+            userId: consent.userId,
+            projectId: consent.projectId,
+            sequence: consent.sequence
+          }
+        }
+      : {})
   });
 }
 
@@ -216,6 +252,12 @@ const PROJECT_ROUTE = /^\/api\/(e2ee\/)?projects\/([^/?#]+)(\/[^?#]*)?/;
 const UPLOAD_ROUTE = /^\/api\/uploads(?:\/|$)/;
 /** Creates and adoptions: the document they send is its project's content. */
 const CREATE_ROUTE = /^\/api\/projects\/?$/;
+/**
+ * Encrypted creates, copies and adoptions: the frame is the new project's
+ * content, encrypted, and names that project only inside it, so the sender
+ * declares the project id it chose (`encryptedDocumentsApi.ts`).
+ */
+const ENCRYPTED_CREATE_ROUTE = /^\/api\/e2ee\/projects\/?$/;
 /** Finalizing an upload sends the file's name and kind in plaintext. */
 const FINALIZE_ROUTE = /^\/api\/(?:artifacts|imports)\/finalize$/;
 /** The model digest, conversation and attachments of one project. */
@@ -370,6 +412,9 @@ function routeOf(path: string | null): RouteClass {
   if (CREATE_ROUTE.test(path)) {
     return { ...NO_CONTENT, content: true, plaintext: true, create: true };
   }
+  if (ENCRYPTED_CREATE_ROUTE.test(path)) {
+    return { ...NO_CONTENT, content: true };
+  }
   if (ASSISTANT_ROUTE.test(path)) {
     return { ...NO_CONTENT, content: true, plaintext: true, assistant: true };
   }
@@ -428,8 +473,9 @@ function requestProject(
 
 /**
  * The migration exemption a request carries, if it still applies: the
- * run's project is the one the request writes, and the route is one that
- * run writes. Otherwise null, and the request is checked like any other.
+ * run's project is the one the request writes, the route is one that run
+ * writes, and the run is still working on that project now. Otherwise
+ * null, and the request is checked like any other.
  */
 function boundMigration(
   migration: MigrationContext | undefined,
@@ -439,12 +485,15 @@ function boundMigration(
 ): MigrationKind | null {
   if (!migration || projectId === null) return null;
   if (migration.projectId !== projectId) return null;
-  return migrationRoute(migration.kind, method, path) ? migration.kind : null;
+  if (!migrationRoute(migration.kind, method, path)) return null;
+  return migration.live() ? migration.kind : null;
 }
 
 /**
  * Resolves what a request writes, from its declared context and its
- * route, before it is sent. Throws for a content request that declared no
+ * route, before it is sent. A migration exemption is resolved against its
+ * run's liveness here, so resolve immediately before the send
+ * (`checkOutboundRequest`). Throws for a content request that declared no
  * context, or declared another project than its route or body names.
  * Synchronous, and reads no state but the request.
  */
@@ -477,10 +526,17 @@ export function resolveProjectRequest(
   }
   const projectId = declared?.projectId ?? named;
   const migration = boundMigration(context?.migration, method, path, projectId);
+  const migrationLive = migration ? context?.migration?.live : undefined;
   // This device's decrypt run declares, for each request, that it stages
   // the plaintext of the project its route or body names.
   if (migration === 'decrypt' && !declared) {
-    return { projectId, payload: 'plaintext', migration, assistant: null };
+    return {
+      projectId,
+      payload: 'plaintext',
+      migration,
+      ...(migrationLive ? { migrationLive } : {}),
+      assistant: null
+    };
   }
   if (route.content && !declared && migration !== 'encrypt') {
     // A create the account builds carries no project's content.
@@ -500,13 +556,19 @@ export function resolveProjectRequest(
     projectId,
     payload: route.plaintext ? 'plaintext' : (declared?.payload ?? 'none'),
     migration,
-    assistant: route.assistant
-      ? {
-          consented:
-            projectId !== null && context?.assistantConsent === projectId
-        }
-      : null
+    ...(migrationLive ? { migrationLive } : {}),
+    assistant: route.assistant ? assistantConsentOf(context, projectId) : null
   };
+}
+
+function assistantConsentOf(
+  context: RequestContext | undefined,
+  projectId: string | null
+): AssistantRequestConsent {
+  const consent = context?.assistantConsent;
+  return consent && projectId !== null && consent.projectId === projectId
+    ? { consented: true, consent }
+    : { consented: false, consent: null };
 }
 
 /**
@@ -515,11 +577,18 @@ export function resolveProjectRequest(
  * between.
  */
 export function checkProjectRequest(request: ResolvedProjectRequest): void {
-  if (!check || request.migration === 'encrypt' || !request.projectId) return;
+  // The run's exemption holds only while the run still works on the
+  // project, asked again now: once its window closes, its requests are
+  // checked like any other (an encrypt run's too).
+  const migration =
+    request.migration !== null && request.migrationLive?.() === true
+      ? request.migration
+      : null;
+  if (!check || migration === 'encrypt' || !request.projectId) return;
   check({
     projectId: request.projectId,
     payload: request.payload,
-    migration: request.migration,
+    migration,
     assistant: request.assistant
   });
 }
@@ -614,9 +683,15 @@ export function migrationRun(kind: MigrationKind): MigrationRun {
           projectId !== null &&
           working.has(projectId) &&
           migrationRoute(kind, methodOf(input, init), path);
+        // Bound to this run: the gate asks, at the send, whether the run is
+        // still working on the project, and checks the request like any
+        // other once it is not.
+        const live = () => working.has(projectId!);
         return fetcher(
           input,
-          covered ? withContext(init, { migration: { kind, projectId } }) : init
+          covered
+            ? withContext(init, { migration: { kind, projectId, live } })
+            : init
         );
       }
   };

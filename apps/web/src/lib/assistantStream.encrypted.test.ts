@@ -67,7 +67,7 @@ describe('the assistant and this page’s encrypted-project marker', () => {
       streamAssistantReply({
         prompt: 'Make the wall 3 mm',
         digest: digest('proj_secret'),
-        consentedProjectId: 'proj_secret'
+        consent: { userId: 'user_1', projectId: 'proj_secret', sequence: 1 }
       })
     ).rejects.toBeDefined();
     expect(desktopFetch).toHaveBeenCalledTimes(1);
@@ -76,7 +76,7 @@ describe('the assistant and this page’s encrypted-project marker', () => {
       streamAssistantReply({
         prompt: 'Hi',
         digest: digest('proj_secret'),
-        consentedProjectId: 'proj_other'
+        consent: { userId: 'user_1', projectId: 'proj_other', sequence: 1 }
       })
     ).rejects.toMatchObject({ code: 'AI_E2EE_PROJECT' });
     expect(desktopFetch).toHaveBeenCalledTimes(1);

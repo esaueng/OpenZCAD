@@ -18,6 +18,7 @@ import {
 import { ENCRYPTED_PROJECT_ASSISTANT_NOTICE } from './assistant/encryptedProject';
 import { desktopFetch } from './desktopBridge';
 import { assistantProjectRequest } from './projectWriteGate';
+import type { VerifiedAssistantConsent } from './e2ee/assistantConsentPins';
 
 interface AssistantStreamOptions {
   signal?: AbortSignal;
@@ -82,10 +83,12 @@ export interface AssistantTurnRequest {
   attachments?: readonly AssistantAttachment[];
   /**
    * Set by the panel once this account's consent for the project verified
-   * right before sending (ADR-024 Phase 6). Never sent; without it an
-   * encrypted project's request is refused here.
+   * right before sending (ADR-024 Phase 6): the record's account, project
+   * and sequence. Never sent; without it an encrypted project's request is
+   * refused here, and with it the send gate refuses the request at its
+   * send if this device has since seen a later consent or a revocation.
    */
-  consentedProjectId?: string;
+  consent?: VerifiedAssistantConsent;
 }
 
 export interface AssistantStatus {
@@ -346,7 +349,9 @@ async function streamAssistantReplyAttempt(
   // ADR-024 D7 and Phase 6: nothing of an encrypted project reaches the
   // assistant, whichever entry point asked, unless its consent verified.
   const projectId = request.digest.projectId;
-  const consented = request.consentedProjectId === projectId;
+  const consent =
+    request.consent?.projectId === projectId ? request.consent : null;
+  const consented = consent !== null;
   if (
     !consented &&
     (isEncryptedProject(projectId) || encryptCutoverUnresolved(projectId))
@@ -364,7 +369,7 @@ async function streamAssistantReplyAttempt(
     // (`projectWriteGate.ts`) whatever was pinned meanwhile.
     response = await desktopFetch(
       '/api/assistant/proposals',
-      assistantProjectRequest(projectId, consented, {
+      assistantProjectRequest(projectId, consent, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({

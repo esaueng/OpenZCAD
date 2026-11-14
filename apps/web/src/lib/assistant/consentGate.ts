@@ -18,6 +18,10 @@ import {
 } from '@openzcad/shared';
 import type * as ConsentModule from '../e2ee/assistantConsent';
 import type { AssistantConsentState } from '../e2ee/assistantConsent';
+import {
+  revokeKnownAssistantConsent,
+  type VerifiedAssistantConsent
+} from '../e2ee/assistantConsentPins';
 import { ENCRYPTED_PROJECT_ASSISTANT_NOTICE } from './encryptedProject';
 
 export type { AssistantConsentState };
@@ -53,6 +57,12 @@ export interface AssistantConsentGate {
   readonly error: string | null;
   /** True when the verified record permits exactly this provider route. */
   permits(route: string): boolean;
+  /**
+   * The verified record that permits this route, as its request carries it
+   * (`assistantProjectRequest`): the send gate checks it again, at the
+   * send, against this device's latest consent and revocations.
+   */
+  grant(route: string): VerifiedAssistantConsent | null;
   confirm(route: string): Promise<AssistantConsentDecision>;
   allow(route: string): Promise<boolean>;
   stop(): Promise<boolean>;
@@ -193,6 +203,18 @@ export function useAssistantConsentGate(
     );
   }, []);
 
+  const grant = useCallback(
+    (route: string): VerifiedAssistantConsent | null => {
+      const current = statusRef.current;
+      if (!projectId || !userId || !permits(route)) return null;
+      if (current.kind !== 'ready' || current.state.kind !== 'verified') {
+        return null;
+      }
+      return { userId, projectId, sequence: current.state.sequence };
+    },
+    [permits, projectId, userId]
+  );
+
   const confirm = useCallback(
     async (route: string): Promise<AssistantConsentDecision> => {
       const current = generation.current;
@@ -225,7 +247,12 @@ export function useAssistantConsentGate(
     async (allowed: boolean, route: string): Promise<boolean> => {
       if (!projectId || !userId) return false;
       const current = generation.current;
-      if (!allowed) stoppedRef.current = true;
+      if (!allowed) {
+        stoppedRef.current = true;
+        // Durable before anything is awaited: no tab of this device sends
+        // on a consent it accepted before this Stop, saved or not.
+        revokeKnownAssistantConsent(userId, projectId);
+      }
       setError(null);
       try {
         const module = await loadRef.current();
@@ -289,8 +316,8 @@ export function useAssistantConsentGate(
   return useMemo(
     () =>
       projectId
-        ? { projectId, status, error, permits, confirm, allow, stop }
+        ? { projectId, status, error, permits, grant, confirm, allow, stop }
         : null,
-    [allow, confirm, error, permits, projectId, status, stop]
+    [allow, confirm, error, grant, permits, projectId, status, stop]
   );
 }

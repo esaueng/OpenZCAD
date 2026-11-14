@@ -85,6 +85,7 @@ import {
   type EncryptedProjectPinStore
 } from './e2ee/encryptedProjectPins';
 import { unlockedAccount } from './e2ee/unlockedKeys';
+import { assistantConsentCurrent } from './e2ee/assistantConsentPins';
 import type { EncryptedProjectStore } from './e2ee/encryptedProjectStore';
 import { getKeySessionRevision, isCurrentKeySession } from './e2ee/keySession';
 import { prioritizeShelfEntries } from './projectShelf';
@@ -465,6 +466,62 @@ export function requireDurablePin(projectId: string): void {
 }
 
 /**
+ * Whether the project's content must stay encrypted on its way off this
+ * device: it is pinned as encrypted, its switch to encryption did not
+ * finish here, another tab reset it, or it came from such a project under
+ * a new or different id (`carryEncryptionRequirement`). Its plaintext is
+ * refused at every send, and its adoption is encrypted only.
+ */
+export function encryptionRequired(
+  projectId: string | null | undefined
+): boolean {
+  return projectId
+    ? encryptionHeldHere(projectId) ||
+        encryptedProjectPins().encryptionRequired(projectId)
+    : false;
+}
+
+/**
+ * Content of `sourceProjectId` is about to move under `destinationId` (a
+ * copy, a branch, a device copy, or an adoption the account answered with
+ * another project): when the source's content must stay encrypted, so must
+ * the destination's, recorded durably before anything is written under it,
+ * or this refuses and nothing is moved.
+ *
+ * `account`: the destination is a project the account holds (an adoption
+ * it redirected), so it is pinned as encrypted and only ever read and
+ * written through the encrypted routes. Otherwise (a device copy, which
+ * has no account copy yet) only the requirement is recorded: its plaintext
+ * is refused everywhere and its adoption is encrypted only. Never lifted
+ * by the account's word; only the owner's confirmed reset, or this
+ * device's own decrypt run, drops either.
+ */
+export function carryEncryptionRequirement(
+  sourceProjectId: string,
+  destinationId: string,
+  options: { account: boolean }
+): void {
+  if (!encryptionRequired(sourceProjectId)) return;
+  const pins = encryptedProjectPins();
+  if (pins.resetElsewhere(destinationId)) {
+    throw pinsResetElsewhere({ projectId: destinationId });
+  }
+  const wasDegraded = pins.degraded;
+  const saved = options.account
+    ? pins.pinDurably(destinationId)
+    : pins.requireEncryption(destinationId);
+  if (saved && options.account) formatMismatchIds.delete(destinationId);
+  pinsChanged();
+  if (!saved) {
+    throw pins.resetElsewhere(destinationId)
+      ? pinsResetElsewhere({ projectId: destinationId })
+      : pinStorageUnavailable(
+          wasDegraded ? undefined : { projectId: destinationId }
+        );
+  }
+}
+
+/**
  * Why this tab may not write the project now, if it may not: another tab
  * reset its pin (or the store) since this tab first saw it, or its switch
  * to end-to-end encryption has not been seen to finish on this device.
@@ -532,17 +589,21 @@ const checkProjectSend: ProjectWriteCheck = ({
   if (assistant) {
     const pins = encryptedProjectPins();
     if (pins.resetElsewhere(projectId)) throw pinsResetElsewhere({ projectId });
-    if (assistant.consented) return;
-    if (isEncryptedProject(projectId) || pins.cutoverUnresolved(projectId)) {
-      throw plaintextRefusedError({ projectId });
+    if (!encryptionRequired(projectId)) return;
+    // The consent this request was verified for must still be this
+    // device's latest word for the project now, at the send: a Stop saved
+    // or recorded since (in any tab) refuses it.
+    if (assistant.consent && assistantConsentCurrent(assistant.consent)) {
+      return;
     }
-    return;
+    throw plaintextRefusedError({ projectId });
   }
   requireProjectWritable(projectId);
   if (
     payload === 'plaintext' &&
     migration !== 'decrypt' &&
-    isEncryptedProject(projectId)
+    (isEncryptedProject(projectId) ||
+      encryptedProjectPins().encryptionRequired(projectId))
   ) {
     throw plaintextRefusedError({ projectId });
   }
@@ -1369,10 +1430,11 @@ export const api = {
       }
     };
     // Whether the adoption must be encrypted: the device project's own pin
-    // first, then the account's setting (decision D2).
+    // or its carried requirement first (a copy of an encrypted project),
+    // then the account's setting (decision D2).
     const encrypts = async (): Promise<boolean> => {
       requireProjectWritable(prepared.projectId);
-      if (isEncryptedProject(prepared.projectId)) return true;
+      if (encryptionRequired(prepared.projectId)) return true;
       return encryptsNewProjects();
     };
     return encrypts().then((encrypted) => adopt(encrypted));

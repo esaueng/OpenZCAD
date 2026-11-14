@@ -94,6 +94,7 @@ import {
   ASSISTANT_CONSENT_LOCKED_NOTICE,
   type AssistantConsentGate
 } from '../../lib/assistant/consentGate';
+import type { VerifiedAssistantConsent } from '../../lib/e2ee/assistantConsentPins';
 import { labelWithKey, useKeymap } from '../../lib/keymap';
 import { platformShortcutLabel } from '../../lib/platformShortcut';
 import { QuestionCard } from './QuestionCard';
@@ -109,6 +110,18 @@ import {
 /** A request an encrypted project's consent did not let leave the device. */
 export const ASSISTANT_CONSENT_NOT_GIVEN =
   'Nothing was sent. The assistant reads this encrypted project only once you allow it.';
+
+/** Why nothing may be sent, or the verified consent the request carries. */
+interface ConsentOutcome {
+  readonly refusal: string | null;
+  /** Null for a project with no consent gate (stored in plaintext). */
+  readonly consent: VerifiedAssistantConsent | null;
+}
+
+const refused = (refusal: string): ConsentOutcome => ({
+  refusal,
+  consent: null
+});
 
 export type AssistantPreviewOutcome =
   { ok: true } | { ok: false; reason: string };
@@ -600,17 +613,25 @@ export function AssistantPanel({
    * and provider, and answer why nothing may be sent, or null to send.
    */
   const ensureConsent = useCallback(
-    async (signal: AbortSignal): Promise<string | null> => {
+    async (signal: AbortSignal): Promise<ConsentOutcome> => {
       const gate = consentRef.current;
-      if (!gate) return null;
+      if (!gate) return { refusal: null, consent: null };
       const current = consentStatusRef.current;
-      if (!current) return ASSISTANT_CONSENT_NOT_GIVEN;
+      if (!current) return refused(ASSISTANT_CONSENT_NOT_GIVEN);
       const route = assistantConsentRoute(current);
+      // The verified record the request carries: the send gate compares it
+      // with this device's latest consent and revocations at the send.
+      const granted = (): ConsentOutcome => {
+        const consent = gate.grant(route);
+        return consent
+          ? { refusal: null, consent }
+          : refused(ASSISTANT_CONSENT_NOT_GIVEN);
+      };
       const decision = await gate.confirm(route);
-      if (signal.aborted) return ASSISTANT_CONSENT_NOT_GIVEN;
-      if (decision.kind === 'permitted') return null;
+      if (signal.aborted) return refused(ASSISTANT_CONSENT_NOT_GIVEN);
+      if (decision.kind === 'permitted') return granted();
       if (decision.kind === 'blocked') {
-        return decision.message;
+        return refused(decision.message);
       }
       const allowed = await new Promise<boolean>((resolve) => {
         const settle = (value: boolean) => {
@@ -626,7 +647,9 @@ export function AssistantPanel({
           resolve: settle
         });
       });
-      return allowed && !signal.aborted ? null : ASSISTANT_CONSENT_NOT_GIVEN;
+      return allowed && !signal.aborted
+        ? granted()
+        : refused(ASSISTANT_CONSENT_NOT_GIVEN);
     },
     []
   );
@@ -942,7 +965,9 @@ export function AssistantPanel({
         }
         // An encrypted project sends only with this account's verified
         // consent for it (ADR-024 Phase 6); a plaintext one has no gate.
-        const refusal = await ensureConsent(controller.signal);
+        const { refusal, consent: verifiedConsent } = await ensureConsent(
+          controller.signal
+        );
         if (controller.signal.aborted) {
           throw new DOMException('Stopped.', 'AbortError');
         }
@@ -969,9 +994,7 @@ export function AssistantPanel({
             ),
             history: historyForRequest(conversation),
             // Verified just above: this project's consent lets it through.
-            ...(consentRef.current
-              ? { consentedProjectId: doc.projectId }
-              : {}),
+            ...(verifiedConsent ? { consent: verifiedConsent } : {}),
             attachments: attachments.map((attachment) => ({
               id: attachment.id,
               mediaType: attachment.mediaType,

@@ -26,6 +26,10 @@ import {
   type E2eeSaveAssistantConsentRequest
 } from '@openzcad/shared';
 import { desktopFetch } from '../desktopBridge';
+import {
+  localStorageConsentPins,
+  type ConsentPinStore
+} from './assistantConsentPins';
 import { E2eeApiError } from './e2eeApi';
 import { unlockedAccount } from './unlockedKeys';
 
@@ -94,62 +98,13 @@ export function createAssistantConsentApi(
   };
 }
 
-/** The highest consent sequence this device accepted, per account and project. */
-export interface ConsentPinStore {
-  read(userId: string, projectId: string): Promise<number | null>;
-  write(userId: string, projectId: string, sequence: number): Promise<void>;
-}
-
-const PIN_KEY = (userId: string, projectId: string) =>
-  `openzcad:e2ee-assistant-consent-pin:v1:${userId}:${projectId}`;
-
-/**
- * Pins in localStorage. Storage that is blocked or cleared loses the pin,
- * which only weakens rollback detection back to first use; it never makes a
- * forged record verify.
- */
-export function localStorageConsentPins(
-  storage: Pick<Storage, 'getItem' | 'setItem'> | null = typeof window ===
-  'undefined'
-    ? null
-    : window.localStorage
-): ConsentPinStore {
-  return {
-    async read(userId, projectId) {
-      try {
-        const value = Number(
-          storage?.getItem(PIN_KEY(userId, projectId)) ?? NaN
-        );
-        return Number.isSafeInteger(value) && value >= 1 ? value : null;
-      } catch {
-        return null;
-      }
-    },
-    async write(userId, projectId, sequence) {
-      try {
-        const current = await this.read(userId, projectId);
-        // A pin only moves forward, whichever tab writes it.
-        if (current === null || sequence > current) {
-          storage?.setItem(PIN_KEY(userId, projectId), String(sequence));
-        }
-      } catch {
-        /* Best effort: see above. */
-      }
-    }
-  };
-}
-
-export function memoryConsentPins(): ConsentPinStore {
-  const pins = new Map<string, number>();
-  return {
-    read: async (userId, projectId) =>
-      pins.get(PIN_KEY(userId, projectId)) ?? null,
-    write: async (userId, projectId, sequence) => {
-      const key = PIN_KEY(userId, projectId);
-      if (sequence > (pins.get(key) ?? 0)) pins.set(key, sequence);
-    }
-  };
-}
+export {
+  assistantConsentCurrent,
+  localStorageConsentPins,
+  memoryConsentPins,
+  type ConsentPinStore,
+  type VerifiedAssistantConsent
+} from './assistantConsentPins';
 
 export interface AssistantConsentContext {
   readonly userId: string;
@@ -231,7 +186,21 @@ async function verify(
       floor
     };
   }
+  // A Stop this device recorded at or past this record (even one whose save
+  // failed, or one saved in another tab) outranks it.
+  const revoked = await ctx.pins.revoked(ctx.userId, projectId);
+  if (opened.allowed && revoked !== null && opened.sequence <= revoked) {
+    return {
+      kind: 'refused',
+      reason: 'rollback',
+      message: ROLLBACK_MESSAGE,
+      floor: Math.max(floor, revoked)
+    };
+  }
   await ctx.pins.write(ctx.userId, projectId, opened.sequence);
+  if (!opened.allowed) {
+    await ctx.pins.revoke(ctx.userId, projectId, opened.sequence);
+  }
   return {
     kind: 'verified',
     allowed: opened.allowed,
@@ -293,8 +262,14 @@ export async function saveAssistantConsent(
   choice: { allowed: boolean; route: string },
   floor: number
 ): Promise<AssistantConsentState> {
-  const pinned = await ctx.pins.read(ctx.userId, projectId);
-  const sequence = Math.max(pinned ?? 0, floor) + 1;
+  const [pinned, revoked] = await Promise.all([
+    ctx.pins.read(ctx.userId, projectId),
+    ctx.pins.revoked(ctx.userId, projectId)
+  ]);
+  const sequence = Math.max(pinned ?? 0, revoked ?? 0, floor) + 1;
+  // A revocation holds here from now on, whether or not its save succeeds:
+  // no consent before it is used again on this device.
+  if (!choice.allowed) await ctx.pins.revoke(ctx.userId, projectId, sequence);
   const record = encodeAssistantConsent({
     userId: ctx.userId,
     projectId,

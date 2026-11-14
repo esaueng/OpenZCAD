@@ -433,6 +433,7 @@ import {
   E2EE_CUTOVER_UNRESOLVED_CODE,
   E2EE_PIN_STORAGE_UNAVAILABLE_CODE,
   api,
+  carryEncryptionRequirement,
   encryptedPinProblem,
   encryptedPinsResetElsewhere,
   encryptedProjectResetElsewhere,
@@ -6445,6 +6446,10 @@ export function App() {
         projects.map((project) => project.name),
         session?.userId ?? localUserId
       );
+      // A copy of a project this device keeps encrypted stays encrypted.
+      carryEncryptionRequirement(source.projectId, copy.projectId, {
+        account: false
+      });
       await saveLocalProject(copy);
       // The shelf never loads a document to draw a card, so a copy saved
       // without a preview would stay a placeholder until it is opened. Seed it
@@ -15312,6 +15317,12 @@ export function App() {
             })
           : undefined
       );
+      // A device copy or branch of a project this device keeps encrypted
+      // (also one the account did not answer for) must stay encrypted:
+      // recorded before the copy is written, or nothing is copied.
+      carryEncryptionRequirement(project.projectId, copy.projectId, {
+        account: false
+      });
       const organization: ProjectOrganization = {
         ...DEFAULT_PROJECT_ORGANIZATION,
         sortOrder: projectOrganization(project).sortOrder

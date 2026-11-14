@@ -6,7 +6,9 @@ import {
   ENCRYPTED_PROJECT_PINS_RESET_KEY,
   ENCRYPTED_PROJECT_RESET_PREFIX,
   ENCRYPTED_PROJECT_UNRESOLVED_PREFIX,
+  ENCRYPTION_REQUIRED_PREFIX,
   NO_RESET,
+  encryptionRequiredKey,
   encryptCutoverUnresolvedKey,
   encryptedProjectPinKey,
   localStorageEncryptedProjectPins,
@@ -231,6 +233,57 @@ describe('encrypted project pins', () => {
     expect(reloaded.has('proj_stuck')).toBe(false);
     expect(reloaded.cutoverUnresolved('proj_stuck')).toBe(false);
     expect(reloaded.has('proj_kept')).toBe(true);
+  });
+
+  it('keeps a carried encryption requirement across a reload, apart from the pin', () => {
+    const storage = memoryStorage();
+    const pins = localStorageEncryptedProjectPins(storage);
+    expect(pins.requireEncryption('proj_device_copy')).toBe(true);
+    const reloaded = localStorageEncryptedProjectPins(storage);
+    expect(reloaded.encryptionRequired('proj_device_copy')).toBe(true);
+    // Not a statement of how the account stores it.
+    expect(reloaded.has('proj_device_copy')).toBe(false);
+    expect(reloaded.encryptionRequired('proj_other')).toBe(false);
+    expect([...storage.values.keys()]).toContain(
+      encryptionRequiredKey('proj_device_copy', NO_RESET)
+    );
+  });
+
+  it('drops a requirement only with the owner’s confirmed reset of that project', () => {
+    const storage = memoryStorage();
+    const pins = localStorageEncryptedProjectPins(storage);
+    pins.requireEncryption('proj_required');
+    pins.requireEncryption('proj_required_kept');
+    pins.resetProject('proj_required');
+    const reloaded = localStorageEncryptedProjectPins(storage);
+    expect(reloaded.encryptionRequired('proj_required')).toBe(false);
+    expect(reloaded.encryptionRequired('proj_required_kept')).toBe(true);
+  });
+
+  it('holds a requirement another tab reset elsewhere, and makes none for it', () => {
+    const storage = memoryStorage();
+    const tab = localStorageEncryptedProjectPins(storage);
+    expect(tab.encryptionRequired('proj_reset_race')).toBe(false);
+    localStorageEncryptedProjectPins(storage).resetProject('proj_reset_race');
+    expect(tab.encryptionRequired('proj_reset_race')).toBe(true);
+    expect(tab.requireEncryption('proj_reset_race')).toBe(false);
+  });
+
+  it('degrades when a requirement cannot be saved', () => {
+    const storage = memoryStorage();
+    const pins = localStorageEncryptedProjectPins(storage);
+    const setItem = storage.setItem;
+    storage.setItem = (key: string, value: string) => {
+      if (key.startsWith(ENCRYPTION_REQUIRED_PREFIX)) {
+        throw new Error('QuotaExceededError');
+      }
+      setItem(key, value);
+    };
+    expect(pins.requireEncryption('proj_unsaved_requirement')).toBe(false);
+    expect(pins.degraded).toBe(true);
+    // Every project is held as encrypted, here and after a reload.
+    expect(localStorageEncryptedProjectPins(storage).degraded).toBe(true);
+    expect(pins.encryptionRequired('proj_anything')).toBe(true);
   });
 
   it('resets a degraded store without dropping a saved pin', () => {
