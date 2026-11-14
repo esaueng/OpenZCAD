@@ -229,6 +229,10 @@
   color: var(--color-text-subtle);
 }
 
+.project-properties-encryption.is-paused svg {
+  color: var(--color-warning);
+}
+
 .project-properties-encryption.is-encrypting svg {
   color: var(--color-accent);
 }

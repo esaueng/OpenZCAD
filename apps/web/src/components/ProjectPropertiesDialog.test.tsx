@@ -6,6 +6,10 @@ import {
   type ProjectSummary
 } from '@openzcad/shared';
 import type { ProjectProperties } from '../lib/projectProperties';
+import {
+  setMigratingProjects,
+  setMigrationElsewhere
+} from '../lib/migrationStatus';
 import { ProjectPropertiesDialog } from './ProjectPropertiesDialog';
 
 const project: ProjectSummary = {
@@ -229,7 +233,10 @@ describe('ProjectPropertiesDialog', () => {
           ...project,
           storageFormat: PROJECT_STORAGE_FORMAT_E2EE_V1
         }}
-        encryptionFacts={{ migrating: false, inAccount: true }}
+        encryptionFacts={{
+          storageFormat: PROJECT_STORAGE_FORMAT_E2EE_V1,
+          inAccount: true
+        }}
         loadProperties={vi.fn().mockResolvedValue(details)}
         onClose={vi.fn()}
       />
@@ -250,5 +257,40 @@ describe('ProjectPropertiesDialog', () => {
     renderDialog();
     await screen.findByRole('alert');
     expect(screen.queryByText('Encryption')).toBeNull();
+  });
+
+  /**
+   * The migration store also locks a paused or stopped run's projects; the
+   * row read every lock as "Being encrypted", progress the run was not
+   * making.
+   */
+  it('follows a migration live and tells a paused run from a running one', async () => {
+    try {
+      render(
+        <ProjectPropertiesDialog
+          project={project}
+          accountStatus="Saved to my account"
+          encryptionFacts={{ storageFormat: undefined, inAccount: true }}
+          loadProperties={vi.fn().mockResolvedValue(details)}
+          onClose={vi.fn()}
+        />
+      );
+      const library = await screen.findByRole('region', { name: 'Library' });
+      const value = () =>
+        within(library).getByText('Encryption').nextElementSibling;
+      expect(value()).toHaveTextContent('Not end-to-end encrypted');
+      act(() => setMigratingProjects([project.projectId]));
+      expect(value()).toHaveTextContent('Being encrypted');
+      act(() => setMigratingProjects([], [project.projectId]));
+      expect(value()).toHaveTextContent('Encryption not finished');
+      act(() => setMigratingProjects([]));
+      act(() => setMigrationElsewhere(project.projectId, true));
+      expect(value()).toHaveTextContent('Being encrypted elsewhere');
+    } finally {
+      act(() => {
+        setMigratingProjects([]);
+        setMigrationElsewhere(project.projectId, false);
+      });
+    }
   });
 });

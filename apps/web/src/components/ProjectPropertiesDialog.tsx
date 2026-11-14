@@ -22,8 +22,14 @@ import {
 } from '../lib/projectProperties';
 import {
   projectEncryptionStatus,
-  type EncryptionFacts
+  type EncryptionFacts,
+  type EncryptionMigration
 } from '../lib/projectEncryptionStatus';
+import {
+  useMigratingProjects,
+  useMigrationElsewhere,
+  useMigrationLockedProjects
+} from '../lib/migrationStatus';
 import { useModalFocus } from '../lib/useModalFocus';
 import { projectNameProblem, sameNamedProject } from '../lib/projectNameHints';
 
@@ -134,12 +140,25 @@ export function ProjectPropertiesDialog({
     ['Pinned', organization.pinned ? 'Yes' : 'No'],
     ['Account copy', accountStatus]
   ];
+  // Live, not read once: a run that starts, pauses or finishes while the
+  // dialog is open changes what the row says.
+  const encryptingHere = useMigratingProjects();
+  const encryptingElsewhere = useMigrationElsewhere();
+  const migrationLocked = useMigrationLockedProjects();
+  const migration: EncryptionMigration = encryptingHere.has(project.projectId)
+    ? 'here'
+    : encryptingElsewhere.has(project.projectId)
+      ? 'elsewhere'
+      : migrationLocked.has(project.projectId)
+        ? 'paused'
+        : null;
   const encryption =
-    encryptionFacts && projectEncryptionStatus(project, encryptionFacts);
+    encryptionFacts && projectEncryptionStatus(encryptionFacts, migration);
   if (encryption) {
     const Icon = {
       encrypted: Lock,
       encrypting: LoaderCircle,
+      paused: TriangleAlert,
       plaintext: LockOpen,
       unreadable: Lock
     }[encryption.state];
@@ -163,8 +182,13 @@ export function ProjectPropertiesDialog({
     library.push(['Archived', dateLabel(organization.archivedAt)]);
   if (organization.deletedAt)
     library.push(['Moved to trash', dateLabel(organization.deletedAt)]);
-  // ADR-024 Phase 6: whether the assistant may read this encrypted project.
-  if (project.storageFormat === PROJECT_STORAGE_FORMAT_E2EE_V1) {
+  // ADR-024 Phase 6: whether the assistant may read this encrypted project,
+  // by the listing's current format where the host passes it.
+  if (
+    (encryptionFacts
+      ? encryptionFacts.storageFormat
+      : project.storageFormat) === PROJECT_STORAGE_FORMAT_E2EE_V1
+  ) {
     library.push([
       'Assistant',
       <AssistantConsentSummary key="assistant" projectId={project.projectId} />

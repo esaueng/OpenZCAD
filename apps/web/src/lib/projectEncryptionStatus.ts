@@ -4,15 +4,23 @@ import {
 } from '@openzcad/shared';
 import { projectNeedsUpdate } from './projectShelf';
 
+/** What the start screen knows about how a project is stored right now. */
 export interface EncryptionFacts {
-  /** Being encrypted in this tab, or paused with its plaintext locked. */
-  migrating: boolean;
+  /** From the current listing, not a snapshot taken when a dialog opened. */
+  storageFormat: ProjectSummary['storageFormat'];
   /** The account listing holds this project. */
   inAccount: boolean;
 }
 
+/**
+ * Where a move to encrypted storage stands (`migrationStatus.ts`): this
+ * page's run is encrypting it, another tab or device is, or a run paused
+ * or stopped with its plaintext still locked.
+ */
+export type EncryptionMigration = 'here' | 'elsewhere' | 'paused' | null;
+
 export interface ProjectEncryptionStatus {
-  state: 'encrypted' | 'encrypting' | 'plaintext' | 'unreadable';
+  state: 'encrypted' | 'encrypting' | 'paused' | 'plaintext' | 'unreadable';
   label: string;
   detail: string;
 }
@@ -20,13 +28,14 @@ export interface ProjectEncryptionStatus {
 /**
  * How a project is stored, for Project properties (ADR-024). This uses the
  * same facts as the start screen's card marks, but it states every case:
- * the card marks only the exception.
+ * the card marks only the exception. It never claims progress a paused run
+ * is not making.
  */
 export function projectEncryptionStatus(
-  project: Pick<ProjectSummary, 'storageFormat'>,
-  context: EncryptionFacts
+  facts: EncryptionFacts,
+  migration: EncryptionMigration
 ): ProjectEncryptionStatus {
-  if (projectNeedsUpdate(project)) {
+  if (projectNeedsUpdate(facts)) {
     return {
       state: 'unreadable',
       label: 'Stored in a newer format',
@@ -34,7 +43,7 @@ export function projectEncryptionStatus(
         'This version of OpenZCAD cannot read how it is stored. Update OpenZCAD to open it.'
     };
   }
-  if (project.storageFormat === PROJECT_STORAGE_FORMAT_E2EE_V1) {
+  if (facts.storageFormat === PROJECT_STORAGE_FORMAT_E2EE_V1) {
     return {
       state: 'encrypted',
       label: 'End-to-end encrypted',
@@ -42,14 +51,30 @@ export function projectEncryptionStatus(
       detail: 'Encrypted on this device before it is saved.'
     };
   }
-  if (context.migrating) {
+  if (migration === 'here') {
     return {
       state: 'encrypting',
       label: 'Being encrypted',
       detail: 'It opens read-only until encryption finishes.'
     };
   }
-  return context.inAccount
+  if (migration === 'elsewhere') {
+    return {
+      state: 'encrypting',
+      label: 'Being encrypted elsewhere',
+      detail:
+        'Another tab or device is encrypting it. It opens read-only until that finishes.'
+    };
+  }
+  if (migration === 'paused') {
+    return {
+      state: 'paused',
+      label: 'Encryption not finished',
+      detail:
+        'Encrypting it paused or stopped before it finished, so it opens read-only. Settings › Encryption shows what it needs.'
+    };
+  }
+  return facts.inAccount
     ? {
         state: 'plaintext',
         label: 'Not end-to-end encrypted',
