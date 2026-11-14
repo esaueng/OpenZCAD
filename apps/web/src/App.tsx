@@ -485,12 +485,9 @@ import {
   sameLocalProjectContent,
   type LocalProjectAutosaveOptions
 } from './lib/localProjectAutosave';
-import {
-  inspectShaprPair,
-  type ShaprPairInspection
-} from './lib/shaprImportWorkerClient';
-import { rebuildImportInDisposableWorker } from './lib/importRebuildWorkerClient';
-import { shaprMigrationDraft } from './lib/shaprMigration';
+// Shapr3D migration loads on the gesture that picks a .shapr + STEP pair.
+import type { ShaprPairInspection } from './lib/shaprImportWorkerClient';
+import type { shaprMigrationDraft as ShaprMigrationDraftFn } from './lib/shaprMigration';
 import {
   autosaveReportedSaveState,
   presentedWorkspaceSaveState
@@ -605,6 +602,9 @@ import { recordActivity } from './lib/activityLog';
 import { WORKSPACE_MODE_OPTIONS } from './lib/topBarPresentation';
 import { PanelResizer } from './components/PanelResizer';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { PatternProgressSlot } from './components/PatternProgressSlot';
+import { rebuildInDisposableWorker } from './lib/disposableRebuild';
+import { MotionStudyTimelineSlot } from './components/assembly/MotionStudyTimelineSlot';
 import { createLazyPanel } from './components/LazyPanel';
 import type { ModelPanel as ModelPanelComponent } from './components/modelPanels/ModelPanel';
 import type * as ModelPanelModule from './components/modelPanels/ModelPanel';
@@ -1106,6 +1106,7 @@ function focusedControlOwnsSpace(target: HTMLElement | null): boolean {
  * BEFORE it (unsupported extension, a lone `.shapr`) stay synchronous.
  */
 const stepImportRun = () => import('./lib/stepImportRun');
+const projectInsertRun = () => import('./lib/projectInsertRun');
 
 /**
  * Extrude classification runs only once a region extrude is previewed or
@@ -1678,6 +1679,7 @@ import {
   isInPlaceTool,
   keypadText,
   profileRegionLoops,
+  isInPlacePatternTool,
   requestNewAxis,
   resolveNewAxis,
   valueInRange,
@@ -1746,7 +1748,6 @@ import {
   type ValidatedFeatureOutcome,
   type ValidatedFeatureRunOptions
 } from './hooks/useValidatedFeatureCommit';
-import { PatternProgress } from './components/PatternProgress';
 import { OVERLAY_EXIT_MS, useDelayedUnmount } from './hooks/useDelayedUnmount';
 import {
   affectedFeatureTargets,
@@ -1944,7 +1945,6 @@ function preloadWorkspaceMode(mode: WorkspaceMode) {
 }
 import { AssemblyPanelPending } from './components/assembly/AssemblyPanelPending';
 import { meshBoundsLookup } from './lib/assembly/motionSetup';
-import { MotionStudyTimeline } from './components/assembly/MotionStudyTimeline';
 // The View-mode playback bar draws only for an assembly with something to
 // play, so a part-only session never downloads it. Its slot keeps a failure
 // local and retries on the next project.
@@ -4478,8 +4478,9 @@ export function App() {
     warnings: attributedFeatureWarnings(),
     // A user edit's check may propose carrying a later hash-only pick; the
     // commit stores it in the edit's own revision (`withCarriedSelections`).
-    rebuild: (document, analysis, lineageDemand) =>
+    rebuild: (document, analysis, lineageDemand, options) =>
       geometry.syncOnce(document, analysis, lineageDemand, {
+        ...options,
         proposeCarry: true
       }),
     track: trackKernelRefusal
@@ -4674,6 +4675,7 @@ export function App() {
   const [syncRun, setSyncRun] = useState<SyncEntry[] | null>(null);
   const viewNonceRef = useRef(0);
   const projectImportInputRef = useRef<HTMLInputElement | null>(null);
+  const projectInsertInputRef = useRef<HTMLInputElement | null>(null);
   const projectTransferRef = useRef(false);
   const [projectTransferBusy, setProjectTransferBusy] = useState(false);
   const importInputRef = useRef<HTMLInputElement | null>(null);
@@ -5522,7 +5524,8 @@ export function App() {
   const validatedFeature = useValidatedFeatureCommit({
     manager: () => managerRef.current,
     derive: (document) => syncCandidate(document),
-    deriveCancellable: rebuildImportInDisposableWorker,
+    deriveCancellable: (document, signal) =>
+      rebuildInDisposableWorker(document, signal),
     commit: (command, derived) => executeCommand(command, derived ?? undefined),
     commitTransaction: (label, commands, derived) =>
       executeTransaction(label, commands, derived ?? undefined),
@@ -6270,6 +6273,27 @@ export function App() {
   assemblyEditDisabledReasonRef.current = assemblyEditDisabledReason;
   const projectRenameDisabledReasonRef = useRef(projectRenameDisabledReason);
   projectRenameDisabledReasonRef.current = projectRenameDisabledReason;
+  // An import into a project that is still empty and still wears its
+  // suggested name names the project for the file once the import lands as
+  // its first content (lib/importProjectName, loaded with the first import:
+  // the main chunk is at its size budget).
+  const importNamingRef = useRef<
+    ((next: ProjectDocument) => string | null | undefined) | null
+  >(null);
+  useEffect(() => {
+    const name = doc ? importNamingRef.current?.(doc) : null;
+    if (name === undefined) return;
+    importNamingRef.current = null;
+    if (doc && name && projectRenameDisabledReasonRef.current === null) {
+      executeCommand(
+        commandFactories.renameNode({ nodeId: doc.rootNodeId, name }),
+        undefined,
+        'rename'
+      );
+    }
+    // executeCommand is this render's, which holds the changed document.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc]);
 
   /** "Cannot use Box: …": one stop, even after a reason that ends in "…". */
   function cannotSentence(action: string, reason: string): string {
@@ -10962,6 +10986,18 @@ export function App() {
    */
   function cancelInPlaceCommand() {
     const editing = inPlaceRef.current.editing;
+    // A pattern's Done still rebuilding is stopped by the card's Cancel too,
+    // as by the pill's Cancel pattern: told to wait instead, the card read
+    // as having no way out of a minute-long rebuild. The command stays open
+    // with its picks, since nothing was added.
+    if (
+      patternAbortRef.current &&
+      !editing &&
+      isInPlacePatternTool(inPlaceRef.current.tool)
+    ) {
+      cancelPattern();
+      return;
+    }
     // A Done still validating keeps the command, and its selection, open.
     if (!inPlaceRef.current.cancel()) return;
     if (editing) {
@@ -17342,6 +17378,9 @@ export function App() {
   }
 
   async function handleImportFiles(files: File[]) {
+    importNamingRef.current = doc
+      ? (await import('./lib/importProjectName')).watchImportNaming(doc, files)
+      : null;
     const shaprFiles = files.filter((file) => /\.shapr$/i.test(file.name));
     if (shaprFiles.length === 0) {
       if (files.length !== 1) {
@@ -17385,6 +17424,8 @@ export function App() {
       inspection: null
     });
     try {
+      const { inspectShaprPair } =
+        await import('./lib/shaprImportWorkerClient');
       const inspection = await inspectShaprPair(shaprFile, sourceStepFile, {
         signal: controller.signal,
         onProgress: (progress) => {
@@ -17442,12 +17483,6 @@ export function App() {
     ) {
       return;
     }
-    const migration = shaprMigrationDraft({
-      ir: pending.inspection.ir,
-      shaprFileName: pending.shaprFile.name,
-      stepFileName: pending.sourceStepFile.name,
-      stepChecksumSha256: pending.inspection.stepChecksumSha256
-    });
     const importId = toShaprImportId(`shapr_${crypto.randomUUID()}`);
     setPendingShaprImport((current) =>
       current
@@ -17459,6 +17494,30 @@ export function App() {
           }
         : null
     );
+    // Loaded here, after the card says it is applying, so a second click
+    // during the load finds the apply already under way.
+    let shaprMigrationDraft: typeof ShaprMigrationDraftFn;
+    try {
+      ({ shaprMigrationDraft } = await import('./lib/shaprMigration'));
+    } catch (error) {
+      setPendingShaprImport((current) =>
+        current
+          ? {
+              ...current,
+              phase: 'preview',
+              progress: 'Preview ready.',
+              error: errorMessage(error, 'The import could not start.')
+            }
+          : null
+      );
+      return;
+    }
+    const migration = shaprMigrationDraft({
+      ir: pending.inspection.ir,
+      shaprFileName: pending.shaprFile.name,
+      stepFileName: pending.sourceStepFile.name,
+      stepChecksumSha256: pending.inspection.stepChecksumSha256
+    });
     const shaprAbort = startImportAbort();
     const { runStepImport } = await stepImportRun();
     const result = await runStepImport({
@@ -17885,6 +17944,60 @@ export function App() {
     }
   }
 
+  /**
+   * File → Insert project…: another project's bodies come into this one as
+   * one undoable step, each keeping its name, colour and opacity, filed in a
+   * folder named after the project. A copy of the solids, not of the
+   * history, and no link back (AS01). See `lib/projectInsertRun.ts`.
+   */
+  async function handleInsertProject(file: File) {
+    if (!managerRef.current || !doc || !ensureCanEdit('insert a project')) {
+      return;
+    }
+    if (importAbortRef.current) {
+      setStatus(
+        'Another import is still running. Try again once it completes.'
+      );
+      return;
+    }
+    const importManager = managerRef.current;
+    const abort = startImportAbort();
+    try {
+      let insert: Awaited<ReturnType<typeof projectInsertRun>>;
+      try {
+        insert = await projectInsertRun();
+      } catch (error) {
+        // A chunk that will not load (offline, a deploy since this page
+        // loaded) has no run to report it; say so on the card.
+        refuseImportOnCard(
+          file.name,
+          errorMessage(error, `Could not insert ${file.name}.`)
+        );
+        return;
+      }
+      await insert.runProjectInsert({
+        file,
+        ownerUserId: session?.userId ?? localUserId,
+        signal: abort.signal,
+        progress: createImportProgressSink(),
+        setStatus,
+        stillCurrent: () => managerRef.current === importManager,
+        onFailure: () => trackDetail('error_import'),
+        stepImport: {
+          archive: archiveArtifact,
+          validatedFeature,
+          status: { setStatus, setFeatureFormError },
+          marks: importMarks(),
+          currentDocument: () => managerRef.current?.document ?? null,
+          editDisabledReason: () => editDisabledReasonRef.current,
+          newId: () => crypto.randomUUID()
+        }
+      });
+    } finally {
+      finishImportAbort(abort);
+    }
+  }
+
   async function handleDownloadProjectArtifact(artifact: ArtifactRecord) {
     try {
       const { downloadProjectArtifact } =
@@ -18271,7 +18384,7 @@ export function App() {
     switch (command) {
       case 'open-model':
         void openDesktopCadFile()
-          .then((file) => (file ? handleImportFile(file) : undefined))
+          .then((file) => (file ? handleImportFiles([file]) : undefined))
           .catch((error) => {
             setStatus(errorMessage(error, 'Could not open the CAD model.'));
           });
@@ -23283,7 +23396,20 @@ export function App() {
         ? inPlaceEditSeedFor(current, feature)
         : null;
     },
-    derive: (document) => syncCandidate(document),
+    // A pattern's frame is built as the live rebuild after its Done will
+    // be, with the live lineage demand: Done commits the frame's own result
+    // (see `commit`), and that rebuild then restores the frame instead of
+    // replaying the whole history in the other lineage mode, which built a
+    // large grid a second time.
+    derive: (document, signal) =>
+      syncCandidate(
+        document,
+        undefined,
+        isInPlacePatternTool(inPlaceRef.current.tool)
+          ? geometry.liveLineageDemand()
+          : undefined,
+        { signal }
+      ),
     buildCommand: (request, title, edit) => {
       if (edit) {
         const command = inPlaceEditCommand(request, edit);
@@ -23296,10 +23422,16 @@ export function App() {
           resultBodyId: inPlaceEditResultBodyId(request, edit)
         };
       }
-      const command = inPlaceCommandFor(request, title);
+      // A pattern's frame is named as its commit names it, so Done can land
+      // this very command and keep the rebuild the frame already made.
+      const command = inPlaceCommandFor(
+        request,
+        request.tool === 'pattern' ? newFeatureName(title) : title
+      );
       const datum = inPlaceDatum(request, command);
       const base = managerRef.current?.document;
       return {
+        command,
         validate: (document) => command.validate(document),
         apply: (document) => command.apply(document),
         resultBodyId: inPlaceResultBodyId(request, command),
@@ -23311,7 +23443,7 @@ export function App() {
           : {})
       };
     },
-    commit: (request, title, edit, withdrawn) => {
+    commit: (request, title, edit, withdrawn, previewed) => {
       // A command closed while its Done validates (another tool, a new
       // selection) withdraws the candidate: nothing lands after it is gone.
       if (edit) {
@@ -23328,7 +23460,10 @@ export function App() {
         return;
       }
       const name = newFeatureName(title);
-      const command = inPlaceCommandFor(request, name);
+      // The frame Done was pressed on built this pattern already; see below.
+      const previewedPattern =
+        request.tool === 'pattern' ? (previewed?.built.command ?? null) : null;
+      const command = previewedPattern ?? inPlaceCommandFor(request, name);
       const datum = inPlaceDatum(request, command);
       if (datum) {
         // A datum has no body to validate: its resolved frame or line is
@@ -23349,13 +23484,26 @@ export function App() {
       const resultBodyId = inPlaceResultBodyId(request, command);
       if (request.tool === 'pattern' && resultBodyId) {
         // Through the pattern runner, so a large pattern shows its progress
-        // and can be stopped, as the card's did.
+        // and can be stopped, as the card's did. Its rebuild runs in a
+        // disposable worker so Cancel can stop it; that worker starts cold
+        // and replays the whole history, which on a 10 × 10 grid repeated a
+        // minute-long preview. The preview's own exact rebuild of this same
+        // command is judged instead while the model has not moved.
         return runPattern(command, {
           featureName: name,
           resultBodyId,
           successMessage: commandOutcomeMessage(command.label),
           onSuccess: finishFeatureCreation,
-          cancelled: withdrawn
+          cancelled: withdrawn,
+          ...(previewedPattern && previewed
+            ? {
+                prebuilt: {
+                  projectId: previewed.document.projectId,
+                  version: previewed.baseVersion,
+                  derived: previewed.derived
+                }
+              }
+            : {})
         }).then((outcome) => outcome === 'committed');
       }
       // The command stays open until this lands: refused or held off by
@@ -31763,6 +31911,14 @@ export function App() {
       run: () => projectImportInputRef.current?.click()
     },
     {
+      id: 'file-insert-project',
+      label: 'Insert project…',
+      group: 'File',
+      keywords: ['merge', 'combine', 'add', 'openzcad', 'into'],
+      icon: <Upload size={16} aria-hidden="true" />,
+      run: () => projectInsertInputRef.current?.click()
+    },
+    {
       // The face outline export used to be a tab on the tool card, where it
       // sat among edit modes and cost that card a quarter of its width.
       id: 'file-export-face-dxf',
@@ -32847,6 +33003,7 @@ export function App() {
           geometryFailed={geometry.state.phase === 'failed'}
           projectTransferBusy={projectTransferBusy}
           onImportProject={(file) => void handleImportProject(file)}
+          onInsertProject={(file) => void handleInsertProject(file)}
           onExportProject={() => void handleExportProject()}
           onDownloadArtifact={(artifact) =>
             void handleDownloadProjectArtifact(artifact)
@@ -33699,7 +33856,8 @@ export function App() {
                     />
                   )}
                   {assembleMode && (
-                    <MotionStudyTimeline
+                    <MotionStudyTimelineSlot
+                      resetKey={doc.projectId}
                       floating
                       assembly={doc.assembly}
                       lengthUnit={doc.units}
@@ -34676,7 +34834,7 @@ export function App() {
               file is moving, the pill is the one notice about it. */}
           <div className="activity-lane">
             {patternProgress && (
-              <PatternProgress
+              <PatternProgressSlot
                 name={patternProgress.name}
                 onCancel={cancelPattern}
               />
@@ -35165,6 +35323,17 @@ export function App() {
               const file = event.currentTarget.files?.[0];
               event.currentTarget.value = '';
               if (file) void handleImportProject(file);
+            }}
+          />
+          <input
+            ref={projectInsertInputRef}
+            type="file"
+            accept={fileAccept('.openzcad')}
+            hidden
+            onChange={(event) => {
+              const file = event.currentTarget.files?.[0];
+              event.currentTarget.value = '';
+              if (file) void handleInsertProject(file);
             }}
           />
           <input

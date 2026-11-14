@@ -31,6 +31,7 @@ import {
 import {
   createBodyFeatureIds,
   numberedFeatureName,
+  type BodyFeatureIds,
   type ImportedStepInput
 } from '@openzcad/document-core';
 import {
@@ -174,6 +175,22 @@ export interface StepImportCommitHook {
   ): Promise<ValidatedFeatureOutcome>;
 }
 
+/**
+ * How a caller that knows the file's structure lays its solids out as bodies,
+ * replacing the default of one body per readable solid.
+ */
+export interface StepImportLayout {
+  /** The undo step's name. */
+  label: string;
+  /** Bodies in creation order, each from its own declared solid indices. */
+  bodies: { name: string; solidIndices: number[] }[];
+  /**
+   * Commands that land with the bodies in the same undo step — appearance,
+   * a folder — given each body's ids in the order of {@link bodies}.
+   */
+  extras?(ids: readonly BodyFeatureIds[]): AnyCommand[];
+}
+
 export interface StepImportRunDeps {
   file: File;
   /** Kernel discovery for ordinary STEP imports; guided imports retain their compound contract. */
@@ -215,12 +232,32 @@ export interface StepImportRunDeps {
   currentDocument(): ProjectDocument | null;
   /** Non-null while editing is blocked: View mode, or another tab's lease. */
   editDisabledReason(): string | null;
+  /**
+   * False once the project this import was started for is no longer the one
+   * open. Checked just before the commit hook takes the run over: the hook
+   * binds to whichever project is open when it starts, so a switch during
+   * the storage write or solid discovery would otherwise land the bodies in
+   * the project switched to.
+   */
+  stillCurrent?(): boolean;
   /** Unique per call. `crypto.randomUUID` in the app. */
   newId(): string;
   /** Alternate atomic command for imports that carry additional evidence. */
   commandFactory?(payload: ImportedStepInput): AnyCommand;
+  /**
+   * Groups the readable solids (declared indices, in file order) into named
+   * bodies. Not combined with {@link commandFactory}.
+   */
+  layout?(input: {
+    solidIndices: readonly number[];
+    document: ProjectDocument | null;
+  }): StepImportLayout;
   validatingMessage?: string;
-  successMessage?(input: { fileName: string; archived: boolean }): string;
+  successMessage?(input: {
+    fileName: string;
+    archived: boolean;
+    bodies: number;
+  }): string;
   /** Overridable so a test need not build a 128 MB file. */
   limits?: { maxSourceBytes?: number; maxEmbeddedBytes?: number };
 }
@@ -276,6 +313,7 @@ function isCancellation(error: unknown, signal?: AbortSignal): boolean {
 function importRunOutcome(input: {
   outcome: ValidatedFeatureOutcome | 'failed';
   archived: boolean;
+  bodies: number;
   rejection: string | null;
   thrown: string | null;
 }): ImportRunOutcome {
@@ -290,7 +328,11 @@ function importRunOutcome(input: {
       // source never reached the cloud is a project no other device can
       // rebuild. That is worth an amber pill and a button, not a tick.
       return input.archived
-        ? { tone: 'ok', message: '1 body', landed: true }
+        ? {
+            tone: 'ok',
+            message: input.bodies === 1 ? '1 body' : `${input.bodies} bodies`,
+            landed: true
+          }
         : {
             tone: 'warning',
             message: 'saved on this device only',
@@ -430,6 +472,8 @@ export async function runStepImport(
   let outcome: ValidatedFeatureOutcome | 'failed' = 'failed';
   /** What went wrong on the way, when nothing ever reached a verdict. */
   let thrown: string | null = null;
+  /** How many bodies the run makes, for the card's last line. */
+  let bodyCount = 1;
   try {
     stopIfCancelled();
     // Hash, store, inspect and archive exactly the same sanitized source.
@@ -517,33 +561,53 @@ export async function runStepImport(
     // Empty discovery still runs the ordinary validator so its precise refusal
     // and source-cleanup behavior are preserved. Never infer solid count/order
     // from STEP text: assembly instances and rejected shells change both.
+    const layout = deps.layout?.({ solidIndices, document: current });
+    if (layout && layout.bodies.length === 0) {
+      throw new Error(`No body in ${file.name} could be read back.`);
+    }
     const selections = solidIndices.length > 1 ? solidIndices : [undefined];
+    const plans: { name: string; solidIndices?: number[] }[] = layout
+      ? layout.bodies
+      : selections.map((solidIndex, index) => ({
+          name: selections.length > 1 ? `${name} — Body ${index + 1}` : name,
+          ...(solidIndex === undefined ? {} : { solidIndices: [solidIndex] })
+        }));
     // Preassign every id so validation and the finalized command name the
     // same bodies, including when the source is archived after validation.
-    const payloads = selections.map((solidIndex, index) => ({
-      name: boundedName(
-        selections.length > 1 ? `${name} — Body ${index + 1}` : name
-      ),
+    const payloads = plans.map((plan) => ({
+      name: boundedName(plan.name),
       ids: createBodyFeatureIds(),
       sourceName: file.name,
       ...(sourceRef ? { stepSourceRef: sourceRef } : { stepText }),
-      ...(solidIndex === undefined ? {} : { solidIndices: [solidIndex] })
+      ...(plan.solidIndices === undefined
+        ? {}
+        : { solidIndices: [...plan.solidIndices] })
     }));
+    bodyCount = payloads.length;
+    const extras = layout?.extras?.(payloads.map((payload) => payload.ids));
     const makeImport = (artifactId: string): AnyCommand => {
-      const commands = payloads.map((payload) =>
-        commandFactory({ ...payload, artifactId })
-      );
+      const commands = [
+        ...payloads.map((payload) =>
+          commandFactory({ ...payload, artifactId })
+        ),
+        ...(extras ?? [])
+      ];
       return commands.length === 1
         ? commands[0]!
-        : composeCommands('Import STEP bodies', commands);
+        : composeCommands(layout?.label ?? 'Import STEP bodies', commands);
     };
     // The artifact id is geometry-inert: the worker resolves source bytes by
     // checksum from the local blob store and reaches for the archive only as a
     // fallback. So a candidate validated against a provisional local id
     // rebuilds identically once the finalized id replaces it.
     const localArtifactId = `artifact_local_${deps.newId()}`;
+    if (deps.stillCurrent && !deps.stillCurrent()) {
+      throw new Error(
+        `${file.name} was not imported: the project changed before it could land.`
+      );
+    }
     outcome = await deps.validatedFeature.run(makeImport(localArtifactId), {
-      featureName: name,
+      featureName: layout?.label ?? name,
       resultBodyId: payloads[0]!.ids.bodyId,
       targets: payloads.map((payload) => ({
         featureName: payload.name,
@@ -616,7 +680,11 @@ export async function runStepImport(
       // rebuilt a body from it. Claiming the second before the rebuild ran is
       // what left a success toast next to an empty viewport.
       successMessage: () =>
-        deps.successMessage?.({ fileName: file.name, archived }) ??
+        deps.successMessage?.({
+          fileName: file.name,
+          archived,
+          bodies: payloads.length
+        }) ??
         (payloads.length === 1
           ? `Imported editable STEP solid from ${file.name}: `
           : `Imported ${payloads.length} editable STEP bodies from ${file.name}: `) +
@@ -668,7 +736,15 @@ export async function runStepImport(
   if (outcome === 'cancelled') {
     status.setStatus(`${file.name} was not imported: you cancelled it.`);
   }
-  progress?.finish(importRunOutcome({ outcome, archived, rejection, thrown }));
+  progress?.finish(
+    importRunOutcome({
+      outcome,
+      archived,
+      bodies: bodyCount,
+      rejection,
+      thrown
+    })
+  );
   if (!sourceRef) {
     return {
       outcome,

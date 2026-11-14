@@ -161,6 +161,17 @@ export interface InPlaceCommandBarProps {
   onCancel(): void;
 }
 
+/** Seconds a preview builds before the state pill starts counting them. */
+const PREVIEW_ELAPSED_AFTER_S = 2;
+
+/**
+ * What a field's entry still being typed became when Done applied it:
+ * nothing to apply, applied (the request changed), or refused.
+ */
+type EntryFlush = 'none' | 'applied' | 'refused';
+/** The fields' entries in progress, which Done applies before finishing. */
+type PendingEntries = Set<() => EntryFlush>;
+
 export function InPlaceCommandBar({
   title,
   hint,
@@ -189,6 +200,13 @@ export function InPlaceCommandBar({
   onCancel
 }: InPlaceCommandBarProps) {
   const commandRef = useRef<HTMLDivElement>(null);
+  const pendingEntries = useRef<PendingEntries>(new Set()).current;
+  /**
+   * The Done press under way found an entry it could not apply: that press
+   * finishes nothing, even once leaving the field gives the entry up and
+   * Done is enabled again with the value held before it.
+   */
+  const refusedPress = useRef(false);
   useLayoutEffect(() => {
     const command = commandRef.current;
     if (!command) return;
@@ -217,6 +235,21 @@ export function InPlaceCommandBar({
       setQueued(false);
     }
   }, [queued, canFinish, previewPending, locked, refusal, onDone]);
+  // A preview still being built says how long it has taken: a large
+  // pattern's took over a minute behind a still "Preview", which read as
+  // nothing happening at all.
+  const building = previewPending && !canFinish && !refusal && !locked;
+  const [buildingFor, setBuildingFor] = useState(0);
+  useEffect(() => {
+    setBuildingFor(0);
+    if (!building) return;
+    const started = Date.now();
+    const timer = window.setInterval(
+      () => setBuildingFor(Math.floor((Date.now() - started) / 1000)),
+      1000
+    );
+    return () => window.clearInterval(timer);
+  }, [building]);
   const refusalSummary = refusal
     ? modelingRefusalSummary(refusal, title)
     : null;
@@ -287,7 +320,9 @@ export function InPlaceCommandBar({
           : refusal
             ? 'Needs attention'
             : canFinish || previewPending
-              ? 'Preview'
+              ? building && buildingFor >= PREVIEW_ELAPSED_AFTER_S
+                ? `Preview · ${buildingFor} s`
+                : 'Preview'
               : ''}
       </span>
       <span
@@ -463,6 +498,7 @@ export function InPlaceCommandBar({
                       onRestore={onValueRestore}
                       onPreview={onValuePreview}
                       scope={scope}
+                      pendingEntries={pendingEntries}
                     />
                   );
                 })}
@@ -499,7 +535,39 @@ export function InPlaceCommandBar({
       <button
         type="button"
         className="in-place-command-done"
-        onClick={onDone}
+        onPointerDown={(event) => {
+          if (locked || event.button !== 0) return;
+          // A number still being typed in Options is what Done is meant to
+          // finish with. Leaving the field applied it only as the press
+          // went on, which held Done for its new preview, so the click was
+          // lost and the count typed seemed ignored. Applied here, Done
+          // waits for that preview and then finishes, as a queued Enter does.
+          let applied = false;
+          let refused = false;
+          for (const flush of pendingEntries) {
+            const outcome = flush();
+            if (outcome === 'applied') applied = true;
+            else if (outcome === 'refused') refused = true;
+          }
+          refusedPress.current = refused;
+          if (refused) return;
+          if (applied) setQueued(true);
+        }}
+        // A press whose click never came (the button was disabled under
+        // it) must not swallow a later keyboard Done.
+        onPointerCancel={() => {
+          refusedPress.current = false;
+        }}
+        onKeyDown={() => {
+          refusedPress.current = false;
+        }}
+        onClick={() => {
+          if (refusedPress.current) {
+            refusedPress.current = false;
+            return;
+          }
+          onDone();
+        }}
         disabled={locked || !canFinish}
         aria-keyshortcuts="Enter"
       >
@@ -718,7 +786,8 @@ function ValueRow({
   onCommit,
   onRestore,
   onPreview,
-  scope
+  scope,
+  pendingEntries
 }: {
   label: string;
   axes: readonly string[] | null;
@@ -728,6 +797,7 @@ function ValueRow({
   onRestore: ((valueId: string) => void) | undefined;
   onPreview: ((valueId: string, value: number) => void) | undefined;
   scope: Record<string, number>;
+  pendingEntries?: PendingEntries;
 }) {
   const firstId = useId();
   const scrub = useRef<{
@@ -813,6 +883,7 @@ function ValueRow({
             onCommit={onCommit}
             onRestore={onRestore}
             scope={scope}
+            pendingEntries={pendingEntries}
           />
         ))}
       </div>
@@ -828,7 +899,8 @@ function ValueField({
   locked,
   onCommit,
   onRestore,
-  scope
+  scope,
+  pendingEntries
 }: {
   id: string | undefined;
   field: InPlaceOptionValue;
@@ -838,6 +910,7 @@ function ValueField({
   onCommit(valueId: string, text: string): boolean;
   onRestore: ((valueId: string) => void) | undefined;
   scope: Record<string, number>;
+  pendingEntries?: PendingEntries;
 }) {
   // The text being typed, while the field has focus; else what is held.
   const [draft, setDraft] = useState<string | null>(null);
@@ -903,6 +976,22 @@ function ValueField({
   useEffect(() => {
     missingName.current = undefinedName;
   }, [undefinedName]);
+  // Done applies the entry in progress before it finishes (see the bar).
+  const flushEntry = useRef<() => EntryFlush>(() => 'none');
+  flushEntry.current = () => {
+    if (draft === null || draft.trim() === field.text.trim()) return 'none';
+    if (!commit(draft)) return 'refused';
+    setDraft(null);
+    return 'applied';
+  };
+  useEffect(() => {
+    if (!pendingEntries) return;
+    const flush = () => flushEntry.current();
+    pendingEntries.add(flush);
+    return () => {
+      pendingEntries.delete(flush);
+    };
+  }, [pendingEntries]);
   /** The entry given up: the field holds its value again, refusal gone. */
   const giveUp = () => {
     setDraft(null);
