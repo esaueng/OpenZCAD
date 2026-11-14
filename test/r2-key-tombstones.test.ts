@@ -319,7 +319,7 @@ describe('claimed R2 deletes (PR #1473 review)', () => {
 });
 
 describe('a staged decryption revision whose asset repair failed', () => {
-  it('is repaired by its retry before the retry answers staged', async () => {
+  it('is not journaled, and its retry stages it again with its assets', async () => {
     const { D1R2PersistenceService } =
       await import('@openzcad/cloudflare-adapters');
     const { createSavedRevision } = await import('@openzcad/document-core');
@@ -375,13 +375,22 @@ describe('a staged decryption revision whose asset repair failed', () => {
     await expect(service.stageDecryptedDocument(OWNER, input)).rejects.toThrow(
       'transient re-put outage'
     );
+    // The save state is not journaled as staged until its assets are in
+    // R2: no revision row landed, so the retry stages it again.
     expect(
       db.prepare('SELECT id FROM revisions WHERE id = ?').get(revisionId)
-    ).toEqual({ id: revisionId });
+    ).toBeUndefined();
     expect(bucket.objects.has(assetKey)).toBe(false);
     putMock.mockImplementation(put);
     const retried = await service.stageDecryptedDocument(OWNER, input);
-    expect(retried.staged).toBe(true);
+    expect(retried.staged).toBe(false);
+    expect(bucket.objects.has(assetKey)).toBe(true);
+    expect(
+      db.prepare('SELECT id FROM revisions WHERE id = ?').get(revisionId)
+    ).toEqual({ id: revisionId });
+    // A retry after that answers staged, with its assets still in place.
+    const again = await service.stageDecryptedDocument(OWNER, input);
+    expect(again.staged).toBe(true);
     expect(bucket.objects.has(assetKey)).toBe(true);
   });
 });

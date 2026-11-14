@@ -4310,7 +4310,15 @@ export class D1R2PersistenceService implements PersistenceService {
             write.objectId,
             input.projectId
           )
-      ),
+      )
+    ];
+    // The save state's row is what the decryption journal lists as staged
+    // (and what the cutover then relies on), so it lands only after this
+    // write's source assets are verified in R2: first the object and asset
+    // rows (from then on no cleanup can claim those keys), then the repair,
+    // then the revision. A failed repair leaves no revision row, so a
+    // resumed run stages it again instead of skipping it.
+    const revisionStatements: D1PreparedStatement[] = [
       ...(revision && latest
         ? [
             this.env.DB.prepare(
@@ -4324,7 +4332,7 @@ export class D1R2PersistenceService implements PersistenceService {
                                 WHERE saved.project_id = ?
                                   AND saved.revision_id = ?
                                   AND author.id = ?), ?)
-               WHERE ${objectFence}`
+               WHERE ${objectFence} AND ${fence.sql}`
             ).bind(
               revision.revisionId,
               input.projectId,
@@ -4339,7 +4347,8 @@ export class D1R2PersistenceService implements PersistenceService {
               revision.authorUserId ?? null,
               userId,
               write.objectId,
-              input.projectId
+              input.projectId,
+              ...fence.binds
             )
           ]
         : [])
@@ -4355,7 +4364,15 @@ export class D1R2PersistenceService implements PersistenceService {
       await this.discardStagedWrite(input.projectId, write);
       throw new DecryptStagingLeaseError();
     }
+    // A failure here leaves an unreferenced staged object (the purge of
+    // superseded staged documents sweeps it) and no journal entry.
     await this.ensureWrittenAssets(write);
+    if (revisionStatements.length) {
+      const [inserted] = await this.env.DB.batch(revisionStatements);
+      if ((inserted?.meta?.changes ?? 0) !== 1) {
+        throw new DecryptStagingLeaseError();
+      }
+    }
     return {
       objectId: write.objectId,
       checksumSha256: write.prepared.checksumSha256,

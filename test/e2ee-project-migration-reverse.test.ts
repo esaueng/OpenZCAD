@@ -2916,3 +2916,73 @@ describe('claimed R2 deletes settle before their claims go (PR #1473 review)', (
     expect(rows(srv, 'SELECT object_key FROM r2_key_tombstones')).toEqual([]);
   });
 });
+
+describe('a browser resume after a failed asset repair (PR #1473 review, round 2)', () => {
+  it('stages the save state again and keeps its source, never purging the originals over a missing asset', async () => {
+    const srv = roomServer();
+    const { projectId, revisionIds } = await encryptedProject(srv, {
+      revisions: 1
+    });
+    const r = reverseOn(srv, owner, 'owner_desktop');
+    // A legacy retained save state holds an embedded STEP source the head
+    // does not; staging it is the only way that source reaches plaintext.
+    const load = r.d.store.loadRevision.bind(r.d.store);
+    r.d.store.loadRevision = async (p: string, id: string) => {
+      const original = await load(p, id);
+      if (!original) return original;
+      const manager = new CommandManager(original);
+      manager.execute(
+        commandFactories.importStep({
+          name: 'Historical embedded source',
+          sourceName: 'old.step',
+          artifactId: 'artifact_local_historical',
+          stepText: `ISO-10303-21;\n${'CLOSED_SHELL'.repeat(20_000)}\nEND-ISO-10303-21;`
+        })
+      );
+      return {
+        ...manager.document,
+        version: original.version,
+        revisions: original.revisions
+      };
+    };
+    const putMock = srv.bucket.put as unknown as Mock<
+      (key: string, body: ArrayBuffer | Uint8Array) => Promise<void>
+    >;
+    const put = putMock.getMockImplementation()!;
+    let assetKey = '';
+    let assetPuts = 0;
+    putMock.mockImplementation(async (key, body) => {
+      if (key.includes('/assets/')) {
+        assetKey = key;
+        assetPuts++;
+        // A cleanup removed the first put's bytes before the rows landed...
+        if (assetPuts === 1) return;
+        // ...and storing them again after the commit fails once.
+        if (assetPuts === 2) {
+          throw new Error('transient post-commit asset repair failure');
+        }
+      }
+      return put(key, body);
+    });
+    await expect(decryptFully(r, projectId)).rejects.toMatchObject({
+      status: 500
+    });
+    expect(assetPuts).toBe(2);
+    // Not journaled: the save state has no plaintext row yet.
+    expect(
+      rows(srv, 'SELECT id FROM revisions WHERE project_id = ?', projectId)
+    ).toEqual([]);
+    expect(srv.bucket.objects.has(assetKey)).toBe(false);
+    putMock.mockImplementation(put);
+    // Retry: the same browser stages the save state again, then cuts over.
+    await decryptFully(r, projectId);
+    expect(migrationRow(srv, projectId)).toMatchObject({ state: 'done' });
+    expectNoCiphertext(srv, projectId);
+    expect(srv.bucket.objects.has(assetKey)).toBe(true);
+    const opened = await srv.call(
+      'GET',
+      `/api/projects/${projectId}/revisions/${revisionIds[0]}`
+    );
+    expect(opened.status).toBe(200);
+  });
+});
