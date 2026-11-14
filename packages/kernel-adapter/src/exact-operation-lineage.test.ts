@@ -13,6 +13,8 @@ import type * as LineageBuilders from './exact-lineage-builders';
 import { topologyCandidatesForSolid } from './exact-lineage-builders';
 import {
   carryAnalyticFaces,
+  draftLineage,
+  shellLineage,
   withBoundaryEdgeLineage
 } from './exact-operation-lineage';
 
@@ -153,5 +155,230 @@ describe('verified operation lineage', () => {
     expect(
       withBoundaryEdgeLineage(kernel, 1, feature, duplicate).edgeReferences.size
     ).toBe(0);
+  });
+});
+
+/**
+ * A planar face for the shell/draft matchers: its witness, its outward
+ * normal and one vertex on it (the vertex mean the matchers read).
+ */
+interface PlaneFace {
+  handle: number;
+  normal: [number, number, number];
+  point: [number, number, number];
+}
+
+const planeWitness = (face: PlaneFace): FaceWitnessV1 => ({
+  surfaceType: 'plane',
+  perimeter: 40 + face.handle,
+  centroid: face.point.map((value) => Math.round(value * 1e6)) as [
+    number,
+    number,
+    number
+  ],
+  analytic: {
+    kind: 'plane',
+    normal: face.normal.map((value) => Math.round(value * 1e9)) as [
+      number,
+      number,
+      number
+    ],
+    offset: Math.round(
+      (face.normal[0] * face.point[0] +
+        face.normal[1] * face.point[1] +
+        face.normal[2] * face.point[2]) *
+        1e6
+    )
+  },
+  closure: { u: 'open', v: 'open' }
+});
+
+/** Source solid 1 and result solid 2, read through the mocked candidates. */
+function planeKernel(
+  sourceFaces: readonly PlaneFace[],
+  resultFaces: readonly PlaneFace[]
+): RemusKernel {
+  const all = new Map(
+    [...sourceFaces, ...resultFaces].map((face) => [face.handle, face])
+  );
+  vi.mocked(topologyCandidatesForSolid).mockImplementation((_kernel, solid) =>
+    (solid === 1 ? sourceFaces : resultFaces).map((face) =>
+      f(face.handle, planeWitness(face))
+    )
+  );
+  return {
+    getSolidFaces: (solid: number) =>
+      new Uint32Array(
+        (solid === 1 ? sourceFaces : resultFaces).map((face) => face.handle)
+      ),
+    getFaceEdges: () => new Uint32Array([]),
+    getFaceNormal: (face: number) => Float64Array.from(all.get(face)!.normal),
+    getFaceVertices: (face: number) => new Uint32Array([face]),
+    getVertexPosition: (vertex: number) =>
+      Float64Array.from(all.get(vertex)!.point)
+  } as unknown as RemusKernel;
+}
+
+const named = (faces: readonly PlaneFace[], names: Record<number, string>) =>
+  createRemusSemanticLineage(
+    feature,
+    'primitive',
+    faces
+      .filter((face) => names[face.handle])
+      .map((face) => ({
+        ...f(face.handle, planeWitness(face)),
+        lineageName: names[face.handle]!
+      }))
+  );
+
+const constructedNames = (state: ReturnType<typeof shellLineage>) =>
+  [...(state?.faceReferences.values() ?? [])]
+    .map((reference) => reference.lineageName)
+    .filter((name) => /^(shell|draft)\.face\./.test(name));
+
+describe('constructed shell and draft names', () => {
+  const producer = toFeatureId('feature_constructed');
+  // Two coplanar top patches at z = 10; only A is named.
+  const topA: PlaneFace = { handle: 1, normal: [0, 0, 1], point: [5, 5, 10] };
+  const topB: PlaneFace = { handle: 2, normal: [0, 0, 1], point: [25, 5, 10] };
+  // The one inner wall a 2 mm shell leaves under them.
+  const inner: PlaneFace = { handle: 10, normal: [0, 0, 1], point: [5, 5, 8] };
+
+  it('names a shell’s inner wall when its source alone lands there', () => {
+    const kernel = planeKernel([topA], [inner]);
+    expect(
+      constructedNames(
+        shellLineage(
+          kernel,
+          1,
+          2,
+          named([topA], { 1: 'top-a' }),
+          producer,
+          [],
+          2
+        )
+      )
+    ).toEqual([`shell.face.inner.${JSON.stringify([feature, 'top-a'])}`]);
+  });
+
+  it('leaves the wall unnamed when an unnamed coplanar patch could own it', () => {
+    // An upstream edit can drop A's wall while B's survives; the one
+    // result face on the carrier must not take A's name.
+    const kernel = planeKernel([topA, topB], [inner]);
+    expect(
+      constructedNames(
+        shellLineage(
+          kernel,
+          1,
+          2,
+          named([topA, topB], { 1: 'top-a' }),
+          producer,
+          [],
+          2
+        )
+      )
+    ).toEqual([]);
+  });
+
+  it('leaves a rim unnamed when another patch shares its plane', () => {
+    const rim: PlaneFace = { handle: 10, normal: [0, 0, 1], point: [1, 1, 10] };
+    const alone = planeKernel([topA], [rim]);
+    expect(
+      constructedNames(
+        shellLineage(
+          alone,
+          1,
+          2,
+          named([topA], { 1: 'top-a' }),
+          producer,
+          [1],
+          2
+        )
+      )
+    ).toEqual([`shell.face.rim.${JSON.stringify([feature, 'top-a'])}`]);
+    // B, opened too or kept, can leave a face on the same plane.
+    const kernel = planeKernel([topA, topB], [rim]);
+    const source = named([topA, topB], { 1: 'top-a' });
+    for (const openings of [[1, 2], [1]]) {
+      expect(
+        constructedNames(
+          shellLineage(kernel, 1, 2, source, producer, openings, 2)
+        )
+      ).toEqual([]);
+    }
+  });
+
+  // Two coplanar +x patches drafted 10° about the z = 0 neutral plane.
+  const sideA: PlaneFace = { handle: 1, normal: [1, 0, 0], point: [10, 5, 5] };
+  const sideB: PlaneFace = { handle: 2, normal: [1, 0, 0], point: [10, 25, 5] };
+  const angle = (10 * Math.PI) / 180;
+  const turned: PlaneFace = {
+    handle: 10,
+    normal: [Math.cos(angle), 0, Math.sin(angle)],
+    point: [10, 5, 0]
+  };
+  const pull = { x: 0, y: 0, z: 1 };
+  const neutral = { x: 0, y: 0, z: 0 };
+
+  it('names a drafted face when its source alone turns onto the carrier', () => {
+    const kernel = planeKernel([sideA], [turned]);
+    expect(
+      constructedNames(
+        draftLineage(
+          kernel,
+          1,
+          2,
+          named([sideA], { 1: 'side-a' }),
+          producer,
+          [1],
+          pull,
+          neutral,
+          10
+        )
+      )
+    ).toEqual([`draft.face.${JSON.stringify([feature, 'side-a'])}`]);
+  });
+
+  it('leaves a drafted face unnamed when an unnamed coplanar patch turns there too', () => {
+    const kernel = planeKernel([sideA, sideB], [turned]);
+    expect(
+      constructedNames(
+        draftLineage(
+          kernel,
+          1,
+          2,
+          named([sideA, sideB], { 1: 'side-a' }),
+          producer,
+          [1, 2],
+          pull,
+          neutral,
+          10
+        )
+      )
+    ).toEqual([]);
+  });
+
+  it('names no drafted face beside one whose carrier it cannot predict', () => {
+    const slanted: PlaneFace = {
+      handle: 3,
+      normal: [0.6, 0, 0.8],
+      point: [0, 40, 5]
+    };
+    const kernel = planeKernel([sideA, slanted], [turned]);
+    expect(
+      constructedNames(
+        draftLineage(
+          kernel,
+          1,
+          2,
+          named([sideA, slanted], { 1: 'side-a' }),
+          producer,
+          [1, 3],
+          pull,
+          neutral,
+          10
+        )
+      )
+    ).toEqual([]);
   });
 });

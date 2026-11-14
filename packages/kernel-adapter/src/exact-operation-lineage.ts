@@ -377,6 +377,53 @@ function resultPlanes(
   return planes;
 }
 
+/** A plane carrier: a normal (either sense) and a point on it. */
+interface Carrier {
+  normal: Vec3;
+  point: Vec3;
+}
+
+function sameCarrier(left: Carrier, right: Carrier): boolean {
+  return liesOnPlane(left, right.normal, right.point);
+}
+
+/**
+ * Whether a source face other than `handle` — named or not — could produce a
+ * result face on one of `carriers`. A constructed name is evidence only when
+ * its source alone can land there: if a coplanar unnamed patch could too, an
+ * upstream edit that removes the named patch's result while the other one
+ * survives would hand the name to the wrong face, and a saved reference
+ * would bind to it instead of refusing.
+ */
+function contested(
+  handle: number,
+  carriers: readonly Carrier[],
+  claims: ReadonlyMap<number, readonly Carrier[]>
+): boolean {
+  for (const [other, claimed] of claims) {
+    if (other === handle) continue;
+    if (claimed.some((claim) => carriers.some((c) => sameCarrier(claim, c))))
+      return true;
+  }
+  return false;
+}
+
+/** Every planar source face, measured once, named or not. */
+function sourcePlanes(
+  kernel: RemusKernel,
+  witnesses: ReadonlyMap<number, FaceWitnessV1>
+): Map<number, OrientedPlane> | null {
+  const planes = new Map<number, OrientedPlane>();
+  for (const [handle, witness] of witnesses) {
+    if (witness.surfaceType !== 'plane') continue;
+    const plane = orientedPlaneOf(kernel, handle);
+    // A planar face that cannot be measured could land anywhere.
+    if (!plane) return null;
+    planes.set(handle, plane);
+  }
+  return planes;
+}
+
 /**
  * Shell: the faces the shell kept outside carry their identity by exact
  * witness or unique carrier, as a hole's do. Two kinds of face are new, and
@@ -387,6 +434,9 @@ function resultPlanes(
  * - `shell.face.inner.<source>`: the wall one thickness inside a kept planar
  *   face. The side is not assumed — both offsets are tried, and a face on
  *   either one, or two faces, leave the wall unnamed.
+ *
+ * Neither is named when another source face, named or not, could land on
+ * the same carrier (`contested`).
  *
  * Edges between two named faces then take boundary roles, so a later fillet
  * or chamfer on a shelled body follows an upstream dimension edit by name
@@ -420,22 +470,33 @@ export function shellLineage(
   // unnamed one can take the constructed name.
   const planes = resultPlanes(kernel, candidates);
   const assignments: RemusSemanticAssignment[] = [];
-  for (const handle of source.faceReferences.keys()) {
+  // An unmeasurable source plane could land on any carrier: name nothing
+  // new, but still publish what was carried.
+  const measured = sourcePlanes(kernel, sourceWitnesses);
+  // What each planar source face can become: an opening leaves a rim on
+  // its own plane; a kept face stays on its plane and may grow a wall one
+  // thickness to either side.
+  const constructed = new Map<number, Carrier[]>();
+  const claims = new Map<number, Carrier[]>();
+  for (const [handle, plane] of measured ?? []) {
+    const built = openings.has(handle)
+      ? [plane]
+      : [-thickness, thickness].map((step) => ({
+          normal: plane.normal,
+          point: add(plane.point, scale(plane.normal, step))
+        }));
+    constructed.set(handle, built);
+    claims.set(handle, openings.has(handle) ? built : [plane, ...built]);
+  }
+  for (const handle of measured ? source.faceReferences.keys() : []) {
     const witness = sourceWitnesses.get(handle);
     if (witness?.surfaceType !== 'plane') continue;
     const reference = verifiedSourceFace(source, handle, witness);
-    const plane = reference ? orientedPlaneOf(kernel, handle) : null;
-    if (!reference || !plane) continue;
+    const carriers = reference ? constructed.get(handle) : undefined;
+    if (!reference || !carriers || contested(handle, carriers, claims))
+      continue;
     const opening = openings.has(handle);
-    const face = opening
-      ? uniqueFaceOn(planes, [plane])
-      : uniqueFaceOn(
-          planes,
-          [-thickness, thickness].map((step) => ({
-            normal: plane.normal,
-            point: add(plane.point, scale(plane.normal, step))
-          }))
-        );
+    const face = uniqueFaceOn(planes, carriers);
     if (face === null || carried.faceReferences.has(face)) continue;
     const candidate = candidates.find(
       (c) => c.kind === 'face' && c.handle === face
@@ -463,7 +524,9 @@ export function shellLineage(
  * about its hinge — the line where it meets the neutral plane — by the draft
  * angle, toward or away from the pull. It takes `draft.face.<source>` only
  * when exactly one result face lies on either of those two constructed
- * carriers. A face the pull is not perpendicular to stays unnamed.
+ * carriers, and no other source face could land on either. A drafted
+ * planar face the pull is not perpendicular to has no predictable carrier,
+ * so its presence leaves every drafted face unnamed.
  */
 export function draftLineage(
   kernel: RemusKernel,
@@ -496,13 +559,25 @@ export function draftLineage(
   // unnamed one can take the constructed name.
   const planes = resultPlanes(kernel, candidates);
   const assignments: RemusSemanticAssignment[] = [];
-  for (const handle of drafted) {
-    const witness = sourceWitnesses.get(handle);
-    if (witness?.surfaceType !== 'plane') continue;
-    const reference = verifiedSourceFace(source, handle, witness);
-    const plane = reference ? orientedPlaneOf(kernel, handle) : null;
-    if (!reference || !plane) continue;
-    if (Math.abs(dot(plane.normal, pull)) > PARALLEL_SINE) continue;
+  // An unmeasurable source plane could land on any carrier: name nothing
+  // new, but still publish what was carried.
+  const measured = sourcePlanes(kernel, sourceWitnesses);
+  // What each planar source face can become: an undrafted face stays on its
+  // plane; a drafted one turns about its hinge either way. A drafted plane
+  // the pull is not perpendicular to has no carrier this can predict, so it
+  // could land on any, and no drafted face is named.
+  const tilted = new Map<number, Carrier[]>();
+  const claims = new Map<number, Carrier[]>();
+  let unpredictable = !measured;
+  for (const [handle, plane] of measured ?? []) {
+    if (!drafted.has(handle)) {
+      claims.set(handle, [plane]);
+      continue;
+    }
+    if (Math.abs(dot(plane.normal, pull)) > PARALLEL_SINE) {
+      unpredictable = true;
+      continue;
+    }
     const hinge = add(
       neutralPoint,
       scale(
@@ -510,16 +585,24 @@ export function draftLineage(
         dot(plane.normal, subtract(plane.point, neutralPoint))
       )
     );
-    const face = uniqueFaceOn(
-      planes,
-      [1, -1].map((sense) => ({
-        normal: add(
-          scale(plane.normal, Math.cos(angle)),
-          scale(pull, sense * Math.sin(angle))
-        ),
-        point: hinge
-      }))
-    );
+    const turned = [1, -1].map((sense) => ({
+      normal: add(
+        scale(plane.normal, Math.cos(angle)),
+        scale(pull, sense * Math.sin(angle))
+      ),
+      point: hinge
+    }));
+    tilted.set(handle, turned);
+    claims.set(handle, turned);
+  }
+  for (const handle of unpredictable ? [] : drafted) {
+    const witness = sourceWitnesses.get(handle);
+    if (witness?.surfaceType !== 'plane') continue;
+    const reference = verifiedSourceFace(source, handle, witness);
+    const carriers = reference ? tilted.get(handle) : undefined;
+    if (!reference || !carriers || contested(handle, carriers, claims))
+      continue;
+    const face = uniqueFaceOn(planes, carriers);
     if (face === null || carried.faceReferences.has(face)) continue;
     const candidate = candidates.find(
       (c) => c.kind === 'face' && c.handle === face
