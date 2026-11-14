@@ -61,6 +61,7 @@ import {
 } from '@openzcad/shared';
 import { countLabel } from '../lib/toasts';
 import { formatBytes } from '../lib/formatBytes';
+import { storageLimitOf, storageParts, storedBytes } from '../lib/storageUsage';
 import { fetchEncryptionAvailability } from '../lib/e2ee/availability';
 import {
   loadAccountShapeHint,
@@ -125,37 +126,14 @@ import {
   usePersonalInfoVisible
 } from './PersonalInfo';
 
-/**
- * The parts of the one storage allowance. Older servers (and the e2e stubs)
- * may omit them; an absent part reads as nothing stored.
- */
-function storageParts(usage: AccountStorageUsage): {
-  projects: number;
-  files: number;
-} {
-  const partial = usage as Partial<AccountStorageUsage>;
-  return {
-    projects: partial.projectStorageBytes ?? 0,
-    // Uploads in flight hold their room, so they read as files.
-    files: (partial.artifactBytes ?? 0) + (partial.artifactReservedBytes ?? 0)
-  };
-}
-
-/**
- * Everything the account stores, against its one allowance: project storage
- * and finalized files. Older servers send only the two parts.
- */
-function storedBytes(usage: AccountStorageUsage): number {
-  const { projects, files } = storageParts(usage);
-  return usage.storageBytes ?? projects + files;
-}
-
 /** What the one storage allowance is made of, and what it holds. */
 function storageHint(usage: AccountStorageUsage | null): string {
   if (!usage) {
     return 'Projects, save states, imports and exports saved to your account.';
   }
-  const { projects, files } = storageParts(usage);
+  const { projects, files: finalized, uploading } = storageParts(usage);
+  // Uploads in flight hold their room, so they read as files.
+  const files = finalized + uploading;
   const trashed = usage.trashedProjectCount ?? 0;
   const counts = [
     countLabel(usage.projectCount, 'project', 'projects'),
@@ -908,13 +886,7 @@ export function SettingsPage({
   }, [active, cloudFunctionsEnabled, session]);
 
   /** The owner's one storage allowance; older servers name it otherwise. */
-  const storageEntitlements =
-    storageUsage?.entitlements ?? session?.entitlements;
-  const storageLimit =
-    storageUsage?.storageLimitBytes ??
-    storageEntitlements?.storageLimitBytes ??
-    storageEntitlements?.projectStorageLimitBytes ??
-    (storageUsage as Partial<AccountStorageUsage> | null)?.artifactLimitBytes;
+  const storageLimit = storageLimitOf(storageUsage, session?.entitlements);
 
   // The Encryption section exists only for an account the server opened the
   // beta to; asked once per signed-in account while Settings is open.
