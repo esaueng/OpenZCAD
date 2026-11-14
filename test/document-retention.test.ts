@@ -131,6 +131,7 @@ describe('account storage accounting', () => {
       maxRevisionsPerProject: MAX_PROJECT_REVISIONS,
       artifactBytes: 0,
       artifactCount: 0,
+      artifactReservedBytes: 0,
       artifactLimitBytes: MAX_ACCOUNT_ARTIFACT_BYTES
     });
   });
