@@ -23,7 +23,11 @@ import {
 } from '../scripts/remus-artifacts.mjs';
 import { checkReleaseBuild } from '../scripts/check-release-build.mjs';
 import { RELEASE_BUILD_CHECK } from '../scripts/validate-deployment-config.mjs';
-import { remusArtifactGate } from '../apps/web/build/remusArtifactGate';
+import {
+  remusArtifactGate,
+  remusOutputStampPlugin,
+  stampRemusOutput
+} from '../apps/web/build/remusArtifactGate';
 
 const COMMIT = 'c'.repeat(40);
 const scratch: string[] = [];
@@ -168,6 +172,61 @@ describe('Remus package recording', () => {
         Object.keys(pinned.files).filter((key) => key.startsWith(`${pkg}/`))
       );
     }
+  });
+
+  it('refuses packaging rules it does not model instead of guessing', () => {
+    const upstream = ['package.json', 'a.js', 'a_bg.wasm', '.gitignore'];
+    const base = { main: 'a.js', files: ['a.js', 'a_bg.wasm'] };
+    expect(packedFiles(upstream, base)).toEqual([
+      'a.js',
+      'a_bg.wasm',
+      'package.json'
+    ]);
+    // A listed directory packs everything under it.
+    expect(
+      packedFiles([...upstream, 'snippets/x.js'], {
+        ...base,
+        files: [...base.files, 'snippets/']
+      })
+    ).toContain('snippets/x.js');
+    const refused: [string[], Record<string, unknown>, string][] = [
+      [upstream, { main: 'a.js' }, 'no "files" list'],
+      [upstream, { ...base, files: ['**/*.js', 'a_bg.wasm'] }, '**/*.js'],
+      [upstream, { ...base, files: ['a.js', '*.wasm'] }, '*.wasm'],
+      [upstream, { ...base, files: [...base.files, '!a.js'] }, '!a.js'],
+      [upstream, { ...base, files: [...base.files, '../x'] }, '../x'],
+      [upstream, { ...base, bin: 'cli.js' }, '"bin"'],
+      [upstream, { ...base, bin: { remus: 'cli.js' } }, '"bin"'],
+      [upstream, { ...base, directories: { bin: 'bin' } }, '"directories"'],
+      [upstream, { ...base, bundleDependencies: ['x'] }, 'bundleDependencies'],
+      [upstream, { ...base, scripts: { prepare: 'x' } }, '"prepare" script'],
+      [[...upstream, '.npmignore'], base, '.npmignore'],
+      [[...upstream, 'snippets/.npmignore'], base, 'snippets/.npmignore'],
+      [
+        [...upstream, 'snippets/.gitignore'],
+        base,
+        'nested snippets/.gitignore'
+      ],
+      [[...upstream, 'README.md'], base, 'unlisted root file README.md'],
+      [[...upstream, 'LICENSE'], base, 'unlisted root file LICENSE'],
+      [upstream, { ...base, main: 'b.cjs' }, '"main" b.cjs outside "files"']
+    ];
+    for (const [files, packageJson, rule] of refused) {
+      const attempt = () => packedFiles(files, packageJson);
+      expect(attempt).toThrow('Unsupported Remus packaging rule');
+      expect(attempt).toThrow(rule);
+      expect(attempt).toThrow('review the package manually');
+    }
+  });
+
+  it('refuses to record an upstream package with an unsupported packaging rule', () => {
+    const { upstream, record } = fixtureRepo();
+    const tree = new Map(upstream.get('crates/wasm/pkg'));
+    tree.set('snippets/.npmignore', 'b'.repeat(40));
+    upstream.set('crates/wasm/pkg', tree);
+    expect(() => record()).toThrow(
+      'Unsupported Remus packaging rule: snippets/.npmignore'
+    );
   });
 
   it('refuses a missing installed file instead of recording a smaller manifest', () => {
@@ -416,6 +475,10 @@ describe('Vite Remus package gate', () => {
 });
 
 describe('release build check', () => {
+  const GLUE = join('assets', 'kernel-hash.js');
+  const WASM = join('assets', 'remus_wasm_bg-hash.wasm');
+
+  /** A built output as the gated Vite build leaves it, stamp included. */
   function releaseFixture() {
     const repo = fixtureRepo();
     const dist = join(repo.root, 'dist');
@@ -427,6 +490,21 @@ describe('release build check', () => {
         readFileSync(join(repo.packageDirs[pkg]!, `${stem}_bg.wasm`))
       );
     }
+    // The bundled glue that loads the modules, a worker, the page and an
+    // unrelated WebAssembly module (sqlite); the stamp covers all of them.
+    writeFileSync(
+      join(dist, GLUE),
+      'import u from "./remus_wasm_bg-hash.wasm?url";'
+    );
+    writeFileSync(
+      join(dist, 'assets', 'worker-hash.js'),
+      'import "./kernel-hash.js";'
+    );
+    writeFileSync(join(dist, 'assets', 'sqlite3-hash.wasm'), '\0asmsqlite');
+    writeFileSync(
+      join(dist, 'index.html'),
+      '<script src="/assets/kernel-hash.js">'
+    );
     const verified = verifyRemusArtifacts({ repoRoot: repo.root });
     const writeMeta = (remus: Record<string, unknown>) =>
       writeFileSync(
@@ -437,63 +515,157 @@ describe('release build check', () => {
           remus
         })
       );
-    writeMeta({ version: '2026.1.1', commit: COMMIT, artifacts: verified });
-    return { ...repo, dist, verified, writeMeta };
+    writeMeta({
+      version: '2026.1.1',
+      commit: COMMIT,
+      artifacts: { ...verified }
+    });
+    // What the build's last writeBundle hook does.
+    stampRemusOutput({ repoRoot: repo.root, dist });
+    const meta = () =>
+      JSON.parse(readFileSync(join(dist, 'build-meta.json'), 'utf8')) as {
+        remus: { artifacts: Record<string, unknown> };
+      };
+    const check = () =>
+      checkReleaseBuild({ repoRoot: repo.root, dist: 'dist' });
+    return { ...repo, dist, verified, writeMeta, meta, check };
   }
 
-  it('accepts a stamped build that ships the pinned modules', () => {
-    const { root, verified } = releaseFixture();
-    expect(checkReleaseBuild({ repoRoot: root, dist: 'dist' })).toEqual(
-      verified
+  it('accepts a stamped build and records where each module was emitted', () => {
+    const { verified, meta, check } = releaseFixture();
+    expect(check()).toEqual(verified);
+    const { artifacts } = meta().remus;
+    expect(artifacts.modules).toEqual({
+      'remus-wasm-io/remus_wasm_io_bg.wasm': [
+        'assets/remus_wasm_io_bg-hash.wasm'
+      ],
+      'remus-wasm/remus_wasm_bg.wasm': ['assets/remus_wasm_bg-hash.wasm']
+    });
+    const output = artifacts.output as { files: number; sha256: string };
+    expect(output.files).toBe(6);
+    expect(output.sha256).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it('refuses output whose bundled Remus glue was modified', () => {
+    const { dist, check } = releaseFixture();
+    writeFileSync(join(dist, GLUE), 'globalThis.kernel = "other";');
+    expect(check).toThrow('does not match the output its gated build stamped');
+  });
+
+  it('refuses output whose bundled Remus glue was deleted', () => {
+    const { dist, check } = releaseFixture();
+    rmSync(join(dist, GLUE));
+    expect(check).toThrow('does not match the output its gated build stamped');
+  });
+
+  it('refuses a valid stamp copied onto other output', () => {
+    const first = releaseFixture();
+    const second = releaseFixture();
+    writeFileSync(join(second.dist, GLUE), 'other glue for the same modules');
+    writeFileSync(
+      join(second.dist, 'build-meta.json'),
+      readFileSync(join(first.dist, 'build-meta.json'))
+    );
+    expect(second.check).toThrow(
+      'does not match the output its gated build stamped'
+    );
+  });
+
+  it('checks each module at its emitted path, not any matching copy', () => {
+    const { dist, check } = releaseFixture();
+    // A genuine copy elsewhere does not excuse a modified loaded module.
+    writeFileSync(join(dist, 'decoy.wasm'), readFileSync(join(dist, WASM)));
+    writeFileSync(join(dist, WASM), '\0asmmodified');
+    expect(check).toThrow(
+      'does not ship the pinned remus-wasm/remus_wasm_bg.wasm at assets/remus_wasm_bg-hash.wasm'
+    );
+  });
+
+  it('refuses a decoy module added beside the genuine one', () => {
+    const { dist, check } = releaseFixture();
+    writeFileSync(join(dist, 'assets', 'decoy.wasm'), '\0asmdecoy');
+    expect(check).toThrow('does not match the output its gated build stamped');
+  });
+
+  it('refuses a stamp without emitted module paths or with paths outside the output', () => {
+    const { dist, meta, check } = releaseFixture();
+    const stamped = meta();
+    const write = (artifacts: Record<string, unknown>) =>
+      writeFileSync(
+        join(dist, 'build-meta.json'),
+        JSON.stringify({
+          ...stamped,
+          remus: { ...stamped.remus, artifacts }
+        })
+      );
+    const withoutModules = { ...stamped.remus.artifacts };
+    delete withoutModules.modules;
+    write(withoutModules);
+    expect(check).toThrow('does not record where its gated build emitted');
+    write({
+      ...stamped.remus.artifacts,
+      modules: {
+        ...(stamped.remus.artifacts.modules as object),
+        'remus-wasm/remus_wasm_bg.wasm': ['../outside.wasm']
+      }
+    });
+    expect(check).toThrow('records an invalid path for remus-wasm');
+  });
+
+  it('refuses to stamp output that does not ship a pinned module', () => {
+    const { root, dist } = releaseFixture();
+    rmSync(join(dist, WASM));
+    expect(() => stampRemusOutput({ repoRoot: root, dist })).toThrow(
+      'does not ship the pinned remus-wasm/remus_wasm_bg.wasm'
     );
   });
 
   it('refuses local overlay output', () => {
-    const { root, verified, writeMeta } = releaseFixture();
+    const { verified, writeMeta, check } = releaseFixture();
     writeMeta({
       version: '2026.1.1+local',
       commit: COMMIT,
       local: true,
       artifacts: verified
     });
-    expect(() => checkReleaseBuild({ repoRoot: root, dist: 'dist' })).toThrow(
-      '+local'
-    );
+    expect(check).toThrow('+local');
   });
 
   it('refuses unstamped or stale output', () => {
-    const { root, verified, writeMeta } = releaseFixture();
+    const { root, verified, writeMeta, check } = releaseFixture();
     writeMeta({ version: '2026.1.1', commit: COMMIT });
-    expect(() => checkReleaseBuild({ repoRoot: root, dist: 'dist' })).toThrow(
-      'was not built from the verified'
-    );
+    expect(check).toThrow('was not built from the verified');
     writeMeta({
       version: '2026.1.1',
       commit: COMMIT,
       artifacts: { ...verified, manifestSha256: sha256(Buffer.from('old')) }
     });
-    expect(() => checkReleaseBuild({ repoRoot: root, dist: 'dist' })).toThrow(
-      'was not built from the verified'
-    );
+    expect(check).toThrow('was not built from the verified');
     expect(() =>
       checkReleaseBuild({ repoRoot: root, dist: 'missing' })
     ).toThrow('no build metadata');
   });
 
-  it('refuses output whose WebAssembly is not the pinned module', () => {
-    const { root, dist } = releaseFixture();
-    writeFileSync(join(dist, 'assets', 'remus_wasm_bg-hash.wasm'), 'other');
-    expect(() => checkReleaseBuild({ repoRoot: root, dist: 'dist' })).toThrow(
-      'does not ship the pinned remus-wasm/remus_wasm_bg.wasm'
-    );
+  it('refuses output when the installed packages no longer verify', () => {
+    const { packageDirs, check } = releaseFixture();
+    writeFileSync(join(packageDirs['remus-wasm']!, 'NOTICE'), 'changed');
+    expect(check).toThrow('remus-wasm/NOTICE');
   });
 
-  it('refuses output when the installed packages no longer verify', () => {
-    const { root, packageDirs } = releaseFixture();
-    writeFileSync(join(packageDirs['remus-wasm']!, 'NOTICE'), 'changed');
-    expect(() => checkReleaseBuild({ repoRoot: root, dist: 'dist' })).toThrow(
-      'remus-wasm/NOTICE'
-    );
+  it('stamps the written output last, and only stamped builds', () => {
+    const plugin = remusOutputStampPlugin({ repoRoot: '.', stamped: false });
+    expect(plugin.apply).toBe('build');
+    const hook = plugin.writeBundle as unknown as {
+      order: string;
+      sequential: boolean;
+      handler: (options: { dir?: string }) => void;
+    };
+    expect(hook.order).toBe('post');
+    expect(hook.sequential).toBe(true);
+    // An unstamped (+local) build is left alone.
+    expect(() => hook.handler({})).not.toThrow();
+    const config = readFileSync('apps/web/vite.config.ts', 'utf8');
+    expect(config).toContain('remusOutputStampPlugin({');
   });
 });
 
@@ -512,9 +684,11 @@ describe('deploy paths run the release build check', () => {
     return (parsed.config as { build?: { command?: string } }).build?.command;
   };
 
-  it('checks before migrating or publishing', () => {
+  it('rebuilds and checks before migrating or publishing', () => {
     const beta = scripts('apps/web/package.json')['deploy:beta']!;
-    expect(beta.startsWith(`${RELEASE_BUILD_CHECK} && `)).toBe(true);
+    expect(
+      beta.startsWith(`pnpm -w run build && ${RELEASE_BUILD_CHECK} && `)
+    ).toBe(true);
     expect(beta.indexOf('check:release-build')).toBeLessThan(
       beta.indexOf('apply-beta-migrations')
     );

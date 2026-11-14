@@ -48,3 +48,19 @@ export function verifyRemusArtifacts(options?: {
   repoRoot?: string;
   packageDirs?: Record<string, string>;
 }): { commit: string; files: number; manifestSha256: string };
+export const BUILD_METADATA: string;
+export interface RemusOutputStamp {
+  modules: Record<string, string[]>;
+  output: { files: number; sha256: string };
+}
+export function outputDigest(dist: string): { files: number; sha256: string };
+export function remusOutputStamp(options: {
+  repoRoot: string;
+  dist: string;
+}): RemusOutputStamp;
+export function verifyRemusOutput(options: {
+  manifest: RemusManifest;
+  stamp: unknown;
+  dist: string;
+  label?: string;
+}): { files: number; sha256: string };

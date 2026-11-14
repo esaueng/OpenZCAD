@@ -7,29 +7,29 @@
  * Vite gate (`apps/web/build/remusArtifactGate.ts`) writes only after
  * verifying the installed packages; that stamp must name the current
  * `remus-checksums.json` and lockfile pin; the build must not come from local
- * (`+local`) Remus packages; the installed packages must still verify; and
- * both pinned WebAssembly modules must be in the output byte for byte.
+ * (`+local`) Remus packages; the installed packages must still verify; each
+ * pinned WebAssembly module must be byte for byte at the exact path the build
+ * emitted it to; and every other output file (the JS glue, workers and
+ * everything else) must still hash to the digest the gate recorded after
+ * writing the output, so a changed, deleted or added file, or a stamp copied
+ * onto other output, is refused. The stamp is a build record, not a
+ * signature: it catches stale, unverified or accidentally altered output, not
+ * someone who deliberately recomputes it. The deploy scripts therefore also
+ * rebuild immediately before checking.
  *
  * Usage: node scripts/check-release-build.mjs [--dist apps/web/dist]
  * (`pnpm -w run check:release-build` from any workspace directory). `--dist`
  * is relative to the repository root.
  */
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { MANIFEST, sha256, verifyRemusArtifacts } from './remus-artifacts.mjs';
-
-function wasmHashes(dir) {
-  const hashes = new Set();
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const path = join(dir, entry.name);
-    if (entry.isDirectory())
-      for (const hash of wasmHashes(path)) hashes.add(hash);
-    else if (entry.isFile() && entry.name.endsWith('.wasm'))
-      hashes.add(sha256(readFileSync(path)));
-  }
-  return hashes;
-}
+import {
+  BUILD_METADATA,
+  MANIFEST,
+  verifyRemusArtifacts,
+  verifyRemusOutput
+} from './remus-artifacts.mjs';
 
 /** Throws unless `dist` is a deployable build of the verified Remus pin. */
 export function checkReleaseBuild({
@@ -40,9 +40,7 @@ export function checkReleaseBuild({
   const output = resolve(root, dist);
   let metadata;
   try {
-    metadata = JSON.parse(
-      readFileSync(join(output, 'build-meta.json'), 'utf8')
-    );
+    metadata = JSON.parse(readFileSync(join(output, BUILD_METADATA), 'utf8'));
   } catch {
     throw new Error(`${dist} has no build metadata; run pnpm build first.`);
   }
@@ -65,13 +63,12 @@ export function checkReleaseBuild({
     throw new Error(
       `${dist} was not built from the verified Remus packages at ${expected.commit}; rebuild with pnpm build.`
     );
-  const manifest = JSON.parse(readFileSync(join(root, MANIFEST), 'utf8'));
-  const shipped = wasmHashes(output);
-  for (const [key, hash] of Object.entries(manifest.sha256))
-    if (key.endsWith('.wasm') && !shipped.has(hash))
-      throw new Error(
-        `${dist} does not ship the pinned ${key}; rebuild with pnpm build.`
-      );
+  verifyRemusOutput({
+    manifest: JSON.parse(readFileSync(join(root, MANIFEST), 'utf8')),
+    stamp,
+    dist: output,
+    label: dist
+  });
   return expected;
 }
 

@@ -13,6 +13,7 @@ import { resolveSourceCommit } from './build/sourceCommit';
 import { localRemusPackages } from './build/localRemus';
 import {
   remusArtifactGate,
+  remusOutputStampPlugin,
   type RemusArtifactStamp
 } from './build/remusArtifactGate';
 import { remusTranslatorRetry } from './build/remusTranslatorRetry';
@@ -273,9 +274,10 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
   const localRemus = await localRemusPackages(process.env);
   // Every build, web or desktop, filtered or not, verifies the Remus packages
   // it bundles; dev and preview only warn. See build/remusArtifactGate.ts.
+  const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
   const remusArtifacts = remusArtifactGate({
     command,
-    repoRoot: fileURLToPath(new URL('../..', import.meta.url)),
+    repoRoot,
     env: process.env,
     overlay: localRemus?.aliases ?? null
   });
@@ -294,7 +296,13 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
     pdfjsAssets(),
     textFontAssets(),
     buildMetadata(commit, remus),
-    lazyChunkPrefetch()
+    lazyChunkPrefetch(),
+    // Last: ties the stamp to the written output (emitted module paths and a
+    // digest of every file) for scripts/check-release-build.mjs.
+    remusOutputStampPlugin({
+      repoRoot,
+      stamped: Boolean(remusArtifacts && !localRemus)
+    })
   );
 
   const nodeMajor = Number.parseInt(

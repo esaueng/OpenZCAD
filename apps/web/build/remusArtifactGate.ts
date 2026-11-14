@@ -1,6 +1,11 @@
+import { readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import type { Plugin } from 'vite';
 import {
   ALLOW_LOCAL_REMUS_ENV,
+  BUILD_METADATA,
   installedPackageDirs,
+  remusOutputStamp,
   verifyRemusArtifacts
 } from '../../../scripts/remus-artifacts.mjs';
 
@@ -9,6 +14,10 @@ export interface RemusArtifactStamp {
   commit: string;
   files: number;
   manifestSha256: string;
+  /** Emitted output path(s) of each pinned WebAssembly module. */
+  modules?: Record<string, string[]>;
+  /** Digest of every output file except `build-meta.json`. */
+  output?: { files: number; sha256: string };
 }
 
 export interface RemusArtifactGateOptions {
@@ -70,4 +79,54 @@ export function remusArtifactGate({
     );
     return null;
   }
+}
+
+/**
+ * Completes the `build-meta.json` stamp once the build output is on disk: it
+ * adds the path each pinned Remus WebAssembly module was emitted to and the
+ * digest of the whole output (`remusOutputStamp`), so
+ * `scripts/check-release-build.mjs` can tie the stamp to exactly this output.
+ * It runs after every other plugin has written its files. Builds without a
+ * stamp (local overlays) are left alone and stay undeployable.
+ */
+export function remusOutputStampPlugin({
+  repoRoot,
+  stamped
+}: {
+  repoRoot: string;
+  stamped: boolean;
+}): Plugin {
+  return {
+    name: 'openzcad-remus-output-stamp',
+    apply: 'build',
+    writeBundle: {
+      order: 'post',
+      sequential: true,
+      handler(options) {
+        if (!stamped) return;
+        if (!options.dir)
+          throw new Error('The Remus output stamp needs an output directory.');
+        stampRemusOutput({ repoRoot, dist: options.dir });
+      }
+    }
+  };
+}
+
+/** Adds the output stamp to `dist/build-meta.json` (see the plugin above). */
+export function stampRemusOutput({
+  repoRoot,
+  dist
+}: {
+  repoRoot: string;
+  dist: string;
+}): void {
+  const path = join(dist, BUILD_METADATA);
+  const metadata = JSON.parse(readFileSync(path, 'utf8')) as {
+    remus?: { artifacts?: RemusArtifactStamp };
+  };
+  const artifacts = metadata.remus?.artifacts;
+  if (!artifacts)
+    throw new Error(`${BUILD_METADATA} has no Remus stamp to complete.`);
+  Object.assign(artifacts, remusOutputStamp({ repoRoot, dist }));
+  writeFileSync(path, `${JSON.stringify(metadata, null, 2)}\n`);
 }

@@ -31,12 +31,31 @@ export const ALLOW_LOCAL_REMUS_ENV = 'OZ_ALLOW_LOCAL_REMUS';
 
 const SHA1 = /^[a-f0-9]{40}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
-/** Files npm and pnpm always pack, whatever `files` says. */
-const ALWAYS_PACKED =
-  /^(?:package\.json|(?:readme|copying|license|licence)(?:\.[^/]*)?)$/i;
 /** Files npm and pnpm never pack. */
 const NEVER_PACKED =
   /(?:^|\/)(?:\.git|\.svn|\.hg|CVS|node_modules|\.npmrc|\.gitignore|\.npmignore|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|\.DS_Store|npm-debug\.log)(?:\/|$)/;
+/**
+ * Root files some npm or pnpm versions pack whatever `files` says. The
+ * supported subset requires each one that exists to be listed explicitly.
+ */
+const SOMETIMES_PACKED =
+  /^(?:readme|copying|license|licence|changes|changelog|history)(?:[.\-_][^/]*)?$/i;
+/** package.json fields that add files or run code at pack or install time. */
+const UNSUPPORTED_FIELDS = [
+  'bin',
+  'directories',
+  'bundleDependencies',
+  'bundledDependencies',
+  'publishConfig'
+];
+const PACK_SCRIPTS = [
+  'preinstall',
+  'install',
+  'postinstall',
+  'prepare',
+  'prepack',
+  'postpack'
+];
 
 export const gitBlobId = (bytes) =>
   createHash('sha1')
@@ -109,48 +128,71 @@ export function entryPoints(packageJson, files) {
   return [...targets].sort();
 }
 
-function globPattern(entry) {
-  let source = '';
-  for (let index = 0; index < entry.length; index += 1) {
-    const char = entry[index];
-    if (char === '*' && entry[index + 1] === '*') {
-      source += '.*';
-      index += 1;
-    } else if (char === '*') source += '[^/]*';
-    else if (char === '?') source += '[^/]';
-    else source += char.replace(/[.+^${}()|[\]\\]/g, '\\$&');
-  }
-  return new RegExp(`^${source}(?:/.*)?$`);
+function unsupportedPackaging(rule) {
+  return new Error(
+    `Unsupported Remus packaging rule: ${rule}. Only plain "files" entries are modelled; review the package manually before pinning it.`
+  );
 }
 
 /**
- * The files pnpm installs from an upstream package directory: everything its
- * `files` list selects, plus the files npm always packs, minus the files it
- * never packs. Unsupported packaging rules fail rather than guess.
+ * The files pnpm installs from an upstream package directory.
+ *
+ * Rather than reimplement npm-packlist, this models only the packaging the
+ * Remus packages use and refuses everything else: a `files` list of plain
+ * file or directory paths (no globs or negations) that names every root
+ * README/LICENSE-style file and the `main` entry, no `.npmignore` anywhere,
+ * no `.gitignore` below the root (a root one is overridden by `files`), and
+ * no `bin`, `directories`, bundled dependencies, `publishConfig` or
+ * pack/install lifecycle scripts. The result is `package.json` plus every
+ * listed path, minus the files npm never packs.
  */
 export function packedFiles(upstreamFiles, packageJson) {
-  if (upstreamFiles.includes('.npmignore'))
-    throw new Error('Remus packages with an .npmignore are not supported.');
   const { files } = packageJson;
-  if (files !== undefined && !Array.isArray(files))
-    throw new Error('Remus package.json "files" must be a list.');
-  const patterns = (files ?? []).map((entry) => {
-    if (typeof entry !== 'string' || entry.startsWith('!'))
-      throw new Error(`Unsupported Remus "files" entry ${String(entry)}.`);
-    return globPattern(relativeTarget(entry).replace(/\/+$/, ''));
+  if (!Array.isArray(files) || files.length === 0)
+    throw unsupportedPackaging('package.json has no "files" list');
+  for (const field of UNSUPPORTED_FIELDS)
+    if (packageJson[field] !== undefined)
+      throw unsupportedPackaging(`package.json "${field}"`);
+  const scripts =
+    packageJson.scripts && typeof packageJson.scripts === 'object'
+      ? packageJson.scripts
+      : {};
+  for (const script of PACK_SCRIPTS)
+    if (scripts[script] !== undefined)
+      throw unsupportedPackaging(`package.json "${script}" script`);
+  for (const file of upstreamFiles) {
+    if (/(?:^|\/)\.npmignore$/.test(file))
+      throw unsupportedPackaging(`${file}`);
+    if (file.includes('/') && /(?:^|\/)\.gitignore$/.test(file))
+      throw unsupportedPackaging(`nested ${file}`);
+  }
+  const entries = files.map((entry) => {
+    if (
+      typeof entry !== 'string' ||
+      /[*?[\]{}!\\]/.test(entry) ||
+      entry.startsWith('/') ||
+      entry.split('/').includes('..')
+    )
+      throw unsupportedPackaging(`"files" entry ${JSON.stringify(entry)}`);
+    const path = relativeTarget(entry).replace(/\/+$/, '');
+    if (!path || path === '.')
+      throw unsupportedPackaging(`"files" entry ${JSON.stringify(entry)}`);
+    return path;
   });
-  const main =
-    typeof packageJson.main === 'string'
-      ? relativeTarget(packageJson.main)
-      : null;
+  const listed = (file) =>
+    entries.some((entry) => file === entry || file.startsWith(`${entry}/`));
+  for (const file of upstreamFiles)
+    if (!file.includes('/') && SOMETIMES_PACKED.test(file) && !listed(file))
+      throw unsupportedPackaging(`unlisted root file ${file}`);
+  if (
+    typeof packageJson.main === 'string' &&
+    !listed(relativeTarget(packageJson.main))
+  )
+    throw unsupportedPackaging(`"main" ${packageJson.main} outside "files"`);
   return upstreamFiles
     .filter(
       (file) =>
-        !NEVER_PACKED.test(file) &&
-        (files === undefined ||
-          (!file.includes('/') && ALWAYS_PACKED.test(file)) ||
-          file === main ||
-          patterns.some((pattern) => pattern.test(file)))
+        !NEVER_PACKED.test(file) && (file === 'package.json' || listed(file))
     )
     .sort();
 }
@@ -365,4 +407,105 @@ export function verifyRemusArtifacts({ repoRoot, packageDirs } = {}) {
     packageDirs: packageDirs ?? installedPackageDirs(root)
   });
   return { commit, files, manifestSha256: sha256(manifestBytes) };
+}
+
+/** The build metadata file, which carries the stamp and so is not hashed. */
+export const BUILD_METADATA = 'build-meta.json';
+
+/**
+ * A digest of an entire build output: every file except `build-meta.json`,
+ * as sorted `path<TAB>sha256` lines. Any changed, deleted or added file —
+ * JS glue, worker, WebAssembly or anything else — changes it.
+ */
+export function outputDigest(dist) {
+  const files = packageFiles(dist).filter((file) => file !== BUILD_METADATA);
+  const hash = createHash('sha256');
+  for (const file of files)
+    hash.update(`${file}\t${sha256(readFileSync(join(dist, file)))}\n`);
+  return { files: files.length, sha256: hash.digest('hex') };
+}
+
+/** Whether `path` is a plain relative path that stays inside the output. */
+const insideOutput = (path) =>
+  typeof path === 'string' &&
+  path.length > 0 &&
+  !path.startsWith('/') &&
+  !/^[a-z]:/i.test(path) &&
+  !path.includes('\\') &&
+  !path.split('/').some((part) => part === '' || part === '.' || part === '..');
+
+/**
+ * What a gated build records about its own output: the emitted path of each
+ * pinned Remus WebAssembly module, and the digest of the whole output. Throws
+ * if a pinned module was not emitted byte for byte.
+ */
+export function remusOutputStamp({ repoRoot, dist }) {
+  const manifest = JSON.parse(
+    readFileSync(join(resolve(repoRoot), MANIFEST), 'utf8')
+  );
+  const byHash = new Map();
+  for (const file of packageFiles(dist))
+    if (file.endsWith('.wasm')) {
+      const hash = sha256(readFileSync(join(dist, file)));
+      byHash.set(hash, [...(byHash.get(hash) ?? []), file]);
+    }
+  const modules = {};
+  for (const [key, hash] of Object.entries(manifest.sha256 ?? {}).sort())
+    if (key.endsWith('.wasm')) {
+      const paths = byHash.get(hash);
+      if (!paths)
+        throw new Error(`The build output does not ship the pinned ${key}.`);
+      modules[key] = paths;
+    }
+  return { modules, output: outputDigest(dist) };
+}
+
+/**
+ * Checks a build output against the stamp its gated build recorded: each
+ * pinned module's bytes at exactly the recorded path, then the digest of the
+ * whole output, so a modified, deleted or added file of any kind is refused.
+ */
+export function verifyRemusOutput({ manifest, stamp, dist, label = dist }) {
+  const pinned = Object.keys(manifest.sha256)
+    .filter((key) => key.endsWith('.wasm'))
+    .sort();
+  const modules = stamp?.modules;
+  if (
+    !modules ||
+    typeof modules !== 'object' ||
+    Object.keys(modules).sort().join('\n') !== pinned.join('\n')
+  )
+    throw new Error(
+      `${label} does not record where its gated build emitted the Remus modules; rebuild with pnpm build.`
+    );
+  for (const key of pinned) {
+    const paths = modules[key];
+    if (!Array.isArray(paths) || paths.length === 0)
+      throw new Error(`${label} does not record the emitted ${key}.`);
+    for (const path of paths) {
+      if (!insideOutput(path) || !path.endsWith('.wasm'))
+        throw new Error(`${label} records an invalid path for ${key}.`);
+      let bytes;
+      try {
+        bytes = readFileSync(join(dist, path));
+      } catch {
+        throw new Error(
+          `${label} does not ship the pinned ${key} at ${path}; rebuild with pnpm build.`
+        );
+      }
+      if (sha256(bytes) !== manifest.sha256[key])
+        throw new Error(
+          `${label} does not ship the pinned ${key} at ${path}; rebuild with pnpm build.`
+        );
+    }
+  }
+  const actual = outputDigest(dist);
+  if (
+    stamp.output?.files !== actual.files ||
+    stamp.output?.sha256 !== actual.sha256
+  )
+    throw new Error(
+      `${label} does not match the output its gated build stamped (${actual.files} files now, ${stamp.output?.files ?? 'none'} stamped): a file was changed, removed or added after the build. Rebuild with pnpm build.`
+    );
+  return actual;
 }
