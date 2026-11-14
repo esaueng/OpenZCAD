@@ -1075,12 +1075,34 @@ describe('persisted enum selectors and freeform values', () => {
         ]
       })
     ).toBeNull();
-    // Elsewhere a primitiveKind is still checked.
+    // Where a command defines one, a primitiveKind is still checked: on a
+    // creation payload and on the data a feature.update changes.
     expect(
-      reservedDocumentIdentifierError({
-        commands: [{ ...command, kind: 'feature.delete' }]
-      })
-    ).not.toBeNull();
+      reservedIdentifierError(
+        [
+          {
+            ...command,
+            kind: 'primitive.add',
+            payload: { name: 'Box', primitiveKind: 'width', dimensions: {} }
+          }
+        ],
+        'commandLog'
+      )
+    ).toMatch(/primitiveKind" has the unknown value "width"/);
+    expect(
+      reservedIdentifierError(
+        [
+          {
+            ...command,
+            payload: {
+              featureId: 'feature_1',
+              data: { primitiveKind: 'width' }
+            }
+          }
+        ],
+        'commandLog'
+      )
+    ).toMatch(/primitiveKind" has the unknown value "width"/);
   });
 
   it.each(['primitiveKind', 'patternKind', 'bodyType'])(
@@ -1198,4 +1220,311 @@ describe('documents from earlier writers', () => {
       );
     }
   );
+});
+
+describe('enum rules by schema position, not by property name', () => {
+  /** Ids spelled like enum fields or freeform fields. */
+  const ENUM_SPELLED_IDS = [
+    'primitiveKind',
+    'patternKind',
+    'bodyType',
+    'representationSource',
+    'fontStyle',
+    'metadata',
+    'dimensions'
+  ];
+
+  type NodesJson = Record<string, Record<string, unknown>>;
+
+  /** `valid()` as received, with its body node stored under `id`. */
+  function withBodyNodeId(
+    id: string,
+    edit: (body: Record<string, unknown>) => void = () => {}
+  ): { nodes: NodesJson } {
+    const json = JSON.parse(JSON.stringify(valid())) as { nodes: NodesJson };
+    const [key, body] = Object.entries(json.nodes).find(
+      ([, node]) => node.kind === 'body'
+    )!;
+    delete json.nodes[key];
+    const node = { ...body, id };
+    edit(node);
+    json.nodes[id] = node;
+    return JSON.parse(JSON.stringify(json)) as { nodes: NodesJson };
+  }
+
+  it.each([
+    'assets',
+    'nodes',
+    'shaprImports',
+    'placements',
+    'values',
+    'objects',
+    'dimensionLabelPositions',
+    'sketchProjections'
+  ])('checks a body node stored under the id "%s" like any other', (id) => {
+    expect(reservedDocumentIdentifierError(withBodyNodeId(id))).toBeNull();
+    expect(
+      reservedDocumentIdentifierError(
+        withBodyNodeId(id, (body) => {
+          body.bodyType = 'constructor';
+        })
+      )
+    ).toMatch(/bodyType" has the unknown value "constructor"/);
+    expect(
+      reservedDocumentIdentifierError(
+        withBodyNodeId(id, (body) => {
+          body.representationSource = 'hologram';
+        })
+      )
+    ).toMatch(/representationSource" has the unknown value "hologram"/);
+  });
+
+  it('refuses bad enums on a body node stored under the id "assets"', () => {
+    expect(
+      refusal(
+        withBodyNodeId('assets', (body) => {
+          body.bodyType = 'constructor';
+        })
+      )
+    ).toMatch(/assets\.bodyType" has the unknown value "constructor"/);
+    expect(
+      refusal(
+        withBodyNodeId('assets', (body) => {
+          body.representationSource = 'hologram';
+        })
+      )
+    ).toMatch(/representationSource" has the unknown value "hologram"/);
+  });
+
+  /** A sketch with one line, and a CommandManager over it. */
+  function sketchManager() {
+    const { document, sketchId } = addSketchFeature(
+      createProjectDocument('Labels', owner),
+      {
+        name: 'Profile',
+        planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+        objects: [{ objectKind: 'line', x1: 0, y1: 0, x2: 10, y2: 0 }]
+      }
+    );
+    const [line] = findSketch(document, sketchId)!.objectIds;
+    return { manager: new CommandManager(document), sketchId, line: line! };
+  }
+
+  /** `document` as received is accepted by the identifier guard and on save. */
+  function stores(document: unknown): void {
+    const received = JSON.parse(JSON.stringify(document)) as ProjectDocument;
+    expect(reservedDocumentIdentifierError(received)).toBeNull();
+    expect(() => assertStorableDocument(received)).not.toThrow();
+  }
+
+  it.each(ENUM_SPELLED_IDS)(
+    'saves a dimension "%s" after its label is moved, with its history',
+    (constraintId) => {
+      const { manager, sketchId, line } = sketchManager();
+      manager.execute(
+        commandFactories.addSketchConstraint({
+          sketchId,
+          constraint: {
+            constraintKind: 'distance',
+            a: { objectId: line, point: 'start' },
+            b: { objectId: line, point: 'end' },
+            value: 10
+          },
+          ids: { constraintId: constraintId as SketchConstraintId }
+        })
+      );
+      stores(manager.document);
+      manager.execute(
+        commandFactories.setSketchDimensionLabelPosition({
+          sketchId,
+          constraintId: constraintId as SketchConstraintId,
+          position: { x: 4, y: 2 }
+        })
+      );
+      expect(JSON.stringify(manager.document)).toContain(
+        `"dimensionLabelPositions":{"${constraintId}":`
+      );
+      stores(manager.document);
+      manager.undo();
+      stores(manager.document);
+      manager.redo();
+      stores(manager.document);
+    }
+  );
+
+  it.each(ENUM_SPELLED_IDS)(
+    'accepts the id "%s" in every id-keyed map of a document',
+    (id) => {
+      const json = JSON.parse(JSON.stringify(valid())) as Record<
+        string,
+        unknown
+      > & { nodes: NodesJson; derived: Record<string, unknown> };
+      json.derived = {
+        ...json.derived,
+        datumFrames: { [id]: { origin: [0, 0, 0] } },
+        datumAxes: { [id]: { origin: [0, 0, 0] } },
+        sketchProjections: { [id]: { status: 'linked' } },
+        sketchGeometry: {
+          projectId: 'project_1',
+          documentVersion: 1,
+          objects: {
+            [id]: { objectKind: 'text', text: 'A', fontStyle: 'bold' }
+          }
+        }
+      };
+      json.objectFolders = {
+        folders: [{ id: 'folder_1', name: 'Parts', parentId: null }],
+        placements: { [id]: 'folder_1' }
+      };
+      json.assembly = {
+        components: [],
+        joints: [],
+        positions: [{ id: 'position_1', name: 'Open', values: { [id]: [10] } }],
+        studies: []
+      };
+      const part = Object.values(json.nodes).find(
+        (node) => node.kind === 'part'
+      )!;
+      json.nodes.sketch_labels = {
+        ...part,
+        id: 'sketch_labels',
+        kind: 'sketch',
+        dimensionLabelPositions: { [id]: { x: 1, y: 2 } }
+      };
+      expect(reservedDocumentIdentifierError(json)).toBeNull();
+      // The same maps restored whole by undo history.
+      expect(reservedIdentifierError(json.objectFolders, 'objectFolders')).toBe(
+        null
+      );
+      expect(reservedIdentifierError(json.assembly, 'assembly')).toBeNull();
+      expect(reservedIdentifierError(json.nodes, 'nodes')).toBeNull();
+      // Map entries are still checked: a placement names a folder id, and a
+      // text object in the derived geometry has a font style.
+      const folderForged = JSON.parse(JSON.stringify(json)) as {
+        objectFolders: { placements: Record<string, unknown> };
+      };
+      folderForged.objectFolders.placements[id] = 'constructor';
+      expect(reservedDocumentIdentifierError(folderForged)).toMatch(
+        /reserved id "constructor"/
+      );
+      const fontForged = JSON.parse(JSON.stringify(json)) as {
+        derived: {
+          sketchGeometry: { objects: Record<string, Record<string, unknown>> };
+        };
+      };
+      fontForged.derived.sketchGeometry.objects[id]!.fontStyle = 'toString';
+      expect(reservedDocumentIdentifierError(fontForged)).toMatch(
+        /fontStyle" has the unknown value "toString"/
+      );
+    }
+  );
+
+  it.each(ENUM_SPELLED_IDS)(
+    'accepts the id "%s" in the maps of stored commands',
+    (id) => {
+      const command = (kind: string, payload: unknown): SerializedCommand => ({
+        kind,
+        payload,
+        replayVersion: 1,
+        label: kind,
+        timestamp: new Date(0).toISOString()
+      });
+      const commands = [
+        command('assembly.pose.set', {
+          values: { [id]: [10] },
+          placements: { [id]: { position: [0, 0, 0] } }
+        }),
+        command('assembly.position.save', {
+          positionId: 'position_1',
+          name: 'Open',
+          values: { [id]: [10] }
+        }),
+        command('sketch.constraint.label-position', {
+          sketchId: 'sketch_1',
+          constraintId: id,
+          position: { x: 1, y: 2 }
+        })
+      ];
+      expect(reservedIdentifierError(commands, 'commandLog')).toBeNull();
+      expect(
+        reservedIdentifierError(
+          [command('transaction', commands)],
+          'commandLog'
+        )
+      ).toBeNull();
+      const document = JSON.parse(
+        JSON.stringify({ ...valid(), commandLog: commands })
+      ) as object;
+      expect(reservedDocumentIdentifierError(document)).toBeNull();
+      // A creation payload is still held to the enums it defines.
+      expect(
+        reservedIdentifierError(
+          [
+            command('transaction', [
+              ...commands,
+              command('primitive.add', {
+                name: 'Box',
+                primitiveKind: id,
+                dimensions: {}
+              })
+            ])
+          ],
+          'commandLog'
+        )
+      ).toMatch(/primitiveKind" has the unknown value/);
+    }
+  );
+
+  it('accepts a whole node map restored by undo history', () => {
+    const document = valid();
+    const nodes = (JSON.parse(JSON.stringify(document)) as { nodes: NodesJson })
+      .nodes;
+    const after = JSON.parse(JSON.stringify(nodes)) as NodesJson;
+    for (const kind of ['feature', 'body']) {
+      const [key, node] = Object.entries(after).find(
+        ([, candidate]) => candidate.kind === kind
+      )!;
+      const id = kind === 'feature' ? 'primitiveKind' : 'bodyType';
+      delete after[key];
+      after[id] = { ...node, id };
+    }
+    const history = (restored: NodesJson) =>
+      JSON.parse(
+        JSON.stringify({
+          schemaVersion: 1,
+          projectId: document.projectId,
+          actorUserId: owner,
+          entries: [
+            {
+              id: 'entry_1',
+              label: 'Edit',
+              changes: [
+                {
+                  kind: 'value',
+                  field: 'nodes',
+                  before: nodes,
+                  after: restored
+                }
+              ]
+            }
+          ],
+          cursor: 1,
+          trimmed: 0
+        })
+      ) as ProjectDocument['editHistory'];
+    expect(isDocumentHistory(history(after), document.projectId)).toBe(true);
+    stores({ ...document, editHistory: history(after) });
+    // Its nodes are still held to the enums they define.
+    const forged = JSON.parse(JSON.stringify(after)) as NodesJson;
+    forged.bodyType!.representationSource = 'hologram';
+    expect(isDocumentHistory(history(forged), document.projectId)).toBe(false);
+    expect(
+      reservedDocumentIdentifierError({
+        ...document,
+        editHistory: history(forged)
+      })
+    ).toMatch(
+      /after\.bodyType\.representationSource" has the unknown value "hologram"/
+    );
+  });
 });

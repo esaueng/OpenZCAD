@@ -14,6 +14,7 @@ import type {
   PatternKind,
   PrimitiveKind,
   RevolveAxis,
+  SketchObjectData,
   TextFontStyle,
   ThreadAnchor,
   ThreadHand,
@@ -211,6 +212,21 @@ function valuesOf<T extends string>(members: Record<T, true>): Set<string> {
 }
 
 /**
+ * The enum fields an owner record defines, each with its union. Field names
+ * are checked against the owner's type, so a list can only name properties
+ * the schema object really has.
+ */
+function enumsOf<T>(fields: {
+  [F in keyof T & string]?: ReadonlySet<string>;
+}): ReadonlyMap<string, ReadonlySet<string>> {
+  return new Map(
+    Object.entries(fields).filter(
+      (entry): entry is [string, ReadonlySet<string>] => entry[1] !== undefined
+    )
+  );
+}
+
+/**
  * `representationSource` spellings the first document writer stored (before
  * 7cfee9ed1): `mock` for primitives and extrusions, `composite` for booleans,
  * `mesh-reference` for mesh imports, and `native`, which its type also
@@ -224,94 +240,56 @@ const LEGACY_REPRESENTATION_SOURCES = [
   'mesh-reference'
 ] as const;
 
-/**
- * Persisted enum fields whose name means the same union everywhere a
- * document, its history or a stored command carries it. Their values index
- * lookup tables (an icon per primitive or pattern kind, the dimensions each
- * primitive is built from), so they must be one of the union's members:
- * anything else, a reserved name included, is refused.
- */
-const ENUM_FIELDS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
-  [
-    'primitiveKind',
-    valuesOf<PrimitiveKind>({
-      box: true,
-      cylinder: true,
-      sphere: true,
-      cone: true,
-      torus: true
-    })
-  ],
-  [
-    'patternKind',
-    valuesOf<PatternKind>({ linear: true, circular: true, grid: true })
-  ],
-  [
-    'gearType',
-    valuesOf<GearType>({
-      external: true,
-      internal: true,
-      rack: true,
-      bevel: true,
-      worm: true,
-      'worm-wheel': true,
-      'enveloping-worm': true,
-      'enveloping-wheel': true
-    })
-  ],
-  [
-    'sizing',
-    valuesOf<GearSizing>({
-      module: true,
-      'circular-pitch': true,
-      'diametral-pitch': true
-    })
-  ],
-  [
-    'endCondition',
-    valuesOf<ExtrudeEndCondition>({
-      blind: true,
-      'through-all': true,
-      'to-face': true
-    })
-  ],
-  [
-    'throughAllSide',
-    valuesOf<ThroughAllSide>({ forward: true, backward: true, both: true })
-  ],
-  ['depthMode', valuesOf<'blind' | 'through'>({ blind: true, through: true })],
-  [
-    'fontStyle',
-    valuesOf<TextFontStyle>({
-      regular: true,
-      bold: true,
-      italic: true,
-      boldItalic: true
-    })
-  ],
-  ['radiusLaw', valuesOf<VariableFilletLaw>({ linear: true, scurve: true })],
-  [
-    'assumedUnits',
-    valuesOf<UnitSystem>({ mm: true, cm: true, m: true, inch: true })
-  ],
-  [
-    'bodyType',
-    valuesOf<BodyNode['bodyType']>({ solid: true, 'mesh-reference': true })
-  ],
-  [
-    'representationSource',
-    new Set([
-      ...valuesOf<BodyNode['representationSource']>({
-        brep: true,
-        'step-import': true,
-        'mesh-import': true
-      }),
-      ...LEGACY_REPRESENTATION_SOURCES
-    ])
-  ]
-]);
-
+const PRIMITIVE_KINDS = valuesOf<PrimitiveKind>({
+  box: true,
+  cylinder: true,
+  sphere: true,
+  cone: true,
+  torus: true
+});
+const PATTERN_KINDS = valuesOf<PatternKind>({
+  linear: true,
+  circular: true,
+  grid: true
+});
+const GEAR_TYPES = valuesOf<GearType>({
+  external: true,
+  internal: true,
+  rack: true,
+  bevel: true,
+  worm: true,
+  'worm-wheel': true,
+  'enveloping-worm': true,
+  'enveloping-wheel': true
+});
+const GEAR_SIZINGS = valuesOf<GearSizing>({
+  module: true,
+  'circular-pitch': true,
+  'diametral-pitch': true
+});
+const END_CONDITIONS = valuesOf<ExtrudeEndCondition>({
+  blind: true,
+  'through-all': true,
+  'to-face': true
+});
+const THROUGH_ALL_SIDES = valuesOf<ThroughAllSide>({
+  forward: true,
+  backward: true,
+  both: true
+});
+const HOLE_DEPTH_MODES = valuesOf<FeatureDataOf<'hole'>['depthMode']>({
+  blind: true,
+  through: true
+});
+const RADIUS_LAWS = valuesOf<VariableFilletLaw>({ linear: true, scurve: true });
+const UNIT_SYSTEMS = valuesOf<UnitSystem>({
+  mm: true,
+  cm: true,
+  m: true,
+  inch: true
+});
 const AXIS_IDS = valuesOf<AxisId>({ x: true, y: true, z: true });
+const THREAD_ANCHORS = valuesOf<ThreadAnchor>({ start: true, end: true });
 
 type FeatureDataOf<K extends FeatureKind> = Extract<
   FeatureData,
@@ -319,85 +297,133 @@ type FeatureDataOf<K extends FeatureKind> = Extract<
 >;
 
 /**
- * Enum fields whose name is shared with other structures (an `axis` is a
- * vector elsewhere, an `operation` an object), checked against their union
- * on the data of a feature node, by its kind.
+ * The enums feature data defines, by its `featureKind`. Their values index
+ * lookup tables (an icon per primitive or pattern kind, the dimensions each
+ * primitive is built from), so on the data of a feature node each must be
+ * one of its union's members: anything else, a reserved name included, is
+ * refused. The same names elsewhere (an `axis` vector, an `operation`
+ * object, a map entry or id spelled `primitiveKind`) are not these enums.
  */
 const FEATURE_DATA_ENUMS: Readonly<
   Partial<Record<FeatureKind, ReadonlyMap<string, ReadonlySet<string>>>>
 > = {
-  pattern: new Map([
-    ['axis', AXIS_IDS],
-    ['axis2', AXIS_IDS]
-  ]),
-  boolean: new Map([
-    [
-      'operation',
-      valuesOf<BooleanOperation>({
-        union: true,
-        subtract: true,
-        intersect: true
-      })
-    ],
-    [
-      'keepOriginals',
-      valuesOf<BooleanKeepOriginals>({ all: true, target: true, tools: true })
-    ]
-  ]),
-  extrude: new Map([
-    [
-      'operation',
-      valuesOf<ExtrudeOperation>({
-        'new-body': true,
-        add: true,
-        cut: true,
-        intersect: true
-      })
-    ]
-  ]),
-  revolve: new Map([
-    ['axis', valuesOf<RevolveAxis>({ horizontal: true, vertical: true })]
-  ]),
-  loft: new Map([
-    [
-      'mode',
-      valuesOf<FeatureDataOf<'loft'>['mode']>({ ruled: true, smooth: true })
-    ]
-  ]),
-  sweep: new Map([
-    [
-      'mode',
-      valuesOf<FeatureDataOf<'sweep'>['mode']>({ standard: true, smooth: true })
-    ]
-  ]),
-  hole: new Map([
-    [
-      'style',
-      valuesOf<FeatureDataOf<'hole'>['style']>({
-        simple: true,
-        counterbore: true,
-        countersink: true
-      })
-    ]
-  ]),
-  gear: new Map([
-    ['hand', valuesOf<GearHand>({ right: true, left: true })],
-    ['fit', valuesOf<GearFit>({ 'keep-diameter': true, module: true })],
-    ['anchor', valuesOf<ThreadAnchor>({ start: true, end: true })]
-  ]),
-  thread: new Map([
-    [
-      'profile',
-      valuesOf<ThreadProfile>({
-        'iso-metric': true,
-        printable: true,
-        custom: true
-      })
-    ],
-    ['hand', valuesOf<ThreadHand>({ right: true, left: true })],
-    ['anchor', valuesOf<ThreadAnchor>({ start: true, end: true })]
-  ])
+  primitive: enumsOf<FeatureDataOf<'primitive'>>({
+    primitiveKind: PRIMITIVE_KINDS
+  }),
+  pattern: enumsOf<FeatureDataOf<'pattern'>>({
+    patternKind: PATTERN_KINDS,
+    axis: AXIS_IDS,
+    axis2: AXIS_IDS
+  }),
+  boolean: enumsOf<FeatureDataOf<'boolean'>>({
+    operation: valuesOf<BooleanOperation>({
+      union: true,
+      subtract: true,
+      intersect: true
+    }),
+    keepOriginals: valuesOf<BooleanKeepOriginals>({
+      all: true,
+      target: true,
+      tools: true
+    })
+  }),
+  extrude: enumsOf<FeatureDataOf<'extrude'>>({
+    operation: valuesOf<ExtrudeOperation>({
+      'new-body': true,
+      add: true,
+      cut: true,
+      intersect: true
+    }),
+    endCondition: END_CONDITIONS,
+    throughAllSide: THROUGH_ALL_SIDES
+  }),
+  revolve: enumsOf<FeatureDataOf<'revolve'>>({
+    axis: valuesOf<RevolveAxis>({ horizontal: true, vertical: true })
+  }),
+  loft: enumsOf<FeatureDataOf<'loft'>>({
+    mode: valuesOf<FeatureDataOf<'loft'>['mode']>({ ruled: true, smooth: true })
+  }),
+  sweep: enumsOf<FeatureDataOf<'sweep'>>({
+    mode: valuesOf<FeatureDataOf<'sweep'>['mode']>({
+      standard: true,
+      smooth: true
+    })
+  }),
+  hole: enumsOf<FeatureDataOf<'hole'>>({
+    depthMode: HOLE_DEPTH_MODES,
+    style: valuesOf<FeatureDataOf<'hole'>['style']>({
+      simple: true,
+      counterbore: true,
+      countersink: true
+    })
+  }),
+  gear: enumsOf<FeatureDataOf<'gear'>>({
+    gearType: GEAR_TYPES,
+    sizing: GEAR_SIZINGS,
+    hand: valuesOf<GearHand>({ right: true, left: true }),
+    fit: valuesOf<GearFit>({ 'keep-diameter': true, module: true }),
+    anchor: THREAD_ANCHORS
+  }),
+  thread: enumsOf<FeatureDataOf<'thread'>>({
+    profile: valuesOf<ThreadProfile>({
+      'iso-metric': true,
+      printable: true,
+      custom: true
+    }),
+    hand: valuesOf<ThreadHand>({ right: true, left: true }),
+    anchor: THREAD_ANCHORS
+  }),
+  fillet: enumsOf<FeatureDataOf<'fillet'>>({ radiusLaw: RADIUS_LAWS }),
+  'imported-mesh': enumsOf<FeatureDataOf<'imported-mesh'>>({
+    assumedUnits: UNIT_SYSTEMS
+  })
 };
+
+/**
+ * The feature enums whose name means one union across every feature kind.
+ * A stored command's payload (a creation input such as `PrimitiveInput` or
+ * `ExtrudeInput`) and a `feature.update` command's `data` carry them under
+ * the same names and unions as the feature data they create or change.
+ */
+const COMMAND_INPUT_ENUMS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ['primitiveKind', PRIMITIVE_KINDS],
+  ['patternKind', PATTERN_KINDS],
+  ['gearType', GEAR_TYPES],
+  ['sizing', GEAR_SIZINGS],
+  ['endCondition', END_CONDITIONS],
+  ['throughAllSide', THROUGH_ALL_SIDES],
+  ['depthMode', HOLE_DEPTH_MODES],
+  ['radiusLaw', RADIUS_LAWS],
+  ['assumedUnits', UNIT_SYSTEMS]
+]);
+
+/** The enums a body node (`kind: 'body'`) defines. */
+const BODY_NODE_ENUMS = enumsOf<BodyNode>({
+  bodyType: valuesOf<BodyNode['bodyType']>({
+    solid: true,
+    'mesh-reference': true
+  }),
+  representationSource: new Set([
+    ...valuesOf<BodyNode['representationSource']>({
+      brep: true,
+      'step-import': true,
+      'mesh-import': true
+    }),
+    ...LEGACY_REPRESENTATION_SOURCES
+  ])
+});
+
+/** The enums a text sketch object's data (`objectKind: 'text'`) defines. */
+const TEXT_OBJECT_ENUMS = enumsOf<
+  Extract<SketchObjectData, { objectKind: 'text' }>
+>({
+  fontStyle: valuesOf<TextFontStyle>({
+    regular: true,
+    bold: true,
+    italic: true,
+    boldItalic: true
+  })
+});
 
 /**
  * Selector fields whose values are not one closed union across the schema
@@ -445,19 +471,136 @@ const FREEFORM_FIELDS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Whether `record` is where a freeform field really lives, rather than a map
- * whose entry happens to be named like one (a node or body id "metadata"):
- * node `metadata` sits on a node, a node snapshot or a metadata command
- * (they name a `kind` or a `nodeId`); primitive `dimensions` sit on primitive
- * feature data or a primitive command (they name a `primitiveKind` or a
- * `featureKind`), or on the `data` of a stored `feature.update` command,
- * which may carry `dimensions` alone.
+ * The schema objects whose fields the walk knows by position: the document,
+ * the containers below it that hold id-keyed maps, its edit history, and
+ * stored commands with their payloads.
+ */
+type Shape =
+  | 'document'
+  | 'derived'
+  | 'sketchGeometry'
+  | 'objectFolders'
+  | 'assembly'
+  | 'assemblyPosition'
+  | 'assemblyPose'
+  | 'history'
+  | 'historyEntry'
+  | 'change'
+  | 'command'
+  | 'featureUpdate'
+  | 'featureUpdateData';
+
+/**
+ * Where a value sits in the schema: a known schema object (`shape`), or a map
+ * keyed by ids (`idMap`). A map's keys are ids, not properties, so an id
+ * spelled like a field (a node "primitiveKind", a constraint "metadata") is
+ * never read as that field; `entryField` names what the map's string values
+ * are, if they are ids.
+ */
+interface Position {
+  shape?: Shape;
+  idMap?: { entryField?: string };
+  /** The schema property the value is judged as, when not its own key. */
+  field?: string;
+}
+
+const ID_MAP: Position = { idMap: {} };
+
+/** The fields of each known schema object that hold a known position. */
+const FIELD_POSITIONS: Readonly<
+  Partial<Record<Shape, Readonly<Record<string, Position>>>>
+> = {
+  // ProjectDocument
+  document: {
+    nodes: ID_MAP,
+    assets: ID_MAP,
+    shaprImports: ID_MAP,
+    commandLog: { shape: 'command' },
+    editHistory: { shape: 'history' },
+    derived: { shape: 'derived' },
+    objectFolders: { shape: 'objectFolders' },
+    assembly: { shape: 'assembly' }
+  },
+  // DerivedState
+  derived: {
+    bodyRepresentations: ID_MAP,
+    datumFrames: ID_MAP,
+    datumAxes: ID_MAP,
+    sketchProjections: ID_MAP,
+    sketchGeometry: { shape: 'sketchGeometry' }
+  },
+  sketchGeometry: { objects: ID_MAP },
+  // ObjectFolderSet: body id -> folder id
+  objectFolders: { placements: { idMap: { entryField: 'folderId' } } },
+  // AssemblySet, AssemblyPosition and the assembly.position.save payload
+  assembly: { positions: { shape: 'assemblyPosition' } },
+  assemblyPosition: { values: ID_MAP },
+  // The assembly.pose.set payload
+  assemblyPose: { values: ID_MAP, placements: ID_MAP },
+  // DocumentHistory and its entries
+  history: { entries: { shape: 'historyEntry' } },
+  historyEntry: { changes: { shape: 'change' } },
+  // The feature.update payload
+  featureUpdate: { data: { shape: 'featureUpdateData' } }
+};
+
+/** Stored command payloads that hold id-keyed maps or further commands. */
+const PAYLOAD_POSITIONS: Readonly<Record<string, Position>> = {
+  transaction: { shape: 'command' },
+  'feature.update': { shape: 'featureUpdate' },
+  'assembly.pose.set': { shape: 'assemblyPose' },
+  'assembly.position.save': { shape: 'assemblyPosition' }
+};
+
+/**
+ * The position of a document field's value, or of one entry of it when
+ * `key` names that entry: a keyed history change on `nodes` holds one node
+ * snapshot, an unkeyed one the whole node map.
+ */
+function documentFieldPosition(field: unknown, key?: unknown): Position {
+  if (typeof field !== 'string' || typeof key === 'string') return {};
+  const document = FIELD_POSITIONS.document!;
+  return Object.hasOwn(document, field) ? document[field]! : {};
+}
+
+/** The position of `record[key]`, from the schema object `record` is. */
+function childPosition(
+  shape: Shape | undefined,
+  record: Readonly<Record<string, unknown>>,
+  key: string
+): Position {
+  if (shape === 'command' && key === 'payload')
+    return typeof record.kind === 'string' &&
+      Object.hasOwn(PAYLOAD_POSITIONS, record.kind)
+      ? PAYLOAD_POSITIONS[record.kind]!
+      : {};
+  // A history change restores a document field: judged as that field.
+  if (shape === 'change' && (key === 'before' || key === 'after'))
+    return typeof record.field === 'string'
+      ? {
+          ...documentFieldPosition(record.field, record.key),
+          field: record.field
+        }
+      : {};
+  // A sketch node, live or a history snapshot: constraint id -> position.
+  if (record.kind === 'sketch' && key === 'dimensionLabelPositions')
+    return ID_MAP;
+  const fields = shape === undefined ? undefined : FIELD_POSITIONS[shape];
+  return fields && Object.hasOwn(fields, key) ? fields[key]! : {};
+}
+
+/**
+ * Whether `record` is where a freeform field really lives: node `metadata`
+ * sits on a node, a node snapshot or a metadata command (they name a `kind`
+ * or a `nodeId`); primitive `dimensions` sit on primitive feature data or a
+ * primitive command (they name a `primitiveKind` or a `featureKind`), or on
+ * the `data` of a stored `feature.update` command, which may carry
+ * `dimensions` alone. `record` is never an id-keyed map here.
  */
 function ownsFreeformField(
   record: Readonly<Record<string, unknown>>,
   key: string,
-  recordField: string | undefined,
-  payloadEntry: { field: string | undefined; parentValue: unknown } | null
+  shape: Shape | undefined
 ): boolean {
   if (key === 'metadata')
     return typeof record.kind === 'string' || typeof record.nodeId === 'string';
@@ -465,30 +608,10 @@ function ownsFreeformField(
     return (
       typeof record.primitiveKind === 'string' ||
       typeof record.featureKind === 'string' ||
-      (recordField === 'data' &&
-        payloadEntry?.field === 'payload' &&
-        isDocumentRecord(payloadEntry.parentValue) &&
-        payloadEntry.parentValue.kind === 'feature.update')
+      shape === 'featureUpdateData'
     );
   return false;
 }
-
-/**
- * Fields whose value is a map keyed by ids (`ProjectDocument.nodes`, the
- * derived body, datum and asset maps, folder placements). An entry's key is an
- * id, not a schema property, so an id that happens to be spelled like an enum
- * field (a node id "primitiveKind") is not held to that enum; the fields
- * inside the entry still are.
- */
-const ID_MAP_FIELDS: ReadonlySet<string> = new Set([
-  'nodes',
-  'bodyRepresentations',
-  'datumFrames',
-  'datumAxes',
-  'assets',
-  'shaprImports',
-  'placements'
-]);
 
 /** Whether a string under `field` is a key, id or selector: never reserved. */
 function isKeyLikeField(field: string | undefined): boolean {
@@ -511,50 +634,64 @@ function parameterNamesOf(value: Record<string, unknown>): unknown[] {
   return [];
 }
 
+interface WalkEntry {
+  value: unknown;
+  /** The property or map key `value` sits under, for the refusal's path. */
+  label: string | undefined;
+  /**
+   * The schema property `value` sits under. A map entry has none: its key is
+   * an id, so only the map's `entryField` says what its value is.
+   */
+  field: string | undefined;
+  parent: WalkEntry | null;
+  freeform: boolean;
+  shape?: Shape;
+  idMap?: { entryField?: string };
+  /** The union this value must belong to, when its owner defines one. */
+  members?: ReadonlySet<string>;
+}
+
 /**
- * Refuses a reserved name used where a document keeps a key, and an enum
- * value outside its union:
- * - any object key, everywhere (every map in a document, its history and its
- *   command payloads, freeform metadata included);
- * - outside freeform data (`FREEFORM_FIELDS`): any id field (see
- *   {@link isIdentifierField}), any selector such as a constraint's `point`
- *   (see `SELECTOR_FIELDS`) and any parameter name, including those in stored
- *   `parameter.*` commands;
- * - outside freeform data: an enum field (`ENUM_FIELDS`, and on a feature
- *   node's data `FEATURE_DATA_ENUMS`) holding anything but a member of its
- *   union.
- * `field` names the property `value` sits under, so a bare id such as a
- * history change's `before` is judged by its change's field. Other strings,
- * such as display names, descriptions and metadata values, are not keys and
- * may be anything.
+ * The enums `record` defines, identified by what it is: the `data` of a
+ * feature node (by its `featureKind`), a stored command's payload or a
+ * `feature.update` command's data, a body node, or a text sketch object's
+ * data. Any other record, a map or freeform data defines none.
  */
-export function reservedIdentifierError(
-  value: unknown,
-  field?: string
-): string | null {
-  interface Entry {
-    value: unknown;
-    field: string | undefined;
-    parent: Entry | null;
-    freeform: boolean;
-    /** The union this value must belong to, when its field has one. */
-    members?: ReadonlySet<string>;
-  }
-  const path = (entry: Entry): string => {
+function enumsOwnedBy(
+  entry: WalkEntry,
+  record: Readonly<Record<string, unknown>>
+): ReadonlyMap<string, ReadonlySet<string>> | undefined {
+  const parent = entry.parent;
+  if (
+    entry.field === 'data' &&
+    parent &&
+    !parent.idMap &&
+    !parent.freeform &&
+    isDocumentRecord(parent.value) &&
+    parent.value.kind === 'feature'
+  )
+    return typeof record.featureKind === 'string' &&
+      Object.hasOwn(FEATURE_DATA_ENUMS, record.featureKind)
+      ? FEATURE_DATA_ENUMS[record.featureKind as FeatureKind]
+      : undefined;
+  if (
+    (entry.field === 'payload' && parent?.shape === 'command') ||
+    entry.shape === 'featureUpdateData'
+  )
+    return COMMAND_INPUT_ENUMS;
+  if (record.kind === 'body') return BODY_NODE_ENUMS;
+  if (record.objectKind === 'text') return TEXT_OBJECT_ENUMS;
+  return undefined;
+}
+
+function walkIdentifiers(root: WalkEntry): string | null {
+  const path = (entry: WalkEntry): string => {
     const parts: string[] = [];
-    for (let at: Entry | null = entry; at; at = at.parent)
-      if (at.field !== undefined) parts.unshift(at.field);
+    for (let at: WalkEntry | null = entry; at; at = at.parent)
+      if (at.label !== undefined) parts.unshift(at.label);
     return parts.join('.') || 'document';
   };
-  const pending: Entry[] = [
-    {
-      value,
-      field,
-      parent: null,
-      freeform: field !== undefined && FREEFORM_FIELDS.has(field),
-      members: field === undefined ? undefined : ENUM_FIELDS.get(field)
-    }
-  ];
+  const pending: WalkEntry[] = [root];
   while (pending.length) {
     const entry = pending.pop()!;
     const current = entry.value;
@@ -570,51 +707,61 @@ export function reservedIdentifierError(
       continue;
     }
     if (Array.isArray(current)) {
+      // A list keeps its position (a command log holds commands), except
+      // where the schema expects a map: its items are no map entries.
+      const item: Omit<WalkEntry, 'value'> = entry.idMap
+        ? { ...entry, parent: entry, shape: undefined, idMap: undefined }
+        : { ...entry, parent: entry };
       // Numbers hold no names; skipping them keeps dense persisted meshes
       // (an imported mesh's `number[]` payload) cheap to walk.
-      for (const item of current)
-        if (typeof item !== 'number')
-          pending.push({ ...entry, value: item, parent: entry });
+      for (const value of current)
+        if (typeof value !== 'number') pending.push({ ...item, value });
       continue;
     }
     if (!isDocumentRecord(current) || ArrayBuffer.isView(current)) continue;
-    const owner = entry.parent?.value;
-    const featureEnums =
-      !entry.freeform &&
-      entry.field === 'data' &&
-      isDocumentRecord(owner) &&
-      owner.kind === 'feature' &&
-      typeof current.featureKind === 'string' &&
-      Object.hasOwn(FEATURE_DATA_ENUMS, current.featureKind)
-        ? FEATURE_DATA_ENUMS[current.featureKind as FeatureKind]
-        : undefined;
+    if (entry.idMap && !entry.freeform) {
+      // Map entries: the key is an id, checked as a key; the value is an
+      // entry of the map, owned by no field of it.
+      for (const key of Object.keys(current)) {
+        if (RESERVED_RECORD_KEYS.has(key))
+          return `"${path(entry)}" uses the reserved key "${key}".`;
+        pending.push({
+          value: current[key],
+          label: key,
+          field: entry.idMap.entryField,
+          parent: entry,
+          freeform: false
+        });
+      }
+      continue;
+    }
+    const owned = entry.freeform ? undefined : enumsOwnedBy(entry, current);
     for (const key of Object.keys(current)) {
       if (RESERVED_RECORD_KEYS.has(key))
         return `"${path(entry)}" uses the reserved key "${key}".`;
+      if (entry.freeform) {
+        pending.push({
+          value: current[key],
+          label: key,
+          field: key,
+          parent: entry,
+          freeform: true
+        });
+        continue;
+      }
       const freeform =
-        entry.freeform ||
-        (FREEFORM_FIELDS.has(key) &&
-          ownsFreeformField(
-            current,
-            key,
-            entry.field,
-            entry.parent
-              ? {
-                  field: entry.parent.field,
-                  parentValue: entry.parent.parent?.value
-                }
-              : null
-          ));
+        FREEFORM_FIELDS.has(key) &&
+        ownsFreeformField(current, key, entry.shape);
+      const position = freeform ? {} : childPosition(entry.shape, current, key);
       pending.push({
         value: current[key],
-        field: key,
+        label: key,
+        field: position.field ?? key,
         parent: entry,
         freeform,
-        members:
-          freeform ||
-          (entry.field !== undefined && ID_MAP_FIELDS.has(entry.field))
-            ? undefined
-            : (featureEnums?.get(key) ?? ENUM_FIELDS.get(key))
+        shape: position.shape,
+        idMap: position.idMap,
+        members: freeform ? undefined : owned?.get(key)
       });
     }
     if (entry.freeform) continue;
@@ -623,6 +770,62 @@ export function reservedIdentifierError(
         return `"${path(entry)}" uses the reserved parameter name "${name}".`;
   }
   return null;
+}
+
+/**
+ * Refuses a reserved name used where a document keeps a key, and an enum
+ * value outside its union:
+ * - any object key, everywhere (every map in a document, its history and its
+ *   command payloads, freeform metadata included);
+ * - outside freeform data (`FREEFORM_FIELDS`): any id field (see
+ *   {@link isIdentifierField}), any selector such as a constraint's `point`
+ *   (see `SELECTOR_FIELDS`) and any parameter name, including those in stored
+ *   `parameter.*` commands;
+ * - an enum field holding anything but a member of its union, where the
+ *   record is the schema object that defines that enum (see
+ *   {@link enumsOwnedBy}): never by a property name alone, so an id, a map
+ *   entry or free text spelled like an enum field is not held to it.
+ * The walk knows the schema position of what it visits (`FIELD_POSITIONS`):
+ * the entries of id-keyed maps (`nodes`, the derived maps, folder
+ * placements, joint values, a sketch's label positions), whole maps restored
+ * by a history change, and stored command payloads.
+ *
+ * `value` is a whole document, or with `field` the value of that document
+ * field (`commandLog`, a history change's bare `nodes` map or id), judged as
+ * that field. Other strings, such as display names, descriptions and
+ * metadata values, are not keys and may be anything.
+ */
+export function reservedIdentifierError(
+  value: unknown,
+  field?: string
+): string | null {
+  const position: Position =
+    field === undefined ? { shape: 'document' } : documentFieldPosition(field);
+  return walkIdentifiers({
+    value,
+    label: field,
+    field,
+    parent: null,
+    freeform: field !== undefined && FREEFORM_FIELDS.has(field),
+    shape: position.shape,
+    idMap: position.idMap
+  });
+}
+
+/**
+ * {@link reservedIdentifierError} for one edit-history change: its `before`
+ * and `after` are judged by the change's `field` and `key` (one node
+ * snapshot, a whole node map, a command list or a bare id).
+ */
+export function historyChangeIdentifierError(change: unknown): string | null {
+  return walkIdentifiers({
+    value: change,
+    label: undefined,
+    field: undefined,
+    parent: null,
+    freeform: false,
+    shape: 'change'
+  });
 }
 
 /**
