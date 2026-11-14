@@ -194,6 +194,14 @@ describe('start screen folder tab', () => {
   });
 });
 
+describe('start screen encryption mark', () => {
+  it('draws the not-encrypted mark in the warning hue', () => {
+    expect(rule(css, '.start-tile-mark.is-plaintext')).toMatch(
+      /color:\s*var\(--color-warning\)/
+    );
+  });
+});
+
 describe('start screen shelf groups', () => {
   it('styles the Pinned and Projects labels as the column eyebrow', () => {
     // 5 Nov 2026: the groups were unlabelled, so a short Pinned row read as

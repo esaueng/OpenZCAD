@@ -1978,7 +1978,7 @@ export function StartScreen({
                 // its name.
                 plaintext && (
                   <span
-                    className="start-tile-mark"
+                    className="start-tile-mark is-plaintext"
                     role="img"
                     aria-label={NOT_ENCRYPTED_LABEL}
                     title={`${NOT_ENCRYPTED_LABEL}. It is stored in your account as plaintext.`}
