@@ -3,6 +3,7 @@
 
 import ast
 import copy
+import functools
 import importlib.util
 import json
 import os
@@ -24,9 +25,13 @@ POLICY = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(POLICY)
 REMUS = POLICY.REPOSITORY == "esaueng/remus"
 JANE_LABEL = "ci-server-jane" if REMUS else "ci-server-jane-5gb"
-STAGED = ROOT / (".github/workflows/fleet-ci-v5.yml" if REMUS
-                 else ".github/workflows/fleet-ci-v6.yml")
-TEXT = STAGED.read_text()
+CALLER = (ROOT / ".github/workflows/ci.yml").read_text()
+# OpenZCAD checks the callee ci.yml activates, which is the one that schedules
+# real jobs. Remus keeps its own staged file.
+ACTIVE = ROOT / (".github/workflows/fleet-ci-v5.yml" if REMUS else re.search(
+    r"uses: [^/\s]+/[^/\s]+/(\.github/workflows/fleet-ci(?:-v[0-9]+)?\.yml)@[a-f0-9]{40}\n",
+    CALLER)[1])
+TEXT = ACTIVE.read_text()
 # fleet-ci-v4 (#836, #878): every shard installs browser binaries only, and
 # merge-queue candidates run no e2e shards, which the e2e gate then accepts.
 # fleet-ci-v5 (#882): pull-request shards start beside `quality` instead of
@@ -113,9 +118,7 @@ def approved(text):
             raise AssertionError(f"Approved action revision must match {count} times: {old}")
         text = text.replace(old, new)
     return text
-def previous_workflow():
-    comparison = json.loads((ROOT / "scripts/fleet-test-fixtures.json").read_text())[POLICY.REPOSITORY]
-    path, pin = comparison["path"], comparison["pin"]
+def immutable_workflow(path, pin):
     previous = ROOT / path
     if previous.exists():
         return previous.read_text()
@@ -128,7 +131,23 @@ def previous_workflow():
         return subprocess.check_output(command, cwd=ROOT, text=True, encoding="utf-8")
 
 
+def previous_workflow():
+    comparison = json.loads((ROOT / "scripts/fleet-test-fixtures.json").read_text())[POLICY.REPOSITORY]
+    return immutable_workflow(comparison["path"], comparison["pin"])
+
+
 OLD = previous_workflow()
+# The approved step changes above turn the original fleet-ci.yml into v6
+# exactly (#1118, landed at 18b7421 and activated by #1120). Later callees
+# (v8, #1295) deliberately restructure the application jobs, so their steps
+# are pinned by test/ci-runtime-optimization.test.ts instead. What they must
+# keep byte for byte is v6's trust boundary: see
+# test_active_callee_keeps_the_lineage_trust_boundary. Read lazily: the
+# fixture preparer imports this module and must not fetch a third snapshot.
+@functools.cache
+def lineage():
+    return TEXT if REMUS else immutable_workflow(
+        ".github/workflows/fleet-ci-v6.yml", "18b74211da50d21d9089fe08b9f03f4241c2a23d")
 
 
 def jobs(text):
@@ -353,7 +372,7 @@ class QueueWorkflowTests(unittest.TestCase):
                                 for old in old_expressions))
 
     def test_every_existing_command_and_security_guard_is_preserved(self):
-        old_jobs, new_jobs = jobs(approved(OLD)), jobs(TEXT)
+        old_jobs, new_jobs = jobs(approved(OLD)), jobs(lineage())
         self.assertEqual(set(new_jobs), set(old_jobs) | {"queue-trust"})
         old_isolation = re.search(r'^      - &fleet-isolation\n.*?(?=^      - |^  [\w-]+:|\Z)', OLD, re.M | re.S)[0]
         expected_isolation = old_isolation
@@ -373,7 +392,7 @@ class QueueWorkflowTests(unittest.TestCase):
         for name, old in old_jobs.items():
             new = new_jobs[name]
             self.assertRegex(new, r"(?m)^    needs: (?:queue-trust|\[queue-trust, .+\])$")
-            self.assertIn("needs.queue-trust.outputs.sha == github.sha", TEXT)
+            self.assertIn("needs.queue-trust.outputs.sha == github.sha", lineage())
             old_steps = old.split("    steps:", 1)[1].replace(old_isolation, "      - *fleet-isolation\n")
             new_steps = new.split("    steps:", 1)[1]
             new_steps = new_steps.replace('            del(."queue-trust") |\n', '')
@@ -393,15 +412,54 @@ class QueueWorkflowTests(unittest.TestCase):
                         continue
                     self.assertIn(f"needs.{dependency}.result == 'success'", new)
 
+    def test_active_callee_keeps_the_lineage_trust_boundary(self):
+        if REMUS:
+            return
+        # Workflow triggers and permissions, the embedded queue probe, the
+        # isolation guard and the runner authorization stay v6's exact bytes.
+        baseline = lineage()
+        self.assertEqual(TEXT.split("\njobs:\n", 1)[0], baseline.split("\njobs:\n", 1)[0])
+        active, previous = jobs(TEXT), jobs(baseline)
+        self.assertEqual(active["queue-trust"], previous["queue-trust"])
+        isolation = r'^      - &fleet-isolation\n.*?(?=^      - |^  [\w-]+:|\Z)'
+        self.assertEqual(re.search(isolation, TEXT, re.M | re.S)[0],
+                         re.search(isolation, baseline, re.M | re.S)[0])
+        runner = r"^    runs-on: &fleet-runner (\$\{\{ fromJSON\(.+\) \}\})$"
+        self.assertEqual(re.findall(runner, TEXT, re.M), re.findall(runner, baseline, re.M))
+        self.assertEqual(len(re.findall(runner, TEXT, re.M)), 1)
+        for name, block in active.items():
+            if name == "queue-trust":
+                continue
+            with self.subTest(job=name):
+                self.assertRegex(block, r"(?m)^    needs: (?:queue-trust|\[queue-trust, .+\])$")
+                placement = re.search(r"(?m)^    runs-on: (.+)$", block)[1]
+                if placement.startswith(("&fleet-runner ", "*fleet-runner")):
+                    # Every job that may land on a home slot checks it first.
+                    steps = re.search(r"(?m)^    steps: \*([\w-]+)$", block)
+                    # A shared step list is checked where its anchor is defined.
+                    anchor = rf"(?m)^    steps: &{steps[1]}\n" if steps else r"(?m)^    steps:(?: &[\w-]+)?\n"
+                    self.assertRegex(TEXT if steps else block,
+                                     anchor + r"      - (?:\*fleet-isolation|&fleet-isolation)\n")
+                else:
+                    # Anything else is an explicit hosted image, never a home slot.
+                    self.assertIn(placement, ("ubuntu-24.04", "ubuntu-latest"))
+                    self.assertNotIn("ci-trusted-main", block)
+
     def test_required_gate_still_rejects_application_failure_when_probe_skips_or_fails(self):
         if not REMUS:
             block = jobs(TEXT)["validate"]
+            needs = re.findall(r"[\w-]+", re.search(r"(?m)^    needs: \[(.+)\]$", block)[1])
+            results = dict(re.findall(r"(?m)^          (\w+_RESULT): \$\{\{ needs\.([\w-]+)\.result \}\}$", block))
+            # The gate reads every job it waits for except the optional probe.
+            self.assertEqual(sorted(results.values()), sorted(set(needs) - {"queue-trust"}))
             command = block.split("        run: |\n", 1)[1]
-            for quality in ("success", "failure", "cancelled", "skipped"):
-                result = subprocess.run([bash_executable(), "-e", "-o", "pipefail", "-c", textwrap.dedent(command)],
-                    env=dict(os.environ, QUALITY_RESULT=quality, UNIT_RESULT="success", VALIDATION_RESULT="success"),
-                    capture_output=True)
-                self.assertEqual(result.returncode == 0, quality == "success")
+            green = {variable: "success" for variable in results}
+            for variable in results:
+                for result in ("success", "failure", "cancelled", "skipped", ""):
+                    with self.subTest(variable=variable, result=result):
+                        status = subprocess.run([bash_executable(), "-e", "-o", "pipefail", "-c", textwrap.dedent(command)],
+                            env={**os.environ, **green, variable: result}, capture_output=True)
+                        self.assertEqual(status.returncode == 0, result == "success")
             return
         command = jobs(TEXT)["ci-pass"].split("        run: |\n", 1)[1]
         for probe in ("success", "failure", "cancelled", "skipped"):

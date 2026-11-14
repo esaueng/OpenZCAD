@@ -35,10 +35,10 @@ describe('superseded CI recovery', () => {
     // successes when validation fails or the current run is canceled.
     const gates = readFileSync(FLEET_CI_PATH, 'utf8');
     expect(gates).toContain(
-      'needs: [queue-trust, quality, unit, validation]\n    if: always()'
+      'needs: [queue-trust, plan, quality, typecheck, unit, validation]\n    if: always()'
     );
     expect(gates).toContain(
-      'needs: [queue-trust, e2e-tests, e2e-tests-pr]\n    if: always()'
+      'needs: [queue-trust, plan, e2e-tests, e2e-tests-pr, e2e-queue]\n    if: always()'
     );
   });
 });
