@@ -30334,6 +30334,15 @@ export function App() {
             return;
           }
           if (interaction.mode === 'sketch') {
+            if (event.defaultPrevented) {
+              // A value prompt (a dimension, a fillet radius, an offset)
+              // spent this press closing itself: it cancels the value and
+              // climbs no rung, so it neither leaves nor arms the exit
+              // (I43). Read before our own preventDefault below, which
+              // would otherwise make every press look spent.
+              sketchExitArmedAtRef.current = null;
+              return;
+            }
             // Inside a sketch Escape still climbs its ladder one rung per
             // press: chain, pick sequence, tool, selection, then the sketch.
             event.preventDefault();
@@ -30352,13 +30361,6 @@ export function App() {
             // sketch had already been left — only Finish Sketch said
             // anything. Both dispatch the same exit, so both can say so.
             const leftSketch = escapeTarget(interaction) === 'exit-sketch';
-            if (leftSketch && event.defaultPrevented) {
-              // A value prompt (a dimension, a fillet radius, an offset)
-              // spent this press closing itself: it cancels the value and
-              // neither leaves nor arms the exit (I43).
-              sketchExitArmedAtRef.current = null;
-              return;
-            }
             if (leftSketch) {
               // I43: the last rung asks before it leaves; a reflex second
               // Escape after closing a prompt or deselecting stays put.

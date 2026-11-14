@@ -487,6 +487,44 @@ test('Offset grows a circle, and refuses one that would vanish', async ({
   expect(constraintKinds(constraints)).toEqual(['concentric']);
 });
 
+test('the Offset value prompt says Esc cancels it, not that Esc leaves the sketch (I43)', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  const at = await startSketch(page, 'Offset escape');
+  const center = at(0.45, 0.5);
+  await drawCircle(page, center, 40);
+  const status = page.getByRole('contentinfo');
+  const finish = page.getByRole('button', {
+    name: 'Finish Sketch',
+    exact: true
+  });
+
+  // The modify tool disarms once its picks are in, so the prompt opens on
+  // the sketch ladder's last rung: its hint read "Esc leaves the sketch".
+  await modifyTool(page, 'Offset');
+  await page.mouse.click(center.x + 40, center.y);
+  const field = page.getByRole('textbox', { name: 'Offset distance' });
+  await expect(field).toBeVisible();
+  await expect(status).toContainText('Esc cancel');
+  await expect(status).not.toContainText('leaves the sketch');
+
+  // Escape cancels the value only; the sketch stays open, exit unarmed.
+  await field.press('Escape');
+  await expect(field).toBeHidden();
+  await expect(finish).toBeVisible();
+  await expect(status).not.toContainText('Press Esc again');
+
+  // The ladder then asks before it leaves, and Finish leaves in one click
+  // with the circle kept.
+  await page.keyboard.press('Escape');
+  await expect(status).toContainText('Press Esc again to leave the sketch');
+  await expect(finish).toBeVisible();
+  await finish.click();
+  await expect(finish).toBeHidden();
+  expect(kindsOf((await exportSketch(page)).objects)).toEqual(['circle']);
+});
+
 test('Construction on one side of a rectangle removes its profile; undo restores it', async ({
   page
 }) => {
