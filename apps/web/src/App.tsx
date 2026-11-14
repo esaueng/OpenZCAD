@@ -95,7 +95,9 @@ import { LatestTask } from './lib/latestTask';
 import { prepareSaveStateRestore } from './lib/saveStateRestore';
 import { rebuildProgressLabel } from './lib/rebuildProgressLabel';
 import {
-  activeIsolatedBodyId,
+  bodyIsolationState,
+  persistedHiddenBodyIds,
+  releaseIsolationToParameter,
   toggleBodyIsolation,
   type BodyIsolation
 } from './lib/bodyIsolation';
@@ -485,11 +487,9 @@ import {
   sameLocalProjectContent,
   type LocalProjectAutosaveOptions
 } from './lib/localProjectAutosave';
-import {
-  inspectShaprPair,
-  type ShaprPairInspection
-} from './lib/shaprImportWorkerClient';
-import { shaprMigrationDraft } from './lib/shaprMigration';
+// Shapr3D migration loads on the gesture that picks a .shapr + STEP pair.
+import type { ShaprPairInspection } from './lib/shaprImportWorkerClient';
+import type { shaprMigrationDraft as ShaprMigrationDraftFn } from './lib/shaprMigration';
 import {
   autosaveReportedSaveState,
   presentedWorkspaceSaveState
@@ -1109,6 +1109,7 @@ function focusedControlOwnsSpace(target: HTMLElement | null): boolean {
  * BEFORE it (unsupported extension, a lone `.shapr`) stay synchronous.
  */
 const stepImportRun = () => import('./lib/stepImportRun');
+const projectInsertRun = () => import('./lib/projectInsertRun');
 
 /**
  * Extrude classification runs only once a region extrude is previewed or
@@ -3572,6 +3573,15 @@ export function App() {
       featureWarnings: derived.featureWarnings ?? []
     });
   }
+  // Isolation is session-local and never saved: while it is on, the view
+  // saves the user's own hidden set from before it (QA 2026-11-14 #17).
+  const [bodyIsolation, setBodyIsolation] = useState<
+    (BodyIsolation & { projectId: string; bodyName: string }) | null
+  >(null);
+  const currentBodyIsolation =
+    bodyIsolation && bodyIsolation.projectId === doc?.projectId
+      ? bodyIsolation
+      : null;
   const {
     projection,
     setProjection,
@@ -3593,7 +3603,9 @@ export function App() {
     onCameraSettled: persistCameraPose,
     persistSection: persistSectionView,
     forget: forgetProjectView
-  } = useProjectView(doc?.projectId ?? null);
+  } = useProjectView(doc?.projectId ?? null, (onScreen) =>
+    persistedHiddenBodyIds(onScreen, currentBodyIsolation)
+  );
   // Read at callback time: the section slider's release handler runs after
   // the change that moved it.
   const viewerSettingsRef = useRef(viewerSettings);
@@ -3632,10 +3644,6 @@ export function App() {
         : [],
     [doc, hiddenBodyIds]
   );
-  // The view's hidden set persists; the prior isolation snapshot is session-local.
-  const [bodyIsolation, setBodyIsolation] = useState<
-    (BodyIsolation & { projectId: string }) | null
-  >(null);
   const [previewDoc, setPreviewDoc] = useState<ProjectDocument | null>(null);
   // D06: an assistant proposal's annotations, drawn on its sheet in Draw.
   const [drawingPreview, setDrawingPreview] = useState<{
@@ -4692,6 +4700,7 @@ export function App() {
   const [syncRun, setSyncRun] = useState<SyncEntry[] | null>(null);
   const viewNonceRef = useRef(0);
   const projectImportInputRef = useRef<HTMLInputElement | null>(null);
+  const projectInsertInputRef = useRef<HTMLInputElement | null>(null);
   const projectTransferRef = useRef(false);
   const [projectTransferBusy, setProjectTransferBusy] = useState(false);
   const importInputRef = useRef<HTMLInputElement | null>(null);
@@ -8197,25 +8206,57 @@ export function App() {
     () => partBodies.filter((body) => !hiddenBodyIds.has(body.bodyId)),
     [partBodies, hiddenBodyIds]
   );
-  const isolatedBodyId = useMemo(
+  const isolationState = useMemo(
     () =>
-      activeIsolatedBodyId(
+      bodyIsolationState(
         partBodies.map((body) => body.bodyId),
         hiddenBodyIds,
         localHiddenBodyIds,
-        bodyIsolation?.projectId === doc?.projectId ? bodyIsolation : null
+        currentBodyIsolation,
+        previewDoc !== null
       ),
     [
       partBodies,
       hiddenBodyIds,
       localHiddenBodyIds,
-      bodyIsolation,
-      doc?.projectId
+      currentBodyIsolation,
+      previewDoc
     ]
   );
-  // End the session permanently when its view changes. Merely hiding the
-  // indicator would let an old snapshot revive if the same set returns later.
-  if (bodyIsolation && isolatedBodyId === null) setBodyIsolation(null);
+  const isolatedBodyId =
+    isolationState.kind === 'active' ? isolationState.bodyId : null;
+  // A hidden set the user replaced, or another project, ends the session
+  // permanently: merely hiding the indicator would let an old snapshot revive
+  // if the same set returns later.
+  if (
+    bodyIsolation &&
+    (isolationState.kind === 'replaced' || isolationState.kind === 'none')
+  )
+    setBodyIsolation(null);
+  // The committed model took the isolated body away (deleted, consumed,
+  // undone, or switched off by a parameter). Before QA 2026-11-14 #17 the
+  // session ended silently and left every other body hidden, through a
+  // reload; it now puts back the bodies shown before isolating, and says so.
+  useEffect(() => {
+    if (isolationState.kind !== 'ended' || !currentBodyIsolation) return;
+    const { bodyName } = currentBodyIsolation;
+    setBodyIsolation(null);
+    setHiddenBodyIds(isolationState.hidden);
+    const restored = isolationState.hidden.size;
+    const notice = `Left isolation: ${bodyName} ${isolationState.reason === 'removed' ? 'is no longer in the model' : 'is now hidden'} · ${restored === 0 ? 'all bodies visible' : `${restored} previously hidden ${restored === 1 ? 'body stays' : 'bodies stay'} hidden`}.`;
+    // An Undo, Delete or boolean that ended it already reported its outcome,
+    // perhaps offering Undo; keep that and add the notice to it.
+    const offersUndo = undoableStatusAt === statusEntry.at;
+    setStatus(offersUndo ? `${statusEntry.text} ${notice}` : notice);
+    if (offersUndo) setUndoableStatusAt(lastStatusAtRef.current);
+  }, [
+    isolationState,
+    currentBodyIsolation,
+    setHiddenBodyIds,
+    setStatus,
+    statusEntry,
+    undoableStatusAt
+  ]);
   // Only whether a face drag is in progress matters to the bodies: keyed on
   // the whole interaction, every drag, keypad or selection event handed the
   // viewer a new bodies array and re-ran each of its bodies effects.
@@ -12895,21 +12936,17 @@ export function App() {
       );
       return;
     }
-    const isolation =
-      bodyIsolation && bodyIsolation.projectId === doc?.projectId
-        ? bodyIsolation
-        : null;
     const step = toggleBodyIsolation(
       partBodies.map((body) => body.bodyId),
       bodyId,
       hiddenBodyIds,
       localHiddenBodyIds,
-      isolation
+      currentBodyIsolation
     );
     setHiddenBodyIds(step.hidden);
     setBodyIsolation(
       step.isolation && doc
-        ? { ...step.isolation, projectId: doc.projectId }
+        ? { ...step.isolation, projectId: doc.projectId, bodyName: body.name }
         : null
     );
     if (!step.entered) {
@@ -17440,6 +17477,8 @@ export function App() {
       inspection: null
     });
     try {
+      const { inspectShaprPair } =
+        await import('./lib/shaprImportWorkerClient');
       const inspection = await inspectShaprPair(shaprFile, sourceStepFile, {
         signal: controller.signal,
         onProgress: (progress) => {
@@ -17497,12 +17536,6 @@ export function App() {
     ) {
       return;
     }
-    const migration = shaprMigrationDraft({
-      ir: pending.inspection.ir,
-      shaprFileName: pending.shaprFile.name,
-      stepFileName: pending.sourceStepFile.name,
-      stepChecksumSha256: pending.inspection.stepChecksumSha256
-    });
     const importId = toShaprImportId(`shapr_${crypto.randomUUID()}`);
     setPendingShaprImport((current) =>
       current
@@ -17514,6 +17547,30 @@ export function App() {
           }
         : null
     );
+    // Loaded here, after the card says it is applying, so a second click
+    // during the load finds the apply already under way.
+    let shaprMigrationDraft: typeof ShaprMigrationDraftFn;
+    try {
+      ({ shaprMigrationDraft } = await import('./lib/shaprMigration'));
+    } catch (error) {
+      setPendingShaprImport((current) =>
+        current
+          ? {
+              ...current,
+              phase: 'preview',
+              progress: 'Preview ready.',
+              error: errorMessage(error, 'The import could not start.')
+            }
+          : null
+      );
+      return;
+    }
+    const migration = shaprMigrationDraft({
+      ir: pending.inspection.ir,
+      shaprFileName: pending.shaprFile.name,
+      stepFileName: pending.sourceStepFile.name,
+      stepChecksumSha256: pending.inspection.stepChecksumSha256
+    });
     const shaprAbort = startImportAbort();
     const { runStepImport } = await stepImportRun();
     const result = await runStepImport({
@@ -17937,6 +17994,60 @@ export function App() {
       projectTransferRef.current = false;
       setProjectTransferBusy(false);
       finishBusy();
+    }
+  }
+
+  /**
+   * File → Insert project…: another project's bodies come into this one as
+   * one undoable step, each keeping its name, colour and opacity, filed in a
+   * folder named after the project. A copy of the solids, not of the
+   * history, and no link back (AS01). See `lib/projectInsertRun.ts`.
+   */
+  async function handleInsertProject(file: File) {
+    if (!managerRef.current || !doc || !ensureCanEdit('insert a project')) {
+      return;
+    }
+    if (importAbortRef.current) {
+      setStatus(
+        'Another import is still running. Try again once it completes.'
+      );
+      return;
+    }
+    const importManager = managerRef.current;
+    const abort = startImportAbort();
+    try {
+      let insert: Awaited<ReturnType<typeof projectInsertRun>>;
+      try {
+        insert = await projectInsertRun();
+      } catch (error) {
+        // A chunk that will not load (offline, a deploy since this page
+        // loaded) has no run to report it; say so on the card.
+        refuseImportOnCard(
+          file.name,
+          errorMessage(error, `Could not insert ${file.name}.`)
+        );
+        return;
+      }
+      await insert.runProjectInsert({
+        file,
+        ownerUserId: session?.userId ?? localUserId,
+        signal: abort.signal,
+        progress: createImportProgressSink(),
+        setStatus,
+        stillCurrent: () => managerRef.current === importManager,
+        onFailure: () => trackDetail('error_import'),
+        stepImport: {
+          archive: archiveArtifact,
+          validatedFeature,
+          status: { setStatus, setFeatureFormError },
+          marks: importMarks(),
+          currentDocument: () => managerRef.current?.document ?? null,
+          editDisabledReason: () => editDisabledReasonRef.current,
+          newId: () => crypto.randomUUID()
+        }
+      });
+    } finally {
+      finishImportAbort(abort);
     }
   }
 
@@ -22424,13 +22535,17 @@ export function App() {
         (p) => p.name === name
       )?.toggle;
       // setParameter both adds and changes one; say which happened.
-      if (toggle)
+      if (toggle) {
         setHiddenBodyIds(
           (hidden) =>
             new Set(
               [...hidden].filter((id) => !toggle.bodyIds.includes(id as BodyId))
             )
         );
+        setBodyIsolation((recorded) =>
+          releaseIsolationToParameter(recorded, toggle.bodyIds)
+        );
+      }
       setStatus(
         added ? `Added parameter ${name}.` : `Parameter ${name} updated.`
       );
@@ -31856,6 +31971,14 @@ export function App() {
       run: () => projectImportInputRef.current?.click()
     },
     {
+      id: 'file-insert-project',
+      label: 'Insert project…',
+      group: 'File',
+      keywords: ['merge', 'combine', 'add', 'openzcad', 'into'],
+      icon: <Upload size={16} aria-hidden="true" />,
+      run: () => projectInsertInputRef.current?.click()
+    },
+    {
       // The face outline export used to be a tab on the tool card, where it
       // sat among edit modes and cost that card a quarter of its width.
       id: 'file-export-face-dxf',
@@ -32940,6 +33063,7 @@ export function App() {
           geometryFailed={geometry.state.phase === 'failed'}
           projectTransferBusy={projectTransferBusy}
           onImportProject={(file) => void handleImportProject(file)}
+          onInsertProject={(file) => void handleInsertProject(file)}
           onExportProject={() => void handleExportProject()}
           onDownloadArtifact={(artifact) =>
             void handleDownloadProjectArtifact(artifact)
@@ -35259,6 +35383,17 @@ export function App() {
               const file = event.currentTarget.files?.[0];
               event.currentTarget.value = '';
               if (file) void handleImportProject(file);
+            }}
+          />
+          <input
+            ref={projectInsertInputRef}
+            type="file"
+            accept={fileAccept('.openzcad')}
+            hidden
+            onChange={(event) => {
+              const file = event.currentTarget.files?.[0];
+              event.currentTarget.value = '';
+              if (file) void handleInsertProject(file);
             }}
           />
           <input

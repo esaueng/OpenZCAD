@@ -51,6 +51,7 @@
   "imported-box-shell.spec.ts": 20,
   "in-place-primitives.spec.ts": 16,
   "in-place-thread.spec.ts": 90,
+  "insert-project.spec.ts": 8,
   "kernel-session-privacy.spec.ts": 14,
   "keyboard-focus-recovery.spec.ts": 12,
   "library-folder-sync.spec.ts": 12,

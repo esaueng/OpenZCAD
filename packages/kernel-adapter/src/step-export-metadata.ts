@@ -14,6 +14,8 @@
  * writer fails an export loudly instead of shipping a half-converted file.
  */
 
+import type { BodyId } from '@openzcad/shared';
+
 import type { ExportUnitOptions } from './export-units';
 
 /** A STEP export's unit plus the header's file name and time stamp. */
@@ -22,6 +24,24 @@ export interface StepExportOptions extends ExportUnitOptions {
   fileName?: string;
   /** ISO 8601 time stamp for the header; the time of export when unset. */
   timestamp?: string;
+}
+
+/** Why a body was left out of a whole-document STEP. */
+export type StepBodySkipReason =
+  /** Its history step failed, so it has no geometry to write. */
+  | 'failed'
+  /** A mesh too large to convert, kept only as a reference. */
+  | 'mesh-reference'
+  /** The build left it with no solid. */
+  | 'empty';
+
+/** A whole-document STEP and how its declared solids map to bodies. */
+export interface StepBodiesExport {
+  text: string;
+  /** Every written body in file order, with the solids it declared. */
+  bodies: { bodyId: BodyId; solidCount: number }[];
+  /** Shown bodies that had nothing to write. */
+  skipped: { bodyId: BodyId; reason: StepBodySkipReason }[];
 }
 
 /** One exported solid's label, in the order the writer receives solids. */
