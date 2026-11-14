@@ -34,6 +34,11 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+/** Props whose key may later turn null, as it does while a save runs. */
+function keyProps(refreshKey: string | null): { refreshKey: string | null } {
+  return { refreshKey };
+}
+
 describe('useAccountStorageUsage', () => {
   it('still retries on request while a save run holds the automatic asks', async () => {
     // PR review: with the key null the first ask set the last key, and Retry
@@ -61,7 +66,7 @@ describe('useAccountStorageUsage', () => {
     const { result, rerender } = renderHook(
       ({ refreshKey }: { refreshKey: string | null }) =>
         useAccountStorageUsage(load, 'user-1', refreshKey),
-      { initialProps: { refreshKey: '1' } }
+      { initialProps: keyProps('1') }
     );
     expect(result.current.state).toBe('loading');
 
@@ -77,7 +82,7 @@ describe('useAccountStorageUsage', () => {
     const { rerender } = renderHook(
       ({ refreshKey }: { refreshKey: string | null }) =>
         useAccountStorageUsage(load, 'user-1', refreshKey),
-      { initialProps: { refreshKey: 'a' } }
+      { initialProps: keyProps('a') }
     );
     await waitFor(() => expect(load).toHaveBeenCalledTimes(1));
     rerender({ refreshKey: 'a' });

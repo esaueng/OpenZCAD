@@ -78,7 +78,13 @@ export function useAccountStorageUsage(
   }, [refresh, accountKey]);
 
   useEffect(() => {
-    if (refreshKey === null || refreshKey === askedKeyRef.current) return;
+    // A save run can rewrite projects already counted, changing their bytes
+    // but not the key; its end asks again even when the key comes back equal.
+    if (refreshKey === null) {
+      askedKeyRef.current = null;
+      return;
+    }
+    if (refreshKey === askedKeyRef.current) return;
     askedKeyRef.current = refreshKey;
     refresh();
   }, [refreshKey, refresh]);
