@@ -2825,7 +2825,16 @@ function resizeCylindricalFaceExactly(
       refusal.reason === 'approximate_reblend_not_permitted';
     // Changing the waypoint cannot make an approximate seam exact. Preserve
     // ordinary sleeve-quality retries while respecting this typed policy.
-    if (kernelRefusalCategoryOf(error) === 'unsupported' || exactOnlyReblend)
+    // `cylinder-diameter-unbuildable` is the blend-cluster route's verdict:
+    // the kernel has already tried every re-fillet order it has, and each
+    // waypoint repeats that whole search (seconds per call on a filleted
+    // boss) only to be refused the same way. The caller keeps this verdict
+    // too, rather than running its own WS6 ladder.
+    if (
+      kernelRefusalCategoryOf(error) === 'unsupported' ||
+      exactOnlyReblend ||
+      refusal?.code === 'cylinder-diameter-unbuildable'
+    )
       throw error;
     const inward = [0.85, 0.7].map(
       (factor) => factor * Math.min(fromRadius, toRadius)
