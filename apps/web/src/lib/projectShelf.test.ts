@@ -1,8 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 import { toArtifactId, type ProjectSummary } from '@openzcad/shared';
 import {
+  createProjectDocument,
+  withoutDerivedProjection
+} from '@openzcad/document-core';
+import { persistedDocumentBytes, toUserId } from '@openzcad/shared';
+import {
   cachedThumbnailSource,
   mergeProjectSummaries,
+  summarizeLocalDocument,
+  withSavedVersion,
   retainPendingShelfOrder,
   prioritizeShelfEntries,
   withVerifiedShelfMetadata,
@@ -24,6 +31,69 @@ it('verifies pinned and visible cards first without dropping or mutating records
     )
   ).toEqual(['pinned', 'visible', 'offscreen', 'other']);
   expect(records[0]?.projectId).toBe('offscreen');
+});
+
+describe('sizes on rows the app adds or moves itself', () => {
+  const document = createProjectDocument('Bracket', toUserId('user_size'));
+  const measured = (doc: typeof document) =>
+    persistedDocumentBytes(withoutDerivedProjection(doc));
+
+  // Review of #1512: a created or duplicated project read "Not measured yet"
+  // until the next listing.
+  it('measures a document the device just stored', () => {
+    expect(summarizeLocalDocument(document).documentBytes).toBe(
+      measured(document)
+    );
+  });
+
+  // Review of #1512: a rename moved the row's version but kept the size of
+  // the version before.
+  it('moves the size with the version', () => {
+    const before = summarizeLocalDocument(document);
+    const renamed = {
+      ...document,
+      name: 'Bracket with a much longer name than before',
+      version: document.version + 1
+    };
+    const after = withSavedVersion(before, renamed);
+    expect(after.documentVersion).toBe(renamed.version);
+    expect(after.documentBytes).toBe(measured(renamed));
+    expect(after.documentBytes).toBeGreaterThan(before.documentBytes!);
+  });
+});
+
+describe('merged project sizes', () => {
+  const local = {
+    projectId: 'proj_sized',
+    name: 'Bracket',
+    updatedAt: LISTED,
+    revisionCount: 1,
+    documentVersion: 4
+  } as ProjectSummary;
+
+  it('keeps the newer record’s own size', () => {
+    const [merged] = mergeProjectSummaries(
+      [{ ...local, documentBytes: 900 }],
+      [{ ...local, updatedAt: EARLIER, documentVersion: 3, documentBytes: 700 }]
+    );
+    expect(merged?.documentBytes).toBe(900);
+  });
+
+  it('fills an unmeasured device projection from the account at the same version', () => {
+    const [merged] = mergeProjectSummaries(
+      [local],
+      [{ ...local, documentBytes: 1200 }]
+    );
+    expect(merged?.documentBytes).toBe(1200);
+  });
+
+  it('does not pass off another version’s size as the newer one’s', () => {
+    const [merged] = mergeProjectSummaries(
+      [local],
+      [{ ...local, updatedAt: EARLIER, documentVersion: 3, documentBytes: 700 }]
+    );
+    expect(merged).not.toHaveProperty('documentBytes');
+  });
 });
 
 describe('provisional encrypted shelf refresh', () => {

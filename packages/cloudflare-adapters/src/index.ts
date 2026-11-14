@@ -2377,7 +2377,7 @@ export class D1R2PersistenceService implements PersistenceService {
     )
       ? this.env.DB.prepare(
           `SELECT p.id, p.name, p.updated_at, p.document_json,
-                  p.document_version, p.last_revision_id, p.revision_count,
+                  p.document_version, p.last_revision_id, p.revision_count, p.document_bytes,
                   p.status, p.pinned, p.sort_order, p.deleted_at, p.archived_at${format},
                   (SELECT a.id FROM artifacts a
                     WHERE a.project_id = p.id AND a.kind = 'thumbnail'
@@ -2406,7 +2406,7 @@ export class D1R2PersistenceService implements PersistenceService {
         ).bind(userId, userId)
       : this.env.DB.prepare(
           `SELECT p.id, p.name, p.updated_at, p.document_json,
-                  p.document_version, p.last_revision_id, p.revision_count,
+                  p.document_version, p.last_revision_id, p.revision_count, p.document_bytes,
                   p.status, p.pinned, p.sort_order, p.deleted_at, p.archived_at${format},
                   (SELECT a.id FROM artifacts a
                     WHERE a.project_id = p.id AND a.kind = 'thumbnail'
@@ -3146,7 +3146,11 @@ export class D1R2PersistenceService implements PersistenceService {
         documentVersion: saved.version,
         updatedAt: saved.updatedAt,
         lastRevisionId: document.revisions.at(-1)?.revisionId,
-        revisionCount: document.revisions.length
+        revisionCount: document.revisions.length,
+        // A new version: the copy state's size described the previous one.
+        documentBytes: persistedDocumentBytes(
+          withoutDerivedProjection(document)
+        )
       },
       document: {
         ...document,
@@ -7861,6 +7865,8 @@ export class D1R2PersistenceService implements PersistenceService {
         revisionCount: document.revisions.length,
         updatedAt,
         documentVersion: document.version,
+        // The figure the row was just written with.
+        documentBytes: persistedDocumentBytes(document),
         organization
       };
     }
@@ -7909,6 +7915,7 @@ export class D1R2PersistenceService implements PersistenceService {
       lastRevisionId: document.revisions.at(-1)?.revisionId,
       revisionCount: document.revisions.length,
       updatedAt,
+      documentBytes: persistedDocumentBytes(document),
       organization
     };
   }
@@ -8601,7 +8608,7 @@ function projectObjectEnvelope(
  * does not expect.
  */
 function projectSummaryColumns(format: string): string {
-  return `SELECT id, name, updated_at, document_json, document_version, last_revision_id, revision_count, status, pinned, sort_order, deleted_at, archived_at${format}, (SELECT a.id FROM artifacts a WHERE a.project_id = projects.id AND a.kind = 'thumbnail' ORDER BY a.created_at DESC LIMIT 1) AS thumbnail_artifact_id`;
+  return `SELECT id, name, updated_at, document_json, document_version, last_revision_id, revision_count, document_bytes, status, pinned, sort_order, deleted_at, archived_at${format}, (SELECT a.id FROM artifacts a WHERE a.project_id = projects.id AND a.kind = 'thumbnail' ORDER BY a.created_at DESC LIMIT 1) AS thumbnail_artifact_id`;
 }
 
 interface ProjectRow {
@@ -8612,6 +8619,11 @@ interface ProjectRow {
   document_version?: number | null;
   last_revision_id?: string | null;
   revision_count?: number | null;
+  /**
+   * The head document's bytes (migration 0010). Zero on a row written before
+   * that accounting, and on an encrypted row, whose head is an envelope.
+   */
+  document_bytes?: number | null;
   status: string | null;
   pinned: number | null;
   sort_order: number | null;
@@ -8725,6 +8737,16 @@ function encryptedSummaryFromRow(row: ProjectRow): ProjectSummary | null {
 /** Shown on the shelf for a project whose real name is encrypted. */
 export const ENCRYPTED_PROJECT_PLACEHOLDER_NAME = 'Encrypted project';
 
+/**
+ * The listing's size for a plaintext row. A zero is the column's default on a
+ * row nothing has measured, not a size, so it is left out rather than shown.
+ */
+function documentBytesOf(row: ProjectRow): { documentBytes?: number } {
+  return typeof row.document_bytes === 'number' && row.document_bytes > 0
+    ? { documentBytes: row.document_bytes }
+    : {};
+}
+
 /** Null when the stored document is unreadable, so the caller can skip it. */
 function summaryFromRow(row: ProjectRow): ProjectSummary | null {
   if (!isPlaintextStorageFormat(row.storage_format)) {
@@ -8748,6 +8770,7 @@ function summaryFromRow(row: ProjectRow): ProjectSummary | null {
       revisionCount: row.revision_count,
       updatedAt: row.updated_at,
       documentVersion: row.document_version,
+      ...documentBytesOf(row),
       organization: organizationFromRow(row)
     };
   }
@@ -8768,6 +8791,7 @@ function summaryFromRow(row: ProjectRow): ProjectSummary | null {
       // number always describes the blob this summary was built from, even if
       // the two ever disagree.
       documentVersion: document.version,
+      ...documentBytesOf(row),
       organization: organizationFromRow(row)
     };
   } catch {

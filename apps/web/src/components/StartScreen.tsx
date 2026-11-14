@@ -106,6 +106,7 @@ import { BrandMark } from './BrandMark';
 import { DemoModelIcon } from './DemoModelIcon';
 import { PartThumbnail } from './PartThumbnail';
 import type { ProjectProperties } from '../lib/projectProperties';
+import { formatBytes } from '../lib/formatBytes';
 
 const ProjectPropertiesDialog = lazyWithStaleChunkNotice(async () => ({
   default: (await import('./ProjectPropertiesDialog')).ProjectPropertiesDialog
@@ -1690,6 +1691,51 @@ export function StartScreen({
     );
   }
 
+  /**
+   * A folder's size is its members' total, and only once every member has
+   * one: a partial sum would read as the folder's size and undercount it.
+   */
+  function folderBytes(members: ProjectSummary[]): number | undefined {
+    if (members.length === 0) return undefined;
+    let total = 0;
+    for (const member of members) {
+      if (projectNeedsUpdate(member) || member.documentBytes === undefined)
+        return undefined;
+      total += member.documentBytes;
+    }
+    return total;
+  }
+
+  /**
+   * The list's Size cell: saved document bytes in Project properties' IEC
+   * units, or a dash with the reason there is no figure. formatBytes rather
+   * than formatProjectBytes, which would pull projectProperties (and the
+   * document model it measures with) out of its lazy chunk.
+   */
+  function renderSize(
+    bytes: number | undefined,
+    label: string,
+    unmeasured: string | undefined
+  ) {
+    if (bytes === undefined || !Number.isFinite(bytes)) {
+      return (
+        <span className="start-tile-size" title={unmeasured}>
+          —
+        </span>
+      );
+    }
+    // A <data> element carries the exact byte count behind the rounded label.
+    return (
+      <data
+        className="start-tile-size"
+        value={bytes}
+        title={`${label}: ${formatBytes(bytes, 'iec')}. Saved model data and undo history; imported source files are not included.`}
+      >
+        {formatBytes(bytes, 'iec')}
+      </data>
+    );
+  }
+
   function renderFolderTile(folder: LibraryFolder) {
     const key = folderKey(folder.id);
     const members = folderMembers(folder);
@@ -1776,6 +1822,13 @@ export function StartScreen({
                   <span className="start-tile-when">
                     {edited ? formatLastEdited(edited) : '—'}
                   </span>
+                  {renderSize(
+                    folderBytes(members),
+                    'Projects in this folder',
+                    members.length === 0
+                      ? undefined
+                      : 'Shown once every project in this folder has a size.'
+                  )}
                   <span className="start-tile-rev">
                     {members.length === 0
                       ? 'Empty'
@@ -2006,7 +2059,7 @@ export function StartScreen({
                 // its name.
                 plaintext && (
                   <span
-                    className="start-tile-mark"
+                    className="start-tile-mark is-plaintext"
                     role="img"
                     aria-label={NOT_ENCRYPTED_LABEL}
                     title={`${NOT_ENCRYPTED_LABEL}. It is stored in your account as plaintext.`}
@@ -2051,7 +2104,15 @@ export function StartScreen({
                 </span>
               )}
             </span>
-            {/* The list has a Saves column; a card leaves the count out. */}
+            {/* The list has Size and Saves columns; a card leaves both out. */}
+            {layout === 'list' &&
+              renderSize(
+                locked ? undefined : project.documentBytes,
+                'Document size',
+                locked
+                  ? undefined
+                  : 'Not measured yet. Recorded the next time this project is saved.'
+              )}
             {layout === 'list' && (
               <span className="start-tile-rev">
                 {project.revisionCount}{' '}
@@ -3133,7 +3194,14 @@ export function StartScreen({
               }
               className={
                 [
-                  shelf === entry.status ? 'is-active' : '',
+                  // An open folder is the place shown, so its row wears the
+                  // highlight; the shelf holding it steps back (is-parent),
+                  // lit again only where the folder list is not shown.
+                  shelf === entry.status
+                    ? openFolder
+                      ? 'is-parent'
+                      : 'is-active'
+                    : '',
                   reorder.dropTarget?.target === `shelf:${entry.status}`
                     ? 'is-drop-target'
                     : '',
@@ -3503,6 +3571,7 @@ export function StartScreen({
                         <span>Name</span>
                         <span>Status</span>
                         <span>Edited</span>
+                        <span className="start-list-head-size">Size</span>
                         <span>Saves</span>
                       </div>
                     )}
@@ -3527,7 +3596,14 @@ export function StartScreen({
                                   <time>&nbsp;</time>
                                 </span>
                                 {layout === 'list' && (
-                                  <span className="start-tile-rev">&nbsp;</span>
+                                  <>
+                                    <span className="start-tile-size">
+                                      &nbsp;
+                                    </span>
+                                    <span className="start-tile-rev">
+                                      &nbsp;
+                                    </span>
+                                  </>
                                 )}
                               </small>
                             </span>
@@ -3587,6 +3663,7 @@ export function StartScreen({
                             <span>Name</span>
                             <span>Status</span>
                             <span>Edited</span>
+                            <span className="start-list-head-size">Size</span>
                             <span>Saves</span>
                           </div>
                         )}
@@ -4011,6 +4088,20 @@ export function StartScreen({
                     ? 'This device only'
                     : 'Unknown — account listing unavailable'
             }
+            // Facts only: the dialog's lazy chunk words them, which keeps
+            // the status text out of the start screen's entry bundle. The
+            // format comes from the current listing: `propertiesProject` is
+            // the summary as it was when the dialog opened, and a migration
+            // can change it while the dialog is still open.
+            encryptionFacts={{
+              storageFormat: (
+                projects.find(
+                  (candidate) =>
+                    candidate.projectId === propertiesProject.projectId
+                ) ?? propertiesProject
+              ).storageFormat,
+              inAccount: cloudProjectIds.has(propertiesProject.projectId)
+            }}
             {...(onRename &&
               !projectNeedsUpdate(propertiesProject) && {
                 // The listed project, whose name a rename here has moved on.

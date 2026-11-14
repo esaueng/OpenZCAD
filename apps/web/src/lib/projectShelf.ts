@@ -1,14 +1,62 @@
+import { withoutDerivedProjection } from '@openzcad/document-core';
 import {
   compareProjectSummaries,
   isSupportedProjectFormat,
+  persistedDocumentBytes,
   PROJECT_FORMAT_UNSUPPORTED_MESSAGE,
   projectOrganization,
   SUPPORTED_PROJECT_FORMATS,
+  type ProjectDocument,
   type ProjectOrganization,
   type ProjectStatus,
   type ProjectSummary
 } from '@openzcad/shared';
 import type { ProjectThumbnailRecord } from './localProjectStore';
+
+/**
+ * A document's size as every store records it: the canonical document,
+ * without its derived projection (see {@link ProjectSummary.documentBytes}).
+ */
+export function measuredDocumentBytes(document: ProjectDocument): number {
+  return persistedDocumentBytes(withoutDerivedProjection(document));
+}
+
+/**
+ * Start-screen summary of a document held on this device, for a row the app
+ * adds before the next listing: a project just created, copied or imported.
+ */
+export function summarizeLocalDocument(
+  document: ProjectDocument,
+  organization?: ProjectOrganization
+): ProjectSummary {
+  return {
+    projectId: document.projectId,
+    name: document.name,
+    lastRevisionId: document.revisions.at(-1)?.revisionId,
+    updatedAt: document.derived.updatedAt,
+    revisionCount: document.checkpoints.length,
+    documentBytes: measuredDocumentBytes(document),
+    ...(organization ? { organization } : {})
+  };
+}
+
+/**
+ * A shelf row moved to a version the app just saved. The size moves with the
+ * version: left as it was, it would describe the version before.
+ */
+export function withSavedVersion(
+  summary: ProjectSummary,
+  document: ProjectDocument,
+  // Measuring serializes the document: a caller inside a state updater, which
+  // React may run more than once, measures first and passes the figure in.
+  documentBytes = measuredDocumentBytes(document)
+): ProjectSummary {
+  return {
+    ...summary,
+    documentVersion: document.version,
+    documentBytes
+  };
+}
 
 /** What a shelf card says for a project stored in a format this build cannot open. */
 export const PROJECT_UPDATE_REQUIRED_LABEL =
@@ -153,8 +201,20 @@ export function mergeProjectSummaries(
     // The account decides how it stores the project: a device record from
     // before it was encrypted must not make it look openable again.
     const storageFormat = project.storageFormat ?? existing.storageFormat;
+    // A size describes one version. The newer record's own measure wins; an
+    // unmeasured one borrows the other's only when both hold that version,
+    // so a device projection from before sizes were recorded still shows
+    // the account's figure without passing off an older version's.
+    const older = newest === project ? existing : project;
+    const documentBytes =
+      newest.documentBytes ??
+      (newest.documentVersion !== undefined &&
+      older.documentVersion === newest.documentVersion
+        ? older.documentBytes
+        : undefined);
     const summary = {
       ...newest,
+      ...(documentBytes !== undefined ? { documentBytes } : {}),
       ...(pending ? { name: existing.name } : {}),
       ...(thumbnailArtifactId ? { thumbnailArtifactId } : {}),
       ...(organization ? { organization } : {}),

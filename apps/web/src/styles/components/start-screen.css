@@ -657,6 +657,13 @@
   color: var(--color-accent-hi);
 }
 
+/* Projects while one of its folders is open: the folder row is the place
+   shown, so the shelf keeps only its full-strength name. Two lit rows read
+   as two places at once. */
+.start-shelf-tabs button.is-parent {
+  color: var(--color-text);
+}
+
 /* ── Column: demos ───────────────────────────────────────── */
 
 /* In the column the demos are a list; the card treatment they take on the
@@ -1604,12 +1611,19 @@
   color: var(--color-accent);
 }
 
+/* Plaintext in an account whose projects are encrypted: the one mark that
+   asks for a look, in the warning hue the Needs attention count uses. */
+.start-tile-mark.is-plaintext {
+  color: var(--color-warning);
+}
+
 /* Room for the copies count beside the actions button. */
 .start-tile-project:has(> .start-tile-copies) .start-tile-meta {
   padding-right: 34px;
 }
 
-.start-tile-rev {
+.start-tile-rev,
+.start-tile-size {
   flex: none;
   color: var(--color-text-subtle);
   font-family: var(--font-mono);
@@ -1674,12 +1688,13 @@
    row's columns, so every action and menu keeps working. The name is what
    tells two rows apart, so it has the room: Status and Edited give way on a
    narrower window (they were a fixed 330px together, and at 1050px left the
-   name 135px, "QA-20261028-Profil…" on two different parts). */
+   name 135px, "QA-20261028-Profil…" on two different parts). Size holds
+   "1,023.9 KiB" in the mono figures. */
 .start-list-head,
 .start-tile-grid.is-list .start-tile-open {
   grid-template-columns:
     52px minmax(0, 1fr) clamp(7rem, 12vw, 170px) clamp(6.5rem, 11vw, 160px)
-    76px 88px;
+    80px 76px 88px;
 }
 
 .start-list-head {
@@ -1777,7 +1792,9 @@
   order: 3;
 }
 
-/* Wide enough for a folder's "12 projects" as well as a part's saves. */
+/* Size precedes Saves in the markup, so the two share an order. Saves is
+   wide enough for a folder's "12 projects" as well as a part's saves. */
+.start-tile-grid.is-list .start-tile-size,
 .start-tile-grid.is-list .start-tile-rev {
   order: 4;
   white-space: nowrap;
@@ -1830,6 +1847,22 @@
 /* The menu carries Restore and Delete forever; a row has no footer. */
 .start-tile-grid.is-list .start-tile-footer {
   display: none;
+}
+
+/* A narrower shelf gives the Size column back to the name: with it, a
+   1050px window left the name about 100px, the F016 clipping again. */
+@container start-section (max-width: 860px) {
+  .start-list-head,
+  .start-tile-grid.is-list .start-tile-open {
+    grid-template-columns:
+      52px minmax(0, 1fr) clamp(7rem, 12vw, 170px) clamp(6.5rem, 11vw, 160px)
+      76px 88px;
+  }
+
+  .start-list-head .start-list-head-size,
+  .start-tile-grid.is-list .start-tile-size {
+    display: none;
+  }
 }
 
 /* One line above phone width: title, filters and tools stay together and
@@ -2069,7 +2102,8 @@
     display: none;
   }
 
-  .start-tile-grid.is-list .start-tile-rev {
+  .start-tile-grid.is-list .start-tile-rev,
+  .start-tile-grid.is-list .start-tile-size {
     display: none;
   }
 
@@ -2960,6 +2994,24 @@
      shelf as tiles. */
   .start-folders {
     display: none;
+  }
+
+  /* With no folder row to carry it, Projects stays lit while one of its
+     folders is open: the strip still says which shelf the folder is on. */
+  /* Hover too: the shared hover rules exclude only .is-active, and their
+     :hover:not() outranks a bare .is-parent, so they would wash it out. */
+  .start-shelf-tabs button.is-parent,
+  .start-shelf-tabs button.is-parent:hover:not(.is-active) {
+    background: var(--color-accent-dim);
+    box-shadow: none;
+  }
+
+  .start-shelf-tabs button.is-parent > svg {
+    color: var(--color-accent);
+  }
+
+  .start-shelf-tabs button.is-parent .start-shelf-count {
+    color: var(--color-accent-hi);
   }
 
   .start-selection-bar {

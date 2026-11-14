@@ -4,6 +4,7 @@ import {
   isPurgeDue,
   MAX_LOCAL_CHECKPOINT_DOCUMENTS,
   MAX_PROJECT_CHECKPOINTS,
+  persistedDocumentBytes,
   PROJECT_DOCUMENT_SCHEMA_VERSION,
   type ArtifactId,
   type ImportedSourceReference,
@@ -946,7 +947,11 @@ export function summarizeProjectDocument(
     lastRevisionId: document.revisions.at(-1)?.revisionId,
     updatedAt: document.derived.updatedAt,
     revisionCount: document.checkpoints.length,
-    documentVersion: document.version
+    documentVersion: document.version,
+    // Measured as the account measures it, so a synced project reads the
+    // same size from either store. Earlier projections lack it until the
+    // project is next saved; the shelf shows those as unmeasured.
+    documentBytes: persistedDocumentBytes(withoutDerivedProjection(document))
   };
 }
 

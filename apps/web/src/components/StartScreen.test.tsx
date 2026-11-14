@@ -12,7 +12,11 @@ import { describeProject } from '../lib/projectProperties';
 import { DEMO_DEFINITIONS } from '../lib/demoDefinitions';
 import type { ComponentProps } from 'react';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { toProjectId, type ProjectSummary } from '@openzcad/shared';
+import {
+  PROJECT_STORAGE_FORMAT_E2EE_V1,
+  toProjectId,
+  type ProjectSummary
+} from '@openzcad/shared';
 import {
   formatLastEdited,
   LibrarySelectionBar,
@@ -23,6 +27,12 @@ import {
 // The selection bar loads on demand; the library warms it once idle. Load it
 // up front so a selection here draws it in the same render, as warmed.
 beforeAll(() => LibrarySelectionBar.preload());
+
+// An encrypted project's properties check the assistant consent against the
+// account; nothing here signs in, so the check would reach for a server.
+vi.mock('./assistant/AssistantConsentSummary', () => ({
+  AssistantConsentSummary: () => 'Checked elsewhere'
+}));
 
 const localProject: ProjectSummary = {
   projectId: toProjectId('project_local'),
@@ -97,17 +107,52 @@ describe('StartScreen properties', () => {
       name: 'Project properties'
     });
     await waitFor(() =>
-      expect(within(dialog).getByText('Document size')).toBeInTheDocument()
+      expect(within(dialog).getByText('Project data size')).toBeInTheDocument()
     );
     expect(loadProperties).toHaveBeenCalledTimes(1);
     expect(onOpen).not.toHaveBeenCalled();
     expect(screen.queryByRole('menu')).toBeNull();
     expect(within(dialog).getByText(localProject.name)).toBeInTheDocument();
     expect(within(dialog).getByText('This device only')).toBeInTheDocument();
+    expect(
+      within(dialog).getByText('Encryption').nextElementSibling
+    ).toHaveTextContent('Not encrypted');
     expect(within(dialog).getByText('Millimeters (mm)')).toBeInTheDocument();
     fireEvent.keyDown(dialog, { key: 'Escape' });
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(actions).toHaveFocus();
+  });
+
+  /**
+   * The dialog keeps the summary it opened with; the encryption row read
+   * its format there, so a migration finishing (or reversing) while it was
+   * open left the row stating the old protection.
+   */
+  it('states the current listing’s encryption, not the one it opened with', async () => {
+    const props = startScreenProps({
+      cloudProjectIds: new Set([localProject.projectId])
+    });
+    const { rerender } = render(<StartScreen {...props} />);
+    fireEvent.click(
+      screen.getByRole('button', { name: `Actions for ${localProject.name}` })
+    );
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Properties' }));
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Project properties'
+    });
+    const value = () =>
+      within(dialog).getByText('Encryption').nextElementSibling;
+    expect(value()).toHaveTextContent('Not end-to-end encrypted');
+    rerender(
+      <StartScreen
+        {...props}
+        projects={[
+          { ...localProject, storageFormat: PROJECT_STORAGE_FORMAT_E2EE_V1 }
+        ]}
+      />
+    );
+    expect(value()).toHaveTextContent('End-to-end encrypted');
+    expect(value()).not.toHaveTextContent('Not');
   });
 
   it('keeps summary details and a retry action available after a failed load', async () => {
@@ -130,7 +175,7 @@ describe('StartScreen properties', () => {
       screen.getByText('Unknown — account listing unavailable')
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
-    await screen.findByText('Document size');
+    await screen.findByText('Project data size');
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
@@ -1536,6 +1581,31 @@ describe('StartScreen folders and selection', () => {
     expect(names()).toEqual(['Fixtures', 'Alpha plate', 'Delta plate']);
   });
 
+  it('highlights the open folder in the column, not also the Projects shelf', () => {
+    // 14 Nov 2026 recording: opening a folder left Projects lit beside it.
+    seedFolder([parts[1]!.projectId, parts[2]!.projectId]);
+    renderStartScreen({ projects: parts });
+    const projectsTab = document.getElementById('start-shelf-tab-active')!;
+    const folderLink = document.querySelector('.start-folder-link')!;
+    expect(projectsTab).toHaveClass('is-active');
+    expect(folderLink).not.toHaveClass('is-active');
+
+    fireEvent.click(folderLink);
+    expect(folderLink).toHaveClass('is-active');
+    expect(folderLink).toHaveAttribute('aria-current', 'page');
+    expect(projectsTab).not.toHaveClass('is-active');
+    // Still the shelf the folder is on, for the strip and assistive tech.
+    expect(projectsTab).toHaveClass('is-parent');
+    expect(projectsTab).toHaveAttribute('aria-selected', 'true');
+
+    fireEvent.click(projectsTab);
+    expect(projectsTab).toHaveClass('is-active');
+    expect(projectsTab).not.toHaveClass('is-parent');
+    expect(document.querySelector('.start-folder-link')).not.toHaveClass(
+      'is-active'
+    );
+  });
+
   it('looks through folders while searching', () => {
     seedFolder([parts[1]!.projectId]);
     renderStartScreen({ projects: parts });
@@ -1674,6 +1744,57 @@ describe('StartScreen folders and selection', () => {
     expect(folder.querySelector('.start-tile-rev')).toHaveTextContent(
       '2 projects'
     );
+  });
+
+  it('shows each row’s saved size in the list’s Size column', () => {
+    const sized = parts.map((part, index) =>
+      index < 2 ? { ...part, documentBytes: (index + 1) * 1536 } : part
+    );
+    seedFolder([sized[0]!.projectId, sized[1]!.projectId]);
+    renderStartScreen({ projects: sized });
+    fireEvent.click(screen.getByRole('button', { name: 'List' }));
+
+    expect(
+      Array.from(document.querySelectorAll('.start-list-head span')).map(
+        (cell) => cell.textContent
+      )
+    ).toEqual(['Name', 'Status', 'Edited', 'Size', 'Saves']);
+    // A folder totals its members once every one of them has a size.
+    const folder = screen
+      .getByRole('button', { name: 'Open folder Fixtures, 2 projects' })
+      .closest('.start-tile')!;
+    expect(folder.querySelector('.start-tile-size')).toHaveTextContent(
+      '4.5 KiB'
+    );
+    // The exact count stays readable behind the rounded label.
+    expect(folder.querySelector('data.start-tile-size')).toHaveAttribute(
+      'value',
+      '4608'
+    );
+    // A project with no measured size reads as a dash, and says why.
+    const unsized = screen
+      .getByRole('button', { name: /^Charlie plate, edited/ })
+      .closest('.start-tile')!;
+    const cell = unsized.querySelector('.start-tile-size');
+    expect(cell).toHaveTextContent('—');
+    expect(cell).toHaveAttribute(
+      'title',
+      expect.stringMatching(/^Not measured yet/)
+    );
+  });
+
+  it('leaves a folder’s size out until every member is measured', () => {
+    seedFolder([parts[0]!.projectId, parts[1]!.projectId]);
+    renderStartScreen({
+      projects: parts.map((part, index) =>
+        index === 0 ? { ...part, documentBytes: 2048 } : part
+      )
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'List' }));
+    const folder = screen
+      .getByRole('button', { name: 'Open folder Fixtures, 2 projects' })
+      .closest('.start-tile')!;
+    expect(folder.querySelector('.start-tile-size')).toHaveTextContent('—');
   });
 
   it('counts a folder card’s projects once, under its name', () => {

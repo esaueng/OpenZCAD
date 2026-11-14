@@ -493,10 +493,23 @@ describe('kernel refusals named in the 2026-11-14 production QA', () => {
     );
   });
 
+  it("keeps the STEP importer's own diagnosis of each dropped solid", () => {
+    for (const sentence of [
+      'Body "Part" imported, but 1 of its 2 STEP solids is not a closed solid and was dropped: solid 1 (5 faces): it is non-manifold — 1 edge is shared by more than two faces.',
+      'STEP file contains no closed solids: solid 1 (5 faces): it is non-manifold — 1 edge is shared by more than two faces.',
+      // Body names are not escaped, so one may carry its own quotes.
+      'Body "Part "A"" imported, but 1 of its 2 STEP solids is not a closed solid and was dropped: solid 1 (5 faces): it is non-manifold — 1 edge is shared by more than two faces.'
+    ]) {
+      expect(plainRefusal(sentence)).toEqual({ message: sentence });
+    }
+  });
+
   it('leaves product sentences with user names and face labels alone', () => {
     for (const sentence of [
       'Subtract refused: "left_bracket" and "Box 2" could not be cut exactly, and an approximate result was declined.',
       'Pick a flat face; Face 18 is curved.',
+      // The STEP importer numbers a file's solids for the user to find.
+      'STEP file contains no closed solids: solid 1 (5 faces): it is an open shell — 4 of its 12 edges are used by a single face, so it encloses no volume.',
       'Subtract refused: subtracting "Left block" and "Right block" would leave nothing, because the tool covers the whole body. Make the tool smaller or move it so part of the body remains.'
     ]) {
       expect(plainRefusal(sentence)).toEqual({ message: sentence });
