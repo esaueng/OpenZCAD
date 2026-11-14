@@ -11,6 +11,8 @@
  * sentence a person reads here was written by a person; the kernel text is
  * never discarded, it moves into the detail the card shows on request.
  */
+
+import { ownEntry } from '@openzcad/shared';
 export interface PlainRefusal {
   message: string;
   headline?: string;
@@ -329,7 +331,9 @@ export function plainRefusal(
   const translation = TRANSLATIONS.find(({ pattern }) =>
     pattern.test(sentence)
   );
-  const byCategory = category ? CATEGORY_SENTENCES[category] : undefined;
+  const byCategory = category
+    ? ownEntry(CATEGORY_SENTENCES, category)
+    : undefined;
   // A table entry names a SYMPTOM and is more specific than any category, so
   // it wins — except where its sentence IS the generic fallback, which says
   // no more than "it did not work". The category says more than that and

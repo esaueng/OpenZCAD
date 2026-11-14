@@ -428,7 +428,8 @@ const SELECTOR_FIELDS: ReadonlySet<string> = new Set([
   'method',
   'align',
   'quantity',
-  'keepOriginals'
+  'keepOriginals',
+  'category'
 ]);
 
 /**

@@ -35,6 +35,14 @@ describe('plainRefusal', () => {
       'That diameter does not fit the existing supports and fillets. Try a smaller diameter.'
     );
   });
+  it.each(['__proto__', 'constructor', 'toString'])(
+    'falls back for a category named "%s"',
+    (category) => {
+      const plain = plainRefusal('The kernel refused this.', category);
+      expect(typeof plain.message).toBe('string');
+    }
+  );
+
   it('keeps a sentence the adapter wrote, and its detail', () => {
     expect(
       plainRefusal(

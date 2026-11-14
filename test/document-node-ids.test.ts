@@ -858,6 +858,24 @@ describe('persisted enum selectors and freeform values', () => {
     return JSON.parse(JSON.stringify(json));
   }
 
+  it.each(RESERVED)(
+    'refuses a stored refusal whose category is "%s"',
+    (category) => {
+      const value = JSON.parse(JSON.stringify(valid())) as {
+        derived?: Record<string, unknown>;
+      };
+      value.derived = {
+        ...(value.derived ?? {}),
+        featureWarnings: [
+          {
+            kernelRefusal: { category, message: 'The kernel refused this.' }
+          }
+        ]
+      };
+      expect(reservedDocumentIdentifierError(value as object)).not.toBeNull();
+    }
+  );
+
   it.each([...RESERVED, 'valueOf', 'hexagon'])(
     'refuses a primitive whose primitiveKind is "%s"',
     (kind) => {
