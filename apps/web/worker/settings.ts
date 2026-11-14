@@ -884,6 +884,20 @@ async function resolveAssistantFromSettings(
   };
 }
 
+/**
+ * `GET /api/assistant/status` for a caller with no session: such a caller
+ * cannot store settings or a credential, so its status is the defaults',
+ * answered without reading D1.
+ */
+export function anonymousAssistantStatus(
+  env: CloudflareEnv
+): EffectiveAssistantSettings & { credential: AssistantCredentialMetadata } {
+  return {
+    ...effectiveAssistantStatus(DEFAULT_APP_SETTINGS, null, env),
+    credential: credentialMetadata(null, env)
+  };
+}
+
 export async function getAppSettings(
   userId: UserId,
   env: CloudflareEnv,

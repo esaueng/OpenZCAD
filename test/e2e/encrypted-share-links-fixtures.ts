@@ -4,6 +4,7 @@ import {
   handleEncryptedSharedBlob,
   handleEncryptedSharedSnapshot
 } from '../../apps/web/worker/e2eeShareLinks';
+import { SHARE_LINK_TOKEN_HEADER, shareLinkTokenPath } from '@openzcad/shared';
 import { d1Database } from '../d1-sqlite';
 import {
   createPrimitiveInPlace,
@@ -49,16 +50,22 @@ export function anonymousSnapshot(server: E2eeServer, token: string) {
 }
 
 /**
- * Routes a visitor context's `/api/e2ee/share/…` calls (the snapshot and
- * its content blobs) to the Worker's anonymous handlers. Nothing else of
+ * Routes a visitor context's `/api/e2ee/share…` calls (the snapshot and
+ * its content blobs) to the Worker's anonymous handlers, with the token
+ * from the request header placed as the Worker places it. Nothing else of
  * `/api/e2ee` is served to it: a visitor has no session.
  */
 export async function installAnonymousShareRoutes(
   context: BrowserContext,
   server: E2eeServer
 ): Promise<void> {
-  await context.route('**/api/e2ee/share/**', async (route) => {
-    const { pathname } = new URL(route.request().url());
+  await context.route(/\/api\/e2ee\/share(\/|$)/, async (route) => {
+    const requested = new URL(route.request().url()).pathname;
+    const pathname =
+      shareLinkTokenPath(
+        requested,
+        route.request().headers()[SHARE_LINK_TOKEN_HEADER] ?? '!'
+      ) ?? requested;
     const db = d1Database(server.db);
     const response = pathname.includes('/blobs/')
       ? await handleEncryptedSharedBlob(

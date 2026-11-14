@@ -916,17 +916,19 @@ function validateExtrudeInput(
 }
 
 function validateDirectEditReference(input: DirectEditInput): void {
-  const reference = input.operation.faceReference;
-  if (!reference) {
-    return;
-  }
-  if (
-    reference.kind !== 'face' ||
-    reference.currentHash !== input.operation.faceHash
-  ) {
-    throw new Error(
-      'The direct-edit face reference does not match its legacy face hash.'
-    );
+  const faces: { faceHash: number; faceReference?: { kind: string; currentHash: number } }[] = [
+    input.operation,
+    ...(input.operation.kind === 'remove-faces'
+      ? input.operation.additionalFaces
+      : [])
+  ];
+  for (const { faceHash, faceReference: reference } of faces) {
+    if (!reference) continue;
+    if (reference.kind !== 'face' || reference.currentHash !== faceHash) {
+      throw new Error(
+        'The direct-edit face reference does not match its legacy face hash.'
+      );
+    }
   }
 }
 

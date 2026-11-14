@@ -50,6 +50,7 @@ import { trackGpuLost } from '../lib/diagnosticSignal';
 import { InteractionShaderWarmup } from './viewer/interactionShaderWarmup';
 import { usePreparedBodies } from './viewer/usePreparedBodies';
 import { SelectionRecede } from './viewer/selectionRecede';
+import { facesAheadOfEdges } from './viewer/faceSetPick';
 import { releasePreparedBodyGeometry } from '../../../../packages/viewport/src/render/preparedBody';
 import { reportPresentedGeometry } from '../lib/startupReadiness';
 import { useWorkspaceFrameReady } from './WorkspaceLoading';
@@ -1392,6 +1393,12 @@ export interface ModelViewerProps {
    * a sketch region, ghost plane or datum drawn in front of it.
    */
   facePickOnly?: boolean;
+  /**
+   * The body whose faces the host holds as a face set, when a Shift pick
+   * adds to it. A Shift pick on that body then takes the face under the
+   * pointer ahead of its boundary edge (`facesAheadOfEdges`).
+   */
+  faceSetPickBodyId?: string | null;
   /** In-viewport sketch session; null when not sketching. */
   sketchMode: SketchModeState | null;
   /**
@@ -2385,6 +2392,7 @@ export function ModelViewer({
   regionHandle,
   modelPanelsHidden = false,
   facePickOnly = false,
+  faceSetPickBodyId = null,
   sketchMode,
   sketchTextAnchorRef,
   onSketchCommit,
@@ -2484,6 +2492,8 @@ export function ModelViewer({
   onSelectTopologyRef.current = onSelectTopology;
   const facePickOnlyRef = useRef(facePickOnly);
   facePickOnlyRef.current = facePickOnly;
+  const faceSetPickBodyIdRef = useRef(faceSetPickBodyId);
+  faceSetPickBodyIdRef.current = faceSetPickBodyId;
   const topologyPicksHeldRef = useRef(topologyPicksHeld);
   topologyPicksHeldRef.current = topologyPicksHeld;
   const onSelectEdgeChainRef = useRef(onSelectEdgeChain);
@@ -5443,6 +5453,17 @@ export function ModelViewer({
     }
 
     /**
+     * Everything under the pointer, with a held face set's face ahead of its
+     * edge when this pick adds to the set; otherwise `pickAll` as it is.
+     */
+    function shiftPickStack(event: PointerEvent | MouseEvent) {
+      const stack = picker.pickAll(event);
+      return addsToSelection(event)
+        ? facesAheadOfEdges(stack, faceSetPickBodyIdRef.current)
+        : stack;
+    }
+
+    /**
      * The ghost plane the pointer means (see preferredGhostHit), or null.
      * The callers weigh it against the model pick with ghostPlaneTakesPick:
      * it wins through faces, but not over edges, vertices, regions or a face
@@ -7196,7 +7217,7 @@ export function ModelViewer({
         ? picker
             .pickAll(event)
             .filter((candidate) => candidate.selection?.kind === 'face')
-        : picker.pickAll(event);
+        : shiftPickStack(event);
       const stepped = cycleDepthPick(
         stack,
         depthCycle,
@@ -7676,7 +7697,11 @@ export function ModelViewer({
       // would win (see ghostPlaneTakesPick): the click will start a sketch
       // on it, not select the face.
       const ghost = pickGhostPlane(event);
-      const solid = pick(event);
+      // Shift over a held face set's body shows the face the click will add.
+      const solid =
+        addsToSelection(event) && faceSetPickBodyIdRef.current
+          ? (shiftPickStack(event)[0] ?? null)
+          : pick(event);
       if (ghost && ghostPlaneTakesPick(ghost.distance, solid)) {
         planePickerRigRef.current?.setHover(ghost.plane);
         applyHover(null);

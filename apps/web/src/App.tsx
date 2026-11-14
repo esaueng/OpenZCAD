@@ -768,6 +768,7 @@ import {
   isRemovableDetail,
   selectedFeatureFaces
 } from './lib/selectionFeature';
+import { heldFaceSetBody, toggleFaceInSet } from './lib/faceSetSelection';
 import { cylinderResizeFold } from './lib/interaction/cylinderResizeFold';
 import {
   cylinderRadialFrame,
@@ -3120,6 +3121,10 @@ export function App() {
     selectedEdges.length === 0
       ? boxFaces.faces
       : null;
+  /** The faces a Shift pick adds to: a swept or Shift-built set, or one face. */
+  const heldFaces =
+    boxSelectedFaces ??
+    (selectedTopology?.kind === 'face' ? [selectedTopology] : null);
   const [selectedSketchProfileId, setSelectedSketchProfileId] =
     useState<SketchId | null>(null);
   const [selectedProfiles, setSelectedProfiles] = useState<RegionPickData[]>(
@@ -19075,6 +19080,40 @@ export function App() {
       setSelectedTopology(selection);
       return;
     }
+    // Shift on another face of the body whose face is selected adds it to a
+    // face set (Shift on a held face takes it back out), the set a box sweep
+    // with the Face filter makes: Delete removes the set and heals the body.
+    // Shift on a face of another body keeps selecting bodies, as before.
+    if (
+      additive &&
+      selection.kind === 'face' &&
+      tool === null &&
+      interaction.mode !== 'sketch'
+    ) {
+      const held = heldFaces;
+      if (held && heldFaceSetBody(held) === selection.bodyId) {
+        const next = toggleFaceInSet(held, selection);
+        if (next.length === 0) {
+          clearSelection();
+          return;
+        }
+        if (interaction.mode !== 'idle') {
+          dispatchInteraction({ type: 'clear' });
+        }
+        const bodyIds = [selection.bodyId];
+        setSelectedEdges([]);
+        setSelectedTopology(null);
+        setSelectedBodyIds(bodyIds);
+        setBoxFaces({ bodyIds, faces: next });
+        inferFeatureNodeFor(selection.bodyId);
+        setStatus(
+          next.length === 1
+            ? '1 face selected.'
+            : `${next.length} faces selected · Delete removes them and closes the gap.`
+        );
+        return;
+      }
+    }
     // Sketch entry: with the Sketch tool armed, a planar face click starts a
     // face-attached sketch instead of arming the offset handle.
     if (
@@ -28244,6 +28283,51 @@ export function App() {
       );
   }
 
+  /**
+   * Several faces of one body, picked with Shift or swept with a box: delete
+   * them together and heal the body, so every wall of a window or pocket
+   * deleted at once fills it. A replayable, undoable direct edit.
+   */
+  function handleDeleteFaces(selections: readonly TopologySelection[]) {
+    if (!requireDisplayedGeometryComplete()) return;
+    const manager = managerRef.current;
+    const base = manager?.document;
+    if (!base) return;
+    const faces = selections.map((selection) => ({ ...selection }));
+    void import('./lib/featureDeletion')
+      .then(({ faceSetDeletion }) => {
+        const current = manager.document;
+        if (
+          managerRef.current !== manager ||
+          current.projectId !== base.projectId ||
+          current.version !== base.version
+        ) {
+          setStatus(
+            'The model changed. Select the faces again before deleting them.'
+          );
+          return;
+        }
+        const removal = faceSetDeletion(current, faces);
+        void validatedFeature.runTransaction([removal.command], {
+          label: removal.command.label,
+          targets: [removal.target],
+          validatingMessage: `Checking the removal of ${faces.length} faces…`,
+          successMessage: removal.successMessage,
+          onFailure: (message) => announce(message),
+          onSuccess: () => {
+            clearSelection();
+            announce(removal.successMessage, {
+              label: 'Undo',
+              run: handleUndo
+            });
+          }
+        });
+      })
+      .catch((error: unknown) =>
+        setStatus(errorMessage(error, 'Could not delete these faces.'))
+      );
+  }
+
   function handleDeleteFeature(featureId: FeatureId, name: string) {
     // Counted before the delete: afterwards the source is gone and the walk
     // has nothing to start from. A load-bearing delete announces its blast
@@ -30638,6 +30722,33 @@ export function App() {
               setActiveMeasurementId(null);
               setStatus('Measurement removed.');
             }
+            return;
+          }
+          // Several faces picked together are deleted together and healed,
+          // whatever built the body: every wall of a window closes it.
+          if (
+            featureSelectionSource !== 'pinned' &&
+            boxSelectedFaces &&
+            boxSelectedFaces.length > 1
+          ) {
+            event.preventDefault();
+            if (
+              new Set(boxSelectedFaces.map((face) => face.bodyId)).size > 1
+            ) {
+              setStatus(
+                'Faces on different bodies cannot be deleted together. Select faces on one body.'
+              );
+              return;
+            }
+            if (
+              !(
+                isOperationState(interaction) &&
+                interaction.phase !== 'armed' &&
+                interaction.phase !== 'failed'
+              ) &&
+              validateSelectionEdit({ acceptCompleteCommit: true })
+            )
+              handleDeleteFaces(boxSelectedFaces);
             return;
           }
           // A STEP face is healed by a replayable direct edit. Its import
@@ -33536,6 +33647,11 @@ export function App() {
                 }
               : {})}
             facePickOnly={toFacePick !== null}
+            faceSetPickBodyId={
+              tool === null && interaction.mode !== 'sketch'
+                ? heldFaceSetBody(heldFaces)
+                : null
+            }
             modeOverlay={
               modelingLocked ? (
                 <>

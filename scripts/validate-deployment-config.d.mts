@@ -1,6 +1,7 @@
 export const REQUIRED_SECRETS: readonly string[];
 export const UPLOAD_CLEANUP_CRON: '17 * * * *';
 
+export const RELEASE_BUILD_CHECK: string;
 export const OFFICIAL: Readonly<{
   repository: string;
   workerName: string;

@@ -87,6 +87,16 @@ function desktopAuthD1(user: AuthSession) {
           const row = access.get(String(values[0]));
           return (row ? { session_id: row.session_id } : null) as T;
         }
+        // The per-address and per-account API limiters count with RETURNING.
+        if (
+          query.includes('INSERT INTO auth_rate_limits') &&
+          query.includes('RETURNING request_count')
+        ) {
+          const bucket = String(values[0]);
+          const count = (rates.get(bucket) ?? 0) + 1;
+          rates.set(bucket, count);
+          return { request_count: count } as T;
+        }
         return null;
       },
       async run() {

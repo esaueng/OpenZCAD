@@ -1,6 +1,9 @@
 import { saveFile } from './saveFile';
 import type { invoke as tauriInvoke } from '@tauri-apps/api/core';
-import { LEGACY_PROJECT_FRAME_CONTENT_TYPE } from '@openzcad/shared';
+import {
+  LEGACY_PROJECT_FRAME_CONTENT_TYPE,
+  SHARE_LINK_TOKEN_HEADER
+} from '@openzcad/shared';
 import { assertCloudFunctionsEnabled, cloudRequestSignal } from './cloudMode';
 import {
   checkOutboundRequest,
@@ -147,7 +150,26 @@ const NATIVE_BLOB_STREAM_PATH =
 const NATIVE_ARTIFACT_STREAM_PATH =
   /^\/api\/artifacts\/[A-Za-z0-9_-]{1,256}\/download$/;
 
-function isNativeBlobStreamPath(path: string): boolean {
+/** An encrypted share blob read with its link's token in a header. */
+const NATIVE_SHARE_BLOB_STREAM_PATH =
+  /^\/api\/e2ee\/share\/blobs\/[0-9a-f]{32}$/;
+
+/**
+ * The share-link token Rust forwards as `SHARE_LINK_TOKEN_HEADER`
+ * (`share_link_destination` in `desktop_auth.rs`); null when there is none.
+ * A malformed one is dropped, as the Worker would treat it: the read then
+ * finds no link, rather than failing in the bridge.
+ */
+function nativeShareToken(headers: Headers): string | null {
+  const token = headers.get(SHARE_LINK_TOKEN_HEADER);
+  return token !== null && /^[A-Za-z0-9_-]{1,256}$/.test(token) ? token : null;
+}
+
+function isNativeBlobStreamPath(
+  path: string,
+  shareToken: string | null
+): boolean {
+  if (shareToken !== null) return NATIVE_SHARE_BLOB_STREAM_PATH.test(path);
   return (
     NATIVE_BLOB_STREAM_PATH.test(path) ||
     NATIVE_ARTIFACT_STREAM_PATH.test(path) ||
@@ -243,16 +265,18 @@ function nativeBlobStreamSlot(signal: AbortSignal): Promise<() => void> {
 async function nativeBlobStream(
   invoke: NativeInvoke,
   path: string,
-  signal: AbortSignal
+  signal: AbortSignal,
+  shareToken: string | null
 ): Promise<Response> {
   const releaseSlot = await nativeBlobStreamSlot(signal);
   let started: NativeBlobStreamStart;
   try {
     assertCloudFunctionsEnabled();
     if (signal.aborted) throw abortError();
-    started = await invoke<NativeBlobStreamStart>('desktop_blob_stream_open', {
-      path
-    });
+    started = await invoke<NativeBlobStreamStart>(
+      'desktop_blob_stream_open',
+      shareToken ? { path, shareToken } : { path }
+    );
   } catch (error) {
     releaseSlot();
     throw error;
@@ -410,6 +434,10 @@ async function sendCloudRequest(
   const headers = new Headers(init.headers);
   const { invoke } = await tauriCore();
   let path = apiPath(input);
+  // A share-link read's token goes to Rust beside the path, which sends it
+  // in the same header and never in the URL that request logs record. The
+  // web assets ship inside the app, so the native host always takes it.
+  const shareToken = nativeShareToken(headers);
   // Older native hosts forward content-type only. Query negotiation keeps
   // browser-side legacy decoding available without a native protocol upgrade.
   if (
@@ -424,9 +452,9 @@ async function sendCloudRequest(
   if (
     (init.method ?? 'GET').toUpperCase() === 'GET' &&
     (init.body === undefined || init.body === null) &&
-    isNativeBlobStreamPath(path)
+    isNativeBlobStreamPath(path, shareToken)
   ) {
-    return nativeBlobStream(invoke, path, signal);
+    return nativeBlobStream(invoke, path, signal, shareToken);
   }
   const body = await requestBodyBytes(init.body);
   if (signal.aborted) {
@@ -441,7 +469,8 @@ async function sendCloudRequest(
       method: init.method ?? 'GET',
       path,
       contentType: headers.get('content-type') ?? undefined,
-      body
+      body,
+      ...(shareToken ? { shareToken } : {})
     }
   });
   assertCloudFunctionsEnabled();
