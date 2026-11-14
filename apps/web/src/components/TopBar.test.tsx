@@ -507,6 +507,8 @@ describe('TopBar sharing chip', () => {
       name: 'Open project sharing · Read-only'
     });
     expect(chip).toHaveTextContent('Read-only');
+    // The class the wide bar keys its visible label on (topbar.css).
+    expect(chip).toHaveClass('is-read-only');
     expect(tooltipFor(chip)).toHaveTextContent('not edit it');
   });
   it('lets a conflict or a lost connection outrank a read-only seat', () => {
@@ -524,6 +526,8 @@ describe('TopBar sharing chip', () => {
       const chip = screen.getByRole('button', { name: /Open project sharing/ });
       expect(chip).toHaveTextContent(label);
       expect(chip).not.toHaveTextContent('Read-only');
+      // Its label stays a glyph on the wide bar, like any other room state.
+      expect(chip).not.toHaveClass('is-read-only');
       cleanup();
     }
   });

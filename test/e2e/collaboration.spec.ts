@@ -1040,7 +1040,7 @@ test('asks a signed-in visitor of a plaintext link where to put the copy', async
 }) => {
   await stubApi(page);
   const document = createProjectDocument('Signed-in source', toUserId('owner'));
-  await page.route('**/api/share/*', (route) =>
+  await page.route('**/api/share', (route) =>
     route.fulfill({
       json: { document, project: { projectId: document.projectId, name: document.name }, mode: 'tweak' }
     })
@@ -1064,6 +1064,32 @@ test('asks a signed-in visitor of a plaintext link where to put the copy', async
       .getByRole('group', { name: 'Workspace mode' })
       .getByRole('button', { name: 'Build' })
   ).toBeEnabled();
+});
+
+test('keeps the share session chip a visible glyph on a phone', async ({
+  page
+}) => {
+  // Below 620px every chip in the bar is its glyph alone; the share
+  // session's chip had none, so it drew as an empty box (re-check of I73).
+  await page.setViewportSize({ width: 390, height: 844 });
+  await stubAnonymousApi(page);
+  const document = createProjectDocument('Phone source', toUserId('owner'));
+  await page.route('**/api/share', (route) =>
+    route.fulfill({
+      json: { document, project: { projectId: document.projectId, name: document.name }, mode: 'tweak' }
+    })
+  );
+  await page.goto(`/#share=${'p'.repeat(43)}`);
+  const chip = page
+    .locator('.topbar')
+    .getByRole('status', { name: 'Shared model · Tweak only' });
+  await expect(chip).toBeVisible();
+  await expect(chip.locator('svg')).toBeVisible();
+  const box = (await chip.locator('svg').boundingBox())!;
+  expect(box.width).toBeGreaterThan(8);
+  await expect(
+    page.locator('.topbar').getByRole('button', { name: 'Make a copy', exact: true })
+  ).toBeVisible();
 });
 
 test('makes a durable share copy without storing the owner snapshot', async ({
@@ -1509,6 +1535,9 @@ test('keeps a shared-project viewer visibly read-only', { tag: '@ci-smoke' }, as
     name: 'Open project sharing'
   });
   await expect(sharingButton).toContainText('Read-only');
+  // Visible in words, not only in the accessible name and tooltip: the wide
+  // bar shows every other room state as its glyph alone (review I77).
+  await expect(sharingButton.getByText('Read-only')).toBeVisible();
   // A viewer is held in View mode — `viewMode` is true whenever there is a
   // buildModeDisabledReason, and being a viewer is one — so the whole Feature
   // tools rail is gone rather than present-but-disabled. This assertion used
