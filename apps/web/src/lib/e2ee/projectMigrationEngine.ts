@@ -174,6 +174,13 @@ export interface MigrationProgress {
    * this page keeps the project read-only meanwhile, paused or stopped.
    */
   readonly plaintextLocked?: boolean;
+  /**
+   * This device asked for the cutover and has not seen it complete, so it
+   * holds the project as encrypted (set by the controller from the
+   * device's record, `encryptedProjectPins.ts`): a cancel leaves it so,
+   * and only a retry or the owner's confirmed reset clears it.
+   */
+  readonly unresolved?: boolean;
   readonly error?: MigrationError;
   /** Slice 7-4: a shared project's members and where each stands. */
   readonly members?: readonly MigrationMember[];
@@ -200,8 +207,25 @@ export interface MigrationEngineDeps {
   readonly leases?: MigrationLeaseStore;
   /** Saves this page's pending edits to the project before staging begins. */
   flushProject?(projectId: string): Promise<void>;
-  /** After the cutover: this page now treats the project as encrypted. */
+  /**
+   * Just before the cutover is asked for: saves that the project is now
+   * encrypted on this device, with the cutover's outcome unknown, or
+   * throws to stop it. Whatever the cutover's answer, that stays saved: a
+   * lost or failed answer does not prove the cutover did not happen, so
+   * neither a failure nor a cancel (an abandon) clears it.
+   */
+  beforeCutover?(projectId: string): void;
+  /**
+   * This run's own cutover call answered success: this page now treats
+   * the project as encrypted, its switch finished.
+   */
   onCutover?(projectId: string): void;
+  /**
+   * A resume found the project cut over (a status answer, not this run's
+   * own cutover): it may be held as encrypted, but its switch is not
+   * thereby seen to finish here.
+   */
+  onCutoverFound?(projectId: string): void;
   onProgress?(progress: MigrationProgress): void;
   /** Lease renewal period (default a third of the five-minute lease). */
   readonly renewEveryMs?: number;
@@ -529,7 +553,7 @@ export function createProjectMigrationEngine(
       .migration;
     if (status?.state === 'cutover' || status?.state === 'purging') {
       leases.delete(projectId);
-      deps.onCutover?.(projectId);
+      deps.onCutoverFound?.(projectId);
       return purgeAll(projectId, (phase) => report({ phase, cutOver: true }));
     }
     if (status?.state === 'done' && (project.storageFormat ?? 1) === 2) {
@@ -595,6 +619,7 @@ export function createProjectMigrationEngine(
         );
       }
       await check('cutover');
+      deps.beforeCutover?.(projectId);
       report({ phase: 'cutover' });
       await migrations.cutover(projectId, lease);
     } finally {

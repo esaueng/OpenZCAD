@@ -5,6 +5,12 @@ import {
   SHARE_LINK_TOKEN_HEADER
 } from '@openzcad/shared';
 import { assertCloudFunctionsEnabled, cloudRequestSignal } from './cloudMode';
+import {
+  checkOutboundRequest,
+  declaredProjectContext,
+  checkProjectRequest,
+  type ResolvedProjectRequest
+} from './projectWriteGate';
 
 export type DesktopMenuCommand =
   | 'open-model'
@@ -382,6 +388,64 @@ async function nativeBlobStream(
   return new Response(body, { status: started.status, headers });
 }
 
+interface NativeApiRequest {
+  method: string;
+  path: string;
+  contentType?: string;
+  body?: number[];
+  shareToken?: string;
+  /**
+   * The handle `desktop_prepare_access` returned for this send (empty when
+   * it readied none): Rust sends with exactly the credential it readied
+   * then, for that signed-in session and this one send, or answers 401
+   * locally; it hands a 401 back instead of refreshing and replaying.
+   */
+  prepared?: string;
+}
+
+/**
+ * A request that writes a project, through Rust. Rust would otherwise
+ * refresh an expiring credential before the send, and refresh and replay
+ * the request after a 401: requests to the account of their own, each an
+ * await the gate's check could not follow. So the credential is readied
+ * first, in a native call of its own (`desktop_prepare_access`), which
+ * answers an opaque handle bound to that credential as it is then, the
+ * signed-in session and one send; then the gate checks the request
+ * synchronously immediately before the send (`checkProjectRequest`), with
+ * nothing awaited in between; and Rust sends it with exactly that
+ * credential (`prepared`), never the one it holds at the send, or answers
+ * 401 itself when the session changed or the credential expired. A 401
+ * after a credential was ready readies a fresh one and is retried once,
+ * checked again immediately before that send.
+ */
+async function sendNativeProjectRequest(
+  invoke: NativeInvoke,
+  native: NativeApiRequest,
+  request: ResolvedProjectRequest,
+  signal: AbortSignal
+): Promise<NativeApiResponse> {
+  for (let attempt = 0; ; attempt += 1) {
+    // A desktop host without a credential answers its own 401 below.
+    const handle = await invoke<string | null>('desktop_prepare_access');
+    const ready = typeof handle === 'string' && handle !== '';
+    if (signal.aborted) {
+      throw new DOMException('The operation was aborted.', 'AbortError');
+    }
+    // Immediately before the native send, after loading Tauri, reading
+    // the body and readying the credential: a pin, an unresolved switch
+    // or a reset noted meanwhile sends nothing. Nothing is awaited
+    // between this check and the invoke.
+    checkProjectRequest(request);
+    const result = await invoke<NativeApiResponse>('desktop_api_request', {
+      request: { ...native, prepared: ready ? handle : '' }
+    });
+    if (result.status !== 401 || !ready || attempt > 0) return result;
+    if (signal.aborted) {
+      throw new DOMException('The operation was aborted.', 'AbortError');
+    }
+  }
+}
+
 function importTauriCore() {
   return import('@tauri-apps/api/core');
 }
@@ -395,13 +459,33 @@ function tauriCore(): ReturnType<typeof importTauriCore> {
 /**
  * Routes cloud requests through Rust so bearer credentials never enter the
  * WebView, localStorage, URLs, logs, or frontend bundles.
+ *
+ * A request that writes a project this tab may not write, or carries
+ * plaintext of a project this device holds as encrypted, is refused
+ * (`projectWriteGate.ts`): resolved from the request's own context first,
+ * then checked again synchronously immediately before `fetch` or the
+ * native invoke, after every await here (for a project request, after
+ * its native credential is readied: `sendNativeProjectRequest`), with
+ * nothing awaited between that check and the send.
  */
 export async function desktopFetch(
   input: RequestInfo | URL,
   init: RequestInit = {}
 ): Promise<Response> {
+  // Refused early, before anything is awaited, and again at the send.
+  const request = checkOutboundRequest(input, init);
+  return sendCloudRequest(input, init, request);
+}
+
+async function sendCloudRequest(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  request: ResolvedProjectRequest
+): Promise<Response> {
   const signal = cloudRequestSignal(init.signal);
   if (!isDesktopApp()) {
+    // Immediately before the send: nothing is awaited in between.
+    checkProjectRequest(request);
     return fetch(input, { ...init, signal });
   }
   if (signal.aborted) {
@@ -436,15 +520,30 @@ export async function desktopFetch(
   if (signal.aborted) {
     throw new DOMException('The operation was aborted.', 'AbortError');
   }
-  const result = await invoke<NativeApiResponse>('desktop_api_request', {
-    request: {
-      method: init.method ?? 'GET',
-      path,
-      contentType: headers.get('content-type') ?? undefined,
-      body,
-      ...(shareToken ? { shareToken } : {})
-    }
-  });
+  const native: NativeApiRequest = {
+    method: init.method ?? 'GET',
+    path,
+    contentType: headers.get('content-type') ?? undefined,
+    body,
+    ...(shareToken ? { shareToken } : {})
+  };
+  let result: NativeApiResponse;
+  // Only a request that names no project and carries none of a project's
+  // content may be refreshed and replayed by Rust; every request with a
+  // project, declared or named, is readied, checked and sent once.
+  if (
+    request.projectId === null &&
+    declaredProjectContext(init) === undefined
+  ) {
+    // Immediately before the native send, after loading Tauri and reading
+    // the body. Nothing is awaited between this check and the invoke.
+    checkProjectRequest(request);
+    result = await invoke<NativeApiResponse>('desktop_api_request', {
+      request: native
+    });
+  } else {
+    result = await sendNativeProjectRequest(invoke, native, request, signal);
+  }
   assertCloudFunctionsEnabled();
   if (signal.aborted) {
     throw new DOMException('The operation was aborted.', 'AbortError');

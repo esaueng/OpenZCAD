@@ -9,6 +9,12 @@ import { desktopFetch } from './desktopBridge';
 
 const encrypted = vi.hoisted(() => new Set<string>());
 vi.mock('./api', () => ({
+  ApiError: class ApiError extends Error {
+    code?: string;
+  },
+  E2EE_CUTOVER_UNRESOLVED_CODE: 'E2EE_CUTOVER_UNRESOLVED',
+  E2EE_PLAINTEXT_REFUSED_CODE: 'E2EE_PLAINTEXT_REFUSED',
+  encryptCutoverUnresolved: () => false,
   isEncryptedProject: (projectId: string | null | undefined) =>
     projectId ? encrypted.has(projectId) : false
 }));
@@ -38,7 +44,10 @@ describe('the assistant and this page’s encrypted-project marker', () => {
       ENCRYPTED_PROJECT_ASSISTANT_NOTICE
     );
     expect(
-      assistantDisabledReason({ storageFormat: 2 }, { status: { kind: 'ready' } })
+      assistantDisabledReason(
+        { storageFormat: 2 },
+        { status: { kind: 'ready' } }
+      )
     ).toBeNull();
     expect(assistantDisabledReason(undefined)).toBeNull();
   });
@@ -58,7 +67,11 @@ describe('the assistant and this page’s encrypted-project marker', () => {
       streamAssistantReply({
         prompt: 'Make the wall 3 mm',
         digest: digest('proj_secret'),
-        consentedProjectId: 'proj_secret'
+        consent: {
+          userId: 'user_1',
+          projectId: 'proj_secret',
+          sequence: 1
+        }
       })
     ).rejects.toBeDefined();
     expect(desktopFetch).toHaveBeenCalledTimes(1);
@@ -67,7 +80,11 @@ describe('the assistant and this page’s encrypted-project marker', () => {
       streamAssistantReply({
         prompt: 'Hi',
         digest: digest('proj_secret'),
-        consentedProjectId: 'proj_other'
+        consent: {
+          userId: 'user_1',
+          projectId: 'proj_other',
+          sequence: 1
+        }
       })
     ).rejects.toMatchObject({ code: 'AI_E2EE_PROJECT' });
     expect(desktopFetch).toHaveBeenCalledTimes(1);

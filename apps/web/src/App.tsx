@@ -388,10 +388,6 @@ import {
 } from './lib/staleChunk';
 import { lockAccountsExcept } from './lib/e2ee/unlockedKeys';
 import {
-  automaticProjectMigration,
-  AUTOMATIC_MIGRATION_LOAD_ERROR
-} from './lib/e2ee/automaticMigration';
-import {
   allowKeySession,
   announceKeySessionChange,
   blockKeySession,
@@ -400,6 +396,10 @@ import {
   subscribeKeySession,
   type KeySessionEvent
 } from './lib/e2ee/keySession';
+import {
+  AUTOMATIC_MIGRATION_LOAD_ERROR,
+  startAutomaticMigration
+} from './lib/e2ee/automaticMigrationLoader';
 import type { DeviceKeySignOutChoice } from './lib/e2ee/signOut';
 import {
   captureEncryptedInvitationLink,
@@ -437,12 +437,22 @@ import type { SharedLinkCopyDestination } from './components/SharedLinkCopyDialo
 import {
   ApiError,
   api,
+  carryEncryptionRequirement,
+  encryptedPinProblem,
+  encryptedPinsResetElsewhere,
+  encryptedProjectResetElsewhere,
   encryptsNewProjects,
+  isEncryptedPinProblemError,
   isEncryptedProject,
   isProjectDocumentUnavailableError,
   isProjectFormatUnsupportedError
 } from './lib/api';
+import {
+  useEncryptedPins,
+  type PinResetTarget
+} from './components/encryptedPinsState';
 import type { ProjectListingProgress } from './lib/api';
+import { saveShareLinkCopy } from './lib/shareLinkCopy';
 import { createCloudConfigurationReads } from './lib/cloudConfigurationReads';
 import { assistantDisabledReason } from './lib/assistant/encryptedProject';
 import {
@@ -1299,6 +1309,15 @@ const LazySelectionReadout = lazyWithStaleChunkNotice(() =>
 const LazyEditRefusal = lazyWithStaleChunkNotice(() =>
   import('./components/EditRefusal').then((module) => ({
     default: module.EditRefusal
+  }))
+);
+const loadPinRecovery = () => import('./components/EncryptedPinReset');
+const ignoreFailure = () => undefined;
+// "Treat as not encrypted on this device" is offered only where a stuck
+// encrypted project is met (PR #1418); nobody else loads it.
+const LazyPinResetDialog = lazyWithStaleChunkNotice(() =>
+  import('./components/EncryptedPinReset').then((module) => ({
+    default: module.PinResetDialog
   }))
 );
 // The first-model tour shows once per device; nobody else pays for it.
@@ -3315,6 +3334,50 @@ export function App() {
   const dismissToast = useCallback((id: number) => {
     setToast((current) => (current?.id === id ? null : current));
   }, []);
+  // "Treat as not encrypted on this device" (PR #1418): asked for only
+  // from this page's own dialog, where a stuck encrypted project is met.
+  const [pinReset, setPinReset] = useState<PinResetTarget | null>(null);
+  /**
+   * Offers the confirmed reset with an error that names a stuck encrypted
+   * project, or this device's unsaved pins: the toast's action opens the
+   * dialog, which alone resets anything. Its words load with the dialog.
+   */
+  const offerPinReset = useCallback(
+    (error: unknown, projectId: string | null, name: string | null) => {
+      if (!isEncryptedPinProblemError(error)) return;
+      void loadPinRecovery().then(({ pinResetOffer }) => {
+        const offer = pinResetOffer(error, projectId, name);
+        if (offer)
+          announce(offer.message, {
+            label: offer.label,
+            run: () => setPinReset(offer.target())
+          });
+      }, ignoreFailure);
+    },
+    [announce]
+  );
+  const offerPinResetRef = useRef(offerPinReset);
+  offerPinResetRef.current = offerPinReset;
+  const pinResetDialog = pinReset ? (
+    <Suspense fallback={null}>
+      <LazyPinResetDialog
+        target={pinReset}
+        onClose={() => setPinReset(null)}
+        onReset={(result) => {
+          setPinReset(null);
+          setStatus(result.message);
+          announce(result.message);
+          // Saves held back while it was stuck go out as the account
+          // lists the project now.
+          if (result.ok) {
+            void cloudProjectAutosaveRef.current
+              ?.flushPending()
+              .catch(() => undefined);
+          }
+        }}
+      />
+    </Suspense>
+  ) : null;
   // A deploy while this tab is open renames every chunk. The version watch
   // usually notices first; if a panel's chunk goes missing before it does,
   // the failure asks the watch to look now. In the workspace the offer is one
@@ -3852,23 +3915,27 @@ export function App() {
   useEffect(() => {
     setAutomaticMigrationLoadError(null);
     if (!sessionUserId || !cloudFunctionsEnabled) return;
-    let stopped = false;
-    // The small availability controller loads no crypto or migration engine
-    // until the server confirms all four rollout gates.
-    const migration = automaticProjectMigration(sessionUserId, (message) => {
-      if (stopped || sessionRef.current?.userId !== sessionUserId) return;
-      setAutomaticMigrationLoadError(
-        message === AUTOMATIC_MIGRATION_LOAD_ERROR ? message : null
-      );
-      setSettingsMessage(message);
-      updateSettingsViewState({ open: true, activeSection: 'encryption' });
-      setSettingsOpen(true);
-    });
-    void migration.check();
-    return () => {
-      stopped = true;
-      migration.dispose();
-    };
+    // The small availability controller loads off the entry chunk, and
+    // loads no crypto or migration engine until the server confirms all
+    // four rollout gates. A failed load is reported and retried when the
+    // page comes back online, encryption state changes or a key session
+    // becomes ready (`automaticMigrationLoader.ts`).
+    const migration = startAutomaticMigration(
+      sessionUserId,
+      (message) => {
+        setAutomaticMigrationLoadError(
+          message === AUTOMATIC_MIGRATION_LOAD_ERROR ? message : null
+        );
+        setSettingsMessage(message);
+        updateSettingsViewState({ open: true, activeSection: 'encryption' });
+        setSettingsOpen(true);
+      },
+      {
+        current: () => sessionRef.current?.userId === sessionUserId,
+        recovered: () => setAutomaticMigrationLoadError(null)
+      }
+    );
+    return () => migration.dispose();
   }, [sessionUserId, cloudFunctionsEnabled]);
   useEffect(() => {
     const online = () => organizationBackground.resume();
@@ -5961,9 +6028,87 @@ export function App() {
     userId: session?.userId ?? null,
     autosave: cloudProjectAutosaveRef
   });
+  // A switch to encryption this device asked for and has not seen finish
+  // (PR #1418): it is held as encrypted here, so its edits could be saved
+  // nowhere, and retrying would encrypt the account's copy without them.
+  // Locked like a project being encrypted until it is retried or reset.
+  const pinsRevision = useEncryptedPins();
+  const openPinProblem = useMemo(() => {
+    void pinsRevision;
+    return openProjectId && !shareSession
+      ? encryptedPinProblem(openProjectId)
+      : null;
+  }, [openProjectId, shareSession, pinsRevision]);
+  // Another tab reset what this tab holds of a project's encryption: this
+  // tab writes none of it until it reloads (`encryptedProjectPins.ts`).
+  const pinsResetElsewhere = useMemo(() => {
+    void pinsRevision;
+    return encryptedPinsResetElsewhere();
+  }, [pinsRevision]);
+  const openResetElsewhere = useMemo(() => {
+    void pinsRevision;
+    return openProjectId && !shareSession
+      ? encryptedProjectResetElsewhere(openProjectId)
+      : false;
+  }, [openProjectId, shareSession, pinsRevision]);
   const migrationEditReason = projectMigrating
     ? 'This project is being end-to-end encrypted'
-    : null;
+    : openResetElsewhere
+      ? 'Encryption was reset in another tab. Reload this tab'
+      : openPinProblem === 'unresolved'
+        ? 'The switch to end-to-end encryption didn’t finish on this device'
+        : null;
+  // The notices load with the reset dialog; editing is locked (above) and
+  // every send refused (`projectWriteGate.ts`) without waiting for them.
+  useEffect(() => {
+    if (!pinsResetElsewhere) return;
+    let live = true;
+    void loadPinRecovery().then(({ pinNotice }) => {
+      if (!live) return;
+      const notice = pinNotice('reset-elsewhere');
+      setStatus(notice, { sticky: true });
+      announce(notice, {
+        label: 'Reload this tab',
+        run: () => window.location.reload()
+      });
+    }, ignoreFailure);
+    return () => {
+      live = false;
+    };
+  }, [announce, pinsResetElsewhere, setStatus]);
+  // Said once, where the eye goes, with the reset one click away; said
+  // again when the project follows the account on this device.
+  const pinNoticeShownRef = useRef(false);
+  useEffect(() => {
+    const problem = openProjectId ? openPinProblem : null;
+    if (!problem && !pinNoticeShownRef.current) return;
+    let live = true;
+    void loadPinRecovery().then(({ pinNotice }) => {
+      if (!live) return;
+      pinNoticeShownRef.current = problem !== null;
+      if (!problem || !openProjectId) {
+        setStatus(
+          pinNotice(isEncryptedProject(openProjectId) ? 'finished' : 'followed')
+        );
+        return;
+      }
+      const notice = pinNotice(problem);
+      setStatus(notice, { sticky: true });
+      announce(notice, {
+        label: 'Treat as not encrypted…',
+        run: () =>
+          setPinReset({
+            kind: 'project',
+            projectId: openProjectId,
+            name: managerRef.current?.document.name ?? null,
+            reason: problem
+          })
+      });
+    }, ignoreFailure);
+    return () => {
+      live = false;
+    };
+  }, [announce, openPinProblem, openProjectId, setStatus]);
   // Said once, where the eye goes, and kept for as long as it lasts, as the
   // second tab's notice is.
   const migrationNoticeShownRef = useRef(false);
@@ -6373,6 +6518,10 @@ export function App() {
         projects.map((project) => project.name),
         session?.userId ?? localUserId
       );
+      // A copy of a project this device keeps encrypted stays encrypted.
+      carryEncryptionRequirement(source.projectId, copy.projectId, {
+        account: false
+      });
       await saveLocalProject(copy);
       // The shelf never loads a document to draw a card, so a copy saved
       // without a preview would stay a placeholder until it is opened. Seed it
@@ -6613,7 +6762,9 @@ export function App() {
       ? 'Viewers cannot replace the live version.'
       : !activeCollaborationLease
         ? 'Keeping this device’s version requires an active edit lease.'
-        : null;
+        : migrationEditReason
+          ? `${migrationEditReason}. This device’s version can’t replace the live one now.`
+          : null;
 
   useEffect(() => {
     savePanelState(panelState);
@@ -6676,6 +6827,16 @@ export function App() {
           }
         } else if (status.state === 'refused') {
           setStatus(errorMessage(status.error, PROJECT_TOO_LARGE_FOR_ACCOUNT));
+          // Kept encrypted on this device while the account disagrees, or
+          // its pins could not be saved: the confirmed reset is one click
+          // away from the refusal.
+          offerPinResetRef.current(
+            status.error,
+            status.projectId ?? null,
+            managerRef.current?.document.projectId === status.projectId
+              ? (managerRef.current?.document.name ?? null)
+              : null
+          );
           // A write refused as read-only: an encrypted member was demoted
           // (slice 5-4). Its page re-reads the role and locks editing.
           if (
@@ -8485,16 +8646,17 @@ export function App() {
   // ADR-024 Phase 6: an encrypted project's assistant reads it only with this
   // account's per-project consent. Null (no gate) for a plaintext project.
   // A project opened directly while the listing is unavailable has no
-  // summary; this page's own marker still says it is encrypted (#869).
+  // summary; this page's own marker still says it is encrypted (#869). The
+  // device's pin outranks the listing: a summary that reports another
+  // format does not lift the gate.
   const assistantProject:
     Pick<ProjectSummary, 'projectId' | 'storageFormat'> | undefined = doc
-    ? (projects.find((project) => project.projectId === doc.projectId) ??
-      (isEncryptedProject(doc.projectId)
-        ? {
-            projectId: doc.projectId,
-            storageFormat: PROJECT_STORAGE_FORMAT_E2EE_V1
-          }
-        : undefined))
+    ? isEncryptedProject(doc.projectId)
+      ? {
+          projectId: doc.projectId,
+          storageFormat: PROJECT_STORAGE_FORMAT_E2EE_V1
+        }
+      : projects.find((project) => project.projectId === doc.projectId)
     : undefined;
   const assistantConsent = useAssistantConsentGate(
     session?.userId ?? null,
@@ -14210,8 +14372,10 @@ export function App() {
           : `Opened ${openedDocument.name}.`
       );
     } catch (error) {
-      if (isCurrent())
+      if (isCurrent()) {
         setStatus(errorMessage(error, 'Failed to open project.'));
+        offerPinReset(error, projectId, listed?.name ?? null);
+      }
     } finally {
       finishBusy();
     }
@@ -14410,7 +14574,7 @@ export function App() {
     const finishBusy = startNavigationBusy();
     let copied: ProjectSummary | null = null;
     try {
-      const copy = duplicateProjectDocument(
+      const copy = await saveShareLinkCopy(
         source,
         duplicateProjectName(
           source.name,
@@ -14418,7 +14582,6 @@ export function App() {
         ),
         session?.userId ?? localUserId
       );
-      await saveLocalProject(copy);
       if (!isCurrent()) return;
       setShareSession(null);
       shareSessionRef.current = null;
@@ -15219,6 +15382,12 @@ export function App() {
             })
           : undefined
       );
+      // A device copy or branch of a project this device keeps encrypted
+      // (also one the account did not answer for) must stay encrypted:
+      // recorded before the copy is written, or nothing is copied.
+      carryEncryptionRequirement(project.projectId, copy.projectId, {
+        account: false
+      });
       const organization: ProjectOrganization = {
         ...DEFAULT_PROJECT_ORGANIZATION,
         sortOrder: projectOrganization(project).sortOrder
@@ -17674,8 +17843,9 @@ export function App() {
     }
   }
 
-  async function handleExportProject() {
+  async function handleExportProject(options: { localOnly?: boolean } = {}) {
     if (!doc || projectTransferRef.current) return;
+    const localOnly = options.localOnly === true;
     projectTransferRef.current = true;
     setProjectTransferBusy(true);
     const snapshot = doc;
@@ -17690,7 +17860,11 @@ export function App() {
     });
     sink.update({ phase: 'preparing', fraction: null });
     try {
-      setStatus('Preparing complete project backup…');
+      setStatus(
+        localOnly
+          ? 'Preparing this device’s copy of the project…'
+          : 'Preparing complete project backup…'
+      );
       const { createProjectBackup, downloadBackupFile } =
         await import('./lib/projectBackupTransfer');
       const text = await createProjectBackup(
@@ -17703,7 +17877,8 @@ export function App() {
               measurementDisplay,
               new Date().toISOString()
             )
-          : undefined
+          : undefined,
+        localOnly ? { localOnly: true } : {}
       );
       sink.update({ phase: 'writing', fraction: null });
       downloadBackupFile(
@@ -17716,12 +17891,33 @@ export function App() {
         const bucket = durationBucket(performance.now() - analyticsStarted);
         if (bucket) trackDetail('export_latency', bucket);
       }
-      setStatus(`Exported complete project ${snapshot.name}.`);
-      sink.finish({ tone: 'ok', message: 'complete project', landed: true });
+      if (localOnly) {
+        // Only what this device holds: files kept only in the account
+        // (archived exports, save states never opened here) are not in it.
+        setStatus(
+          `Exported this device’s copy of ${snapshot.name}. Files stored only in your account are not included.`
+        );
+        sink.finish({
+          tone: 'ok',
+          message: 'this device’s copy',
+          landed: true
+        });
+      } else {
+        setStatus(`Exported complete project ${snapshot.name}.`);
+        sink.finish({ tone: 'ok', message: 'complete project', landed: true });
+      }
     } catch (error) {
       const message = errorMessage(error, 'Unable to create backup.');
       setStatus(`Project export failed: ${message}`);
       sink.finish({ tone: 'error', message });
+      // A complete backup this device cannot vouch for: its own copy can
+      // still be exported, said as what it is.
+      if (!localOnly && isEncryptedPinProblemError(error)) {
+        announce(message, {
+          label: 'Export this device’s copy',
+          run: () => void handleExportProject({ localOnly: true })
+        });
+      }
     } finally {
       projectTransferRef.current = false;
       setProjectTransferBusy(false);
@@ -31102,6 +31298,7 @@ export function App() {
         />
         {settingsOverlay}
         {confirmDialog}
+        {pinResetDialog}
         <ToastHost toast={toast} onDismiss={dismissToast} />
       </>
     );
@@ -34018,6 +34215,7 @@ export function App() {
               onImport={() => importInputRef.current?.click()}
             />
           )}
+          {pinResetDialog}
           <ToastHost toast={toast} onDismiss={dismissToast} />
         </ErrorBoundary>
       }

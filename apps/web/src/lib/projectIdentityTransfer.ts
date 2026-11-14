@@ -26,7 +26,7 @@ import {
   sourceUploadMessage
 } from './accountImportSources';
 import { listLocalOnlyImportSources } from './importArchival';
-import { ApiError, api } from './api';
+import { ApiError, api, carryEncryptionRequirement } from './api';
 import { archiveArtifact as archiveArtifactBody } from './archiveArtifact';
 import {
   conflictFromDocuments,
@@ -589,6 +589,11 @@ export async function adoptLocalProject(
     const response = await api.adoptProject(local, app.accountUserId, {
       sourceArtifactIds: importArtifactIds(local)
     });
+    // The device project's content moves under the account's id: if it
+    // must stay encrypted, so must that project, before anything moves.
+    carryEncryptionRequirement(projectId, response.document.projectId, {
+      account: true
+    });
     const accountLocal = await transferAdoptedProjectIdentity(
       local,
       response.document,
@@ -615,6 +620,15 @@ export async function adoptLocalProject(
         typeof error.details?.projectId === 'string'
           ? error.details.projectId
           : projectId;
+      // The account names the project this one was adopted as: this
+      // device's content moves there. If it must stay encrypted, the
+      // account's project is pinned as encrypted first, before it is read,
+      // rekeyed, uploaded to or saved, whatever the account says of its
+      // format: it is read and written only through the encrypted routes,
+      // and the recovery never sends this content as plaintext.
+      carryEncryptionRequirement(projectId, accountProjectId, {
+        account: true
+      });
       const remote = await api.loadProject(accountProjectId);
       let accountLocal: ProjectDocument;
       try {

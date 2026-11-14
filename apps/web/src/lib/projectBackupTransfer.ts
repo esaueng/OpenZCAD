@@ -4,7 +4,16 @@ import type { StoredMeasurementRecord } from './measurementRecord';
 import { withoutDerivedProjection } from '@openzcad/document-core';
 import { importArtifactIds } from '@openzcad/persistence';
 import type { ArtifactRecord, ProjectDocument } from '@openzcad/shared';
-import { api, isEncryptedProject } from './api';
+import {
+  api,
+  ApiError,
+  E2EE_CUTOVER_UNRESOLVED_CODE,
+  E2EE_FORMAT_MISMATCH_CODE,
+  encryptedPinProblem,
+  encryptedProjectPinsUnavailable,
+  isEncryptedProject,
+  pinStorageUnavailable
+} from './api';
 import { desktopFetch } from './desktopBridge';
 import { prepareProjectSources, type ProjectSource } from './projectSources';
 import { encryptedBlobSource } from './e2ee/blobReferences';
@@ -152,6 +161,19 @@ export async function createProjectBackup(
     bytesUsed += length;
   };
   ensureSpace(0);
+  // What a cloud project's backup includes depends on whether it is
+  // encrypted. While this device cannot tell (its pins are unavailable and
+  // it holds every project as encrypted), refuse rather than finish a
+  // backup that silently leaves files out.
+  if (remote && encryptedProjectPinsUnavailable()) {
+    throw pinStorageUnavailable();
+  }
+  // Likewise while this device's pin disagrees with what it knows: a
+  // switch to encryption it has not seen finish, or a listing that says
+  // the project is not encrypted.
+  if (remote && encryptedPinProblem(snapshot.projectId)) {
+    throw backupUnresolved(snapshot.projectId);
+  }
   const artifacts =
     remote &&
     (!isEncryptedProject(snapshot.projectId) || options.includeEncryptedFiles)
@@ -336,6 +358,23 @@ export async function createProjectBackup(
   if (new Blob([text]).size > maxBytes) throw capacityError();
   await parseProjectBackup(text);
   return text;
+}
+
+/**
+ * A complete backup refused because this device cannot tell whether the
+ * project is stored encrypted. What it keeps of the project can still be
+ * exported (`localOnly`).
+ */
+export function backupUnresolved(projectId: string): ApiError {
+  const unresolved = encryptedPinProblem(projectId) === 'unresolved';
+  return new ApiError(
+    409,
+    unresolved
+      ? 'A complete backup isn’t possible yet: the switch to end-to-end encryption didn’t finish on this device, so it can’t tell which files your account stores. Retry encrypting it in Settings › Encryption, or choose “Treat as not encrypted on this device”. You can still export the copy on this device.'
+      : 'A complete backup isn’t possible yet: this device keeps the project encrypted, but your account lists it as not encrypted, so it can’t tell which files your account stores. Choose “Treat as not encrypted on this device” if you stopped encrypting it elsewhere. You can still export the copy on this device.',
+    unresolved ? E2EE_CUTOVER_UNRESOLVED_CODE : E2EE_FORMAT_MISMATCH_CODE,
+    { projectId }
+  );
 }
 
 export function downloadBackupFile(name: string, contents: Blob): void {

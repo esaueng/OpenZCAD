@@ -106,7 +106,13 @@ export async function archiveArtifact(
     // aborts the multipart state if the upload cannot finish.
     await uploadArtifactBody(
       transport,
-      { uploadSessionId: upload.uploadSessionId, uploadUrl: upload.uploadUrl },
+      {
+        projectId,
+        // Decided before the session opened: checked again at each send.
+        payload: 'plaintext',
+        uploadSessionId: upload.uploadSessionId,
+        uploadUrl: upload.uploadUrl
+      },
       input.body,
       {
         ...(input.onUploadProgress

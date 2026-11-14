@@ -8,9 +8,17 @@ import {
   type AssistantReply,
   type CadDocumentDigest
 } from '@openzcad/ai-contracts';
-import { isEncryptedProject } from './api';
+import {
+  ApiError,
+  E2EE_CUTOVER_UNRESOLVED_CODE,
+  E2EE_PLAINTEXT_REFUSED_CODE,
+  encryptCutoverUnresolved,
+  isEncryptedProject
+} from './api';
 import { ENCRYPTED_PROJECT_ASSISTANT_NOTICE } from './assistant/encryptedProject';
 import { desktopFetch } from './desktopBridge';
+import { assistantProjectRequest } from './projectWriteGate';
+import type { VerifiedAssistantConsent } from './e2ee/assistantConsentPins';
 
 interface AssistantStreamOptions {
   signal?: AbortSignal;
@@ -75,10 +83,12 @@ export interface AssistantTurnRequest {
   attachments?: readonly AssistantAttachment[];
   /**
    * Set by the panel once this account's consent for the project verified
-   * right before sending (ADR-024 Phase 6). Never sent; without it an
-   * encrypted project's request is refused here.
+   * right before sending (ADR-024 Phase 6): the record's account, project
+   * and sequence. Never sent; without it an encrypted project's request is
+   * refused here, and with it the send gate refuses the request at its
+   * send if this device has since seen a later consent or a revocation.
    */
-  consentedProjectId?: string;
+  consent?: VerifiedAssistantConsent;
 }
 
 export interface AssistantStatus {
@@ -338,28 +348,54 @@ async function streamAssistantReplyAttempt(
 ): Promise<AssistantReply> {
   // ADR-024 D7 and Phase 6: nothing of an encrypted project reaches the
   // assistant, whichever entry point asked, unless its consent verified.
+  const projectId = request.digest.projectId;
+  const consent =
+    request.consent?.projectId === projectId ? request.consent : null;
+  const consented = consent !== null;
   if (
-    isEncryptedProject(request.digest.projectId) &&
-    request.consentedProjectId !== request.digest.projectId
+    !consented &&
+    (isEncryptedProject(projectId) || encryptCutoverUnresolved(projectId))
   ) {
     throw new AssistantStreamError(
       'AI_E2EE_PROJECT',
       ENCRYPTED_PROJECT_ASSISTANT_NOTICE
     );
   }
-  const response = await desktopFetch('/api/assistant/proposals', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      prompt: request.prompt,
-      digest: request.digest,
-      history: request.history ?? [],
-      attachments: request.attachments ?? [],
-      retryAttempt,
-      operations: CAD_PATCH_OPERATION_KINDS
-    }),
-    signal: options.signal
-  });
+  let response: Response;
+  try {
+    // The digest, conversation and attachments are the project's content
+    // in plaintext: declared as such, with the consent bound to this
+    // project, so the gate checks them again immediately before the send
+    // (`projectWriteGate.ts`) whatever was pinned meanwhile.
+    response = await desktopFetch(
+      '/api/assistant/proposals',
+      assistantProjectRequest(projectId, consent, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          prompt: request.prompt,
+          digest: request.digest,
+          history: request.history ?? [],
+          attachments: request.attachments ?? [],
+          retryAttempt,
+          operations: CAD_PATCH_OPERATION_KINDS
+        }),
+        signal: options.signal
+      })
+    );
+  } catch (error) {
+    if (
+      error instanceof ApiError &&
+      (error.code === E2EE_PLAINTEXT_REFUSED_CODE ||
+        error.code === E2EE_CUTOVER_UNRESOLVED_CODE)
+    ) {
+      throw new AssistantStreamError(
+        'AI_E2EE_PROJECT',
+        ENCRYPTED_PROJECT_ASSISTANT_NOTICE
+      );
+    }
+    throw error;
+  }
   const requestId = safeRequestId(response);
   if (!response.ok || !response.body) {
     const error = (await response.json().catch(() => null)) as {

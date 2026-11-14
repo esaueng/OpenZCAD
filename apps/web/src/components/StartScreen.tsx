@@ -98,6 +98,8 @@ import {
 } from '../lib/projectShelf';
 import { syncRunTotals, type SyncEntry } from '../lib/syncRun';
 import { useMigrationLockedProjects } from '../lib/migrationStatus';
+import { encryptedPinProblem, encryptionHeldHere } from '../lib/api';
+import { pinProblemText, useEncryptedPins } from './encryptedPinsState';
 import type { DemoDefinition } from '../lib/demoDefinitions';
 import { BrandMark } from './BrandMark';
 import { DemoModelIcon } from './DemoModelIcon';
@@ -807,12 +809,15 @@ export function StartScreen({
   // Demos are rebuilt from their definitions on any device, so they are not
   // work to rescue and would only pad the offer. Trashed projects are excluded
   // for the same reason in reverse: uploading something on its way out is not
-  // what "save my work" means.
+  // what "save my work" means. A project this device holds as encrypted is
+  // never device only, whatever the account's listing leaves out (PR #1418):
+  // saving its cached copy would send it to the account as a new project.
   const localOnlyProjects =
     signedIn && accountProjectListReached
       ? userProjects.filter(
           (project) =>
             !cloudProjectIds.has(project.projectId) &&
+            !encryptionHeldHere(project.projectId) &&
             projectOrganization(project).status !== 'deleted'
         )
       : [];
@@ -820,6 +825,9 @@ export function StartScreen({
   // Being encrypted in this tab, or paused or stopped with its plaintext
   // still locked: badged, and opened read-only (App.tsx).
   const migratingProjectIds = useMigrationLockedProjects();
+  // Held as encrypted on this device while the switch to encryption did
+  // not finish here, or while the account lists it otherwise (PR #1418).
+  useEncryptedPins();
   const syncEntryById = new Map(
     (syncRun ?? []).map((entry) => [entry.projectId, entry] as const)
   );
@@ -1883,7 +1891,8 @@ export function StartScreen({
     const localOnly =
       signedIn &&
       accountProjectListReached &&
-      !cloudProjectIds.has(project.projectId);
+      !cloudProjectIds.has(project.projectId) &&
+      !encryptionHeldHere(project.projectId);
     const conflicted = conflictedProjectIds.has(project.projectId);
     const syncEntry = syncEntryById.get(project.projectId);
     const recoveryOf = recoveryCopyOf(project.name);
@@ -1897,6 +1906,7 @@ export function StartScreen({
     const encrypted = project.storageFormat === 2;
     // Being encrypted in this tab (ADR-024 Phase 7): it opens read-only.
     const migrating = migratingProjectIds.has(project.projectId);
+    const pinProblem = encryptedPinProblem(project.projectId);
 
     const preview = (
       <>
@@ -1955,6 +1965,20 @@ export function StartScreen({
                     <Lock size={11} aria-hidden="true" />
                   </span>
                 )
+              )}
+              {pinProblem && !migrating && !trashed && (
+                <span
+                  className="start-tile-mark"
+                  role="img"
+                  aria-label={
+                    pinProblem === 'unresolved'
+                      ? 'Encryption didn’t finish on this device'
+                      : 'Kept encrypted on this device'
+                  }
+                  title={`${pinProblemText(pinProblem)} See Settings › Encryption.`}
+                >
+                  <TriangleAlert size={11} aria-hidden="true" />
+                </span>
               )}
               {recoveryOf !== null && !trashed && (
                 <span

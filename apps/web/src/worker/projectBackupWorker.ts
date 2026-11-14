@@ -6,7 +6,17 @@ import {
   type ProjectBackup
 } from '../lib/projectBackup';
 export type ProjectBackupWorkerResult =
-  { ok: true; backup: ProjectBackup } | { ok: false; error: string };
+  | {
+      ok: true;
+      backup: ProjectBackup;
+      /**
+       * The project the backup was exported from: the copy is rekeyed to a
+       * new id here, and the page carries any encryption requirement this
+       * device keeps for the source to it before saving (PR #1418).
+       */
+      sourceProjectId: string;
+    }
+  | { ok: false; error: string };
 self.onmessage = async (
   event: MessageEvent<{ file: File; ownerUserId: UserId }>
 ) => {
@@ -35,11 +45,14 @@ self.onmessage = async (
       reader.releaseLock();
     }
     chunks.push(decoder.decode());
-    const backup = importProjectCopy(
-      await parseProjectBackup(chunks.join('')),
-      ownerUserId
-    );
-    self.postMessage({ ok: true, backup } satisfies ProjectBackupWorkerResult);
+    const parsed = await parseProjectBackup(chunks.join(''));
+    const sourceProjectId: string = parsed.document.projectId;
+    const backup = importProjectCopy(parsed, ownerUserId);
+    self.postMessage({
+      ok: true,
+      backup,
+      sourceProjectId
+    } satisfies ProjectBackupWorkerResult);
   } catch (error) {
     self.postMessage({
       ok: false,

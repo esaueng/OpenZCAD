@@ -135,6 +135,7 @@ function Harness({
 }) {
   const gate = useAssistantConsentGate(USER, project, {
     loadModule: async () => consentModule,
+    pins,
     context: (_module, userId) => ({
       userId,
       accountKey: ACCOUNT_KEY,

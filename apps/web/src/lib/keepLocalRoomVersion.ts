@@ -15,6 +15,7 @@ import {
 } from './conflictRecovery';
 import { desktopFetch } from './desktopBridge';
 import { projectPreservesLocalWork } from './localProjectStore';
+import { projectRequest, sendProjectFrame } from './projectWriteGate';
 import {
   collaborationDocument,
   parseServerMessage,
@@ -194,7 +195,17 @@ export async function keepLocalRoomVersion(
           resolve,
           reject
         };
-        socket.send(payload);
+        // Refused (an unfinished switch to encryption, or a reset in
+        // another tab): nothing is sent, and the conflict stays open with
+        // the refusal shown in its dialog.
+        sendProjectFrame(
+          {
+            projectId: pending.projectId,
+            payload: controls.sealKept ? 'encrypted' : 'plaintext'
+          },
+          socket,
+          payload
+        );
       });
     } catch (error) {
       if (isCurrentRoom()) {
@@ -213,18 +224,23 @@ export async function keepLocalRoomVersion(
   try {
     const response = await desktopFetch(
       `/api/projects/${encodeURIComponent(projectId)}/collaboration`,
-      {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          clientId: body.clientId,
-          baseVersion: body.baseVersion,
-          document: body.document,
-          leaseId: body.leaseId,
-          conflictResolution: body.conflictResolution,
-          savedRevisionId: body.savedRevisionId
-        })
-      }
+      // Plaintext (a sealed version never comes this way): refused at its
+      // send if the project is pinned as encrypted meanwhile.
+      projectRequest(
+        { projectId, payload: 'plaintext' },
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            clientId: body.clientId,
+            baseVersion: body.baseVersion,
+            document: body.document,
+            leaseId: body.leaseId,
+            conflictResolution: body.conflictResolution,
+            savedRevisionId: body.savedRevisionId
+          })
+        }
+      )
     );
     const message = parseServerMessage(await response.text(), projectId);
     // The room can change while either the request or its body is read.

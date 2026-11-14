@@ -18,7 +18,16 @@ import {
   type ArtifactRecord,
   type ReferenceImageId
 } from '@openzcad/shared';
-import { api, rememberProjectFormats } from './api';
+import {
+  api,
+  beginEncryptCutover,
+  E2EE_CUTOVER_UNRESOLVED_CODE,
+  E2EE_FORMAT_MISMATCH_CODE,
+  forgetEncryptedProject,
+  rememberProjectFormats,
+  treatProjectAsNotEncrypted
+} from './api';
+import { ENCRYPTED_PROJECT_PIN_FAILED_KEY } from './e2ee/encryptedProjectPins';
 import {
   pageBlobReferences,
   setEncryptedBlobReader
@@ -482,7 +491,7 @@ it('backs up an encrypted project’s sources through its blob reader', async ()
   } finally {
     setEncryptedBlobReader(null);
     pageBlobReferences.clear();
-    rememberProjectFormats([{ projectId: document.projectId }]);
+    forgetEncryptedProject(document.projectId);
   }
 });
 
@@ -530,7 +539,7 @@ it('includes encrypted archived exports in a bulk backup without plaintext reque
   } finally {
     setEncryptedBlobReader(null);
     pageBlobReferences.clear();
-    rememberProjectFormats([{ projectId: document.projectId }]);
+    forgetEncryptedProject(document.projectId);
   }
 });
 
@@ -704,3 +713,67 @@ it.each([true, false])(
     if (!identical) expect(backupFileBytes(backup.files[0]!)).toEqual(original);
   }
 );
+
+it('refuses a cloud backup while this device cannot tell which projects are encrypted', async () => {
+  const document = createProjectDocument('Plain', toUserId('user_backup'));
+  // An earlier load could not save a pin: every project is held encrypted,
+  // so a cloud backup cannot know which files belong in it.
+  window.localStorage.setItem(ENCRYPTED_PROJECT_PIN_FAILED_KEY, '1');
+  try {
+    vi.resetModules();
+    const { createProjectBackup: backupAfterReload } =
+      await import('./projectBackupTransfer');
+    const { E2EE_PIN_STORAGE_UNAVAILABLE_CODE } = await import('./api');
+    await expect(backupAfterReload(document, true)).rejects.toMatchObject({
+      code: E2EE_PIN_STORAGE_UNAVAILABLE_CODE
+    });
+    // A local-only backup does not depend on the cloud format.
+    await expect(backupAfterReload(document, false)).resolves.toContain(
+      'openzcad-project'
+    );
+  } finally {
+    window.localStorage.removeItem(ENCRYPTED_PROJECT_PIN_FAILED_KEY);
+  }
+});
+
+it('refuses a cloud backup of a project whose switch to encryption did not finish here', async () => {
+  const document = createProjectDocument('Switching', toUserId('user_backup'));
+  beginEncryptCutover(document.projectId);
+  const listArtifacts = vi.spyOn(api, 'listArtifacts');
+  try {
+    // A complete backup cannot tell which files the account stores.
+    const refused = createProjectBackup(document, true);
+    await expect(refused).rejects.toMatchObject({
+      code: E2EE_CUTOVER_UNRESOLVED_CODE
+    });
+    await expect(refused).rejects.toThrow(/export the copy on this device/);
+    expect(listArtifacts).not.toHaveBeenCalled();
+    // What this device holds can still be exported.
+    const local = await createProjectBackup(document, true, undefined, {
+      localOnly: true
+    });
+    expect(JSON.parse(local)).toMatchObject({
+      format: 'openzcad-project',
+      document: { projectId: document.projectId }
+    });
+  } finally {
+    listArtifacts.mockRestore();
+    treatProjectAsNotEncrypted(document.projectId, { confirmedByOwner: true });
+  }
+});
+
+it('refuses a cloud backup of a project the account lists otherwise than this device keeps it', async () => {
+  const document = createProjectDocument('Disagreed', toUserId('user_backup'));
+  rememberProjectFormats([{ projectId: document.projectId, storageFormat: 2 }]);
+  rememberProjectFormats([{ projectId: document.projectId, storageFormat: 1 }]);
+  try {
+    await expect(createProjectBackup(document, true)).rejects.toMatchObject({
+      code: E2EE_FORMAT_MISMATCH_CODE
+    });
+    await expect(
+      createProjectBackup(document, true, undefined, { localOnly: true })
+    ).resolves.toContain('openzcad-project');
+  } finally {
+    forgetEncryptedProject(document.projectId);
+  }
+});

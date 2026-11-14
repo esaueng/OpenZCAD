@@ -23,6 +23,7 @@ import { readSharedSourceBytes } from './sharedSourceDownload';
 import { sharedBlobPath } from './e2ee/sharedSnapshotLoader';
 import { createContentBlobsApi } from './e2ee/encryptedContentBlobs';
 import { LEGACY_PROJECT_FRAME_CONTENT_TYPE } from '@openzcad/shared';
+import { projectRequest } from './projectWriteGate';
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: vi.fn() }));
@@ -343,11 +344,13 @@ describe('desktop bridge', () => {
     });
 
     await expect(
-      desktopFetch('/api/uploads', {
-        method: 'POST',
-        body,
-        signal: controller.signal
-      })
+      desktopFetch(
+        '/api/uploads',
+        projectRequest(
+          { projectId: 'proj_upload', payload: 'plaintext' },
+          { method: 'POST', body, signal: controller.signal }
+        )
+      )
     ).rejects.toMatchObject({ name: 'AbortError' });
     expect(invoke).not.toHaveBeenCalled();
   });
@@ -559,7 +562,13 @@ describe('desktop bridge', () => {
       vi.mocked(invoke).mockReset();
       vi.mocked(invoke).mockResolvedValue({ status: 200, body: [] });
       await desktopFetch(path, init);
-      expect(nativeCommands(), path).toEqual(['desktop_api_request']);
+      // A project write readies its credential first (projectWriteGate.ts).
+      expect(
+        nativeCommands().filter(
+          (command) => command !== 'desktop_prepare_access'
+        ),
+        path
+      ).toEqual(['desktop_api_request']);
     }
   });
 

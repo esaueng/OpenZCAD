@@ -73,7 +73,19 @@ import { splitProjectStorageUpload } from '@openzcad/persistence';
 import { desktopFetch, isDesktopApp } from './desktopBridge';
 import type * as EncryptedProjectsModule from './e2ee/encryptedProjects';
 import { localStoragePreferencePins } from './e2ee/preferencePins';
+import {
+  contentFreeCreate,
+  installProjectWriteGate,
+  projectRequest,
+  type ProjectRequestContext,
+  type ProjectWriteCheck
+} from './projectWriteGate';
+import {
+  localStorageEncryptedProjectPins,
+  type EncryptedProjectPinStore
+} from './e2ee/encryptedProjectPins';
 import { unlockedAccount } from './e2ee/unlockedKeys';
+import { assistantConsentCurrent } from './e2ee/assistantConsentPins';
 import type { EncryptedProjectStore } from './e2ee/encryptedProjectStore';
 import { getKeySessionRevision, isCurrentKeySession } from './e2ee/keySession';
 import { prioritizeShelfEntries } from './projectShelf';
@@ -336,8 +348,57 @@ async function requestJson<T>(
 
 // --- Encrypted projects (ADR-024 Phase 4) ---------------------------------
 
-/** Projects the account stores end-to-end encrypted (format 2), by id. */
-const encryptedProjectIds = new Set<string>();
+/**
+ * Projects this device holds as end-to-end encrypted (format 2), pinned
+ * across reloads (`e2ee/encryptedProjectPins.ts`). Loaded on first use.
+ */
+let pinStore: EncryptedProjectPinStore | null = null;
+const encryptedProjectPins = () =>
+  (pinStore ??= localStorageEncryptedProjectPins());
+
+/**
+ * Pinned projects the account's latest listing reports as not encrypted,
+ * with the name it listed. They stay encrypted here; a failed write names
+ * the disagreement, and Settings › Encryption offers the owner's reset.
+ */
+const formatMismatchIds = new Map<string, string | null>();
+
+/**
+ * Listeners to changes of this device's pins as the page shows them (a
+ * disagreement found, an unfinished cutover, a reset): the shelf, the
+ * editor and Settings › Encryption re-read them.
+ */
+const pinListeners = new Set<() => void>();
+let pinRevision = 0;
+function pinsChanged(): void {
+  pinRevision += 1;
+  for (const listener of pinListeners) listener();
+}
+
+/** Another tab's pins changed: re-read. */
+function onPinStorage(event: StorageEvent): void {
+  if (event.key === null || event.key.startsWith('openzcad:e2ee-encrypt')) {
+    pinsChanged();
+  }
+}
+
+export function subscribeEncryptedPins(listener: () => void): () => void {
+  if (!pinListeners.size && typeof window !== 'undefined') {
+    window.addEventListener('storage', onPinStorage);
+  }
+  pinListeners.add(listener);
+  return () => {
+    pinListeners.delete(listener);
+    if (!pinListeners.size && typeof window !== 'undefined') {
+      window.removeEventListener('storage', onPinStorage);
+    }
+  };
+}
+
+/** Bumped on every change {@link subscribeEncryptedPins} reports. */
+export function encryptedPinsRevision(): number {
+  return pinRevision;
+}
 
 /**
  * The encrypted-project module, loaded the first time a format-2 project is
@@ -347,16 +408,505 @@ let encryptedModule: Promise<typeof EncryptedProjectsModule> | null = null;
 const encryptedProjects = () =>
   (encryptedModule ??= import('./e2ee/encryptedProjects'));
 
-/** Records which listed projects are encrypted, for the dispatch below. */
+/**
+ * Records which listed projects are encrypted, for the dispatch below. A
+ * project is pinned as encrypted the first time it is seen so; a listing
+ * that later reports another format does not unpin it (only this device's
+ * own decrypt run does, `forgetEncryptedProject`), it is only noted as a
+ * disagreement.
+ */
 export function rememberProjectFormats(
   projects: readonly Pick<ProjectSummary, 'projectId' | 'storageFormat'>[]
 ): void {
+  const pins = encryptedProjectPins();
+  let changed = false;
+  const wasDegraded = pins.degraded;
   for (const project of projects) {
     if (project.storageFormat === PROJECT_STORAGE_FORMAT_E2EE_V1) {
-      encryptedProjectIds.add(project.projectId);
-    } else {
-      encryptedProjectIds.delete(project.projectId);
+      pins.pin(project.projectId);
+      changed = formatMismatchIds.delete(project.projectId) || changed;
+    } else if (pins.has(project.projectId)) {
+      const name = (project as { name?: unknown }).name;
+      if (!formatMismatchIds.has(project.projectId)) changed = true;
+      formatMismatchIds.set(
+        project.projectId,
+        typeof name === 'string' ? name : null
+      );
     }
+  }
+  if (changed || pins.degraded !== wasDegraded) pinsChanged();
+}
+
+/**
+ * Pins one project as encrypted: this page created, copied or encrypted
+ * it, or a route answered that it is stored encrypted.
+ */
+export function rememberEncryptedProject(projectId: string): boolean {
+  const pins = encryptedProjectPins();
+  const wasDegraded = pins.degraded;
+  const changed = formatMismatchIds.delete(projectId);
+  const saved = pins.pin(projectId);
+  if (changed || pins.degraded !== wasDegraded) pinsChanged();
+  return saved;
+}
+
+/**
+ * Refuses unless the project's pin is saved on this device, pinning it
+ * first if it can: no encrypted project is opened, written, created or
+ * copied here unless a reload would still hold it as encrypted.
+ */
+export function requireDurablePin(projectId: string): void {
+  const pins = encryptedProjectPins();
+  if (pins.resetElsewhere(projectId)) {
+    throw pinsResetElsewhere({ projectId });
+  }
+  if (!pins.pinDurably(projectId)) {
+    throw pinStorageUnavailable();
+  }
+}
+
+/**
+ * Whether the project's content must stay encrypted on its way off this
+ * device: it is pinned as encrypted, its switch to encryption did not
+ * finish here, another tab reset it, or it came from such a project under
+ * a new or different id (`carryEncryptionRequirement`). Its plaintext is
+ * refused at every send, and its adoption is encrypted only.
+ */
+export function encryptionRequired(
+  projectId: string | null | undefined
+): boolean {
+  return projectId
+    ? encryptionHeldHere(projectId) ||
+        encryptedProjectPins().encryptionRequired(projectId)
+    : false;
+}
+
+/**
+ * Content of `sourceProjectId` is about to move under `destinationId` (a
+ * copy, a branch, a device copy, or an adoption the account answered with
+ * another project): when the source's content must stay encrypted, so must
+ * the destination's, recorded durably before anything is written under it,
+ * or this refuses and nothing is moved.
+ *
+ * `account`: the destination is a project the account holds (an adoption
+ * it redirected), so it is pinned as encrypted and only ever read and
+ * written through the encrypted routes. Otherwise (a device copy, which
+ * has no account copy yet) only the requirement is recorded: its plaintext
+ * is refused everywhere and its adoption is encrypted only. Never lifted
+ * by the account's word; only the owner's confirmed reset, or this
+ * device's own decrypt run, drops either.
+ */
+export function carryEncryptionRequirement(
+  sourceProjectId: string,
+  destinationId: string,
+  options: { account: boolean }
+): void {
+  if (!encryptionRequired(sourceProjectId)) return;
+  const pins = encryptedProjectPins();
+  if (pins.resetElsewhere(destinationId)) {
+    throw pinsResetElsewhere({ projectId: destinationId });
+  }
+  const wasDegraded = pins.degraded;
+  const saved = options.account
+    ? pins.pinDurably(destinationId)
+    : pins.requireEncryption(destinationId);
+  if (saved && options.account) formatMismatchIds.delete(destinationId);
+  pinsChanged();
+  if (!saved) {
+    throw pins.resetElsewhere(destinationId)
+      ? pinsResetElsewhere({ projectId: destinationId })
+      : pinStorageUnavailable(
+          wasDegraded ? undefined : { projectId: destinationId }
+        );
+  }
+}
+
+/**
+ * Why this tab may not write the project now, if it may not: another tab
+ * reset its pin (or the store) since this tab first saw it, or its switch
+ * to end-to-end encryption has not been seen to finish on this device.
+ * Checked before every outbound write of the project
+ * (`projectWriteGate.ts`), and by the room before it submits.
+ */
+export function projectWriteRefusal(
+  projectId: string | null | undefined
+): ApiError | null {
+  if (!projectId) return null;
+  const pins = encryptedProjectPins();
+  if (pins.resetElsewhere(projectId)) return pinsResetElsewhere({ projectId });
+  if (pins.cutoverUnresolved(projectId)) {
+    // Unreadable storage reads as unresolved: say why instead.
+    return pins.degraded
+      ? pinStorageUnavailable({ projectId })
+      : cutoverUnresolvedError({ projectId });
+  }
+  return null;
+}
+
+/** Throws {@link projectWriteRefusal}'s refusal, if there is one. */
+export function requireProjectWritable(projectId: string): void {
+  const refusal = projectWriteRefusal(projectId);
+  if (refusal) throw refusal;
+}
+
+export const E2EE_PLAINTEXT_REFUSED_CODE = 'E2EE_PLAINTEXT_REFUSED';
+
+/**
+ * A request decided as plaintext before the project was pinned as
+ * encrypted here (by a listing or another tab) reached its send: refused
+ * there, so nothing went out without encryption.
+ */
+export function plaintextRefusedError(
+  details?: Record<string, unknown>
+): ApiError {
+  return new ApiError(
+    409,
+    'This device now keeps this project end-to-end encrypted, so nothing was sent without encryption. Your changes stay on this device; try again to send them encrypted.',
+    E2EE_PLAINTEXT_REFUSED_CODE,
+    details
+  );
+}
+
+/**
+ * The gate's check, run synchronously immediately before each request or
+ * room frame is sent (`projectWriteGate.ts`): no write of a project this
+ * tab may not write, and no plaintext of a project this device holds as
+ * encrypted now, whatever its sender decided before it awaited anything.
+ * This device's own decrypt run stages plaintext before its cutover.
+ *
+ * An assistant request is not a write of its project, but carries its
+ * content in plaintext: refused for a project this device holds as
+ * encrypted, or whose switch to encryption did not finish here, unless
+ * this account's assistant consent verified for that very project
+ * (ADR-024 Phase 6), and refused in a tab that must reload first.
+ */
+const checkProjectSend: ProjectWriteCheck = ({
+  projectId,
+  payload,
+  migration,
+  assistant
+}) => {
+  if (assistant) {
+    const pins = encryptedProjectPins();
+    if (pins.resetElsewhere(projectId)) throw pinsResetElsewhere({ projectId });
+    if (!encryptionRequired(projectId)) return;
+    // The consent this request was verified for must still be this
+    // device's latest word for the project now, at the send: a Stop saved
+    // or recorded since (in any tab) refuses it.
+    if (assistant.consent && assistantConsentCurrent(assistant.consent)) {
+      return;
+    }
+    throw plaintextRefusedError({ projectId });
+  }
+  requireProjectWritable(projectId);
+  if (
+    payload === 'plaintext' &&
+    migration !== 'decrypt' &&
+    (isEncryptedProject(projectId) ||
+      encryptedProjectPins().encryptionRequired(projectId))
+  ) {
+    throw plaintextRefusedError({ projectId });
+  }
+};
+
+installProjectWriteGate(checkProjectSend);
+
+/** A request carrying the project's content in plaintext. */
+const plaintextOf = (projectId: string, init: RequestInit = {}): RequestInit =>
+  projectRequest({ projectId, payload: 'plaintext' }, init);
+
+/**
+ * Whether another tab reset pins this tab still holds in memory, so this
+ * tab writes none of those projects until it reloads.
+ */
+export function encryptedPinsResetElsewhere(): boolean {
+  return encryptedProjectPins().staleTab;
+}
+
+/** Whether another tab reset this project's pin (or the store). */
+export function encryptedProjectResetElsewhere(
+  projectId: string | null | undefined
+): boolean {
+  return projectId ? encryptedProjectPins().resetElsewhere(projectId) : false;
+}
+
+/** Refuses before an encrypted create or copy while pins are unavailable. */
+function requirePinStorage(): void {
+  if (encryptedProjectPins().degraded) throw pinStorageUnavailable();
+}
+
+/**
+ * Pins a project this page just created or copied encrypted, or refuses.
+ * The document is this page's own; the summary's id comes from the
+ * account's answer, so one that names another project is refused rather
+ * than pinned in its place.
+ */
+function pinCreated<
+  T extends {
+    project: { projectId: string };
+    document: { projectId: string };
+  }
+>(created: T): T {
+  if (created.project.projectId !== created.document.projectId) {
+    throw new ApiError(
+      502,
+      'The account answered for another project than the one this browser created. Nothing more was sent.'
+    );
+  }
+  if (!rememberEncryptedProject(created.document.projectId)) {
+    throw encryptedProjectPins().resetElsewhere(created.document.projectId)
+      ? pinsResetElsewhere({ projectId: created.document.projectId })
+      : pinStorageUnavailable();
+  }
+  return created;
+}
+
+/**
+ * Unpins a project once this device's own decrypt run has cut it over to
+ * plaintext (ADR-024 Phase 7, slice 7-3). Nothing else may call this: no
+ * account record of the reverse path is signed by the owner, so the
+ * account's word alone never turns encryption off for a project here.
+ */
+export function forgetEncryptedProject(projectId: string): void {
+  // Its format is known here now, so no encrypt switch is left unknown.
+  encryptedProjectPins().resetProject(projectId);
+  formatMismatchIds.delete(projectId);
+  pinsChanged();
+}
+
+/**
+ * Just before this device's encrypt run asks for a project's cutover:
+ * records that its outcome is unknown here, then saves the pin, or refuses
+ * (nothing is asked). Both stay whatever the cutover answers, since a lost
+ * or failed answer does not prove the cutover did not happen; only
+ * {@link finishEncryptCutover} or the owner's confirmed reset clears them.
+ */
+export function beginEncryptCutover(projectId: string): void {
+  const pins = encryptedProjectPins();
+  try {
+    if (pins.resetElsewhere(projectId)) throw pinsResetElsewhere({ projectId });
+    if (pins.degraded || !pins.markCutoverUnresolved(projectId)) {
+      throw pinStorageUnavailable();
+    }
+    requireDurablePin(projectId);
+  } finally {
+    pinsChanged();
+  }
+}
+
+/**
+ * This device's own cutover call, in the run that asked for it, answered
+ * success: pinned, and no longer unresolved. The one way besides the
+ * owner's confirmed reset that the record is cleared.
+ *
+ * A migration status that says the project is cut over, purging or done
+ * never clears it: that answer is not bound to this device's attempt.
+ * Nor can this device check the switch for itself: the encrypted versions
+ * it staged verify and decrypt whether or not the cutover happened (the
+ * account holds them from staging either way), and nothing the account
+ * returns proves its plaintext copy was retired. A resume that finds the
+ * switch done only pins the project ({@link noteEncryptCutoverFound}).
+ */
+export function finishEncryptCutover(projectId: string): void {
+  if (!rememberEncryptedProject(projectId)) throw pinStorageUnavailable();
+  encryptedProjectPins().resolveCutover(projectId);
+  pinsChanged();
+}
+
+/**
+ * A migration status says the project is cut over: pinned as encrypted
+ * (the account's word may only add protection), with any unresolved
+ * record kept, since the status is not this device's own cutover answer.
+ */
+export function noteEncryptCutoverFound(projectId: string): void {
+  rememberEncryptedProject(projectId);
+}
+
+/**
+ * Whether this device asked for the project's encrypt cutover and has not
+ * seen it complete: the project is held as encrypted here, but may still be
+ * stored in plaintext.
+ */
+export function encryptCutoverUnresolved(
+  projectId: string | null | undefined
+): boolean {
+  return projectId
+    ? encryptedProjectPins().cutoverUnresolved(projectId)
+    : false;
+}
+
+/** Why an encrypted project is stuck on this device, if it is. */
+export type EncryptedPinProblem = 'unresolved' | 'mismatch';
+
+export function encryptedPinProblem(
+  projectId: string | null | undefined
+): EncryptedPinProblem | null {
+  if (!projectId) return null;
+  if (encryptCutoverUnresolved(projectId)) return 'unresolved';
+  return formatMismatchIds.has(projectId) && isEncryptedProject(projectId)
+    ? 'mismatch'
+    : null;
+}
+
+/**
+ * Pinned projects the account's latest listing reports as not encrypted,
+ * with the name it listed (null when it listed none).
+ */
+export function formatMismatchedProjects(): {
+  projectId: string;
+  name: string | null;
+}[] {
+  return [...formatMismatchIds]
+    .filter(([projectId]) => isEncryptedProject(projectId))
+    .map(([projectId, name]) => ({ projectId, name }));
+}
+
+/**
+ * What only the owner can give: their explicit confirmation, in this
+ * page's own dialog, of a reset that the account's word never triggers.
+ */
+export interface OwnerConfirmation {
+  readonly confirmedByOwner: true;
+}
+
+/**
+ * "Treat as not encrypted on this device": the owner confirmed that this
+ * device should stop holding the project as encrypted. Drops its pin and
+ * its unfinished-cutover record; its next listing decides its format, as
+ * for a project this device never saw. Never called on the account's
+ * word (a listing, a status, an abandoned migration).
+ */
+export function treatProjectAsNotEncrypted(
+  projectId: string,
+  confirmation: OwnerConfirmation
+): void {
+  if (confirmation.confirmedByOwner !== true) return;
+  encryptedProjectPins().resetProject(projectId);
+  formatMismatchIds.delete(projectId);
+  pinsChanged();
+}
+
+/**
+ * The owner confirmed "Treat as not encrypted on this device" for this
+ * device's pin storage after a pin could not be saved: every saved pin is
+ * kept, and the projects whose pins were lost are pinned again by the next
+ * listing that reports them encrypted. Whether the pins work normally now.
+ */
+export function resetEncryptedProjectPins(
+  confirmation: OwnerConfirmation
+): boolean {
+  if (confirmation.confirmedByOwner !== true) return false;
+  const healthy = encryptedProjectPins().resetDegraded();
+  pinsChanged();
+  return healthy;
+}
+
+export const E2EE_FORMAT_MISMATCH_CODE = 'E2EE_FORMAT_MISMATCH';
+export const E2EE_PIN_STORAGE_UNAVAILABLE_CODE = 'E2EE_PIN_STORAGE_UNAVAILABLE';
+export const E2EE_CUTOVER_UNRESOLVED_CODE = 'E2EE_CUTOVER_UNRESOLVED';
+export const E2EE_PINS_RESET_ELSEWHERE_CODE = 'E2EE_PINS_RESET_ELSEWHERE';
+
+/**
+ * Another tab reset what this tab holds of the project's encryption: this
+ * tab sends nothing for it until it reloads.
+ */
+export function pinsResetElsewhere(
+  details?: Record<string, unknown>
+): ApiError {
+  return new ApiError(
+    409,
+    'This project’s encryption setting was reset in another OpenZCAD tab, so this tab sent nothing. Reload this tab before making changes. Your work on this device is kept.',
+    E2EE_PINS_RESET_ELSEWHERE_CODE,
+    details
+  );
+}
+
+/** The codes whose recovery is "Treat as not encrypted on this device". */
+export function isEncryptedPinProblemError(error: unknown): boolean {
+  return (
+    error instanceof ApiError &&
+    (error.code === E2EE_FORMAT_MISMATCH_CODE ||
+      error.code === E2EE_PIN_STORAGE_UNAVAILABLE_CODE ||
+      error.code === E2EE_CUTOVER_UNRESOLVED_CODE)
+  );
+}
+
+/**
+ * Whether this device cannot read its encrypted-project pins, or once
+ * could not save one, so it holds every project as encrypted. Work that
+ * must know a project's real format (a complete backup) refuses meanwhile.
+ */
+export function encryptedProjectPinsUnavailable(): boolean {
+  return encryptedProjectPins().degraded;
+}
+
+export function pinStorageUnavailable(
+  details?: Record<string, unknown>
+): ApiError {
+  return new ApiError(
+    409,
+    'This device could not save which projects are end-to-end encrypted (its site storage is blocked or full), so it treats every project as encrypted and sent nothing without encryption. Your work on this device is kept. Allow site storage and free up space, then choose “Treat as not encrypted on this device” in Settings › Encryption. Do not clear this site’s data: it holds unsynced work and this device’s encryption keys.',
+    E2EE_PIN_STORAGE_UNAVAILABLE_CODE,
+    details
+  );
+}
+
+/**
+ * A pinned project's encrypted write or read failed while the account
+ * lists it as not encrypted, or while this device cannot read or save its
+ * pins and so holds every project as encrypted: said plainly, since
+ * nothing went to the plaintext routes instead.
+ */
+function withFormatMismatch(projectId: string, error: unknown): unknown {
+  if (encryptedProjectPins().resetElsewhere(projectId)) {
+    return pinsResetElsewhere(
+      error instanceof ApiError ? error.details : undefined
+    );
+  }
+  if (encryptedProjectPinsUnavailable()) {
+    return pinStorageUnavailable(
+      error instanceof ApiError ? error.details : undefined
+    );
+  }
+  if (encryptCutoverUnresolved(projectId)) {
+    return cutoverUnresolvedError(
+      error instanceof ApiError ? error.details : undefined
+    );
+  }
+  if (!formatMismatchIds.has(projectId)) return error;
+  return new ApiError(
+    409,
+    'This device keeps this project end-to-end encrypted, but your account now lists it as not encrypted, so nothing was sent without encryption. Your changes stay on this device. If you stopped encrypting it on another device, choose “Treat as not encrypted on this device”.',
+    E2EE_FORMAT_MISMATCH_CODE,
+    error instanceof ApiError ? error.details : undefined
+  );
+}
+
+/**
+ * A project whose switch to end-to-end encryption this device asked for
+ * and has not seen finish: it is held as encrypted here, so it is neither
+ * saved nor backed up as plaintext until the switch is retried or reset.
+ */
+export function cutoverUnresolvedError(
+  details?: Record<string, unknown>
+): ApiError {
+  return new ApiError(
+    409,
+    'The switch to end-to-end encryption didn’t finish on this device, so it keeps this project encrypted and sent nothing without encryption. Your changes stay on this device. Retry encrypting it in Settings › Encryption, or choose “Treat as not encrypted on this device”.',
+    E2EE_CUTOVER_UNRESOLVED_CODE,
+    details
+  );
+}
+
+/** Runs an encrypted-route call, naming a format disagreement if it fails. */
+async function viaEncryptedRoute<T>(
+  projectId: string,
+  call: () => Promise<T>
+): Promise<T> {
+  try {
+    return await call();
+  } catch (error) {
+    throw withFormatMismatch(projectId, error);
   }
 }
 
@@ -378,9 +928,30 @@ export function encryptedLocalOnly(what: string): ApiError {
   );
 }
 
-/** Whether this page knows the project is stored encrypted (format 2). */
+/**
+ * Whether this device holds the project as stored encrypted (format 2):
+ * pinned when first seen so, and kept across reloads and listings.
+ */
 export function isEncryptedProject(projectId: string | null | undefined) {
-  return projectId ? encryptedProjectIds.has(projectId) : false;
+  return projectId ? encryptedProjectPins().has(projectId) : false;
+}
+
+/**
+ * Whether this device holds what it knows of the project's encryption: it
+ * is pinned as encrypted, its switch to encryption did not finish here, or
+ * another tab reset it. A cached copy of such a project is never device
+ * only, whatever the account's listing leaves out: it is not offered to
+ * be saved to the account as a new project, and an adoption of it is only
+ * ever encrypted (`adoptProject`).
+ */
+export function encryptionHeldHere(
+  projectId: string | null | undefined
+): boolean {
+  return (
+    isEncryptedProject(projectId) ||
+    encryptCutoverUnresolved(projectId) ||
+    encryptedProjectResetElsewhere(projectId)
+  );
 }
 
 export const E2EE_PREFERENCE_UNVERIFIED_CODE = 'E2EE_PREFERENCE_UNVERIFIED';
@@ -484,14 +1055,19 @@ async function byFormat<T>(
   encrypted: (store: EncryptedProjectStore) => Promise<T>,
   options: { fallback: boolean }
 ): Promise<T> {
-  const viaStore = async () =>
-    encrypted(await (await encryptedProjects()).encryptedProjectStore());
-  if (encryptedProjectIds.has(projectId)) return viaStore();
+  const viaStore = () =>
+    viaEncryptedRoute(projectId, async () => {
+      requireDurablePin(projectId);
+      return encrypted(
+        await (await encryptedProjects()).encryptedProjectStore()
+      );
+    });
+  if (isEncryptedProject(projectId)) return viaStore();
   try {
     return await plaintext();
   } catch (error) {
     if (options.fallback && isProjectFormatUnsupportedError(error)) {
-      encryptedProjectIds.add(projectId);
+      rememberEncryptedProject(projectId);
       return viaStore();
     }
     throw error;
@@ -659,6 +1235,9 @@ export const api = {
               onEntry(projectId, entry) {
                 const project = projects.get(projectId);
                 if (!project || !isCurrent()) return;
+                // Decrypted details only for a project this device keeps
+                // as encrypted, whatever the listing says of its format.
+                if (!encryptedProjectPins().pinDurably(projectId)) return;
                 progress.onVerified({
                   ...project,
                   name: entry.name,
@@ -681,6 +1260,11 @@ export const api = {
         await encryptedProjects()
       ).encryptedProjectShelf(encryptedProjectInfo);
       if (!isCurrent()) return unverified();
+      // Decrypted details only for a project this device keeps as
+      // encrypted, whatever the listing says of its format.
+      for (const id of [...shelf.keys()]) {
+        if (!encryptedProjectPins().pinDurably(id)) shelf.delete(id);
+      }
       for (const id of shelf.keys()) pending.delete(id);
       return {
         ...unverified(),
@@ -711,25 +1295,31 @@ export const api = {
    */
   createProject: async (payload: CreateProjectRequest) => {
     const encrypted = async () => {
-      const created = await (
-        await encryptedProjects()
-      ).createEncryptedProject(payload);
-      rememberProjectFormats([created.project]);
-      return created;
+      requirePinStorage();
+      return pinCreated(
+        await (await encryptedProjects()).createEncryptedProject(payload)
+      );
     };
     // A device document too: the encrypted store refuses it without sending.
     if (await encryptsNewProjects()) {
       return encrypted();
     }
+    // The new project's own document, in plaintext; a create without one
+    // has the account build it, and sends no project's content.
+    const created = payload.initialDocument ?? payload.document;
     try {
-      return await requestJson<CreateProjectResponse>('/api/projects', {
+      const init: RequestInit = {
         method: 'POST',
         body: JSON.stringify(
           payload.initialDocument
             ? await withSplitStorage(payload, 'initialDocument')
             : payload
         )
-      });
+      };
+      return await requestJson<CreateProjectResponse>(
+        '/api/projects',
+        created ? plaintextOf(created.projectId, init) : contentFreeCreate(init)
+      );
     } catch (error) {
       if (
         !payload.document &&
@@ -751,6 +1341,13 @@ export const api = {
    * checkpoint. The device id travels beside it as the account's retry key,
    * with the archived import ids localization removed, so a discarded mesh
    * upload still refuses the adoption.
+   *
+   * The device copy of a project this device holds as encrypted (an
+   * account listing that leaves it out makes it look device only) is only
+   * ever adopted encrypted, and not at all while its switch to encryption
+   * is unfinished here or another tab reset it. The plaintext adoption
+   * declares the device project it comes from, so the gate checks that
+   * project again immediately before the document is sent.
    */
   adoptProject: (
     document: ProjectDocument,
@@ -771,23 +1368,26 @@ export const api = {
         ownerUserId,
         prepared.name
       );
-      return requestJson<CreateProjectResponse>('/api/projects', {
-        method: 'POST',
-        body: JSON.stringify(
-          await withSplitStorage(
-            {
-              name: prepared.name,
-              adoptionProtocolVersion: 2,
-              localProjectId: prepared.projectId,
-              ...(options.sourceArtifactIds?.length
-                ? { sourceArtifactIds: options.sourceArtifactIds }
-                : {}),
-              document: withoutDerivedProjection(adopted)
-            },
-            'document'
+      return requestJson<CreateProjectResponse>(
+        '/api/projects',
+        plaintextOf(prepared.projectId, {
+          method: 'POST',
+          body: JSON.stringify(
+            await withSplitStorage(
+              {
+                name: prepared.name,
+                adoptionProtocolVersion: 2,
+                localProjectId: prepared.projectId,
+                ...(options.sourceArtifactIds?.length
+                  ? { sourceArtifactIds: options.sourceArtifactIds }
+                  : {}),
+                document: withoutDerivedProjection(adopted)
+              },
+              'document'
+            )
           )
-        )
-      });
+        })
+      );
     };
     // An account that encrypts new projects (decision D2) is never sent
     // the plaintext document: the project is created encrypted (slice 4-8),
@@ -798,16 +1398,17 @@ export const api = {
         ownerUserId,
         prepared.name
       );
-      const created = await (
-        await encryptedProjects()
-      ).createEncryptedProject({
-        name: prepared.name,
-        adoptionProtocolVersion: 2,
-        localProjectId: prepared.projectId,
-        document: withoutDerivedProjection(adopted)
-      });
-      rememberProjectFormats([created.project]);
-      return created;
+      requirePinStorage();
+      return pinCreated(
+        await (
+          await encryptedProjects()
+        ).createEncryptedProject({
+          name: prepared.name,
+          adoptionProtocolVersion: 2,
+          localProjectId: prepared.projectId,
+          document: withoutDerivedProjection(adopted)
+        })
+      );
     };
     // A minted id that already names a project is a one-in-2^122 collision:
     // mint another once rather than failing the save.
@@ -828,7 +1429,15 @@ export const api = {
         throw error;
       }
     };
-    return encryptsNewProjects().then((encrypts) => adopt(encrypts));
+    // Whether the adoption must be encrypted: the device project's own pin
+    // or its carried requirement first (a copy of an encrypted project),
+    // then the account's setting (decision D2).
+    const encrypts = async (): Promise<boolean> => {
+      requireProjectWritable(prepared.projectId);
+      if (encryptionRequired(prepared.projectId)) return true;
+      return encryptsNewProjects();
+    };
+    return encrypts().then((encrypted) => adopt(encrypted));
   },
   loadProject: (projectId: string) =>
     byFormat(
@@ -858,6 +1467,8 @@ export const api = {
     projectId: string,
     options: Omit<DuplicateProjectRequest, 'projectId'> = {}
   ) => {
+    // An encrypted copy names its source only inside its frame.
+    requireProjectWritable(projectId);
     if (isEncryptedProject(projectId)) {
       // The page decrypted the source and built the copy; the account
       // copies its files byte for byte (slice 4-8). It cannot build one.
@@ -867,17 +1478,18 @@ export const api = {
           'An end-to-end encrypted project is copied in the browser.'
         );
       }
-      const created = await (
-        await encryptedProjects()
-      ).copyEncryptedProject({
-        sourceProjectId: projectId,
-        document: withoutDerivedProjection(options.document),
-        ...(options.revisionId === undefined
-          ? {}
-          : { revisionId: options.revisionId })
-      });
-      rememberProjectFormats([created.project]);
-      return created;
+      requirePinStorage();
+      return pinCreated(
+        await (
+          await encryptedProjects()
+        ).copyEncryptedProject({
+          sourceProjectId: projectId,
+          document: withoutDerivedProjection(options.document),
+          ...(options.revisionId === undefined
+            ? {}
+            : { revisionId: options.revisionId })
+        })
+      );
     }
     if (await encryptsNewProjects()) {
       throw new ApiError(
@@ -901,14 +1513,14 @@ export const api = {
     };
     return requestJson<DuplicateProjectResponse>(
       `/api/projects/${encodeURIComponent(projectId)}/duplicate`,
-      {
+      plaintextOf(projectId, {
         method: 'POST',
         body: JSON.stringify(
           request.document
             ? await withSplitStorage(request, 'document')
             : request
         )
-      }
+      })
     );
   },
   /** The project's retained save states, newest first, without documents. */
@@ -976,10 +1588,14 @@ export const api = {
    * the minted records with the trimmed reason it receives.
    */
   saveRevision: async (payload: SaveRevisionRequest) => {
-    if (encryptedProjectIds.has(payload.projectId)) {
-      return (
-        await (await encryptedProjects()).encryptedProjectStore()
-      ).saveRevision(payload);
+    // Before anything is sealed or recorded, not only before it is sent.
+    requireProjectWritable(payload.projectId);
+    if (isEncryptedProject(payload.projectId)) {
+      return viaEncryptedRoute(payload.projectId, async () =>
+        (
+          await (await encryptedProjects()).encryptedProjectStore()
+        ).saveRevision(payload)
+      );
     }
     const reason = payload.reason.trim();
     const document =
@@ -988,7 +1604,7 @@ export const api = {
         : payload.document;
     return requestJson<ProjectDocument>(
       `/api/projects/${encodeURIComponent(payload.projectId)}/revisions`,
-      {
+      plaintextOf(payload.projectId, {
         method: 'POST',
         body: JSON.stringify(
           await withSplitStorage(
@@ -1002,7 +1618,7 @@ export const api = {
             'document'
           )
         )
-      }
+      })
     );
   },
   /**
@@ -1018,67 +1634,90 @@ export const api = {
     payload: SaveProjectDocumentRequest,
     options?: { keepalive?: boolean }
   ) => {
-    if (encryptedProjectIds.has(payload.projectId)) {
-      return (
-        await (await encryptedProjects()).encryptedProjectStore()
-      ).saveProjectDocument(payload);
+    // Before anything is sealed or recorded, not only before it is sent.
+    requireProjectWritable(payload.projectId);
+    if (isEncryptedProject(payload.projectId)) {
+      return viaEncryptedRoute(payload.projectId, async () =>
+        (
+          await (await encryptedProjects()).encryptedProjectStore()
+        ).saveProjectDocument(payload)
+      );
     }
     const body = JSON.stringify(await withSplitStorage(payload, 'document'));
     return requestJson<SaveProjectDocumentResponse>(
       `/api/projects/${encodeURIComponent(payload.projectId)}/document`,
-      {
+      plaintextOf(payload.projectId, {
         method: 'PUT',
         body,
         keepalive:
           options?.keepalive === true && new Blob([body]).size <= 60_000
-      }
+      })
     );
   },
   createUploadSession: async (payload: CreateUploadSessionRequest) => {
     if (isEncryptedProject(payload.projectId)) {
       throw encryptedLocalOnly('Files');
     }
-    return requestJson<CreateUploadSessionResponse>('/api/uploads', {
-      method: 'POST',
-      body: JSON.stringify(payload)
-    });
+    return requestJson<CreateUploadSessionResponse>(
+      '/api/uploads',
+      plaintextOf(payload.projectId, {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      })
+    );
   },
-  uploadArtifact: async (uploadUrl: string, body: Blob) => {
+  /**
+   * The upload-session requests: each carries the context its uploader
+   * declared (`uploadArtifactBody`), since the session's routes name no
+   * project.
+   */
+  uploadArtifact: async (
+    uploadUrl: string,
+    body: Blob,
+    context: ProjectRequestContext
+  ) => {
     if (
       !isDesktopApp() &&
       new URL(uploadUrl, window.location.href).origin !== window.location.origin
     ) {
       throw new Error('Artifact upload URL must use the application origin.');
     }
-    const response = await desktopFetch(uploadUrl, {
-      method: 'PUT',
-      headers: { 'content-type': body.type || 'application/octet-stream' },
-      body
-    });
+    const response = await desktopFetch(
+      uploadUrl,
+      projectRequest(context, {
+        method: 'PUT',
+        headers: { 'content-type': body.type || 'application/octet-stream' },
+        body
+      })
+    );
     if (!response.ok) {
       throw new Error(
         (await response.text()) || `Upload failed (${response.status}).`
       );
     }
   },
-  createMultipartUpload: (uploadSessionId: string) =>
+  createMultipartUpload: (
+    uploadSessionId: string,
+    context: ProjectRequestContext
+  ) =>
     requestJson<CreateMultipartUploadResponse>(
       `/api/uploads/${encodeURIComponent(uploadSessionId)}/multipart`,
-      { method: 'POST' }
+      projectRequest(context, { method: 'POST' })
     ),
   uploadArtifactPart: async (
     uploadSessionId: string,
     uploadId: string,
     partNumber: number,
-    body: Blob
+    body: Blob,
+    context: ProjectRequestContext
   ): Promise<UploadedArtifactPart> => {
     const response = await desktopFetch(
       `/api/uploads/${encodeURIComponent(uploadSessionId)}/parts/${partNumber}?uploadId=${encodeURIComponent(uploadId)}`,
-      {
+      projectRequest(context, {
         method: 'PUT',
         headers: { 'content-type': 'application/octet-stream' },
         body
-      }
+      })
     );
     if (!response.ok) {
       throw new Error(
@@ -1090,15 +1729,16 @@ export const api = {
   },
   completeMultipartUpload: async (
     uploadSessionId: string,
-    payload: CompleteMultipartUploadRequest
+    payload: CompleteMultipartUploadRequest,
+    context: ProjectRequestContext
   ) => {
     const response = await desktopFetch(
       `/api/uploads/${encodeURIComponent(uploadSessionId)}/multipart/complete`,
-      {
+      projectRequest(context, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(payload)
-      }
+      })
     );
     if (!response.ok) {
       throw new Error(
@@ -1107,10 +1747,14 @@ export const api = {
       );
     }
   },
-  abortMultipartUpload: async (uploadSessionId: string, uploadId: string) => {
+  abortMultipartUpload: async (
+    uploadSessionId: string,
+    uploadId: string,
+    context: ProjectRequestContext
+  ) => {
     const response = await desktopFetch(
       `/api/uploads/${encodeURIComponent(uploadSessionId)}/multipart?uploadId=${encodeURIComponent(uploadId)}`,
-      { method: 'DELETE' }
+      projectRequest(context, { method: 'DELETE' })
     );
     if (!response.ok) {
       throw new Error(
@@ -1120,10 +1764,13 @@ export const api = {
     }
   },
   finalizeArtifact: (payload: FinalizeArtifactRequest) =>
-    requestJson<{ artifactId: string | null }>('/api/artifacts/finalize', {
-      method: 'POST',
-      body: JSON.stringify(payload)
-    }),
+    requestJson<{ artifactId: string | null }>(
+      '/api/artifacts/finalize',
+      plaintextOf(payload.projectId, {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      })
+    ),
   discardMeshPayload: async (
     projectId: string,
     artifactId: string,

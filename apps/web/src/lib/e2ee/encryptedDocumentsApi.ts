@@ -24,6 +24,7 @@ import {
 } from '@openzcad/shared';
 import { ApiError } from '../api';
 import { desktopFetch } from '../desktopBridge';
+import { projectRequest } from '../projectWriteGate';
 
 type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -91,6 +92,15 @@ export function createEncryptedDocumentsApi(
 ): EncryptedDocumentsApi {
   const base = (projectId: string) =>
     `/api/e2ee/projects/${encodeURIComponent(projectId)}`;
+  /**
+   * Every write here is the project's encrypted content, declared as such
+   * for the project it writes: a create names the id this page chose for
+   * the new project (its frame's metadata), so the gate checks that
+   * project at the send and the desktop host sends it once with a readied
+   * credential, never refreshing and replaying it.
+   */
+  const encrypted = (projectId: string, init: RequestInit): RequestInit =>
+    projectRequest({ projectId, payload: 'encrypted' }, init);
   const send = async (
     path: string,
     init: RequestInit = {}
@@ -105,13 +115,18 @@ export function createEncryptedDocumentsApi(
   const sendJson = async <T>(
     path: string,
     method = 'GET',
-    body?: unknown
+    body?: unknown,
+    projectId?: string
   ): Promise<T> => {
-    const response = await send(path, {
+    const init: RequestInit = {
       method,
       headers: { 'content-type': 'application/json' },
       ...(body === undefined ? {} : { body: JSON.stringify(body) })
-    });
+    };
+    const response = await send(
+      path,
+      projectId === undefined ? init : encrypted(projectId, init)
+    );
     try {
       return (await response.json()) as T;
     } catch {
@@ -119,16 +134,20 @@ export function createEncryptedDocumentsApi(
     }
   };
   const sendFrame = <T>(
+    projectId: string,
     path: string,
     method: string,
     metadata: unknown,
     envelope: Uint8Array
   ) =>
-    send(path, {
-      method,
-      headers: { 'content-type': E2EE_FRAME_CONTENT_TYPE },
-      body: encodeE2eeFrame(metadata, envelope)
-    }).then((response) => response.json() as Promise<T>);
+    send(
+      path,
+      encrypted(projectId, {
+        method,
+        headers: { 'content-type': E2EE_FRAME_CONTENT_TYPE },
+        body: encodeE2eeFrame(metadata, envelope)
+      })
+    ).then((response) => response.json() as Promise<T>);
   const readFrame = async <T>(response: Response) => {
     try {
       const { metadata, payload } = decodeE2eeFrame(
@@ -141,11 +160,29 @@ export function createEncryptedDocumentsApi(
   };
   return {
     create: (metadata, envelope) =>
-      sendFrame('/api/e2ee/projects', 'POST', metadata, envelope),
+      sendFrame(
+        metadata.projectId,
+        '/api/e2ee/projects',
+        'POST',
+        metadata,
+        envelope
+      ),
     saveDocument: (projectId, version, envelope) =>
-      sendFrame(`${base(projectId)}/document`, 'PUT', { version }, envelope),
+      sendFrame(
+        projectId,
+        `${base(projectId)}/document`,
+        'PUT',
+        { version },
+        envelope
+      ),
     saveRevision: (projectId, version, envelope) =>
-      sendFrame(`${base(projectId)}/revisions`, 'POST', { version }, envelope),
+      sendFrame(
+        projectId,
+        `${base(projectId)}/revisions`,
+        'POST',
+        { version },
+        envelope
+      ),
     loadDocument: async (projectId, since) =>
       readFrame<E2eeDocumentHeadMetadata>(
         await send(
@@ -175,6 +212,6 @@ export function createEncryptedDocumentsApi(
     },
     info: (projectId) => sendJson(`${base(projectId)}/info`),
     saveInfo: (projectId, upload) =>
-      sendJson(`${base(projectId)}/info`, 'PUT', upload)
+      sendJson(`${base(projectId)}/info`, 'PUT', upload, projectId)
   };
 }
