@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { BodyId, ParamValue } from '@openzcad/shared';
+import type { BodyId, FeatureData, ParamValue } from '@openzcad/shared';
 import {
   threadAnchor,
   threadChamferedEnds,
@@ -1367,5 +1367,106 @@ describe('in-place pipe threads (schema v57)', () => {
         { faces: [{ ...pipe, cylinder: unknown }] }
       )
     ).toMatch(/^Sized from the Ø13.716 mm face · /);
+  });
+});
+
+describe('in-place thread edits keep a stored end kind (review #1458)', () => {
+  // A runout stored at the face's start, where the span begins (a thread
+  // against a shoulder), on the Ø6 × 12 boss. The panel's reach rule would
+  // chamfer that end; an edit that leaves the extent as stored keeps it.
+  const stored = (
+    fields: Partial<ThreadRequest> = {}
+  ): Extract<FeatureData, { featureKind: 'thread' }> => ({
+    featureKind: 'thread',
+    targetBodyId: 'body_a' as BodyId,
+    faceHash: 9,
+    profile: 'iso-metric',
+    length: 5,
+    runoutStart: true,
+    ...fields
+  });
+  const finish = (
+    saved: Extract<FeatureData, { featureKind: 'thread' }>,
+    changes: {
+      options?: Record<string, string>;
+      values?: Record<string, ParamValue>;
+      units?: 'mm' | 'inch';
+    } = {}
+  ) => {
+    const units = changes.units ?? 'mm';
+    const values = {
+      ...initialValues({
+        length: saved.length ?? 12,
+        offset: saved.offset ?? 0
+      }),
+      ...(changes.values ?? {})
+    };
+    const options = {
+      ...defaults(),
+      ...threadEditOptions(saved, evaluate, units),
+      ...(changes.options ?? {})
+    };
+    const ctx = {
+      ...CTX,
+      saved,
+      units,
+      touched: ['length', 'offset', ...Object.keys(changes.values ?? {})]
+    };
+    return (
+      threadSpec.request(
+        { ...SLOTS, faces: [BOSS] },
+        values,
+        options,
+        ctx,
+        numbersOf(values)
+      ) as { thread: ThreadRequest }
+    ).thread;
+  };
+
+  it('keeps the runout with an explicit zero offset, which the request leaves out', () => {
+    const thread = finish(stored({ offset: 0 }));
+    expect(thread.runoutStart).toBe(true);
+    expect(thread.chamferStart).toBeUndefined();
+    expect(thread.offset).toBeUndefined();
+  });
+
+  it('keeps it through a profile-, pitch- or fit-only edit', () => {
+    const edits: Record<string, string>[] = [
+      { profile: 'printable' },
+      { profile: 'custom' },
+      { size: 'M8' },
+      { fit: 'loose' }
+    ];
+    for (const options of edits) {
+      const thread = finish(stored({ offset: 0 }), { options });
+      expect(thread.runoutStart, JSON.stringify(options)).toBe(true);
+      expect(thread.chamferStart, JSON.stringify(options)).toBeUndefined();
+    }
+  });
+
+  it('keeps it in an inch document with a typed length equal to the stored one', () => {
+    const inch = stored({ length: 5 / 25.4, offset: 0 });
+    // Typed again, the same length comes back off by a rounding step from
+    // its unit conversion.
+    const typed = 5 / 25.4 + 1e-15;
+    expect(typed).not.toBe(5 / 25.4);
+    const thread = finish(inch, { units: 'inch', values: { length: typed } });
+    expect(thread.runoutStart).toBe(true);
+    expect(thread.chamferStart).toBeUndefined();
+  });
+
+  it('keeps it on a stored whole-face span whose length is written out', () => {
+    const thread = finish(stored({ length: 12 }));
+    expect(thread.runoutStart).toBe(true);
+    expect(thread.chamferStart).toBeUndefined();
+  });
+
+  it('lets the reach decide again once the extent is edited', () => {
+    const shorter = finish(stored({ offset: 0 }), { values: { length: 4 } });
+    expect(shorter.chamferStart).toBe(true);
+    expect(shorter.runoutStart).toBeUndefined();
+    const setOff = finish(stored(), { values: { offset: 1 } });
+    // Set off from the start, that end stops short: a runout by the reach.
+    expect(setOff.runoutStart).toBe(true);
   });
 });

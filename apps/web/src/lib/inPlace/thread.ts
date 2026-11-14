@@ -945,7 +945,9 @@ export function threadRequestFields(
  */
 export function keepStoredEndKinds(
   thread: ThreadRequest,
-  saved: FeatureData | undefined
+  saved: FeatureData | undefined,
+  /** The face's length, which an absent length runs to from the offset. */
+  faceLength?: number
 ): ThreadRequest {
   if (saved?.featureKind !== 'thread') return thread;
   const sameFace =
@@ -953,10 +955,26 @@ export function keepStoredEndKinds(
     (thread.faceReference !== undefined &&
       saved.faceReference !== undefined &&
       thread.faceReference.lineageName === saved.faceReference.lineageName);
+  // Compared as they build, not as they are written: an absent offset is
+  // 0 and an absent anchor the start, an absent length the rest of the
+  // face from the offset, and numbers that differ only by rounding (a value
+  // typed in another unit) are the same. Expressions compare as written.
+  const offsetOf = (data: Pick<ThreadRequest, 'offset'>) => data.offset ?? 0;
+  const lengthOf = (data: Pick<ThreadRequest, 'offset' | 'length'>) => {
+    if (data.length !== undefined) return data.length;
+    const offset = offsetOf(data);
+    return faceLength !== undefined && typeof offset === 'number'
+      ? faceLength - offset
+      : undefined;
+  };
+  const same = (a: ParamValue | undefined, b: ParamValue | undefined) =>
+    typeof a === 'number' && typeof b === 'number'
+      ? Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(a), Math.abs(b))
+      : a === b;
   const sameExtent =
     sameFace &&
-    thread.length === saved.length &&
-    thread.offset === saved.offset &&
+    same(offsetOf(thread), offsetOf(saved)) &&
+    same(lengthOf(thread), lengthOf(saved)) &&
     (thread.anchor ?? 'start') === (saved.anchor ?? 'start');
   if (!sameExtent) return thread;
   const next: ThreadRequest = { ...thread };
@@ -1306,7 +1324,8 @@ export const threadSpec: InPlaceToolSpec = {
             threadSpan.extent(face, values, ctx, numbers)
           )
         },
-        ctx.saved
+        ctx.saved,
+        threadFace(face)?.length
       )
     };
   },
