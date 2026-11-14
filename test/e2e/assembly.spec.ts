@@ -288,7 +288,7 @@ for (const width of [1440, 390]) {
       // An edited local copy still opens in the sample's workspace, even
       // after the user changed modes and collapsed its pivot controls.
       await panel(page)
-        .getByRole('button', { name: /^Revolute 1 / })
+        .getByRole('button', { name: /^Pivot / })
         .click();
       await expect(angle).toHaveCount(0);
       await page.getByRole('button', { name: 'Build', exact: true }).click();

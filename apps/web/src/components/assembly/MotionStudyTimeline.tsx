@@ -28,8 +28,10 @@ import {
   type AssemblyCouplingEnd,
   type AssemblyMotionStudy,
   type AssemblyPlayback,
-  type AssemblySet
+  type AssemblySet,
+  type UnitSystem
 } from '@openzcad/shared';
+import { unitSymbol } from '../../lib/assembly/assemblyUi';
 import {
   assemblyRuntime,
   getAssemblyRuntime,
@@ -76,6 +78,8 @@ export interface MotionStudyTimelineProps {
    * instead of filling the container the layout gives it.
    */
   floating?: boolean;
+  /** The document's unit: a slide's values are in it. */
+  lengthUnit?: UnitSystem;
 }
 
 const PLAYBACK_MODES: {
@@ -147,7 +151,8 @@ export function MotionStudyTimeline({
   execute,
   onClose,
   readOnly = false,
-  floating = false
+  floating = false,
+  lengthUnit = 'mm'
 }: MotionStudyTimelineProps) {
   const selectedStudyId = useAssemblyRuntime((s) => s.selectedStudyId);
   const studyTimeS = useAssemblyRuntime((s) => s.studyTimeS);
@@ -531,10 +536,10 @@ export function MotionStudyTimeline({
     : undefined;
 
   const keyUnit = selectedKeyTrack
-    ? dofUnit(selectedKeyJoint?.kind ?? 'revolute', selectedKeyTrack.dof) ===
-      'deg'
-      ? '°'
-      : 'mm'
+    ? unitSymbol(
+        dofUnit(selectedKeyJoint?.kind ?? 'revolute', selectedKeyTrack.dof),
+        lengthUnit
+      )
     : '';
 
   return (
@@ -802,7 +807,7 @@ export function MotionStudyTimeline({
                         ? `${joint.name} · ${dofName(joint.kind, dof)}`
                         : joint.name}
                       <span className="motion-track-menu-unit">
-                        {dofUnit(joint.kind, dof) === 'deg' ? '°' : 'mm'}
+                        {unitSymbol(dofUnit(joint.kind, dof), lengthUnit)}
                       </span>
                     </button>
                   ))}
@@ -875,7 +880,7 @@ export function MotionStudyTimeline({
                   {name}
                 </button>
                 <span className="motion-track-value">
-                  {formatDofValue(evaluateTrack(track, t), unit)}
+                  {formatDofValue(evaluateTrack(track, t), unit, lengthUnit)}
                 </span>
                 {!readOnly && (
                   <button
@@ -934,7 +939,7 @@ export function MotionStudyTimeline({
                         top: `${keyValueY(track, key.value)}%`
                       }}
                       aria-pressed={selected}
-                      aria-label={`Key at ${formatStudyTime(key.t)} s, ${formatDofValue(key.value, unit)}`}
+                      aria-label={`Key at ${formatStudyTime(key.t)} s, ${formatDofValue(key.value, unit, lengthUnit)}`}
                       onPointerDown={(event) =>
                         onKeyPointerDown(event, trackIndex, keyIndex)
                       }

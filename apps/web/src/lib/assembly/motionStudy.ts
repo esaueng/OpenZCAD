@@ -22,8 +22,10 @@ import {
   type AssemblyKeyframe,
   type AssemblyMotionStudy,
   type AssemblySet,
-  type AssemblyTrack
+  type AssemblyTrack,
+  type UnitSystem
 } from '@openzcad/shared';
+import { unitSymbol } from './assemblyUi';
 
 /**
  * AS07 motion study editing. Pure: every helper takes a study and returns a
@@ -650,10 +652,14 @@ export function formatStudyTime(t: number): string {
   return (Math.round(t * 100) / 100).toFixed(2);
 }
 
-export function formatDofValue(value: number, unit: AssemblyDofUnit): string {
+export function formatDofValue(
+  value: number,
+  unit: AssemblyDofUnit,
+  lengthUnit: UnitSystem = 'mm'
+): string {
   const rounded = Math.round(value * 100) / 100;
   const text = Object.is(rounded, -0) ? '0' : String(rounded);
-  return unit === 'deg' ? `${text}°` : `${text} mm`;
+  return unit === 'deg' ? `${text}°` : `${text} ${unitSymbol(unit, lengthUnit)}`;
 }
 
 const DOF_NAMES: Readonly<Record<AssemblyJointKind, readonly string[]>> = {
