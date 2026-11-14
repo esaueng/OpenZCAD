@@ -496,14 +496,7 @@ describe('an account that holds encrypted projects without the opt-in', () => {
 
   it.each([
     ['503s', () => json({ error: 'down' }, 503)],
-    ['network failures', () => Promise.reject(new TypeError('offline'))],
-    [
-      'an HTML page',
-      () =>
-        new Response('<!doctype html>', {
-          headers: { 'content-type': 'text/html' }
-        })
-    ]
+    ['network failures', () => Promise.reject(new TypeError('offline'))]
   ] as const)(
     'sends no device project when the encryption routes answer %s',
     async (_, failure) => {
@@ -529,14 +522,24 @@ describe('an account that holds encrypted projects without the opt-in', () => {
     }
   );
 
-  it('reads as not encrypted only from a Worker without encryption routes', async () => {
-    vi.mocked(desktopFetch).mockImplementation(async (input) =>
-      input === '/api/session'
-        ? json({ userId: 'user_1' })
-        : json({ error: 'Not found' }, 404)
-    );
-    await expect(encryptsAccountLibrary()).resolves.toBe(false);
-  });
+  it.each([
+    ['404s', () => json({ error: 'Not found' }, 404)],
+    [
+      'a static host’s HTML page',
+      () =>
+        new Response('<!doctype html>', {
+          headers: { 'content-type': 'text/html' }
+        })
+    ]
+  ] as const)(
+    'reads as not encrypted only where nothing serves the encryption routes: %s',
+    async (_, answer) => {
+      vi.mocked(desktopFetch).mockImplementation(async (input) =>
+        input === '/api/session' ? json({ userId: 'user_1' }) : answer()
+      );
+      await expect(encryptsAccountLibrary()).resolves.toBe(false);
+    }
+  );
 
   it('refuses rather than guessing when the answer cannot be read', async () => {
     vi.mocked(desktopFetch).mockImplementation(async (input) => {
