@@ -221,7 +221,7 @@ export function JointDetails({
           <span>
             Recording into {study.name}: a value set here is keyed at{' '}
             {formatStudyTime(Math.min(studyTimeS, study.durationS))} s. Close
-            the study to change where the joint rests.
+            the animation to change where the joint rests.
           </span>
         </p>
       ) : null}

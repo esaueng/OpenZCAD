@@ -59,7 +59,7 @@ describe('Set up motion card', () => {
       within(joints).getByRole('button', { name: 'Set up motion' })
     ).toBeInTheDocument();
     // The header's Motion button joins once a part moves.
-    expect(screen.queryByRole('button', { name: 'Motion' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Make it move' })).toBeNull();
   });
 
   it('defaults to lifting the free part clear of the fixed one, then creates and plays it', () => {
@@ -121,7 +121,7 @@ describe('Set up motion card', () => {
       (commands[0]?.payload as { joint: { id: string } }).joint.id
     );
     expect(screen.queryByRole('region', { name: 'Set up motion' })).toBeNull();
-    expect(screen.getByRole('button', { name: 'Motion' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Make it move' })).toBeEnabled();
     expect(status.at(-1)).toBe(
       'Blade B slide is ready. Space plays it; Esc stops.'
     );

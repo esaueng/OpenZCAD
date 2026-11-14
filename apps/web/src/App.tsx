@@ -32578,6 +32578,15 @@ export function App() {
               collaboration.status === 'read-only')
           }
           collaboratorCount={collaboration.members.length}
+          shareSession={
+            shareSession
+              ? {
+                  // A plaintext link always opens in Tweak.
+                  mode: shareSession.encryptedMode ?? 'tweak',
+                  onMakeCopy: requestShareCopy
+                }
+              : null
+          }
           projectSharingEnabled={
             cloudFunctionsEnabled && projectSharingPreferenceEnabled
           }
@@ -32687,7 +32696,8 @@ export function App() {
             onViewActivityLog={openActivityLog}
             onExportStep={() => void handleExportStep()}
             onOpenMeshExport={() => setMeshExportOpen(true)}
-            share={shareSession ? { onMakeCopy: requestShareCopy } : null}
+            // Make a copy is the top bar's labelled button now (I73).
+            share={null}
             panelOpen={panelState.tweakPanelOpen}
             onTogglePanel={() =>
               setPanelState((current) => ({
@@ -33348,14 +33358,7 @@ export function App() {
             modeOverlay={
               modelingLocked ? (
                 <>
-                  {viewMode && (
-                    <ViewModeRail
-                      {...partsProps}
-                      {...(shareSession?.encryptedMode
-                        ? { onMakeCopy: requestShareCopy }
-                        : {})}
-                    />
-                  )}
+                  {viewMode && <ViewModeRail {...partsProps} />}
                   {viewMode && (
                     <AssemblyPlayer
                       projectId={doc.projectId}

@@ -24,6 +24,7 @@ function renderTopBar(
     exportUnavailableReason?: string | null;
     projectName?: string;
     encryption?: EncryptionIndicatorProps | null;
+    shareSession?: { mode: 'view' | 'tweak'; onMakeCopy(): void } | null;
     buildModeDisabledReason?: string;
     warningCount?: number;
     reloadPrompt?: 'update' | 'interrupted' | null;
@@ -79,6 +80,7 @@ function renderTopBar(
       collaborationFailure={options.collaborationFailure}
       readOnlySeat={options.readOnlySeat}
       collaboratorCount={0}
+      shareSession={options.shareSession ?? null}
       projectSharingEnabled
       workspaceMode="build"
       canRenameProject
@@ -990,6 +992,29 @@ describe('TopBar encryption indicator', () => {
     expect(lock.closest('details')).not.toHaveAttribute('open');
     expect(lock).toHaveFocus();
   });
+});
+
+// Design review I73: a share-link visitor saw "Local only", "Signed out" and
+// "Offline", none of them true of the session, and an unlabelled Make a copy.
+describe('TopBar share-link session', () => {
+  it.each([
+    ['tweak', 'Shared model · Tweak only'],
+    ['view', 'Shared model · View only']
+  ] as const)(
+    'names a %s session and offers a labelled Make a copy',
+    (mode, label) => {
+      const onMakeCopy = vi.fn();
+      renderTopBar({ saveState: 'local', shareSession: { mode, onMakeCopy } });
+      expect(screen.getByRole('status', { name: label })).toBeVisible();
+      expect(screen.queryByText('Local only')).toBeNull();
+      expect(screen.queryByText('Signed out')).toBeNull();
+      expect(
+        screen.queryByRole('button', { name: /Sign in to share/ })
+      ).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'Make a copy' }));
+      expect(onMakeCopy).toHaveBeenCalledOnce();
+    }
+  );
 });
 
 // Design review I8: one name for the unreachable cloud, and no call to an

@@ -78,10 +78,15 @@ export function roundTime(t: number): number {
   return Math.round(t * 1e6) / 1e6;
 }
 
-/** "Motion 1", "Motion 2"…: the next unused default study name. */
+/**
+ * "Animation 1", "Animation 2"…: the next unused default study name. A study
+ * is an "animation" on screen, so "Motion" no longer names three things
+ * (review I57).
+ */
 export function nextStudyName(set: AssemblySet | undefined): string {
   const names = new Set((set?.studies ?? []).map((s) => s.name));
-  for (let n = 1; ; n += 1) if (!names.has(`Motion ${n}`)) return `Motion ${n}`;
+  for (let n = 1; ; n += 1)
+    if (!names.has(`Animation ${n}`)) return `Animation ${n}`;
 }
 
 /**
