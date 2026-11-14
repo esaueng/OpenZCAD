@@ -11,6 +11,7 @@ import {
 } from 'react';
 import { ownedTopologyName } from '../lib/topologyLabels';
 import { modelingRefusalSummary } from '../lib/modelingRefusal';
+import { plainRefusal } from '../lib/refusalLanguage';
 import type { InPlacePanelSectionView } from '../lib/inPlace/panel';
 import { spokenValueName } from '../lib/inPlace/chipNames';
 import {
@@ -219,14 +220,22 @@ export function InPlaceCommandBar({
   const refusalSummary = refusal
     ? modelingRefusalSummary(refusal, title)
     : null;
+  // The rebuild's warning arrives as written: an adapter sentence, or the
+  // kernel's own words ("Remus draft refused: … corner 139 …"). Only a plain
+  // sentence leads; the kernel's words move behind Technical details
+  // (QA 2026-11-14 finding #18).
+  const plain = refusal
+    ? plainRefusal(
+        blendRefusalText(
+          refusal.replace(/^-?(?:\d+\.?\d*|\.\d+);\s*/, ''),
+          null
+        )
+      )
+    : null;
   const shown =
     refusalSummary ??
-    (refusal
-      ? blendRefusalText(
-          refusal.replace(/^-?(?:\d+\.?\d*|\.\d+);\s*/, ''),
-          unitLabel
-        )
-      : null);
+    (plain ? blendRefusalText(plain.message, unitLabel) : null);
+  const technical = refusalSummary || plain?.detail ? refusal : null;
   const smaller = refusal && onTrySize ? smallerSizeIn(refusal) : null;
   const hintRef = useRef<HTMLSpanElement>(null);
   const hintId = useId();
@@ -313,12 +322,11 @@ export function InPlaceCommandBar({
           {unitLabel ? ` ${unitLabel}` : ''}
         </button>
       ) : null}
-      {refusalSummary && (
+      {technical && (
         <details className="in-place-command-options">
           <summary>Technical details</summary>
           <div className="in-place-command-options-panel">
-            <p>{refusalSummary}</p>
-            <p>{refusal}</p>
+            <p>{technical}</p>
           </div>
         </details>
       )}

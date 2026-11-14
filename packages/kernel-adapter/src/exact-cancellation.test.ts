@@ -380,6 +380,36 @@ describe('syncDocument cancellation', { timeout: 120_000 }, () => {
     }
   });
 
+  // QA 2026-11-14: the `[geometry rebuild]` debug line logged a feature as
+  // `completed` while the UI showed it failed. A completed feature stage now
+  // says which it was.
+  it('reports whether each completed feature built or failed', async () => {
+    let document = twoBoxes();
+    document = booleanBodies(document, {
+      name: 'Remove all',
+      operation: 'subtract',
+      targetBodyIds: [...document.bodyOrder] as BodyId[]
+    }).document;
+    const adapter = await createExactKernelAdapter({
+      historyCheckpointLimit: 0
+    });
+    try {
+      const completed: RebuildProgress[] = [];
+      await adapter.syncDocument(document, (progress) => {
+        if (progress.stage === 'feature' && progress.status === 'completed') {
+          completed.push(progress);
+        }
+      });
+      expect(completed.map(({ name, outcome }) => [name, outcome])).toEqual([
+        ['Box A', 'built'],
+        ['Box B', 'built'],
+        ['Remove all', 'failed']
+      ]);
+    } finally {
+      adapter.dispose();
+    }
+  });
+
   it('a stale generation is dropped and the next sync matches', async () => {
     const document = twoBoxes();
     const adapter = await createExactKernelAdapter({
