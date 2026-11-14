@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { activeIsolatedBodyId, toggleBodyIsolation } from './bodyIsolation';
+import {
+  activeIsolatedBodyId,
+  bodyIsolationState,
+  persistedHiddenBodyIds,
+  toggleBodyIsolation
+} from './bodyIsolation';
 
 const bodies = ['a', 'b', 'c', 'd'];
 
@@ -122,8 +127,8 @@ describe('toggleBodyIsolation', () => {
     expect(
       activeIsolatedBodyId(bodies, step.hidden, step.hidden, step.isolation)
     ).toBe('a');
-    // A manual Show, a newly created body, an off parameter or a removed body
-    // must not leave an Exit isolation control attached to the wrong view.
+    // A manual Show, an off parameter or a removed body must not leave an
+    // Exit isolation control attached to the wrong view.
     expect(
       activeIsolatedBodyId(
         bodies,
@@ -132,6 +137,7 @@ describe('toggleBodyIsolation', () => {
         step.isolation
       )
     ).toBeNull();
+    // A body created while isolated joins the view; isolation goes on.
     expect(
       activeIsolatedBodyId(
         [...bodies, 'new'],
@@ -139,7 +145,7 @@ describe('toggleBodyIsolation', () => {
         step.hidden,
         step.isolation
       )
-    ).toBeNull();
+    ).toBe('a');
     expect(
       activeIsolatedBodyId(bodies, new Set(bodies), step.hidden, step.isolation)
     ).toBeNull();
@@ -151,5 +157,96 @@ describe('toggleBodyIsolation', () => {
         step.isolation
       )
     ).toBeNull();
+  });
+});
+
+// QA 2026-11-14 #17: isolating, then creating or editing a feature, ended
+// isolation silently and left every other body hidden, through a reload.
+describe('isolation across model changes', () => {
+  const before = new Set(['c']);
+  const enter = toggleBodyIsolation(bodies, 'a', before, before, null);
+
+  it('keeps isolating when a feature adds a body, and Exit restores the earlier set', () => {
+    const withNew = [...bodies, 'new'];
+    expect(
+      bodyIsolationState(
+        withNew,
+        enter.hidden,
+        enter.hidden,
+        enter.isolation,
+        false
+      )
+    ).toEqual({ kind: 'active', bodyId: 'a' });
+    const leave = toggleBodyIsolation(
+      withNew,
+      'a',
+      enter.hidden,
+      enter.hidden,
+      enter.isolation
+    );
+    expect(leave.entered).toBe(false);
+    expect([...leave.hidden]).toEqual(['c']);
+  });
+
+  it('puts back the earlier hidden set when the model takes the isolated body away', () => {
+    const state = bodyIsolationState(
+      ['b', 'c', 'd'],
+      enter.hidden,
+      enter.hidden,
+      enter.isolation,
+      false
+    );
+    expect(state).toEqual({
+      kind: 'ended',
+      reason: 'removed',
+      hidden: new Set(['c'])
+    });
+    // A parameter switching the body off ends it the same way.
+    expect(
+      bodyIsolationState(
+        bodies,
+        new Set([...enter.hidden, 'a']),
+        enter.hidden,
+        enter.isolation,
+        false
+      )
+    ).toMatchObject({ kind: 'ended', reason: 'hidden' });
+  });
+
+  it('waits out a preview that drops the isolated body', () => {
+    expect(
+      bodyIsolationState(
+        ['b', 'c', 'd'],
+        enter.hidden,
+        enter.hidden,
+        enter.isolation,
+        true
+      )
+    ).toEqual({ kind: 'suspended' });
+  });
+
+  it('leaves a hidden set the user replaced as it is', () => {
+    expect(
+      bodyIsolationState(
+        bodies,
+        new Set(['c', 'd']),
+        new Set(['c', 'd']),
+        enter.isolation,
+        false
+      )
+    ).toEqual({ kind: 'replaced' });
+    expect(bodyIsolationState(bodies, before, before, null, false)).toEqual({
+      kind: 'none'
+    });
+  });
+
+  it('saves the hidden set from before isolating, never the isolated one', () => {
+    expect(persistedHiddenBodyIds(enter.hidden, enter.isolation)).toEqual(
+      before
+    );
+    // Once the user replaced the set, theirs is what is saved.
+    const manual = new Set(['b', 'c']);
+    expect(persistedHiddenBodyIds(manual, enter.isolation)).toBe(manual);
+    expect(persistedHiddenBodyIds(before, null)).toBe(before);
   });
 });

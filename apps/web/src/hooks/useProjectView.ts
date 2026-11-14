@@ -84,7 +84,17 @@ const NO_SKETCH_VISIBILITY: Readonly<Record<string, boolean>> = {};
  * that surround it. They now share one writer, so a field added to a saved
  * view cannot be persisted by one path and forgotten by the other.
  */
-export function useProjectView(projectId: string | null): ProjectView {
+export function useProjectView(
+  projectId: string | null,
+  /**
+   * The hidden-body set to save in place of the one on screen, when a
+   * temporary view (isolation) hides bodies the user did not choose to hide.
+   * The saved view and the account's resume state then carry the user's own
+   * set, so a reload never keeps that temporary hiding. It should return a
+   * stable set: the save effect re-runs when its identity changes.
+   */
+  savedHiddenBodyIds?: (onScreen: ReadonlySet<string>) => ReadonlySet<string>
+): ProjectView {
   const [projection, setProjection] = useState<ProjectionMode>('perspective');
   const [settings, setSettings] = useState<ViewerSettings>({
     showGrid: true,
@@ -127,6 +137,8 @@ export function useProjectView(projectId: string | null): ProjectView {
     };
   }, []);
 
+  const savedHidden = savedHiddenBodyIds?.(hiddenBodyIds) ?? hiddenBodyIds;
+
   function hiddenReferences(): ProjectViewState['hiddenReferences'] {
     return hiddenDatumIds.size || hiddenReferenceImageIds.size
       ? {
@@ -151,7 +163,7 @@ export function useProjectView(projectId: string | null): ProjectView {
       camera,
       projection: next?.projection ?? projection,
       settings: next?.settings ?? settings,
-      hiddenBodyIds: [...(next?.hiddenBodyIds ?? hiddenBodyIds)],
+      hiddenBodyIds: [...(next?.hiddenBodyIds ?? savedHidden)],
       hiddenReferences: references,
       ...(Object.keys(sketchVisibility).length > 0
         ? { sketchVisibility: { ...sketchVisibility } }
@@ -179,7 +191,7 @@ export function useProjectView(projectId: string | null): ProjectView {
   // `onCameraSettled` once the controller reports that motion has stopped.
   useEffect(persistCurrentView, [
     projectId,
-    hiddenBodyIds,
+    savedHidden,
     sketchVisibility,
     hiddenDatumIds,
     hiddenReferenceImageIds,
@@ -250,7 +262,7 @@ export function useProjectView(projectId: string | null): ProjectView {
             camera: cameraRef.current,
             projection,
             settings,
-            hiddenBodyIds: [...hiddenBodyIds],
+            hiddenBodyIds: [...savedHidden],
             ...(Object.keys(sketchVisibility).length > 0
               ? { sketchVisibility: { ...sketchVisibility } }
               : {})
