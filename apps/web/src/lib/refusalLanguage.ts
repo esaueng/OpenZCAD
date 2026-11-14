@@ -411,8 +411,16 @@ export function plainRefusal(
     ...(typed?.code ? { code: typed.code } : {})
   };
   // A lost selection is read by the card to know that no value can help; a
-  // parse error names the entity of the file that is broken. Both stay.
-  if (/no longer exists|^parse error:/.test(sentence)) {
+  // parse error names the entity of the file that is broken. Both stay. So
+  // do the STEP importer's own sentences, which name each solid it dropped
+  // and why: "it is non-manifold" there is the importer's diagnosis, not the
+  // kernel's, and a partial import that succeeded read as "The resulting
+  // body wouldn't be valid."
+  if (
+    /no longer exists|^parse error:|^STEP file contains no |^Body "[^"]*" imported, but /.test(
+      sentence
+    )
+  ) {
     return tail
       ? { message: sentence, detail: tail, ...classified }
       : { message: sentence, ...classified };
