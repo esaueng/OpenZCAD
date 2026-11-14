@@ -31,14 +31,16 @@ requests already running on an older configuration may finish under that policy.
 | Hosted AI requests per 10 minutes | 6            | 600             |
 | Weighted AI units per 10 minutes  | 24           | 2,400           |
 | Cloud projects                    | 100          | 10,000          |
-| Storage (one bucket, see below)   | 1 GiB        | 25 GiB          |
+| Storage (one bucket, see below)   | 100 MiB      | 1 GiB           |
 | Concurrent AI requests            | 2            | 8               |
 
 Storage is one allowance per account (migration
 `0049_unified_account_storage.sql`): projects, save states and source assets
 (plaintext or encrypted) and imports, exports and encrypted files, including
 pending upload reservations, all count against the same bucket. Free is
-1 GiB in total, not 1 GiB for projects plus 1 GiB for files.
+100 MiB in total, not 100 MiB for projects plus 100 MiB for files. The
+Free allowance is smaller than the largest supported STEP import (128 MiB),
+so a Free account cannot store an import that big.
 
 Account buckets remain the same across tier changes so an upgrade or downgrade
 cannot reset consumption. Accounts sharing an IP have independent allowances.

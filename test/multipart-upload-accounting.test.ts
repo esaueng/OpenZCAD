@@ -7,6 +7,7 @@ import {
   MAX_ACCOUNT_ARTIFACT_BYTES,
   MAX_ACTIVE_ARTIFACT_UPLOAD_SESSIONS,
   MAX_ARTIFACT_PART_BYTES,
+  MAX_ARTIFACT_UPLOAD_BYTES,
   toProjectId,
   toUserId,
   type UploadSessionRecord
@@ -14,6 +15,8 @@ import {
 
 const OWNER = toUserId('user_upload_owner');
 const OTHER_OWNER = toUserId('user_upload_other');
+/** One upload's own byte cap, which migration 0049's triggers hard-code. */
+const UPLOAD_CAP_BYTES = MAX_ARTIFACT_UPLOAD_BYTES;
 const PROJECT = toProjectId('project_upload_owner');
 const OTHER_PROJECT = toProjectId('project_upload_other');
 const MIGRATIONS = new URL('../apps/web/migrations/', import.meta.url);
@@ -872,7 +875,36 @@ describe('durable multipart quota accounting', () => {
        (upload_session_id, part_number, bytes, etag, reservation_token)
        VALUES (?, ?, ?, 'etag', ?)`
     );
-    // One full upload (32 parts of 32 MiB) fills the 1 GiB Free allowance.
+    // The Free allowance (100 MiB) stops reservations long before one
+    // upload's own 1 GiB cap, so a fourth 32 MiB part is refused.
+    for (let part = 1; part <= 3; part += 1) {
+      insertPart.run(
+        sessions[1].session.uploadSessionId,
+        part,
+        MAX_ARTIFACT_PART_BYTES,
+        `${sessions[1].uploadId}-${part}`
+      );
+    }
+    expect(MAX_ACCOUNT_ARTIFACT_BYTES).toBeLessThan(
+      4 * MAX_ARTIFACT_PART_BYTES
+    );
+    expect(() =>
+      insertPart.run(
+        sessions[1].session.uploadSessionId,
+        4,
+        MAX_ARTIFACT_PART_BYTES,
+        `${sessions[1].uploadId}-4`
+      )
+    ).toThrow('artifact_reserved_byte_limit');
+    sqlite.exec(`DELETE FROM artifact_upload_parts`);
+
+    // A Premium-sized stored allowance (1 GiB) makes the per-upload cap
+    // reachable: one full upload (32 parts of 32 MiB) fills both.
+    sqlite
+      .prepare(
+        'UPDATE users SET artifact_limit_bytes = ?, project_storage_limit_bytes = ? WHERE id = ?'
+      )
+      .run(UPLOAD_CAP_BYTES, UPLOAD_CAP_BYTES, OWNER);
     for (const target of sessions.slice(0, 1)) {
       for (let part = 1; part <= 32; part += 1) {
         insertPart.run(
@@ -891,7 +923,7 @@ describe('durable multipart quota accounting', () => {
         )
       ).toThrow('artifact_upload_byte_limit');
     }
-    expect(usage(sqlite)?.reserved_bytes).toBe(MAX_ACCOUNT_ARTIFACT_BYTES);
+    expect(usage(sqlite)?.reserved_bytes).toBe(UPLOAD_CAP_BYTES);
     expect(() =>
       insertPart.run(
         sessions[2].session.uploadSessionId,

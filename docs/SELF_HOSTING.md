@@ -270,6 +270,13 @@ Encryption migrations stage within the same allowance, projected to their
 cutover. See
 [account tiers](plans/account-tiers.md#storage-and-downgrade-behavior).
 
+**Storage allowances lowered** (no migration): Free accounts now get 100 MiB
+and Premium 1 GiB (previously 1 GiB and 25 GiB). The Worker brings each
+account's stored limits to the new values before that account's writes, and
+`PREMIUM_STORAGE_LIMIT_BYTES` still overrides the Premium default. Accounts
+already over the new allowance keep their data; only growth is refused until
+they free space.
+
 Export D1 before a migration or major upgrade:
 
 ```bash

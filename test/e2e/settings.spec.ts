@@ -1200,9 +1200,9 @@ for (const tier of ['free', 'premium'] as const) {
           entitlements: {
             tier,
             projectLimit: premium ? 10_000 : 100,
-            storageLimitBytes: (premium ? 25 : 1) * 1024 ** 3,
-            projectStorageLimitBytes: (premium ? 25 : 1) * 1024 ** 3,
-            artifactLimitBytes: (premium ? 25 : 1) * 1024 ** 3,
+            storageLimitBytes: premium ? 1024 ** 3 : 100 * 1024 ** 2,
+            projectStorageLimitBytes: premium ? 1024 ** 3 : 100 * 1024 ** 2,
+            artifactLimitBytes: premium ? 1024 ** 3 : 100 * 1024 ** 2,
             ai: {
               requestLimit: premium ? 600 : 6,
               costLimitUnits: premium ? 2400 : 24,
@@ -1222,7 +1222,7 @@ for (const tier of ['free', 'premium'] as const) {
       .filter({ hasText: 'Membership' });
     await expect(membership).toContainText(premium ? 'Premium' : 'Free');
     await expect(membership).toContainText(
-      `${premium ? '10,000' : '100'} cloud projects · ${premium ? '25' : '1'} GB storage · ${premium ? 600 : 6} hosted AI requests per 10 minutes`
+      `${premium ? '10,000' : '100'} cloud projects · ${premium ? '1 GB' : '100 MB'} storage · ${premium ? 600 : 6} hosted AI requests per 10 minutes`
     );
     // One allowance for everything the account stores, not two.
     await expect(membership).not.toContainText('cloud file storage');

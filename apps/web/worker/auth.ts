@@ -924,12 +924,29 @@ export async function verifyEmailLogin(
   const tokenHash = await sha256(sessionToken);
   const maxAgeSeconds = configuredSessionDays(env) * 24 * 60 * 60;
   const expiresAt = timestamp + maxAgeSeconds;
+  // Write the tier's limits with the row. The quota triggers read them, and
+  // the column defaults (2 GiB) would otherwise hold until a refresh, which
+  // a warm isolate's once-only bulk sync never repeats for a new account.
+  const limits = accountEntitlements(env, challenge.email);
   const decision = await env.DB.batch([
     env.DB.prepare(
-      `INSERT INTO users (id, email, created_at)
-         VALUES (?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET email = excluded.email`
-    ).bind(userId, challenge.email, new Date().toISOString()),
+      `INSERT INTO users
+           (id, email, created_at, artifact_limit_bytes, project_limit,
+            project_storage_limit_bytes)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           email = excluded.email,
+           artifact_limit_bytes = excluded.artifact_limit_bytes,
+           project_limit = excluded.project_limit,
+           project_storage_limit_bytes = excluded.project_storage_limit_bytes`
+    ).bind(
+      userId,
+      challenge.email,
+      new Date().toISOString(),
+      limits.storageLimitBytes,
+      limits.projectLimit,
+      limits.storageLimitBytes
+    ),
     env.DB.prepare(
       `INSERT INTO auth_sessions
            (token_hash, user_id, created_at, expires_at)

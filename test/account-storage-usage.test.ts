@@ -73,9 +73,9 @@ describe('account storage usage', () => {
       trashedProjectCount: 0,
       // One bucket: project storage plus files (none here).
       storageBytes: 2_650,
-      storageLimitBytes: 1024 ** 3
+      storageLimitBytes: 100 * 1024 ** 2
     });
-    expect(usage.entitlements?.storageLimitBytes).toBe(1024 ** 3);
-    expect(usage.entitlements?.projectStorageLimitBytes).toBe(1024 ** 3);
+    expect(usage.entitlements?.storageLimitBytes).toBe(100 * 1024 ** 2);
+    expect(usage.entitlements?.projectStorageLimitBytes).toBe(100 * 1024 ** 2);
   });
 });
