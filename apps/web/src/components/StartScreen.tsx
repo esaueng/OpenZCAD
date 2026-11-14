@@ -95,6 +95,8 @@ import {
 } from '../lib/projectShelf';
 import { syncRunTotals, type SyncEntry } from '../lib/syncRun';
 import { useMigrationLockedProjects } from '../lib/migrationStatus';
+import { encryptedPinProblem } from '../lib/api';
+import { pinProblemText, useEncryptedPins } from './EncryptedPinReset';
 import type { DemoDefinition } from '../lib/demoDefinitions';
 import { BrandMark } from './BrandMark';
 import { DemoModelIcon } from './DemoModelIcon';
@@ -764,6 +766,9 @@ export function StartScreen({
   // Being encrypted in this tab, or paused or stopped with its plaintext
   // still locked: badged, and opened read-only (App.tsx).
   const migratingProjectIds = useMigrationLockedProjects();
+  // Held as encrypted on this device while the switch to encryption did
+  // not finish here, or while the account lists it otherwise (PR #1418).
+  useEncryptedPins();
   const syncEntryById = new Map(
     (syncRun ?? []).map((entry) => [entry.projectId, entry] as const)
   );
@@ -1683,6 +1688,7 @@ export function StartScreen({
     const encrypted = project.storageFormat === 2;
     // Being encrypted in this tab (ADR-024 Phase 7): it opens read-only.
     const migrating = migratingProjectIds.has(project.projectId);
+    const pinProblem = encryptedPinProblem(project.projectId);
 
     const preview = (
       <>
@@ -1737,6 +1743,20 @@ export function StartScreen({
                     <Lock size={11} aria-hidden="true" />
                   </span>
                 )
+              )}
+              {pinProblem && !migrating && !trashed && (
+                <span
+                  className="start-tile-mark"
+                  role="img"
+                  aria-label={
+                    pinProblem === 'unresolved'
+                      ? 'Encryption didn’t finish on this device'
+                      : 'Kept encrypted on this device'
+                  }
+                  title={`${pinProblemText(pinProblem)} See Settings › Encryption.`}
+                >
+                  <TriangleAlert size={11} aria-hidden="true" />
+                </span>
               )}
               {recoveryOf !== null && !trashed && (
                 <span

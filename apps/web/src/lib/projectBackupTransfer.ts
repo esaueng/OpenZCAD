@@ -6,6 +6,10 @@ import { importArtifactIds } from '@openzcad/persistence';
 import type { ArtifactRecord, ProjectDocument } from '@openzcad/shared';
 import {
   api,
+  ApiError,
+  E2EE_CUTOVER_UNRESOLVED_CODE,
+  E2EE_FORMAT_MISMATCH_CODE,
+  encryptedPinProblem,
   encryptedProjectPinsUnavailable,
   isEncryptedProject,
   pinStorageUnavailable
@@ -163,6 +167,12 @@ export async function createProjectBackup(
   // backup that silently leaves files out.
   if (remote && encryptedProjectPinsUnavailable()) {
     throw pinStorageUnavailable();
+  }
+  // Likewise while this device's pin disagrees with what it knows: a
+  // switch to encryption it has not seen finish, or a listing that says
+  // the project is not encrypted.
+  if (remote && encryptedPinProblem(snapshot.projectId)) {
+    throw backupUnresolved(snapshot.projectId);
   }
   const artifacts =
     remote &&
@@ -348,6 +358,23 @@ export async function createProjectBackup(
   if (new Blob([text]).size > maxBytes) throw capacityError();
   await parseProjectBackup(text);
   return text;
+}
+
+/**
+ * A complete backup refused because this device cannot tell whether the
+ * project is stored encrypted. What it keeps of the project can still be
+ * exported (`localOnly`).
+ */
+export function backupUnresolved(projectId: string): ApiError {
+  const unresolved = encryptedPinProblem(projectId) === 'unresolved';
+  return new ApiError(
+    409,
+    unresolved
+      ? 'A complete backup isn’t possible yet: the switch to end-to-end encryption didn’t finish on this device, so it can’t tell which files your account stores. Retry encrypting it in Settings › Encryption, or choose “Treat as not encrypted on this device”. You can still export the copy on this device.'
+      : 'A complete backup isn’t possible yet: this device keeps the project encrypted, but your account lists it as not encrypted, so it can’t tell which files your account stores. Choose “Treat as not encrypted on this device” if you stopped encrypting it elsewhere. You can still export the copy on this device.',
+    unresolved ? E2EE_CUTOVER_UNRESOLVED_CODE : E2EE_FORMAT_MISMATCH_CODE,
+    { projectId }
+  );
 }
 
 export function downloadBackupFile(name: string, contents: Blob): void {

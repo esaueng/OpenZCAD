@@ -23,7 +23,18 @@ import {
   type ProjectWorkspaceSession
 } from '@openzcad/shared';
 import { forgetAllProjectKeys } from '../apps/web/src/lib/e2ee/unlockedProjectKeys';
-import { createProjectMigrationsApi } from '../apps/web/src/lib/e2ee/projectMigrationsApi';
+import {
+  createProjectMigrationsApi,
+  type ProjectMigrationsApi
+} from '../apps/web/src/lib/e2ee/projectMigrationsApi';
+import {
+  ApiError,
+  beginEncryptCutover,
+  encryptCutoverUnresolved,
+  finishEncryptCutover,
+  isEncryptedProject,
+  rememberProjectFormats
+} from '../apps/web/src/lib/api';
 import { createMigrationPlaintextSource } from '../apps/web/src/lib/e2ee/migrationPlaintextSource';
 import {
   MigrationPausedError,
@@ -414,6 +425,9 @@ function engineOn(
     leases?: MigrationLeaseStore;
     beforeStep?: (step: string, projectId: string) => void | Promise<void>;
     beforeCutover?: (projectId: string) => void;
+    onCutover?: (projectId: string) => void;
+    /** Wraps the device's migration routes (a failed or lost cutover). */
+    migrations?: (api: ProjectMigrationsApi) => ProjectMigrationsApi;
   } = {}
 ): EngineDevice {
   const d = device(
@@ -429,7 +443,9 @@ function engineOn(
   const engine = createProjectMigrationEngine({
     deviceId,
     fetcher: base,
-    migrations: createProjectMigrationsApi(base),
+    migrations: (options.migrations ?? ((api) => api))(
+      createProjectMigrationsApi(base)
+    ),
     plaintext,
     loadSource: options.loadSource,
     leases: options.leases ?? memoryLeaseStore(),
@@ -450,7 +466,8 @@ function engineOn(
     },
     onProgress: (p) => progress.push(p),
     ...(options.beforeStep ? { beforeStep: options.beforeStep } : {}),
-    ...(options.beforeCutover ? { beforeCutover: options.beforeCutover } : {})
+    ...(options.beforeCutover ? { beforeCutover: options.beforeCutover } : {}),
+    ...(options.onCutover ? { onCutover: options.onCutover } : {})
   });
   return {
     d,
@@ -779,6 +796,86 @@ describe('encrypting an existing project', () => {
     // answer cannot leave this device without the pin.
     expect(formatsWhenPinned).toEqual([1]);
     expect(formatOf(srv, projectId)).toBe(2);
+  });
+
+  it('records the cutover as unresolved before asking for it, and clears that once it sees it done', async () => {
+    const srv = roomServer();
+    const plain = await plaintextProject(srv, { revisions: 1 });
+    const projectId = plain.head.projectId;
+    const atCutover: boolean[] = [];
+    const laptop = engineOn(srv, owner, 'owner_laptop', {
+      beforeCutover: (id) => {
+        beginEncryptCutover(id);
+        atCutover.push(encryptCutoverUnresolved(id) && isEncryptedProject(id));
+      },
+      onCutover: finishEncryptCutover
+    });
+    await migrateFully(laptop, projectId);
+    expect(atCutover).toEqual([true]);
+    expect(formatOf(srv, projectId)).toBe(2);
+    expect(encryptCutoverUnresolved(projectId)).toBe(false);
+    expect(isEncryptedProject(projectId)).toBe(true);
+  });
+
+  it('keeps a cutover that failed unresolved, also once its staging is cancelled', async () => {
+    const srv = roomServer();
+    const plain = await plaintextProject(srv, { revisions: 1 });
+    const projectId = plain.head.projectId;
+    const laptop = engineOn(srv, owner, 'owner_laptop', {
+      beforeCutover: beginEncryptCutover,
+      onCutover: finishEncryptCutover,
+      migrations: (api) => ({
+        ...api,
+        cutover: async () => {
+          throw new ApiError(503, 'The cutover failed.');
+        }
+      })
+    });
+    await expect(migrateFully(laptop, projectId)).rejects.toThrow(
+      'The cutover failed.'
+    );
+    await laptop.engine.cancel(projectId);
+    // The account still holds it as plaintext, and says so; the device
+    // keeps it encrypted and unresolved: neither the failed answer, the
+    // abandon nor the listing clears that.
+    expect(formatOf(srv, projectId)).toBe(1);
+    expect(migrationRow(srv, projectId)?.state).toBe('abandoned');
+    rememberProjectFormats([{ projectId, storageFormat: 1 }]);
+    expect(encryptCutoverUnresolved(projectId)).toBe(true);
+    expect(isEncryptedProject(projectId)).toBe(true);
+  });
+
+  it('finishes an unresolved cutover whose answer was lost when it resumes', async () => {
+    const srv = roomServer();
+    const plain = await plaintextProject(srv, { revisions: 1 });
+    const projectId = plain.head.projectId;
+    let lose = true;
+    const options = {
+      beforeCutover: beginEncryptCutover,
+      onCutover: finishEncryptCutover,
+      migrations: (api: ProjectMigrationsApi): ProjectMigrationsApi => ({
+        ...api,
+        cutover: async (
+          ...args: Parameters<ProjectMigrationsApi['cutover']>
+        ) => {
+          const answer = await api.cutover(...args);
+          if (lose) throw new ApiError(503, 'The answer was lost.');
+          return answer;
+        }
+      })
+    };
+    const laptop = engineOn(srv, owner, 'owner_laptop', options);
+    await expect(migrateFully(laptop, projectId)).rejects.toThrow(
+      'The answer was lost.'
+    );
+    expect(formatOf(srv, projectId)).toBe(2);
+    expect(encryptCutoverUnresolved(projectId)).toBe(true);
+    lose = false;
+    const listed = await laptop.summary(projectId);
+    expect(listed.storageFormat).toBe(2);
+    await laptop.engine.migrate(listed);
+    expect(encryptCutoverUnresolved(projectId)).toBe(false);
+    expect(isEncryptedProject(projectId)).toBe(true);
   });
 
   it('refuses while the room holds edits the account never saved', async () => {

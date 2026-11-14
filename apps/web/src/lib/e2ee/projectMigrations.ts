@@ -17,12 +17,25 @@
  *   running again checks once more. After a shared project's cutover, the
  *   page offers encrypted links and invitations in place of the plaintext
  *   ones it revoked (`reissueLinks`, `reinvite`).
+ * - **Unfinished switches.** Just before the cutover is asked for, this
+ *   device pins the project as encrypted and records that the cutover's
+ *   outcome is unknown (`beginEncryptCutover`). Both stay whatever the
+ *   answer, so a project whose cutover failed, even once its staging is
+ *   cancelled, stays held as encrypted here and its row says the switch
+ *   did not finish on this device (`unresolved`): retrying finishes it,
+ *   and only the owner's confirmed "Treat as not encrypted on this device"
+ *   (`treatAsNotEncrypted`) drops the pin. The record is cleared only when
+ *   this device sees the cutover complete: its own run, or a status that
+ *   says the migration is cut over or done.
  */
 import type { ProjectSummary } from '@openzcad/shared';
 import {
-  pinStorageUnavailable,
-  rememberEncryptedProject,
-  requireDurablePin
+  beginEncryptCutover,
+  encryptCutoverUnresolved,
+  finishEncryptCutover,
+  subscribeEncryptedPins,
+  treatProjectAsNotEncrypted,
+  type OwnerConfirmation
 } from '../api';
 import { desktopFetch } from '../desktopBridge';
 import { flushProjectEdits, setMigratingProjects } from '../migrationStatus';
@@ -117,8 +130,17 @@ export interface MigrationController {
     options?: { readonly resumeStopped?: boolean }
   ): Promise<void>;
   pause(): void;
-  /** Drops a project's staging and unlocks its plaintext. */
+  /**
+   * Drops a project's staging and unlocks its plaintext. A project whose
+   * cutover was asked for stays held as encrypted on this device
+   * (`unresolved`) until it is retried or reset.
+   */
   cancel(projectId: string): Promise<void>;
+  /**
+   * The owner's confirmed "Treat as not encrypted on this device" for a
+   * project whose switch did not finish here: drops its pin and record.
+   */
+  treatAsNotEncrypted(projectId: string, confirmation: OwnerConfirmation): void;
   /**
    * Slice 7-4 (decision M8): new encrypted links, of the same modes, for
    * the plaintext links a migrated project's cutover revoked.
@@ -209,6 +231,19 @@ function waiting(project: ProjectSummary): MigrationProgress {
   };
 }
 
+/**
+ * The row with whether this device asked for its cutover and has not seen
+ * it complete; a finished row never is.
+ */
+function withPin(progress: MigrationProgress): MigrationProgress {
+  const unresolved =
+    progress.phase !== 'done' && encryptCutoverUnresolved(progress.projectId);
+  if (unresolved === (progress.unresolved === true)) return progress;
+  if (unresolved) return { ...progress, unresolved: true };
+  const { unresolved: _resolved, ...rest } = progress;
+  return rest;
+}
+
 export function createMigrationController(
   deps: MigrationControllerDeps
 ): MigrationController {
@@ -234,7 +269,11 @@ export function createMigrationController(
   let engine: ProjectMigrationEngine | null = null;
 
   function set(change: Partial<MigrationRunState>) {
-    state = { ...state, ...change };
+    state = {
+      ...state,
+      ...change,
+      ...(change.projects ? { projects: change.projects.map(withPin) } : {})
+    };
     setMigratingProjects(
       state.projects
         .filter((progress) => ACTIVE.has(progress.phase))
@@ -291,13 +330,12 @@ export function createMigrationController(
       leases,
       createStaging: (leased) => opened.open(leased),
       flushProject: flushProjectEdits,
-      // The pin must outlive this page and any lost answer: save it before
-      // asking for the cutover, and keep it whatever the answer, since a
-      // failed answer does not prove the cutover did not happen.
-      beforeCutover: (projectId) => requireDurablePin(projectId),
-      onCutover: (projectId) => {
-        if (!rememberEncryptedProject(projectId)) throw pinStorageUnavailable();
-      },
+      // The pin must outlive this page and any lost answer: save it, with
+      // the cutover's outcome unknown, before asking for the cutover, and
+      // keep both whatever the answer, since a failed answer does not
+      // prove the cutover did not happen.
+      beforeCutover: beginEncryptCutover,
+      onCutover: finishEncryptCutover,
       onProgress: update,
       ...(deps.renewEveryMs ? { renewEveryMs: deps.renewEveryMs } : {})
     });
@@ -340,6 +378,15 @@ export function createMigrationController(
       const { migration } = await migrations.status(projectId);
       const unfinished =
         migration?.state === 'cutover' || migration?.state === 'purging';
+      // Cut over and purged (by another tab or device): this device's
+      // switch is finished too, as a resumed run finds it.
+      if (migration?.state === 'done' && encryptCutoverUnresolved(projectId)) {
+        try {
+          finishEncryptCutover(projectId);
+        } catch {
+          // Pins unavailable: the record stays, which is safe.
+        }
+      }
       if (!unfinished) settled.add(projectId);
       return unfinished;
     } catch (error) {
@@ -374,12 +421,15 @@ export function createMigrationController(
     known: ReadonlyMap<string, MigrationProgress>
   ): Promise<ProjectSummary[]> {
     const plaintextIds = new Set(migratable.map((p) => p.projectId));
+    // A switch this device has not seen finish is asked about first, as
+    // one its runs worked on.
     const worked = listed.filter((project) => {
       const record = recordOf(known, project.projectId);
       return (
         !plaintextIds.has(project.projectId) &&
-        record !== undefined &&
-        record.phase !== 'done'
+        ((record !== undefined && record.phase !== 'done') ||
+          (project.storageFormat === 2 &&
+            encryptCutoverUnresolved(project.projectId)))
       );
     });
     const unrecorded = listed
@@ -388,7 +438,8 @@ export function createMigrationController(
           project.storageFormat === 2 &&
           (project.organization?.status ?? 'active') !== 'deleted' &&
           recordOf(known, project.projectId) === undefined &&
-          !settled.has(project.projectId)
+          !settled.has(project.projectId) &&
+          !encryptCutoverUnresolved(project.projectId)
       )
       .sort(
         (a, b) =>
@@ -590,6 +641,9 @@ export function createMigrationController(
     update({ ...progress, revoked: { ...progress.revoked, ...change } });
   }
 
+  // A reset or another tab's change re-reads every row's record.
+  subscribeEncryptedPins(() => set({ projects: state.projects }));
+
   return {
     getState: () => state,
     subscribe(listener) {
@@ -648,6 +702,11 @@ export function createMigrationController(
         )
       });
       return result;
+    },
+    treatAsNotEncrypted(projectId, confirmation) {
+      if (state.running) return;
+      treatProjectAsNotEncrypted(projectId, confirmation);
+      set({ projects: state.projects });
     },
     async cancel(projectId) {
       if (state.running) return;

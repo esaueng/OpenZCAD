@@ -3,6 +3,7 @@ import {
   ENCRYPTED_PROJECT_PIN_PREFIX,
   ENCRYPTED_PROJECT_PIN_FAILED_KEY,
   ENCRYPTED_PROJECT_PIN_RESERVE_KEY,
+  ENCRYPTED_PROJECT_UNRESOLVED_PREFIX,
   localStorageEncryptedProjectPins
 } from './encryptedProjectPins';
 
@@ -168,5 +169,113 @@ describe('encrypted project pins', () => {
     // earlier still counts.
     expect(storage.values.has(ENCRYPTED_PROJECT_PIN_FAILED_KEY)).toBe(false);
     expect(pins.pinDurably('proj_saved')).toBe(true);
+  });
+
+  it('keeps an unresolved cutover across a reload until this device sees it done', () => {
+    const storage = memoryStorage();
+    const pins = localStorageEncryptedProjectPins(storage);
+    expect(pins.markCutoverUnresolved('proj_switching')).toBe(true);
+    expect(
+      storage.values.has(ENCRYPTED_PROJECT_UNRESOLVED_PREFIX + 'proj_switching')
+    ).toBe(true);
+    // Its own key beside the pin: no shared list is read and rewritten.
+    expect(
+      storage.values.has(ENCRYPTED_PROJECT_PIN_PREFIX + 'proj_switching')
+    ).toBe(false);
+
+    const reloaded = localStorageEncryptedProjectPins(storage);
+    expect(reloaded.cutoverUnresolved('proj_switching')).toBe(true);
+    expect(reloaded.cutoverUnresolved('proj_other')).toBe(false);
+    reloaded.resolveCutover('proj_switching');
+    expect(
+      localStorageEncryptedProjectPins(storage).cutoverUnresolved(
+        'proj_switching'
+      )
+    ).toBe(false);
+  });
+
+  it('degrades when an unresolved cutover cannot be saved', () => {
+    const storage = memoryStorage();
+    let refusing = false;
+    const pins = localStorageEncryptedProjectPins({
+      ...storage,
+      setItem: (key: string, value: string) => {
+        if (refusing && key.startsWith(ENCRYPTED_PROJECT_UNRESOLVED_PREFIX)) {
+          throw new Error('QuotaExceededError');
+        }
+        storage.setItem(key, value);
+      }
+    });
+    refusing = true;
+    expect(pins.markCutoverUnresolved('proj_switching')).toBe(false);
+    expect(pins.degraded).toBe(true);
+    expect(storage.values.has(ENCRYPTED_PROJECT_PIN_FAILED_KEY)).toBe(true);
+    // This page still knows it.
+    expect(pins.cutoverUnresolved('proj_switching')).toBe(true);
+  });
+
+  it('resets one project: its pin and its unresolved cutover', () => {
+    const storage = memoryStorage();
+    const pins = localStorageEncryptedProjectPins(storage);
+    pins.pin('proj_stuck');
+    pins.markCutoverUnresolved('proj_stuck');
+    pins.pin('proj_kept');
+    pins.resetProject('proj_stuck');
+    const reloaded = localStorageEncryptedProjectPins(storage);
+    expect(reloaded.has('proj_stuck')).toBe(false);
+    expect(reloaded.cutoverUnresolved('proj_stuck')).toBe(false);
+    expect(reloaded.has('proj_kept')).toBe(true);
+  });
+
+  it('resets a degraded store without dropping a saved pin', () => {
+    const storage = memoryStorage();
+    let full = false;
+    const nearlyFull = {
+      ...storage,
+      setItem: (key: string, value: string) => {
+        if (full && key.startsWith(ENCRYPTED_PROJECT_PIN_PREFIX)) {
+          throw new Error('QuotaExceededError');
+        }
+        storage.setItem(key, value);
+      }
+    };
+    const pins = localStorageEncryptedProjectPins(nearlyFull);
+    pins.pin('proj_saved');
+    full = true;
+    expect(pins.pin('proj_lost')).toBe(false);
+    expect(pins.degraded).toBe(true);
+    expect(storage.values.has(ENCRYPTED_PROJECT_PIN_RESERVE_KEY)).toBe(false);
+
+    full = false;
+    const reloaded = localStorageEncryptedProjectPins(nearlyFull);
+    expect(reloaded.degraded).toBe(true);
+    expect(reloaded.resetDegraded()).toBe(true);
+    expect(reloaded.degraded).toBe(false);
+    expect(storage.values.has(ENCRYPTED_PROJECT_PIN_FAILED_KEY)).toBe(false);
+    // Reserved again, so a later failure still finds room to be recorded.
+    expect(storage.values.has(ENCRYPTED_PROJECT_PIN_RESERVE_KEY)).toBe(true);
+    expect(reloaded.has('proj_saved')).toBe(true);
+    // The pin that was never saved is gone: the next listing decides.
+    expect(reloaded.has('proj_lost')).toBe(false);
+    expect(reloaded.pinDurably('proj_lost')).toBe(true);
+    expect(localStorageEncryptedProjectPins(storage).degraded).toBe(false);
+  });
+
+  it('stays degraded when the reset finds storage still refusing', () => {
+    const storage = memoryStorage();
+    storage.setItem(ENCRYPTED_PROJECT_PIN_PREFIX + 'proj_saved', '1');
+    storage.setItem(ENCRYPTED_PROJECT_PIN_FAILED_KEY, '1');
+    const pins = localStorageEncryptedProjectPins({
+      ...storage,
+      setItem: () => {
+        throw new Error('QuotaExceededError');
+      }
+    });
+    expect(pins.degraded).toBe(true);
+    // The failure key goes, but the reserve cannot be saved again.
+    expect(pins.resetDegraded()).toBe(false);
+    expect(pins.degraded).toBe(true);
+    expect(pins.has('proj_saved')).toBe(true);
+    expect(localStorageEncryptedProjectPins(null).resetDegraded()).toBe(false);
   });
 });

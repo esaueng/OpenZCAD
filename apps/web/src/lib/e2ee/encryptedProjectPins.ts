@@ -7,10 +7,19 @@
  * a reload, whatever a later listing says of its format.
  *
  * Only this device's own "Stop encrypting" run, once its cutover is done
- * (`projectDecryption.ts`), unpins a project: the account's listing alone
- * never does, since a listing that disagrees with the pin is the account's
- * word, not the owner's. Such a project stays encrypted here, and its
- * writes fail on the encrypted routes rather than go out in plaintext.
+ * (`projectDecryption.ts`), or the owner's own confirmed "Treat as not
+ * encrypted on this device" (`resetProject`), unpins a project: the
+ * account's listing alone never does, since a listing that disagrees with
+ * the pin is the account's word, not the owner's. Such a project stays
+ * encrypted here, and its writes fail on the encrypted routes rather than
+ * go out in plaintext.
+ *
+ * An encrypt run pins the project before it asks for the cutover, and
+ * records beside the pin that the cutover's outcome is unknown here
+ * (`markCutoverUnresolved`). Only this device seeing the cutover complete
+ * clears that record (`resolveCutover`); until then the project is shown
+ * as not finished, and work that must know its real format (a complete
+ * backup) refuses.
  *
  * Kept in localStorage, as the "Encrypt new projects" opt-in pins are
  * (`preferencePins.ts`), because the dispatch in `api.ts` and the rooms ask
@@ -29,8 +38,11 @@
  * every project as encrypted: writes then fail on the encrypted routes
  * instead of going out in plaintext. A pin that could not be saved sets a
  * failure key that nothing here ever clears or overwrites, so every tab
- * and every later load stays degraded. To make room for that key in full
- * storage, a reserve key larger than it is kept and removed first. Where
+ * and every later load stays degraded, until the owner confirms "Treat as
+ * not encrypted on this device" for the store (`resetDegraded`), which
+ * removes the failure key and keeps every saved pin. To make room for that
+ * key in full storage, a reserve key larger than it is kept and removed
+ * first. Where
  * even the failure key cannot be saved, `api.ts` refuses to open, create,
  * copy or encrypt a project whose pin is not saved (`pinDurably`), so no
  * encrypted project's content reaches this device without a saved pin.
@@ -59,6 +71,33 @@ export interface EncryptedProjectPinStore {
    */
   forget(projectId: string): void;
   /**
+   * Records, beside the pin, that this device is about to ask for the
+   * project's encrypt cutover and has not seen it complete; whether that
+   * record is saved (read back). One that could not be saved degrades the
+   * store, as a pin does.
+   */
+  markCutoverUnresolved(projectId: string): boolean;
+  /** Clears that record: this device saw the cutover complete. */
+  resolveCutover(projectId: string): void;
+  /**
+   * Whether this device asked for the project's encrypt cutover and has
+   * not seen it complete; true when storage cannot be read.
+   */
+  cutoverUnresolved(projectId: string): boolean;
+  /**
+   * The owner's confirmed "Treat as not encrypted on this device" for one
+   * project: drops its pin and its unresolved record. Never called on the
+   * account's word.
+   */
+  resetProject(projectId: string): void;
+  /**
+   * The owner's confirmed reset of a degraded store: removes the failure
+   * key and keeps every saved pin, then saves the reserve again. Whether
+   * the store now works normally (false while storage stays blocked or
+   * full, or the failure key could not be removed).
+   */
+  resetDegraded(): boolean;
+  /**
    * Whether pins cannot be read, or one could not be saved (on this page,
    * another tab or an earlier load), so every project is held as encrypted.
    */
@@ -69,7 +108,17 @@ export interface EncryptedProjectPinStore {
 export const ENCRYPTED_PROJECT_PIN_PREFIX =
   'openzcad:e2ee-encrypted-project:v1:';
 
-/** Set once a pin could not be saved; never cleared or overwritten here. */
+/**
+ * One key per project whose encrypt cutover this device asked for and has
+ * not seen complete: `<prefix><projectId>` = `"1"`.
+ */
+export const ENCRYPTED_PROJECT_UNRESOLVED_PREFIX =
+  'openzcad:e2ee-encrypt-cutover-unresolved:v1:';
+
+/**
+ * Set once a pin could not be saved; cleared only by the owner's confirmed
+ * reset (`resetDegraded`), never overwritten.
+ */
 export const ENCRYPTED_PROJECT_PIN_FAILED_KEY =
   'openzcad:e2ee-encrypted-project-pins:failed';
 
@@ -130,8 +179,8 @@ export function localStorageEncryptedProjectPins(
       return true;
     }
   };
-  if (storage && failed()) degraded = true;
-  if (storage && !degraded) {
+  const reserve = () => {
+    if (!storage || degraded) return;
     try {
       // Without the reserve, a later failed pin might find no room to be
       // recorded; storage that refuses it now cannot keep pins either.
@@ -141,7 +190,9 @@ export function localStorageEncryptedProjectPins(
     } catch {
       degraded = true;
     }
-  }
+  };
+  if (storage && failed()) degraded = true;
+  reserve();
   const isDegraded = (): boolean => {
     // Another tab's failed pin degrades this page too.
     if (!degraded && failed()) degraded = true;
@@ -187,6 +238,27 @@ export function localStorageEncryptedProjectPins(
     recordFailure();
     return false;
   };
+  const forget = (projectId: string) => {
+    own.delete(projectId);
+    if (!storage) return;
+    try {
+      storage.removeItem(ENCRYPTED_PROJECT_PIN_PREFIX + projectId);
+    } catch {
+      // Still pinned in storage: it stays encrypted, which is safe.
+    }
+  };
+  /** This page's own unresolved records, as `own` holds its pins. */
+  const ownUnresolved = new Set<string>();
+  const resolveCutover = (projectId: string) => {
+    ownUnresolved.delete(projectId);
+    if (!storage) return;
+    try {
+      storage.removeItem(ENCRYPTED_PROJECT_UNRESOLVED_PREFIX + projectId);
+    } catch {
+      // Still recorded: the project keeps reading as unfinished, and a
+      // complete backup of it refuses, which is safe.
+    }
+  };
   return {
     get degraded() {
       return isDegraded();
@@ -204,14 +276,55 @@ export function localStorageEncryptedProjectPins(
       if (isDegraded()) return false;
       return pin(projectId);
     },
-    forget(projectId) {
-      own.delete(projectId);
-      if (!storage) return;
+    forget,
+    markCutoverUnresolved(projectId) {
+      if (!PROJECT_ID.test(projectId)) return false;
+      ownUnresolved.add(projectId);
+      if (!storage) return false;
+      const key = ENCRYPTED_PROJECT_UNRESOLVED_PREFIX + projectId;
       try {
-        storage.removeItem(ENCRYPTED_PROJECT_PIN_PREFIX + projectId);
+        storage.setItem(key, '1');
       } catch {
-        // Still pinned in storage: it stays encrypted, which is safe.
+        // Fall through to the read-back.
       }
+      try {
+        if (storage.getItem(key) !== null) return true;
+      } catch {
+        // Unreadable: not saved.
+      }
+      recordFailure();
+      return false;
+    },
+    resolveCutover,
+    cutoverUnresolved(projectId) {
+      if (!PROJECT_ID.test(projectId)) return false;
+      if (ownUnresolved.has(projectId)) return true;
+      if (!storage) return false;
+      try {
+        return (
+          storage.getItem(ENCRYPTED_PROJECT_UNRESOLVED_PREFIX + projectId) !==
+          null
+        );
+      } catch {
+        return true;
+      }
+    },
+    resetProject(projectId) {
+      forget(projectId);
+      resolveCutover(projectId);
+    },
+    resetDegraded() {
+      if (!storage) return false;
+      try {
+        storage.removeItem(ENCRYPTED_PROJECT_PIN_FAILED_KEY);
+      } catch {
+        // Checked below.
+      }
+      // Saved pins are kept: only what could not be saved is forgotten,
+      // and the next listing pins those projects again.
+      degraded = failed();
+      reserve();
+      return !degraded;
     }
   };
 }

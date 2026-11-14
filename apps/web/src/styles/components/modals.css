@@ -259,6 +259,34 @@
   font-size: var(--fs-xs);
 }
 
+/* "Treat as not encrypted on this device" (EncryptedPinReset.tsx). */
+.pin-reset-dialog {
+  width: min(520px, 100%);
+  max-height: calc(100dvh - 12vh - 32px);
+  overflow-y: auto;
+  display: grid;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid color-mix(in srgb, var(--color-warning) 55%, transparent);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-3);
+}
+
+.pin-reset-dialog > header {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: var(--sp-3);
+  color: var(--color-warning);
+}
+
+.pin-reset-dialog h2 {
+  margin: 0;
+  font-size: var(--fs-lg);
+}
+
 .cloud-deletion-dialog {
   width: min(560px, 100%);
   max-height: calc(100dvh - 12vh - 32px);

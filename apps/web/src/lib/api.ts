@@ -349,10 +349,48 @@ const encryptedProjectPins = () =>
   (pinStore ??= localStorageEncryptedProjectPins());
 
 /**
- * Pinned projects the account's latest listing reports as not encrypted.
- * They stay encrypted here; a failed write names the disagreement.
+ * Pinned projects the account's latest listing reports as not encrypted,
+ * with the name it listed. They stay encrypted here; a failed write names
+ * the disagreement, and Settings › Encryption offers the owner's reset.
  */
-const formatMismatchIds = new Set<string>();
+const formatMismatchIds = new Map<string, string | null>();
+
+/**
+ * Listeners to changes of this device's pins as the page shows them (a
+ * disagreement found, an unfinished cutover, a reset): the shelf, the
+ * editor and Settings › Encryption re-read them.
+ */
+const pinListeners = new Set<() => void>();
+let pinRevision = 0;
+function pinsChanged(): void {
+  pinRevision += 1;
+  for (const listener of pinListeners) listener();
+}
+
+/** Another tab's pins changed: re-read. */
+function onPinStorage(event: StorageEvent): void {
+  if (event.key === null || event.key.startsWith('openzcad:e2ee-encrypt')) {
+    pinsChanged();
+  }
+}
+
+export function subscribeEncryptedPins(listener: () => void): () => void {
+  if (!pinListeners.size && typeof window !== 'undefined') {
+    window.addEventListener('storage', onPinStorage);
+  }
+  pinListeners.add(listener);
+  return () => {
+    pinListeners.delete(listener);
+    if (!pinListeners.size && typeof window !== 'undefined') {
+      window.removeEventListener('storage', onPinStorage);
+    }
+  };
+}
+
+/** Bumped on every change {@link subscribeEncryptedPins} reports. */
+export function encryptedPinsRevision(): number {
+  return pinRevision;
+}
 
 /**
  * The encrypted-project module, loaded the first time a format-2 project is
@@ -373,14 +411,22 @@ export function rememberProjectFormats(
   projects: readonly Pick<ProjectSummary, 'projectId' | 'storageFormat'>[]
 ): void {
   const pins = encryptedProjectPins();
+  let changed = false;
+  const wasDegraded = pins.degraded;
   for (const project of projects) {
     if (project.storageFormat === PROJECT_STORAGE_FORMAT_E2EE_V1) {
       pins.pin(project.projectId);
-      formatMismatchIds.delete(project.projectId);
+      changed = formatMismatchIds.delete(project.projectId) || changed;
     } else if (pins.has(project.projectId)) {
-      formatMismatchIds.add(project.projectId);
+      const name = (project as { name?: unknown }).name;
+      if (!formatMismatchIds.has(project.projectId)) changed = true;
+      formatMismatchIds.set(
+        project.projectId,
+        typeof name === 'string' ? name : null
+      );
     }
   }
+  if (changed || pins.degraded !== wasDegraded) pinsChanged();
 }
 
 /**
@@ -388,8 +434,12 @@ export function rememberProjectFormats(
  * it, or a route answered that it is stored encrypted.
  */
 export function rememberEncryptedProject(projectId: string): boolean {
-  formatMismatchIds.delete(projectId);
-  return encryptedProjectPins().pin(projectId);
+  const pins = encryptedProjectPins();
+  const wasDegraded = pins.degraded;
+  const changed = formatMismatchIds.delete(projectId);
+  const saved = pins.pin(projectId);
+  if (changed || pins.degraded !== wasDegraded) pinsChanged();
+  return saved;
 }
 
 /**
@@ -439,12 +489,133 @@ function pinCreated<
  * account's word alone never turns encryption off for a project here.
  */
 export function forgetEncryptedProject(projectId: string): void {
-  encryptedProjectPins().forget(projectId);
+  // Its format is known here now, so no encrypt switch is left unknown.
+  encryptedProjectPins().resetProject(projectId);
   formatMismatchIds.delete(projectId);
+  pinsChanged();
+}
+
+/**
+ * Just before this device's encrypt run asks for a project's cutover:
+ * records that its outcome is unknown here, then saves the pin, or refuses
+ * (nothing is asked). Both stay whatever the cutover answers, since a lost
+ * or failed answer does not prove the cutover did not happen; only
+ * {@link finishEncryptCutover} or the owner's confirmed reset clears them.
+ */
+export function beginEncryptCutover(projectId: string): void {
+  const pins = encryptedProjectPins();
+  try {
+    if (pins.degraded || !pins.markCutoverUnresolved(projectId)) {
+      throw pinStorageUnavailable();
+    }
+    requireDurablePin(projectId);
+  } finally {
+    pinsChanged();
+  }
+}
+
+/**
+ * This device saw the project's encrypt cutover complete (its own run, or
+ * a resumed one that found it cut over): pinned, and no longer unresolved.
+ */
+export function finishEncryptCutover(projectId: string): void {
+  if (!rememberEncryptedProject(projectId)) throw pinStorageUnavailable();
+  encryptedProjectPins().resolveCutover(projectId);
+  pinsChanged();
+}
+
+/**
+ * Whether this device asked for the project's encrypt cutover and has not
+ * seen it complete: the project is held as encrypted here, but may still be
+ * stored in plaintext.
+ */
+export function encryptCutoverUnresolved(
+  projectId: string | null | undefined
+): boolean {
+  return projectId
+    ? encryptedProjectPins().cutoverUnresolved(projectId)
+    : false;
+}
+
+/** Why an encrypted project is stuck on this device, if it is. */
+export type EncryptedPinProblem = 'unresolved' | 'mismatch';
+
+export function encryptedPinProblem(
+  projectId: string | null | undefined
+): EncryptedPinProblem | null {
+  if (!projectId) return null;
+  if (encryptCutoverUnresolved(projectId)) return 'unresolved';
+  return formatMismatchIds.has(projectId) && isEncryptedProject(projectId)
+    ? 'mismatch'
+    : null;
+}
+
+/**
+ * Pinned projects the account's latest listing reports as not encrypted,
+ * with the name it listed (null when it listed none).
+ */
+export function formatMismatchedProjects(): {
+  projectId: string;
+  name: string | null;
+}[] {
+  return [...formatMismatchIds]
+    .filter(([projectId]) => isEncryptedProject(projectId))
+    .map(([projectId, name]) => ({ projectId, name }));
+}
+
+/**
+ * What only the owner can give: their explicit confirmation, in this
+ * page's own dialog, of a reset that the account's word never triggers.
+ */
+export interface OwnerConfirmation {
+  readonly confirmedByOwner: true;
+}
+
+/**
+ * "Treat as not encrypted on this device": the owner confirmed that this
+ * device should stop holding the project as encrypted. Drops its pin and
+ * its unfinished-cutover record; its next listing decides its format, as
+ * for a project this device never saw. Never called on the account's
+ * word (a listing, a status, an abandoned migration).
+ */
+export function treatProjectAsNotEncrypted(
+  projectId: string,
+  confirmation: OwnerConfirmation
+): void {
+  if (confirmation.confirmedByOwner !== true) return;
+  encryptedProjectPins().resetProject(projectId);
+  formatMismatchIds.delete(projectId);
+  pinsChanged();
+}
+
+/**
+ * The owner confirmed "Treat as not encrypted on this device" for this
+ * device's pin storage after a pin could not be saved: every saved pin is
+ * kept, and the projects whose pins were lost are pinned again by the next
+ * listing that reports them encrypted. Whether the pins work normally now.
+ */
+export function resetEncryptedProjectPins(
+  confirmation: OwnerConfirmation
+): boolean {
+  if (confirmation.confirmedByOwner !== true) return false;
+  const healthy = encryptedProjectPins().resetDegraded();
+  pinsChanged();
+  return healthy;
 }
 
 export const E2EE_FORMAT_MISMATCH_CODE = 'E2EE_FORMAT_MISMATCH';
 export const E2EE_PIN_STORAGE_UNAVAILABLE_CODE = 'E2EE_PIN_STORAGE_UNAVAILABLE';
+export const E2EE_CUTOVER_UNRESOLVED_CODE = 'E2EE_CUTOVER_UNRESOLVED';
+
+/** The codes whose recovery is "Treat as not encrypted on this device". */
+export function isEncryptedPinProblemError(error: unknown): boolean {
+  return (
+    error instanceof ApiError &&
+    (error.code === E2EE_FORMAT_MISMATCH_CODE ||
+      error.code === E2EE_PIN_STORAGE_UNAVAILABLE_CODE ||
+      error.code === E2EE_CUTOVER_UNRESOLVED_CODE)
+  );
+}
 
 /**
  * Whether this device cannot read its encrypted-project pins, or once
@@ -460,7 +631,7 @@ export function pinStorageUnavailable(
 ): ApiError {
   return new ApiError(
     409,
-    'This device could not save which projects are end-to-end encrypted (its site storage is blocked or full), so it treats every project as encrypted and sent nothing without encryption. Your work on this device is kept. Allow site storage for this site, or free up space, then reload. Do not clear this site’s data to fix this: it holds unsynced work and this device’s encryption keys.',
+    'This device could not save which projects are end-to-end encrypted (its site storage is blocked or full), so it treats every project as encrypted and sent nothing without encryption. Your work on this device is kept. Allow site storage and free up space, then choose “Treat as not encrypted on this device” in Settings › Encryption. Do not clear this site’s data: it holds unsynced work and this device’s encryption keys.',
     E2EE_PIN_STORAGE_UNAVAILABLE_CODE,
     details
   );
@@ -478,12 +649,33 @@ function withFormatMismatch(projectId: string, error: unknown): unknown {
       error instanceof ApiError ? error.details : undefined
     );
   }
+  if (encryptCutoverUnresolved(projectId)) {
+    return cutoverUnresolvedError(
+      error instanceof ApiError ? error.details : undefined
+    );
+  }
   if (!formatMismatchIds.has(projectId)) return error;
   return new ApiError(
     409,
-    'This device keeps this project end-to-end encrypted, but your account now lists it as not encrypted, so nothing was sent without encryption. Your changes stay on this device.',
+    'This device keeps this project end-to-end encrypted, but your account now lists it as not encrypted, so nothing was sent without encryption. Your changes stay on this device. If you stopped encrypting it on another device, choose “Treat as not encrypted on this device”.',
     E2EE_FORMAT_MISMATCH_CODE,
     error instanceof ApiError ? error.details : undefined
+  );
+}
+
+/**
+ * A project whose switch to end-to-end encryption this device asked for
+ * and has not seen finish: it is held as encrypted here, so it is neither
+ * saved nor backed up as plaintext until the switch is retried or reset.
+ */
+export function cutoverUnresolvedError(
+  details?: Record<string, unknown>
+): ApiError {
+  return new ApiError(
+    409,
+    'The switch to end-to-end encryption didn’t finish on this device, so it keeps this project encrypted and sent nothing without encryption. Your changes stay on this device. Retry encrypting it in Settings › Encryption, or choose “Treat as not encrypted on this device”.',
+    E2EE_CUTOVER_UNRESOLVED_CODE,
+    details
   );
 }
 

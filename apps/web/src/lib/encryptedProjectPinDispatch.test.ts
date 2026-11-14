@@ -4,9 +4,19 @@ import { toProjectId, toUserId, type ProjectDocument } from '@openzcad/shared';
 import {
   api,
   ApiError,
+  beginEncryptCutover,
+  E2EE_CUTOVER_UNRESOLVED_CODE,
   E2EE_FORMAT_MISMATCH_CODE,
   E2EE_LOCAL_ONLY_CODE,
-  isEncryptedProject
+  encryptCutoverUnresolved,
+  encryptedPinProblem,
+  encryptedProjectPinsUnavailable,
+  isEncryptedProject,
+  rememberEncryptedProject,
+  rememberProjectFormats,
+  resetEncryptedProjectPins,
+  treatProjectAsNotEncrypted,
+  type OwnerConfirmation
 } from './api';
 import { desktopFetch } from './desktopBridge';
 import {
@@ -508,5 +518,114 @@ describe('an encrypted project stays encrypted on this device', () => {
     });
     expect(store.saveProjectDocument).not.toHaveBeenCalled();
     expect(plaintextWrites(projectId)).toHaveLength(1);
+  });
+});
+
+describe('a switch to encryption this device did not see finish', () => {
+  it('names the unfinished switch when a write fails, and sends nothing in plaintext', async () => {
+    const projectId = 'proj_pin_unresolved';
+    beginEncryptCutover(projectId);
+    // The cutover failed: the account still lists it as plaintext.
+    await listAs(projectId, 1);
+    vi.mocked(desktopFetch).mockResolvedValue(json({}));
+    store.saveProjectDocument.mockRejectedValue(
+      new ApiError(404, 'No encrypted head')
+    );
+    store.saveRevision.mockRejectedValue(
+      new ApiError(404, 'No encrypted head')
+    );
+
+    const { document, revision } = await saveBoth(projectId);
+    expect(document).toMatchObject({ code: E2EE_CUTOVER_UNRESOLVED_CODE });
+    expect(revision).toMatchObject({ code: E2EE_CUTOVER_UNRESOLVED_CODE });
+    expect(encryptedPinProblem(projectId)).toBe('unresolved');
+    expect(plaintextWrites(projectId)).toEqual([]);
+  });
+
+  it('is never cleared by the account’s word, only by the owner’s confirmed reset', async () => {
+    const plaintext = createProjectDocument('Stuck', toUserId('user_owner'));
+    const projectId = plaintext.projectId;
+    beginEncryptCutover(projectId);
+    await listAs(projectId, 1);
+    await listAs(projectId, 2);
+    await listAs(projectId, 1);
+    rememberProjectFormats([{ projectId: toProjectId(projectId) }]);
+    expect(isEncryptedProject(projectId)).toBe(true);
+    expect(encryptCutoverUnresolved(projectId)).toBe(true);
+
+    // Anything short of the owner's confirmation does nothing.
+    treatProjectAsNotEncrypted(projectId, {
+      confirmedByOwner: false
+    } as unknown as OwnerConfirmation);
+    expect(isEncryptedProject(projectId)).toBe(true);
+    expect(encryptCutoverUnresolved(projectId)).toBe(true);
+
+    treatProjectAsNotEncrypted(projectId, { confirmedByOwner: true });
+    expect(isEncryptedProject(projectId)).toBe(false);
+    expect(encryptCutoverUnresolved(projectId)).toBe(false);
+    expect(encryptedPinProblem(projectId)).toBeNull();
+
+    // It now follows the account: plaintext, as listed.
+    vi.mocked(desktopFetch).mockResolvedValue(
+      json({ projectId, version: 4, updatedAt: 'now' })
+    );
+    await api.saveProjectDocument({
+      projectId,
+      expectedVersion: plaintext.version,
+      document: plaintext
+    });
+    expect(store.saveProjectDocument).not.toHaveBeenCalled();
+    expect(plaintextWrites(projectId)).toHaveLength(1);
+  });
+
+  it('resets a project encrypted here but decrypted elsewhere only once confirmed', async () => {
+    const projectId = 'proj_pin_decrypted_elsewhere';
+    await listAs(projectId, 2);
+    await listAs(projectId, 1);
+    expect(encryptedPinProblem(projectId)).toBe('mismatch');
+    treatProjectAsNotEncrypted(projectId, { confirmedByOwner: true });
+    expect(isEncryptedProject(projectId)).toBe(false);
+    expect(encryptedPinProblem(projectId)).toBeNull();
+    // A later listing that reports it encrypted pins it again.
+    await listAs(projectId, 2);
+    expect(isEncryptedProject(projectId)).toBe(true);
+  });
+});
+
+describe('resetting pins this device could not save', () => {
+  it('keeps every saved pin, and the next listing pins the rest again', async () => {
+    const kept = 'proj_pin_kept_on_reset';
+    const lost = 'proj_pin_lost_on_reset';
+    expect(rememberEncryptedProject(kept)).toBe(true);
+    // Another tab could not save a pin.
+    window.localStorage.setItem(ENCRYPTED_PROJECT_PIN_FAILED_KEY, '1');
+    try {
+      expect(encryptedProjectPinsUnavailable()).toBe(true);
+      expect(isEncryptedProject(lost)).toBe(true);
+      // The account's word does not end it.
+      await listAs(lost, 1);
+      expect(encryptedProjectPinsUnavailable()).toBe(true);
+      expect(
+        resetEncryptedProjectPins({
+          confirmedByOwner: false
+        } as unknown as OwnerConfirmation)
+      ).toBe(false);
+      expect(encryptedProjectPinsUnavailable()).toBe(true);
+
+      expect(resetEncryptedProjectPins({ confirmedByOwner: true })).toBe(true);
+      expect(encryptedProjectPinsUnavailable()).toBe(false);
+      expect(
+        window.localStorage.getItem(ENCRYPTED_PROJECT_PIN_FAILED_KEY)
+      ).toBeNull();
+      expect(isEncryptedProject(kept)).toBe(true);
+      expect(isEncryptedProject(lost)).toBe(false);
+      await listAs(lost, 2);
+      expect(isEncryptedProject(lost)).toBe(true);
+      expect(
+        window.localStorage.getItem(ENCRYPTED_PROJECT_PIN_PREFIX + lost)
+      ).not.toBeNull();
+    } finally {
+      window.localStorage.removeItem(ENCRYPTED_PROJECT_PIN_FAILED_KEY);
+    }
   });
 });

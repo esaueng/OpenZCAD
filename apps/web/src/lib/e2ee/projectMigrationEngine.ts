@@ -174,6 +174,13 @@ export interface MigrationProgress {
    * this page keeps the project read-only meanwhile, paused or stopped.
    */
   readonly plaintextLocked?: boolean;
+  /**
+   * This device asked for the cutover and has not seen it complete, so it
+   * holds the project as encrypted (set by the controller from the
+   * device's record, `encryptedProjectPins.ts`): a cancel leaves it so,
+   * and only a retry or the owner's confirmed reset clears it.
+   */
+  readonly unresolved?: boolean;
   readonly error?: MigrationError;
   /** Slice 7-4: a shared project's members and where each stands. */
   readonly members?: readonly MigrationMember[];
@@ -202,12 +209,16 @@ export interface MigrationEngineDeps {
   flushProject?(projectId: string): Promise<void>;
   /**
    * Just before the cutover is asked for: saves that the project is now
-   * encrypted on this device, or throws to stop it. Whatever the cutover's
-   * answer, that stays saved: a lost or failed answer does not prove the
-   * cutover did not happen.
+   * encrypted on this device, with the cutover's outcome unknown, or
+   * throws to stop it. Whatever the cutover's answer, that stays saved: a
+   * lost or failed answer does not prove the cutover did not happen, so
+   * neither a failure nor a cancel (an abandon) clears it.
    */
   beforeCutover?(projectId: string): void;
-  /** After the cutover: this page now treats the project as encrypted. */
+  /**
+   * After the cutover, or on a resume that finds it cut over: this page
+   * now treats the project as encrypted, its switch finished.
+   */
   onCutover?(projectId: string): void;
   onProgress?(progress: MigrationProgress): void;
   /** Lease renewal period (default a third of the five-minute lease). */

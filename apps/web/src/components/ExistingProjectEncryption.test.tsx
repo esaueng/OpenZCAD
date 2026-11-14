@@ -28,6 +28,12 @@ import {
 import type * as MigrationMembersModule from '../lib/e2ee/migrationMembers';
 import type { MigrationMember } from '../lib/e2ee/migrationMembers';
 import { reissuePlaintextShareLinks } from '../lib/e2ee/migrationMembers';
+import {
+  beginEncryptCutover,
+  encryptCutoverUnresolved,
+  isEncryptedProject,
+  treatProjectAsNotEncrypted
+} from '../lib/api';
 import { ExistingProjectEncryption } from './ExistingProjectEncryption';
 
 const followUps = vi.hoisted(() => ({
@@ -978,6 +984,96 @@ describe('Settings › Encryption › Encrypt existing projects', () => {
     await waitFor(() =>
       expect(within(older).getByText('Not encrypted')).toBeTruthy()
     );
+  });
+
+  it('says a cancel after a failed cutover did not restore it, and resets it only once confirmed', async () => {
+    const fake = fakeEngine(async (summary, report) => {
+      if (summary.projectId === 'proj_old') {
+        // Pinned, with the outcome unknown, then the cutover failed.
+        beginEncryptCutover(summary.projectId);
+        report({ phase: 'cutover', plaintextLocked: true });
+      }
+      report({ phase: 'error', error: { message: 'Broke', retryable: true } });
+      throw new Error('Broke');
+    });
+    const controller = controllerWith(fake);
+    try {
+      render(
+        <ExistingProjectEncryption
+          userId="user_alice"
+          unlocked
+          controller={controller}
+          isOpen={async () => true}
+        />
+      );
+      await clickEncryptProjects();
+      const older = await screen.findByRole('listitem', {
+        name: 'Older bracket'
+      });
+      fireEvent.click(
+        await within(older).findByRole('button', { name: 'Cancel' })
+      );
+      await waitFor(() =>
+        expect(fake.engine.cancel).toHaveBeenCalledWith('proj_old')
+      );
+      // Still held as encrypted here: not "Not encrypted", and not editable.
+      await waitFor(() =>
+        expect(
+          within(older).getByText('Encryption didn’t finish on this device')
+        ).toBeTruthy()
+      );
+      expect(within(older).queryByText('Not encrypted')).toBeNull();
+      expect(
+        within(older).getByText(
+          /The switch to end-to-end encryption didn’t finish on this device/
+        )
+      ).toBeTruthy();
+      expect(
+        within(older).getByRole('button', { name: 'Retry encryption' })
+      ).toBeTruthy();
+      expect(
+        within(older).queryByRole('button', { name: 'Cancel' })
+      ).toBeNull();
+      expect(
+        controller.getState().projects.find((p) => p.projectId === 'proj_old')
+      ).toMatchObject({ phase: 'waiting', unresolved: true });
+      expect(isEncryptedProject('proj_old')).toBe(true);
+
+      // Asking is not confirming; backing out keeps it encrypted.
+      fireEvent.click(
+        within(older).getByRole('button', {
+          name: 'Treat as not encrypted on this device'
+        })
+      );
+      const confirm = within(older).getByRole<HTMLButtonElement>('button', {
+        name: 'Treat as not encrypted'
+      });
+      expect(confirm.disabled).toBe(true);
+      fireEvent.click(confirm);
+      expect(isEncryptedProject('proj_old')).toBe(true);
+      fireEvent.click(
+        within(older).getByRole('button', { name: 'Keep it encrypted' })
+      );
+      expect(isEncryptedProject('proj_old')).toBe(true);
+      expect(encryptCutoverUnresolved('proj_old')).toBe(true);
+
+      fireEvent.click(
+        within(older).getByRole('button', {
+          name: 'Treat as not encrypted on this device'
+        })
+      );
+      fireEvent.click(within(older).getByRole('checkbox'));
+      fireEvent.click(
+        within(older).getByRole('button', { name: 'Treat as not encrypted' })
+      );
+      expect(isEncryptedProject('proj_old')).toBe(false);
+      expect(encryptCutoverUnresolved('proj_old')).toBe(false);
+      await waitFor(() =>
+        expect(within(older).getByText('Not encrypted')).toBeTruthy()
+      );
+    } finally {
+      treatProjectAsNotEncrypted('proj_old', { confirmedByOwner: true });
+    }
   });
 });
 
