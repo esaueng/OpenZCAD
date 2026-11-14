@@ -11,7 +11,9 @@
  *    (`signProjectInvitation`, "OZI") and posts it with the invitee's email:
  *    `POST /api/e2ee/projects/:id/invitations`. The Worker verifies it
  *    against the owner's device list, stores it with a hash of the email,
- *    and emails a link that names the sender, not the project.
+ *    and emails a link that names the sender, not the project. A version 2
+ *    statement names a hash of the link's token, which the owner's browser
+ *    made and posts with it; the Worker mails that token.
  * 2. The invitee signs in with that email and accepts the emailed token:
  *    `POST /api/e2ee/invitations/accept`. That binds their account; it does
  *    not make them a member.
@@ -41,6 +43,12 @@ export interface E2eeCreateInvitationRequest {
   statement: string;
   /** 65-byte signature by the statement's signing device. */
   signature: string;
+  /**
+   * The emailed link's token, for a version 2 statement only, which names
+   * its `invitationLinkTokenHash`: the Worker mails exactly this token.
+   * Without it (a version 1 statement, an older app) the Worker makes one.
+   */
+  token?: string;
 }
 
 export interface E2eeInvitationRecord {

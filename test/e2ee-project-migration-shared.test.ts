@@ -381,7 +381,7 @@ async function publishKeys(w: World, d: Device) {
   const ctx = invitationsOf(w, d);
   for (const invitation of await acceptedInvitations(ctx)) {
     if (invitation.state === 'confirm') {
-      await confirmEncryptedInvitation(ctx, invitation.record);
+      await confirmEncryptedInvitation(ctx, invitation);
     }
   }
   return publishInvitationKeyPackages(ctx);

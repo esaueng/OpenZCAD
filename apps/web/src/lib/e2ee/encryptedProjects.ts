@@ -107,6 +107,7 @@ import type { ShareDelegationState, ShareLinksContext } from './shareLinks';
 import type { ShareRemovalNotice } from './shareWorkStore';
 import {
   contactInvitationPeople,
+  invitationRemovalChecks,
   recordRemovedMembers,
   type InvitationContext
 } from './invitations';
@@ -385,7 +386,8 @@ async function openStore(
     onMembersRemoved: async (removal: MembersRemoved) => {
       // Never added back by the invitation sweep: the owner confirms that.
       // Awaited by the Commit's caller, so an Add built next sees it; a
-      // write that fails stops this page adding anyone automatically.
+      // write that fails leaves the step's removal check open, so no tab
+      // adds anyone to the project automatically.
       const recorded = recordRemovedMembers(
         invitationStore(),
         account.userId,
@@ -400,8 +402,12 @@ async function openStore(
           return null;
         })
         .catch(() => notify());
-      await recorded;
+      return recorded;
     },
+    // Each Commit that advances an owned project's state here does so
+    // inside a mark every tab of this browser reads, ended once its
+    // removals are recorded (above).
+    removalChecks: invitationRemovalChecks(invitationStore(), account.userId),
     // A co-member's device removal rotated a project (slice 5-7): the
     // owner's page states its share links again without that device.
     onMemberDevicesRemoved: (removal: MemberDevicesRemoved) => {

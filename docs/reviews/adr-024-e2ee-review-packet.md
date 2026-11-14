@@ -423,14 +423,20 @@ the browser side first, then the Worker's defense in depth.
 ### 3.10 Invitations
 
 - Crypto: `signProjectInvitation`, `verifyProjectInvitation`,
-  `invitationEmailHash` ("OZI", seven days) in
+  `invitationEmailHash` ("OZI", seven days; version 2 adds
+  `invitationLinkTokenHash` of the emailed link's token, which the owner's
+  browser makes), and the invitee's signed acceptance
+  (`signInvitationAcceptance`, `verifyInvitationAcceptance`, "OZJ") in
   `packages/crypto/src/invitations.ts`.
-- Browser: `inviteToEncryptedProject`, `acceptEncryptedInvitation`,
-  `publishInvitationKeyPackages`, `addInvitedMember`,
-  `completeReadyInvitations`, `joinWelcomedProjects` in
-  `apps/web/src/lib/e2ee/invitations.ts`; `addInvitee` and
-  `joinProjectByWelcome` (full-history verification, issue #817) in
-  `projectGroups.ts`; link capture in `encryptedInvitationLink.ts`.
+- Browser: `inviteToEncryptedProject`, `acceptEncryptedInvitation` (records
+  intent only when the returned statement names the opened link's token),
+  `confirmEncryptedInvitation` (the explicit Join, from the verified
+  statement), `publishInvitationKeyPackages`, `addInvitedMember`,
+  `completeReadyInvitations`, `joinWelcomedProjects` and the removal checks
+  that block automatic re-adds across tabs (`invitationRemovalChecks`,
+  `recordRemovedMembers`) in `apps/web/src/lib/e2ee/invitations.ts`;
+  `addInvitee` and `joinProjectByWelcome` (full-history verification, issue
+  #817) in `projectGroups.ts`; link capture in `encryptedInvitationLink.ts`.
 - Worker: `apps/web/worker/e2eeInvitations.ts` (`prepareAddCommit` gates an
   Add Commit on a claimed KeyPackage of an accepted invitation). Emails name
   the sender, not the project.

@@ -31,9 +31,19 @@ import type { SigningPrivateKey } from './external-keys';
  * verifies it against the owner's device list before it publishes a
  * KeyPackage, and the owner's browser only Commits an Add for invitations
  * it signed.
+ *
+ * Version 2 adds `linkTokenHash`: a hash of the token in the emailed link,
+ * which the owner's browser makes and the Worker mails. The invitee's
+ * browser records that the person accepted an invitation by link only when
+ * the statement it gets back names the token it opened, so the server
+ * cannot answer a link with another invitation. A version 1 statement
+ * (an older app, or a migration invitation, which has no link) is still
+ * verified, but it is joined only on the person's explicit confirmation.
  */
 
 export const PROJECT_INVITATION_VERSION_1 = 1;
+/** Version 1 plus the emailed link's token hash. */
+export const PROJECT_INVITATION_VERSION_2 = 2;
 
 const INVITATION_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x49); // "OZI"
 
@@ -62,11 +72,19 @@ export interface ProjectInvitation {
   readonly signerDeviceId: string;
   /** `publicKeyHash` of that device's signing key. */
   readonly signerKeyHash: Uint8Array;
+  /**
+   * `invitationLinkTokenHash` of the emailed link's token (version 2).
+   * Absent from a version 1 statement, which binds no link.
+   */
+  readonly linkTokenHash?: Uint8Array;
 }
 
-/** Largest canonical invitation: three longest ids and the signer id. */
+/**
+ * Largest canonical invitation: three longest ids and the signer id, and a
+ * version 2 statement's link token hash.
+ */
 export const MAX_PROJECT_INVITATION_BYTES =
-  3 + 1 + 4 * (1 + MAX_ID_BYTES) + HASH_BYTES + 1 + 8 + 8 + HASH_BYTES;
+  3 + 1 + 4 * (1 + MAX_ID_BYTES) + HASH_BYTES + 1 + 8 + 8 + 2 * HASH_BYTES;
 
 export type InvitationFailure =
   /** The signature does not verify under the given signing key. */
@@ -143,6 +161,9 @@ function checkInvitation(value: ProjectInvitation, code: E2eeErrorCode): void {
   }
   if (!isEnvelopeId(value.signerDeviceId)) fail('signerDeviceId is not an id');
   if (!isHash(value.signerKeyHash)) fail('signerKeyHash must be 32 bytes');
+  if (value.linkTokenHash !== undefined && !isHash(value.linkTokenHash)) {
+    fail('linkTokenHash must be 32 bytes');
+  }
 }
 
 /**
@@ -165,16 +186,34 @@ export async function invitationEmailHash(email: string): Promise<Bytes> {
 }
 
 /**
- * Canonical bytes: `"OZI" | u8 1 | u8 length + project id | u8 length +
- * invitation id | u8 length + inviter user id | 32-byte invitee email hash |
- * u8 role (1 editor, 2 viewer) | u64 issuedAt | u64 expiresAt | u8 length +
- * signer device id | 32-byte signer key hash`.
+ * The emailed link's token as a version 2 statement names it:
+ * `SHA-256(label "v1 invitation link token hash" | UTF-8(token))`. The
+ * owner's browser makes the token and signs this hash; the invitee's
+ * browser compares it with the token of the link it opened.
+ */
+export async function invitationLinkTokenHash(token: string): Promise<Bytes> {
+  if (typeof token !== 'string' || token.length === 0 || token.length > 256) {
+    throw new E2eeError('invalid-argument', 'token must be a short string');
+  }
+  return sha256(
+    concatBytes(label('v1 invitation link token hash'), utf8(token))
+  );
+}
+
+/**
+ * Canonical bytes: `"OZI" | u8 version | u8 length + project id | u8 length
+ * + invitation id | u8 length + inviter user id | 32-byte invitee email hash
+ * | u8 role (1 editor, 2 viewer) | u64 issuedAt | u64 expiresAt | u8 length
+ * + signer device id | 32-byte signer key hash`, then for version 2 only a
+ * `32-byte link token hash`. A value with `linkTokenHash` encodes as
+ * version 2, one without as version 1.
  */
 export function encodeProjectInvitation(value: ProjectInvitation): Bytes {
   checkInvitation(value, 'invalid-argument');
+  const linked = value.linkTokenHash !== undefined;
   const writer = new ByteWriter()
     .bytes(INVITATION_MAGIC)
-    .u8(PROJECT_INVITATION_VERSION_1);
+    .u8(linked ? PROJECT_INVITATION_VERSION_2 : PROJECT_INVITATION_VERSION_1);
   writeId(writer, value.projectId);
   writeId(writer, value.invitationId);
   writeId(writer, value.inviterUserId);
@@ -184,7 +223,9 @@ export function encodeProjectInvitation(value: ProjectInvitation): Bytes {
     .u64(value.issuedAt)
     .u64(value.expiresAt);
   writeId(writer, value.signerDeviceId);
-  return writer.bytes(value.signerKeyHash).finish();
+  writer.bytes(value.signerKeyHash);
+  if (linked) writer.bytes(value.linkTokenHash);
+  return writer.finish();
 }
 
 /** Decodes canonical invitation bytes; anything else is `malformed`. */
@@ -200,7 +241,10 @@ export function decodeProjectInvitation(bytes: Uint8Array): ProjectInvitation {
     throw new E2eeError('malformed', 'Not a project invitation');
   }
   const version = reader.u8();
-  if (version !== PROJECT_INVITATION_VERSION_1) {
+  if (
+    version !== PROJECT_INVITATION_VERSION_1 &&
+    version !== PROJECT_INVITATION_VERSION_2
+  ) {
     throw new E2eeError(
       'unsupported-version',
       `Project invitation version ${version} is not supported`
@@ -218,6 +262,10 @@ export function decodeProjectInvitation(bytes: Uint8Array): ProjectInvitation {
   const expiresAt = reader.u64();
   const signerDeviceId = readId(reader);
   const signerKeyHash = copyBytes(reader.bytes(HASH_BYTES));
+  const linkTokenHash =
+    version === PROJECT_INVITATION_VERSION_2
+      ? copyBytes(reader.bytes(HASH_BYTES))
+      : undefined;
   reader.end();
   const value: ProjectInvitation = {
     projectId,
@@ -228,7 +276,8 @@ export function decodeProjectInvitation(bytes: Uint8Array): ProjectInvitation {
     issuedAt,
     expiresAt,
     signerDeviceId,
-    signerKeyHash
+    signerKeyHash,
+    ...(linkTokenHash ? { linkTokenHash } : {})
   };
   checkInvitation(value, 'malformed');
   if (!equalBytes(encodeProjectInvitation(value), bytes)) {
@@ -262,6 +311,11 @@ export interface InvitationExpectations {
   readonly invitationId?: string;
   readonly inviterUserId?: string;
   readonly inviteeEmailHash?: Uint8Array;
+  /**
+   * `invitationLinkTokenHash` of the link's token: the statement must be
+   * version 2 and name exactly it.
+   */
+  readonly linkTokenHash?: Uint8Array;
 }
 
 /**
@@ -313,7 +367,10 @@ export async function verifyProjectInvitation(
     (expected.inviterUserId !== undefined &&
       value.inviterUserId !== expected.inviterUserId) ||
     (expected.inviteeEmailHash !== undefined &&
-      !equalBytes(value.inviteeEmailHash, expected.inviteeEmailHash))
+      !equalBytes(value.inviteeEmailHash, expected.inviteeEmailHash)) ||
+    (expected.linkTokenHash !== undefined &&
+      (value.linkTokenHash === undefined ||
+        !equalBytes(value.linkTokenHash, expected.linkTokenHash)))
   ) {
     refuse('context-mismatch', 'The invitation is for something else');
   }

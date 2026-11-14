@@ -6,13 +6,17 @@ import { encodeGroupReset, signStatement } from './devices';
 import {
   INVITATION_CLOCK_SKEW_MS,
   MAX_INVITATION_ACCEPTANCE_BYTES,
+  MAX_PROJECT_INVITATION_BYTES,
   MAX_PROJECT_INVITATION_LIFETIME_MS,
+  PROJECT_INVITATION_VERSION_1,
+  PROJECT_INVITATION_VERSION_2,
   ProjectInvitationError,
   decodeInvitationAcceptance,
   decodeProjectInvitation,
   encodeInvitationAcceptance,
   encodeProjectInvitation,
   invitationEmailHash,
+  invitationLinkTokenHash,
   invitationStatementHash,
   signInvitationAcceptance,
   signProjectInvitation,
@@ -83,6 +87,99 @@ describe('owner-signed project invitations (slice 5-3a)', () => {
     await expect(
       verifyProjectInvitation(signed, device.publicKey, { now: T })
     ).resolves.toEqual(value);
+  });
+
+  it('binds the emailed link in version 2, and still verifies version 1', async () => {
+    const { device, deviceRaw, value } = await fixture();
+    const token = 'A'.repeat(43);
+    const linkTokenHash = await invitationLinkTokenHash(token);
+    expect(linkTokenHash.byteLength).toBe(32);
+    // Its own label: not the email hash, nor a bare SHA-256 of the token.
+    expect(linkTokenHash).not.toEqual(await invitationEmailHash(token));
+    expect(linkTokenHash).not.toEqual(
+      new Uint8Array(
+        await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token))
+      )
+    );
+    const linked: ProjectInvitation = { ...value, linkTokenHash };
+    const bytes = encodeProjectInvitation(linked);
+    expect([...bytes.subarray(0, 4)]).toEqual([
+      0x4f,
+      0x5a,
+      0x49,
+      PROJECT_INVITATION_VERSION_2
+    ]);
+    expect(bytes.byteLength).toBe(
+      encodeProjectInvitation(value).byteLength + 32
+    );
+    expect(bytes.byteLength).toBeLessThanOrEqual(MAX_PROJECT_INVITATION_BYTES);
+    expect(decodeProjectInvitation(bytes)).toEqual(linked);
+    const signed = await signProjectInvitation(device.privateKey, linked);
+    await expect(
+      verifyProjectInvitation(signed, deviceRaw, {
+        now: T,
+        expected: { linkTokenHash }
+      })
+    ).resolves.toEqual(linked);
+    // Another link's token, or a version 1 statement, does not match a link.
+    await refusedWith(
+      verifyProjectInvitation(signed, deviceRaw, {
+        now: T,
+        expected: {
+          linkTokenHash: await invitationLinkTokenHash('B'.repeat(43))
+        }
+      }),
+      'context-mismatch'
+    );
+    const older = await signProjectInvitation(device.privateKey, value);
+    expect(encodeProjectInvitation(value)[3]).toBe(
+      PROJECT_INVITATION_VERSION_1
+    );
+    expect(decodeProjectInvitation(older.statement).linkTokenHash).toBe(
+      undefined
+    );
+    await expect(
+      verifyProjectInvitation(older, deviceRaw, { now: T })
+    ).resolves.toEqual(value);
+    await refusedWith(
+      verifyProjectInvitation(older, deviceRaw, {
+        now: T,
+        expected: { linkTokenHash }
+      }),
+      'context-mismatch'
+    );
+    // The hash is signed: dropping or swapping it breaks the signature.
+    const swapped = encodeProjectInvitation({
+      ...linked,
+      linkTokenHash: await invitationLinkTokenHash('B'.repeat(43))
+    });
+    await refusedWith(
+      verifyProjectInvitation(
+        { statement: swapped, signature: signed.signature },
+        deviceRaw,
+        { now: T }
+      ),
+      'signature'
+    );
+    await refusedWith(
+      verifyProjectInvitation(
+        { statement: older.statement, signature: signed.signature },
+        deviceRaw,
+        { now: T }
+      ),
+      'signature'
+    );
+    throwsCode(
+      () =>
+        encodeProjectInvitation({
+          ...value,
+          linkTokenHash: new Uint8Array(31)
+        }),
+      'invalid-argument'
+    );
+    await expect(invitationLinkTokenHash('')).rejects.toMatchObject({
+      code: 'invalid-argument'
+    });
   });
 
   it('hashes the normalized email under its own label', async () => {
@@ -223,8 +320,12 @@ describe('owner-signed project invitations (slice 5-3a)', () => {
     badRole[roleAt] = 3;
     throwsCode(() => decodeProjectInvitation(badRole), 'malformed');
     const newer = new Uint8Array(bytes);
-    newer[3] = 2;
+    newer[3] = 3;
     throwsCode(() => decodeProjectInvitation(newer), 'unsupported-version');
+    // A version 1 body relabelled version 2 lacks its link token hash.
+    const relabelled = new Uint8Array(bytes);
+    relabelled[3] = 2;
+    throwsCode(() => decodeProjectInvitation(relabelled), 'malformed');
     // A decoded statement over seven days is refused as malformed.
     const long = new Uint8Array(bytes);
     new DataView(long.buffer).setBigUint64(

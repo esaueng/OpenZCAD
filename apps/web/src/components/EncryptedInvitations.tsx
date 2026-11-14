@@ -32,7 +32,7 @@ const INCOMING_HINTS: Record<InviteeInvitation['state'], string> = {
   'waiting-for-owner':
     'Your keys are ready. Waiting for them to verify you and add you.',
   confirm:
-    'Join only if you expected this invitation from them. Confirming tells them this account accepted it.',
+    'Join only if you expected this invitation from this verified contact. Confirming tells them this account accepted it.',
   ready: 'Preparing your keys for the project…',
   'no-device':
     'Open this invitation on a device that holds your encryption keys.'
@@ -144,6 +144,8 @@ export function EncryptedInvitations({ ready }: { ready: boolean }) {
     try {
       const { acceptEncryptedInvitation } =
         await import('../lib/e2ee/invitations');
+      // An invitation whose statement names no link (an older app's) is
+      // listed below for an explicit Join.
       await acceptEncryptedInvitation(await pageInvitations(), token);
       clearPendingEncryptedInvitation();
     } catch (caught) {
@@ -165,10 +167,8 @@ export function EncryptedInvitations({ ready }: { ready: boolean }) {
     try {
       const { confirmEncryptedInvitation } =
         await import('../lib/e2ee/invitations');
-      await confirmEncryptedInvitation(
-        await pageInvitations(),
-        invitation.record
-      );
+      // Exactly the verified statement this row shows.
+      await confirmEncryptedInvitation(await pageInvitations(), invitation);
     } catch (caught) {
       setError(messageFor(caught));
       setBusy(false);
@@ -237,11 +237,30 @@ export function EncryptedInvitations({ ready }: { ready: boolean }) {
       ) : null}
       {incoming.map((invitation) => {
         const owner = invitation.ownerEmail ?? 'The owner';
+        // Role and project from the verified statement, never the server's
+        // listing; the inviter by the fingerprint of the key compared.
+        const statement = invitation.statement;
+        const inviter = invitation.ownerFingerprint
+          ? `Your verified contact ${invitation.ownerFingerprint}`
+          : owner;
+        const joinable =
+          invitation.state === 'confirm' &&
+          statement !== null &&
+          invitation.ownerFingerprint !== null;
+        const title = !statement
+          ? `An invitation from ${owner} that does not verify`
+          : invitation.state === 'confirm'
+            ? `${inviter} invited you as ${ROLE[statement.role]}`
+            : `${owner} invited you as ${ROLE[statement.role]}`;
         return (
           <SettingRow
             key={invitation.record.invitationId}
-            title={`${owner} invited you as ${ROLE[invitation.record.role]}`}
-            hint={INCOMING_HINTS[invitation.state]}
+            title={title}
+            hint={
+              joinable && statement
+                ? `${INCOMING_HINTS.confirm} Project ${statement.projectId}.`
+                : INCOMING_HINTS[invitation.state]
+            }
           >
             {invitation.state === 'verify-owner' ? (
               <button
@@ -257,12 +276,12 @@ export function EncryptedInvitations({ ready }: { ready: boolean }) {
                 Verify
               </button>
             ) : null}
-            {invitation.state === 'confirm' ? (
+            {joinable && statement ? (
               <button
                 className="primary"
                 type="button"
                 disabled={busy}
-                aria-label={`Join ${owner}’s project as ${ROLE[invitation.record.role]}`}
+                aria-label={`Join project ${statement.projectId} from ${inviter} as ${ROLE[statement.role]}`}
                 onClick={() => void confirm(invitation)}
               >
                 Join

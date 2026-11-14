@@ -38,12 +38,14 @@ import {
   addInvitedMember,
   completeReadyInvitations,
   confirmEncryptedInvitation,
+  invitationRemovalChecks,
   inviteToEncryptedProject,
   joinWelcomedProjects,
   projectInvitations,
   publishInvitationKeyPackages,
   recordRemovedMembers,
   sentInvitations,
+  signInvitationStatement,
   syncInvitations,
   type InvitationContext,
   type InvitationPerson
@@ -53,6 +55,7 @@ import {
   type InvitationStore
 } from '../apps/web/src/lib/e2ee/invitationStore';
 import {
+  catchUpProjectGroup,
   commitProjectGroup,
   joinProjectByWelcome,
   joinProjectGroup,
@@ -207,7 +210,8 @@ function invitationsOf(
           status: w.verified.get(d.account.userId)?.has(userId)
             ? 'verified'
             : 'seen',
-          list: account.list
+          list: account.list,
+          fingerprint: `fingerprint of ${userId}`
         };
       }
     }
@@ -772,7 +776,12 @@ describe('the invitee’s signed acceptance', () => {
     // The invitee's next session signs nothing in the background: they
     // confirm the invitation in the app first (inviter and role shown).
     const [listed] = await acceptedInvitations(inviteeCtx);
-    expect(listed).toMatchObject({ state: 'confirm', ownerEmail: OWNER_EMAIL });
+    expect(listed).toMatchObject({
+      state: 'confirm',
+      ownerEmail: OWNER_EMAIL,
+      ownerFingerprint: `fingerprint of ${OWNER}`,
+      statement: { role: 'editor', projectId }
+    });
     expect(await publishInvitationKeyPackages(inviteeCtx)).toEqual([]);
     expect((await syncInvitations(inviteeCtx)).errors).toEqual([]);
     expect(
@@ -782,7 +791,7 @@ describe('the invitee’s signed acceptance', () => {
         invitation.invitationId
       )
     ).toEqual([{ acceptance_statement: null }]);
-    await confirmEncryptedInvitation(inviteeCtx, listed!.record);
+    await confirmEncryptedInvitation(inviteeCtx, listed!);
     expect(await acceptedInvitations(inviteeCtx)).toMatchObject([
       { state: 'ready' }
     ]);
@@ -1036,9 +1045,9 @@ describe('the invitee’s signed acceptance', () => {
       ...invitationsOf(w, laptop, store),
       groups: {
         ...laptop.groups,
-        onMembersRemoved: async (removal) => {
-          await recordRemovedMembers(store, OWNER, removal);
-        }
+        onMembersRemoved: (removal) =>
+          recordRemovedMembers(store, OWNER, removal),
+        removalChecks: invitationRemovalChecks(store, OWNER)
       }
     };
   }
@@ -1175,6 +1184,282 @@ describe('the invitee’s signed acceptance', () => {
       confirmReAdd: true
     });
     expect(memberRole(w.srv, projectId, OTHER)).toBe('viewer');
+  });
+
+  /**
+   * Two tabs of the owner's browser: one IndexedDB store behind both, but
+   * each tab its own module state (a store object of its own, so the
+   * per-page latch does not carry over) and the same device's MLS session.
+   */
+  function tabOf(
+    w: World,
+    laptop: Device,
+    shared: InvitationStore
+  ): InvitationContext {
+    return recordingOwner(w, laptop, { ...shared });
+  }
+
+  it('blocks an automatic re-add in another tab while a removal there is unrecorded', async () => {
+    const w = world();
+    const setup = await removedElsewhere(w, true);
+    const { projectId, laptop } = setup;
+    const shared = setup.ownerCtx.store;
+    // Tab A processes the desktop's removal, advancing the shared session,
+    // and fails to record it.
+    const tabA = recordingOwner(w, laptop, {
+      ...shared,
+      rememberRemoved: () => Promise.reject(new Error('quota exceeded'))
+    });
+    const epoch = groupEpoch(w.srv, projectId);
+    await catchUpProjectGroup(tabA.groups, projectId);
+    expect(await shared.removedMembers(OWNER)).toEqual([]);
+    // The Commit's check stays open (and the failed record opened one).
+    const open = await shared.removalChecks(OWNER);
+    expect(open.length).toBeGreaterThan(0);
+    expect(open.every((check) => check.projectId === projectId)).toBe(true);
+    // Tab B reads the advanced session: nothing to replay, no record of
+    // the removal, but the open check stops it adding them back.
+    const tabB = tabOf(w, laptop, shared);
+    const sync = await syncInvitations(tabB);
+    expect(sync.added).toEqual([]);
+    expect(sync.outgoing).toMatchObject([{ state: 'confirm-re-add' }]);
+    await expect(
+      addInvitedMember(tabB, sync.outgoing[0]!.record)
+    ).rejects.toSatisfy(refusedWith('removed-member'));
+    expect(memberRole(w.srv, projectId, OTHER)).toBeNull();
+    expect(groupEpoch(w.srv, projectId)).toBe(epoch);
+    // The owner's explicit confirmation still adds them.
+    await addInvitedMember(tabB, sync.outgoing[0]!.record, {
+      confirmReAdd: true
+    });
+    expect(memberRole(w.srv, projectId, OTHER)).toBe('viewer');
+  });
+
+  it('closes a removal check once the removal is recorded', async () => {
+    const w = world();
+    const setup = await removedElsewhere(w, true);
+    const { projectId } = setup;
+    await catchUpProjectGroup(setup.ownerCtx.groups, projectId);
+    expect(await setup.ownerCtx.store.removalChecks(OWNER)).toEqual([]);
+    expect(await setup.ownerCtx.store.removedMembers(OWNER)).toMatchObject([
+      { projectId, userId: OTHER }
+    ]);
+    // Another tab sees the record, not an open check, and still asks.
+    const tabB = tabOf(w, setup.laptop, setup.ownerCtx.store);
+    expect(await sentInvitations(tabB)).toMatchObject([
+      { state: 'confirm-re-add' }
+    ]);
+  });
+
+  it('processes no Commit in a tab that cannot mark the removal check, and adds nobody there', async () => {
+    const w = world();
+    const setup = await removedElsewhere(w, true);
+    const { projectId, laptop } = setup;
+    const shared = setup.ownerCtx.store;
+    const broken: InvitationStore = {
+      ...shared,
+      beginRemovalCheck: () => Promise.reject(new Error('quota exceeded'))
+    };
+    const tab = recordingOwner(w, laptop, broken);
+    const ref = { userId: OWNER, deviceId: 'owner_laptop', projectId };
+    const before = (await laptop.groups.sessions.status(ref)).epoch;
+    await expect(catchUpProjectGroup(tab.groups, projectId)).rejects.toThrow(
+      /could not note a change/
+    );
+    expect((await laptop.groups.sessions.status(ref)).epoch).toBe(before);
+    expect(await shared.removalChecks(OWNER)).toEqual([]);
+    // That tab stays latched: it adds nobody automatically.
+    const sync = await syncInvitations(tab);
+    expect(sync.added).toEqual([]);
+    expect(sync.outgoing).toMatchObject([{ state: 'confirm-re-add' }]);
+    expect(memberRole(w.srv, projectId, OTHER)).toBeNull();
+  });
+});
+
+describe('the emailed link, bound into the owner-signed statement', () => {
+  /** The owner's project and an invitation of the invitee, not accepted. */
+  async function sent(w: World, role: 'editor' | 'viewer' = 'editor') {
+    const project = await ownersProject(w);
+    const ownerCtx = invitationsOf(w, project.laptop);
+    const invitation = await inviteToEncryptedProject(
+      ownerCtx,
+      project.projectId,
+      INVITEE_EMAIL,
+      role
+    );
+    return { ...project, ownerCtx, invitation, token: w.mail.at(-1)!.token };
+  }
+
+  it('records the link only when the statement names the token opened', async () => {
+    const w = world();
+    const { projectId, invitation, token } = await sent(w);
+    const laptop = emailDevice(w, other, 'other_laptop', { members: [owner] });
+    const inviteeCtx = invitationsOf(w, laptop);
+    const accepted = await acceptEncryptedInvitation(inviteeCtx, token);
+    expect(accepted).toMatchObject({
+      linked: true,
+      invitation: { invitationId: invitation.invitationId }
+    });
+    expect(await inviteeCtx.store.intents(OTHER)).toMatchObject([
+      { invitationId: invitation.invitationId, projectId, source: 'link' }
+    ]);
+  });
+
+  it('refuses a link the server answers with another invitation, recording and signing nothing', async () => {
+    const w = world();
+    // The owner invites the invitee; the server keeps that link's answer.
+    const { projectId, ownerCtx, invitation } = await sent(w);
+    // It also invites the third account, whose link the server answers
+    // with the invitee's invitation, reporting the invitee's email.
+    await inviteToEncryptedProject(ownerCtx, projectId, THIRD_EMAIL, 'viewer');
+    const carolToken = w.mail.at(-1)!.token;
+    const bobs = (await projectInvitations(ownerCtx, projectId)).find(
+      (entry) => entry.record.invitationId === invitation.invitationId
+    )!.record;
+    verify(w, THIRD, OWNER);
+    verify(w, OWNER, THIRD);
+    const carol = emailDevice(w, third, 'third_laptop', { members: [owner] });
+    const substituted = { ...bobs, acceptedByUserId: THIRD };
+    carol.answer = async (path, _init, response) =>
+      path === '/api/e2ee/invitations/accept'
+        ? Response.json({ invitation: substituted })
+        : path === '/api/e2ee/invitations'
+          ? Response.json({ invitations: [substituted] })
+          : response;
+    const carolCtx: InvitationContext = {
+      ...invitationsOf(w, carol),
+      email: INVITEE_EMAIL
+    };
+    await expect(
+      acceptEncryptedInvitation(carolCtx, carolToken)
+    ).rejects.toSatisfy(
+      (error: unknown) =>
+        error instanceof InvitationError &&
+        error.code === 'statement-invalid' &&
+        /another invitation/.test(error.message)
+    );
+    expect(await carolCtx.store.intents(THIRD)).toEqual([]);
+    // Nothing is signed or published for it in the background.
+    expect(await acceptedInvitations(carolCtx)).toMatchObject([
+      { state: 'confirm' }
+    ]);
+    expect(await publishInvitationKeyPackages(carolCtx)).toEqual([]);
+    expect(
+      rows<{ acceptance_statement: string | null }>(
+        w.srv,
+        'SELECT acceptance_statement FROM e2ee_invitations WHERE invitation_id = ?',
+        invitation.invitationId
+      )
+    ).toEqual([{ acceptance_statement: null }]);
+    expect((await syncInvitations(ownerCtx)).added).toEqual([]);
+    expect(memberRole(w.srv, projectId, THIRD)).toBeNull();
+  });
+
+  it('joins a version 1 invitation only on a confirmation that shows the verified role', async () => {
+    const w = world();
+    const { projectId, laptop: ownerLaptop } = await ownersProject(w);
+    const ownerCtx = invitationsOf(w, ownerLaptop);
+    // An older app: a statement with no link token, posted without one.
+    const signed = await signInvitationStatement(
+      ownerCtx,
+      projectId,
+      INVITEE_EMAIL,
+      'viewer'
+    );
+    expect(fromBase64Url(signed.statement)[3]).toBe(1);
+    await ownerCtx.api.create(projectId, {
+      email: INVITEE_EMAIL,
+      statement: signed.statement,
+      signature: signed.signature
+    });
+    const laptop = emailDevice(w, other, 'other_laptop', { members: [owner] });
+    const inviteeCtx = invitationsOf(w, laptop);
+    expect(
+      await acceptEncryptedInvitation(inviteeCtx, w.mail.at(-1)!.token)
+    ).toMatchObject({ linked: false });
+    expect(await inviteeCtx.store.intents(OTHER)).toEqual([]);
+    verify(w, OTHER, OWNER);
+    verify(w, OWNER, OTHER);
+    // Listed for confirmation, with the signed role and the owner's
+    // fingerprint; nothing is signed before it.
+    const [listed] = await acceptedInvitations(inviteeCtx);
+    expect(listed).toMatchObject({
+      state: 'confirm',
+      statement: { role: 'viewer', projectId },
+      ownerFingerprint: `fingerprint of ${OWNER}`
+    });
+    expect(await publishInvitationKeyPackages(inviteeCtx)).toEqual([]);
+    await confirmEncryptedInvitation(inviteeCtx, listed!);
+    expect(await inviteeCtx.store.intents(OTHER)).toMatchObject([
+      { statementHash: listed!.statementHash, source: 'confirmed' }
+    ]);
+    expect(await publishInvitationKeyPackages(inviteeCtx)).toEqual([
+      signed.invitationId
+    ]);
+    const sync = await syncInvitations(ownerCtx);
+    expect(sync.errors).toEqual([]);
+    expect(sync.added).toEqual([signed.invitationId]);
+    expect(memberRole(w.srv, projectId, OTHER)).toBe('viewer');
+  });
+
+  it('refuses an invitation whose listed role conflicts with its statement', async () => {
+    const w = world();
+    const { projectId, invitation, token } = await sent(w, 'viewer');
+    const laptop = emailDevice(w, other, 'other_laptop', { members: [owner] });
+    const inviteeCtx = invitationsOf(w, laptop);
+    // The server answers the link and lists the invitation as editor.
+    laptop.answer = async (path, _init, response) => {
+      if (
+        path !== '/api/e2ee/invitations/accept' &&
+        path !== '/api/e2ee/invitations'
+      ) {
+        return response;
+      }
+      const body = (await response.json()) as {
+        invitation?: E2eeInvitationRecord;
+        invitations?: E2eeInvitationRecord[];
+      };
+      return Response.json(
+        body.invitation
+          ? { invitation: { ...body.invitation, role: 'editor' } }
+          : {
+              invitations: body.invitations!.map((record) => ({
+                ...record,
+                role: 'editor'
+              }))
+            },
+        { status: response.status }
+      );
+    };
+    await expect(
+      acceptEncryptedInvitation(inviteeCtx, token)
+    ).rejects.toSatisfy(
+      (error: unknown) =>
+        error instanceof InvitationError && error.code === 'statement-invalid'
+    );
+    expect(await inviteeCtx.store.intents(OTHER)).toEqual([]);
+    verify(w, OTHER, OWNER);
+    const [listed] = await acceptedInvitations(inviteeCtx);
+    expect(listed).toMatchObject({
+      state: 'invalid',
+      statement: null,
+      statementHash: null,
+      record: { invitationId: invitation.invitationId, role: 'editor' }
+    });
+    await expect(
+      confirmEncryptedInvitation(inviteeCtx, listed!)
+    ).rejects.toSatisfy(
+      (error: unknown) =>
+        error instanceof InvitationError && error.code === 'statement-invalid'
+    );
+    expect(await publishInvitationKeyPackages(inviteeCtx)).toEqual([]);
+    expect(
+      rows<{ n: number }>(
+        w.srv,
+        'SELECT COUNT(*) AS n FROM e2ee_key_packages WHERE project_id = ?',
+        projectId
+      )
+    ).toEqual([{ n: 0 }]);
   });
 });
 

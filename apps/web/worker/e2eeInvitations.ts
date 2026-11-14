@@ -6,7 +6,10 @@
  *   owner-signed invitation statement ("OZI", `@openzcad/crypto`) after
  *   checking its signature against the owner's newest device list, keeps a
  *   hash of the invitee's email (not the email) and emails a link that names
- *   the sender, not the project. `GET` lists them; `DELETE …/:invitationId`
+ *   the sender, not the project. A version 2 statement names the hash of
+ *   the link's token (`invitationLinkTokenHash`); the owner's browser made
+ *   the token and posts it, and the Worker mails exactly that token, so the
+ *   invitee's browser can check the statement it gets back for the link. `GET` lists them; `DELETE …/:invitationId`
  *   revokes one that no Add completed.
  * - `POST /api/e2ee/invitations/accept`: binds the signed-in account whose
  *   email hashes to the statement's. It does not make a member: the owner's
@@ -50,6 +53,7 @@ import {
   fromBase64Url,
   fromHex,
   invitationEmailHash,
+  invitationLinkTokenHash,
   invitationStatementHash,
   toHex,
   verifyInvitationAcceptance,
@@ -401,6 +405,39 @@ async function createInvitation(
       'The invitation statement does not verify with your device’s key.'
     );
   }
+  // A version 2 statement binds the link: its token is the owner's, and
+  // only that token is mailed. A version 1 statement gets one made here.
+  let token: string;
+  if (decoded.linkTokenHash) {
+    token = tokenField(body.token);
+    if (
+      toHex(await invitationLinkTokenHash(token)) !==
+      toHex(decoded.linkTokenHash)
+    ) {
+      refuse(
+        400,
+        'E2EE_INVITATION_INVALID',
+        'The invitation statement names another link.'
+      );
+    }
+    // A token is one link: the owner's browser makes a fresh one each time.
+    const used = await db
+      .prepare('SELECT 1 AS found FROM e2ee_invitations WHERE token_hash = ?')
+      .bind(await hashProjectInvitationToken(token))
+      .first<{ found: number }>();
+    if (used) {
+      refuse(
+        409,
+        'E2EE_INVITATION_INVALID',
+        'That invitation link is already in use.'
+      );
+    }
+  } else {
+    if (body.token !== undefined) {
+      invalid('token belongs only with a statement that names its link');
+    }
+    token = createProjectInvitationToken();
+  }
   if (
     host.email &&
     toHex(await invitationEmailHash(host.email)) === toHex(emailHash)
@@ -422,7 +459,6 @@ async function createInvitation(
     Math.floor(seconds / PROJECT_INVITATION_RATE_WINDOW_SECONDS) *
     PROJECT_INVITATION_RATE_WINDOW_SECONDS;
   const bucket = `project-invite-account:${userId}`;
-  const token = createProjectInvitationToken();
   const tokenHash = await hashProjectInvitationToken(token);
   const emailHex = toHex(emailHash);
   const now = new Date(nowMs).toISOString();

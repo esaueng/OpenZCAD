@@ -403,9 +403,26 @@ export interface ProjectGroupContext {
    * links made before the removal. A returned promise is awaited before
    * the Commit's caller goes on, so a record of the removal (the owner's
    * invitation sweep never adds them back) is written before any Add this
-   * device builds next. A throw or rejection is ignored.
+   * device builds next. It resolves `false` (or throws) when that record
+   * could not be written: the step's removal check (`removalChecks`) then
+   * stays open. A throw or rejection does not undo the Commit.
    */
-  readonly onMembersRemoved?: (removal: MembersRemoved) => void | Promise<void>;
+  readonly onMembersRemoved?: (
+    removal: MembersRemoved
+  ) => void | boolean | Promise<void | boolean>;
+  /**
+   * Durable marks, shared by every tab of this browser, around each step
+   * that advances this device's state of a project this account owns by a
+   * Commit (processing one, or confirming its own). The mark is written
+   * before the state advances and ended only once every removal that step
+   * made was recorded (`onMembersRemoved`), or once it is clear the state
+   * did not advance. While one is open, the owner's invitation sweep adds
+   * nobody to that project automatically: another tab that reads the
+   * advanced state never replays the removal, so the record is the only
+   * way it could know. A mark that cannot be written throws, and the state
+   * is not advanced.
+   */
+  readonly removalChecks?: RemovalChecks;
   /**
    * Told when a Commit this device sent or processed removed leaves of
    * other members who keep at least one leaf (slice 5-7: a co-member's
@@ -2623,12 +2640,64 @@ async function departedIdentities(
   return leafless.filter((userId) => departed.includes(userId));
 }
 
+/** An open removal check (`ProjectGroupContext.removalChecks`). */
+export interface RemovalCheck {
+  /** Every removal of the step is recorded, or nothing advanced. */
+  end(): Promise<void>;
+}
+
+export interface RemovalChecks {
+  /** Durably marks `projectId`'s state as about to advance; throws if not. */
+  begin(projectId: string): Promise<RemovalCheck>;
+}
+
+/**
+ * Runs `step`, which advances this device's state of `projectId` past
+ * `epochBefore` by a Commit and reports its removals (resolving whether
+ * they were all recorded), inside a removal check when this account owns
+ * the project or its roles cannot say (members never add anyone). The
+ * check ends once the removals are recorded, or when the step failed
+ * without advancing the state; otherwise it stays open, and the owner's
+ * sweep adds nobody to the project. A check that cannot begin throws
+ * before `step` runs.
+ */
+async function withRemovalCheck<T>(
+  ctx: ProjectGroupContext,
+  ref: MlsProjectRef,
+  projectId: string,
+  status: SessionStatus,
+  epochBefore: number | null,
+  step: () => Promise<{ readonly result: T; readonly recorded: boolean }>
+): Promise<T> {
+  const owner = status.roles?.users.find(
+    (user) => user.role === 'owner'
+  )?.userId;
+  if (!ctx.removalChecks || (owner && owner !== ctx.account.userId)) {
+    return (await step()).result;
+  }
+  const check = await ctx.removalChecks.begin(projectId);
+  let settled = false;
+  try {
+    const { result, recorded } = await step();
+    settled = recorded;
+    return result;
+  } catch (error) {
+    const after = await ctx.sessions.status(ref).catch(() => null);
+    settled = after !== null && after.epoch === epochBefore;
+    throw error;
+  } finally {
+    // An end that fails leaves the check open: the sweep only asks more.
+    if (settled) await check.end().catch(() => undefined);
+  }
+}
+
 /**
  * Tells `onMembersRemoved` which other members a processed or confirmed
  * Commit took the last leaf of (slice 5-5, for share-link reissue), and
  * `onMemberDevicesRemoved` which leaves it removed of other members who
  * stay (slice 5-7's rotation of a co-member's device removal, for new
- * share-authority statements).
+ * share-authority statements). Resolves whether every removal of members
+ * was recorded (true when there was none).
  */
 async function reportRemovals(
   ctx: ProjectGroupContext,
@@ -2636,12 +2705,12 @@ async function reportRemovals(
   projectId: string,
   keyEpochBase: number,
   change: EpochChange
-): Promise<void> {
+): Promise<boolean> {
   if (
     (!ctx.onMembersRemoved && !ctx.onMemberDevicesRemoved) ||
     change.removed.length === 0
   ) {
-    return;
+    return true;
   }
   const status = await ctx.sessions.status(ref);
   const keyEpoch = keyEpochBase + change.epoch;
@@ -2656,20 +2725,25 @@ async function reportRemovals(
   const devices = others
     .filter((leaf) => stays(leaf.userId))
     .map(({ userId, deviceId }) => ({ userId, deviceId }));
+  let recorded = true;
   try {
-    if (userIds.length > 0) {
-      await ctx.onMembersRemoved?.({ projectId, keyEpoch, userIds });
+    if (userIds.length > 0 && ctx.onMembersRemoved) {
+      recorded =
+        (await ctx.onMembersRemoved({ projectId, keyEpoch, userIds })) !==
+        false;
     }
   } catch {
-    // Best effort: the Commit stands either way.
+    // The Commit stands either way; its removal check stays open.
+    recorded = false;
   }
   try {
     if (devices.length > 0) {
       ctx.onMemberDevicesRemoved?.({ projectId, keyEpoch, devices });
     }
   } catch {
-    // Best effort, as above.
+    // Best effort: the Commit stands either way.
   }
+  return recorded;
 }
 
 /**
@@ -2821,18 +2895,30 @@ async function commitLoop(
       }
     );
     if (submitted.accepted) {
-      const change = await ctx.sessions.confirmCommit(ref, directory);
-      await publishConfirmedAuthority(
-        ctx,
-        projectId,
-        submitted.group.keyEpochBase
-      );
-      await reportRemovals(
+      await withRemovalCheck(
         ctx,
         ref,
         projectId,
-        submitted.group.keyEpochBase,
-        change
+        status,
+        status.epoch,
+        async () => {
+          const change = await ctx.sessions.confirmCommit(ref, directory);
+          await publishConfirmedAuthority(
+            ctx,
+            projectId,
+            submitted.group.keyEpochBase
+          );
+          return {
+            result: undefined,
+            recorded: await reportRemovals(
+              ctx,
+              ref,
+              projectId,
+              submitted.group.keyEpochBase,
+              change
+            )
+          };
+        }
       );
       return stateOf(submitted.group);
     }
@@ -3487,67 +3573,120 @@ export async function catchUpProjectGroup(
           `The server skipped from epoch ${epoch} to ${commit.epoch}.`
         );
       }
-      let processed;
-      try {
-        processed = await processCommit(
-          ctx,
-          ref,
-          projectId,
-          group,
-          directory,
-          commit
-        );
-      } catch (error) {
-        const revoked = isPolicyRefusal(error, 'credential-revoked');
-        const historic =
-          revoked || isPolicyRefusal(error, 'rejoin-psk-before-revocation')
-            ? await historicalDirectory(
-                ctx,
-                projectId,
-                group,
-                directory,
-                commit
-              )
-            : null;
-        if (!historic) {
-          if (revoked) {
-            throw await revokedCommitter(ctx, projectId, group, commit);
-          }
-          throw error;
-        }
-        processed = await processCommit(
-          ctx,
-          ref,
-          projectId,
-          group,
-          historic,
-          commit
-        );
-      }
-      if (processed.kind !== 'commit') {
-        throw new ProjectGroupError(
-          'server-mismatch',
-          'The sequencer delivered a message that is not a Commit.'
-        );
-      }
-      if (processed.change.removedSelf) {
+      const next = await processInCheck(
+        ctx,
+        ref,
+        projectId,
+        status,
+        epoch,
+        group,
+        directory,
+        commit
+      );
+      if (next === null) {
         throw new ProjectGroupError(
           'no-session',
           'This device was removed from the project’s group.'
         );
       }
-      epoch = processed.change.epoch;
+      epoch = next;
+    }
+    if (!page.more) group = await fetchGroup(ctx, projectId);
+  }
+}
+
+/**
+ * Processes one Commit during catch-up inside a removal check, then
+ * remembers its roles and reports its removals. Resolves the new epoch, or
+ * null when the Commit removed this device (its removals of others are
+ * still reported).
+ */
+function processInCheck(
+  ctx: ProjectGroupContext,
+  ref: MlsProjectRef,
+  projectId: string,
+  status: SessionStatus,
+  epoch: number,
+  group: E2eeProjectGroupRecord,
+  directory: DirectoryInput,
+  commit: E2eeMlsCommitRecord
+): Promise<number | null> {
+  return withRemovalCheck(ctx, ref, projectId, status, epoch, async () => {
+    const change = await processAccepted(
+      ctx,
+      ref,
+      projectId,
+      group,
+      directory,
+      commit
+    );
+    if (!change.removedSelf) {
       await afterProcessed(ctx, ref, projectId, group.keyEpochBase, commit);
-      await reportRemovals(
+    }
+    return {
+      result: change.removedSelf ? null : change.epoch,
+      recorded: await reportRemovals(
         ctx,
         ref,
         projectId,
         group.keyEpochBase,
-        processed.change
-      );
+        change
+      )
+    };
+  });
+}
+
+/**
+ * Processes one Commit the sequencer accepted during catch-up, with the
+ * historical directory a revoked device's Commit needs, and refuses
+ * anything that is not a Commit.
+ */
+async function processAccepted(
+  ctx: ProjectGroupContext,
+  ref: MlsProjectRef,
+  projectId: string,
+  group: E2eeProjectGroupRecord,
+  directory: DirectoryInput,
+  commit: E2eeMlsCommitRecord
+): Promise<EpochChange> {
+  let processed;
+  try {
+    processed = await processCommit(
+      ctx,
+      ref,
+      projectId,
+      group,
+      directory,
+      commit
+    );
+  } catch (error) {
+    const revoked = isPolicyRefusal(error, 'credential-revoked');
+    const historic =
+      revoked || isPolicyRefusal(error, 'rejoin-psk-before-revocation')
+        ? await historicalDirectory(ctx, projectId, group, directory, commit)
+        : null;
+    if (!historic) {
+      if (revoked) {
+        throw await revokedCommitter(ctx, projectId, group, commit);
+      }
+      throw error;
     }
-    if (!page.more) group = await fetchGroup(ctx, projectId);
+    processed = await processCommit(
+      ctx,
+      ref,
+      projectId,
+      group,
+      historic,
+      commit
+    );
   }
+  if (processed.kind !== 'commit') {
+    throw new ProjectGroupError(
+      'server-mismatch',
+      'The sequencer delivered a message that is not a Commit.'
+    );
+  }
+  return processed.change;
 }
 
 /**
@@ -4126,7 +4265,7 @@ export async function recoverProjectGroup(
   if (winner && sameBytes(bytes(winner.message), pending.commit)) {
     const directory = await directoryFor(ctx, projectId);
     if (external) await ctx.sessions.confirmRejoin(ref, directory);
-    else await ctx.sessions.confirmCommit(ref, directory);
+    else await confirmRecovered(ctx, ref, projectId, status, directory);
     const group = await fetchGroup(ctx, projectId);
     rememberProjectKey(
       ctx.account.userId,
@@ -4181,11 +4320,45 @@ export async function recoverProjectGroup(
     throw error;
   }
   if (submitted.accepted) {
-    await ctx.sessions.confirmCommit(ref, directory);
+    await confirmRecovered(ctx, ref, projectId, status, directory);
     return 'resent';
   }
   await ctx.sessions.discardCommit(ref);
   return 'discarded';
+}
+
+/**
+ * Confirms a recovered pending Commit of this device, inside a removal
+ * check, and reports the members it removed like any confirmed Commit.
+ */
+async function confirmRecovered(
+  ctx: ProjectGroupContext,
+  ref: MlsProjectRef,
+  projectId: string,
+  status: SessionStatus,
+  directory: DirectoryInput
+): Promise<void> {
+  await withRemovalCheck(
+    ctx,
+    ref,
+    projectId,
+    status,
+    status.epoch,
+    async () => {
+      const change = await ctx.sessions.confirmCommit(ref, directory);
+      const group = await fetchGroup(ctx, projectId);
+      return {
+        result: undefined,
+        recorded: await reportRemovals(
+          ctx,
+          ref,
+          projectId,
+          group.keyEpochBase,
+          change
+        )
+      };
+    }
+  );
 }
 
 // --- Solo group reset (decision D9) ----------------------------------------

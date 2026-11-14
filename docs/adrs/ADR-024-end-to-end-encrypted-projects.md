@@ -577,6 +577,13 @@ comparison, which is safe only because of its commitment step.
   one comparison per person, not one per project. The comparison is mutual:
   the invitee verifies the owner's fingerprint in the same step, which anchors
   the project's roster for them. Sharing remains owner-only (ADR-019).
+  The owner's statement also names a hash of the emailed link's token, which
+  the owner's browser makes, so the invitee's browser accepts by link only
+  the invitation that names the link it opened. The invitee's device then
+  signs an acceptance of that exact statement, and the owner adds only an
+  account whose device signed one. An invitation the server merely lists,
+  or one whose statement names no link, is joined only on the invitee's
+  explicit confirmation of the verified statement.
 - **Invitation emails** name the sender, not the project.
 - **Share links** become `#share=<token>.<key>.<owner>`, where `<owner>` is
   the full hash of the owner's identity key; the fragment never reaches the
