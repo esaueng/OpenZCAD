@@ -1062,9 +1062,7 @@ describe('persisted enum selectors and freeform values', () => {
         data: { dimensions: { primitiveKind: 'width', width: '2 * width' } }
       }
     };
-    expect(
-      reservedDocumentIdentifierError({ commands: [command] })
-    ).toBeNull();
+    expect(reservedDocumentIdentifierError({ commands: [command] })).toBeNull();
     expect(
       reservedDocumentIdentifierError({
         commands: [
@@ -1084,6 +1082,25 @@ describe('persisted enum selectors and freeform values', () => {
       })
     ).not.toBeNull();
   });
+
+  it.each(['primitiveKind', 'patternKind', 'bodyType'])(
+    'accepts a node id spelled like an enum field ("%s")',
+    (nodeId) => {
+      const json = JSON.parse(JSON.stringify(valid())) as {
+        nodes: Record<string, { kind?: string; id?: string }>;
+      };
+      const [key, node] = Object.entries(json.nodes).find(
+        ([, candidate]) => candidate.kind === 'feature'
+      )!;
+      delete json.nodes[key];
+      json.nodes[nodeId] = { ...node, id: nodeId };
+      expect(reservedDocumentIdentifierError(json as object)).toBeNull();
+      // Its history snapshot of the same map is accepted too.
+      expect(
+        reservedIdentifierError({ [nodeId]: json.nodes[nodeId] }, 'nodes')
+      ).toBeNull();
+    }
+  );
 
   it('still refuses a reserved metadata key', () => {
     const value = received((json) => {

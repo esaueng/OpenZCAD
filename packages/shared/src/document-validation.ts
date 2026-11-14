@@ -473,6 +473,23 @@ function ownsFreeformField(
   return false;
 }
 
+/**
+ * Fields whose value is a map keyed by ids (`ProjectDocument.nodes`, the
+ * derived body, datum and asset maps, folder placements). An entry's key is an
+ * id, not a schema property, so an id that happens to be spelled like an enum
+ * field (a node id "primitiveKind") is not held to that enum; the fields
+ * inside the entry still are.
+ */
+const ID_MAP_FIELDS: ReadonlySet<string> = new Set([
+  'nodes',
+  'bodyRepresentations',
+  'datumFrames',
+  'datumAxes',
+  'assets',
+  'shaprImports',
+  'placements'
+]);
+
 /** Whether a string under `field` is a key, id or selector: never reserved. */
 function isKeyLikeField(field: string | undefined): boolean {
   return (
@@ -593,9 +610,11 @@ export function reservedIdentifierError(
         field: key,
         parent: entry,
         freeform,
-        members: freeform
-          ? undefined
-          : (featureEnums?.get(key) ?? ENUM_FIELDS.get(key))
+        members:
+          freeform ||
+          (entry.field !== undefined && ID_MAP_FIELDS.has(entry.field))
+            ? undefined
+            : (featureEnums?.get(key) ?? ENUM_FIELDS.get(key))
       });
     }
     if (entry.freeform) continue;
