@@ -5,6 +5,7 @@ import {
   DEFAULT_APP_SETTINGS,
   holdsOnlyAccountServerSettings,
   SETTINGS_ENCRYPTION_REQUIRED_CODE,
+  SETTINGS_SEAL_REQUIRED_CODE,
   toUserId,
   withAccountServerSettings,
   type AppSettings,
@@ -162,6 +163,42 @@ describe('PATCH /api/settings for an encrypted library', () => {
     expect(JSON.parse(storedRow().settings_json)).toMatchObject({
       collaboration: { enabled: true }
     });
+  });
+
+  it('keeps readable settings from before until a device can seal them', async () => {
+    const d1 = seed(true);
+    // Stored readable before the library was encrypted.
+    db!
+      .prepare(
+        `INSERT INTO user_settings (user_id, settings_json, revision, updated_at)
+       VALUES (?, ?, 1, ?)`
+      )
+      .run(USER, JSON.stringify(privateSettings()), NOW);
+    // A device with locked keys cannot seal them: its write would reset
+    // them to defaults for every device, so it is refused.
+    const locked = await worker.fetch(
+      patch({
+        expectedRevision: 1,
+        settings: accountServerSettings(privateSettings())
+      }),
+      env(d1, projectsOn)
+    );
+    expect(locked.status).toBe(409);
+    expect(await locked.json()).toMatchObject({
+      code: SETTINGS_SEAL_REQUIRED_CODE
+    });
+    expect(storedRow().settings_json).toContain('sliding clearances');
+    // A device holding the account key seals them.
+    const sealed = await worker.fetch(
+      patch({
+        expectedRevision: 1,
+        settings: accountServerSettings(privateSettings()),
+        sealedSettings: SEALED
+      }),
+      env(d1, projectsOn)
+    );
+    expect(sealed.status).toBe(200);
+    expect(storedRow().settings_json).not.toContain('sliding clearances');
   });
 
   it('refuses a client that leaves fields to the stored copy', async () => {

@@ -16,6 +16,7 @@ import {
   type CloudSettingsAutosaveOptions
 } from '../lib/cloudSettingsAutosave';
 import { errorMessage } from '../lib/errors';
+import { subscribeAccountSettingsMerged } from '../lib/accountSettingsEvents';
 import { savedPanelWidths } from '../lib/panelWidths';
 
 export interface AppSettingsSyncInput {
@@ -227,6 +228,19 @@ export function useAppSettingsSync({
       cloudSettingsSessionUserRef.current = null;
     };
   }, [api]);
+
+  // A save that merged this device's edits onto the account's sealed
+  // settings (read while its keys were locked): show what the account now
+  // holds, so the next save carries it rather than undoing the merge.
+  useEffect(
+    () =>
+      subscribeAccountSettingsMerged((userId, settings) => {
+        if (cloudSettingsSessionUserRef.current !== userId) return;
+        appSettingsRef.current = settings;
+        setAppSettings(settings);
+      }),
+    []
+  );
 
   /** Ends the account session's autosave, if one was connected. */
   const endCloudSettingsAutosave = useCallback(() => {

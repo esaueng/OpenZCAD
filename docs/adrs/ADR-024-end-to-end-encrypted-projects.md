@@ -1474,12 +1474,27 @@ account whose library is encrypted (the rule above) stores them sealed.
   authentication), or locked keys, leaves this device's own values for the
   sealed fields. Readable settings left from before the account encrypted
   are sealed by the first read that holds the account key.
-- **Writes.** The browser sends the readable part and a new record. A device
-  with locked keys sends the readable part alone and the Worker keeps the
-  stored record. The Worker refuses a write that carries more than the
-  readable part, or that omits fields it would fill from the stored copy
+- **Writes.** The browser sends the readable part and a new record, at a
+  sequence above both its own pin and every record it has seen the account
+  hold (read from the header, which needs no key), so no device reuses or
+  lowers a sequence. A device with locked keys sends the readable part alone
+  and the Worker keeps the stored record; while the account's settings are
+  still readable from before and unsealed, it refuses that write instead
+  (`SETTINGS_SEAL_REQUIRED`), since it would reset them for every device.
+  The Worker refuses a write that carries more than the readable part, or
+  that omits fields it would fill from the stored copy
   (`SETTINGS_ENCRYPTION_REQUIRED`); an account that stores settings readable
   drops any sealed record on its next write.
+- **Reading locked, saving unlocked.** A device that read the record while
+  locked showed its own values. Its first save once unlocked merges onto the
+  record it read: each field changed since that read keeps the device's
+  value, every other field takes the record's, and the page adopts the
+  result. Without it, a fresh device's first save would replace the
+  account's settings with its defaults.
+- **Unanswered library rule.** Only a Worker without the encryption routes
+  reads as "not encrypted"; one that cannot be reached or fails refuses the
+  save (`E2EE_PREFERENCE_UNVERIFIED`), so settings never leave readable on a
+  guess.
 - **Custom instructions** travel with each assistant request
   (`customInstructions`) instead of being read from the stored settings, so
   the Worker still adds them for the provider. The request gained a field,

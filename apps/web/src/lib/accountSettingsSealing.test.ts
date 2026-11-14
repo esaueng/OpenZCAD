@@ -5,7 +5,14 @@ import {
   type AppSettings,
   type AppSettingsResponse
 } from '@openzcad/shared';
+import {
+  ACCOUNT_SETTINGS_RECORD,
+  fromBase64Url,
+  readSealedRecordHeader
+} from '@openzcad/crypto';
 import { api } from './api';
+import { subscribeAccountSettingsMerged } from './accountSettingsEvents';
+import { sealSettings } from './e2ee/sealedSettings';
 import { saveLocalAppSettings } from './appSettings';
 import { desktopFetch } from './desktopBridge';
 
@@ -230,6 +237,61 @@ describe('settings of an account whose library is encrypted', () => {
     expect(JSON.stringify(patches[0])).not.toContain(SECRET);
     expect(typeof patches[0]!.sealedSettings).toBe('string');
     expect(read.settings.assistant.customInstructions).toBe(SECRET);
+  });
+
+  it('merges a save after unlocking onto the record it read locked', async () => {
+    // Another device sealed the account's settings at sequence 5.
+    const account = privateSettings();
+    const { record } = await sealSettings(
+      {
+        accountKey: ACCOUNT_KEY,
+        userId: state.userId,
+        pins: { read: () => 4, write: () => undefined }
+      },
+      account
+    );
+    state.libraryEncrypted = true;
+    // A fresh device, keys locked: it shows its own defaults.
+    const patches = worker(() =>
+      response(accountServerSettings(account), { sealedSettings: record })
+    );
+    const read = await api.getSettings();
+    expect(read.settings.assistant.customInstructions).toBe('');
+    const merges: AppSettings[] = [];
+    const stop = subscribeAccountSettingsMerged((_, settings) =>
+      merges.push(settings)
+    );
+    try {
+      // Unlocked, the user changes one setting.
+      state.account = { accountKey: ACCOUNT_KEY };
+      const edited = structuredClone(read.settings);
+      edited.general.defaultUnits = 'cm';
+      const saved = await api.updateSettings({
+        settings: edited,
+        expectedRevision: 1
+      });
+      // The account keeps everything the device did not touch.
+      expect(saved.settings.assistant.customInstructions).toBe(SECRET);
+      expect(saved.settings.appearance.theme).toBe('light');
+      expect(saved.settings.general.defaultUnits).toBe('cm');
+      expect(merges).toHaveLength(1);
+      expect(merges[0]!.assistant.customInstructions).toBe(SECRET);
+      // Sealed above the record it replaced, though this device never
+      // pinned it: other devices never see a lower or repeated sequence.
+      const sealed = patches[0]!.sealedSettings as string;
+      expect(
+        readSealedRecordHeader(ACCOUNT_SETTINGS_RECORD, fromBase64Url(sealed))
+          .sequence
+      ).toBe(6);
+      // Once merged, the next save is an ordinary one.
+      await api.updateSettings({
+        settings: saved.settings,
+        expectedRevision: 2
+      });
+      expect(merges).toHaveLength(1);
+    } finally {
+      stop();
+    }
   });
 
   it('refuses to save rather than guess when the library rule cannot be read', async () => {

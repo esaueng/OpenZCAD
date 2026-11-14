@@ -12,6 +12,7 @@ import type {
   AccountStorageUsage,
   AccountDeletionPreview,
   AccountDeletionScope,
+  AppSettings,
   AppSettingsResponse,
   AuthConfigResponse,
   AuthSession,
@@ -82,6 +83,7 @@ import type { EncryptedProjectStore } from './e2ee/encryptedProjectStore';
 import { getKeySessionRevision, isCurrentKeySession } from './e2ee/keySession';
 import { prioritizeShelfEntries } from './projectShelf';
 import { loadLocalAppSettings } from './appSettings';
+import { accountSettingsMerged } from './accountSettingsEvents';
 
 /** Optional presentation updates; document opens still perform full verification. */
 export interface ProjectListingProgress {
@@ -612,6 +614,28 @@ function libraryEncryptedForRead(userId: string): Promise<boolean> {
 }
 
 /**
+ * A sealed record this page read while its keys were locked, and the
+ * settings it showed in its place (this device's own). Until a save merges
+ * them, a save after unlocking puts only the fields changed since then
+ * onto the account's record, never this device's untouched defaults.
+ */
+const lockedReads = new Map<string, { base: AppSettings; record: string }>();
+
+/** The highest sealed-settings sequence this page has seen the account hold. */
+const accountRecordSequences = new Map<string, number>();
+
+function noteAccountRecord(
+  userId: string,
+  sequence: number | null | undefined
+): void {
+  if (typeof sequence !== 'number') return;
+  accountRecordSequences.set(
+    userId,
+    Math.max(accountRecordSequences.get(userId) ?? 0, sequence)
+  );
+}
+
+/**
  * The account's settings. Where the library is encrypted the Worker holds
  * only what it acts on readable (`accountServerSettings`) and the rest in a
  * record sealed under the account key: this device opens it, and keeps its
@@ -624,13 +648,40 @@ async function readAccountSettings(): Promise<AppSettingsResponse> {
   const userId = await sessionUserId();
   if (response.sealedSettings) {
     const sealed = await sealedSettingsKeys(userId);
+    if (userId) {
+      const { sealedSettingsSequence } =
+        sealed?.sealing ?? (await import('./e2ee/sealedSettings'));
+      noteAccountRecord(
+        userId,
+        sealedSettingsSequence(response.sealedSettings)
+      );
+    }
     const opened = sealed
       ? await sealed.sealing.openSettings(sealed.keys, response.sealedSettings)
       : null;
+    const local = loadLocalAppSettings();
+    if (!sealed && userId) {
+      // Locked: show this device's own, and remember what it showed.
+      const earlier = lockedReads.get(userId);
+      lockedReads.set(userId, {
+        base: earlier?.base ?? local,
+        record: response.sealedSettings
+      });
+    }
+    const earlier = userId ? lockedReads.get(userId) : undefined;
+    if (sealed && opened && earlier && userId) {
+      lockedReads.set(userId, { ...earlier, record: response.sealedSettings });
+    }
     return {
       ...response,
       settings: withAccountServerSettings(
-        opened ?? loadLocalAppSettings(),
+        opened && earlier
+          ? sealed!.sealing.mergeSettingsOntoAccount(
+              earlier.base,
+              local,
+              opened
+            )
+          : (opened ?? local),
         response.settings
       )
     };
@@ -663,10 +714,13 @@ async function readAccountSettings(): Promise<AppSettingsResponse> {
 /**
  * Saves the account's settings. Where its library is encrypted only
  * `accountServerSettings` is sent readable, with the whole settings sealed
- * under the account key; a device whose keys are locked sends the readable
- * part alone and the Worker keeps the sealed record it has. An account whose
- * library rule cannot be read refuses (`E2EE_PREFERENCE_UNVERIFIED`) rather
- * than sending everything readable on a guess.
+ * under the account key at a sequence above every record this page has
+ * seen; a device whose keys are locked sends the readable part alone and
+ * the Worker keeps the sealed record it has (or refuses, while settings
+ * from before are still readable and unsealed). A device that read the
+ * record locked merges its changes onto it first. An account whose library
+ * rule cannot be read refuses (`E2EE_PREFERENCE_UNVERIFIED`) rather than
+ * sending everything readable on a guess.
  */
 async function writeAccountSettings(
   payload: UpdateAppSettingsRequest,
@@ -693,22 +747,58 @@ async function writeAccountSettings(
       throw error;
     }
   }
-  const sealed = await sealedSettingsKeys(await sessionUserId());
+  const userId = await sessionUserId();
+  const sealed = await sealedSettingsKeys(userId);
+  let settings = payload.settings;
+  let merged = false;
+  const lockedRead = userId ? lockedReads.get(userId) : undefined;
+  if (sealed && lockedRead) {
+    const theirs = await sealed.sealing.openSettings(
+      sealed.keys,
+      lockedRead.record
+    );
+    noteAccountRecord(
+      sealed.keys.userId,
+      sealed.sealing.sealedSettingsSequence(lockedRead.record)
+    );
+    if (theirs) {
+      settings = sealed.sealing.mergeSettingsOntoAccount(
+        lockedRead.base,
+        payload.settings,
+        theirs
+      );
+      merged = JSON.stringify(settings) !== JSON.stringify(payload.settings);
+    }
+  }
   const sealing = sealed
-    ? await sealed.sealing.sealSettings(sealed.keys, payload.settings)
+    ? await sealed.sealing.sealSettings(
+        sealed.keys,
+        settings,
+        accountRecordSequences.get(sealed.keys.userId) ?? 0
+      )
     : null;
   const response = await requestJson<AppSettingsResponse>('/api/settings', {
     method: 'PATCH',
     body: JSON.stringify({
-      settings: accountServerSettings(payload.settings),
+      settings: accountServerSettings(settings),
       expectedRevision: payload.expectedRevision,
       ...(sealing ? { sealedSettings: sealing.record } : {})
     })
   });
   sealing?.commit();
+  if (sealed && userId) {
+    if (sealing) {
+      noteAccountRecord(
+        userId,
+        sealed.sealing.sealedSettingsSequence(sealing.record)
+      );
+    }
+    lockedReads.delete(userId);
+    if (merged) accountSettingsMerged(userId, settings);
+  }
   return {
     ...response,
-    settings: withAccountServerSettings(payload.settings, response.settings)
+    settings: withAccountServerSettings(settings, response.settings)
   };
 }
 

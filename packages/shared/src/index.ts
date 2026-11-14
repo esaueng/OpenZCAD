@@ -5093,6 +5093,14 @@ export const MAX_SEALED_SETTINGS_CHARS = 64 * 1024;
 export const SETTINGS_ENCRYPTION_REQUIRED_CODE = 'SETTINGS_ENCRYPTION_REQUIRED';
 
 /**
+ * A write without a sealed record, from a device whose keys are locked,
+ * while the account's settings are still stored readable from before its
+ * library was encrypted: taking it would discard them before any device
+ * sealed them (ADR-024 amendment 2026-11-14).
+ */
+export const SETTINGS_SEAL_REQUIRED_CODE = 'SETTINGS_SEAL_REQUIRED';
+
+/**
  * What the Worker reads from an account's settings to act for it: the
  * sharing switch, which authorizes invitations and live connections, and the
  * assistant's route (whether it is on, whose credential, which provider,

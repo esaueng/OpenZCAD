@@ -8,7 +8,9 @@ import {
   DEFAULT_APP_SETTINGS,
   deepClone,
   EXPORT_UNITS,
+  holdsOnlyAccountServerSettings,
   MAX_SEALED_SETTINGS_CHARS,
+  SETTINGS_SEAL_REQUIRED_CODE,
   normalizeHiddenRelationGlyphs,
   normalizeKeymapOverrides,
   nowIso,
@@ -36,6 +38,7 @@ import {
 } from './assistant';
 import { isPrivateHostname } from './privateNetwork';
 import { HttpError } from './validation';
+import { SharingRequestError } from './sharing';
 
 interface SettingsRow {
   settings_json: string;
@@ -1151,6 +1154,22 @@ export async function updateAppSettings(
     );
   }
   const current = await readSettings(userId, env);
+  if (
+    options.libraryEncrypted &&
+    request.sealedSettings === undefined &&
+    current.sealed === null &&
+    !holdsOnlyAccountServerSettings(current.settings)
+  ) {
+    // Settings stored readable before the library was encrypted, and no
+    // device has sealed them yet: a write without a record would reset them
+    // to their defaults for every device. A device holding the account key
+    // seals them first.
+    throw new SharingRequestError(
+      409,
+      SETTINGS_SEAL_REQUIRED_CODE,
+      'Your account settings are sealed under your account key before they can change. Unlock encryption on this device, then they save.'
+    );
+  }
   if (current.revision !== request.expectedRevision) {
     throw new HttpError(
       409,
