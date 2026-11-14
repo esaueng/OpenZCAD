@@ -88,8 +88,6 @@ export interface AssistantConsentRecord {
   readonly userId: string;
   readonly projectId: string;
   readonly sequence: number;
-  /** This device's stop generation when the record was read or allowed. */
-  readonly stops: string;
 }
 
 interface RequestContext {
@@ -217,8 +215,7 @@ export function assistantProjectRequest(
           assistantConsent: {
             userId: consent.userId,
             projectId: consent.projectId,
-            sequence: consent.sequence,
-            stops: consent.stops
+            sequence: consent.sequence
           }
         }
       : {})

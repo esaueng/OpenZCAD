@@ -32,9 +32,7 @@ import { desktopFetch } from './desktopBridge';
 import { uploadTransport } from './e2ee/encryptedContentBlobs';
 import { localStorageEncryptedProjectPins } from './e2ee/encryptedProjectPins';
 import {
-  assistantConsentPinKey,
-  assistantStopGeneration,
-  assistantConsentRevokedKey,
+  localStorageConsentPins,
   type VerifiedAssistantConsent
 } from './e2ee/assistantConsentPins';
 import { createEncryptedDocumentsApi } from './e2ee/encryptedDocumentsApi';
@@ -644,21 +642,18 @@ describe('an assistant request', () => {
     expect(nativeSends()).toEqual([]);
   });
 
-  /** This device accepted `sequence` for the project (`verify` pins it). */
+  /** This device's consent log, as every tab reads it. */
+  const consentLog = () => localStorageConsentPins(window.localStorage);
+
+  /** This device verified an Allow at `sequence` (`verify` records it). */
   function verifiedConsent(
     projectId: string,
     sequence = 1
   ): VerifiedAssistantConsent {
-    window.localStorage.setItem(
-      assistantConsentPinKey('user_ctx', projectId),
-      String(sequence)
+    expect(consentLog().observe('user_ctx', projectId, sequence, true)).toBe(
+      'accepted'
     );
-    return {
-      userId: 'user_ctx',
-      projectId,
-      sequence,
-      stops: assistantStopGeneration('user_ctx', projectId)
-    };
+    return { userId: 'user_ctx', projectId, sequence };
   }
 
   it('carries only that project’s verified consent', async () => {
@@ -695,15 +690,8 @@ describe('an assistant request', () => {
     const consent = verifiedConsent(projectId, 1);
     desktop((command) => {
       if (command === 'desktop_prepare_access') {
-        // Tab B's Stop, saved and verified: its pin moves past A's record.
-        window.localStorage.setItem(
-          assistantConsentPinKey('user_ctx', projectId),
-          '2'
-        );
-        window.localStorage.setItem(
-          assistantConsentRevokedKey('user_ctx', projectId),
-          '2'
-        );
+        // Tab B's Stop, saved and verified: it revokes A's record.
+        consentLog().observe('user_ctx', projectId, 2, false);
       }
     });
     await expect(
@@ -723,10 +711,7 @@ describe('an assistant request', () => {
     desktop((command) => {
       if (command === 'desktop_prepare_access') {
         // Recorded before the Stop's save, which never reached the account.
-        window.localStorage.setItem(
-          assistantConsentRevokedKey('user_ctx', projectId),
-          '3'
-        );
+        consentLog().stop('user_ctx', projectId);
       }
     });
     await expect(
@@ -749,12 +734,7 @@ describe('an assistant request', () => {
     vi.mocked(invoke).mockImplementation(async (command: string) => {
       if (command === 'desktop_prepare_access') {
         readied += 1;
-        if (readied > 1) {
-          window.localStorage.setItem(
-            assistantConsentRevokedKey('user_ctx', projectId),
-            '1'
-          );
-        }
+        if (readied > 1) consentLog().stop('user_ctx', projectId);
         return `handle-${readied}`;
       }
       return { status: 401, body: [], contentType: 'application/json' };
@@ -780,12 +760,7 @@ describe('an assistant request', () => {
       streamAssistantReply({
         prompt: 'Hi',
         digest: assistantDigest(projectId),
-        consent: {
-          userId: 'user_ctx',
-          projectId,
-          sequence: 1,
-          stops: assistantStopGeneration('user_ctx', projectId)
-        }
+        consent: { userId: 'user_ctx', projectId, sequence: 1 }
       })
     ).rejects.toBeDefined();
     expect(nativeSends()).toEqual([]);

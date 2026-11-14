@@ -396,6 +396,10 @@ import {
   subscribeKeySession,
   type KeySessionEvent
 } from './lib/e2ee/keySession';
+import {
+  AUTOMATIC_MIGRATION_LOAD_ERROR,
+  startAutomaticMigration
+} from './lib/e2ee/automaticMigrationLoader';
 import type { DeviceKeySignOutChoice } from './lib/e2ee/signOut';
 import {
   captureEncryptedInvitationLink,
@@ -3910,32 +3914,27 @@ export function App() {
   useEffect(() => {
     setAutomaticMigrationLoadError(null);
     if (!sessionUserId || !cloudFunctionsEnabled) return;
-    let stopped = false;
-    let migration: { dispose(): void } | null = null;
     // The small availability controller loads off the entry chunk, and
     // loads no crypto or migration engine until the server confirms all
-    // four rollout gates. Not loaded, it waits for the next session.
-    void import('./lib/e2ee/automaticMigration').then(
-      ({ automaticProjectMigration, AUTOMATIC_MIGRATION_LOAD_ERROR }) => {
-        if (stopped) return;
-        const started = automaticProjectMigration(sessionUserId, (message) => {
-          if (stopped || sessionRef.current?.userId !== sessionUserId) return;
-          setAutomaticMigrationLoadError(
-            message === AUTOMATIC_MIGRATION_LOAD_ERROR ? message : null
-          );
-          setSettingsMessage(message);
-          updateSettingsViewState({ open: true, activeSection: 'encryption' });
-          setSettingsOpen(true);
-        });
-        migration = started;
-        void started.check();
+    // four rollout gates. A failed load is reported and retried when the
+    // page comes back online, encryption state changes or a key session
+    // becomes ready (`automaticMigrationLoader.ts`).
+    const migration = startAutomaticMigration(
+      sessionUserId,
+      (message) => {
+        setAutomaticMigrationLoadError(
+          message === AUTOMATIC_MIGRATION_LOAD_ERROR ? message : null
+        );
+        setSettingsMessage(message);
+        updateSettingsViewState({ open: true, activeSection: 'encryption' });
+        setSettingsOpen(true);
       },
-      ignoreFailure
+      {
+        current: () => sessionRef.current?.userId === sessionUserId,
+        recovered: () => setAutomaticMigrationLoadError(null)
+      }
     );
-    return () => {
-      stopped = true;
-      migration?.dispose();
-    };
+    return () => migration.dispose();
   }, [sessionUserId, cloudFunctionsEnabled]);
   useEffect(() => {
     const online = () => organizationBackground.resume();

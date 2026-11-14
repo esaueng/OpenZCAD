@@ -16,7 +16,6 @@ import {
   type AssistantConsentState,
   type ConsentPinStore
 } from '../lib/e2ee/assistantConsent';
-import { revokeKnownAssistantConsent } from '../lib/e2ee/assistantConsentPins';
 import { Group, Notice, SettingRow, Status } from './settingsControls';
 
 interface Listed {
@@ -141,9 +140,9 @@ export function AssistantAccessSettings({
     if (!ctx) return;
     setBusy(entry.projectId);
     setError(null);
-    // A Stop, recorded here before anything is awaited, as the panel's is.
-    revokeKnownAssistantConsent(ctx.userId, entry.projectId);
     try {
+      // The Stop is registered in this device's consent log on the call,
+      // before anything is awaited, as the panel's is.
       await saveAssistantConsent(
         ctx,
         entry.projectId,

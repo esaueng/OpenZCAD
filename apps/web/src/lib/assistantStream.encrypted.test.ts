@@ -70,8 +70,7 @@ describe('the assistant and this page’s encrypted-project marker', () => {
         consent: {
           userId: 'user_1',
           projectId: 'proj_secret',
-          sequence: 1,
-          stops: '0.0'
+          sequence: 1
         }
       })
     ).rejects.toBeDefined();
@@ -84,8 +83,7 @@ describe('the assistant and this page’s encrypted-project marker', () => {
         consent: {
           userId: 'user_1',
           projectId: 'proj_other',
-          sequence: 1,
-          stops: '0.0'
+          sequence: 1
         }
       })
     ).rejects.toMatchObject({ code: 'AI_E2EE_PROJECT' });
