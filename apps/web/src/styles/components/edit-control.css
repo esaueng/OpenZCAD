@@ -174,9 +174,10 @@
   cursor: not-allowed;
 }
 
-/* The one line under the row: the unit's help, Checking…, or why the entry
-   does not evaluate. */
+/* The lines under the row: what a face offset's number means, then the
+   unit's help, Checking…, or why the entry does not evaluate. */
 .keypad-help,
+.keypad-meaning,
 .keypad-state,
 .keypad-warning {
   display: flex;
@@ -189,6 +190,7 @@
 }
 
 .keypad-help,
+.keypad-meaning,
 .keypad-state {
   color: var(--color-text-muted);
 }
@@ -604,6 +606,29 @@
   gap: 6px;
 }
 
+/* The kernel's own words, opened in place under the remedies. */
+.edit-refusal-detail {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.edit-refusal-detail pre {
+  margin: 0;
+  padding: 6px 8px;
+  max-width: 100%;
+  max-height: 12em;
+  overflow: auto;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--color-surface-hover);
+  border-radius: var(--radius-sm);
+}
+
 @media (any-pointer: coarse) {
   .edit-refusal-action,
   .edit-refusal-why {
@@ -682,6 +707,10 @@
 .live-session-notice-spinner {
   flex: none;
   animation: oz-spin 0.9s linear infinite;
+}
+
+[data-reduced-motion='true'] .live-session-notice-spinner {
+  animation: none;
 }
 
 @media (prefers-reduced-motion: reduce) {

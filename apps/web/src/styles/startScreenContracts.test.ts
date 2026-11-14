@@ -177,6 +177,23 @@ describe('start screen card names and flags', () => {
   });
 });
 
+describe('start screen folder tab', () => {
+  it('fills the tab in the folder edge colour, so it shows on the page', () => {
+    // 14 Nov 2026: an outline in the card's own fill, 7px tall, all but
+    // vanished; with the count chip gone it is what says "folder".
+    const tab = rule(css, '.start-tile-folder::before');
+    expect(tab).toMatch(/background:\s*var\(--start-folder-tab\)/);
+    expect(tab).not.toMatch(/border:/);
+    expect(Number(/height:\s*(\d+)px/.exec(tab)?.[1])).toBeGreaterThan(7);
+    expect(rule(css, '.start-tile-folder')).toMatch(
+      /--start-folder-tab:\s*var\(--color-border-strong\)/
+    );
+    expect(rule(css, '.start-tile-folder.is-drop-target')).toMatch(
+      /--start-folder-tab:\s*var\(--color-accent\)/
+    );
+  });
+});
+
 describe('start screen shelf groups', () => {
   it('styles the Pinned and Projects labels as the column eyebrow', () => {
     // 5 Nov 2026: the groups were unlabelled, so a short Pinned row read as
@@ -184,7 +201,7 @@ describe('start screen shelf groups', () => {
     const label = rule(css, '.start-group-label');
     expect(label).toMatch(/font-family:\s*var\(--font-mono\)/);
     expect(label).toMatch(/text-transform:\s*uppercase/);
-    // A negative bottom margin would put a folder's 7px tab on the label.
+    // A negative bottom margin would put a folder's tab on the label.
     expect(label).toMatch(/margin:\s*0;/);
   });
 });
@@ -198,8 +215,14 @@ describe('start screen shelf clip', () => {
     expect(tab).toMatch(new RegExp(`top:\\s*-${tabHeight}px`));
     const body = rule(css, '.start-body');
     const inset = Number(/--start-shelf-inset:\s*(\d+)px/.exec(body)?.[1]);
-    expect(inset).toBeGreaterThan(tabHeight);
-    for (const side of ['top', 'right', 'left']) {
+    const tabRoom = Number(
+      /--start-folder-tab-room:\s*(\d+)px/.exec(body)?.[1]
+    );
+    // The tab, plus the 2px focus ring above the tile beside it.
+    expect(tabRoom).toBeGreaterThanOrEqual(tabHeight + 2);
+    expect(body).toMatch(/padding-top:\s*var\(--start-folder-tab-room\)/);
+    expect(inset).toBeGreaterThanOrEqual(2);
+    for (const side of ['right', 'left']) {
       expect(body).toMatch(
         new RegExp(`padding-${side}:\\s*var\\(--start-shelf-inset\\)`)
       );

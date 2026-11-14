@@ -37,6 +37,7 @@ import {
   List,
   LoaderCircle,
   Lock,
+  LockOpen,
   MoreHorizontal,
   Pencil,
   Pin,
@@ -58,6 +59,7 @@ import {
 import {
   daysUntilPurge,
   MAX_PROJECT_NAME_LENGTH,
+  PROJECT_STORAGE_FORMAT_E2EE_V1,
   projectOrganization,
   TRASH_RETENTION_DAYS,
   type LibraryCardSize,
@@ -358,6 +360,9 @@ function writeLibraryView(view: LibraryView) {
     // Forgetting the view is the whole failure mode.
   }
 }
+
+/** The one encryption mark a card carries: the exception, not the norm. */
+const NOT_ENCRYPTED_LABEL = 'Not end-to-end encrypted';
 
 const RECOVERY_SUFFIX = / \((?:Recovery|Local copy)\)(?: \(copy(?: \d+)?\))*$/;
 
@@ -820,6 +825,19 @@ export function StartScreen({
   // Being encrypted in this tab, or paused or stopped with its plaintext
   // still locked: badged, and opened read-only (App.tsx).
   const migratingProjectIds = useMigrationLockedProjects();
+  // Encryption is opt-in during the beta (ADR-024). Where the account's own
+  // projects are encrypted, encrypted is the norm and goes unmarked; the
+  // exception, an account project still stored as plaintext, is what a card
+  // marks. An account with none encrypted marks nothing: it would be every
+  // card.
+  const accountEncrypts =
+    signedIn &&
+    accountProjectListReached &&
+    projects.some(
+      (project) =>
+        cloudProjectIds.has(project.projectId) &&
+        project.storageFormat === PROJECT_STORAGE_FORMAT_E2EE_V1
+    );
   const syncEntryById = new Map(
     (syncRun ?? []).map((entry) => [entry.projectId, entry] as const)
   );
@@ -1889,9 +1907,17 @@ export function StartScreen({
     const locked = projectNeedsUpdate(project);
     // An encrypted project this build opens (ADR-024 Phase 4); it is
     // duplicated in the browser like any other (slice 4-8).
-    const encrypted = project.storageFormat === 2;
+    const encrypted = project.storageFormat === PROJECT_STORAGE_FORMAT_E2EE_V1;
     // Being encrypted in this tab (ADR-024 Phase 7): it opens read-only.
     const migrating = migratingProjectIds.has(project.projectId);
+    // In an account whose projects are encrypted, one that is not.
+    const plaintext =
+      accountEncrypts &&
+      !trashed &&
+      cloudProjectIds.has(project.projectId) &&
+      !encrypted &&
+      !locked &&
+      !migrating;
 
     const preview = (
       <>
@@ -1936,18 +1962,17 @@ export function StartScreen({
                   <LoaderCircle size={11} className="spin" aria-hidden="true" />
                 </span>
               ) : (
-                (locked || encrypted) && (
+                // 14 Nov 2026: a lock on every encrypted card marked the
+                // norm. A locked card says so over its preview and under
+                // its name.
+                plaintext && (
                   <span
                     className="start-tile-mark"
                     role="img"
-                    aria-label="End-to-end encrypted"
-                    title={
-                      locked
-                        ? 'End-to-end encrypted. Update OpenZCAD to open this project.'
-                        : 'End-to-end encrypted.'
-                    }
+                    aria-label={NOT_ENCRYPTED_LABEL}
+                    title={`${NOT_ENCRYPTED_LABEL}. It is stored in your account as plaintext.`}
                   >
-                    <Lock size={11} aria-hidden="true" />
+                    <LockOpen size={11} aria-hidden="true" />
                   </span>
                 )
               )}
@@ -2080,8 +2105,8 @@ export function StartScreen({
         ? PROJECT_UPDATE_REQUIRED_LABEL
         : migrating && !encrypted
           ? 'being encrypted'
-          : encrypted
-            ? 'end-to-end encrypted'
+          : plaintext
+            ? NOT_ENCRYPTED_LABEL.toLowerCase()
             : null,
       recoveryOf !== null && !trashed ? `recovery copy of ${recoveryOf}` : null,
       localOnly && !trashed && !syncEntry && !conflicted

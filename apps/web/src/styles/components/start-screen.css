@@ -909,16 +909,18 @@
 
 .start-body {
   /* Room inside the scroller's clip for what a tile draws outside its box:
-     a folder's 7px tab above the first row and the 2px focus and drop rings
-     on every edge. The left margin cancels the inset so the cards keep their
-     line; on the right it is the gutter before the scrollbar. */
+     the 2px focus and drop rings on every edge, and above the first row a
+     folder's 9px tab as well. The left margin cancels the inset so the
+     cards keep their line; on the right it is the gutter before the
+     scrollbar. */
   --start-shelf-inset: 8px;
+  --start-folder-tab-room: 12px;
   display: grid;
   align-content: start;
   gap: var(--sp-3);
   min-height: 0;
   margin-left: calc(-1 * var(--start-shelf-inset));
-  padding-top: var(--start-shelf-inset);
+  padding-top: var(--start-folder-tab-room);
   padding-right: var(--start-shelf-inset);
   padding-bottom: var(--sp-4);
   padding-left: var(--start-shelf-inset);
@@ -1272,7 +1274,7 @@
 }
 
 /* Pinned and Projects, over their groups: the column's mono eyebrow. The
-   body's row gap below it leaves room for a folder's 7px tab; the margin
+   body's row gap below it leaves room for a folder's 9px tab; the margin
    above sets the label off from the group before it. */
 .start-group-label {
   margin: 0;
@@ -2658,28 +2660,38 @@
 /* A folder is a card with a tab: the same tile, so the shelf stays one grid,
    but it reads as something that holds parts rather than as a part. */
 .start-tile-folder {
+  --start-folder-tab: var(--color-border-strong);
   background: var(--color-surface-2);
   border-color: var(--color-border-strong);
 }
 
 /* The tab rides in the grid's row gap, so a folder lines up with the parts
-   beside it. */
+   beside it. It is filled in the card's edge colour and its last pixel is
+   that edge, so tab and top edge read as one folder back: drawn as an
+   outline in the card's own fill, 7px tall, it all but vanished against
+   the page (14 Nov 2026). The sloped side is a folder's, not a browser
+   tab's. */
 .start-tile-folder::before {
   content: '';
   position: absolute;
-  top: -7px;
+  top: -10px;
   left: -1px;
-  width: 42%;
-  height: 7px;
-  background: var(--color-surface-2);
-  border: 1px solid var(--color-border-strong);
-  border-bottom: 0;
-  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  width: 40%;
+  height: 10px;
+  background: var(--start-folder-tab);
+  border-radius: var(--radius-lg) 0 0 0;
+  clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 100%, 0 100%);
 }
 
-.start-tile-folder:has(.start-tile-open:focus-visible)::before,
-.start-tile-folder:hover::before {
-  border-color: var(--color-accent-border);
+/* Lit with the card's edge, in the colour that edge shows: the accent
+   border over the folder's own fill. */
+.start-tile-folder:has(> .start-tile-open:not(.is-static):hover:not(:disabled)),
+.start-tile-folder:has(.start-tile-open:focus-visible) {
+  --start-folder-tab: color-mix(
+    in srgb,
+    var(--color-accent) 45%,
+    var(--color-surface-2)
+  );
 }
 
 .start-tile-folder .start-tile-name {
@@ -2720,13 +2732,13 @@
 
 /* Where a dragged part would go: a folder under it, or a part it is held
    over (pending until the hold arms, then the accent). */
-.start-tile-project.is-drop-target,
-.start-tile-folder.is-drop-target::before {
+.start-tile-project.is-drop-target {
   border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px var(--color-accent);
 }
 
-.start-tile-project.is-drop-target {
-  box-shadow: 0 0 0 2px var(--color-accent);
+.start-tile-folder.is-drop-target {
+  --start-folder-tab: var(--color-accent);
 }
 
 .start-tile-project.is-drop-pending {
