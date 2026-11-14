@@ -218,6 +218,11 @@ describe('beta deployment safety', () => {
       'https://challenges.cloudflare.com'
     ]);
     expect(csp).not.toContain('cloudflareinsights');
+    // Directives that would override script-src for elements or handlers.
+    for (const name of ['script-src-elem', 'script-src-attr'])
+      expect(
+        csp.split(';').map((part) => part.trim().split(/\s+/)[0])
+      ).not.toContain(name);
     expect(headers.get('x-content-type-options')).toBe('nosniff');
     expect(headers.get('referrer-policy')).toBe(
       'strict-origin-when-cross-origin'
