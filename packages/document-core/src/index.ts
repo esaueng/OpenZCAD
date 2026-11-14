@@ -5895,7 +5895,11 @@ const EXPRESSION_ANGLE_UNITS: Record<string, number> = {
  */
 function isUnitSuffix(name: string): boolean {
   const suffix = name.toLowerCase();
-  return suffix in EXPRESSION_LENGTH_UNITS || suffix in EXPRESSION_ANGLE_UNITS;
+  // Own entries only: a suffix such as `constructor` is no unit.
+  return (
+    ownEntry(EXPRESSION_LENGTH_UNITS, suffix) !== undefined ||
+    ownEntry(EXPRESSION_ANGLE_UNITS, suffix) !== undefined
+  );
 }
 
 /** Trigonometry takes degrees — the conventional unit in CAD parameter tables. */
@@ -6289,7 +6293,7 @@ function parseExpressionQuantity(
   /** Converts a raw suffixed number into document units with its dimension. */
   function applyUnitSuffix(raw: number, suffix: string): ExpressionQuantity {
     const lowered = suffix.toLowerCase();
-    const millimeters = EXPRESSION_LENGTH_UNITS[lowered];
+    const millimeters = ownEntry(EXPRESSION_LENGTH_UNITS, lowered);
     if (millimeters !== undefined) {
       if (documentUnits === undefined) {
         throw new Error(
@@ -6302,7 +6306,7 @@ function parseExpressionQuantity(
         0
       );
     }
-    const degrees = EXPRESSION_ANGLE_UNITS[lowered];
+    const degrees = ownEntry(EXPRESSION_ANGLE_UNITS, lowered);
     if (degrees !== undefined) {
       return quantity(raw * degrees, 0, 1);
     }

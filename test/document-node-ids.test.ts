@@ -356,6 +356,15 @@ describe('ids that key other document maps', () => {
       );
   });
 
+  it('never reads an inherited member as a unit suffix', () => {
+    const { scope } = getParameterScope(valid());
+    for (const suffix of ['constructor', 'toString', '__proto__'])
+      expect(() =>
+        evaluateExpression(`1 ${suffix}`, scope, { documentUnits: 'mm' })
+      ).toThrow(/trailing tokens/);
+    expect(evaluateExpression('1 cm', scope, { documentUnits: 'mm' })).toBe(10);
+  });
+
   it('refuses a reserved key in any document map', () => {
     const document = valid();
     const nodeId = document.activePartId;
