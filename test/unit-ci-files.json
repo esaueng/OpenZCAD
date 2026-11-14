@@ -333,6 +333,7 @@
     "src/styles/viewerResponsiveContracts.test.ts",
     "src/theme/contrast.test.ts",
     "src/theme/tokens-defined.test.ts",
+    "src/theme/viewport-overlays.test.ts",
     "src/worker/geometryWorker.test.ts",
     "worker/glimpse.test.ts",
     "src/lib/kernelSessionStore.test.ts",
