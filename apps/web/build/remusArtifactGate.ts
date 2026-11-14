@@ -4,6 +4,7 @@ import type { Plugin } from 'vite';
 import {
   ALLOW_LOCAL_REMUS_ENV,
   BUILD_METADATA,
+  outputDigest,
   installedPackageDirs,
   remusOutputStamp,
   verifyRemusArtifacts
@@ -127,6 +128,12 @@ export function stampRemusOutput({
   const artifacts = metadata.remus?.artifacts;
   if (!artifacts)
     throw new Error(`${BUILD_METADATA} has no Remus stamp to complete.`);
-  Object.assign(artifacts, remusOutputStamp({ repoRoot, dist }));
+  // The module paths are part of the metadata the output digest covers, so
+  // they are written first and the digest last.
+  const { modules } = remusOutputStamp({ repoRoot, dist });
+  delete artifacts.output;
+  artifacts.modules = modules;
+  writeFileSync(path, `${JSON.stringify(metadata, null, 2)}\n`);
+  artifacts.output = outputDigest(dist);
   writeFileSync(path, `${JSON.stringify(metadata, null, 2)}\n`);
 }

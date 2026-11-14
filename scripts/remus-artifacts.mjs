@@ -16,7 +16,7 @@
  */
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { readdirSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs';
 import { join, posix, resolve } from 'node:path';
 
 export const MANIFEST = 'remus-checksums.json';
@@ -409,12 +409,29 @@ export function verifyRemusArtifacts({ repoRoot, packageDirs } = {}) {
   return { commit, files, manifestSha256: sha256(manifestBytes) };
 }
 
-/** The build metadata file, which carries the stamp and so is not hashed. */
+/**
+ * The build metadata file. It carries the stamp, so it is hashed without the
+ * stamp's own output digest (see `outputDigest`).
+ */
 export const BUILD_METADATA = 'build-meta.json';
 
 /**
- * A digest of an entire build output: every file except `build-meta.json`,
- * as sorted `path<TAB>sha256` lines. Any changed, deleted or added file —
+ * The build metadata as hashed: parsed and re-serialised without
+ * `remus.artifacts.output`, the digest it carries of the output itself.
+ * Every other field, which the app reads at runtime, is covered.
+ */
+function metadataDigest(dist) {
+  const path = join(dist, BUILD_METADATA);
+  if (!existsSync(path)) return null;
+  const metadata = JSON.parse(readFileSync(path, 'utf8'));
+  if (metadata?.remus?.artifacts) delete metadata.remus.artifacts.output;
+  return sha256(JSON.stringify(metadata));
+}
+
+/**
+ * A digest of an entire build output: every file as sorted
+ * `path<TAB>sha256` lines, with `build-meta.json` hashed without this digest
+ * (`metadataDigest`), so its runtime fields are covered too. Any changed, deleted or added file —
  * JS glue, worker, WebAssembly or anything else — changes it.
  */
 export function outputDigest(dist) {
@@ -422,6 +439,8 @@ export function outputDigest(dist) {
   const hash = createHash('sha256');
   for (const file of files)
     hash.update(`${file}\t${sha256(readFileSync(join(dist, file)))}\n`);
+  const metadata = metadataDigest(dist);
+  if (metadata !== null) hash.update(`${BUILD_METADATA}\t${metadata}\n`);
   return { files: files.length, sha256: hash.digest('hex') };
 }
 

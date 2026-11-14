@@ -552,6 +552,17 @@ describe('release build check', () => {
     expect(check).toThrow('does not match the output its gated build stamped');
   });
 
+  it('refuses output whose runtime build metadata was changed', () => {
+    const { dist, check } = releaseFixture();
+    const path = join(dist, 'build-meta.json');
+    const metadata = JSON.parse(readFileSync(path, 'utf8')) as {
+      commit: string;
+    };
+    metadata.commit = 'not-the-built-commit';
+    writeFileSync(path, JSON.stringify(metadata));
+    expect(check).toThrow('does not match the output its gated build stamped');
+  });
+
   it('refuses output whose bundled Remus glue was deleted', () => {
     const { dist, check } = releaseFixture();
     rmSync(join(dist, GLUE));
