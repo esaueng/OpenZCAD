@@ -8,4 +8,5 @@ again to leave the sketch", and only a second press within 3 s leaves (Finish
 Sketch still leaves in one click). A value prompt open in a sketch (dimension,
 fillet radius, offset) reads "Esc cancel" and its Escape neither leaves nor
 arms the exit (`sketchExitConfirm.test.ts`, `prompt.test.ts`,
-`viewport.spec.ts`).
+`viewport.spec.ts`, `sketch-modify-tools.spec.ts`,
+`sketch-review-fixes.spec.ts`, `design-review-followups.spec.ts`).
