@@ -109,7 +109,8 @@ def required_objects(db):
     if not migrations or any(not re.fullmatch(r'00[0-4][0-9]_[a-z0-9_]+\.sql', name) for name in migrations):
         raise SnapshotError('Unsupported migration ledger.')
     # 0047 adds only glimpse_account_consent.version: no stored objects or keys.
-    if max(int(name[:4]) for name in migrations) > 47:
+    # 0048 adds only e2ee_mls_commits.sender_signature: no stored objects or keys.
+    if max(int(name[:4]) for name in migrations) > 48:
         raise SnapshotError('Review new migrations before using this snapshot tool.')
     version = max(int(name[:4]) for name in migrations)
     reviewed = sorted(path.name for path in

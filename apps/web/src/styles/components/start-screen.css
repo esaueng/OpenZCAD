@@ -99,22 +99,14 @@
   animation: startup-detail-in var(--dur-slow) var(--ease-out);
 }
 
-.startup-card button {
+.startup-card .startup-back {
   margin-top: var(--sp-5);
-  padding: var(--sp-2) var(--sp-3);
-  color: var(--color-text-muted);
-  border: var(--border-thin);
-  border-radius: var(--radius-md);
-}
-
-.startup-card button:hover {
-  background: var(--color-surface-hover);
-  color: var(--color-text);
+  border-color: var(--color-border-strong);
 }
 
 /* Keep the restore card still before navigation is available, without
    presenting an escape that cannot be used during local discovery. */
-.startup-card button:disabled {
+.startup-card .startup-back:disabled {
   visibility: hidden;
 }
 
@@ -347,6 +339,14 @@
   min-width: 0;
 }
 
+/* A file dragged over the library: the workspace's drop cue, over the whole
+   page, since the drop makes a project rather than landing anywhere on it. */
+.start-screen > .file-drop-target {
+  position: absolute;
+  inset: 10px;
+  z-index: 30;
+}
+
 /* ── Top bar ─────────────────────────────────────────────── */
 
 /* The column's head: the logo where the workspace's top bar puts it. */
@@ -570,9 +570,15 @@
    suggestion, and an unlabelled filled field beside a button read as a
    search box rather than as the new project's name. */
 @media (min-width: 901px) {
-  .start-launch-hint {
+  .start-launch-hint:not(.is-taken) {
     display: none;
   }
+}
+
+/* A name another project already has: said, never refused. */
+.start-launch-hint.is-taken,
+.start-rename-hint {
+  color: var(--color-text-muted);
 }
 
 /* ── Column: shelves ─────────────────────────────────────── */
@@ -938,6 +944,7 @@
 
 .start-section {
   container: start-section / inline-size;
+  position: relative;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   min-height: 0;
@@ -962,6 +969,10 @@
   .start-toolbar {
     position: relative;
     z-index: 4;
+    /* The filter row's 40px under the gap, on every shelf: Archive and
+       Trash have no filters, and the padding ate their 40px, lifting the
+       title 5px against Projects. */
+    min-height: calc(40px + var(--island-gap));
     padding-top: var(--island-gap);
     background: var(--color-bg);
   }
@@ -1046,6 +1057,10 @@
   font-size: var(--fs-sm);
   background-color: transparent;
   border-color: transparent;
+}
+
+.start-sort.is-reserved {
+  visibility: hidden;
 }
 
 .start-sort select:hover {
@@ -1673,7 +1688,7 @@
 .start-tile-grid.is-list .start-tile-open {
   grid-template-columns:
     52px minmax(0, 1fr) clamp(7rem, 12vw, 170px) clamp(6.5rem, 11vw, 160px)
-    56px 88px;
+    76px 88px;
 }
 
 .start-list-head {
@@ -1771,8 +1786,10 @@
   order: 3;
 }
 
+/* Wide enough for a folder's "12 projects" as well as a part's saves. */
 .start-tile-grid.is-list .start-tile-rev {
   order: 4;
+  white-space: nowrap;
 }
 
 .start-tile-grid.is-list .start-tile-purge {
@@ -1997,6 +2014,23 @@
   }
 }
 
+/* A phone says "Projects" in the shelf strip just above, so the shelf's
+   heading steps aside there too: with the strip, the heading and the group
+   label it read "Projects" three times in 200px. */
+@media (max-width: 560px) {
+  .start-toolbar h2:not(.start-folder-title) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  .start-toolbar-title:not(:has(.start-crumb, .start-section-note)) {
+    display: contents;
+  }
+}
+
 /* Settings sits beside the logo below 900px, above the shelf. */
 @media (max-width: 900px) {
   .start-toolbar {
@@ -2046,6 +2080,11 @@
 
   .start-tile-grid.is-list .start-tile-rev {
     display: none;
+  }
+
+  /* A folder's count is its only line under the name. */
+  .start-tile-grid.is-list .start-tile-folder .start-tile-rev {
+    display: inline;
   }
 }
 
@@ -2686,6 +2725,29 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* A folder in the list is a row like the rest: no tab over the row above
+   (it was a 300–480px strip across the list), no count over its 52px thumb
+   (the Saves column has it), and the list's own background. */
+.start-tile-grid.is-list .start-tile-folder {
+  background: transparent;
+}
+
+.start-tile-grid.is-list .start-tile-folder::before,
+.start-tile-grid.is-list .start-folder-count {
+  display: none;
+}
+
+.start-tile-grid.is-list .start-folder-thumb {
+  display: grid;
+  place-items: center;
+  background: transparent;
+}
+
+.start-tile-grid.is-list .start-folder-empty-icon {
+  width: 20px;
+  height: 20px;
+}
+
 /* Where a dragged part would go: a folder under it, or a part it is held
    over (pending until the hold arms, then the accent). */
 .start-tile-project.is-drop-target,
@@ -2741,6 +2803,16 @@
   margin: 0 36px 28px 8px;
 }
 
+.start-rename-hint {
+  display: block;
+  margin-top: 2px;
+  padding: 2px 6px;
+  font-size: var(--fs-xs);
+  line-height: 1.3;
+  background: var(--color-surface);
+  border-radius: var(--radius-sm);
+}
+
 .start-folder-rename {
   width: 100%;
   min-height: 26px;
@@ -2781,10 +2853,25 @@
   white-space: nowrap;
 }
 
+/* A short confirmation floating at the shelf's foot. In the grid's flow it
+   pushed every card down 30px when it came and pulled them back up when it
+   went. Positioned on the section, so the shelf's scroll does not take it. */
 .start-folder-notice {
+  position: absolute;
+  bottom: var(--sp-4);
+  left: 50%;
+  z-index: 6;
+  max-width: min(480px, calc(100% - 32px));
   margin: 0;
-  color: var(--color-text-muted);
+  padding: 6px 12px;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-popover);
   font-size: var(--fs-xs);
+  transform: translateX(-50%);
+  pointer-events: none;
 }
 
 .start-folder-empty {

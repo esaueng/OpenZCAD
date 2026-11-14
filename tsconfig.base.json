@@ -44,6 +44,9 @@
         "./packages/viewport/src/gizmo/moveTransform.ts"
       ],
       "@openzcad/viewport/types": ["./packages/viewport/src/types.ts"],
+      "@openzcad/viewport/wheel-gesture": [
+        "./packages/viewport/src/input/wheelGesture.ts"
+      ],
       "@openzcad/io-step": ["./packages/io-step/src/index.ts"],
       "@openzcad/io-shapr": ["./packages/io-shapr/src/index.ts"],
       "@openzcad/io-stl": ["./packages/io-stl/src/index.ts"],

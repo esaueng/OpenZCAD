@@ -421,10 +421,14 @@ export function databaseBefore(
   // Exercise an older optional feature schema with the current MLS trust
   // format's independent storage dependency present. Opt-in is explicit at
   // each fixture; missing-authority migration tests keep the exact old schema.
-  if (options.authority && number > 32 && number <= 44)
-    db.exec(
-      readFileSync(new URL('0044_e2ee_project_authority.sql', dir), 'utf8')
-    );
+  // Commits likewise need their device-signature column (0048).
+  if (options.authority && number > 32) {
+    for (const [file, from] of [
+      ['0044_e2ee_project_authority.sql', 44],
+      ['0048_e2ee_commit_signatures.sql', 48]
+    ] as const)
+      if (number <= from) db.exec(readFileSync(new URL(file, dir), 'utf8'));
+  }
   return db;
 }
 

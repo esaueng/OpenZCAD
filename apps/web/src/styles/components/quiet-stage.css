@@ -1295,8 +1295,8 @@
 
 /* View's bar stands on the right at the stage's middle, a vertical rail
    like Build's instruments (View and Tweak have no instrument rail of their
-   own): Measure, then fit, views, grid, display, projection and orbit mode, icons only
-   with their names as tooltips. The views panel opens beside it, leftward. */
+   own): Measure, then fit, grid, projection, orbit mode, section, display
+   and views, Build's order (I52), icons only with their names as tooltips. The views panel opens beside it, leftward. */
 .workspace.column-layout .palette-float:has(.view-mode-bar) {
   top: var(--stage-middle);
   right: var(--island-gap);
@@ -1316,9 +1316,9 @@
 }
 
 /* Keep the lazy fallback in the same right-hand slot as the loaded rail.
-   Its seven 30px controls, divider, gaps and padding occupy 241px. */
+   Its eight 30px controls, divider, gaps and padding occupy 273px. */
 .workspace.column-layout .view-tools-loading {
-  min-height: 241px;
+  min-height: 273px;
   justify-content: center;
 }
 
@@ -1538,6 +1538,14 @@
     transform: none;
   }
 
+  /* Across a phone's foot the workbench is where the cube stands, and the
+     cube sat under it (I47): it steps aside while the workbench is up.
+     Build's workbench is a command card at the top and keeps it. */
+  .workspace.column-layout:has(.viewer-shell .measurement-dock)
+    .viewer-rail-stack {
+    visibility: hidden;
+  }
+
   .workspace.column-layout:has(.measurement-dock)
     .view-flyouts
     > .view-mode-rail {
@@ -1545,6 +1553,16 @@
       60vh - var(--stage-top) - var(--island-gap) * 4 - var(--command-bar-h) -
         36px
     );
+  }
+}
+
+/* On a short phone the scale rule has no corner under the workbench left
+   either, and drew over its results ("50 mm" across them at 360×640, I47).
+   A taller one keeps it, clear below the sheet (measure.spec.ts). */
+@media (max-width: 620px) and (max-height: 700px) {
+  .workspace.column-layout:has(.viewer-shell .measurement-dock)
+    .viewport-scale-indicator {
+    visibility: hidden;
   }
 }
 
@@ -2883,6 +2901,15 @@ button.command-rail.is-suggested {
     transform: none;
   }
 
+  /* Above the open sheet the bar has room for seven controls, not eight:
+     Section waits for View and Build here, as it waits behind More on
+     Build's short phone rail. The order of the rest is unchanged (I52). */
+  .workspace.column-layout:has(.tweak-flyouts.is-open)
+    .view-mode-bar
+    .view-mode-section-toggle {
+    display: none;
+  }
+
   .tweak-flyouts {
     top: auto;
     bottom: 0;
@@ -3261,6 +3288,15 @@ button.command-rail.is-suggested {
    float would, and stands over the inspector it covers until it closes. */
 .panel-dock-layer.slot-over-lane .panel-unpinned {
   z-index: calc(var(--z-inspector-float) + 1);
+}
+
+/* A card in the right lane (a command's card, or the feature card a click
+   in a floating History opens) stands over the floating windows: the edit
+   card opened BEHIND the History it was opened from, its labels cut to
+   "e center Y" and its Apply half covered (I7). Under the Tools drawer
+   (+9) and the rail's own flyouts (+10), which are more temporary still. */
+.stage-right:has(> :is(.command-float, .inspector-float)) {
+  z-index: calc(var(--z-panel-float) + 8);
 }
 
 /* A floating window: its panels stacked as in a column, the corner that

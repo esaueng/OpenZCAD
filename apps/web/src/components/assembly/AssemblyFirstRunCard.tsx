@@ -45,6 +45,10 @@ export function AssemblyFirstRunCard({
   const groundedIds = grounded ?? new Set(bodies[0] ? [bodies[0].bodyId] : []);
   const chosen = bodies.filter((body) => !excluded.has(body.bodyId));
   const count = chosen.length;
+  // Only a ticked body can be fixed: an unticked one is not added at all.
+  const fixedIds = new Set(
+    chosen.filter((b) => groundedIds.has(b.bodyId)).map((b) => b.bodyId)
+  );
 
   const toggle = (
     set: ReadonlySet<BodyId>,
@@ -56,19 +60,39 @@ export function AssemblyFirstRunCard({
     return next;
   };
 
+  /**
+   * Ticks or unticks a body. Unticking the only fixed one hands "fixed" to
+   * the first body still ticked, so the assembly never starts with nothing
+   * holding it (the user can still unfix that one on purpose).
+   */
+  const toggleIncluded = (bodyId: BodyId) => {
+    const nextExcluded = toggle(excluded, bodyId);
+    setExcluded(nextExcluded);
+    if (!nextExcluded.has(bodyId) || !fixedIds.has(bodyId)) return;
+    const remaining = bodies.filter((b) => !nextExcluded.has(b.bodyId));
+    if (remaining.some((b) => fixedIds.has(b.bodyId))) return;
+    const heir = remaining[0];
+    const next = new Set(groundedIds);
+    next.delete(bodyId);
+    if (heir) next.add(heir.bodyId);
+    setGrounded(next);
+  };
+
   const create = () => {
     if (count === 0) return;
     const components = chosen.map((body) => ({
       componentId: createId<'AssemblyComponent'>('comp'),
       name: body.name,
       bodyId: body.bodyId,
-      grounded: groundedIds.has(body.bodyId)
+      grounded: fixedIds.has(body.bodyId)
     }));
     if (!execute(commandFactories.addAssemblyComponents({ components })))
       return;
     const groundedCount = components.filter((c) => c.grounded).length;
     onAnnounce(
-      `${count} ${count === 1 ? 'part' : 'parts'} · ${groundedCount} fixed. Next: press J to join two parts`
+      count === 1
+        ? `1 part · ${groundedCount} fixed. Next: add a second part to move it`
+        : `${count} parts · ${groundedCount} fixed. Next: Set up motion to make one move`
     );
   };
 
@@ -94,16 +118,14 @@ export function AssemblyFirstRunCard({
           <ul className="assembly-first-run-list" aria-label="Bodies">
             {bodies.map((body) => {
               const included = !excluded.has(body.bodyId);
-              const isGrounded = groundedIds.has(body.bodyId);
+              const isGrounded = fixedIds.has(body.bodyId);
               return (
                 <li key={body.bodyId} className="assembly-first-run-row">
                   <label className="assembly-check">
                     <input
                       type="checkbox"
                       checked={included}
-                      onChange={() =>
-                        setExcluded((current) => toggle(current, body.bodyId))
-                      }
+                      onChange={() => toggleIncluded(body.bodyId)}
                     />
                     <span className="assembly-row-name">{body.name}</span>
                   </label>

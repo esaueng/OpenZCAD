@@ -2931,7 +2931,7 @@ export const commandFactories = {
   },
   setAssemblyStudy(
     payload: AssemblyStudySetInput,
-    label = 'Edit motion study'
+    label = 'Edit animation'
   ): CommandDefinition<AssemblyStudySetInput> {
     return makeCommand('assembly.study.set', label, payload, (document) =>
       setAssemblyStudy(document, payload)
@@ -2942,7 +2942,7 @@ export const commandFactories = {
   ): CommandDefinition<AssemblyStudyDeleteInput> {
     return makeCommand(
       'assembly.study.delete',
-      'Delete motion study',
+      'Delete animation',
       payload,
       (document) => deleteAssemblyStudy(document, payload)
     );

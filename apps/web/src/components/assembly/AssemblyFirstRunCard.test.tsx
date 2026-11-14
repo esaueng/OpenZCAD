@@ -31,14 +31,14 @@ describe('AssemblyFirstRunCard', () => {
       ['Blade B', b, false]
     ]);
     expect(onAnnounce).toHaveBeenCalledWith(
-      '2 parts · 1 fixed. Next: press J to join two parts'
+      '2 parts · 1 fixed. Next: Set up motion to make one move'
     );
     // One undo takes the whole assembly back out.
     manager.undo();
     expect(manager.document.assembly).toBeUndefined();
   });
 
-  it('leaves unchecked bodies out and follows the fix pins', () => {
+  it('hands "fixed" to a ticked body when the fixed one is unticked', () => {
     const { manager, b, live } = scissorsManager();
     const { execute } = recordingExecute(manager);
     render(
@@ -49,12 +49,42 @@ describe('AssemblyFirstRunCard', () => {
       />
     );
     fireEvent.click(screen.getByRole('checkbox', { name: 'Blade A' }));
-    fireEvent.click(
+    // The unticked row no longer claims to be fixed; Blade B now is.
+    const pinA = screen.getByRole('button', { name: 'Fix Blade A in place' });
+    expect(pinA).toHaveAttribute('aria-pressed', 'false');
+    expect(pinA).toBeDisabled();
+    expect(pinA).toHaveTextContent('Fix');
+    expect(
       screen.getByRole('button', { name: 'Fix Blade B in place' })
-    );
+    ).toHaveAttribute('aria-pressed', 'true');
     fireEvent.click(screen.getByRole('button', { name: 'Add 1 part' }));
     expect(
       manager.document.assembly?.components.map((c) => [c.bodyId, c.grounded])
     ).toEqual([[b, true]]);
+  });
+
+  it('follows the fix pins', () => {
+    const { manager, a, b, live } = scissorsManager();
+    const { execute } = recordingExecute(manager);
+    render(
+      <AssemblyFirstRunCard
+        document={live()}
+        execute={execute}
+        onAnnounce={vi.fn()}
+      />
+    );
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Fix Blade B in place' })
+    );
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Fix Blade A in place' })
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Add 2 parts' }));
+    expect(
+      manager.document.assembly?.components.map((c) => [c.bodyId, c.grounded])
+    ).toEqual([
+      [a, false],
+      [b, true]
+    ]);
   });
 });

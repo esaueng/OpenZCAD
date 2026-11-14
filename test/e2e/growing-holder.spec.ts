@@ -194,7 +194,7 @@ test('parameterizes a moved holder import: opening, mounting holes, edits, reloa
   await expectExactReady(page);
 
   // Undo the last edit and redo it: both replay through exact history.
-  await page.getByRole('button', { name: 'Undo' }).click();
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
   await expect(width).toHaveValue('10');
   await expect(page.getByRole('contentinfo')).toContainText('warnings0', {
     timeout: 120_000

@@ -2,7 +2,6 @@ import { ProjectImportButton } from './ProjectImportButton';
 import { labelWithKey, useKeymap } from '../lib/keymap';
 import {
   Fragment,
-  lazy,
   Suspense,
   useEffect,
   useLayoutEffect,
@@ -52,7 +51,10 @@ import {
   type LucideIcon
 } from 'lucide-react';
 import { isLibraryModeStatus } from '../lib/libraryStatus';
-import { STALE_CHUNK_MESSAGE } from '../lib/staleChunk';
+import {
+  lazyWithStaleChunkNotice,
+  STALE_CHUNK_MESSAGE
+} from '../lib/staleChunk';
 import {
   daysUntilPurge,
   MAX_PROJECT_NAME_LENGTH,
@@ -64,6 +66,7 @@ import {
   type UnitSystem
 } from '@openzcad/shared';
 import { generateCutePartName } from '../lib/cutePartName';
+import { projectNameProblem, sameNamedProject } from '../lib/projectNameHints';
 import {
   readLibraryLayout,
   saveLibraryLayout,
@@ -101,10 +104,13 @@ import { DemoModelIcon } from './DemoModelIcon';
 import { PartThumbnail } from './PartThumbnail';
 import type { ProjectProperties } from '../lib/projectProperties';
 
-const ProjectPropertiesDialog = lazy(async () => ({
+const ProjectPropertiesDialog = lazyWithStaleChunkNotice(async () => ({
   default: (await import('./ProjectPropertiesDialog')).ProjectPropertiesDialog
 }));
-const FolderCoverDialog = lazy(async () => ({
+const FileDropTarget = lazyWithStaleChunkNotice(async () => ({
+  default: (await import('./FileDropTarget')).FileDropTarget
+}));
+const FolderCoverDialog = lazyWithStaleChunkNotice(async () => ({
   default: (await import('./FolderCoverDialog')).FolderCoverDialog
 }));
 
@@ -132,6 +138,11 @@ interface StartScreenProps {
   /** The grid's card size (Settings › Appearance); small is the original. */
   cardSize?: LibraryCardSize;
   onImportProject?(file: File): void;
+  /**
+   * Files dropped on the screen or picked through Import: a backup restores,
+   * CAD files start a new project in the units the form shows.
+   */
+  onImportFiles?(files: File[], units: UnitSystem): void;
   onCreate(name: string, units: UnitSystem): void;
   onOpen(projectId: string): void;
   onOpenDemo(definition: DemoDefinition): void;
@@ -144,6 +155,11 @@ interface StartScreenProps {
   /** Settings at its Account section; falls back to plain Settings. */
   onSignIn?(): void;
   onDuplicate(project: ProjectSummary): void;
+  /**
+   * Renames a project without opening it, from its tile or its Properties;
+   * resolves true once the new name is stored.
+   */
+  onRename?(project: ProjectSummary, name: string): Promise<boolean>;
   loadProperties(project: ProjectSummary): Promise<ProjectProperties | null>;
   /**
    * Projects the account holds. Anything absent lives on this device alone —
@@ -163,6 +179,13 @@ interface StartScreenProps {
    */
   conflictedProjectIds: ReadonlySet<string>;
   signedIn: boolean;
+  /**
+   * Sign-in itself could not be reached. The footer then says the cloud is
+   * unavailable and offers Retry, instead of a Sign in that leads to a page
+   * saying sign-in is unreachable (design review I8, S9).
+   */
+  cloudUnavailable?: boolean;
+  onRetryCloud?(): void;
   onSaveToAccount(project: ProjectSummary): void;
   onSaveAllToAccount(projects: ProjectSummary[]): void;
   /**
@@ -409,8 +432,12 @@ const SHELVES: ReadonlyArray<{
 const LIBRARY_SCROLL_KEY = 'openzcad.start.scroll';
 const LIBRARY_SCROLLERS = ['.start-body'] as const;
 const REORDER_KEYS = 'Alt+ArrowLeft Alt+ArrowRight Alt+ArrowUp Alt+ArrowDown';
+/** A tile's own keys: its controls, then its menu. */
+const TILE_KEYS = 'ArrowRight ArrowLeft Shift+F10';
 /** How long a project is held over another's middle before they would merge. */
 const MERGE_HOLD_MS = 450;
+const FOLDER_MADE_NOTICE =
+  'Made a folder. Name it, or press Enter to keep the name.';
 const FOLDER_KEY_PREFIX = 'folder:';
 
 /** A folder's tile id, kept apart from project ids on the same shelf. */
@@ -489,6 +516,7 @@ export function StartScreen({
   defaultUnits,
   cardSize = 'small',
   onImportProject,
+  onImportFiles,
   onCreate,
   onOpen,
   onOpenDemo,
@@ -496,11 +524,14 @@ export function StartScreen({
   onOpenSettings,
   onSignIn,
   onDuplicate,
+  onRename,
   loadProperties,
   cloudProjectIds,
   accountProjectListReached,
   conflictedProjectIds,
   signedIn,
+  cloudUnavailable = false,
+  onRetryCloud,
   onSaveToAccount,
   onSaveAllToAccount,
   syncRun,
@@ -565,6 +596,29 @@ export function StartScreen({
   useLibraryFolderCloudSync(thumbnailAccountId, folderState);
   const [folderMenu, setFolderMenu] = useState<string | null>(null);
   const [renamingFolderId, setRenamingFolderId] = useState<string | null>(null);
+  // Read synchronously: Enter and Escape end the field, and the blur that
+  // follows must not name the folder (or bring it back) a second time.
+  const renamingFolderRef = useRef<string | null>(null);
+  renamingFolderRef.current = renamingFolderId;
+  // A folder made a moment ago and not yet named: Escape unmakes it.
+  const justMadeFolderRef = useRef<string | null>(null);
+  // Files dropped on the screen, held while the library is still loading:
+  // a project made before discovery ends would be replaced by its result.
+  const [droppedFiles, setDroppedFiles] = useState<File[] | null>(null);
+  useEffect(() => {
+    if (!droppedFiles || busy || !onImportFiles) return;
+    setDroppedFiles(null);
+    onImportFiles(droppedFiles, units);
+  }, [droppedFiles, busy, onImportFiles, units]);
+  // A project's name being typed in place on its tile, and what is typed.
+  const [renamingProject, setRenamingProject] = useState<{
+    projectId: string;
+    draft: string;
+  } | null>(null);
+  // Which field is still open, synchronously: Enter and Escape move focus
+  // back to the tile, and the blur that follows must not commit again.
+  const renamingProjectRef = useRef<string | null>(null);
+  renamingProjectRef.current = renamingProject?.projectId ?? null;
   const [coverFolderId, setCoverFolderId] = useState<string | null>(null);
   // Projects picked for a bulk action, by id; only those on screen count.
   const [selected, setSelected] = useState<ReadonlySet<string>>(
@@ -651,6 +705,8 @@ export function StartScreen({
   // it would block names the API accepts (or vice versa).
   const trimmedName = name.trim();
   const nameTooLong = trimmedName.length > MAX_PROJECT_NAME_LENGTH;
+  // Names may repeat; a second "Bracket A" is allowed, but not unannounced.
+  const nameTaken = sameNamedProject(trimmedName, projects);
   const canCreate = !busy && trimmedName.length > 0 && !nameTooLong;
 
   useEffect(() => {
@@ -1060,6 +1116,7 @@ export function StartScreen({
     setQuery('');
     setMoveMenuOpen(false);
     setRenamingFolderId(id);
+    justMadeFolderRef.current = id;
     return id;
   }
 
@@ -1133,7 +1190,7 @@ export function StartScreen({
         [other, ...moving.filter((id) => id !== other)],
         pinnedIds.has(other)
       );
-      setNotice('Made a folder. Name it, or press Enter to keep the name.');
+      setNotice(FOLDER_MADE_NOTICE);
     },
     onCommit: (ids, moved) => commitOrder(ids, moved)
   });
@@ -1185,6 +1242,45 @@ export function StartScreen({
     }
     event.preventDefault();
     nudge(id, offset);
+  }
+
+  /**
+   * A tile is one Tab stop, its open button (it was four: open, select, pin
+   * and menu, so 50 projects took 200 Tabs). The arrow keys walk its other
+   * controls and back, and Shift+F10 or the context-menu key opens its menu.
+   */
+  function walkTile(event: ReactKeyboardEvent<HTMLElement>, menuId?: string) {
+    if (
+      event.defaultPrevented ||
+      event.altKey ||
+      event.ctrlKey ||
+      event.metaKey
+    )
+      return;
+    const tile = event.currentTarget.closest<HTMLElement>('.start-tile');
+    if (!tile) return;
+    if (
+      menuId !== undefined &&
+      (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10'))
+    ) {
+      event.preventDefault();
+      menuFocusEnd.current = 'first';
+      if (folderIdOf(menuId)) setFolderMenu(folderIdOf(menuId));
+      else setOpenMenu(menuId);
+      return;
+    }
+    if (event.shiftKey) return;
+    if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return;
+    const ring = Array.from(
+      tile.querySelectorAll<HTMLElement>(
+        ':scope > .start-tile-open, :scope > .start-tile-select, :scope > .start-tile-actions > button'
+      )
+    ).filter((control) => !(control as HTMLButtonElement).disabled);
+    const at = ring.indexOf(event.currentTarget);
+    const next = at + (event.key === 'ArrowRight' ? 1 : -1);
+    if (at < 0 || next < 0 || next >= ring.length) return;
+    event.preventDefault();
+    ring[next]!.focus();
   }
 
   function shelfCount(status: ProjectStatus): number {
@@ -1411,8 +1507,97 @@ export function StartScreen({
   }
 
   function commitRename(folderId: string, name: string) {
+    if (renamingFolderRef.current !== folderId) return;
+    renamingFolderRef.current = null;
+    justMadeFolderRef.current = null;
     setRenamingFolderId(null);
+    // Named: the prompt to name it has done its work.
+    setNotice((current) => (current === FOLDER_MADE_NOTICE ? '' : current));
     updateFolders((state) => renameFolder(state, folderId, name));
+  }
+
+  /**
+   * Escape while naming. A folder made a moment ago is unmade, its projects
+   * back where they were: Escape kept a folder called "New folder" the user
+   * had just declined to name. An existing folder keeps its name.
+   */
+  function cancelRename(folder: LibraryFolder) {
+    if (renamingFolderRef.current !== folder.id) return;
+    renamingFolderRef.current = null;
+    setRenamingFolderId(null);
+    if (justMadeFolderRef.current !== folder.id) return;
+    justMadeFolderRef.current = null;
+    updateFolders((state) => deleteFolder(state, folder.id));
+    setNotice(
+      folder.projectIds.length === 0
+        ? 'No folder made.'
+        : 'No folder made; the projects are back on the shelf.'
+    );
+  }
+
+  function commitProjectRename(project: ProjectSummary, name: string) {
+    if (renamingProjectRef.current !== project.projectId) return;
+    renamingProjectRef.current = null;
+    setRenamingProject(null);
+    // Focus goes back to the tile, as it does after a folder is named.
+    tileRefs.current
+      .get(project.projectId)
+      ?.querySelector<HTMLElement>('.start-tile-open')
+      ?.focus({ preventScroll: true });
+    if (!onRename || projectNameProblem(name) || name.trim() === project.name)
+      return;
+    void onRename(project, name);
+  }
+
+  /** The name field a tile's Rename puts in place of its name. */
+  function renderProjectRename(project: ProjectSummary) {
+    if (renamingProject?.projectId !== project.projectId) return null;
+    const { draft } = renamingProject;
+    const problem = projectNameProblem(draft);
+    const taken = problem
+      ? null
+      : sameNamedProject(draft, projects, project.projectId);
+    const hintId = `start-rename-hint-${project.projectId}`;
+    return (
+      <div className="start-folder-rename-field">
+        <input
+          className="start-folder-rename"
+          value={draft}
+          aria-label={`Rename ${project.name}`}
+          aria-invalid={problem ? true : undefined}
+          aria-describedby={problem || taken ? hintId : undefined}
+          maxLength={MAX_PROJECT_NAME_LENGTH}
+          autoFocus
+          onFocus={(event) => event.currentTarget.select()}
+          onChange={(event) =>
+            setRenamingProject({
+              projectId: project.projectId,
+              draft: event.target.value
+            })
+          }
+          onClick={(event) => event.stopPropagation()}
+          onPointerDown={(event) => event.stopPropagation()}
+          onKeyDown={(event) => {
+            event.stopPropagation();
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              commitProjectRename(project, event.currentTarget.value);
+            } else if (event.key === 'Escape') {
+              event.preventDefault();
+              commitProjectRename(project, project.name);
+            }
+          }}
+          onBlur={(event) =>
+            commitProjectRename(project, event.currentTarget.value)
+          }
+        />
+        {(problem || taken) && (
+          <small id={hintId} className="start-rename-hint" role="status">
+            {problem ?? `Another project is already called “${taken}”.`}
+          </small>
+        )}
+      </div>
+    );
   }
 
   function renderFolderName(folder: LibraryFolder) {
@@ -1440,7 +1625,7 @@ export function StartScreen({
             commitRename(folder.id, event.currentTarget.value);
           } else if (event.key === 'Escape') {
             event.preventDefault();
-            setRenamingFolderId(null);
+            cancelRename(folder);
           }
         }}
         onBlur={(event) => commitRename(folder.id, event.currentTarget.value)}
@@ -1489,14 +1674,23 @@ export function StartScreen({
           data-tile-drag=""
           disabled={busy}
           aria-label={`Open folder ${folder.name}, ${members.length} ${members.length === 1 ? 'project' : 'projects'}`}
-          aria-keyshortcuts={canReorder ? REORDER_KEYS : undefined}
+          aria-keyshortcuts={
+            canReorder ? `${TILE_KEYS} ${REORDER_KEYS}` : TILE_KEYS
+          }
           onClick={() => {
             if (!renaming) showFolder(folder.id);
           }}
-          onKeyDown={(event) => nudgeFromKey(key, event)}
+          onKeyDown={(event) => {
+            nudgeFromKey(key, event);
+            walkTile(event, key);
+          }}
         >
           <span className="start-tile-thumb start-folder-thumb">
-            {cover ? (
+            {/* A row's 52px thumb says "folder" rather than shrinking the
+                cover under its count, which the Saves column now holds. */}
+            {layout === 'list' ? (
+              <Folder className="start-folder-empty-icon" aria-hidden="true" />
+            ) : cover ? (
               <PartThumbnail
                 project={cover}
                 accountId={thumbnailAccountId}
@@ -1509,23 +1703,45 @@ export function StartScreen({
                 aria-hidden="true"
               />
             )}
-            <span className="start-folder-count" aria-hidden="true">
-              <Folder size={11} aria-hidden="true" />
-              {members.length}
-            </span>
+            {layout !== 'list' && (
+              <span className="start-folder-count" aria-hidden="true">
+                <Folder size={11} aria-hidden="true" />
+                {members.length}
+              </span>
+            )}
           </span>
           <span className="start-tile-body">
             {!renaming && renderFolderName(folder)}
             {renaming && <span className="start-folder-rename-slot" />}
-            <small className="start-tile-meta">
-              <span className="start-tile-when">
-                {members.length === 0
-                  ? 'Empty — drop projects here'
-                  : `${members.length} ${members.length === 1 ? 'project' : 'projects'}${
-                      edited ? ` · ${formatLastEdited(edited)}` : ''
-                    }`}
-              </span>
-            </small>
+            {layout === 'list' ? (
+              // The row's own columns: nothing under Status, the newest
+              // member's date under Edited, the count where a project's
+              // saves go. One sentence in Status wrapped and left the rest
+              // of the row empty.
+              <>
+                <span className="start-tile-flags" />
+                <small className="start-tile-meta">
+                  <span className="start-tile-when">
+                    {edited ? formatLastEdited(edited) : '—'}
+                  </span>
+                  <span className="start-tile-rev">
+                    {members.length === 0
+                      ? 'Empty'
+                      : `${members.length} ${members.length === 1 ? 'project' : 'projects'}`}
+                  </span>
+                </small>
+              </>
+            ) : (
+              <small className="start-tile-meta">
+                <span className="start-tile-when">
+                  {members.length === 0
+                    ? 'Empty — drop projects here'
+                    : `${members.length} ${members.length === 1 ? 'project' : 'projects'}${
+                        edited ? ` · ${formatLastEdited(edited)}` : ''
+                      }`}
+                </span>
+              </small>
+            )}
           </span>
         </button>
         {/* The name field is a sibling of the open button: a field inside a
@@ -1548,6 +1764,8 @@ export function StartScreen({
             }
             title={pinnedNow ? 'Unpin' : 'Pin to the front'}
             disabled={busy}
+            tabIndex={-1}
+            onKeyDown={walkTile}
             onClick={() =>
               updateFolders((state) =>
                 setFolderPinned(state, folder.id, !pinnedNow)
@@ -1567,6 +1785,8 @@ export function StartScreen({
             aria-expanded={menuOpen}
             aria-label={`Actions for folder ${folder.name}`}
             disabled={busy}
+            tabIndex={-1}
+            onKeyDown={walkTile}
             onClick={() => setFolderMenu(menuOpen ? null : folder.id)}
           >
             <MoreHorizontal size={12} aria-hidden="true" />
@@ -1637,7 +1857,6 @@ export function StartScreen({
               type="button"
               role="menuitem"
               tabIndex={-1}
-              className="is-destructive"
               onClick={() => ungroupFolder(folder)}
             >
               <FolderMinus size={13} aria-hidden="true" />
@@ -1701,9 +1920,13 @@ export function StartScreen({
         <span className="start-tile-body">
           {/* Clipped names differ only in their ends ("…-Profiles" and
               "…-Profiles copy"), so the whole name is a hover away. */}
-          <strong className="start-tile-name" title={project.name}>
-            {project.name}
-          </strong>
+          {renamingProject?.projectId === project.projectId ? (
+            <span className="start-folder-rename-slot" />
+          ) : (
+            <strong className="start-tile-name" title={project.name}>
+              {project.name}
+            </strong>
+          )}
           <small className="start-tile-meta">
             {/* Quiet marks for the project's standing traits, ahead of the date
                 they qualify: how it is stored, where it lives, what it is. */}
@@ -1853,6 +2076,41 @@ export function StartScreen({
     // As the shelf shows it: a drop into or out of Pinned counts before its
     // save lands, so the pin button never offers the opposite action.
     const pinnedNow = shownPinned(project);
+    // What a screen reader hears for the card: its name, when it was last
+    // edited, and whatever the corner marks say, in words.
+    const tileName = [
+      project.name,
+      `edited ${formatLastEdited(project.updatedAt)}`,
+      locked
+        ? PROJECT_UPDATE_REQUIRED_LABEL
+        : migrating && !encrypted
+          ? 'being encrypted'
+          : encrypted
+            ? 'end-to-end encrypted'
+            : null,
+      recoveryOf !== null && !trashed ? `recovery copy of ${recoveryOf}` : null,
+      localOnly && !trashed && !syncEntry && !conflicted
+        ? 'on this device only'
+        : null,
+      syncEntry && !trashed
+        ? {
+            pending: 'waiting to save to your account',
+            syncing: 'saving to your account',
+            synced: 'saved to your account',
+            failed: 'could not be saved to your account'
+          }[syncEntry.state]
+        : conflicted && !trashed
+          ? 'changed in two places'
+          : null,
+      pinnedNow && shelf === 'active' ? 'pinned' : null,
+      trashed
+        ? daysLeft === 0
+          ? 'deleting shortly'
+          : `deletes in ${daysLeft} ${daysLeft === 1 ? 'day' : 'days'}`
+        : null
+    ]
+      .filter(Boolean)
+      .join(', ');
     const isSelected = selected.has(project.projectId);
     const mergeTarget =
       reorder.dropTarget?.target === `merge:${project.projectId}`
@@ -1890,9 +2148,10 @@ export function StartScreen({
         ]
           .filter(Boolean)
           .join(' ')}
-        onPointerDown={(event) =>
-          reorder.onPointerDown(project.projectId, event)
-        }
+        onPointerDown={(event) => {
+          if (renamingProject?.projectId !== project.projectId)
+            reorder.onPointerDown(project.projectId, event);
+        }}
         // The preview picture is an image, which the browser would otherwise
         // drag out on its own instead of moving the card.
         onDragStart={(event) => event.preventDefault()}
@@ -1909,14 +2168,18 @@ export function StartScreen({
               if (picks(event))
                 toggleSelected(project.projectId, event.shiftKey);
             }}
-            {...(canReorder && {
-              tabIndex: 0,
-              role: 'group',
-              'aria-label': project.name,
-              'aria-keyshortcuts': REORDER_KEYS,
-              onKeyDown: (event: ReactKeyboardEvent) =>
-                nudgeFromKey(project.projectId, event)
-            })}
+            // The tile's one Tab stop, here as on an openable card: its
+            // select and menu are reached from it with the arrow keys.
+            tabIndex={0}
+            role="group"
+            aria-label={tileName}
+            aria-keyshortcuts={
+              canReorder ? `${TILE_KEYS} ${REORDER_KEYS}` : TILE_KEYS
+            }
+            onKeyDown={(event: ReactKeyboardEvent<HTMLElement>) => {
+              nudgeFromKey(project.projectId, event);
+              walkTile(event, project.projectId);
+            }}
           >
             {preview}
           </div>
@@ -1928,8 +2191,14 @@ export function StartScreen({
             disabled={busy}
             onPointerEnter={onOpenIntent}
             onFocus={onOpenIntent}
-            aria-keyshortcuts={canReorder ? REORDER_KEYS : undefined}
+            // Its name and standing, once: the preview's "No geometry" and
+            // the marks ran together into "No geometryLidNov 13, 2026".
+            aria-label={tileName}
+            aria-keyshortcuts={
+              canReorder ? `${TILE_KEYS} ${REORDER_KEYS}` : TILE_KEYS
+            }
             onClick={(event) => {
+              if (renamingProject?.projectId === project.projectId) return;
               if (picks(event)) {
                 event.preventDefault();
                 toggleSelected(project.projectId, event.shiftKey);
@@ -1937,11 +2206,17 @@ export function StartScreen({
                 onOpen(project.projectId);
               }
             }}
-            onKeyDown={(event) => nudgeFromKey(project.projectId, event)}
+            onKeyDown={(event) => {
+              nudgeFromKey(project.projectId, event);
+              walkTile(event, project.projectId);
+            }}
           >
             {preview}
           </button>
         )}
+        {/* A sibling of the open button, as a folder's name field is: a
+            field inside the button would open the project on each key. */}
+        {renderProjectRename(project)}
 
         {/* Picks the project for a bulk action. Shown on hover, and on every
             card once anything is picked. */}
@@ -1951,6 +2226,8 @@ export function StartScreen({
           className="start-tile-select"
           aria-checked={isSelected}
           aria-label={`Select ${project.name}`}
+          tabIndex={-1}
+          onKeyDown={walkTile}
           title={isSelected ? 'Deselect' : 'Select (Shift picks a range)'}
           onClick={(event) => toggleSelected(project.projectId, event.shiftKey)}
         >
@@ -1977,6 +2254,8 @@ export function StartScreen({
               }
               title={pinnedNow ? 'Unpin' : 'Pin to the front'}
               disabled={busy}
+              tabIndex={-1}
+              onKeyDown={walkTile}
               onClick={() => onTogglePin(project)}
             >
               {/* Filled when pinned: the marker stays on a pinned tile, and a
@@ -1996,9 +2275,11 @@ export function StartScreen({
             aria-expanded={menuOpen}
             aria-label={`Actions for ${project.name}`}
             disabled={busy}
+            tabIndex={-1}
             onClick={() => setOpenMenu(menuOpen ? null : project.projectId)}
             onKeyDown={(event) => {
               if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') {
+                walkTile(event);
                 return;
               }
               event.preventDefault();
@@ -2124,6 +2405,23 @@ export function StartScreen({
                   >
                     <Copy size={13} aria-hidden="true" />
                     Duplicate
+                  </button>
+                )}
+                {!locked && onRename && (
+                  <button
+                    type="button"
+                    role="menuitem"
+                    tabIndex={-1}
+                    onClick={() => {
+                      closeMenu(project.projectId);
+                      setRenamingProject({
+                        projectId: project.projectId,
+                        draft: project.name
+                      });
+                    }}
+                  >
+                    <Pencil size={13} aria-hidden="true" />
+                    Rename
                   </button>
                 )}
                 {shelf === 'active' && (
@@ -2518,6 +2816,24 @@ export function StartScreen({
     if (loading) {
       return { tone: 'idle', Icon: Cloud, text: 'Checking account…' };
     }
+    if (!signedIn && cloudUnavailable) {
+      return {
+        tone: 'warning',
+        Icon: CloudAlert,
+        text: 'Cloud unavailable',
+        title:
+          'Sign-in could not be reached. Projects keep saving on this device.',
+        ...(onRetryCloud
+          ? {
+              action: {
+                text: 'Retry',
+                label: 'Retry the cloud connection',
+                run: onRetryCloud
+              }
+            }
+          : {})
+      };
+    }
     if (!signedIn) {
       return {
         tone: 'idle',
@@ -2611,19 +2927,6 @@ export function StartScreen({
           OpenZCAD <span className="beta-tag">Beta</span>
         </h1>
       </header>
-      {/* Settings on the shelf line's end, on the workspace Settings
-          button's line; Settings puts its way back in the same place. */}
-      <div className="corner-slot">
-        <button
-          className="corner-action start-settings-button"
-          type="button"
-          aria-label="Open settings"
-          title={labelWithKey('Settings', settingsKey)}
-          onClick={onOpenSettings}
-        >
-          <Settings size={15} aria-hidden="true" />
-        </button>
-      </div>
 
       <section className="start-launch" aria-label="New project">
         <form
@@ -2667,10 +2970,17 @@ export function StartScreen({
             {onImportProject && (
               <ProjectImportButton
                 onImport={onImportProject}
+                {...(onImportFiles && {
+                  onImportFiles: (files: File[]) => onImportFiles(files, units)
+                })}
                 disabled={busy}
                 className="start-launch-import"
                 shortLabel="Import"
-                title="Import an .openzcad project backup"
+                title={
+                  onImportFiles
+                    ? 'Import an .openzcad project backup, or CAD files as a new project'
+                    : 'Import an .openzcad project backup'
+                }
               />
             )}
           </div>
@@ -2707,6 +3017,11 @@ export function StartScreen({
               role="alert"
             >
               Project name must be at most {MAX_PROJECT_NAME_LENGTH} characters.
+            </small>
+          ) : nameTaken ? (
+            <small className="start-launch-hint is-taken" role="status">
+              You already have a project called “{nameTaken}”. The new one is
+              kept separately.
             </small>
           ) : (
             <small className="start-launch-hint">
@@ -2978,7 +3293,10 @@ export function StartScreen({
                     value={query}
                     type="text"
                     aria-label="Search projects"
-                    placeholder="Search projects…"
+                    // Short enough for a phone's half-width field, which
+                    // cut "Search projects…" to "Search proje"; the label
+                    // still says what it searches.
+                    placeholder="Search…"
                     onChange={(event) => setQuery(event.target.value)}
                     onKeyDown={(event) => {
                       if (event.key === 'Escape' && query) {
@@ -3002,7 +3320,7 @@ export function StartScreen({
                   )}
                 </div>
 
-                {(layoutCounts.all > 1 || (loading && !previousLayout)) && (
+                {layoutCounts.all > 1 || (loading && !previousLayout) ? (
                   <label className="start-sort">
                     <span className="visually-hidden">Sort projects</span>
                     <select
@@ -3017,6 +3335,22 @@ export function StartScreen({
                       <option value="name">Name</option>
                     </select>
                   </label>
+                ) : (
+                  // Its room, held: with one project there is nothing to
+                  // sort, and without the slot the search jumped 128px
+                  // between Projects and Archive.
+                  <span className="start-sort is-reserved" aria-hidden="true">
+                    <select
+                      tabIndex={-1}
+                      disabled
+                      value={sort}
+                      onChange={() => {}}
+                    >
+                      <option value="custom">Custom order</option>
+                      <option value="edited">Last edited</option>
+                      <option value="name">Name</option>
+                    </select>
+                  </span>
                 )}
                 <div className="start-layout" role="group" aria-label="Layout">
                   <button
@@ -3075,20 +3409,21 @@ export function StartScreen({
             )}
             {loading && userProjects.length === 0 && (
               <>
-                {layout === 'list' && (
-                  <div className="start-list-head" aria-hidden="true">
-                    <span>Name</span>
-                    <span>Status</span>
-                    <span>Edited</span>
-                    <span>Saves</span>
-                  </div>
-                )}
-                {loadingGroups.map((group) => (
+                {loadingGroups.map((group, groupIndex) => (
                   <Fragment key={group.label ?? 'all'}>
                     {group.label && (
                       <h3 className="start-group-label" aria-hidden="true">
                         {group.label}
                       </h3>
+                    )}
+                    {/* Where the loaded list puts it: under the first label. */}
+                    {layout === 'list' && groupIndex === 0 && (
+                      <div className="start-list-head" aria-hidden="true">
+                        <span>Name</span>
+                        <span>Status</span>
+                        <span>Edited</span>
+                        <span>Saves</span>
+                      </div>
                     )}
                     <div
                       className={`start-tile-grid ${layout === 'list' ? 'is-list' : `is-${cardSize}`}`}
@@ -3150,14 +3485,6 @@ export function StartScreen({
 
             {items.length > 0 && (
               <>
-                {layout === 'list' && (
-                  <div className="start-list-head" aria-hidden="true">
-                    <span>Name</span>
-                    <span>Status</span>
-                    <span>Edited</span>
-                    <span>Saves</span>
-                  </div>
-                )}
                 {shelfGroups.map((group) =>
                   // An empty group only shows as a drop target mid-drag.
                   group.items.length === 0 && !reorder.draggingId ? null : (
@@ -3167,6 +3494,21 @@ export function StartScreen({
                       {group.label && (
                         <h3 className="start-group-label">{group.label}</h3>
                       )}
+                      {/* Under the first group's label, over the rows it
+                          names: above the label it headed "Pinned" instead. */}
+                      {layout === 'list' &&
+                        group ===
+                          shelfGroups.find(
+                            (candidate) =>
+                              candidate.items.length > 0 || reorder.draggingId
+                          ) && (
+                          <div className="start-list-head" aria-hidden="true">
+                            <span>Name</span>
+                            <span>Status</span>
+                            <span>Edited</span>
+                            <span>Saves</span>
+                          </div>
+                        )}
                       <div
                         className={`start-tile-grid ${layout === 'list' ? 'is-list' : `is-${cardSize}`}`}
                         data-tile-group={canReorder ? group.group : undefined}
@@ -3549,6 +3891,21 @@ export function StartScreen({
           />
         </Suspense>
       )}
+      {/* Settings on the shelf line's end, on the workspace Settings
+          button's line; Settings puts its way back in the same place. Last
+          in the page's order, though drawn at its top: Tab started there,
+          ahead of New project. */}
+      <div className="corner-slot">
+        <button
+          className="corner-action start-settings-button"
+          type="button"
+          aria-label="Open settings"
+          title={labelWithKey('Settings', settingsKey)}
+          onClick={onOpenSettings}
+        >
+          <Settings size={15} aria-hidden="true" />
+        </button>
+      </div>
       {propertiesProject && (
         <Suspense fallback={null}>
           <ProjectPropertiesDialog
@@ -3563,7 +3920,31 @@ export function StartScreen({
                     ? 'This device only'
                     : 'Unknown — account listing unavailable'
             }
+            {...(onRename &&
+              !projectNeedsUpdate(propertiesProject) && {
+                // The listed project, whose name a rename here has moved on.
+                onRename: (name: string) =>
+                  onRename(
+                    projects.find(
+                      (candidate) =>
+                        candidate.projectId === propertiesProject.projectId
+                    ) ?? propertiesProject,
+                    name
+                  ),
+                projects
+              })}
             onClose={() => setPropertiesProject(null)}
+          />
+        </Suspense>
+      )}
+      {onImportFiles && (
+        // Without a target here the browser took a dropped file and opened
+        // or downloaded it in place of the library.
+        <Suspense fallback={null}>
+          <FileDropTarget
+            title="Drop to make a project"
+            hint="STEP, DXF or a mesh file starts a new project; an .openzcad backup restores one"
+            onDrop={setDroppedFiles}
           />
         </Suspense>
       )}

@@ -329,7 +329,6 @@ html select:not([multiple]):not(.start-field *):not(.object-filter *):focus {
 .keypad-units button:not(.active):not(:hover):not(:focus-visible),
 .command-flyout-more:not(:hover):not(:focus-visible) > span,
 .demo-action:not(:hover):not(:focus-visible),
-.startup-card button:not(:hover):not(:focus-visible),
 .start-shelf-action:not(:hover):not(:focus-visible),
 .start-tile-footer button:not(:hover):not(:focus-visible) {
   background: transparent;
@@ -350,7 +349,6 @@ html select:not([multiple]):not(.start-field *):not(.object-filter *):focus {
 .keypad-units button:not(.active):is(:hover, :focus-visible),
 .command-flyout-more:is(:hover, :focus-visible) > span,
 .demo-action:is(:hover, :focus-visible):not(:disabled),
-.startup-card button:is(:hover, :focus-visible),
 .start-shelf-action:is(:hover, :focus-visible):not(:disabled),
 .start-tile-footer button:is(:hover, :focus-visible):not(:disabled) {
   background: var(--color-surface-hover);

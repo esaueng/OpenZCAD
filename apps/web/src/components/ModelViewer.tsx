@@ -132,6 +132,7 @@ import {
   GestureRouter,
   HudLayer,
   TopologyPickList,
+  type TopologyPickListEntry,
   PickService,
   SelectionManager,
   animationStepSeconds,
@@ -305,6 +306,7 @@ import {
 } from '../lib/selectionCalloutView';
 import {
   cornersWithinFrame,
+  measureClearStage,
   measureCreationFrame,
   measureFitFrame,
   measureOpeningFrame,
@@ -977,6 +979,25 @@ export interface NormalToFaceRequest {
   nonce: number;
 }
 
+/**
+ * What a viewport menu knows besides the pick (design review I18).
+ *
+ * A right-click used to open the Select other list whenever two targets were
+ * stacked under the pointer, and choosing from it only selected: near an
+ * edge the action menu was never reached. The menu now opens for the top
+ * target and leads with Select other, and a target chosen from that list
+ * opens its own menu.
+ */
+export interface ViewportContextMenuOptions {
+  /** Present when two or more targets are stacked under the pointer. */
+  selectOther?: { count: number; open(): void };
+  /**
+   * Opened from the keyboard for the current selection, which the menu acts
+   * on as it stands rather than re-picking (a multi-selection stays whole).
+   */
+  keyboard?: boolean;
+}
+
 export interface ModelViewerProps {
   parameterVisualPreview?: ParameterVisualPreview | null;
   bodies: GeometryBodyRepresentation[];
@@ -1033,6 +1054,13 @@ export interface ModelViewerProps {
    * set for an edit, whose camera is the user's.
    */
   creationFrame?: AutoFrameRequest | null;
+  /**
+   * Bumped when something has just opened over the stage (the section
+   * controls, an assistant proposal's preview): the model, previews
+   * included, is reframed into the clear stage if any of it now stands
+   * outside it. The view keeps its direction; a model already clear stays.
+   */
+  clearStageRequest?: number;
   /** Set to move the camera to a view target; nonce forces re-runs. */
   viewRequest: { view: ViewRequestTarget; nonce: number } | null;
   /** Set to centre and frame an exact planar face; nonce forces re-runs. */
@@ -1471,11 +1499,16 @@ export interface ModelViewerProps {
    * chosen size for image export, without presenting a frame.
    */
   viewportImageRef?: MutableRefObject<ViewportImageSource | null>;
-  /** Stationary right-click; right-drag stays a pan. */
+  /**
+   * Stationary right-click, a long press, Shift+F10 or the Menu key;
+   * right-drag stays a pan. `options` says when more than one target is
+   * stacked under the pointer, so the menu can lead with Select other.
+   */
   onContextMenu(
     x: number,
     y: number,
-    selection: TopologySelection | null
+    selection: TopologySelection | null,
+    options?: ViewportContextMenuOptions
   ): void;
   /** A two-finger tap undoes and a three-finger tap redoes (L02). */
   onTouchHistory?(step: 'undo' | 'redo'): void;
@@ -2153,6 +2186,40 @@ function isTextEntryTarget(target: EventTarget | null): boolean {
   );
 }
 
+/** Shift+F10 or the Menu key, the keyboard's right-click. */
+function isContextMenuKey(event: KeyboardEvent): boolean {
+  if (event.ctrlKey || event.metaKey || event.altKey) return false;
+  return event.key === 'ContextMenu' || (event.key === 'F10' && event.shiftKey);
+}
+
+/**
+ * The menu key belongs to the viewport while focus is on it or nowhere in
+ * particular. A focused History row, panel or button keeps its own menu.
+ */
+function viewportOwnsMenuKey(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return true;
+  if (target === document.body || target === document.documentElement) {
+    return true;
+  }
+  return target.closest('.viewer-shell') !== null && !target.closest('button');
+}
+
+/**
+ * Swallows the contextmenu event a browser sends after Shift+F10 or the Menu
+ * key, once, so its own menu does not open over ours.
+ */
+function suppressNextNativeContextMenu() {
+  const swallow = (event: Event) => {
+    event.preventDefault();
+    window.removeEventListener('contextmenu', swallow, true);
+  };
+  window.addEventListener('contextmenu', swallow, true);
+  window.setTimeout(
+    () => window.removeEventListener('contextmenu', swallow, true),
+    600
+  );
+}
+
 type ViewRequest = NonNullable<ModelViewerProps['viewRequest']>;
 
 function startRequestedView(
@@ -2228,6 +2295,7 @@ export function ModelViewer({
   fitSignal,
   autoFrame = null,
   creationFrame = null,
+  clearStageRequest = 0,
   viewRequest,
   normalToFaceRequest,
   units,
@@ -4191,6 +4259,16 @@ export function ModelViewer({
       onOffsetCancelRef.current();
     };
 
+    /**
+     * Set while a Select other list opened from a viewport menu is up: the
+     * point that menu opened at and how many targets it listed. A pick from
+     * that list reopens the menu for the chosen target there.
+     */
+    let pickListThenMenu: {
+      clientX: number;
+      clientY: number;
+      count: number;
+    } | null = null;
     const topologyPickList = new TopologyPickList({
       hud,
       onHover(candidate) {
@@ -4207,10 +4285,29 @@ export function ModelViewer({
       },
       onSelect(candidate) {
         const pickedSelection = candidate.selection;
+        const thenMenu = pickListThenMenu;
+        pickListThenMenu = null;
         if (!pickedSelection) {
           return;
         }
         cameraRig.pivotOn(candidate.hit.point);
+        if (thenMenu) {
+          // Opened from a menu's Select other: the chosen target gets its
+          // own menu where the first one stood, which selects it as a
+          // right-click on it would.
+          onContextMenuRef.current(
+            thenMenu.clientX,
+            thenMenu.clientY,
+            pickedSelection,
+            {
+              selectOther: {
+                count: thenMenu.count,
+                open: () => openSelectOtherFromMenu(thenMenu)
+              }
+            }
+          );
+          return;
+        }
         onSelectTopologyRef.current(
           pickedSelection,
           false,
@@ -4405,6 +4502,28 @@ export function ModelViewer({
         topologyPickList.hide();
         event.preventDefault();
         event.stopPropagation();
+        return;
+      }
+      if (
+        isContextMenuKey(event) &&
+        !sketchModeRef.current &&
+        !assemblyViewport.active &&
+        !isTextEntryTarget(event.target) &&
+        viewportOwnsMenuKey(event.target)
+      ) {
+        // Shift+F10 and the Menu key: the selection's menu, which a keyboard
+        // could not reach before (I18). The browser follows the key with a
+        // contextmenu event of its own; that one opens nothing.
+        event.preventDefault();
+        event.stopPropagation();
+        suppressNextNativeContextMenu();
+        const rect = renderer.domElement.getBoundingClientRect();
+        onContextMenuRef.current(
+          rect.left + rect.width / 2,
+          rect.top + rect.height / 2,
+          selectedTopologyRef.current ?? null,
+          { keyboard: true }
+        );
         return;
       }
       if (
@@ -7393,10 +7512,79 @@ export function ModelViewer({
       requireDisambiguation: boolean,
       focusFirst = false
     ): boolean {
+      pickListThenMenu = null;
       if (!pickListEnabledRef.current) {
         return false;
       }
-      const entries = picker.pickAll(event).flatMap((candidate) => {
+      const entries = stackedPickEntries(event);
+      if (
+        entries.length === 0 ||
+        (requireDisambiguation && entries.length < 2)
+      ) {
+        return false;
+      }
+      hud.hide(measurePreviewChip);
+      hud.hide(snapGlyph);
+      return topologyPickList.show(entries, event, focusFirst);
+    }
+
+    /**
+     * The viewport's action menu for whatever is under the pointer (I18).
+     * With two or more targets stacked there it opens for the top one and
+     * leads with Select other, rather than opening only the list.
+     */
+    function openViewportContextMenu(
+      event: PointerEvent | MouseEvent,
+      offerSelectOther: boolean
+    ) {
+      const count =
+        offerSelectOther && pickListEnabledRef.current
+          ? stackedPickEntries(event).length
+          : 0;
+      const point = { clientX: event.clientX, clientY: event.clientY, count };
+      onContextMenuRef.current(
+        event.clientX,
+        event.clientY,
+        pick(event)?.selection ?? null,
+        count >= 2
+          ? {
+              selectOther: {
+                count,
+                open: () => openSelectOtherFromMenu(point)
+              }
+            }
+          : undefined
+      );
+    }
+
+    /**
+     * A menu's Select other: the list of what was under the pointer when the
+     * menu opened (the camera cannot move while a menu is up). Focus is
+     * parked on the viewport first, since the menu item that held it is
+     * closing, and Escape from the list must have somewhere to return to.
+     */
+    function openSelectOtherFromMenu(point: {
+      clientX: number;
+      clientY: number;
+      count: number;
+    }) {
+      renderer.domElement
+        .closest<HTMLElement>('.viewer-shell')
+        ?.focus({ preventScroll: true });
+      const pointer = new PointerEvent('pointermove', {
+        clientX: point.clientX,
+        clientY: point.clientY
+      });
+      if (showTopologyPickList(pointer, true, true)) {
+        pickListThenMenu = point;
+      }
+    }
+
+    /** The targets under the pointer that a pick could take, nearest first. */
+    function stackedPickEntries(
+      event: PointerEvent | MouseEvent
+    ): TopologyPickListEntry[] {
+      return picker.pickAll(event).flatMap((candidate) => {
         const pickedSelection = candidate.selection;
         if (!pickedSelection) {
           return [];
@@ -7414,15 +7602,6 @@ export function ModelViewer({
           }
         ];
       });
-      if (
-        entries.length === 0 ||
-        (requireDisambiguation && entries.length < 2)
-      ) {
-        return false;
-      }
-      hud.hide(measurePreviewChip);
-      hud.hide(snapGlyph);
-      return topologyPickList.show(entries, event, focusFirst);
     }
 
     /**
@@ -7811,6 +7990,8 @@ export function ModelViewer({
           delete renderer.domElement.dataset.e2eChipAnchorWorldY;
           delete renderer.domElement.dataset.e2eChipAnchorWorldZ;
           delete renderer.domElement.dataset.e2eChipAnchorRig;
+          delete renderer.domElement.dataset.e2eChipPinX;
+          delete renderer.domElement.dataset.e2eChipPinY;
         }
         return;
       }
@@ -7899,6 +8080,8 @@ export function ModelViewer({
           delete renderer.domElement.dataset.e2eChipAnchorWorldY;
           delete renderer.domElement.dataset.e2eChipAnchorWorldZ;
           delete renderer.domElement.dataset.e2eChipAnchorRig;
+          delete renderer.domElement.dataset.e2eChipPinX;
+          delete renderer.domElement.dataset.e2eChipPinY;
         }
         return;
       }
@@ -8005,6 +8188,15 @@ export function ModelViewer({
         renderer.domElement.dataset.e2eChipAnchorWorldY = String(anchor.y);
         renderer.domElement.dataset.e2eChipAnchorWorldZ = String(anchor.z);
         renderer.domElement.dataset.e2eChipAnchorRig = rig.kind;
+        // Where the pin the label hangs beside projects (the arrow's foot),
+        // as distinct from `e2eHandle*`, a grab point on the arrow's shaft.
+        if (pinScreenAt) {
+          renderer.domElement.dataset.e2eChipPinX = String(pinScreenAt.x);
+          renderer.domElement.dataset.e2eChipPinY = String(pinScreenAt.y);
+        } else {
+          delete renderer.domElement.dataset.e2eChipPinX;
+          delete renderer.domElement.dataset.e2eChipPinY;
+        }
       }
       if (e2eCanvasHooksEnabled && rig?.kind === 'cylinder-radius') {
         const scale =
@@ -8525,7 +8717,31 @@ export function ModelViewer({
         sketchDimLabel,
         appendUnits ? `${text} ${unitLabelRef.current}` : text
       );
-      hud.showAtPointer(sketchDimLabel, event, 16, -28);
+      showSketchReadout(event);
+    }
+
+    // The clear stage's right edge, read at most every quarter second: the
+    // readout follows every pointer move, and the panels rarely move.
+    let readoutStageRight = Infinity;
+    let readoutStageReadAt = -Infinity;
+    /**
+     * Beside the pointer, on its right unless that runs past the clear
+     * stage: drawing toward the Relations rail clipped "40 × 31 mm" and its
+     * snap hint under the rail (I7), so near it the readout takes the
+     * pointer's left instead.
+     */
+    function showSketchReadout(event: PointerEvent) {
+      if (!hud.showAtPointer(sketchDimLabel, event, 16, -28)) return;
+      const now = performance.now();
+      if (now - readoutStageReadAt > 250) {
+        readoutStageReadAt = now;
+        readoutStageRight =
+          measureClearStage(renderer.domElement)?.rect.right ?? Infinity;
+      }
+      const width = sketchDimLabel.offsetWidth;
+      if (event.clientX + 16 + width > readoutStageRight) {
+        hud.showAtPointer(sketchDimLabel, event, -16 - width, -28);
+      }
     }
 
     function hideSketchDimLabel() {
@@ -8560,7 +8776,7 @@ export function ModelViewer({
           : `${label}: ${sketchNumericRaw || '…'} ${units} · Enter`;
       setElementText(sketchDimLabel, text);
       sketchDimLabel.dataset.editing = 'true';
-      hud.showAtPointer(sketchDimLabel, event, 16, -28);
+      showSketchReadout(event);
     }
 
     function finishSketchNumericEntry() {
@@ -8960,7 +9176,7 @@ export function ModelViewer({
       if (event.key === 'Enter' && sketchNumericRaw !== null) {
         if (!commitSketchNumericEntry() && latestSketchPointerEvent) {
           sketchDimLabel.textContent = 'Enter a positive exact value';
-          hud.showAtPointer(sketchDimLabel, latestSketchPointerEvent, 16, -28);
+          showSketchReadout(latestSketchPointerEvent);
         }
         event.preventDefault();
         event.stopPropagation();
@@ -11042,14 +11258,8 @@ export function ModelViewer({
           // has neither.
           !assemblyViewport.active
         ) {
-          if (!event.shiftKey && showTopologyPickList(event, true, true)) {
-            return;
-          }
-          onContextMenuRef.current(
-            event.clientX,
-            event.clientY,
-            pick(event)?.selection ?? null
-          );
+          // Shift+right-click keeps to the pick alone, with no Select other.
+          openViewportContextMenu(event, !event.shiftKey);
         }
         return;
       }
@@ -11763,10 +11973,10 @@ export function ModelViewer({
         pointerType !== 'mouse' &&
         !(pointerType === 'touch' && touchNavigation.active) &&
         !sketchModeRef.current &&
-        !assemblyViewport.active &&
-        showTopologyPickList(event, true, true)
+        !assemblyViewport.active
       ) {
         event.stopPropagation();
+        openViewportContextMenu(event, true);
       }
     };
     // The canvas listener alone is not enough: HUD chips and the CSS2D label
@@ -11781,12 +11991,7 @@ export function ModelViewer({
       // Build's pick list and context menu act on topology; Assemble has
       // neither. The same order as a stationary right-click.
       if (assemblyViewport.active) return;
-      if (showTopologyPickList(event, true, true)) return;
-      onContextMenuRef.current(
-        event.clientX,
-        event.clientY,
-        pick(event)?.selection ?? null
-      );
+      openViewportContextMenu(event, true);
     };
     const touchNavigation = createTouchNavigation({
       pressDown: handlePointerDown,
@@ -15585,6 +15790,9 @@ export function ModelViewer({
       if (!frame) {
         return null;
       }
+      // Into the stage the docks, rails and lane leave clear (I6): a small
+      // sketch re-entered with panels docked ran under them at both sides.
+      const stage = measureFitFrame(context.renderer.domElement);
       const normal = new THREE.Vector3(
         sketchBasis.normal.x,
         sketchBasis.normal.y,
@@ -15624,7 +15832,8 @@ export function ModelViewer({
           points,
           center,
           normal,
-          sketchUp
+          sketchUp,
+          stage
         );
       }
       if (frame.points.length === 0) {
@@ -15641,7 +15850,8 @@ export function ModelViewer({
         points,
         center,
         normal,
-        sketchUp
+        sketchUp,
+        stage
       );
     })();
     const distance = Math.max(context.camera.position.distanceTo(origin), 40);
@@ -16312,6 +16522,57 @@ export function ModelViewer({
     return () => cancelAnimationFrame(frame);
   }, [creationFrame]);
 
+  // Something opened over the stage: keep the model where it can be seen.
+  useEffect(() => {
+    const context = contextRef.current;
+    if (!clearStageRequest || !context || !context.hasFitCamera) {
+      return;
+    }
+    // Two frames: whatever opened, and any preview it brought, are laid out.
+    let frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => {
+        const targets = [
+          ...context.bodyGroup.children,
+          ...(parameterPreviewController.current?.group.children ?? [])
+        ].filter((child) => child.visible);
+        const reached = new THREE.Box3();
+        for (const object of targets) reached.expandByObject(object);
+        const stage = measureFitFrame(context.renderer.domElement);
+        if (reached.isEmpty() || !stage) {
+          return;
+        }
+        const camera = context.activeCamera;
+        camera.updateMatrixWorld();
+        const corners = Array.from({ length: 8 }, (_, index) =>
+          new THREE.Vector3(
+            index & 1 ? reached.max.x : reached.min.x,
+            index & 2 ? reached.max.y : reached.min.y,
+            index & 4 ? reached.max.z : reached.min.z
+          ).project(camera)
+        );
+        if (cornersWithinFrame(corners, stage)) {
+          return;
+        }
+        const pose = computeFitPose(
+          context.camera,
+          targets,
+          context.viewDirection(),
+          0,
+          stage
+        );
+        context.startCameraTween(
+          pose,
+          () => {
+            if (context.projection === 'orthographic') {
+              context.syncOrthographic(true);
+            }
+          },
+          { ease: viewJumpEase }
+        );
+      });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [clearStageRequest]);
   // View requests keep the current zoom and glide the camera to the axis —
   // named standard views and the cube's corner diagonals alike.
   useEffect(() => {

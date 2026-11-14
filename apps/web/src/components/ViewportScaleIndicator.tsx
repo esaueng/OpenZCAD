@@ -238,8 +238,20 @@ export function ViewportScaleIndicator({
           .getComputedStyle(root)
           .getPropertyValue('--viewport-scale-pinned')
           .trim() === '1';
+      // Pinned from the top while a phone's sheet takes the foot: the rule
+      // hangs toward that sheet, so it ends a clearance above it rather
+      // than at a fixed 200px that a tall sheet or a short stage reaches.
+      const sheet =
+        box('.stage-right > .panel-lane-float') ??
+        box('.tweak-flyouts.is-open');
+      const pinnedRoom = sheet
+        ? Math.max(MIN_RULE_ROOM_PX, sheet.top - rect.top - CLEARANCE_PX)
+        : DEFAULT_SCALE_BAR_MAX_WIDTH_PX;
       const placement = pinned
-        ? { ...corner, maxLengthPx: DEFAULT_SCALE_BAR_MAX_WIDTH_PX }
+        ? {
+            ...corner,
+            maxLengthPx: Math.min(DEFAULT_SCALE_BAR_MAX_WIDTH_PX, pinnedRoom)
+          }
         : scaleRulePlacement(
             corner,
             box('.instrument-rail')?.top ?? stage.top,
@@ -273,7 +285,9 @@ export function ViewportScaleIndicator({
         area?.querySelector('.command-bar-lane'),
         area?.querySelector('.command-bar-row'),
         area?.querySelector('.workspace-column-float'),
-        area?.querySelector('.measurement-dock')
+        area?.querySelector('.measurement-dock'),
+        // A sheet opening in the right lane resizes it.
+        area?.querySelector('.stage-right')
       ]) {
         if (target) resizes?.observe(target);
       }

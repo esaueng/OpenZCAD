@@ -248,6 +248,31 @@
   pointer-events: none;
 }
 
+/* Undo for the commit the toast reports ("Added box."), a pill of its own
+   beside it: the toast's body is the activity log's button. */
+.workspace-toast-undo {
+  height: 28px;
+  margin-left: 6px;
+  padding: 0 12px;
+  color: var(--color-text);
+  background: color-mix(in srgb, var(--color-surface-2) 94%, transparent);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-2);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  cursor: pointer;
+  animation: oz-fade var(--dur-fast) var(--ease-out);
+}
+
+.workspace-toast:not(.hidden) .workspace-toast-undo {
+  pointer-events: auto;
+}
+
+.workspace-toast-undo:hover {
+  background: var(--color-surface-hover);
+}
+
 /* Where the toast, the selection chip and the Undo toast stand is the notice
    lane's business (quiet-stage.css): one stack on the search bar, not a
    fixed offset per state. */
@@ -380,6 +405,24 @@
   .workspace.column-layout .viewer-rail-stack,
   .workspace.column-layout .viewer-area.has-inspector .viewer-rail-stack {
     bottom: 52px;
+  }
+}
+
+/* A command's card stands in the same lane over the search bar, centred on
+   it, and at 768px with the panels docked it covered the cube completely
+   (I7). While one is up the cube steps above it, and above the status row
+   that stands on it too. */
+@media (min-width: 521px) and (max-width: 960px) {
+  .workspace.column-layout
+    .viewer-area:has(.in-place-command)
+    .viewer-rail-stack {
+    bottom: calc(var(--lane-base) + var(--in-place-command-h, 38px) + 10px);
+  }
+
+  .workspace.column-layout
+    .viewer-area:has(.in-place-command):has(.workspace-toast:not(.hidden))
+    .viewer-rail-stack {
+    bottom: calc(var(--lane-base) + var(--in-place-command-h, 38px) + 50px);
   }
 }
 
