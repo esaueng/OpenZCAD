@@ -131,7 +131,8 @@ function storageParts(usage: AccountStorageUsage): {
   const partial = usage as Partial<AccountStorageUsage>;
   return {
     projects: partial.projectStorageBytes ?? 0,
-    files: partial.artifactBytes ?? 0
+    // Uploads in flight hold their room, so they read as files.
+    files: (partial.artifactBytes ?? 0) + (partial.artifactReservedBytes ?? 0)
   };
 }
 

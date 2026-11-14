@@ -683,6 +683,34 @@ describe('project shelves', () => {
     ).rejects.toMatchObject({ kind: 'storage' });
   });
 
+  it('reports an upload in flight in the storage total', async () => {
+    const service = new InMemoryPersistenceService();
+    const created = await service.createProject(userId, { name: 'Inflight' });
+    const before = await service.getStorageUsage(userId);
+    const { session } = await service.createUploadSession(userId, {
+      projectId: created.document.projectId,
+      fileName: 'part.step',
+      contentType: 'model/step',
+      kind: 'snapshot'
+    });
+    const { uploadId } = await service.createMultipartUpload(
+      userId,
+      session.uploadSessionId
+    );
+    await service.putUploadPart(
+      userId,
+      session.uploadSessionId,
+      uploadId,
+      1,
+      new ArrayBuffer(400)
+    );
+    expect(await service.getStorageUsage(userId)).toMatchObject({
+      artifactBytes: 0,
+      artifactReservedBytes: 400,
+      storageBytes: before.projectStorageBytes + 400
+    });
+  });
+
   it('counts trashed projects apart, their bytes still stored', async () => {
     const service = new InMemoryPersistenceService();
     const kept = await service.createProject(userId, { name: 'Kept' });

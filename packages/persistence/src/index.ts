@@ -1981,6 +1981,8 @@ export class InMemoryPersistenceService implements PersistenceService {
     ).length;
     // No R2 objects or encryption here: logical sizes are the stored ones.
     const projectStorageBytes = this.projectStorageBytes(userId);
+    // In-flight uploads hold their room, as the quota counts them.
+    const artifactReservedBytes = this.accountReservedArtifactBytes(userId);
     return {
       projectCount: owned.length - trashed,
       trashedProjectCount: trashed,
@@ -1994,12 +1996,13 @@ export class InMemoryPersistenceService implements PersistenceService {
       ),
       revisionCount: revisions.length,
       projectStorageBytes,
-      storageBytes: projectStorageBytes + artifacts.bytes,
+      storageBytes: projectStorageBytes + artifacts.bytes + artifactReservedBytes,
       storageLimitBytes: this.storageLimitBytes,
       documentLimitBytes: MAX_PERSISTED_DOCUMENT_BYTES,
       maxRevisionsPerProject: MAX_PROJECT_REVISIONS,
       artifactBytes: artifacts.bytes,
       artifactCount: artifacts.count,
+      artifactReservedBytes,
       artifactLimitBytes: this.storageLimitBytes
     };
   }

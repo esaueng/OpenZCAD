@@ -32,17 +32,17 @@
 -- and evaluates each sum for that owner only; an owner with no projects has
 -- no row, which every reader takes as zero.
 CREATE VIEW IF NOT EXISTS account_project_storage AS
+-- Each unary + keeps SQLite from answering `document_object_id IS NULL`
+-- through the document-object indexes, which hold every account's inline
+-- rows under one key: it walks this owner's projects and their revisions.
 SELECT owners.user_id AS user_id,
   COALESCE((
     SELECT SUM(p.document_bytes) FROM projects p
-    WHERE p.user_id = owners.user_id AND p.document_object_id IS NULL
+    WHERE p.user_id = owners.user_id AND +p.document_object_id IS NULL
   ), 0)
   + COALESCE((
     SELECT SUM(r.document_bytes)
     FROM revisions r JOIN projects p ON p.id = r.project_id
-    -- The unary + keeps SQLite from scanning every account's inline
-    -- revisions through the document-object index: it walks this owner's
-    -- projects and their revisions instead.
     WHERE p.user_id = owners.user_id AND +r.document_object_id IS NULL
   ), 0)
   + COALESCE((
@@ -73,11 +73,28 @@ SET project_storage_limit_bytes = MAX(project_storage_limit_bytes, artifact_limi
     artifact_limit_bytes = MAX(project_storage_limit_bytes, artifact_limit_bytes)
 WHERE project_storage_limit_bytes <> artifact_limit_bytes;
 
+-- Upload sessions whose bytes stage a migration rather than add storage:
+-- a decrypt staging's plaintext files (migration 0043's view) and an
+-- encrypt staging's ciphertext blobs (an encrypted blob session of a
+-- plaintext project, decision M10). Their finalized rows are already
+-- exempt; their sessions and reservations are exempt here too, so an
+-- account at or over its allowance can still stage a migration that would
+-- shrink it. Each cutover checks the account's combined usage instead and
+-- refuses one that would grow it past the allowance (the Worker's
+-- `encryptCutoverQuota` and `decryptCutoverQuota`). Selected by `id`, it
+-- is one primary-key lookup.
+CREATE VIEW IF NOT EXISTS migration_staging_upload_sessions AS
+SELECT s.id AS id
+FROM upload_sessions s JOIN projects p ON p.id = s.project_id
+WHERE s.project_id IN (SELECT project_id FROM e2ee_decrypt_staged_projects)
+   OR (s.e2ee_blob_kind IS NOT NULL AND p.storage_format = 1);
+
 -- ---------------------------------------------------------------------------
 -- Cloud file side: artifact usage plus the owner's project storage.
 -- ---------------------------------------------------------------------------
 
--- Migration 0022's upload-session admission.
+-- Migration 0022's upload-session admission; a migration staging's
+-- session is admitted at any usage (see the view above).
 DROP TRIGGER IF EXISTS artifact_upload_session_before_insert;
 CREATE TRIGGER artifact_upload_session_before_insert
 BEFORE INSERT ON upload_sessions
@@ -103,7 +120,14 @@ BEGIN
     ) >= 16;
 
   SELECT RAISE(ABORT, 'artifact_account_quota')
-  WHERE (
+  WHERE NEW.project_id NOT IN (
+      SELECT project_id FROM e2ee_decrypt_staged_projects
+    )
+    AND NOT (
+      NEW.e2ee_blob_kind IS NOT NULL
+      AND (SELECT storage_format FROM projects WHERE id = NEW.project_id) = 1
+    )
+    AND (
       SELECT finalized_bytes + reserved_bytes
       FROM artifact_account_usage
       WHERE owner_user_id = NEW.owner_user_id
@@ -163,7 +187,8 @@ END;
 
 -- Migration 0022's multipart part reservation. The in-flight reservation
 -- check (`artifact_reserved_byte_limit`) is unchanged: it bounds reserved
--- bytes alone, against the mirrored `artifact_limit_bytes`.
+-- bytes alone, against the mirrored `artifact_limit_bytes`. A migration
+-- staging's part is not checked against the allowance (see the view).
 DROP TRIGGER IF EXISTS artifact_upload_part_before_insert;
 CREATE TRIGGER artifact_upload_part_before_insert
 BEFORE INSERT ON artifact_upload_parts
@@ -214,7 +239,11 @@ BEGIN
     AND NEW.bytes > COALESCE((SELECT bytes FROM artifact_upload_parts WHERE upload_session_id = NEW.upload_session_id AND part_number = NEW.part_number), 0);
 
   SELECT RAISE(ABORT, 'artifact_account_quota')
-  WHERE (
+  WHERE NOT EXISTS (
+      SELECT 1 FROM migration_staging_upload_sessions
+      WHERE id = NEW.upload_session_id
+    )
+    AND (
       SELECT usage.finalized_bytes + usage.reserved_bytes + NEW.bytes
         - COALESCE((
           SELECT bytes FROM artifact_upload_parts
@@ -272,7 +301,11 @@ BEGIN
     AND NEW.bytes > OLD.bytes;
 
   SELECT RAISE(ABORT, 'artifact_account_quota')
-  WHERE (
+  WHERE NOT EXISTS (
+      SELECT 1 FROM migration_staging_upload_sessions
+      WHERE id = NEW.upload_session_id
+    )
+    AND (
       SELECT usage.finalized_bytes + usage.reserved_bytes
         + NEW.bytes - OLD.bytes
       FROM artifact_account_usage usage

@@ -15,7 +15,6 @@ import {
   E2EE_MIGRATION_LEASE_HEADER,
   decodeE2eeFrame,
   encodeE2eeFrame,
-  MAX_ACCOUNT_ARTIFACT_BYTES,
   toRevisionId,
   type E2eeMigrationLeaseResponse,
   type ProjectDocument
@@ -1972,8 +1971,61 @@ describe('purging the plaintext', () => {
 
 // --- Quota ------------------------------------------------------------------------------
 
-describe('quota (decision M10)', () => {
-  it('counts staged ciphertext toward nothing until the cutover', async () => {
+/** Sets the owner's one storage allowance (both columns, migration 0048). */
+function setLimit(srv: Server, bytes: number) {
+  srv.db
+    .prepare(
+      'UPDATE users SET artifact_limit_bytes = ?1, project_storage_limit_bytes = ?1 WHERE id = ?2'
+    )
+    .run(bytes, OWNER);
+}
+
+/** Everything the owner stores, as migration 0048's triggers measure it. */
+function storedNow(srv: Server): number {
+  return (
+    srv.db
+      .prepare(
+        `SELECT COALESCE((SELECT bytes FROM account_project_storage
+                          WHERE user_id = ?1), 0)
+              + COALESCE((SELECT finalized_bytes + reserved_bytes
+                          FROM artifact_account_usage
+                          WHERE owner_user_id = ?1), 0) AS bytes`
+      )
+      .get(OWNER) as { bytes: number }
+  ).bytes;
+}
+
+/**
+ * What an encrypt cutover adds to {@link storedNow} once the purge has run:
+ * the retained envelopes and the blobs, less the plaintext they replace.
+ */
+function encryptGrowth(srv: Server, projectId: string): number {
+  return (
+    srv.db
+      .prepare(
+        `SELECT
+           (SELECT COALESCE(SUM(envelope_bytes), 0) FROM e2ee_project_versions
+            WHERE project_id = ?1
+              AND (envelope_key IS NOT NULL OR envelope_inline IS NOT NULL))
+         + (SELECT COALESCE(SUM(ciphertext_bytes), 0) FROM e2ee_content_blobs
+            WHERE project_id = ?1)
+         - (SELECT document_bytes * (document_object_id IS NULL) FROM projects
+            WHERE id = ?1)
+         - (SELECT COALESCE(SUM(document_bytes), 0) FROM revisions
+            WHERE project_id = ?1 AND document_object_id IS NULL)
+         - (SELECT COALESCE(SUM(stored_bytes), 0)
+            FROM project_document_objects WHERE project_id = ?1)
+         - (SELECT COALESCE(SUM(stored_bytes), 0)
+            FROM project_storage_assets WHERE project_id = ?1)
+         - (SELECT COALESCE(SUM(bytes), 0) FROM artifacts WHERE project_id = ?1)
+           AS bytes`
+      )
+      .get(projectId) as { bytes: number }
+  ).bytes;
+}
+
+describe('quota (decision M10, one allowance)', () => {
+  it('counts staged ciphertext toward nothing until the cutover, which refuses to grow the account past its allowance', async () => {
     const srv = server();
     const plain = await namedSave(srv, await plaintextProject(srv), 'Named');
     await plaintextUpload(srv, plain.projectId, 'Plain artifact');
@@ -1993,48 +2045,17 @@ describe('quota (decision M10)', () => {
         .artifactBytes;
     };
     const plaintextArtifacts = usage();
-    const documents = (
-      srv.db
-        .prepare(
-          'SELECT COALESCE(SUM(stored_bytes), 0) AS bytes FROM project_document_objects'
-        )
-        .get() as { bytes: number }
-    ).bytes;
     const s = await startStaging(srv, plain.projectId);
-    // No project storage left beyond the plaintext: had staged versions
-    // counted, none would fit.
-    srv.db
-      .prepare('UPDATE users SET project_storage_limit_bytes = ? WHERE id = ?')
-      .run(documents + 100, OWNER);
-    const head = await stage(s, plain);
-    const first = await s.d.blobs.archive(plain.projectId, noiseInput(1));
-    const blobBytes = (
-      srv.db
-        .prepare(
-          'SELECT ciphertext_bytes AS bytes FROM e2ee_content_blobs WHERE blob_id = ?'
-        )
-        .get(first) as { bytes: number }
-    ).bytes;
-    expect(usage()).toBe(plaintextArtifacts);
-    // Fill the artifact storage to leave room for one more blob only, had
-    // the first counted: it does not, so the second fits too.
-    srv.db
-      .prepare(
-        `INSERT INTO artifacts (id, project_id, kind, name, object_key,
-           content_type, metadata_json, created_at, bytes)
-         VALUES ('artifact_big', ?, 'step-import', 'big.step', 'big',
-                 'model/step', '{}', 'now', ?)`
-      )
-      .run(
-        (await plaintextProject(srv, 'Filler')).projectId,
-        MAX_ACCOUNT_ARTIFACT_BYTES -
-          plaintextArtifacts -
-          Math.floor(blobBytes * 1.5)
-      );
-    const filled = usage();
+    const before = storedNow(srv);
+    // An account with no room beyond its plaintext still stages: staged
+    // versions and blobs count toward nothing.
+    setLimit(srv, before);
+    await stage(s, plain);
+    await s.d.blobs.archive(plain.projectId, noiseInput(1));
     await s.d.blobs.archive(plain.projectId, noiseInput(2));
-    expect(usage()).toBe(filled);
-    expect(await reported()).toBe(filled);
+    expect(usage()).toBe(plaintextArtifacts);
+    expect(storedNow(srv)).toBe(before);
+    expect(await reported()).toBe(plaintextArtifacts);
     const stagedBlobBytes = (
       srv.db
         .prepare(
@@ -2042,31 +2063,59 @@ describe('quota (decision M10)', () => {
         )
         .get(plain.projectId) as { bytes: number }
     ).bytes;
-    expect(stagedBlobBytes).toBeGreaterThan(Math.floor(blobBytes * 1.5));
+    // The noise blobs replace no plaintext: encrypting grows the account.
+    const growth = encryptGrowth(srv, plain.projectId);
+    expect(growth).toBeGreaterThan(0);
 
-    // From the cutover on they count (the account may sit over its limits
-    // until the purge removes the plaintext): the next save is refused.
-    await s.api.cutover(plain.projectId, s.lease);
-    // (Every account write refreshes the limits from the tier; set it again.)
-    srv.db
-      .prepare('UPDATE users SET project_storage_limit_bytes = ? WHERE id = ?')
-      .run(documents + 100, OWNER);
-    expect(usage()).toBe(filled + stagedBlobBytes);
-    expect(await reported()).toBe(filled + stagedBlobBytes);
-    expect(
-      await errorOf(
-        s.d.store.saveProjectDocument({
-          projectId: plain.projectId,
-          expectedVersion: head.version,
-          document: { ...head, version: head.version + 1 }
-        })
-      )
-    ).toMatchObject({ status: 413, code: 'PROJECT_STORAGE_QUOTA' });
-    await purgeAll(s.api, plain.projectId);
-    expect(usage()).toBe(filled - plaintextArtifacts + stagedBlobBytes);
-    expect(await reported()).toBe(
-      filled - plaintextArtifacts + stagedBlobBytes
+    // One byte short of what the cutover would leave after its purge: it
+    // is refused, and nothing changes.
+    setLimit(srv, before + growth - 1);
+    const refused = await errorOf(s.api.cutover(plain.projectId, s.lease));
+    expect(refused.status).toBe(413);
+    expect(refused.code).toMatch(
+      /^(ARTIFACT_QUOTA_EXCEEDED|PROJECT_STORAGE_QUOTA)$/
     );
+    expect(formatOf(srv, plain.projectId).storage_format).toBe(1);
+    expect(migrationRow(srv, plain.projectId)).toMatchObject({
+      state: 'staging'
+    });
+    expect(usage()).toBe(plaintextArtifacts);
+    expect(storedNow(srv)).toBe(before);
+
+    // With exactly that room it cuts over; once the purge removes the
+    // plaintext, the account holds exactly its allowance.
+    setLimit(srv, before + growth);
+    await s.api.cutover(plain.projectId, s.lease);
+    expect(formatOf(srv, plain.projectId).storage_format).toBe(2);
+    expect(usage()).toBe(plaintextArtifacts + stagedBlobBytes);
+    await purgeAll(s.api, plain.projectId);
+    expect(usage()).toBe(stagedBlobBytes);
+    expect(await reported()).toBe(stagedBlobBytes);
+    expect(storedNow(srv)).toBe(before + growth);
+  });
+
+  it('cuts over an encryption that shrinks the account, even over its allowance', async () => {
+    const srv = server();
+    const plain = await plaintextProject(srv);
+    // A large plaintext file the encrypted project does not carry over.
+    srv.db
+      .prepare(
+        `INSERT INTO artifacts (id, project_id, kind, name, object_key,
+           content_type, metadata_json, created_at, bytes)
+         VALUES ('artifact_large', ?, 'step-import', 'large.step',
+                 'large-key', 'model/step', '{}', 'now', 200000)`
+      )
+      .run(plain.projectId);
+    const s = await startStaging(srv, plain.projectId);
+    await stage(s, plain);
+    expect(encryptGrowth(srv, plain.projectId)).toBeLessThan(0);
+    // Far over its allowance: only growth is refused.
+    setLimit(srv, 1);
+    await s.api.cutover(plain.projectId, s.lease);
+    expect(formatOf(srv, plain.projectId).storage_format).toBe(2);
+    expect(migrationRow(srv, plain.projectId)).toMatchObject({
+      state: 'cutover'
+    });
   });
 });
 

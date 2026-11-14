@@ -5269,11 +5269,17 @@ export interface AccountStorageUsage {
    */
   projectStorageBytes: number;
   /**
-   * Everything the account stores, against `storageLimitBytes`: project
-   * storage (`projectStorageBytes`) plus finalized files (`artifactBytes`).
+   * Everything the account stores, against `storageLimitBytes`, as the quota
+   * counts it: project storage (`projectStorageBytes`), finalized files
+   * (`artifactBytes`) and uploads in flight (`artifactReservedBytes`).
    * Older servers omit it.
    */
   storageBytes?: number;
+  /**
+   * Bytes reserved by uploads still in flight: they hold their room until
+   * they finish or are abandoned. Older servers omit it.
+   */
+  artifactReservedBytes?: number;
   /** The account's one storage allowance. Older servers omit it. */
   storageLimitBytes?: number;
   /** The per-document ceiling, so the client can name it without hardcoding. */

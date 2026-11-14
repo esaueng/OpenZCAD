@@ -3622,11 +3622,13 @@ export class D1R2PersistenceService implements PersistenceService {
    * Slice 7-3: a decrypt staging's files count toward no quota until the
    * cutover (migration 0043), which refuses one that would leave the owner
    * over their storage allowance. This refuses a further staged file early,
-   * once the files staged so far would already do so at the cutover: the
+   * once what is staged so far would already do so at the cutover: the
    * account's file usage and project storage (one allowance, migration
-   * 0048), plus the staged files, less the project's encrypted blobs the
-   * cutover stops counting. Advisory only; the cutover's check is the one
-   * that holds.
+   * 0048), plus what the cutover adds (the staged files, documents and
+   * assets, less the encrypted blobs and envelopes it stops counting), when
+   * that grows the account. A staging that shrinks it is never refused, so
+   * an account at its allowance can still decrypt. Advisory only; the
+   * cutover's check is the one that holds.
    */
   private async assertDecryptStagingFileCapacity(
     ownerUserId: UserId,
@@ -3637,13 +3639,21 @@ export class D1R2PersistenceService implements PersistenceService {
         `SELECT
            COALESCE((SELECT finalized_bytes + reserved_bytes
                      FROM artifact_account_usage
-                     WHERE owner_user_id = ?), 0) AS used,
+                     WHERE owner_user_id = ?1), 0) AS used,
            (SELECT COALESCE(SUM(bytes), 0) FROM artifacts
-            WHERE project_id = ?) AS staged,
+            WHERE project_id = ?2)
+           + (SELECT COALESCE(SUM(stored_bytes), 0)
+              FROM project_document_objects WHERE project_id = ?2)
+           + (SELECT COALESCE(SUM(stored_bytes), 0)
+              FROM project_storage_assets WHERE project_id = ?2) AS staged,
            (SELECT COALESCE(SUM(ciphertext_bytes), 0) FROM e2ee_content_blobs
-            WHERE project_id = ?) AS blobs`
+            WHERE project_id = ?2)
+           + (SELECT COALESCE(SUM(envelope_bytes), 0) FROM e2ee_project_versions
+              WHERE project_id = ?2
+                AND (envelope_key IS NOT NULL OR envelope_inline IS NOT NULL))
+             AS blobs`
       )
-      .bind(ownerUserId, projectId, projectId)
+      .bind(ownerUserId, projectId)
       .first<{ used: number; staged: number; blobs: number }>();
     const used = row?.used ?? 0;
     const staged = row?.staged ?? 0;
@@ -3757,6 +3767,11 @@ export class D1R2PersistenceService implements PersistenceService {
     const entitlements = await this.ownerEntitlements(userId);
     const projectStorageBytes =
       (await this.plaintextProjectStorageBytes(userId)) + encrypted.storedBytes;
+    // In-flight uploads hold their room, as the quota triggers count them.
+    const artifactReservedBytes = Math.max(
+      0,
+      (await this.accountArtifactQuotaBytes(userId)) - artifacts.bytes
+    );
     return {
       projectCount: totals?.project_count ?? 0,
       trashedProjectCount: totals?.trashed_count ?? 0,
@@ -3764,12 +3779,13 @@ export class D1R2PersistenceService implements PersistenceService {
       revisionBytes: (revisions?.revision_bytes ?? 0) + encrypted.revisionBytes,
       revisionCount: (revisions?.revision_count ?? 0) + encrypted.revisionCount,
       projectStorageBytes,
-      storageBytes: projectStorageBytes + artifacts.bytes,
+      storageBytes: projectStorageBytes + artifacts.bytes + artifactReservedBytes,
       storageLimitBytes: entitlements.storageLimitBytes,
       documentLimitBytes: this.projectDocumentLimitBytes(),
       maxRevisionsPerProject: MAX_PROJECT_REVISIONS,
       artifactBytes: artifacts.bytes,
       artifactCount: artifacts.count,
+      artifactReservedBytes,
       artifactLimitBytes: entitlements.storageLimitBytes,
       entitlements
     };
@@ -3786,15 +3802,19 @@ export class D1R2PersistenceService implements PersistenceService {
     const staged = (await isE2eeReverseStorageReady(this.env.DB))
       ? ' AND projects.id NOT IN (SELECT project_id FROM e2ee_decrypt_staged_projects)'
       : '';
+    // The unary + keeps SQLite from answering `document_object_id IS NULL`
+    // through the document-object indexes, which hold every account's
+    // inline rows under one key: it walks this owner's projects (and their
+    // revisions) instead, as migration 0048's view does.
     const row = await this.env
       .DB!.prepare(
         `SELECT
            COALESCE((SELECT SUM(document_bytes) FROM projects
-                     WHERE user_id = ?1 AND document_object_id IS NULL), 0)
+                     WHERE user_id = ?1 AND +document_object_id IS NULL), 0)
          + COALESCE((SELECT SUM(revisions.document_bytes) FROM revisions
                      JOIN projects ON projects.id = revisions.project_id
                      WHERE projects.user_id = ?1
-                       AND revisions.document_object_id IS NULL), 0)
+                       AND +revisions.document_object_id IS NULL), 0)
          + COALESCE((SELECT SUM(objects.stored_bytes)
                      FROM project_document_objects objects
                      JOIN projects ON projects.id = objects.project_id

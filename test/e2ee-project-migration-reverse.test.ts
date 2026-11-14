@@ -1527,11 +1527,11 @@ describe('the owner’s limits at the cutover', () => {
         expect(usage(srv)).toBe(before);
         // Once the files staged so far would already leave the account at
         // its limit after the cutover, a further staged file is refused:
-        // everything stored now (one allowance), plus the staged files,
-        // less the blobs they replace.
+        // everything stored now (one allowance), plus what the cutover
+        // adds (the staged files and documents, less the blobs and
+        // envelopes they replace).
         const room =
-          2147483648 -
-          (storedNow(srv) + fileBytesOf(srv, projectId) - blobBytes);
+          2147483648 - (storedNow(srv) + cutoverGrowth(srv, projectId));
         const bump = (bytes: number) =>
           srv.db
             .prepare(
@@ -1577,6 +1577,52 @@ describe('the owner’s limits at the cutover', () => {
     expect(new Set(srv.bucket.objects.keys())).toEqual(objectsBefore);
     expect(usage(srv)).toBe(before);
     expect(formatOf(srv, projectId)).toBe(2);
+  });
+
+  it('decrypts a full account when the cutover shrinks what it stores', async () => {
+    const srv = roomServer();
+    const { projectId } = await encryptedProject(srv, { revisions: 1 });
+    // Fill the account to its allowance exactly with another project's
+    // file: every new upload session would be refused, but a decrypt
+    // staging's are admitted (migration 0048), and the cutover is checked
+    // for growth instead.
+    const filler = (
+      (await (
+        await srv.call('POST', '/api/projects', {
+          body: { name: 'Filler', initialDocument: initialDocument('Filler') }
+        })
+      ).json()) as { document: ProjectDocument }
+    ).document.projectId;
+    const limit = (
+      srv.db
+        .prepare(
+          'SELECT project_storage_limit_bytes AS bytes FROM users WHERE id = ?'
+        )
+        .get(OWNER) as { bytes: number }
+    ).bytes;
+    srv.db
+      .prepare(
+        `INSERT INTO artifacts (id, project_id, kind, name, object_key,
+           content_type, metadata_json, created_at, bytes)
+         VALUES ('artifact_filler', ?, 'step-import', 'filler.step',
+                 'filler-key', 'model/step', '{}', 'now', ?)`
+      )
+      .run(filler, limit - storedNow(srv));
+    expect(storedNow(srv)).toBe(limit);
+    let growth: number | undefined;
+    const desktop = reverseOn(srv, owner, 'owner_desktop', {
+      beforeStep: async (step) => {
+        if (step !== 'cutover' || growth !== undefined) return;
+        growth = cutoverGrowth(srv, projectId);
+      }
+    });
+    await decryptFully(desktop, projectId);
+    expect(growth).toBeDefined();
+    expect(growth!).toBeLessThanOrEqual(0);
+    expect(formatOf(srv, projectId)).toBe(1);
+    expect(migrationRow(srv, projectId)).toMatchObject({ state: 'done' });
+    expect(storedNow(srv)).toBeLessThanOrEqual(limit);
+    expectNoCiphertext(srv, projectId);
   });
 
   it('completes a reverse whose staged files fit the storage limit exactly', async () => {

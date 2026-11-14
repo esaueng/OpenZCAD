@@ -1011,6 +1011,8 @@ async function cutover(
       { revisionIds: (uncovered.results ?? []).slice(0, 64).map((r) => r.id) }
     );
   }
+  await refuseOverEncryptQuota(ctx.db, projectId, ctx.userId);
+  const quota = encryptCutoverQuota(projectId, ctx.userId);
   const counts = await stagedCounts(ctx.db, projectId);
   const last = await ctx.db
     .prepare(
@@ -1047,7 +1049,8 @@ async function cutover(
            AND NOT ${sharedSql(sharing)}
            AND NOT ${members.sql}
            AND ${STAGED_SQL}
-           AND NOT EXISTS (${UNCOVERED_SQL})`
+           AND NOT EXISTS (${UNCOVERED_SQL})
+           AND NOT ${quota.over.sql}`
       )
       .bind(
         counts.revisions,
@@ -1069,7 +1072,8 @@ async function cutover(
         ...members.binds(projectId, now, row.started_at),
         ...stagedBinds,
         projectId,
-        row.staged_version
+        row.staged_version,
+        ...quota.over.binds
       ),
     // The format flips with the staged head; the plaintext row's name and
     // document go in the purge's first steps.
@@ -1150,6 +1154,8 @@ async function cutover(
     if (current.lease_id !== lease || (current.lease_expires_at ?? 0) <= now) {
       leaseLost();
     }
+    // A file or document landed meanwhile that takes the owner over.
+    await refuseOverEncryptQuota(ctx.db, projectId, ctx.userId);
     refuse(
       409,
       E2EE_MIGRATION_CODES.stale,
@@ -1161,6 +1167,111 @@ async function cutover(
     revokedShareLinks: results[2]?.meta?.changes ?? 0,
     revokedInvitations: results[3]?.meta?.changes ?? 0
   } satisfies E2eeMigrationCutoverResponse);
+}
+
+/** Everything the owner stores, as migration 0048's triggers measure it. */
+function storedByOwnerSql(): string {
+  return `(COALESCE((SELECT qp.bytes FROM account_project_storage qp
+                     WHERE qp.user_id = ?), 0)
+    + COALESCE((SELECT qu.finalized_bytes + qu.reserved_bytes
+                FROM artifact_account_usage qu
+                WHERE qu.owner_user_id = ?), 0))`;
+}
+
+/** The owner's one storage allowance (migration 0048). */
+const OWNER_LIMIT_SQL = `COALESCE((SELECT project_storage_limit_bytes FROM users
+                           WHERE id = ?), 2147483648)`;
+
+/**
+ * The owner's storage as an encrypt cutover leaves it, once the purge has
+ * removed the plaintext. Staged ciphertext counts toward nothing while
+ * staging (decision M10, migration 0042), so the cutover, which ends that
+ * exemption, must not publish it over the account's one storage allowance
+ * (migration 0048). The cutover's own statement carries the negation of
+ * `over`, so nothing between the check and the batch can move it.
+ *
+ * What the cutover changes: the project's retained envelopes and its
+ * encrypted blobs start counting, and its plaintext (the inline head and
+ * save states, document objects, source assets and files) leaves with the
+ * purge. Over the allowance only when that grows what the account stores:
+ * an encryption that shrinks it passes even for an account over its limit.
+ * `files` holds when the blobs alone, less the files they replace, would go
+ * over, so the refusal names files as the cause.
+ */
+function encryptCutoverQuota(
+  projectId: string,
+  userId: string
+): { over: Condition; files: Condition } {
+  const blobs = `(SELECT COALESCE(SUM(eb.ciphertext_bytes), 0)
+    FROM e2ee_content_blobs eb WHERE eb.project_id = ?)`;
+  const files = `(SELECT COALESCE(SUM(ea.bytes), 0) FROM artifacts ea
+    WHERE ea.project_id = ?)`;
+  const growth = `((SELECT COALESCE(SUM(ev.envelope_bytes), 0)
+        FROM e2ee_project_versions ev
+        WHERE ev.project_id = ?
+          AND (ev.envelope_key IS NOT NULL OR ev.envelope_inline IS NOT NULL))
+    + ${blobs}
+    - COALESCE((SELECT ep.document_bytes * (ep.document_object_id IS NULL)
+                FROM projects ep WHERE ep.id = ?), 0)
+    - (SELECT COALESCE(SUM(er.document_bytes), 0) FROM revisions er
+       WHERE er.project_id = ? AND er.document_object_id IS NULL)
+    - (SELECT COALESCE(SUM(eo.stored_bytes), 0) FROM project_document_objects eo
+       WHERE eo.project_id = ?)
+    - (SELECT COALESCE(SUM(es.stored_bytes), 0) FROM project_storage_assets es
+       WHERE es.project_id = ?)
+    - ${files})`;
+  const growthBinds = Array<string>(7).fill(projectId);
+  return {
+    over: {
+      sql: `(${growth} > 0
+        AND ${storedByOwnerSql()} + ${growth} > ${OWNER_LIMIT_SQL})`,
+      binds: [...growthBinds, userId, userId, ...growthBinds, userId]
+    },
+    files: {
+      sql: `(${blobs} > ${files}
+        AND ${storedByOwnerSql()} + ${blobs} - ${files} > ${OWNER_LIMIT_SQL})`,
+      binds: [projectId, projectId, userId, userId, projectId, projectId, userId]
+    }
+  };
+}
+
+/**
+ * Refuses with the account's quota code when an encrypt cutover would go
+ * over the owner's storage allowance (`encryptCutoverQuota`): 413
+ * ARTIFACT_QUOTA_EXCEEDED when the encrypted files alone would, otherwise
+ * PROJECT_STORAGE_QUOTA, with the limit. Nothing is changed: the project
+ * stays plaintext, and its staging stays in place to be abandoned.
+ */
+async function refuseOverEncryptQuota(
+  db: D1Database,
+  projectId: string,
+  userId: string
+): Promise<void> {
+  const quota = encryptCutoverQuota(projectId, userId);
+  const row = await db
+    .prepare(
+      `SELECT ${quota.over.sql} AS over, ${quota.files.sql} AS files,
+              (SELECT project_storage_limit_bytes FROM users WHERE id = ?)
+                AS storage_limit`
+    )
+    .bind(...quota.over.binds, ...quota.files.binds, userId)
+    .first<{ over: number; files: number; storage_limit: number | null }>();
+  if (!row?.over) return;
+  const limitBytes = row.storage_limit ?? 2147483648;
+  if (row.files) {
+    refuse(
+      413,
+      'ARTIFACT_QUOTA_EXCEEDED',
+      'Your account does not have room for this project’s files encrypted. Nothing was changed; the project stays as it is.',
+      { limitBytes }
+    );
+  }
+  refuse(
+    413,
+    'PROJECT_STORAGE_QUOTA',
+    'Your account does not have storage left to encrypt this project. Nothing was changed; the project stays as it is.',
+    { limitBytes }
+  );
 }
 
 // --- Abandon -----------------------------------------------------------------

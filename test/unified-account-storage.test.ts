@@ -279,6 +279,75 @@ describe('account storage usage (one bucket)', () => {
     });
   });
 
+  it('counts an upload in flight in the reported total, as the quota does', async () => {
+    // Project storage 600 and a 400-byte multipart reservation fill a
+    // 1,000-byte allowance: the meter must say so, not 600 of 1,000.
+    const db = account(1_000);
+    db.prepare('UPDATE projects SET document_bytes = 600 WHERE id = ?').run(
+      PROJECT
+    );
+    uploadSession(db, 'session_inflight');
+    db.prepare(
+      `UPDATE upload_sessions
+       SET reservation_state = 'uploading', multipart_upload_id = 'mp_1'
+       WHERE id = 'session_inflight'`
+    ).run();
+    db.prepare(
+      `INSERT INTO artifact_upload_parts
+         (upload_session_id, part_number, bytes, reservation_token)
+       VALUES ('session_inflight', 1, 400, 'token')`
+    ).run();
+
+    const usage = await new D1R2PersistenceService({
+      DB: sqliteD1(db)
+    }).getStorageUsage(toUserId(OWNER));
+    expect(usage).toMatchObject({
+      projectStorageBytes: 600,
+      artifactBytes: 0,
+      artifactReservedBytes: 400,
+      storageBytes: 1_000
+    });
+    // And a one-byte save is refused, as the report says it will be.
+    expect(() =>
+      db
+        .prepare('UPDATE projects SET document_bytes = 601 WHERE id = ?')
+        .run(PROJECT)
+    ).toThrow('project_account_document_quota');
+  });
+
+  it('measures inline project storage through the owner, not every account', async () => {
+    // Inline rows of other accounts share the document-object indexes' NULL
+    // key; the owner's sums must walk the owner's projects instead.
+    const db = account(10 * GIB);
+    const statements: string[] = [];
+    await new D1R2PersistenceService({
+      DB: sqliteD1(db, { onStatement: (sql) => statements.push(sql) })
+    }).getStorageUsage(toUserId(OWNER));
+    const measure = statements.find((sql) =>
+      sql.includes('revisions.document_object_id IS NULL')
+    );
+    expect(measure).toBeDefined();
+    const plans = [
+      measure!,
+      'SELECT bytes FROM account_project_storage WHERE user_id = ?1'
+    ].map((sql) =>
+      (
+        db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(OWNER) as {
+          detail: string;
+        }[]
+      )
+        .map((row) => row.detail)
+        .join(' | ')
+    );
+    for (const plan of plans) {
+      expect(plan).not.toMatch(/idx_revisions_document_object/);
+      expect(plan).not.toMatch(/idx_projects_document_object/);
+      expect(plan).toMatch(
+        /SEARCH \w+ USING (COVERING )?INDEX idx_projects_user/
+      );
+    }
+  });
+
   it('names the one allowance in its refusals', () => {
     expect(new ArtifactQuotaError(GIB).message).toBe(
       'Account storage limit reached.'
