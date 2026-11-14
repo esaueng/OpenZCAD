@@ -1090,6 +1090,14 @@ export interface ProjectCopyFinalizeRequest {
 // it (ADR-024 Phase 1); re-exported for existing server callers.
 export { projectCopyDocumentDigest };
 
+/**
+ * Unreferenced document objects one prune deletes at most. Each costs an R2
+ * delete subrequest; a backlog from failed deletes drains over later saves.
+ */
+const OBJECT_PRUNE_LIMIT = 32;
+/** The smaller bound for the prune that runs before a save is measured. */
+const PRE_SAVE_OBJECT_PRUNE_LIMIT = 8;
+
 export class D1R2PersistenceService implements PersistenceService {
   constructor(private readonly env: CloudflareEnv) {}
 
@@ -6787,7 +6795,10 @@ export class D1R2PersistenceService implements PersistenceService {
       // 0049): prune again before measuring, so a temporary failure does
       // not block the project's saves for good. Document object keys are
       // random, so this is the same safe prune that follows every save.
-      await this.pruneUnreferencedProjectObjects(document.projectId);
+      await this.pruneUnreferencedProjectObjects(
+        document.projectId,
+        PRE_SAVE_OBJECT_PRUNE_LIMIT
+      );
     }
     const released = options?.replacesHead
       ? await this.releasedHead(document.projectId)
@@ -7175,8 +7186,16 @@ export class D1R2PersistenceService implements PersistenceService {
     }
   }
 
+  /**
+   * Deletes up to `limit` of the project's unreferenced document objects.
+   * Bounded so a backlog left by failed R2 deletes cannot exhaust a
+   * request's subrequest budget; each object's row is dropped only once
+   * its R2 delete succeeded, so progress is kept and the rest are retried
+   * by later saves.
+   */
   private async pruneUnreferencedProjectObjects(
-    projectId: string
+    projectId: string,
+    limit: number = OBJECT_PRUNE_LIMIT
   ): Promise<void> {
     const bucket = this.projectStorageBucket();
     if (!bucket) {
@@ -7193,15 +7212,23 @@ export class D1R2PersistenceService implements PersistenceService {
              )
              AND NOT EXISTS (
                SELECT 1 FROM revisions WHERE document_object_id = object.id
-             )`
+             )
+           LIMIT ?`
         )
-        .bind(projectId)
+        .bind(projectId, limit)
         .all<{ id: string; object_key: string }>();
-      const rows = objects.results ?? [];
-      await Promise.all(rows.map((row) => bucket.delete(row.object_key)));
-      if (rows.length > 0) {
+      const results = await Promise.allSettled(
+        (objects.results ?? []).map(async (row) => {
+          await bucket.delete(row.object_key);
+          return row;
+        })
+      );
+      const deleted = results.flatMap((result) =>
+        result.status === 'fulfilled' ? [result.value] : []
+      );
+      if (deleted.length > 0) {
         await this.env.DB!.batch(
-          rows.map((row) =>
+          deleted.map((row) =>
             this.env
               .DB!.prepare(`DELETE FROM project_document_objects WHERE id = ?`)
               .bind(row.id)

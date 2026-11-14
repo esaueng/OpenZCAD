@@ -824,6 +824,85 @@ describe('a head-replacing save releases the head it replaces (migration 0049)',
     expect(stored()).toBeLessThanOrEqual(limit);
   });
 
+  it('bounds each prune, so a backlog of stale objects cannot stop a save, and keeps its progress', async () => {
+    const db = migratedDatabase();
+    db.prepare(
+      `INSERT INTO users (id, email, created_at) VALUES (?, 'owner@example.com', ?)`
+    ).run(OWNER, CREATED);
+    const r2 = bucket();
+    let deletes = 0;
+    const removed = new Set<string>();
+    const counting = {
+      ...(r2.bucket as unknown as Record<string, unknown>),
+      delete: async (key: string | string[]) => {
+        deletes += 1;
+        // Every other delete fails: its row must survive for a later prune.
+        if (deletes % 2 === 0) throw new Error('injected R2 delete failure');
+        for (const item of typeof key === 'string' ? [key] : key)
+          removed.add(item);
+        await r2.bucket.delete(key);
+      }
+    } as unknown as R2Bucket;
+    const service = new D1R2PersistenceService({
+      DB: sqliteD1(db),
+      PROJECT_STORAGE: counting
+    });
+    const name = 'bounded prune';
+    const { document } = await service.createProject(toUserId(OWNER), {
+      name
+    });
+    // A backlog of replaced heads left by failed deletes.
+    const insert = db.prepare(
+      `INSERT INTO project_document_objects
+         (id, project_id, object_key, checksum_sha256, logical_bytes,
+          stored_bytes, content_encoding, state, created_at)
+       VALUES (?, ?, ?, 'x', 1, 1, 'identity', 'committed', ?)`
+    );
+    for (let index = 0; index < 500; index += 1) {
+      insert.run(
+        `stale_${index}`,
+        document.projectId,
+        `stale/${index}`,
+        CREATED
+      );
+    }
+    const stale = () =>
+      (
+        db
+          .prepare(
+            `SELECT COUNT(*) AS n FROM project_document_objects
+             WHERE id LIKE 'stale\\_%' ESCAPE '\\'`
+          )
+          .get() as { n: number }
+      ).n;
+    deletes = 0;
+    removed.clear();
+    const next = {
+      ...(JSON.parse(
+        JSON.stringify(document).replaceAll(name, 'bounded prune 2')
+      ) as typeof document),
+      version: document.version + 1
+    };
+    await service.saveDocument(toUserId(OWNER), {
+      projectId: document.projectId,
+      expectedVersion: document.version,
+      document: next
+    });
+    // The save committed despite the backlog...
+    const head = db
+      .prepare('SELECT document_version AS version FROM projects WHERE id = ?')
+      .get(document.projectId) as { version: number };
+    expect(head.version).toBe(next.version);
+    // ...issuing a bounded number of deletes (pre-save 8, post-save 32),
+    expect(deletes).toBeLessThanOrEqual(8 + 32);
+    // ...dropping exactly the rows whose R2 delete succeeded.
+    const removedStale = [...removed].filter((key) =>
+      key.startsWith('stale/')
+    ).length;
+    expect(removedStale).toBeGreaterThan(0);
+    expect(stale()).toBe(500 - removedStale);
+  });
+
   it('refuses further credited saves once pruning fails, so storage stays within one replacement', async () => {
     const db = migratedDatabase();
     db.prepare(
