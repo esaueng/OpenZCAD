@@ -16,7 +16,7 @@ import {
   type UnitSystem,
   type Vector3
 } from '@openzcad/shared';
-import { assemblyLengthScale } from './assemblyUi';
+import { ANIMATE_SPEEDS, assemblyLengthScale } from './assemblyUi';
 
 /**
  * Set up motion (AS02/AS06): the quick way to make one part move against a
@@ -56,13 +56,8 @@ export type MotionSetupBounds = (bodyId: BodyId) => MotionSetupBox | null;
 
 export const MOTION_SETUP_AXES: readonly MotionSetupAxis[] = ['x', 'y', 'z'];
 
-/** Set up motion's speeds: the Animate sweep times, named. */
-export const MOTION_SETUP_SWEEPS: readonly { sweepS: number; label: string }[] =
-  [
-    { sweepS: 3, label: 'Slow' },
-    { sweepS: 1.5, label: 'Normal' },
-    { sweepS: 0.75, label: 'Fast' }
-  ];
+/** Set up motion's speeds: the same named speeds as a joint's Play. */
+export const MOTION_SETUP_SWEEPS = ANIMATE_SPEEDS;
 
 /** Used when the base's size along the axis is unknown (a mm project). */
 export const DEFAULT_SLIDE_TRAVEL_MM = 50;

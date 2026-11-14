@@ -50,7 +50,11 @@ import {
   AssemblyFirstRunCard,
   assemblyCandidateBodies
 } from './AssemblyFirstRunCard';
-import { ComponentDetails, JointDetails } from './AssemblyDetails';
+import {
+  AssemblyPositions,
+  ComponentDetails,
+  JointDetails
+} from './AssemblyDetails';
 import { AssemblyNameField } from './AssemblyNameField';
 import {
   AddStudyButton,
@@ -738,6 +742,14 @@ function AssemblyLists({
             </ul>
           )}
         </Section>
+
+        {set.joints.some(
+          (joint) => ASSEMBLY_JOINT_DOFS[joint.kind].length > 0
+        ) || set.positions.length > 0 ? (
+          <Section title="Positions" count={set.positions.length}>
+            <AssemblyPositions execute={execute} model={model} />
+          </Section>
+        ) : null}
 
         {studies ??
           ((set.studies.length > 0 ||

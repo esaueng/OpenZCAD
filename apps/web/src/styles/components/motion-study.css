@@ -215,6 +215,16 @@
   color: var(--color-text-muted);
 }
 
+.motion-playback {
+  display: inline-flex;
+  flex: none;
+}
+
+.motion-playback .assembly-select {
+  height: 24px;
+  font-size: var(--fs-xs);
+}
+
 .motion-speed,
 .motion-toggle {
   flex: none;
@@ -256,6 +266,28 @@
 }
 
 /* Until the study first moves: what to do next. */
+.motion-timeline-recording {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin-left: 6px;
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A recording light: the shape says "recording" as well as the colour. */
+.motion-recording-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-error);
+}
+
 .motion-timeline-hint {
   min-width: 0;
   margin-left: 6px;
