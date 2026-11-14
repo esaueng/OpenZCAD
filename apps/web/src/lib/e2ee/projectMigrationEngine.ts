@@ -80,10 +80,13 @@ import {
   MigrationMembersNotReadyError,
   MIGRATION_APPROVAL_CODE,
   MigrationApprovalNeededError,
+  memoryApprovalReceipts,
   prepareMigrationMembers,
   readdMigrationMembers,
   requireMembersApproved,
   requireMembersReady,
+  unconfirmedReadds,
+  type MigrationApprovalReceipts,
   type MigrationMember,
   type MigrationMemberApproval,
   type MigrationSharing
@@ -202,6 +205,12 @@ export interface MigrationEngineDeps {
   /** The encrypted clients, built once over the leased fetcher. */
   createStaging(leased: Fetch): MigrationStagingClients;
   readonly leases?: MigrationLeaseStore;
+  /**
+   * Slice 7-4: this browser's record of the owner's approval of each
+   * staging's members (`MigrationApprovalReceipt`), so a reload resumes the
+   * staging it approved without asking again. In memory by default.
+   */
+  readonly approvalReceipts?: MigrationApprovalReceipts;
   /** Saves this page's pending edits to the project before staging begins. */
   flushProject?(projectId: string): Promise<void>;
   /** After the cutover: this page now treats the project as encrypted. */
@@ -225,7 +234,11 @@ export class MigrationPausedError extends Error {
 class RestartError extends Error {
   constructor(
     readonly reason:
-      'stale' | 'device-removed' | 'unfinished-start' | 'unreadable-journal',
+      | 'stale'
+      | 'device-removed'
+      | 'unfinished-start'
+      | 'unreadable-journal'
+      | 'unconfirmed-readd',
     message: string
   ) {
     super(message);
@@ -399,6 +412,16 @@ export function createProjectMigrationEngine(
 ): ProjectMigrationEngine {
   const { migrations, plaintext } = deps;
   const leases = deps.leases ?? memoryLeaseStore();
+  const receipts = deps.approvalReceipts ?? memoryApprovalReceipts();
+  /** The approval this browser recorded for the staging `startedAt`. */
+  const receiptFor = (projectId: string, startedAt: string | undefined) => {
+    const receipt = startedAt ? receipts.get(projectId) : null;
+    return receipt &&
+      receipt.projectId === projectId &&
+      receipt.stagingStartedAt === startedAt
+      ? receipt.members
+      : null;
+  };
   let currentLease: string | null = null;
   const leased: Fetch = (input, init) =>
     currentLease
@@ -420,6 +443,7 @@ export function createProjectMigrationEngine(
     const lease = leases.get(projectId);
     await stepAll(() => migrations.abandon(projectId, lease));
     leases.delete(projectId);
+    receipts.delete(projectId);
     currentLease = null;
     // The staged ciphertext is gone: so is what this browser accepted of
     // it, or the next staging would read as a rollback.
@@ -558,6 +582,7 @@ export function createProjectMigrationEngine(
       .migration;
     if (status?.state === 'cutover' || status?.state === 'purging') {
       leases.delete(projectId);
+      receipts.delete(projectId);
       deps.onCutover?.(projectId);
       return purgeAll(projectId, (phase) => report({ phase, cutOver: true }));
     }
@@ -576,6 +601,11 @@ export function createProjectMigrationEngine(
     // resumed staging that waits for a member still reads as locked.
     const invitations = staging().invitations;
     let sharing: MigrationSharing | null = null;
+    let approved: Map<string, MigrationMemberApproval> | null = null;
+    // Members a staging re-added without an acceptance the owner can
+    // review (an older app version's): that staging is dropped and staged
+    // again (below, once its lease is held), so they are asked about.
+    let unconfirmed = false;
     if (invitations) {
       await check('members');
       sharing = await prepareMigrationMembers(
@@ -588,9 +618,21 @@ export function createProjectMigrationEngine(
         ...(sharing.members.length ? { members: sharing.members } : {})
       });
       requireMembersReady(sharing);
+      unconfirmed = unconfirmedReadds(sharing).length > 0;
       // The owner approves the roster shown, by contact code and signed
-      // role, before anything is staged or locked.
-      requireMembersApproved(sharing, approvedMembers);
+      // role, before anything is staged or locked; for a staging resumed,
+      // the whole staged roster, members already re-added included,
+      // unless this browser recorded that approval for this staging.
+      if (!unconfirmed) {
+        approved = requireMembersApproved(
+          sharing,
+          approvedMembers,
+          receiptFor(
+            projectId,
+            status?.state === 'staging' ? status.startedAt : undefined
+          )
+        );
+      }
     }
     report({ phase: 'starting', error: undefined, plaintextLocked });
     const { lease, migration } = await acquire(projectId, status);
@@ -604,6 +646,21 @@ export function createProjectMigrationEngine(
         'The last attempt stopped before its first version.'
       );
     }
+    if (unconfirmed) {
+      throw new RestartError(
+        'unconfirmed-readd',
+        'Members were added back without an approval you can check; encryption starts again.'
+      );
+    }
+    if (approvedMembers && approved?.size) {
+      // What the owner approved now, recorded for this staging: a reload
+      // resumes it without asking again; any other staging asks.
+      receipts.set({
+        projectId,
+        stagingStartedAt: migration.startedAt,
+        members: [...approved.values()]
+      });
+    }
     const renewal = renewLease(projectId, lease);
     try {
       await stage(project, migration, check, report, current);
@@ -615,7 +672,8 @@ export function createProjectMigrationEngine(
           migrations,
           projectId,
           lease,
-          approvedMembers
+          approvedMembers,
+          receiptFor(projectId, migration.startedAt)
         );
         report({ members: sharing.members });
       } else if (invitations) {
@@ -642,6 +700,7 @@ export function createProjectMigrationEngine(
       });
     }
     leases.delete(projectId);
+    receipts.delete(projectId);
     currentLease = null;
     deps.onCutover?.(projectId);
     await check('purge');

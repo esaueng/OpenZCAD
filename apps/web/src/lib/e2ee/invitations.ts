@@ -871,11 +871,15 @@ async function acceptedBy(
  * `record`'s statement, when this account's device signed it, and the
  * verified contact whose device signed a valid acceptance of it (looked up
  * now): what the owner reviews before confirming an Add, as the migration
- * cutover's member approval does.
+ * cutover's member approval does. `options.at` checks the statement's
+ * validity at another time than now: when an Add completed it, for the
+ * migration's review of a member already added (the signature is what
+ * names them; freshness mattered when they were added).
  */
 export async function reviewAcceptance(
   ctx: InvitationContext,
-  record: E2eeInvitationRecord
+  record: E2eeInvitationRecord,
+  options: { readonly at?: number } = {}
 ): Promise<{
   statement: ProjectInvitation | null;
   acceptor: InvitationAcceptor | null;
@@ -883,7 +887,7 @@ export async function reviewAcceptance(
   const person = record.acceptedByUserId
     ? await ctx.people.inspect(record.acceptedByUserId).catch(() => null)
     : null;
-  return acceptedBy(ctx, record, person, now(ctx));
+  return acceptedBy(ctx, record, person, options.at ?? now(ctx));
 }
 
 async function describe(
@@ -1038,14 +1042,19 @@ async function checkedKeyPackage(
  * owner's explicit confirmation of the hex identity key hash the
  * confirmation showed (`OwnerInvitation.acceptor`; the migration cutover
  * names each verified member's): the acceptance must be by exactly it.
- * The KeyPackages are claimed once (or taken from this browser's earlier
- * claim), each checked, and added in one Commit with the statement's role.
- * The claim is dropped once the Add lands.
+ * `projectId`, when given, is the project the caller means to add to (the
+ * migration's): both the record and its verified statement must name it,
+ * or nothing is added. The KeyPackages are claimed once (or taken from
+ * this browser's earlier claim), each checked, and added in one Commit
+ * with the statement's role. The claim is dropped once the Add lands.
  */
 export async function addInvitedMember(
   ctx: InvitationContext,
   invitation: E2eeInvitationRecord,
-  options: { readonly confirmedIdentity?: string } = {}
+  options: {
+    readonly confirmedIdentity?: string;
+    readonly projectId?: string;
+  } = {}
 ): Promise<ProjectGroupState> {
   const userId = ctx.groups.account.userId;
   certifiedDevice(ctx);
@@ -1060,6 +1069,16 @@ export async function addInvitedMember(
     ctx.groups.account.list,
     now(ctx)
   );
+  if (
+    options.projectId !== undefined &&
+    (invitation.projectId !== options.projectId ||
+      statement.projectId !== options.projectId)
+  ) {
+    throw new InvitationError(
+      'statement-invalid',
+      'The server offered an invitation to another project. Nothing was added.'
+    );
+  }
   const invitee = invitation.acceptedByUserId;
   if (!invitee) {
     throw new InvitationError(

@@ -441,8 +441,16 @@ describe('the invitation flow in the browser (slice 5-3b)', () => {
     ).toEqual(['project-key', 'rejoin-psk']);
 
     // The laptop joins by its Welcome, verifying the whole history, and
-    // posts its account's wraps of the joined epoch.
-    expect(await joinWelcomedProjects(inviteeCtx)).toEqual([projectId]);
+    // posts its account's wraps of the joined epoch. A read of the project
+    // (the shelf's) joins at the same moment as the invitation sync: one
+    // join opens the Welcome and the other shares its outcome, rather than
+    // opening it again over the provisional join in progress.
+    const [joinedBySync, joinedByRead] = await Promise.all([
+      joinWelcomedProjects(inviteeCtx),
+      joinProjectByWelcome(invitee.groups, projectId)
+    ]);
+    expect(joinedBySync).toEqual([projectId]);
+    expect(joinedByRead).toMatchObject({ epoch: 2 });
     expect(
       rows<{ purpose: string }>(
         w.srv,

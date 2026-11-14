@@ -2234,8 +2234,33 @@ export async function joinProjectGroup(
  * joined epoch's key trusted: this account posts its own wraps of it (the
  * project key and rejoin PSK, decision D1), which its other devices read
  * and rejoin with, and the device catches up on later Commits.
+ *
+ * One join of a project runs at a time on this page: a second caller (the
+ * invitation sync while the shelf's read joins, or the other way round)
+ * waits for the one running and shares its outcome, rather than opening
+ * the same Welcome over a provisional join in progress.
  */
-export async function joinProjectByWelcome(
+export function joinProjectByWelcome(
+  ctx: ProjectGroupContext,
+  projectId: string
+): Promise<ProjectGroupState | null> {
+  const deviceId = ctx.device?.deviceId;
+  // Without a device it refuses (`requireDevice`), as it always did.
+  if (deviceId === undefined) return joinByWelcomeOnce(ctx, projectId);
+  const id = JSON.stringify([ctx.account.userId, deviceId, projectId]);
+  const running = welcomeJoins.get(id);
+  if (running) return running;
+  const outcome = joinByWelcomeOnce(ctx, projectId).finally(() =>
+    welcomeJoins.delete(id)
+  );
+  welcomeJoins.set(id, outcome);
+  return outcome;
+}
+
+/** The Welcome joins running on this page, by account, device and project. */
+const welcomeJoins = new Map<string, Promise<ProjectGroupState | null>>();
+
+async function joinByWelcomeOnce(
   ctx: ProjectGroupContext,
   projectId: string
 ): Promise<ProjectGroupState | null> {

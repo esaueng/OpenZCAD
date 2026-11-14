@@ -25,8 +25,10 @@ import { flushProjectEdits, setMigratingProjects } from '../migrationStatus';
 import type { InvitationContext } from './invitations';
 import { getKeySessionRevision } from './keySession';
 import {
+  parseApprovalReceipt,
   reinviteToEncryptedProject,
   reissuePlaintextShareLinks,
+  type MigrationApprovalReceipts,
   type MigrationMemberApproval
 } from './migrationMembers';
 import {
@@ -85,6 +87,7 @@ export interface MigrationControllerDeps {
   }>;
   readonly locks?: MigrationLocks | null;
   readonly leases?: MigrationLeaseStore;
+  readonly approvalReceipts?: MigrationApprovalReceipts;
   readonly renewEveryMs?: number;
   /**
    * Slice 7-4: the page's share links and invitations of encrypted
@@ -141,6 +144,48 @@ export interface MigrationController {
 }
 
 /** Leases kept in this browser's storage, per account and project. */
+/**
+ * Slice 7-4: this browser's record of the owner's approval of each
+ * staging's members, by account and project, in local storage (the server
+ * never supplies it). One that cannot be read or written is absent: the
+ * owner is asked again.
+ */
+export function localStorageApprovalReceipts(
+  userId: string
+): MigrationApprovalReceipts {
+  const key = (projectId: string) =>
+    `openzcad-e2ee-migration-approval:${userId}:${projectId}`;
+  return {
+    get(projectId) {
+      try {
+        const stored = globalThis.localStorage?.getItem(key(projectId));
+        return stored
+          ? parseApprovalReceipt(JSON.parse(stored), projectId)
+          : null;
+      } catch {
+        return null;
+      }
+    },
+    set(receipt) {
+      try {
+        globalThis.localStorage?.setItem(
+          key(receipt.projectId),
+          JSON.stringify(receipt)
+        );
+      } catch {
+        // The owner is then asked again after a reload.
+      }
+    },
+    delete(projectId) {
+      try {
+        globalThis.localStorage?.removeItem(key(projectId));
+      } catch {
+        // Nothing to forget.
+      }
+    }
+  };
+}
+
 export function localStorageLeases(userId: string): MigrationLeaseStore {
   const key = (projectId: string) =>
     `openzcad-e2ee-migration-lease:${userId}:${projectId}`;
@@ -227,6 +272,8 @@ export function createMigrationController(
           ?.locks ?? null)
       : deps.locks;
   const leases = deps.leases ?? localStorageLeases(deps.userId);
+  const approvalReceipts =
+    deps.approvalReceipts ?? localStorageApprovalReceipts(deps.userId);
   const listeners = new Set<() => void>();
   let summaries: ProjectSummary[] = [];
   let state: MigrationRunState = {
@@ -297,6 +344,7 @@ export function createMigrationController(
       loadSource: async (checksum) =>
         (await import('../localProjectStore')).loadSourceBlob(checksum),
       leases,
+      approvalReceipts,
       createStaging: (leased) => opened.open(leased),
       flushProject: flushProjectEdits,
       onCutover: (projectId) =>

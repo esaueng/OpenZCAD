@@ -35,7 +35,9 @@ import { ProjectCollaborationRoom } from '../apps/web/worker/e2eeRoom';
 import { forgetAllProjectKeys } from '../apps/web/src/lib/e2ee/unlockedProjectKeys';
 import { toHex } from '@openzcad/crypto';
 import {
+  InvitationError,
   acceptedInvitations,
+  addInvitedMember,
   confirmEncryptedInvitation,
   contactCodeOf,
   joinWelcomedProjects,
@@ -44,7 +46,10 @@ import {
   type InvitationPerson
 } from '../apps/web/src/lib/e2ee/invitations';
 import { memoryInvitationStore } from '../apps/web/src/lib/e2ee/invitationStore';
-import { createProjectMigrationsApi } from '../apps/web/src/lib/e2ee/projectMigrationsApi';
+import {
+  createProjectMigrationsApi,
+  type ProjectMigrationsApi
+} from '../apps/web/src/lib/e2ee/projectMigrationsApi';
 import { createMigrationPlaintextSource } from '../apps/web/src/lib/e2ee/migrationPlaintextSource';
 import {
   createProjectMigrationEngine,
@@ -57,7 +62,10 @@ import {
   MigrationApprovalNeededError,
   MigrationMembersNotReadyError,
   approvalOf,
+  memoryApprovalReceipts,
   migrationMemberAction,
+  prepareMigrationMembers,
+  type MigrationApprovalReceipts,
   type MigrationMemberApproval,
   reinviteToEncryptedProject,
   reissuePlaintextShareLinks
@@ -243,12 +251,18 @@ interface Owner {
   approve(projectId: string): Promise<MigrationMemberApproval[]>;
   /** Sets the approval the next runs carry (null: none). */
   approved: MigrationMemberApproval[] | null;
+  /** What this browser recorded of the owner's approval, per staging. */
+  receipts: MigrationApprovalReceipts;
 }
+
+type MembersAnswer = Awaited<ReturnType<ProjectMigrationsApi['members']>>;
 
 function ownerEngine(
   w: World,
   options: {
     beforeStep?: (step: string, projectId: string) => void | Promise<void>;
+    /** What the server answers the owner's member listings instead. */
+    tamper?: (projectId: string, answer: MembersAnswer) => MembersAnswer;
   } = {}
 ): Owner {
   const d = memberDevice(w, owner, 'owner_laptop');
@@ -256,12 +270,22 @@ function ownerEngine(
   const invitations = invitationsOf(w, d);
   const progress: MigrationProgress[] = [];
   const plaintext = createMigrationPlaintextSource(base);
+  const api = createProjectMigrationsApi(base);
+  const tamper = options.tamper;
+  const receipts = memoryApprovalReceipts();
   const engine = createProjectMigrationEngine({
     deviceId: 'owner_laptop',
     fetcher: base,
-    migrations: createProjectMigrationsApi(base),
+    migrations: tamper
+      ? {
+          ...api,
+          members: async (projectId, leaseId) =>
+            tamper(projectId, await api.members(projectId, leaseId))
+        }
+      : api,
     plaintext,
     leases: memoryLeaseStore(),
+    approvalReceipts: receipts,
     createStaging: (leased) => {
       d.fetcher = leased;
       return {
@@ -286,6 +310,7 @@ function ownerEngine(
     invitations,
     progress,
     approved: null,
+    receipts,
     async migrate(projectId) {
       const summary = (await plaintext.listProjects()).find(
         (p) => p.projectId === projectId
@@ -897,6 +922,276 @@ describe('migrating a shared plaintext project (slice 7-4)', () => {
     expect(again).toBeInstanceOf(MigrationMembersNotReadyError);
     await publishKeys(w, memberDevice(w, other, 'other_laptop'));
     await publishKeys(w, memberDevice(w, third, 'third_laptop'));
+    await ownerSide.migrate(projectId);
+    expect(formatOf(srv, projectId)).toBe(2);
+  });
+
+  it('never adds a member by another project’s invitation the server lists for this one', async () => {
+    const w = world();
+    const { srv } = w;
+    const { projectId } = await sharedPlaintext(w);
+    // The owner's other project, which the editor is also a member of.
+    const created = await srv.call('POST', '/api/projects', {
+      body: {
+        name: 'Other bracket',
+        initialDocument: initialDocument('Other bracket')
+      }
+    });
+    expect(created.status).toBe(201);
+    const elsewhereId = (
+      (await created.json()) as { document: ProjectDocument }
+    ).document.projectId;
+    memberRow(srv, elsewhereId, OTHER, 'editor');
+    for (const [a, b] of [
+      [OWNER, OTHER],
+      [OTHER, OWNER],
+      [OWNER, THIRD],
+      [THIRD, OWNER]
+    ] as const) {
+      verify(w, a, b);
+    }
+    // The server answers this migration's listing with the editor's
+    // genuine, accepted re-add invitation to the other project.
+    let swap: 'always' | 'readd' | null = null;
+    let elsewhere: MembersAnswer['members'][number]['invitation'] = null;
+    let readding = false;
+    const swapped = (answer: MembersAnswer): MembersAnswer => ({
+      ...answer,
+      members: answer.members.map((member) =>
+        member.userId === OTHER ? { ...member, invitation: elsewhere } : member
+      )
+    });
+    const ownerSide = ownerEngine(w, {
+      beforeStep: (step) => {
+        readding = step === 'readd';
+      },
+      tamper: (id, answer) =>
+        id === projectId &&
+        (swap === 'always' || (swap === 'readd' && readding))
+          ? swapped(answer)
+          : answer
+    });
+    await failure(ownerSide.migrate(projectId));
+    const api = createProjectMigrationsApi(ownerSide.d.fetcher);
+    await prepareMigrationMembers(ownerSide.invitations, api, elsewhereId);
+    await publishKeys(w, memberDevice(w, other, 'other_laptop'));
+    await publishKeys(w, memberDevice(w, third, 'third_laptop'));
+    elsewhere = (await api.members(elsewhereId)).members.find(
+      (member) => member.userId === OTHER
+    )!.invitation;
+    expect(elsewhere).toMatchObject({
+      projectId: elsewhereId,
+      acceptedByUserId: OTHER,
+      role: 'editor'
+    });
+    expect(elsewhere!.acceptance).toBeTruthy();
+    const welcomes = (id: string) =>
+      rows(srv, 'SELECT * FROM e2ee_welcomes WHERE project_id = ?', id);
+
+    // Listed for this migration, it is not ready: nobody is shown for
+    // approval with it.
+    swap = 'always';
+    const listed = await failure(ownerSide.migrate(projectId));
+    expect(listed).toBeInstanceOf(MigrationMembersNotReadyError);
+    expect(
+      ownerSide.progress
+        .at(-1)!
+        .members!.map((member) => [member.userId, member.state])
+    ).toEqual([
+      [OTHER, 'needs-invitation'],
+      [THIRD, 'ready']
+    ]);
+    expect(welcomes(projectId)).toEqual([]);
+    expect(welcomes(elsewhereId)).toEqual([]);
+
+    // Honest while the owner approves; swapped once staged, just before
+    // the Adds: nobody is added to either project, nothing switched over.
+    swap = null;
+    await publishKeys(w, memberDevice(w, other, 'other_laptop'));
+    const shown = await ownerSide.approve(projectId);
+    expect(shown.map((entry) => entry.userId)).toEqual([OTHER, THIRD]);
+    swap = 'readd';
+    const stopped = await failure(ownerSide.migrate(projectId));
+    expect(stopped).toBeInstanceOf(MigrationMembersNotReadyError);
+    expect(welcomes(projectId)).toEqual([]);
+    expect(welcomes(elsewhereId)).toEqual([]);
+    expect(formatOf(srv, projectId)).toBe(1);
+
+    // The Add itself refuses an invitation that names another project.
+    const refused = await failure(
+      addInvitedMember(ownerSide.invitations, elsewhere!, {
+        confirmedIdentity: toHex(other.list.identityKeyHash),
+        projectId
+      })
+    );
+    expect(refused).toBeInstanceOf(InvitationError);
+    expect(refused.code).toBe('statement-invalid');
+    expect(welcomes(elsewhereId)).toEqual([]);
+
+    // Listed honestly, the approved roster goes ahead.
+    swap = null;
+    await ownerSide.migrate(projectId);
+    expect(formatOf(srv, projectId)).toBe(2);
+    expect(
+      rows<{ user_id: string }>(
+        srv,
+        'SELECT user_id FROM e2ee_welcomes WHERE project_id = ?',
+        projectId
+      )
+        .map((row) => row.user_id)
+        .sort()
+    ).toEqual([OTHER, THIRD].sort());
+    expect(welcomes(elsewhereId)).toEqual([]);
+  });
+
+  it('resumes a staging whose members were already re-added only with the owner’s approval of all of them', async () => {
+    const w = world();
+    const { srv } = w;
+    const { projectId } = await sharedPlaintext(w);
+    for (const [a, b] of [
+      [OWNER, OTHER],
+      [OTHER, OWNER],
+      [OWNER, THIRD],
+      [THIRD, OWNER]
+    ] as const) {
+      verify(w, a, b);
+    }
+    let stop = true;
+    const ownerSide = ownerEngine(w, {
+      beforeStep: (step) => {
+        if (step === 'cutover' && stop) throw new Error('Interrupted');
+      }
+    });
+    await failure(ownerSide.migrate(projectId));
+    await publishKeys(w, memberDevice(w, other, 'other_laptop'));
+    await publishKeys(w, memberDevice(w, third, 'third_laptop'));
+    const shown = await ownerSide.approve(projectId);
+    await failure(ownerSide.migrate(projectId));
+    const welcomes = () =>
+      rows(srv, 'SELECT * FROM e2ee_welcomes WHERE project_id = ?', projectId);
+    expect(welcomes()).toHaveLength(2);
+    // This browser recorded the approval for this staging.
+    const receipt = ownerSide.receipts.get(projectId)!;
+    expect(receipt.members).toEqual(shown);
+
+    // A staging this browser holds no approval of (an earlier app
+    // version's, which re-added the members without asking): after a
+    // reload, nothing is switched over until the owner approves every
+    // member, the ones already re-added included.
+    ownerSide.receipts.delete(projectId);
+    ownerSide.approved = null;
+    stop = false;
+    const asked = await failure(ownerSide.migrate(projectId));
+    expect(asked).toBeInstanceOf(MigrationApprovalNeededError);
+    expect(asked).toMatchObject({ changed: false });
+    expect(formatOf(srv, projectId)).toBe(1);
+    expect(welcomes()).toHaveLength(2);
+    expect(
+      ownerSide.progress
+        .at(-1)!
+        .members!.map((m) => [
+          m.userId,
+          m.state,
+          m.signedRole,
+          m.acceptor?.code
+        ])
+    ).toEqual([
+      [OTHER, 'readded', 'editor', await contactCodeOf(other.list)],
+      [THIRD, 'readded', 'viewer', await contactCodeOf(third.list)]
+    ]);
+    // An approval of only one of them, or of another identity, is not one.
+    for (const approval of [
+      shown.filter((entry) => entry.userId === OTHER),
+      shown.map((entry) =>
+        entry.userId === THIRD
+          ? { ...entry, identityKeyHash: toHex(other.list.identityKeyHash) }
+          : entry
+      )
+    ]) {
+      ownerSide.approved = approval;
+      expect(await failure(ownerSide.migrate(projectId))).toMatchObject({
+        code: MIGRATION_APPROVAL_CODE,
+        changed: true
+      });
+      expect(formatOf(srv, projectId)).toBe(1);
+    }
+    // A receipt for another staging is not this one's.
+    ownerSide.approved = null;
+    ownerSide.receipts.set({
+      ...receipt,
+      stagingStartedAt: '2000-01-01T00:00:00.000Z'
+    });
+    expect(await failure(ownerSide.migrate(projectId))).toMatchObject({
+      code: MIGRATION_APPROVAL_CODE,
+      changed: false
+    });
+    expect(formatOf(srv, projectId)).toBe(1);
+
+    // This browser's own receipt for this staging resumes it after a
+    // reload without asking again.
+    ownerSide.receipts.set(receipt);
+    await ownerSide.migrate(projectId);
+    expect(formatOf(srv, projectId)).toBe(2);
+    expect(welcomes()).toHaveLength(2);
+    expect(ownerSide.receipts.get(projectId)).toBeNull();
+  });
+
+  it('drops a resumed staging whose re-added members have no acceptance to review, and adds them again once approved', async () => {
+    const w = world();
+    const { srv } = w;
+    const { projectId } = await sharedPlaintext(w);
+    for (const [a, b] of [
+      [OWNER, OTHER],
+      [OTHER, OWNER],
+      [OWNER, THIRD],
+      [THIRD, OWNER]
+    ] as const) {
+      verify(w, a, b);
+    }
+    let stop = true;
+    const ownerSide = ownerEngine(w, {
+      beforeStep: (step) => {
+        if (step === 'cutover' && stop) throw new Error('Interrupted');
+      }
+    });
+    await failure(ownerSide.migrate(projectId));
+    await publishKeys(w, memberDevice(w, other, 'other_laptop'));
+    await publishKeys(w, memberDevice(w, third, 'third_laptop'));
+    await ownerSide.approve(projectId);
+    await failure(ownerSide.migrate(projectId));
+    expect(
+      rows(srv, 'SELECT * FROM e2ee_welcomes WHERE project_id = ?', projectId)
+    ).toHaveLength(2);
+
+    // As main's app left it: the members re-added with no signed
+    // acceptance, and no approval recorded by this browser.
+    srv.db
+      .prepare(
+        `UPDATE e2ee_invitations
+           SET acceptance_statement = NULL, acceptance_signature = NULL
+         WHERE project_id = ?`
+      )
+      .run(projectId);
+    ownerSide.receipts.delete(projectId);
+    ownerSide.approved = null;
+    stop = false;
+    const restarted = await failure(ownerSide.migrate(projectId));
+    // The staging and its Adds are gone; the members are invited again.
+    expect(restarted).toBeInstanceOf(MigrationMembersNotReadyError);
+    expect(
+      rows(srv, 'SELECT * FROM e2ee_welcomes WHERE project_id = ?', projectId)
+    ).toEqual([]);
+    expect(formatOf(srv, projectId)).toBe(1);
+    expect(ownerSide.progress.at(-1)!.members!.map((m) => m.state)).toEqual([
+      'waiting-for-keys',
+      'waiting-for-keys'
+    ]);
+
+    // Once they publish again, the owner approves both and it completes.
+    await ownerSide.d.store.forgetStagedProject(projectId);
+    await publishKeys(w, memberDevice(w, other, 'other_laptop'));
+    await publishKeys(w, memberDevice(w, third, 'third_laptop'));
+    await ownerSide.approve(projectId);
     await ownerSide.migrate(projectId);
     expect(formatOf(srv, projectId)).toBe(2);
   });

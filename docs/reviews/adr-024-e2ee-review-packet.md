@@ -477,7 +477,13 @@ the browser side first, then the Worker's defense in depth.
   member's contact code and signed role are shown, and
   `requireMembersApproved` stops before staging and again before the
   re-add unless the approval names exactly the current roster, identities
-  and roles. UI `ExistingProjectEncryption.tsx`.
+  and roles. The roster includes members a resumed staging already
+  re-added; `MigrationApprovalReceipt` (local storage, bound to the
+  project, the staging's `startedAt`, and each approved identity and role)
+  spares asking again after a reload, and `unconfirmedReadds` restarts a
+  staging whose re-adds carry no reviewable acceptance. A record or
+  statement naming another project is never ready, and `addInvitedMember`
+  refuses it (`projectId`). UI `ExistingProjectEncryption.tsx`.
 - Worker: `apps/web/worker/e2eeProjectMigrations.ts` (`start`, `renew`,
   `cutover`, `abandon`, `purge` and `purgeStep` are internal;
   `purgeMigratedProject` and `sweepProjectMigrations` are exported), lease

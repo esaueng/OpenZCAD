@@ -596,7 +596,13 @@ comparison, which is safe only because of its commitment step.
   way: before anything is staged, the owner approves each member to be
   added back by contact code and signed role, and the cutover adds exactly
   those identities, stopping to ask again if the roster, an identity or a
-  role changed.
+  role changed. Every re-add must name the migrating project, in the
+  server's record and in the owner-signed statement alike. A staging
+  resumed after a reload, or one an older app version left, reaches the
+  cutover only with the owner's approval of the whole staged roster,
+  members already re-added included, given again or recorded on that
+  owner's browser for that same staging; a member re-added without an
+  acceptance the owner can review drops the staging, which starts again.
   Automatic adds also require that the owner's browser saw every removal
   from the project since its group began (it created the group); a device
   that joined from the project's history asks the owner for every Add.

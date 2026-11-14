@@ -308,7 +308,8 @@ function MemberReadiness({
               {MEMBER_STATE_LABELS[member.state]}
             </Status>
           </span>
-          {member.state === 'ready' && member.acceptor ? (
+          {(member.state === 'ready' || member.state === 'readded') &&
+          member.acceptor ? (
             <code
               className="encryption-code"
               aria-label={`Contact code of ${member.email ?? 'this member'}`}
@@ -497,7 +498,11 @@ function ProjectRow({
   const approvable =
     progress.phase === 'members' &&
     progress.error?.code === MIGRATION_APPROVAL_CODE &&
-    members.some((member) => member.state === 'ready') &&
+    members.some(
+      (member) =>
+        (member.state === 'ready' || member.state === 'readded') &&
+        member.acceptor
+    ) &&
     members.every(
       (member) => member.state === 'ready' || member.state === 'readded'
     );

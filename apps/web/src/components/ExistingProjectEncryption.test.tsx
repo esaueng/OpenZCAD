@@ -1293,6 +1293,92 @@ describe('a shared project (slice 7-4)', () => {
     ]);
   });
 
+  it('asks the owner to approve members a resumed staging already re-added, by code, before it switches over', async () => {
+    const readded = (
+      email: string,
+      role: MigrationMember['role'],
+      code: string
+    ): MigrationMember => ({
+      ...member(email, role, 'readded'),
+      signedRole: role,
+      acceptor: {
+        userId: `user_${email}`,
+        identityKeyHash: code.replace(/\D/g, ''),
+        code,
+        email
+      }
+    });
+    const roster = [
+      readded('editor@example.com', 'editor', '55555 66666'),
+      readded('viewer@example.com', 'viewer', '77777 88888')
+    ];
+    const approvals: unknown[] = [];
+    const fake = fakeEngine(async (summary, report, _signal, options) => {
+      if (summary.projectId !== 'proj_old') {
+        report({ phase: 'done' });
+        return;
+      }
+      approvals.push(options?.approvedMembers);
+      if (!options?.approvedMembers) {
+        report({
+          phase: 'members',
+          plaintextLocked: true,
+          members: roster,
+          error: {
+            code: MIGRATION_APPROVAL_CODE,
+            message:
+              'Check each member’s contact code and role below, then approve.',
+            retryable: false
+          }
+        });
+        throw new Error('approve');
+      }
+      report({ phase: 'done', error: undefined, members: roster });
+    });
+    const controller = controllerWith(fake);
+    render(
+      <ExistingProjectEncryption
+        userId="user_alice"
+        unlocked
+        controller={controller}
+        isOpen={async () => true}
+      />
+    );
+    await clickEncryptProjects();
+    const older = await screen.findByRole('listitem', {
+      name: 'Older bracket'
+    });
+    const members = await within(older).findByRole('list', {
+      name: 'Members of Older bracket'
+    });
+    expect(
+      within(members).getByLabelText('Contact code of editor@example.com')
+    ).toHaveTextContent('55555 66666');
+    expect(
+      within(members).getByLabelText('Contact code of viewer@example.com')
+    ).toHaveTextContent('77777 88888');
+    expect(approvals).toEqual([undefined]);
+
+    fireEvent.click(
+      within(older).getByRole('button', { name: 'Approve and encrypt' })
+    );
+    await waitFor(() =>
+      expect(within(older).getByText('Encrypted')).toBeTruthy()
+    );
+    expect(approvals.at(-1)).toEqual([
+      {
+        userId: 'user_editor@example.com',
+        role: 'editor',
+        identityKeyHash: '5555566666'
+      },
+      {
+        userId: 'user_viewer@example.com',
+        role: 'viewer',
+        identityKeyHash: '7777788888'
+      }
+    ]);
+  });
+
   it('keeps a resumed staging that waits for a member read-only, and cancellable', async () => {
     const fake = fakeEngine(async (summary, report) => {
       if (summary.projectId !== 'proj_old') {

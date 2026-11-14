@@ -23,7 +23,16 @@
  *   acceptance) and the role this account signed. Nothing is staged until
  *   the owner approves exactly that roster (`MigrationMemberApproval`), and
  *   the cutover stops and asks again if the roster, an identity or a role
- *   changed since.
+ *   changed since. Every member counts: one listed for the migration only
+ *   with an invitation to (or a statement naming) another project is not
+ *   ready, and is refused again just before the Add.
+ * - **Resuming a staging.** The approval covers the whole staged roster,
+ *   members already re-added included: a staging resumed after a reload
+ *   (or one an older app version staged, which re-added members without
+ *   asking) goes on to the cutover only with the owner's approval of every
+ *   member, given now or recorded by this browser for that same staging
+ *   (`MigrationApprovalReceipt`). A member re-added without a signed
+ *   acceptance the owner can review drops the staging, which starts again.
  * - **Re-add.** Once the staging is complete, just before the cutover, the
  *   owner adds each member by Welcome with their current role, one Add
  *   Commit per member (`addInvitedMember`), under the migration lease, each
@@ -80,11 +89,15 @@ export interface MigrationMember {
   readonly state: MigrationMemberState;
   readonly invitation: E2eeInvitationRecord | null;
   /**
-   * Once `ready`: the verified contact whose device signed the acceptance,
-   * with the contact code Contacts shows. What the owner approves.
+   * Once `ready` (or `readded`, when the acceptance still verifies): the
+   * verified contact whose device signed the acceptance, with the contact
+   * code Contacts shows. What the owner approves.
    */
   readonly acceptor?: InvitationAcceptor | null;
-  /** Once `ready`: the role the re-add statement this account signed names. */
+  /**
+   * Once `ready` (or `readded`, likewise): the role the re-add statement
+   * this account signed names.
+   */
   readonly signedRole?: 'editor' | 'viewer' | null;
 }
 
@@ -100,6 +113,71 @@ export interface MigrationMemberApproval {
 
 /** Client-side: the owner has not approved the ready roster as it is now. */
 export const MIGRATION_APPROVAL_CODE = 'E2EE_MIGRATION_MEMBERS_UNAPPROVED';
+
+/**
+ * The owner's approval of a staging's roster, as this browser recorded it
+ * when the staging went ahead with it: bound to the project and the
+ * staging (its `startedAt`), with each approved account, identity and
+ * signed role. Kept on this device only (the server never sees or supplies
+ * it), so a reload resumes that staging without asking again, while a
+ * staging this browser did not approve (another, or an older app
+ * version's) asks.
+ */
+export interface MigrationApprovalReceipt {
+  readonly projectId: string;
+  readonly stagingStartedAt: string;
+  readonly members: readonly MigrationMemberApproval[];
+}
+
+export interface MigrationApprovalReceipts {
+  get(projectId: string): MigrationApprovalReceipt | null;
+  set(receipt: MigrationApprovalReceipt): void;
+  delete(projectId: string): void;
+}
+
+export function memoryApprovalReceipts(): MigrationApprovalReceipts {
+  const receipts = new Map<string, MigrationApprovalReceipt>();
+  return {
+    get: (projectId) => receipts.get(projectId) ?? null,
+    set: (receipt) => void receipts.set(receipt.projectId, receipt),
+    delete: (projectId) => void receipts.delete(projectId)
+  };
+}
+
+const HEX_HASH = /^[0-9a-f]{64}$/;
+
+/** A stored receipt, or null when it is not one (never trusted half-read). */
+export function parseApprovalReceipt(
+  value: unknown,
+  projectId: string
+): MigrationApprovalReceipt | null {
+  if (!value || typeof value !== 'object') return null;
+  const receipt = value as Record<string, unknown>;
+  if (
+    receipt.projectId !== projectId ||
+    typeof receipt.stagingStartedAt !== 'string' ||
+    !receipt.stagingStartedAt ||
+    !Array.isArray(receipt.members)
+  ) {
+    return null;
+  }
+  const members: MigrationMemberApproval[] = [];
+  for (const entry of receipt.members as unknown[]) {
+    if (!entry || typeof entry !== 'object') return null;
+    const { userId, role, identityKeyHash } = entry as Record<string, unknown>;
+    if (
+      typeof userId !== 'string' ||
+      !userId ||
+      (role !== 'editor' && role !== 'viewer') ||
+      typeof identityKeyHash !== 'string' ||
+      !HEX_HASH.test(identityKeyHash)
+    ) {
+      return null;
+    }
+    members.push({ userId, role, identityKeyHash });
+  }
+  return { projectId, stagingStartedAt: receipt.stagingStartedAt, members };
+}
 
 /** What a shared project's migration carries over, or offers to reissue. */
 export interface MigrationSharing {
@@ -161,12 +239,19 @@ export class MigrationApprovalNeededError extends Error {
   }
 }
 
-/** The approval of `members` as shown: every ready member, by code. */
+/** The members of the roster the owner approves: ready or re-added. */
+const inRoster = (member: MigrationMember) =>
+  member.state === 'ready' || member.state === 'readded';
+
+/**
+ * The approval of `members` as shown: every ready or re-added member, by
+ * code.
+ */
 export function approvalOf(
   members: readonly MigrationMember[]
 ): MigrationMemberApproval[] {
   return members.flatMap((member) =>
-    member.state === 'ready' && member.acceptor && member.signedRole
+    inRoster(member) && member.acceptor && member.signedRole
       ? [
           {
             userId: member.userId,
@@ -179,51 +264,76 @@ export function approvalOf(
 }
 
 /**
- * The owner's approval of each member still to be re-added, by account;
- * throws {@link MigrationApprovalNeededError} unless `approved` is exactly
- * the ready roster as it stands: the same accounts, each with the identity
- * and signed role approved (members already re-added are left out).
+ * Members re-added to the staged group whom the owner cannot review: no
+ * acceptance by a verified contact that still verifies (an older app
+ * version re-added them without one). Their staging is dropped and staged
+ * again, so they are added only once approved.
+ */
+export function unconfirmedReadds(
+  sharing: MigrationSharing
+): MigrationMember[] {
+  return sharing.members.filter(
+    (member) =>
+      member.state === 'readded' && (!member.acceptor || !member.signedRole)
+  );
+}
+
+/**
+ * The owner's approval of each member of the staged roster (ready, or
+ * already re-added), by account; throws
+ * {@link MigrationApprovalNeededError} unless `approved` (the owner's,
+ * given now) or else `receipt` (what this browser recorded for this
+ * staging) is exactly the roster as it stands: the same accounts, each
+ * with the identity and signed role approved.
  */
 export function requireMembersApproved(
   sharing: MigrationSharing,
-  approved: readonly MigrationMemberApproval[] | undefined
+  approved: readonly MigrationMemberApproval[] | undefined,
+  receipt: readonly MigrationMemberApproval[] | null = null
 ): Map<string, MigrationMemberApproval> {
-  const ready = sharing.members.filter((member) => member.state === 'ready');
-  const byUser = new Map<string, MigrationMemberApproval>();
-  if (!ready.length) return byUser;
-  if (!approved) throw new MigrationApprovalNeededError(false);
-  const readded = new Set(
-    sharing.members
-      .filter((member) => member.state === 'readded')
-      .map((member) => member.userId)
-  );
-  for (const entry of approved) {
-    if (readded.has(entry.userId)) continue;
-    if (byUser.has(entry.userId)) throw new MigrationApprovalNeededError(true);
-    byUser.set(entry.userId, entry);
-  }
-  if (byUser.size !== ready.length)
-    throw new MigrationApprovalNeededError(true);
-  for (const member of ready) {
-    const entry = byUser.get(member.userId);
-    if (
-      !entry ||
-      entry.role !== member.role ||
-      entry.role !== member.signedRole ||
-      entry.identityKeyHash !== member.acceptor?.identityKeyHash
-    ) {
-      throw new MigrationApprovalNeededError(true);
+  const roster = sharing.members.filter(inRoster);
+  if (!roster.length) return new Map();
+  const matching = (entries: readonly MigrationMemberApproval[]) => {
+    const byUser = new Map<string, MigrationMemberApproval>();
+    for (const entry of entries) {
+      if (byUser.has(entry.userId)) return null;
+      byUser.set(entry.userId, entry);
     }
-  }
+    if (byUser.size !== roster.length) return null;
+    for (const member of roster) {
+      const entry = byUser.get(member.userId);
+      if (
+        !entry ||
+        !member.acceptor ||
+        !member.signedRole ||
+        entry.role !== member.role ||
+        entry.role !== member.signedRole ||
+        entry.identityKeyHash !== member.acceptor.identityKeyHash
+      ) {
+        return null;
+      }
+    }
+    return byUser;
+  };
+  const given = approved ?? receipt;
+  if (!given) throw new MigrationApprovalNeededError(false);
+  const byUser = matching(given);
+  if (!byUser) throw new MigrationApprovalNeededError(true);
   return byUser;
 }
 
+/**
+ * The member's live re-add invitation to `projectId`: one the server
+ * lists for another project is not theirs to be added by here.
+ */
 const usable = (
+  projectId: string,
   record: E2eeMigrationMemberRecord,
   at: number
 ): E2eeInvitationRecord | null => {
   const invitation = record.invitation;
   return invitation &&
+    invitation.projectId === projectId &&
     !invitation.completedAt &&
     !invitation.revokedAt &&
     invitation.expiresAt > at &&
@@ -233,14 +343,55 @@ const usable = (
     : null;
 };
 
+/**
+ * Who a re-added member was added as: the verified contact whose device
+ * signed the acceptance of the re-add statement this account signed for
+ * `projectId` with their role, checked as of the Add (when it completed).
+ * Nothing when it does not verify (an older app version's re-add, which
+ * had no acceptance).
+ */
+async function readdedAs(
+  ctx: InvitationContext,
+  projectId: string,
+  record: E2eeMigrationMemberRecord
+): Promise<Pick<MigrationMember, 'acceptor' | 'signedRole'>> {
+  const invitation = record.invitation;
+  if (
+    !invitation?.completedAt ||
+    invitation.projectId !== projectId ||
+    invitation.acceptedByUserId !== record.userId
+  ) {
+    return {};
+  }
+  const completed = Date.parse(invitation.completedAt);
+  const { statement, acceptor } = await reviewAcceptance(
+    ctx,
+    invitation,
+    Number.isFinite(completed) ? { at: completed } : {}
+  ).catch(() => ({ statement: null, acceptor: null }));
+  if (
+    !statement ||
+    statement.projectId !== projectId ||
+    statement.role !== record.role ||
+    !acceptor ||
+    acceptor.userId !== record.userId
+  ) {
+    return {};
+  }
+  return { acceptor, signedRole: statement.role };
+}
+
 async function stateOf(
   ctx: InvitationContext,
+  projectId: string,
   record: E2eeMigrationMemberRecord,
   at: number
 ): Promise<Pick<MigrationMember, 'state' | 'acceptor' | 'signedRole'>> {
-  if (record.readded) return { state: 'readded' };
+  if (record.readded) {
+    return { state: 'readded', ...(await readdedAs(ctx, projectId, record)) };
+  }
   if (!record.hasKeys) return { state: 'needs-encryption' };
-  const invitation = usable(record, at);
+  const invitation = usable(projectId, record, at);
   if (!invitation) return { state: 'needs-invitation' };
   if (
     (invitation.keyPackages ?? 0) + (invitation.claimedKeyPackages ?? 0) ===
@@ -255,7 +406,11 @@ async function stateOf(
   // Ready only with what the owner approves: the verified contact whose
   // device signed the acceptance, and the role this account signed.
   const { statement, acceptor } = await reviewAcceptance(ctx, invitation);
-  if (!statement || statement.role !== record.role) {
+  if (
+    !statement ||
+    statement.projectId !== projectId ||
+    statement.role !== record.role
+  ) {
     return { state: 'needs-invitation' };
   }
   if (!acceptor || acceptor.userId !== record.userId) {
@@ -266,6 +421,7 @@ async function stateOf(
 
 async function describeSharing(
   ctx: InvitationContext,
+  projectId: string,
   answer: E2eeMigrationMembersResponse
 ): Promise<MigrationSharing> {
   const at = (ctx.now ?? Date.now)();
@@ -275,7 +431,7 @@ async function describeSharing(
       userId: record.userId,
       email: record.email,
       role: record.role,
-      ...(await stateOf(ctx, record, at)),
+      ...(await stateOf(ctx, projectId, record, at)),
       invitation: record.invitation
     });
   }
@@ -303,7 +459,7 @@ export async function prepareMigrationMembers(
   let invited = false;
   for (const record of answer.members) {
     if (record.readded || !record.hasKeys || !record.email) continue;
-    if (usable(record, at)) continue;
+    if (usable(projectId, record, at)) continue;
     const signed = await signInvitationStatement(
       ctx,
       projectId,
@@ -322,7 +478,7 @@ export async function prepareMigrationMembers(
     invited = true;
   }
   if (invited) answer = await migrations.members(projectId, leaseId);
-  return describeSharing(ctx, answer);
+  return describeSharing(ctx, projectId, answer);
 }
 
 /** The members still to be re-added; throws unless every one is ready. */
@@ -338,35 +494,42 @@ export function requireMembersReady(sharing: MigrationSharing): void {
  * current role and a Welcome (slice 5-3b's `addInvitedMember`, which checks
  * the statement, that the member is a verified contact and each claimed
  * KeyPackage), confirmed as exactly the identity the owner approved
- * (`approved`). `ctx` writes through the staging's leased clients. Throws
+ * (`approved`, or this staging's `receipt`), the whole staged roster
+ * included. `ctx` writes through the staging's leased clients. Throws
  * {@link MigrationMembersNotReadyError} when a member is no longer ready,
  * and {@link MigrationApprovalNeededError} when the roster, an identity or
- * a role is not the one approved.
+ * a role is not the one approved. Each Add is to `projectId` only: an
+ * invitation to another project is refused.
  */
 export async function readdMigrationMembers(
   ctx: InvitationContext,
   migrations: ProjectMigrationsApi,
   projectId: string,
   leaseId: string,
-  approved: readonly MigrationMemberApproval[] | undefined
+  approved: readonly MigrationMemberApproval[] | undefined,
+  receipt: readonly MigrationMemberApproval[] | null = null
 ): Promise<MigrationSharing> {
   const current = await describeSharing(
     ctx,
+    projectId,
     await migrations.members(projectId, leaseId)
   );
   requireMembersReady(current);
-  const approvals = requireMembersApproved(current, approved);
+  const approvals = requireMembersApproved(current, approved, receipt);
   for (const member of current.members) {
     if (member.state !== 'ready') continue;
     // The owner approved this member by code and role: the Add confirms
     // exactly that identity, so someone this browser once saw removed is
-    // added back too, and nobody the owner did not approve is.
+    // added back too, and nobody the owner did not approve is. It adds to
+    // this project only, whatever the server's record names.
     await addInvitedMember(ctx, member.invitation!, {
-      confirmedIdentity: approvals.get(member.userId)!.identityKeyHash
+      confirmedIdentity: approvals.get(member.userId)!.identityKeyHash,
+      projectId
     });
   }
   const after = await describeSharing(
     ctx,
+    projectId,
     await migrations.members(projectId, leaseId)
   );
   if (after.members.some((member) => member.state !== 'readded')) {
