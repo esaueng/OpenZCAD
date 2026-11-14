@@ -670,19 +670,35 @@ async function storeBody(
     }
     return { key: null, inline: toBase64Url(version.envelope) };
   }
-  // Opaque: the project id the row already names and the version hash.
-  const key = `e2ee/${projectId}/v/${version.hash}`;
-  await ctx.bucket.put(key, version.envelope);
+  // Opaque: the project id the row already names, the version hash, and a
+  // nonce of this write attempt. Every attempt stores its own object, so no
+  // other attempt's rollback (which deletes only its own key) can remove the
+  // body a committed row names.
+  const key = `e2ee/${projectId}/v/${version.hash}.${crypto.randomUUID()}`;
+  const bucket = ctx.bucket;
+  try {
+    await bucket.put(key, version.envelope);
+    // No row may name a body R2 does not hold: checked before the commit,
+    // so a lost write fails the save retryably, never after it committed.
+    const stored = bucket.head ? await bucket.head(key) : await bucket.get(key);
+    if (!stored) throw new Error('The stored body is missing.');
+  } catch {
+    await bucket.delete(key).catch(() => undefined);
+    refuse(
+      503,
+      'PROJECT_STORAGE_UNAVAILABLE',
+      'The account copy of this project could not be stored right now. Try again.'
+    );
+  }
   return { key, inline: null };
 }
 
 /**
- * After a refused write: drop an R2 body no row references. A body's key is
- * its version hash, which an identical retry writes again, so it is deleted
- * only under a migration 0050 claim taken while no version row names it
- * (migration 0051): while the claim holds, the retry's version row is
- * refused; a retry whose bytes this removed before its row landed stores
- * them again after its commit (`ensureStoredBody`).
+ * After a refused write: drop an R2 body no row references. Bodies written
+ * since migration 0051 carry a per-attempt nonce, so only this attempt ever
+ * writes this key; bodies of older rows were keyed by version hash alone, so
+ * every body delete still goes through a migration 0050 claim taken while no
+ * version row names the key.
  */
 async function discardBody(ctx: Context, body: StoredBody): Promise<void> {
   if (!body.key || !ctx.bucket) return;
@@ -711,34 +727,6 @@ async function deleteBodies(
   } finally {
     await claim.release();
   }
-}
-
-/**
- * After a version's row committed (or a retry found it committed): stores
- * its body again if the object is gone. The body reaches R2 before its
- * row, so a concurrent rollback of an identical attempt may have deleted
- * it under a claim released before the row landed; once the row exists,
- * no claim on the key can be taken.
- */
-async function ensureStoredBody(
-  ctx: Context,
-  projectId: string,
-  version: CheckedVersion
-): Promise<void> {
-  const bucket = ctx.bucket;
-  if (!bucket) return;
-  const row = await ctx.db
-    .prepare(
-      `SELECT envelope_key FROM e2ee_project_versions
-       WHERE project_id = ? AND version_hash = ? AND envelope_key IS NOT NULL`
-    )
-    .bind(projectId, version.hash)
-    .first<{ envelope_key: string }>();
-  if (!row) return;
-  const present = bucket.head
-    ? await bucket.head(row.envelope_key)
-    : await bucket.get(row.envelope_key);
-  if (!present) await bucket.put(row.envelope_key, version.envelope);
 }
 
 function insertVersion(
@@ -1223,7 +1211,6 @@ async function writeVersion(
       // The row no longer names it; an orphan costs storage only.
     }
   }
-  await ensureStoredBody(ctx, projectId, version);
   await retain(ctx, projectId);
   return { version, updatedAt: now };
 }
@@ -1472,7 +1459,6 @@ async function writeStagedVersion(
       // The row no longer names it; an orphan costs storage only.
     }
   }
-  await ensureStoredBody(ctx, projectId, version);
   await retain(ctx, projectId);
   return { version, updatedAt: now };
 }
@@ -1536,9 +1522,10 @@ async function saveRevision(
  * acknowledgement was lost is answered as created, never refused.
  */
 /**
- * Once a create's rows are committed: its body and any copied objects are
- * in R2, stored again if a concurrent attempt's rollback removed them
- * before the rows landed (migrations 0050 and 0051).
+ * Once a create's rows are committed: its copied objects are in R2, copied
+ * again if a concurrent attempt's rollback removed them before the rows
+ * landed (migration 0050). Its body needs no such repair: every attempt
+ * stores its own, verified before the commit.
  */
 async function finishCreated(
   ctx: Context,
@@ -1555,7 +1542,6 @@ async function finishCreated(
       copyFrom.blobIds
     );
   }
-  await ensureStoredBody(ctx, projectId, version);
 }
 
 async function storedCreate(

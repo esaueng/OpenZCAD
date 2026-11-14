@@ -120,7 +120,8 @@ def required_objects(db):
     # deleting, never objects a restore needs.
     # 0051 adds only an index and an insert guard on e2ee_project_versions:
     # no stored objects or keys.
-    if max(int(name[:4]) for name in migrations) > 51:
+    # 0052 adds project_instances: a random id per project row, no objects.
+    if max(int(name[:4]) for name in migrations) > 52:
         raise SnapshotError('Review new migrations before using this snapshot tool.')
     version = max(int(name[:4]) for name in migrations)
     reviewed = sorted(path.name for path in

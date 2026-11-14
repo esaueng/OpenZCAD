@@ -1439,7 +1439,8 @@ describe('writes', () => {
       projectId
     );
     expect(keys.at(-1)!.envelope_key).toMatch(
-      new RegExp(`^e2ee/${projectId}/v/[0-9a-f]{64}$`)
+      // The version hash, then this write attempt's nonce (migration 0051).
+      new RegExp(`^e2ee/${projectId}/v/[0-9a-f]{64}\\.[0-9a-f-]{36}$`)
     );
     const key = keys.at(-1)!.envelope_key!;
     expect(srv.bucket.objects.has(key)).toBe(true);
@@ -2105,13 +2106,22 @@ describe('version bodies under reused keys (migration 0051)', () => {
       projectId,
       version: v1.version + 1,
       hand,
-      key: `e2ee/${projectId}/v/${hand.hash}`
+      prefix: `e2ee/${projectId}/v/${hand.hash}`
     };
   }
 
+  const bodyKeyAt = (srv: Server, projectId: string, version: number) =>
+    rows<{ envelope_key: string | null }>(
+      srv,
+      `SELECT envelope_key FROM e2ee_project_versions
+       WHERE project_id = ? AND document_version = ?`,
+      projectId,
+      version
+    )[0]?.envelope_key ?? null;
+
   it('never lets a failed save’s rollback delete the body an identical retry committed', async () => {
     const srv = server();
-    const { projectId, version, hand, key } = await largeNext(srv);
+    const { projectId, version, hand, prefix } = await largeNext(srv);
     const db = srv.env.DB as D1Database;
     const batch = db.batch.bind(db);
     let fail = true;
@@ -2137,8 +2147,9 @@ describe('version bodies under reused keys (migration 0051)', () => {
     let release!: () => void;
     const atDelete = new Promise<void>((resolve) => (entered = resolve));
     const released = new Promise<void>((resolve) => (release = resolve));
+    let staleKey = '';
     deleteMock.mockImplementationOnce(async (deleted: string) => {
-      expect(deleted).toBe(key);
+      staleKey = deleted;
       entered();
       await released;
       return remove(deleted);
@@ -2148,51 +2159,162 @@ describe('version bodies under reused keys (migration 0051)', () => {
     const failed = putVersion(srv, projectId, hand);
     await atDelete;
     db.batch = batch;
-    // An identical retry while A's claim holds is refused, never left with
-    // a row naming bytes A is about to remove.
-    const refused = await putVersion(srv, projectId, hand);
-    expect(refused.status).toBe(503);
-    expect(await refused.json()).toMatchObject({
-      code: 'STORAGE_CLEANUP_BUSY'
-    });
+    expect(staleKey.startsWith(`${prefix}.`)).toBe(true);
+    // An identical retry stores its own body under its own key and commits.
+    expect((await putVersion(srv, projectId, hand)).status).toBe(200);
+    const committed = bodyKeyAt(srv, projectId, version)!;
+    expect(committed.startsWith(`${prefix}.`)).toBe(true);
+    expect(committed).not.toBe(staleKey);
+    // A's delayed rollback removes only A's own object.
     release();
     await failed;
-    // Once A is done, the retry lands, and its body stays.
-    expect((await putVersion(srv, projectId, hand)).status).toBe(200);
-    expect(
-      rows(
-        srv,
-        `SELECT envelope_key FROM e2ee_project_versions
-         WHERE project_id = ? AND document_version = ?`,
-        projectId,
-        version
-      )
-    ).toEqual([{ envelope_key: key }]);
-    expect(srv.bucket.objects.has(key)).toBe(true);
+    expect(srv.bucket.objects.has(staleKey)).toBe(false);
+    expect(new Uint8Array(srv.bucket.objects.get(committed)!)).toEqual(
+      new Uint8Array(hand.envelope)
+    );
     expect(rows(srv, 'SELECT object_key FROM r2_key_tombstones')).toEqual([]);
   });
 
-  it('stores a body again after the commit when a rollback removed it before the row landed', async () => {
+  it('commits no save state whose body is missing: a lost put fails retryably, and the retry stores and keeps it', async () => {
     const srv = server();
-    const { projectId, hand, key } = await largeNext(srv);
+    const { projectId, version, hand, prefix } = await largeNext(srv);
     const putMock = srv.bucket.put as unknown as Mock<
       (key: string, body: ArrayBuffer | Uint8Array) => Promise<void>
     >;
     const put = putMock.getMockImplementation()!;
-    let dropped = false;
+    let writes = 0;
     putMock.mockImplementation(async (written, body) => {
-      // A concurrent identical attempt's rollback removed the bytes between
-      // this save's put and its row.
-      if (written === key && !dropped) {
-        dropped = true;
-        return;
+      if (written.startsWith(`${prefix}.`)) {
+        writes++;
+        // The first put is lost (as if removed before the row landed)...
+        if (writes === 1) return;
+        // ...and the next one fails outright.
+        if (writes === 2) throw new Error('transient R2 outage');
       }
       return put(written, body);
     });
-    expect((await putVersion(srv, projectId, hand)).status).toBe(200);
-    expect(dropped).toBe(true);
-    expect(new Uint8Array(srv.bucket.objects.get(key)!)).toEqual(
+    const metadata = {
+      version: { ...hand.upload, revisionId: 'saved-before-change' }
+    };
+    const call = () =>
+      srv.call('POST', `/api/e2ee/projects/${projectId}/revisions`, {
+        raw: encodeE2eeFrame(metadata, hand.envelope),
+        contentType: FRAME
+      });
+    for (const attempt of [await call(), await call()]) {
+      expect(attempt.status).toBe(503);
+      expect(await attempt.json()).toMatchObject({
+        code: 'PROJECT_STORAGE_UNAVAILABLE'
+      });
+    }
+    // Nothing committed: the head did not move, so the same save can retry.
+    expect(bodyKeyAt(srv, projectId, version)).toBeNull();
+    expect(
+      rows(
+        srv,
+        'SELECT revision_id FROM e2ee_project_revisions WHERE project_id = ?',
+        projectId
+      )
+    ).toEqual([]);
+    expect((await call()).status).toBe(201);
+    const committed = bodyKeyAt(srv, projectId, version)!;
+    expect(new Uint8Array(srv.bucket.objects.get(committed)!)).toEqual(
       new Uint8Array(hand.envelope)
     );
+    expect(
+      rows(
+        srv,
+        'SELECT revision_id FROM e2ee_project_revisions WHERE project_id = ?',
+        projectId
+      )
+    ).toEqual([{ revision_id: 'saved-before-change' }]);
+    expect(
+      (await srv.call('GET', `/api/e2ee/projects/${projectId}/document`)).status
+    ).toBe(200);
+  });
+
+  it('lets the real client retry a named save whose body put was lost, and opens it afterwards', async () => {
+    const srv = server();
+    const laptop = device(srv, owner, 'owner_laptop');
+    const { document: v1 } = await createEncrypted(laptop);
+    const projectId = v1.projectId;
+    // A storable document large enough that its body goes to R2.
+    const {
+      addPrimitiveFeature,
+      assertStorableDocument,
+      withoutDerivedProjection
+    } = await import('@openzcad/document-core');
+    let big = structuredClone(v1);
+    for (let index = 0; index < 4000; index++) {
+      const one = addPrimitiveFeature(v1, {
+        name: `Block ${index}`,
+        primitiveKind: 'box',
+        dimensions: {
+          width: Math.random() * 100 + 1,
+          height: Math.random() * 100 + 1,
+          depth: Math.random() * 100 + 1
+        }
+      });
+      for (const [id, node] of Object.entries(one.nodes)) {
+        if (!v1.nodes[id]) big.nodes[id] = node;
+      }
+      big.featureOrder.push(...one.featureOrder);
+      big.bodyOrder.push(...one.bodyOrder);
+      (
+        big.nodes[big.activePartId] as unknown as { childIds: string[] }
+      ).childIds.push(
+        ...(
+          one.nodes[one.activePartId] as unknown as { childIds: string[] }
+        ).childIds.filter((id) => !v1.nodes[id])
+      );
+    }
+    big.version = v1.version + 1;
+    big = withoutDerivedProjection(big);
+    assertStorableDocument(big);
+    const putMock = srv.bucket.put as unknown as Mock<
+      (key: string, body: ArrayBuffer | Uint8Array) => Promise<void>
+    >;
+    const put = putMock.getMockImplementation()!;
+    let writes = 0;
+    putMock.mockImplementation(async (written, body) => {
+      if (written.includes('/v/')) {
+        writes++;
+        if (writes === 1) return;
+        if (writes === 2) throw new Error('transient R2 outage');
+      }
+      return put(written, body);
+    });
+    const input = {
+      projectId,
+      expectedVersion: v1.version,
+      reason: 'Before removing blocks',
+      document: big
+    };
+    const outcomes: (number | null)[] = [];
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await laptop.store.saveRevision(input);
+        outcomes.push(null);
+        break;
+      } catch (error) {
+        outcomes.push((error as { status?: number }).status ?? -1);
+      }
+    }
+    // Refused retryably until a body is stored, then saved.
+    expect(outcomes.at(-1)).toBeNull();
+    expect(outcomes.slice(0, -1).every((status) => status === 503)).toBe(true);
+    expect(writes).toBeGreaterThanOrEqual(2);
+    const desktop = reload(srv, device(srv, owner, 'owner_desktop'));
+    expect((await desktop.store.loadProject(projectId)).version).toBe(
+      v1.version + 1
+    );
+    const key = rows<{ envelope_key: string | null }>(
+      srv,
+      `SELECT envelope_key FROM e2ee_project_versions
+       WHERE project_id = ? ORDER BY document_version DESC LIMIT 1`,
+      projectId
+    )[0]!.envelope_key;
+    expect(key).not.toBeNull();
+    expect(srv.bucket.objects.has(key!)).toBe(true);
   });
 });

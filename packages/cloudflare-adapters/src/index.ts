@@ -569,6 +569,30 @@ export function cachedSchemaProbe(
   };
 }
 
+/** Whether migration 0052's project instances are installed. */
+export const isProjectInstanceReady = cachedSchemaProbe(
+  `SELECT COUNT(*) AS ready FROM sqlite_master
+   WHERE type = 'table' AND name = 'project_instances'`,
+  (row) => row?.ready === 1
+);
+
+/**
+ * The instance (migration 0052) of the project now stored under `projectId`:
+ * which generation of a client-minted id it is. Null when the project is
+ * gone or the migration is not installed.
+ */
+export async function projectInstanceId(
+  db: D1Database,
+  projectId: string
+): Promise<string | null> {
+  if (!(await isProjectInstanceReady(db))) return null;
+  const row = await db
+    .prepare('SELECT instance_id FROM project_instances WHERE project_id = ?')
+    .bind(projectId)
+    .first<{ instance_id: string }>();
+  return row?.instance_id ?? null;
+}
+
 /** Whether migration 0050's R2 key tombstones are installed. */
 export const isR2KeyTombstoneReady = cachedSchemaProbe(
   `SELECT COUNT(*) AS ready FROM sqlite_master
@@ -1421,6 +1445,17 @@ export { projectCopyDocumentDigest };
 const OBJECT_PRUNE_LIMIT = 32;
 /** The smaller bound for the prune that runs before a save is measured. */
 const PRE_SAVE_OBJECT_PRUNE_LIMIT = 8;
+
+/**
+ * A project to destroy: its id and the instance (migration 0052) the
+ * caller's owner check or listing saw (`''` for a project stored before
+ * that migration). Without `instance` the caller already holds the
+ * project's cleanup claim, which names its generation.
+ */
+interface DestroyTarget {
+  id: string;
+  instance?: string;
+}
 
 export class D1R2PersistenceService implements PersistenceService {
   constructor(private readonly env: CloudflareEnv) {}
@@ -2940,7 +2975,8 @@ export class D1R2PersistenceService implements PersistenceService {
       throw conflict;
     }
     await afterClaim?.();
-    await this.destroyProjects([document.projectId]);
+    // The claim just taken names this very project: destroy its generation.
+    await this.destroyProjects([{ id: document.projectId }]);
   }
 
   private async recordVerifiedCopiedImportArchive(
@@ -3275,21 +3311,50 @@ export class D1R2PersistenceService implements PersistenceService {
       return getInMemoryPersistence().deleteProject(userId, projectId);
     }
     await this.assertProjectOwner(userId, projectId);
-    await this.destroyProjects([projectId]);
+    // The instance (migration 0052) this owner check saw: only that very
+    // project is destroyed, never one created again under its id meanwhile.
+    const [target] = await this.ownedDestroyTargets(
+      `SELECT p.id, ${await this.instanceColumn()} AS instance_id
+       FROM projects p WHERE p.id = ? AND p.user_id = ?`,
+      [projectId, userId]
+    );
+    if (!target) return;
+    await this.destroyProjects([target]);
+  }
+
+  /** `instance_id` of `projects p`, or NULL before migration 0052. */
+  private async instanceColumn(): Promise<string> {
+    return (await isProjectInstanceReady(this.env.DB))
+      ? `(SELECT i.instance_id FROM project_instances i WHERE i.project_id = p.id)`
+      : 'NULL';
+  }
+
+  /** Projects to destroy, each with the instance its listing saw. */
+  private async ownedDestroyTargets(
+    sql: string,
+    binds: readonly unknown[]
+  ): Promise<DestroyTarget[]> {
+    const rows = await this.env
+      .DB!.prepare(sql)
+      .bind(...binds)
+      .all<{ id: string; instance_id: string | null }>();
+    return (rows.results ?? []).map((row) => ({
+      id: row.id,
+      instance: row.instance_id ?? ''
+    }));
   }
 
   async deleteOwnedProjects(userId: UserId): Promise<ProjectId[]> {
     if (!this.env.DB) {
       return getInMemoryPersistence().deleteOwnedProjects(userId);
     }
-    const rows = await this.env.DB.prepare(
-      `SELECT id FROM projects WHERE user_id = ? ORDER BY id`
-    )
-      .bind(userId)
-      .all<{ id: string }>();
-    const projectIds = (rows.results ?? []).map((row) => row.id);
-    await this.destroyProjectsInBatches(projectIds);
-    return projectIds.map(toProjectId);
+    const targets = await this.ownedDestroyTargets(
+      `SELECT p.id, ${await this.instanceColumn()} AS instance_id
+       FROM projects p WHERE p.user_id = ? ORDER BY p.id`,
+      [userId]
+    );
+    await this.destroyProjectsInBatches(targets);
+    return targets.map((target) => toProjectId(target.id));
   }
 
   async purgeExpiredProjects(userId: UserId): Promise<ProjectId[]> {
@@ -3297,17 +3362,17 @@ export class D1R2PersistenceService implements PersistenceService {
       return getInMemoryPersistence().purgeExpiredProjects(userId);
     }
     const cutoff = new Date(Date.now() - TRASH_RETENTION_MS).toISOString();
-    const expired = await this.env.DB.prepare(
-      `SELECT id FROM projects WHERE user_id = ? AND status = 'deleted' AND deleted_at IS NOT NULL AND deleted_at <= ? LIMIT 100`
-    )
-      .bind(userId, cutoff)
-      .all<{ id: string }>();
-    const projectIds = (expired.results ?? []).map((row) => row.id);
+    const targets = await this.ownedDestroyTargets(
+      `SELECT p.id, ${await this.instanceColumn()} AS instance_id
+       FROM projects p WHERE p.user_id = ? AND p.status = 'deleted'
+         AND p.deleted_at IS NOT NULL AND p.deleted_at <= ? LIMIT 100`,
+      [userId, cutoff]
+    );
     // Up to 100 ids, so batched like account deletion: in one call, 51 expired
     // projects bound 102 parameters, D1 refused the statement, and because the
     // same rows were selected again next time the purge could never succeed.
-    await this.destroyProjectsInBatches(projectIds);
-    return projectIds.map(toProjectId);
+    await this.destroyProjectsInBatches(targets);
+    return targets.map((target) => toProjectId(target.id));
   }
 
   async loadProject(
@@ -7943,14 +8008,16 @@ export class D1R2PersistenceService implements PersistenceService {
   }
 
   /** Keeps statement sizes, bound parameters and object-deletion fanout small. */
-  private async destroyProjectsInBatches(projectIds: string[]): Promise<void> {
+  private async destroyProjectsInBatches(
+    targets: DestroyTarget[]
+  ): Promise<void> {
     for (
       let start = 0;
-      start < projectIds.length;
+      start < targets.length;
       start += PROJECT_DESTROY_BATCH_SIZE
     ) {
       await this.destroyProjects(
-        projectIds.slice(start, start + PROJECT_DESTROY_BATCH_SIZE)
+        targets.slice(start, start + PROJECT_DESTROY_BATCH_SIZE)
       );
     }
   }
@@ -7971,43 +8038,76 @@ export class D1R2PersistenceService implements PersistenceService {
    * Takes at most {@link PROJECT_DESTROY_BATCH_SIZE} ids; larger sets go
    * through {@link destroyProjectsInBatches}.
    */
-  private async destroyProjects(requestedIds: string[]): Promise<void> {
-    if (requestedIds.length === 0) {
+  private async destroyProjects(targets: DestroyTarget[]): Promise<void> {
+    if (targets.length === 0) {
       return;
     }
-    let projectIds = requestedIds;
+    let projectIds = targets.map((target) => target.id);
+    const instancesReady = await isProjectInstanceReady(this.env.DB);
+    // Each target as [id, instance]: the instance (migration 0052) its
+    // caller saw with its owner check or listing, or null for a caller that
+    // already holds the project's cleanup claim.
+    const requested = JSON.stringify(
+      targets.map((target) => [
+        target.id,
+        instancesReady ? (target.instance ?? null) : null
+      ])
+    );
+    const sameInstance = instancesReady
+      ? `(json_extract(g.value, '$[1]') IS NULL
+          OR COALESCE((SELECT i.instance_id FROM project_instances i
+                       WHERE i.project_id = p.id), '')
+             = json_extract(g.value, '$[1]'))`
+      : '1';
     // The existing durable cleanup claim fences restoration and writers.
     // Shelf status alone is reversible while object cleanup is in flight.
     // Its `claimed_at` names the generation of the project being destroyed.
-    let generations: { projectId: string; claimedAt: string }[] | null = null;
+    // It is taken, and read back, only for the very instance requested: a
+    // project created again under the id after another deletion finished is
+    // never claimed here.
+    let generations:
+      { projectId: string; claimedAt: string; instance: string }[] | null =
+      null;
     if (await isE2eeShareLinkStorageReady(this.env.DB)) {
-      const placeholders = projectIds.map(() => '?').join(', ');
       await this.env
         .DB!.prepare(
           `INSERT OR IGNORE INTO project_copy_cleanup_claims (project_id, claimed_at)
-           SELECT id, ? FROM projects WHERE id IN (${placeholders})`
+           SELECT p.id, ? FROM json_each(?) g
+           JOIN projects p ON p.id = json_extract(g.value, '$[0]')
+           WHERE ${sameInstance}`
         )
-        .bind(new Date().toISOString(), ...projectIds)
+        .bind(new Date().toISOString(), requested)
         .run();
       const claimed = await this.env
         .DB!.prepare(
-          `SELECT c.project_id, c.claimed_at
-           FROM project_copy_cleanup_claims c
-           JOIN projects p ON p.id = c.project_id
-           WHERE c.project_id IN (${placeholders})
+          `SELECT c.project_id, c.claimed_at,
+                  ${
+                    instancesReady
+                      ? `COALESCE((SELECT i.instance_id FROM project_instances i
+                                   WHERE i.project_id = p.id), '')`
+                      : `''`
+                  } AS instance_id
+           FROM json_each(?) g
+           JOIN projects p ON p.id = json_extract(g.value, '$[0]')
+           JOIN project_copy_cleanup_claims c ON c.project_id = p.id
+           WHERE ${sameInstance}
            ORDER BY c.project_id`
         )
-        .bind(...projectIds)
-        .all<{ project_id: string; claimed_at: string }>();
+        .bind(requested)
+        .all<{ project_id: string; claimed_at: string; instance_id: string }>();
       generations = (claimed.results ?? []).map((row) => ({
         projectId: row.project_id,
-        claimedAt: row.claimed_at
+        claimedAt: row.claimed_at,
+        instance: row.instance_id
       }));
       projectIds = generations.map((row) => row.projectId);
       if (projectIds.length === 0) return;
     }
     const generationOf = new Map(
       (generations ?? []).map((row) => [row.projectId, row.claimedAt])
+    );
+    const instanceOf = new Map(
+      (generations ?? []).map((row) => [row.projectId, row.instance])
     );
     /** One project's generation, as a fence of one condition. */
     const generationFence = (projectId: string) =>
@@ -8055,7 +8155,17 @@ export class D1R2PersistenceService implements PersistenceService {
             `https://project-room.internal/?projectId=${encodeURIComponent(projectId)}`,
             {
               method: 'DELETE',
-              headers: { 'x-openzcad-internal-project-erasure': 'v1' }
+              headers: {
+                'x-openzcad-internal-project-erasure': 'v1',
+                // The room erases only while it serves this very instance
+                // (migration 0052): a delayed erasure of this generation
+                // leaves the room of a project created again untouched.
+                ...(instanceOf.get(projectId)
+                  ? {
+                      'x-openzcad-project-instance': instanceOf.get(projectId)!
+                    }
+                  : {})
+              }
             }
           )
         );
@@ -9163,6 +9273,8 @@ async function readSnapshotBody(
 interface RoomMeta {
   schema: number;
   projectId: string | null;
+  /** The project instance (migration 0052) whose state this room holds. */
+  instanceId?: string;
   latestVersion: number | null;
   historyVersions: number[];
   /** Present only on an encrypted project's room, whose versions live apart. */
@@ -9242,6 +9354,8 @@ export class ProjectCollaborationRoom extends DurableObject {
    * plaintext keys, and plaintext requests are refused. Null otherwise.
    */
   private roomFormat: 2 | null = null;
+  /** The project instance (migration 0052) whose state this room holds. */
+  private instanceId: string | null = null;
   private e2eeLedgerState: E2eeRoomLedger | null = null;
   private e2eeAccountState: E2eeRoomAccount | null | undefined;
 
@@ -9298,6 +9412,7 @@ export class ProjectCollaborationRoom extends DurableObject {
           'Copied project identity could not be restored.'
         );
       this.projectId = meta.projectId ?? this.projectId;
+      this.instanceId = meta.instanceId ?? null;
       this.roomFormat = meta.format === 2 ? 2 : null;
       this.historyVersions = meta.historyVersions ?? [];
       this.latestDocument =
@@ -9610,8 +9725,19 @@ export class ProjectCollaborationRoom extends DurableObject {
     ) {
       return new Response('Invalid project erasure request.', { status: 403 });
     }
+    const expectedInstance = request.headers.get('x-openzcad-project-instance');
     return this.roomContext.blockConcurrencyWhile(() =>
       this.enqueueLeaseOperation(async () => {
+        // Decided inside the room's queue, so no write of the room can come
+        // between: a room holding another instance's state (the project was
+        // created again under its id) is not this deletion's to erase.
+        if (
+          expectedInstance &&
+          this.instanceId &&
+          this.instanceId !== expectedInstance
+        ) {
+          return new Response(null, { status: 204 });
+        }
         await this.eraseRoomState();
         return new Response(null, { status: 204 });
       })
@@ -9633,6 +9759,7 @@ export class ProjectCollaborationRoom extends DurableObject {
     this.sourceCopyPublicationStarted = false;
     this.historyVersions = [];
     this.projectId = null;
+    this.instanceId = null;
     this.roomFormat = null;
     this.e2eeLedgerState = null;
     await this.roomContext.storage.deleteAll();
@@ -11808,6 +11935,18 @@ export class ProjectCollaborationRoom extends DurableObject {
       await this.ensureDocumentHistory();
     }
     const evicted = this.trimHistory();
+    // The first state stored for a project records which instance of it
+    // (migration 0052) the room serves.
+    if (this.projectId && !this.instanceId && this.roomEnv.DB) {
+      try {
+        this.instanceId = await projectInstanceId(
+          this.roomEnv.DB,
+          this.projectId
+        );
+      } catch {
+        this.instanceId = null;
+      }
+    }
     const entries: Record<string, unknown> = {};
     for (const version of dirtyHistoryVersions) {
       const document = this.documentHistory.get(version);
@@ -11821,6 +11960,7 @@ export class ProjectCollaborationRoom extends DurableObject {
     entries[ROOM_META_KEY] = {
       schema: ROOM_STORAGE_SCHEMA,
       projectId: this.projectId,
+      ...(this.instanceId ? { instanceId: this.instanceId } : {}),
       latestVersion: this.latestDocument?.version ?? null,
       historyVersions: Array.from(this.documentHistory.keys()).sort(
         (left, right) => left - right

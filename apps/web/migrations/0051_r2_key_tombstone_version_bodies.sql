@@ -7,9 +7,11 @@
 -- committed meanwhile. Version bodies therefore follow migration 0050's
 -- protocol too: `claimObjectKeysForDelete` treats a version row naming the
 -- key as a live reference, and the guard below refuses a new version row
--- naming a key while a fresh claim holds it. A body reaches R2 before its
--- row, so a save checks after its commit that its body is still there and
--- stores it again if not, exactly as a source asset does.
+-- naming a key while a fresh claim holds it. Bodies written from now on
+-- also carry a per-attempt nonce in their key (`…/v/<hash>.<nonce>`), and a
+-- save checks its body is in R2 before its commit, so no committed row can
+-- name a body another attempt's rollback removed; the claim still guards
+-- the hash-only keys of older rows.
 --
 -- Version rows never take a new body key once inserted (migration 0033's
 -- immutability trigger only lets a body be cleared), so the insert guard is
