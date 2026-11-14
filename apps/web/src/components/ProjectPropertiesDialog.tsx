@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { Info, LoaderCircle, X } from 'lucide-react';
 import {
+  MAX_PROJECT_NAME_LENGTH,
   PROJECT_STORAGE_FORMAT_E2EE_V1,
   projectOrganization,
   type ProjectSummary
@@ -11,11 +12,19 @@ import {
   type ProjectProperties
 } from '../lib/projectProperties';
 import { useModalFocus } from '../lib/useModalFocus';
+import { projectNameProblem, sameNamedProject } from '../lib/projectNameHints';
 
 export interface ProjectPropertiesDialogProps {
   project: ProjectSummary;
   accountStatus: string;
   loadProperties(project: ProjectSummary): Promise<ProjectProperties | null>;
+  /**
+   * Makes the name editable: resolves true once the new name is stored.
+   * Absent for a project this build cannot open.
+   */
+  onRename?(name: string): Promise<boolean>;
+  /** The library's projects, to say when a typed name is already taken. */
+  projects?: ReadonlyArray<{ projectId: string; name: string }>;
   onClose(): void;
 }
 
@@ -35,10 +44,37 @@ export function ProjectPropertiesDialog({
   project,
   accountStatus,
   loadProperties,
+  onRename,
+  projects = [],
   onClose
 }: ProjectPropertiesDialogProps) {
   const ref = useRef<HTMLDivElement>(null);
   const titleId = useId();
+  const nameHintId = useId();
+  // The name as stored, which a rename here moves ahead of `project`.
+  const [savedName, setSavedName] = useState(project.name);
+  const [nameDraft, setNameDraft] = useState(project.name);
+  const [renaming, setRenaming] = useState(false);
+  const nameProblem = projectNameProblem(nameDraft);
+  const nameTaken = nameProblem
+    ? null
+    : sameNamedProject(nameDraft, projects, project.projectId);
+  async function commitName() {
+    const next = nameDraft.trim();
+    if (!onRename || renaming || nameProblem || next === savedName) {
+      if (nameProblem) setNameDraft(savedName);
+      return;
+    }
+    setRenaming(true);
+    const stored = await onRename(next).catch(() => false);
+    setRenaming(false);
+    if (stored) {
+      setSavedName(next);
+      setNameDraft(next);
+    } else {
+      setNameDraft(savedName);
+    }
+  }
   const [properties, setProperties] = useState<ProjectProperties | null>(null);
   const [loading, setLoading] = useState(true);
   const [attempt, setAttempt] = useState(0);
@@ -65,7 +101,42 @@ export function ProjectPropertiesDialog({
     organization.status
   ];
   const rows: Array<[string, ReactNode]> = [
-    ['Project name', project.name],
+    [
+      'Project name',
+      onRename ? (
+        <span key="name" className="project-properties-name">
+          <input
+            value={nameDraft}
+            aria-label="Project name"
+            aria-invalid={nameProblem ? true : undefined}
+            aria-describedby={nameProblem || nameTaken ? nameHintId : undefined}
+            maxLength={MAX_PROJECT_NAME_LENGTH}
+            disabled={renaming}
+            onChange={(event) => setNameDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                void commitName();
+              } else if (event.key === 'Escape' && nameDraft !== savedName) {
+                // The first Escape puts the name back; the next closes.
+                event.preventDefault();
+                event.stopPropagation();
+                setNameDraft(savedName);
+              }
+            }}
+            onBlur={() => void commitName()}
+          />
+          {(nameProblem || nameTaken) && (
+            <small id={nameHintId} role="status">
+              {nameProblem ??
+                `Another project is already called “${nameTaken}”.`}
+            </small>
+          )}
+        </span>
+      ) : (
+        savedName
+      )
+    ],
     ['Shelf', shelf],
     ['Pinned', organization.pinned ? 'Yes' : 'No'],
     ['Account copy', accountStatus],
