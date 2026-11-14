@@ -378,7 +378,7 @@ export function MotionStudyTimeline({
     }
     const { study: keyed, changed } = result;
     if (!changed) return true;
-    if (!commit(keyed, 'Key pose', 'This study holds as many keys as it can.'))
+    if (!commit(keyed, 'Key pose', 'This animation holds as many keys as it can.'))
       // Refused: the parts go back to what the study shows.
       showAt(set, base, at);
     return true;
@@ -532,7 +532,7 @@ export function MotionStudyTimeline({
           : 'motion-timeline'
       }
       ref={timelineRef}
-      aria-label={`Motion study ${saved.name}`}
+      aria-label={`Animation ${saved.name}`}
       tabIndex={0}
       onKeyDown={onKeyDown}
     >
@@ -633,7 +633,7 @@ export function MotionStudyTimeline({
                 commit(
                   moved?.study ?? null,
                   'Move key',
-                  'Use a time in the study.'
+                  'Use a time in the animation.'
                 );
               }}
             />
@@ -733,7 +733,7 @@ export function MotionStudyTimeline({
               ? 'motion-icon-button motion-timeline-end'
               : 'motion-icon-button'
           }
-          aria-label="Close motion study"
+          aria-label="Close animation"
           title="Close"
           onClick={close}
         >
@@ -780,7 +780,7 @@ export function MotionStudyTimeline({
                           commit(
                             addTrack(set, saved, joint.id, dof, value),
                             'Add motion track',
-                            'This study cannot take another track.'
+                            'This animation cannot take another track.'
                           )
                         )
                           setSelectedTrack(saved.tracks.length);
