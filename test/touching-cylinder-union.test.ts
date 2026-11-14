@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   addDatumAxis,
   addPrimitiveFeature,
@@ -25,8 +25,10 @@ import { RemusKernel } from '../packages/kernel-adapter/src/remus-runtime';
 import { transformMatrix } from '../packages/kernel-adapter/src/exact-math';
 import {
   fuseAllMergingFaceContacts,
-  isFaceConnectedSolid
+  isFaceConnectedSolid,
+  solidMaterialPieces
 } from '../packages/kernel-adapter/src/exact-boolean-helpers';
+import { AdapterRefusal } from '../packages/kernel-adapter/src/adapter-refusal';
 
 /**
  * QA 2026-11-14 finding #1: a hub standing EXACTLY on a flange (a cylinder
@@ -70,25 +72,39 @@ function concaveFootFillet(R: number, r: number): number {
 
 const last = (document: ProjectDocument): BodyId => document.bodyOrder.at(-1)!;
 
+function lifted(
+  kernel: RemusKernel,
+  solid: number,
+  x: number,
+  z: number,
+  y = 0
+): number {
+  return kernel.copyAndTransformSolid(
+    solid,
+    transformMatrix({ x, y, z }, { x: 0, y: 0, z: 0 })
+  );
+}
+
 function cylinder(
   document: ProjectDocument,
   name: string,
   radius: number,
   height: number,
   z: number,
-  y = 0
+  y = 0,
+  x = 0
 ): ProjectDocument {
   const placed = addPrimitiveFeature(document, {
     name,
     primitiveKind: 'cylinder',
     dimensions: { radius, height }
   });
-  return z === 0 && y === 0
+  return z === 0 && y === 0 && x === 0
     ? placed
     : transformBody(placed, {
         name: `${name} move`,
         targetBodyId: last(placed),
-        translation: { x: 0, y, z }
+        translation: { x, y, z }
       }).document;
 }
 
@@ -224,32 +240,207 @@ describe('a cylinder standing exactly on another cylinder', () => {
 
   it('folds only a fuseAll result left in pieces', () => {
     const kernel = new RemusKernel();
-    const lifted = (solid: number, z: number) =>
-      kernel.copyAndTransformSolid(
-        solid,
-        transformMatrix({ x: 0, y: 0, z }, { x: 0, y: 0, z: 0 })
-      );
     const touching = [
       kernel.makeCylinder(FLANGE_R, FLANGE_H),
-      lifted(kernel.makeCylinder(HUB_R, TOP - FLANGE_H), FLANGE_H)
+      lifted(kernel, kernel.makeCylinder(HUB_R, TOP - FLANGE_H), 0, FLANGE_H)
     ];
     const merged = fuseAllMergingFaceContacts(kernel, touching);
     expect(isFaceConnectedSolid(kernel, merged)).toBe(true);
     expect(kernel.getSolidFaces(merged)).toHaveLength(5);
 
-    // Genuinely apart: the fold cannot join them, so the result stays in
-    // two pieces and the union keeps reporting a disconnected body.
+    // Genuinely apart: nothing can join them, so the result stays in two
+    // pieces and the union keeps reporting a disconnected body.
     const apart = [
       kernel.makeCylinder(FLANGE_R, FLANGE_H),
-      lifted(kernel.makeCylinder(HUB_R, TOP - FLANGE_H), FLANGE_H + 1)
+      lifted(
+        kernel,
+        kernel.makeCylinder(HUB_R, TOP - FLANGE_H),
+        0,
+        FLANGE_H + 1
+      )
     ];
     const disjoint = fuseAllMergingFaceContacts(kernel, apart);
-    expect(isFaceConnectedSolid(kernel, disjoint)).toBe(false);
+    expect(solidMaterialPieces(kernel, disjoint)).toBe(2);
     expect(kernel.volume(disjoint, 0.01)).toBeCloseTo(
       Math.PI * FLANGE_R ** 2 * FLANGE_H +
         Math.PI * HUB_R ** 2 * (TOP - FLANGE_H),
       6
     );
+  });
+
+  it('refuses, by type, a contact it cannot merge instead of returning the wall', () => {
+    const kernel = new RemusKernel();
+    const touching = [
+      kernel.makeCylinder(FLANGE_R, FLANGE_H),
+      lifted(kernel, kernel.makeCylinder(HUB_R, TOP - FLANGE_H), 0, FLANGE_H)
+    ];
+    // Stand in for a kernel that can merge the contact by neither entry
+    // point: the pairwise fuse refuses, and `fuseAll` keeps the two caps.
+    const refuse = vi
+      .spyOn(RemusKernel.prototype, 'fuseDetailed')
+      .mockImplementation(
+        () =>
+          ({
+            status: 'error',
+            code: 'exact_only_unattainable',
+            category: 'quality_refused',
+            details: {}
+          }) as never
+      );
+    try {
+      let refusal: unknown;
+      try {
+        fuseAllMergingFaceContacts(kernel, touching, undefined, 1);
+      } catch (error) {
+        refusal = error;
+      }
+      expect(refusal).toBeInstanceOf(AdapterRefusal);
+      expect((refusal as AdapterRefusal).adapterCode).toBe(
+        'union_unmerged_contact'
+      );
+    } finally {
+      refuse.mockRestore();
+    }
+  });
+});
+
+describe('several bodies standing on one flange', () => {
+  let adapter: ExactKernelAdapter;
+  beforeAll(async () => {
+    adapter = await createExactKernelAdapter();
+  });
+
+  /** Two r20 bosses at x = ±19.5 overlap each other by 1 mm. */
+  const BOSS_X = 19.5;
+  const LENS =
+    2 * HUB_R ** 2 * Math.acos(BOSS_X / HUB_R) -
+    BOSS_X * Math.sqrt(4 * HUB_R ** 2 - 4 * BOSS_X ** 2);
+  const BOSSES_AREA = 2 * Math.PI * HUB_R ** 2 - LENS;
+
+  it.each([
+    [0, 1, 2],
+    [0, 2, 1],
+    [1, 0, 2],
+    [1, 2, 0],
+    [2, 0, 1],
+    [2, 1, 0]
+  ])(
+    'merges two overlapping bosses resting on the flange (operand order %s %s %s)',
+    async (...order) => {
+      let document = createProjectDocument(
+        'Twin hub',
+        toUserId('user_touching')
+      );
+      document = cylinder(document, 'Flange', FLANGE_R, FLANGE_H, 0);
+      const ids = [last(document)];
+      for (const x of [-BOSS_X, BOSS_X]) {
+        document = cylinder(
+          document,
+          `Boss ${x}`,
+          HUB_R,
+          TOP - FLANGE_H,
+          FLANGE_H,
+          0,
+          x
+        );
+        ids.push(last(document));
+      }
+      document = booleanBodies(document, {
+        name: 'Union',
+        operation: 'union',
+        targetBodyIds: order.map((index) => ids[index]!)
+      }).document;
+      const derived = await adapter.syncDocument(document);
+      expect(derived.warnings).toEqual([]);
+      const body = derived.bodyRepresentations[last(document)]!;
+      expect(body.volume).toBeCloseTo(
+        Math.PI * FLANGE_R ** 2 * FLANGE_H + BOSSES_AREA * (TOP - FLANGE_H),
+        3
+      );
+      // Before the fix: both full 5026.55 mm² flange discs, the bosses'
+      // bottom inside the solid.
+      const planes = planarAreas(derived, last(document));
+      expect(planes).toHaveLength(3);
+      // Boss tops 2507.33, flange top annulus 2519.21, flange bottom.
+      expect(planes[0]).toBeCloseTo(BOSSES_AREA, 3);
+      expect(planes[1]).toBeCloseTo(Math.PI * FLANGE_R ** 2 - BOSSES_AREA, 3);
+      expect(planes[2]).toBeCloseTo(Math.PI * FLANGE_R ** 2, 6);
+    },
+    120_000
+  );
+
+  it('keeps an enclosed cavity in a united body without refusing it', async () => {
+    // A cavity is a second boundary component that is NOT a missed merge:
+    // it must neither be repaired nor refused. (On the pin `fuseAll` refuses,
+    // by its own typed refusal, any hub on a hollow CYLINDER flange, so the
+    // document case is prismatic; the piece count of a hollow body is pinned
+    // at kernel level below.)
+    let document = createProjectDocument(
+      'Hollow plate',
+      toUserId('user_touching')
+    );
+    document = addPrimitiveFeature(document, {
+      name: 'Plate',
+      primitiveKind: 'box',
+      dimensions: { width: 40, height: 40, depth: 10 }
+    });
+    const plate = last(document);
+    document = addPrimitiveFeature(document, {
+      name: 'Void',
+      primitiveKind: 'box',
+      dimensions: { width: 4, height: 4, depth: 4 }
+    });
+    document = transformBody(document, {
+      name: 'Void move',
+      targetBodyId: last(document),
+      translation: { x: 3, y: 3, z: 3 }
+    }).document;
+    document = booleanBodies(document, {
+      name: 'Hollow',
+      operation: 'subtract',
+      targetBodyIds: [plate, last(document)]
+    }).document;
+    const hollow = last(document);
+    document = addPrimitiveFeature(document, {
+      name: 'Block',
+      primitiveKind: 'box',
+      dimensions: { width: 10, height: 10, depth: 10 }
+    });
+    document = transformBody(document, {
+      name: 'Block move',
+      targetBodyId: last(document),
+      translation: { x: 15, y: 15, z: 10 }
+    }).document;
+    document = booleanBodies(document, {
+      name: 'Union',
+      operation: 'union',
+      targetBodyIds: [hollow, last(document)]
+    }).document;
+    const derived = await adapter.syncDocument(document);
+    expect(derived.warnings).toEqual([]);
+    expect(derived.bodyRepresentations[last(document)]!.volume).toBeCloseTo(
+      40 * 40 * 10 - 4 ** 3 + 10 ** 3,
+      6
+    );
+  }, 120_000);
+
+  it('counts a cavity as no extra piece of material', () => {
+    const kernel = new RemusKernel();
+    const hollow = kernel.cut(
+      kernel.makeBox(20, 20, 20),
+      lifted(kernel, kernel.makeBox(10, 10, 10), 5, 5, 5)
+    );
+    expect(isFaceConnectedSolid(kernel, hollow)).toBe(false);
+    expect(solidMaterialPieces(kernel, hollow)).toBe(1);
+    // Fused with a box on its side, still one piece, and not refused.
+    const united = fuseAllMergingFaceContacts(
+      kernel,
+      [hollow, lifted(kernel, kernel.makeBox(20, 20, 20), 20, 0)],
+      undefined,
+      1
+    );
+    expect(solidMaterialPieces(kernel, united)).toBe(1);
+    expect(kernel.volume(united, 0.01)).toBeCloseTo(15000, 6);
   });
 });
 

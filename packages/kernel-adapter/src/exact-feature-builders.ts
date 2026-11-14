@@ -2066,7 +2066,8 @@ function combineBooleanOperands(
       ctx.strictVerdicts !== undefined,
       feature.bodyId === undefined
         ? undefined
-        : ctx.heldDisplayDeflection?.(feature.bodyId)
+        : ctx.heldDisplayDeflection?.(feature.bodyId),
+      connectivity.uncertain ? undefined : connectivity.componentCount
     );
     solid = unified.solid;
     unionVerdict = unified.verdict;

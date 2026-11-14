@@ -25,6 +25,7 @@ import {
   unionSwallowedCurvature
 } from './boolean-result-validation';
 import { type KernelUnifyReport, validationReport } from './kernel-validation';
+import { AdapterRefusal } from './adapter-refusal';
 import { exactBooleanOutcome, exactFuseAll } from './exact-boolean-refusal';
 import { analyzeUnionConnectivity, type UnionBounds } from './union-connectivity';
 import type { ExactShape } from './exact-types';
@@ -527,29 +528,23 @@ export function fuseUniformSolidChecked(
   labels?: readonly string[],
   onAccepted?: (solid: number) => void,
   retainDisplayMesh = false,
-  heldLinearDeflection?: number
+  heldLinearDeflection?: number,
+  /**
+   * How many separate groups the operands form, when the caller has already
+   * proved it (the Union feature's connectivity pass). Omitted, the gate
+   * works it out itself — and only on the rare path that needs it.
+   */
+  contactGroups?: number
 ): UnifiedUnion {
   return unifyUnionFacesChecked(
     kernel,
     // `exactFuseAll` refuses by name on a non-exact pair; only a fused
     // solid reaches the gate.
-    fuseAllMergingFaceContacts(kernel, solids, labels),
+    fuseAllMergingFaceContacts(kernel, solids, labels, contactGroups),
     onAccepted,
     retainDisplayMesh,
     heldLinearDeflection
   );
-}
-
-/** Face-connected pieces of one solid, or null when the kernel cannot say. */
-function faceComponentCount(kernel: RemusKernel, solid: number): number | null {
-  try {
-    return countFaceConnectedComponents(
-      kernel.getSolidFaces(solid),
-      JSON.parse(kernel.edgeToFaceMap(solid)) as Record<string, number[]>
-    );
-  } catch {
-    return null;
-  }
 }
 
 /** Retire a scratch solid; a failed release never replaces the result. */
@@ -561,70 +556,324 @@ function releaseScratchSolid(kernel: RemusKernel, solid: number): void {
   }
 }
 
+/** Signed volume of one face's display triangles (outward-wound). */
+function faceSignedVolume(kernel: RemusKernel, face: number): number {
+  const mesh = kernel.tessellateFace(face, MEASUREMENT_DEFLECTION);
+  try {
+    const p = mesh.positions;
+    const index = mesh.indices;
+    let volume = 0;
+    for (let t = 0; t + 2 < index.length; t += 3) {
+      const a = index[t]! * 3;
+      const b = index[t + 1]! * 3;
+      const c = index[t + 2]! * 3;
+      volume +=
+        (p[a]! * (p[b + 1]! * p[c + 2]! - p[b + 2]! * p[c + 1]!) -
+          p[a + 1]! * (p[b]! * p[c + 2]! - p[b + 2]! * p[c]!) +
+          p[a + 2]! * (p[b]! * p[c + 1]! - p[b + 1]! * p[c]!)) /
+        6;
+    }
+    return volume;
+  } finally {
+    mesh.free();
+  }
+}
+
 /**
- * `exactFuseAll`, with the face contacts it leaves unmerged merged pairwise.
+ * How many pieces of material one solid holds: its face-connected boundary
+ * components that enclose POSITIVE volume. Null when the kernel cannot say.
+ *
+ * Counting raw components is not enough. A body with an enclosed cavity has
+ * a second boundary component too — the void's — and it is legitimate. Its
+ * faces point into the void, away from the material, so it encloses negative
+ * volume and is not a piece. Two pieces of material that should have merged
+ * each enclose positive volume. A solid in one component is one piece
+ * without tessellating anything, which is every ordinary result.
+ */
+export function solidMaterialPieces(
+  kernel: RemusKernel,
+  solid: number
+): number | null {
+  try {
+    const faces = Array.from<number>(kernel.getSolidFaces(solid));
+    const edgeToFaces = JSON.parse(kernel.edgeToFaceMap(solid)) as Record<
+      string,
+      number[]
+    >;
+    if (countFaceConnectedComponents(faces, edgeToFaces) <= 1) return 1;
+    const parent = new Map(faces.map((face) => [face, face]));
+    const root = (face: number): number => {
+      let current = face;
+      while (parent.get(current) !== current) current = parent.get(current)!;
+      return current;
+    };
+    for (const adjacent of Object.values(edgeToFaces)) {
+      for (const face of adjacent.slice(1)) {
+        const left = root(adjacent[0]!);
+        const right = root(face);
+        if (left !== right) parent.set(right, left);
+      }
+    }
+    const enclosed = new Map<number, number>();
+    for (const face of faces) {
+      const component = root(face);
+      enclosed.set(
+        component,
+        (enclosed.get(component) ?? 0) + faceSignedVolume(kernel, face)
+      );
+    }
+    return [...enclosed.values()].filter((volume) => volume > 0).length;
+  } catch {
+    return null;
+  }
+}
+
+/** Operand count above which the contact repair is not attempted. */
+export const MAX_CONTACT_REPAIR_OPERANDS = 12;
+
+interface RepairPart {
+  readonly id: number;
+  readonly solid: number;
+  readonly owned: boolean;
+  readonly pieces: number;
+  readonly box: readonly number[];
+}
+
+function boxesMeet(
+  left: readonly number[],
+  right: readonly number[],
+  tolerance: number
+): boolean {
+  return [0, 1, 2].every(
+    (axis) =>
+      Math.min(left[axis + 3]!, right[axis + 3]!) -
+        Math.max(left[axis]!, right[axis]!) >=
+      -tolerance
+  );
+}
+
+/**
+ * Re-fuse operands that `fuseAll` left in more pieces than they should be,
+ * grouping them rather than folding them in a fixed order.
+ *
+ * The two fuse entry points fail on complementary contacts. `fuseAll` misses
+ * a cylinder cap resting on another cylinder cap; the pairwise `fuse` merges
+ * that, but refuses two equal cylinders that overlap and share both cap
+ * planes, which `fuseAll` fuses. A hub of two such bosses standing on a
+ * flange needs both, in the right order: no fixed fold of the pairwise fuse
+ * builds it, while `fuseAll` of the two bosses, then of that with the flange,
+ * does. So pairs merge one at a time — `fuseAll` on any pair first, the
+ * pairwise fuse only when no pair merges that way — and a merge counts only
+ * when it leaves fewer pieces of material than its two parts held.
+ *
+ * Bounded: only pairs whose boxes meet are candidates, at most
+ * {@link MAX_CONTACT_REPAIR_OPERANDS} operands are taken, and no pair of
+ * parts is tried twice with the same entry point, so a run costs at most two
+ * fuses per pair of parts that ever coexist — O(n²) for n operands — and it
+ * runs only when the plain `fuseAll` result is already in pieces.
+ *
+ * Returns the regrouped solid, owned by the caller, or null when nothing
+ * merged.
+ */
+function regroupTouchingOperands(
+  kernel: RemusKernel,
+  solids: readonly number[]
+): number | null {
+  let nextId = 0;
+  let parts: RepairPart[] = [];
+  for (const solid of solids) {
+    const pieces = solidMaterialPieces(kernel, solid);
+    if (pieces === null) return null;
+    parts.push({
+      id: nextId++,
+      solid,
+      owned: false,
+      pieces,
+      box: Array.from<number>(kernel.boundingBox(solid))
+    });
+  }
+  const scale = Math.max(1, ...parts.flatMap((part) => part.box.map(Math.abs)));
+  const tolerance = scale * 1e-7;
+  const tried = { fuseAll: new Set<string>(), fuse: new Set<string>() };
+  const attempt = (
+    strategy: 'fuseAll' | 'fuse',
+    left: RepairPart,
+    right: RepairPart
+  ): number | null => {
+    try {
+      if (strategy === 'fuseAll') {
+        return kernel.fuseAll(Uint32Array.from([left.solid, right.solid]));
+      }
+      const outcome = exactBooleanOutcome(
+        kernel,
+        'fuse',
+        left.solid,
+        right.solid
+      );
+      return outcome.status === 'ok' ? outcome.solid : null;
+    } catch {
+      return null;
+    }
+  };
+  let merges = 0;
+  try {
+    for (;;) {
+      let merged: {
+        left: RepairPart;
+        right: RepairPart;
+        part: RepairPart;
+      } | null = null;
+      for (const strategy of ['fuseAll', 'fuse'] as const) {
+        for (let i = 0; i < parts.length && !merged; i += 1) {
+          for (let j = i + 1; j < parts.length && !merged; j += 1) {
+            const left = parts[i]!;
+            const right = parts[j]!;
+            const key = `${left.id}:${right.id}`;
+            if (
+              tried[strategy].has(key) ||
+              !boxesMeet(left.box, right.box, tolerance)
+            ) {
+              continue;
+            }
+            tried[strategy].add(key);
+            const solid = attempt(strategy, left, right);
+            if (solid === null) continue;
+            const pieces = solidMaterialPieces(kernel, solid);
+            if (pieces !== null && pieces < left.pieces + right.pieces) {
+              merged = {
+                left,
+                right,
+                part: {
+                  id: nextId++,
+                  solid,
+                  owned: true,
+                  pieces,
+                  box: Array.from<number>(kernel.boundingBox(solid))
+                }
+              };
+            } else {
+              releaseScratchSolid(kernel, solid);
+            }
+          }
+        }
+        if (merged) break;
+      }
+      if (!merged) break;
+      const { left, right, part } = merged;
+      for (const spent of [left, right]) {
+        if (spent.owned) releaseScratchSolid(kernel, spent.solid);
+      }
+      parts = [...parts.filter((p) => p !== left && p !== right), part];
+      merges += 1;
+    }
+    if (merges === 0) return null;
+    if (parts.length === 1) {
+      const only = parts[0]!;
+      parts = [];
+      return only.solid;
+    }
+    // What could not merge stays apart, exactly as `fuseAll` keeps it.
+    return kernel.fuseAll(Uint32Array.from(parts.map((part) => part.solid)));
+  } catch {
+    return null;
+  } finally {
+    for (const part of parts) {
+      if (part.owned) releaseScratchSolid(kernel, part.solid);
+    }
+  }
+}
+
+/** How many separate groups the operands form, or null when uncertain. */
+function operandContactGroups(
+  kernel: RemusKernel,
+  solids: readonly number[]
+): number | null {
+  try {
+    const connectivity = analyzeUnionConnectivity(
+      solids.map((solid) => {
+        const box = kernel.boundingBox(solid);
+        return {
+          solid,
+          bounds: {
+            min: { x: box[0]!, y: box[1]!, z: box[2]! },
+            max: { x: box[3]!, y: box[4]!, z: box[5]! }
+          }
+        };
+      }),
+      (left, right) => certifiedSolidDistance(kernel, left, right),
+      (left, right) =>
+        solidsHavePositiveExactIntersection(kernel, left, right) ||
+        solidsShareMaterialOrTouch(kernel, left, right)
+    );
+    return connectivity.uncertain ? null : connectivity.componentCount;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * `exactFuseAll`, with the face contacts it leaves unmerged merged — or, when
+ * that cannot be done, refused by name rather than shipped.
  *
  * `fuseAll` joins the groups it judges disjoint "directly without a boolean".
  * On the pinned Remus that judgement misses planar contact between two
  * cylinder caps — a hub standing exactly on a flange, coaxial or not, either
  * operand order — and returns one valid-looking solid that still holds both
  * caps: the flange top stays a full disc under the hub, an internal wall the
- * viewport hides and every face pick, offset and fillet then works on. A
- * fillet of the hub foot comes out convex, because the edge it rounds is the
- * hub's own base rim rather than a concave junction. Box-on-box, cylinder on
- * a box and a cone on a cylinder merge correctly; the pairwise `fuse` merges
- * every one of them, including the cylinder pair.
+ * viewport hides and every face pick, offset, fillet and later cut then works
+ * on. A fillet of the hub foot came out convex, and a bore cut dropped the
+ * hub. Box-on-box, a cylinder on a box and a cone on a cylinder merge
+ * correctly.
  *
- * So a result in more than one face-connected piece is folded again with the
- * pairwise typed fuse, and the fold replaces it only when it has strictly
- * fewer pieces. Disjoint operands stay disjoint under either construction, so
- * a genuinely disconnected union keeps the `fuseAll` result (and its own
- * disconnected-union refusal). A fold the kernel refuses is not a reason to
- * refuse a union `fuseAll` accepted: the original result stands.
+ * A result holding more pieces of material than the operands form contact
+ * groups is that defect; enclosed cavities and genuinely separate operands
+ * are not (see {@link solidMaterialPieces}). Such a result is regrouped
+ * ({@link regroupTouchingOperands}) and replaced only by one with fewer
+ * pieces. If pieces the operands prove are in contact are still apart, the
+ * union is refused (`union_unmerged_contact`): a body with a hidden internal
+ * wall is never returned silently. The refusal needs certainty — operands
+ * whose contact cannot be proved keep the existing behaviour.
  *
- * The extra fold runs only when the fused result is in pieces, which on a
- * union of touching or overlapping operands means this defect. It is kept off
+ * Every ordinary union (one piece) pays only an edge-to-face read. Kept off
  * `collapseShape`, where a disjoint pattern tool is in pieces by design.
  */
 export function fuseAllMergingFaceContacts(
   kernel: RemusKernel,
   solids: readonly number[],
-  labels?: readonly string[]
+  labels?: readonly string[],
+  contactGroups?: number
 ): number {
   const fused = exactFuseAll(kernel, solids, labels);
   if (solids.length < 2) return fused;
-  const pieces = faceComponentCount(kernel, fused);
+  const pieces = solidMaterialPieces(kernel, fused);
   if (pieces === null || pieces <= 1) return fused;
-  let accumulated = solids[0]!;
-  let owned: number | null = null;
-  try {
-    for (let index = 1; index < solids.length; index += 1) {
-      const outcome = exactBooleanOutcome(
-        kernel,
-        'fuse',
-        accumulated,
-        solids[index]!
-      );
-      if (outcome.status !== 'ok') {
-        if (owned !== null) releaseScratchSolid(kernel, owned);
-        return fused;
+  let result = fused;
+  let resultPieces = pieces;
+  if (solids.length <= MAX_CONTACT_REPAIR_OPERANDS) {
+    const regrouped = regroupTouchingOperands(kernel, solids);
+    if (regrouped !== null) {
+      const regroupedPieces = solidMaterialPieces(kernel, regrouped);
+      if (regroupedPieces !== null && regroupedPieces < pieces) {
+        releaseScratchSolid(kernel, fused);
+        result = regrouped;
+        resultPieces = regroupedPieces;
+      } else {
+        releaseScratchSolid(kernel, regrouped);
       }
-      if (owned !== null) releaseScratchSolid(kernel, owned);
-      accumulated = outcome.solid;
-      owned = outcome.solid;
     }
-  } catch {
-    if (owned !== null) releaseScratchSolid(kernel, owned);
-    return fused;
   }
-  if (owned === null) return fused;
-  const folded = faceComponentCount(kernel, owned);
-  if (folded !== null && folded < pieces) {
-    releaseScratchSolid(kernel, fused);
-    return owned;
+  if (resultPieces <= 1) return result;
+  const groups = contactGroups ?? operandContactGroups(kernel, solids);
+  if (groups !== null && resultPieces > groups) {
+    releaseScratchSolid(kernel, result);
+    throw new AdapterRefusal(
+      'union_unmerged_contact',
+      'Union refused: where these bodies only touch face to face, the exact ' +
+        'kernel could not merge them, so the result would keep a hidden ' +
+        'internal wall. Overlapping them slightly instead usually clears it.'
+    );
   }
-  releaseScratchSolid(kernel, owned);
-  return fused;
+  return result;
 }
 
 /**
