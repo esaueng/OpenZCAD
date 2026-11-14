@@ -73,7 +73,11 @@ import {
   handleE2eeShareLinkRequest,
   isE2eeShareLinkPath
 } from './e2eeShareLinks';
-import { handleE2eeContactsRequest, isE2eeContactsPath } from './e2eeContacts';
+import {
+  handleE2eeContactsRequest,
+  isE2eeContactsPath,
+  MAX_CONTACTS_RESEAL_BODY_BYTES
+} from './e2eeContacts';
 import {
   handleE2eeInvitationRequest,
   isE2eeInvitationPath,
@@ -2258,7 +2262,14 @@ export async function handleE2eeRequest(
         rawDb,
         userId,
         db.authorization,
-        () => readBody(request)
+        // A reseal carries the whole list at once.
+        () =>
+          readBody(
+            request,
+            request.method === 'PUT'
+              ? MAX_CONTACTS_RESEAL_BODY_BYTES
+              : MAX_BODY_BYTES
+          )
       );
     }
     if (isAssistantConsentPath(pathname)) {

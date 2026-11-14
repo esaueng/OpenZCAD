@@ -13,7 +13,9 @@ import {
   fromBase64Url,
   contactsEntryHash,
   isSealedContactsRecord,
+  MAX_CONTACTS_ENTRIES,
   readSealedContactsHeader,
+  SEALED_CONTACTS_RECORD_BYTES,
   sealContactsEntries,
   sealedContactsRecordHash,
   type SealedContactsHead,
@@ -2435,6 +2437,43 @@ describe('sealed contacts lists (ADR-024 amendment 2026-11-14)', () => {
         await sealedContactsRecordHash(fromBase64Url(rowsOf(srv)[0]!.entry))
       )
     );
+  });
+
+  it('takes a reseal of the longest list through the router, and nothing larger', async () => {
+    // #1522 review: the whole list goes in one PUT, which outgrew the 512 KiB
+    // every other encrypted route takes at about 720 entries.
+    const { srv, alice } = await plaintextList();
+    const record = {
+      entry: toBase64Url(new Uint8Array(SEALED_CONTACTS_RECORD_BYTES.next)),
+      signature: toBase64Url(new Uint8Array(65))
+    };
+    const body = (count: number) => ({
+      generation: alice.account.generation,
+      replaces: '0'.repeat(64),
+      entries: Array.from({ length: count }, () => record)
+    });
+    const longest = body(MAX_CONTACTS_ENTRIES);
+    expect(JSON.stringify(longest).length).toBeGreaterThan(512 * 1024);
+    const read = await srv.call('PUT', '/api/e2ee/contacts', {
+      user: ALICE,
+      body: longest
+    });
+    // Read and checked: these placeholder records are refused on their
+    // content, not on the size of the request.
+    const answer = await json<{ code: string }>(read);
+    expect(answer.code).not.toBe('E2EE_REQUEST_TOO_LARGE');
+    expect(read.status).not.toBe(413);
+    const oversized = await srv.call('PUT', '/api/e2ee/contacts', {
+      user: ALICE,
+      body: { ...longest, padding: 'x'.repeat(1024 * 1024) }
+    });
+    expect(oversized.status).toBe(413);
+    // An append is still held to the ordinary limit.
+    const append = await srv.call('POST', '/api/e2ee/contacts', {
+      user: ALICE,
+      body: { ...longest, entry: record.entry, signature: record.signature }
+    });
+    expect(append.status).toBe(413);
   });
 
   it('deletes a replaced identity’s plaintext list at the first sealed write', async () => {

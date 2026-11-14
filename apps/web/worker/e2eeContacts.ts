@@ -30,6 +30,7 @@ import {
   E2eeError,
   MAX_CONTACTS_ENTRIES,
   MAX_CONTACTS_ENTRY_BYTES,
+  SEALED_CONTACTS_RECORD_BYTES,
   decodeContactsEntry,
   decodeDeviceListEntry,
   fromBase64Url,
@@ -60,6 +61,21 @@ const DEVICE_LIST_ROUTE = /^\/api\/e2ee\/users\/([^/]+)\/device-list$/;
 /** People one contacts response lists at most. */
 export const MAX_CONTACT_PEOPLE = 500;
 const SIGNATURE_BYTES = 65;
+
+const base64UrlChars = (bytes: number) => Math.ceil((bytes * 4) / 3);
+/**
+ * The body a reseal (`PUT`) may carry: a whole list at the longest,
+ * `MAX_CONTACTS_ENTRIES` sealed records with their signatures as JSON, and
+ * room for the rest. Larger than the 512 KiB every other encrypted route
+ * takes, which a list of about 720 entries already outgrows; refused at that
+ * size, a list would stay readable and block every later contacts change.
+ */
+export const MAX_CONTACTS_RESEAL_BODY_BYTES =
+  MAX_CONTACTS_ENTRIES *
+    (base64UrlChars(SEALED_CONTACTS_RECORD_BYTES.next) +
+      base64UrlChars(SIGNATURE_BYTES) +
+      64) +
+  16 * 1024;
 /**
  * The base64url text every stored row starts with: exactly the 3-byte magic
  * of a plaintext entry ("OZK") or a sealed record ("OZC"), so SQL can tell
