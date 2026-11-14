@@ -84,6 +84,7 @@
   "sphere-cylinder-union.spec.ts": 36,
   "staged-geometry.spec.ts": 6,
   "standalone-gear-height.spec.ts": 24,
+  "start-screen-import-rename.spec.ts": 20,
   "start-screen-responsive.spec.ts": 3,
   "start-screen-sync-failures.spec.ts": 9,
   "start-tile-reorder.spec.ts": 3,
