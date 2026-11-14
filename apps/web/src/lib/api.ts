@@ -550,8 +550,9 @@ export async function encryptsAccountLibrary(): Promise<boolean> {
 }
 
 /**
- * A route's JSON body; `absent` when the Worker does not have the route
- * (404); `unavailable` when it cannot be reached, fails or is not JSON.
+ * A route's JSON body; `absent` when nothing there serves the route (404,
+ * or a static host's HTML page in its place); `unavailable` when it cannot
+ * be reached, fails, or answers JSON that is not an object.
  */
 async function readJsonAnswer(
   path: string
@@ -564,6 +565,9 @@ async function readJsonAnswer(
     const response = await desktopFetch(path, { credentials: 'same-origin' });
     if (response.status === 404) return { kind: 'absent' };
     if (!response.ok) return { kind: 'unavailable' };
+    if (!/\bjson\b/i.test(response.headers.get('content-type') ?? '')) {
+      return { kind: 'absent' };
+    }
     const body: unknown = await response.json();
     return body !== null && typeof body === 'object' && !Array.isArray(body)
       ? { kind: 'ok', body: body as Record<string, unknown> }
