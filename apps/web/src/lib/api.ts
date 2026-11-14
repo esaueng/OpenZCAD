@@ -538,13 +538,44 @@ export async function encryptsNewProjects(): Promise<boolean> {
  */
 export async function encryptsAccountLibrary(): Promise<boolean> {
   if (await encryptsNewProjects()) return true;
-  const stored = await readOptionalJson('/api/e2ee/project-preferences');
-  if (stored) return stored.libraryEncrypted === true;
-  const config = await readOptionalJson('/api/e2ee/config');
-  if (config?.enabled === true && config.projectsEnabled === true) {
-    throw preferenceUnverified();
+  const stored = await readJsonAnswer('/api/e2ee/project-preferences');
+  if (stored.kind === 'ok') return stored.body.libraryEncrypted === true;
+  const config = await readJsonAnswer('/api/e2ee/config');
+  if (config.kind === 'ok') {
+    if (config.body.enabled === true && config.body.projectsEnabled === true) {
+      throw preferenceUnverified();
+    }
+    return false;
   }
-  return false;
+  // Only a Worker that has no encryption routes at all reads as no. One that
+  // cannot be reached, errors or answers something else could be hiding an
+  // encrypted library, and `encryptsNewProjects` reads it as no too.
+  if (config.kind === 'absent') return false;
+  throw preferenceUnverified();
+}
+
+/**
+ * A route's JSON body; `absent` when the Worker does not have the route
+ * (404); `unavailable` when it cannot be reached, fails or is not JSON.
+ */
+async function readJsonAnswer(
+  path: string
+): Promise<
+  | { kind: 'ok'; body: Record<string, unknown> }
+  | { kind: 'absent' }
+  | { kind: 'unavailable' }
+> {
+  try {
+    const response = await desktopFetch(path, { credentials: 'same-origin' });
+    if (response.status === 404) return { kind: 'absent' };
+    if (!response.ok) return { kind: 'unavailable' };
+    const body: unknown = await response.json();
+    return body !== null && typeof body === 'object' && !Array.isArray(body)
+      ? { kind: 'ok', body: body as Record<string, unknown> }
+      : { kind: 'unavailable' };
+  } catch {
+    return { kind: 'unavailable' };
+  }
 }
 
 // --- Account settings (ADR-024 amendment 2026-11-14) ------------------------

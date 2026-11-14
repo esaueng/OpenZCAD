@@ -494,6 +494,50 @@ describe('an account that holds encrypted projects without the opt-in', () => {
     }
   );
 
+  it.each([
+    ['503s', () => json({ error: 'down' }, 503)],
+    ['network failures', () => Promise.reject(new TypeError('offline'))],
+    [
+      'an HTML page',
+      () =>
+        new Response('<!doctype html>', {
+          headers: { 'content-type': 'text/html' }
+        })
+    ]
+  ] as const)(
+    'sends no device project when the encryption routes answer %s',
+    async (_, failure) => {
+      // A device with no pinned opt-in, whose encryption routes fail while
+      // the project route still answers: never read as "not encrypted".
+      vi.mocked(desktopFetch).mockImplementation(async (input) => {
+        if (input === '/api/session') return json({ userId: 'user_1' });
+        if (
+          input === '/api/e2ee/config' ||
+          input === '/api/e2ee/project-preferences'
+        ) {
+          return failure();
+        }
+        return json({ project: { projectId: 'proj_plain' } }, 201);
+      });
+      await expect(
+        api.adoptProject(
+          createProjectDocument('Device', 'user_1' as never),
+          'user_1' as never
+        )
+      ).rejects.toMatchObject({ code: 'E2EE_PREFERENCE_UNVERIFIED' });
+      expect(sentPlaintextTo('/api/projects')).toBe(false);
+    }
+  );
+
+  it('reads as not encrypted only from a Worker without encryption routes', async () => {
+    vi.mocked(desktopFetch).mockImplementation(async (input) =>
+      input === '/api/session'
+        ? json({ userId: 'user_1' })
+        : json({ error: 'Not found' }, 404)
+    );
+    await expect(encryptsAccountLibrary()).resolves.toBe(false);
+  });
+
   it('refuses rather than guessing when the answer cannot be read', async () => {
     vi.mocked(desktopFetch).mockImplementation(async (input) => {
       if (input === '/api/session') return json({ userId: 'user_1' });
