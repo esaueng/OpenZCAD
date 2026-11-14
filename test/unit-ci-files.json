@@ -190,6 +190,7 @@
     "test/thread-feature.test.ts",
     "test/thread-pipe-runout.test.ts",
     "test/three-box-union-grouping.test.ts",
+    "test/touching-cylinder-union.test.ts",
     "test/through-hole-chamfer-resize.test.ts",
     "test/trusted-pr-policy.test.ts",
     "test/typed-parameters.test.ts",

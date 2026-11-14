@@ -533,11 +533,98 @@ export function fuseUniformSolidChecked(
     kernel,
     // `exactFuseAll` refuses by name on a non-exact pair; only a fused
     // solid reaches the gate.
-    exactFuseAll(kernel, solids, labels),
+    fuseAllMergingFaceContacts(kernel, solids, labels),
     onAccepted,
     retainDisplayMesh,
     heldLinearDeflection
   );
+}
+
+/** Face-connected pieces of one solid, or null when the kernel cannot say. */
+function faceComponentCount(kernel: RemusKernel, solid: number): number | null {
+  try {
+    return countFaceConnectedComponents(
+      kernel.getSolidFaces(solid),
+      JSON.parse(kernel.edgeToFaceMap(solid)) as Record<string, number[]>
+    );
+  } catch {
+    return null;
+  }
+}
+
+/** Retire a scratch solid; a failed release never replaces the result. */
+function releaseScratchSolid(kernel: RemusKernel, solid: number): void {
+  try {
+    kernel.deleteSolid(solid);
+  } catch {
+    // An arena handle that could not be retired is a leak, not an error.
+  }
+}
+
+/**
+ * `exactFuseAll`, with the face contacts it leaves unmerged merged pairwise.
+ *
+ * `fuseAll` joins the groups it judges disjoint "directly without a boolean".
+ * On the pinned Remus that judgement misses planar contact between two
+ * cylinder caps — a hub standing exactly on a flange, coaxial or not, either
+ * operand order — and returns one valid-looking solid that still holds both
+ * caps: the flange top stays a full disc under the hub, an internal wall the
+ * viewport hides and every face pick, offset and fillet then works on. A
+ * fillet of the hub foot comes out convex, because the edge it rounds is the
+ * hub's own base rim rather than a concave junction. Box-on-box, cylinder on
+ * a box and a cone on a cylinder merge correctly; the pairwise `fuse` merges
+ * every one of them, including the cylinder pair.
+ *
+ * So a result in more than one face-connected piece is folded again with the
+ * pairwise typed fuse, and the fold replaces it only when it has strictly
+ * fewer pieces. Disjoint operands stay disjoint under either construction, so
+ * a genuinely disconnected union keeps the `fuseAll` result (and its own
+ * disconnected-union refusal). A fold the kernel refuses is not a reason to
+ * refuse a union `fuseAll` accepted: the original result stands.
+ *
+ * The extra fold runs only when the fused result is in pieces, which on a
+ * union of touching or overlapping operands means this defect. It is kept off
+ * `collapseShape`, where a disjoint pattern tool is in pieces by design.
+ */
+export function fuseAllMergingFaceContacts(
+  kernel: RemusKernel,
+  solids: readonly number[],
+  labels?: readonly string[]
+): number {
+  const fused = exactFuseAll(kernel, solids, labels);
+  if (solids.length < 2) return fused;
+  const pieces = faceComponentCount(kernel, fused);
+  if (pieces === null || pieces <= 1) return fused;
+  let accumulated = solids[0]!;
+  let owned: number | null = null;
+  try {
+    for (let index = 1; index < solids.length; index += 1) {
+      const outcome = exactBooleanOutcome(
+        kernel,
+        'fuse',
+        accumulated,
+        solids[index]!
+      );
+      if (outcome.status !== 'ok') {
+        if (owned !== null) releaseScratchSolid(kernel, owned);
+        return fused;
+      }
+      if (owned !== null) releaseScratchSolid(kernel, owned);
+      accumulated = outcome.solid;
+      owned = outcome.solid;
+    }
+  } catch {
+    if (owned !== null) releaseScratchSolid(kernel, owned);
+    return fused;
+  }
+  if (owned === null) return fused;
+  const folded = faceComponentCount(kernel, owned);
+  if (folded !== null && folded < pieces) {
+    releaseScratchSolid(kernel, fused);
+    return owned;
+  }
+  releaseScratchSolid(kernel, owned);
+  return fused;
 }
 
 /**
