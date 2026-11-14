@@ -4029,7 +4029,11 @@ export function StartScreen({
               onClose={() => setStorageOpen(false)}
               onShowTrash={() => {
                 selectShelf('deleted');
-                document.getElementById('start-shelf-tab-deleted')?.focus();
+                // The panel that held focus is going away; the Trash tab
+                // it led to takes it, as a click on the tab would.
+                globalThis.document
+                  .getElementById('start-shelf-tab-deleted')
+                  ?.focus();
               }}
               {...((onOpenAccountSettings ?? onSignIn) && {
                 onOpenAccountSettings: onOpenAccountSettings ?? onSignIn

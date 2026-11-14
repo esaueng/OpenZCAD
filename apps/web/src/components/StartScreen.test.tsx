@@ -2590,6 +2590,7 @@ describe('StartScreen storage readout', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Storage details/ }));
     fireEvent.click(await screen.findByRole('button', { name: 'View trash' }));
     expect(screen.queryByRole('dialog', { name: 'Storage' })).toBeNull();
+    // The focused panel went away; focus follows to the tab it led to.
     expect(
       screen.getByRole('tab', { name: /Trash/, selected: true })
     ).toHaveFocus();
@@ -2612,7 +2613,8 @@ describe('StartScreen storage readout', () => {
           storageReport({ storageBytes: GB + 10 * MB, projectStorageBytes: GB })
         )
     });
-    await screen.findByText('1 GB of 1 GB');
+    // At one decimal place this read "1 GB of 1 GB" beside 101%.
+    await screen.findByText('1.01 GB of 1 GB');
     expect(
       screen.getByRole('meter', { name: 'Account storage used' })
     ).toHaveClass('is-over');

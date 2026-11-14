@@ -1,3 +1,4 @@
+import { formatBytes } from './formatBytes';
 import type {
   AccountEntitlements,
   AccountStorageUsage
@@ -60,4 +61,19 @@ export function storageLevel(
   if (!limit || limit <= 0) return 'ok';
   if (used > limit) return 'over';
   return used / limit >= STORAGE_NEAR_FRACTION ? 'near' : 'ok';
+}
+
+/**
+ * Usage as written beside its allowance. At one decimal place 1,034 MB of a
+ * 1 GB allowance read "1 GB of 1 GB" beside "101%"; a figure that differs
+ * from the allowance takes the places it needs (up to three) to say so.
+ */
+export function formatUsedBytes(used: number, limit: number): string {
+  const allowance = formatBytes(limit);
+  let figure = formatBytes(used);
+  for (let digits = 2; digits <= 3 && used !== limit; digits += 1) {
+    if (figure !== allowance) break;
+    figure = formatBytes(used, 'short', digits);
+  }
+  return figure;
 }

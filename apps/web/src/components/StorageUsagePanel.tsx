@@ -11,6 +11,7 @@ import { formatBytes } from '../lib/formatBytes';
 import { countLabel } from '../lib/toasts';
 import {
   storageLevel,
+  formatUsedBytes,
   storageLimitOf,
   storageParts,
   storedBytes,
@@ -22,10 +23,12 @@ export type StorageUsageState = 'idle' | 'loading' | 'ready' | 'failed';
 /**
  * The account's storage report for the library's footer. Asked once a loader
  * is given (signed in, cloud on), again whenever `refreshKey` changes — a
- * save, a trash, an import finishing — and on demand. A null key holds the
- * last answer, so a running save does not ask after every project. Dropped
- * when the loader goes away or the account changes, so one account's totals
- * never linger in front of another's.
+ * save, a trash, an import finishing — and whenever `refresh` is called. A
+ * null key only pauses the automatic asks, so a running save does not ask
+ * after every project; a request already in flight still lands, and Retry
+ * still asks. Dropped when the loader goes away or the account changes, and
+ * an answer for an earlier account or an older request is ignored, so one
+ * account's totals never linger in front of another's.
  */
 export function useAccountStorageUsage(
   load: (() => Promise<AccountStorageUsage>) | undefined,
@@ -38,46 +41,48 @@ export function useAccountStorageUsage(
 } {
   const [usage, setUsage] = useState<AccountStorageUsage | null>(null);
   const [state, setState] = useState<StorageUsageState>('idle');
-  const [manual, setManual] = useState(0);
-  const [automaticRefresh, setAutomaticRefresh] = useState({
-    key: refreshKey,
-    generation: 0
-  });
-  // Suspending automatic refresh keeps the request already in flight alive.
-  // Manual refresh and account changes still start their own request.
-  if (refreshKey !== automaticRefresh.key) {
-    setAutomaticRefresh({
-      key: refreshKey,
-      generation: automaticRefresh.generation + (refreshKey === null ? 0 : 1)
-    });
-  }
+  /** Bumped by every request and every reset; only the latest may land. */
+  const requestRef = useRef(0);
+  /** The automatic key last asked for, so an unchanged key asks nothing. */
+  const askedKeyRef = useRef<string | null>(null);
+  const refreshKeyRef = useRef(refreshKey);
+  refreshKeyRef.current = refreshKey;
 
-  useEffect(() => {
-    setUsage(null);
-    setState('idle');
-  }, [load, accountKey]);
-
-  useEffect(() => {
+  const refresh = useCallback(() => {
     if (!load) return;
-    let cancelled = false;
+    const request = ++requestRef.current;
     setState((current) => (current === 'ready' ? current : 'loading'));
     load()
       .then((next) => {
-        if (cancelled) return;
+        if (requestRef.current !== request) return;
         setUsage(next);
         setState('ready');
       })
       .catch(() => {
-        if (cancelled) return;
+        if (requestRef.current !== request) return;
         // A stale figure beats none: keep the last one if there was one.
         setState((current) => (current === 'ready' ? current : 'failed'));
       });
-    return () => {
-      cancelled = true;
-    };
-  }, [load, accountKey, automaticRefresh.generation, manual]);
+  }, [load]);
 
-  const refresh = useCallback(() => setManual((count) => count + 1), []);
+  // A new account (or none) starts from nothing and asks once.
+  useEffect(() => {
+    requestRef.current += 1;
+    setUsage(null);
+    setState('idle');
+    askedKeyRef.current = refreshKeyRef.current;
+    refresh();
+    return () => {
+      requestRef.current += 1;
+    };
+  }, [refresh, accountKey]);
+
+  useEffect(() => {
+    if (refreshKey === null || refreshKey === askedKeyRef.current) return;
+    askedKeyRef.current = refreshKey;
+    refresh();
+  }, [refreshKey, refresh]);
+
   return { usage, state, refresh };
 }
 
@@ -143,7 +148,7 @@ export function storageSegments(usage: AccountStorageUsage): StorageSegment[] {
 /** "42 MB of 1 GB", the footer's one-glance figure. */
 export function storageFigure(used: number, limit: number | undefined) {
   return limit
-    ? `${formatBytes(used)} of ${formatBytes(limit)}`
+    ? `${formatUsedBytes(used, limit)} of ${formatBytes(limit)}`
     : formatBytes(used);
 }
 
@@ -302,7 +307,9 @@ export function StorageUsagePanel({
           {usage ? (
             <>
               <div className="storage-panel-hero">
-                <span className="storage-panel-used">{formatBytes(used)}</span>
+                <span className="storage-panel-used">
+                  {limit ? formatUsedBytes(used, limit) : formatBytes(used)}
+                </span>
                 {limit ? (
                   <span className="storage-panel-limit">
                     of {formatBytes(limit)}

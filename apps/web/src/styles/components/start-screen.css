@@ -3166,15 +3166,6 @@
   outline: none;
 }
 
-/* On narrow screens the account card follows the brand at the page's top. */
-@media (max-width: 900px) {
-  .storage-panel {
-    top: calc(100% + var(--sp-2));
-    bottom: auto;
-    left: var(--sp-3);
-  }
-}
-
 .storage-panel:focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 1px;
@@ -3442,4 +3433,15 @@
 .storage-panel-skeleton.is-bar {
   height: 8px;
   border-radius: 999px;
+}
+
+/* In the one-column layout the card sits under the logo, at the page's top:
+   rising from it ran the panel off the top of the page. It drops instead. */
+@media (max-width: 900px) {
+  .storage-panel {
+    top: calc(100% + var(--sp-2));
+    bottom: auto;
+    max-height: none;
+    animation-name: oz-drop;
+  }
 }
