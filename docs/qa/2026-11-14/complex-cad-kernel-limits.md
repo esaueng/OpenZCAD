@@ -295,3 +295,29 @@ filleting a patterned union, sweeps, lofts, imports and exports.
 3. Track draft × blend, split through blends and offset beside blends as
    explicit capability rows, so users get one typed "not yet" message
    instead of raw kernel text.
+
+## Follow-up (same day)
+
+Each app-side finding was reviewed against the code, reproduced locally where
+possible, fixed with regression tests and independently reviewed before
+merge. Status as of the end of 2026-11-14:
+
+| Finding                                        | Verdict                                                                                            | Outcome                                                                                                                |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| 1 Face-touching union                          | Real; Remus `fuseAll` leaves face-touching cylinders unmerged (pairwise `fuse` merges them)        | #1499, open: the adapter repairs or refuses the contact; owner accepted the saved-face identity change                 |
+| 2 Pattern ×4 + Subtract                        | Not reproduced; every copy reaches the cut, and 4–24 copies cut exactly N holes                    | Likely a consequence of finding 1's unmerged hub                                                                       |
+| 5 Pattern booleans refuse disjoint pins        | Not reproduced at 5–24 copies; 60 copies overlap and refuse clearly                                | Kernel limit only where pins overlap                                                                                   |
+| 3, 4, 6, 7, 13, 14                             | Kernel limits or bugs                                                                              | Drafted for upstream Remus issues with minimal reproductions                                                           |
+| 8 "A selected edge no longer exists"           | Real for Shell and Draft (no face names); not reproduced for the box and early-chamfer cases       | #1500, merged: Shell and Draft publish face and edge names, and the refusal names the downstream feature               |
+| 9 Offset "Total" semantics                     | Real                                                                                               | #1497, merged: the field says what its number means. A follow-up PR makes a signed distance the default, per the owner |
+| 10 Typed radius edits the previous fillet      | Real                                                                                               | #1495, merged                                                                                                          |
+| 11 Refusal-card fillet edits as "Resize Blend" | Real, but caused by bodies without face names (shell, shared-carrier unions), not the refusal card | Shell is covered by #1500; unions remain under K05                                                                     |
+| 12 Solid offset growth capped at +11           | Real, in the adapter's shrink check                                                                | #1497, merged                                                                                                          |
+| 16 Large patterns                              | Real except the stale size readout (not reproduced)                                                | #1501, merged: Done reuses the preview, Cancel stops the work, a typed count applies                                   |
+| 17 Isolation leaves bodies hidden              | Real                                                                                               | #1498, open                                                                                                            |
+| 18 Raw kernel text in refusals                 | Real                                                                                               | #1494, merged; #1509, open, restores the STEP importer's own sentences that #1494 replaced                             |
+
+Three suites that fail on `main` were found along the way and fixed:
+glyph coverage and the motion contract (#1503, merged), STEP import
+rejection (#1509) and the viewport overlay contract (#1510). Each now runs in
+CI's unit selection.
