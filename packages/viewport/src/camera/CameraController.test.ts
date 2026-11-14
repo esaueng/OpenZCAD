@@ -1613,3 +1613,70 @@ describe('CameraController saved up', () => {
     }
   });
 });
+
+describe('spatial navigation', () => {
+  const neutral = { panX: 0, panY: 0, zoom: 0, pitch: 0, yaw: 0, roll: 0 };
+
+  it.each(['perspective', 'orthographic'] as const)(
+    'pans, zooms, orbits and rolls the %s camera',
+    (projection) => {
+      const { controller, onViewChange } = createController();
+      controller.applyProjection(projection);
+      const camera = controller.activeCamera;
+      const distance = () =>
+        camera.position.distanceTo(controller.controls.target);
+      const startDistance = distance();
+      const startZoom = controller.orthographic.zoom;
+      const startTarget = controller.controls.target.clone();
+      const startPosition = camera.position.clone();
+
+      expect(controller.navigateSpatially({ ...neutral, panX: 0.1 })).toBe(
+        true
+      );
+      expect(
+        controller.controls.target.distanceTo(startTarget)
+      ).toBeGreaterThan(0);
+      expect(
+        camera.position
+          .clone()
+          .sub(startPosition)
+          .distanceTo(controller.controls.target.clone().sub(startTarget))
+      ).toBeLessThan(1e-9);
+
+      expect(controller.navigateSpatially({ ...neutral, zoom: -0.2 })).toBe(
+        true
+      );
+      if (projection === 'perspective')
+        expect(distance()).toBeLessThan(startDistance);
+      else expect(controller.orthographic.zoom).toBeGreaterThan(startZoom);
+
+      const beforeOrbit = camera.position.clone();
+      const beforeOrbitDistance = distance();
+      expect(
+        controller.navigateSpatially({ ...neutral, pitch: 0.1, yaw: 0.1 })
+      ).toBe(true);
+      expect(camera.position.distanceTo(beforeOrbit)).toBeGreaterThan(0);
+      expect(distance()).toBeCloseTo(beforeOrbitDistance);
+
+      const beforeRoll = camera.position.clone();
+      const upBeforeRoll = camera.up.clone();
+      expect(
+        controller.navigateSpatially({ ...neutral, roll: Math.PI / 2 })
+      ).toBe(true);
+      expect(camera.position.distanceTo(beforeRoll)).toBeLessThan(1e-7);
+      expect(camera.up.dot(upBeforeRoll)).toBeCloseTo(0);
+      expect(onViewChange).toHaveBeenCalled();
+      controller.dispose();
+    }
+  );
+
+  it('leaves sketch rotation locked while allowing pan and zoom', () => {
+    const { controller } = createController();
+    controller.controls.enableRotate = false;
+    expect(controller.navigateSpatially({ ...neutral, roll: 0.5 })).toBe(false);
+    expect(
+      controller.navigateSpatially({ ...neutral, panY: 0.1, zoom: -0.1 })
+    ).toBe(true);
+    controller.dispose();
+  });
+});

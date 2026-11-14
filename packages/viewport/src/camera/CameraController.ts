@@ -52,6 +52,18 @@ interface OrbitGlide {
 }
 
 /** A durable camera pose: what a reload restores. */
+export interface SpatialNavigationStep {
+  /** Pan as a fraction of the viewport height, positive right/up. */
+  panX: number;
+  panY: number;
+  /** Target-centered zoom as a natural log scale. */
+  zoom: number;
+  /** Camera-local rotation around the orbit target, in radians. */
+  pitch: number;
+  yaw: number;
+  roll: number;
+}
+
 export interface ViewportCameraState {
   position: THREE.Vector3Tuple;
   target: THREE.Vector3Tuple;
@@ -1013,6 +1025,69 @@ export class CameraController {
       this.orbit.update();
       this.options.requestRender();
     }
+  }
+
+  /** Applies a 3D controller step directly to the live orbit pose. */
+  navigateSpatially(step: SpatialNavigationStep): boolean {
+    if (this.disposed || this.gestureActive || !this.orbit.enabled)
+      return false;
+    const { panX, panY, zoom, pitch, yaw, roll } = step;
+    const pan = this.orbit.enablePan && (panX !== 0 || panY !== 0);
+    const dolly = this.orbit.enableZoom && zoom !== 0;
+    const rotate =
+      this.orbit.enableRotate && (pitch !== 0 || yaw !== 0 || roll !== 0);
+    if (!pan && !dolly && !rotate) return false;
+
+    this.cancelZoom();
+    this.cancelTween();
+    const orbit = this.orbit;
+    const active = this.active;
+    const target = orbit.target;
+    if (this.orbitGlide !== null) {
+      this.orbitGlide = null;
+      orbit.enableDamping = false;
+      orbit.update();
+      orbit.enableDamping = true;
+      orbit.dampingFactor = DRAG_DAMPING;
+    }
+    if (pan) {
+      const span =
+        this.mode === 'orthographic'
+          ? (this.orthographic.top - this.orthographic.bottom) /
+            this.orthographic.zoom
+          : 2 *
+            active.position.distanceTo(target) *
+            Math.tan(THREE.MathUtils.degToRad(this.perspective.fov / 2));
+      const offset = new THREE.Vector3(-panX, -panY, 0)
+        .multiplyScalar(span)
+        .applyQuaternion(active.quaternion);
+      active.position.add(offset);
+      target.add(offset);
+    }
+    if (dolly) {
+      applyAnchoredZoom(
+        active,
+        target,
+        this.zoomPointerNdc,
+        zoom,
+        false,
+        this.zoomScratch
+      );
+    }
+    if (rotate) {
+      const rotation = active.quaternion
+        .clone()
+        .multiply(
+          new THREE.Quaternion().setFromEuler(new THREE.Euler(pitch, yaw, roll))
+        );
+      const distance = active.position.distanceTo(target);
+      active.position.set(0, 0, distance).applyQuaternion(rotation).add(target);
+      this.holdUp(new THREE.Vector3(0, 1, 0).applyQuaternion(rotation));
+      active.quaternion.copy(rotation);
+    }
+    if (!orbit.update()) this.handleOrbitChange();
+    active.updateMatrixWorld(true);
+    return true;
   }
 
   /** Releases an external orbit into the same short damping tail as canvas. */

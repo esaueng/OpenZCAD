@@ -606,6 +606,23 @@ export async function saveCadBinaryFile(
   });
 }
 
+export type SpaceMouseReport =
+  | { kind: 'translation' | 'rotation'; value: [number, number, number] }
+  | { kind: 'buttons'; value: number }
+  | { kind: 'disconnected' };
+
+export async function listenForSpaceMouse(
+  handler: (report: SpaceMouseReport) => void
+): Promise<() => void> {
+  if (!isDesktopApp()) return () => undefined;
+  const { listen } = await import('@tauri-apps/api/event');
+  return listen<SpaceMouseReport>(
+    'openzcad://spacemouse',
+    (event) => handler(event.payload),
+    { target: 'main' }
+  );
+}
+
 export async function listenForDesktopMenu(
   handler: (command: DesktopMenuCommand) => void
 ): Promise<() => void> {
