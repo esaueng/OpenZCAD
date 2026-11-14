@@ -184,7 +184,7 @@ test(
     expect(dragged).toBeGreaterThan(7.5);
     await bar.locator('summary').click();
     await expect(bar).toContainText(
-      /Threads [\d.]+ of 12 mm, plain where it stops/
+      /Threads [\d.]+ of 12 mm, runs out where it stops/
     );
     await bar.locator('summary').click();
     // A thread is slow to build and mesh: give the dragged frame its time.
@@ -203,8 +203,9 @@ test(
     });
     expect(Number(created!.length)).toBeCloseTo(dragged, 6);
     expect(created!.majorDiameter).toBeUndefined();
-    // Chamfered at the top it starts from, plain where it stops short.
+    // Chamfered at the top it starts from, run out where it stops short.
     expect(created!.chamferStart).toBeUndefined();
+    expect(created!.runoutStart).toBe(true);
     expect(created!.chamferEnd).toBe(true);
 
     // Re-armed from History and finished untouched, it is stored as it was.
@@ -266,5 +267,65 @@ test(
     });
     expect(thread?.length).toBeUndefined();
     expect(thread?.chamferEnd).toBeUndefined();
+    // Set off from the top, it runs out there (schema v57).
+    expect(thread?.runoutEnd).toBe(true);
+  }
+);
+
+/** Choose an Options choice, shown as segments or, when crowded, a menu. */
+async function choose(bar: Locator, label: string, choice: string) {
+  const segments = bar.getByRole('radiogroup', { name: label });
+  if ((await segments.count()) > 0) {
+    await segments.getByRole('radio', { name: choice, exact: true }).click();
+    return;
+  }
+  await bar
+    .getByRole('combobox', { name: label })
+    .selectOption({ label: choice });
+}
+
+test(
+  'NPT in place: a pipe boss takes its size, the standard length and an exact fit',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(300_000);
+    await stubApi(page, { panelLayout: MODEL_ONLY });
+    // A 1/4 NPT pipe: 0.540 in across, 12 mm tall.
+    const radius = (0.54 * 25.4) / 2;
+    await openDocument(page, boss(radius));
+    const more = page.getByRole('button', { name: /^More tools/ });
+    if ((await more.getAttribute('aria-expanded')) !== 'true')
+      await more.click();
+    await pressTool(page, /^Thread\b/);
+    await setSelectionFilter(page, 'Face');
+    await clickWorldPoint(page, [0, -radius, 10]);
+    const bar = page.getByRole('group', { name: 'Thread command' });
+    await expect(bar).toContainText('Drag the arrow');
+    await bar.locator('summary').click();
+    await choose(bar, 'Profile', 'NPT');
+    // Sized from the pipe; it stops where its crest meets the boss, short of
+    // the standard's length, and runs out there.
+    await expect(bar).toContainText('1/4-18 NPT from the Ø13.716 mm face');
+    await expect(bar).toContainText(
+      /Threads 7\.\d+ of 12 mm, runs out where it stops/
+    );
+    await expect(bar.getByRole('button', { name: /Done/ })).toBeEnabled({
+      timeout: 120_000
+    });
+    await finishInPlaceCommand(page, 'Thread');
+    await setSelectionFilter(page, 'Any');
+    const [thread] = await storedThreads(page);
+    expect(thread).toMatchObject({
+      profile: 'npt',
+      anchor: 'end',
+      chamferEnd: true,
+      runoutStart: true
+    });
+    expect(thread?.pipeSize).toBeUndefined();
+    expect(thread?.clearance).toBeUndefined();
+    expect(Number(thread?.length)).toBeCloseTo(
+      (0.2278 + 16 * (0.54 - 0.49163 - 0.8 / 18)) * 25.4,
+      3
+    );
   }
 );

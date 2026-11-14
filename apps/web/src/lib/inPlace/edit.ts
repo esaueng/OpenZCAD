@@ -1078,7 +1078,10 @@ export function inPlaceFeatureUpdate(
         'phaseDeg',
         'chamferStart',
         'chamferEnd',
-        'chamferAngleDeg'
+        'chamferAngleDeg',
+        'runoutStart',
+        'runoutEnd',
+        'pipeSize'
       ] as const;
       const clear = optional.filter(
         (key) => saved[key] !== undefined && request.thread[key] === undefined

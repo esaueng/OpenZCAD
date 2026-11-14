@@ -7,6 +7,7 @@ import type {
   UnitSystem,
   Vector3
 } from '@openzcad/shared';
+import { pipeThreadLabel } from '@openzcad/shared';
 import { edgeSelectionName, storedLoopEdges } from './edgeLoops';
 import { unitLabel } from './measurements';
 import { evalParamValue, formatNumber } from './model';
@@ -302,6 +303,16 @@ export function featureValueSummary(
         : `${teeth} teeth, ${helix}° ${data.hand ?? 'right'} ${data.herringbone ? 'herringbone' : 'helix'}`;
     }
     case 'thread': {
+      if (data.profile === 'npt' || data.profile === 'bspt') {
+        // Schema v57 pipe threads: the callout, or the standard where the
+        // face picks the size.
+        const standard = data.profile === 'npt' ? 'NPT' : 'BSPT';
+        return data.pipeSize === undefined
+          ? `${standard}, fits the face`
+          : data.profile === 'npt'
+            ? pipeThreadLabel('npt', data.pipeSize)
+            : `${data.pipeSize} BSPT`;
+      }
       const profile =
         data.profile === 'printable'
           ? 'printable'

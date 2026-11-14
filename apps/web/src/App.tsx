@@ -765,6 +765,7 @@ import {
 } from './lib/selectionFeature';
 import { heldFaceSetBody, toggleFaceInSet } from './lib/faceSetSelection';
 import { cylinderResizeFold } from './lib/interaction/cylinderResizeFold';
+import { facePickCylinder, facePickKey } from './lib/inPlace/cylinderSide';
 import {
   cylinderRadialFrame,
   type CylinderRadiusEdit,
@@ -11176,6 +11177,11 @@ export function App() {
     }
     if (!face) return null;
     const geometry = face.geometry;
+    const cylinder = facePickCylinder(
+      geometry,
+      representations[resolvedBodyId]?.mesh,
+      face
+    );
     return {
       bodyId: resolvedBodyId,
       hash: face.hash,
@@ -11186,18 +11192,7 @@ export function App() {
       ...(geometry?.normal ? { normal: geometry.normal } : {}),
       ...(geometry?.centroid ? { centroid: geometry.centroid } : {}),
       ...(geometry?.center ? { center: geometry.center } : {}),
-      ...(geometry?.surfaceType === 'cylinder' &&
-      geometry.axisStart &&
-      geometry.axisEnd &&
-      geometry.radius !== undefined
-        ? {
-            cylinder: {
-              axisStart: geometry.axisStart,
-              axisEnd: geometry.axisEnd,
-              radius: geometry.radius
-            }
-          }
-        : {}),
+      ...(cylinder ? { cylinder } : {}),
       ...(point ? { point } : {})
     };
   }
@@ -24400,15 +24395,7 @@ export function App() {
     // hash, its plane, a saved hole's place on it), so its handles follow
     // a face an update moved.
     let facesMoved = false;
-    const placed = (pick: FacePick) =>
-      JSON.stringify([
-        pick.hash,
-        pick.topologyId,
-        pick.normal,
-        pick.centroid,
-        pick.center,
-        pick.point
-      ]);
+    const placed = facePickKey;
     const faces = inPlaceEditPicks.faces.flatMap((pick) => {
       const body = representations[pick.bodyId];
       if (!body?.topology) return [pick];
