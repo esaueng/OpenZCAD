@@ -1217,6 +1217,41 @@ describe('in-place pipe threads (schema v57)', () => {
     );
   });
 
+  it('keeps an untouched pipe length to the pipe rule as the offset moves (review #1458)', () => {
+    const values = { ...numbersOf(initialValues()), length: reach, offset: 0 };
+    const context = {
+      touched: ['offset'],
+      options: { ...defaults(), profile: 'npt' },
+      units: 'mm' as const
+    };
+    // Set off 1 from the fitting end, the band still ends where the crest
+    // meets the boss: 1 shorter, not the rest of the 30 mm face.
+    const carried = threadSpec.carries!('offset', 1, values, slots, context);
+    expect(carried?.length).toBeCloseTo(reach - 1, 9);
+    expect(
+      threadSpec.defaults!(
+        slots,
+        CTX,
+        { ...values, offset: 1 },
+        context.options
+      ).length
+    ).toBeCloseTo(reach - 1, 9);
+    // A length the user set stays as set.
+    expect(
+      threadSpec.carries!('offset', 1, values, slots, {
+        ...context,
+        touched: ['offset', 'length']
+      })
+    ).toBeNull();
+    // Any other profile still runs to the face's far end.
+    expect(
+      threadSpec.carries!('offset', 1, values, slots, {
+        ...context,
+        options: defaults()
+      })
+    ).toEqual({ length: 29 });
+  });
+
   it('stores the profile, its length and no clearance, and runs out where it stops', () => {
     const values = initialValues({ length: reach, offset: 0 });
     const request = threadSpec.request(

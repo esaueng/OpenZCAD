@@ -306,6 +306,10 @@ export interface InPlaceValueContext {
   raws?: Readonly<Record<string, string>>;
   /** The edited feature's stored data; absent when creating. */
   saved?: FeatureData;
+  /** Each option's value, for a check that reads one (a thread's profile). */
+  options?: Readonly<Record<string, string>>;
+  /** The document's length unit. */
+  units?: UnitSystem;
 }
 
 export type ValueUnit = 'angle' | 'length' | 'count';

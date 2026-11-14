@@ -10,7 +10,7 @@ import {
   createExactKernelAdapter,
   type ExactKernelAdapter
 } from '@openzcad/kernel-adapter/exact';
-import { commandFactories } from '@openzcad/command-system';
+import { CommandManager, commandFactories } from '@openzcad/command-system';
 import {
   PIPE_THREAD_SIZES,
   PIPE_THREAD_TABLES,
@@ -132,9 +132,9 @@ describe('pipe thread resolution against its face', () => {
     expect(thread.length).toBeCloseTo(reach, 3);
     expect(thread.offset).toBe(0);
     expect(thread.truncation).toBe(0);
-    expect(thread.shortOfStandard).toBeCloseTo(0.5337 * INCH, 9);
+    expect(thread.shortOfStandard?.standard).toBeCloseTo(0.5337 * INCH, 9);
     expect(threadPrintAdvisories(thread, 1, 'mm').join('\n')).toMatch(
-      /stops after 9\.92\d* mm, where its crest meets the boss, short of the standard's 13\.5\d* mm/
+      /stops 9\.92\d* mm from its fitting end, where its crest meets the boss, short of the standard's 13\.5\d* mm/
     );
   });
 
@@ -209,6 +209,105 @@ describe('pipe thread resolution against its face', () => {
     expect(r.majorDiameter * INCH).toBeCloseTo(20.955 - 0.2, 9);
     expect(r.pitch).toBeCloseTo(1 / 14, 12);
     expect(r.taper!.gaugeOffset * INCH).toBeCloseTo(8.2, 9);
+  });
+});
+
+describe('pipe thread gauge plane and length from the fitting face (review #1458)', () => {
+  const p = INCH / 14;
+
+  it('keeps an offset Rc thread gauged half a pitch behind the fitting face, from either end', () => {
+    for (const anchor of ['start', 'end'] as const) {
+      const rc = resolveThread(
+        data({
+          profile: 'bspt',
+          pipeSize: '1/2',
+          anchor,
+          offset: 2,
+          length: 10
+        }),
+        values,
+        { kind: 'internal', radius: 9, faceLength: 30 },
+        1
+      );
+      // The small end is the band's deep side, 12 from the fitting face; the
+      // gauge plane is P/2 = 0.907 from that face, so 11.093 from the small
+      // end, not 9.093 (P/2 behind the band's start).
+      expect(rc.taper!.smallEnd).toBe(anchor === 'start' ? 'end' : 'start');
+      expect(rc.taper!.gaugeOffset).toBeCloseTo(12 - p / 2, 12);
+      expect(rc.offset).toBe(anchor === 'start' ? 2 : 18);
+    }
+  });
+
+  it('keeps an offset NPT thread gauged where the standards put it, boss and bore', () => {
+    const boss = resolveThread(
+      data({ pipeSize: '1/2', anchor: 'end', offset: 2 }),
+      values,
+      { kind: 'external', radius: 0.84 * (INCH / 2), faceLength: 20 },
+      1
+    );
+    // L1 from the pipe's end, which the band starts 2 in from.
+    expect(boss.taper!.smallEnd).toBe('end');
+    expect(boss.taper!.gaugeOffset).toBeCloseTo(0.32 * INCH - 2, 9);
+    // The band still ends where the crest meets the boss, so it is 2 shorter.
+    const reach = (0.32 + 16 * (0.84 - 0.77843 - 0.8 / 14)) * INCH;
+    expect(boss.length).toBeCloseTo(reach - 2, 9);
+    expect(boss.offset).toBeCloseTo(20 - 2 - (reach - 2), 9);
+    expect(boss.shortOfStandard?.stopsAt).toBeCloseTo(reach, 9);
+    const bore = resolveThread(
+      data({ pipeSize: '1/2', offset: 1.5, length: 4 }),
+      values,
+      { kind: 'internal', radius: 9, faceLength: 30 },
+      1
+    );
+    // NPT gauges a bore on its fitting face: 5.5 from the small end.
+    expect(bore.taper).toMatchObject({ smallEnd: 'end', gaugeOffset: 5.5 });
+  });
+
+  it('refuses an offset that leaves a standard-length pipe thread no length', () => {
+    expect(() =>
+      resolveThread(
+        data({ pipeSize: '1/2', offset: 11 }),
+        values,
+        { kind: 'external', radius: 0.84 * (INCH / 2), faceLength: 20 },
+        1
+      )
+    ).toThrow(
+      /The offset leaves this pipe thread no length: it would end 9\.92\d* from the fitting end, and the offset is 11\. Reduce the offset or set the length\./
+    );
+  });
+
+  it('warns of the shortened standard length for a stored default length too', () => {
+    const face = {
+      kind: 'external' as const,
+      radius: 0.54 * (INCH / 2),
+      faceLength: 30
+    };
+    const reach = (0.2278 + 16 * (0.54 - 0.49163 - 0.8 / 18)) * INCH;
+    // The panel stores the length it defaulted to (7.381 of L2's 10.206).
+    const stored = resolveThread(
+      data({ pipeSize: '1/4', length: reach }),
+      values,
+      face,
+      1
+    );
+    expect(stored.shortOfStandard?.standard).toBeCloseTo(0.4018 * INCH, 9);
+    expect(threadPrintAdvisories(stored, 1, 'mm').join('\n')).toMatch(
+      /stops 7\.38\d* mm from its fitting end, where its crest meets the boss, short of the standard's 10\.2\d* mm/
+    );
+    // One the user dragged shorter is their choice, and says nothing.
+    expect(
+      resolveThread(data({ pipeSize: '1/4', length: 5 }), values, face, 1)
+        .shortOfStandard
+    ).toBeUndefined();
+    // One the face stops before the crest meets the boss says nothing either.
+    expect(
+      resolveThread(
+        data({ pipeSize: '1/4' }),
+        values,
+        { ...face, faceLength: 6 },
+        1
+      ).shortOfStandard
+    ).toBeUndefined();
   });
 });
 
@@ -355,6 +454,60 @@ describe('schema v57 migration', () => {
     expect(opened.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
     expect(opened.nodes).toEqual(v56.nodes);
     expect(opened.featureOrder).toEqual(v56.featureOrder);
+  });
+
+  it('refuses a saved partial patch that adds a runout or pipe fields under v56 (review #1458)', () => {
+    const document = addPrimitiveFeature(
+      createProjectDocument('Bolt', toUserId('user_thread')),
+      {
+        name: 'Shank',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 3, height: 8 }
+      }
+    );
+    const manager = new CommandManager(document);
+    manager.execute(
+      commandFactories.threadBody({
+        name: 'Thread',
+        targetBodyId: document.bodyOrder[0]!,
+        faceHash: 7,
+        profile: 'iso-metric',
+        length: 5
+      })
+    );
+    const featureId = manager.document.featureOrder.at(-1)!;
+    const v56 = (patch: Record<string, unknown>, nest = false) => {
+      const saved = JSON.parse(
+        JSON.stringify(manager.document)
+      ) as ProjectDocument & { commandLog: unknown[] };
+      // The patch names no feature kind, as an edit's partial update need
+      // not; the node itself is left a v53 thread, so only the log carries
+      // the v57 field.
+      const update = {
+        kind: 'feature.update',
+        payload: { featureId, data: patch }
+      };
+      saved.commandLog = [
+        ...saved.commandLog,
+        nest ? { kind: 'transaction', payload: [update] } : update
+      ];
+      return { ...saved, schemaVersion: 56 } as unknown as ProjectDocument;
+    };
+    for (const patch of [
+      { runoutEnd: true },
+      { runoutStart: true },
+      { pipeSize: '1/4' },
+      { profile: 'npt' }
+    ])
+      for (const nest of [false, true])
+        expect(() => normalizeDocument(v56(patch, nest))).toThrow(
+          /Thread runouts and pipe threads require project schema v57/
+        );
+    // A v53 patch, and another kind's patch, still open under v56.
+    expect(() => normalizeDocument(v56({ length: 6 }))).not.toThrow();
+    expect(() =>
+      normalizeDocument(v56({ featureKind: 'gear', offset: 2 }))
+    ).not.toThrow();
   });
 
   it.each([

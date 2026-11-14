@@ -121,9 +121,14 @@ export function assertDocumentContentCommandSchema(
     if (!record(command.payload)) continue;
     if (command.kind === 'feature.thread')
       assertThreadContentSchema(command.payload, document.schemaVersion);
+    // A feature patch (`feature.update`) need not name its kind, so a
+    // partial `{ runoutEnd: true }` is gated by its fields: they are
+    // thread-only, so any patch that is not another kind's carries them
+    // only as a thread.
     if (
       record(command.payload.data) &&
-      command.payload.data.featureKind === 'thread'
+      (command.payload.data.featureKind === undefined ||
+        command.payload.data.featureKind === 'thread')
     )
       assertThreadContentSchema(command.payload.data, document.schemaVersion);
     switch (command.kind) {

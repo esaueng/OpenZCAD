@@ -5,6 +5,7 @@ import type {
   ParamValue,
   ParametricVector3,
   ProjectDocument,
+  UnitSystem,
   Vector3
 } from '@openzcad/shared';
 import { GEOMETRY_PREVIEW_SCHEDULING, LivePreview } from '../lib/livePreview';
@@ -1839,7 +1840,11 @@ export function useInPlaceCommand(
               value,
               current.values,
               { faces: current.slots.faces },
-              valueContext(current, savedDataRef.current)
+              valueContext(
+                current,
+                savedDataRef.current,
+                optionsRef.current.units
+              )
             ) ?? null)
           : null;
       if (crossed) {
@@ -1872,7 +1877,13 @@ export function useInPlaceCommand(
           ...current,
           values: {
             ...current.values,
-            ...carriedValues(current, valueId, next, savedDataRef.current),
+            ...carriedValues(
+              current,
+              valueId,
+              next,
+              savedDataRef.current,
+              optionsRef.current.units
+            ),
             [valueId]: next
           },
           raws,
@@ -1931,7 +1942,13 @@ export function useInPlaceCommand(
           // box's corner, with its height).
           values: {
             ...current.values,
-            ...carriedValues(current, valueId, restored, savedDataRef.current),
+            ...carriedValues(
+              current,
+              valueId,
+              restored,
+              savedDataRef.current,
+              optionsRef.current.units
+            ),
             [valueId]: restored
           },
           raws,
@@ -2142,7 +2159,8 @@ function carriedValues(
   session: Session,
   valueId: string,
   value: number,
-  saved: FeatureData | undefined
+  saved: FeatureData | undefined,
+  units?: UnitSystem
 ): Record<string, number> {
   return Object.fromEntries(
     Object.entries(
@@ -2155,7 +2173,7 @@ function carriedValues(
           placement: session.slots.placement,
           faces: session.slots.faces
         },
-        valueContext(session, saved)
+        valueContext(session, saved, units)
       ) ?? {}
     ).filter(([id]) => session.raws[id] === undefined)
   );
@@ -2164,11 +2182,14 @@ function carriedValues(
 /** How a session holds its values, for a tool's value checks. */
 function valueContext(
   session: Session,
-  saved: FeatureData | undefined
+  saved: FeatureData | undefined,
+  units?: UnitSystem
 ): InPlaceValueContext {
   return {
     touched: session.touched,
     raws: session.raws,
+    options: session.options,
+    ...(units ? { units } : {}),
     ...(saved ? { saved } : {})
   };
 }

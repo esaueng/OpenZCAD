@@ -188,10 +188,11 @@ export interface ResolvedThread {
   /** The pipe size a pipe thread was cut to, in millimetres. */
   pipe?: PipeThreadSpec;
   /**
-   * A pipe thread whose length the feature left to the standard, cut
-   * shorter where its crest meets the cylinder: the standard's length.
+   * A pipe thread that ends where its crest meets the cylinder, short of
+   * the standard's thread: where it stops and where the standard's ends,
+   * both from the fitting face.
    */
-  shortOfStandard?: number;
+  shortOfStandard?: { stopsAt: number; standard: number };
 }
 
 /** A profile's depth, crest flat and flank angles for a pitch. */
@@ -361,19 +362,33 @@ function resolvePipeThread(
     gaugeFromFittingEnd,
     diameter: 2 * radius
   });
-  // Left to the standard, the thread takes its standard length within the
-  // face, and stops where its crest meets the cylinder. One that does not
-  // fit at all keeps the standard's, and the kernel names why.
-  const room = faceLength - offset;
-  const fitted = Math.min(
+  // Every distance here is from the fitting face (the end of the face the
+  // thread is anchored at), as the standards measure the gauge plane and
+  // the thread's length from the pipe's end or the fitting's face: an
+  // offset moves the band, never the gauge plane. Left to the standard,
+  // the band ends where the standard's thread ends, within the face, and
+  // where its crest meets the cylinder. One that does not fit at all keeps
+  // the standard's end, and the kernel names why.
+  const end = Math.min(
     standardLength,
-    room,
+    faceLength,
     reach > 0 ? reach : standardLength
   );
-  const length = typedLength ?? fitted;
+  const slack = (size: number) => 1e-9 * Math.max(size, 1);
+  if (typedLength === undefined && end - offset <= slack(end)) {
+    throw new Error(
+      `The offset leaves this pipe thread no length: it would end ${formatted(end)} from the fitting end, and the offset is ${formatted(offset)}. Reduce the offset or set the length.`
+    );
+  }
+  const length = typedLength ?? end - offset;
   const fittingEnd = data.anchor ?? 'start';
   const farEnd = fittingEnd === 'start' ? 'end' : 'start';
-  const slack = (size: number) => 1e-9 * Math.max(size, 1);
+  // Derived from where the band ends, so a length the panel stored from
+  // this same rule warns as one left to it does.
+  const stopsAtCrest =
+    reach > 0 &&
+    reach < Math.min(standardLength, faceLength) - slack(standardLength) &&
+    Math.abs(offset + length - reach) <= 1e-6 * Math.max(standardLength, 1);
   return {
     kind,
     majorDiameter: majorAtGauge,
@@ -390,25 +405,30 @@ function resolvePipeThread(
     chamfer: threadChamfers(data, values),
     ...threadRunouts(data, values),
     truncation: 0,
-    // The gauge offset runs from the small end toward the large end: from
-    // a boss's fitting end, from a bore's far end.
+    // The kernel's gauge offset runs from the band's small end toward its
+    // large end, and may fall outside the band. A boss's small end is the
+    // band's fitting side, `offset` from the fitting face; a bore's is its
+    // far side, `offset + length` from it.
     taper:
       kind === 'external'
         ? {
             ratio: PIPE_THREAD_TAPER,
             smallEnd: fittingEnd,
-            gaugeOffset: gaugeFromFittingEnd
+            gaugeOffset: gaugeFromFittingEnd - offset
           }
         : {
             ratio: PIPE_THREAD_TAPER,
             smallEnd: farEnd,
-            gaugeOffset: length - gaugeFromFittingEnd
+            gaugeOffset: offset + length - gaugeFromFittingEnd
           },
     pipe,
-    ...(typedLength === undefined &&
-    fitted < standardLength - slack(standardLength) &&
-    fitted < room - slack(faceLength)
-      ? { shortOfStandard: standardLength }
+    ...(stopsAtCrest
+      ? {
+          shortOfStandard: {
+            stopsAt: offset + length,
+            standard: standardLength
+          }
+        }
       : {})
   };
 }
@@ -559,7 +579,7 @@ export function threadPrintAdvisories(
   }
   if (thread.shortOfStandard !== undefined) {
     advisories.push(
-      `The pipe thread stops after ${formatted(thread.length)} ${unitLabel}, where its crest meets the ${thread.kind === 'external' ? 'boss' : 'bore'}, short of the standard's ${formatted(thread.shortOfStandard)} ${unitLabel}.`
+      `The pipe thread stops ${formatted(thread.shortOfStandard.stopsAt)} ${unitLabel} from its fitting end, where its crest meets the ${thread.kind === 'external' ? 'boss' : 'bore'}, short of the standard's ${formatted(thread.shortOfStandard.standard)} ${unitLabel}.`
     );
   }
   if (thread.pipe?.standard === 'bspt') {

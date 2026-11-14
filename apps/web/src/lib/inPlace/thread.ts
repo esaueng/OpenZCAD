@@ -213,9 +213,11 @@ function pipeSpecFor(
 }
 
 /**
- * Schema v57: the length a pipe thread takes until it is dragged: its
- * standard's, within the face from its offset, and no further than its
- * crest can go before it meets the cylinder (the adapter's own rule).
+ * Schema v57: the length a pipe thread takes until it is dragged, by the
+ * adapter's own rule: measured from the fitting face, as the standards
+ * measure it, the band ends where the standard's thread ends, within the
+ * face, and no further than its crest can go before it meets the cylinder;
+ * the offset moves its start, not that end.
  */
 export function pipeThreadDefaultLength(
   standard: PipeThreadStandard,
@@ -242,9 +244,9 @@ export function pipeThreadDefaultLength(
   return Math.max(
     Math.min(
       standardLength,
-      geometry.length - Math.max(offset, 0),
+      geometry.length,
       reach > 0 ? reach : standardLength
-    ),
+    ) - Math.max(offset, 0),
     0
   );
 }
@@ -1120,6 +1122,30 @@ export function faceSpan(lengthId: SpanLengthId, runs: string) {
 
 const threadSpan = faceSpan('length', 'a thread here runs');
 
+/**
+ * Schema v57: the length a pipe thread takes at `offset` until it is
+ * dragged, or null for any other profile (or a face with no cylinder).
+ */
+function pipeDefault(
+  options: Readonly<Record<string, string>>,
+  face: FacePick | undefined,
+  units: UnitSystem,
+  numbers: Readonly<Record<string, number>>,
+  offset: number
+): number | null {
+  const standard = pipeStandard(options.profile);
+  if (!standard) return null;
+  const fit = options.pipeFit ?? 'exact';
+  return pipeThreadDefaultLength(
+    standard,
+    options.pipeSize,
+    face,
+    units,
+    fit === 'custom' ? (numbers.clearance ?? 0) : fitClearance(fit, units),
+    offset
+  );
+}
+
 export const threadSpec: InPlaceToolSpec = {
   id: 'thread',
   title: 'Thread',
@@ -1170,20 +1196,45 @@ export const threadSpec: InPlaceToolSpec = {
   ...threadSpan.behaviour,
   defaults(slots, ctx, numbers, options = {}) {
     const span = threadSpan.behaviour.defaults!(slots, ctx, numbers);
-    const standard = pipeStandard(options.profile);
-    if (!standard) return span;
     // Schema v57: a pipe thread runs its standard's length until dragged.
-    const units = ctx.units ?? 'mm';
-    const fit = options.pipeFit ?? 'exact';
-    const length = pipeThreadDefaultLength(
-      standard,
-      options.pipeSize,
+    const length = pipeDefault(
+      options,
       slots.faces[0],
-      units,
-      fit === 'custom' ? (numbers.clearance ?? 0) : fitClearance(fit, units),
+      ctx.units ?? 'mm',
+      numbers,
       numbers.offset ?? 0
     );
     return length === null ? span : { ...span, length };
+  },
+  carries(valueId, value, values, slots, context) {
+    // An untouched pipe thread's length follows its offset by the pipe rule,
+    // not to the face's far end: the band keeps ending where the standard's
+    // thread (or the taper's reach) ends.
+    const length =
+      valueId === 'offset' &&
+      !lengthIsExplicit(
+        threadFace(slots.faces[0]),
+        heldValues(values, context),
+        values,
+        context ?? {}
+      )
+        ? pipeDefault(
+            context?.options ?? {},
+            slots.faces[0],
+            context?.units ?? 'mm',
+            values,
+            value
+          )
+        : null;
+    return length === null
+      ? (threadSpan.behaviour.carries?.(
+          valueId,
+          value,
+          values,
+          slots,
+          context
+        ) ?? null)
+      : { length };
   },
   hint(slots: InPlaceSlots) {
     const face = slots.faces[0];
