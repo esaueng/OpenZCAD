@@ -1,3 +1,4 @@
+import type { ProjectOrganization } from '@openzcad/shared';
 import {
   cleanFolderName,
   type LibraryFolder,
@@ -18,8 +19,17 @@ import {
  *
  * Membership is recorded per project, not per folder, so a merge can never
  * leave one part in two folders.
+ *
+ * Version 3 adds each project's shelf state (pin, manual order, archive) for
+ * an account whose library is encrypted (ADR-024 amendment 2026-11-14): the
+ * sealed record carries it instead of the account's project rows. Version 2
+ * sets stay readable and read as carrying no shelf state; the plaintext
+ * record (format 1) remains version 2, since a plaintext library keeps its
+ * shelf state on the project rows.
  */
-export const FOLDER_SET_VERSION = 2;
+export const FOLDER_SET_VERSION = 3;
+/** The plaintext record's version, which carries no shelf state. */
+export const PLAINTEXT_FOLDER_SET_VERSION = 2;
 /** Deleted folders and cleared memberships are remembered this long. */
 export const FOLDER_TOMBSTONE_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -54,11 +64,43 @@ export interface SyncedMember {
   stamp: number;
 }
 
+/** When each shelf field of a project last changed, in milliseconds. */
+export interface ShelfFieldStamps {
+  pinned: number;
+  order: number;
+  archived: number;
+}
+
+/** A project's shelf state, as the shelf edits it. Trash is not part of it. */
+export interface ProjectShelf {
+  pinned: boolean;
+  sortOrder: number;
+  archived: boolean;
+  /** When it was archived; only while archived. */
+  archivedAt?: string;
+}
+
+export interface SyncedShelf extends ProjectShelf {
+  stamps: ShelfFieldStamps;
+}
+
 export interface FolderSet {
   version: typeof FOLDER_SET_VERSION;
   folders: Record<string, SyncedFolder>;
   members: Record<string, SyncedMember>;
+  /**
+   * Shelf state per project id. Absent from a set that has never carried it
+   * (a version 2 copy, or a plaintext library), which a device then seeds
+   * from its own rows without overruling anything the account holds.
+   */
+  projects?: Record<string, SyncedShelf>;
 }
+
+export const DEFAULT_PROJECT_SHELF: ProjectShelf = {
+  pinned: false,
+  sortOrder: 0,
+  archived: false
+};
 
 export const EMPTY_FOLDER_SET: FolderSet = {
   version: FOLDER_SET_VERSION,
@@ -165,6 +207,9 @@ function highestStamp(set: FolderSet): number {
   for (const member of Object.values(set.members)) {
     highest = Math.max(highest, member.stamp);
   }
+  for (const shelf of Object.values(set.projects ?? {})) {
+    highest = Math.max(highest, shelfEdited(shelf));
+  }
   return highest;
 }
 
@@ -250,7 +295,11 @@ export function recordFolderChanges(
     if (placedAfter.has(projectId)) continue;
     members[projectId] = { folderId: null, order: 0, stamp };
   }
-  return { version: FOLDER_SET_VERSION, folders, members };
+  return withProjects({ version: FOLDER_SET_VERSION, folders, members }, set);
+}
+
+function withProjects(set: FolderSet, from: FolderSet): FolderSet {
+  return from.projects ? { ...set, projects: from.projects } : set;
 }
 
 /** The later of two stamped values; equal stamps resolve the same way everywhere. */
@@ -311,6 +360,54 @@ function mergeMember(a: SyncedMember, b: SyncedMember): SyncedMember {
     : b;
 }
 
+function mergeShelf(a: SyncedShelf, b: SyncedShelf): SyncedShelf {
+  const pinned = later(
+    { value: a.pinned, stamp: a.stamps.pinned },
+    { value: b.pinned, stamp: b.stamps.pinned }
+  );
+  const order = later(
+    { value: a.sortOrder, stamp: a.stamps.order },
+    { value: b.sortOrder, stamp: b.stamps.order }
+  );
+  // The archive time travels with the archive flag it belongs to.
+  const archived = later(
+    {
+      value: [a.archived, a.archivedAt ?? null] as const,
+      stamp: a.stamps.archived
+    },
+    {
+      value: [b.archived, b.archivedAt ?? null] as const,
+      stamp: b.stamps.archived
+    }
+  );
+  const [isArchived, archivedAt] = archived.value;
+  return {
+    pinned: pinned.value,
+    sortOrder: order.value,
+    archived: isArchived,
+    ...(isArchived && archivedAt ? { archivedAt } : {}),
+    stamps: {
+      pinned: pinned.stamp,
+      order: order.stamp,
+      archived: archived.stamp
+    }
+  };
+}
+
+function mergeProjects(
+  a: FolderSet['projects'],
+  b: FolderSet['projects']
+): FolderSet['projects'] {
+  if (!a || !b) return a ?? b;
+  const projects: Record<string, SyncedShelf> = {};
+  for (const id of new Set([...Object.keys(a), ...Object.keys(b)])) {
+    const left = a[id];
+    const right = b[id];
+    projects[id] = left && right ? mergeShelf(left, right) : (left ?? right)!;
+  }
+  return projects;
+}
+
 /**
  * Combines two copies of the set. Per folder field and per project the later
  * stamp wins; a folder deletion beats every edit stamped before it and loses
@@ -335,7 +432,13 @@ export function mergeFolderSets(a: FolderSet, b: FolderSet): FolderSet {
     const right = b.members[id];
     members[id] = left && right ? mergeMember(left, right) : (left ?? right)!;
   }
-  return { version: FOLDER_SET_VERSION, folders, members };
+  const projects = mergeProjects(a.projects, b.projects);
+  return {
+    version: FOLDER_SET_VERSION,
+    folders,
+    members,
+    ...(projects ? { projects } : {})
+  };
 }
 
 /**
@@ -363,7 +466,21 @@ export function pruneFolderSet(
       return folder !== undefined && folderIsLive(folder);
     })
   );
-  return { version: FOLDER_SET_VERSION, folders, members };
+  // A project back at the defaults is remembered as long as a deletion is,
+  // so an older copy cannot restore its pin; after that it is dropped.
+  const projects = set.projects
+    ? Object.fromEntries(
+        Object.entries(set.projects).filter(
+          ([, shelf]) => !isDefaultShelf(shelf) || shelfEdited(shelf) >= cutoff
+        )
+      )
+    : undefined;
+  return {
+    version: FOLDER_SET_VERSION,
+    folders,
+    members,
+    ...(projects ? { projects } : {})
+  };
 }
 
 const MAX_ID_LENGTH = 128;
@@ -392,7 +509,11 @@ function parseStamps(value: unknown): FolderFieldStamps | null {
 export function parseFolderSet(value: unknown): FolderSet | null {
   if (!value || typeof value !== 'object') return null;
   const record = value as Record<string, unknown>;
-  if (record.version !== FOLDER_SET_VERSION) return null;
+  if (
+    record.version !== FOLDER_SET_VERSION &&
+    record.version !== PLAINTEXT_FOLDER_SET_VERSION
+  )
+    return null;
   const folders: Record<string, SyncedFolder> = {};
   const members: Record<string, SyncedMember> = {};
   if (record.folders && typeof record.folders === 'object') {
@@ -441,5 +562,267 @@ export function parseFolderSet(value: unknown): FolderSet | null {
       };
     }
   }
-  return { version: FOLDER_SET_VERSION, folders, members };
+  // Only version 3 carries shelf state; a version 2 copy, or a set that
+  // never carried any (a plaintext library's), has none to give.
+  if (
+    record.version !== FOLDER_SET_VERSION ||
+    !record.projects ||
+    typeof record.projects !== 'object'
+  ) {
+    return { version: FOLDER_SET_VERSION, folders, members };
+  }
+  const projects: Record<string, SyncedShelf> = {};
+  for (const [id, raw] of Object.entries(record.projects)) {
+    if (!validId(id) || !raw || typeof raw !== 'object') continue;
+    const entry = raw as Record<string, unknown>;
+    const stamps = parseShelfStamps(entry.stamps);
+    if (
+      !stamps ||
+      typeof entry.pinned !== 'boolean' ||
+      !finiteNumber(entry.sortOrder) ||
+      typeof entry.archived !== 'boolean' ||
+      (entry.archivedAt !== undefined && typeof entry.archivedAt !== 'string')
+    ) {
+      continue;
+    }
+    projects[id] = {
+      pinned: entry.pinned,
+      sortOrder: entry.sortOrder,
+      archived: entry.archived,
+      ...(entry.archived && typeof entry.archivedAt === 'string'
+        ? { archivedAt: entry.archivedAt }
+        : {}),
+      stamps
+    };
+  }
+  return { version: FOLDER_SET_VERSION, folders, members, projects };
+}
+
+function parseShelfStamps(value: unknown): ShelfFieldStamps | null {
+  if (!value || typeof value !== 'object') return null;
+  const { pinned, order, archived } = value as Record<string, unknown>;
+  return finiteNumber(pinned) && finiteNumber(order) && finiteNumber(archived)
+    ? { pinned, order, archived }
+    : null;
+}
+
+/**
+ * The set as the plaintext record (format 1) stores it: version 2, without
+ * shelf state, which a plaintext library keeps on its project rows.
+ */
+export function plaintextFolderSet(set: FolderSet): {
+  version: typeof PLAINTEXT_FOLDER_SET_VERSION;
+  folders: FolderSet['folders'];
+  members: FolderSet['members'];
+} {
+  return {
+    version: PLAINTEXT_FOLDER_SET_VERSION,
+    folders: set.folders,
+    members: set.members
+  };
+}
+
+/** The set without shelf state, as a plaintext library syncs it. */
+export function withoutShelf(set: FolderSet): FolderSet {
+  return {
+    version: FOLDER_SET_VERSION,
+    folders: set.folders,
+    members: set.members
+  };
+}
+
+// ── Shelf state ────────────────────────────────────────────────────────────
+
+function shelfEdited(shelf: SyncedShelf): number {
+  return Math.max(
+    shelf.stamps.pinned,
+    shelf.stamps.order,
+    shelf.stamps.archived
+  );
+}
+
+export function isDefaultShelf(shelf: ProjectShelf): boolean {
+  return !shelf.pinned && shelf.sortOrder === 0 && !shelf.archived;
+}
+
+/**
+ * The shelf part of a device row. Trash is the account's business, and a
+ * project in the trash is not archived: trashing an archived project clears
+ * its archive, as it does on the device (`applyOrganizationUpdate`).
+ */
+export function shelfOfOrganization(
+  organization: ProjectOrganization
+): ProjectShelf {
+  const archived = organization.status === 'archived';
+  return {
+    pinned: organization.pinned,
+    sortOrder: organization.sortOrder,
+    archived,
+    ...(archived && organization.archivedAt
+      ? { archivedAt: organization.archivedAt }
+      : {})
+  };
+}
+
+/**
+ * A device row with this shelf state laid over it. A row in the trash stays
+ * there: only the account moves a project in or out of the trash.
+ */
+export function organizationWithShelf(
+  organization: ProjectOrganization,
+  shelf: ProjectShelf
+): ProjectOrganization {
+  if (organization.status === 'deleted') {
+    return {
+      ...organization,
+      pinned: shelf.pinned,
+      sortOrder: shelf.sortOrder
+    };
+  }
+  return {
+    status: shelf.archived ? 'archived' : 'active',
+    pinned: shelf.pinned,
+    sortOrder: shelf.sortOrder,
+    ...(shelf.archived && shelf.archivedAt
+      ? { archivedAt: shelf.archivedAt }
+      : {})
+  };
+}
+
+/** The shelf state the set holds for a project; defaults when it holds none. */
+export function shelfInSet(set: FolderSet, projectId: string): ProjectShelf {
+  const shelf = set.projects?.[projectId];
+  if (!shelf) return DEFAULT_PROJECT_SHELF;
+  return {
+    pinned: shelf.pinned,
+    sortOrder: shelf.sortOrder,
+    archived: shelf.archived,
+    ...(shelf.archivedAt ? { archivedAt: shelf.archivedAt } : {})
+  };
+}
+
+function sameArchive(a: ProjectShelf, b: ProjectShelf): boolean {
+  return (
+    a.archived === b.archived &&
+    (a.archived ? (a.archivedAt ?? null) === (b.archivedAt ?? null) : true)
+  );
+}
+
+export function sameShelf(a: ProjectShelf, b: ProjectShelf): boolean {
+  return (
+    a.pinned === b.pinned && a.sortOrder === b.sortOrder && sameArchive(a, b)
+  );
+}
+
+function syncedShelf(
+  shelf: ProjectShelf,
+  stamps: ShelfFieldStamps
+): SyncedShelf {
+  return {
+    pinned: shelf.pinned,
+    sortOrder: shelf.sortOrder,
+    archived: shelf.archived,
+    ...(shelf.archived && shelf.archivedAt
+      ? { archivedAt: shelf.archivedAt }
+      : {}),
+    stamps
+  };
+}
+
+/**
+ * Gives a set that has never carried shelf state (the account's first
+ * sealed round, or a device that synced folders before shelf state joined
+ * them) this device's non-default rows, stamped 0 so anything the account
+ * already holds wins over them. A set that carries shelf state is returned
+ * as it is: from then on only edits made on the shelf are recorded.
+ */
+export function seedShelf(
+  set: FolderSet,
+  rows: ReadonlyMap<string, ProjectShelf>
+): FolderSet {
+  if (set.projects) return set;
+  const projects: Record<string, SyncedShelf> = {};
+  for (const [projectId, shelf] of rows) {
+    if (isDefaultShelf(shelf)) continue;
+    projects[projectId] = syncedShelf(shelf, {
+      pinned: 0,
+      order: 0,
+      archived: 0
+    });
+  }
+  return { ...set, projects };
+}
+
+/**
+ * Seeds shelf state the set holds nothing for, stamped 0: readable state an
+ * account stored on its project rows before its library was encrypted. Any
+ * value the account's sealed record already holds wins over it.
+ */
+export function seedMissingShelf(
+  set: FolderSet,
+  seeds: ReadonlyMap<string, ProjectShelf>
+): FolderSet {
+  const projects = { ...(set.projects ?? {}) };
+  for (const [projectId, shelf] of seeds) {
+    if (projects[projectId] || isDefaultShelf(shelf)) continue;
+    projects[projectId] = syncedShelf(shelf, {
+      pinned: 0,
+      order: 0,
+      archived: 0
+    });
+  }
+  return { ...set, projects };
+}
+
+/** A shelf edit made on this device: the state before it and after it. */
+export interface ShelfEdit {
+  before: ProjectShelf;
+  after: ProjectShelf;
+}
+
+/**
+ * Records shelf edits into the set, stamping only the fields each edit
+ * changed, after everything this device has seen: a pin on one device and a
+ * reorder on another both survive. Only edits are recorded, never a row as
+ * it stands, so a row the listing wrote from an older record cannot read as
+ * this device's choice.
+ */
+export function recordShelfEdits(
+  set: FolderSet,
+  edits: ReadonlyMap<string, ShelfEdit>,
+  now: number
+): FolderSet {
+  const stamp = nextFolderStamp(set, now);
+  const projects = { ...(set.projects ?? {}) };
+  for (const [projectId, { before, after }] of edits) {
+    const pinned = before.pinned !== after.pinned;
+    const order = before.sortOrder !== after.sortOrder;
+    const archived = !sameArchive(before, after);
+    if (!pinned && !order && !archived) continue;
+    const previous = projects[projectId];
+    // The fields an edit left keep their value; one only seeded (stamp 0)
+    // is vouched for by this device's edit and moves to 1: over untimed
+    // seeds from elsewhere, under any real edit.
+    const current = previous ? shelfInSet(set, projectId) : after;
+    const stamps: ShelfFieldStamps = {
+      pinned: Math.max(previous?.stamps.pinned ?? 0, 1),
+      order: Math.max(previous?.stamps.order ?? 0, 1),
+      archived: Math.max(previous?.stamps.archived ?? 0, 1)
+    };
+    if (pinned) stamps.pinned = stamp;
+    if (order) stamps.order = stamp;
+    if (archived) stamps.archived = stamp;
+    projects[projectId] = syncedShelf(
+      {
+        pinned: pinned ? after.pinned : current.pinned,
+        sortOrder: order ? after.sortOrder : current.sortOrder,
+        archived: archived ? after.archived : current.archived,
+        ...((archived ? after : current).archivedAt
+          ? { archivedAt: (archived ? after : current).archivedAt }
+          : {})
+      },
+      stamps
+    );
+  }
+  return { ...set, projects };
 }

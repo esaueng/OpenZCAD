@@ -223,6 +223,7 @@ import {
 import {
   assistantConsentRoute,
   E2EE_DEFAULT_ON_CODE,
+  PROJECT_SHELF_STATE_SEALED_CODE,
   E2EE_MIGRATION_CODES,
   ENCRYPTED_PROJECT_ASSISTANT_CONSENT_REQUIRED_CODE,
   ENCRYPTED_PROJECT_ASSISTANT_UNAVAILABLE_CODE,
@@ -829,6 +830,35 @@ async function assertPlaintextCreationAllowed(
   ) {
     throw new EncryptedProjectsRequiredError();
   }
+}
+
+/**
+ * ADR-024 amendment 2026-11-14: an account whose library is encrypted keeps
+ * its pins, manual order and archive sealed in its library record. The
+ * Worker stores the defaults for it (unpinned, order 0, active unless in the
+ * trash, no archive time) and refuses any other value. Trash stays readable:
+ * sharing, purging and quotas act on it. Behind the library rule's flags.
+ */
+async function accountSealsShelfState(
+  env: Env,
+  session: { userId: string; email?: string | null }
+): Promise<boolean> {
+  return (
+    isE2eeDefaultOn(env, session.email ?? undefined) ||
+    (isE2eeProjectsEnabled(env, session.email ?? undefined) &&
+      (await accountRequiresEncryptedLibrary(env.DB, session.userId)))
+  );
+}
+
+function shelfStateSealedRefusal(): Response {
+  return json(
+    {
+      error:
+        'This account encrypts its library, so pins, order and the archive are stored encrypted. Update OpenZCAD to organize projects.',
+      code: PROJECT_SHELF_STATE_SEALED_CODE
+    },
+    409
+  );
 }
 
 /**
@@ -2309,6 +2339,13 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   // "reorder" as a project id.
   if (request.method === 'POST' && pathname === '/api/projects/reorder') {
     const payload = parseReorderProjectsRequest(await readJsonBody(request));
+    // Positions after the first are a manual order, sealed for such an account.
+    if (
+      payload.projectIds.length > 1 &&
+      (await accountSealsShelfState(env, session))
+    ) {
+      return shelfStateSealedRefusal();
+    }
     return json(await persistence.reorderProjects(userId, payload));
   }
 
@@ -2364,7 +2401,8 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     );
     return json(
       await persistence.duplicateProject(userId, payload, {
-        storage: opened.storage
+        storage: opened.storage,
+        sealedShelfState: await accountSealsShelfState(env, session)
       }),
       201
     );
@@ -2517,6 +2555,16 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       await readJsonBody(request),
       projectMatch[1]!
     );
+    // Trash, restore and the defaults pass; a pin, a manual position or the
+    // archive is sealed shelf state for an account whose library is encrypted.
+    if (
+      (payload.pinned === true ||
+        (payload.sortOrder !== undefined && payload.sortOrder !== 0) ||
+        payload.status === 'archived') &&
+      (await accountSealsShelfState(env, session))
+    ) {
+      return shelfStateSealedRefusal();
+    }
     return json({ project: await persistence.updateProject(userId, payload) });
   }
 

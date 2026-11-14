@@ -869,6 +869,9 @@ devices and unlock methods were added or removed, and their public keys.
 Project names, checkpoint names, revision reasons,
 upload file names, thumbnails, measurements, workspace view state, archived
 exports and library folders are encrypted. R2 keys use opaque ids only.
+Which projects are in the trash, and since when, stays readable; pins,
+manual order and the archive of an account whose library is encrypted do
+not (amendment 2026-11-14, shelf state).
 
 ### AI assistant
 
@@ -1448,3 +1451,54 @@ that may be "Keep both" or recovery copies of them.
   read while encrypted projects are open refuses
   (`E2EE_PREFERENCE_UNVERIFIED`) rather than reading as no. A folder sync
   that meets the refusal mid-visit seals from its next round.
+
+### Shelf state
+
+An audit found the shelf state of every project (pinned, manual order,
+archived and when, in the trash and when) stored readable on the account's
+project rows, written by the shelf's organization route and its reorder
+route and read back in every listing, although "Plaintext metadata" never
+listed it. For an account whose library is encrypted (the rule above), pins,
+manual order and the archive are now sealed; the trash stays readable.
+
+- **What is sealed.** The sealed library record (format 2) carries each
+  project's pin, manual order, archived flag and archive time beside the
+  folders, keyed by project id with one merge stamp per field, so a pin on
+  one device and a reorder on another both survive. The folder set's own
+  version moves from 2 to 3 for it. Version 2 sets stay readable and read
+  as carrying no shelf state; the plaintext record (format 1) stays
+  version 2, since a plaintext library keeps its shelf state on its rows.
+  A client that predates version 3 reads a version 3 record as
+  unsupported and stops syncing folders rather than overwriting it.
+- **What stays readable, and why.** Whether a project is in the trash and
+  since when. The server acts on it: members, collaboration rooms and share
+  links lose access to a trashed project, the purge deletes it once the
+  retention window ends, and the account's quotas count it.
+- **The Worker.** For such an account the project rows hold the defaults
+  (unpinned, order 0, active unless in the trash, no archive time). Behind
+  the library rule's flags, the organization route refuses a pin, a
+  non-zero position or the archive with 409 `PROJECT_SHELF_STATE_SEALED`,
+  the reorder route refuses more than one project, and copies start at
+  order 0 instead of beside their source. Trash, restore and the defaults
+  pass. An encrypted copy always starts at order 0: its owner holds an
+  encrypted project.
+- **The browser.** Shelf edits are noted per account until a sealed sync
+  takes them, and the shelf's account writes carry only moves into and out
+  of the trash. Listings take the trash from the account's rows, and pins,
+  order and archive from this device's unsynced edits, then the agreed
+  sealed record, then this device's rows. With locked keys a device keeps
+  its own state and sends nothing readable; a fresh device takes the
+  sealed record once its keys unlock. A sync records only edits made on
+  the shelf, never a row as it stands, so a row the listing wrote cannot
+  overrule the account.
+- **Migration.** Rows that still hold readable shelf state are shown once
+  and seeded into the sealed record wherever it holds nothing for the
+  project, stamped below every real edit. Only after that record is saved,
+  and only for an account the Worker or the preference route confirmed is
+  encrypted, are the rows reset to the defaults; a trashed row stays in the
+  trash. A row of a project another account owns is never reset.
+- **Members.** Only an owner writes a project's row. A member used to see
+  the owner's pins and archive; a member whose library is encrypted now
+  keeps its own shelf state for shared projects in its own sealed record,
+  seeded once from whatever the owner's row still shows. A member of a
+  project whose owner's library is encrypted sees the defaults there.

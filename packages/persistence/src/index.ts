@@ -488,6 +488,12 @@ export interface ProjectWriteOptions {
    * Worker (ADR-024 Phase 1). Stores without object storage ignore it.
    */
   storage?: ClientProjectStorage;
+  /**
+   * The account keeps its shelf state sealed (ADR-024 amendment
+   * 2026-11-14): a copy starts at the default order instead of beside its
+   * source. Read by `duplicateProject` only.
+   */
+  sealedShelfState?: boolean;
 }
 
 export interface PersistenceService {

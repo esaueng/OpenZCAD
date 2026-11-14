@@ -3893,6 +3893,13 @@ export const ENCRYPTED_PROJECTS_REQUIRED_CODE = 'ENCRYPTED_PROJECTS_REQUIRED';
  */
 export const E2EE_DEFAULT_ON_CODE = 'E2EE_DEFAULT_ON';
 export const E2EE_PLAINTEXT_FROZEN_CODE = 'E2EE_PLAINTEXT_FROZEN';
+/**
+ * An account whose library is encrypted (ADR-024 amendment 2026-11-14) keeps
+ * its pins, manual order and archive in its sealed library record. The
+ * Worker stores the defaults for it and refuses any other value with 409 and
+ * this code; trash and restore stay readable.
+ */
+export const PROJECT_SHELF_STATE_SEALED_CODE = 'PROJECT_SHELF_STATE_SEALED';
 /** The assistant is off on encrypted projects until per-project consent (D7). */
 export const ENCRYPTED_PROJECT_ASSISTANT_UNAVAILABLE_CODE =
   'ENCRYPTED_PROJECT_ASSISTANT_UNAVAILABLE';

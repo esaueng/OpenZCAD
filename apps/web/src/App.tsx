@@ -303,7 +303,6 @@ import {
   isFeatureSuppressed,
   projectBranchPoint,
   projectOrganization,
-  toProjectId,
   TRASH_RETENTION_DAYS
 } from '@openzcad/shared';
 import type {
@@ -441,6 +440,7 @@ import type { SharedLinkCopyDestination } from './components/SharedLinkCopyDialo
 import {
   ApiError,
   api,
+  encryptsAccountLibrary,
   encryptsNewProjects,
   isEncryptedProject,
   isProjectDocumentUnavailableError,
@@ -1660,6 +1660,21 @@ import {
   withSavedVersion
 } from './lib/projectShelf';
 import {
+  agreedShelfState,
+  isShelfSealed,
+  journalShelfEdit,
+  mirrorShelfToAccount,
+  noteLegacyShelfRows,
+  overlaySealedShelf,
+  readShelfEdits,
+  rememberAccountRows,
+  reorderShelfOnAccount,
+  SEALED_SHELF_APPLIED_EVENT,
+  setShelfAccount,
+  shelfAccount,
+  shelfSealedOrSafe
+} from './lib/sealedShelfState';
+import {
   preparePartThumbnails,
   rememberCapturedThumbnail
 } from './components/PartThumbnail';
@@ -2194,18 +2209,10 @@ interface HydrateOptions {
 const organizationMirrorHost: OrganizationMirrorHost = {
   readLocal: loadLocalProjectOrganizationSnapshot,
   saveLocal: saveLocalProjectOrganizationIfCurrent,
+  // An account whose library is encrypted sends only trash moves; its pins,
+  // order and archive go to the sealed library record (sealedShelfState.ts).
   updateRemote: (projectId, organization, signal) =>
-    api
-      .updateProject(
-        {
-          projectId: toProjectId(projectId),
-          status: organization.status,
-          pinned: organization.pinned,
-          sortOrder: organization.sortOrder
-        },
-        signal
-      )
-      .then(() => undefined)
+    mirrorShelfToAccount(api, shelfAccount(), projectId, organization, signal)
 };
 const organizationBackground = new OrganizationMirrorBackground();
 
@@ -2235,6 +2242,13 @@ async function loadProjectSummaries(
   const keySessionRevision = getKeySessionRevision();
   const signedIn = accountId !== null;
   const scope = organizationBackground.begin(accountId);
+  setShelfAccount(accountId);
+  // Whether this account's shelf state is sealed, asked beside the listing.
+  // Unanswerable reads as sealed here: the listing then keeps this device's
+  // pins instead of adopting the account's rows, which loses nothing.
+  const sealedShelf = signedIn
+    ? shelfSealedOrSafe(accountId, encryptsAccountLibrary)
+    : Promise.resolve(false);
   const unavailableAs =
     <T,>(fallback: T) =>
     (error: unknown): T => {
@@ -2297,7 +2311,25 @@ async function loadProjectSummaries(
       snapshot.organization
     ])
   );
-  const remoteProjects = remote?.projects ?? [];
+  let remoteProjects = remote?.projects ?? [];
+  let legacyShelf: ReadonlyMap<string, ProjectOrganization> = new Map();
+  if (accountId && remote) {
+    rememberAccountRows(accountId, remoteProjects);
+    if (await sealedShelf) {
+      // The account's rows speak for the trash only (ADR-024 amendment
+      // 2026-11-14): pins, order and archive come from this device's
+      // unsynced edits, the sealed record, then this device's rows, and
+      // once from readable state still on the rows, to migrate.
+      const overlaid = overlaySealedShelf(
+        remoteProjects,
+        organizationSnapshots,
+        agreedShelfState(accountId),
+        readShelfEdits(accountId)
+      );
+      remoteProjects = overlaid.projects;
+      legacyShelf = overlaid.legacy;
+    }
+  }
   const remoteIds = new Set<string>(
     remoteProjects.map((project) => project.projectId)
   );
@@ -2333,6 +2365,10 @@ async function loadProjectSummaries(
         unavailableAs(localOrganizations)
       )
     : localOrganizations;
+  // Readable shelf state goes into the sealed record with the next folder
+  // sync, which then resets those account rows.
+  if (accountId && remote && (await sealedShelf))
+    noteLegacyShelfRows(accountId, legacyShelf);
   const pendingEncryptedProjectIds = isCurrentKeySession(keySessionRevision)
     ? remote?.pendingEncryptedProjectIds
     : undefined;
@@ -7193,7 +7229,7 @@ export function App() {
       navigationBusyRef.current === null &&
       pendingOrganizations.current.size === 0 &&
       sessionRef.current?.userId === accountId;
-    const stop = watchLibraryFreshness(async () => {
+    const refresh = async () => {
       if (!settled()) return;
       const before = latestProjects.current;
       // Expiry purging stays with the explicit listings.
@@ -7209,10 +7245,22 @@ export function App() {
       setCloudProjectIds(listed.cloudProjectIds);
       setAccountProjectListReached(true);
       setCloudAvailable(true);
-    });
+    };
+    const stop = watchLibraryFreshness(refresh);
+    // A sealed shelf sync laid the account's pins, order or archive over
+    // this device's rows: show them now rather than at the next poll.
+    const applied = (event: Event) => {
+      if (
+        (event as CustomEvent<{ accountId?: string }>).detail?.accountId ===
+        accountId
+      )
+        void refresh();
+    };
+    window.addEventListener(SEALED_SHELF_APPLIED_EVENT, applied);
     return () => {
       cancelled = true;
       stop();
+      window.removeEventListener(SEALED_SHELF_APPLIED_EVENT, applied);
     };
   }, [cloudFunctionsEnabled, libraryShown, session?.userId]);
 
@@ -14808,6 +14856,17 @@ export function App() {
    * rows, and the rows before them are already on the shelf.
    */
   async function saveShelfRows(rows: Map<string, ProjectOrganization>) {
+    const before = new Map(
+      [...rows.keys()].map((projectId) => [
+        projectId,
+        pendingOrganizations.current.get(projectId) ??
+          projectOrganization(
+            latestProjects.current.find(
+              (project) => project.projectId === projectId
+            ) ?? {}
+          )
+      ])
+    );
     for (const [projectId, organization] of rows) {
       pendingOrganizations.current.set(projectId, organization);
     }
@@ -14826,6 +14885,20 @@ export function App() {
         }
       }
       throw error;
+    }
+    // The edit also waits for the account's sealed library record, which
+    // carries pins, order and archive of an account whose library is
+    // encrypted; a plaintext library's sync forgets it again.
+    const accountId = sessionRef.current?.userId;
+    if (accountId) {
+      for (const [projectId, organization] of rows) {
+        journalShelfEdit(
+          accountId,
+          projectId,
+          before.get(projectId)!,
+          organization
+        );
+      }
     }
     setProjects((current) =>
       current
@@ -15129,13 +15202,13 @@ export function App() {
       void mirrorPendingReorder(
         projectIds,
         organizationMirrorHost,
-        async (ids) =>
-          (
-            await api.reorderProjects(
-              { projectIds: ids.map(toProjectId) },
-              organizationScope.signal
-            )
-          ).projects,
+        (ids) =>
+          reorderShelfOnAccount(
+            api,
+            session.userId,
+            ids,
+            organizationScope.signal
+          ),
         undefined,
         organizationScope
       ).catch(() => undefined);
@@ -15290,17 +15363,38 @@ export function App() {
           if (!isEncryptedProject(project.projectId)) {
             await copyDuplicateSaveStates(project.projectId, localCopy);
           }
-          if (response.project.organization) {
+          // A sealed shelf keeps the copy beside its source on this device
+          // (and in the sealed record); the account row holds the default.
+          const copyOrganization =
+            response.project.organization && isShelfSealed(session?.userId)
+              ? {
+                  ...response.project.organization,
+                  sortOrder: projectOrganization(project).sortOrder
+                }
+              : response.project.organization;
+          if (copyOrganization) {
             await saveLocalProjectOrganization(
               response.project.projectId,
-              response.project.organization
+              copyOrganization
             ).catch(() => undefined);
+            if (session && copyOrganization !== response.project.organization)
+              journalShelfEdit(
+                session.userId,
+                response.project.projectId,
+                DEFAULT_PROJECT_ORGANIZATION,
+                copyOrganization
+              );
           }
           await seedCopyThumbnail(localSource ?? localCopy, localCopy);
           // Measured on what the account now holds: uploading the copy's
           // images saves a version after the one the response describes, and
           // an encrypted account's response carries no size at all.
-          const copyRow = withSavedVersion(response.project, copied);
+          const copyRow = withSavedVersion(
+            copyOrganization
+              ? { ...response.project, organization: copyOrganization }
+              : response.project,
+            copied
+          );
           setProjects((current) =>
             [...current, copyRow].sort(compareProjectSummaries)
           );

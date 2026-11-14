@@ -2622,12 +2622,15 @@ export class D1R2PersistenceService implements PersistenceService {
     // A copy lands next to its original rather than at the top of the shelf,
     // which is where you go looking for it. It starts unpinned and active: the
     // point of a duplicate is to diverge from the original, not to inherit its
-    // place on the desk.
-    const sortOrder = await this.env.DB.prepare(
-      `SELECT sort_order FROM projects WHERE id = ? AND user_id = ?`
-    )
-      .bind(request.projectId, userId)
-      .first<{ sort_order: number }>();
+    // place on the desk. An account whose shelf state is sealed keeps that
+    // place in its library record, so the row holds the default order.
+    const sortOrder = options?.sealedShelfState
+      ? null
+      : await this.env.DB.prepare(
+          `SELECT sort_order FROM projects WHERE id = ? AND user_id = ?`
+        )
+          .bind(request.projectId, userId)
+          .first<{ sort_order: number }>();
     const initialHead: { value?: ProjectCopyStoredHead } = {};
     const project = await this.insertProject(
       userId,
