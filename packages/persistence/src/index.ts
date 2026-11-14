@@ -490,6 +490,13 @@ export interface ProjectWriteOptions {
   storage?: ClientProjectStorage;
 }
 
+/** A project as a caller listed it: its id and its instance (migration 0052). */
+export interface OwnedProjectInstance {
+  projectId: string;
+  /** Null for a project stored before migration 0052, or before it. */
+  instance: string | null;
+}
+
 export interface PersistenceService {
   requireProjectRead(userId: UserId, projectId: string): Promise<ProjectAccess>;
   requireProjectEdit(userId: UserId, projectId: string): Promise<ProjectAccess>;
@@ -612,8 +619,16 @@ export interface PersistenceService {
    * @throws ProjectNotFoundError when the project does not exist.
    */
   deleteProject(userId: UserId, projectId: string): Promise<void>;
-  /** Destroys every project owned by this account, preserving shared projects. */
-  deleteOwnedProjects(userId: UserId): Promise<ProjectId[]>;
+  /**
+   * Destroys every project owned by this account, preserving shared
+   * projects. With `instances`, only those projects, each only while it is
+   * still the instance listed (migration 0052): never a project created
+   * again under one of their ids since.
+   */
+  deleteOwnedProjects(
+    userId: UserId,
+    instances?: readonly OwnedProjectInstance[]
+  ): Promise<ProjectId[]>;
   /** Destroys deleted projects whose retention window has run out. */
   purgeExpiredProjects(userId: UserId): Promise<ProjectId[]>;
   /** Removes expired upload bytes and their tracking records. */

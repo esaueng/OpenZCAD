@@ -1121,7 +1121,10 @@ describe('cloudflare adapters', () => {
     expect(await service.purgeExpiredProjects(toUserId('user_test'))).toEqual([
       'proj_expired'
     ]);
-    expect(statements[0]).toContain("status = 'deleted'");
+    // The first statement past the schema probes lists the expired projects.
+    expect(
+      statements.find((statement) => !statement.includes('sqlite_master'))
+    ).toContain("status = 'deleted'");
     const destroyed = statements.slice(1).join('\n');
     for (const table of [
       'project_access_events',

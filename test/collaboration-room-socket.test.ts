@@ -131,12 +131,16 @@ describe('collaboration room socket handling', () => {
     const before = structuredClone([...storage.values]);
     createTestRoom(storage.context, { E2EE_PLAINTEXT_FROZEN: 'true' });
     const edited = addPrimitiveFeature(base, {
-      name: 'Blocked', primitiveKind: 'box', dimensions: { width: 1, height: 1, depth: 1 }
+      name: 'Blocked',
+      primitiveKind: 'box',
+      dimensions: { width: 1, height: 1, depth: 1 }
     });
     await socket.receive(documentFrame(edited, base.version));
     const frame = socket.lastFrame();
     expect(frame).toMatchObject({ type: 'error', code: 'permission-denied' });
-    expect(frame && 'message' in frame ? frame.message : null).toContain('read-only');
+    expect(frame && 'message' in frame ? frame.message : null).toContain(
+      'read-only'
+    );
     expect([...storage.values]).toEqual(before);
   });
 
@@ -551,8 +555,10 @@ describe('collaboration room socket handling', () => {
               return { results: [] };
             },
             first: async () => {
-              // The storage-format schema probe answers "not installed".
+              // The storage-format and project-instance (migration 0052)
+              // schema probes answer "not installed".
               if (query.includes('pragma_table_info')) return null;
+              if (query.includes('sqlite_master')) return null;
               if (query.includes('user_id AS owner_user_id'))
                 return { owner_user_id: 'user_room' };
               if (query.startsWith('SELECT 1 AS allowed'))

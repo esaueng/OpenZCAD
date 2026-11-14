@@ -99,6 +99,7 @@ import {
   isE2eeProjectVersionStorageReady,
   assertClaimedDeleteComplete,
   claimObjectKeysForDelete,
+  drainPendingObjects,
   ObjectKeyDeleteRetryError,
   isE2eeReverseStorageReady,
   isE2eeShareLinkStorageReady,
@@ -1414,26 +1415,62 @@ async function dropStaged(
     if (!bucket) {
       refuse(503, 'E2EE_UNAVAILABLE', 'Encrypted storage is unavailable.');
     }
-    await Promise.all(bodyRows.map((row) => bucket.delete(row.envelope_key)));
-    objects += bodyRows.length;
-    await runBatch(db, [
-      db
-        .prepare(
-          `UPDATE e2ee_project_versions
-           SET envelope_key = NULL, envelope_inline = NULL
-           WHERE project_id = ?
-             AND document_version IN (SELECT value FROM json_each(?))
-             AND ${fence}`
-        )
-        .bind(
+    // Migration 0051: a body's key is its version hash, which an identical
+    // write stores again, so it is deleted only under a claim taken while
+    // the fence holds and no other version row names it.
+    const claim = await claimObjectKeysForDelete(
+      db,
+      bodyRows.map((row) => row.envelope_key),
+      {
+        versions: bodyRows.map((row) => ({
           projectId,
-          JSON.stringify(bodyRows.map((row) => row.document_version)),
-          projectId
-        )
-    ]);
+          documentVersion: row.document_version
+        }))
+      },
+      { sql: fence, binds: [projectId] }
+    );
+    try {
+      assertClaimedDeleteComplete(claim, await claim.deleteObjects(bucket));
+      objects += bodyRows.length;
+      await runBatch(db, [
+        db
+          .prepare(
+            `UPDATE e2ee_project_versions
+             SET envelope_key = NULL, envelope_inline = NULL
+             WHERE project_id = ?
+               AND document_version IN (SELECT value FROM json_each(?))
+               AND ${fence}`
+          )
+          .bind(
+            projectId,
+            JSON.stringify(bodyRows.map((row) => row.document_version)),
+            projectId
+          )
+      ]);
+    } finally {
+      await claim.release();
+    }
     if ((bodies.results ?? []).length > MIGRATION_STEP_OBJECTS) {
       return { complete: false, objects };
     }
+  }
+  // Objects failed encrypted writes left pending (migration 0051), all of
+  // them: no encrypted write of this project can commit now.
+  if (
+    await drainPendingObjects(
+      db,
+      {
+        'project-storage': projectStorageBucket(env),
+        artifacts: artifactBucket(env)
+      },
+      projectId,
+      {
+        fence: { sql: fence, binds: [projectId] },
+        limit: MIGRATION_STEP_OBJECTS
+      }
+    )
+  ) {
+    return { complete: false, objects };
   }
   const tables = [
     'e2ee_version_blobs',

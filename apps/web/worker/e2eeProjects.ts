@@ -917,6 +917,24 @@ export async function runBatch(
         'Cloud data deletion is in progress. Retry that deletion before making other cloud changes.'
       );
     }
+    // Migrations 0050/0051: a cleanup is removing a stored object under a
+    // key this write names (an identical retry's body, a copy's blob).
+    if (message.includes('r2_key_deleting')) {
+      refuse(
+        503,
+        'STORAGE_CLEANUP_BUSY',
+        'A stored file of this project is still being removed. Try again in a moment.'
+      );
+    }
+    // Migration 0051: this write's body was drained as abandoned before
+    // its version could commit; the save stores it again on retry.
+    if (message.includes('r2_object_not_pending')) {
+      refuse(
+        503,
+        'PROJECT_STORAGE_UNAVAILABLE',
+        'The account copy of this project could not be stored right now. Try again.'
+      );
+    }
     if (/UNIQUE constraint|PRIMARY KEY|E2EE_GROUP_EPOCH/i.test(message)) {
       await onConflict?.();
       refuse(

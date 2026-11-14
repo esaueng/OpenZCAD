@@ -402,3 +402,861 @@ describe('a staged decryption revision whose asset repair failed', () => {
     expect(bucket.objects.has(assetKey)).toBe(true);
   });
 });
+
+describe('a project deleted twice and created again under its id', () => {
+  const PROJECT = 'proj_11111111-1111-4111-8111-111111111111';
+
+  async function recreatable() {
+    const { D1R2PersistenceService } =
+      await import('@openzcad/cloudflare-adapters');
+    const { objectBucket } = await import('./support/e2ee-documents');
+    const db = database();
+    db.prepare('DELETE FROM projects').run();
+    const manager = new CommandManager({
+      ...createProjectDocument('Recreated project', OWNER),
+      projectId: PROJECT
+    } as ProjectDocument);
+    manager.execute(
+      commandFactories.importStep({
+        name: 'Source',
+        artifactId: 'artifact_local_source',
+        sourceName: 'source.step',
+        stepText: STEP_TEXT
+      })
+    );
+    const document = withoutDerivedProjection(manager.document);
+    const bucket = objectBucket();
+    const d1 = sqliteD1(db);
+    const service = new D1R2PersistenceService({
+      DB: d1,
+      PROJECT_STORAGE: bucket,
+      ARTIFACTS: bucket
+    } as never);
+    await service.createProject(OWNER, {
+      name: document.name,
+      initialDocument: document
+    });
+    const assetKey = (
+      db.prepare('SELECT object_key FROM project_storage_assets').get() as {
+        object_key: string;
+      }
+    ).object_key;
+    const deleteMock = bucket.delete as unknown as Mock<
+      (key: string | string[]) => Promise<void>
+    >;
+    return { db, d1, bucket, service, document, assetKey, deleteMock };
+  }
+
+  it('a deletion paused at an R2 delete holds its keys: the other deletion waits, and a recreated project keeps its files', async () => {
+    const { db, bucket, service, document, assetKey, deleteMock } =
+      await recreatable();
+    const remove = deleteMock.getMockImplementation()!;
+    let entered!: () => void;
+    let release!: () => void;
+    const atDelete = new Promise<void>((resolve) => (entered = resolve));
+    const released = new Promise<void>((resolve) => (release = resolve));
+    deleteMock.mockImplementationOnce(async (key) => {
+      entered();
+      await released;
+      return remove(key);
+    });
+    const stale = service.deleteProject(OWNER, PROJECT);
+    await atDelete;
+    // Deletion B cannot finish while A holds the project's keys, so the
+    // project cannot be created again under its id meanwhile.
+    await expect(service.deleteProject(OWNER, PROJECT)).rejects.toThrow(
+      ObjectKeyDeleteRetryError
+    );
+    release();
+    await stale;
+    expect(db.prepare('SELECT id FROM projects').all()).toEqual([]);
+    await service.createProject(OWNER, {
+      name: document.name,
+      initialDocument: document
+    });
+    expect(bucket.objects.has(assetKey)).toBe(true);
+    expect(db.prepare('SELECT id FROM projects').all()).toEqual([
+      { id: PROJECT }
+    ]);
+  });
+
+  it('a deletion that stalls before its deletes touches nothing of the project created again after another deletion finished', async () => {
+    const { db, d1, bucket, document, assetKey } = await recreatable();
+    const { D1R2PersistenceService } =
+      await import('@openzcad/cloudflare-adapters');
+    // Deletion A records the generation it destroys, then stalls before it
+    // lists anything.
+    let entered!: () => void;
+    let release!: () => void;
+    const stalled = new Promise<void>((resolve) => (entered = resolve));
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let intercept = true;
+    const wrapped = new Proxy(d1, {
+      get(target, property) {
+        if (property === 'prepare') {
+          return (sql: string) => {
+            const statement = target.prepare(sql);
+            if (
+              !sql.includes(
+                'SELECT id FROM upload_sessions WHERE project_id IN'
+              )
+            ) {
+              return statement;
+            }
+            return new Proxy(statement, {
+              get(inner, key) {
+                if (key === 'bind') {
+                  return (...args: unknown[]) => {
+                    const bound = inner.bind(...args);
+                    return new Proxy(bound, {
+                      get(b, k) {
+                        if (k === 'all' && intercept) {
+                          intercept = false;
+                          return async () => {
+                            entered();
+                            await released;
+                            return b.all();
+                          };
+                        }
+                        const value = Reflect.get(b, k) as unknown;
+                        return typeof value === 'function'
+                          ? (value as (...a: unknown[]) => unknown).bind(b)
+                          : value;
+                      }
+                    });
+                  };
+                }
+                const value = Reflect.get(inner, key) as unknown;
+                return typeof value === 'function'
+                  ? (value as (...a: unknown[]) => unknown).bind(inner)
+                  : value;
+              }
+            });
+          };
+        }
+        const value = Reflect.get(target, property) as unknown;
+        return typeof value === 'function'
+          ? (value as (...a: unknown[]) => unknown).bind(target)
+          : value;
+      }
+    });
+    const staleService = new D1R2PersistenceService({
+      DB: wrapped,
+      PROJECT_STORAGE: bucket,
+      ARTIFACTS: bucket
+    } as never);
+    const service = new D1R2PersistenceService({
+      DB: d1,
+      PROJECT_STORAGE: bucket,
+      ARTIFACTS: bucket
+    } as never);
+    const stale = staleService.deleteProject(OWNER, PROJECT);
+    await stalled;
+    // Deletion B finishes; the project is created again under its id and
+    // stores the same content-addressed source.
+    await service.deleteProject(OWNER, PROJECT);
+    expect(bucket.objects.has(assetKey)).toBe(false);
+    await service.createProject(OWNER, {
+      name: document.name,
+      initialDocument: document
+    });
+    expect(bucket.objects.has(assetKey)).toBe(true);
+    // A resumes: the generation it set out to destroy is gone, so it
+    // deletes no object and no row of the new project.
+    release();
+    await stale;
+    expect(bucket.objects.has(assetKey)).toBe(true);
+    expect(db.prepare('SELECT id FROM projects').all()).toEqual([
+      { id: PROJECT }
+    ]);
+    expect(
+      db.prepare('SELECT object_key FROM project_storage_assets').all()
+    ).toEqual([{ object_key: assetKey }]);
+    expect(
+      db.prepare('SELECT COUNT(*) AS n FROM project_document_objects').get()
+    ).toEqual({ n: 1 });
+  });
+});
+
+describe('a deletion delayed past another one, the project created again (PR #1477 review)', () => {
+  const PROJECT = 'proj_22222222-2222-4222-8222-222222222222';
+
+  async function recreatable() {
+    const { D1R2PersistenceService } =
+      await import('@openzcad/cloudflare-adapters');
+    const { objectBucket } = await import('./support/e2ee-documents');
+    const db = database();
+    db.prepare('DELETE FROM projects').run();
+    const manager = new CommandManager({
+      ...createProjectDocument('Recreated project', OWNER),
+      projectId: PROJECT
+    } as ProjectDocument);
+    manager.execute(
+      commandFactories.importStep({
+        name: 'Source',
+        artifactId: 'artifact_local_source',
+        sourceName: 'source.step',
+        stepText: STEP_TEXT
+      })
+    );
+    const document = withoutDerivedProjection(manager.document);
+    const bucket = objectBucket();
+    const d1 = sqliteD1(db);
+    const service = new D1R2PersistenceService({
+      DB: d1,
+      PROJECT_STORAGE: bucket,
+      ARTIFACTS: bucket
+    } as never);
+    await service.createProject(OWNER, {
+      name: document.name,
+      initialDocument: document
+    });
+    const assetKey = (
+      db.prepare('SELECT object_key FROM project_storage_assets').get() as {
+        object_key: string;
+      }
+    ).object_key;
+    return { db, d1, bucket, service, document, assetKey };
+  }
+
+  /** `d1`, pausing the first run of a statement whose SQL includes `marker`. */
+  function pausing(d1: D1Database, marker: string) {
+    let entered!: () => void;
+    let release!: () => void;
+    const paused = new Promise<void>((resolve) => (entered = resolve));
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let once = true;
+    const passThrough = <T extends object>(
+      target: T,
+      property: PropertyKey
+    ) => {
+      const value = Reflect.get(target, property) as unknown;
+      return typeof value === 'function'
+        ? (value as (...args: unknown[]) => unknown).bind(target)
+        : value;
+    };
+    const wrapped = new Proxy(d1, {
+      get(target, property) {
+        if (property !== 'prepare') return passThrough(target, property);
+        return (sql: string) => {
+          const statement = target.prepare(sql);
+          if (!sql.includes(marker)) return statement;
+          return new Proxy(statement, {
+            get(inner, key) {
+              if (key !== 'bind') return passThrough(inner, key);
+              return (...args: unknown[]) =>
+                new Proxy(inner.bind(...args), {
+                  get(bound, name) {
+                    if (name === 'run' && once) {
+                      once = false;
+                      return async () => {
+                        entered();
+                        await released;
+                        return bound.run();
+                      };
+                    }
+                    return passThrough(bound, name);
+                  }
+                });
+            }
+          });
+        };
+      }
+    });
+    return { wrapped, paused, release };
+  }
+
+  it('a deletion stalled before taking its cleanup claim never claims or destroys the project created again', async () => {
+    const { D1R2PersistenceService } =
+      await import('@openzcad/cloudflare-adapters');
+    const { db, d1, bucket, service, document, assetKey } = await recreatable();
+    const { wrapped, paused, release } = pausing(
+      d1,
+      'INSERT OR IGNORE INTO project_copy_cleanup_claims'
+    );
+    const a = new D1R2PersistenceService({
+      DB: wrapped,
+      PROJECT_STORAGE: bucket,
+      ARTIFACTS: bucket
+    } as never);
+    // A checked ownership and stalls just before claiming the project.
+    const stale = a.deleteProject(OWNER, PROJECT);
+    await paused;
+    // B deletes the project, and it is created again under its id.
+    await service.deleteProject(OWNER, PROJECT);
+    await service.createProject(OWNER, {
+      name: document.name,
+      initialDocument: document
+    });
+    expect(bucket.objects.has(assetKey)).toBe(true);
+    // A resumes: the instance it checked is gone, so it claims nothing.
+    release();
+    await stale;
+    expect(
+      db.prepare('SELECT id FROM projects WHERE id = ?').get(PROJECT)
+    ).toEqual({ id: PROJECT });
+    expect(bucket.objects.has(assetKey)).toBe(true);
+    expect(
+      db.prepare('SELECT COUNT(*) AS n FROM project_copy_cleanup_claims').get()
+    ).toEqual({ n: 0 });
+  });
+
+  it('a delayed room erasure of the deleted project leaves the room of the project created again', async () => {
+    const { D1R2PersistenceService } =
+      await import('@openzcad/cloudflare-adapters');
+    const {
+      createRoomContext,
+      createTestRoom,
+      settleRoom,
+      installWorkerSocketGlobals
+    } = await import('./collaboration-room-harness');
+    const { db, d1, bucket, service, document, assetKey } = await recreatable();
+    const storage = createRoomContext();
+    let room = createTestRoom(storage.context, { DB: d1 });
+    await settleRoom(room);
+    let entered!: () => void;
+    let release!: () => void;
+    const atRoom = new Promise<void>((resolve) => (entered = resolve));
+    const released = new Promise<void>((resolve) => (release = resolve));
+    // A's room erasure is delayed on its way to the room.
+    const a = new D1R2PersistenceService({
+      DB: d1,
+      PROJECT_STORAGE: bucket,
+      ARTIFACTS: bucket,
+      PROJECT_ROOM: {
+        getByName: () => ({
+          fetch: async (request: Request) => {
+            entered();
+            await released;
+            return room.fetch(request);
+          }
+        })
+      }
+    } as never);
+    const stale = a.deleteProject(OWNER, PROJECT);
+    await atRoom;
+    const b = new D1R2PersistenceService({
+      DB: d1,
+      PROJECT_STORAGE: bucket,
+      ARTIFACTS: bucket,
+      PROJECT_ROOM: {
+        getByName: () => ({ fetch: (request: Request) => room.fetch(request) })
+      }
+    } as never);
+    await b.deleteProject(OWNER, PROJECT);
+    await service.createProject(OWNER, {
+      name: document.name,
+      initialDocument: document
+    });
+    // The recreated project's room accepts a client and stores its state.
+    room = createTestRoom(storage.context, { DB: d1 });
+    await settleRoom(room);
+    const globals = installWorkerSocketGlobals();
+    try {
+      const response = await room.fetch(
+        new Request(`https://room.test/?projectId=${PROJECT}`, {
+          headers: {
+            upgrade: 'websocket',
+            'x-openzcad-user-id': OWNER,
+            'x-openzcad-display-name': 'Owner',
+            'x-openzcad-project-role': 'owner'
+          }
+        })
+      );
+      expect(response.status).toBe(101);
+      const socket = globals.serverSockets.at(-1)!;
+      const roomDocument = {
+        ...createProjectDocument('Recreated room', OWNER),
+        projectId: PROJECT
+      };
+      (
+        roomDocument.nodes[roomDocument.rootNodeId] as unknown as {
+          projectId: string;
+        }
+      ).projectId = PROJECT;
+      await socket.receive(
+        JSON.stringify({
+          type: 'hello',
+          clientId: 'client_recreated',
+          displayName: 'Owner',
+          baseVersion: null,
+          document: roomDocument
+        })
+      );
+      expect(storage.values.has('room:latest')).toBe(true);
+      // A's erasure finally reaches the room: it names the old instance, so
+      // the new room's state stays.
+      release();
+      await stale;
+    } finally {
+      globals.restore();
+    }
+    expect(storage.values.has('room:latest')).toBe(true);
+    expect(
+      db.prepare('SELECT id FROM projects WHERE id = ?').get(PROJECT)
+    ).toEqual({ id: PROJECT });
+    expect(bucket.objects.has(assetKey)).toBe(true);
+  });
+});
+
+describe('room identity and account erasure under recreation (PR #1477 review, round 2)', () => {
+  const PROJECT = 'proj_33333333-3333-4333-8333-333333333333';
+
+  async function recreatable() {
+    const { D1R2PersistenceService } =
+      await import('@openzcad/cloudflare-adapters');
+    const { objectBucket } = await import('./support/e2ee-documents');
+    const db = database();
+    db.prepare('DELETE FROM projects').run();
+    const manager = new CommandManager({
+      ...createProjectDocument('Recreated project', OWNER),
+      projectId: PROJECT
+    } as ProjectDocument);
+    manager.execute(
+      commandFactories.importStep({
+        name: 'Source',
+        artifactId: 'artifact_local_source',
+        sourceName: 'source.step',
+        stepText: STEP_TEXT
+      })
+    );
+    const document = withoutDerivedProjection(manager.document);
+    const bucket = objectBucket();
+    const d1 = sqliteD1(db);
+    const service = new D1R2PersistenceService({
+      DB: d1,
+      PROJECT_STORAGE: bucket,
+      ARTIFACTS: bucket
+    } as never);
+    await service.createProject(OWNER, {
+      name: document.name,
+      initialDocument: document
+    });
+    const assetKey = (
+      db.prepare('SELECT object_key FROM project_storage_assets').get() as {
+        object_key: string;
+      }
+    ).object_key;
+    return { db, d1, bucket, service, document, assetKey };
+  }
+
+  const roomDocument = () => {
+    const document = {
+      ...createProjectDocument('Recreated room', OWNER),
+      projectId: PROJECT
+    };
+    (
+      document.nodes[document.rootNodeId] as unknown as { projectId: string }
+    ).projectId = PROJECT;
+    return document;
+  };
+
+  const hello = (clientId: string) =>
+    JSON.stringify({
+      type: 'hello',
+      clientId,
+      displayName: 'Owner',
+      baseVersion: null,
+      document: roomDocument()
+    });
+
+  const socketRequest = () =>
+    new Request(`https://room.test/?projectId=${PROJECT}`, {
+      headers: {
+        upgrade: 'websocket',
+        'x-openzcad-user-id': OWNER,
+        'x-openzcad-display-name': 'Owner',
+        'x-openzcad-project-role': 'owner'
+      }
+    });
+
+  it('acknowledges no room state it cannot attribute to an instance, so a stale erasure never clears acknowledged state', async () => {
+    const { D1R2PersistenceService } =
+      await import('@openzcad/cloudflare-adapters');
+    const {
+      createRoomContext,
+      createTestRoom,
+      settleRoom,
+      installWorkerSocketGlobals
+    } = await import('./collaboration-room-harness');
+    const { db, d1, bucket, service, document, assetKey } = await recreatable();
+    const storage = createRoomContext();
+    let room = createTestRoom(storage.context, { DB: d1 });
+    await settleRoom(room);
+    let entered!: () => void;
+    let release!: () => void;
+    const atRoom = new Promise<void>((resolve) => (entered = resolve));
+    const released = new Promise<void>((resolve) => (release = resolve));
+    const a = new D1R2PersistenceService({
+      DB: d1,
+      PROJECT_STORAGE: bucket,
+      ARTIFACTS: bucket,
+      PROJECT_ROOM: {
+        getByName: () => ({
+          fetch: async (request: Request) => {
+            entered();
+            await released;
+            return room.fetch(request);
+          }
+        })
+      }
+    } as never);
+    const stale = a.deleteProject(OWNER, PROJECT);
+    await atRoom;
+    const b = new D1R2PersistenceService({
+      DB: d1,
+      PROJECT_STORAGE: bucket,
+      ARTIFACTS: bucket,
+      PROJECT_ROOM: {
+        getByName: () => ({ fetch: (request: Request) => room.fetch(request) })
+      }
+    } as never);
+    await b.deleteProject(OWNER, PROJECT);
+    await service.createProject(OWNER, {
+      name: document.name,
+      initialDocument: document
+    });
+    // The recreated project's room cannot read its instance for a while.
+    let failIdentity = true;
+    const unreliable = sqliteD1(db, {
+      onStatement(sql) {
+        if (
+          failIdentity &&
+          sql.includes('SELECT instance_id FROM project_instances')
+        ) {
+          throw new Error('transient D1 read outage');
+        }
+      }
+    });
+    room = createTestRoom(storage.context, { DB: unreliable });
+    await settleRoom(room);
+    const globals = installWorkerSocketGlobals();
+    try {
+      // Admission stores state, so it fails (a 500 from the room) while
+      // the instance is unknown; nothing is acknowledged or kept.
+      const refused = await room.fetch(socketRequest()).catch(() => null);
+      if (refused?.status === 101) {
+        const socket = globals.serverSockets.at(-1)!;
+        await socket.receive(hello('client_early'));
+        expect(
+          socket
+            .frames()
+            .some((frame) => (frame as { type?: string }).type === 'ack')
+        ).toBe(false);
+      }
+      expect(storage.values.has('room:latest')).toBe(false);
+      // Once D1 answers, the client joins and its state is acknowledged
+      // under the recreated project's instance.
+      failIdentity = false;
+      room = createTestRoom(storage.context, { DB: unreliable });
+      await settleRoom(room);
+      expect((await room.fetch(socketRequest())).status).toBe(101);
+      const socket = globals.serverSockets.at(-1)!;
+      await socket.receive(hello('client_recreated'));
+      expect(storage.values.has('room:latest')).toBe(true);
+      expect(
+        (storage.values.get('room:meta') as { instanceId?: string }).instanceId
+      ).toMatch(/^[0-9a-f]{32}$/);
+      // A's erasure of the old instance finally arrives: a no-op.
+      release();
+      await stale;
+    } finally {
+      globals.restore();
+    }
+    expect(storage.values.has('room:latest')).toBe(true);
+    expect(
+      db.prepare('SELECT id FROM projects WHERE id = ?').get(PROJECT)
+    ).toEqual({ id: PROJECT });
+    expect(bucket.objects.has(assetKey)).toBe(true);
+  });
+
+  it('an account erasure attempt that resumes after a retry completed it touches nothing created since', async () => {
+    const { D1R2PersistenceService } =
+      await import('@openzcad/cloudflare-adapters');
+    const {
+      createRoomContext,
+      createTestRoom,
+      settleRoom,
+      installWorkerSocketGlobals
+    } = await import('./collaboration-room-harness');
+    const { deleteAccountData } =
+      await import('../apps/web/worker/accountDeletion');
+    const { db, d1, bucket, service, document, assetKey } = await recreatable();
+    const storage = createRoomContext();
+    let room = createTestRoom(storage.context, { DB: d1 });
+    await settleRoom(room);
+    let entered!: () => void;
+    let release!: () => void;
+    const atRoom = new Promise<void>((resolve) => (entered = resolve));
+    const released = new Promise<void>((resolve) => (release = resolve));
+    const session = {
+      userId: OWNER,
+      email: 'dev@example.test'
+    } as never;
+    const input = { scope: 'projects', confirmation: 'dev@example.test' };
+    const base = {
+      ENVIRONMENT: 'development',
+      AUTH_MODE: 'development',
+      DB: d1,
+      PROJECT_STORAGE: bucket,
+      ARTIFACTS: bucket
+    };
+    const envA = {
+      ...base,
+      PROJECT_ROOM: {
+        getByName: () => ({
+          fetch: async (request: Request) => {
+            entered();
+            await released;
+            return room.fetch(request);
+          }
+        })
+      }
+    };
+    const envB = {
+      ...base,
+      PROJECT_ROOM: {
+        getByName: () => ({ fetch: (request: Request) => room.fetch(request) })
+      }
+    };
+    // Attempt A pauses on its room erasure; retry B completes the request.
+    const stale = deleteAccountData(
+      session,
+      input,
+      envA as never,
+      new D1R2PersistenceService(envA as never)
+    );
+    await atRoom;
+    const completed = await deleteAccountData(
+      session,
+      input,
+      envB as never,
+      new D1R2PersistenceService(envB as never)
+    );
+    expect(completed.ok).toBe(true);
+    expect(db.prepare('SELECT * FROM account_erasure_requests').all()).toEqual(
+      []
+    );
+    // The project is created again, and its room stores a document.
+    await service.createProject(OWNER, {
+      name: document.name,
+      initialDocument: document
+    });
+    room = createTestRoom(storage.context, { DB: d1 });
+    await settleRoom(room);
+    const globals = installWorkerSocketGlobals();
+    try {
+      expect((await room.fetch(socketRequest())).status).toBe(101);
+      const socket = globals.serverSockets.at(-1)!;
+      await socket.receive(hello('client_recreated'));
+      expect(storage.values.has('room:latest')).toBe(true);
+      // A resumes: its erasure names the old instance, and its request is
+      // already complete, so it erases and deletes nothing.
+      release();
+      expect((await stale).ok).toBe(true);
+    } finally {
+      globals.restore();
+    }
+    expect(storage.values.has('room:latest')).toBe(true);
+    expect(
+      db.prepare('SELECT id FROM projects WHERE id = ?').get(PROJECT)
+    ).toEqual({ id: PROJECT });
+    expect(bucket.objects.has(assetKey)).toBe(true);
+  });
+});
+
+describe('an account erasure attempt a retry overtook (PR #1477 review, round 3)', () => {
+  const PROJECT = 'proj_44444444-4444-4444-8444-444444444444';
+
+  async function recreatable() {
+    const { D1R2PersistenceService } =
+      await import('@openzcad/cloudflare-adapters');
+    const { objectBucket } = await import('./support/e2ee-documents');
+    const db = database();
+    db.prepare('DELETE FROM projects').run();
+    const manager = new CommandManager({
+      ...createProjectDocument('Recreated project', OWNER),
+      projectId: PROJECT
+    } as ProjectDocument);
+    manager.execute(
+      commandFactories.importStep({
+        name: 'Source',
+        artifactId: 'artifact_local_source',
+        sourceName: 'source.step',
+        stepText: STEP_TEXT
+      })
+    );
+    const document = withoutDerivedProjection(manager.document);
+    const bucket = objectBucket();
+    const d1 = sqliteD1(db);
+    const service = new D1R2PersistenceService({
+      DB: d1,
+      PROJECT_STORAGE: bucket,
+      ARTIFACTS: bucket
+    } as never);
+    await service.createProject(OWNER, {
+      name: document.name,
+      initialDocument: document
+    });
+    const assetKey = (
+      db.prepare('SELECT object_key FROM project_storage_assets').get() as {
+        object_key: string;
+      }
+    ).object_key;
+    return { db, d1, bucket, service, document, assetKey };
+  }
+
+  /** `d1`, pausing the first `method` call of a statement naming `marker`. */
+  function pausing(d1: D1Database, marker: string, method: 'first' | 'all') {
+    let entered!: () => void;
+    let release!: () => void;
+    const paused = new Promise<void>((resolve) => (entered = resolve));
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let once = true;
+    const pass = <T extends object>(target: T, property: PropertyKey) => {
+      const value = Reflect.get(target, property) as unknown;
+      return typeof value === 'function'
+        ? (value as (...args: unknown[]) => unknown).bind(target)
+        : value;
+    };
+    const wrapped = new Proxy(d1, {
+      get(target, property) {
+        if (property !== 'prepare') return pass(target, property);
+        return (sql: string) => {
+          const statement = target.prepare(sql);
+          if (!sql.includes(marker)) return statement;
+          return new Proxy(statement, {
+            get(inner, key) {
+              if (key !== 'bind') return pass(inner, key);
+              return (...args: unknown[]) =>
+                new Proxy(inner.bind(...args), {
+                  get(bound, name) {
+                    if (name === method && once) {
+                      once = false;
+                      return async () => {
+                        entered();
+                        await released;
+                        return method === 'first' ? bound.first() : bound.all();
+                      };
+                    }
+                    return pass(bound, name);
+                  }
+                });
+            }
+          });
+        };
+      }
+    });
+    return { wrapped, paused, release };
+  }
+
+  for (const [label, marker, method] of [
+    ['before listing its projects', 'FROM projects p WHERE p.user_id', 'all'],
+    ['between listing and its room erasure', 'SELECT 1 AS current', 'first']
+  ] as const) {
+    it(`a stalled attempt (${label}) touches nothing created after the retry completed`, async () => {
+      const { D1R2PersistenceService } =
+        await import('@openzcad/cloudflare-adapters');
+      const {
+        createRoomContext,
+        createTestRoom,
+        settleRoom,
+        installWorkerSocketGlobals
+      } = await import('./collaboration-room-harness');
+      const { deleteAccountData } =
+        await import('../apps/web/worker/accountDeletion');
+      const { db, d1, bucket, service, document, assetKey } =
+        await recreatable();
+      const { wrapped, paused, release } = pausing(d1, marker, method);
+      const storage = createRoomContext();
+      let room = createTestRoom(storage.context, { DB: d1 });
+      await settleRoom(room);
+      const rooms = {
+        getByName: () => ({ fetch: (request: Request) => room.fetch(request) })
+      };
+      const base = {
+        ENVIRONMENT: 'development',
+        AUTH_MODE: 'development',
+        DB: d1,
+        PROJECT_STORAGE: bucket,
+        ARTIFACTS: bucket,
+        PROJECT_ROOM: rooms
+      };
+      const envA = { ...base, DB: wrapped };
+      const session = { userId: OWNER, email: 'dev@example.test' } as never;
+      const input = { scope: 'projects', confirmation: 'dev@example.test' };
+      const stale = deleteAccountData(
+        session,
+        input,
+        envA as never,
+        new D1R2PersistenceService(envA as never)
+      );
+      await paused;
+      // A retry of the same request completes it.
+      expect(
+        (
+          await deleteAccountData(
+            session,
+            input,
+            base as never,
+            new D1R2PersistenceService(base as never)
+          )
+        ).ok
+      ).toBe(true);
+      expect(
+        db.prepare('SELECT * FROM account_erasure_requests').all()
+      ).toEqual([]);
+      // The project is created again, and its room acknowledges a document.
+      await service.createProject(OWNER, {
+        name: document.name,
+        initialDocument: document
+      });
+      room = createTestRoom(storage.context, { DB: d1 });
+      await settleRoom(room);
+      const globals = installWorkerSocketGlobals();
+      try {
+        const response = await room.fetch(
+          new Request(`https://room.test/?projectId=${PROJECT}`, {
+            headers: {
+              upgrade: 'websocket',
+              'x-openzcad-user-id': OWNER,
+              'x-openzcad-display-name': 'Owner',
+              'x-openzcad-project-role': 'owner'
+            }
+          })
+        );
+        expect(response.status).toBe(101);
+        const socket = globals.serverSockets.at(-1)!;
+        const roomDocument = {
+          ...createProjectDocument('New room', OWNER),
+          projectId: PROJECT
+        };
+        (
+          roomDocument.nodes[roomDocument.rootNodeId] as unknown as {
+            projectId: string;
+          }
+        ).projectId = PROJECT;
+        await socket.receive(
+          JSON.stringify({
+            type: 'hello',
+            clientId: 'new-client',
+            displayName: 'Owner',
+            baseVersion: null,
+            document: roomDocument
+          })
+        );
+        expect(storage.values.has('room:latest')).toBe(true);
+        // A resumes: its request is complete, so it stops.
+        release();
+        expect((await stale).ok).toBe(true);
+      } finally {
+        globals.restore();
+      }
+      expect(
+        db.prepare('SELECT id FROM projects WHERE id = ?').get(PROJECT)
+      ).toEqual({ id: PROJECT });
+      expect(bucket.objects.has(assetKey)).toBe(true);
+      expect(storage.values.has('room:latest')).toBe(true);
+    });
+  }
+});

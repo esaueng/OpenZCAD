@@ -252,7 +252,11 @@ and insert guards. Cleanups that delete R2 objects under reusable keys
 (content-addressed source assets, encrypted blobs) claim each key there
 first, so a cleanup that resumes late can never delete bytes a newer row
 stores under the same key. Claims expire after an hour, and nothing needs
-operator attention. Migration numbers can have gaps.
+operator attention. Migration `0051_r2_key_tombstone_version_bodies.sql`
+extends the same guard to encrypted document version bodies, and
+`0052_project_instances.sql` gives every project row a random instance id, so
+a deletion never touches a project created again under the same id.
+Migration numbers can have gaps.
 
 **Upgrading across migration 0049** (`0049_unified_account_storage.sql`):
 account storage becomes one allowance. Projects, save states and source assets

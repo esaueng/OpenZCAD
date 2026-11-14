@@ -58,12 +58,27 @@ function database(
         if (query.includes('SELECT scope FROM account_erasure_requests')) {
           return fence.existingScope ? { scope: fence.existingScope } : null;
         }
+        // Recording the request answers its identity (RETURNING): a new
+        // request, or the open one of the same scope it joins.
+        if (query.includes('INSERT INTO account_erasure_requests')) {
+          const scope = call.params[1];
+          return fence.changes === 1 || fence.existingScope === scope
+            ? { identity: 1 }
+            : null;
+        }
+        // The request is still open for every later step.
+        if (query.includes('SELECT 1 AS current')) return { current: 1 };
         return null;
       },
       async all() {
-        if (query.includes('SELECT id FROM projects WHERE user_id')) {
+        // The account's projects, as listed with their instances
+        // (migration 0052, "not installed" here).
+        if (
+          query.includes('SELECT id FROM projects WHERE user_id') ||
+          query.includes('FROM projects p WHERE p.user_id')
+        ) {
           const ids = projectPasses[projectPass++] ?? [];
-          return { results: ids.map((id) => ({ id })) };
+          return { results: ids.map((id) => ({ id, instance_id: null })) };
         }
         return { results: [] };
       },
@@ -252,7 +267,10 @@ describe('account cloud-data deletion', () => {
         'x-openzcad-internal-project-erasure'
       )
     ).toBe('v1');
-    expect(store.deleteOwnedProjects).toHaveBeenCalledWith(session.userId);
+    // Exactly the projects it listed, as the instances it listed.
+    expect(store.deleteOwnedProjects).toHaveBeenCalledWith(session.userId, [
+      { projectId, instance: null }
+    ]);
     expect(calls.at(-1)?.query).toContain(
       'DELETE FROM account_erasure_requests'
     );

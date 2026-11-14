@@ -58,6 +58,8 @@ import { serveAssetFallback } from './assetFallback';
 import { JsonComplexityGuard } from '@openzcad/shared';
 import {
   accountEntitlements,
+  drainPendingObjects,
+  PENDING_OBJECT_GRACE_MS,
   syncStoredAccountLimits
 } from '@openzcad/cloudflare-adapters';
 import {
@@ -2838,6 +2840,23 @@ export default {
   async scheduled(_controller: unknown, env: Env): Promise<void> {
     assertSafeRuntimeConfiguration(env);
     await createPersistenceService(env).purgeExpiredUploadSessions();
+    // Objects failed writes left pending (migration 0051), however their
+    // project fares otherwise: reclaimed once no write can still need them.
+    if (env.DB) {
+      try {
+        await drainPendingObjects(
+          env.DB,
+          {
+            'project-storage': env.PROJECT_STORAGE ?? env.ARTIFACTS ?? null,
+            artifacts: env.ARTIFACTS ?? null
+          },
+          null,
+          { olderThanMs: PENDING_OBJECT_GRACE_MS, limit: 200 }
+        );
+      } catch (error) {
+        console.error('Pending object sweep failed.', error);
+      }
+    }
     // Request-path limiters no longer reclaim stale windows themselves.
     await purgeStaleRateLimitBuckets(env);
     // Nor does desktop sign-in start reclaim expired sign-in rows.
