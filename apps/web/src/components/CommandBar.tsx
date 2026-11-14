@@ -16,6 +16,7 @@ import {
   recordRecentCommand
 } from '../lib/commandSearch';
 import { ShortcutKeys } from './ShortcutKeys';
+import { TOUCH_ONLY_QUERY, useMediaQuery } from '../hooks/useMediaQuery';
 
 const LIST_ID = 'command-palette-list';
 const ASK_HINT_ID = 'command-bar-ask-hint';
@@ -29,6 +30,13 @@ export const COMMAND_PREFIX = '/';
 
 const KEYS_RUN = '↑↓ move · Tab completes · Enter runs · Esc clears';
 const KEYS_ASK = '↑ picks a command · Enter asks the assistant · Esc clears';
+/**
+ * The same lane on a touch-only device, which has no arrows, Tab or Esc to
+ * press: at 390px the key list was cut to "Enter runs · Es…" (I23).
+ */
+const TOUCH_RUN = 'Tap a command to run it';
+const TOUCH_ASK = 'Tap a command, or Ask to send your words to the assistant';
+const TOUCH_ASK_HINT = 'Return asks the assistant · type / for commands';
 
 export interface PaletteCommand {
   id: string;
@@ -163,6 +171,8 @@ export function CommandBar({
   // Null is the default row: the ask row when there is one, else the best
   // match.
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const touchOnly = useMediaQuery(TOUCH_ONLY_QUERY);
+  const keysRun = touchOnly ? TOUCH_RUN : KEYS_RUN;
   // Most recent first; read once, then kept in step with what runs here.
   const [recentIds, setRecentIds] = useState(loadRecentCommands);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -445,10 +455,12 @@ export function CommandBar({
             {hasRows && (
               <p className="command-bar-keys" aria-hidden="true">
                 {clampedIndex === askIndex
-                  ? KEYS_ASK
+                  ? touchOnly
+                    ? TOUCH_ASK
+                    : KEYS_ASK
                   : browsing && pick
-                    ? `For ${pick} · type to search all · ${KEYS_RUN}`
-                    : KEYS_RUN}
+                    ? `For ${pick} · type to search all · ${keysRun}`
+                    : keysRun}
               </p>
             )}
           </div>
@@ -459,7 +471,9 @@ export function CommandBar({
             onMouseDown={(event) => event.preventDefault()}
           >
             <p className="command-bar-keys" id={ASK_HINT_ID}>
-              Enter asks the assistant · type / for commands
+              {touchOnly
+                ? TOUCH_ASK_HINT
+                : 'Enter asks the assistant · type / for commands'}
             </p>
           </div>
         )}
