@@ -1881,3 +1881,34 @@
   font-size: var(--fs-xs);
   line-height: 1.4;
 }
+
+/* The 3D mouse's Reverse row: one chip per cap direction, pressed is
+   reversed. Drawn like the relation-glyph filter's chips, with words. */
+.space-mouse-axis-filter {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.space-mouse-axis-toggle {
+  min-height: 24px;
+  padding: 0 8px;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+}
+
+.space-mouse-axis-toggle:not([aria-pressed='true']):is(:hover, :focus-visible) {
+  color: var(--color-text);
+  background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
+}
+
+.space-mouse-axis-toggle[aria-pressed='true'] {
+  color: var(--color-text);
+  background: var(--color-surface-2);
+  border-color: var(--color-border-strong);
+}

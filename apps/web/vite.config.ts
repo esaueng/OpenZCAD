@@ -446,6 +446,14 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
             import.meta.url
           )
         ),
+        // The 3D mouse connection lives in the entry chunk (App and
+        // Settings share it); its decoder imports nothing.
+        '@openzcad/viewport/space-mouse': fileURLToPath(
+          new URL(
+            '../../packages/viewport/src/input/spaceMouse.ts',
+            import.meta.url
+          )
+        ),
         '@openzcad/viewport/types': fileURLToPath(
           new URL('../../packages/viewport/src/types.ts', import.meta.url)
         ),

@@ -1435,6 +1435,11 @@ describe('worker api routes', () => {
     custom.viewport.pencilDrawsOnly = false;
     custom.viewport.tangentEdges = 'hide';
     custom.viewport.orbitMode = 'turntable';
+    custom.viewport.spaceMouse = {
+      ...custom.viewport.spaceMouse,
+      rotationSpeed: 60,
+      reversed: ['zoom']
+    };
     let storedSettings = structuredClone(custom);
     let storedRevision = 1;
     const prepare = vi.fn((query: string) => {
@@ -1481,6 +1486,7 @@ describe('worker api routes', () => {
     delete legacy.viewport.pencilDrawsOnly;
     delete legacy.viewport.tangentEdges;
     delete legacy.viewport.orbitMode;
+    delete legacy.viewport.spaceMouse;
     legacy.appearance.theme = 'dark';
     const saved = await worker.fetch(
       patch('/api/settings', { settings: legacy, expectedRevision: 1 }),
@@ -1495,6 +1501,11 @@ describe('worker api routes', () => {
     expect(storedSettings.viewport.pencilDrawsOnly).toBe(false);
     expect(storedSettings.viewport.tangentEdges).toBe('hide');
     expect(storedSettings.viewport.orbitMode).toBe('turntable');
+    // A 3D mouse tuned on the desktop keeps its tuning.
+    expect(storedSettings.viewport.spaceMouse).toMatchObject({
+      rotationSpeed: 60,
+      reversed: ['zoom']
+    });
 
     // A client that sends them is honoured.
     const changed = structuredClone(storedSettings);

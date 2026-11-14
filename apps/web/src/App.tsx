@@ -4,6 +4,12 @@ import {
   persistStorageForInstalledApp
 } from './lib/appleTouch';
 import { registerOfflineShell } from './lib/offlineShell';
+import { spaceMouse } from './lib/spaceMouse';
+import {
+  dispatchEmulatedKey,
+  spaceMouseAction,
+  type SpaceMouseAction
+} from './lib/spaceMouseActions';
 import {
   localHistoryAppend,
   retainLocalHistoryAppend,
@@ -3890,6 +3896,60 @@ export function App() {
     []
   );
   const [fitSignal, setFitSignal] = useState(0);
+  // A 3D mouse this browser already allows reopens with no prompt. Its keys
+  // run the same commands as the keyboard (spaceMouseActions.ts); the roll
+  // key turns the camera, so the viewer answers that one.
+  const spaceMouseActionRef = useRef<(action: SpaceMouseAction) => void>(
+    () => undefined
+  );
+  spaceMouseActionRef.current = (action) => {
+    switch (action.kind) {
+      case 'menu':
+        openSettingsAt('controls');
+        return;
+      case 'fit':
+        setFitSignal((value) => value + 1);
+        return;
+      case 'view':
+        requestView(action.view);
+        return;
+      case 'normal-to-face':
+        requestNormalToSelectedFace();
+        return;
+      case 'projection':
+        toggleProjection();
+        return;
+      case 'display':
+        cycleDisplayMode();
+        return;
+      case 'rotation-lock':
+        setStatus(
+          spaceMouse.isRotationLocked
+            ? '3D mouse rotation locked: pan and zoom only.'
+            : '3D mouse rotation unlocked.',
+          { unlogged: true }
+        );
+        return;
+      case 'key':
+        dispatchEmulatedKey(action.key, action.pressed);
+        return;
+      case 'roll':
+        return;
+    }
+  };
+  // The 3D mouse reads the cap with the account's own settings, applied at
+  // once to a cap that is held.
+  const spaceMouseSettings = appSettings.viewport.spaceMouse;
+  useEffect(() => {
+    spaceMouse.setPreferences(spaceMouseSettings);
+  }, [spaceMouseSettings]);
+  useEffect(() => {
+    void spaceMouse.restore();
+    return spaceMouse.subscribeButtons((event) => {
+      const action = spaceMouseAction(event);
+      if (action) spaceMouseActionRef.current(action);
+    });
+  }, []);
   const [presentedGeometry, setPresentedGeometry] = useState<{
     projectId: string;
     generation: number;

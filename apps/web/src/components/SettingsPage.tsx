@@ -109,6 +109,11 @@ import {
   Toggle,
   type SegmentOption
 } from './settingsControls';
+import {
+  SpaceMousePreferenceRows,
+  SpaceMouseSettings
+} from './SpaceMouseSettings';
+import { SPACE_MOUSE_KEY_REFERENCE } from '../lib/spaceMouseActions';
 import { CloudDataDeletionDialog } from './CloudDataDeletionDialog';
 import { describeFailure } from '../lib/plainFailure';
 import { DataDownload } from './DataDownload';
@@ -1600,6 +1605,22 @@ export function SettingsPage({
                     }
                   />
                 </SettingRow>
+              </Group>
+              {/* A 3D mouse is navigation too, so its settings sit right
+                  under it rather than past the keyboard reference. */}
+              <Group title="3D mouse" note="Chrome and Edge">
+                <SpaceMouseSettings />
+                <SpaceMousePreferenceRows
+                  value={settings.viewport.spaceMouse}
+                  onChange={(spaceMouse) =>
+                    patch({
+                      viewport: { ...settings.viewport, spaceMouse }
+                    })
+                  }
+                />
+              </Group>
+              <Group title="SpaceMouse keys">
+                <ControlReferenceGroups groups={[SPACE_MOUSE_KEY_REFERENCE]} />
               </Group>
               {/* Every remappable command with its live keys. A key can mean
                   one thing per context (C is Cylinder in the workspace and

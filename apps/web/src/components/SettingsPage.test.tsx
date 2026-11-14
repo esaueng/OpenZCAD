@@ -1114,6 +1114,8 @@ describe('settings controls section', () => {
     // meaning everywhere, then the pointer.
     expect([...headers].map((header) => header.textContent)).toEqual([
       'Navigation',
+      expect.stringContaining('3D mouse'),
+      'SpaceMouse keys',
       expect.stringContaining('Keyboard'),
       expect.stringContaining('Fixed keys'),
       'Mouse & pointer'
@@ -1122,7 +1124,7 @@ describe('settings controls section', () => {
       screen.getByRole('button', { name: 'Reset all shortcuts' })
     ).toBeDisabled();
     // The banner's guidance lives on beside the one header.
-    expect(headers[1]).toHaveTextContent(
+    expect(headers[3]).toHaveTextContent(
       'Workspace shortcuts pause while you type in a field'
     );
   });
