@@ -8,9 +8,9 @@ import type { CloudflareEnv } from './index';
 
 /**
  * Premium's one storage allowance, for everything the account stores
- * (projects, save states, imports, exports, encrypted files): 25 GiB.
+ * (projects, save states, imports, exports, encrypted files): 1 GiB.
  */
-export const PREMIUM_STORAGE_BYTES = 25 * 1024 ** 3;
+export const PREMIUM_STORAGE_BYTES = 1024 ** 3;
 
 /**
  * The Premium storage override. `PREMIUM_STORAGE_LIMIT_BYTES` names the

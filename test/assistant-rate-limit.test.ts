@@ -651,7 +651,7 @@ describe('premium assistant enforcement', () => {
     );
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({
-      entitlements: { tier: 'premium', artifactLimitBytes: 25 * 1024 ** 3 }
+      entitlements: { tier: 'premium', artifactLimitBytes: 1024 ** 3 }
     });
   });
 });

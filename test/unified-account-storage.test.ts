@@ -21,6 +21,7 @@ const OWNER = 'user_owner';
 const PROJECT = 'p_owner';
 const CREATED = '2026-01-01T00:00:00.000Z';
 const GIB = 1024 ** 3;
+const FREE_STORAGE = 100 * 1024 ** 2;
 
 /** An account with one inline project and the given single limit. */
 function account(limitBytes: number, email = 'owner@example.com') {
@@ -186,16 +187,16 @@ describe('one storage allowance per account (migration 0049)', () => {
     db.prepare("DELETE FROM artifacts WHERE id = 'a_old'").run();
   });
 
-  it('gives Premium one 25 GiB bucket and Free one 1 GiB bucket', async () => {
+  it('gives Premium one 1 GiB bucket and Free one 100 MiB bucket', async () => {
     const env = { PREMIUM_USER_EMAILS: 'premium@example.com' };
     const premium = accountEntitlements(env, 'premium@example.com');
     const free = accountEntitlements(env, 'free@example.com');
-    expect(premium.storageLimitBytes).toBe(25 * GIB);
-    expect(free.storageLimitBytes).toBe(GIB);
+    expect(premium.storageLimitBytes).toBe(GIB);
+    expect(free.storageLimitBytes).toBe(FREE_STORAGE);
 
     for (const [email, limit] of [
-      ['premium@example.com', 25 * GIB],
-      ['free@example.com', GIB]
+      ['premium@example.com', GIB],
+      ['free@example.com', FREE_STORAGE]
     ] as const) {
       // Stored under the old policy: 2 GiB each, two buckets.
       const db = account(2 * GIB, email);
@@ -215,7 +216,7 @@ describe('one storage allowance per account (migration 0049)', () => {
       });
 
       // 60% of the bucket in files and 40% in projects fills it; the two
-      // are not separate allowances (Free is 1 GiB in total, not 2).
+      // are not separate allowances (Free is 100 MiB in total, not 200).
       const files = Math.floor(limit * 0.6);
       artifact(db, 'a_six', files);
       documentObject(db, 'o_four', limit - files - 100);
@@ -1195,12 +1196,12 @@ describe('account storage usage (one bucket)', () => {
       projectStorageBytes: 100 + 200 + 300 + 400,
       artifactBytes: 5_000,
       storageBytes: 1_000 + 5_000,
-      storageLimitBytes: GIB,
-      artifactLimitBytes: GIB,
+      storageLimitBytes: FREE_STORAGE,
+      artifactLimitBytes: FREE_STORAGE,
       entitlements: {
-        storageLimitBytes: GIB,
-        projectStorageLimitBytes: GIB,
-        artifactLimitBytes: GIB
+        storageLimitBytes: FREE_STORAGE,
+        projectStorageLimitBytes: FREE_STORAGE,
+        artifactLimitBytes: FREE_STORAGE
       }
     });
   });

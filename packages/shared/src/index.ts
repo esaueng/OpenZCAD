@@ -4237,11 +4237,12 @@ export const MAX_ACTIVE_ARTIFACT_UPLOAD_SESSIONS = 16;
  * attributed to the project owner — documents, revisions and source assets
  * (plaintext or encrypted) together with imports, exports and encrypted
  * content blobs, in one bucket (migration 0049). Uploads and saves are
- * otherwise unmetered writes on an open-signup beta; 1 GiB covers real use
- * (the largest supported STEP import is 128 MB) while bounding abuse.
+ * otherwise unmetered writes on an open-signup beta; 100 MiB bounds abuse
+ * while covering typical projects. It is smaller than the largest supported
+ * STEP import (128 MiB), so a Free account cannot store an import that big.
  * Premium raises it.
  */
-export const MAX_ACCOUNT_STORAGE_BYTES = 1024 * 1024 * 1024;
+export const MAX_ACCOUNT_STORAGE_BYTES = 100 * 1024 * 1024;
 /**
  * @deprecated One allowance covers artifacts and projects alike; use
  * {@link MAX_ACCOUNT_STORAGE_BYTES}. Kept equal to it.

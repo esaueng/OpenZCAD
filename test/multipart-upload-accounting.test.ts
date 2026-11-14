@@ -2,11 +2,15 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { D1R2PersistenceService } from '@openzcad/cloudflare-adapters';
-import { ArtifactQuotaError, ProjectNotFoundError } from '@openzcad/persistence';
+import {
+  ArtifactQuotaError,
+  ProjectNotFoundError
+} from '@openzcad/persistence';
 import {
   MAX_ACCOUNT_ARTIFACT_BYTES,
   MAX_ACTIVE_ARTIFACT_UPLOAD_SESSIONS,
   MAX_ARTIFACT_PART_BYTES,
+  MAX_ARTIFACT_UPLOAD_BYTES,
   toProjectId,
   toUserId,
   type UploadSessionRecord
@@ -14,6 +18,8 @@ import {
 
 const OWNER = toUserId('user_upload_owner');
 const OTHER_OWNER = toUserId('user_upload_other');
+/** One upload's own byte cap, which migration 0049's triggers hard-code. */
+const UPLOAD_CAP_BYTES = MAX_ARTIFACT_UPLOAD_BYTES;
 const PROJECT = toProjectId('project_upload_owner');
 const OTHER_PROJECT = toProjectId('project_upload_other');
 const MIGRATIONS = new URL('../apps/web/migrations/', import.meta.url);
@@ -190,7 +196,11 @@ class FakeR2 {
     get: async (key: string) => {
       const body = this.objects.get(key);
       return body
-        ? { key, size: body.byteLength, arrayBuffer: async () => body.slice().buffer }
+        ? {
+            key,
+            size: body.byteLength,
+            arrayBuffer: async () => body.slice().buffer
+          }
         : null;
     },
     put: async (key: string, body: unknown) => {
@@ -343,11 +353,13 @@ describe('durable multipart quota accounting', () => {
     expect(r2.multipart.size).toBe(1);
   });
   it('rechecks project trash state when an editor inserts a session', async () => {
-    sqlite.prepare(
-      `INSERT INTO project_members
+    sqlite
+      .prepare(
+        `INSERT INTO project_members
        (project_id, user_id, role, added_by_user_id, created_at, updated_at)
        VALUES (?, ?, 'editor', ?, 1, 1)`
-    ).run(PROJECT, OTHER_OWNER, OWNER);
+      )
+      .run(PROJECT, OTHER_OWNER, OWNER);
     const sharingService = new D1R2PersistenceService({
       DB: d1.database,
       ARTIFACTS: r2.bucket,
@@ -356,7 +368,9 @@ describe('durable multipart quota accounting', () => {
     d1.beforeRun = (query) => {
       if (query.includes('INSERT INTO upload_sessions')) {
         d1.beforeRun = null;
-        sqlite.prepare(`UPDATE projects SET status = 'deleted' WHERE id = ?`).run(PROJECT);
+        sqlite
+          .prepare(`UPDATE projects SET status = 'deleted' WHERE id = ?`)
+          .run(PROJECT);
       }
     };
     await expect(
@@ -485,7 +499,11 @@ describe('durable multipart quota accounting', () => {
       entered.resolve();
       await release.promise;
     };
-    const single = service.putUpload(OWNER, session.uploadSessionId, new ArrayBuffer(6));
+    const single = service.putUpload(
+      OWNER,
+      session.uploadSessionId,
+      new ArrayBuffer(6)
+    );
     await entered.promise;
     r2.beforeCreate = null;
     const { uploadId } = await service.createMultipartUpload(
@@ -500,7 +518,11 @@ describe('durable multipart quota accounting', () => {
       multipart_upload_id: uploadId,
       reserved_bytes: 0
     });
-    await service.abortMultipartUpload(OWNER, session.uploadSessionId, uploadId);
+    await service.abortMultipartUpload(
+      OWNER,
+      session.uploadSessionId,
+      uploadId
+    );
     expect(r2.multipart.size).toBe(0);
   });
 
@@ -521,14 +543,21 @@ describe('durable multipart quota accounting', () => {
         await release.promise;
       }
     };
-    const pending = service.putUpload(OWNER, session.uploadSessionId, new ArrayBuffer(9));
+    const pending = service.putUpload(
+      OWNER,
+      session.uploadSessionId,
+      new ArrayBuffer(9)
+    );
     await entered.promise;
     expect(uploadRow(sqlite, session.uploadSessionId)).toMatchObject({
       reservation_state: 'uploading',
       reserved_bytes: 9
     });
     expect(usage(sqlite)?.reserved_bytes).toBe(9);
-    const internalUploadId = uploadRow(sqlite, session.uploadSessionId)?.multipart_upload_id;
+    const internalUploadId = uploadRow(
+      sqlite,
+      session.uploadSessionId
+    )?.multipart_upload_id;
     expect(internalUploadId).toBeTruthy();
     await expect(
       service.createMultipartUpload(OWNER, session.uploadSessionId)
@@ -549,7 +578,11 @@ describe('durable multipart quota accounting', () => {
       })
     ).rejects.toThrow('Multipart upload was not found');
     await expect(
-      service.abortMultipartUpload(OWNER, session.uploadSessionId, internalUploadId!)
+      service.abortMultipartUpload(
+        OWNER,
+        session.uploadSessionId,
+        internalUploadId!
+      )
     ).rejects.toThrow('single upload storage');
     const request = {
       projectId: PROJECT,
@@ -585,13 +618,21 @@ describe('durable multipart quota accounting', () => {
       })
     ).rejects.toThrow('Multipart upload was not found');
     await expect(
-      service.abortMultipartUpload(OWNER, session.uploadSessionId, internalUploadId!)
+      service.abortMultipartUpload(
+        OWNER,
+        session.uploadSessionId,
+        internalUploadId!
+      )
     ).rejects.toThrow('single upload storage');
     await expect(
       service.putUpload(OWNER, session.uploadSessionId, new ArrayBuffer(9))
     ).resolves.toBeUndefined();
     await expect(
-      service.putUpload(OWNER, session.uploadSessionId, new Uint8Array(9).fill(1).buffer)
+      service.putUpload(
+        OWNER,
+        session.uploadSessionId,
+        new Uint8Array(9).fill(1).buffer
+      )
     ).rejects.toThrow('already in use');
     expect((await service.finalizeArtifact(OWNER, request))?.bytes).toBe(9);
     expect(usage(sqlite)).toMatchObject({
@@ -614,7 +655,11 @@ describe('durable multipart quota accounting', () => {
       entered.resolve();
       await release.promise;
     };
-    const pending = service.putUpload(OWNER, session.uploadSessionId, new ArrayBuffer(8));
+    const pending = service.putUpload(
+      OWNER,
+      session.uploadSessionId,
+      new ArrayBuffer(8)
+    );
     await entered.promise;
     sqlite
       .prepare(`UPDATE upload_sessions SET expires_at = ? WHERE id = ?`)
@@ -625,7 +670,10 @@ describe('durable multipart quota accounting', () => {
     expect(r2.objects.size).toBe(0);
     expect(r2.multipart.size).toBe(0);
     expect(uploadRow(sqlite, session.uploadSessionId)).toBeUndefined();
-    expect(usage(sqlite)).toMatchObject({ reserved_bytes: 0, active_sessions: 0 });
+    expect(usage(sqlite)).toMatchObject({
+      reserved_bytes: 0,
+      active_sessions: 0
+    });
   });
 
   it('keeps a completing single PUT indexed until R2 completion settles', async () => {
@@ -641,7 +689,11 @@ describe('durable multipart quota accounting', () => {
       entered.resolve();
       await release.promise;
     };
-    const pending = service.putUpload(OWNER, session.uploadSessionId, new ArrayBuffer(7));
+    const pending = service.putUpload(
+      OWNER,
+      session.uploadSessionId,
+      new ArrayBuffer(7)
+    );
     await entered.promise;
     sqlite
       .prepare(`UPDATE upload_sessions SET expires_at = ? WHERE id = ?`)
@@ -656,7 +708,10 @@ describe('durable multipart quota accounting', () => {
     expect(r2.objects.size).toBe(1);
     await expect(service.purgeExpiredUploadSessions()).resolves.toBe(1);
     expect(r2.objects.size).toBe(0);
-    expect(usage(sqlite)).toMatchObject({ reserved_bytes: 0, active_sessions: 0 });
+    expect(usage(sqlite)).toMatchObject({
+      reserved_bytes: 0,
+      active_sessions: 0
+    });
   });
 
   it('aborts a stale completion before deleting its R2 index', async () => {
@@ -672,7 +727,11 @@ describe('durable multipart quota accounting', () => {
       entered.resolve();
       await release.promise;
     };
-    const pending = service.putUpload(OWNER, session.uploadSessionId, new ArrayBuffer(6));
+    const pending = service.putUpload(
+      OWNER,
+      session.uploadSessionId,
+      new ArrayBuffer(6)
+    );
     await entered.promise;
     sqlite
       .prepare(
@@ -685,7 +744,10 @@ describe('durable multipart quota accounting', () => {
     await expect(pending).rejects.toThrow('NoSuchUpload');
     expect(r2.objects.size).toBe(0);
     expect(r2.multipart.size).toBe(0);
-    expect(usage(sqlite)).toMatchObject({ reserved_bytes: 0, active_sessions: 0 });
+    expect(usage(sqlite)).toMatchObject({
+      reserved_bytes: 0,
+      active_sessions: 0
+    });
   });
   it('atomically admits only one concurrent session near quota and isolates accounts', async () => {
     sqlite
@@ -872,7 +934,36 @@ describe('durable multipart quota accounting', () => {
        (upload_session_id, part_number, bytes, etag, reservation_token)
        VALUES (?, ?, ?, 'etag', ?)`
     );
-    // One full upload (32 parts of 32 MiB) fills the 1 GiB Free allowance.
+    // The Free allowance (100 MiB) stops reservations long before one
+    // upload's own 1 GiB cap, so a fourth 32 MiB part is refused.
+    for (let part = 1; part <= 3; part += 1) {
+      insertPart.run(
+        sessions[1].session.uploadSessionId,
+        part,
+        MAX_ARTIFACT_PART_BYTES,
+        `${sessions[1].uploadId}-${part}`
+      );
+    }
+    expect(MAX_ACCOUNT_ARTIFACT_BYTES).toBeLessThan(
+      4 * MAX_ARTIFACT_PART_BYTES
+    );
+    expect(() =>
+      insertPart.run(
+        sessions[1].session.uploadSessionId,
+        4,
+        MAX_ARTIFACT_PART_BYTES,
+        `${sessions[1].uploadId}-4`
+      )
+    ).toThrow('artifact_reserved_byte_limit');
+    sqlite.exec(`DELETE FROM artifact_upload_parts`);
+
+    // A Premium-sized stored allowance (1 GiB) makes the per-upload cap
+    // reachable: one full upload (32 parts of 32 MiB) fills both.
+    sqlite
+      .prepare(
+        'UPDATE users SET artifact_limit_bytes = ?, project_storage_limit_bytes = ? WHERE id = ?'
+      )
+      .run(UPLOAD_CAP_BYTES, UPLOAD_CAP_BYTES, OWNER);
     for (const target of sessions.slice(0, 1)) {
       for (let part = 1; part <= 32; part += 1) {
         insertPart.run(
@@ -891,7 +982,7 @@ describe('durable multipart quota accounting', () => {
         )
       ).toThrow('artifact_upload_byte_limit');
     }
-    expect(usage(sqlite)?.reserved_bytes).toBe(MAX_ACCOUNT_ARTIFACT_BYTES);
+    expect(usage(sqlite)?.reserved_bytes).toBe(UPLOAD_CAP_BYTES);
     expect(() =>
       insertPart.run(
         sessions[2].session.uploadSessionId,
@@ -1180,9 +1271,14 @@ describe('durable multipart quota accounting', () => {
          (user_id, scope, started_at, updated_at) VALUES (?, 'projects', 1, 1)`
       )
       .run(OWNER);
-    await expect(service.deleteOwnedProjects(OWNER)).resolves.toEqual([PROJECT]);
+    await expect(service.deleteOwnedProjects(OWNER)).resolves.toEqual([
+      PROJECT
+    ]);
     expect(r2.objects.size).toBe(0);
-    expect(usage(sqlite)).toMatchObject({ reserved_bytes: 0, active_sessions: 0 });
+    expect(usage(sqlite)).toMatchObject({
+      reserved_bytes: 0,
+      active_sessions: 0
+    });
   });
 });
 
@@ -1292,10 +1388,12 @@ describe('migration 0020 single-part compatibility', () => {
 
     applyMigrations(db, 20, 19);
     expect(
-      db.prepare(
-        `SELECT reservation_state, expires_at, single_part
+      db
+        .prepare(
+          `SELECT reservation_state, expires_at, single_part
          FROM upload_sessions WHERE id = 'old_open'`
-      ).get()
+        )
+        .get()
     ).toMatchObject({
       reservation_state: 'legacy',
       expires_at: expiry,
@@ -1312,13 +1410,15 @@ describe('migration 0020 single-part compatibility', () => {
       db.prepare(`SELECT id FROM upload_sessions WHERE id = 'old_open'`).get()
     ).toMatchObject({ id: 'old_open' });
     expect(() =>
-      db.prepare(
-        `INSERT INTO upload_sessions
+      db
+        .prepare(
+          `INSERT INTO upload_sessions
          (id, artifact_id, project_id, object_key, file_name, content_type,
           expires_at, kind, metadata_json, owner_user_id, reservation_state)
          VALUES ('old_worker_new', 'old_worker_artifact', ?, 'old/new', 'old.step',
           'model/step', ?, 'snapshot', '{}', ?, 'open')`
-      ).run(PROJECT, expiry, OWNER)
+        )
+        .run(PROJECT, expiry, OWNER)
     ).toThrow('artifact_upload_protocol_version_required');
     db.close();
   });
