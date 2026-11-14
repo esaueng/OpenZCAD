@@ -436,7 +436,12 @@ async function consumeRateLimit(
   }
 }
 
-/** Counts one request against the bucket; false once it is over the limit. */
+/**
+ * Counts one request against the bucket; false once it is over the limit.
+ * A request past the limit writes nothing: the upsert only counts while the
+ * window has room, so a caller that keeps going after its 429 changes no
+ * row.
+ */
 async function takeRateLimit(
   db: D1Database,
   bucket: string,
@@ -446,33 +451,24 @@ async function takeRateLimit(
   const windowStart =
     Math.floor(timestamp / LOGIN_RATE_WINDOW_SECONDS) *
     LOGIN_RATE_WINDOW_SECONDS;
-  await db
+  const counted = await db
     .prepare(
       `INSERT INTO auth_rate_limits (bucket, window_start, request_count)
        VALUES (?, ?, 1)
        ON CONFLICT(bucket) DO UPDATE SET
-         window_start = CASE
-           WHEN auth_rate_limits.window_start = excluded.window_start
-             THEN auth_rate_limits.window_start
-           ELSE excluded.window_start
-         END,
+         window_start = excluded.window_start,
          request_count = CASE
            WHEN auth_rate_limits.window_start = excluded.window_start
              THEN auth_rate_limits.request_count + 1
            ELSE 1
-         END`
+         END
+       WHERE auth_rate_limits.window_start != excluded.window_start
+         OR auth_rate_limits.request_count < ?
+       RETURNING request_count`
     )
-    .bind(bucket, windowStart)
-    .run();
-  const current = await db
-    .prepare(
-      `SELECT request_count
-       FROM auth_rate_limits
-       WHERE bucket = ? AND window_start = ?`
-    )
-    .bind(bucket, windowStart)
+    .bind(bucket, windowStart, limit)
     .first<{ request_count: number }>();
-  return (current?.request_count ?? limit + 1) <= limit;
+  return counted !== null && counted.request_count <= limit;
 }
 
 /**
@@ -572,10 +568,11 @@ async function knownDeviceId(
   return constantTimeEqual(mac!, expected) ? deviceId! : null;
 }
 
+/** Deletes up to one batch of each; true while a table may have more. */
 async function cleanExpiredAuthRows(
   db: D1Database,
   timestamp: number
-): Promise<void> {
+): Promise<boolean> {
   const staleWindow =
     timestamp -
     Math.max(
@@ -583,7 +580,7 @@ async function cleanExpiredAuthRows(
       PROJECT_INVITATION_RATE_WINDOW_SECONDS
     ) *
       2;
-  await db.batch([
+  const results = await db.batch([
     // Spent codes stay for a failure window: their attempt counts are the
     // email's record of recent wrong codes.
     db
@@ -617,6 +614,9 @@ async function cleanExpiredAuthRows(
       )
       .bind(staleWindow)
   ]);
+  return results.some(
+    (result) => (result.meta?.changes ?? 0) >= EXPIRED_ROW_BATCH
+  );
 }
 
 const EMAIL_FONT =
@@ -1075,11 +1075,39 @@ function desktopSession(
   };
 }
 
+/** The `LIMIT` of each expired-row cleanup statement below. */
+const EXPIRED_ROW_BATCH = 100;
+const EXPIRED_ROW_PURGE_BATCHES = 50;
+
+/**
+ * Reclaims expired sign-in rows from the scheduled handler: email codes,
+ * sessions and stale login windows, and desktop sign-in attempts and tokens.
+ * Desktop sign-in start no longer cleans these itself, so an anonymous
+ * caller cannot cause D1 writes there. Bounded per run; anything left goes
+ * on the next one.
+ */
+export async function purgeExpiredAuthRows(
+  env: CloudflareEnv,
+  timestamp = nowSeconds()
+): Promise<void> {
+  const db = env.DB;
+  if (!db) return;
+  const desktopTables = await isDesktopAuthReady(db);
+  for (let batch = 0; batch < EXPIRED_ROW_PURGE_BATCHES; batch += 1) {
+    const authMore = await cleanExpiredAuthRows(db, timestamp);
+    const desktopMore = desktopTables
+      ? await cleanExpiredDesktopAuthRows(db, timestamp)
+      : false;
+    if (!authMore && !desktopMore) return;
+  }
+}
+
+/** Deletes up to one batch of each; true while a table may have more. */
 async function cleanExpiredDesktopAuthRows(
   db: D1Database,
   timestamp: number
-): Promise<void> {
-  await db.batch([
+): Promise<boolean> {
+  const results = await db.batch([
     db
       .prepare(
         `DELETE FROM desktop_auth_attempts
@@ -1111,6 +1139,9 @@ async function cleanExpiredDesktopAuthRows(
       )
       .bind(timestamp)
   ]);
+  return results.some(
+    (result) => (result.meta?.changes ?? 0) >= EXPIRED_ROW_BATCH
+  );
 }
 
 export async function startDesktopAuthorization(
@@ -1141,14 +1172,14 @@ export async function startDesktopAuthorization(
     `desktop-ip:${connectingIp}`,
     env.AUTH_OTP_PEPPER!
   );
-  await cleanExpiredAuthRows(db, timestamp);
+  // Expired rows are reclaimed by the scheduled `purgeExpiredAuthRows`, so
+  // an anonymous caller past its allowance causes no D1 write here.
   await consumeRateLimit(
     db,
     `desktop-ip:${ipBucket}`,
     DESKTOP_AUTH_IP_RATE_LIMIT,
     timestamp
   );
-  await cleanExpiredDesktopAuthRows(db, timestamp);
   const attemptId = crypto.randomUUID();
   const userCode = desktopUserCode();
   await db

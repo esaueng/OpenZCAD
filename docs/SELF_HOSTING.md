@@ -85,12 +85,13 @@ its `v1` SQLite migration; Wrangler applies that class migration on the first
 Worker deployment. Keep the binding name, class name, and migration tag.
 
 The hourly cron in the example runs the existing expired-upload cleanup and
-reclaims expired rate-limit rows from D1. You may change its schedule, but
+reclaims expired rate-limit and sign-in rows from D1. You may change its schedule, but
 keep a schedule if uploads are enabled. Cron schedules are UTC.
 
 The example's `ratelimits` entries are Workers rate-limit bindings that the
 Worker checks before any D1 work: sign-in verification and desktop refresh
-(`AUTH_REQUEST_LIMITER`), desktop sign-in polling (`DESKTOP_EXCHANGE_LIMITER`),
+(`AUTH_REQUEST_LIMITER`), desktop sign-in start (`DESKTOP_START_LIMITER`),
+desktop sign-in polling (`DESKTOP_EXCHANGE_LIMITER`),
 anonymous assistant requests (`ANONYMOUS_ASSISTANT_LIMITER`), plaintext
 share-link reads (`SHARE_LINK_LIMITER`) and signed-in reads
 (`ACCOUNT_READ_LIMITER`). They need no resource to be created. Each
@@ -354,8 +355,7 @@ content, so it requires the owners' explicit consent and a private recovery
 backup. If that is unacceptable, remain on the prior release until a separately
 reviewed encrypted-to-encrypted upgrader is available.
 
-Confirm that `SELECT COUNT(*) FROM e2ee_project_groups` is zero before retrying
-0044. Then deploy the new release, re-encrypt through the normal verified
+Confirm that `SELECT COUNT(*) FROM e2ee_project_groups` is zero before retrying 0044. Then deploy the new release, re-encrypt through the normal verified
 migration flow, and restore sharing with new verified invitations and links.
 Check head content, source files and retained revisions in the owner browser
 before considering the transition complete. This is a gated format change;

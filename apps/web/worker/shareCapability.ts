@@ -12,9 +12,9 @@ const UNUSABLE_TOKEN = '!';
  * route (see packages/shared/src/share-link-token.ts), which keeps the token
  * out of the URL that Cloudflare's request logs record; it is mapped onto
  * the path form the handlers parse, so both forms are served by one code
- * path. The path forms stay served: the macOS host forwards no request
- * headers yet, and a tab opened before a deploy still uses them. Any other
- * request's path is returned unchanged.
+ * path. The path forms stay served for clients from before the header:
+ * macOS builds released without it, and a tab opened before a deploy. Any
+ * other request's path is returned unchanged.
  */
 export function shareCapabilityPathname(
   request: Request,

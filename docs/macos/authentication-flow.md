@@ -44,13 +44,18 @@ reports, frontend bundles, and GitHub Actions output.
   `DESKTOP_AUTH_ENABLED` rollout gate are both present.
 - Start, approve, exchange, refresh, and logout routes enforce the fixed
   `openzcad-macos` client, ten-minute attempts, PKCE, one-time consumption,
-  refresh reuse revocation, expiry, and an IP start-rate limit. Exchange and
-  refresh are also limited per client address before their bodies are read,
-  and every sign-in route caps its JSON body at 4 KiB.
+  refresh reuse revocation, expiry, and an IP start-rate limit. Start,
+  exchange and refresh are also limited per client address before their
+  bodies are read, and every sign-in route caps its JSON body at 4 KiB.
+  Expired attempts and tokens are reclaimed by the Worker's scheduled run.
 - Existing authenticated HTTP routes accept the opaque desktop bearer without
   weakening the hosted cookie flow or adding cross-origin browser access.
 - The native proxy is pinned to `https://zcad.app`; it validates every API
   path and system-browser handoff before making a request or opening a URL.
+  Besides the content type, the only request header the WebView can have it
+  send is a share link's token (`x-openzcad-share-token`), validated as one
+  plain token and accepted only on a GET of a token-free share read, which
+  goes without account credentials.
 
 ## Remaining release gates
 

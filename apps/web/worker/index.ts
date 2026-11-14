@@ -148,6 +148,7 @@ import {
   getDesktopAuthConfig,
   identifyAssistantIdentity,
   refreshDesktopAuthorization,
+  purgeExpiredAuthRows,
   startDesktopAuthorization,
   startEmailLogin,
   verifyEmailLogin
@@ -1440,6 +1441,12 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   }
 
   if (request.method === 'POST' && pathname === '/api/auth/desktop/start') {
+    await enforcePublicRequestRateLimit(
+      request,
+      env,
+      'desktop-start',
+      'DESKTOP_START_LIMITER'
+    );
     const payload = await readJsonBody(request, MAX_AUTH_BODY_BYTES);
     const input =
       payload && typeof payload === 'object'
@@ -2826,6 +2833,8 @@ export default {
     await createPersistenceService(env).purgeExpiredUploadSessions();
     // Request-path limiters no longer reclaim stale windows themselves.
     await purgeStaleRateLimitBuckets(env);
+    // Nor does desktop sign-in start reclaim expired sign-in rows.
+    await purgeExpiredAuthRows(env);
     // Purges and abandons of project migrations a browser left behind, and
     // of stagings whose owner may no longer migrate (or, for a decrypt
     // staging, no longer use the reverse path, slice 7-3). Where encryption

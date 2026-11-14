@@ -175,18 +175,21 @@ function loginStartD1() {
         return statement;
       },
       async first<T>() {
-        if (query.includes('SELECT request_count')) {
-          return {
-            request_count: rates.get(String(values[0])) ?? 0
-          } as T;
+        // The login limiter counts with RETURNING, and only while the
+        // window has room (`values[2]` is the limit).
+        if (
+          query.includes('INSERT INTO auth_rate_limits') &&
+          query.includes('RETURNING request_count')
+        ) {
+          const bucket = String(values[0]);
+          const count = rates.get(bucket) ?? 0;
+          if (count >= Number(values[2])) return null;
+          rates.set(bucket, count + 1);
+          return { request_count: count + 1 } as T;
         }
         return null;
       },
       async run() {
-        if (query.includes('INSERT INTO auth_rate_limits')) {
-          const bucket = String(values[0]);
-          rates.set(bucket, (rates.get(bucket) ?? 0) + 1);
-        }
         if (query.includes('INSERT INTO auth_email_challenges')) {
           challenge = {
             id: String(values[0]),

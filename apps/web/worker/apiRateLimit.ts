@@ -112,6 +112,13 @@ export const REQUEST_LIMITS = {
    * app polling for its approval every couple of seconds).
    */
   DESKTOP_EXCHANGE_LIMITER: 60,
+  /**
+   * Desktop sign-in start, per address, before the body is read or D1 is
+   * touched; D1's own 20-per-15-minutes allowance stays behind it
+   * (judgment: a person starts a sign-in a few times, not every few
+   * seconds).
+   */
+  DESKTOP_START_LIMITER: 10,
   /** Anonymous assistant proposals (development only), per address. */
   ANONYMOUS_ASSISTANT_LIMITER: 20,
   /**

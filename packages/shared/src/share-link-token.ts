@@ -11,7 +11,9 @@
  *
  * Each is served exactly as the path form that names the token,
  * `/api/share/:token…` and `/api/e2ee/share/:token…`, which the Worker
- * still serves for clients that cannot send the header.
+ * still serves for clients from before the header (macOS builds released
+ * without it, and tabs opened before a deploy). Current web and macOS
+ * builds send only the header form.
  */
 export const SHARE_LINK_TOKEN_HEADER = 'x-openzcad-share-token';
 

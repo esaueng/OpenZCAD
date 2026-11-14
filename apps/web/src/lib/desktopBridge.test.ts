@@ -29,7 +29,10 @@ vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: vi.fn() }));
 
 const BLOB_ID = '0123456789abcdef0123456789abcdef';
 
-/** A share blob's path form, which the native host is handed. */
+/**
+ * A share blob's older path form, which a desktop build before the token
+ * header used and the native host still streams.
+ */
 function sharedBlobUrl(token: string, blobId: string): string {
   return `/api/e2ee/share/${token}/blobs/${blobId}`;
 }
@@ -441,14 +444,16 @@ describe('desktop bridge', () => {
       contentLength: 5
     });
 
-    const response = await desktopFetch(sharedBlobUrl('AbC-12_x', BLOB_ID), {
-      credentials: 'omit'
+    const response = await desktopFetch(sharedBlobPath(BLOB_ID), {
+      credentials: 'omit',
+      headers: { 'x-openzcad-share-token': 'AbC-12_x' }
     });
 
     expect(response.status).toBe(200);
     expect(response.headers.get('content-length')).toBe('5');
     expect(invoke).toHaveBeenCalledWith('desktop_blob_stream_open', {
-      path: `/api/e2ee/share/AbC-12_x/blobs/${BLOB_ID}`
+      path: `/api/e2ee/share/blobs/${BLOB_ID}`,
+      shareToken: 'AbC-12_x'
     });
     // Nothing is read from Rust before the caller reads the body.
     expect(nativeCommands()).toEqual(['desktop_blob_stream_open']);
@@ -462,7 +467,7 @@ describe('desktop bridge', () => {
     ]);
   });
 
-  it('hands the native host the path form of a share read whose token is in a header', async () => {
+  it("hands Rust a share read's token beside its path, never in it", async () => {
     markDesktopRuntime();
     mockNativeBlobStream([new Uint8Array([7])]);
     const streamed = await desktopFetch(sharedBlobPath(BLOB_ID), {
@@ -471,26 +476,55 @@ describe('desktop bridge', () => {
     });
     await streamed.arrayBuffer();
     expect(invoke).toHaveBeenCalledWith('desktop_blob_stream_open', {
-      path: `/api/e2ee/share/AbC-12_x/blobs/${BLOB_ID}`
+      path: `/api/e2ee/share/blobs/${BLOB_ID}`,
+      shareToken: 'AbC-12_x'
     });
 
-    for (const [path, expected] of [
-      ['/api/e2ee/share', '/api/e2ee/share/AbC-12_x'],
-      ['/api/share', '/api/share/AbC-12_x'],
-      [
-        '/api/share/sources/artifact_1',
-        '/api/share/AbC-12_x/sources/artifact_1'
-      ]
-    ] as const) {
+    for (const path of [
+      '/api/e2ee/share',
+      '/api/share',
+      '/api/share/sources/artifact_1',
+      // Not streamed: only a 32-hex blob id is.
+      '/api/e2ee/share/blobs/blob_1'
+    ]) {
       vi.mocked(invoke).mockReset();
       vi.mocked(invoke).mockResolvedValue({ status: 200, body: [] });
       await desktopFetch(path, {
         headers: { 'x-openzcad-share-token': 'AbC-12_x' }
       });
+      expect(vi.mocked(invoke).mock.calls).toEqual([
+        [
+          'desktop_api_request',
+          {
+            request: {
+              method: 'GET',
+              path,
+              contentType: undefined,
+              body: undefined,
+              shareToken: 'AbC-12_x'
+            }
+          }
+        ]
+      ]);
+    }
+
+    // A malformed token is dropped, as the Worker would ignore it, and
+    // nothing without one names a token at all.
+    for (const headers of [
+      { 'x-openzcad-share-token': 'AbC 12' },
+      { 'x-openzcad-share-token': 'a'.repeat(257) },
+      {}
+    ] as Record<string, string>[]) {
+      vi.mocked(invoke).mockReset();
+      vi.mocked(invoke).mockResolvedValue({ status: 404, body: [] });
+      await desktopFetch('/api/share', { headers });
       const [command, args] = vi.mocked(invoke).mock.calls[0]!;
       expect(command).toBe('desktop_api_request');
+      expect(
+        (args as { request: Record<string, unknown> }).request
+      ).not.toHaveProperty('shareToken');
       expect((args as { request: { path: string } }).request.path).toBe(
-        expected
+        '/api/share'
       );
     }
   });
@@ -643,11 +677,12 @@ describe('desktop bridge', () => {
     mockNativeBlobStream(pieces, { contentLength: 60 * MiB + 1 });
 
     const bytes = await readSharedSourceBytes(
-      sharedBlobUrl('AbC-12_x', BLOB_ID),
+      sharedBlobPath(BLOB_ID),
       'bracket.step',
       desktopFetch,
       128 * MiB,
-      30_000
+      30_000,
+      { 'x-openzcad-share-token': 'AbC-12_x' }
     );
 
     expect(bytes?.byteLength).toBe(60 * MiB + 1);

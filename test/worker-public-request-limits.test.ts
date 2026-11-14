@@ -9,6 +9,7 @@ import {
   publicRequestBucket,
   purgeStaleRateLimitBuckets
 } from '../apps/web/worker/apiRateLimit';
+import { purgeExpiredAuthRows } from '../apps/web/worker/auth';
 import { clientAddressKey } from '../apps/web/worker/clientAddress';
 import { shareCapabilityPathname } from '../apps/web/worker/shareCapability';
 import { migratedDatabase, sqliteD1 } from './support/sqlite-d1';
@@ -93,6 +94,15 @@ function spendAddressBudget(
     .run(limit, buckets[0]!.bucket);
 }
 
+/** A well-formed desktop sign-in start. */
+function desktopStartBody(): string {
+  return JSON.stringify({
+    clientId: 'openzcad-macos',
+    state: 's'.repeat(43),
+    codeChallenge: 'c'.repeat(43)
+  });
+}
+
 function fixMinute(): void {
   // Every request below falls in one fixed-window minute.
   vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-11-13T10:00:10Z'));
@@ -146,6 +156,7 @@ describe('sign-in request bodies', () => {
 describe('per-address limits before a sign-in body is read', () => {
   it.each([
     ['/api/auth/email/verify', 30],
+    ['/api/auth/desktop/start', 10],
     ['/api/auth/desktop/exchange', 60],
     ['/api/auth/desktop/refresh', 30]
   ] as const)(
@@ -347,6 +358,22 @@ describe('Workers rate-limit bindings', () => {
     );
   });
 
+  it('refuse a desktop sign-in start before any D1 work when the binding says no', async () => {
+    const { env, statements } = hostedEnv();
+    const binding = limiter(false);
+    const { body, state } = trackedBody(desktopStartBody());
+    const response = await worker.fetch(post('/api/auth/desktop/start', body), {
+      ...env,
+      DESKTOP_START_LIMITER: binding
+    });
+    expect(response.status).toBe(429);
+    expect(state.read).toBe(false);
+    expect(statements).toEqual([]);
+    expect(binding.limit.mock.calls[0]![0].key).toMatch(
+      /^desktop-start:[0-9a-f]{64}$/
+    );
+  });
+
   it('count in the binding alone while it admits, writing no D1 limiter row', async () => {
     const { env, statements } = hostedEnv();
     const response = await worker.fetch(
@@ -446,6 +473,69 @@ describe('D1 rate-limit accounting', () => {
     // One keyed statement per refused request, and no stale-row cleanup.
     expect(statements).toHaveLength(5);
     expect(statements.some((sql) => sql.includes('DELETE'))).toBe(false);
+  });
+
+  it('write nothing for desktop sign-in starts past the D1 allowance', async () => {
+    fixMinute();
+    const { env, sqlite, statements } = hostedEnv();
+    // The Workers binding admits, so only the D1 allowance (20 per window)
+    // speaks.
+    const admitted = { ...env, DESKTOP_START_LIMITER: limiter(true) };
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      expect(
+        (
+          await worker.fetch(
+            post('/api/auth/desktop/start', desktopStartBody()),
+            admitted
+          )
+        ).status
+      ).toBe(201);
+    }
+    statements.length = 0;
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const refused = await worker.fetch(
+        post('/api/auth/desktop/start', desktopStartBody()),
+        admitted
+      );
+      expect(refused.status).toBe(429);
+    }
+    expect(
+      sqlite.prepare('SELECT request_count FROM auth_rate_limits').all()
+    ).toEqual([{ request_count: 20 }]);
+    expect(
+      sqlite
+        .prepare('SELECT COUNT(*) AS count FROM desktop_auth_attempts')
+        .get()
+    ).toEqual({ count: 20 });
+    // No cleanup and no attempt row once refused: the only write-shaped
+    // statement is the counter upsert, which changed nothing above.
+    const writes = statements.filter((sql) =>
+      /^\s*(INSERT|UPDATE|DELETE)/.test(sql)
+    );
+    expect(writes).toHaveLength(5);
+    expect(
+      writes.every((sql) => sql.includes('INSERT INTO auth_rate_limits'))
+    ).toBe(true);
+  });
+
+  it('leave expired sign-in rows to the scheduled purge', async () => {
+    const { env, sqlite } = hostedEnv();
+    const now = Math.floor(Date.parse('2026-11-13T10:00:10Z') / 1000);
+    const insert = sqlite.prepare(
+      `INSERT INTO desktop_auth_attempts
+         (id, state_hash, code_challenge, client_id, created_at, expires_at)
+       VALUES (?, 'state', 'challenge', 'openzcad-macos', ?, ?)`
+    );
+    for (let index = 0; index < 250; index += 1)
+      insert.run(`expired-${index}`, now - 1_200, now - 600);
+    insert.run('live', now - 60, now + 540);
+    await purgeExpiredAuthRows(env, now);
+    expect(
+      sqlite
+        .prepare('SELECT id FROM desktop_auth_attempts')
+        .all()
+        .map((row) => (row as { id: string }).id)
+    ).toEqual(['live']);
   });
 
   it('leave stale windows to the scheduled purge', async () => {
