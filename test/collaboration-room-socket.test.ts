@@ -555,7 +555,7 @@ describe('collaboration room socket handling', () => {
               return { results: [] };
             },
             first: async () => {
-              // The storage-format and project-instance (migration 0052)
+              // The storage-format and project-instance (migration 0056)
               // schema probes answer "not installed".
               if (query.includes('pragma_table_info')) return null;
               if (query.includes('sqlite_master')) return null;

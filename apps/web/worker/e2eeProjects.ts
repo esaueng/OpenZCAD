@@ -917,7 +917,7 @@ export async function runBatch(
         'Cloud data deletion is in progress. Retry that deletion before making other cloud changes.'
       );
     }
-    // Migrations 0050/0051: a cleanup is removing a stored object under a
+    // Migrations 0050/0055: a cleanup is removing a stored object under a
     // key this write names (an identical retry's body, a copy's blob).
     if (message.includes('r2_key_deleting')) {
       refuse(
@@ -926,7 +926,7 @@ export async function runBatch(
         'A stored file of this project is still being removed. Try again in a moment.'
       );
     }
-    // Migration 0051: this write's body was drained as abandoned before
+    // Migration 0055: this write's body was drained as abandoned before
     // its version could commit; the save stores it again on retry.
     if (message.includes('r2_object_not_pending')) {
       refuse(

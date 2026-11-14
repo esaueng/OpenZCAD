@@ -570,7 +570,7 @@ export function cachedSchemaProbe(
   };
 }
 
-/** Whether migration 0052's project instances are installed. */
+/** Whether migration 0056's project instances are installed. */
 export const isProjectInstanceReady = cachedSchemaProbe(
   `SELECT COUNT(*) AS ready FROM sqlite_master
    WHERE type = 'table' AND name = 'project_instances'`,
@@ -578,7 +578,7 @@ export const isProjectInstanceReady = cachedSchemaProbe(
 );
 
 /**
- * The instance (migration 0052) of the project now stored under `projectId`:
+ * The instance (migration 0056) of the project now stored under `projectId`:
  * which generation of a client-minted id it is. Null when the project is
  * gone or the migration is not installed.
  */
@@ -594,14 +594,14 @@ export async function projectInstanceId(
   return row?.instance_id ?? null;
 }
 
-/** Whether migration 0051's pending R2 objects are installed. */
+/** Whether migration 0055's pending R2 objects are installed. */
 export const isPendingObjectStorageReady = cachedSchemaProbe(
   `SELECT COUNT(*) AS ready FROM sqlite_master
    WHERE type = 'table' AND name = 'r2_pending_objects'`,
   (row) => row?.ready === 1
 );
 
-/** Which bucket a pending object (migration 0051) lives in. */
+/** Which bucket a pending object (migration 0055) lives in. */
 export type PendingObjectBucket = 'project-storage' | 'artifacts';
 
 /** The buckets a drain of pending objects deletes from. */
@@ -613,7 +613,7 @@ export type PendingObjectBuckets = Partial<
 export const PENDING_OBJECTS_PER_PROJECT = 8;
 
 /**
- * Records that `attempt` is about to put `key` (migration 0051), before the
+ * Records that `attempt` is about to put `key` (migration 0055), before the
  * put: from then on no cleanup can claim the key while the record stands,
  * and the row that names the key clears it. With `cap`, refused (false)
  * once the project already holds that many pending objects in `bucket`, so
@@ -672,7 +672,7 @@ export const PENDING_OBJECT_GRACE_MS = 60 * 60 * 1000;
 
 /**
  * Deletes the R2 objects that failed writes left recorded as pending
- * (migration 0051), each under a key claim (fenced on `fence` when given),
+ * (migration 0055), each under a key claim (fenced on `fence` when given),
  * then their records: those of `projectId`, or with null the oldest of any
  * project (the scheduled sweep). Only records at least `olderThanMs` old: a
  * younger one may belong to a write still in flight. True while more are
@@ -808,7 +808,7 @@ export interface OwnObjectRows {
    */
   readonly projects?: readonly string[];
   /**
-   * Write attempts whose pending records (migration 0051) the deleter is
+   * Write attempts whose pending records (migration 0055) the deleter is
    * removing: their records do not keep their keys alive. Any other
    * attempt's record does, for the write is still in flight.
    */
@@ -1261,6 +1261,18 @@ export const isE2eeInvitationStorageReady = cachedSchemaProbe(
 );
 
 /**
+ * Whether migration 0054's signed-acceptance columns of `e2ee_invitations`
+ * exist. Invitations must not depend on them: until they are there, no
+ * statement names them, every acceptance reads null (so owners add
+ * nobody), and only posting an acceptance answers 503.
+ */
+export const isE2eeInvitationAcceptanceReady = cachedSchemaProbe(
+  `SELECT COUNT(*) AS ready FROM pragma_table_info('e2ee_invitations')
+   WHERE name IN ('acceptance_statement', 'acceptance_signature')`,
+  (row) => row?.ready === 2
+);
+
+/**
  * Whether migration 0039's proposal table exists (ADR-024 Phase 5, slice
  * 5-5: a departing member's SelfRemove, stored for another member to
  * commit). Only the proposal routes, the Commit route's settlement of
@@ -1623,7 +1635,7 @@ const OBJECT_PRUNE_LIMIT = 32;
 const PRE_SAVE_OBJECT_PRUNE_LIMIT = 8;
 
 /**
- * A project to destroy: its id and the instance (migration 0052) the
+ * A project to destroy: its id and the instance (migration 0056) the
  * caller's owner check or listing saw (`''` for a project stored before
  * that migration). Without `instance` the caller already holds the
  * project's cleanup claim, which names its generation.
@@ -2605,7 +2617,7 @@ export class D1R2PersistenceService implements PersistenceService {
     )
       ? this.env.DB.prepare(
           `SELECT p.id, p.name, p.updated_at, p.document_json,
-                  p.document_version, p.last_revision_id, p.revision_count,
+                  p.document_version, p.last_revision_id, p.revision_count, p.document_bytes,
                   p.status, p.pinned, p.sort_order, p.deleted_at, p.archived_at${format},
                   (SELECT a.id FROM artifacts a
                     WHERE a.project_id = p.id AND a.kind = 'thumbnail'
@@ -2634,7 +2646,7 @@ export class D1R2PersistenceService implements PersistenceService {
         ).bind(userId, userId)
       : this.env.DB.prepare(
           `SELECT p.id, p.name, p.updated_at, p.document_json,
-                  p.document_version, p.last_revision_id, p.revision_count,
+                  p.document_version, p.last_revision_id, p.revision_count, p.document_bytes,
                   p.status, p.pinned, p.sort_order, p.deleted_at, p.archived_at${format},
                   (SELECT a.id FROM artifacts a
                     WHERE a.project_id = p.id AND a.kind = 'thumbnail'
@@ -3375,7 +3387,11 @@ export class D1R2PersistenceService implements PersistenceService {
         documentVersion: saved.version,
         updatedAt: saved.updatedAt,
         lastRevisionId: document.revisions.at(-1)?.revisionId,
-        revisionCount: document.revisions.length
+        revisionCount: document.revisions.length,
+        // A new version: the copy state's size described the previous one.
+        documentBytes: persistedDocumentBytes(
+          withoutDerivedProjection(document)
+        )
       },
       document: {
         ...document,
@@ -3487,7 +3503,7 @@ export class D1R2PersistenceService implements PersistenceService {
       return getInMemoryPersistence().deleteProject(userId, projectId);
     }
     await this.assertProjectOwner(userId, projectId);
-    // The instance (migration 0052) this owner check saw: only that very
+    // The instance (migration 0056) this owner check saw: only that very
     // project is destroyed, never one created again under its id meanwhile.
     const [target] = await this.ownedDestroyTargets(
       `SELECT p.id, ${await this.instanceColumn()} AS instance_id
@@ -3498,7 +3514,7 @@ export class D1R2PersistenceService implements PersistenceService {
     await this.destroyProjects([target]);
   }
 
-  /** `instance_id` of `projects p`, or NULL before migration 0052. */
+  /** `instance_id` of `projects p`, or NULL before migration 0056. */
   private async instanceColumn(): Promise<string> {
     return (await isProjectInstanceReady(this.env.DB))
       ? `(SELECT i.instance_id FROM project_instances i WHERE i.project_id = p.id)`
@@ -8139,6 +8155,8 @@ export class D1R2PersistenceService implements PersistenceService {
         revisionCount: document.revisions.length,
         updatedAt,
         documentVersion: document.version,
+        // The figure the row was just written with.
+        documentBytes: persistedDocumentBytes(document),
         organization
       };
     }
@@ -8187,6 +8205,7 @@ export class D1R2PersistenceService implements PersistenceService {
       lastRevisionId: document.revisions.at(-1)?.revisionId,
       revisionCount: document.revisions.length,
       updatedAt,
+      documentBytes: persistedDocumentBytes(document),
       organization
     };
   }
@@ -8240,7 +8259,7 @@ export class D1R2PersistenceService implements PersistenceService {
     }
     let projectIds = targets.map((target) => target.id);
     const instancesReady = await isProjectInstanceReady(this.env.DB);
-    // Each target as [id, instance]: the instance (migration 0052) its
+    // Each target as [id, instance]: the instance (migration 0056) its
     // caller saw with its owner check or listing, or null for a caller that
     // already holds the project's cleanup claim.
     const requested = JSON.stringify(
@@ -8354,7 +8373,7 @@ export class D1R2PersistenceService implements PersistenceService {
               headers: {
                 'x-openzcad-internal-project-erasure': 'v1',
                 // The room erases only while it serves this very instance
-                // (migration 0052): a delayed erasure of this generation
+                // (migration 0056): a delayed erasure of this generation
                 // leaves the room of a project created again untouched.
                 ...(instanceOf.get(projectId)
                   ? {
@@ -8429,7 +8448,7 @@ export class D1R2PersistenceService implements PersistenceService {
                WHERE project_id = ? AND envelope_key IS NOT NULL`
             )
           : [];
-        // Objects failed writes left pending (migration 0051).
+        // Objects failed writes left pending (migration 0055).
         if (pendingReady) {
           bodyKeys.push(
             ...(await keysOf(
@@ -9031,7 +9050,7 @@ function projectObjectEnvelope(
  * does not expect.
  */
 function projectSummaryColumns(format: string): string {
-  return `SELECT id, name, updated_at, document_json, document_version, last_revision_id, revision_count, status, pinned, sort_order, deleted_at, archived_at${format}, (SELECT a.id FROM artifacts a WHERE a.project_id = projects.id AND a.kind = 'thumbnail' ORDER BY a.created_at DESC LIMIT 1) AS thumbnail_artifact_id`;
+  return `SELECT id, name, updated_at, document_json, document_version, last_revision_id, revision_count, document_bytes, status, pinned, sort_order, deleted_at, archived_at${format}, (SELECT a.id FROM artifacts a WHERE a.project_id = projects.id AND a.kind = 'thumbnail' ORDER BY a.created_at DESC LIMIT 1) AS thumbnail_artifact_id`;
 }
 
 interface ProjectRow {
@@ -9042,6 +9061,11 @@ interface ProjectRow {
   document_version?: number | null;
   last_revision_id?: string | null;
   revision_count?: number | null;
+  /**
+   * The head document's bytes (migration 0010). Zero on a row written before
+   * that accounting, and on an encrypted row, whose head is an envelope.
+   */
+  document_bytes?: number | null;
   status: string | null;
   pinned: number | null;
   sort_order: number | null;
@@ -9155,6 +9179,16 @@ function encryptedSummaryFromRow(row: ProjectRow): ProjectSummary | null {
 /** Shown on the shelf for a project whose real name is encrypted. */
 export const ENCRYPTED_PROJECT_PLACEHOLDER_NAME = 'Encrypted project';
 
+/**
+ * The listing's size for a plaintext row. A zero is the column's default on a
+ * row nothing has measured, not a size, so it is left out rather than shown.
+ */
+function documentBytesOf(row: ProjectRow): { documentBytes?: number } {
+  return typeof row.document_bytes === 'number' && row.document_bytes > 0
+    ? { documentBytes: row.document_bytes }
+    : {};
+}
+
 /** Null when the stored document is unreadable, so the caller can skip it. */
 function summaryFromRow(row: ProjectRow): ProjectSummary | null {
   if (!isPlaintextStorageFormat(row.storage_format)) {
@@ -9178,6 +9212,7 @@ function summaryFromRow(row: ProjectRow): ProjectSummary | null {
       revisionCount: row.revision_count,
       updatedAt: row.updated_at,
       documentVersion: row.document_version,
+      ...documentBytesOf(row),
       organization: organizationFromRow(row)
     };
   }
@@ -9198,6 +9233,7 @@ function summaryFromRow(row: ProjectRow): ProjectSummary | null {
       // number always describes the blob this summary was built from, even if
       // the two ever disagree.
       documentVersion: document.version,
+      ...documentBytesOf(row),
       organization: organizationFromRow(row)
     };
   } catch {
@@ -9490,7 +9526,7 @@ async function readSnapshotBody(
 interface RoomMeta {
   schema: number;
   projectId: string | null;
-  /** The project instance (migration 0052) whose state this room holds. */
+  /** The project instance (migration 0056) whose state this room holds. */
   instanceId?: string;
   latestVersion: number | null;
   historyVersions: number[];
@@ -9571,7 +9607,7 @@ export class ProjectCollaborationRoom extends DurableObject {
    * plaintext keys, and plaintext requests are refused. Null otherwise.
    */
   private roomFormat: 2 | null = null;
-  /** The project instance (migration 0052) whose state this room holds. */
+  /** The project instance (migration 0056) whose state this room holds. */
   private instanceId: string | null = null;
   private e2eeLedgerState: E2eeRoomLedger | null = null;
   private e2eeAccountState: E2eeRoomAccount | null | undefined;
@@ -12166,7 +12202,7 @@ export class ProjectCollaborationRoom extends DurableObject {
     }
     const evicted = this.trimHistory();
     // The first state stored for a project records which instance of it
-    // (migration 0052) the room serves. Fail closed: state is never stored,
+    // (migration 0056) the room serves. Fail closed: state is never stored,
     // or acknowledged, without its instance once instances exist, since a
     // delayed erasure of an earlier instance could not tell it apart.
     if (this.projectId && !this.instanceId && this.roomEnv.DB) {

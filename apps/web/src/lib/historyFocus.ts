@@ -1,3 +1,4 @@
+import { ownEntry } from '@openzcad/shared';
 import type {
   BodyId,
   BodyRepresentation,
@@ -144,7 +145,7 @@ export function ghostBodiesFor(
     return [];
   }
   return focus.ghostBodyIds.flatMap((bodyId) => {
-    const body = document.derived.bodyRepresentations[bodyId];
+    const body = ownEntry(document.derived.bodyRepresentations, bodyId);
     return body ? [body] : [];
   });
 }
@@ -211,6 +212,16 @@ export function faceLineageTrace(
   reference: FaceTopologyReferenceV5
 ): FaceLineageTrace | null {
   return lineageTracer(document)(reference);
+}
+
+/**
+ * `faceLineageTrace` for many faces of one document: the feature index is
+ * built once rather than once per face.
+ */
+export function faceLineageTracer(
+  document: ProjectDocument
+): (reference: FaceTopologyReferenceV5) => FaceLineageTrace | null {
+  return lineageTracer(document);
 }
 
 function lineageTracer(document: ProjectDocument) {
@@ -280,7 +291,7 @@ function lineageTracer(document: ProjectDocument) {
         continue;
       }
       const head = rest.split('.', 1)[0] ?? '';
-      const owners = HEAD_KINDS[head];
+      const owners = ownEntry(HEAD_KINDS, head);
       if (!owners || owners.includes(kind)) {
         return traced(current.featureId);
       }

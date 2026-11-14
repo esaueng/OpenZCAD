@@ -1,4 +1,5 @@
 import {
+  ownEntry,
   isFeatureSuppressed,
   type BodyId,
   type FeatureNode,
@@ -58,7 +59,7 @@ export function isLiveAssemblyBody(
   document: ProjectDocument,
   bodyId: BodyId
 ): boolean {
-  const body = document.derived.bodyRepresentations[bodyId];
+  const body = ownEntry(document.derived.bodyRepresentations, bodyId);
   return Boolean(body && !body.consumed);
 }
 
@@ -130,7 +131,7 @@ export function deriveAssemblyBom(
     if (!row) {
       const name =
         bodyNames.get(bodyId)?.trim() ||
-        document.derived.bodyRepresentations[bodyId]?.name.trim() ||
+        ownEntry(document.derived.bodyRepresentations, bodyId)?.name.trim() ||
         component.name;
       row = {
         item: rows.size + 1,

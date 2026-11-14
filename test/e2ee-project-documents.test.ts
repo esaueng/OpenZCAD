@@ -1439,7 +1439,7 @@ describe('writes', () => {
       projectId
     );
     expect(keys.at(-1)!.envelope_key).toMatch(
-      // The version hash, then this write attempt's nonce (migration 0051).
+      // The version hash, then this write attempt's nonce (migration 0055).
       new RegExp(`^e2ee/${projectId}/v/[0-9a-f]{64}\\.[0-9a-f-]{36}$`)
     );
     const key = keys.at(-1)!.envelope_key!;
@@ -2075,7 +2075,7 @@ describe('heads the Worker accepts but the browser does not trust', () => {
   });
 });
 
-describe('version bodies under reused keys (migration 0051)', () => {
+describe('version bodies under reused keys (migration 0055)', () => {
   /** A large next version of a fresh project, so its body goes to R2. */
   async function largeNext(srv: Server) {
     const laptop = device(srv, owner, 'owner_laptop');

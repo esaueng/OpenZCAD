@@ -537,6 +537,16 @@ describe('settings number fields', () => {
 });
 
 describe('settings navigation', () => {
+  it('lets Appearance break only at its syllable in the phone rail', async () => {
+    renderSettings();
+    const button = await screen.findByRole('button', { name: 'Appearance' });
+    // Shown with a soft hyphen, so a rail narrower than the word breaks it
+    // as "Appear-" over "ance" rather than at an arbitrary letter; the
+    // button keeps the plain name.
+    expect(button.querySelector('span')?.textContent).toBe('Appear­ance');
+    expect(button).toHaveAccessibleName('Appearance');
+  });
+
   it('opens on the heading without focusing the active nav item or close button', async () => {
     const user = userEvent.setup();
     window.localStorage.clear();

@@ -321,8 +321,15 @@ export function solveSketchWithGcs(
     return entry;
   };
   const pointHandle = (ref: SketchPointRef): number => {
-    const handle = objectHandles(ref.objectId).points[ref.point];
-    if (handle === undefined) {
+    const points = objectHandles(ref.objectId).points;
+    // Own entries only: a stored point name such as "__proto__" must not
+    // reach an inherited member, and only a solver handle (a number) may be
+    // sent to the kernel.
+    const handle =
+      typeof ref.point === 'string' && Object.hasOwn(points, ref.point)
+        ? points[ref.point]
+        : undefined;
+    if (typeof handle !== 'number') {
       throw new Error(
         `Object ${ref.objectId} has no '${ref.point}' point to constrain.`
       );

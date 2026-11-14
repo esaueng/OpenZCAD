@@ -20,6 +20,7 @@ export * from './assembly-kinematics';
 export * from './gear-mesh-types';
 export * from './gear-mesh';
 import type { DocumentHistory } from './document-history';
+import { ownEntry } from './document-validation';
 import type { KeymapOverrides } from './keymap-settings';
 import type { DrawingSet } from './drawings';
 import type {
@@ -3825,6 +3826,16 @@ export interface ProjectSummary {
    */
   documentVersion?: number;
   /**
+   * Bytes of the saved document at `documentVersion`, measured as
+   * {@link persistedDocumentBytes} of the canonical document (without its
+   * derived projection) — the size Project properties calls "Document size"
+   * and the account's per-project limit measures. Imported sources stored
+   * beside the document are not included. Absent when the store has not
+   * measured this version: a device projection written before sizes were
+   * recorded, or an encrypted project the account holds only as ciphertext.
+   */
+  documentBytes?: number;
+  /**
    * Absent when the store holding this summary has no shelf state for the
    * project — an older row, or a device that has never organised it. Read it
    * through {@link projectOrganization} so a missing record reads as defaults
@@ -4236,11 +4247,12 @@ export const MAX_ACTIVE_ARTIFACT_UPLOAD_SESSIONS = 16;
  * attributed to the project owner — documents, revisions and source assets
  * (plaintext or encrypted) together with imports, exports and encrypted
  * content blobs, in one bucket (migration 0049). Uploads and saves are
- * otherwise unmetered writes on an open-signup beta; 1 GiB covers real use
- * (the largest supported STEP import is 128 MB) while bounding abuse.
+ * otherwise unmetered writes on an open-signup beta; 100 MiB bounds abuse
+ * while covering typical projects. It is smaller than the largest supported
+ * STEP import (128 MiB), so a Free account cannot store an import that big.
  * Premium raises it.
  */
-export const MAX_ACCOUNT_STORAGE_BYTES = 1024 * 1024 * 1024;
+export const MAX_ACCOUNT_STORAGE_BYTES = 100 * 1024 * 1024;
 /**
  * @deprecated One allowance covers artifacts and projects alike; use
  * {@link MAX_ACCOUNT_STORAGE_BYTES}. Kept equal to it.
@@ -5606,7 +5618,7 @@ export const FEATURE_COLORS: Record<FeatureKind, string> = {
 };
 
 export const featureColor = (kind: FeatureKind): string =>
-  FEATURE_COLORS[kind] ?? FEATURE_COLORS.primitive;
+  ownEntry(FEATURE_COLORS, kind) ?? FEATURE_COLORS.primitive;
 
 /**
  * The colour a body's own metadata asks for, or null when it asks for none:
@@ -5679,6 +5691,18 @@ export const UNIT_TO_MM: Record<UnitSystem, number> = {
   m: 1000,
   inch: 25.4
 };
+
+/**
+ * Millimetres per `units`. Anything but a unit system is refused rather than
+ * read as `UNIT_TO_MM[units]`, which turns an unknown value into NaN geometry
+ * and an inherited name into a prototype member.
+ */
+export function millimetresPerUnit(units: UnitSystem): number {
+  const millimetres = ownEntry(UNIT_TO_MM, units);
+  if (millimetres === undefined)
+    throw new RangeError(`Unknown units "${String(units)}".`);
+  return millimetres;
+}
 
 /** One ISO 261 coarse-pitch metric thread size, in millimetres. */
 export interface IsoMetricThreadSize {

@@ -1,4 +1,6 @@
 import {
+  ownEntry,
+  suppliedIds,
   createSketchCompositeId,
   isSketchComposite,
   sketchCompositeHelperKinds,
@@ -63,7 +65,8 @@ export function addSketchComposite(
 ): { document: ProjectDocument; compositeId: SketchCompositeId } {
   const sketch = findSketch(document, input.sketchId);
   if (!sketch) throw new Error(`Sketch ${input.sketchId} not found.`);
-  const compositeId = input.ids?.compositeId ?? createSketchCompositeId();
+  const compositeId =
+    suppliedIds(input.ids)?.compositeId ?? createSketchCompositeId();
   const composite: SketchComposite = { ...input.composite, compositeId };
   if (composite.helperIds?.length === 0) delete composite.helperIds;
   assertSketchComposites({
@@ -72,7 +75,7 @@ export function addSketchComposite(
   });
   for (const [index, member] of sketchCompositeMemberIds(composite).entries()) {
     const node = sketch.objectIds.includes(member)
-      ? document.nodes[member]
+      ? ownEntry(document.nodes, member)
       : undefined;
     if (!node || node.kind !== 'sketch-object') {
       throw new Error(`Sketch ${input.sketchId} has no object ${member}.`);

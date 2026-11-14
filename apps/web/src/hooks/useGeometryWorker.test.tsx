@@ -453,6 +453,53 @@ describe('useGeometryWorker', () => {
     ).rejects.toMatchObject({ name: 'AbortError' });
     expect(worker.postMessage).toHaveBeenCalledTimes(posts);
   });
+  it('cancels an abandoned one-off rebuild in the worker and discards its late reply', async () => {
+    // QA 2026-11-14 #16: a large pattern's in-place preview kept the worker
+    // building for its whole minute after Cancel closed the card.
+    installWorker();
+    const document = createProjectDocument('Pattern preview', toUserId('user'));
+    const host = { manager: () => null, onDerived: vi.fn(), onError: vi.fn() };
+    const { result } = renderHook(() => useGeometryWorker(host));
+    const worker = FakeWorker.instances[0]!;
+    const controller = new AbortController();
+    const settled = vi.fn();
+    const pending = result.current.syncOnce(document, undefined, undefined, {
+      proposeCarry: true,
+      signal: controller.signal
+    });
+    pending.then(settled, () => undefined);
+    const request = worker.postMessage.mock.calls.at(-1)![0] as {
+      requestId: string;
+    };
+    expect(request).toMatchObject({ type: 'sync', proposeCarry: true });
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(worker.postMessage).toHaveBeenLastCalledWith({
+      type: 'cancel',
+      requestId: request.requestId
+    });
+    // The worker was mid-job: its result arrives later and lands nowhere.
+    act(() => {
+      worker.emit({
+        type: 'sync',
+        ok: true,
+        projectId: document.projectId,
+        version: document.version,
+        requestId: request.requestId,
+        derived: document.derived
+      });
+    });
+    expect(settled).not.toHaveBeenCalled();
+    expect(host.onDerived).not.toHaveBeenCalled();
+    // Already aborted: nothing is posted at all.
+    const posts = worker.postMessage.mock.calls.length;
+    await expect(
+      result.current.syncOnce(document, undefined, undefined, {
+        signal: controller.signal
+      })
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    expect(worker.postMessage).toHaveBeenCalledTimes(posts);
+  });
   it('preserves selected analysis on one-off sync requests', async () => {
     installWorker();
     const document = createProjectDocument('Analysis', toUserId('user'));

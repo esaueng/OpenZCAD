@@ -153,3 +153,118 @@ test('a copy of a sample drops "Demo ·" and wears its picture', async ({
   await expect(copy).not.toContainText('Demo ·');
   await expect(copy.locator('.start-tile-thumb img')).toHaveCount(1);
 });
+
+// 14 Nov 2026: New project and then Import kept the suggested name ("Lucky
+// Quokka"), and a library of them could not be searched by what they were.
+test(
+  'a part imported into a new project with its suggested name names it',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(90_000);
+    await stubApi(page);
+    await page.goto('/');
+    const suggested = await page.getByLabel('Project name').inputValue();
+    expect(suggested).toMatch(/^[A-Z][a-z]+ [A-Z][a-z]+$/);
+    await page.getByRole('button', { name: 'New project' }).click();
+    await expect(
+      page.getByRole('button', { name: `Rename project ${suggested}` })
+    ).toBeVisible();
+
+    await page
+      .getByLabel(/^Import STEP or /)
+      .setInputFiles('samples/simple-block.stl');
+    await page
+      .getByRole('dialog', { name: 'Units for simple-block.stl' })
+      .getByRole('button', { name: 'Import in millimeters' })
+      .click();
+    await expectBodyCount(page, 1);
+    await expect(
+      page.getByRole('button', { name: 'Rename project simple-block' })
+    ).toBeVisible();
+  }
+);
+
+test('a part imported into a project someone named keeps that name', async ({
+  page
+}) => {
+  test.setTimeout(90_000);
+  await stubApi(page);
+  await page.goto('/');
+  await page.getByLabel('Project name').fill('Gearbox lid');
+  await page.getByRole('button', { name: 'New project' }).click();
+  await page
+    .getByLabel(/^Import STEP or /)
+    .setInputFiles('samples/simple-block.stl');
+  await page
+    .getByRole('dialog', { name: 'Units for simple-block.stl' })
+    .getByRole('button', { name: 'Import in millimeters' })
+    .click();
+  await expectBodyCount(page, 1);
+  await expect(
+    page.getByRole('button', { name: 'Rename project Gearbox lid' })
+  ).toBeVisible();
+});
+
+// Review of #1512: a rename kept the size of the version before it, and a
+// duplicate read "Not measured yet", until the library was next listed.
+test(
+  'a renamed or duplicated project shows its own size at once',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(90_000);
+    await stubApi(page);
+    await page.goto('/');
+    await page.getByLabel('Project name').fill('Size alpha');
+    await page.getByRole('button', { name: 'New project' }).click();
+    await expect(
+      page.getByRole('region', { name: '3D viewport' })
+    ).toBeVisible();
+    await page.getByTitle('Back to projects').click();
+    await expect(page.locator('.start-screen')).toBeVisible();
+    await page.getByRole('button', { name: 'List' }).click();
+
+    const size = (name: string) =>
+      page
+        .locator('.start-tile-project')
+        .filter({
+          has: page.locator('.start-tile-name', {
+            hasText: new RegExp(`^${name}$`)
+          })
+        })
+        .locator('data.start-tile-size');
+    const bytes = async (name: string) =>
+      Number(await size(name).getAttribute('value'));
+
+    await expect(size('Size alpha')).toHaveCount(1);
+    const before = await bytes('Size alpha');
+    expect(before).toBeGreaterThan(0);
+
+    const renamedName = 'Size alpha with a longer name';
+    await page.getByRole('button', { name: 'Actions for Size alpha' }).click();
+    await page.getByRole('menuitem', { name: 'Rename' }).click();
+    const field = page.getByRole('textbox', { name: 'Rename Size alpha' });
+    await field.fill(renamedName);
+    await field.press('Enter');
+    // A longer name and one more undo entry: a larger document, shown at once.
+    await expect(size(renamedName)).toHaveCount(1);
+    await expect.poll(() => bytes(renamedName)).toBeGreaterThan(before);
+    const renamed = await bytes(renamedName);
+
+    await page
+      .getByRole('button', { name: `Actions for ${renamedName}` })
+      .click();
+    await page
+      .getByRole('menuitem', { name: 'Duplicate', exact: true })
+      .click();
+    const copyName = `${renamedName} \\(copy\\)`;
+    await expect(size(copyName)).toHaveCount(1);
+    const copied = await bytes(copyName);
+    expect(copied).toBeGreaterThan(0);
+
+    // What the device stored agrees with what the rows showed.
+    await page.reload();
+    await expect(size(copyName)).toHaveCount(1);
+    expect(await bytes(renamedName)).toBe(renamed);
+    expect(await bytes(copyName)).toBe(copied);
+  }
+);

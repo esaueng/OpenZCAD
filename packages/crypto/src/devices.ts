@@ -529,6 +529,7 @@ export type StatementKind =
   | 'share link forget'
   | 'share link registration'
   | 'project invitation'
+  | 'invitation acceptance'
   | 'MLS authority manifest'
   | 'MLS authority trust'
   | 'MLS commit submission';

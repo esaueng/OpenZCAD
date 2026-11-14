@@ -9,6 +9,8 @@ const projects = ['Lid', 'Bracket A', 'Bracket B', 'Gearbox'].map(
     name,
     revisionCount: 1,
     updatedAt: '2026-11-13T12:00:00.000Z',
+    // Gearbox (archived) is left unmeasured.
+    ...(index < 3 ? { documentBytes: (index + 1) * 512 * 1024 } : {}),
     organization: {
       status: index === 3 ? 'archived' : 'active',
       pinned: index === 0,
@@ -71,7 +73,6 @@ test(
     await expect(folder.locator('.start-tile-rev')).toHaveText('2 projects');
     await expect(folder.locator('.start-tile-when')).toHaveText('Nov 13, 2026');
     await expect(folder.locator('.start-tile-flags')).toBeEmpty();
-    await expect(folder.locator('.start-folder-count')).toHaveCount(0);
     // No tab drawn over the row above it.
     expect(
       await folder.evaluate(
@@ -87,6 +88,36 @@ test(
       .locator('.start-group-label', { hasText: 'Pinned' })
       .boundingBox();
     expect(head!.y).toBeGreaterThan(pinned!.y);
+  }
+);
+
+test(
+  'the list shows each project’s size under its Size heading',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openLibrary(page);
+    await page.getByRole('button', { name: 'List' }).click();
+    const lid = page.locator('.start-tile-project', { hasText: 'Lid' });
+    await expect(lid.locator('.start-tile-size')).toHaveText('512 KiB');
+    // The folder totals its two brackets (1 MiB + 1.5 MiB).
+    const folder = page.locator('.start-tile-folder', { hasText: 'Brackets' });
+    await expect(folder.locator('.start-tile-size')).toHaveText('2.5 MiB');
+    // Each value sits in the column its heading names, on one line.
+    const heading = await page.locator('.start-list-head-size').boundingBox();
+    const cell = await lid.locator('.start-tile-size').boundingBox();
+    expect(Math.abs(cell!.x - heading!.x)).toBeLessThan(2);
+    expect(cell!.height).toBeLessThan(24);
+
+    // A narrow window gives the column back to the name.
+    await page.setViewportSize({ width: 1050, height: 800 });
+    await expect(page.locator('.start-list-head-size')).toBeHidden();
+    await expect(lid.locator('.start-tile-size')).toBeHidden();
+    const edited = await page
+      .locator('.start-list-head span', { hasText: 'Edited' })
+      .boundingBox();
+    const when = await lid.locator('.start-tile-when').boundingBox();
+    expect(Math.abs(when!.x - edited!.x)).toBeLessThan(2);
   }
 );
 
@@ -176,4 +207,25 @@ test('Escape while naming a new folder unmakes it', async ({ page }) => {
   await expect(page.locator('.start-folder-notice')).toHaveText(
     'No folder made.'
   );
+});
+
+// 14 Nov 2026: a click into the suggested name put the caret where it
+// landed, so a typed name ran into "Lucky Quokka" instead of replacing it.
+test('a click into the suggested name selects it, so typing replaces it', async ({
+  page
+}) => {
+  await openLibrary(page, false);
+  const field = page.getByLabel('Project name');
+  const suggestion = await field.inputValue();
+  await field.click();
+  await page.keyboard.type('Pump housing');
+  await expect(field).toHaveValue('Pump housing');
+  expect(suggestion).not.toBe('Pump housing');
+  // Once typed over, a click places the caret like any field.
+  await page.locator('body').click({ position: { x: 900, y: 600 } });
+  // Past the text's end: the caret goes there, nothing is selected.
+  const box = (await field.boundingBox())!;
+  await field.click({ position: { x: box.width - 6, y: box.height / 2 } });
+  await page.keyboard.type(' v2');
+  await expect(field).toHaveValue('Pump housing v2');
 });

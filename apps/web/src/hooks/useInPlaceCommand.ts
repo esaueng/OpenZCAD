@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ownEntry } from '@openzcad/shared';
 import type {
   BodyId,
   FeatureData,
@@ -8,6 +9,7 @@ import type {
   UnitSystem,
   Vector3
 } from '@openzcad/shared';
+import type { AnyCommand } from '@openzcad/command-system';
 import { GEOMETRY_PREVIEW_SCHEDULING, LivePreview } from '../lib/livePreview';
 import {
   IN_PLACE_TOOL_SPECS,
@@ -61,6 +63,26 @@ export interface InPlaceBuiltCommand {
    * when it did not. A command with it is judged by it, not by a body.
    */
   check?(derived: ProjectDocument['derived']): void;
+  /**
+   * The host's own command behind this frame, handed back to `commit` with
+   * the frame (see {@link InPlacePreviewedFrame}). The hook never reads it.
+   */
+  command?: AnyCommand;
+}
+
+/**
+ * The valid frame on screen when Done was pressed, when it shows exactly
+ * what Done commits: the same request, built on the base version the model
+ * is still at. Its command carries the ids and names the frame was built
+ * with, so committing that command lands the document the frame rebuilt,
+ * and `derived` is that rebuild.
+ */
+export interface InPlacePreviewedFrame {
+  built: InPlaceBuiltCommand;
+  document: ProjectDocument;
+  derived: ProjectDocument['derived'];
+  /** The base document's version the frame was built on. */
+  baseVersion: number;
 }
 
 export interface UseInPlaceCommandOptions extends InPlaceContext {
@@ -87,7 +109,15 @@ export interface UseInPlaceCommandOptions extends InPlaceContext {
   reseed?(
     edit: InPlaceEditSeed
   ): { tool: InPlaceToolId; seed: InPlaceEditSeed } | null | undefined;
-  derive(document: ProjectDocument): Promise<ProjectDocument['derived']>;
+  /**
+   * The exact rebuild of a frame. `signal` aborts once the frame is no
+   * longer wanted (the command closed or replaced it), so the host can stop
+   * the worker job rather than let it run on unseen.
+   */
+  derive(
+    document: ProjectDocument,
+    signal?: AbortSignal
+  ): Promise<ProjectDocument['derived']>;
   /**
    * Builds the same command the commit runs, named for the tool so a kernel
    * refusal names it as the commit would. With `edit`, that is the feature's
@@ -111,7 +141,12 @@ export interface UseInPlaceCommandOptions extends InPlaceContext {
      * True once the command is closed or replaced while this commit still
      * validates: the host withdraws the candidate rather than land it.
      */
-    withdrawn: () => boolean
+    withdrawn: () => boolean,
+    /**
+     * The frame Done was pressed on, when it is exactly what this commits;
+     * null otherwise (an edit, or a frame no longer current).
+     */
+    previewed: InPlacePreviewedFrame | null
   ): Promise<boolean> | void;
   publishPreview(preview: ProjectDocument | null): void;
   onStatus(message: string): void;
@@ -735,10 +770,14 @@ export function useInPlaceCommand(
         bodyId: BodyId | undefined;
         /** The base version the frame was built on. */
         base: number | null | undefined;
-        check?: InPlaceBuiltCommand['check'];
+        built: InPlaceBuiltCommand;
       }
     >()
   ).current;
+  /** The last frame published as valid; see {@link InPlacePreviewedFrame}. */
+  const lastValidFrame = useRef<
+    (InPlacePreviewedFrame & { key: string }) | null
+  >(null);
 
   const preview = useRef(
     new LivePreview<ProjectDocument, ProjectDocument['derived']>({
@@ -759,11 +798,11 @@ export function useInPlaceCommand(
           base: optionsRef.current.baseVersion,
           key: JSON.stringify(current),
           bodyId: command.resultBodyId,
-          ...(command.check ? { check: command.check } : {})
+          built: command
         });
         return built;
       },
-      derive: (document) => optionsRef.current.derive(document),
+      derive: (document, signal) => optionsRef.current.derive(document, signal),
       publish: (result) => {
         const built = result ? builtFrames.get(result.document) : undefined;
         // A frame built on a base the model has since moved past (an undo,
@@ -796,9 +835,9 @@ export function useInPlaceCommand(
             : null;
         // A datum adds no body: its own check proves it resolved.
         let unresolved: string | null = null;
-        if (result && frame?.check) {
+        if (result && frame?.built.check) {
           try {
-            frame.check(result.derived);
+            frame.built.check(result.derived);
           } catch (error) {
             unresolved =
               error instanceof Error ? error.message : 'This did not resolve.';
@@ -809,13 +848,23 @@ export function useInPlaceCommand(
         const valid = Boolean(
           result &&
           base &&
-          (frame?.check
+          (frame?.built.check
             ? unresolved === null
-            : bodyId && result.derived.bodyRepresentations[bodyId]) &&
+            : bodyId && ownEntry(result.derived.bodyRepresentations, bodyId)) &&
           !fresh
         );
         setPreviewValid(valid);
         setPreviewedKey(valid ? (frame?.key ?? null) : null);
+        lastValidFrame.current =
+          valid && result && frame && typeof frame.base === 'number'
+            ? {
+                key: frame.key,
+                built: frame.built,
+                document: result.document,
+                derived: result.derived,
+                baseVersion: frame.base
+              }
+            : null;
         if (!result) return;
         if (valid) {
           setRefusal(null);
@@ -857,6 +906,7 @@ export function useInPlaceCommand(
         }
       },
       onFailure: ({ error }) => {
+        lastValidFrame.current = null;
         setPreviewValid(false);
         setPreviewAdvisory(null);
         optionsRef.current.publishPreview(null);
@@ -1133,6 +1183,7 @@ export function useInPlaceCommand(
 
   const end = useCallback(() => {
     commitToken.current += 1;
+    lastValidFrame.current = null;
     preview.clear();
     setSession(null);
     setCommitting(false);
@@ -1980,11 +2031,23 @@ export function useInPlaceCommand(
     setCommitting(true);
     commitToken.current += 1;
     const token = commitToken.current;
+    const frame = lastValidFrame.current;
     const landed = optionsRef.current.commit(
       current,
       editing?.name ?? spec.featureName ?? spec.title,
       editing,
-      () => commitToken.current !== token
+      () => commitToken.current !== token,
+      !editing &&
+        frame &&
+        frame.key === requestKeyRef.current &&
+        frame.baseVersion === optionsRef.current.baseVersion
+        ? {
+            built: frame.built,
+            document: frame.document,
+            derived: frame.derived,
+            baseVersion: frame.baseVersion
+          }
+        : null
     );
     if (!editing) {
       if (!landed) {

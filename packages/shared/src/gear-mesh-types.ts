@@ -5,7 +5,7 @@ import type {
   UnitSystem,
   Vector3
 } from './index';
-import { UNIT_TO_MM } from './index';
+import { UNIT_TO_MM, millimetresPerUnit } from './index';
 import type { AssemblyFrame } from './assembly';
 import type { RigidTransform } from './assembly-kinematics';
 
@@ -117,7 +117,7 @@ export function gearModule(
     case 'circular-pitch':
       return pitch / Math.PI;
     case 'diametral-pitch':
-      return UNIT_TO_MM.inch / UNIT_TO_MM[units] / pitch;
+      return UNIT_TO_MM.inch / millimetresPerUnit(units) / pitch;
   }
 }
 

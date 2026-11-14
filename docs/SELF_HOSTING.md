@@ -252,9 +252,9 @@ and insert guards. Cleanups that delete R2 objects under reusable keys
 (content-addressed source assets, encrypted blobs) claim each key there
 first, so a cleanup that resumes late can never delete bytes a newer row
 stores under the same key. Claims expire after an hour, and nothing needs
-operator attention. Migration `0051_r2_key_tombstone_version_bodies.sql`
+operator attention. Migration `0055_r2_key_tombstone_version_bodies.sql`
 extends the same guard to encrypted document version bodies, and
-`0052_project_instances.sql` gives every project row a random instance id, so
+`0056_project_instances.sql` gives every project row a random instance id, so
 a deletion never touches a project created again under the same id.
 Migration numbers can have gaps.
 
@@ -273,6 +273,13 @@ uploads that would add storage are refused until it frees space.
 Encryption migrations stage within the same allowance, projected to their
 cutover. See
 [account tiers](plans/account-tiers.md#storage-and-downgrade-behavior).
+
+**Storage allowances lowered** (no migration): Free accounts now get 100 MiB
+and Premium 1 GiB (previously 1 GiB and 25 GiB). The Worker brings each
+account's stored limits to the new values before that account's writes, and
+`PREMIUM_STORAGE_LIMIT_BYTES` still overrides the Premium default. Accounts
+already over the new allowance keep their data; only growth is refused until
+they free space.
 
 Export D1 before a migration or major upgrade:
 

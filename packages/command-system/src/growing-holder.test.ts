@@ -110,10 +110,18 @@ describe('growing holder recipe compiler', () => {
     expect(at(plan.bridgeLength, 16.1)).toBeCloseTo(0.1, 9);
     expect(() => at(plan.bridgeLength, 16)).toThrow();
     expect(
-      growingHolderPlan({ ...hammerRecipe('b' as BodyId), axis: 'y', cuts: [10, 50] })
+      growingHolderPlan({
+        ...hammerRecipe('b' as BodyId),
+        axis: 'y',
+        cuts: [10, 50]
+      })
     ).toMatchObject({ plane: 'XZ', axisIndex: 1 });
     expect(
-      growingHolderPlan({ ...hammerRecipe('b' as BodyId), axis: 'z', cuts: [10, 50] })
+      growingHolderPlan({
+        ...hammerRecipe('b' as BodyId),
+        axis: 'z',
+        cuts: [10, 50]
+      })
     ).toMatchObject({ plane: 'XY', axisIndex: 2 });
   });
 
@@ -252,9 +260,7 @@ describe('growing holder recipe compiler', () => {
       data: Record<string, unknown>
     ) => {
       const edited = new CommandManager(doc);
-      edited.execute(
-        commandFactories.updateFeature({ featureId, data: data })
-      );
+      edited.execute(commandFactories.updateFeature({ featureId, data: data }));
       return growingHolderHistories(edited.document);
     };
     expect(
@@ -265,9 +271,9 @@ describe('growing holder recipe compiler', () => {
         }
       })
     ).toEqual([]);
-    expect(
-      edit(history.negativeEnd.featureId, { operation: 'union' })
-    ).toEqual([]);
+    expect(edit(history.negativeEnd.featureId, { operation: 'union' })).toEqual(
+      []
+    );
     const suppressed = new CommandManager(doc);
     suppressed.execute(
       commandFactories.setNodeMetadata({
@@ -306,6 +312,8 @@ describe('growing holder recipe compiler', () => {
       { envelope: { min: { x: 0, y: 0, z: 0 }, max: { x: 0, y: 1, z: 1 } } },
       /envelope/
     );
+    bad({ axis: 'constructor' as never }, /opening axis/);
+    bad({ axis: '__proto__' as never }, /opening axis/);
     bad({ center: 30 }, /between the cut planes/);
     bad({ sourceOpening: 0 }, /positive/);
     bad({ minimumOpening: 47 }, /cannot exceed/);

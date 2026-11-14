@@ -9,6 +9,7 @@
  * staged group, first version and project info routes.
  */
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   E2EE_FRAME_CONTENT_TYPE,
@@ -16,6 +17,7 @@ import {
   decodeE2eeFrame,
   encodeE2eeFrame,
   toRevisionId,
+  type E2eeMigrationAttemptExpectation,
   type E2eeMigrationLeaseResponse,
   type ProjectDocument
 } from '@openzcad/shared';
@@ -682,6 +684,428 @@ describe('the migration lease', () => {
         })
       )
     ).toMatchObject({ status: 409, code: 'E2EE_MIGRATION_STATE' });
+    expect(migrationRow(srv, plain.projectId)).toBeUndefined();
+  });
+});
+
+// --- The attempt a start expects ---------------------------------------------------
+
+describe('the attempt a start expects (#1465 review)', () => {
+  const NONE: E2eeMigrationAttemptExpectation = {
+    state: 'none',
+    attempt: null,
+    startedAt: null
+  };
+  /** The project's migration as a browser that read it now expects it. */
+  const asRead = (
+    srv: Server,
+    projectId: string
+  ): E2eeMigrationAttemptExpectation => {
+    const row = migrationRow(srv, projectId)!;
+    return {
+      state: row.state as E2eeMigrationAttemptExpectation['state'],
+      attempt: (row.attempt as number | undefined) ?? null,
+      startedAt: row.started_at as string
+    };
+  };
+  const startAs = (
+    api: ProjectMigrationsApi,
+    projectId: string,
+    expectedAttempt?: E2eeMigrationAttemptExpectation,
+    lease?: string
+  ) =>
+    api.start(
+      projectId,
+      {
+        direction: 'encrypt',
+        deviceId: 'owner_laptop',
+        ...(expectedAttempt ? { expectedAttempt } : {})
+      },
+      lease
+    );
+  /**
+   * Runs `between` once, just before the start's own write to the
+   * migration row: what another device does after the start read it.
+   */
+  function beforeStartWrite(srv: Server, between: () => void) {
+    const db = srv.env.DB as D1Database;
+    const batch = db.batch.bind(db);
+    let pending: (() => void) | null = between;
+    db.batch = async (statements: D1PreparedStatement[]) => {
+      const writes = statements.some((statement) => {
+        const sql = (statement as { sql?: string }).sql ?? '';
+        return (
+          sql.includes('INSERT INTO e2ee_project_migrations') ||
+          (sql.includes('UPDATE e2ee_project_migrations') &&
+            sql.includes('SET device_id = ?, lease_id = ?'))
+        );
+      });
+      const run = writes ? pending : null;
+      if (run) {
+        pending = null;
+        run();
+      }
+      return batch(statements);
+    };
+  }
+
+  it('starts a new attempt only from the one it read, and counts every new staging', async () => {
+    const srv = server();
+    const plain = await plaintextProject(srv);
+    const d = device(srv, owner, 'owner_laptop');
+    const api = createProjectMigrationsApi(d.fetcher);
+
+    const first = await startAs(api, plain.projectId, NONE);
+    expect(first.migration).toMatchObject({ state: 'staging', attempt: 1 });
+    await abandonAll(api, plain.projectId, first.leaseId);
+    const abandoned = migrationRow(srv, plain.projectId);
+    expect(abandoned).toMatchObject({ state: 'abandoned', attempt: 1 });
+
+    // Read before that start, or as the staging it was: nothing written.
+    for (const stale of [
+      NONE,
+      { state: 'staging', attempt: 1, startedAt: first.migration.startedAt },
+      { state: 'abandoned', attempt: 1, startedAt: 'another start' }
+    ] satisfies E2eeMigrationAttemptExpectation[]) {
+      expect(await errorOf(startAs(api, plain.projectId, stale))).toMatchObject(
+        { status: 409, code: 'E2EE_MIGRATION_ATTEMPT_CHANGED' }
+      );
+      expect(migrationRow(srv, plain.projectId)).toEqual(abandoned);
+    }
+
+    // As it stands: a new attempt, counted on.
+    const second = await startAs(
+      api,
+      plain.projectId,
+      asRead(srv, plain.projectId)
+    );
+    expect(second.migration).toMatchObject({ state: 'staging', attempt: 2 });
+    // Its own resume, as read, is the same attempt.
+    const resumed = await startAs(
+      api,
+      plain.projectId,
+      asRead(srv, plain.projectId),
+      second.leaseId
+    );
+    expect(resumed.migration).toMatchObject({
+      state: 'staging',
+      attempt: 2,
+      startedAt: second.migration.startedAt,
+      leaseHeld: true
+    });
+    await abandonAll(api, plain.projectId, resumed.leaseId);
+
+    // Two attempts that began in the same millisecond still differ.
+    srv.db
+      .prepare(
+        'UPDATE e2ee_project_migrations SET started_at = ? WHERE project_id = ?'
+      )
+      .run(first.migration.startedAt, plain.projectId);
+    const collided = migrationRow(srv, plain.projectId);
+    expect(collided).toMatchObject({
+      state: 'abandoned',
+      attempt: 2,
+      started_at: first.migration.startedAt
+    });
+    expect(
+      await errorOf(
+        startAs(api, plain.projectId, {
+          state: 'abandoned',
+          attempt: 1,
+          startedAt: first.migration.startedAt
+        })
+      )
+    ).toMatchObject({ code: 'E2EE_MIGRATION_ATTEMPT_CHANGED' });
+    expect(migrationRow(srv, plain.projectId)).toEqual(collided);
+
+    // An older app names no attempt: started as before.
+    const older = await startAs(api, plain.projectId);
+    expect(older.migration).toMatchObject({ state: 'staging', attempt: 3 });
+  });
+
+  it('fences the write itself: a start and cancel elsewhere after the read writes nothing', async () => {
+    const srv = server();
+    const plain = await plaintextProject(srv);
+    const api = createProjectMigrationsApi(
+      device(srv, owner, 'owner_laptop').fetcher
+    );
+    // Another device starts and cancels between this start's read (none)
+    // and its write.
+    beforeStartWrite(srv, () => {
+      srv.db
+        .prepare(
+          `INSERT INTO e2ee_project_migrations
+             (project_id, direction, state, owner_user_id, source_version,
+              started_at, updated_at, finished_at)
+           VALUES (?, 'encrypt', 'abandoned', ?, ?, ?, ?, ?)`
+        )
+        .run(
+          plain.projectId,
+          OWNER,
+          plain.version,
+          '2026-11-14T00:00:00.000Z',
+          '2026-11-14T00:00:01.000Z',
+          '2026-11-14T00:00:01.000Z'
+        );
+    });
+    expect(await errorOf(startAs(api, plain.projectId, NONE))).toMatchObject({
+      status: 409,
+      code: 'E2EE_MIGRATION_ATTEMPT_CHANGED'
+    });
+    expect(migrationRow(srv, plain.projectId)).toMatchObject({
+      state: 'abandoned',
+      attempt: 1,
+      lease_id: null
+    });
+    expect(stagedRows(srv, plain.projectId)).toEqual(nothingStaged);
+  });
+
+  it('fences a resume on the attempt too: a restart elsewhere in the same millisecond writes nothing', async () => {
+    const srv = server();
+    const plain = await plaintextProject(srv);
+    const api = createProjectMigrationsApi(
+      device(srv, owner, 'owner_laptop').fetcher
+    );
+    const first = await startAs(api, plain.projectId, NONE);
+    // The lease lapsed; this device reads the staging to resume it.
+    srv.db
+      .prepare('UPDATE e2ee_project_migrations SET lease_expires_at = 1')
+      .run();
+    const read = asRead(srv, plain.projectId);
+    expect(read).toEqual({
+      state: 'staging',
+      attempt: 1,
+      startedAt: first.migration.startedAt
+    });
+    // Before it writes, another device cancels that staging and starts a
+    // new one with the same start time.
+    beforeStartWrite(srv, () => {
+      srv.db
+        .prepare(
+          `UPDATE e2ee_project_migrations
+           SET state = 'abandoned', device_id = NULL, lease_id = NULL,
+               lease_expires_at = NULL
+           WHERE project_id = ?`
+        )
+        .run(plain.projectId);
+      srv.db
+        .prepare(
+          `UPDATE e2ee_project_migrations
+           SET state = 'staging', device_id = 'owner_desktop',
+               lease_id = ?, lease_expires_at = 1
+           WHERE project_id = ?`
+        )
+        .run('d'.repeat(43), plain.projectId);
+    });
+    expect(await errorOf(startAs(api, plain.projectId, read))).toMatchObject({
+      status: 409,
+      code: 'E2EE_MIGRATION_ATTEMPT_CHANGED'
+    });
+    expect(migrationRow(srv, plain.projectId)).toMatchObject({
+      state: 'staging',
+      attempt: 2,
+      started_at: first.migration.startedAt,
+      device_id: 'owner_desktop',
+      lease_id: 'd'.repeat(43)
+    });
+  });
+
+  it('checks the state and start time until migration 0053 is applied', async () => {
+    const srv = newServer(
+      [owner, other],
+      databaseBefore(53, { authority: true }),
+      MIGRATION_ON
+    );
+    const plain = await plaintextProject(srv);
+    const api = createProjectMigrationsApi(
+      device(srv, owner, 'owner_laptop').fetcher
+    );
+    const first = await startAs(api, plain.projectId, NONE);
+    expect(first.migration.state).toBe('staging');
+    expect(first.migration).not.toHaveProperty('attempt');
+    await abandonAll(api, plain.projectId, first.leaseId);
+    const abandoned = migrationRow(srv, plain.projectId);
+    expect(await errorOf(startAs(api, plain.projectId, NONE))).toMatchObject({
+      code: 'E2EE_MIGRATION_ATTEMPT_CHANGED'
+    });
+    expect(
+      await errorOf(
+        startAs(api, plain.projectId, {
+          state: 'abandoned',
+          attempt: null,
+          startedAt: 'another start'
+        })
+      )
+    ).toMatchObject({ code: 'E2EE_MIGRATION_ATTEMPT_CHANGED' });
+    expect(migrationRow(srv, plain.projectId)).toEqual(abandoned);
+    const second = await startAs(
+      api,
+      plain.projectId,
+      asRead(srv, plain.projectId)
+    );
+    expect(second.migration.state).toBe('staging');
+  });
+
+  it('restarts an abandoned migration although D1 counts the counter’s trigger write as a change', async () => {
+    const srv = server();
+    const plain = await plaintextProject(srv);
+    const api = createProjectMigrationsApi(
+      device(srv, owner, 'owner_laptop').fetcher
+    );
+    const first = await startAs(api, plain.projectId, NONE);
+    await abandonAll(api, plain.projectId, first.leaseId);
+    // As on D1, a restart's write reports the row and the trigger's
+    // counter update (#1465 review): two changes for one row started.
+    const db = srv.env.DB as D1Database;
+    const probe = await db.batch([
+      db
+        .prepare(
+          `UPDATE e2ee_project_migrations SET state = 'staging'
+           WHERE project_id = ?`
+        )
+        .bind(plain.projectId),
+      db
+        .prepare(
+          `UPDATE e2ee_project_migrations SET state = 'abandoned',
+             attempt = attempt - 1
+           WHERE project_id = ?`
+        )
+        .bind(plain.projectId)
+    ]);
+    expect(probe.map((result) => result.meta?.changes)).toEqual([2, 1]);
+    expect(migrationRow(srv, plain.projectId)).toMatchObject({
+      state: 'abandoned',
+      attempt: 1
+    });
+
+    // The restart still goes ahead, holds its lease and locks the room.
+    const second = await startAs(
+      api,
+      plain.projectId,
+      asRead(srv, plain.projectId)
+    );
+    expect(second.migration).toMatchObject({
+      state: 'staging',
+      attempt: 2,
+      leaseHeld: true
+    });
+    expect(migrationRow(srv, plain.projectId)).toMatchObject({
+      state: 'staging',
+      attempt: 2,
+      lease_id: second.leaseId
+    });
+  });
+
+  it('never drops a counter the browser read for a schema probe cached before migration 0053', async () => {
+    const db = databaseBefore(53, { authority: true });
+    const srv = newServer([owner, other], db, MIGRATION_ON);
+    const plain = await plaintextProject(srv);
+    const api = createProjectMigrationsApi(
+      device(srv, owner, 'owner_laptop').fetcher
+    );
+    // A start before 0053 (any schema probe now remembers it missing),
+    // then 0053 lands while this isolate stays warm.
+    const first = await startAs(api, plain.projectId, NONE);
+    expect(first.migration).not.toHaveProperty('attempt');
+    await abandonAll(api, plain.projectId, first.leaseId);
+    db.exec(
+      readFileSync(
+        new URL(
+          '../apps/web/migrations/0053_e2ee_migration_attempts.sql',
+          import.meta.url
+        ),
+        'utf8'
+      )
+    );
+    const second = await startAs(
+      api,
+      plain.projectId,
+      asRead(srv, plain.projectId)
+    );
+    expect(second.migration).toMatchObject({ state: 'staging', attempt: 2 });
+    await abandonAll(api, plain.projectId, second.leaseId);
+    // Attempt 3, in the same millisecond as attempt 2 began: an approval
+    // read for attempt 2 must not start it.
+    srv.db
+      .prepare(
+        `UPDATE e2ee_project_migrations SET state = 'staging'
+         WHERE project_id = ?`
+      )
+      .run(plain.projectId);
+    srv.db
+      .prepare(
+        `UPDATE e2ee_project_migrations SET state = 'abandoned', started_at = ?
+         WHERE project_id = ?`
+      )
+      .run(second.migration.startedAt, plain.projectId);
+    const third = migrationRow(srv, plain.projectId);
+    expect(third).toMatchObject({
+      state: 'abandoned',
+      attempt: 3,
+      started_at: second.migration.startedAt
+    });
+    expect(
+      await errorOf(
+        startAs(api, plain.projectId, {
+          state: 'abandoned',
+          attempt: 2,
+          startedAt: second.migration.startedAt
+        })
+      )
+    ).toMatchObject({ code: 'E2EE_MIGRATION_ATTEMPT_CHANGED' });
+    expect(migrationRow(srv, plain.projectId)).toEqual(third);
+  });
+
+  it('refuses a counted expectation for a row that has no counter', async () => {
+    const srv = newServer(
+      [owner, other],
+      databaseBefore(53, { authority: true }),
+      MIGRATION_ON
+    );
+    const plain = await plaintextProject(srv);
+    const api = createProjectMigrationsApi(
+      device(srv, owner, 'owner_laptop').fetcher
+    );
+    const first = await startAs(api, plain.projectId, NONE);
+    await abandonAll(api, plain.projectId, first.leaseId);
+    const abandoned = migrationRow(srv, plain.projectId);
+    expect(
+      await errorOf(
+        startAs(api, plain.projectId, {
+          state: 'abandoned',
+          attempt: 1,
+          startedAt: first.migration.startedAt
+        })
+      )
+    ).toMatchObject({ code: 'E2EE_MIGRATION_ATTEMPT_CHANGED' });
+    expect(migrationRow(srv, plain.projectId)).toEqual(abandoned);
+  });
+
+  it('refuses an expectation that is not one', async () => {
+    const srv = server();
+    const plain = await plaintextProject(srv);
+    for (const expectedAttempt of [
+      'none',
+      { state: 'started', attempt: null, startedAt: null },
+      { state: 'none', attempt: 1, startedAt: null },
+      { state: 'none', attempt: null, startedAt: '2026-11-14T00:00:00.000Z' },
+      { state: 'abandoned', attempt: null, startedAt: null },
+      { state: 'abandoned', attempt: 0, startedAt: '2026-11-14T00:00:00.000Z' }
+    ]) {
+      const response = await srv.call(
+        'POST',
+        `/api/e2ee/projects/${plain.projectId}/migration`,
+        {
+          body: {
+            direction: 'encrypt',
+            deviceId: 'owner_laptop',
+            expectedAttempt
+          }
+        }
+      );
+      expect(response.status, JSON.stringify(expectedAttempt)).toBe(400);
+      expect(await codeOf(response)).toBe('E2EE_REQUEST_INVALID');
+    }
     expect(migrationRow(srv, plain.projectId)).toBeUndefined();
   });
 });

@@ -2840,7 +2840,7 @@ export default {
   async scheduled(_controller: unknown, env: Env): Promise<void> {
     assertSafeRuntimeConfiguration(env);
     await createPersistenceService(env).purgeExpiredUploadSessions();
-    // Objects failed writes left pending (migration 0051), however their
+    // Objects failed writes left pending (migration 0055), however their
     // project fares otherwise: reclaimed once no write can still need them.
     if (env.DB) {
       try {

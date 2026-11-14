@@ -115,6 +115,11 @@ test('a generic imported side drags the whole body and stays selected after the 
   await expect(page.getByText('Offset face by', { exact: false })).toBeVisible({
     timeout: 30_000
   });
+  // The chip read Total (the 80 mm span plus the drag) while the history
+  // row records the change: the commit names both, so they read as one edit.
+  await expect(
+    page.getByText('Offset face by +12 mm · Total 92 mm.', { exact: false })
+  ).toBeVisible();
   await expect.poll(() => maxX(canvas)).toBeCloseTo(92, 3);
   await expect(canvas).not.toHaveAttribute('data-e2e-offset-ghost');
   // The moved face is still the selection, armed for another drag, rather

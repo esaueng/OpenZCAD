@@ -5,7 +5,7 @@ import {
   MAX_REFERENCE_IMAGE_PIXELS,
   referenceImageHeaderSize,
   sniffReferenceImageType,
-  UNIT_TO_MM,
+  millimetresPerUnit,
   type ArtifactId,
   type ProjectDocument,
   type ReferenceImage,
@@ -147,7 +147,7 @@ export async function prepareReferenceImage({
     plane,
     center: { u: 0, v: 0 },
     rotationDeg: 0,
-    width: DEFAULT_WIDTH_MM / UNIT_TO_MM[document.units],
+    width: DEFAULT_WIDTH_MM / millimetresPerUnit(document.units),
     opacity: 0.6
   };
   addReferenceImage(document, { image: candidate });

@@ -1,5 +1,5 @@
 import { writeAsciiStl } from '@openzcad/io-stl';
-import { UNIT_TO_MM, type UnitSystem } from '@openzcad/shared';
+import { millimetresPerUnit, type UnitSystem } from '@openzcad/shared';
 
 import {
   MAX_MESH_FILE_IMPORT_TRIANGLES,
@@ -376,7 +376,7 @@ function verifyMeshRebuilds(
 /**
  * The millimetre triangles as the document will hold them.
  *
- * `commitImportedMesh` adopts an imported mesh at `1 / UNIT_TO_MM[units]`, so
+ * `commitImportedMesh` adopts an imported mesh at `1 / millimetresPerUnit(units)`, so
  * this is the same multiplication on the same values — identical bits, not an
  * approximation of them — and the check therefore sees exactly the vertices
  * the feature will store and the rebuild will sew.
@@ -385,7 +385,7 @@ function storedVertices(
   vertices: readonly number[],
   documentUnits: UnitSystem
 ): number[] {
-  const scale = 1 / UNIT_TO_MM[documentUnits];
+  const scale = 1 / millimetresPerUnit(documentUnits);
   return scale === 1
     ? (vertices as number[])
     : vertices.map((value) => value * scale);

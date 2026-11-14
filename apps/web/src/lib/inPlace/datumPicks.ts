@@ -3,6 +3,7 @@ import {
   edgeDatumAxis,
   newCanonicalPlaneRef
 } from '@openzcad/geometry';
+import { ownEntry } from '@openzcad/shared';
 import type {
   FeatureId,
   PlaneId,
@@ -74,9 +75,10 @@ export function facePlaneRef(
 ): RefPick | Refused {
   try {
     const source = datumFaceSourceFromPick(document, 'the datum', selection);
-    const face = document.derived.bodyRepresentations[
+    const face = ownEntry(
+      document.derived.bodyRepresentations,
       selection.bodyId
-    ]?.topology?.faces.find((candidate) => candidate.hash === selection.hash);
+    )?.topology?.faces.find((candidate) => candidate.hash === selection.hash);
     const normal = face?.geometry?.normal;
     if (!normal) return { reason: 'This face has no normal to build on.' };
     return {
@@ -110,9 +112,10 @@ export function faceRef(
   selection: TopologySelection,
   kinds: readonly RefPick['kind'][]
 ): RefPick | Refused {
-  const face = document.derived.bodyRepresentations[
+  const face = ownEntry(
+    document.derived.bodyRepresentations,
     selection.bodyId
-  ]?.topology?.faces.find((candidate) => candidate.hash === selection.hash);
+  )?.topology?.faces.find((candidate) => candidate.hash === selection.hash);
   const type = face?.geometry?.surfaceType.toLowerCase();
   if ((type === 'cylinder' || type === 'cone') && kinds.includes('revolution'))
     return revolutionRef(document, selection);
@@ -133,9 +136,10 @@ export function edgeRef(
   kinds: readonly RefPick['kind'][],
   pointsPicked: number
 ): RefPick | Refused {
-  const edge = document.derived.bodyRepresentations[
+  const edge = ownEntry(
+    document.derived.bodyRepresentations,
     selection.bodyId
-  ]?.topology?.edges.find((candidate) => candidate.hash === selection.hash);
+  )?.topology?.edges.find((candidate) => candidate.hash === selection.hash);
   const witness = edge?.reference?.witness;
   const ends = witness ? edgeEnds(witness) : null;
   const straight = Boolean(
@@ -210,9 +214,10 @@ export function faceAxisLine(
 ): RevolveAxisCandidate | Refused {
   const source = datumAxisFaceFromPick(document, selection);
   if ('reason' in source) return source;
-  const geometry = document.derived.bodyRepresentations[
+  const geometry = ownEntry(
+    document.derived.bodyRepresentations,
     selection.bodyId
-  ]?.topology?.faces.find((face) => face.hash === selection.hash)?.geometry;
+  )?.topology?.faces.find((face) => face.hash === selection.hash)?.geometry;
   const start = geometry?.axisStart;
   const end = geometry?.axisEnd;
   const origin =
@@ -248,9 +253,10 @@ export function faceNormal(
   document: ProjectDocument,
   selection: TopologySelection
 ): Vector3 | Refused {
-  const geometry = document.derived.bodyRepresentations[
+  const geometry = ownEntry(
+    document.derived.bodyRepresentations,
     selection.bodyId
-  ]?.topology?.faces.find((face) => face.hash === selection.hash)?.geometry;
+  )?.topology?.faces.find((face) => face.hash === selection.hash)?.geometry;
   if (geometry?.surfaceType.toLowerCase() !== 'plane' || !geometry.normal) {
     return {
       reason: 'A direction is a straight edge, a flat face’s normal or an axis.'
@@ -269,9 +275,10 @@ export function edgeDirection(
   selection: TopologySelection
 ): Vector3 | Refused {
   const points =
-    document.derived.bodyRepresentations[
+    ownEntry(
+      document.derived.bodyRepresentations,
       selection.bodyId
-    ]?.topology?.edges.find((edge) => edge.hash === selection.hash)?.points ??
+    )?.topology?.edges.find((edge) => edge.hash === selection.hash)?.points ??
     [];
   const count = Math.floor(points.length / 3);
   if (count < 2) return { reason: 'This edge has no ends to run between.' };

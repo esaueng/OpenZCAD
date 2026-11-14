@@ -46,6 +46,7 @@ export type {
 import { recognizePlanarEmboss } from './planar-emboss';
 import {
   rebuildReporter,
+  type RebuildProgress,
   type RebuildProgressListener
 } from './rebuild-progress';
 export type {
@@ -119,7 +120,7 @@ export type {
 import {
   BODY_OPACITY_METADATA_KEY,
   MAX_MESH_SOLID_CONVERSION_TRIANGLES,
-  UNIT_TO_MM,
+  millimetresPerUnit,
   bodyDisplayColor,
   importedSourceReferenceOf,
   isFeatureSuppressed,
@@ -266,10 +267,15 @@ import {
   finishStepExport,
   stepTimestamp,
   stepWriterOptions,
+  type StepBodiesExport,
   type StepExportMetadata,
   type StepExportOptions
 } from './step-export-metadata';
-export { type StepExportOptions } from './step-export-metadata';
+export {
+  type StepBodiesExport,
+  type StepBodySkipReason,
+  type StepExportOptions
+} from './step-export-metadata';
 export {
   DEFAULT_MESH_ANGULAR_TOLERANCE,
   type ExportUnitOptions,
@@ -794,6 +800,18 @@ export interface ExactKernelAdapter {
     options?: StepExportOptions
   ): Promise<string>;
   /**
+   * The same STEP as {@link exportStep}, of every body the document shows
+   * that has an exact solid, with how many solids each body wrote — in file
+   * order, so a reader can tell which declared solids came from which body.
+   * Bodies with nothing to write (a mesh reference, a failed step, a body a
+   * parameter hides or a boolean consumed) are left out and listed, rather
+   * than refusing the whole file.
+   */
+  exportStepBodies(
+    document: ProjectDocument,
+    options?: StepExportOptions
+  ): Promise<StepBodiesExport>;
+  /**
    * DXF R12 outline of one PLANAR face, in millimetres (or `options.units`)
    * — the laser-cutting export. Fails closed on non-planar faces and stale
    * face references.
@@ -1146,6 +1164,62 @@ function carryProposalSalt(
     feature.data.edgeReferences === undefined
     ? '|carry-proposal'
     : '';
+}
+
+/**
+ * One STEP of the given bodies' solids, each named after its body and styled
+ * in its display colour.
+ */
+function writeStepBodies(
+  kernel: RemusKernel,
+  io: RemusIo,
+  document: ProjectDocument,
+  bodies: readonly { bodyId: BodyId; solids: number[] }[],
+  options: StepExportOptions
+): string {
+  const bodyNodes = new Map(
+    listNodesByKind(document, 'body').map((body) => [body.bodyId, body])
+  );
+  const featureKinds = new Map(
+    listNodesByKind(document, 'feature').map((feature) => [
+      feature.featureId,
+      feature.featureKind
+    ])
+  );
+  const metadata: StepExportMetadata = {
+    productName: document.name,
+    fileName: options.fileName ?? `${document.name}.step`,
+    timestamp: options.timestamp ?? stepTimestamp(new Date()),
+    solids: bodies.flatMap(({ bodyId, solids }) => {
+      const body = bodyNodes.get(bodyId);
+      const label = {
+        name: body?.name ?? '',
+        color: bodyDisplayColor(
+          body?.metadata,
+          body ? featureKinds.get(body.featureId) : undefined
+        )
+      };
+      return solids.map(() => label);
+    })
+  };
+  // Never fuse: a boolean union changes the geometry (overlaps merge,
+  // coincident faces weld). Every root of the arena document becomes its
+  // own MANIFOLD_SOLID_BREP inside one shape representation, so the
+  // bodies stay distinct through a round trip.
+  return finishStepExport(
+    declareStepLengthUnit(
+      decodeText(
+        io.exportStepWithOptions(
+          kernel.serializeSolids(
+            new Uint32Array(bodies.flatMap(({ solids }) => solids))
+          ),
+          stepWriterOptions(metadata)
+        )
+      ),
+      options.units ?? 'mm'
+    ),
+    metadata
+  );
 }
 
 export class RemusKernelAdapter implements ExactKernelAdapter {
@@ -2430,7 +2504,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     );
 
     const report = rebuildReporter(onProgress);
-    let featureDone: (() => void) | undefined;
+    let featureDone:
+      ((outcome?: RebuildProgress['outcome']) => void) | undefined;
     let executedFeatures = 0;
     // The feature the next build step runs: each step builds one.
     let nextBuildIndex = startIndex;
@@ -2448,7 +2523,16 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       result: ExactBuildResult,
       idleView?: IdleLineageView
     ) => {
-      featureDone?.();
+      const featureId = features[index]?.featureId;
+      featureDone?.(
+        result.featureWarnings.some(
+          (warning) =>
+            warning.featureId === featureId &&
+            (warning.kind === 'build-failed' || warning.kind === 'refusal')
+        )
+          ? 'failed'
+          : 'built'
+      );
       nextBuildIndex = index + 1;
       if (index <= checkpointIndices.at(-1)!)
         axialExtent.observe(index, result);
@@ -4435,7 +4519,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                   document.bodyOrder.length
                 ),
               analysisHashes,
-              1 / UNIT_TO_MM[document.units],
+              1 / millimetresPerUnit(document.units),
               strictVerdicts,
               measureOpening,
               this.heldDisplayDeflections.get(bodyId),
@@ -4968,57 +5052,78 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
   ): Promise<string> {
     const units = options.units ?? 'mm';
     const io = await loadRemusTranslators();
-    return this.withExportBuild(document, (kernel, build) => {
-      const bodies = this.exportBodySolidsFor(
+    return this.withExportBuild(document, (kernel, build) =>
+      writeStepBodies(
         kernel,
-        build,
+        io,
         document,
-        bodyIds,
-        units
+        this.exportBodySolidsFor(kernel, build, document, bodyIds, units),
+        options
+      )
+    );
+  }
+
+  async exportStepBodies(
+    document: ProjectDocument,
+    options: StepExportOptions = {}
+  ): Promise<StepBodiesExport> {
+    const units = options.units ?? 'mm';
+    const io = await loadRemusTranslators();
+    return this.withExportBuild(document, (kernel, build) => {
+      const hidden = getParameterHiddenBodyIds(document);
+      const features = new Map(
+        listNodesByKind(document, 'feature').map((feature) => [
+          feature.featureId,
+          feature
+        ])
       );
       const bodyNodes = new Map(
         listNodesByKind(document, 'body').map((body) => [body.bodyId, body])
       );
-      const featureKinds = new Map(
-        listNodesByKind(document, 'feature').map((feature) => [
-          feature.featureId,
-          feature.featureKind
-        ])
+      const written: BodyId[] = [];
+      const skipped: StepBodiesExport['skipped'] = [];
+      for (const bodyId of document.bodyOrder) {
+        const body = bodyNodes.get(bodyId);
+        const feature = body ? features.get(body.featureId) : undefined;
+        // What the document itself shows: not hidden by a parameter, not
+        // replaced by a later boolean, not switched off by suppression.
+        if (
+          !body ||
+          hidden.has(bodyId) ||
+          build.consumed.has(bodyId) ||
+          (feature && isFeatureSuppressed(feature) && !build.shapes.has(bodyId))
+        ) {
+          continue;
+        }
+        const shape = build.shapes.get(bodyId);
+        const reason = !shape
+          ? 'failed'
+          : shape.referenceMesh
+            ? 'mesh-reference'
+            : shape.solids.length === 0
+              ? 'empty'
+              : null;
+        if (reason) skipped.push({ bodyId, reason });
+        else written.push(bodyId);
+      }
+      if (written.length === 0) {
+        throw new Error('The project has no solid body to write.');
+      }
+      const bodies = this.exportBodySolidsFor(
+        kernel,
+        build,
+        document,
+        written,
+        units
       );
-      const metadata: StepExportMetadata = {
-        productName: document.name,
-        fileName: options.fileName ?? `${document.name}.step`,
-        timestamp: options.timestamp ?? stepTimestamp(new Date()),
-        solids: bodies.flatMap(({ bodyId, solids }) => {
-          const body = bodyNodes.get(bodyId);
-          const label = {
-            name: body?.name ?? '',
-            color: bodyDisplayColor(
-              body?.metadata,
-              body ? featureKinds.get(body.featureId) : undefined
-            )
-          };
-          return solids.map(() => label);
-        })
+      return {
+        text: writeStepBodies(kernel, io, document, bodies, options),
+        bodies: bodies.map(({ bodyId, solids }) => ({
+          bodyId,
+          solidCount: solids.length
+        })),
+        skipped
       };
-      // Never fuse: a boolean union changes the geometry (overlaps merge,
-      // coincident faces weld). Every root of the arena document becomes its
-      // own MANIFOLD_SOLID_BREP inside one shape representation, so the
-      // bodies stay distinct through a round trip.
-      return finishStepExport(
-        declareStepLengthUnit(
-          decodeText(
-            io.exportStepWithOptions(
-              kernel.serializeSolids(
-                new Uint32Array(bodies.flatMap(({ solids }) => solids))
-              ),
-              stepWriterOptions(metadata)
-            )
-          ),
-          units
-        ),
-        metadata
-      );
     });
   }
 
@@ -5047,7 +5152,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         kernel,
         faceHandle,
         exportLengthScale(document.units, units),
-        UNIT_TO_MM[document.units]
+        millimetresPerUnit(document.units)
       );
       return writeDxf(entities, { units });
     });
@@ -5199,7 +5304,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           faces,
           plane,
           exportLengthScale(document.units, units),
-          UNIT_TO_MM[document.units]
+          millimetresPerUnit(document.units)
         ),
         { units }
       );
@@ -5390,7 +5495,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     const units = options.units ?? 'mm';
     const angular = explicitAngularTolerance(options.angularTolerance);
     // The deflection is physical millimetres; the solids are in `units`.
-    const unitDeflection = deflection / UNIT_TO_MM[units];
+    const unitDeflection = deflection / millimetresPerUnit(units);
     const io = await loadRemusTranslators();
     return this.withExportBuild(document, (kernel, build) => {
       const referenceMeshes = this.referenceExportMeshes(
@@ -5473,7 +5578,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         })
       );
     }
-    const unitDeflection = deflection / UNIT_TO_MM[units];
+    const unitDeflection = deflection / millimetresPerUnit(units);
     const io = await loadRemusTranslators();
     return this.withExportBuild(document, (kernel, build) => {
       const meshes =
@@ -5624,7 +5729,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     const units = tolerances.units ?? 'mm';
     // The writers' space: the export unit, at the deflection that is
     // `deflection` millimetres there.
-    const unitMm = UNIT_TO_MM[units];
+    const unitMm = millimetresPerUnit(units);
     const unitDeflection = deflection / unitMm;
     return this.withExportBuild(document, (kernel, build) => {
       const exportScale = exportLengthScale(document.units, units);

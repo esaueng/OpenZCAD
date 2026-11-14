@@ -1091,7 +1091,9 @@ describe('ProjectSharingDialog for an encrypted project (slice 5-3b)', () => {
       {
         record: encryptedRecord('inv_keys', { acceptedByUserId: invitee }),
         state: 'waiting-for-keys',
-        email: 'keys@example.com'
+        email: 'keys@example.com',
+        statement: null,
+        acceptor: null
       },
       {
         record: encryptedRecord('inv_verify', {
@@ -1099,7 +1101,9 @@ describe('ProjectSharingDialog for an encrypted project (slice 5-3b)', () => {
           role: 'viewer'
         }),
         state: 'waiting-for-verification',
-        email: 'verify@example.com'
+        email: 'verify@example.com',
+        statement: null,
+        acceptor: null
       },
       {
         record: encryptedRecord('inv_done', {
@@ -1107,7 +1111,9 @@ describe('ProjectSharingDialog for an encrypted project (slice 5-3b)', () => {
           completedAt: '2026-10-24T01:00:00.000Z'
         }),
         state: 'completed',
-        email: 'member@example.com'
+        email: 'member@example.com',
+        statement: null,
+        acceptor: null
       }
     ]);
     const onVerifyContact = vi.fn();
@@ -1227,13 +1233,204 @@ describe('ProjectSharingDialog for an encrypted project (slice 5-3b)', () => {
       expect(encrypted.invite).toHaveBeenCalledWith(
         'proj_encrypted',
         'New@Example.com',
-        'viewer'
+        'viewer',
+        undefined
       )
     );
     expect(sharingClient.createInvitation).not.toHaveBeenCalled();
     expect(
       await screen.findByText('Invitation sent to new@example.com.')
     ).toBeVisible();
+    setPersonalInfoVisible(false);
+  });
+
+  it('offers a contact listed under the address only as an explicit choice, by contact code', async () => {
+    setPersonalInfoVisible(true);
+    const listed = {
+      userId: 'user_carol',
+      identityKeyHash: 'cc'.repeat(32),
+      code: '33333 44444',
+      // The server's label: it may name someone other than who was meant.
+      email: 'bob@example.com'
+    };
+    const encrypted: EncryptedSharingClient = {
+      ...encryptedClient([]),
+      contactsFor: vi.fn(async () => [listed])
+    };
+    const user = userEvent.setup();
+    render(
+      <ProjectSharingDialog
+        projectId="proj_encrypted"
+        role="owner"
+        collaborationStatus="live"
+        lease={null}
+        client={client()}
+        shareLinkClient={shareLinkClient()}
+        encrypted
+        encryptedClient={encrypted}
+        encryptedShareLinkClient={encryptedShareLinkClient()}
+        onClose={vi.fn()}
+      />
+    );
+    await user.type(await screen.findByLabelText('Email'), 'Bob@Example.com');
+    const choice = await screen.findByRole('radiogroup', {
+      name: 'Who to add'
+    });
+    expect(encrypted.contactsFor).toHaveBeenLastCalledWith('bob@example.com');
+    // An email-only invitation unless the owner picks the contact.
+    expect(
+      within(choice).getByRole('radio', {
+        name: 'Email only: you confirm whoever accepts'
+      })
+    ).toBeChecked();
+    expect(choice).toHaveTextContent('33333 44444');
+    await user.click(screen.getByRole('button', { name: 'Invite' }));
+    await waitFor(() =>
+      expect(encrypted.invite).toHaveBeenLastCalledWith(
+        'proj_encrypted',
+        'Bob@Example.com',
+        'viewer',
+        undefined
+      )
+    );
+
+    await user.type(screen.getByLabelText('Email'), 'bob@example.com');
+    await user.click(
+      within(
+        await screen.findByRole('radiogroup', { name: 'Who to add' })
+      ).getByRole('radio', {
+        name: /^Invite bob@example\.com \(code 33333 44444 ?\)$/
+      })
+    );
+    await user.click(screen.getByRole('button', { name: 'Invite' }));
+    await waitFor(() =>
+      expect(encrypted.invite).toHaveBeenLastCalledWith(
+        'proj_encrypted',
+        'bob@example.com',
+        'viewer',
+        { userId: 'user_carol', identityKeyHash: 'cc'.repeat(32) }
+      )
+    );
+    expect(encrypted.invite).toHaveBeenCalledTimes(2);
+    setPersonalInfoVisible(false);
+  });
+
+  it('adds someone who accepted only when the owner confirms the contact code, and declines', async () => {
+    setPersonalInfoVisible(true);
+    const statement = {
+      projectId: 'proj_encrypted',
+      role: 'viewer'
+    } as OwnerInvitation['statement'];
+    const acceptor = (code: string, identityKeyHash: string) => ({
+      userId: invitee,
+      identityKeyHash,
+      code,
+      email: 'carol@example.com'
+    });
+    const encrypted = {
+      ...encryptedClient([
+        {
+          record: encryptedRecord('inv_new', {
+            acceptedByUserId: invitee,
+            role: 'viewer'
+          }),
+          state: 'confirm-add',
+          email: 'bob@example.com',
+          statement,
+          acceptor: acceptor('11111 22222', 'aa'.repeat(32))
+        },
+        {
+          record: encryptedRecord('inv_again', { acceptedByUserId: invitee }),
+          state: 'confirm-re-add',
+          email: 'again@example.com',
+          statement: { ...statement!, role: 'editor' },
+          acceptor: acceptor('33333 44444', 'bb'.repeat(32))
+        },
+        {
+          record: encryptedRecord('inv_other', { acceptedByUserId: invitee }),
+          state: 'accepted-by-other',
+          email: 'dave@example.com',
+          statement,
+          acceptor: acceptor('55555 66666', 'cc'.repeat(32))
+        },
+        {
+          record: encryptedRecord('inv_older', { acceptedByUserId: invitee }),
+          state: 'needs-acceptance',
+          email: 'older@example.com',
+          statement: null,
+          acceptor: null
+        }
+      ]),
+      confirmAdd: vi.fn(async () => undefined)
+    };
+    const onVerifyContact = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ProjectSharingDialog
+        projectId="proj_encrypted"
+        projectName="Gearbox"
+        role="owner"
+        collaborationStatus="live"
+        lease={null}
+        client={client()}
+        shareLinkClient={shareLinkClient()}
+        encrypted
+        encryptedClient={encrypted}
+        encryptedShareLinkClient={encryptedShareLinkClient()}
+        onVerifyContact={onVerifyContact}
+        onClose={vi.fn()}
+      />
+    );
+    // Named by the verified acceptor and the signed role, with the code
+    // Contacts shows; never the address the invitation was sent to.
+    const [first] = await screen.findAllByRole('group', {
+      name: 'Confirm carol@example.com'
+    });
+    expect(first).toHaveTextContent(
+      'carol@example.com accepted your invitation to Gearbox as a viewer. Add them?'
+    );
+    expect(first).toHaveTextContent('11111 22222');
+    expect(first).not.toHaveTextContent('bob@example.com');
+    const groups = screen.getAllByRole('group', {
+      name: 'Confirm carol@example.com'
+    });
+    expect(groups).toHaveLength(2);
+    expect(groups[1]).toHaveTextContent('as an editor');
+    expect(groups[1]).toHaveTextContent('You removed them from this project');
+    expect(
+      screen.getByText(
+        /^Accepted by someone you did not invite · Editor · \d+d$/
+      )
+    ).toBeVisible();
+    expect(
+      screen.getByText(/^Waiting for them to accept again · Editor · \d+d$/)
+    ).toBeVisible();
+    // Nothing happens until the owner asks for it.
+    expect(encrypted.confirmAdd).not.toHaveBeenCalled();
+    await user.click(
+      within(groups[0]!).getByRole('button', { name: 'Open contact' })
+    );
+    expect(onVerifyContact).toHaveBeenCalledWith(invitee);
+    await user.click(within(groups[0]!).getByRole('button', { name: 'Add' }));
+    await waitFor(() =>
+      expect(encrypted.confirmAdd).toHaveBeenCalledWith(
+        'proj_encrypted',
+        'inv_new',
+        'aa'.repeat(32)
+      )
+    );
+    await user.click(
+      within(
+        screen.getAllByRole('group', { name: 'Confirm carol@example.com' })[1]!
+      ).getByRole('button', { name: 'Decline' })
+    );
+    await waitFor(() =>
+      expect(encrypted.revoke).toHaveBeenCalledWith(
+        'proj_encrypted',
+        'inv_again'
+      )
+    );
+    expect(encrypted.confirmAdd).toHaveBeenCalledTimes(1);
     setPersonalInfoVisible(false);
   });
 

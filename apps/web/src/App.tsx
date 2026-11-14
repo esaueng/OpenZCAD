@@ -42,6 +42,7 @@ import {
 import type { RefusalCapture } from './lib/refusalHarvest';
 import { useRefusalHarvest } from './hooks/useRefusalHarvest';
 import {
+  ownEntry,
   PROJECT_MIGRATING_CODE,
   type DrawingAnnotation,
   type DrawingSheetId,
@@ -94,7 +95,9 @@ import { LatestTask } from './lib/latestTask';
 import { prepareSaveStateRestore } from './lib/saveStateRestore';
 import { rebuildProgressLabel } from './lib/rebuildProgressLabel';
 import {
-  activeIsolatedBodyId,
+  bodyIsolationState,
+  persistedHiddenBodyIds,
+  releaseIsolationToParameter,
   toggleBodyIsolation,
   type BodyIsolation
 } from './lib/bodyIsolation';
@@ -229,6 +232,7 @@ import {
   listParameters,
   suggestParameterQuantities,
   normalizeDocument,
+  reservedDocumentIdentifierError,
   numberedBodyName,
   numberedFeatureName,
   extrudeToFaceUnresolved,
@@ -483,12 +487,9 @@ import {
   sameLocalProjectContent,
   type LocalProjectAutosaveOptions
 } from './lib/localProjectAutosave';
-import {
-  inspectShaprPair,
-  type ShaprPairInspection
-} from './lib/shaprImportWorkerClient';
-import { rebuildImportInDisposableWorker } from './lib/importRebuildWorkerClient';
-import { shaprMigrationDraft } from './lib/shaprMigration';
+// Shapr3D migration loads on the gesture that picks a .shapr + STEP pair.
+import type { ShaprPairInspection } from './lib/shaprImportWorkerClient';
+import type { shaprMigrationDraft as ShaprMigrationDraftFn } from './lib/shaprMigration';
 import {
   autosaveReportedSaveState,
   presentedWorkspaceSaveState
@@ -603,6 +604,9 @@ import { recordActivity } from './lib/activityLog';
 import { WORKSPACE_MODE_OPTIONS } from './lib/topBarPresentation';
 import { PanelResizer } from './components/PanelResizer';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { PatternProgressSlot } from './components/PatternProgressSlot';
+import { rebuildInDisposableWorker } from './lib/disposableRebuild';
+import { MotionStudyTimelineSlot } from './components/assembly/MotionStudyTimelineSlot';
 import { createLazyPanel } from './components/LazyPanel';
 import type { ModelPanel as ModelPanelComponent } from './components/modelPanels/ModelPanel';
 import type * as ModelPanelModule from './components/modelPanels/ModelPanel';
@@ -1104,6 +1108,7 @@ function focusedControlOwnsSpace(target: HTMLElement | null): boolean {
  * BEFORE it (unsupported extension, a lone `.shapr`) stay synchronous.
  */
 const stepImportRun = () => import('./lib/stepImportRun');
+const projectInsertRun = () => import('./lib/projectInsertRun');
 
 /**
  * Extrude classification runs only once a region extrude is previewed or
@@ -1127,6 +1132,7 @@ const preflightCadPatch: typeof AiPatchPreflight.preflightCadPatch = (
  * read only for its Settings export, neither of which waits on the result.
  */
 const interactionDiagnostics = () => import('./lib/interactionDiagnostics');
+const closedOpenings = () => import('./lib/closedOpenings');
 /** A refused rebuild saved as a corpus fixture, on its Save reproduction. */
 const refusalReproduction = () => import('./lib/refusalReproduction');
 
@@ -1648,9 +1654,15 @@ import {
   PROJECT_FORMAT_UNSUPPORTED_MESSAGE,
   projectNeedsUpdate,
   resolveShelfThumbnail,
-  cachedThumbnailSource
+  cachedThumbnailSource,
+  measuredDocumentBytes,
+  summarizeLocalDocument,
+  withSavedVersion
 } from './lib/projectShelf';
-import { preparePartThumbnails } from './components/PartThumbnail';
+import {
+  preparePartThumbnails,
+  rememberCapturedThumbnail
+} from './components/PartThumbnail';
 import { folderStorageKey, readLibraryFolders } from './lib/libraryFolders';
 import { sharedThumbnailCapture } from './lib/sharedThumbnailCapture';
 import {
@@ -1675,6 +1687,7 @@ import {
   isInPlaceTool,
   keypadText,
   profileRegionLoops,
+  isInPlacePatternTool,
   requestNewAxis,
   resolveNewAxis,
   valueInRange,
@@ -1743,7 +1756,6 @@ import {
   type ValidatedFeatureOutcome,
   type ValidatedFeatureRunOptions
 } from './hooks/useValidatedFeatureCommit';
-import { PatternProgress } from './components/PatternProgress';
 import { OVERLAY_EXIT_MS, useDelayedUnmount } from './hooks/useDelayedUnmount';
 import {
   affectedFeatureTargets,
@@ -1817,7 +1829,7 @@ import {
   type ToastModel
 } from './lib/toasts';
 import { PreviewRefusalError, splitRefusal } from './lib/featureValidation';
-import { keptOffsetValue } from './lib/offsetChip';
+import { keptOffsetValue, offsetFaceCommitMessage } from './lib/offsetChip';
 import { useCollaboration } from './lib/useCollaboration';
 import type * as AiPatchPreflight from './lib/aiPatchPreflight';
 import type {
@@ -1941,7 +1953,6 @@ function preloadWorkspaceMode(mode: WorkspaceMode) {
 }
 import { AssemblyPanelPending } from './components/assembly/AssemblyPanelPending';
 import { meshBoundsLookup } from './lib/assembly/motionSetup';
-import { MotionStudyTimeline } from './components/assembly/MotionStudyTimeline';
 // The View-mode playback bar draws only for an assembly with something to
 // play, so a part-only session never downloads it. Its slot keeps a failure
 // local and retries on the next project.
@@ -2167,21 +2178,6 @@ function desktopAuthorizationAttemptFromLocation(): string | null {
     'desktopAuth'
   );
   return attempt && /^[A-Za-z0-9-]{16,64}$/.test(attempt) ? attempt : null;
-}
-
-/** Start-screen summary of a document held on this device. */
-function summarizeLocalDocument(
-  document: ProjectDocument,
-  organization?: ProjectOrganization
-): ProjectSummary {
-  return {
-    projectId: document.projectId,
-    name: document.name,
-    lastRevisionId: document.revisions.at(-1)?.revisionId,
-    updatedAt: document.derived.updatedAt,
-    revisionCount: document.checkpoints.length,
-    ...(organization ? { organization } : {})
-  };
 }
 
 interface HydrateOptions {
@@ -3183,6 +3179,8 @@ export function App() {
   const pendingBlendRearmRef = useRef<{
     bodyId: BodyId;
     before: BodyTopology['faces'] | undefined;
+    /** The new Fillet, so a band an earlier one owns is never re-armed. */
+    featureId: string | undefined;
   } | null>(null);
   const [sketchConstruction, setSketchConstruction] = useState(false);
   /** When a first Escape armed leaving the sketch (I43), or null. */
@@ -3550,6 +3548,15 @@ export function App() {
       featureWarnings: derived.featureWarnings ?? []
     });
   }
+  // Isolation is session-local and never saved: while it is on, the view
+  // saves the user's own hidden set from before it (QA 2026-11-14 #17).
+  const [bodyIsolation, setBodyIsolation] = useState<
+    (BodyIsolation & { projectId: string; bodyName: string }) | null
+  >(null);
+  const currentBodyIsolation =
+    bodyIsolation && bodyIsolation.projectId === doc?.projectId
+      ? bodyIsolation
+      : null;
   const {
     projection,
     setProjection,
@@ -3571,7 +3578,9 @@ export function App() {
     onCameraSettled: persistCameraPose,
     persistSection: persistSectionView,
     forget: forgetProjectView
-  } = useProjectView(doc?.projectId ?? null);
+  } = useProjectView(doc?.projectId ?? null, (onScreen) =>
+    persistedHiddenBodyIds(onScreen, currentBodyIsolation)
+  );
   // Read at callback time: the section slider's release handler runs after
   // the change that moved it.
   const viewerSettingsRef = useRef(viewerSettings);
@@ -3602,7 +3611,7 @@ export function App() {
     () =>
       doc
         ? doc.bodyOrder.filter((id) => {
-            const body = doc.derived.bodyRepresentations[id];
+            const body = ownEntry(doc.derived.bodyRepresentations, id);
             return (
               body !== undefined && !body.consumed && !hiddenBodyIds.has(id)
             );
@@ -3610,10 +3619,6 @@ export function App() {
         : [],
     [doc, hiddenBodyIds]
   );
-  // The view's hidden set persists; the prior isolation snapshot is session-local.
-  const [bodyIsolation, setBodyIsolation] = useState<
-    (BodyIsolation & { projectId: string }) | null
-  >(null);
   const [previewDoc, setPreviewDoc] = useState<ProjectDocument | null>(null);
   // D06: an assistant proposal's annotations, drawn on its sheet in Draw.
   const [drawingPreview, setDrawingPreview] = useState<{
@@ -4473,8 +4478,9 @@ export function App() {
     warnings: attributedFeatureWarnings(),
     // A user edit's check may propose carrying a later hash-only pick; the
     // commit stores it in the edit's own revision (`withCarriedSelections`).
-    rebuild: (document, analysis, lineageDemand) =>
+    rebuild: (document, analysis, lineageDemand, options) =>
       geometry.syncOnce(document, analysis, lineageDemand, {
+        ...options,
         proposeCarry: true
       }),
     track: trackKernelRefusal
@@ -4583,6 +4589,21 @@ export function App() {
     cloudProjectIds
   };
   const thumbnailAccountUserId = session?.userId;
+  // Every card the workspace captures goes straight to the shelf's tile
+  // cache, so the shelf shown on leaving draws it without waiting for the
+  // refreshed listing.
+  useEffect(
+    () =>
+      sharedThumbnailCapture.subscribe((captured) =>
+        rememberCapturedThumbnail({
+          projectId: captured.projectId,
+          source: captured.source,
+          accountId: thumbnailAccountUserId ?? null,
+          protected: isEncryptedProject(captured.projectId)
+        })
+      ),
+    [thumbnailAccountUserId]
+  );
   const loadProperties = useCallback(
     async (project: ProjectSummary) => {
       const { loadProjectProperties } = await import('./lib/projectProperties');
@@ -4669,6 +4690,7 @@ export function App() {
   const [syncRun, setSyncRun] = useState<SyncEntry[] | null>(null);
   const viewNonceRef = useRef(0);
   const projectImportInputRef = useRef<HTMLInputElement | null>(null);
+  const projectInsertInputRef = useRef<HTMLInputElement | null>(null);
   const projectTransferRef = useRef(false);
   const [projectTransferBusy, setProjectTransferBusy] = useState(false);
   const importInputRef = useRef<HTMLInputElement | null>(null);
@@ -5517,7 +5539,8 @@ export function App() {
   const validatedFeature = useValidatedFeatureCommit({
     manager: () => managerRef.current,
     derive: (document) => syncCandidate(document),
-    deriveCancellable: rebuildImportInDisposableWorker,
+    deriveCancellable: (document, signal) =>
+      rebuildInDisposableWorker(document, signal),
     commit: (command, derived) => executeCommand(command, derived ?? undefined),
     commitTransaction: (label, commands, derived) =>
       executeTransaction(label, commands, derived ?? undefined),
@@ -5585,7 +5608,7 @@ export function App() {
         const valid =
           preview &&
           bodyId &&
-          preview.derived.bodyRepresentations[bodyId] &&
+          ownEntry(preview.derived.bodyRepresentations, bodyId) &&
           !warning;
         setPreviewDoc(
           valid ? { ...preview.document, derived: preview.derived } : null
@@ -6265,6 +6288,27 @@ export function App() {
   assemblyEditDisabledReasonRef.current = assemblyEditDisabledReason;
   const projectRenameDisabledReasonRef = useRef(projectRenameDisabledReason);
   projectRenameDisabledReasonRef.current = projectRenameDisabledReason;
+  // An import into a project that is still empty and still wears its
+  // suggested name names the project for the file once the import lands as
+  // its first content (lib/importProjectName, loaded with the first import:
+  // the main chunk is at its size budget).
+  const importNamingRef = useRef<
+    ((next: ProjectDocument) => string | null | undefined) | null
+  >(null);
+  useEffect(() => {
+    const name = doc ? importNamingRef.current?.(doc) : null;
+    if (name === undefined) return;
+    importNamingRef.current = null;
+    if (doc && name && projectRenameDisabledReasonRef.current === null) {
+      executeCommand(
+        commandFactories.renameNode({ nodeId: doc.rootNodeId, name }),
+        undefined,
+        'rename'
+      );
+    }
+    // executeCommand is this render's, which holds the changed document.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc]);
 
   /** "Cannot use Box: …": one stop, even after a reason that ends in "…". */
   function cannotSentence(action: string, reason: string): string {
@@ -8152,25 +8196,57 @@ export function App() {
     () => partBodies.filter((body) => !hiddenBodyIds.has(body.bodyId)),
     [partBodies, hiddenBodyIds]
   );
-  const isolatedBodyId = useMemo(
+  const isolationState = useMemo(
     () =>
-      activeIsolatedBodyId(
+      bodyIsolationState(
         partBodies.map((body) => body.bodyId),
         hiddenBodyIds,
         localHiddenBodyIds,
-        bodyIsolation?.projectId === doc?.projectId ? bodyIsolation : null
+        currentBodyIsolation,
+        previewDoc !== null
       ),
     [
       partBodies,
       hiddenBodyIds,
       localHiddenBodyIds,
-      bodyIsolation,
-      doc?.projectId
+      currentBodyIsolation,
+      previewDoc
     ]
   );
-  // End the session permanently when its view changes. Merely hiding the
-  // indicator would let an old snapshot revive if the same set returns later.
-  if (bodyIsolation && isolatedBodyId === null) setBodyIsolation(null);
+  const isolatedBodyId =
+    isolationState.kind === 'active' ? isolationState.bodyId : null;
+  // A hidden set the user replaced, or another project, ends the session
+  // permanently: merely hiding the indicator would let an old snapshot revive
+  // if the same set returns later.
+  if (
+    bodyIsolation &&
+    (isolationState.kind === 'replaced' || isolationState.kind === 'none')
+  )
+    setBodyIsolation(null);
+  // The committed model took the isolated body away (deleted, consumed,
+  // undone, or switched off by a parameter). Before QA 2026-11-14 #17 the
+  // session ended silently and left every other body hidden, through a
+  // reload; it now puts back the bodies shown before isolating, and says so.
+  useEffect(() => {
+    if (isolationState.kind !== 'ended' || !currentBodyIsolation) return;
+    const { bodyName } = currentBodyIsolation;
+    setBodyIsolation(null);
+    setHiddenBodyIds(isolationState.hidden);
+    const restored = isolationState.hidden.size;
+    const notice = `Left isolation: ${bodyName} ${isolationState.reason === 'removed' ? 'is no longer in the model' : 'is now hidden'} · ${restored === 0 ? 'all bodies visible' : `${restored} previously hidden ${restored === 1 ? 'body stays' : 'bodies stay'} hidden`}.`;
+    // An Undo, Delete or boolean that ended it already reported its outcome,
+    // perhaps offering Undo; keep that and add the notice to it.
+    const offersUndo = undoableStatusAt === statusEntry.at;
+    setStatus(offersUndo ? `${statusEntry.text} ${notice}` : notice);
+    if (offersUndo) setUndoableStatusAt(lastStatusAtRef.current);
+  }, [
+    isolationState,
+    currentBodyIsolation,
+    setHiddenBodyIds,
+    setStatus,
+    statusEntry,
+    undoableStatusAt
+  ]);
   // Only whether a face drag is in progress matters to the bodies: keyed on
   // the whole interaction, every drag, keypad or selection event handed the
   // viewer a new bodies array and re-ran each of its bodies effects.
@@ -8264,7 +8340,7 @@ export function App() {
       if (!node) {
         return [];
       }
-      const representation = doc.derived.bodyRepresentations[bodyId];
+      const representation = ownEntry(doc.derived.bodyRepresentations, bodyId);
       return [
         { bodyId, name: node.name, consumed: representation?.consumed ?? false }
       ];
@@ -8298,7 +8374,7 @@ export function App() {
             : []
       );
     }
-    const node = doc.nodes[requestedFeatureNodeId];
+    const node = ownEntry(doc.nodes, requestedFeatureNodeId);
     return node?.kind === 'feature' ? node : null;
   }, [
     doc,
@@ -8575,7 +8651,7 @@ export function App() {
       };
     }
     const bodyName = (bodyId: BodyId) =>
-      doc.derived.bodyRepresentations[bodyId]?.name ?? bodyId;
+      ownEntry(doc.derived.bodyRepresentations, bodyId)?.name ?? bodyId;
     const scope = exportScope(
       Object.values(doc.derived.bodyRepresentations).map((body) => ({
         bodyId: body.bodyId,
@@ -9079,7 +9155,7 @@ export function App() {
     // Against what is drawn: an edit preview republishes the faces it lights.
     const shown = previewDoc ?? doc;
     const focus = historyFeatureFocus(shown, selectedFeature, (bodyId) => {
-      const body = shown.derived.bodyRepresentations[bodyId];
+      const body = ownEntry(shown.derived.bodyRepresentations, bodyId);
       return Boolean(body && !body.consumed && !hiddenBodyIds.has(bodyId));
     });
     return focus.kind === 'focus' ? { feature: selectedFeature, focus } : null;
@@ -9437,6 +9513,12 @@ export function App() {
   ) {
     let normalized: ProjectDocument;
     try {
+      // Every document published here, from any source, is checked first: a
+      // reserved name such as "__proto__" as a key, id or selector would make
+      // map lookups reach inherited members. The project is not opened and the
+      // reason is shown; whatever was open stays open.
+      const refused = reservedDocumentIdentifierError(nextDocument);
+      if (refused) throw new Error(`This project cannot be opened: ${refused}`);
       normalized = normalizeDocument(nextDocument);
       // Shares are ephemeral; every persistence path still rejects owner writes.
       if (shareSessionRef.current) {
@@ -9732,6 +9814,11 @@ export function App() {
    * Says once, as the commit lands, that it stored a pick with no lineage
    * name: such a pick resolves only by its hash, which an upstream edit to
    * that entity orphans. Never blocks the commit (`lib/fragileSelections`).
+   *
+   * A face edit that filled in an opening an earlier cut made then says so,
+   * in the toast's place: that cut's step stays in the history but no longer
+   * changes the shape (`lib/closedOpenings`, loaded on demand). The pick
+   * advice stays in the activity log.
    */
   function announceFragileSelections(
     before: ProjectDocument,
@@ -9750,6 +9837,30 @@ export function App() {
       // Advice only: the commit has already landed.
     }
     if (advisory) announce(advisory);
+    const manager = managerRef.current;
+    if (!derived || !manager) return;
+    // The check lands a moment later. It speaks only about this commit, so
+    // it stays silent once anything moved on: an undo, redo or later edit
+    // (each moves the edit history; the rebuild's own repairs do not),
+    // another project or a reopen (another manager), or a newer notice.
+    const historyAt = (document: ProjectDocument) =>
+      `${document.editHistory?.cursor}/${document.editHistory?.entries.length}`;
+    const position = historyAt(manager.document);
+    const toastId = toastIdRef.current;
+    void closedOpenings()
+      .then(({ closedOpeningsAdvisory }) => {
+        if (
+          managerRef.current !== manager ||
+          historyAt(manager.document) !== position ||
+          toastIdRef.current !== toastId
+        )
+          return;
+        const notice = closedOpeningsAdvisory(before, after, derived);
+        if (notice) announce(notice, undefined, { tone: 'warning' });
+      })
+      .catch(() => {
+        // Advice only, as above.
+      });
   }
 
   function executeCommand(
@@ -10602,14 +10713,15 @@ export function App() {
     feature: FeatureNode
   ): { middle: Vector3; outward: Vector3 } | null {
     const focus = historyFeatureFocus(current, feature, (bodyId) => {
-      const body = current.derived.bodyRepresentations[bodyId];
+      const body = ownEntry(current.derived.bodyRepresentations, bodyId);
       return Boolean(body && !body.consumed && !hiddenBodyIds.has(bodyId));
     });
     if (focus.kind !== 'focus') return null;
     for (const selection of focus.faces) {
-      const geometry = current.derived.bodyRepresentations[
+      const geometry = ownEntry(
+        current.derived.bodyRepresentations,
         selection.bodyId
-      ]?.topology?.faces.find(
+      )?.topology?.faces.find(
         (face) =>
           face.topologyId === selection.topologyId ||
           face.hash === selection.hash
@@ -10921,6 +11033,18 @@ export function App() {
    */
   function cancelInPlaceCommand() {
     const editing = inPlaceRef.current.editing;
+    // A pattern's Done still rebuilding is stopped by the card's Cancel too,
+    // as by the pill's Cancel pattern: told to wait instead, the card read
+    // as having no way out of a minute-long rebuild. The command stays open
+    // with its picks, since nothing was added.
+    if (
+      patternAbortRef.current &&
+      !editing &&
+      isInPlacePatternTool(inPlaceRef.current.tool)
+    ) {
+      cancelPattern();
+      return;
+    }
     // A Done still validating keeps the command, and its selection, open.
     if (!inPlaceRef.current.cancel()) return;
     if (editing) {
@@ -11021,7 +11145,7 @@ export function App() {
     sketchId: SketchId,
     entityId: string
   ): boolean {
-    const node = current.nodes[entityId as EntityId];
+    const node = ownEntry(current.nodes, entityId as EntityId);
     return (
       node?.kind === 'sketch-object' &&
       !node.data.construction &&
@@ -12427,9 +12551,10 @@ export function App() {
     const attachment = faceSketchAttachment({
       bodyId: selection.bodyId,
       pickedHash: selection.hash,
-      face: current.derived.bodyRepresentations[
+      face: ownEntry(
+        current.derived.bodyRepresentations,
         selection.bodyId
-      ]?.topology?.faces.find((face) => face.hash === selection.hash)
+      )?.topology?.faces.find((face) => face.hash === selection.hash)
     });
     return attachment.ok ? attachment.planeRef : { reason: attachment.reason };
   }
@@ -12801,21 +12926,17 @@ export function App() {
       );
       return;
     }
-    const isolation =
-      bodyIsolation && bodyIsolation.projectId === doc?.projectId
-        ? bodyIsolation
-        : null;
     const step = toggleBodyIsolation(
       partBodies.map((body) => body.bodyId),
       bodyId,
       hiddenBodyIds,
       localHiddenBodyIds,
-      isolation
+      currentBodyIsolation
     );
     setHiddenBodyIds(step.hidden);
     setBodyIsolation(
       step.isolation && doc
-        ? { ...step.isolation, projectId: doc.projectId }
+        ? { ...step.isolation, projectId: doc.projectId, bodyName: body.name }
         : null
     );
     if (!step.entered) {
@@ -14605,6 +14726,11 @@ export function App() {
     forgetCompleteCommit();
     clearAutoFrame();
     setDoc(null);
+    // A workspace notice speaks about the model just closed, and its action
+    // (an Undo above all) has no document left to act on. The library shares
+    // the toast slot, so one left standing was carried onto the shelf and,
+    // remounted there, started its lifetime over.
+    setToast(null);
     setArtifacts([]);
     setSelectedFeatureNode(null);
     setSelectedTopology(null);
@@ -14767,13 +14893,13 @@ export function App() {
       if (inAccount) {
         remoteVersionsRef.current.set(project.projectId, stored.version);
       }
+      const storedBytes = measuredDocumentBytes(stored);
       setProjects((current) =>
         current.map((candidate) =>
           candidate.projectId === project.projectId
             ? {
-                ...candidate,
-                name: stored.name,
-                documentVersion: stored.version
+                ...withSavedVersion(candidate, stored, storedBytes),
+                name: stored.name
               }
             : candidate
         )
@@ -15171,8 +15297,12 @@ export function App() {
             ).catch(() => undefined);
           }
           await seedCopyThumbnail(localSource ?? localCopy, localCopy);
+          // Measured on what the account now holds: uploading the copy's
+          // images saves a version after the one the response describes, and
+          // an encrypted account's response carries no size at all.
+          const copyRow = withSavedVersion(response.project, copied);
           setProjects((current) =>
-            [...current, response.project].sort(compareProjectSummaries)
+            [...current, copyRow].sort(compareProjectSummaries)
           );
           setStatus(
             [
@@ -17295,6 +17425,9 @@ export function App() {
   }
 
   async function handleImportFiles(files: File[]) {
+    importNamingRef.current = doc
+      ? (await import('./lib/importProjectName')).watchImportNaming(doc, files)
+      : null;
     const shaprFiles = files.filter((file) => /\.shapr$/i.test(file.name));
     if (shaprFiles.length === 0) {
       if (files.length !== 1) {
@@ -17338,6 +17471,8 @@ export function App() {
       inspection: null
     });
     try {
+      const { inspectShaprPair } =
+        await import('./lib/shaprImportWorkerClient');
       const inspection = await inspectShaprPair(shaprFile, sourceStepFile, {
         signal: controller.signal,
         onProgress: (progress) => {
@@ -17395,12 +17530,6 @@ export function App() {
     ) {
       return;
     }
-    const migration = shaprMigrationDraft({
-      ir: pending.inspection.ir,
-      shaprFileName: pending.shaprFile.name,
-      stepFileName: pending.sourceStepFile.name,
-      stepChecksumSha256: pending.inspection.stepChecksumSha256
-    });
     const importId = toShaprImportId(`shapr_${crypto.randomUUID()}`);
     setPendingShaprImport((current) =>
       current
@@ -17412,6 +17541,30 @@ export function App() {
           }
         : null
     );
+    // Loaded here, after the card says it is applying, so a second click
+    // during the load finds the apply already under way.
+    let shaprMigrationDraft: typeof ShaprMigrationDraftFn;
+    try {
+      ({ shaprMigrationDraft } = await import('./lib/shaprMigration'));
+    } catch (error) {
+      setPendingShaprImport((current) =>
+        current
+          ? {
+              ...current,
+              phase: 'preview',
+              progress: 'Preview ready.',
+              error: errorMessage(error, 'The import could not start.')
+            }
+          : null
+      );
+      return;
+    }
+    const migration = shaprMigrationDraft({
+      ir: pending.inspection.ir,
+      shaprFileName: pending.shaprFile.name,
+      stepFileName: pending.sourceStepFile.name,
+      stepChecksumSha256: pending.inspection.stepChecksumSha256
+    });
     const shaprAbort = startImportAbort();
     const { runStepImport } = await stepImportRun();
     const result = await runStepImport({
@@ -17838,6 +17991,60 @@ export function App() {
     }
   }
 
+  /**
+   * File → Insert project…: another project's bodies come into this one as
+   * one undoable step, each keeping its name, colour and opacity, filed in a
+   * folder named after the project. A copy of the solids, not of the
+   * history, and no link back (AS01). See `lib/projectInsertRun.ts`.
+   */
+  async function handleInsertProject(file: File) {
+    if (!managerRef.current || !doc || !ensureCanEdit('insert a project')) {
+      return;
+    }
+    if (importAbortRef.current) {
+      setStatus(
+        'Another import is still running. Try again once it completes.'
+      );
+      return;
+    }
+    const importManager = managerRef.current;
+    const abort = startImportAbort();
+    try {
+      let insert: Awaited<ReturnType<typeof projectInsertRun>>;
+      try {
+        insert = await projectInsertRun();
+      } catch (error) {
+        // A chunk that will not load (offline, a deploy since this page
+        // loaded) has no run to report it; say so on the card.
+        refuseImportOnCard(
+          file.name,
+          errorMessage(error, `Could not insert ${file.name}.`)
+        );
+        return;
+      }
+      await insert.runProjectInsert({
+        file,
+        ownerUserId: session?.userId ?? localUserId,
+        signal: abort.signal,
+        progress: createImportProgressSink(),
+        setStatus,
+        stillCurrent: () => managerRef.current === importManager,
+        onFailure: () => trackDetail('error_import'),
+        stepImport: {
+          archive: archiveArtifact,
+          validatedFeature,
+          status: { setStatus, setFeatureFormError },
+          marks: importMarks(),
+          currentDocument: () => managerRef.current?.document ?? null,
+          editDisabledReason: () => editDisabledReasonRef.current,
+          newId: () => crypto.randomUUID()
+        }
+      });
+    } finally {
+      finishImportAbort(abort);
+    }
+  }
+
   async function handleDownloadProjectArtifact(artifact: ArtifactRecord) {
     try {
       const { downloadProjectArtifact } =
@@ -18224,7 +18431,7 @@ export function App() {
     switch (command) {
       case 'open-model':
         void openDesktopCadFile()
-          .then((file) => (file ? handleImportFile(file) : undefined))
+          .then((file) => (file ? handleImportFiles([file]) : undefined))
           .catch((error) => {
             setStatus(errorMessage(error, 'Could not open the CAD model.'));
           });
@@ -18406,8 +18613,10 @@ export function App() {
     document: ProjectDocument,
     selection: TopologySelection
   ): boolean {
-    const topology =
-      document.derived.bodyRepresentations[selection.bodyId]?.topology;
+    const topology = ownEntry(
+      document.derived.bodyRepresentations,
+      selection.bodyId
+    )?.topology;
     if (!topology) {
       return false;
     }
@@ -18435,7 +18644,12 @@ export function App() {
     // A later Move owns the lane. An automatic re-pick must neither ask a
     // user-selection question nor replace the values that card now holds.
     if (movePreview) return;
-    const pick = newBlendFacePick(pending.bodyId, pending.before, faces);
+    const pick = newBlendFacePick(
+      pending.bodyId,
+      pending.before,
+      faces,
+      pending.featureId
+    );
     if (pick) {
       // The pick is the app's, not the user's: it must not retire the
       // commit's own message ("Filleted 2 edges at 1 mm.") the way a real
@@ -20099,7 +20313,7 @@ export function App() {
         ? affectedFeatureTargets(base, sketchFeature.featureId)
         : [];
       if (repair) {
-        const node = base.nodes[repair.objectId];
+        const node = ownEntry(base.nodes, repair.objectId);
         if (node?.kind !== 'sketch-object' || pick.objects.length !== 1) {
           setStatus(
             'Re-pick one edge: a face projects several, and the object needs one source.'
@@ -20405,7 +20619,7 @@ export function App() {
       return false;
     const sketchId = target.sketchId as SketchId;
     const objectId = target.objectId as EntityId;
-    const selected = base.nodes[objectId];
+    const selected = ownEntry(base.nodes, objectId);
     const nextData =
       selected?.kind === 'sketch-object' && selected.data.construction
         ? { ...data, construction: true }
@@ -20465,7 +20679,7 @@ export function App() {
     if (!base || !target || sketchSolving || geometryBusy) return;
     const sketchId = target.sketchId as SketchId;
     const sourceObjectId = target.objectId as EntityId;
-    const source = base.nodes[sourceObjectId];
+    const source = ownEntry(base.nodes, sourceObjectId);
     if (
       source?.kind !== 'sketch-object' ||
       (source.data.objectKind !== 'rectangle' &&
@@ -22315,13 +22529,17 @@ export function App() {
         (p) => p.name === name
       )?.toggle;
       // setParameter both adds and changes one; say which happened.
-      if (toggle)
+      if (toggle) {
         setHiddenBodyIds(
           (hidden) =>
             new Set(
               [...hidden].filter((id) => !toggle.bodyIds.includes(id as BodyId))
             )
         );
+        setBodyIsolation((recorded) =>
+          releaseIsolationToParameter(recorded, toggle.bodyIds)
+        );
+      }
       setStatus(
         added ? `Added parameter ${name}.` : `Parameter ${name} updated.`
       );
@@ -23229,7 +23447,20 @@ export function App() {
         ? inPlaceEditSeedFor(current, feature)
         : null;
     },
-    derive: (document) => syncCandidate(document),
+    // A pattern's frame is built as the live rebuild after its Done will
+    // be, with the live lineage demand: Done commits the frame's own result
+    // (see `commit`), and that rebuild then restores the frame instead of
+    // replaying the whole history in the other lineage mode, which built a
+    // large grid a second time.
+    derive: (document, signal) =>
+      syncCandidate(
+        document,
+        undefined,
+        isInPlacePatternTool(inPlaceRef.current.tool)
+          ? geometry.liveLineageDemand()
+          : undefined,
+        { signal }
+      ),
     buildCommand: (request, title, edit) => {
       if (edit) {
         const command = inPlaceEditCommand(request, edit);
@@ -23242,10 +23473,16 @@ export function App() {
           resultBodyId: inPlaceEditResultBodyId(request, edit)
         };
       }
-      const command = inPlaceCommandFor(request, title);
+      // A pattern's frame is named as its commit names it, so Done can land
+      // this very command and keep the rebuild the frame already made.
+      const command = inPlaceCommandFor(
+        request,
+        request.tool === 'pattern' ? newFeatureName(title) : title
+      );
       const datum = inPlaceDatum(request, command);
       const base = managerRef.current?.document;
       return {
+        command,
         validate: (document) => command.validate(document),
         apply: (document) => command.apply(document),
         resultBodyId: inPlaceResultBodyId(request, command),
@@ -23257,7 +23494,7 @@ export function App() {
           : {})
       };
     },
-    commit: (request, title, edit, withdrawn) => {
+    commit: (request, title, edit, withdrawn, previewed) => {
       // A command closed while its Done validates (another tool, a new
       // selection) withdraws the candidate: nothing lands after it is gone.
       if (edit) {
@@ -23274,7 +23511,10 @@ export function App() {
         return;
       }
       const name = newFeatureName(title);
-      const command = inPlaceCommandFor(request, name);
+      // The frame Done was pressed on built this pattern already; see below.
+      const previewedPattern =
+        request.tool === 'pattern' ? (previewed?.built.command ?? null) : null;
+      const command = previewedPattern ?? inPlaceCommandFor(request, name);
       const datum = inPlaceDatum(request, command);
       if (datum) {
         // A datum has no body to validate: its resolved frame or line is
@@ -23295,13 +23535,26 @@ export function App() {
       const resultBodyId = inPlaceResultBodyId(request, command);
       if (request.tool === 'pattern' && resultBodyId) {
         // Through the pattern runner, so a large pattern shows its progress
-        // and can be stopped, as the card's did.
+        // and can be stopped, as the card's did. Its rebuild runs in a
+        // disposable worker so Cancel can stop it; that worker starts cold
+        // and replays the whole history, which on a 10 × 10 grid repeated a
+        // minute-long preview. The preview's own exact rebuild of this same
+        // command is judged instead while the model has not moved.
         return runPattern(command, {
           featureName: name,
           resultBodyId,
           successMessage: commandOutcomeMessage(command.label),
           onSuccess: finishFeatureCreation,
-          cancelled: withdrawn
+          cancelled: withdrawn,
+          ...(previewedPattern && previewed
+            ? {
+                prebuilt: {
+                  projectId: previewed.document.projectId,
+                  version: previewed.baseVersion,
+                  derived: previewed.derived
+                }
+              }
+            : {})
         }).then((outcome) => outcome === 'committed');
       }
       // The command stays open until this lands: refused or held off by
@@ -25446,7 +25699,7 @@ export function App() {
       target.hash,
       {
         localBlendGroup: localBlendGroupBoss(
-          base.derived.bodyRepresentations[target.bodyId as BodyId],
+          ownEntry(base.derived.bodyRepresentations, target.bodyId as BodyId),
           target.concavity
         )
       }
@@ -25591,7 +25844,8 @@ export function App() {
       z: value[2]
     });
     const bodyId = target.bodyId as BodyId;
-    const faces = document.derived.bodyRepresentations[bodyId]?.topology?.faces;
+    const faces = ownEntry(document.derived.bodyRepresentations, bodyId)
+      ?.topology?.faces;
     const wall = faces
       ? findResizedCylinderFace(
           faces,
@@ -25661,7 +25915,10 @@ export function App() {
       y: value[1],
       z: value[2]
     });
-    const body = document.derived.bodyRepresentations[target.bodyId as BodyId];
+    const body = ownEntry(
+      document.derived.bodyRepresentations,
+      target.bodyId as BodyId
+    );
     if (!body) return;
     const wall = findHistoryBoreFace(
       body,
@@ -26273,6 +26530,7 @@ export function App() {
     const op = interaction.op;
     const resultBodyId =
       command.payload.ids?.bodyId ?? command.payload.targetBodyId;
+    const newFeatureId = command.payload.ids?.featureId;
     const facesBefore =
       representations[command.payload.targetBodyId]?.topology?.faces;
     // Judged as the preview judges it: the kernel names a refusal after the
@@ -26288,7 +26546,8 @@ export function App() {
         if (op === 'fillet') {
           pendingBlendRearmRef.current = {
             bodyId: resultBodyId,
-            before: facesBefore
+            before: facesBefore,
+            featureId: newFeatureId
           };
         }
       },
@@ -26466,9 +26725,10 @@ export function App() {
     // As for a new blend: the preview stays until the commit or a refusal.
     stopEdgePreview();
     const removing = size <= 1e-9;
-    const sourceFace = base.derived.bodyRepresentations[
+    const sourceFace = ownEntry(
+      base.derived.bodyRepresentations,
       current.target.bodyId as BodyId
-    ]?.topology?.faces.find(
+    )?.topology?.faces.find(
       (face) => face.topologyId === current.target.topologyId
     );
     const committedDirectEditFeatureId =
@@ -27151,7 +27411,10 @@ export function App() {
     }
     const target = current.target;
     const bodyId = target.bodyId as BodyId;
-    const face = base.derived.bodyRepresentations[bodyId]?.topology?.faces.find(
+    const face = ownEntry(
+      base.derived.bodyRepresentations,
+      bodyId
+    )?.topology?.faces.find(
       (candidate) =>
         candidate.topologyId === target.topologyId ||
         (target.hash !== undefined && candidate.hash === target.hash)
@@ -27160,7 +27423,10 @@ export function App() {
       return null;
     }
     const capBoundary =
-      base.derived.bodyRepresentations[bodyId]?.topology?.edges.filter((e) =>
+      ownEntry(
+        base.derived.bodyRepresentations,
+        bodyId
+      )?.topology?.edges.filter((e) =>
         e.adjacentFaceHashes?.includes(face.hash)
       ) ?? [];
     const sampledShoulderCap =
@@ -27169,12 +27435,12 @@ export function App() {
       (face.geometry?.normal?.z ?? 0) > 0.999 &&
       capBoundary.length > 0 &&
       capBoundary.every((e) => e.curve?.type === 'CIRCLE') &&
-      base.derived.bodyRepresentations[bodyId]?.topology?.faces.some(
+      ownEntry(base.derived.bodyRepresentations, bodyId)?.topology?.faces.some(
         (f) =>
           f.geometry?.surfaceType === 'torus' &&
           f.geometry.featureType === 'blend'
       ) &&
-      base.derived.bodyRepresentations[bodyId]?.topology?.faces.some(
+      ownEntry(base.derived.bodyRepresentations, bodyId)?.topology?.faces.some(
         (f) =>
           f.geometry?.surfaceType === 'cylinder' &&
           f.geometry.featureType === 'blend'
@@ -27234,7 +27500,7 @@ export function App() {
       command: plan.command,
       bodyId,
       editedFeatureId: null,
-      successMessage: `Offset face by ${Math.round(offset * 100) / 100} ${base.units}.`,
+      successMessage: offsetFaceCommitMessage(offset, base.units),
       ...(plan.travelHint ? { travelHint: plan.travelHint } : {})
     };
   }
@@ -27309,7 +27575,11 @@ export function App() {
   function handleOffsetCommit(
     offset: number,
     exact?: ParamValue,
-    options?: { keepingLastValid?: boolean }
+    options?: {
+      keepingLastValid?: boolean;
+      /** The Total the chip read at release, when it read one. */
+      total?: number;
+    }
   ): OffsetCommitOutcome {
     stopOffsetRestCheck();
     // The arrow rig is shared: in region mode its drag is an extrude height.
@@ -27381,10 +27651,22 @@ export function App() {
       if (!retakenRelease.commit(retaken)) return 'blocked';
       return 'started';
     }
+    // A plain face offset released from a Total reading names that Total
+    // beside the change its history row records.
+    const successMessage =
+      plan.editedFeatureId === null && options?.total !== undefined
+        ? offsetFaceCommitMessage(
+            offset,
+            managerRef.current?.document.units ?? '',
+            options.total
+          )
+        : reuse
+          ? reuse.successMessage
+          : plan.successMessage;
     void executeValidatedDirectEdit(
       reuse ? reuse.command : plan.command,
       reuse ? reuse.bodyId : plan.bodyId,
-      reuse ? reuse.successMessage : plan.successMessage,
+      successMessage,
       offset,
       undefined,
       reuse ? reuse.validationTargets : plan.validationTargets
@@ -27557,7 +27839,7 @@ export function App() {
       return;
     }
     const nodeId = featureNodeIdForBody(commit.bodyId);
-    const feature = nodeId ? doc.nodes[nodeId] : undefined;
+    const feature = nodeId ? ownEntry(doc.nodes, nodeId) : undefined;
     if (
       feature?.kind !== 'feature' ||
       feature.data.featureKind !== 'primitive' ||
@@ -27772,7 +28054,7 @@ export function App() {
     if (!current) return;
     // A datum plane's row is a plane an in-place Mirror or Split can take:
     // the way to reach one a body hides in the viewport.
-    const clicked = current.nodes[nodeId];
+    const clicked = ownEntry(current.nodes, nodeId);
     // So is it a Plane's or Axis's source, or a plane for a picture.
     if (
       inPlaceRef.current.active &&
@@ -27817,7 +28099,7 @@ export function App() {
       selectedFeatureNodeId === nodeId
         ? null
         : nodeId;
-    const node = current.nodes[nodeId];
+    const node = ownEntry(current.nodes, nodeId);
     if (node?.kind !== 'feature') {
       setStatus('This history feature is no longer available to edit.');
       return;
@@ -27929,7 +28211,7 @@ export function App() {
     // running against geometry the panel no longer shows.
     dispatchInteraction({ type: 'clear' });
     selectFeatureNode(next, 'pinned');
-    const node = next ? current.nodes[next] : undefined;
+    const node = next ? ownEntry(current.nodes, next) : undefined;
 
     const sourceSketchId =
       node?.kind === 'feature' &&
@@ -27978,7 +28260,7 @@ export function App() {
       setSelectedProfiles([]);
     }
     const visible = (id: BodyId) => {
-      const result = current.derived.bodyRepresentations[id];
+      const result = ownEntry(current.derived.bodyRepresentations, id);
       return Boolean(result && !result.consumed && !hiddenBodyIds.has(id));
     };
     // A feature still on screen selects its body. One a later feature
@@ -28079,7 +28361,7 @@ export function App() {
       return;
     }
     const declared =
-      doc.derived.bodyRepresentations[feature.bodyId]
+      ownEntry(doc.derived.bodyRepresentations, feature.bodyId)
         ?.importedStepDeclaredSolidCount ?? 0;
     if (declared === 0) {
       return;
@@ -29185,7 +29467,10 @@ export function App() {
         }
         run(viewportMenuHandlersRef.current);
       };
-    const body = current.derived.bodyRepresentations[selection.bodyId];
+    const body = ownEntry(
+      current.derived.bodyRepresentations,
+      selection.bodyId
+    );
     const feature = selectionFeature(current, body, selection);
     const edge = selection.kind === 'edge';
     // Union and Subtract say why they are greyed out, as the rail does.
@@ -31119,6 +31404,9 @@ export function App() {
           loadThumbnail={loadThumbnail}
           thumbnailAccountId={thumbnailAccountUserId ?? null}
           publishThumbnail={publishThumbnail}
+          {...(session &&
+            cloudFunctionsEnabled && { loadStorageUsage: api.storageUsage })}
+          onOpenAccountSettings={() => openSettingsAt('account')}
         />
         <StatusActivityLog
           status={status}
@@ -31675,6 +31963,14 @@ export function App() {
         ? 'Project transfer in progress'
         : null,
       run: () => projectImportInputRef.current?.click()
+    },
+    {
+      id: 'file-insert-project',
+      label: 'Insert project…',
+      group: 'File',
+      keywords: ['merge', 'combine', 'add', 'openzcad', 'into'],
+      icon: <Upload size={16} aria-hidden="true" />,
+      run: () => projectInsertInputRef.current?.click()
     },
     {
       // The face outline export used to be a tab on the tool card, where it
@@ -32761,6 +33057,7 @@ export function App() {
           geometryFailed={geometry.state.phase === 'failed'}
           projectTransferBusy={projectTransferBusy}
           onImportProject={(file) => void handleImportProject(file)}
+          onInsertProject={(file) => void handleInsertProject(file)}
           onExportProject={() => void handleExportProject()}
           onDownloadArtifact={(artifact) =>
             void handleDownloadProjectArtifact(artifact)
@@ -33220,7 +33517,7 @@ export function App() {
                 : null
             }
             onOffsetPreview={handleOffsetPreview}
-            onOffsetCommit={(value) => {
+            onOffsetCommit={(value, reading) => {
               if (interactionRef.current.mode === 'region') {
                 regionDistanceSetter.current?.(Math.round(value * 1000) / 1000);
                 dispatchInteraction({ type: 'drag-release' });
@@ -33229,7 +33526,11 @@ export function App() {
                 );
                 return 'started';
               }
-              return handleOffsetCommit(value);
+              return handleOffsetCommit(
+                value,
+                undefined,
+                reading ? { total: reading.total } : undefined
+              );
             }}
             onOffsetCancel={handleViewerOffsetCancel}
             offsetPreviewInvalid={holdsRefusal(interaction)}
@@ -33609,7 +33910,8 @@ export function App() {
                     />
                   )}
                   {assembleMode && (
-                    <MotionStudyTimeline
+                    <MotionStudyTimelineSlot
+                      resetKey={doc.projectId}
                       floating
                       assembly={doc.assembly}
                       lengthUnit={doc.units}
@@ -34586,7 +34888,7 @@ export function App() {
               file is moving, the pill is the one notice about it. */}
           <div className="activity-lane">
             {patternProgress && (
-              <PatternProgress
+              <PatternProgressSlot
                 name={patternProgress.name}
                 onCancel={cancelPattern}
               />
@@ -34812,7 +35114,10 @@ export function App() {
                   units={doc.units}
                   profileCount={Math.max(1, selectedProfiles.length)}
                   bodies={doc.bodyOrder.flatMap((bodyId) => {
-                    const body = doc.derived.bodyRepresentations[bodyId];
+                    const body = ownEntry(
+                      doc.derived.bodyRepresentations,
+                      bodyId
+                    );
                     return body && !body.consumed
                       ? [{ bodyId, name: body.name }]
                       : [];
@@ -35072,6 +35377,17 @@ export function App() {
               const file = event.currentTarget.files?.[0];
               event.currentTarget.value = '';
               if (file) void handleImportProject(file);
+            }}
+          />
+          <input
+            ref={projectInsertInputRef}
+            type="file"
+            accept={fileAccept('.openzcad')}
+            hidden
+            onChange={(event) => {
+              const file = event.currentTarget.files?.[0];
+              event.currentTarget.value = '';
+              if (file) void handleInsertProject(file);
             }}
           />
           <input
@@ -35393,9 +35709,13 @@ export function App() {
                 }
                 bodies={exportBodyIds.map((bodyId) => ({
                   bodyId,
-                  name: doc.derived.bodyRepresentations[bodyId]?.name ?? bodyId,
-                  meshReference:
-                    doc.derived.bodyRepresentations[bodyId]?.meshReference
+                  name:
+                    ownEntry(doc.derived.bodyRepresentations, bodyId)?.name ??
+                    bodyId,
+                  meshReference: ownEntry(
+                    doc.derived.bodyRepresentations,
+                    bodyId
+                  )?.meshReference
                 }))}
                 revision={doc.version}
                 onClose={() => setMeshExportOpen(false)}

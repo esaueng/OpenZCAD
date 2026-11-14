@@ -490,10 +490,10 @@ export interface ProjectWriteOptions {
   storage?: ClientProjectStorage;
 }
 
-/** A project as a caller listed it: its id and its instance (migration 0052). */
+/** A project as a caller listed it: its id and its instance (migration 0056). */
 export interface OwnedProjectInstance {
   projectId: string;
-  /** Null for a project stored before migration 0052, or before it. */
+  /** Null for a project stored before migration 0056, or before it. */
   instance: string | null;
 }
 
@@ -622,7 +622,7 @@ export interface PersistenceService {
   /**
    * Destroys every project owned by this account, preserving shared
    * projects. With `instances`, only those projects, each only while it is
-   * still the instance listed (migration 0052): never a project created
+   * still the instance listed (migration 0056): never a project created
    * again under one of their ids since.
    */
   deleteOwnedProjects(
@@ -2624,7 +2624,8 @@ function summarizeDocument(document: ProjectDocument): ProjectSummary {
     lastRevisionId: latestRevision?.revisionId,
     revisionCount: document.revisions.length,
     updatedAt: latestRevision?.createdAt ?? nowIso(),
-    documentVersion: document.version
+    documentVersion: document.version,
+    documentBytes: persistedDocumentBytes(withoutDerivedProjection(document))
   };
 }
 

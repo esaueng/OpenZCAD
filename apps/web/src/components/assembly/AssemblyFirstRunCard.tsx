@@ -1,7 +1,12 @@
 import { useMemo, useState } from 'react';
 import { Pin } from 'lucide-react';
 import { commandFactories } from '@openzcad/command-system';
-import { createId, type BodyId, type ProjectDocument } from '@openzcad/shared';
+import {
+  ownEntry,
+  createId,
+  type BodyId,
+  type ProjectDocument
+} from '@openzcad/shared';
 import type { AssemblyExecute } from '../../lib/assembly/assembleWorkspace';
 import { assemblyName } from '../../lib/assembly/assemblyUi';
 
@@ -17,7 +22,7 @@ export function assemblyCandidateBodies(
   document: ProjectDocument
 ): { bodyId: BodyId; name: string }[] {
   return document.bodyOrder.flatMap((bodyId) => {
-    const body = document.derived.bodyRepresentations[bodyId];
+    const body = ownEntry(document.derived.bodyRepresentations, bodyId);
     if (!body || body.consumed) return [];
     return [{ bodyId, name: assemblyName(body.name, 'Body') }];
   });

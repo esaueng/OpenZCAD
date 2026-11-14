@@ -196,7 +196,7 @@ export async function assertAccountNotErasing(
   }
 }
 
-/** Whether migration 0052's erasure request tokens are installed. */
+/** Whether migration 0056's erasure request tokens are installed. */
 const isErasureRequestTokenReady = cachedSchemaProbe(
   `SELECT COUNT(*) AS ready FROM pragma_table_info('account_erasure_requests')
    WHERE name = 'request_token'`,
@@ -204,7 +204,7 @@ const isErasureRequestTokenReady = cachedSchemaProbe(
 );
 
 /**
- * Which erasure request an attempt serves: its token (migration 0052), set
+ * Which erasure request an attempt serves: its token (migration 0056), set
  * when the request was first recorded and kept by its retries, or before
  * that migration its `started_at`.
  */
@@ -269,7 +269,7 @@ async function beginErasure(
 }
 
 /**
- * The account's projects, each with its instance (migration 0052): listed
+ * The account's projects, each with its instance (migration 0056): listed
  * once, and then the only projects this erasure attempt touches, so a
  * project created again under one of their ids is never erased by it.
  */

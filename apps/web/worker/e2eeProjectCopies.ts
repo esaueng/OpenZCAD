@@ -340,7 +340,7 @@ export function insertCopiedBlobs(
  * the caller hands to `discardCopiedObjects` when the copy fails: a
  * concurrent retry of the same create may already name those objects.
  * With `pending`, each key is first recorded as this attempt's write
- * (migration 0051): while the record stands, no other attempt's rollback
+ * (migration 0055): while the record stands, no other attempt's rollback
  * can claim and delete the key, so the copy's rows never land on bytes a
  * rollback removed before them.
  */
@@ -435,7 +435,7 @@ export async function verifyCopiedObjects(
  * request with the same id may name them; those stay). A retry of the same
  * copy writes the same keys, so each is deleted only under a migration
  * 0050 claim taken while no row and no other attempt's pending record
- * (migration 0051) names it: an attempt still writing the key keeps it.
+ * (migration 0055) names it: an attempt still writing the key keeps it.
  * `attempt` is this copy's own pending record, dropped for every key it
  * no longer has to remove.
  */

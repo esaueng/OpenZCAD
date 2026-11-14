@@ -93,13 +93,26 @@ function undefinedParameterIn(
   quantity?: FieldQuantity
 ): string | undefined {
   const missing: string[] = [];
+  const isMissing = (target: object, key: string | symbol): key is string =>
+    typeof key === 'string' &&
+    !Object.hasOwn(target, key) &&
+    isValidParameterName(key);
   const reading = new Proxy(scope, {
+    // The evaluator reads only the scope's own names (`ownEntry`), so a
+    // missing name has to look like one of them for the read to reach `get`.
+    getOwnPropertyDescriptor(target, key) {
+      if (isMissing(target, key)) {
+        return {
+          value: Number.NaN,
+          writable: true,
+          enumerable: true,
+          configurable: true
+        };
+      }
+      return Reflect.getOwnPropertyDescriptor(target, key);
+    },
     get(target, key, receiver) {
-      if (
-        typeof key === 'string' &&
-        !Object.hasOwn(target, key) &&
-        isValidParameterName(key)
-      ) {
+      if (isMissing(target, key)) {
         if (!missing.includes(key)) missing.push(key);
         return Number.NaN;
       }

@@ -72,7 +72,7 @@ function database(
       },
       async all() {
         // The account's projects, as listed with their instances
-        // (migration 0052, "not installed" here).
+        // (migration 0056, "not installed" here).
         if (
           query.includes('SELECT id FROM projects WHERE user_id') ||
           query.includes('FROM projects p WHERE p.user_id')

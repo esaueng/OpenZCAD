@@ -166,11 +166,23 @@
     height: 44px;
   }
 
-  /* The launch card's field labels follow its two buttons and painted over
-     their reach; the buttons stand over them. */
+  /* The launch card's fields follow its two buttons and painted over their
+     reach; the buttons stand over them. */
   .start-launch-create,
   .start-launch-import {
     z-index: 1;
+  }
+
+  /* The name and units sit side by side under the buttons, with no caption
+     above them to take a finger: each is drawn 44 px tall, and the row
+     clears the buttons' 9 px reach rather than lose its top edge to it. */
+  .start-field input,
+  .start-field select {
+    min-height: 44px;
+  }
+
+  .start-launch-form {
+    row-gap: 10px;
   }
 
   /* The brand's reach would end on the project name 7 px away. */

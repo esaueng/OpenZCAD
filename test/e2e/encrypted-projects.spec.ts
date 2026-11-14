@@ -63,217 +63,223 @@ const count = (server: E2eeServer, sql: string) =>
  * run over SQLite, the browser runs the real MLS Worker, and no plaintext
  * project route ever receives the document.
  */
-test('creates, autosaves, reloads and saves an encrypted project', { tag: '@ci-smoke' }, async ({
-  page,
-  context
-}) => {
-  test.setTimeout(120_000);
-  const errors: string[] = [];
-  page.on('pageerror', (error) => errors.push(error.message));
-  await stubApi(page);
-  const server = createE2eeServer({ projectsEnabled: true });
-  await installE2eeServer(context, server);
-  const plaintextWrites: string[] = [];
-  let headReads = 0;
-  page.on('request', (request) => {
-    const path = new URL(request.url()).pathname;
-    if (
-      request.method() === 'GET' &&
-      /^\/api\/e2ee\/projects\/[^/]+\/document$/.test(path)
-    ) {
-      headReads += 1;
-    }
-    if (
-      path.startsWith('/api/projects') &&
-      !['GET', 'HEAD'].includes(request.method())
-    ) {
-      plaintextWrites.push(`${request.method()} ${path}`);
-    }
-  });
-  await page.route('**/api/projects', async (route) => {
-    if (route.request().method() !== 'GET') {
-      return route.fulfill({
+test(
+  'creates, autosaves, reloads and saves an encrypted project',
+  { tag: '@ci-smoke' },
+  async ({ page, context }) => {
+    test.setTimeout(120_000);
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    await stubApi(page);
+    const server = createE2eeServer({ projectsEnabled: true });
+    await installE2eeServer(context, server);
+    const plaintextWrites: string[] = [];
+    let headReads = 0;
+    page.on('request', (request) => {
+      const path = new URL(request.url()).pathname;
+      if (
+        request.method() === 'GET' &&
+        /^\/api\/e2ee\/projects\/[^/]+\/document$/.test(path)
+      ) {
+        headReads += 1;
+      }
+      if (
+        path.startsWith('/api/projects') &&
+        !['GET', 'HEAD'].includes(request.method())
+      ) {
+        plaintextWrites.push(`${request.method()} ${path}`);
+      }
+    });
+    await page.route('**/api/projects', async (route) => {
+      if (route.request().method() !== 'GET') {
+        return route.fulfill({
+          status: 409,
+          json: {
+            error: 'Plaintext projects are refused for this account.',
+            code: 'ENCRYPTED_PROJECTS_REQUIRED'
+          }
+        });
+      }
+      return route.fulfill({ json: await listing(server) });
+    });
+    // Every plaintext route of a format-2 project answers as the Worker's
+    // format gate does (slice 4-1).
+    await page.route(/\/api\/projects\/proj_[^/]+(\/.*)?$/, (route) =>
+      route.fulfill({
         status: 409,
         json: {
-          error: 'Plaintext projects are refused for this account.',
-          code: 'ENCRYPTED_PROJECTS_REQUIRED'
+          error: 'This project is end-to-end encrypted.',
+          code: 'PROJECT_FORMAT_UNSUPPORTED'
         }
+      })
+    );
+
+    await page.goto('/');
+    await seedE2eeDevice(page, server);
+    const settings = await openEncryptionSettings(page);
+    const toggle = settings.getByRole('checkbox', {
+      name: 'Encrypt new projects'
+    });
+    await expect(toggle).toBeEnabled();
+    await toggle.click();
+    await expect(toggle).toBeChecked();
+    await page.keyboard.press('Escape');
+    await expect(settings).toHaveCount(0);
+
+    let profiling = true;
+    let accountRequests = 0;
+    const latencyMs = Number(process.env.OZ_CREATE_LATENCY_MS ?? 0);
+    if (latencyMs > 0) {
+      await page.route('**/api/**', async (route) => {
+        if (profiling) {
+          accountRequests++;
+          await new Promise((resolve) => setTimeout(resolve, latencyMs));
+        }
+        await route.fallback();
       });
     }
-    return route.fulfill({ json: await listing(server) });
-  });
-  // Every plaintext route of a format-2 project answers as the Worker's
-  // format gate does (slice 4-1).
-  await page.route(/\/api\/projects\/proj_[^/]+(\/.*)?$/, (route) =>
-    route.fulfill({
-      status: 409,
-      json: {
-        error: 'This project is end-to-end encrypted.',
-        code: 'PROJECT_FORMAT_UNSUPPORTED'
-      }
-    })
-  );
-
-  await page.goto('/');
-  await seedE2eeDevice(page, server);
-  const settings = await openEncryptionSettings(page);
-  const toggle = settings.getByRole('checkbox', {
-    name: 'Encrypt new projects'
-  });
-  await expect(toggle).toBeEnabled();
-  await toggle.click();
-  await expect(toggle).toBeChecked();
-  await page.keyboard.press('Escape');
-  await expect(settings).toHaveCount(0);
-
-  let profiling = true;
-  let accountRequests = 0;
-  const latencyMs = Number(process.env.OZ_CREATE_LATENCY_MS ?? 0);
-  if (latencyMs > 0) {
-    await page.route('**/api/**', async (route) => {
-      if (profiling) {
-        accountRequests++;
-        await new Promise((resolve) => setTimeout(resolve, latencyMs));
-      }
-      await route.fallback();
+    await page.getByLabel('Project name').fill('Secret bracket');
+    const createStart = Date.now();
+    await page.getByRole('button', { name: 'New project' }).click();
+    await expect(page.locator('.workspace-reveal')).toHaveClass(/is-ready/, {
+      timeout: SYNC_BUDGET_MS
     });
-  }
-  await page.getByLabel('Project name').fill('Secret bracket');
-  const createStart = Date.now();
-  await page.getByRole('button', { name: 'New project' }).click();
-  await expect(page.locator('.workspace-reveal')).toHaveClass(/is-ready/, {
-    timeout: SYNC_BUDGET_MS
-  });
-  profiling = false;
-  if (latencyMs > 0)
-    console.log('CREATE_PROFILE', JSON.stringify({
-      elapsedMs: Date.now() - createStart, accountRequests, latencyMs
-    }));
-  await createPrimitiveInPlace(page, 'box');
-  await expect(
-    page.getByRole('status', { name: 'Saved', exact: true })
-  ).toBeVisible({ timeout: SYNC_BUDGET_MS });
-  await expect
-    .poll(
-      () => count(server, 'SELECT COUNT(*) AS n FROM e2ee_project_versions'),
-      { timeout: SYNC_BUDGET_MS }
-    )
-    .toBeGreaterThan(1);
-  // The account holds ciphertext: no name, no document.
-  expect(
-    server.db
-      .prepare('SELECT name, document_json, storage_format FROM projects')
-      .all()
-  ).toEqual([{ name: '', document_json: 'e2ee-v1', storage_format: 2 }]);
-  const stored = JSON.stringify(
-    server.db.prepare('SELECT * FROM e2ee_project_versions').all()
-  );
-  expect(stored).not.toContain('Secret bracket');
+    profiling = false;
+    if (latencyMs > 0)
+      console.log(
+        'CREATE_PROFILE',
+        JSON.stringify({
+          elapsedMs: Date.now() - createStart,
+          accountRequests,
+          latencyMs
+        })
+      );
+    await createPrimitiveInPlace(page, 'box');
+    await expect(
+      page.getByRole('status', { name: 'Saved', exact: true })
+    ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+    await expect
+      .poll(
+        () => count(server, 'SELECT COUNT(*) AS n FROM e2ee_project_versions'),
+        { timeout: SYNC_BUDGET_MS }
+      )
+      .toBeGreaterThan(1);
+    // The account holds ciphertext: no name, no document.
+    expect(
+      server.db
+        .prepare('SELECT name, document_json, storage_format FROM projects')
+        .all()
+    ).toEqual([{ name: '', document_json: 'e2ee-v1', storage_format: 2 }]);
+    const stored = JSON.stringify(
+      server.db.prepare('SELECT * FROM e2ee_project_versions').all()
+    );
+    expect(stored).not.toContain('Secret bracket');
 
-  // The top bar says so, verified: the page wrote and checked its heads.
-  await expect(encryptionIndicator(page)).toHaveAttribute(
-    'data-encryption-state',
-    'verified'
-  );
-  const lock = page
-    .locator('.topbar-identity')
-    .getByLabel('End-to-end encrypted', { exact: true });
-  await expect(lock).toBeVisible();
-  // On a phone the bar takes two rows; the lock still follows the name it
-  // describes rather than the far end of a stretched island.
-  const desktopViewport = page.viewportSize()!;
-  await page.setViewportSize({ width: 390, height: 844 });
-  await expect
-    .poll(() =>
-      page.locator('.topbar-identity').evaluate((island) => {
-        const name = island.querySelector('.breadcrumb')!;
-        const lockBox = island
-          .querySelector('.encryption-indicator')!
-          .getBoundingClientRect();
-        return Math.round(lockBox.left - name.getBoundingClientRect().right);
+    // The top bar says so, verified: the page wrote and checked its heads.
+    await expect(encryptionIndicator(page)).toHaveAttribute(
+      'data-encryption-state',
+      'verified'
+    );
+    const lock = page
+      .locator('.topbar-identity')
+      .getByLabel('End-to-end encrypted', { exact: true });
+    await expect(lock).toBeVisible();
+    // On a phone the bar takes two rows; the lock still follows the name it
+    // describes rather than the far end of a stretched island.
+    const desktopViewport = page.viewportSize()!;
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect
+      .poll(() =>
+        page.locator('.topbar-identity').evaluate((island) => {
+          const name = island.querySelector('.breadcrumb')!;
+          const lockBox = island
+            .querySelector('.encryption-indicator')!
+            .getBoundingClientRect();
+          return Math.round(lockBox.left - name.getBoundingClientRect().right);
+        })
+      )
+      .toBeLessThanOrEqual(12);
+    // At a laptop's 1366px the lock's 28px left the name one pixel short of
+    // whole; the wordmark gives way instead.
+    await page.setViewportSize({ width: 1366, height: 800 });
+    await expect
+      .poll(() =>
+        page
+          .locator('.topbar-identity .breadcrumb strong')
+          .evaluate((name) => name.scrollWidth - name.clientWidth)
+      )
+      .toBe(0);
+    await page.setViewportSize(desktopViewport);
+    await lock.click();
+    await expect(
+      encryptionIndicator(page).getByText('Verified', { exact: true })
+    ).toBeVisible();
+    const comparisonCode = encryptionIndicator(page).locator(
+      '.encryption-menu-code code'
+    );
+    await expect(comparisonCode).toBeVisible();
+    const fullCode = await comparisonCode.innerText();
+    expect(fullCode).toMatch(/^\d{5}( \d{5}){7}$/);
+    await expect(
+      encryptionIndicator(page).getByRole('button', {
+        name: 'Encryption settings'
       })
-    )
-    .toBeLessThanOrEqual(12);
-  // At a laptop's 1366px the lock's 28px left the name one pixel short of
-  // whole; the wordmark gives way instead.
-  await page.setViewportSize({ width: 1366, height: 800 });
-  await expect
-    .poll(() =>
-      page
-        .locator('.topbar-identity .breadcrumb strong')
-        .evaluate((name) => name.scrollWidth - name.clientWidth)
-    )
-    .toBe(0);
-  await page.setViewportSize(desktopViewport);
-  await lock.click();
-  await expect(
-    encryptionIndicator(page).getByText('Verified', { exact: true })
-  ).toBeVisible();
-  const comparisonCode = encryptionIndicator(page).locator(
-    '.encryption-menu-code code'
-  );
-  await expect(comparisonCode).toBeVisible();
-  const fullCode = await comparisonCode.innerText();
-  expect(fullCode).toMatch(/^\d{5}( \d{5}){7}$/);
-  await expect(
-    encryptionIndicator(page).getByRole('button', {
-      name: 'Encryption settings'
-    })
-  ).toBeVisible();
-  await page.keyboard.press('Escape');
-  await expect(encryptionIndicator(page)).not.toHaveAttribute('open', '');
-  await page.getByRole('button', { name: /^Open project sharing/ }).click();
-  const sharing = page.getByRole('dialog', {
-    name: 'Project sharing',
-    exact: true
-  });
-  // The state code is a disclosure behind the header's Encrypted chip.
-  await sharing.getByRole('button', { name: 'Encrypted' }).click();
-  await expect(sharing.getByText(fullCode, { exact: true })).toBeVisible();
-  await page.keyboard.press('Escape');
-  await expect(sharing).toHaveCount(0);
+    ).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(encryptionIndicator(page)).not.toHaveAttribute('open', '');
+    await page.getByRole('button', { name: /^Open project sharing/ }).click();
+    const sharing = page.getByRole('dialog', {
+      name: 'Project sharing',
+      exact: true
+    });
+    // The state code is a disclosure behind the header's Encrypted chip.
+    await sharing.getByRole('button', { name: 'Encrypted' }).click();
+    await expect(sharing.getByText(fullCode, { exact: true })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(sharing).toHaveCount(0);
 
-  // A named save writes a revision.
-  await page.keyboard.press('ControlOrMeta+s');
-  await expect
-    .poll(
-      () => count(server, 'SELECT COUNT(*) AS n FROM e2ee_project_revisions'),
-      { timeout: SYNC_BUDGET_MS }
-    )
-    .toBe(1);
+    // A named save writes a revision.
+    await page.keyboard.press('ControlOrMeta+s');
+    await expect
+      .poll(
+        () => count(server, 'SELECT COUNT(*) AS n FROM e2ee_project_revisions'),
+        { timeout: SYNC_BUDGET_MS }
+      )
+      .toBe(1);
 
-  // Reload: the shelf names it from its project info, and it reopens from
-  // the account copy, verified against this browser's pin.
-  const readsBeforeReload = headReads;
-  await page.reload();
-  await expect(
-    page.getByRole('status', { name: 'Saved', exact: true })
-  ).toBeVisible({ timeout: SYNC_BUDGET_MS });
-  await page.getByTitle('Back to projects').click();
-  const card = page.locator('.start-tile-project', {
-    hasText: 'Secret bracket'
-  });
-  await expect(card).toBeVisible({ timeout: SYNC_BUDGET_MS });
-  await expect(
-    card.getByRole('img', { name: 'End-to-end encrypted' })
-  ).toBeVisible();
-  await card.locator('.start-tile-open').click();
-  await expect(
-    page.getByRole('status', { name: 'Saved', exact: true })
-  ).toBeVisible({ timeout: SYNC_BUDGET_MS });
-  await expect(
-    page.getByRole('dialog', { name: 'Choose a version to keep' })
-  ).toHaveCount(0);
+    // Reload: the shelf names it from its project info, and it reopens from
+    // the account copy, verified against this browser's pin.
+    const readsBeforeReload = headReads;
+    await page.reload();
+    await expect(
+      page.getByRole('status', { name: 'Saved', exact: true })
+    ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+    await page.getByTitle('Back to projects').click();
+    const card = page.locator('.start-tile-project', {
+      hasText: 'Secret bracket'
+    });
+    await expect(card).toBeVisible({ timeout: SYNC_BUDGET_MS });
+    // Encrypted is this account's norm, so the card carries no mark; the top
+    // bar below says it, verified.
+    await expect(card.getByRole('img', { name: /encrypted/i })).toHaveCount(0);
+    await card.locator('.start-tile-open').click();
+    await expect(
+      page.getByRole('status', { name: 'Saved', exact: true })
+    ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+    await expect(
+      page.getByRole('dialog', { name: 'Choose a version to keep' })
+    ).toHaveCount(0);
 
-  // Reopening read and verified the account's encrypted head.
-  expect(headReads).toBeGreaterThan(readsBeforeReload);
-  await expect(encryptionIndicator(page)).toHaveAttribute(
-    'data-encryption-state',
-    'verified'
-  );
-  expect(plaintextWrites).toEqual([]);
-  expect(errors).toEqual([]);
-});
+    // Reopening read and verified the account's encrypted head.
+    expect(headReads).toBeGreaterThan(readsBeforeReload);
+    await expect(encryptionIndicator(page)).toHaveAttribute(
+      'data-encryption-state',
+      'verified'
+    );
+    expect(plaintextWrites).toEqual([]);
+    expect(errors).toEqual([]);
+  }
+);
 
 /** A plaintext project's top bar is unchanged: no encryption indicator. */
 test('shows no encryption indicator on a plaintext project', async ({

@@ -9,6 +9,7 @@ import type {
   UnitSystem,
   Vector3
 } from '@openzcad/shared';
+import { millimetresPerUnit } from '@openzcad/shared';
 import {
   edgeLengthMeasurement,
   topologySelectionLabel
@@ -233,13 +234,6 @@ export interface FormattedMeasurement {
 
 /** Keep a long inspection pass bounded without tying it to document state. */
 export const MEASUREMENT_LIMIT = 50;
-
-const UNIT_TO_MM: Record<UnitSystem, number> = {
-  mm: 1,
-  cm: 10,
-  m: 1000,
-  inch: 25.4
-};
 
 const QUALITY_RANK: Record<MeasurementQuality, number> = {
   'exact-analytic': 0,
@@ -1629,7 +1623,10 @@ function convertedValue(
     return value;
   }
   const exponent = dimension === 'length' ? 1 : dimension === 'area' ? 2 : 3;
-  return value * Math.pow(UNIT_TO_MM[from] / UNIT_TO_MM[to], exponent);
+  return (
+    value *
+    Math.pow(millimetresPerUnit(from) / millimetresPerUnit(to), exponent)
+  );
 }
 
 /**
@@ -1930,9 +1927,7 @@ function delimitedCell(value: string | number, delimiter: ',' | '\t'): string {
 function spreadsheetCell(value: string | number): string {
   const text = String(value);
   const formulaLike = /^[=+\-@\t\r]/.test(text) || /^\s+[=+\-@]/.test(text);
-  return typeof value === 'string' && formulaLike
-    ? `'${text}`
-    : text;
+  return typeof value === 'string' && formulaLike ? `'${text}` : text;
 }
 
 export function measurementsToCsv(

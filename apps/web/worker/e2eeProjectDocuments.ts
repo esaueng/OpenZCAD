@@ -655,7 +655,7 @@ async function versionBody(ctx: Context, row: VersionRow): Promise<Uint8Array> {
 interface StoredBody {
   key: string | null;
   inline: string | null;
-  /** This write attempt's pending record of `key` (migration 0051). */
+  /** This write attempt's pending record of `key` (migration 0055). */
   attempt?: string;
 }
 
@@ -684,7 +684,7 @@ async function storeBody(
   const attempt = crypto.randomUUID();
   const key = `e2ee/${projectId}/v/${version.hash}.${attempt}`;
   const bucket = ctx.bucket;
-  // Recorded before the put (migration 0051): a body this attempt cannot
+  // Recorded before the put (migration 0055): a body this attempt cannot
   // remove after a failure stays discoverable and is reclaimed (retention,
   // the scheduled sweep, the project's deletion); its version row clears
   // the record when it commits. A project holding too many such bodies
@@ -731,7 +731,7 @@ async function storeBody(
 
 /**
  * After a refused write: drop an R2 body no row references. Bodies written
- * since migration 0051 carry a per-attempt nonce, so only this attempt ever
+ * since migration 0055 carry a per-attempt nonce, so only this attempt ever
  * writes this key; bodies of older rows were keyed by version hash alone, so
  * every body delete still goes through a migration 0050 claim taken while no
  * version row (and no other attempt's pending record) names the key.
@@ -1023,7 +1023,7 @@ async function retain(ctx: Context, projectId: string): Promise<void> {
         )
     ]);
     // Only bodies whose row this request actually cleared, each under a
-    // claim (migration 0051).
+    // claim (migration 0055).
     await deleteBodies(
       ctx,
       orphanRows.flatMap((row, index) =>
@@ -1035,7 +1035,7 @@ async function retain(ctx: Context, projectId: string): Promise<void> {
   } catch {
     // Retention is housekeeping. It does not get to fail a save.
   }
-  // Bodies failed saves could not remove (migration 0051).
+  // Bodies failed saves could not remove (migration 0055).
   try {
     await drainPendingObjects(
       ctx.db,
@@ -1707,7 +1707,7 @@ async function createProject(
   }
   const body = await storeBody(ctx, projectId, version);
   const copied: string[] = [];
-  // This create's pending records of the objects it copies (migration 0051).
+  // This create's pending records of the objects it copies (migration 0055).
   const copyAttempt = crypto.randomUUID();
   let sortOrder: number;
   try {

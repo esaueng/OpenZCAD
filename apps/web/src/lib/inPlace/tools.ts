@@ -30,6 +30,7 @@ import {
   type UnitSystem,
   type VariableFilletLaw,
   UNIT_TO_MM,
+  millimetresPerUnit,
   type Vector3
 } from '@openzcad/shared';
 import {
@@ -140,6 +141,15 @@ export const IN_PLACE_TOOLS: readonly InPlaceToolId[] = [
 
 export function isInPlaceTool(tool: string): tool is InPlaceToolId {
   return (IN_PLACE_TOOLS as readonly string[]).includes(tool);
+}
+
+/** The commands whose Done runs through the cancellable pattern rebuild. */
+export function isInPlacePatternTool(tool: InPlaceToolId | null): boolean {
+  return (
+    tool === 'linear-pattern' ||
+    tool === 'circular-pattern' ||
+    tool === 'grid-pattern'
+  );
 }
 
 /** A picked region: its sketch, its stored reference, and which cell. */
@@ -2251,7 +2261,7 @@ export function gearModuleOf(
   const pitch = numbers[id] ?? GEAR_PITCH_INITIALS[id];
   if (id === 'circularPitch') return pitch / Math.PI;
   if (id === 'diametralPitch') {
-    return UNIT_TO_MM.inch / UNIT_TO_MM[units] / pitch;
+    return UNIT_TO_MM.inch / millimetresPerUnit(units) / pitch;
   }
   return pitch;
 }
@@ -2264,7 +2274,7 @@ function gearPitchFor(
 ): number {
   if (id === 'circularPitch') return module * Math.PI;
   if (id === 'diametralPitch') {
-    return UNIT_TO_MM.inch / UNIT_TO_MM[units] / module;
+    return UNIT_TO_MM.inch / millimetresPerUnit(units) / module;
   }
   return module;
 }

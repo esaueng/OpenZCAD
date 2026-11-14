@@ -1,3 +1,7 @@
+import {
+  MAX_ACCOUNT_PROJECTS,
+  MAX_ACCOUNT_STORAGE_BYTES
+} from '@openzcad/shared';
 import { sessionWriteCredential } from './sessionCredentials';
 
 export interface E2eeWriteAuthorization {
@@ -35,12 +39,23 @@ export async function admitDevelopmentE2eeWrite(
   const fence =
     'NOT EXISTS (SELECT 1 FROM account_erasure_requests WHERE user_id = ?)';
   await db.batch([
+    // A row without an email is Free; write its limits rather than leave
+    // the 2 GiB column defaults for the quota triggers to read.
     db
       .prepare(
-        `INSERT INTO users (id, email, created_at)
-        SELECT ?, NULL, ? WHERE ${fence} ON CONFLICT(id) DO NOTHING`
+        `INSERT INTO users
+          (id, email, created_at, artifact_limit_bytes, project_limit,
+           project_storage_limit_bytes)
+        SELECT ?, NULL, ?, ?, ?, ? WHERE ${fence} ON CONFLICT(id) DO NOTHING`
       )
-      .bind(userId, new Date().toISOString(), userId),
+      .bind(
+        userId,
+        new Date().toISOString(),
+        MAX_ACCOUNT_STORAGE_BYTES,
+        MAX_ACCOUNT_PROJECTS,
+        MAX_ACCOUNT_STORAGE_BYTES,
+        userId
+      ),
     db
       .prepare(
         `INSERT INTO auth_sessions (token_hash, user_id, created_at, expires_at)

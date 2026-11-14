@@ -50,6 +50,13 @@ const OPERATION_NOUN: Record<ExactBooleanOperation, string> = {
   intersect: 'Intersect'
 };
 
+/**
+ * The kernel's wording for a boolean whose answer is no solid at all,
+ * measured on the pin: `empty result: Cut of identical solids` and
+ * `empty result: Cut with target fully contained in tool`.
+ */
+const EMPTY_RESULT = /^empty result\b/i;
+
 const OPERATION_PAST_TENSE: Record<ExactBooleanOperation, string> = {
   cut: 'cut',
   fuse: 'combined',
@@ -83,9 +90,22 @@ function operandPhrase(operands: readonly string[] | undefined): string {
 function refusalReason(
   operation: ExactBooleanOperation,
   category: BooleanRefusalCategory,
-  subject: string
+  subject: string,
+  kernelMessage = ''
 ): string {
   const verb = OPERATION_PAST_TENSE[operation];
+  // An empty result is an answer, not a failure: the kernel files it under
+  // `internal` (code `operation_failed`), but nothing broke — subtracting a
+  // body from an identical one, or from a tool that encloses it, leaves
+  // nothing. "failed internally" sent people looking for a bug.
+  if (EMPTY_RESULT.test(kernelMessage)) {
+    if (operation === 'cut') {
+      return `subtracting ${subject} would leave nothing, because the tool covers the whole body`;
+    }
+    if (operation === 'intersect') {
+      return `${subject} do not overlap, so nothing would be left`;
+    }
+  }
   switch (category) {
     case 'quality_refused':
       return `${subject} could not be ${verb} exactly, and an approximate result was declined`;
@@ -128,8 +148,17 @@ function refusalReason(
  */
 function refusalRemedy(
   operation: ExactBooleanOperation,
-  category: BooleanRefusalCategory
+  category: BooleanRefusalCategory,
+  kernelMessage = ''
 ): string | null {
+  if (EMPTY_RESULT.test(kernelMessage)) {
+    if (operation === 'cut') {
+      return 'Make the tool smaller or move it so part of the body remains.';
+    }
+    if (operation === 'intersect') {
+      return 'Move the bodies so they overlap, then try again.';
+    }
+  }
   if (category !== 'quality_refused' && category !== 'tolerance_violation') {
     return null;
   }
@@ -162,8 +191,17 @@ export class ExactBooleanRefusal extends KernelRefusal {
 
   constructor(init: ExactBooleanRefusalInit) {
     const subject = operandPhrase(init.operands);
-    const reason = refusalReason(init.operation, init.category, subject);
-    const remedy = refusalRemedy(init.operation, init.category);
+    const reason = refusalReason(
+      init.operation,
+      init.category,
+      subject,
+      init.kernelMessage
+    );
+    const remedy = refusalRemedy(
+      init.operation,
+      init.category,
+      init.kernelMessage
+    );
     super({
       family: 'boolean',
       category: init.category,

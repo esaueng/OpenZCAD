@@ -1,4 +1,8 @@
-import { createFeatureOnlyIds, listFeaturesInOrder } from '@openzcad/document-core';
+import {
+  createFeatureOnlyIds,
+  listFeaturesInOrder
+} from '@openzcad/document-core';
+import { ownEntry } from '@openzcad/shared';
 import type {
   BodyId,
   DirectEditOperation,
@@ -52,7 +56,9 @@ function endHoles(
   side: 'negative' | 'positive',
   cut: number
 ): GrowingHolderHole[] {
-  const faces = document.derived.bodyRepresentations[bodyId]?.topology?.faces ?? [];
+  const faces =
+    ownEntry(document.derived.bodyRepresentations, bodyId)?.topology?.faces ??
+    [];
   return faces.flatMap((face) => {
     const geometry = face.geometry;
     if (
@@ -67,7 +73,9 @@ function endHoles(
     // Only the bore that survives this side's carve.
     const along = Math.max(geometry.axisStart[axis], geometry.axisEnd[axis]);
     const alongMin = Math.min(geometry.axisStart[axis], geometry.axisEnd[axis]);
-    if (side === 'negative' ? along > cut + TOLERANCE : alongMin < cut - TOLERANCE)
+    if (
+      side === 'negative' ? along > cut + TOLERANCE : alongMin < cut - TOLERANCE
+    )
       return [];
     const direction = {
       x: geometry.axisEnd.x - geometry.axisStart.x,
@@ -109,8 +117,12 @@ function mirrored(
   const [p0, p1] = orderedEnds(positive);
   const others = AXES.filter((other) => other !== axis);
   const sameAcross = (a: Vector3, b: Vector3) =>
-    near(a[axis] + b[axis], 2 * center) && others.every((o) => near(a[o], b[o]));
-  return (sameAcross(n0, p0) && sameAcross(n1, p1)) || (sameAcross(n0, p1) && sameAcross(n1, p0));
+    near(a[axis] + b[axis], 2 * center) &&
+    others.every((o) => near(a[o], b[o]));
+  return (
+    (sameAcross(n0, p0) && sameAcross(n1, p1)) ||
+    (sameAcross(n0, p1) && sameAcross(n1, p0))
+  );
 }
 
 /**
@@ -143,22 +155,30 @@ export function matchGrowingHolderHoles(
   if (!negatives.length || !positives.length)
     return {
       status: 'unsupported',
-      reason: 'No through bore perpendicular to the opening was measured on both ends.'
+      reason:
+        'No through bore perpendicular to the opening was measured on both ends.'
     };
   const pairs: GrowingHolderHolePair[] = [];
   for (const negative of negatives)
     for (const positive of positives)
       if (mirrored(negative, positive, axis, center))
-        pairs.push({ history, negative, positive, diameter: negative.sourceDiameter });
+        pairs.push({
+          history,
+          negative,
+          positive,
+          diameter: negative.sourceDiameter
+        });
   if (!pairs.length)
     return {
       status: 'unsupported',
-      reason: 'The through bores on the two ends are not mirror images of each other.'
+      reason:
+        'The through bores on the two ends are not mirror images of each other.'
     };
   if (pairs.length > 1)
     return {
       status: 'ambiguous',
-      reason: 'More than one mirrored pair of bores was found; select the intended pair.',
+      reason:
+        'More than one mirrored pair of bores was found; select the intended pair.',
       pairs
     };
   return { status: 'matched', pair: pairs[0]! };
@@ -278,8 +298,8 @@ export function createGrowingHolderHoleProposal(
 ): CadPatchProposal | null {
   const histories = growingHolderHistories(document).filter(
     (history) =>
-      !document.derived.bodyRepresentations[history.resultBodyId]?.consumed &&
-      growingHolderHoleControls(document, history).length === 0
+      !ownEntry(document.derived.bodyRepresentations, history.resultBodyId)
+        ?.consumed && growingHolderHoleControls(document, history).length === 0
   );
   const history =
     selection.bodyIds.length === 1
@@ -293,8 +313,8 @@ export function createGrowingHolderHoleProposal(
   const { pair } = match;
   const units = document.units;
   const holderName =
-    document.derived.bodyRepresentations[history.resultBodyId]?.name ??
-    history.recipe.name;
+    ownEntry(document.derived.bodyRepresentations, history.resultBodyId)
+      ?.name ?? history.recipe.name;
   return {
     proposalId: `verified_growing_holder_holes_${history.resultBodyId}`,
     summary: `The two ${millimetres(pair.diameter, units)} mounting bores of ${holderName} will become the editable parameter ${GROWING_HOLDER_HOLE_PARAMETER}. Each bore is resized on its own end before the ends move, so both stay aligned with their arms at every opening; the larger countersink keeps its diameter.`,

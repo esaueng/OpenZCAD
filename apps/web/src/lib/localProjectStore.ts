@@ -4,6 +4,7 @@ import {
   isPurgeDue,
   MAX_LOCAL_CHECKPOINT_DOCUMENTS,
   MAX_PROJECT_CHECKPOINTS,
+  persistedDocumentBytes,
   PROJECT_DOCUMENT_SCHEMA_VERSION,
   type ArtifactId,
   type ImportedSourceReference,
@@ -14,9 +15,11 @@ import {
   type RevisionId
 } from '@openzcad/shared';
 import {
+  reservedDocumentIdentifierError,
   withoutDerivedProjection,
   normalizeDocument,
-  repairLegacyBracketModel
+  repairLegacyBracketModel,
+  UnstorableDocumentError
 } from '@openzcad/document-core';
 import type { StoredMeasurementRecord } from './measurementRecord';
 import type { SourceBlobClaim } from './sourceBlobClaims';
@@ -944,7 +947,11 @@ export function summarizeProjectDocument(
     lastRevisionId: document.revisions.at(-1)?.revisionId,
     updatedAt: document.derived.updatedAt,
     revisionCount: document.checkpoints.length,
-    documentVersion: document.version
+    documentVersion: document.version,
+    // Measured as the account measures it, so a synced project reads the
+    // same size from either store. Earlier projections lack it until the
+    // project is next saved; the shelf shows those as unmeasured.
+    documentBytes: persistedDocumentBytes(withoutDerivedProjection(document))
   };
 }
 
@@ -1015,6 +1022,7 @@ export function saveLocalProject(document: ProjectDocument): Promise<void> {
     'readwrite',
     [STORE_NAME, SUMMARY_STORE_NAME, CHECKPOINT_STORE_NAME, ALIAS_STORE_NAME],
     async (store) => {
+      assertSafeLocalDocument(document, 'saved');
       await assertCurrentProjectId(store(ALIAS_STORE_NAME), document.projectId);
       store(STORE_NAME).put(document);
       store(SUMMARY_STORE_NAME).put(summarizeProjectDocument(document));
@@ -1061,6 +1069,7 @@ export function saveLocalSaveStates(
     [CHECKPOINT_STORE_NAME, ALIAS_STORE_NAME],
     async (store) => {
       for (const document of documents) {
+        assertSafeLocalDocument(document, 'saved');
         await assertCurrentProjectId(
           store(ALIAS_STORE_NAME),
           document.projectId
@@ -1178,6 +1187,28 @@ export function checkpointKeyRange(projectId: string): IDBKeyRange {
  * this store has none of its older save states here at all. The caller falls
  * back to the account copy.
  */
+/**
+ * Refuses a device copy that uses a reserved name (`__proto__`,
+ * `constructor`, …) as a key, id or selector, where map lookups would reach
+ * inherited members. Every document this store reads or writes passes it, so
+ * a damaged or forged copy is never published to the app. Opening one fails
+ * with this message; the shelf lists projects from their summaries, so the
+ * rest of it still loads.
+ */
+function assertSafeLocalDocument(
+  document: unknown,
+  action: 'opened' | 'saved'
+): void {
+  const reason =
+    typeof document === 'object' && document !== null
+      ? reservedDocumentIdentifierError(document)
+      : 'The project document must be an object.';
+  if (reason)
+    throw new UnstorableDocumentError(
+      `This project on this device cannot be ${action}: ${reason}`
+    );
+}
+
 export function loadLocalSaveState(
   projectId: string,
   checkpointId: string
@@ -1190,7 +1221,11 @@ export function loadLocalSaveState(
       store.get([projectId, checkpointId]) as IDBRequest<
         ProjectCheckpointDocumentRecord | undefined
       >
-  ).then((record) => record?.document ?? null);
+  ).then((record) => {
+    if (!record?.document) return null;
+    assertSafeLocalDocument(record.document, 'opened');
+    return record.document;
+  });
 }
 
 /**
@@ -1276,7 +1311,11 @@ export function loadLocalProject(
     STORE_NAME,
     (store, projectId) =>
       store.get(projectId) as IDBRequest<ProjectDocument | undefined>
-  ).then((document) => document ?? null);
+  ).then((document) => {
+    if (!document) return null;
+    assertSafeLocalDocument(document, 'opened');
+    return document;
+  });
 }
 
 /**
@@ -2319,6 +2358,9 @@ export async function saveImportedProject(
     ],
     async (store) => {
       const document = backup.document;
+      assertSafeLocalDocument(document, 'saved');
+      for (const state of backup.saveStates ?? [])
+        assertSafeLocalDocument(state.document, 'saved');
       await assertCurrentProjectId(store(ALIAS_STORE_NAME), document.projectId);
       if (await settled(store(STORE_NAME).count(document.projectId)))
         throw new Error('Imported project already exists.');
