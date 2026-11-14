@@ -137,7 +137,6 @@ type ProjectThumbnailSyncState = readonly [
       artifactId?: ArtifactId;
       version: number;
       updatedAt: string;
-      supersededArtifactIds?: ArtifactId[];
     }
   ) => Promise<void>
 ];

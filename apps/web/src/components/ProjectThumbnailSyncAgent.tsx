@@ -28,7 +28,6 @@ interface ProjectThumbnailSyncAgentProps {
       artifactId?: ArtifactId;
       version: number;
       updatedAt: string;
-      supersededArtifactIds?: ArtifactId[];
     }
   ): Promise<void>;
   /** Injected by tests; the app stages into the shared instance. */
@@ -66,7 +65,6 @@ export function ProjectThumbnailSyncAgent({
         return;
       }
       const source = captured.source;
-      const supersededArtifactIds = captured.supersededArtifactIds;
       // Deliberately not cancelled on unmount: the leave flush notifies while
       // this agent is still mounted and the upload must outlive it. The
       // record is keyed by version, so a late write cannot mislabel anything.
@@ -77,13 +75,7 @@ export function ProjectThumbnailSyncAgent({
         source
       })
         .then((artifactId) =>
-          saveThumbnail(projectId, {
-            source,
-            artifactId,
-            version,
-            updatedAt,
-            ...(supersededArtifactIds ? { supersededArtifactIds } : {})
-          })
+          saveThumbnail(projectId, { source, artifactId, version, updatedAt })
         )
         .catch(() => undefined);
     });

@@ -108,18 +108,6 @@ export function cachedThumbnailSource(
   if (!cached) {
     return undefined;
   }
-  // The workspace uploads each card as it leaves, so a listing fetched while
-  // that upload finalized still names the card it replaced. Downloading that
-  // spent a round trip to put the previous card back on the tile. Only an
-  // artifact this record is known to have replaced counts: equal document
-  // versions do not, because two devices can each make their own version 9.
-  if (
-    cached.source &&
-    project.thumbnailArtifactId &&
-    cached.supersededArtifactIds?.includes(project.thumbnailArtifactId)
-  ) {
-    return cached.source;
-  }
   if (
     project.thumbnailArtifactId &&
     cached.artifactId !== project.thumbnailArtifactId &&

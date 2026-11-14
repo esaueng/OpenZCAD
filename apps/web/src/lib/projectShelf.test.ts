@@ -219,38 +219,19 @@ describe('cachedThumbnailSource', () => {
       )
     ).toBeUndefined();
   });
+});
 
-  it('keeps the device card while the listing still names the card it replaced', () => {
-    // Leaving the workspace writes the card and uploads it; a listing fetched
-    // while that upload finalized still names the previous artifact.
-    expect(
-      cachedThumbnailSource(
-        {
-          ...record('data:image/webp;base64,FRESH', LISTED),
-          version: 9,
-          artifactId: toArtifactId('artifact_just_uploaded'),
-          supersededArtifactIds: [toArtifactId('artifact_replaced')]
-        },
-        {
-          ...summary(LISTED),
-          documentVersion: 9,
-          thumbnailArtifactId: toArtifactId('artifact_replaced')
-        }
-      )
-    ).toBe('data:image/webp;base64,FRESH');
-  });
-
+describe('cachedThumbnailSource across devices', () => {
   it("fetches another device's card at the same version number", () => {
-    // Two devices each turned version 8 into their own version 9, and this
-    // one then took the account's. Equal versions say nothing about which
-    // card is current, so the account image is fetched.
+    // Two devices can each turn version 8 into their own version 9. Equal
+    // versions say nothing about which card is current, so a listing naming
+    // an artifact this record does not carry is fetched.
     expect(
       cachedThumbnailSource(
         {
           ...record('data:image/webp;base64,MINE', LISTED),
           version: 9,
-          artifactId: toArtifactId('artifact_mine'),
-          supersededArtifactIds: [toArtifactId('artifact_v8')]
+          artifactId: toArtifactId('artifact_mine')
         },
         {
           ...summary(LISTED),

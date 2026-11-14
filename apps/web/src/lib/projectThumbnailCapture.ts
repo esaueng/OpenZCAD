@@ -13,8 +13,6 @@ import { thumbnailRecordDescribes } from './projectShelf';
  * up sooner, and a leave more often finds the card already written.
  */
 const DEFAULT_IDLE_MS = 2000;
-/** Enough to outlast a listing a few refreshes behind; records stay small. */
-const MAX_SUPERSEDED_ARTIFACTS = 8;
 
 export interface StagedThumbnail {
   projectId: ProjectId;
@@ -31,8 +29,6 @@ export interface CapturedThumbnail {
   source: string | null;
   /** Present when the record this capture settled on was already published. */
   artifactId?: ArtifactId;
-  /** Account cards this capture replaced; carried onto its published record. */
-  supersededArtifactIds?: ArtifactId[];
 }
 
 export interface ThumbnailCaptureHost {
@@ -46,12 +42,7 @@ export interface ThumbnailCaptureHost {
   load(projectId: string): Promise<ProjectThumbnailRecord | null>;
   save(
     projectId: string,
-    thumbnail: {
-      source: string | null;
-      version: number;
-      updatedAt: string;
-      supersededArtifactIds?: ArtifactId[];
-    }
+    thumbnail: { source: string | null; version: number; updatedAt: string }
   ): Promise<void>;
   /**
    * Serialises renders. Browsers keep WebGL contexts alive for a while after
@@ -185,22 +176,11 @@ export function createThumbnailCapture(
       // unwritten so the next flush tries once more.
       return;
     }
-    // The record being replaced, and whatever it had replaced, is older than
-    // this one. Kept so a listing still naming one of those artifacts is
-    // recognised as behind this device rather than as a newer account card.
-    const superseded = [
-      ...(cached?.artifactId ? [cached.artifactId] : []),
-      ...(cached?.supersededArtifactIds ?? [])
-    ]
-      .filter((id, index, all) => all.indexOf(id) === index)
-      .slice(0, MAX_SUPERSEDED_ARTIFACTS);
-    const supersededArtifactIds = superseded.length ? superseded : undefined;
     try {
       await host.save(entry.projectId, {
         source,
         version: entry.version,
-        updatedAt: entry.updatedAt,
-        ...(supersededArtifactIds ? { supersededArtifactIds } : {})
+        updatedAt: entry.updatedAt
       });
     } catch {
       return;
@@ -210,8 +190,7 @@ export function createThumbnailCapture(
       projectId: entry.projectId,
       version: entry.version,
       updatedAt: entry.updatedAt,
-      source,
-      ...(supersededArtifactIds ? { supersededArtifactIds } : {})
+      source
     });
   }
 

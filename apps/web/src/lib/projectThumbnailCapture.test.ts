@@ -47,35 +47,6 @@ function staged(
 afterEach(() => vi.useRealTimers());
 
 describe('createThumbnailCapture', () => {
-  it('records the published card it replaces, and the ones that card replaced', async () => {
-    const h = host({
-      load: vi.fn<ThumbnailCaptureHost['load']>().mockResolvedValue({
-        projectId: PROJECT,
-        source: 'data:image/webp;base64,OLD',
-        version: 2,
-        updatedAt: '2026-09-04T21:00:02.000Z',
-        artifactId: toArtifactId('artifact_v2'),
-        supersededArtifactIds: [toArtifactId('artifact_v1')]
-      })
-    });
-    const capture = createThumbnailCapture({ idleMs: 0 });
-    const captured = vi.fn();
-    capture.subscribe(captured);
-    capture.stage(staged(3), h);
-    await capture.flush();
-    const superseded = [
-      toArtifactId('artifact_v2'),
-      toArtifactId('artifact_v1')
-    ];
-    expect(h.save).toHaveBeenCalledWith(
-      PROJECT,
-      expect.objectContaining({ version: 3, supersededArtifactIds: superseded })
-    );
-    expect(captured).toHaveBeenCalledWith(
-      expect.objectContaining({ version: 3, supersededArtifactIds: superseded })
-    );
-  });
-
   it('captures a part left alone for two seconds by default', async () => {
     vi.useFakeTimers();
     const capture = createThumbnailCapture();
