@@ -33,6 +33,8 @@ OBJECT_COLUMNS = {
     # Transient work is retained in SQL but is not a committed object.
     'upload_sessions': {'object_key'},
     'artifact_mesh_discards': {'object_key'},
+    # Migration 0050: a cleanup's claim on a key it is deleting.
+    'r2_key_tombstones': {'object_key'},
 }
 
 
@@ -101,8 +103,8 @@ def load_sql(data: bytes):
         raise SnapshotError('SQL export is invalid or uses unsupported operations.') from None
 
 
-# Migrations above 0049 reviewed one by one (other numbers are still in review).
-REVIEWED_AFTER_0049 = frozenset({53})
+# Migrations above 0050 reviewed one by one (other numbers are still in review).
+REVIEWED_AFTER_0050 = frozenset({53})
 
 
 def required_objects(db):
@@ -116,9 +118,11 @@ def required_objects(db):
     # 0048 adds only e2ee_mls_commits.sender_signature: no stored objects or keys.
     # 0049 adds only e2ee_invitations.acceptance_statement and
     # acceptance_signature (signed public statements): no stored objects or keys.
+    # 0050 adds r2_key_tombstones: transient claims on keys a cleanup is
+    # deleting, never objects a restore needs.
     # 0053 adds only e2ee_project_migrations.attempt (a counter) and the trigger
-    # that moves it on: no stored objects or keys. 0050-0052 are not reviewed.
-    if any(int(name[:4]) > 49 and int(name[:4]) not in REVIEWED_AFTER_0049
+    # that moves it on: no stored objects or keys. 0051-0052 are not reviewed.
+    if any(int(name[:4]) > 50 and int(name[:4]) not in REVIEWED_AFTER_0050
            for name in migrations):
         raise SnapshotError('Review new migrations before using this snapshot tool.')
     version = max(int(name[:4]) for name in migrations)

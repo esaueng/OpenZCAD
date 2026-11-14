@@ -4,6 +4,12 @@ import {
   persistStorageForInstalledApp
 } from './lib/appleTouch';
 import { registerOfflineShell } from './lib/offlineShell';
+import { spaceMouse } from './lib/spaceMouse';
+import {
+  dispatchEmulatedKey,
+  spaceMouseAction,
+  type SpaceMouseAction
+} from './lib/spaceMouseActions';
 import {
   localHistoryAppend,
   retainLocalHistoryAppend,
@@ -457,6 +463,7 @@ import {
   sourceUploadMessage
 } from './lib/accountImportSources';
 import type { ArchiveArtifactInput } from './lib/archiveArtifact';
+import { cloudArchivable } from './lib/cloudArchivable';
 import {
   archiveLocalOnlyImportSources,
   createInFlightImportChecksums,
@@ -757,7 +764,9 @@ import {
   isRemovableDetail,
   selectedFeatureFaces
 } from './lib/selectionFeature';
+import { heldFaceSetBody, toggleFaceInSet } from './lib/faceSetSelection';
 import { cylinderResizeFold } from './lib/interaction/cylinderResizeFold';
+import { facePickCylinder, facePickKey } from './lib/inPlace/cylinderSide';
 import {
   cylinderRadialFrame,
   type CylinderRadiusEdit,
@@ -882,7 +891,11 @@ import {
   type SelectionCalloutOperation,
   type SelectionCalloutVerbId
 } from './lib/selectionCallout';
-import { ghostBodiesFor, historyFeatureFocus } from './lib/historyFocus';
+import {
+  ghostBodiesFor,
+  historyFeatureFocus,
+  isCutFace
+} from './lib/historyFocus';
 import { useLocalAutoFrame } from './hooks/useLocalAutoFrame';
 import type { AutoFrameRequest } from './lib/autoFrame';
 import { useOffsetFaceHandle } from './hooks/useOffsetFaceHandle';
@@ -3109,6 +3122,10 @@ export function App() {
     selectedEdges.length === 0
       ? boxFaces.faces
       : null;
+  /** The faces a Shift pick adds to: a swept or Shift-built set, or one face. */
+  const heldFaces =
+    boxSelectedFaces ??
+    (selectedTopology?.kind === 'face' ? [selectedTopology] : null);
   const [selectedSketchProfileId, setSelectedSketchProfileId] =
     useState<SketchId | null>(null);
   const [selectedProfiles, setSelectedProfiles] = useState<RegionPickData[]>(
@@ -3889,6 +3906,60 @@ export function App() {
     []
   );
   const [fitSignal, setFitSignal] = useState(0);
+  // A 3D mouse this browser already allows reopens with no prompt. Its keys
+  // run the same commands as the keyboard (spaceMouseActions.ts); the roll
+  // key turns the camera, so the viewer answers that one.
+  const spaceMouseActionRef = useRef<(action: SpaceMouseAction) => void>(
+    () => undefined
+  );
+  spaceMouseActionRef.current = (action) => {
+    switch (action.kind) {
+      case 'menu':
+        openSettingsAt('controls');
+        return;
+      case 'fit':
+        setFitSignal((value) => value + 1);
+        return;
+      case 'view':
+        requestView(action.view);
+        return;
+      case 'normal-to-face':
+        requestNormalToSelectedFace();
+        return;
+      case 'projection':
+        toggleProjection();
+        return;
+      case 'display':
+        cycleDisplayMode();
+        return;
+      case 'rotation-lock':
+        setStatus(
+          spaceMouse.isRotationLocked
+            ? '3D mouse rotation locked: pan and zoom only.'
+            : '3D mouse rotation unlocked.',
+          { unlogged: true }
+        );
+        return;
+      case 'key':
+        dispatchEmulatedKey(action.key, action.pressed);
+        return;
+      case 'roll':
+        return;
+    }
+  };
+  // The 3D mouse reads the cap with the account's own settings, applied at
+  // once to a cap that is held.
+  const spaceMouseSettings = appSettings.viewport.spaceMouse;
+  useEffect(() => {
+    spaceMouse.setPreferences(spaceMouseSettings);
+  }, [spaceMouseSettings]);
+  useEffect(() => {
+    void spaceMouse.restore();
+    return spaceMouse.subscribeButtons((event) => {
+      const action = spaceMouseAction(event);
+      if (action) spaceMouseActionRef.current(action);
+    });
+  }, []);
   const [presentedGeometry, setPresentedGeometry] = useState<{
     projectId: string;
     generation: number;
@@ -11107,6 +11178,11 @@ export function App() {
     }
     if (!face) return null;
     const geometry = face.geometry;
+    const cylinder = facePickCylinder(
+      geometry,
+      representations[resolvedBodyId]?.mesh,
+      face
+    );
     return {
       bodyId: resolvedBodyId,
       hash: face.hash,
@@ -11117,18 +11193,7 @@ export function App() {
       ...(geometry?.normal ? { normal: geometry.normal } : {}),
       ...(geometry?.centroid ? { centroid: geometry.centroid } : {}),
       ...(geometry?.center ? { center: geometry.center } : {}),
-      ...(geometry?.surfaceType === 'cylinder' &&
-      geometry.axisStart &&
-      geometry.axisEnd &&
-      geometry.radius !== undefined
-        ? {
-            cylinder: {
-              axisStart: geometry.axisStart,
-              axisEnd: geometry.axisEnd,
-              radius: geometry.radius
-            }
-          }
-        : {}),
+      ...(cylinder ? { cylinder } : {}),
       ...(point ? { point } : {})
     };
   }
@@ -16504,7 +16569,13 @@ export function App() {
     // Local-first imports/exports keep their bytes on this device. A protected
     // upload cannot succeed before this project has an account copy, and its
     // failed request would add a console error to an otherwise valid import.
-    if (!sessionRef.current || !remoteVersionsRef.current.has(doc.projectId)) {
+    if (
+      !cloudArchivable(
+        Boolean(sessionRef.current),
+        doc.projectId,
+        remoteVersionsRef.current
+      )
+    ) {
       throw new Error(
         'Cloud archival needs an account project. The file stays on this device.'
       );
@@ -18894,6 +18965,40 @@ export function App() {
     ) {
       setSelectedTopology(selection);
       return;
+    }
+    // Shift on another face of the body whose face is selected adds it to a
+    // face set (Shift on a held face takes it back out), the set a box sweep
+    // with the Face filter makes: Delete removes the set and heals the body.
+    // Shift on a face of another body keeps selecting bodies, as before.
+    if (
+      additive &&
+      selection.kind === 'face' &&
+      tool === null &&
+      interaction.mode !== 'sketch'
+    ) {
+      const held = heldFaces;
+      if (held && heldFaceSetBody(held) === selection.bodyId) {
+        const next = toggleFaceInSet(held, selection);
+        if (next.length === 0) {
+          clearSelection();
+          return;
+        }
+        if (interaction.mode !== 'idle') {
+          dispatchInteraction({ type: 'clear' });
+        }
+        const bodyIds = [selection.bodyId];
+        setSelectedEdges([]);
+        setSelectedTopology(null);
+        setSelectedBodyIds(bodyIds);
+        setBoxFaces({ bodyIds, faces: next });
+        inferFeatureNodeFor(selection.bodyId);
+        setStatus(
+          next.length === 1
+            ? '1 face selected.'
+            : `${next.length} faces selected · Delete removes them and closes the gap.`
+        );
+        return;
+      }
     }
     // Sketch entry: with the Sketch tool armed, a planar face click starts a
     // face-attached sketch instead of arming the offset handle.
@@ -24297,15 +24402,7 @@ export function App() {
     // hash, its plane, a saved hole's place on it), so its handles follow
     // a face an update moved.
     let facesMoved = false;
-    const placed = (pick: FacePick) =>
-      JSON.stringify([
-        pick.hash,
-        pick.topologyId,
-        pick.normal,
-        pick.centroid,
-        pick.center,
-        pick.point
-      ]);
+    const placed = facePickKey;
     const faces = inPlaceEditPicks.faces.flatMap((pick) => {
       const body = representations[pick.bodyId];
       if (!body?.topology) return [pick];
@@ -28021,7 +28118,15 @@ export function App() {
     });
   }
 
-  function handleDeleteImportedFace(selection: TopologySelection) {
+  /**
+   * Heals one face by a replayable direct edit: a face of an imported STEP
+   * part, which has no history to delete, or a face a subtract cut, whose
+   * inferred feature (the cutting tool) the cut still needs.
+   */
+  function handleDeleteImportedFace(
+    selection: TopologySelection,
+    origin: 'imported' | 'cut' = 'imported'
+  ) {
     // A pick may demand lineage while a complete validated body is already
     // displayed. The candidate rebuild re-resolves its face before healing.
     if (!requireDisplayedGeometryComplete()) return;
@@ -28029,7 +28134,7 @@ export function App() {
     const base = manager?.document;
     if (!base) return;
     void import('./lib/featureDeletion')
-      .then(({ importedFaceDeletion }) => {
+      .then(({ importedFaceDeletion, cutFaceDeletion }) => {
         const current = manager.document;
         if (
           managerRef.current !== manager ||
@@ -28041,11 +28146,17 @@ export function App() {
           );
           return;
         }
-        const removal = importedFaceDeletion(current, selection);
+        const removal =
+          origin === 'cut'
+            ? cutFaceDeletion(current, selection)
+            : importedFaceDeletion(current, selection);
         void validatedFeature.runTransaction([removal.command], {
           label: removal.command.label,
           targets: [removal.target],
-          validatingMessage: 'Checking imported feature removal…',
+          validatingMessage:
+            origin === 'cut'
+              ? 'Checking the cut removal…'
+              : 'Checking imported feature removal…',
           successMessage: removal.successMessage,
           onFailure: (message) => announce(message),
           onSuccess: () => {
@@ -28059,8 +28170,58 @@ export function App() {
       })
       .catch((error: unknown) =>
         setStatus(
-          errorMessage(error, 'Could not remove this imported feature.')
+          errorMessage(
+            error,
+            origin === 'cut'
+              ? 'Could not fill this cut.'
+              : 'Could not remove this imported feature.'
+          )
         )
+      );
+  }
+
+  /**
+   * Several faces of one body, picked with Shift or swept with a box: delete
+   * them together and heal the body, so every wall of a window or pocket
+   * deleted at once fills it. A replayable, undoable direct edit.
+   */
+  function handleDeleteFaces(selections: readonly TopologySelection[]) {
+    if (!requireDisplayedGeometryComplete()) return;
+    const manager = managerRef.current;
+    const base = manager?.document;
+    if (!base) return;
+    const faces = selections.map((selection) => ({ ...selection }));
+    void import('./lib/featureDeletion')
+      .then(({ faceSetDeletion }) => {
+        const current = manager.document;
+        if (
+          managerRef.current !== manager ||
+          current.projectId !== base.projectId ||
+          current.version !== base.version
+        ) {
+          setStatus(
+            'The model changed. Select the faces again before deleting them.'
+          );
+          return;
+        }
+        const removal = faceSetDeletion(current, faces);
+        void validatedFeature.runTransaction([removal.command], {
+          label: removal.command.label,
+          targets: [removal.target],
+          validatingMessage: `Checking the removal of ${faces.length} faces…`,
+          successMessage: removal.successMessage,
+          onFailure: (message) => announce(message),
+          onSuccess: () => {
+            clearSelection();
+            announce(removal.successMessage, {
+              label: 'Undo',
+              run: handleUndo
+            });
+          }
+        });
+      })
+      .catch((error: unknown) =>
+        setStatus(errorMessage(error, 'Could not delete these faces.'))
       );
   }
 
@@ -30460,6 +30621,31 @@ export function App() {
             }
             return;
           }
+          // Several faces picked together are deleted together and healed,
+          // whatever built the body: every wall of a window closes it.
+          if (
+            featureSelectionSource !== 'pinned' &&
+            boxSelectedFaces &&
+            boxSelectedFaces.length > 1
+          ) {
+            event.preventDefault();
+            if (new Set(boxSelectedFaces.map((face) => face.bodyId)).size > 1) {
+              setStatus(
+                'Faces on different bodies cannot be deleted together. Select faces on one body.'
+              );
+              return;
+            }
+            if (
+              !(
+                isOperationState(interaction) &&
+                interaction.phase !== 'armed' &&
+                interaction.phase !== 'failed'
+              ) &&
+              validateSelectionEdit({ acceptCompleteCommit: true })
+            )
+              handleDeleteFaces(boxSelectedFaces);
+            return;
+          }
           // A STEP face is healed by a replayable direct edit. Its import
           // history row is never deleted by a viewport face pick.
           if (
@@ -30481,6 +30667,27 @@ export function App() {
               validateSelectionEdit({ acceptCompleteCommit: true })
             )
               handleDeleteImportedFace(selectedTopology);
+            return;
+          }
+          // A face a subtract cut — the wall of a round hole — is healed in
+          // place. The feature it is inferred to is the cutting tool, and
+          // deleting that would leave the subtract with nothing to cut.
+          if (
+            featureSelectionSource !== 'pinned' &&
+            selectedTopology?.kind === 'face' &&
+            doc &&
+            isCutFace(doc, selectedTopology)
+          ) {
+            event.preventDefault();
+            if (
+              !(
+                isOperationState(interaction) &&
+                interaction.phase !== 'armed' &&
+                interaction.phase !== 'failed'
+              ) &&
+              validateSelectionEdit({ acceptCompleteCommit: true })
+            )
+              handleDeleteImportedFace(selectedTopology, 'cut');
             return;
           }
           // A drag or a commit still in flight owns the selection; Delete
@@ -33355,6 +33562,11 @@ export function App() {
                 }
               : {})}
             facePickOnly={toFacePick !== null}
+            faceSetPickBodyId={
+              tool === null && interaction.mode !== 'sketch'
+                ? heldFaceSetBody(heldFaces)
+                : null
+            }
             modeOverlay={
               modelingLocked ? (
                 <>
@@ -34354,7 +34566,18 @@ export function App() {
                   run={importRun}
                   onCancel={cancelImportRun}
                   onDismiss={dismissImportRun}
-                  onArchiveNow={archiveImportSourcesFromCard}
+                  // The same test archiveArtifact applies: signed out, or
+                  // signed in with a device-only project, the upload can
+                  // only fail (I8), so there is no Archive now.
+                  onArchiveNow={
+                    cloudArchivable(
+                      Boolean(session),
+                      doc.projectId,
+                      remoteVersionsRef.current
+                    )
+                      ? archiveImportSourcesFromCard
+                      : undefined
+                  }
                 />
               </Suspense>
             )}

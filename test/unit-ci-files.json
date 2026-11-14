@@ -157,7 +157,9 @@
     "test/project-diagnostics.test.ts",
     "test/project-sharing.test.ts",
     "test/recovery-snapshot.test.ts",
+    "test/redact-path.test.ts",
     "test/refusal-reproduction.test.ts",
+    "test/remus-artifacts.test.ts",
     "test/remus-owned-mesh.test.ts",
     "test/remus-wasm-load-baseline.test.ts",
     "test/retained-fillet-package.test.ts",
@@ -185,6 +187,7 @@
     "test/synthetic-holder-fixtures.test.ts",
     "test/test-tools.test.ts",
     "test/thread-feature.test.ts",
+    "test/thread-pipe-runout.test.ts",
     "test/three-box-union-grouping.test.ts",
     "test/through-hole-chamfer-resize.test.ts",
     "test/trusted-pr-policy.test.ts",
@@ -193,7 +196,8 @@
     "test/unit-runtime-budget.test.ts",
     "test/unit-suites.test.ts",
     "test/kernel-session-snapshot.test.ts",
-    "test/glimpse-census.test.ts"
+    "test/glimpse-census.test.ts",
+    "test/worker-public-request-limits.test.ts"
   ],
   "web": [
     "src/components/DrawingWorkspace.test.tsx",

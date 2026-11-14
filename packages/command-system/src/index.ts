@@ -46,6 +46,8 @@ export {
   type OpeningAxis
 } from './growing-holder';
 import {
+  PIPE_THREAD_SIZES,
+  isPipeThreadSize,
   createId,
   createSketchReferenceAnnotationId,
   createSketchCompositeId,
@@ -916,17 +918,19 @@ function validateExtrudeInput(
 }
 
 function validateDirectEditReference(input: DirectEditInput): void {
-  const reference = input.operation.faceReference;
-  if (!reference) {
-    return;
-  }
-  if (
-    reference.kind !== 'face' ||
-    reference.currentHash !== input.operation.faceHash
-  ) {
-    throw new Error(
-      'The direct-edit face reference does not match its legacy face hash.'
-    );
+  const faces: { faceHash: number; faceReference?: { kind: string; currentHash: number } }[] = [
+    input.operation,
+    ...(input.operation.kind === 'remove-faces'
+      ? input.operation.additionalFaces
+      : [])
+  ];
+  for (const { faceHash, faceReference: reference } of faces) {
+    if (!reference) continue;
+    if (reference.kind !== 'face' || reference.currentHash !== faceHash) {
+      throw new Error(
+        'The direct-edit face reference does not match its legacy face hash.'
+      );
+    }
   }
 }
 
@@ -1201,6 +1205,49 @@ function validateThreadInput(
       'Thread chamfer angle must be strictly between 0 and 90 degrees.'
     );
   }
+  // Schema v57: an end takes a chamfer or a runout, not both.
+  for (const [end, chamfered, runout] of [
+    ['start', input.chamferStart, input.runoutStart],
+    ['end', input.chamferEnd, input.runoutEnd]
+  ] as const) {
+    if (chamfered && runout) {
+      throw new Error(
+        `A thread's ${end} takes a chamfer or a runout, not both.`
+      );
+    }
+  }
+  const pipe = input.profile === 'npt' || input.profile === 'bspt';
+  if (
+    !pipe &&
+    input.profile !== 'iso-metric' &&
+    input.profile !== 'printable' &&
+    input.profile !== 'custom'
+  ) {
+    throw new Error(`Unknown thread profile ${String(input.profile)}.`);
+  }
+  if (input.pipeSize !== undefined) {
+    if (!pipe) {
+      throw new Error('Only an NPT or BSPT pipe thread takes a pipe size.');
+    }
+    if (!isPipeThreadSize(input.pipeSize)) {
+      throw new Error(
+        `Pipe thread sizes are ${PIPE_THREAD_SIZES.join(', ')}; ${String(input.pipeSize)} is not one.`
+      );
+    }
+  }
+  if (pipe) {
+    // The pipe size sets the diameter and pitch, and the standard its form.
+    for (const [label, present] of [
+      ['diameter', input.majorDiameter],
+      ['pitch', input.pitch]
+    ] as const) {
+      if (present !== undefined) {
+        throw new Error(
+          `A pipe thread takes its ${label} from its pipe size; set the size instead.`
+        );
+      }
+    }
+  }
   const starts = value('starts', input.starts);
   if (
     starts !== undefined &&
@@ -1220,7 +1267,9 @@ function validateThreadInput(
     for (const [label, present] of custom) {
       if (present !== undefined) {
         throw new Error(
-          `Only a custom thread profile sets its ${label}; this one derives it from the pitch.`
+          pipe
+            ? `Only a custom thread profile sets its ${label}; a pipe thread takes its standard's.`
+            : `Only a custom thread profile sets its ${label}; this one derives it from the pitch.`
         );
       }
     }

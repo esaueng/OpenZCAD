@@ -6,6 +6,8 @@ import {
   spokenChipText
 } from '../lib/inPlace/chipNames';
 import type { FrameStatsSink } from '../lib/frameStats';
+import { spaceMouse } from '../lib/spaceMouse';
+import { spaceMouseAction } from '../lib/spaceMouseActions';
 import { ParameterPreviewController } from './viewer/parameterPreviewController';
 import {
   useEffect,
@@ -50,6 +52,7 @@ import { trackGpuLost } from '../lib/diagnosticSignal';
 import { InteractionShaderWarmup } from './viewer/interactionShaderWarmup';
 import { usePreparedBodies } from './viewer/usePreparedBodies';
 import { SelectionRecede } from './viewer/selectionRecede';
+import { facesAheadOfEdges } from './viewer/faceSetPick';
 import { releasePreparedBodyGeometry } from '../../../../packages/viewport/src/render/preparedBody';
 import { reportPresentedGeometry } from '../lib/startupReadiness';
 import { useWorkspaceFrameReady } from './WorkspaceLoading';
@@ -1392,6 +1395,12 @@ export interface ModelViewerProps {
    * a sketch region, ghost plane or datum drawn in front of it.
    */
   facePickOnly?: boolean;
+  /**
+   * The body whose faces the host holds as a face set, when a Shift pick
+   * adds to it. A Shift pick on that body then takes the face under the
+   * pointer ahead of its boundary edge (`facesAheadOfEdges`).
+   */
+  faceSetPickBodyId?: string | null;
   /** In-viewport sketch session; null when not sketching. */
   sketchMode: SketchModeState | null;
   /**
@@ -2222,6 +2231,29 @@ function suppressNextNativeContextMenu() {
 
 type ViewRequest = NonNullable<ModelViewerProps['viewRequest']>;
 
+/**
+ * What a 3D mouse turns the model about: the centre of the selected bodies,
+ * else of every visible body. Null (an empty scene) turns about the orbit
+ * target instead, as a drag does.
+ */
+function spaceMousePivot(
+  context: Pick<SceneContext, 'bodyGroup' | 'objectsByBodyId'> | null,
+  selectedBodyIds: readonly string[]
+): THREE.Vector3 | null {
+  if (!context) return null;
+  const box = new THREE.Box3();
+  for (const bodyId of selectedBodyIds) {
+    const object = context.objectsByBodyId.get(bodyId);
+    if (object?.visible) box.expandByObject(object);
+  }
+  if (box.isEmpty()) {
+    for (const child of context.bodyGroup.children) {
+      if (child.visible) box.expandByObject(child);
+    }
+  }
+  return box.isEmpty() ? null : box.getCenter(new THREE.Vector3());
+}
+
 function startRequestedView(
   context: SceneContext,
   request: ViewRequest,
@@ -2385,6 +2417,7 @@ export function ModelViewer({
   regionHandle,
   modelPanelsHidden = false,
   facePickOnly = false,
+  faceSetPickBodyId = null,
   sketchMode,
   sketchTextAnchorRef,
   onSketchCommit,
@@ -2484,6 +2517,8 @@ export function ModelViewer({
   onSelectTopologyRef.current = onSelectTopology;
   const facePickOnlyRef = useRef(facePickOnly);
   facePickOnlyRef.current = facePickOnly;
+  const faceSetPickBodyIdRef = useRef(faceSetPickBodyId);
+  faceSetPickBodyIdRef.current = faceSetPickBodyId;
   const topologyPicksHeldRef = useRef(topologyPicksHeld);
   topologyPicksHeldRef.current = topologyPicksHeld;
   const onSelectEdgeChainRef = useRef(onSelectEdgeChain);
@@ -2602,6 +2637,9 @@ export function ModelViewer({
   middleDragRef.current = settings.middleDrag;
   const orbitModeRef = useRef(settings.orbitMode);
   orbitModeRef.current = settings.orbitMode;
+  // A 3D mouse turns the model about the selection while there is one.
+  const spaceMouseSelectionRef = useRef(selectedBodyIds);
+  spaceMouseSelectionRef.current = selectedBodyIds;
   const pointerNavigationRef = useRef(settings.pointerNavigation);
   pointerNavigationRef.current = settings.pointerNavigation;
   const reportWorkspaceFrame = useWorkspaceFrameReady();
@@ -3189,7 +3227,11 @@ export function ModelViewer({
         write: writeWheelDeviceMemory
       },
       onWheelDeviceLearned: (device) =>
-        onWheelDeviceLearnedRef.current?.(device)
+        onWheelDeviceLearnedRef.current?.(device),
+      sixDofPivot: () =>
+        spaceMouse.rotateAbout === 'model'
+          ? spaceMousePivot(contextRef.current, spaceMouseSelectionRef.current)
+          : null
     });
     const camera = cameraRig.perspective;
     const orthographic = cameraRig.orthographic;
@@ -3199,6 +3241,16 @@ export function ModelViewer({
       end: () => cameraRig.endOrbitDrag()
     };
     orientationDragRef.current = orientationDragControls;
+    // A connected 3D mouse drives the camera directly; the rig keeps moving
+    // at the held rate frame by frame until the cap comes back to rest.
+    const stopSpaceMouseMotion = spaceMouse.subscribeMotion((axes) =>
+      cameraRig.setSixDofInput(axes)
+    );
+    // Its roll key turns the camera itself; the workspace runs the rest.
+    const stopSpaceMouseKeys = spaceMouse.subscribeButtons((event) => {
+      const action = spaceMouseAction(event);
+      if (action?.kind === 'roll') cameraRig.rollView(action.direction);
+    });
 
     // A dim sky/floor fill beside the environment; without an environment map
     // (E2E builds) it carries the ambient term on its own.
@@ -5443,6 +5495,17 @@ export function ModelViewer({
     }
 
     /**
+     * Everything under the pointer, with a held face set's face ahead of its
+     * edge when this pick adds to the set; otherwise `pickAll` as it is.
+     */
+    function shiftPickStack(event: PointerEvent | MouseEvent) {
+      const stack = picker.pickAll(event);
+      return addsToSelection(event)
+        ? facesAheadOfEdges(stack, faceSetPickBodyIdRef.current)
+        : stack;
+    }
+
+    /**
      * The ghost plane the pointer means (see preferredGhostHit), or null.
      * The callers weigh it against the model pick with ghostPlaneTakesPick:
      * it wins through faces, but not over edges, vertices, regions or a face
@@ -7196,7 +7259,7 @@ export function ModelViewer({
         ? picker
             .pickAll(event)
             .filter((candidate) => candidate.selection?.kind === 'face')
-        : picker.pickAll(event);
+        : shiftPickStack(event);
       const stepped = cycleDepthPick(
         stack,
         depthCycle,
@@ -7676,7 +7739,11 @@ export function ModelViewer({
       // would win (see ghostPlaneTakesPick): the click will start a sketch
       // on it, not select the face.
       const ghost = pickGhostPlane(event);
-      const solid = pick(event);
+      // Shift over a held face set's body shows the face the click will add.
+      const solid =
+        addsToSelection(event) && faceSetPickBodyIdRef.current
+          ? (shiftPickStack(event)[0] ?? null)
+          : pick(event);
       if (ghost && ghostPlaneTakesPick(ghost.distance, solid)) {
         planePickerRigRef.current?.setHover(ghost.plane);
         applyHover(null);
@@ -12280,6 +12347,8 @@ export function ModelViewer({
       // Camera glide first so controls and the ortho mirror see the result.
       const tweening = cameraRig.stepTween(now);
       const zooming = cameraRig.stepZoom(now);
+      // Ahead of the orbit step, which applies the turn and pan it queues.
+      const sixDofMoving = cameraRig.stepSixDof(now);
       const controlsChanged = cameraRig.stepOrbit(now);
       const dragEvent = pendingDragEvent;
       pendingDragEvent = null;
@@ -12734,6 +12803,7 @@ export function ModelViewer({
       const sceneAnimating =
         tweening ||
         zooming ||
+        sixDofMoving ||
         controlsChanged ||
         hoverAnimating ||
         cubeAnimating ||
@@ -12954,6 +13024,8 @@ export function ModelViewer({
       // scene-graph clear reaches.
       keyLight.dispose();
       clearGroup(axes); // the triad is three fat lines now, not one helper
+      stopSpaceMouseMotion();
+      stopSpaceMouseKeys();
       cameraRig.dispose();
       // Rigs still fading out have no render loop left to finish them.
       for (const rig of retiringRigsRef.current) {

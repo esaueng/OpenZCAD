@@ -138,6 +138,37 @@ test(
 );
 
 test(
+  'a hidden profile name and email are each a 44 px reveal target',
+  async ({ page }) => {
+    await stubApi(page);
+    await page.route('**/api/session', (route) =>
+      route.fulfill({
+        json: {
+          userId: 'user_touch',
+          displayName: 'Touch Person',
+          email: 'touch@example.com',
+          mode: 'email-code'
+        }
+      })
+    );
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Open settings' }).click();
+    await page.getByRole('button', { name: 'Account', exact: true }).click();
+    const reveal = page.locator('.setting-copy .private-text');
+    await expect(reveal).toHaveCount(2);
+    await expectTouchSized(
+      page,
+      'profile name and email',
+      '.setting-copy:has(.private-text)'
+    );
+    // Stacked, neither reaches over the other.
+    expect(overlaps(await box(reveal.first()), await box(reveal.last()))).toBe(
+      false
+    );
+  }
+);
+
+test(
   'every workspace control is a 44 px touch target in Build, View, Measure and Tweak',
   { tag: '@ci-smoke' },
   async ({ page }) => {
@@ -264,5 +295,64 @@ test(
     await expect(save).toBeVisible();
     await expect(save.locator('.topbar-menu-key')).toBeHidden();
     await expect(save).not.toContainText(/Ctrl|⌘/, { useInnerText: true });
+  }
+);
+
+test(
+  'a disabled command’s wrapped reason stays inside its own row on a phone',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    // An empty project: Export STEP and Export mesh are disabled with
+    // "Create a body before exporting.", which wraps to two lines at 390 px.
+    // The rows kept the list's 44 px track and that second line ran over
+    // the next command's name (13 November review recheck, I23).
+    await stubApi(page);
+    await createProject(page, 'Wrapped reasons');
+    await promptField(page).click();
+    await promptField(page).fill('ex');
+    const rows = page.locator('.palette-row');
+    await expect(
+      page.locator('.palette-row', { hasText: 'Create a body before' }).first()
+    ).toBeVisible();
+    const overflowing = await rows.evaluateAll((elements) =>
+      elements
+        .filter((element) => element.scrollHeight > element.clientHeight + 1)
+        .map((element) => element.textContent)
+    );
+    expect(overflowing, 'rows whose text runs past them').toEqual([]);
+  }
+);
+
+test(
+  'a touch tablet keeps each top-bar label inside its action',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    // Wide enough to label File and Settings, coarse enough for the 44 px
+    // rule: each action was held to exactly 44 px and drew its label over
+    // the next one (13 November review recheck, I1).
+    await page.setViewportSize({ width: 1366, height: 1024 });
+    await stubApi(page);
+    await createProject(page, 'Tablet labels');
+    const actions = page.locator(
+      '.topbar-actions > :is(button, .topbar-action), .topbar-actions .topbar-menu > summary'
+    );
+    await expect(actions.first()).toBeVisible();
+    await expect(
+      page.locator('.topbar-actions').getByText('Settings', { exact: true })
+    ).toBeVisible();
+    const cut = await actions.evaluateAll((elements) =>
+      elements
+        .filter(
+          (element) =>
+            element.getBoundingClientRect().width > 0 &&
+            element.scrollWidth > element.clientWidth + 1
+        )
+        .map((element) => element.textContent?.trim())
+    );
+    expect(cut, 'top-bar actions drawn past their box').toEqual([]);
+    for (const action of await actions.all()) {
+      if (!(await action.isVisible())) continue;
+      expect((await box(action)).width).toBeGreaterThanOrEqual(44);
+    }
   }
 );

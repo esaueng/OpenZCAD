@@ -99,6 +99,9 @@ import {
   isE2eeProjectGroupStorageReady,
   isE2eeProjectMigrationStorageReady,
   isE2eeProjectVersionStorageReady,
+  assertClaimedDeleteComplete,
+  claimObjectKeysForDelete,
+  ObjectKeyDeleteRetryError,
   isE2eeReverseStorageReady,
   isE2eeShareLinkStorageReady,
   isProjectStorageFormatReady,
@@ -1369,8 +1372,23 @@ async function dropStaged(
     if (!bucket) {
       refuse(503, 'E2EE_UNAVAILABLE', 'Encrypted storage is unavailable.');
     }
-    // Objects first: a failed delete keeps the rows, so a retry finds them.
-    await Promise.all(blobRows.map((row) => bucket.delete(row.object_key)));
+    // Migration 0050: a blob's key is reused by a retried upload of the same
+    // blob id, so it is deleted only under a claim taken while the fence
+    // holds and no other row names it.
+    const claim = await claimObjectKeysForDelete(
+      db,
+      blobRows.map((row) => row.object_key),
+      { blobs: blobRows.map((row) => row.blob_id) },
+      { sql: fence, binds: [projectId] }
+    );
+    try {
+      // Objects first: a failed delete keeps the rows, so a retry finds them.
+      // Every started delete settles before any claim is released.
+      assertClaimedDeleteComplete(claim, await claim.deleteObjects(bucket));
+    } catch (error) {
+      await claim.release();
+      throw error;
+    }
     objects += blobRows.length;
     const ids = JSON.stringify(blobRows.map((row) => row.blob_id));
     await runBatch(db, [
@@ -1397,7 +1415,7 @@ async function dropStaged(
              AND ${fence}`
         )
         .bind(projectId, ids, projectId)
-    ]);
+    ]).finally(() => claim.release());
     if ((blobs.results ?? []).length > MIGRATION_STEP_OBJECTS) {
       return { complete: false, objects };
     }
@@ -1643,27 +1661,49 @@ async function purgeObjects(
     rows.map((row) => row.object_key)
   );
   const owned = rows.filter((row) => !shared.has(row.object_key));
-  // Objects first: a failed delete keeps the rows, so a retry finds them.
-  await Promise.all(owned.map((row) => bucket.delete(row.object_key)));
-  const ids = JSON.stringify(rows.map((row) => row.id));
-  await runBatch(db, [
-    ...extraDeletes.map((sql) =>
+  // Migration 0050: a key is deleted from R2 only under a claim taken while
+  // this step's fence holds and no other row names it. A step that listed
+  // its rows, paused, and resumed after a newer attempt stored the same
+  // content-addressed key claims nothing, so it removes nothing live.
+  const listedIds = rows.map((row) => row.id);
+  const claim = await claimObjectKeysForDelete(
+    db,
+    owned.map((row) => row.object_key),
+    table === 'artifacts'
+      ? { artifacts: listedIds }
+      : table === 'project_storage_assets'
+        ? { assets: listedIds }
+        : { documentObjects: listedIds },
+    { sql: fence, binds: [projectId] }
+  );
+  try {
+    // Objects first: a failed delete keeps the rows, so a retry finds them.
+    // Every started delete settles before any claim is released, and a
+    // key whose delete failed stays claimed until its claim lapses.
+    const outcome = await claim.deleteObjects(bucket);
+    assertClaimedDeleteComplete(claim, outcome);
+    const ids = JSON.stringify(listedIds);
+    await runBatch(db, [
+      ...extraDeletes.map((sql) =>
+        db
+          .prepare(`${sql} IN (SELECT value FROM json_each(?)) AND ${fence}`)
+          .bind(ids, projectId)
+      ),
       db
-        .prepare(`${sql} IN (SELECT value FROM json_each(?)) AND ${fence}`)
-        .bind(ids, projectId)
-    ),
-    db
-      .prepare(
-        `DELETE FROM ${table} WHERE project_id = ?
-           AND id IN (SELECT value FROM json_each(?)) AND ${fence}`
-      )
-      .bind(projectId, ids, projectId)
-  ]);
-  return {
-    more: (results ?? []).length > MIGRATION_STEP_OBJECTS,
-    rows: rows.length,
-    objects: owned.length
-  };
+        .prepare(
+          `DELETE FROM ${table} WHERE project_id = ?
+             AND id IN (SELECT value FROM json_each(?)) AND ${fence}`
+        )
+        .bind(projectId, ids, projectId)
+    ]);
+    return {
+      more: (results ?? []).length > MIGRATION_STEP_OBJECTS,
+      rows: rows.length,
+      objects: outcome.deleted.size
+    };
+  } finally {
+    await claim.release();
+  }
 }
 
 async function purgeStep(
@@ -3224,6 +3264,10 @@ export async function handleE2eeProjectMigrationRequest(
         { error: error.message, code: error.code, ...error.extra },
         error.status
       );
+    }
+    // Migration 0050: another cleanup still holds a key this one deletes.
+    if (error instanceof ObjectKeyDeleteRetryError) {
+      return json({ error: error.message, code: 'STORAGE_CLEANUP_BUSY' }, 503);
     }
     throw error;
   }

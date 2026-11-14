@@ -9,6 +9,7 @@ import {
   isCloudflareFeatureEnabled,
   type CloudflareEnv
 } from '@openzcad/cloudflare-adapters';
+import { requestClientAddressKey } from './clientAddress';
 import { isDesktopAuthReady } from './readiness';
 
 import {
@@ -34,6 +35,20 @@ const LOGIN_IP_RATE_LIMIT = 10;
 // failures for at most one extra code lifetime, without requiring a migration.
 const LOGIN_EMAIL_FAILURE_LIMIT = 20;
 const LOGIN_FAILURE_WINDOW_SECONDS = 24 * 60 * 60;
+// Once an email collects this many wrong codes within the failure window it
+// cools down: the shared per-email allowance sends nothing more until enough
+// of those failures age out, so wrong guesses per day stay near this cap
+// instead of growing with every code the shared allowance would send.
+const LOGIN_EMAIL_DAILY_FAILURE_CAP = 50;
+// Codes per window to one email for a browser that has signed in to it
+// before (a valid known-device cookie). They come from the device's own
+// allowance, never the email's shared one, so the email's owner can still
+// get a code however other requesters spend the shared allowance, and while
+// the email cools down. Each device's allowance is its own, and only a
+// browser that once signed in to the email holds one.
+const LOGIN_KNOWN_DEVICE_ALLOWANCE = 3;
+// How long a known-device cookie lasts after the sign-in that set it.
+const KNOWN_DEVICE_MAX_AGE_SECONDS = 180 * 24 * 60 * 60;
 const DEFAULT_SESSION_DAYS = 30;
 const TURNSTILE_ACTION = 'email-code';
 const DESKTOP_CLIENT_ID = 'openzcad-macos';
@@ -421,7 +436,12 @@ async function consumeRateLimit(
   }
 }
 
-/** Counts one request against the bucket; false once it is over the limit. */
+/**
+ * Counts one request against the bucket; false once it is over the limit.
+ * A request past the limit writes nothing: the upsert only counts while the
+ * window has room, so a caller that keeps going after its 429 changes no
+ * row.
+ */
 async function takeRateLimit(
   db: D1Database,
   bucket: string,
@@ -431,39 +451,128 @@ async function takeRateLimit(
   const windowStart =
     Math.floor(timestamp / LOGIN_RATE_WINDOW_SECONDS) *
     LOGIN_RATE_WINDOW_SECONDS;
-  await db
+  const counted = await db
     .prepare(
       `INSERT INTO auth_rate_limits (bucket, window_start, request_count)
        VALUES (?, ?, 1)
        ON CONFLICT(bucket) DO UPDATE SET
-         window_start = CASE
-           WHEN auth_rate_limits.window_start = excluded.window_start
-             THEN auth_rate_limits.window_start
-           ELSE excluded.window_start
-         END,
+         window_start = excluded.window_start,
          request_count = CASE
            WHEN auth_rate_limits.window_start = excluded.window_start
              THEN auth_rate_limits.request_count + 1
            ELSE 1
-         END`
+         END
+       WHERE auth_rate_limits.window_start != excluded.window_start
+         OR auth_rate_limits.request_count < ?
+       RETURNING request_count`
     )
-    .bind(bucket, windowStart)
-    .run();
-  const current = await db
-    .prepare(
-      `SELECT request_count
-       FROM auth_rate_limits
-       WHERE bucket = ? AND window_start = ?`
-    )
-    .bind(bucket, windowStart)
+    .bind(bucket, windowStart, limit)
     .first<{ request_count: number }>();
-  return (current?.request_count ?? limit + 1) <= limit;
+  return counted !== null && counted.request_count <= limit;
 }
 
+/**
+ * Charges one code to the email. A browser with a known-device cookie for
+ * this email draws on that device's own allowance; every other requester
+ * shares the email's allowance, which sends nothing while the email cools
+ * down.
+ */
+async function takeEmailAllowance(
+  db: D1Database,
+  email: string,
+  emailBucket: string,
+  knownDeviceId: string | null,
+  timestamp: number
+): Promise<boolean> {
+  if (knownDeviceId) {
+    return takeRateLimit(
+      db,
+      authKnownDeviceAllowanceBucket(emailBucket, knownDeviceId),
+      LOGIN_KNOWN_DEVICE_ALLOWANCE,
+      timestamp
+    );
+  }
+  const failures = await db
+    .prepare(
+      `SELECT COALESCE(SUM(attempts), 0) AS email_failures
+       FROM auth_email_challenges
+       WHERE email = ? AND expires_at >= ?`
+    )
+    .bind(email, timestamp - LOGIN_FAILURE_WINDOW_SECONDS)
+    .first<{ email_failures: number }>();
+  if ((failures?.email_failures ?? 0) >= LOGIN_EMAIL_DAILY_FAILURE_CAP) {
+    return false;
+  }
+  return takeRateLimit(db, emailBucket, LOGIN_EMAIL_RATE_LIMIT, timestamp);
+}
+
+/** A known device's own allowance bucket under an email's rate-limit bucket. */
+export function authKnownDeviceAllowanceBucket(
+  emailBucket: string,
+  deviceId: string
+): string {
+  return `${emailBucket}:device:${deviceId}`;
+}
+
+export const KNOWN_DEVICE_COOKIE_NAME = '__Host-openzcad_known_device';
+
+async function knownDeviceMac(
+  emailBucket: string,
+  deviceId: string,
+  expiresAt: number,
+  pepper: string
+): Promise<string> {
+  return hmac(
+    `openzcad-known-device-v1\n${emailBucket}\n${deviceId}\n${expiresAt}`,
+    pepper
+  );
+}
+
+/**
+ * The known-device cookie a successful sign-in sets: a random device id and
+ * expiry, signed with the pepper and bound to the email's opaque bucket, so
+ * it names no email and works for no other one. Kept across sign-out; a
+ * sign-in to another email replaces it.
+ */
+async function createKnownDeviceCookie(
+  emailBucket: string,
+  pepper: string,
+  timestamp: number
+): Promise<string> {
+  const deviceId = randomToken(16);
+  const expiresAt = timestamp + KNOWN_DEVICE_MAX_AGE_SECONDS;
+  const mac = await knownDeviceMac(emailBucket, deviceId, expiresAt, pepper);
+  return `${KNOWN_DEVICE_COOKIE_NAME}=${deviceId}.${expiresAt}.${mac}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${KNOWN_DEVICE_MAX_AGE_SECONDS}`;
+}
+
+/** The request's known-device id for this email, or null. */
+async function knownDeviceId(
+  request: Request,
+  emailBucket: string,
+  pepper: string,
+  timestamp: number
+): Promise<string | null> {
+  const value = readCookie(request, KNOWN_DEVICE_COOKIE_NAME);
+  const match =
+    value && /^([A-Za-z0-9_-]{22})\.(\d{1,12})\.([0-9a-f]{64})$/.exec(value);
+  if (!match) return null;
+  const [, deviceId, expiry, mac] = match;
+  const expiresAt = Number(expiry);
+  if (expiresAt < timestamp) return null;
+  const expected = await knownDeviceMac(
+    emailBucket,
+    deviceId!,
+    expiresAt,
+    pepper
+  );
+  return constantTimeEqual(mac!, expected) ? deviceId! : null;
+}
+
+/** Deletes up to one batch of each; true while a table may have more. */
 async function cleanExpiredAuthRows(
   db: D1Database,
   timestamp: number
-): Promise<void> {
+): Promise<boolean> {
   const staleWindow =
     timestamp -
     Math.max(
@@ -471,7 +580,7 @@ async function cleanExpiredAuthRows(
       PROJECT_INVITATION_RATE_WINDOW_SECONDS
     ) *
       2;
-  await db.batch([
+  const results = await db.batch([
     // Spent codes stay for a failure window: their attempt counts are the
     // email's record of recent wrong codes.
     db
@@ -505,6 +614,9 @@ async function cleanExpiredAuthRows(
       )
       .bind(staleWindow)
   ]);
+  return results.some(
+    (result) => (result.meta?.changes ?? 0) >= EXPIRED_ROW_BATCH
+  );
 }
 
 const EMAIL_FONT =
@@ -587,8 +699,7 @@ export async function startEmailLogin(
   await verifyTurnstile(request, turnstileToken, attemptId, env);
 
   const timestamp = nowSeconds();
-  const connectingIp =
-    request.headers.get('cf-connecting-ip')?.trim() || 'unknown';
+  const connectingIp = requestClientAddressKey(request);
   const [emailBucket, ipBucket, requesterKey] = await Promise.all([
     authEmailRateLimitBucket(email, env.AUTH_OTP_PEPPER),
     hmac(`ip:${connectingIp}`, env.AUTH_OTP_PEPPER),
@@ -615,10 +726,11 @@ export async function startEmailLogin(
   // ceiling, and neither limit voids a pending code.
   if (
     !requesterAllowed ||
-    !(await takeRateLimit(
+    !(await takeEmailAllowance(
       env.DB,
+      email,
       emailBucket,
-      LOGIN_EMAIL_RATE_LIMIT,
+      await knownDeviceId(request, emailBucket, env.AUTH_OTP_PEPPER, timestamp),
       timestamp
     ))
   ) {
@@ -722,7 +834,11 @@ function parseChallengeId(value: unknown): string {
 export async function verifyEmailLogin(
   input: { challengeId: unknown; code: unknown },
   env: CloudflareEnv
-): Promise<{ session: AuthSession; cookie: string }> {
+): Promise<{
+  session: AuthSession;
+  cookie: string;
+  knownDeviceCookie: string;
+}> {
   requireEmailAuth(env);
   const challengeId = parseChallengeId(input.challengeId);
   const code = parseLoginCode(input.code);
@@ -859,7 +975,12 @@ export async function verifyEmailLogin(
   };
   return {
     session,
-    cookie: createSessionCookie(sessionToken, maxAgeSeconds)
+    cookie: createSessionCookie(sessionToken, maxAgeSeconds),
+    knownDeviceCookie: await createKnownDeviceCookie(
+      await authEmailRateLimitBucket(challenge.email, env.AUTH_OTP_PEPPER),
+      env.AUTH_OTP_PEPPER,
+      timestamp
+    )
   };
 }
 
@@ -954,11 +1075,39 @@ function desktopSession(
   };
 }
 
+/** The `LIMIT` of each expired-row cleanup statement below. */
+const EXPIRED_ROW_BATCH = 100;
+const EXPIRED_ROW_PURGE_BATCHES = 50;
+
+/**
+ * Reclaims expired sign-in rows from the scheduled handler: email codes,
+ * sessions and stale login windows, and desktop sign-in attempts and tokens.
+ * Desktop sign-in start no longer cleans these itself, so an anonymous
+ * caller cannot cause D1 writes there. Bounded per run; anything left goes
+ * on the next one.
+ */
+export async function purgeExpiredAuthRows(
+  env: CloudflareEnv,
+  timestamp = nowSeconds()
+): Promise<void> {
+  const db = env.DB;
+  if (!db) return;
+  const desktopTables = await isDesktopAuthReady(db);
+  for (let batch = 0; batch < EXPIRED_ROW_PURGE_BATCHES; batch += 1) {
+    const authMore = await cleanExpiredAuthRows(db, timestamp);
+    const desktopMore = desktopTables
+      ? await cleanExpiredDesktopAuthRows(db, timestamp)
+      : false;
+    if (!authMore && !desktopMore) return;
+  }
+}
+
+/** Deletes up to one batch of each; true while a table may have more. */
 async function cleanExpiredDesktopAuthRows(
   db: D1Database,
   timestamp: number
-): Promise<void> {
-  await db.batch([
+): Promise<boolean> {
+  const results = await db.batch([
     db
       .prepare(
         `DELETE FROM desktop_auth_attempts
@@ -990,6 +1139,9 @@ async function cleanExpiredDesktopAuthRows(
       )
       .bind(timestamp)
   ]);
+  return results.some(
+    (result) => (result.meta?.changes ?? 0) >= EXPIRED_ROW_BATCH
+  );
 }
 
 export async function startDesktopAuthorization(
@@ -1015,20 +1167,19 @@ export async function startDesktopAuthorization(
     43
   );
   const timestamp = nowSeconds();
-  const connectingIp =
-    request.headers.get('cf-connecting-ip')?.trim() || 'unknown';
+  const connectingIp = requestClientAddressKey(request);
   const ipBucket = await hmac(
     `desktop-ip:${connectingIp}`,
     env.AUTH_OTP_PEPPER!
   );
-  await cleanExpiredAuthRows(db, timestamp);
+  // Expired rows are reclaimed by the scheduled `purgeExpiredAuthRows`, so
+  // an anonymous caller past its allowance causes no D1 write here.
   await consumeRateLimit(
     db,
     `desktop-ip:${ipBucket}`,
     DESKTOP_AUTH_IP_RATE_LIMIT,
     timestamp
   );
-  await cleanExpiredDesktopAuthRows(db, timestamp);
   const attemptId = crypto.randomUUID();
   const userCode = desktopUserCode();
   await db
@@ -1515,6 +1666,8 @@ export async function authenticateBrowserSession(
 export interface AssistantRequestIdentity {
   userId: AuthSession['userId'];
   email?: string;
+  /** A caller with no session, identified only by its address. */
+  anonymous?: true;
 }
 
 export async function identifyAssistantIdentity(
@@ -1538,10 +1691,10 @@ export async function identifyAssistantIdentity(
       ...(session.email ? { email: session.email } : {})
     };
   }
-  const connectingIp = request.headers.get('cf-connecting-ip')?.trim();
-  if (!connectingIp) {
+  if (!request.headers.get('cf-connecting-ip')?.trim()) {
     throw new AuthenticationError();
   }
+  const connectingIp = requestClientAddressKey(request);
   const pepper = env.AI_IDENTITY_PEPPER?.trim();
   if (!pepper) {
     throw new AuthFlowError(
@@ -1555,7 +1708,8 @@ export async function identifyAssistantIdentity(
       'user_anon',
       `openzcad-ai-user-v1:${connectingIp}`,
       pepper
-    )
+    ),
+    anonymous: true
   };
 }
 

@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import type { BodyId, ParamValue } from '@openzcad/shared';
+import type { BodyId, FeatureData, ParamValue } from '@openzcad/shared';
 import {
   threadAnchor,
   threadChamferedEnds,
+  threadEndFinishes,
   threadEditOptions,
   threadFace,
   threadIsPartial,
@@ -183,7 +184,7 @@ describe('in-place thread', () => {
       { starts: 2, phaseDeg: 30, chamferAngleDeg: 30 }
     );
     expect(threadSummary(state)).toBe(
-      'Left hand · 2 starts · Rotated 30° · Chamfer 30°'
+      'Left hand · 2 starts · Rotated 30° · Ends 30°'
     );
     expect(
       threadSummary(
@@ -433,7 +434,7 @@ describe('in-place thread: picks and the dragged end (U11)', () => {
       numbersOf(short)
     );
     // Clicked near the top, it runs 8 down from there: chamfered at the
-    // top it starts from, plain where it stops short of the bottom.
+    // top it starts from, run out where it stops short of the bottom.
     expect(request).toEqual({
       tool: 'thread',
       thread: {
@@ -443,7 +444,8 @@ describe('in-place thread: picks and the dragged end (U11)', () => {
         clearance: 0.1,
         length: 8,
         anchor: 'end',
-        chamferEnd: true
+        chamferEnd: true,
+        runoutStart: true
       }
     });
     // Dragged back to the face's end, it is whole again, chamfers and all,
@@ -571,7 +573,11 @@ describe('in-place thread: picks and the dragged end (U11)', () => {
       CTX,
       numbersOf(values)
     ) as { thread: ThreadRequest };
-    expect(request.thread).toMatchObject({ offset: 2, chamferEnd: true });
+    expect(request.thread).toMatchObject({
+      offset: 2,
+      chamferEnd: true,
+      runoutStart: true
+    });
     expect(request.thread.chamferStart).toBeUndefined();
     expect(request.thread.length).toBeUndefined();
   });
@@ -645,12 +651,33 @@ describe('in-place thread: picks and the dragged end (U11)', () => {
         face: { length: 1, radius: 20 }
       }).far
     ).toBe(true);
-    // What does not resolve reaches nothing it is not known to.
-    expect(reach(true, undefined, 8)).toEqual({ near: false, far: false });
-    expect(reach(true, 0, undefined)).toEqual({ near: true, far: false });
+    // What does not resolve reaches nothing it is not known to, and is not
+    // known to stop short either, so it takes no runout (schema v57).
+    expect(reach(true, undefined, 8)).toEqual({
+      near: false,
+      far: false,
+      nearUnknown: true,
+      farUnknown: true
+    });
+    expect(reach(true, 0, undefined)).toEqual({
+      near: true,
+      far: false,
+      farUnknown: true
+    });
     expect(
       threadReach({ held: true, offset: 0, length: 8, face: null })
-    ).toEqual({ near: true, far: false });
+    ).toEqual({ near: true, far: false, farUnknown: true });
+    expect(
+      threadEndFinishes('both', 'start', {
+        near: false,
+        far: false,
+        nearUnknown: true,
+        farUnknown: true
+      })
+    ).toEqual({});
+    expect(
+      threadEndFinishes('both', 'end', { near: true, far: false })
+    ).toEqual({ start: 'runout', end: 'chamfer' });
     expect(
       threadReach({ held: false, offset: 0, length: 8, face: null })
     ).toEqual({ near: true, far: true });
@@ -860,6 +887,7 @@ describe('in-place thread: picks and the dragged end (U11)', () => {
       chamferAngleDeg: 30
     });
     expect(request(2, 'both').chamferEnd).toBeUndefined();
+    expect(request(2, 'both').runoutEnd).toBe(true);
     expect(request(2, 'both').anchor).toBeUndefined();
     // Picked near the top: the face's end.
     expect(request(10, 'both')).toMatchObject({
@@ -869,10 +897,16 @@ describe('in-place thread: picks and the dragged end (U11)', () => {
       chamferAngleDeg: 30
     });
     expect(request(10, 'both').chamferStart).toBeUndefined();
-    // Asked only for the end it stops short of, it has none, nor an angle.
-    const plain = request(2, 'end');
-    expect(plain.chamferStart).toBeUndefined();
-    expect(plain.chamferEnd).toBeUndefined();
+    expect(request(10, 'both').runoutStart).toBe(true);
+    // Asked only for the end it stops short of, it runs out there alone.
+    const runout = request(2, 'end');
+    expect(runout.chamferStart).toBeUndefined();
+    expect(runout.chamferEnd).toBeUndefined();
+    expect(runout.runoutStart).toBeUndefined();
+    expect(runout).toMatchObject({ runoutEnd: true, chamferAngleDeg: 30 });
+    // Asked for none, it has none, nor an angle.
+    const plain = request(2, 'none');
+    expect(plain.runoutEnd).toBeUndefined();
     expect(plain.chamferAngleDeg).toBeUndefined();
   });
 
@@ -932,21 +966,31 @@ describe('in-place thread: picks and the dragged end (U11)', () => {
         'mm',
         slots
       )
-    ).toBe('Threads 8 of 12 mm, plain where it stops · Chamfer 30°');
-    // With no chamfer left where it starts, both ends are plain.
-    for (const chamfer of ['none', 'start']) {
-      expect(
-        threadSummary(
-          inPlacePanelState(
-            threadSpec,
-            { size: 'M8', chamfer },
-            { length: 8, chamferAngleDeg: 30 }
-          ),
-          'mm',
-          slots
-        )
-      ).toBe('Threads 8 of 12 mm, ends plain');
-    }
+    ).toBe('Threads 8 of 12 mm, runs out where it stops · Ends 30°');
+    // Finished only where it starts, it stops plain; finished nowhere, both
+    // ends are plain.
+    expect(
+      threadSummary(
+        inPlacePanelState(
+          threadSpec,
+          { size: 'M8', chamfer: 'end' },
+          { length: 8, chamferAngleDeg: 30 }
+        ),
+        'mm',
+        slots
+      )
+    ).toBe('Threads 8 of 12 mm, plain where it stops · Ends 30°');
+    expect(
+      threadSummary(
+        inPlacePanelState(
+          threadSpec,
+          { size: 'M8', chamfer: 'none' },
+          { length: 8, chamferAngleDeg: 30 }
+        ),
+        'mm',
+        slots
+      )
+    ).toBe('Threads 8 of 12 mm, ends plain');
     expect(
       threadSummary(
         inPlacePanelState(threadSpec, {}, { length: 10, offset: 2 }),
@@ -972,7 +1016,7 @@ describe('in-place thread: picks and the dragged end (U11)', () => {
         }
       )
     ).toBe('Sized from the Ø6 mm face · To end · Threads 10 of 12 mm');
-    // The same stored span one short of the far end stops plain there.
+    // The same stored span one short of the far end runs out there.
     expect(
       threadSummary(
         inPlacePanelState(threadSpec, {}, { length: 9, offset: 2 }),
@@ -990,7 +1034,9 @@ describe('in-place thread: picks and the dragged end (U11)', () => {
           }
         }
       )
-    ).toBe('Sized from the Ø6 mm face · Threads 9 of 12 mm, ends plain');
+    ).toBe(
+      'Sized from the Ø6 mm face · Threads 9 of 12 mm, runs out where it stops'
+    );
   });
 });
 
@@ -1125,5 +1171,479 @@ describe('in-place thread edits', () => {
         'upperFlankAngleDeg'
       ].sort()
     );
+  });
+});
+
+describe('in-place pipe threads (schema v57)', () => {
+  // A 1/4 NPT pipe, 30 long up +Z, clicked near its top.
+  const radius = (0.54 * 25.4) / 2;
+  const pipe: FacePick = {
+    ...BOSS,
+    point: { x: radius, y: 0, z: 28 },
+    cylinder: {
+      axisStart: { x: 0, y: 0, z: 0 },
+      axisEnd: { x: 0, y: 0, z: 30 },
+      radius,
+      boss: true
+    }
+  };
+  const slots = { ...SLOTS, faces: [pipe] };
+  // On its nominal pipe the crest meets the boss short of L2.
+  const reach = (0.2278 + 16 * (0.54 - 0.49163 - 0.8 / 18)) * 25.4;
+
+  it('runs the standard length, stopping where the crest meets the boss', () => {
+    const numbers = numbersOf(initialValues());
+    const pipeDefaults = threadSpec.defaults!(slots, CTX, numbers, {
+      ...defaults(),
+      profile: 'npt'
+    });
+    expect(pipeDefaults.length).toBeCloseTo(reach, 9);
+    // A bore 30 long of Ø10.5 takes Rc 1/4 and its useful 9.7.
+    const bore: FacePick = {
+      ...pipe,
+      point: { x: 5.25, y: 0, z: 28 },
+      cylinder: { ...pipe.cylinder!, radius: 5.25, boss: false }
+    };
+    expect(
+      threadSpec.defaults!({ ...SLOTS, faces: [bore] }, CTX, numbers, {
+        ...defaults(),
+        profile: 'bspt'
+      }).length
+    ).toBeCloseTo(9.7, 9);
+    // Not a pipe thread: the rest of the face.
+    expect(threadSpec.defaults!(slots, CTX, numbers, defaults()).length).toBe(
+      30
+    );
+  });
+
+  it('keeps an untouched pipe length to the pipe rule as the offset moves (review #1458)', () => {
+    const values = { ...numbersOf(initialValues()), length: reach, offset: 0 };
+    const context = {
+      touched: ['offset'],
+      options: { ...defaults(), profile: 'npt' },
+      units: 'mm' as const
+    };
+    // Set off 1 from the fitting end, the band still ends where the crest
+    // meets the boss: 1 shorter, not the rest of the 30 mm face.
+    const carried = threadSpec.carries!('offset', 1, values, slots, context);
+    expect(carried?.length).toBeCloseTo(reach - 1, 9);
+    expect(
+      threadSpec.defaults!(
+        slots,
+        CTX,
+        { ...values, offset: 1 },
+        context.options
+      ).length
+    ).toBeCloseTo(reach - 1, 9);
+    // A length the user set stays as set.
+    expect(
+      threadSpec.carries!('offset', 1, values, slots, {
+        ...context,
+        touched: ['offset', 'length']
+      })
+    ).toBeNull();
+    // Any other profile still runs to the face's far end.
+    expect(
+      threadSpec.carries!('offset', 1, values, slots, {
+        ...context,
+        options: defaults()
+      })
+    ).toEqual({ length: 29 });
+  });
+
+  it('keeps a length the user set to the face end when the offset moves (review #1458 re-check)', () => {
+    // NPT 1/4 on a Ø15.4 × 30 boss, Exact fit: Length typed to 30, then
+    // Offset 1. The typed length follows the face's end (29), as any span's
+    // does; it does not snap back to the standard's 9.206.
+    const boss: FacePick = {
+      ...pipe,
+      point: { x: 7.7, y: 0, z: 28 },
+      cylinder: { ...pipe.cylinder!, radius: 7.7 }
+    };
+    const bossSlots = { ...SLOTS, faces: [boss] };
+    const options = { ...defaults(), profile: 'npt', pipeSize: '1/4' };
+    const values = { ...numbersOf(initialValues()), length: 30, offset: 0 };
+    expect(
+      threadSpec.carries!('offset', 1, values, bossSlots, {
+        touched: ['length', 'offset'],
+        options,
+        units: 'mm'
+      })
+    ).toEqual({ length: 29 });
+    // Untouched, it still follows the pipe rule.
+    const standard = 0.4018 * 25.4;
+    expect(
+      threadSpec.carries!(
+        'offset',
+        1,
+        { ...values, length: standard },
+        bossSlots,
+        { touched: ['offset'], options, units: 'mm' }
+      )?.length
+    ).toBeCloseTo(standard - 1, 9);
+  });
+
+  it('stores the profile, its length and no clearance, and runs out where it stops', () => {
+    const values = initialValues({ length: reach, offset: 0 });
+    const request = threadSpec.request(
+      slots,
+      values,
+      defaults({ profile: 'npt' }),
+      CTX,
+      numbersOf(values)
+    ) as { thread: ThreadRequest };
+    expect(request.thread).toEqual({
+      targetBodyId: 'body_a',
+      faceHash: 9,
+      profile: 'npt',
+      length: reach,
+      anchor: 'end',
+      chamferEnd: true,
+      runoutStart: true
+    });
+    // A chosen size and a printed fit are stored, and read back as chosen.
+    const sized = threadSpec.request(
+      slots,
+      values,
+      defaults({ profile: 'bspt', pipeSize: '1/4', pipeFit: 'print' }),
+      CTX,
+      numbersOf(values)
+    ) as { thread: ThreadRequest };
+    expect(sized.thread).toMatchObject({
+      profile: 'bspt',
+      pipeSize: '1/4',
+      clearance: 0.1
+    });
+    expect(sized.thread.majorDiameter).toBeUndefined();
+    const read = threadEditOptions(sized.thread, evaluate, 'mm');
+    expect(read).toMatchObject({
+      profile: 'bspt',
+      pipeSize: '1/4',
+      pipeFit: 'print',
+      chamfer: 'both'
+    });
+    expect(read.size).toBeUndefined();
+  });
+
+  it('shows the pipe rows in place of the ISO ones and names the size', () => {
+    const state = inPlacePanelState(threadSpec, { profile: 'npt' }, {});
+    const shown = (id: string) =>
+      (threadSpec.options ?? []).find((option) => option.id === id)!.when!(
+        state
+      );
+    expect([shown('size'), shown('fit')]).toEqual([false, false]);
+    expect([shown('pipeSize'), shown('pipeFit')]).toEqual([true, true]);
+    expect(
+      threadSpec.values.find((value) => value.id === 'majorDiameter')!.when!({
+        ...state,
+        options: { ...state.options, size: 'custom' }
+      })
+    ).toBe(false);
+    expect(
+      threadSummary(
+        inPlacePanelState(threadSpec, { profile: 'npt' }, { length: reach }),
+        'mm',
+        { faces: [pipe] }
+      )
+    ).toBe(
+      `1/4-18 NPT from the Ø13.716 mm face · Threads ${Math.round(reach * 1000) / 1000} of 30 mm, runs out where it stops`
+    );
+    // An edit not clicked again reads its side from the mesh too.
+    const { point: _point, ...unclicked } = pipe;
+    expect(
+      threadSummary(
+        inPlacePanelState(threadSpec, { profile: 'bspt' }, { length: 9 }),
+        'mm',
+        { faces: [unclicked] }
+      )
+    ).toMatch(/^R 1\/4 from the Ø13.716 mm face · /);
+    // Where the mesh could not say, the build sizes it and the summary does
+    // not guess.
+    const { boss: _boss, ...unknown } = pipe.cylinder!;
+    expect(
+      threadSummary(
+        inPlacePanelState(threadSpec, { profile: 'bspt' }, { length: 9 }),
+        'mm',
+        { faces: [{ ...pipe, cylinder: unknown }] }
+      )
+    ).toMatch(/^Sized from the Ø13.716 mm face · /);
+  });
+});
+
+describe('in-place thread edits keep a stored end kind (review #1458)', () => {
+  // A runout stored at the face's start, where the span begins (a thread
+  // against a shoulder), on the Ø6 × 12 boss. The panel's reach rule would
+  // chamfer that end; an edit that leaves the extent as stored keeps it.
+  const stored = (
+    fields: Partial<ThreadRequest> = {}
+  ): Extract<FeatureData, { featureKind: 'thread' }> => ({
+    featureKind: 'thread',
+    targetBodyId: 'body_a' as BodyId,
+    faceHash: 9,
+    profile: 'iso-metric',
+    length: 5,
+    runoutStart: true,
+    ...fields
+  });
+  const finish = (
+    saved: Extract<FeatureData, { featureKind: 'thread' }>,
+    changes: {
+      options?: Record<string, string>;
+      values?: Record<string, ParamValue>;
+      units?: 'mm' | 'inch';
+      face?: FacePick;
+    } = {}
+  ) => {
+    const units = changes.units ?? 'mm';
+    const face = changes.face ?? BOSS;
+    const values = {
+      ...initialValues({
+        length: saved.length ?? threadFace(face)!.length,
+        offset: saved.offset ?? 0
+      }),
+      ...(changes.values ?? {})
+    };
+    // The document's evaluator, as the build uses it.
+    const formulas: Record<string, number> = {
+      '2+3': 5,
+      '0*1': 0,
+      // A parameter the user has since set to 2.
+      gap: 2,
+      '19.99999998+0': 19.99999998,
+      '20+0': 20
+    };
+    const calculate = (value: ParamValue) =>
+      typeof value === 'number' ? value : (formulas[value] ?? null);
+    const numbers = Object.fromEntries(
+      Object.entries(values).map(([id, value]) => [id, calculate(value) ?? 0])
+    );
+    const options = {
+      ...defaults(),
+      ...threadEditOptions(saved, evaluate, units),
+      ...(changes.options ?? {})
+    };
+    const ctx = {
+      ...CTX,
+      saved,
+      units,
+      evaluate: calculate,
+      touched: ['length', 'offset', ...Object.keys(changes.values ?? {})]
+    };
+    return (
+      threadSpec.request(
+        { ...SLOTS, faces: [face] },
+        values,
+        options,
+        ctx,
+        numbers
+      ) as { thread: ThreadRequest }
+    ).thread;
+  };
+
+  it('keeps the runout when an expression evaluates to the stored extent', () => {
+    // Length `2+3` is the stored 5; offset `0*1` the absent 0.
+    const edits: Record<string, ParamValue>[] = [
+      { length: '2+3' },
+      { offset: '0*1' }
+    ];
+    for (const values of edits) {
+      const thread = finish(stored(), { values });
+      expect(thread.runoutStart, JSON.stringify(values)).toBe(true);
+      expect(thread.chamferStart, JSON.stringify(values)).toBeUndefined();
+    }
+    // Stored as expressions, an untouched edit keeps it too.
+    const written = stored({ length: '2+3', offset: '0*1' });
+    expect(finish(written).runoutStart).toBe(true);
+  });
+
+  it('lets the reach decide when an end crosses the build’s snap, however small the move', () => {
+    // A Ø6 × 20 boss: its snap is 1e-9 × 20 = 2e-8. A chamfer stored with
+    // the span 1.99e-8 off its start reaches that end; moved to 2.01e-8 it
+    // stops short, and keeping the chamfer would fail the build.
+    const long: FacePick = {
+      ...BOSS,
+      cylinder: { ...BOSS.cylinder!, axisEnd: { x: 0, y: 0, z: 20 } }
+    };
+    const chamfered = stored({
+      offset: 1.99e-8,
+      runoutStart: undefined,
+      chamferStart: true
+    });
+    const kept = finish(chamfered, { face: long });
+    expect(kept.chamferStart).toBe(true);
+    const crossed = finish(chamfered, {
+      face: long,
+      values: { offset: 2.01e-8 }
+    });
+    expect(crossed.chamferStart).toBeUndefined();
+    expect(crossed.runoutStart).toBe(true);
+  });
+
+  it('keeps the runout with an explicit zero offset, which the request leaves out', () => {
+    const thread = finish(stored({ offset: 0 }));
+    expect(thread.runoutStart).toBe(true);
+    expect(thread.chamferStart).toBeUndefined();
+    expect(thread.offset).toBeUndefined();
+  });
+
+  it('keeps it through a profile-, pitch- or fit-only edit', () => {
+    const edits: Record<string, string>[] = [
+      { profile: 'printable' },
+      { profile: 'custom' },
+      { size: 'M8' },
+      { fit: 'loose' }
+    ];
+    for (const options of edits) {
+      const thread = finish(stored({ offset: 0 }), { options });
+      expect(thread.runoutStart, JSON.stringify(options)).toBe(true);
+      expect(thread.chamferStart, JSON.stringify(options)).toBeUndefined();
+    }
+  });
+
+  it('keeps it in an inch document with a typed length equal to the stored one', () => {
+    const inch = stored({ length: 5 / 25.4, offset: 0 });
+    // Typed again, the same length comes back off by a rounding step from
+    // its unit conversion.
+    const typed = 5 / 25.4 + 1e-15;
+    expect(typed).not.toBe(5 / 25.4);
+    const thread = finish(inch, { units: 'inch', values: { length: typed } });
+    expect(thread.runoutStart).toBe(true);
+    expect(thread.chamferStart).toBeUndefined();
+  });
+
+  it('keeps it on a stored whole-face span whose length is written out', () => {
+    const thread = finish(stored({ length: 12 }));
+    expect(thread.runoutStart).toBe(true);
+    expect(thread.chamferStart).toBeUndefined();
+  });
+
+  it('keeps a stored runout through an extent edit, where it stays valid', () => {
+    const shorter = finish(stored({ offset: 0 }), { values: { length: 4 } });
+    expect(shorter.runoutStart).toBe(true);
+    expect(shorter.chamferStart).toBeUndefined();
+    const setOff = finish(stored(), { values: { offset: 1 } });
+    expect(setOff.runoutStart).toBe(true);
+  });
+
+  // The Ø6 × 20 boss of Sol's re-check of 43425cad: its snap is 2e-8.
+  const long: FacePick = {
+    ...BOSS,
+    cylinder: { ...BOSS.cylinder!, axisEnd: { x: 0, y: 0, z: 20 } }
+  };
+  const chamfered = (fields: Partial<ThreadRequest>) =>
+    stored({ runoutStart: undefined, chamferStart: true, ...fields });
+
+  it('finishes a stored chamfer a parameter change set off the face as a runout (re-check of 43425cad)', () => {
+    // Stored with offset `gap` when gap was 0; gap is now 2. Untouched, and
+    // with the offset typed as 2, the start stops short of the face: the
+    // build refuses a chamfer there, so it runs out.
+    const edits: Record<string, ParamValue>[] = [{}, { offset: 2 }];
+    for (const values of edits) {
+      const thread = finish(chamfered({ offset: 'gap' }), {
+        face: long,
+        values
+      });
+      expect(thread.chamferStart, JSON.stringify(values)).toBeUndefined();
+      expect(thread.runoutStart, JSON.stringify(values)).toBe(true);
+    }
+  });
+
+  it('settles an end at the snap by the build’s own arithmetic (re-check of 43425cad)', () => {
+    // From the far end, length 19.9999999801 puts the start 1.99e-8 off the
+    // face's start: inside the snap, so the stored chamfer stands.
+    const stand = finish(chamfered({ anchor: 'end', length: 19.9999999801 }), {
+      face: long
+    });
+    expect(stand.chamferStart).toBe(true);
+    // Typed as `19.99999998+0` the build places the start at
+    // 20 − 0 − 19.99999998 = 2.000000165e-8, past it: a runout.
+    const past = finish(chamfered({ anchor: 'end', length: 19.9999999801 }), {
+      face: long,
+      values: { length: '19.99999998+0' }
+    });
+    expect(past.chamferStart).toBeUndefined();
+    expect(past.runoutStart).toBe(true);
+  });
+
+  it('chamfers a stored runout only where an edit carries its end onto the face’s end', () => {
+    // Owner's rule: a stored runout stays one unless that end goes from
+    // stopping short (as stored) to reaching the face (as edited).
+    const runout = stored({ runoutStart: undefined, runoutEnd: true });
+    // Stored 5 of 20 from the start, its end stops short; extended to 20 it
+    // reaches the face's end, which is chamfered.
+    const extended = finish(runout, { face: long, values: { length: 20 } });
+    expect(extended.chamferEnd).toBe(true);
+    expect(extended.runoutEnd).toBeUndefined();
+    // A runout stored where the span already reaches the face's end (a
+    // shoulder) stays a runout, untouched or edited elsewhere.
+    const shoulder = stored({
+      runoutStart: undefined,
+      runoutEnd: true,
+      length: 20
+    });
+    expect(finish(shoulder, { face: long }).runoutEnd).toBe(true);
+    expect(
+      finish(shoulder, { face: long, options: { profile: 'printable' } })
+        .runoutEnd
+    ).toBe(true);
+    // The first repro: a runout at the start the span reaches, untouched.
+    expect(finish(stored(), { face: long }).runoutStart).toBe(true);
+  });
+
+  it('resolves a pipe thread’s standard length before applying the runout rule (re-check of 7f28f427)', () => {
+    // A radius-7.7 × 20 boss storing NPT 1/4 with no length: it runs its
+    // standard 10.20572 and its end stops short of the face, run out. Edited
+    // to `20+0` the end reaches the face's end, so it is chamfered.
+    const pipeBoss: FacePick = {
+      ...BOSS,
+      cylinder: {
+        axisStart: { x: 0, y: 0, z: 0 },
+        axisEnd: { x: 0, y: 0, z: 20 },
+        radius: 7.7,
+        boss: true
+      }
+    };
+    const pipe = stored({
+      profile: 'npt',
+      pipeSize: '1/4',
+      length: undefined,
+      runoutStart: undefined,
+      runoutEnd: true
+    });
+    const extended = finish(pipe, {
+      face: pipeBoss,
+      values: { length: '20+0' }
+    });
+    expect(extended.chamferEnd).toBe(true);
+    expect(extended.runoutEnd).toBeUndefined();
+    // Edited elsewhere, it still stops short at its standard length: a runout.
+    const kept = finish(pipe, {
+      face: pipeBoss,
+      values: { length: 10.20572 }
+    });
+    expect(kept.runoutEnd).toBe(true);
+  });
+
+  it('holds to the snap in an inch document, where it is under any rounding tolerance', () => {
+    // The same boss in inches: 0.7874 long, snap 7.874e-10 in.
+    const inches: FacePick = {
+      ...BOSS,
+      cylinder: {
+        ...BOSS.cylinder!,
+        axisEnd: { x: 0, y: 0, z: 20 / 25.4 },
+        radius: 3 / 25.4
+      }
+    };
+    const inch = chamfered({ length: 5 / 25.4, offset: 7.8e-10 });
+    expect(finish(inch, { face: inches, units: 'inch' }).chamferStart).toBe(
+      true
+    );
+    const moved = finish(inch, {
+      face: inches,
+      units: 'inch',
+      values: { offset: 7.9e-10 }
+    });
+    expect(moved.chamferStart).toBeUndefined();
+    expect(moved.runoutStart).toBe(true);
   });
 });
