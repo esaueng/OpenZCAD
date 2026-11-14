@@ -15,6 +15,18 @@
   "triggers": {
     "crons": ["17 * * * *"]
   },
+  // Namespace ids are your account's own choice: any unused positive
+  // integers. See docs/SELF_HOSTING.md.
+  "ratelimits": [
+    // Per-location request limits checked before any D1 work
+    // (REQUEST_LIMITS in apps/web/worker/apiRateLimit.ts, which each limit
+    // must match); a deployment without one counts that limit in D1 instead.
+    {"name":"AUTH_REQUEST_LIMITER", "namespace_id":"2026111301", "simple":{"limit":30,"period":60}},
+    {"name":"DESKTOP_EXCHANGE_LIMITER", "namespace_id":"2026111302", "simple":{"limit":60,"period":60}},
+    {"name":"ANONYMOUS_ASSISTANT_LIMITER", "namespace_id":"2026111303", "simple":{"limit":20,"period":60}},
+    {"name":"SHARE_LINK_LIMITER", "namespace_id":"2026111304", "simple":{"limit":300,"period":60}},
+    {"name":"ACCOUNT_READ_LIMITER", "namespace_id":"2026111305", "simple":{"limit":1200,"period":60}}
+  ],
   "assets": {
     "directory": "./apps/web/dist",
     "binding": "ASSETS",

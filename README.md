@@ -304,7 +304,8 @@ DELETE /api/projects/:id/invitations/:invitationId
 PATCH|DELETE /api/projects/:id/members/:userId
 GET|POST /api/projects/:id/share-links
 DELETE /api/projects/:id/share-links/:shareLinkId
-GET  /api/share/:token                GET  /api/share/:token/assets/:assetId
+GET  /api/share                      GET  /api/share/assets/:assetId
+GET  /api/share/sources/:artifactId
 POST /api/project-invitations/accept
 POST /api/uploads                     PUT  /api/uploads/:id/content
 POST|DELETE /api/uploads/:id/multipart
@@ -314,7 +315,7 @@ GET  /api/projects/:id/artifacts      GET  /api/artifacts/:id
 GET  /api/artifacts/:id/download
 ```
 
-Cloud settings, personal credentials, projects, artifacts, and collaboration require an email-code session; the assistant also serves local-only users, and share-link reads under `/api/share` need no session at all. The native app exchanges its fixed-origin bearer request for a short-lived, one-use collaboration ticket before opening a WebSocket, so bearer credentials never enter browser code. Artifacts require an uploaded R2 object before finalization; large uploads go through the multipart routes.
+Cloud settings, personal credentials, projects, artifacts, and collaboration require an email-code session; the assistant also serves local-only users, and share-link reads under `/api/share` need no session at all; they carry the link's token in the `x-openzcad-share-token` header rather than the URL (the older `/api/share/:token…` paths are still served for the macOS app). The native app exchanges its fixed-origin bearer request for a short-lived, one-use collaboration ticket before opening a WebSocket, so bearer credentials never enter browser code. Artifacts require an uploaded R2 object before finalization; large uploads go through the multipart routes.
 
 ## AI assistant (experimental)
 

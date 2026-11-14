@@ -27,8 +27,8 @@ import type {
 } from '@openzcad/cloudflare-adapters';
 import type { PersistenceService } from '@openzcad/persistence';
 import {
-  authEmailCleanAllowanceBucket,
-  authEmailRateLimitBucket
+  authEmailRateLimitBucket,
+  authKnownDeviceAllowanceBucket
 } from './auth';
 import { libraryFolderErasureStatements } from './libraryFolderSets';
 import {
@@ -295,12 +295,12 @@ function profileCleanupStatements(
         // the pending challenges, while keeping the shared IP limiter intact.
         .prepare(
           `DELETE FROM auth_rate_limits
-           WHERE bucket = ? OR bucket = ? OR bucket GLOB ?`
+           WHERE bucket = ? OR bucket GLOB ? OR bucket GLOB ?`
         )
         .bind(
           authRateBucket,
-          authEmailCleanAllowanceBucket(authRateBucket),
-          `${authRateBucket}:ip:*`
+          `${authRateBucket}:ip:*`,
+          authKnownDeviceAllowanceBucket(authRateBucket, '*')
         )
     );
   }

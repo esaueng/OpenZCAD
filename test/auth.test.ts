@@ -245,10 +245,13 @@ function signInHarness(email = 'person@example.com') {
       })
     )
   );
-  const start = (ip: string) =>
+  const start = (ip: string, cookie?: string) =>
     startEmailLogin(
       new Request('https://example.com/api/auth/email/start', {
-        headers: { 'cf-connecting-ip': ip }
+        headers: {
+          'cf-connecting-ip': ip,
+          ...(cookie === undefined ? {} : { cookie })
+        }
       }),
       { email, turnstileToken: 'turnstile-token' },
       env
@@ -256,6 +259,11 @@ function signInHarness(email = 'person@example.com') {
   const verify = (challengeId: string, code: string) =>
     verifyEmailLogin({ challengeId, code }, env);
   return { env, sent, start, verify };
+}
+
+/** The `name=value` pair a browser sends back for a Set-Cookie line. */
+function cookiePair(setCookie: string): string {
+  return setCookie.split(';')[0]!;
 }
 
 function wrongCode(code: string): string {
@@ -660,7 +668,24 @@ describe('sign-in cannot be denied by someone who only knows the email', () => {
           env
         );
       await startOtherEmail();
-      const { session } = await verify(first.challengeId, firstCode);
+      const { session, knownDeviceCookie } = await verify(
+        first.challengeId,
+        firstCode
+      );
+      // A code to the signed-in browser's own allowance leaves a device
+      // bucket under the email's, which deletion erases too.
+      await start('198.51.100.9', cookiePair(knownDeviceCookie));
+      const deviceBuckets = () =>
+        (
+          env.DB as unknown as {
+            prepare(sql: string): { first(): Promise<{ count: number }> };
+          }
+        )
+          .prepare(
+            "SELECT COUNT(*) AS count FROM auth_rate_limits WHERE bucket GLOB 'email:*:device:*'"
+          )
+          .first();
+      expect(await deviceBuckets()).toEqual({ count: 1 });
       const deletionEnv = {
         ...env,
         PROJECT_STORAGE: {
@@ -678,6 +703,7 @@ describe('sign-in cannot be denied by someone who only knows the email', () => {
           new D1R2PersistenceService(deletionEnv)
         )
       ).resolves.toMatchObject({ ok: true, signedOut: true });
+      expect(await deviceBuckets()).toEqual({ count: 0 });
 
       // Both requesters exhausted three codes before deletion. Neither may
       // retain a silent limiter after its pending challenges have been erased.
@@ -820,43 +846,98 @@ describe('sign-in cannot be denied by someone who only knows the email', () => {
       await start(`203.0.113.${host}`);
     }
     expect(sent).toHaveLength(10);
-    // Past the shared allowance, two more requesters with no wrong codes
-    // still get one each.
-    await start('198.51.100.5');
-    await start('198.51.100.6');
-    expect(sent).toHaveLength(12);
 
     const capped = await start('198.51.100.7');
 
-    expect(sent).toHaveLength(12);
+    expect(sent).toHaveLength(10);
     expect(capped.expiresInSeconds).toBe(600);
-    await expect(verify(capped.challengeId, sent[11]!)).rejects.toMatchObject({
+    await expect(verify(capped.challengeId, sent[9]!)).rejects.toMatchObject({
       code: 'AUTH_CODE_INVALID'
     });
   });
 
-  it('still sends a code to a requester with no wrong codes once guessers spend the shared allowance', async () => {
+  it('keeps sending codes to a browser that signed in before once other requesters spend the shared allowance', async () => {
     const { sent, start, verify } = signInHarness();
-    for (let host = 1; host <= 10; host += 1) {
+    const first = await start('198.51.100.7');
+    const signedIn = await verify(first.challengeId, sent.at(-1)!);
+    expect(signedIn.knownDeviceCookie).toMatch(
+      /^__Host-openzcad_known_device=[A-Za-z0-9_-]{22}\.\d+\.[0-9a-f]{64}; Path=\/; HttpOnly; Secure; SameSite=Strict; Max-Age=15552000$/
+    );
+    const device = cookiePair(signedIn.knownDeviceCookie);
+
+    // Other requesters spend the rest of the shared allowance first.
+    for (let host = 1; host <= 9; host += 1) {
       const { challengeId } = await start(`203.0.113.${host}`);
       await expect(
         verify(challengeId, wrongCode(sent.at(-1)!))
       ).rejects.toMatchObject({ code: 'AUTH_CODE_INVALID' });
     }
     expect(sent).toHaveLength(10);
+    const sentCount = sent.length;
+    await start('203.0.113.50');
+    await start('198.51.100.8');
+    expect(sent).toHaveLength(sentCount);
 
-    // A requester with a wrong code of its own gets nothing more.
-    await start('203.0.113.1');
-    expect(sent).toHaveLength(10);
-
-    const owner = await start('198.51.100.7');
-    expect(sent).toHaveLength(11);
-    await expect(verify(owner.challengeId, sent[10]!)).resolves.toMatchObject({
-      session: { email: 'person@example.com' }
-    });
+    // The owner's browser draws on its own allowance, from any address.
+    const owner = await start('192.0.2.200', device);
+    expect(sent).toHaveLength(sentCount + 1);
+    await expect(
+      verify(owner.challengeId, sent.at(-1)!)
+    ).resolves.toMatchObject({ session: { email: 'person@example.com' } });
   });
 
-  it('cools an email down after a day of wrong codes, keeping one code a window for requesters with none', async () => {
+  it('honours a known-device cookie only for its own email, untampered and unexpired', async () => {
+    const owner = signInHarness();
+    const first = await owner.start('198.51.100.7');
+    const { knownDeviceCookie } = await owner.verify(
+      first.challengeId,
+      owner.sent.at(-1)!
+    );
+    const device = cookiePair(knownDeviceCookie);
+    const [name, value] = device.split('=') as [string, string];
+    const [id, expiry, mac] = value.split('.') as [string, string, string];
+
+    const other = signInHarness('someone@example.com');
+    for (let host = 1; host <= 10; host += 1) {
+      await other.start(`203.0.113.${host}`);
+    }
+    expect(other.sent).toHaveLength(10);
+    // Another email's device cookie, or a forged one, earns nothing here.
+    await other.start('192.0.2.200', device);
+    await other.start(
+      '192.0.2.201',
+      `${name}=${id}.${expiry}.${mac.replace(/^./, (c) => (c === '0' ? '1' : '0'))}`
+    );
+    await other.start(
+      '192.0.2.202',
+      `${name}=${id}.${Number(expiry) + 1}.${mac}`
+    );
+    expect(other.sent).toHaveLength(10);
+
+    // An expired cookie earns nothing for its own email either.
+    for (let host = 1; host <= 9; host += 1) {
+      await owner.start(`203.0.113.${host}`);
+    }
+    expect(owner.sent).toHaveLength(10);
+    const now = vi
+      .spyOn(Date, 'now')
+      .mockReturnValue((Number(expiry) + 1) * 1000);
+    try {
+      const sentCount = owner.sent.length;
+      // A new window: spend the shared allowance again, then try the cookie.
+      for (let host = 1; host <= 10; host += 1) {
+        await owner.start(`203.0.113.${100 + host}`);
+      }
+      const shared = owner.sent.length;
+      expect(shared).toBe(sentCount + 10);
+      await owner.start('192.0.2.200', device);
+      expect(owner.sent).toHaveLength(shared);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('cools an email down after a day of wrong codes, still sending codes to a browser that signed in before', async () => {
     const harness = signInHarness();
     const { env, sent, start, verify } = harness;
     let clock = Date.parse('2026-11-13T08:00:00Z');
@@ -866,6 +947,12 @@ describe('sign-in cannot be denied by someone who only knows the email', () => {
         'SELECT COALESCE(SUM(attempts), 0) AS count FROM auth_email_challenges'
       ).first<{ count: number }>())!.count;
     try {
+      const first = await start('198.51.100.7');
+      const device = cookiePair(
+        (await verify(first.challengeId, sent.at(-1)!)).knownDeviceCookie
+      );
+      clock += 15 * 60 * 1000;
+
       // Fifty wrong codes, each code tried until it locks, ten codes a
       // window from fresh addresses.
       let host = 0;
@@ -886,26 +973,24 @@ describe('sign-in cannot be denied by someone who only knows the email', () => {
         clock += 15 * 60 * 1000;
       }
 
-      // A fresh window: the shared allowance is closed, so a requester with
-      // wrong codes of its own gets nothing.
+      // A fresh window: the shared allowance sends nothing, to a requester
+      // with wrong codes of its own or to a fresh one asking first.
       clock += 15 * 60 * 1000;
       let sentCount = sent.length;
       await start('192.0.2.1');
+      await start('198.51.100.8');
       expect(sent).toHaveLength(sentCount);
 
-      // One requester with none gets a code this window, the next does not.
-      const owner = await start('198.51.100.7');
+      // The browser that signed in before still gets its codes.
+      const owner = await start('198.51.100.9', device);
       expect(sent).toHaveLength(sentCount + 1);
-      const ownerCode = sent.at(-1)!;
-      await start('198.51.100.8');
-      expect(sent).toHaveLength(sentCount + 1);
-      await expect(verify(owner.challengeId, ownerCode)).resolves.toMatchObject(
-        { session: { email: 'person@example.com' } }
-      );
+      await expect(
+        verify(owner.challengeId, sent.at(-1)!)
+      ).resolves.toMatchObject({ session: { email: 'person@example.com' } });
 
-      // Next window's code allows a single try.
+      // Past the failure limit each of its codes allows a single try.
       clock += 15 * 60 * 1000;
-      const oneTry = await start('198.51.100.9');
+      const oneTry = await start('198.51.100.9', device);
       const oneTryCode = sent.at(-1)!;
       await expect(
         verify(oneTry.challengeId, wrongCode(oneTryCode))

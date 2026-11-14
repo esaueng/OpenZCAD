@@ -17,7 +17,17 @@
     // Sweep expired D1 upload sessions only after their R2 state is gone.
     "crons": ["17 * * * *"]
   },
-  "ratelimits": [{"name":"GLIMPSE_USAGE_LIMITER", "namespace_id":"2026101501", "simple":{"limit":120,"period":60}}],
+  "ratelimits": [
+    {"name":"GLIMPSE_USAGE_LIMITER", "namespace_id":"2026101501", "simple":{"limit":120,"period":60}},
+    // Per-location request limits checked before any D1 work
+    // (REQUEST_LIMITS in apps/web/worker/apiRateLimit.ts, which each limit
+    // must match); a deployment without one counts that limit in D1 instead.
+    {"name":"AUTH_REQUEST_LIMITER", "namespace_id":"2026111301", "simple":{"limit":30,"period":60}},
+    {"name":"DESKTOP_EXCHANGE_LIMITER", "namespace_id":"2026111302", "simple":{"limit":60,"period":60}},
+    {"name":"ANONYMOUS_ASSISTANT_LIMITER", "namespace_id":"2026111303", "simple":{"limit":20,"period":60}},
+    {"name":"SHARE_LINK_LIMITER", "namespace_id":"2026111304", "simple":{"limit":300,"period":60}},
+    {"name":"ACCOUNT_READ_LIMITER", "namespace_id":"2026111305", "simple":{"limit":1200,"period":60}}
+  ],
   // Production collection enabled; optional analytics still require browser consent.
   "services": [{"binding":"GLIMPSE", "service":"glimpse", "entrypoint":"OpenZCADIngest"}],
   // See docs/glimpse.md for consent controls and rollback.

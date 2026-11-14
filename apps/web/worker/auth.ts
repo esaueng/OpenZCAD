@@ -9,6 +9,7 @@ import {
   isCloudflareFeatureEnabled,
   type CloudflareEnv
 } from '@openzcad/cloudflare-adapters';
+import { requestClientAddressKey } from './clientAddress';
 import { isDesktopAuthReady } from './readiness';
 
 import {
@@ -39,15 +40,15 @@ const LOGIN_FAILURE_WINDOW_SECONDS = 24 * 60 * 60;
 // of those failures age out, so wrong guesses per day stay near this cap
 // instead of growing with every code the shared allowance would send.
 const LOGIN_EMAIL_DAILY_FAILURE_CAP = 50;
-// Codes per window to one email for requesters with no wrong code of their
-// own in the failure window, once the shared allowance is spent or while the
-// email cools down. It keeps the owner able to sign in when someone else has
-// used up the shared allowance, and stays small because a fresh requester
-// is clean too.
-const LOGIN_EMAIL_CLEAN_ALLOWANCE = 2;
-// The same allowance while the email cools down: each such code allows one
-// try, so this bounds the wrong guesses a cooling email still takes.
-const LOGIN_EMAIL_COOLDOWN_ALLOWANCE = 1;
+// Codes per window to one email for a browser that has signed in to it
+// before (a valid known-device cookie). They come from the device's own
+// allowance, never the email's shared one, so the email's owner can still
+// get a code however other requesters spend the shared allowance, and while
+// the email cools down. Each device's allowance is its own, and only a
+// browser that once signed in to the email holds one.
+const LOGIN_KNOWN_DEVICE_ALLOWANCE = 3;
+// How long a known-device cookie lasts after the sign-in that set it.
+const KNOWN_DEVICE_MAX_AGE_SECONDS = 180 * 24 * 60 * 60;
 const DEFAULT_SESSION_DAYS = 30;
 const TURNSTILE_ACTION = 'email-code';
 const DESKTOP_CLIENT_ID = 'openzcad-macos';
@@ -475,48 +476,100 @@ async function takeRateLimit(
 }
 
 /**
- * Charges one code to the email: to its shared allowance unless the email is
- * cooling down, and otherwise, for a requester with no wrong code of its own
- * in the failure window, to the small clean-requester allowance.
+ * Charges one code to the email. A browser with a known-device cookie for
+ * this email draws on that device's own allowance; every other requester
+ * shares the email's allowance, which sends nothing while the email cools
+ * down.
  */
 async function takeEmailAllowance(
   db: D1Database,
   email: string,
   emailBucket: string,
-  requesterTag: string,
+  knownDeviceId: string | null,
   timestamp: number
 ): Promise<boolean> {
+  if (knownDeviceId) {
+    return takeRateLimit(
+      db,
+      authKnownDeviceAllowanceBucket(emailBucket, knownDeviceId),
+      LOGIN_KNOWN_DEVICE_ALLOWANCE,
+      timestamp
+    );
+  }
   const failures = await db
     .prepare(
-      `SELECT
-         COALESCE(SUM(attempts), 0) AS email_failures,
-         COALESCE(SUM(CASE WHEN id LIKE ? THEN attempts ELSE 0 END), 0)
-           AS requester_failures
+      `SELECT COALESCE(SUM(attempts), 0) AS email_failures
        FROM auth_email_challenges
        WHERE email = ? AND expires_at >= ?`
     )
-    .bind(`${requesterTag}.%`, email, timestamp - LOGIN_FAILURE_WINDOW_SECONDS)
-    .first<{ email_failures: number; requester_failures: number }>();
-  const coolingDown =
-    (failures?.email_failures ?? 0) >= LOGIN_EMAIL_DAILY_FAILURE_CAP;
-  if (
-    !coolingDown &&
-    (await takeRateLimit(db, emailBucket, LOGIN_EMAIL_RATE_LIMIT, timestamp))
-  ) {
-    return true;
+    .bind(email, timestamp - LOGIN_FAILURE_WINDOW_SECONDS)
+    .first<{ email_failures: number }>();
+  if ((failures?.email_failures ?? 0) >= LOGIN_EMAIL_DAILY_FAILURE_CAP) {
+    return false;
   }
-  if ((failures?.requester_failures ?? 0) > 0) return false;
-  return takeRateLimit(
-    db,
-    authEmailCleanAllowanceBucket(emailBucket),
-    coolingDown ? LOGIN_EMAIL_COOLDOWN_ALLOWANCE : LOGIN_EMAIL_CLEAN_ALLOWANCE,
-    timestamp
+  return takeRateLimit(db, emailBucket, LOGIN_EMAIL_RATE_LIMIT, timestamp);
+}
+
+/** A known device's own allowance bucket under an email's rate-limit bucket. */
+export function authKnownDeviceAllowanceBucket(
+  emailBucket: string,
+  deviceId: string
+): string {
+  return `${emailBucket}:device:${deviceId}`;
+}
+
+export const KNOWN_DEVICE_COOKIE_NAME = '__Host-openzcad_known_device';
+
+async function knownDeviceMac(
+  emailBucket: string,
+  deviceId: string,
+  expiresAt: number,
+  pepper: string
+): Promise<string> {
+  return hmac(
+    `openzcad-known-device-v1\n${emailBucket}\n${deviceId}\n${expiresAt}`,
+    pepper
   );
 }
 
-/** The clean-requester allowance's bucket for an email's rate-limit bucket. */
-export function authEmailCleanAllowanceBucket(emailBucket: string): string {
-  return `${emailBucket}:clean`;
+/**
+ * The known-device cookie a successful sign-in sets: a random device id and
+ * expiry, signed with the pepper and bound to the email's opaque bucket, so
+ * it names no email and works for no other one. Kept across sign-out; a
+ * sign-in to another email replaces it.
+ */
+async function createKnownDeviceCookie(
+  emailBucket: string,
+  pepper: string,
+  timestamp: number
+): Promise<string> {
+  const deviceId = randomToken(16);
+  const expiresAt = timestamp + KNOWN_DEVICE_MAX_AGE_SECONDS;
+  const mac = await knownDeviceMac(emailBucket, deviceId, expiresAt, pepper);
+  return `${KNOWN_DEVICE_COOKIE_NAME}=${deviceId}.${expiresAt}.${mac}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${KNOWN_DEVICE_MAX_AGE_SECONDS}`;
+}
+
+/** The request's known-device id for this email, or null. */
+async function knownDeviceId(
+  request: Request,
+  emailBucket: string,
+  pepper: string,
+  timestamp: number
+): Promise<string | null> {
+  const value = readCookie(request, KNOWN_DEVICE_COOKIE_NAME);
+  const match =
+    value && /^([A-Za-z0-9_-]{22})\.(\d{1,12})\.([0-9a-f]{64})$/.exec(value);
+  if (!match) return null;
+  const [, deviceId, expiry, mac] = match;
+  const expiresAt = Number(expiry);
+  if (expiresAt < timestamp) return null;
+  const expected = await knownDeviceMac(
+    emailBucket,
+    deviceId!,
+    expiresAt,
+    pepper
+  );
+  return constantTimeEqual(mac!, expected) ? deviceId! : null;
 }
 
 async function cleanExpiredAuthRows(
@@ -646,8 +699,7 @@ export async function startEmailLogin(
   await verifyTurnstile(request, turnstileToken, attemptId, env);
 
   const timestamp = nowSeconds();
-  const connectingIp =
-    request.headers.get('cf-connecting-ip')?.trim() || 'unknown';
+  const connectingIp = requestClientAddressKey(request);
   const [emailBucket, ipBucket, requesterKey] = await Promise.all([
     authEmailRateLimitBucket(email, env.AUTH_OTP_PEPPER),
     hmac(`ip:${connectingIp}`, env.AUTH_OTP_PEPPER),
@@ -678,7 +730,7 @@ export async function startEmailLogin(
       env.DB,
       email,
       emailBucket,
-      requesterTag,
+      await knownDeviceId(request, emailBucket, env.AUTH_OTP_PEPPER, timestamp),
       timestamp
     ))
   ) {
@@ -782,7 +834,11 @@ function parseChallengeId(value: unknown): string {
 export async function verifyEmailLogin(
   input: { challengeId: unknown; code: unknown },
   env: CloudflareEnv
-): Promise<{ session: AuthSession; cookie: string }> {
+): Promise<{
+  session: AuthSession;
+  cookie: string;
+  knownDeviceCookie: string;
+}> {
   requireEmailAuth(env);
   const challengeId = parseChallengeId(input.challengeId);
   const code = parseLoginCode(input.code);
@@ -919,7 +975,12 @@ export async function verifyEmailLogin(
   };
   return {
     session,
-    cookie: createSessionCookie(sessionToken, maxAgeSeconds)
+    cookie: createSessionCookie(sessionToken, maxAgeSeconds),
+    knownDeviceCookie: await createKnownDeviceCookie(
+      await authEmailRateLimitBucket(challenge.email, env.AUTH_OTP_PEPPER),
+      env.AUTH_OTP_PEPPER,
+      timestamp
+    )
   };
 }
 
@@ -1075,8 +1136,7 @@ export async function startDesktopAuthorization(
     43
   );
   const timestamp = nowSeconds();
-  const connectingIp =
-    request.headers.get('cf-connecting-ip')?.trim() || 'unknown';
+  const connectingIp = requestClientAddressKey(request);
   const ipBucket = await hmac(
     `desktop-ip:${connectingIp}`,
     env.AUTH_OTP_PEPPER!
@@ -1600,10 +1660,10 @@ export async function identifyAssistantIdentity(
       ...(session.email ? { email: session.email } : {})
     };
   }
-  const connectingIp = request.headers.get('cf-connecting-ip')?.trim();
-  if (!connectingIp) {
+  if (!request.headers.get('cf-connecting-ip')?.trim()) {
     throw new AuthenticationError();
   }
+  const connectingIp = requestClientAddressKey(request);
   const pepper = env.AI_IDENTITY_PEPPER?.trim();
   if (!pepper) {
     throw new AuthFlowError(

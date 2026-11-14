@@ -20,7 +20,7 @@ import {
   setCloudFunctionsEnabled
 } from './cloudMode';
 import { readSharedSourceBytes } from './sharedSourceDownload';
-import { sharedBlobUrl } from './e2ee/sharedSnapshotLoader';
+import { sharedBlobPath } from './e2ee/sharedSnapshotLoader';
 import { createContentBlobsApi } from './e2ee/encryptedContentBlobs';
 import { LEGACY_PROJECT_FRAME_CONTENT_TYPE } from '@openzcad/shared';
 
@@ -28,6 +28,11 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: vi.fn() }));
 
 const BLOB_ID = '0123456789abcdef0123456789abcdef';
+
+/** A share blob's path form, which the native host is handed. */
+function sharedBlobUrl(token: string, blobId: string): string {
+  return `/api/e2ee/share/${token}/blobs/${blobId}`;
+}
 
 type NativePiece = Uint8Array | Error | 'stall';
 
@@ -455,6 +460,39 @@ describe('desktop bridge', () => {
       'desktop_blob_stream_read',
       { streamId: 'stream-1' }
     ]);
+  });
+
+  it('hands the native host the path form of a share read whose token is in a header', async () => {
+    markDesktopRuntime();
+    mockNativeBlobStream([new Uint8Array([7])]);
+    const streamed = await desktopFetch(sharedBlobPath(BLOB_ID), {
+      credentials: 'omit',
+      headers: { 'x-openzcad-share-token': 'AbC-12_x' }
+    });
+    await streamed.arrayBuffer();
+    expect(invoke).toHaveBeenCalledWith('desktop_blob_stream_open', {
+      path: `/api/e2ee/share/AbC-12_x/blobs/${BLOB_ID}`
+    });
+
+    for (const [path, expected] of [
+      ['/api/e2ee/share', '/api/e2ee/share/AbC-12_x'],
+      ['/api/share', '/api/share/AbC-12_x'],
+      [
+        '/api/share/sources/artifact_1',
+        '/api/share/AbC-12_x/sources/artifact_1'
+      ]
+    ] as const) {
+      vi.mocked(invoke).mockReset();
+      vi.mocked(invoke).mockResolvedValue({ status: 200, body: [] });
+      await desktopFetch(path, {
+        headers: { 'x-openzcad-share-token': 'AbC-12_x' }
+      });
+      const [command, args] = vi.mocked(invoke).mock.calls[0]!;
+      expect(command).toBe('desktop_api_request');
+      expect((args as { request: { path: string } }).request.path).toBe(
+        expected
+      );
+    }
   });
 
   it('streams only blob and archived artifact reads; everything else stays buffered', async () => {

@@ -68,7 +68,7 @@ for (const [name, value] of [
     await page.route('**/api/session', (route) =>
       route.fulfill({ json: null })
     );
-    await page.route('**/api/share/*', (route) =>
+    await page.route('**/api/share', (route) =>
       route.fulfill({
         json: {
           document: shared,

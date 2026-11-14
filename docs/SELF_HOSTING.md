@@ -84,9 +84,20 @@ tracked config already declares the `PROJECT_ROOM` Durable Object binding and
 its `v1` SQLite migration; Wrangler applies that class migration on the first
 Worker deployment. Keep the binding name, class name, and migration tag.
 
-The hourly cron in the example runs the existing expired-upload cleanup. You
-may change its schedule, but keep a schedule if uploads are enabled. Cron
-schedules are UTC.
+The hourly cron in the example runs the existing expired-upload cleanup and
+reclaims expired rate-limit rows from D1. You may change its schedule, but
+keep a schedule if uploads are enabled. Cron schedules are UTC.
+
+The example's `ratelimits` entries are Workers rate-limit bindings that the
+Worker checks before any D1 work: sign-in verification and desktop refresh
+(`AUTH_REQUEST_LIMITER`), desktop sign-in polling (`DESKTOP_EXCHANGE_LIMITER`),
+anonymous assistant requests (`ANONYMOUS_ASSISTANT_LIMITER`), plaintext
+share-link reads (`SHARE_LINK_LIMITER`) and signed-in reads
+(`ACCOUNT_READ_LIMITER`). They need no resource to be created. Each
+`namespace_id` is any positive integer not used by another rate-limit binding
+in your account. Keep each binding's name, `limit` and 60-second `period` as
+they are: the Worker passes the same limits, and without a binding it counts
+that limit in D1 instead, which works but costs a D1 write per request.
 
 ## Configure email and Turnstile
 

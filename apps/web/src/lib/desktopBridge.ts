@@ -1,6 +1,10 @@
 import { saveFile } from './saveFile';
 import type { invoke as tauriInvoke } from '@tauri-apps/api/core';
-import { LEGACY_PROJECT_FRAME_CONTENT_TYPE } from '@openzcad/shared';
+import {
+  LEGACY_PROJECT_FRAME_CONTENT_TYPE,
+  SHARE_LINK_TOKEN_HEADER,
+  shareLinkTokenPath
+} from '@openzcad/shared';
 import { assertCloudFunctionsEnabled, cloudRequestSignal } from './cloudMode';
 
 export type DesktopMenuCommand =
@@ -386,6 +390,15 @@ export async function desktopFetch(
   const headers = new Headers(init.headers);
   const { invoke } = await tauriCore();
   let path = apiPath(input);
+  // The native host forwards no request headers but content-type, so a
+  // share-link read whose token travels in a header goes as the path form
+  // the Worker still serves (share-link-token.ts).
+  const shareToken = headers.get(SHARE_LINK_TOKEN_HEADER);
+  if (shareToken !== null && /^[A-Za-z0-9_-]{1,256}$/.test(shareToken)) {
+    const raw = new URL(path, CLOUD_API_ORIGIN);
+    const tokenPath = shareLinkTokenPath(raw.pathname, shareToken);
+    if (tokenPath) path = tokenPath + raw.search;
+  }
   // Older native hosts forward content-type only. Query negotiation keeps
   // browser-side legacy decoding available without a native protocol upgrade.
   if (

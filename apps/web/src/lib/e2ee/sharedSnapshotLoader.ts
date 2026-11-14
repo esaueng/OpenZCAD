@@ -37,6 +37,7 @@ import {
   documentNodesWithHistory,
   importedSourceReferenceOf,
   referenceImagesWithHistory,
+  SHARE_LINK_TOKEN_HEADER,
   type E2eeShareLinksApi,
   type ProjectDocument
 } from '@openzcad/shared';
@@ -161,9 +162,12 @@ export interface SharedSnapshotLoaderDeps {
   readonly idleMs?: number;
 }
 
-/** Where a visitor fetches one content blob of the link's snapshot. */
-export function sharedBlobUrl(token: string, blobId: string): string {
-  return `/api/e2ee/share/${encodeURIComponent(token)}/blobs/${encodeURIComponent(blobId)}`;
+/**
+ * Where a visitor fetches one content blob of the link's snapshot; the token
+ * goes in `SHARE_LINK_TOKEN_HEADER`, never the URL.
+ */
+export function sharedBlobPath(blobId: string): string {
+  return `/api/e2ee/share/blobs/${encodeURIComponent(blobId)}`;
 }
 
 async function sha256Hex(bytes: Uint8Array): Promise<string> {
@@ -265,11 +269,12 @@ async function preloadSharedBlobs(
     let plaintext: Uint8Array<ArrayBuffer>;
     try {
       const ciphertext = await readSharedSourceBytes(
-        sharedBlobUrl(token, reference.blobId),
+        sharedBlobPath(reference.blobId),
         file.name,
         deps.fetch,
         maxCiphertextBytes(reference),
-        deps.idleMs
+        deps.idleMs,
+        { [SHARE_LINK_TOKEN_HEADER]: token }
       );
       if (!ciphertext) throw new E2eeError('limit-exceeded', 'Too large');
       const result = await deps.decodeContentBlob({
