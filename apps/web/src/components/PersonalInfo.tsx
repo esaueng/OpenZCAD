@@ -4,8 +4,8 @@ import {
   type InputHTMLAttributes
 } from 'react';
 
-// Clicking any hidden name or email in Settings flips this one switch, and
-// project sharing follows it. Memory only, so every page load starts hidden
+// Clicking any hidden name or email flips this one switch: Settings, project
+// sharing and the cloud deletion dialog all follow it. Memory only, so every page load starts hidden
 // for screenshots.
 let personalInfoVisible = false;
 const listeners = new Set<() => void>();

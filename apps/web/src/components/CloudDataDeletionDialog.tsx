@@ -8,7 +8,11 @@ import type {
 } from '@openzcad/shared';
 import { api, ApiError } from '../lib/api';
 import { useModalFocus } from '../lib/useModalFocus';
-import { PrivateText } from './PersonalInfo';
+import {
+  PrivateText,
+  setPersonalInfoVisible,
+  usePersonalInfoVisible
+} from './PersonalInfo';
 
 interface CloudDataDeletionDialogProps {
   scope: AccountDeletionScope;
@@ -76,7 +80,9 @@ export function CloudDataDeletionDialog({
   const cancelRef = useRef<HTMLButtonElement>(null);
   const [preview, setPreview] = useState<AccountDeletionPreview | null>(null);
   const [confirmation, setConfirmation] = useState('');
-  const [personalInfoVisible, setPersonalInfoVisible] = useState(false);
+  // The same switch as Settings and project sharing: shown there, the email
+  // is shown here, and hiding it here hides it everywhere.
+  const personalInfoVisible = usePersonalInfoVisible();
   // Masked only while not being typed in (design review I78).
   const [confirmationFocused, setConfirmationFocused] = useState(false);
   const [busy, setBusy] = useState(false);
