@@ -1,3 +1,4 @@
+import { ownEntry } from '@openzcad/shared';
 import type {
   ProjectDocument,
   SketchNode,
@@ -68,7 +69,7 @@ export function sketchObjectLabels(
 ): Map<string, string> {
   const membership = compositeMembership(sketch);
   const objects = [...new Set(sketch.objectIds)].flatMap((id) => {
-    const node = document.nodes[id];
+    const node = ownEntry(document.nodes, id);
     if (node?.kind !== 'sketch-object') return [];
     const kind = node.data.objectKind;
     if (!storedDefaultName(node.name ?? '', kind)) {

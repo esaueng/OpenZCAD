@@ -1,4 +1,6 @@
 import {
+  ownEntry,
+  suppliedIds,
   deepClone,
   boundaryProvenanceObjectIds,
   MAX_SKETCH_POLYGON_SIDES,
@@ -215,7 +217,7 @@ export function prepareLegacySketchConversion(
 ): LegacySketchConversionInput {
   requirePromotionSchema(document);
   const sketch = findSketch(document, input.sketchId);
-  const source = document.nodes[input.sourceObjectId];
+  const source = ownEntry(document.nodes, input.sourceObjectId);
   if (
     !sketch?.objectIds.includes(input.sourceObjectId) ||
     source?.kind !== 'sketch-object' ||
@@ -235,7 +237,7 @@ export function prepareLegacySketchConversion(
   )
     refuse('wait for current exact sketch geometry before converting.');
   const linkedIds = sketch.objectIds.filter((id) => {
-    const node = document.nodes[id];
+    const node = ownEntry(document.nodes, id);
     return (
       node?.kind === 'sketch-object' && node.data.projection?.mode === 'linked'
     );
@@ -257,8 +259,8 @@ export function prepareLegacySketchConversion(
   const geometryOverrides: LegacySketchConversionQualification['geometryOverrides'] =
     [];
   for (const objectId of sketch.objectIds) {
-    const authored = document.nodes[objectId];
-    const read = view.nodes[objectId];
+    const authored = ownEntry(document.nodes, objectId);
+    const read = ownEntry(view.nodes, objectId);
     if (
       authored?.kind !== 'sketch-object' ||
       read?.kind !== 'sketch-object' ||
@@ -419,7 +421,7 @@ export function convertLegacySketchObject(
   requirePromotionSchema(document);
   const sketch = findSketch(document, input.sketchId);
   const source = sketch?.objectIds.includes(input.sourceObjectId)
-    ? document.nodes[input.sourceObjectId]
+    ? ownEntry(document.nodes, input.sourceObjectId)
     : undefined;
   if (
     !sketch ||
@@ -469,7 +471,7 @@ export function convertLegacySketchObject(
       refuse('rectangle sizes must be positive.');
   } else if (resolve(data.radius) <= 0)
     refuse('the polygon radius must be positive.');
-  const ids = input.ids;
+  const ids = suppliedIds(input.ids);
   if (
     !ids ||
     ids.edgeIds.length !== MAX_SKETCH_POLYGON_SIDES ||
@@ -495,7 +497,7 @@ export function convertLegacySketchObject(
       (id) =>
         typeof id !== 'string' ||
         !/^[A-Za-z0-9_-]+$/.test(id) ||
-        document.nodes[id]
+        ownEntry(document.nodes, id)
     ) ||
     new Set(memberIds).size !== memberIds.length ||
     !/^sprm_[A-Za-z0-9_-]+$/.test(ids.promotionId) ||
@@ -552,7 +554,7 @@ export function convertLegacySketchObject(
     input,
     new Map(
       sketch.objectIds.flatMap((id) => {
-        const node = document.nodes[id];
+        const node = ownEntry(document.nodes, id);
         return node?.kind === 'sketch-object' ? [[id, node.data] as const] : [];
       })
     )
@@ -779,7 +781,7 @@ export function convertLegacySketchObject(
     nextSketch.promotions,
     new Map(
       nextSketch.objectIds.flatMap((id) => {
-        const node = next.nodes[id];
+        const node = ownEntry(next.nodes, id);
         return node?.kind === 'sketch-object' ? [[id, node.data] as const] : [];
       })
     )

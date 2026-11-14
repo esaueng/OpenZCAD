@@ -1,3 +1,4 @@
+import { ownEntry } from '@openzcad/shared';
 import type {
   BodyId,
   BodyRepresentation,
@@ -144,7 +145,7 @@ export function ghostBodiesFor(
     return [];
   }
   return focus.ghostBodyIds.flatMap((bodyId) => {
-    const body = document.derived.bodyRepresentations[bodyId];
+    const body = ownEntry(document.derived.bodyRepresentations, bodyId);
     return body ? [body] : [];
   });
 }
@@ -280,7 +281,7 @@ function lineageTracer(document: ProjectDocument) {
         continue;
       }
       const head = rest.split('.', 1)[0] ?? '';
-      const owners = HEAD_KINDS[head];
+      const owners = ownEntry(HEAD_KINDS, head);
       if (!owners || owners.includes(kind)) {
         return traced(current.featureId);
       }

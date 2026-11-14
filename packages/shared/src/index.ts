@@ -20,6 +20,7 @@ export * from './assembly-kinematics';
 export * from './gear-mesh-types';
 export * from './gear-mesh';
 import type { DocumentHistory } from './document-history';
+import { ownEntry } from './document-validation';
 import type { KeymapOverrides } from './keymap-settings';
 import type { DrawingSet } from './drawings';
 import type {
@@ -5606,7 +5607,7 @@ export const FEATURE_COLORS: Record<FeatureKind, string> = {
 };
 
 export const featureColor = (kind: FeatureKind): string =>
-  FEATURE_COLORS[kind] ?? FEATURE_COLORS.primitive;
+  ownEntry(FEATURE_COLORS, kind) ?? FEATURE_COLORS.primitive;
 
 /**
  * The colour a body's own metadata asks for, or null when it asks for none:
@@ -5679,6 +5680,18 @@ export const UNIT_TO_MM: Record<UnitSystem, number> = {
   m: 1000,
   inch: 25.4
 };
+
+/**
+ * Millimetres per `units`. Anything but a unit system is refused rather than
+ * read as `UNIT_TO_MM[units]`, which turns an unknown value into NaN geometry
+ * and an inherited name into a prototype member.
+ */
+export function millimetresPerUnit(units: UnitSystem): number {
+  const millimetres = ownEntry(UNIT_TO_MM, units);
+  if (millimetres === undefined)
+    throw new RangeError(`Unknown units "${String(units)}".`);
+  return millimetres;
+}
 
 /** One ISO 261 coarse-pitch metric thread size, in millimetres. */
 export interface IsoMetricThreadSize {

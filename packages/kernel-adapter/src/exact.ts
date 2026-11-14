@@ -119,7 +119,7 @@ export type {
 import {
   BODY_OPACITY_METADATA_KEY,
   MAX_MESH_SOLID_CONVERSION_TRIANGLES,
-  UNIT_TO_MM,
+  millimetresPerUnit,
   bodyDisplayColor,
   importedSourceReferenceOf,
   isFeatureSuppressed,
@@ -4435,7 +4435,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
                   document.bodyOrder.length
                 ),
               analysisHashes,
-              1 / UNIT_TO_MM[document.units],
+              1 / millimetresPerUnit(document.units),
               strictVerdicts,
               measureOpening,
               this.heldDisplayDeflections.get(bodyId),
@@ -5047,7 +5047,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         kernel,
         faceHandle,
         exportLengthScale(document.units, units),
-        UNIT_TO_MM[document.units]
+        millimetresPerUnit(document.units)
       );
       return writeDxf(entities, { units });
     });
@@ -5199,7 +5199,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
           faces,
           plane,
           exportLengthScale(document.units, units),
-          UNIT_TO_MM[document.units]
+          millimetresPerUnit(document.units)
         ),
         { units }
       );
@@ -5390,7 +5390,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     const units = options.units ?? 'mm';
     const angular = explicitAngularTolerance(options.angularTolerance);
     // The deflection is physical millimetres; the solids are in `units`.
-    const unitDeflection = deflection / UNIT_TO_MM[units];
+    const unitDeflection = deflection / millimetresPerUnit(units);
     const io = await loadRemusTranslators();
     return this.withExportBuild(document, (kernel, build) => {
       const referenceMeshes = this.referenceExportMeshes(
@@ -5473,7 +5473,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         })
       );
     }
-    const unitDeflection = deflection / UNIT_TO_MM[units];
+    const unitDeflection = deflection / millimetresPerUnit(units);
     const io = await loadRemusTranslators();
     return this.withExportBuild(document, (kernel, build) => {
       const meshes =
@@ -5624,7 +5624,7 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     const units = tolerances.units ?? 'mm';
     // The writers' space: the export unit, at the deflection that is
     // `deflection` millimetres there.
-    const unitMm = UNIT_TO_MM[units];
+    const unitMm = millimetresPerUnit(units);
     const unitDeflection = deflection / unitMm;
     return this.withExportBuild(document, (kernel, build) => {
       const exportScale = exportLengthScale(document.units, units);

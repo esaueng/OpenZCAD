@@ -42,6 +42,7 @@ import {
 import type { RefusalCapture } from './lib/refusalHarvest';
 import { useRefusalHarvest } from './hooks/useRefusalHarvest';
 import {
+  ownEntry,
   PROJECT_MIGRATING_CODE,
   type DrawingAnnotation,
   type DrawingSheetId,
@@ -229,6 +230,7 @@ import {
   listParameters,
   suggestParameterQuantities,
   normalizeDocument,
+  reservedDocumentIdentifierError,
   numberedBodyName,
   numberedFeatureName,
   extrudeToFaceUnresolved,
@@ -3602,7 +3604,7 @@ export function App() {
     () =>
       doc
         ? doc.bodyOrder.filter((id) => {
-            const body = doc.derived.bodyRepresentations[id];
+            const body = ownEntry(doc.derived.bodyRepresentations, id);
             return (
               body !== undefined && !body.consumed && !hiddenBodyIds.has(id)
             );
@@ -5585,7 +5587,7 @@ export function App() {
         const valid =
           preview &&
           bodyId &&
-          preview.derived.bodyRepresentations[bodyId] &&
+          ownEntry(preview.derived.bodyRepresentations, bodyId) &&
           !warning;
         setPreviewDoc(
           valid ? { ...preview.document, derived: preview.derived } : null
@@ -8264,7 +8266,7 @@ export function App() {
       if (!node) {
         return [];
       }
-      const representation = doc.derived.bodyRepresentations[bodyId];
+      const representation = ownEntry(doc.derived.bodyRepresentations, bodyId);
       return [
         { bodyId, name: node.name, consumed: representation?.consumed ?? false }
       ];
@@ -8298,7 +8300,7 @@ export function App() {
             : []
       );
     }
-    const node = doc.nodes[requestedFeatureNodeId];
+    const node = ownEntry(doc.nodes, requestedFeatureNodeId);
     return node?.kind === 'feature' ? node : null;
   }, [
     doc,
@@ -8575,7 +8577,7 @@ export function App() {
       };
     }
     const bodyName = (bodyId: BodyId) =>
-      doc.derived.bodyRepresentations[bodyId]?.name ?? bodyId;
+      ownEntry(doc.derived.bodyRepresentations, bodyId)?.name ?? bodyId;
     const scope = exportScope(
       Object.values(doc.derived.bodyRepresentations).map((body) => ({
         bodyId: body.bodyId,
@@ -9079,7 +9081,7 @@ export function App() {
     // Against what is drawn: an edit preview republishes the faces it lights.
     const shown = previewDoc ?? doc;
     const focus = historyFeatureFocus(shown, selectedFeature, (bodyId) => {
-      const body = shown.derived.bodyRepresentations[bodyId];
+      const body = ownEntry(shown.derived.bodyRepresentations, bodyId);
       return Boolean(body && !body.consumed && !hiddenBodyIds.has(bodyId));
     });
     return focus.kind === 'focus' ? { feature: selectedFeature, focus } : null;
@@ -9437,6 +9439,12 @@ export function App() {
   ) {
     let normalized: ProjectDocument;
     try {
+      // Every document published here, from any source, is checked first: a
+      // reserved name such as "__proto__" as a key, id or selector would make
+      // map lookups reach inherited members. The project is not opened and the
+      // reason is shown; whatever was open stays open.
+      const refused = reservedDocumentIdentifierError(nextDocument);
+      if (refused) throw new Error(`This project cannot be opened: ${refused}`);
       normalized = normalizeDocument(nextDocument);
       // Shares are ephemeral; every persistence path still rejects owner writes.
       if (shareSessionRef.current) {
@@ -10602,14 +10610,15 @@ export function App() {
     feature: FeatureNode
   ): { middle: Vector3; outward: Vector3 } | null {
     const focus = historyFeatureFocus(current, feature, (bodyId) => {
-      const body = current.derived.bodyRepresentations[bodyId];
+      const body = ownEntry(current.derived.bodyRepresentations, bodyId);
       return Boolean(body && !body.consumed && !hiddenBodyIds.has(bodyId));
     });
     if (focus.kind !== 'focus') return null;
     for (const selection of focus.faces) {
-      const geometry = current.derived.bodyRepresentations[
+      const geometry = ownEntry(
+        current.derived.bodyRepresentations,
         selection.bodyId
-      ]?.topology?.faces.find(
+      )?.topology?.faces.find(
         (face) =>
           face.topologyId === selection.topologyId ||
           face.hash === selection.hash
@@ -11021,7 +11030,7 @@ export function App() {
     sketchId: SketchId,
     entityId: string
   ): boolean {
-    const node = current.nodes[entityId as EntityId];
+    const node = ownEntry(current.nodes, entityId as EntityId);
     return (
       node?.kind === 'sketch-object' &&
       !node.data.construction &&
@@ -12427,9 +12436,10 @@ export function App() {
     const attachment = faceSketchAttachment({
       bodyId: selection.bodyId,
       pickedHash: selection.hash,
-      face: current.derived.bodyRepresentations[
+      face: ownEntry(
+        current.derived.bodyRepresentations,
         selection.bodyId
-      ]?.topology?.faces.find((face) => face.hash === selection.hash)
+      )?.topology?.faces.find((face) => face.hash === selection.hash)
     });
     return attachment.ok ? attachment.planeRef : { reason: attachment.reason };
   }
@@ -18406,8 +18416,10 @@ export function App() {
     document: ProjectDocument,
     selection: TopologySelection
   ): boolean {
-    const topology =
-      document.derived.bodyRepresentations[selection.bodyId]?.topology;
+    const topology = ownEntry(
+      document.derived.bodyRepresentations,
+      selection.bodyId
+    )?.topology;
     if (!topology) {
       return false;
     }
@@ -20099,7 +20111,7 @@ export function App() {
         ? affectedFeatureTargets(base, sketchFeature.featureId)
         : [];
       if (repair) {
-        const node = base.nodes[repair.objectId];
+        const node = ownEntry(base.nodes, repair.objectId);
         if (node?.kind !== 'sketch-object' || pick.objects.length !== 1) {
           setStatus(
             'Re-pick one edge: a face projects several, and the object needs one source.'
@@ -20405,7 +20417,7 @@ export function App() {
       return false;
     const sketchId = target.sketchId as SketchId;
     const objectId = target.objectId as EntityId;
-    const selected = base.nodes[objectId];
+    const selected = ownEntry(base.nodes, objectId);
     const nextData =
       selected?.kind === 'sketch-object' && selected.data.construction
         ? { ...data, construction: true }
@@ -20465,7 +20477,7 @@ export function App() {
     if (!base || !target || sketchSolving || geometryBusy) return;
     const sketchId = target.sketchId as SketchId;
     const sourceObjectId = target.objectId as EntityId;
-    const source = base.nodes[sourceObjectId];
+    const source = ownEntry(base.nodes, sourceObjectId);
     if (
       source?.kind !== 'sketch-object' ||
       (source.data.objectKind !== 'rectangle' &&
@@ -25446,7 +25458,7 @@ export function App() {
       target.hash,
       {
         localBlendGroup: localBlendGroupBoss(
-          base.derived.bodyRepresentations[target.bodyId as BodyId],
+          ownEntry(base.derived.bodyRepresentations, target.bodyId as BodyId),
           target.concavity
         )
       }
@@ -25591,7 +25603,8 @@ export function App() {
       z: value[2]
     });
     const bodyId = target.bodyId as BodyId;
-    const faces = document.derived.bodyRepresentations[bodyId]?.topology?.faces;
+    const faces = ownEntry(document.derived.bodyRepresentations, bodyId)
+      ?.topology?.faces;
     const wall = faces
       ? findResizedCylinderFace(
           faces,
@@ -25661,7 +25674,10 @@ export function App() {
       y: value[1],
       z: value[2]
     });
-    const body = document.derived.bodyRepresentations[target.bodyId as BodyId];
+    const body = ownEntry(
+      document.derived.bodyRepresentations,
+      target.bodyId as BodyId
+    );
     if (!body) return;
     const wall = findHistoryBoreFace(
       body,
@@ -26466,9 +26482,10 @@ export function App() {
     // As for a new blend: the preview stays until the commit or a refusal.
     stopEdgePreview();
     const removing = size <= 1e-9;
-    const sourceFace = base.derived.bodyRepresentations[
+    const sourceFace = ownEntry(
+      base.derived.bodyRepresentations,
       current.target.bodyId as BodyId
-    ]?.topology?.faces.find(
+    )?.topology?.faces.find(
       (face) => face.topologyId === current.target.topologyId
     );
     const committedDirectEditFeatureId =
@@ -27151,7 +27168,10 @@ export function App() {
     }
     const target = current.target;
     const bodyId = target.bodyId as BodyId;
-    const face = base.derived.bodyRepresentations[bodyId]?.topology?.faces.find(
+    const face = ownEntry(
+      base.derived.bodyRepresentations,
+      bodyId
+    )?.topology?.faces.find(
       (candidate) =>
         candidate.topologyId === target.topologyId ||
         (target.hash !== undefined && candidate.hash === target.hash)
@@ -27160,7 +27180,10 @@ export function App() {
       return null;
     }
     const capBoundary =
-      base.derived.bodyRepresentations[bodyId]?.topology?.edges.filter((e) =>
+      ownEntry(
+        base.derived.bodyRepresentations,
+        bodyId
+      )?.topology?.edges.filter((e) =>
         e.adjacentFaceHashes?.includes(face.hash)
       ) ?? [];
     const sampledShoulderCap =
@@ -27169,12 +27192,12 @@ export function App() {
       (face.geometry?.normal?.z ?? 0) > 0.999 &&
       capBoundary.length > 0 &&
       capBoundary.every((e) => e.curve?.type === 'CIRCLE') &&
-      base.derived.bodyRepresentations[bodyId]?.topology?.faces.some(
+      ownEntry(base.derived.bodyRepresentations, bodyId)?.topology?.faces.some(
         (f) =>
           f.geometry?.surfaceType === 'torus' &&
           f.geometry.featureType === 'blend'
       ) &&
-      base.derived.bodyRepresentations[bodyId]?.topology?.faces.some(
+      ownEntry(base.derived.bodyRepresentations, bodyId)?.topology?.faces.some(
         (f) =>
           f.geometry?.surfaceType === 'cylinder' &&
           f.geometry.featureType === 'blend'
@@ -27557,7 +27580,7 @@ export function App() {
       return;
     }
     const nodeId = featureNodeIdForBody(commit.bodyId);
-    const feature = nodeId ? doc.nodes[nodeId] : undefined;
+    const feature = nodeId ? ownEntry(doc.nodes, nodeId) : undefined;
     if (
       feature?.kind !== 'feature' ||
       feature.data.featureKind !== 'primitive' ||
@@ -27772,7 +27795,7 @@ export function App() {
     if (!current) return;
     // A datum plane's row is a plane an in-place Mirror or Split can take:
     // the way to reach one a body hides in the viewport.
-    const clicked = current.nodes[nodeId];
+    const clicked = ownEntry(current.nodes, nodeId);
     // So is it a Plane's or Axis's source, or a plane for a picture.
     if (
       inPlaceRef.current.active &&
@@ -27817,7 +27840,7 @@ export function App() {
       selectedFeatureNodeId === nodeId
         ? null
         : nodeId;
-    const node = current.nodes[nodeId];
+    const node = ownEntry(current.nodes, nodeId);
     if (node?.kind !== 'feature') {
       setStatus('This history feature is no longer available to edit.');
       return;
@@ -27929,7 +27952,7 @@ export function App() {
     // running against geometry the panel no longer shows.
     dispatchInteraction({ type: 'clear' });
     selectFeatureNode(next, 'pinned');
-    const node = next ? current.nodes[next] : undefined;
+    const node = next ? ownEntry(current.nodes, next) : undefined;
 
     const sourceSketchId =
       node?.kind === 'feature' &&
@@ -27978,7 +28001,7 @@ export function App() {
       setSelectedProfiles([]);
     }
     const visible = (id: BodyId) => {
-      const result = current.derived.bodyRepresentations[id];
+      const result = ownEntry(current.derived.bodyRepresentations, id);
       return Boolean(result && !result.consumed && !hiddenBodyIds.has(id));
     };
     // A feature still on screen selects its body. One a later feature
@@ -28079,7 +28102,7 @@ export function App() {
       return;
     }
     const declared =
-      doc.derived.bodyRepresentations[feature.bodyId]
+      ownEntry(doc.derived.bodyRepresentations, feature.bodyId)
         ?.importedStepDeclaredSolidCount ?? 0;
     if (declared === 0) {
       return;
@@ -29185,7 +29208,10 @@ export function App() {
         }
         run(viewportMenuHandlersRef.current);
       };
-    const body = current.derived.bodyRepresentations[selection.bodyId];
+    const body = ownEntry(
+      current.derived.bodyRepresentations,
+      selection.bodyId
+    );
     const feature = selectionFeature(current, body, selection);
     const edge = selection.kind === 'edge';
     // Union and Subtract say why they are greyed out, as the rail does.
@@ -34812,7 +34838,10 @@ export function App() {
                   units={doc.units}
                   profileCount={Math.max(1, selectedProfiles.length)}
                   bodies={doc.bodyOrder.flatMap((bodyId) => {
-                    const body = doc.derived.bodyRepresentations[bodyId];
+                    const body = ownEntry(
+                      doc.derived.bodyRepresentations,
+                      bodyId
+                    );
                     return body && !body.consumed
                       ? [{ bodyId, name: body.name }]
                       : [];
@@ -35393,9 +35422,13 @@ export function App() {
                 }
                 bodies={exportBodyIds.map((bodyId) => ({
                   bodyId,
-                  name: doc.derived.bodyRepresentations[bodyId]?.name ?? bodyId,
-                  meshReference:
-                    doc.derived.bodyRepresentations[bodyId]?.meshReference
+                  name:
+                    ownEntry(doc.derived.bodyRepresentations, bodyId)?.name ??
+                    bodyId,
+                  meshReference: ownEntry(
+                    doc.derived.bodyRepresentations,
+                    bodyId
+                  )?.meshReference
                 }))}
                 revision={doc.version}
                 onClose={() => setMeshExportOpen(false)}

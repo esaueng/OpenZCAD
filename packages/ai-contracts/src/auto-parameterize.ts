@@ -1,4 +1,5 @@
 import {
+  ownEntry,
   isFeatureManuallySuppressed,
   isFeatureRollbackSuppressed,
   isFeatureSuppressed,
@@ -360,7 +361,8 @@ function featureScopeForBodies(
         neededSketches.add(data.profile.sketchId);
         break;
       case 'gear':
-        if (data.targetBodyId !== undefined) neededBodies.add(data.targetBodyId);
+        if (data.targetBodyId !== undefined)
+          neededBodies.add(data.targetBodyId);
         break;
       case 'boolean':
         data.targetBodyIds.forEach((bodyId) => neededBodies.add(bodyId));
@@ -456,7 +458,7 @@ function sketchCandidates(
   const candidates: ParameterCandidate[] = [];
   let skippedRelational = 0;
   sketch.objectIds.forEach((objectId, index) => {
-    const object = document.nodes[objectId];
+    const object = ownEntry(document.nodes, objectId);
     if (!object || object.kind !== 'sketch-object') {
       return;
     }
@@ -676,13 +678,14 @@ function importedThroughHoleCandidates(
     selected.length > 0
       ? selected
       : document.derived.exportableBodyIds.filter(
-          (bodyId) => !document.derived.bodyRepresentations[bodyId]?.consumed
+          (bodyId) =>
+            !ownEntry(document.derived.bodyRepresentations, bodyId)?.consumed
         );
   const features = listFeaturesInOrder(document);
   const candidates: ParameterCandidate[] = [];
 
   for (const bodyId of targetBodyIds) {
-    const body = document.derived.bodyRepresentations[bodyId];
+    const body = ownEntry(document.derived.bodyRepresentations, bodyId);
     if (!body?.topology || body.consumed) {
       continue;
     }
@@ -948,13 +951,14 @@ function importedBlendCandidates(
     selected.length > 0
       ? selected
       : document.derived.exportableBodyIds.filter(
-          (bodyId) => !document.derived.bodyRepresentations[bodyId]?.consumed
+          (bodyId) =>
+            !ownEntry(document.derived.bodyRepresentations, bodyId)?.consumed
         );
   const features = listFeaturesInOrder(document);
   const candidates: ParameterCandidate[] = [];
 
   for (const bodyId of targetBodyIds) {
-    const body = document.derived.bodyRepresentations[bodyId];
+    const body = ownEntry(document.derived.bodyRepresentations, bodyId);
     if (!body?.topology || body.consumed) {
       continue;
     }
@@ -1121,13 +1125,14 @@ function importedFaceDistanceCandidates(
     selected.length > 0
       ? selected
       : document.derived.exportableBodyIds.filter(
-          (bodyId) => !document.derived.bodyRepresentations[bodyId]?.consumed
+          (bodyId) =>
+            !ownEntry(document.derived.bodyRepresentations, bodyId)?.consumed
         );
   const features = listFeaturesInOrder(document);
   const candidates: ParameterCandidate[] = [];
 
   for (const bodyId of targetBodyIds) {
-    const body = document.derived.bodyRepresentations[bodyId];
+    const body = ownEntry(document.derived.bodyRepresentations, bodyId);
     const topology = body?.topology;
     if (!body || !topology || body.consumed) {
       continue;
@@ -1251,12 +1256,22 @@ export function createAutoParameterizeProposal(
     ...importedFaceDistanceCandidates(document, selection),
     ...importedThroughHoleCandidates(document, selection),
     ...importedBlendCandidates(document, selection)
-  ].filter(candidate => {
-    const faces = selection.topologies.filter(item => item.kind === 'face');
+  ].filter((candidate) => {
+    const faces = selection.topologies.filter((item) => item.kind === 'face');
     if (!candidate.imported || faces.length === 0) return true;
-    const operation = candidate.bind(new Map(candidate.parameters.map(parameter => [parameter.key, parameter.key])));
+    const operation = candidate.bind(
+      new Map(
+        candidate.parameters.map((parameter) => [parameter.key, parameter.key])
+      )
+    );
     if (operation.kind !== 'add_direct_edit') return true;
-    return faces.some(face => face.bodyId === operation.targetBodyId && (face.hash === operation.operation.faceHash || (operation.operation.kind === 'set-face-distance' && face.hash === operation.operation.oppositeFaceHash)));
+    return faces.some(
+      (face) =>
+        face.bodyId === operation.targetBodyId &&
+        (face.hash === operation.operation.faceHash ||
+          (operation.operation.kind === 'set-face-distance' &&
+            face.hash === operation.operation.oppositeFaceHash))
+    );
   });
   if (allCandidates.length === 0) {
     return null;

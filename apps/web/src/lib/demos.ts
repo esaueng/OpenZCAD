@@ -16,6 +16,7 @@ import {
   type SketchFeatureIds
 } from '@openzcad/document-core';
 import {
+  ownEntry,
   toUserId,
   type DerivedState,
   type EdgeTopology,
@@ -140,7 +141,7 @@ function pickEdges(
   predicate: (p: P3) => boolean,
   edgeSpan?: (span: P3) => boolean
 ): EdgeTopology[] {
-  const representation = derived.bodyRepresentations[bodyId];
+  const representation = ownEntry(derived.bodyRepresentations, bodyId);
   const picked: EdgeTopology[] = [];
   for (const edge of representation?.topology?.edges ?? []) {
     let all = true;
@@ -486,7 +487,8 @@ async function buildVisualSelectionAcceptance(
 
   const revBDerived = await syncExact(builder.document);
   const outerRims = (
-    revBDerived.bodyRepresentations[boredBoss.bodyId]?.topology?.edges ?? []
+    ownEntry(revBDerived.bodyRepresentations, boredBoss.bodyId)?.topology
+      ?.edges ?? []
   )
     .filter(
       (edge) =>
@@ -892,7 +894,7 @@ function withDemoIdentity(
   document: ProjectDocument,
   definition: DemoDefinition
 ): ProjectDocument {
-  const rootNode = document.nodes[document.rootNodeId];
+  const rootNode = ownEntry(document.nodes, document.rootNodeId);
   return {
     ...document,
     editHistory: undefined,

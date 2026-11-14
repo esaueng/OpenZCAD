@@ -8,7 +8,11 @@ import {
   composeCommands,
   type AnyCommand
 } from '@openzcad/command-system';
-import { isFeatureSuppressed, isInPlaceTransform } from '@openzcad/shared';
+import {
+  ownEntry,
+  isFeatureSuppressed,
+  isInPlaceTransform
+} from '@openzcad/shared';
 import type {
   BodyId,
   FaceTopology,
@@ -234,7 +238,7 @@ function faceTravelHint(
   face: FaceTopology,
   offset: number
 ): string | undefined {
-  const representation = document.derived.bodyRepresentations[bodyId];
+  const representation = ownEntry(document.derived.bodyRepresentations, bodyId);
   // Measured on the body the plan edits, never on a stale copy of the face.
   const current = representation?.topology?.faces.find(
     (candidate) =>

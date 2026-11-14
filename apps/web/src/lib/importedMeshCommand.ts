@@ -1,7 +1,7 @@
 import { commandFactories } from '@openzcad/command-system';
 import type { BodyFeatureIds } from '@openzcad/document-core';
 import {
-  UNIT_TO_MM,
+  millimetresPerUnit,
   type ImportedSourceReference,
   type UnitSystem
 } from '@openzcad/shared';
@@ -49,8 +49,8 @@ export function meshInDocumentUnits(
   units: UnitSystem,
   reading: UnitSystem = 'mm'
 ): DocumentUnitTriangles {
-  const scale = 1 / UNIT_TO_MM[units];
-  const millimetres = UNIT_TO_MM[reading];
+  const scale = 1 / millimetresPerUnit(units);
+  const millimetres = millimetresPerUnit(reading);
   return {
     vertices:
       scale === 1 && millimetres === 1

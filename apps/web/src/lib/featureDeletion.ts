@@ -1,6 +1,7 @@
 import { commandFactories } from '@openzcad/command-system';
 import { deleteFeature, listFeaturesInOrder } from '@openzcad/document-core';
 import {
+  ownEntry,
   isFeatureSuppressed,
   type BodyId,
   type DirectEditOperation,
@@ -66,7 +67,7 @@ function singleFaceDeletion(
     face: [name: string, success: string];
   }
 ) {
-  const body = document.derived.bodyRepresentations[selection.bodyId];
+  const body = ownEntry(document.derived.bodyRepresentations, selection.bodyId);
   const resolved = resolveSelectionTopology(body, selection);
   if (!body || body.consumed || resolved?.kind !== 'face') {
     throw new Error(names.missing);
@@ -141,7 +142,7 @@ export function faceSetDeletion(
   ) {
     throw new Error('Select two or more faces on one body to delete them.');
   }
-  const body = document.derived.bodyRepresentations[bodyId];
+  const body = ownEntry(document.derived.bodyRepresentations, bodyId);
   if (!body || body.consumed) {
     throw new Error('Select faces on a current body.');
   }
@@ -226,7 +227,7 @@ export function nativeFeatureDeletion(
             live.featureId
           ) ||
           featureResultBodyIds(live).some(
-            (id) => !derived.bodyRepresentations[id]
+            (id) => !ownEntry(derived.bodyRepresentations, id)
           )
         );
       });
@@ -241,7 +242,7 @@ export function nativeFeatureDeletion(
           feature.name
         );
       }
-      if (!derived.bodyRepresentations[data.targetBodyId]) {
+      if (!ownEntry(derived.bodyRepresentations, data.targetBodyId)) {
         throw new FeatureBuildError(
           `Cannot remove "${feature.name}": its original body could not rebuild.`,
           feature.featureId,
@@ -345,7 +346,7 @@ export function batchFeatureDeletion(
                   live.featureId
                 ) ||
                 featureResultBodyIds(live).some(
-                  (id) => !derived.bodyRepresentations[id]
+                  (id) => !ownEntry(derived.bodyRepresentations, id)
                 )
             );
           if (refused.length) {
@@ -369,7 +370,7 @@ export function batchFeatureDeletion(
           if (
             input &&
             !removedBodies.has(input) &&
-            !derived.bodyRepresentations[input]
+            !ownEntry(derived.bodyRepresentations, input)
           ) {
             throw new FeatureBuildError(
               `Cannot remove "${detail.name}": its original body could not rebuild.`,

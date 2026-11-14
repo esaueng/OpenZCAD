@@ -16,6 +16,7 @@ import type {
   SketchReferenceCurveTarget,
   UnitSystem
 } from './index';
+import { ownEntry } from './document-validation';
 
 import {
   isSketchCompositeCornerTarget,
@@ -919,9 +920,16 @@ export function convertReferenceLengthForDisplay(
     return value;
   }
   return (
-    value *
-    (REFERENCE_MM_PER_UNIT[fromUnit] / REFERENCE_MM_PER_UNIT[displayUnit])
+    value * (referenceMillimetres(fromUnit) / referenceMillimetres(displayUnit))
   );
+}
+
+/** Millimetres per unit; an unknown unit is refused, never read as NaN. */
+function referenceMillimetres(unit: UnitSystem): number {
+  const millimetres = ownEntry(REFERENCE_MM_PER_UNIT, unit);
+  if (millimetres === undefined)
+    throw new RangeError(`Unknown units "${String(unit)}".`);
+  return millimetres;
 }
 
 /** Display unit label. `inch` renders as `in`, matching the measurement dock. */

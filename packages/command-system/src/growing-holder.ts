@@ -1,4 +1,4 @@
-import { isInPlaceTransform } from '@openzcad/shared';
+import { ownEntry, isInPlaceTransform } from '@openzcad/shared';
 import {
   constantRigidTransform,
   createBodyFeatureIds,
@@ -182,6 +182,10 @@ const PLANE_FOR_AXIS: Record<OpeningAxis, PlaneId> = {
 const AXIS_INDEX: Record<OpeningAxis, 0 | 1 | 2> = { x: 0, y: 1, z: 2 };
 const AXES = ['x', 'y', 'z'] as const;
 
+/** Whether a decoded value is one of the three opening axes. */
+const isOpeningAxis = (value: unknown): value is OpeningAxis =>
+  (AXES as readonly unknown[]).includes(value);
+
 const literal = (value: number): string =>
   value < 0 ? `(${value})` : String(value);
 const tidy = (value: number) => Math.round(value * 1e9) / 1e9;
@@ -358,7 +362,7 @@ export function validateGrowingHolderRecipe(recipe: GrowingHolderRecipe): void {
     throw new Error('A growing-holder recipe needs a name.');
   if (typeof recipe.targetBodyId !== 'string' || !recipe.targetBodyId)
     throw new Error('A growing-holder recipe needs a target body.');
-  if (!(recipe.axis in PLANE_FOR_AXIS))
+  if (!isOpeningAxis(recipe.axis))
     throw new Error('The opening axis must be x, y or z.');
   if (
     !recipe.envelope ||
@@ -406,7 +410,7 @@ export function validateGrowingHolderRecipe(recipe: GrowingHolderRecipe): void {
     );
   const height = recipe.height;
   if (height === undefined) return;
-  if (!(height.axis in PLANE_FOR_AXIS) || height.axis === recipe.axis)
+  if (!isOpeningAxis(height.axis) || height.axis === recipe.axis)
     throw new Error('The height axis must differ from the opening axis.');
   if (
     !Array.isArray(height.cuts) ||
@@ -1000,7 +1004,7 @@ export function growingHolderHistories(
         !sameValue(sketchNode.planeRef.offset, bridge.offset) ||
         sketchNode.objectIds.length !== bridge.section.length ||
         sketchNode.objectIds.some((id, index) => {
-          const node = document.nodes[id];
+          const node = ownEntry(document.nodes, id);
           return (
             node?.kind !== 'sketch-object' ||
             !sameNumericObject(node.data, bridge.section[index])

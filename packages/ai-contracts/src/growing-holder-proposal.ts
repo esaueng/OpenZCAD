@@ -1,4 +1,5 @@
 import { rigidImportedSource } from '@openzcad/document-core';
+import { ownEntry } from '@openzcad/shared';
 import type {
   BodyId,
   ProjectDocument,
@@ -26,7 +27,7 @@ export function growingHolderProposalTarget(
   selection: Pick<CadSelectionContext, 'bodyIds'>
 ): GrowingHolderProposalTarget | null {
   const eligible = document.bodyOrder.flatMap((bodyId) => {
-    const body = document.derived.bodyRepresentations[bodyId];
+    const body = ownEntry(document.derived.bodyRepresentations, bodyId);
     const recognition = body?.topology?.recognizedOpening;
     if (
       !body ||

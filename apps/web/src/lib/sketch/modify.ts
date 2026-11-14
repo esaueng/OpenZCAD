@@ -25,6 +25,7 @@ import {
   geometryTolerance
 } from '@openzcad/geometry';
 import {
+  ownEntry,
   createId,
   sketchCompositeTargetMemberIds,
   sketchReferenceDimensionObjectIds,
@@ -2294,7 +2295,7 @@ export function planSketchConstructionToggle(
   objectId: string
 ): SketchModifyPlan {
   // This changes profile membership only; retain the authored coordinates.
-  const node = document.nodes[objectId as EntityId];
+  const node = ownEntry(document.nodes, objectId as EntityId);
   const data =
     sketch.objectIds.includes(objectId as EntityId) &&
     node?.kind === 'sketch-object'

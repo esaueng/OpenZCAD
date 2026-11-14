@@ -277,6 +277,7 @@ import {
   VIEWPORT_FIELD_OF_VIEW_BOUNDS,
   XRAY_OPACITY_BOUNDS,
   displayLengthName,
+  ownEntry,
   type GeometryBodyRepresentation,
   type FaceGeometry,
   type TopologySelection,
@@ -1656,7 +1657,7 @@ interface DimensionLabelBinding {
  * chip five inches, off the top of the window and under the top bar.
  */
 function calloutLift(box: THREE.Box3, units: string): number {
-  const millimetresPerUnit = UNIT_TO_MM[units as UnitSystem] ?? 1;
+  const millimetresPerUnit = ownEntry(UNIT_TO_MM, units) ?? 1;
   return Math.max(
     box.getSize(new THREE.Vector3()).z * 0.12,
     5 / millimetresPerUnit

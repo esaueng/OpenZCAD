@@ -10,6 +10,7 @@ import { Trash2 } from 'lucide-react';
 import { coerceParamValue } from '@openzcad/document-core';
 import { findFontFace } from '@openzcad/geometry';
 import {
+  ownEntry,
   MATERIAL_DENSITY_PRESETS,
   MAX_CUSTOM_DENSITY_KG_PER_M3,
   UNIT_MASS_DENSITY_SELECTION,
@@ -1031,7 +1032,7 @@ function FaceDirectEdit({
       ? 'Imported blend'
       : geometry.featureType === 'through-hole'
         ? 'Through hole'
-        : (SURFACE_LABELS[geometry.surfaceType] ??
+        : (ownEntry(SURFACE_LABELS, geometry.surfaceType) ??
           `${geometry.surfaceType} face`);
 
   return (
@@ -1564,14 +1565,15 @@ export function Inspector(props: InspectorProps) {
         : props.massPropertiesDocument;
     const statsBody =
       measureLastApplied && props.document && selectedBody
-        ? (props.document.derived.bodyRepresentations[selectedBody.bodyId] ??
-          null)
+        ? (ownEntry(
+            props.document.derived.bodyRepresentations,
+            selectedBody.bodyId
+          ) ?? null)
         : selectedBody;
     const splitHalf =
       data.featureKind === 'split'
-        ? (statsDocument?.derived.bodyRepresentations[
-            data.secondBodyId
-          ] ?? props.bodyRepresentations?.[data.secondBodyId])
+        ? (statsDocument?.derived.bodyRepresentations[data.secondBodyId] ??
+          props.bodyRepresentations?.[data.secondBodyId])
         : undefined;
     const featurePanel = (
       <>
@@ -1654,9 +1656,7 @@ export function Inspector(props: InspectorProps) {
           )}
         {statsBody && (
           <>
-            {splitHalf && (
-              <h3 className="section-title">{statsBody.name}</h3>
-            )}
+            {splitHalf && <h3 className="section-title">{statsBody.name}</h3>}
             <BodyStats
               body={statsBody}
               units={units}
