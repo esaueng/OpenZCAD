@@ -1654,7 +1654,10 @@ import {
   resolveShelfThumbnail,
   cachedThumbnailSource
 } from './lib/projectShelf';
-import { preparePartThumbnails } from './components/PartThumbnail';
+import {
+  preparePartThumbnails,
+  rememberCapturedThumbnail
+} from './components/PartThumbnail';
 import { folderStorageKey, readLibraryFolders } from './lib/libraryFolders';
 import { sharedThumbnailCapture } from './lib/sharedThumbnailCapture';
 import {
@@ -4589,6 +4592,21 @@ export function App() {
     cloudProjectIds
   };
   const thumbnailAccountUserId = session?.userId;
+  // Every card the workspace captures goes straight to the shelf's tile
+  // cache, so the shelf shown on leaving draws it without waiting for the
+  // refreshed listing.
+  useEffect(
+    () =>
+      sharedThumbnailCapture.subscribe((captured) =>
+        rememberCapturedThumbnail({
+          projectId: captured.projectId,
+          source: captured.source,
+          accountId: thumbnailAccountUserId ?? null,
+          protected: isEncryptedProject(captured.projectId)
+        })
+      ),
+    [thumbnailAccountUserId]
+  );
   const loadProperties = useCallback(
     async (project: ProjectSummary) => {
       const { loadProjectProperties } = await import('./lib/projectProperties');

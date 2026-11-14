@@ -108,6 +108,18 @@ export function cachedThumbnailSource(
   if (!cached) {
     return undefined;
   }
+  // An image this device drew from the exact version the listing names is as
+  // current as any account copy can be. Its artifact id can still disagree:
+  // the workspace uploads each card as it leaves, so a listing fetched while
+  // that upload finalized names the card it superseded. Downloading there
+  // spent a round trip to put the previous card back on the tile.
+  if (
+    cached.source &&
+    project.documentVersion !== undefined &&
+    cached.version === project.documentVersion
+  ) {
+    return cached.source;
+  }
   if (
     project.thumbnailArtifactId &&
     cached.artifactId !== project.thumbnailArtifactId &&

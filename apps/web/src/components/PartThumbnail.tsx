@@ -171,6 +171,57 @@ function thumbnailFor(
   return pending;
 }
 
+/**
+ * Puts a card the open workspace just captured in front of the shelf's tiles.
+ *
+ * Without it, returning to the shelf showed the previous card: a tile's
+ * remembered image is keyed by the listing it was loaded for, and the listing
+ * the shelf renders first is the one from before the project was opened, so
+ * the tile answered its own stale key until the refreshed listing arrived —
+ * a network round trip with an account, never while offline.
+ *
+ * The seed's key matches no listing, so a mounted tile still re-reads the
+ * device record for its own key; until then it shows this image rather than
+ * the superseded one. An encrypted project's image is stored as protected,
+ * scoped to this account and key session like every other protected image.
+ */
+export function rememberCapturedThumbnail(input: {
+  projectId: string;
+  source: string | null;
+  accountId: string | null;
+  protected: boolean;
+}): void {
+  const { projectId, source } = input;
+  if (input.protected && (!input.accountId || !isKeySessionActive())) {
+    // Nothing may be shown for it here; drop the superseded card instead.
+    thumbnails.delete(projectId);
+    latestRequest.delete(projectId);
+    return;
+  }
+  const authorization = input.protected
+    ? `protected:${input.accountId}:${getKeySessionVersion()}`
+    : 'device';
+  // A read already under way for the old listing would otherwise land after
+  // this and put the superseded card back.
+  latestRequest.delete(projectId);
+  thumbnails.delete(projectId);
+  thumbnails.set(projectId, {
+    key: `captured:${projectId}`,
+    projectId,
+    authorization,
+    protected: input.protected,
+    source
+  });
+  if (thumbnails.size > MAX_RETAINED_THUMBNAILS) {
+    const oldest = thumbnails.keys().next().value!;
+    thumbnails.delete(oldest);
+    latestRequest.delete(oldest);
+  }
+  // Inserted synchronously so a shelf mounting right after the leave flush
+  // reads it; the decode only warms the image the tile is about to show.
+  if (source) void decodeThumbnail(source).catch(() => undefined);
+}
+
 /** Prime a bounded first screen from device images before mounting its tiles.
  * A slow/blocked store cannot hold the library; unfinished reads remain reusable.
  * The caller supplies a cache-only loader: no document loads or uploads here.

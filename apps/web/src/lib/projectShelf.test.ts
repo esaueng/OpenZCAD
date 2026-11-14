@@ -219,6 +219,42 @@ describe('cachedThumbnailSource', () => {
       )
     ).toBeUndefined();
   });
+
+  it('keeps the card drawn from the listed version when the listing names the one it superseded', () => {
+    // Leaving the workspace writes the card and uploads it; a listing fetched
+    // while that upload finalized still names the previous artifact.
+    expect(
+      cachedThumbnailSource(
+        {
+          ...record('data:image/webp;base64,FRESH', LISTED),
+          version: 9,
+          artifactId: toArtifactId('artifact_just_uploaded')
+        },
+        {
+          ...summary(LISTED),
+          documentVersion: 9,
+          thumbnailArtifactId: toArtifactId('artifact_superseded')
+        }
+      )
+    ).toBe('data:image/webp;base64,FRESH');
+  });
+
+  it('still fetches the account card once the listed version moves past the device one', () => {
+    expect(
+      cachedThumbnailSource(
+        {
+          ...record('data:image/webp;base64,OLD', LISTED),
+          version: 9,
+          artifactId: toArtifactId('artifact_mine')
+        },
+        {
+          ...summary(LISTED),
+          documentVersion: 12,
+          thumbnailArtifactId: toArtifactId('artifact_other_device')
+        }
+      )
+    ).toBeUndefined();
+  });
 });
 
 describe('mergeProjectSummaries', () => {
