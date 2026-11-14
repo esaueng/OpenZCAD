@@ -3105,7 +3105,14 @@ export function StartScreen({
               }
               className={
                 [
-                  shelf === entry.status ? 'is-active' : '',
+                  // An open folder is the place shown, so its row wears the
+                  // highlight; the shelf holding it steps back (is-parent),
+                  // lit again only where the folder list is not shown.
+                  shelf === entry.status
+                    ? openFolder
+                      ? 'is-parent'
+                      : 'is-active'
+                    : '',
                   reorder.dropTarget?.target === `shelf:${entry.status}`
                     ? 'is-drop-target'
                     : '',
