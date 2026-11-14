@@ -414,6 +414,136 @@ describe('closing a shaped window by pushing its floor', () => {
 });
 
 /**
+ * A window cut across a thicker strip of wall — a rib along the inside, the
+ * way a case's rail band thickens the wall a port crosses. The window floor
+ * is then an L where the window takes the rib's end, or a T where the rib
+ * runs through it, with a reflex corner at each side of the rib, and pushing
+ * it up to the top still closes the window exactly.
+ */
+describe('closing a window whose floor is not convex', () => {
+  /** The rib: 8 wide, 1 proud of the wall's inside, the wall's full height. */
+  const RIB_VOLUME = 8 * 1 * 40;
+
+  /** The window (x 20 to 36) and a rib from `ribX`, 1 deep where they meet. */
+  async function ribbedWindow(ribX: number) {
+    const floorArea =
+      16 * 4 + (Math.min(36, ribX + 8) - Math.max(20, ribX)) * 1;
+    adapter ??= await createExactKernelAdapter();
+    let document = createProjectDocument('Window', toUserId('user_window'));
+    document = addPrimitiveFeature(document, {
+      name: 'Wall',
+      primitiveKind: 'box',
+      dimensions: { width: 60, height: 4, depth: 40 }
+    });
+    const wall = document.bodyOrder.at(-1)!;
+    document = addPrimitiveFeature(document, {
+      name: 'Rib',
+      primitiveKind: 'box',
+      dimensions: { width: 8, height: 1, depth: 40 }
+    });
+    document = transformBody(document, {
+      name: 'Place the rib',
+      targetBodyId: document.bodyOrder.at(-1)!,
+      translation: { x: ribX, y: 4, z: 0 },
+      rotationDeg: { x: 0, y: 0, z: 0 }
+    }).document;
+    const rib = document.bodyOrder.at(-1)!;
+    document = addPrimitiveFeature(document, {
+      name: 'Window tool',
+      primitiveKind: 'box',
+      dimensions: { width: 16, height: 10, depth: WINDOW_HEIGHT }
+    });
+    document = transformBody(document, {
+      name: 'Place the window',
+      targetBodyId: document.bodyOrder.at(-1)!,
+      translation: { x: 20, y: -3, z: 10 },
+      rotationDeg: { x: 0, y: 0, z: 0 }
+    }).document;
+    const tool = document.bodyOrder.at(-1)!;
+    const manager = new CommandManager(document);
+    manager.execute(
+      commandFactories.booleanBodies({
+        name: 'Add the rib',
+        operation: 'union',
+        targetBodyIds: [wall, rib]
+      })
+    );
+    const ribbedId = manager.document.bodyOrder.at(-1)!;
+    const ribbed = (await adapter.syncDocument(manager.document))
+      .bodyRepresentations[ribbedId]!;
+    expect(ribbed.volume).toBeCloseTo(WALL_VOLUME + RIB_VOLUME, 6);
+    manager.execute(
+      commandFactories.booleanBodies({
+        name: 'Cut the window',
+        operation: 'subtract',
+        targetBodyIds: [ribbedId, tool]
+      })
+    );
+    const derived = await adapter.syncDocument(manager.document);
+    expect(derived.warnings).toEqual([]);
+    const bodyId = [...manager.document.bodyOrder]
+      .reverse()
+      .find(
+        (id) =>
+          derived.bodyRepresentations[id] &&
+          !derived.bodyRepresentations[id].consumed
+      )!;
+    expect(derived.bodyRepresentations[bodyId]!.volume).toBeCloseTo(
+      WALL_VOLUME + RIB_VOLUME - floorArea * WINDOW_HEIGHT,
+      6
+    );
+    const floor = derived.bodyRepresentations[bodyId]!.topology!.faces.find(
+      (face) =>
+        face.geometry?.surfaceType === 'plane' &&
+        face.geometry.normal!.z > 0.9 &&
+        Math.abs(face.geometry.center.z - 10) < 1e-9
+    );
+    expect(floor?.geometry!.area).toBeCloseTo(floorArea, 9);
+    return {
+      document: { ...manager.document, derived },
+      bodyId,
+      floor: floor!,
+      floorArea,
+      ribbedFaceCount: ribbed.faceCount
+    };
+  }
+
+  for (const [shape, ribX] of [
+    ['L', 16],
+    ['T', 24]
+  ] as const) {
+    it(`pushes the ${shape}-shaped floor to the top and closes the window`, async () => {
+      const { document, bodyId, floor, floorArea, ribbedFaceCount } =
+        await ribbedWindow(ribX);
+
+      // Short of the top the kernel's own move does it, as before.
+      const partial = await edit(document, bodyId, offsetBottom(floor, 10));
+      expect(partial.warnings).toEqual([]);
+      expect(partial.bodyRepresentations[bodyId]!.volume).toBeCloseTo(
+        WALL_VOLUME + RIB_VOLUME - floorArea * (WINDOW_HEIGHT - 10),
+        6
+      );
+
+      // At the top, and past it into the wall above, the window closes and
+      // the ribbed wall is whole again: nothing more, nothing less.
+      for (const offset of [WINDOW_HEIGHT, 20]) {
+        const closed = await edit(
+          document,
+          bodyId,
+          offsetBottom(floor, offset)
+        );
+        expect(closed.warnings).toEqual([]);
+        const body = closed.bodyRepresentations[bodyId]!;
+        expect(body.volume).toBeCloseTo(WALL_VOLUME + RIB_VOLUME, 6);
+        expect(body.faceCount).toBe(ribbedFaceCount);
+        expect(body.bbox.max.z).toBeCloseTo(40, 9);
+        expect(body.bbox.max.y).toBeCloseTo(5, 9);
+      }
+    }, 60_000);
+  }
+});
+
+/**
  * A round port cut through the wall by a cylinder. Its wall is inferred to
  * the cylinder that cut it, and deleting that tool would leave the subtract
  * with nothing to cut; Delete on the wall heals it instead.
