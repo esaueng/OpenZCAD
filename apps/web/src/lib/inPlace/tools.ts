@@ -176,7 +176,17 @@ export interface FacePick {
    * where a thread on it starts, how long it may run, and what it is sized
    * from. `axisStart` is the face's start (its lower end along the axis).
    */
-  cylinder?: { axisStart: Vector3; axisEnd: Vector3; radius: number };
+  cylinder?: {
+    axisStart: Vector3;
+    axisEnd: Vector3;
+    radius: number;
+    /**
+     * Schema v57 pipe threads: whether the body's material lies inside the
+     * face (a boss) or outside it (a bore), read from the body's mesh; absent
+     * where the mesh cannot say. A thread's build reads the solid itself.
+     */
+    boss?: boolean;
+  };
   /**
    * `point` is where an edited hole already stands, not a click: its stored
    * position is kept, expressions and all, until the face is clicked again.

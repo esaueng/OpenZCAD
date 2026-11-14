@@ -169,19 +169,15 @@ export function threadEndFinishes(
 }
 
 /**
- * Boss or bore, as the pick reads: the face's normal where it was clicked
- * points away from the axis on a boss. Null where the pick cannot say (an
- * edit not clicked again); the build reads the solid itself and is the one
- * that decides.
+ * Boss or bore, as the pick reads it from the body's mesh (see
+ * `cylinderFaceIsBoss`). Null where the mesh could not say; the build reads
+ * the solid itself and is the one that decides.
  */
 export function threadFaceKnownKind(
   face: FacePick | undefined
 ): 'external' | 'internal' | null {
-  const geometry = threadFace(face);
-  if (!geometry || !face?.normal || !face.point || face.savedPosition) {
-    return null;
-  }
-  return dot(face.normal, geometry.radial) < 0 ? 'internal' : 'external';
+  const boss = face?.cylinder?.boss;
+  return boss === undefined ? null : boss ? 'external' : 'internal';
 }
 
 /** {@link threadFaceKnownKind}, taking a boss where the pick cannot say. */

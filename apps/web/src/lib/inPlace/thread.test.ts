@@ -1180,11 +1180,11 @@ describe('in-place pipe threads (schema v57)', () => {
   const pipe: FacePick = {
     ...BOSS,
     point: { x: radius, y: 0, z: 28 },
-    normal: { x: 1, y: 0, z: 0 },
     cylinder: {
       axisStart: { x: 0, y: 0, z: 0 },
       axisEnd: { x: 0, y: 0, z: 30 },
-      radius
+      radius,
+      boss: true
     }
   };
   const slots = { ...SLOTS, faces: [pipe] };
@@ -1202,8 +1202,7 @@ describe('in-place pipe threads (schema v57)', () => {
     const bore: FacePick = {
       ...pipe,
       point: { x: 5.25, y: 0, z: 28 },
-      normal: { x: -1, y: 0, z: 0 },
-      cylinder: { ...pipe.cylinder!, radius: 5.25 }
+      cylinder: { ...pipe.cylinder!, radius: 5.25, boss: false }
     };
     expect(
       threadSpec.defaults!({ ...SLOTS, faces: [bore] }, CTX, numbers, {
@@ -1349,14 +1348,23 @@ describe('in-place pipe threads (schema v57)', () => {
     ).toBe(
       `1/4-18 NPT from the Ø13.716 mm face · Threads ${Math.round(reach * 1000) / 1000} of 30 mm, runs out where it stops`
     );
-    // An edit not clicked again cannot tell a boss from a bore: the build
-    // sizes it, and the summary does not guess.
-    const { point: _point, normal: _normal, ...unclicked } = pipe;
+    // An edit not clicked again reads its side from the mesh too.
+    const { point: _point, ...unclicked } = pipe;
     expect(
       threadSummary(
         inPlacePanelState(threadSpec, { profile: 'bspt' }, { length: 9 }),
         'mm',
         { faces: [unclicked] }
+      )
+    ).toMatch(/^R 1\/4 from the Ø13.716 mm face · /);
+    // Where the mesh could not say, the build sizes it and the summary does
+    // not guess.
+    const { boss: _boss, ...unknown } = pipe.cylinder!;
+    expect(
+      threadSummary(
+        inPlacePanelState(threadSpec, { profile: 'bspt' }, { length: 9 }),
+        'mm',
+        { faces: [{ ...pipe, cylinder: unknown }] }
       )
     ).toMatch(/^Sized from the Ø13.716 mm face · /);
   });
