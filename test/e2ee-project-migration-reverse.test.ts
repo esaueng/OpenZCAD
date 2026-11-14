@@ -2986,3 +2986,142 @@ describe('a browser resume after a failed asset repair (PR #1473 review, round 2
     expect(opened.status).toBe(200);
   });
 });
+
+describe('a browser retry near the storage limit after a failed asset repair (PR #1473 review, round 3)', () => {
+  it('reuses the failed attempt’s staged object, so the retry’s cutover fits the limit the retained data fits', async () => {
+    const srv = roomServer();
+    const { projectId, revisionIds } = await encryptedProject(srv, {
+      revisions: 1
+    });
+    const encryptedBefore = rows<{ n: number }>(
+      srv,
+      'SELECT SUM(envelope_bytes) AS n FROM e2ee_project_versions WHERE project_id = ?',
+      projectId
+    )[0]!.n;
+    // The account is close to its limit: everything but this project's
+    // encrypted versions and 100 bytes is held by another project.
+    const capacity = encryptedBefore + 100;
+    const accountLimit = Number(
+      (
+        srv.db
+          .prepare('SELECT project_storage_limit_bytes FROM users WHERE id = ?')
+          .get(OWNER) as { project_storage_limit_bytes: number }
+      ).project_storage_limit_bytes
+    );
+    const padding = accountLimit - capacity;
+    srv.db
+      .prepare(
+        `INSERT INTO projects (id, user_id, name, document_json, updated_at)
+         VALUES ('padding_project', ?, 'Other retained work', '{}', 'now')`
+      )
+      .run(OWNER);
+    srv.db
+      .prepare(
+        `INSERT INTO project_document_objects
+           (id, project_id, object_key, checksum_sha256, logical_bytes,
+            stored_bytes, content_encoding, state, created_at)
+         VALUES ('padding_object', 'padding_project', 'padding/doc', ?, ?, ?,
+                 'gzip', 'committed', 'now')`
+      )
+      .run('c'.repeat(64), padding, padding);
+    srv.db
+      .prepare(
+        "UPDATE projects SET document_object_id = 'padding_object' WHERE id = 'padding_project'"
+      )
+      .run();
+    let staged = 0;
+    let orphans = -1;
+    const r = reverseOn(srv, owner, 'owner_desktop', {
+      beforeStep: (step) => {
+        if (step !== 'cutover') return;
+        staged = rows<{ n: number }>(
+          srv,
+          `SELECT COALESCE((SELECT SUM(stored_bytes) FROM project_document_objects
+                            WHERE project_id = ?), 0)
+                + COALESCE((SELECT SUM(stored_bytes) FROM project_storage_assets
+                            WHERE project_id = ?), 0) AS n`,
+          projectId,
+          projectId
+        )[0]!.n;
+        // Objects neither a save state nor the journaled head names.
+        orphans = rows<{ n: number }>(
+          srv,
+          `SELECT COUNT(*) AS n FROM project_document_objects o
+           WHERE o.project_id = ?
+             AND NOT EXISTS (SELECT 1 FROM revisions r
+                             WHERE r.document_object_id = o.id)
+             AND o.checksum_sha256 IS NOT (
+               SELECT staged_hash FROM e2ee_project_migrations
+               WHERE project_id = ?)`,
+          projectId,
+          projectId
+        )[0]!.n;
+      }
+    });
+    // A legacy retained save state holds an embedded STEP source. Decrypting
+    // it gives the same document every time.
+    const load = r.d.store.loadRevision.bind(r.d.store);
+    const decoded = new Map<string, ProjectDocument>();
+    r.d.store.loadRevision = async (p: string, id: string) => {
+      const known = decoded.get(id);
+      if (known) return structuredClone(known);
+      const original = await load(p, id);
+      if (!original) return original;
+      const manager = new CommandManager(original);
+      manager.execute(
+        commandFactories.importStep({
+          name: 'Historical embedded source',
+          sourceName: 'old.step',
+          artifactId: 'artifact_local_historical',
+          stepText: `ISO-10303-21;\n${'CLOSED_SHELL'.repeat(20_000)}\nEND-ISO-10303-21;`
+        })
+      );
+      const legacy = {
+        ...manager.document,
+        version: original.version,
+        revisions: original.revisions
+      };
+      decoded.set(id, legacy);
+      return structuredClone(legacy);
+    };
+    const putMock = srv.bucket.put as unknown as Mock<
+      (key: string, body: ArrayBuffer | Uint8Array) => Promise<void>
+    >;
+    const put = putMock.getMockImplementation()!;
+    let assetKey = '';
+    let assetPuts = 0;
+    putMock.mockImplementation(async (key, body) => {
+      if (key.includes('/assets/')) {
+        assetKey = key;
+        assetPuts++;
+        if (assetPuts === 1) return;
+        if (assetPuts === 2) {
+          throw new Error('transient post-commit asset repair failure');
+        }
+      }
+      return put(key, body);
+    });
+    await expect(decryptFully(r, projectId)).rejects.toMatchObject({
+      status: 500
+    });
+    expect(assetPuts).toBe(2);
+    expect(
+      rows(srv, 'SELECT id FROM revisions WHERE project_id = ?', projectId)
+    ).toEqual([]);
+    putMock.mockImplementation(put);
+    // Retry: the save state is staged on the failed attempt's object, so
+    // no second copy counts against the limit, and the cutover goes ahead.
+    await decryptFully(r, projectId);
+    expect(orphans).toBe(0);
+    expect(staged).toBeLessThanOrEqual(capacity);
+    expect(migrationRow(srv, projectId)).toMatchObject({ state: 'done' });
+    expectNoCiphertext(srv, projectId);
+    expect(formatOf(srv, projectId)).toBe(1);
+    expect(srv.bucket.objects.has(assetKey)).toBe(true);
+    const opened = await srv.call(
+      'GET',
+      `/api/projects/${projectId}/revisions/${revisionIds[0]}`
+    );
+    expect(opened.status).toBe(200);
+  });
+});

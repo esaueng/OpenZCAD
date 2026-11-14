@@ -4263,39 +4263,24 @@ export class D1R2PersistenceService implements PersistenceService {
         }
       }
     }
-    const write = await this.putProjectStorageObjects(document, {
-      ...(input.storage ? { storage: input.storage } : {}),
-      stagedForDecryption: true
-    });
-    const envelope = projectObjectEnvelope(document, write.objectId);
     const fence = input.fence;
     const objectFence = `EXISTS (SELECT 1 FROM project_document_objects
       WHERE id = ? AND project_id = ?)`;
     const latest = document.revisions.at(-1);
-    const statements: D1PreparedStatement[] = [
-      this.env.DB.prepare(
-        `INSERT INTO project_document_objects
-           (id, project_id, object_key, checksum_sha256, logical_bytes,
-            stored_bytes, content_encoding, state, created_at)
-         SELECT ?, ?, ?, ?, ?, ?, ?, 'committed', ? WHERE ${fence.sql}`
-      ).bind(
-        write.objectId,
-        input.projectId,
-        write.objectKey,
-        write.prepared.checksumSha256,
-        write.prepared.logicalBytes,
-        write.prepared.storedBytes,
-        write.prepared.contentEncoding,
-        write.createdAt,
-        ...fence.binds
-      ),
-      ...write.prepared.assets.map((asset) =>
-        this.env
-          .DB!.prepare(
+    const db = this.env.DB;
+    const assetInserts = (
+      objectId: string,
+      createdAt: string,
+      assets: readonly ProjectStorageAssetObject[]
+    ) =>
+      assets.map((asset) =>
+        db
+          .prepare(
             `INSERT OR IGNORE INTO project_storage_assets
                (id, project_id, kind, object_key, checksum_sha256,
                 logical_bytes, stored_bytes, content_encoding, created_at)
-             SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${objectFence}`
+             SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${objectFence}
+               AND ${fence.sql}`
           )
           .bind(
             `project_asset_${crypto.randomUUID()}`,
@@ -4306,56 +4291,120 @@ export class D1R2PersistenceService implements PersistenceService {
             asset.logicalBytes,
             asset.storedBytes,
             asset.contentEncoding,
-            write.createdAt,
-            write.objectId,
-            input.projectId
+            createdAt,
+            objectId,
+            input.projectId,
+            ...fence.binds
           )
-      )
-    ];
+      );
     // The save state's row is what the decryption journal lists as staged
     // (and what the cutover then relies on), so it lands only after this
     // write's source assets are verified in R2: first the object and asset
     // rows (from then on no cleanup can claim those keys), then the repair,
     // then the revision. A failed repair leaves no revision row, so a
     // resumed run stages it again instead of skipping it.
-    const revisionStatements: D1PreparedStatement[] = [
-      ...(revision && latest
-        ? [
-            this.env.DB.prepare(
-              `INSERT INTO revisions
-                 (id, project_id, reason, document_json, document_object_id,
-                  document_bytes, created_at, author_user_id)
-               SELECT ?, ?, ?, ?, ?, ?, ?,
-                      COALESCE((SELECT author.id FROM users author
-                                JOIN e2ee_project_revisions saved
-                                  ON saved.author_user_id = author.id
-                                WHERE saved.project_id = ?
-                                  AND saved.revision_id = ?
-                                  AND author.id = ?), ?)
-               WHERE ${objectFence} AND ${fence.sql}`
-            ).bind(
-              revision.revisionId,
-              input.projectId,
-              revision.reason,
-              envelope,
-              write.objectId,
-              persistedDocumentBytes(document),
-              latest.createdAt,
-              // Who saved it, as the encrypted history records them.
-              input.projectId,
-              revision.revisionId,
-              revision.authorUserId ?? null,
-              userId,
-              write.objectId,
-              input.projectId,
-              ...fence.binds
-            )
-          ]
-        : [])
+    const journalRevision = async (objectId: string) => {
+      if (!revision || !latest) return;
+      const [inserted] = await db.batch([
+        db
+          .prepare(
+            `INSERT INTO revisions
+               (id, project_id, reason, document_json, document_object_id,
+                document_bytes, created_at, author_user_id)
+             SELECT ?, ?, ?, ?, ?, ?, ?,
+                    COALESCE((SELECT author.id FROM users author
+                              JOIN e2ee_project_revisions saved
+                                ON saved.author_user_id = author.id
+                              WHERE saved.project_id = ?
+                                AND saved.revision_id = ?
+                                AND author.id = ?), ?)
+             WHERE ${objectFence} AND ${fence.sql}`
+          )
+          .bind(
+            revision.revisionId,
+            input.projectId,
+            revision.reason,
+            projectObjectEnvelope(document, objectId),
+            objectId,
+            persistedDocumentBytes(document),
+            latest.createdAt,
+            // Who saved it, as the encrypted history records them.
+            input.projectId,
+            revision.revisionId,
+            revision.authorUserId ?? null,
+            userId,
+            objectId,
+            input.projectId,
+            ...fence.binds
+          )
+      ]);
+      if ((inserted?.meta?.changes ?? 0) !== 1) {
+        throw new DecryptStagingLeaseError();
+      }
+    };
+    // An earlier attempt at this same document may have committed its
+    // object and asset rows, then failed to repair an asset, and so was
+    // never journaled. Its object is reused rather than a second one
+    // stored: an unjournaled copy would count against the cutover's storage
+    // check, which a cutover it blocks would never get to sweep.
+    const reusable = await this.unjournaledStagedObject(
+      input.projectId,
+      document,
+      input.storage
+    );
+    if (reusable) {
+      const assetRows = assetInserts(
+        reusable.objectId,
+        nowIso(),
+        reusable.prepared.assets
+      );
+      if (assetRows.length) await db.batch(assetRows);
+      await this.repairStoredAssets(input.projectId, reusable.prepared.assets);
+      await journalRevision(reusable.objectId);
+      if (!revision) {
+        // The head's journal entry is recorded by the caller under its
+        // lease; still only while this lease holds.
+        const current = await db
+          .prepare(`SELECT 1 AS current WHERE ${fence.sql}`)
+          .bind(...fence.binds)
+          .first<{ current: number }>();
+        if (!current) throw new DecryptStagingLeaseError();
+      }
+      return {
+        objectId: reusable.objectId,
+        checksumSha256: reusable.prepared.checksumSha256,
+        version: document.version,
+        staged: false
+      };
+    }
+    const write = await this.putProjectStorageObjects(document, {
+      ...(input.storage ? { storage: input.storage } : {}),
+      stagedForDecryption: true
+    });
+    const statements: D1PreparedStatement[] = [
+      db
+        .prepare(
+          `INSERT INTO project_document_objects
+             (id, project_id, object_key, checksum_sha256, logical_bytes,
+              stored_bytes, content_encoding, state, created_at)
+           SELECT ?, ?, ?, ?, ?, ?, ?, 'committed', ? WHERE ${fence.sql}`
+        )
+        .bind(
+          write.objectId,
+          input.projectId,
+          write.objectKey,
+          write.prepared.checksumSha256,
+          write.prepared.logicalBytes,
+          write.prepared.storedBytes,
+          write.prepared.contentEncoding,
+          write.createdAt,
+          ...fence.binds
+        ),
+      ...assetInserts(write.objectId, write.createdAt, write.prepared.assets)
     ];
     let results: Awaited<ReturnType<D1Database['batch']>>;
     try {
-      results = await this.env.DB.batch(statements);
+      results = await db.batch(statements);
     } catch (error) {
       await this.discardStagedWrite(input.projectId, write);
       throw error;
@@ -4364,21 +4413,61 @@ export class D1R2PersistenceService implements PersistenceService {
       await this.discardStagedWrite(input.projectId, write);
       throw new DecryptStagingLeaseError();
     }
-    // A failure here leaves an unreferenced staged object (the purge of
-    // superseded staged documents sweeps it) and no journal entry.
+    // A failure here leaves an unjournaled staged object, which the next
+    // attempt at this document reuses (and the purge of superseded staged
+    // documents sweeps otherwise), and no journal entry.
     await this.ensureWrittenAssets(write);
-    if (revisionStatements.length) {
-      const [inserted] = await this.env.DB.batch(revisionStatements);
-      if ((inserted?.meta?.changes ?? 0) !== 1) {
-        throw new DecryptStagingLeaseError();
-      }
-    }
+    await journalRevision(write.objectId);
     return {
       objectId: write.objectId,
       checksumSha256: write.prepared.checksumSha256,
       version: document.version,
       staged: false
     };
+  }
+
+  /**
+   * A committed staged document object of `projectId` that no project or
+   * revision names yet and that holds exactly `document` (by its storage
+   * checksum), with its R2 object present: what an attempt that committed
+   * its rows and then failed before its journal entry leaves behind.
+   */
+  private async unjournaledStagedObject(
+    projectId: string,
+    document: ProjectDocument,
+    storage: ClientProjectStorage | undefined
+  ): Promise<{
+    objectId: string;
+    prepared: PreparedProjectStorageSnapshot;
+  } | null> {
+    const { results } = await this.env
+      .DB!.prepare(
+        `SELECT o.id, o.object_key, o.checksum_sha256
+         FROM project_document_objects o
+         WHERE o.project_id = ? AND o.state = 'committed'
+           AND NOT EXISTS (SELECT 1 FROM projects p
+                           WHERE p.document_object_id = o.id)
+           AND NOT EXISTS (SELECT 1 FROM revisions r
+                           WHERE r.document_object_id = o.id)
+         ORDER BY o.created_at DESC, o.id DESC
+         LIMIT 32`
+      )
+      .bind(projectId)
+      .all<{ id: string; object_key: string; checksum_sha256: string }>();
+    const candidates = results ?? [];
+    if (!candidates.length) return null;
+    const prepared = storage
+      ? await prepareClientProjectStorageSnapshot(document, storage)
+      : await prepareProjectStorageSnapshot(document);
+    const match = candidates.find(
+      (row) => row.checksum_sha256 === prepared.checksumSha256
+    );
+    if (!match) return null;
+    const bucket = this.projectStorageBucket();
+    if (bucket && typeof bucket.head === 'function') {
+      if (!(await bucket.head(match.object_key))) return null;
+    }
+    return { objectId: match.id, prepared };
   }
 
   /** Removes a staged write's objects that no row names (slice 7-3). */

@@ -382,9 +382,17 @@ describe('a staged decryption revision whose asset repair failed', () => {
     ).toBeUndefined();
     expect(bucket.objects.has(assetKey)).toBe(false);
     putMock.mockImplementation(put);
+    const objectsBefore = db
+      .prepare('SELECT id FROM project_document_objects')
+      .all();
     const retried = await service.stageDecryptedDocument(OWNER, input);
     expect(retried.staged).toBe(false);
     expect(bucket.objects.has(assetKey)).toBe(true);
+    // It reuses the failed attempt's committed object: no second copy.
+    expect(db.prepare('SELECT id FROM project_document_objects').all()).toEqual(
+      objectsBefore
+    );
+    expect(objectsBefore).toContainEqual({ id: retried.objectId });
     expect(
       db.prepare('SELECT id FROM revisions WHERE id = ?').get(revisionId)
     ).toEqual({ id: revisionId });
