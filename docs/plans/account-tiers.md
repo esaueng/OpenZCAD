@@ -136,8 +136,12 @@ that head when nothing else names it, so a save that does not grow what the
 account stores is never refused, even at or over the allowance. The credit
 is granted only while the project holds no other unreclaimed object (a
 replaced head whose pruning failed), so at most one replacement's bytes are
-ever outstanding. A source asset added by the same save is judged with it, on
-the save's net change.
+ever outstanding. A source asset added by the same save names that save's
+object (`project_storage_assets.added_by_object_id`) and is judged with it:
+the save's assets share the one credit, so the object and all its assets less
+the replaced head is what is checked. A head-replacing save first prunes any
+replaced head an earlier R2 delete left behind, so a temporary failure does
+not withhold credit for good.
 
 Downgrades do not delete files. Existing reads, downloads and cleanup remain
 available. Over-limit accounts cannot increase storage; shrinking an existing

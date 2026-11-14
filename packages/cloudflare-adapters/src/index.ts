@@ -6781,9 +6781,18 @@ export class D1R2PersistenceService implements PersistenceService {
       }
     }
 
+    if (options?.replacesHead) {
+      // A replaced head whose pruning failed (an R2 delete that did not go
+      // through) withholds the credit of every later replacement (migration
+      // 0049): prune again before measuring, so a temporary failure does
+      // not block the project's saves for good. Document object keys are
+      // random, so this is the same safe prune that follows every save.
+      await this.pruneUnreferencedProjectObjects(document.projectId);
+    }
     const released = options?.replacesHead
       ? await this.releasedHead(document.projectId)
       : null;
+    const linksAssets = await isObjectSupersedesReady(this.env.DB);
     if (!options?.stagedForDecryption) {
       await this.assertAccountProjectStorageCapacity(
         document.ownerUserId,
@@ -6813,7 +6822,8 @@ export class D1R2PersistenceService implements PersistenceService {
       createdAt,
       prepared,
       missingAssets,
-      supersedesObjectId: released?.objectId ?? null
+      supersedesObjectId: released?.objectId ?? null,
+      linksAssets
     };
   }
 
@@ -6915,13 +6925,22 @@ export class D1R2PersistenceService implements PersistenceService {
     projectId: string,
     write: ProjectStorageWrite
   ): D1PreparedStatement[] {
+    // Migration 0049: an asset names the save's object it came with, so
+    // the save's assets share the one credit of the head it replaced.
+    const link = write.linksAssets
+      ? {
+          column: ', added_by_object_id',
+          value: ', ?',
+          binds: [write.objectId]
+        }
+      : { column: '', value: '', binds: [] as string[] };
     return write.prepared.assets.map((asset) =>
       this.env
         .DB!.prepare(
           `INSERT OR IGNORE INTO project_storage_assets
              (id, project_id, kind, object_key, checksum_sha256, logical_bytes,
-              stored_bytes, content_encoding, created_at)
-           SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
+              stored_bytes, content_encoding, created_at${link.column})
+           SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?${link.value}
            WHERE EXISTS (
              SELECT 1 FROM projects
              WHERE id = ? AND document_object_id = ?
@@ -6937,6 +6956,7 @@ export class D1R2PersistenceService implements PersistenceService {
           asset.storedBytes,
           asset.contentEncoding,
           write.createdAt,
+          ...link.binds,
           projectId,
           write.objectId
         )
@@ -8067,6 +8087,8 @@ interface ProjectStorageWrite {
   missingAssets: ProjectStorageAssetObject[];
   /** The head this write releases, credited at its admission (0049). */
   supersedesObjectId: string | null;
+  /** Whether its asset rows name its object (migration 0049). */
+  linksAssets: boolean;
 }
 
 interface ProjectStorageWriteResolutionRow {

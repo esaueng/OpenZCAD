@@ -110,8 +110,9 @@ def required_objects(db):
         raise SnapshotError('Unsupported migration ledger.')
     # 0047 adds only glimpse_account_consent.version: no stored objects or keys.
     # 0048 adds only e2ee_mls_commits.sender_signature: no stored objects or keys.
-    # 0049 adds storage-quota views and triggers and
-    # project_document_objects.supersedes_object_id (an object id, not a key):
+    # 0049 adds storage-quota views and triggers,
+    # project_document_objects.supersedes_object_id and
+    # project_storage_assets.added_by_object_id (object ids, not keys):
     # no stored objects or keys.
     if max(int(name[:4]) for name in migrations) > 49:
         raise SnapshotError('Review new migrations before using this snapshot tool.')

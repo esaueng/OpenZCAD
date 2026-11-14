@@ -494,7 +494,8 @@ describe('migration staging is bounded by projected storage (migration 0049)', (
 });
 
 describe('a head-replacing save releases the head it replaces (migration 0049)', () => {
-  function bucket(failDelete = false) {
+  function bucket(failDelete: boolean | number = false) {
+    let failures = typeof failDelete === 'number' ? failDelete : 0;
     const objects = new Map<string, Uint8Array<ArrayBuffer>>();
     return {
       objects,
@@ -521,7 +522,10 @@ describe('a head-replacing save releases the head it replaces (migration 0049)',
           return bytes ? { size: bytes.length } : null;
         },
         delete: async (key: string | string[]) => {
-          if (failDelete) throw new Error('injected R2 delete failure');
+          if (failDelete === true || failures > 0) {
+            failures -= 1;
+            throw new Error('injected R2 delete failure');
+          }
           for (const item of typeof key === 'string' ? [key] : key)
             objects.delete(item);
         }
@@ -690,6 +694,134 @@ describe('a head-replacing save releases the head it replaces (migration 0049)',
       "DELETE FROM project_document_objects WHERE id = 'o_head'"
     ).run();
     replace('o_third', 'o_second');
+  });
+
+  it('shares one replaced head\u2019s credit across every asset of its save', () => {
+    // Full: a 6,223-byte head and files filling the rest.
+    const db = account(100_000);
+    db.prepare('UPDATE projects SET document_bytes = 0 WHERE id = ?').run(
+      PROJECT
+    );
+    db.prepare(
+      `INSERT INTO project_document_objects
+         (id, project_id, object_key, checksum_sha256, logical_bytes,
+          stored_bytes, content_encoding, state, created_at)
+       VALUES ('o_head', ?, 'o_head', 'sha', 6_223, 6_223, 'gzip',
+               'committed', ?)`
+    ).run(PROJECT, CREATED);
+    db.prepare(
+      "UPDATE projects SET document_object_id = 'o_head' WHERE id = ?"
+    ).run(PROJECT);
+    project(db, 'p_other', 0);
+    db.prepare(
+      `INSERT INTO artifacts
+         (id, project_id, kind, name, object_key, content_type, bytes,
+          metadata_json, created_at)
+       VALUES ('a_fill', 'p_other', 'snapshot', 'fill.step', 'fill',
+               'model/step', ?, '{}', ?)`
+    ).run(100_000 - 6_223, CREATED);
+    // The save, as its batch runs: a 1,816-byte head replacing it...
+    db.prepare(
+      `INSERT INTO project_document_objects
+         (id, project_id, object_key, checksum_sha256, logical_bytes,
+          stored_bytes, content_encoding, state, created_at,
+          supersedes_object_id)
+       VALUES ('o_cur', ?, 'o_cur', 'sha', 1_816, 1_816, 'gzip', 'pending', ?,
+               'o_head')`
+    ).run(PROJECT, CREATED);
+    db.prepare(
+      "UPDATE projects SET document_object_id = 'o_cur' WHERE id = ?"
+    ).run(PROJECT);
+    db.prepare(
+      "UPDATE project_document_objects SET state = 'committed' WHERE id = 'o_cur'"
+    ).run();
+    const saveAsset = (id: string, bytes: number) =>
+      db
+        .prepare(
+          `INSERT INTO project_storage_assets
+             (id, project_id, kind, object_key, checksum_sha256,
+              logical_bytes, stored_bytes, content_encoding, created_at,
+              added_by_object_id)
+           VALUES (?, ?, 'step-source', ?, ?, ?, ?, 'gzip', ?, 'o_cur')`
+        )
+        .run(id, PROJECT, id, id, bytes, bytes, CREATED);
+    // ...and two source assets. The first fits in what the save releases;
+    // the second would leave the account 1,942 bytes over once the old
+    // head is pruned, so it is refused.
+    saveAsset('a_first', 3_175);
+    expect(() => saveAsset('a_second', 3_174)).toThrow(
+      'project_account_storage_quota'
+    );
+  });
+
+  it('recovers from a failed prune: the next shrinking save at the allowance prunes, then is credited', async () => {
+    const db = migratedDatabase();
+    db.prepare(
+      `INSERT INTO users (id, email, created_at) VALUES (?, 'owner@example.com', ?)`
+    ).run(OWNER, CREATED);
+    // The first save's prune fails once; R2 then recovers.
+    const r2 = bucket(1);
+    const service = new D1R2PersistenceService({
+      DB: sqliteD1(db),
+      PROJECT_STORAGE: r2.bucket
+    });
+    let name = randomBytes(5_000).toString('hex');
+    let { document } = await service.createProject(toUserId(OWNER), { name });
+    const stored = () =>
+      (
+        db
+          .prepare(
+            `SELECT COALESCE((SELECT bytes FROM account_project_storage
+                              WHERE user_id = ?1), 0)
+                  + COALESCE((SELECT finalized_bytes + reserved_bytes
+                              FROM artifact_account_usage
+                              WHERE owner_user_id = ?1), 0) AS bytes`
+          )
+          .get(OWNER) as { bytes: number }
+      ).bytes;
+    const limit = (
+      db
+        .prepare(
+          'SELECT project_storage_limit_bytes AS bytes FROM users WHERE id = ?'
+        )
+        .get(OWNER) as { bytes: number }
+    ).bytes;
+    db.prepare(
+      `INSERT INTO artifacts
+         (id, project_id, kind, name, object_key, content_type, bytes,
+          metadata_json, created_at)
+       VALUES ('a_fill', ?, 'snapshot', 'fill.step', 'fill', 'model/step', ?,
+               '{}', ?)`
+    ).run(document.projectId, limit - stored(), CREATED);
+    const objects = () =>
+      (
+        db
+          .prepare('SELECT COUNT(*) AS n FROM project_document_objects')
+          .get() as { n: number }
+      ).n;
+    const shrink = async () => {
+      const nextName = name.slice(0, -1_000);
+      const next = {
+        ...(JSON.parse(
+          JSON.stringify(document).replaceAll(name, nextName)
+        ) as typeof document),
+        version: document.version + 1
+      };
+      await service.saveDocument(toUserId(OWNER), {
+        projectId: document.projectId,
+        expectedVersion: document.version,
+        document: next
+      });
+      document = next;
+      name = nextName;
+    };
+    await shrink();
+    // Its old head could not be pruned.
+    expect(objects()).toBe(2);
+    // The next shrinking save prunes it first, is credited, and saves.
+    await shrink();
+    expect(objects()).toBe(1);
+    expect(stored()).toBeLessThanOrEqual(limit);
   });
 
   it('refuses further credited saves once pruning fails, so storage stays within one replacement', async () => {

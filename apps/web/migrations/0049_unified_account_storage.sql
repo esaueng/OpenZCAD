@@ -159,6 +159,10 @@ WHERE m.state IN ('staging', 'abandoned');
 -- the account stores is never refused. A checkpoint or copy names none.
 ALTER TABLE project_document_objects ADD COLUMN supersedes_object_id TEXT;
 
+-- The head-replacing save's object a source asset was added with, so the
+-- save's assets share its one credit (below) instead of each taking it.
+ALTER TABLE project_storage_assets ADD COLUMN added_by_object_id TEXT;
+
 -- ---------------------------------------------------------------------------
 -- Cloud file side: artifact usage plus the owner's project storage.
 -- ---------------------------------------------------------------------------
@@ -773,17 +777,24 @@ BEGIN
       WHERE project_id = NEW.project_id
         AND checksum_sha256 = NEW.checksum_sha256 AND kind = NEW.kind
     )
-    -- A source asset of the save that just moved the head is judged with
-    -- that save: what the account stores once the replaced head is pruned
-    -- (under the object's credit rules), refused only if the save as a
-    -- whole grows it.
+    -- A source asset of the save that just moved the head (the asset names
+    -- that save's object) is judged with that save: what the account
+    -- stores once the replaced head is pruned (under the object's credit
+    -- rules), refused only if the save as a whole grows it. The save's
+    -- earlier assets have already used their share of the credit.
     AND NEW.stored_bytes - COALESCE((
-      SELECT old.stored_bytes - cur.stored_bytes FROM projects rp
+      SELECT old.stored_bytes - cur.stored_bytes - COALESCE((
+          SELECT SUM(prior.stored_bytes) FROM project_storage_assets prior
+          WHERE prior.project_id = rp.id
+            AND prior.added_by_object_id = cur.id
+        ), 0)
+      FROM projects rp
       JOIN project_document_objects cur
         ON cur.id = rp.document_object_id AND cur.project_id = rp.id
       JOIN project_document_objects old
         ON old.id = cur.supersedes_object_id AND old.project_id = rp.id
       WHERE rp.id = NEW.project_id
+        AND cur.id = NEW.added_by_object_id
         AND old.state = 'committed'
         AND NOT EXISTS (
           SELECT 1 FROM revisions orr WHERE orr.document_object_id = old.id
@@ -805,6 +816,7 @@ BEGIN
       JOIN project_document_objects old
         ON old.id = cur.supersedes_object_id AND old.project_id = rp.id
       WHERE rp.id = NEW.project_id
+        AND cur.id = NEW.added_by_object_id
         AND old.state = 'committed'
         AND NOT EXISTS (
           SELECT 1 FROM revisions orr WHERE orr.document_object_id = old.id

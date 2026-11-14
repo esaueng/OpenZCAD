@@ -73,7 +73,7 @@ describe('opt-in cloud census SQL against the actual migrations', () => {
       );
       db.exec("UPDATE projects SET document_object_id='o' WHERE id='yes'");
       db.exec(
-        "INSERT INTO project_storage_assets VALUES('a','yes','mesh-payload','private/asset','sha',200,50,'gzip','2026-01-01')"
+        "INSERT INTO project_storage_assets (id, project_id, kind, object_key, checksum_sha256, logical_bytes, stored_bytes, content_encoding, created_at) VALUES('a','yes','mesh-payload','private/asset','sha',200,50,'gzip','2026-01-01')"
       );
       expect(census(db.prepare(CENSUS_SQL).get(), 'openzcad')).toMatchObject({
         storedBytes: 75,
