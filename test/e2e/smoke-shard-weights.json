@@ -99,7 +99,7 @@
   "toast-outcomes.spec.ts": 12,
   "tool-rail-pins.spec.ts": 5,
   "touch-navigation.spec.ts": 9,
-  "touch-targets.spec.ts": 13,
+  "touch-targets.spec.ts": 22,
   "upside-down-view-reload.spec.ts": 7,
   "view-cube-orbit-tooltip.spec.ts": 6,
   "viewport-clear-stage.spec.ts": 6,

@@ -1,14 +1,33 @@
 import {
-  MAX_ACCOUNT_ARTIFACT_BYTES,
   MAX_ACCOUNT_PROJECTS,
-  MAX_ACCOUNT_PROJECT_STORAGE_BYTES,
+  MAX_ACCOUNT_STORAGE_BYTES,
   type AccountEntitlements,
   type AccountTier
 } from '@openzcad/shared';
 import type { CloudflareEnv } from './index';
 
-/** Premium project storage and cloud file storage, each: 25 GiB. */
+/**
+ * Premium's one storage allowance, for everything the account stores
+ * (projects, save states, imports, exports, encrypted files): 25 GiB.
+ */
 export const PREMIUM_STORAGE_BYTES = 25 * 1024 ** 3;
+
+/**
+ * The Premium storage override. `PREMIUM_STORAGE_LIMIT_BYTES` names the
+ * single allowance; the two names from before it was one,
+ * `PREMIUM_PROJECT_STORAGE_LIMIT_BYTES` and then
+ * `PREMIUM_ARTIFACT_LIMIT_BYTES`, still apply when it is unset.
+ */
+function premiumStorageOverride(env: CloudflareEnv): string | undefined {
+  for (const value of [
+    env.PREMIUM_STORAGE_LIMIT_BYTES,
+    env.PREMIUM_PROJECT_STORAGE_LIMIT_BYTES,
+    env.PREMIUM_ARTIFACT_LIMIT_BYTES
+  ]) {
+    if (value?.trim()) return value;
+  }
+  return undefined;
+}
 
 /** Invalid configuration falls back to a finite operational ceiling. */
 function positiveInteger(
@@ -66,34 +85,36 @@ export function accountAiLimits(env: CloudflareEnv, email?: string) {
   };
 }
 
+/** What this server computes: always with the single storage allowance. */
+export type ServerAccountEntitlements = AccountEntitlements & {
+  storageLimitBytes: number;
+};
+
 export function accountEntitlements(
   env: CloudflareEnv,
   email?: string
-): AccountEntitlements {
+): ServerAccountEntitlements {
   const tier = accountTier(env, email);
   const ai = accountAiLimits(env, email);
+  // One bucket per account (migration 0049): projects and files share it.
+  const storageLimitBytes =
+    tier === 'premium'
+      ? positiveInteger(
+          premiumStorageOverride(env),
+          PREMIUM_STORAGE_BYTES,
+          1024 ** 4
+        )
+      : MAX_ACCOUNT_STORAGE_BYTES;
   return {
     tier,
     projectLimit:
       tier === 'premium'
         ? positiveInteger(env.PREMIUM_PROJECT_LIMIT, 10_000, 100_000)
         : MAX_ACCOUNT_PROJECTS,
-    projectStorageLimitBytes:
-      tier === 'premium'
-        ? positiveInteger(
-            env.PREMIUM_PROJECT_STORAGE_LIMIT_BYTES,
-            PREMIUM_STORAGE_BYTES,
-            1024 ** 4
-          )
-        : MAX_ACCOUNT_PROJECT_STORAGE_BYTES,
-    artifactLimitBytes:
-      tier === 'premium'
-        ? positiveInteger(
-            env.PREMIUM_ARTIFACT_LIMIT_BYTES,
-            PREMIUM_STORAGE_BYTES,
-            1024 ** 4
-          )
-        : MAX_ACCOUNT_ARTIFACT_BYTES,
+    storageLimitBytes,
+    // Older clients read these two; both name the same single allowance.
+    projectStorageLimitBytes: storageLimitBytes,
+    artifactLimitBytes: storageLimitBytes,
     ai: {
       requestLimit: ai.accountRequestLimit,
       costLimitUnits: ai.accountCostLimit,
@@ -109,7 +130,10 @@ const syncedAccountLimits = new WeakMap<D1Database, Promise<void>>();
 /**
  * Brings every account's derived limits (`users.artifact_limit_bytes`,
  * `project_limit`, `project_storage_limit_bytes`, migration 0022) in line
- * with this deployment's tier policy, once per isolate and database.
+ * with this deployment's tier policy, once per isolate and database. Since
+ * migration 0049 both byte columns hold the one storage allowance: the
+ * quota triggers read `project_storage_limit_bytes`, and the in-flight
+ * reservation check and older Workers read `artifact_limit_bytes`.
  *
  * The quota triggers read those columns. The plaintext write paths refresh
  * the owner's row before each write, but encrypted saves, copies and
@@ -151,12 +175,12 @@ export function syncStoredAccountLimits(
         )
         .bind(
           JSON.stringify(premiumEmails),
-          premium.artifactLimitBytes,
-          free.artifactLimitBytes,
+          premium.storageLimitBytes,
+          free.storageLimitBytes,
           premium.projectLimit,
           free.projectLimit,
-          premium.projectStorageLimitBytes,
-          free.projectStorageLimitBytes
+          premium.storageLimitBytes,
+          free.storageLimitBytes
         )
         .run()
     )

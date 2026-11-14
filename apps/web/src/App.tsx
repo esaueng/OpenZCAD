@@ -445,6 +445,8 @@ import {
   isEncryptedPinProblemError,
   isEncryptedProject,
   isProjectDocumentUnavailableError,
+  isProjectStorageCleanupPendingError,
+  retryWhileStorageCleanupPending,
   isProjectFormatUnsupportedError
 } from './lib/api';
 import {
@@ -473,6 +475,7 @@ import {
   sourceUploadMessage
 } from './lib/accountImportSources';
 import type { ArchiveArtifactInput } from './lib/archiveArtifact';
+import { cloudArchivable } from './lib/cloudArchivable';
 import {
   archiveLocalOnlyImportSources,
   createInFlightImportChecksums,
@@ -16209,7 +16212,14 @@ export function App() {
     if (!doc || !savingManager) {
       return;
     }
-    const isCurrentProject = () => managerRef.current === savingManager;
+    // Fenced to the autosave lifecycle this save began under as well as the
+    // project: a cleanup that disposes the controller keeps the manager
+    // reference, and a save outliving it must not write stale copies over
+    // what the next owner saved.
+    const savingController = cloudProjectAutosaveRef.current;
+    const isCurrentProject = () =>
+      managerRef.current === savingManager &&
+      cloudProjectAutosaveRef.current === savingController;
     if (shareSessionRef.current) {
       setStatus(
         'This is a shared link session — Make a copy to keep the model.'
@@ -16405,13 +16415,20 @@ export function App() {
       }) => {
         savingDocument = input.document;
         await saveLocalProject(savingDocument);
-        if (!readDocument()) return null;
+        if (!readDocument() || !isCurrentProject()) return null;
         accountWriteStarted = true;
-        return api.saveRevision({
-          ...input,
-          reason,
-          document: withoutDerivedProjection(savingDocument)
-        });
+        // A save held back while earlier saves' copies are freed is retried
+        // here, account write only: the device copy is already saved, and
+        // edits may have saved newer device copies since.
+        return retryWhileStorageCleanupPending(
+          () =>
+            api.saveRevision({
+              ...input,
+              reason,
+              document: withoutDerivedProjection(savingDocument)
+            }),
+          () => Boolean(readDocument()) && isCurrentProject()
+        );
       };
       const currentDocument = readDocument();
       if (!currentDocument) return;
@@ -16427,7 +16444,20 @@ export function App() {
             document: currentDocument
           });
       if (!saved) {
-        if (isCurrentProject()) controller?.schedule(savingManager.document);
+        if (isCurrentProject()) {
+          // A halted controller (before or during this save) puts back its
+          // own state and the action it offers. Otherwise the save was
+          // cancelled (the project changed mode or moved on meanwhile):
+          // settle the indicator rather than leave "Saving". The device copy
+          // was written before the account checkpoint began.
+          if (!controller?.reannounceHalt()) {
+            setSaveState('local');
+            setStatus(
+              'Save point not made. Your work is saved on this device.'
+            );
+          }
+          controller?.schedule(savingManager.document);
+        }
         return;
       }
       remoteVersionsRef.current.set(saved.projectId, saved.version);
@@ -16494,9 +16524,11 @@ export function App() {
       }
       // A local failure or a server refusal does not mean the account is
       // unreachable. Only an attempted account write with no usable response
-      // should turn the connectivity indicator offline.
+      // should turn the connectivity indicator offline. A save still held
+      // back while earlier copies are freed reached the account too.
       const accountUnreachable =
         accountWriteStarted &&
+        !isProjectStorageCleanupPendingError(error) &&
         (!(error instanceof ApiError) || error.status >= 500);
       if (accountUnreachable) setCloudAvailable(false);
       setSaveState(
@@ -16737,7 +16769,13 @@ export function App() {
     // Local-first imports/exports keep their bytes on this device. A protected
     // upload cannot succeed before this project has an account copy, and its
     // failed request would add a console error to an otherwise valid import.
-    if (!sessionRef.current || !remoteVersionsRef.current.has(doc.projectId)) {
+    if (
+      !cloudArchivable(
+        Boolean(sessionRef.current),
+        doc.projectId,
+        remoteVersionsRef.current
+      )
+    ) {
       throw new Error(
         'Cloud archival needs an account project. The file stays on this device.'
       );
@@ -30818,9 +30856,7 @@ export function App() {
             boxSelectedFaces.length > 1
           ) {
             event.preventDefault();
-            if (
-              new Set(boxSelectedFaces.map((face) => face.bodyId)).size > 1
-            ) {
+            if (new Set(boxSelectedFaces.map((face) => face.bodyId)).size > 1) {
               setStatus(
                 'Faces on different bodies cannot be deleted together. Select faces on one body.'
               );
@@ -34759,7 +34795,18 @@ export function App() {
                   run={importRun}
                   onCancel={cancelImportRun}
                   onDismiss={dismissImportRun}
-                  onArchiveNow={archiveImportSourcesFromCard}
+                  // The same test archiveArtifact applies: signed out, or
+                  // signed in with a device-only project, the upload can
+                  // only fail (I8), so there is no Archive now.
+                  onArchiveNow={
+                    cloudArchivable(
+                      Boolean(session),
+                      doc.projectId,
+                      remoteVersionsRef.current
+                    )
+                      ? archiveImportSourcesFromCard
+                      : undefined
+                  }
                 />
               </Suspense>
             )}

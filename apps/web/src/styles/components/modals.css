@@ -1957,3 +1957,9 @@
 .conflict-choice-name {
   color: var(--color-text);
 }
+
+/* The account email to type, once shown, weighs what the other prompts'
+   <strong> text does. */
+.cloud-deletion-confirmation .private-text.shown {
+  font-weight: var(--fw-bold);
+}

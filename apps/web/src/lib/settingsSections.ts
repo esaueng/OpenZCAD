@@ -187,11 +187,9 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
     settings: [
       'Cloud features',
       'Membership',
-      'Personal information',
       'Preference synchronization',
       'Project sharing',
-      'Account storage',
-      'Cloud file storage'
+      'Storage'
     ],
     searchTerms: [
       ...CLOUD_SWITCH_SEARCH_TERMS,
@@ -207,6 +205,12 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'sync preferences',
       'collaboration',
       'storage usage',
+      'storage used',
+      'account storage',
+      'cloud file storage',
+      'imports and exports',
+      'save states',
+      'trash',
       'cloud profile',
       'email sign-in'
     ]
@@ -238,7 +242,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'Compare the codes',
       'Certify the new device',
       'Your recovery key',
-      'I saved my recovery key',
+      'Before you continue',
       'Confirm recovery key',
       'Current recovery key',
       'Recovery key to confirm'

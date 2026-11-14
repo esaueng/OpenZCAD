@@ -8,6 +8,7 @@ import {
 import {
   MAX_ACCOUNT_PROJECTS,
   MAX_ACCOUNT_PROJECT_STORAGE_BYTES,
+  MAX_ACCOUNT_STORAGE_BYTES,
   toUserId
 } from '@openzcad/shared';
 
@@ -74,11 +75,10 @@ describe('project quota preflight', () => {
         first: async () =>
           query.includes('AS project_count')
             ? { project_count: 0 }
-            : query.includes('AS object_bytes')
-              ? {
-                  object_bytes: MAX_ACCOUNT_PROJECT_STORAGE_BYTES,
-                  asset_bytes: 0
-                }
+            : // Project storage as the quota measures it (migration 0049),
+              // already at the account's one allowance.
+              query.includes('FROM project_document_objects objects')
+              ? { bytes: MAX_ACCOUNT_STORAGE_BYTES }
               : null
       })
     }));
@@ -94,7 +94,7 @@ describe('project quota preflight', () => {
       service.createProject(owner, { name: 'Full' })
     ).rejects.toMatchObject({
       kind: 'storage',
-      limit: MAX_ACCOUNT_PROJECT_STORAGE_BYTES
+      limit: MAX_ACCOUNT_STORAGE_BYTES
     });
     expect(put).not.toHaveBeenCalled();
   });

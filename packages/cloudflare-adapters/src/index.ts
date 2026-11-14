@@ -36,6 +36,7 @@ import {
   getInMemoryPersistence,
   ProjectAdoptionError,
   ProjectQuotaError,
+  ProjectStorageCleanupPendingError,
   PROJECT_ACTIVE_INVITATION_CAP,
   PROJECT_INVITATION_RATE_LIMIT,
   PROJECT_INVITATION_RATE_WINDOW_SECONDS,
@@ -76,9 +77,8 @@ import {
   duplicateProjectName,
   MAX_ACTIVE_ARTIFACT_UPLOAD_SESSIONS,
   MAX_CLOUD_PROJECT_DOCUMENT_BYTES,
-  MAX_ACCOUNT_ARTIFACT_BYTES,
+  MAX_ACCOUNT_STORAGE_BYTES,
   MAX_ACCOUNT_PROJECTS,
-  MAX_ACCOUNT_PROJECT_STORAGE_BYTES,
   MAX_ARTIFACT_PART_BYTES,
   MAX_ARTIFACT_UPLOAD_BYTES,
   MAX_ARTIFACT_UPLOAD_PARTS,
@@ -324,9 +324,13 @@ export interface CloudflareEnv {
   AI_DEPLOYMENT_FREE_ENABLED?: string;
   /** Server-only comma-separated verified account emails with Premium access. */
   PREMIUM_USER_EMAILS?: string;
+  /** Legacy name, read only when `PREMIUM_STORAGE_LIMIT_BYTES` is unset. */
   PREMIUM_ARTIFACT_LIMIT_BYTES?: string;
   PREMIUM_PROJECT_LIMIT?: string;
+  /** Legacy name, read only when `PREMIUM_STORAGE_LIMIT_BYTES` is unset. */
   PREMIUM_PROJECT_STORAGE_LIMIT_BYTES?: string;
+  /** Premium's one storage allowance, in bytes (at most 1 TiB). */
+  PREMIUM_STORAGE_LIMIT_BYTES?: string;
   AI_PREMIUM_ACCOUNT_RATE_LIMIT_REQUESTS?: string;
   AI_PREMIUM_ACCOUNT_COST_LIMIT_UNITS?: string;
   AI_PREMIUM_ACCOUNT_CONCURRENCY_LIMIT?: string;
@@ -565,6 +569,300 @@ export function cachedSchemaProbe(
   };
 }
 
+/** Whether migration 0050's R2 key tombstones are installed. */
+export const isR2KeyTombstoneReady = cachedSchemaProbe(
+  `SELECT COUNT(*) AS ready FROM sqlite_master
+   WHERE type = 'table' AND name = 'r2_key_tombstones'`,
+  (row) => row?.ready === 1
+);
+
+/**
+ * How long a key claim blocks writers (migration 0050's triggers). Only
+ * once it has lapsed can another claim on the key be taken, or a row
+ * naming it inserted.
+ */
+export const R2_KEY_TOMBSTONE_TTL_MS = 60 * 60 * 1000;
+
+/**
+ * How long after taking its claim a deleter may still start an R2 delete
+ * under it. Every delete starts inside this window, right after a re-read
+ * of the stored claim, so it is issued at least
+ * `R2_KEY_TOMBSTONE_TTL_MS - R2_KEY_DELETE_WINDOW_MS` (45 minutes) before
+ * any writer can reuse its key: far longer than one R2 call of a Worker
+ * invocation can stay in flight.
+ */
+export const R2_KEY_DELETE_WINDOW_MS = 15 * 60 * 1000;
+
+/** Rows a deleter is removing: they do not keep their own keys alive. */
+export interface OwnObjectRows {
+  readonly uploadSessions?: readonly string[];
+  readonly blobs?: readonly string[];
+  /**
+   * Encrypted blobs a garbage collector listed in state `deleting`, by row
+   * identity: only a row that is still that very row (blob id and
+   * `created_at`), still `deleting`, is exempt. A committed re-upload of the
+   * same blob id, a newer row under the same key, keeps the key alive.
+   */
+  readonly deletingBlobs?: readonly {
+    readonly blobId: string;
+    readonly createdAt: string;
+  }[];
+  readonly assets?: readonly string[];
+  readonly artifacts?: readonly string[];
+  readonly documentObjects?: readonly string[];
+}
+
+/** What `ObjectKeyClaim.deleteObjects` did, key by key. */
+export interface ClaimedDeleteOutcome {
+  /** Deleted from R2. */
+  readonly deleted: ReadonlySet<string>;
+  /** The R2 delete failed; the claim is left settling on these keys. */
+  readonly failed: ReadonlyMap<string, unknown>;
+  /**
+   * Not deleted: the claim was no longer held, or its delete window had
+   * passed. Keep their rows; a later pass claims them again.
+   */
+  readonly lapsed: ReadonlySet<string>;
+}
+
+/** The keys a deleter may remove from R2, until it releases them. */
+export interface ObjectKeyClaim {
+  /** Keys this claim holds. */
+  readonly keys: ReadonlySet<string>;
+  /**
+   * Keys not claimed because another deleter holds a fresh claim on them
+   * (not because a row names them). Keep their rows for a retry: that
+   * deleter may yet fail. A claim an earlier failed delete left settling
+   * is taken over instead, so it never makes a key contended.
+   */
+  readonly contended: ReadonlySet<string>;
+  /**
+   * Deletes `keys` (default: every claimed key) from R2. Immediately before
+   * starting, it re-reads the claim and skips any key it no longer holds
+   * inside the delete window; it then waits for every started delete to
+   * settle, so no delete is still in flight when the claim is released.
+   */
+  deleteObjects(
+    bucket: { delete(key: string): Promise<unknown> },
+    keys?: Iterable<string>
+  ): Promise<ClaimedDeleteOutcome>;
+  /**
+   * Releases the claim, except on keys whose R2 delete failed, now or in
+   * a claim this one took over: a failed call may still remove the bytes,
+   * so those are left settling and keep blocking writers until the claim
+   * lapses on its own. Any later cleanup may take them over.
+   */
+  release(): Promise<void>;
+}
+
+/** A claimed R2 delete that failed or could not run yet: retry later. */
+export class ObjectKeyDeleteRetryError extends Error {
+  constructor(
+    message = 'Stored objects are still being removed. Try again later.'
+  ) {
+    super(message);
+    this.name = 'ObjectKeyDeleteRetryError';
+  }
+}
+
+/**
+ * Throws when a claimed delete pass left work for a retry: an R2 delete
+ * failed (with its error), a claim lapsed, or another deleter holds a key.
+ */
+export function assertClaimedDeleteComplete(
+  claim: ObjectKeyClaim,
+  outcome: ClaimedDeleteOutcome
+): void {
+  for (const failure of outcome.failed.values()) {
+    throw failure instanceof Error ? failure : new ObjectKeyDeleteRetryError();
+  }
+  if (outcome.lapsed.size || claim.contended.size) {
+    throw new ObjectKeyDeleteRetryError();
+  }
+}
+
+function settledClaim(
+  keys: ReadonlySet<string>,
+  contended: ReadonlySet<string>,
+  claimedAt: number,
+  verify: (keys: readonly string[]) => Promise<Set<string>>,
+  release: (keep: readonly string[]) => Promise<void>
+): ObjectKeyClaim {
+  const failedKeys = new Set<string>();
+  return {
+    keys,
+    contended,
+    async deleteObjects(bucket, requested = keys) {
+      const wanted = [...new Set(requested)].filter((key) => keys.has(key));
+      const held = wanted.length ? await verify(wanted) : new Set<string>();
+      const lapsed = new Set<string>();
+      const started: { key: string; result: Promise<unknown> }[] = [];
+      for (const key of wanted) {
+        // The window is checked again as each delete starts.
+        if (
+          !held.has(key) ||
+          Date.now() - claimedAt >= R2_KEY_DELETE_WINDOW_MS
+        ) {
+          lapsed.add(key);
+          continue;
+        }
+        started.push({
+          key,
+          result: (async () => bucket.delete(key))()
+        });
+      }
+      const settled = await Promise.allSettled(
+        started.map((entry) => entry.result)
+      );
+      const deleted = new Set<string>();
+      const failed = new Map<string, unknown>();
+      settled.forEach((result, index) => {
+        const key = started[index]!.key;
+        if (result.status === 'fulfilled') {
+          deleted.add(key);
+        } else {
+          failed.set(key, result.reason);
+          failedKeys.add(key);
+        }
+      });
+      return { deleted, failed, lapsed };
+    },
+    release: () => release([...failedKeys])
+  };
+}
+
+/**
+ * Claims `keys` for deletion (migration 0050's protocol), in one statement:
+ * a key is claimed only while `fence` holds (one SQL condition and its
+ * binds, which must use `?` placeholders only) and no row other than `own`
+ * names it. Delete from R2 only through `deleteObjects`, then remove the
+ * rows, then `release()`. While a claim is fresh, no new row can name its
+ * key, so the delete can never remove bytes a newer row stores. Before
+ * migration 0050 every key is returned, as before.
+ */
+export async function claimObjectKeysForDelete(
+  db: D1Database,
+  keys: readonly string[],
+  own: OwnObjectRows = {},
+  fence?: { sql: string; binds: readonly unknown[] }
+): Promise<ObjectKeyClaim> {
+  const unique = [...new Set(keys)];
+  const claimedAt = Date.now();
+  if (!unique.length || !(await isR2KeyTombstoneReady(db))) {
+    // Before migration 0050 there is nothing to hold or re-read.
+    return settledClaim(
+      new Set(unique),
+      new Set(),
+      claimedAt,
+      async (wanted) => new Set(wanted),
+      async () => {}
+    );
+  }
+  const token = crypto.randomUUID();
+  const listed = JSON.stringify(unique);
+  const ids = (values?: readonly string[]) => JSON.stringify(values ?? []);
+  // A claim that outlived its deleter blocks nothing; it is dropped here
+  // so the key can be claimed again.
+  await db
+    .prepare(
+      `DELETE FROM r2_key_tombstones WHERE created_at <= ?
+       AND object_key IN (SELECT value FROM json_each(?))`
+    )
+    .bind(claimedAt - R2_KEY_TOMBSTONE_TTL_MS, listed)
+    .run();
+  await db
+    .prepare(
+      `INSERT INTO r2_key_tombstones (object_key, token, created_at)
+       SELECT k.value, ?1, ?2 FROM json_each(?3) k
+       WHERE NOT EXISTS (SELECT 1 FROM upload_sessions s
+                         WHERE s.object_key = k.value
+                           AND s.id NOT IN (SELECT value FROM json_each(?4)))
+         AND NOT EXISTS (SELECT 1 FROM e2ee_content_blobs b
+                         WHERE b.object_key = k.value
+                           AND b.blob_id NOT IN (SELECT value FROM json_each(?5))
+                           AND NOT (b.state = 'deleting' AND EXISTS (
+                             SELECT 1 FROM json_each(?9) d
+                             WHERE json_extract(d.value, '$[0]') = b.blob_id
+                               AND json_extract(d.value, '$[1]') = b.created_at)))
+         AND NOT EXISTS (SELECT 1 FROM project_storage_assets a
+                         WHERE a.object_key = k.value
+                           AND a.id NOT IN (SELECT value FROM json_each(?6)))
+         AND NOT EXISTS (SELECT 1 FROM artifacts f
+                         WHERE f.object_key = k.value
+                           AND f.id NOT IN (SELECT value FROM json_each(?7)))
+         AND NOT EXISTS (SELECT 1 FROM project_document_objects o
+                         WHERE o.object_key = k.value
+                           AND o.id NOT IN (SELECT value FROM json_each(?8)))
+         AND ${fence ? fence.sql : '1'}
+       ON CONFLICT (object_key) DO UPDATE
+         SET token = excluded.token, created_at = excluded.created_at
+         WHERE r2_key_tombstones.settling = 1`
+    )
+    .bind(
+      token,
+      claimedAt,
+      listed,
+      ids(own.uploadSessions),
+      ids(own.blobs),
+      ids(own.assets),
+      ids(own.artifacts),
+      ids(own.documentObjects),
+      JSON.stringify(
+        (own.deletingBlobs ?? []).map((row) => [row.blobId, row.createdAt])
+      ),
+      ...(fence?.binds ?? [])
+    )
+    .run();
+  const { results } = await db
+    .prepare(
+      `SELECT object_key, token, settling FROM r2_key_tombstones
+       WHERE object_key IN (SELECT value FROM json_each(?)) AND created_at > ?`
+    )
+    .bind(listed, Date.now() - R2_KEY_TOMBSTONE_TTL_MS)
+    .all<{ object_key: string; token: string; settling: number }>();
+  const claimed = new Set<string>();
+  const contended = new Set<string>();
+  for (const row of results ?? []) {
+    if (row.token === token) claimed.add(row.object_key);
+    else if (!row.settling) contended.add(row.object_key);
+  }
+  return settledClaim(
+    claimed,
+    contended,
+    claimedAt,
+    async (wanted) => {
+      const { results: held } = await db
+        .prepare(
+          `SELECT object_key FROM r2_key_tombstones
+           WHERE token = ? AND created_at > ?
+             AND object_key IN (SELECT value FROM json_each(?))`
+        )
+        .bind(
+          token,
+          Date.now() - R2_KEY_DELETE_WINDOW_MS,
+          JSON.stringify(wanted)
+        )
+        .all<{ object_key: string }>();
+      return new Set((held ?? []).map((row) => row.object_key));
+    },
+    async (failed) => {
+      await db.batch([
+        db
+          .prepare(
+            `UPDATE r2_key_tombstones SET settling = 1 WHERE token = ?
+             AND object_key IN (SELECT value FROM json_each(?))`
+          )
+          .bind(token, JSON.stringify(failed)),
+        db
+          .prepare(
+            'DELETE FROM r2_key_tombstones WHERE token = ? AND settling = 0'
+          )
+          .bind(token)
+      ]);
+    }
+  );
+}
+
 /**
  * Whether migration 0031's `projects.storage_format` exists (ADR-024 Phase
  * 4). Ordinary project traffic must never depend on that migration: until
@@ -799,6 +1097,17 @@ export const isE2eeProjectMigrationStorageReady = cachedSchemaProbe(
  * until the cutover. Only the reverse routes and the usage reads that must
  * agree with its triggers name it, each after asking this.
  */
+/**
+ * Whether migration 0049's `project_document_objects.supersedes_object_id`
+ * exists: a head-replacing write names the head it releases there, and its
+ * admission credits it.
+ */
+export const isObjectSupersedesReady = cachedSchemaProbe(
+  `SELECT COUNT(*) AS ready FROM pragma_table_info('project_document_objects')
+   WHERE name = 'supersedes_object_id'`,
+  (row) => row?.ready === 1
+);
+
 export const isE2eeReverseStorageReady = cachedSchemaProbe(
   `SELECT COUNT(*) AS ready FROM sqlite_master WHERE type = 'view'
    AND name = 'e2ee_decrypt_staged_projects'`,
@@ -1075,6 +1384,14 @@ export interface ProjectCopyFinalizeRequest {
 // Moved to @openzcad/persistence so the browser that builds a copy computes
 // it (ADR-024 Phase 1); re-exported for existing server callers.
 export { projectCopyDocumentDigest };
+
+/**
+ * Unreferenced document objects one prune deletes at most. Each costs an R2
+ * delete subrequest; a backlog from failed deletes drains over later saves.
+ */
+const OBJECT_PRUNE_LIMIT = 32;
+/** The smaller bound for the prune that runs before a save is measured. */
+const PRE_SAVE_OBJECT_PRUNE_LIMIT = 8;
 
 export class D1R2PersistenceService implements PersistenceService {
   constructor(private readonly env: CloudflareEnv) {}
@@ -3134,7 +3451,10 @@ export class D1R2PersistenceService implements PersistenceService {
         access.ownerUserId,
         request.expectedVersion
       );
-      const write = await this.putProjectStorageObjects(document, { storage });
+      const write = await this.putProjectStorageObjects(document, {
+        storage,
+        replacesHead: true
+      });
       const updatedAt = nowIso();
       const envelope = projectObjectEnvelope(document, write.objectId);
       const assetStatements = this.projectAssetStatements(
@@ -3237,6 +3557,7 @@ export class D1R2PersistenceService implements PersistenceService {
         );
         if (resolution.state === 'committed') {
           await this.pruneRevisions(request.projectId);
+          await this.ensureWrittenAssets(write);
           await this.pruneUnreferencedProjectObjects(request.projectId);
           return document;
         }
@@ -3255,6 +3576,7 @@ export class D1R2PersistenceService implements PersistenceService {
         );
       }
       await this.pruneRevisions(request.projectId);
+      await this.ensureWrittenAssets(write);
       await this.pruneUnreferencedProjectObjects(request.projectId);
       return document;
     }
@@ -3629,11 +3951,14 @@ export class D1R2PersistenceService implements PersistenceService {
   /**
    * Slice 7-3: a decrypt staging's files count toward no quota until the
    * cutover (migration 0043), which refuses one that would leave the owner
-   * over their artifact limit. This refuses a further staged file early,
-   * once the files staged so far would already do so at the cutover: the
-   * account's usage, plus the staged files, less the project's encrypted
-   * blobs the cutover stops counting. Advisory only; the cutover's check is
-   * the one that holds.
+   * over their storage allowance. This refuses a further staged file early,
+   * once what is staged so far would already do so at the cutover: the
+   * account's file usage and project storage (one allowance, migration
+   * 0049), plus what the cutover adds (the staged files, documents and
+   * assets, less the encrypted blobs and envelopes it stops counting), when
+   * that grows the account. A staging that shrinks it is never refused, so
+   * an account at its allowance can still decrypt. Advisory only; the
+   * cutover's check is the one that holds.
    */
   private async assertDecryptStagingFileCapacity(
     ownerUserId: UserId,
@@ -3644,21 +3969,63 @@ export class D1R2PersistenceService implements PersistenceService {
         `SELECT
            COALESCE((SELECT finalized_bytes + reserved_bytes
                      FROM artifact_account_usage
-                     WHERE owner_user_id = ?), 0) AS used,
+                     WHERE owner_user_id = ?1), 0) AS used,
            (SELECT COALESCE(SUM(bytes), 0) FROM artifacts
-            WHERE project_id = ?) AS staged,
+            WHERE project_id = ?2)
+           + (SELECT COALESCE(SUM(stored_bytes), 0)
+              FROM project_document_objects WHERE project_id = ?2)
+           + (SELECT COALESCE(SUM(stored_bytes), 0)
+              FROM project_storage_assets WHERE project_id = ?2) AS staged,
            (SELECT COALESCE(SUM(ciphertext_bytes), 0) FROM e2ee_content_blobs
-            WHERE project_id = ?) AS blobs`
+            WHERE project_id = ?2)
+           + (SELECT COALESCE(SUM(envelope_bytes), 0) FROM e2ee_project_versions
+              WHERE project_id = ?2
+                AND (envelope_key IS NOT NULL OR envelope_inline IS NOT NULL))
+             AS blobs`
       )
-      .bind(ownerUserId, projectId, projectId)
+      .bind(ownerUserId, projectId)
       .first<{ used: number; staged: number; blobs: number }>();
     const used = row?.used ?? 0;
     const staged = row?.staged ?? 0;
     const blobs = row?.blobs ?? 0;
-    const { artifactLimitBytes } = await this.ownerEntitlements(ownerUserId);
-    if (staged > blobs && used + staged - blobs >= artifactLimitBytes) {
-      throw new ArtifactQuotaError(artifactLimitBytes);
+    if (staged <= blobs) return;
+    const projects = await this.accountProjectStorageBytes(ownerUserId);
+    const { storageLimitBytes } = await this.ownerEntitlements(ownerUserId);
+    if (used + projects + staged - blobs >= storageLimitBytes) {
+      throw new ArtifactQuotaError(storageLimitBytes);
     }
+  }
+
+  /**
+   * The owner's project storage as the quota triggers measure it (migration
+   * 0049's `account_project_storage`): plaintext as
+   * `plaintextProjectStorageBytes` counts it, plus retained encrypted
+   * envelopes.
+   */
+  private async accountProjectStorageBytes(
+    ownerUserId: UserId
+  ): Promise<number> {
+    return (
+      (await this.plaintextProjectStorageBytes(ownerUserId)) +
+      (await this.encryptedProjectUsage(ownerUserId)).storedBytes
+    );
+  }
+
+  /**
+   * The owner's file usage as the quota triggers count it: finalized and
+   * reserved bytes, so an upload in flight holds its room.
+   */
+  private async accountArtifactQuotaBytes(
+    ownerUserId: UserId
+  ): Promise<number> {
+    const row = await this.env
+      .DB!.prepare(
+        `SELECT finalized_bytes + reserved_bytes AS bytes
+         FROM artifact_account_usage WHERE owner_user_id = ?`
+      )
+      .bind(ownerUserId)
+      .first<{ bytes: number }>();
+    return row?.bytes ?? 0;
   }
 
   private async ownerEntitlements(ownerUserId: UserId) {
@@ -3678,19 +4045,20 @@ export class D1R2PersistenceService implements PersistenceService {
     // Legacy rows without an account use the database's Free fallback.
     if (!owner) return;
     const limits = accountEntitlements(this.env, owner.email ?? undefined);
+    // Both byte columns hold the one storage allowance (migration 0049).
     await this.env
       .DB!.prepare(
         `UPDATE users SET artifact_limit_bytes = ?, project_limit = ?, project_storage_limit_bytes = ?
        WHERE id = ? AND (artifact_limit_bytes <> ? OR project_limit <> ? OR project_storage_limit_bytes <> ?)`
       )
       .bind(
-        limits.artifactLimitBytes,
+        limits.storageLimitBytes,
         limits.projectLimit,
-        limits.projectStorageLimitBytes,
+        limits.storageLimitBytes,
         ownerUserId,
-        limits.artifactLimitBytes,
+        limits.storageLimitBytes,
         limits.projectLimit,
-        limits.projectStorageLimitBytes
+        limits.storageLimitBytes
       )
       .run();
   }
@@ -3700,13 +4068,21 @@ export class D1R2PersistenceService implements PersistenceService {
       return getInMemoryPersistence().getStorageUsage(userId);
     }
     const db = this.env.DB;
+    // The library lists projects outside the recycle bin; trashed ones are
+    // counted apart. Every project's bytes count: trashed ones are stored.
     const totals = await db
       .prepare(
-        `SELECT COUNT(*) AS project_count, COALESCE(SUM(document_bytes), 0) AS document_bytes
+        `SELECT COALESCE(SUM(status <> 'deleted'), 0) AS project_count,
+                COALESCE(SUM(status = 'deleted'), 0) AS trashed_count,
+                COALESCE(SUM(document_bytes), 0) AS document_bytes
        FROM projects WHERE user_id = ?`
       )
       .bind(userId)
-      .first<{ project_count: number; document_bytes: number }>();
+      .first<{
+        project_count: number;
+        trashed_count: number;
+        document_bytes: number;
+      }>();
     const revisions = await db
       .prepare(
         `SELECT COUNT(*) AS revision_count, COALESCE(SUM(revisions.document_bytes), 0) AS revision_bytes
@@ -3719,19 +4095,29 @@ export class D1R2PersistenceService implements PersistenceService {
     const encrypted = await this.encryptedProjectUsage(userId);
     const artifacts = await this.accountArtifactUsage(userId);
     const entitlements = await this.ownerEntitlements(userId);
+    const projectStorageBytes =
+      (await this.plaintextProjectStorageBytes(userId)) + encrypted.storedBytes;
+    // In-flight uploads hold their room, as the quota triggers count them.
+    const artifactReservedBytes = Math.max(
+      0,
+      (await this.accountArtifactQuotaBytes(userId)) - artifacts.bytes
+    );
     return {
       projectCount: totals?.project_count ?? 0,
+      trashedProjectCount: totals?.trashed_count ?? 0,
       documentBytes: (totals?.document_bytes ?? 0) + encrypted.documentBytes,
       revisionBytes: (revisions?.revision_bytes ?? 0) + encrypted.revisionBytes,
       revisionCount: (revisions?.revision_count ?? 0) + encrypted.revisionCount,
-      projectStorageBytes:
-        (await this.plaintextProjectStorageBytes(userId)) +
-        encrypted.storedBytes,
+      projectStorageBytes,
+      storageBytes:
+        projectStorageBytes + artifacts.bytes + artifactReservedBytes,
+      storageLimitBytes: entitlements.storageLimitBytes,
       documentLimitBytes: this.projectDocumentLimitBytes(),
       maxRevisionsPerProject: MAX_PROJECT_REVISIONS,
       artifactBytes: artifacts.bytes,
       artifactCount: artifacts.count,
-      artifactLimitBytes: entitlements.artifactLimitBytes,
+      artifactReservedBytes,
+      artifactLimitBytes: entitlements.storageLimitBytes,
       entitlements
     };
   }
@@ -3747,15 +4133,19 @@ export class D1R2PersistenceService implements PersistenceService {
     const staged = (await isE2eeReverseStorageReady(this.env.DB))
       ? ' AND projects.id NOT IN (SELECT project_id FROM e2ee_decrypt_staged_projects)'
       : '';
+    // The unary + keeps SQLite from answering `document_object_id IS NULL`
+    // through the document-object indexes, which hold every account's
+    // inline rows under one key: it walks this owner's projects (and their
+    // revisions) instead, as migration 0049's view does.
     const row = await this.env
       .DB!.prepare(
         `SELECT
            COALESCE((SELECT SUM(document_bytes) FROM projects
-                     WHERE user_id = ?1 AND document_object_id IS NULL), 0)
+                     WHERE user_id = ?1 AND +document_object_id IS NULL), 0)
          + COALESCE((SELECT SUM(revisions.document_bytes) FROM revisions
                      JOIN projects ON projects.id = revisions.project_id
                      WHERE projects.user_id = ?1
-                       AND revisions.document_object_id IS NULL), 0)
+                       AND +revisions.document_object_id IS NULL), 0)
          + COALESCE((SELECT SUM(objects.stored_bytes)
                      FROM project_document_objects objects
                      JOIN projects ON projects.id = objects.project_id
@@ -3922,6 +4312,16 @@ export class D1R2PersistenceService implements PersistenceService {
         ) {
           throw new RevisionIdCollisionError();
         }
+        // A first attempt may have committed these rows and then failed to
+        // store a source asset again (`ensureWrittenAssets`): its retry
+        // repairs it before answering staged.
+        await this.repairStoredAssets(
+          input.projectId,
+          (input.storage
+            ? await prepareClientProjectStorageSnapshot(document, input.storage)
+            : await prepareProjectStorageSnapshot(document)
+          ).assets
+        );
         return {
           objectId: existing.object_id,
           checksumSha256: existing.checksum_sha256,
@@ -3947,6 +4347,7 @@ export class D1R2PersistenceService implements PersistenceService {
           .bind(input.projectId, journaled.checksumSha256)
           .first<{ id: string }>();
         if (existing) {
+          await this.repairStoredAssets(input.projectId, prepared.assets);
           return {
             objectId: existing.id,
             checksumSha256: journaled.checksumSha256,
@@ -3956,39 +4357,24 @@ export class D1R2PersistenceService implements PersistenceService {
         }
       }
     }
-    const write = await this.putProjectStorageObjects(document, {
-      ...(input.storage ? { storage: input.storage } : {}),
-      stagedForDecryption: true
-    });
-    const envelope = projectObjectEnvelope(document, write.objectId);
     const fence = input.fence;
     const objectFence = `EXISTS (SELECT 1 FROM project_document_objects
       WHERE id = ? AND project_id = ?)`;
     const latest = document.revisions.at(-1);
-    const statements: D1PreparedStatement[] = [
-      this.env.DB.prepare(
-        `INSERT INTO project_document_objects
-           (id, project_id, object_key, checksum_sha256, logical_bytes,
-            stored_bytes, content_encoding, state, created_at)
-         SELECT ?, ?, ?, ?, ?, ?, ?, 'committed', ? WHERE ${fence.sql}`
-      ).bind(
-        write.objectId,
-        input.projectId,
-        write.objectKey,
-        write.prepared.checksumSha256,
-        write.prepared.logicalBytes,
-        write.prepared.storedBytes,
-        write.prepared.contentEncoding,
-        write.createdAt,
-        ...fence.binds
-      ),
-      ...write.prepared.assets.map((asset) =>
-        this.env
-          .DB!.prepare(
+    const db = this.env.DB;
+    const assetInserts = (
+      objectId: string,
+      createdAt: string,
+      assets: readonly ProjectStorageAssetObject[]
+    ) =>
+      assets.map((asset) =>
+        db
+          .prepare(
             `INSERT OR IGNORE INTO project_storage_assets
                (id, project_id, kind, object_key, checksum_sha256,
                 logical_bytes, stored_bytes, content_encoding, created_at)
-             SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${objectFence}`
+             SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${objectFence}
+               AND ${fence.sql}`
           )
           .bind(
             `project_asset_${crypto.randomUUID()}`,
@@ -3999,47 +4385,120 @@ export class D1R2PersistenceService implements PersistenceService {
             asset.logicalBytes,
             asset.storedBytes,
             asset.contentEncoding,
-            write.createdAt,
-            write.objectId,
-            input.projectId
+            createdAt,
+            objectId,
+            input.projectId,
+            ...fence.binds
           )
-      ),
-      ...(revision && latest
-        ? [
-            this.env.DB.prepare(
-              `INSERT INTO revisions
-                 (id, project_id, reason, document_json, document_object_id,
-                  document_bytes, created_at, author_user_id)
-               SELECT ?, ?, ?, ?, ?, ?, ?,
-                      COALESCE((SELECT author.id FROM users author
-                                JOIN e2ee_project_revisions saved
-                                  ON saved.author_user_id = author.id
-                                WHERE saved.project_id = ?
-                                  AND saved.revision_id = ?
-                                  AND author.id = ?), ?)
-               WHERE ${objectFence}`
-            ).bind(
-              revision.revisionId,
-              input.projectId,
-              revision.reason,
-              envelope,
-              write.objectId,
-              persistedDocumentBytes(document),
-              latest.createdAt,
-              // Who saved it, as the encrypted history records them.
-              input.projectId,
-              revision.revisionId,
-              revision.authorUserId ?? null,
-              userId,
-              write.objectId,
-              input.projectId
-            )
-          ]
-        : [])
+      );
+    // The save state's row is what the decryption journal lists as staged
+    // (and what the cutover then relies on), so it lands only after this
+    // write's source assets are verified in R2: first the object and asset
+    // rows (from then on no cleanup can claim those keys), then the repair,
+    // then the revision. A failed repair leaves no revision row, so a
+    // resumed run stages it again instead of skipping it.
+    const journalRevision = async (objectId: string) => {
+      if (!revision || !latest) return;
+      const [inserted] = await db.batch([
+        db
+          .prepare(
+            `INSERT INTO revisions
+               (id, project_id, reason, document_json, document_object_id,
+                document_bytes, created_at, author_user_id)
+             SELECT ?, ?, ?, ?, ?, ?, ?,
+                    COALESCE((SELECT author.id FROM users author
+                              JOIN e2ee_project_revisions saved
+                                ON saved.author_user_id = author.id
+                              WHERE saved.project_id = ?
+                                AND saved.revision_id = ?
+                                AND author.id = ?), ?)
+             WHERE ${objectFence} AND ${fence.sql}`
+          )
+          .bind(
+            revision.revisionId,
+            input.projectId,
+            revision.reason,
+            projectObjectEnvelope(document, objectId),
+            objectId,
+            persistedDocumentBytes(document),
+            latest.createdAt,
+            // Who saved it, as the encrypted history records them.
+            input.projectId,
+            revision.revisionId,
+            revision.authorUserId ?? null,
+            userId,
+            objectId,
+            input.projectId,
+            ...fence.binds
+          )
+      ]);
+      if ((inserted?.meta?.changes ?? 0) !== 1) {
+        throw new DecryptStagingLeaseError();
+      }
+    };
+    // An earlier attempt at this same document may have committed its
+    // object and asset rows, then failed to repair an asset, and so was
+    // never journaled. Its object is reused rather than a second one
+    // stored: an unjournaled copy would count against the cutover's storage
+    // check, which a cutover it blocks would never get to sweep.
+    const reusable = await this.unjournaledStagedObject(
+      input.projectId,
+      document,
+      input.storage
+    );
+    if (reusable) {
+      const assetRows = assetInserts(
+        reusable.objectId,
+        nowIso(),
+        reusable.prepared.assets
+      );
+      if (assetRows.length) await db.batch(assetRows);
+      await this.repairStoredAssets(input.projectId, reusable.prepared.assets);
+      await journalRevision(reusable.objectId);
+      if (!revision) {
+        // The head's journal entry is recorded by the caller under its
+        // lease; still only while this lease holds.
+        const current = await db
+          .prepare(`SELECT 1 AS current WHERE ${fence.sql}`)
+          .bind(...fence.binds)
+          .first<{ current: number }>();
+        if (!current) throw new DecryptStagingLeaseError();
+      }
+      return {
+        objectId: reusable.objectId,
+        checksumSha256: reusable.prepared.checksumSha256,
+        version: document.version,
+        staged: false
+      };
+    }
+    const write = await this.putProjectStorageObjects(document, {
+      ...(input.storage ? { storage: input.storage } : {}),
+      stagedForDecryption: true
+    });
+    const statements: D1PreparedStatement[] = [
+      db
+        .prepare(
+          `INSERT INTO project_document_objects
+             (id, project_id, object_key, checksum_sha256, logical_bytes,
+              stored_bytes, content_encoding, state, created_at)
+           SELECT ?, ?, ?, ?, ?, ?, ?, 'committed', ? WHERE ${fence.sql}`
+        )
+        .bind(
+          write.objectId,
+          input.projectId,
+          write.objectKey,
+          write.prepared.checksumSha256,
+          write.prepared.logicalBytes,
+          write.prepared.storedBytes,
+          write.prepared.contentEncoding,
+          write.createdAt,
+          ...fence.binds
+        ),
+      ...assetInserts(write.objectId, write.createdAt, write.prepared.assets)
     ];
     let results: Awaited<ReturnType<D1Database['batch']>>;
     try {
-      results = await this.env.DB.batch(statements);
+      results = await db.batch(statements);
     } catch (error) {
       await this.discardStagedWrite(input.projectId, write);
       throw error;
@@ -4048,12 +4507,61 @@ export class D1R2PersistenceService implements PersistenceService {
       await this.discardStagedWrite(input.projectId, write);
       throw new DecryptStagingLeaseError();
     }
+    // A failure here leaves an unjournaled staged object, which the next
+    // attempt at this document reuses (and the purge of superseded staged
+    // documents sweeps otherwise), and no journal entry.
+    await this.ensureWrittenAssets(write);
+    await journalRevision(write.objectId);
     return {
       objectId: write.objectId,
       checksumSha256: write.prepared.checksumSha256,
       version: document.version,
       staged: false
     };
+  }
+
+  /**
+   * A committed staged document object of `projectId` that no project or
+   * revision names yet and that holds exactly `document` (by its storage
+   * checksum), with its R2 object present: what an attempt that committed
+   * its rows and then failed before its journal entry leaves behind.
+   */
+  private async unjournaledStagedObject(
+    projectId: string,
+    document: ProjectDocument,
+    storage: ClientProjectStorage | undefined
+  ): Promise<{
+    objectId: string;
+    prepared: PreparedProjectStorageSnapshot;
+  } | null> {
+    const { results } = await this.env
+      .DB!.prepare(
+        `SELECT o.id, o.object_key, o.checksum_sha256
+         FROM project_document_objects o
+         WHERE o.project_id = ? AND o.state = 'committed'
+           AND NOT EXISTS (SELECT 1 FROM projects p
+                           WHERE p.document_object_id = o.id)
+           AND NOT EXISTS (SELECT 1 FROM revisions r
+                           WHERE r.document_object_id = o.id)
+         ORDER BY o.created_at DESC, o.id DESC
+         LIMIT 32`
+      )
+      .bind(projectId)
+      .all<{ id: string; object_key: string; checksum_sha256: string }>();
+    const candidates = results ?? [];
+    if (!candidates.length) return null;
+    const prepared = storage
+      ? await prepareClientProjectStorageSnapshot(document, storage)
+      : await prepareProjectStorageSnapshot(document);
+    const match = candidates.find(
+      (row) => row.checksum_sha256 === prepared.checksumSha256
+    );
+    if (!match) return null;
+    const bucket = this.projectStorageBucket();
+    if (bucket && typeof bucket.head === 'function') {
+      if (!(await bucket.head(match.object_key))) return null;
+    }
+    return { objectId: match.id, prepared };
   }
 
   /** Removes a staged write's objects that no row names (slice 7-3). */
@@ -4071,22 +4579,20 @@ export class D1R2PersistenceService implements PersistenceService {
         .bind(write.objectId)
         .first<{ named: number }>();
       if (named) return;
-      const orphans = await Promise.all(
-        write.missingAssets.map(async (asset) =>
-          (await this.env
-            .DB!.prepare(
-              'SELECT 1 AS named FROM project_storage_assets WHERE project_id = ? AND object_key = ?'
-            )
-            .bind(projectId, asset.objectKey)
-            .first<{ named: number }>())
-            ? null
-            : asset.objectKey
-        )
+      // Content-addressed asset keys only under a claim (migration 0050):
+      // a concurrent write of the same source may name them meanwhile.
+      const claim = await claimObjectKeysForDelete(
+        this.env.DB!,
+        write.missingAssets.map((asset) => asset.objectKey)
       );
-      await Promise.allSettled([
-        bucket.delete(write.objectKey),
-        ...orphans.flatMap((key) => (key ? [bucket.delete(key)] : []))
-      ]);
+      try {
+        await Promise.allSettled([
+          bucket.delete(write.objectKey),
+          claim.deleteObjects(bucket)
+        ]);
+      } finally {
+        await claim.release();
+      }
     } catch {
       // An orphaned object is harmless; the project's purge sweeps it.
     }
@@ -4189,7 +4695,8 @@ export class D1R2PersistenceService implements PersistenceService {
         request.expectedVersion
       );
       const write = await this.putProjectStorageObjects(normalized, {
-        storage
+        storage,
+        replacesHead: true
       });
       const envelope = projectObjectEnvelope(normalized, write.objectId);
       const assetStatements = this.projectAssetStatements(
@@ -4271,6 +4778,7 @@ export class D1R2PersistenceService implements PersistenceService {
           write
         );
         if (resolution.state === 'committed') {
+          await this.ensureWrittenAssets(write);
           await this.pruneUnreferencedProjectObjects(request.projectId);
           return {
             projectId: request.projectId,
@@ -4292,6 +4800,7 @@ export class D1R2PersistenceService implements PersistenceService {
           resolution.currentVersion
         );
       }
+      await this.ensureWrittenAssets(write);
       await this.pruneUnreferencedProjectObjects(request.projectId);
       return {
         projectId: request.projectId,
@@ -4447,7 +4956,7 @@ export class D1R2PersistenceService implements PersistenceService {
     } catch (error) {
       throw artifactAccountingError(
         error,
-        (await this.ownerEntitlements(access.ownerUserId)).artifactLimitBytes
+        (await this.ownerEntitlements(access.ownerUserId)).storageLimitBytes
       );
     }
     return { session };
@@ -4548,7 +5057,7 @@ export class D1R2PersistenceService implements PersistenceService {
         await multipart.abort().catch(() => undefined);
         throw artifactAccountingError(
           error,
-          (await this.ownerEntitlements(upload.ownerUserId)).artifactLimitBytes
+          (await this.ownerEntitlements(upload.ownerUserId)).storageLimitBytes
         );
       }
       if (claimed !== 1) {
@@ -5060,20 +5569,38 @@ export class D1R2PersistenceService implements PersistenceService {
         upload.multipartUploadId
       );
     }
-    await this.env.ARTIFACTS.delete(upload.objectKey);
-    const results = await this.env.DB!.batch([
-      this.env
-        .DB!.prepare(
-          `DELETE FROM artifact_upload_parts WHERE upload_session_id = ?`
-        )
-        .bind(upload.uploadSessionId),
-      this.env
-        .DB!.prepare(
-          `DELETE FROM upload_sessions
+    // Migration 0050: the session's key is deleted only while no other row
+    // names it. An encrypted blob's key is reused by a retried upload, so a
+    // cleanup that paused here must not remove a newer upload's bytes.
+    const claim = await claimObjectKeysForDelete(
+      this.env.DB!,
+      [upload.objectKey],
+      { uploadSessions: [upload.uploadSessionId] }
+    );
+    let results: Awaited<ReturnType<D1Database['batch']>>;
+    try {
+      // Another deleter still holds the key, or this claim lapsed before
+      // its delete could start: the session stays `aborting` for a retry.
+      if (claim.contended.size) return false;
+      const outcome = await claim.deleteObjects(this.env.ARTIFACTS);
+      for (const error of outcome.failed.values()) throw error;
+      if (outcome.lapsed.size) return false;
+      results = await this.env.DB!.batch([
+        this.env
+          .DB!.prepare(
+            `DELETE FROM artifact_upload_parts WHERE upload_session_id = ?`
+          )
+          .bind(upload.uploadSessionId),
+        this.env
+          .DB!.prepare(
+            `DELETE FROM upload_sessions
          WHERE id = ? AND reservation_state = 'aborting'`
-        )
-        .bind(upload.uploadSessionId)
-    ]);
+          )
+          .bind(upload.uploadSessionId)
+      ]);
+    } finally {
+      await claim.release();
+    }
     if (results[1]?.meta?.changes === 1) return true;
     return (await this.loadUploadSession(upload.uploadSessionId)) === null;
   }
@@ -5176,7 +5703,7 @@ export class D1R2PersistenceService implements PersistenceService {
       await upload.abort().catch(() => undefined);
       throw artifactAccountingError(
         error,
-        (await this.ownerEntitlements(session.ownerUserId)).artifactLimitBytes
+        (await this.ownerEntitlements(session.ownerUserId)).storageLimitBytes
       );
     }
     if (changes === 0) {
@@ -5285,7 +5812,7 @@ export class D1R2PersistenceService implements PersistenceService {
     } catch (error) {
       throw artifactAccountingError(
         error,
-        (await this.ownerEntitlements(session.ownerUserId)).artifactLimitBytes
+        (await this.ownerEntitlements(session.ownerUserId)).storageLimitBytes
       );
     }
     if (leaseFence && reserved !== reservationToken) {
@@ -5328,7 +5855,7 @@ export class D1R2PersistenceService implements PersistenceService {
     } catch (error) {
       throw artifactAccountingError(
         error,
-        (await this.ownerEntitlements(session.ownerUserId)).artifactLimitBytes
+        (await this.ownerEntitlements(session.ownerUserId)).storageLimitBytes
       );
     }
     if (recorded !== 1) {
@@ -5848,7 +6375,7 @@ export class D1R2PersistenceService implements PersistenceService {
       }
       throw artifactAccountingError(
         error,
-        (await this.ownerEntitlements(access.ownerUserId)).artifactLimitBytes
+        (await this.ownerEntitlements(access.ownerUserId)).storageLimitBytes
       );
     }
     return {
@@ -6040,7 +6567,7 @@ export class D1R2PersistenceService implements PersistenceService {
     } catch (error) {
       const mapped = artifactAccountingError(
         error,
-        (await this.ownerEntitlements(access.ownerUserId)).artifactLimitBytes
+        (await this.ownerEntitlements(access.ownerUserId)).storageLimitBytes
       );
       if (mapped instanceof ArtifactQuotaError) {
         await this.cleanupUploadSession(upload).catch(() => false);
@@ -6263,7 +6790,7 @@ export class D1R2PersistenceService implements PersistenceService {
     } catch (error) {
       const mapped = artifactAccountingError(
         error,
-        (await this.ownerEntitlements(upload.ownerUserId)).artifactLimitBytes
+        (await this.ownerEntitlements(upload.ownerUserId)).storageLimitBytes
       );
       if (mapped instanceof ArtifactQuotaError) {
         await this.cleanupUploadSession(upload);
@@ -6606,6 +7133,60 @@ export class D1R2PersistenceService implements PersistenceService {
     assertPersistableDocument(document, this.projectDocumentLimitBytes());
   }
 
+  /**
+   * After a write's rows commit: stores again any source asset this write
+   * put whose object is gone (migration 0050). A cleanup may have deleted a
+   * content-addressed key between this write's put and its row, under a
+   * claim it released before the row landed; once the row exists, no claim
+   * on the key can be taken, so this check is the last one needed.
+   */
+  private async ensureWrittenAssets(write: ProjectStorageWrite): Promise<void> {
+    const bucket = this.projectStorageBucket();
+    if (!bucket || typeof bucket.head !== 'function') return;
+    for (const asset of write.missingAssets) {
+      if (await bucket.head(asset.objectKey)) continue;
+      await bucket.put(
+        asset.objectKey,
+        Uint8Array.from(asset.storedBody).buffer,
+        { httpMetadata: { contentType: asset.contentType } }
+      );
+    }
+  }
+
+  /**
+   * Stores again any of a document's source assets that a row of the
+   * project names but whose object is gone: what an idempotent retry of a
+   * write that committed its rows, then failed `ensureWrittenAssets`, does
+   * before treating that write as complete.
+   */
+  private async repairStoredAssets(
+    projectId: string,
+    assets: readonly ProjectStorageAssetObject[]
+  ): Promise<void> {
+    const bucket = this.projectStorageBucket();
+    if (!bucket || typeof bucket.head !== 'function' || !assets.length) {
+      return;
+    }
+    const { results } = await this.env
+      .DB!.prepare(
+        `SELECT object_key FROM project_storage_assets
+         WHERE project_id = ?
+           AND object_key IN (SELECT value FROM json_each(?))`
+      )
+      .bind(projectId, JSON.stringify(assets.map((asset) => asset.objectKey)))
+      .all<{ object_key: string }>();
+    const named = new Set((results ?? []).map((row) => row.object_key));
+    for (const asset of assets) {
+      if (!named.has(asset.objectKey)) continue;
+      if (await bucket.head(asset.objectKey)) continue;
+      await bucket.put(
+        asset.objectKey,
+        Uint8Array.from(asset.storedBody).buffer,
+        { httpMetadata: { contentType: asset.contentType } }
+      );
+    }
+  }
+
   private async putProjectStorageObjects(
     document: ProjectDocument,
     options?: {
@@ -6617,6 +7198,12 @@ export class D1R2PersistenceService implements PersistenceService {
        * toward no quota until the cutover (migration 0043).
        */
       stagedForDecryption?: boolean;
+      /**
+       * The write moves the project's head to this object (an autosave or
+       * named save): it releases the current head once nothing else names
+       * it, so its admission credits that head (migration 0049).
+       */
+      replacesHead?: boolean;
     }
   ): Promise<ProjectStorageWrite> {
     const bucket = this.projectStorageBucket();
@@ -6689,11 +7276,44 @@ export class D1R2PersistenceService implements PersistenceService {
       }
     }
 
+    // A replaced head whose pruning failed (an R2 delete that did not go
+    // through) withholds the credit of every later replacement (migration
+    // 0049): prune again before measuring, so a temporary failure does not
+    // block the project's saves for good. Document object keys are random,
+    // so this is the same safe prune that follows every save. Bounded; a
+    // larger backlog drains over retries (see the refusal below).
+    const pruned = options?.replacesHead
+      ? await this.pruneUnreferencedProjectObjects(
+          document.projectId,
+          PRE_SAVE_OBJECT_PRUNE_LIMIT
+        )
+      : null;
+    const released = options?.replacesHead
+      ? await this.releasedHead(document.projectId)
+      : null;
+    const linksAssets = await isObjectSupersedesReady(this.env.DB);
     if (!options?.stagedForDecryption) {
-      await this.assertAccountProjectStorageCapacity(
-        document.ownerUserId,
-        prepared.storedBytes + newAssetBytes
-      );
+      try {
+        await this.assertAccountProjectStorageCapacity(
+          document.ownerUserId,
+          prepared.storedBytes + newAssetBytes,
+          released?.storedBytes ?? 0
+        );
+      } catch (error) {
+        // The bounded prune made progress but left replaced heads behind,
+        // and those withhold this save's credit: the refusal is not final.
+        // Answer retryably so the client tries again and the next prune
+        // drains more, instead of halting on a quota it may not exceed.
+        if (
+          error instanceof ProjectQuotaError &&
+          pruned &&
+          pruned.deleted > 0 &&
+          pruned.remaining
+        ) {
+          throw new ProjectStorageCleanupPendingError();
+        }
+        throw error;
+      }
     }
 
     await Promise.all(
@@ -6716,8 +7336,54 @@ export class D1R2PersistenceService implements PersistenceService {
       objectKey,
       createdAt,
       prepared,
-      missingAssets
+      missingAssets,
+      supersedesObjectId: released?.objectId ?? null,
+      linksAssets
     };
+  }
+
+  /**
+   * The head a head-replacing write releases, as migration 0049's object
+   * admission credits it: the project's current head object, named by no
+   * save state and claimed by no pending object, while the project holds
+   * no other unreclaimed object (a replaced head whose pruning failed), so
+   * at most one replacement's credit is ever outstanding. Null before migration 0049
+   * or when there is none.
+   */
+  private async releasedHead(
+    projectId: string
+  ): Promise<{ objectId: string; storedBytes: number } | null> {
+    if (!(await isObjectSupersedesReady(this.env.DB))) return null;
+    const row = await this.env
+      .DB!.prepare(
+        `SELECT head.id AS object_id, head.stored_bytes AS stored_bytes
+         FROM projects hp
+         JOIN project_document_objects head ON head.id = hp.document_object_id
+         WHERE hp.id = ?1 AND head.project_id = ?1
+           AND NOT EXISTS (
+             SELECT 1 FROM revisions hr WHERE hr.document_object_id = head.id
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM project_document_objects claim
+             WHERE claim.project_id = ?1
+               AND claim.supersedes_object_id = head.id
+               AND claim.state = 'pending'
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM project_document_objects spare
+             WHERE spare.project_id = ?1 AND spare.state = 'committed'
+               AND spare.id <> head.id
+               AND NOT EXISTS (
+                 SELECT 1 FROM revisions sr
+                 WHERE sr.document_object_id = spare.id
+               )
+           )`
+      )
+      .bind(projectId)
+      .first<{ object_id: string; stored_bytes: number }>();
+    return row
+      ? { objectId: row.object_id, storedBytes: row.stored_bytes }
+      : null;
   }
 
   private async assertAccountProjectCount(userId: UserId): Promise<void> {
@@ -6736,46 +7402,37 @@ export class D1R2PersistenceService implements PersistenceService {
     }
   }
 
+  /**
+   * Refuses an R2 document write the quota triggers would refuse at commit:
+   * everything the owner stores (project storage as migration 0049 measures
+   * it, and file usage, finalized and reserved, in the same allowance), plus
+   * the incoming bytes, over the one storage allowance. Plaintext staged
+   * beside an encrypted project (slice 7-3) counts only from its cutover on,
+   * as its triggers do.
+   */
   private async assertAccountProjectStorageCapacity(
     userId: UserId,
-    incomingBytes: number
+    incomingBytes: number,
+    /** What the write releases (a replaced head), as its admission credits. */
+    releasedBytes = 0
   ): Promise<void> {
-    // Since migration 0043, plaintext staged beside an encrypted project
-    // (slice 7-3) counts only from its cutover on, as its triggers do.
-    const unstaged = await this.notStagedForDecryption('projects.id');
-    const row = await this.env
-      .DB!.prepare(
-        `SELECT
-         COALESCE((
-           SELECT SUM(objects.stored_bytes)
-           FROM project_document_objects objects
-           JOIN projects ON projects.id = objects.project_id
-           WHERE projects.user_id = ?${unstaged}
-         ), 0) AS object_bytes,
-         COALESCE((
-           SELECT SUM(assets.stored_bytes)
-           FROM project_storage_assets assets
-           JOIN projects ON projects.id = assets.project_id
-           WHERE projects.user_id = ?${unstaged}
-         ), 0) AS asset_bytes`
-      )
-      .bind(userId, userId)
-      .first<{ object_bytes: number; asset_bytes: number }>();
+    const projects = await this.accountProjectStorageBytes(userId);
+    const files = await this.accountArtifactQuotaBytes(userId);
     if (
-      (row && !Number.isSafeInteger(row.object_bytes)) ||
-      (row && !Number.isSafeInteger(row.asset_bytes)) ||
-      (row && row.object_bytes < 0) ||
-      (row && row.asset_bytes < 0) ||
+      !Number.isSafeInteger(projects) ||
+      !Number.isSafeInteger(files) ||
+      projects < 0 ||
+      files < 0 ||
       !Number.isSafeInteger(incomingBytes)
     ) {
       throw new ProjectObjectStorageError('Project storage usage is invalid.');
     }
     const limits = await this.ownerEntitlements(userId);
-    if (
-      (row?.object_bytes ?? 0) + (row?.asset_bytes ?? 0) + incomingBytes >
-      limits.projectStorageLimitBytes
-    ) {
-      throw new ProjectQuotaError('storage', limits.projectStorageLimitBytes);
+    // Only growth is refused: a save that releases at least what it adds
+    // passes even at or over the allowance.
+    const growth = incomingBytes - releasedBytes;
+    if (growth > 0 && projects + files + growth > limits.storageLimitBytes) {
+      throw new ProjectQuotaError('storage', limits.storageLimitBytes);
     }
   }
 
@@ -6783,13 +7440,22 @@ export class D1R2PersistenceService implements PersistenceService {
     projectId: string,
     write: ProjectStorageWrite
   ): D1PreparedStatement[] {
+    // Migration 0049: an asset names the save's object it came with, so
+    // the save's assets share the one credit of the head it replaced.
+    const link = write.linksAssets
+      ? {
+          column: ', added_by_object_id',
+          value: ', ?',
+          binds: [write.objectId]
+        }
+      : { column: '', value: '', binds: [] as string[] };
     return write.prepared.assets.map((asset) =>
       this.env
         .DB!.prepare(
           `INSERT OR IGNORE INTO project_storage_assets
              (id, project_id, kind, object_key, checksum_sha256, logical_bytes,
-              stored_bytes, content_encoding, created_at)
-           SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
+              stored_bytes, content_encoding, created_at${link.column})
+           SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?${link.value}
            WHERE EXISTS (
              SELECT 1 FROM projects
              WHERE id = ? AND document_object_id = ?
@@ -6805,6 +7471,7 @@ export class D1R2PersistenceService implements PersistenceService {
           asset.storedBytes,
           asset.contentEncoding,
           write.createdAt,
+          ...link.binds,
           projectId,
           write.objectId
         )
@@ -6835,12 +7502,17 @@ export class D1R2PersistenceService implements PersistenceService {
     write: ProjectStorageWrite,
     state: 'pending' | 'committed'
   ): D1PreparedStatement {
+    // A head-replacing write names the head it releases (migration 0049);
+    // `releasedHead` found one only when the column exists.
+    const supersedes = write.supersedesObjectId
+      ? { column: ', supersedes_object_id', value: ', ?' }
+      : { column: '', value: '' };
     return this.env
       .DB!.prepare(
         `INSERT INTO project_document_objects
            (id, project_id, object_key, checksum_sha256, logical_bytes,
-            stored_bytes, content_encoding, state, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            stored_bytes, content_encoding, state, created_at${supersedes.column})
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?${supersedes.value})`
       )
       .bind(
         write.objectId,
@@ -6851,7 +7523,8 @@ export class D1R2PersistenceService implements PersistenceService {
         write.prepared.storedBytes,
         write.prepared.contentEncoding,
         state,
-        write.createdAt
+        write.createdAt,
+        ...(write.supersedesObjectId ? [write.supersedesObjectId] : [])
       );
   }
 
@@ -6992,24 +7665,20 @@ export class D1R2PersistenceService implements PersistenceService {
 
       const bucket = this.projectStorageBucket();
       if (bucket) {
-        const orphanedAssetKeys = await Promise.all(
-          write.missingAssets.map(async (asset) => {
-            const reference = await this.env
-              .DB!.prepare(
-                `SELECT 1 AS referenced FROM project_storage_assets
-                 WHERE project_id = ? AND object_key = ? LIMIT 1`
-              )
-              .bind(projectId, asset.objectKey)
-              .first<{ referenced: number }>();
-            return reference ? null : asset.objectKey;
-          })
+        // Content-addressed asset keys only under a claim (migration
+        // 0050): a concurrent write of the same source may name them.
+        const claim = await claimObjectKeysForDelete(
+          this.env.DB!,
+          write.missingAssets.map((asset) => asset.objectKey)
         );
-        await Promise.allSettled([
-          bucket.delete(write.objectKey),
-          ...orphanedAssetKeys.flatMap((key) =>
-            key === null ? [] : [bucket.delete(key)]
-          )
-        ]);
+        try {
+          await Promise.allSettled([
+            bucket.delete(write.objectKey),
+            claim.deleteObjects(bucket)
+          ]);
+        } finally {
+          await claim.release();
+        }
       }
       return { state: 'uncommitted', currentVersion };
     } catch {
@@ -7017,12 +7686,21 @@ export class D1R2PersistenceService implements PersistenceService {
     }
   }
 
+  /**
+   * Deletes up to `limit` of the project's unreferenced document objects.
+   * Bounded so a backlog left by failed R2 deletes cannot exhaust a
+   * request's subrequest budget; each object's row is dropped only once
+   * its R2 delete succeeded, so progress is kept and the rest are retried
+   * by later saves.
+   */
   private async pruneUnreferencedProjectObjects(
-    projectId: string
-  ): Promise<void> {
+    projectId: string,
+    limit: number = OBJECT_PRUNE_LIMIT
+  ): Promise<{ deleted: number; remaining: boolean }> {
+    const none = { deleted: 0, remaining: false };
     const bucket = this.projectStorageBucket();
     if (!bucket) {
-      return;
+      return none;
     }
     try {
       const objects = await this.env
@@ -7035,23 +7713,38 @@ export class D1R2PersistenceService implements PersistenceService {
              )
              AND NOT EXISTS (
                SELECT 1 FROM revisions WHERE document_object_id = object.id
-             )`
+             )
+           LIMIT ?`
         )
-        .bind(projectId)
+        // One more than the bound, to tell whether any are left over.
+        .bind(projectId, limit + 1)
         .all<{ id: string; object_key: string }>();
-      const rows = objects.results ?? [];
-      await Promise.all(rows.map((row) => bucket.delete(row.object_key)));
-      if (rows.length > 0) {
+      const selected = objects.results ?? [];
+      const results = await Promise.allSettled(
+        selected.slice(0, limit).map(async (row) => {
+          await bucket.delete(row.object_key);
+          return row;
+        })
+      );
+      const deleted = results.flatMap((result) =>
+        result.status === 'fulfilled' ? [result.value] : []
+      );
+      if (deleted.length > 0) {
         await this.env.DB!.batch(
-          rows.map((row) =>
+          deleted.map((row) =>
             this.env
               .DB!.prepare(`DELETE FROM project_document_objects WHERE id = ?`)
               .bind(row.id)
           )
         );
       }
+      return {
+        deleted: deleted.length,
+        remaining: selected.length > deleted.length
+      };
     } catch {
       // Object cleanup is retryable housekeeping; the committed save wins.
+      return none;
     }
   }
 
@@ -7148,6 +7841,7 @@ export class D1R2PersistenceService implements PersistenceService {
           throw projectQuotaError(error, await this.ownerEntitlements(userId));
         }
       }
+      await this.ensureWrittenAssets(write);
       return {
         projectId: document.projectId,
         name: document.name,
@@ -7726,9 +8420,15 @@ const MULTIPART_COMPLETION_LEASE_MS = 60_000;
 
 function projectQuotaError(
   error: unknown,
-  limits?: { projectLimit: number; projectStorageLimitBytes: number }
+  limits?: { projectLimit: number; storageLimitBytes: number }
 ): unknown {
   const message = error instanceof Error ? error.message : String(error);
+  // Migration 0050: a source asset's stored bytes are being removed.
+  if (message.includes('r2_key_deleting')) {
+    return new ProjectObjectStorageError(
+      'A stored file of this project is still being removed. Try again in a moment.'
+    );
+  }
   // Decision D2, enforced by 0031's trigger inside the insert itself.
   if (message.includes('ENCRYPTED_PROJECTS_REQUIRED')) {
     return new EncryptedProjectsRequiredError();
@@ -7745,7 +8445,7 @@ function projectQuotaError(
   ) {
     return new ProjectQuotaError(
       'storage',
-      limits?.projectStorageLimitBytes ?? MAX_ACCOUNT_PROJECT_STORAGE_BYTES
+      limits?.storageLimitBytes ?? MAX_ACCOUNT_STORAGE_BYTES
     );
   }
   return error;
@@ -7753,7 +8453,7 @@ function projectQuotaError(
 
 function revisionSaveError(
   error: unknown,
-  limits?: { projectLimit: number; projectStorageLimitBytes: number }
+  limits?: { projectLimit: number; storageLimitBytes: number }
 ): unknown {
   const message = error instanceof Error ? error.message : String(error);
   if (message.includes('revision_project_collision')) {
@@ -7764,9 +8464,15 @@ function revisionSaveError(
 
 function artifactAccountingError(
   error: unknown,
-  limitBytes = MAX_ACCOUNT_ARTIFACT_BYTES
+  limitBytes = MAX_ACCOUNT_STORAGE_BYTES
 ): Error {
   const message = error instanceof Error ? error.message : String(error);
+  // Migration 0050: a cleanup is removing this key's stored bytes.
+  if (message.includes('r2_key_deleting')) {
+    return new ArtifactStorageError(
+      'This file is still being removed. Try again in a moment.'
+    );
+  }
   if (
     message.includes('artifact_account_quota') ||
     message.includes('artifact_reserved_byte_limit')
@@ -7927,6 +8633,10 @@ interface ProjectStorageWrite {
   createdAt: string;
   prepared: PreparedProjectStorageSnapshot;
   missingAssets: ProjectStorageAssetObject[];
+  /** The head this write releases, credited at its admission (0049). */
+  supersedesObjectId: string | null;
+  /** Whether its asset rows name its object (migration 0049). */
+  linksAssets: boolean;
 }
 
 interface ProjectStorageWriteResolutionRow {
