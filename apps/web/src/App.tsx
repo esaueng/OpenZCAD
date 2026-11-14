@@ -15979,7 +15979,14 @@ export function App() {
     if (!doc || !savingManager) {
       return;
     }
-    const isCurrentProject = () => managerRef.current === savingManager;
+    // Fenced to the autosave lifecycle this save began under as well as the
+    // project: a cleanup that disposes the controller keeps the manager
+    // reference, and a save outliving it must not write stale copies over
+    // what the next owner saved.
+    const savingController = cloudProjectAutosaveRef.current;
+    const isCurrentProject = () =>
+      managerRef.current === savingManager &&
+      cloudProjectAutosaveRef.current === savingController;
     if (shareSessionRef.current) {
       setStatus(
         'This is a shared link session — Make a copy to keep the model.'
@@ -16175,7 +16182,7 @@ export function App() {
       }) => {
         savingDocument = input.document;
         await saveLocalProject(savingDocument);
-        if (!readDocument()) return null;
+        if (!readDocument() || !isCurrentProject()) return null;
         accountWriteStarted = true;
         // A save held back while earlier saves' copies are freed is retried
         // here, account write only: the device copy is already saved, and
@@ -16187,7 +16194,7 @@ export function App() {
               reason,
               document: withoutDerivedProjection(savingDocument)
             }),
-          () => Boolean(readDocument())
+          () => Boolean(readDocument()) && isCurrentProject()
         );
       };
       const currentDocument = readDocument();
@@ -16204,7 +16211,14 @@ export function App() {
             document: currentDocument
           });
       if (!saved) {
-        if (isCurrentProject()) controller?.schedule(savingManager.document);
+        if (isCurrentProject()) {
+          // The save point was not made (the project changed mode or moved
+          // on meanwhile); settle the indicator rather than leave "Saving".
+          // The device copy was written before the account checkpoint began.
+          setSaveState('local');
+          setStatus('Save point not made. Your work is saved on this device.');
+          controller?.schedule(savingManager.document);
+        }
         return;
       }
       remoteVersionsRef.current.set(saved.projectId, saved.version);
