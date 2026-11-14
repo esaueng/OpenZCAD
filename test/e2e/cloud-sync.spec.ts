@@ -487,7 +487,7 @@ test('drains a pending account edit before opening a public share', async ({
     'Public navigation target',
     toUserId('other_owner')
   );
-  await page.route('**/api/share/*', (route) =>
+  await page.route('**/api/share', (route) =>
     route.fulfill({
       json: {
         document: shared,
@@ -574,7 +574,7 @@ for (const action of ['edit', 'leave', 'switch', 'share'] as const) {
       'Shared during checkpoint',
       toUserId('other_owner')
     );
-    await page.route('**/api/share/*', (route) =>
+    await page.route('**/api/share', (route) =>
       route.fulfill({
         json: {
           document: shared,

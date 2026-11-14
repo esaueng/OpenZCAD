@@ -226,6 +226,11 @@ function withEnabledDeploymentAssistant<T extends Record<string, unknown>>(
                   expires_at: 4_000_000_000
                 };
               }
+              // A signed-in read is counted against the account's read
+              // budget, which has room.
+              if (query.includes('INSERT INTO auth_rate_limits')) {
+                return { request_count: 1 };
+              }
               return query.includes('FROM user_settings')
                 ? {
                     settings_json: JSON.stringify(settings),

@@ -17,6 +17,8 @@ export const REQUIRED_SECRETS = [
   'AI_IDENTITY_PEPPER'
 ];
 
+/** wrangler.jsonc's build step: refuses an unverified or +local web build. */
+export const RELEASE_BUILD_CHECK = 'pnpm -w run check:release-build';
 export const OFFICIAL = Object.freeze({
   repository: 'esaueng/OpenZCAD',
   workerName: 'openzcad',
@@ -394,6 +396,7 @@ export function validateDeploymentConfig(
     const checks = [
       [config.name, OFFICIAL.workerName, 'Worker name'],
       [config.assets?.binding, OFFICIAL.assetBinding, 'asset binding'],
+      [config.build?.command, RELEASE_BUILD_CHECK, 'release build check'],
       [db?.binding, OFFICIAL.databaseBinding, 'D1 binding'],
       [db?.database_name, OFFICIAL.databaseName, 'D1 database name'],
       [db?.database_id, OFFICIAL.databaseId, 'D1 database ID'],

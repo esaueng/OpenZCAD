@@ -23,16 +23,54 @@ export function importedFaceDeletion(
   document: ProjectDocument,
   selection: TopologySelection
 ) {
-  const body = ownEntry(document.derived.bodyRepresentations, selection.bodyId);
   const imported = listFeaturesInOrder(document).find(
     (feature) =>
       feature.bodyId === selection.bodyId &&
       feature.data.featureKind === 'imported-step' &&
       !isFeatureSuppressed(feature)
   );
-  const resolved = resolveSelectionTopology(body, selection);
-  if (!imported || !body || body.consumed || resolved?.kind !== 'face') {
+  if (!imported) {
     throw new Error('Select a current face on an imported STEP part.');
+  }
+  return singleFaceDeletion(document, selection, {
+    missing: 'Select a current face on an imported STEP part.',
+    blend: ['Remove imported fillet', 'Removed the selected imported fillet.'],
+    face: ['Remove imported feature', 'Removed the selected imported feature.']
+  });
+}
+
+/**
+ * A face a subtract cut (the wall of a hole a cylinder cut through a part):
+ * healed in place, as an imported face is. Deleting the feature the face is
+ * inferred to — the cutting tool — would leave the subtract with nothing to
+ * cut and every step after it unbuilt; the heal closes just this cut.
+ */
+export function cutFaceDeletion(
+  document: ProjectDocument,
+  selection: TopologySelection
+) {
+  return singleFaceDeletion(document, selection, {
+    missing: 'Select a current face of a cut.',
+    blend: ['Remove fillet', 'Removed the selected fillet.'],
+    face: ['Fill the cut', 'Filled the cut and healed the body.']
+  });
+}
+
+/** One face healed by a replayable direct edit: a blend resized away, or
+ * the face removed and its neighbours extended over it. */
+function singleFaceDeletion(
+  document: ProjectDocument,
+  selection: TopologySelection,
+  names: {
+    missing: string;
+    blend: [name: string, success: string];
+    face: [name: string, success: string];
+  }
+) {
+  const body = ownEntry(document.derived.bodyRepresentations, selection.bodyId);
+  const resolved = resolveSelectionTopology(body, selection);
+  if (!body || body.consumed || resolved?.kind !== 'face') {
+    throw new Error(names.missing);
   }
   const face = body.topology!.faces.find(
     (candidate) => candidate.topologyId === resolved.topologyId
@@ -64,7 +102,7 @@ export function importedFaceDeletion(
         sourceAxisStart: geometry.axisStart,
         sourceAxisEnd: geometry.axisEnd
       };
-  const name = blend ? 'Remove imported fillet' : 'Remove imported feature';
+  const [name, successMessage] = blend ? names.blend : names.face;
   const command = commandFactories.directEditBody({
     name,
     targetBodyId: selection.bodyId,
@@ -79,9 +117,76 @@ export function importedFaceDeletion(
         : {}),
       resultBodyId: selection.bodyId
     },
-    successMessage: blend
-      ? 'Removed the selected imported fillet.'
-      : 'Removed the selected imported feature.'
+    successMessage
+  };
+}
+
+/**
+ * Several faces of one body deleted together, as one replayable direct edit:
+ * the faces around them extend until the body closes again. Selecting every
+ * wall of a window or pocket and deleting them fills it. Works on any body,
+ * native or imported; the exact rebuild refuses a set it cannot heal (three
+ * walls of a four-walled window) and leaves the body as it was.
+ */
+export function faceSetDeletion(
+  document: ProjectDocument,
+  selections: readonly TopologySelection[]
+) {
+  const bodyId = selections[0]?.bodyId;
+  if (
+    !bodyId ||
+    selections.length < 2 ||
+    selections.some(
+      (selection) => selection.bodyId !== bodyId || selection.kind !== 'face'
+    )
+  ) {
+    throw new Error('Select two or more faces on one body to delete them.');
+  }
+  const body = ownEntry(document.derived.bodyRepresentations, bodyId);
+  if (!body || body.consumed) {
+    throw new Error('Select faces on a current body.');
+  }
+  const faces = selections.map((selection) => {
+    const resolved = resolveSelectionTopology(body, selection);
+    const face =
+      resolved?.kind === 'face'
+        ? body.topology?.faces.find(
+            (candidate) => candidate.topologyId === resolved.topologyId
+          )
+        : undefined;
+    if (!face?.geometry) {
+      throw new Error(
+        'A selected face is no longer on the model. Select the faces again.'
+      );
+    }
+    return {
+      faceHash: face.hash,
+      ...(face.reference ? { faceReference: face.reference } : {}),
+      sourceSurfaceType: face.geometry.surfaceType,
+      sourceArea: face.geometry.area,
+      sourceCenter: face.geometry.center
+    };
+  });
+  if (new Set(faces.map((face) => face.faceHash)).size !== faces.length) {
+    throw new Error('The same face is selected twice. Select the faces again.');
+  }
+  const [first, ...additionalFaces] = faces;
+  const name = `Delete ${faces.length} faces`;
+  const command = commandFactories.directEditBody({
+    name,
+    targetBodyId: bodyId,
+    operation: { kind: 'remove-faces', ...first!, additionalFaces }
+  });
+  return {
+    command,
+    target: {
+      featureName: name,
+      ...(command.payload.ids
+        ? { featureId: command.payload.ids.featureId }
+        : {}),
+      resultBodyId: bodyId
+    },
+    successMessage: `Deleted ${faces.length} faces and closed the gap.`
   };
 }
 

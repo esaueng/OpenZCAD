@@ -99,6 +99,17 @@ const MAX_AI_DIGEST_BYTES = 512_000;
 const MAX_AI_DIGEST_ITEMS = 1_000;
 
 const MAX_AI_ATTACHMENT_LABEL_LENGTH = 200;
+/**
+ * The largest assistant proposal body the limits below can accept: every
+ * attachment's base64 at the total cap, the digest at its cap, the prompt
+ * and history with each character JSON-escaped to six bytes, and room for
+ * ids, labels, operation kinds and the object around them.
+ */
+export const MAX_ASSISTANT_PROPOSAL_BODY_BYTES =
+  Math.ceil(MAX_ASSISTANT_ATTACHMENT_TOTAL_BYTES / 3) * 4 +
+  MAX_AI_DIGEST_BYTES +
+  6 * (MAX_AI_PROMPT_LENGTH + MAX_ASSISTANT_HISTORY_CHARS) +
+  64 * 1024;
 const BASE64_PATTERN = /^[A-Za-z0-9+/]*={0,2}$/;
 
 export interface AssistantProposalRequest {

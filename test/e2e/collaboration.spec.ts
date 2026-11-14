@@ -91,7 +91,7 @@ for (const fromPublicShare of [false, true]) {
       'Public snapshot',
       toUserId('public_owner')
     );
-    await page.route('**/api/share/*', (route) =>
+    await page.route('**/api/share', (route) =>
       route.fulfill({
         json: {
           document: publicDocument,
@@ -240,7 +240,7 @@ for (const stage of ['accept', 'document', 'public share'] as const) {
     await page.route(`**/api/projects/${latest.projectId}`, (route) =>
       route.fulfill({ json: latest })
     );
-    await page.route('**/api/share/*', (route) =>
+    await page.route('**/api/share', (route) =>
       route.fulfill({
         json: {
           document: latest,
@@ -402,7 +402,7 @@ for (const stage of ['accept', 'document', 'public share'] as const) {
       }
       await route.fulfill({ json: invited });
     });
-    await page.route('**/api/share/*', (route) =>
+    await page.route('**/api/share', (route) =>
       route.fulfill({
         json: {
           document: shared,
@@ -519,7 +519,7 @@ test('allows signed-out invitation sign-in while a superseded share request is p
   const gate = new Promise<void>((resolve) => {
     release = resolve;
   });
-  await page.route('**/api/share/*', async (route) => {
+  await page.route('**/api/share', async (route) => {
     requested = true;
     await gate;
     await route.fulfill({
@@ -570,7 +570,7 @@ test('opens a public link instead of resuming an older retained invitation', asy
     acceptCalls++;
     return route.fulfill({ status: 410, json: { error: 'Expired' } });
   });
-  await page.route('**/api/share/*', (route) =>
+  await page.route('**/api/share', (route) =>
     route.fulfill({
       json: { document, project: { projectId: document.projectId, name: document.name }, mode: 'tweak' }
     })
@@ -599,8 +599,8 @@ test('opens and switches public links in an already-open Settings tab', async ({
     toUserId('owner')
   );
   const tokens = ['a'.repeat(43), 'b'.repeat(43)];
-  await page.route('**/api/share/*', (route) => {
-    const index = tokens.indexOf(route.request().url().split('/').at(-1)!);
+  await page.route('**/api/share', (route) => {
+    const index = tokens.indexOf(route.request().headers()['x-openzcad-share-token']!);
     const document = [first, second][index]!;
     return route.fulfill({
       json: {
@@ -649,7 +649,7 @@ for (const active of [false, true]) {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    await page.route('**/api/share/*', async (route) => {
+    await page.route('**/api/share', async (route) => {
       requested = true;
       await gate;
       await route.fulfill({
@@ -707,8 +707,8 @@ for (const status of [404, 503]) {
       'Retained shared model',
       toUserId('owner')
     );
-    await page.route('**/api/share/*', (route) =>
-      route.request().url().endsWith('a'.repeat(43))
+    await page.route('**/api/share', (route) =>
+      route.request().headers()['x-openzcad-share-token'] === 'a'.repeat(43)
         ? route.fulfill({
             json: { document, project: { projectId: document.projectId, name: document.name }, mode: 'tweak' }
           })
@@ -757,7 +757,7 @@ for (const status of [404, 503]) {
     await page.getByTitle('Back to projects').click();
     await expect(page.getByRole('tab', { name: 'Projects 1' })).toBeVisible();
     let shareReads = 0;
-    await page.route('**/api/share/*', (route) => {
+    await page.route('**/api/share', (route) => {
       shareReads += 1;
       return route.fulfill({ status, json: { error: 'Unavailable share' } });
     });
@@ -809,7 +809,7 @@ for (const action of ['create', 'demo', 'import'] as const) {
       const gate = new Promise<void>((resolve) => {
         release = resolve;
       });
-      await page.route('**/api/share/*', async (route) => {
+      await page.route('**/api/share', async (route) => {
         requested = true;
         if (pending) await gate;
         await route.fulfill(
@@ -898,7 +898,7 @@ test('keeps revoked-link guidance visible after delayed startup completes', asyn
   page
 }) => {
   await stubAnonymousApi(page);
-  await page.route('**/api/share/*', (route) =>
+  await page.route('**/api/share', (route) =>
     route.fulfill({ status: 404, json: { error: 'Unavailable' } })
   );
   await page.route('**/api/session', async (route) => {
@@ -930,7 +930,7 @@ test('cancels a pending share on Back and leaves an active share when its fragme
   });
   let delay = true;
   let requested = false;
-  await page.route('**/api/share/*', async (route) => {
+  await page.route('**/api/share', async (route) => {
     requested = true;
     if (delay) await delayed;
     await route.fulfill({
@@ -995,9 +995,9 @@ for (const departure of ['fragment', 'home'] as const) {
       }
       await route.fulfill({ json: { projects: [] } });
     });
-    await page.route('**/api/share/*', (route) => {
+    await page.route('**/api/share', (route) => {
       const document =
-        documents[route.request().url().endsWith('a'.repeat(43)) ? 0 : 1]!;
+        documents[route.request().headers()['x-openzcad-share-token'] === 'a'.repeat(43) ? 0 : 1]!;
       return route.fulfill({
         json: { document, project: { projectId: document.projectId, name: document.name }, mode: 'tweak' }
       });
@@ -1071,7 +1071,7 @@ test('makes a durable share copy without storing the owner snapshot', async ({
 }) => {
   await stubAnonymousApi(page);
   const document = createProjectDocument('Anonymous source', toUserId('owner'));
-  await page.route('**/api/share/*', (route) =>
+  await page.route('**/api/share', (route) =>
     route.fulfill({
       json: { document, project: { projectId: document.projectId, name: document.name }, mode: 'tweak' }
     })
@@ -1235,7 +1235,7 @@ test('saves incoming member updates through the room without refused account wri
     ).toBeVisible();
     await expect(page.locator('.save-state.is-syncing')).toHaveCount(0);
   }
-  await page.route('**/api/share/*', (route) =>
+  await page.route('**/api/share', (route) =>
     route.fulfill({
       json: { document: incoming, project: summary, mode: 'tweak' }
     })

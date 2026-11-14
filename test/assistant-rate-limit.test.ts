@@ -95,6 +95,10 @@ function assistantGuardD1(
             cost_units: current.costUnits
           } as T;
         }
+        // The per-account read limiter, which these tests never exhaust.
+        if (query.includes('INSERT INTO auth_rate_limits')) {
+          return { request_count: 1 } as T;
+        }
         return null;
       },
       async run() {
