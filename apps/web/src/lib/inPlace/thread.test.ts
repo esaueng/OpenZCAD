@@ -1252,6 +1252,38 @@ describe('in-place pipe threads (schema v57)', () => {
     ).toEqual({ length: 29 });
   });
 
+  it('keeps a length the user set to the face end when the offset moves (review #1458 re-check)', () => {
+    // NPT 1/4 on a Ø15.4 × 30 boss, Exact fit: Length typed to 30, then
+    // Offset 1. The typed length follows the face's end (29), as any span's
+    // does; it does not snap back to the standard's 9.206.
+    const boss: FacePick = {
+      ...pipe,
+      point: { x: 7.7, y: 0, z: 28 },
+      cylinder: { ...pipe.cylinder!, radius: 7.7 }
+    };
+    const bossSlots = { ...SLOTS, faces: [boss] };
+    const options = { ...defaults(), profile: 'npt', pipeSize: '1/4' };
+    const values = { ...numbersOf(initialValues()), length: 30, offset: 0 };
+    expect(
+      threadSpec.carries!('offset', 1, values, bossSlots, {
+        touched: ['length', 'offset'],
+        options,
+        units: 'mm'
+      })
+    ).toEqual({ length: 29 });
+    // Untouched, it still follows the pipe rule.
+    const standard = 0.4018 * 25.4;
+    expect(
+      threadSpec.carries!(
+        'offset',
+        1,
+        { ...values, length: standard },
+        bossSlots,
+        { touched: ['offset'], options, units: 'mm' }
+      )?.length
+    ).toBeCloseTo(standard - 1, 9);
+  });
+
   it('stores the profile, its length and no clearance, and runs out where it stops', () => {
     const values = initialValues({ length: reach, offset: 0 });
     const request = threadSpec.request(

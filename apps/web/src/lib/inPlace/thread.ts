@@ -1209,15 +1209,12 @@ export const threadSpec: InPlaceToolSpec = {
   carries(valueId, value, values, slots, context) {
     // An untouched pipe thread's length follows its offset by the pipe rule,
     // not to the face's far end: the band keeps ending where the standard's
-    // thread (or the taper's reach) ends.
+    // thread (or the taper's reach) ends. Untouched means the user never set
+    // it (an edit's stored length counts as set), whatever its value: a
+    // length typed to the face's end is theirs, and follows the face's end
+    // as any span's does (review #1458).
     const length =
-      valueId === 'offset' &&
-      !lengthIsExplicit(
-        threadFace(slots.faces[0]),
-        heldValues(values, context),
-        values,
-        context ?? {}
-      )
+      valueId === 'offset' && !context?.touched?.includes('length')
         ? pipeDefault(
             context?.options ?? {},
             slots.faces[0],
