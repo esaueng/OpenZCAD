@@ -80,6 +80,7 @@ import {
   E2EE_MIGRATION_LEASE_TTL_MS,
   MAX_DECRYPT_STAGED_SESSIONS,
   type E2eeDecryptStagingResponse,
+  type E2eeMigrationAttemptExpectation,
   type E2eeMigrationCutoverResponse,
   type E2eeMigrationLeaseResponse,
   type E2eeMigrationStepResponse,
@@ -93,6 +94,7 @@ import {
   isE2eeContentBlobStorageReady,
   isE2eeDeviceRemovalStorageReady,
   isE2eeInvitationStorageReady,
+  isE2eeMigrationAttemptReady,
   isE2eeMlsProposalStorageReady,
   isE2eeProjectGroupStorageReady,
   isE2eeProjectMigrationStorageReady,
@@ -217,6 +219,8 @@ interface MigrationRow {
   purged_rows: number;
   purged_objects: number;
   started_at: string;
+  /** Migration 0053; absent before it. */
+  attempt?: number;
   updated_at: string;
   cutover_at: string | null;
   finished_at: string | null;
@@ -293,6 +297,7 @@ async function recordOf(
     purgedRows: row.purged_rows,
     purgedObjects: row.purged_objects,
     startedAt: row.started_at,
+    ...(typeof row.attempt === 'number' ? { attempt: row.attempt } : {}),
     updatedAt: row.updated_at,
     cutoverAt: row.cutover_at,
     finishedAt: row.finished_at
@@ -608,6 +613,111 @@ const leaseLost = (): never =>
 
 // --- Start and lease ---------------------------------------------------------
 
+const ATTEMPT_STATES: ReadonlySet<string> = new Set([
+  'none',
+  'staging',
+  'cutover',
+  'purging',
+  'done',
+  'abandoned'
+]);
+
+/**
+ * A start's `expectedAttempt` (#1465 review), or null when it names none
+ * (an older app's start, which nothing is checked against).
+ */
+function expectedAttemptOf(
+  value: unknown
+): E2eeMigrationAttemptExpectation | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    invalid('expectedAttempt must be an object');
+  }
+  const { state, attempt, startedAt } = value as Record<string, unknown>;
+  if (typeof state !== 'string' || !ATTEMPT_STATES.has(state)) {
+    invalid('expectedAttempt.state is not a migration state');
+  }
+  if (
+    attempt !== null &&
+    !(
+      typeof attempt === 'number' &&
+      Number.isSafeInteger(attempt) &&
+      attempt >= 1
+    )
+  ) {
+    invalid('expectedAttempt.attempt must be a positive integer or null');
+  }
+  if (
+    startedAt !== null &&
+    !(typeof startedAt === 'string' && startedAt.length <= 64)
+  ) {
+    invalid('expectedAttempt.startedAt must be a timestamp or null');
+  }
+  if ((state === 'none') !== (startedAt === null)) {
+    invalid('expectedAttempt.startedAt is set exactly when a migration exists');
+  }
+  if (state === 'none' && attempt !== null) {
+    invalid('expectedAttempt.attempt must be null without a migration');
+  }
+  return {
+    state: state as E2eeMigrationAttemptExpectation['state'],
+    attempt,
+    startedAt
+  };
+}
+
+/**
+ * Whether the row is still the attempt the caller read: none, or the same
+ * state and start time, and the same counter once migration 0053 is there
+ * and the caller read one.
+ */
+function isExpectedAttempt(
+  row: MigrationRow | null,
+  expected: E2eeMigrationAttemptExpectation,
+  counted: boolean
+): boolean {
+  if (expected.state === 'none') return row === null;
+  return (
+    row !== null &&
+    row.state === expected.state &&
+    row.started_at === expected.startedAt &&
+    (!counted || expected.attempt === null || row.attempt === expected.attempt)
+  );
+}
+
+/**
+ * {@link isExpectedAttempt} as SQL over `table`'s existing row, for the
+ * statement that writes it, so nothing another tab or device wrote since
+ * the read slips in between. True without an expectation; never true for
+ * `none` (an existing row is not none).
+ */
+function expectedAttemptSql(
+  table: string,
+  expected: E2eeMigrationAttemptExpectation | null,
+  counted: boolean
+): { sql: string; binds: unknown[] } {
+  if (!expected) return { sql: '1', binds: [] };
+  if (expected.state === 'none') return { sql: '0', binds: [] };
+  const byCounter = counted && expected.attempt !== null;
+  return {
+    sql: `(${table}.state = ? AND ${table}.started_at = ?${
+      byCounter ? ` AND ${table}.attempt = ?` : ''
+    })`,
+    binds: [
+      expected.state,
+      expected.startedAt,
+      ...(byCounter ? [expected.attempt] : [])
+    ]
+  };
+}
+
+const attemptChanged = (): never =>
+  refuse(
+    409,
+    E2EE_MIGRATION_CODES.attemptChanged,
+    'This project’s encryption was started, cancelled or restarted elsewhere since this page read it. Nothing changed; check it again.'
+  );
+
 async function start(
   ctx: Context,
   projectId: string,
@@ -626,6 +736,7 @@ async function start(
   }
   if (body.direction !== 'encrypt') invalid('direction must be encrypt');
   const deviceId = idField(body.deviceId, 'deviceId');
+  const expected = expectedAttemptOf(body.expectedAttempt);
   await requireCertifiedDevice(ctx.db, ctx.userId, deviceId);
   const project = await requireOwnedProject(ctx.db, ctx.userId, projectId);
   if (project.status === 'deleted') {
@@ -635,7 +746,15 @@ async function start(
       'Restore this project from the recycle bin before encrypting it.'
     );
   }
+  const counted = await isE2eeMigrationAttemptReady(ctx.db);
   const existing = await migrationRow(ctx.db, projectId);
+  // #1465 review: the attempt the browser decided on (and the owner
+  // approved the members for) is still the one here. The statements below
+  // fence on it again, so a start, cancel or restart elsewhere in between
+  // writes nothing either.
+  if (expected && !isExpectedAttempt(existing, expected, counted)) {
+    attemptChanged();
+  }
   if (
     project.storage_format !== 1 ||
     existing?.state === 'cutover' ||
@@ -681,6 +800,11 @@ async function start(
         }
       );
     }
+    const fence = expectedAttemptSql(
+      'e2ee_project_migrations',
+      expected,
+      counted
+    );
     const results = await runBatch(ctx.db, [
       ctx.db
         .prepare(
@@ -688,6 +812,7 @@ async function start(
            SET device_id = ?, lease_id = ?, lease_expires_at = ?, updated_at = ?
            WHERE project_id = ? AND state = 'staging' AND owner_user_id = ?
              AND (lease_id IS ? OR lease_expires_at <= ?)
+             AND ${fence.sql}
              AND ${ctx.authorization.sql}`
         )
         .bind(
@@ -699,11 +824,15 @@ async function start(
           ctx.userId,
           existing.lease_id,
           now,
+          ...fence.binds,
           ...ctx.authorization.binds
         )
     ]);
     if ((results[0]?.meta?.changes ?? 0) !== 1) {
       const current = await migrationRow(ctx.db, projectId);
+      if (expected && !isExpectedAttempt(current, expected, counted)) {
+        attemptChanged();
+      }
       if (current?.state === 'staging') {
         refuse(
           409,
@@ -736,7 +865,14 @@ async function start(
         'Encrypted rows of an earlier attempt remain. Finish abandoning it first.'
       );
     }
-    // One statement, fenced on everything checked above.
+    // One statement, fenced on everything checked above, the attempt the
+    // browser read included: a new row only when it read none, and an
+    // existing row only while it is still the one it read.
+    const fence = expectedAttemptSql(
+      'e2ee_project_migrations',
+      expected,
+      counted
+    );
     const results = await runBatch(ctx.db, [
       ctx.db
         .prepare(
@@ -752,6 +888,8 @@ async function start(
              AND p.status <> 'deleted' AND ${ctx.authorization.sql}
              AND NOT ${sharedSql(sharing)} AND NOT ${members.sql}
              AND NOT ${STAGED_ROWS_SQL}
+             AND (? = 1 OR EXISTS (SELECT 1 FROM e2ee_project_migrations m
+                                   WHERE m.project_id = p.id))
            ON CONFLICT (project_id) DO UPDATE SET
              direction = excluded.direction, state = 'staging',
              device_id = excluded.device_id, lease_id = excluded.lease_id,
@@ -764,7 +902,8 @@ async function start(
              started_at = excluded.started_at, updated_at = excluded.updated_at,
              cutover_at = NULL, finished_at = NULL
            WHERE e2ee_project_migrations.state IN ('abandoned', 'done')
-             AND e2ee_project_migrations.purge_cursor IS NULL`
+             AND e2ee_project_migrations.purge_cursor IS NULL
+             AND ${fence.sql}`
         )
         .bind(
           projectId,
@@ -779,11 +918,16 @@ async function start(
           ...ctx.authorization.binds,
           ...sharedBinds(projectId, now, sharing),
           ...members.binds(projectId, now, NEVER),
-          ...stagedRowsBinds(projectId)
+          ...stagedRowsBinds(projectId),
+          !expected || expected.state === 'none' ? 1 : 0,
+          ...fence.binds
         )
     ]);
     if ((results[0]?.meta?.changes ?? 0) !== 1) {
       const current = await migrationRow(ctx.db, projectId);
+      if (expected && !isExpectedAttempt(current, expected, counted)) {
+        attemptChanged();
+      }
       if (current?.state === 'staging') {
         refuse(
           409,

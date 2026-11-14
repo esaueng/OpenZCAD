@@ -101,18 +101,25 @@ def load_sql(data: bytes):
         raise SnapshotError('SQL export is invalid or uses unsupported operations.') from None
 
 
+# Migrations above 0049 reviewed one by one (other numbers are still in review).
+REVIEWED_AFTER_0049 = frozenset({53})
+
+
 def required_objects(db):
     tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     if 'd1_migrations' not in tables:
         raise SnapshotError('SQL export has no migration ledger.')
     migrations = [row[0] for row in db.execute('SELECT name FROM d1_migrations ORDER BY name')]
-    if not migrations or any(not re.fullmatch(r'00[0-4][0-9]_[a-z0-9_]+\.sql', name) for name in migrations):
+    if not migrations or any(not re.fullmatch(r'00[0-5][0-9]_[a-z0-9_]+\.sql', name) for name in migrations):
         raise SnapshotError('Unsupported migration ledger.')
     # 0047 adds only glimpse_account_consent.version: no stored objects or keys.
     # 0048 adds only e2ee_mls_commits.sender_signature: no stored objects or keys.
     # 0049 adds only e2ee_invitations.acceptance_statement and
     # acceptance_signature (signed public statements): no stored objects or keys.
-    if max(int(name[:4]) for name in migrations) > 49:
+    # 0053 adds only e2ee_project_migrations.attempt (a counter) and the trigger
+    # that moves it on: no stored objects or keys. 0050-0052 are not reviewed.
+    if any(int(name[:4]) > 49 and int(name[:4]) not in REVIEWED_AFTER_0049
+           for name in migrations):
         raise SnapshotError('Review new migrations before using this snapshot tool.')
     version = max(int(name[:4]) for name in migrations)
     reviewed = sorted(path.name for path in

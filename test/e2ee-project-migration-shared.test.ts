@@ -283,6 +283,8 @@ function ownerEngine(
       leases: MigrationLeaseStore;
     };
     onProgress?: (progress: MigrationProgress) => void;
+    /** The page's flush of a project before a start (`flushProject`). */
+    flushProject?: (projectId: string) => Promise<void>;
   } = {}
 ): Owner {
   const d = options.browser?.d ?? memberDevice(w, owner, 'owner_laptop');
@@ -326,7 +328,8 @@ function ownerEngine(
       progress.push(p);
       options.onProgress?.(p);
     },
-    ...(options.beforeStep ? { beforeStep: options.beforeStep } : {})
+    ...(options.beforeStep ? { beforeStep: options.beforeStep } : {}),
+    ...(options.flushProject ? { flushProject: options.flushProject } : {})
   });
   const side: Owner = {
     d,
@@ -1139,6 +1142,97 @@ describe('migrating a shared plaintext project (slice 7-4)', () => {
     expect(formatOf(srv, projectId)).toBe(2);
   });
 
+  it('asks again, and records nothing, when another device starts and cancels while this one flushes before its start (#1465 review)', async () => {
+    const w = world();
+    const { srv } = w;
+    const { projectId } = await sharedPlaintext(w);
+    for (const [a, b] of [
+      [OWNER, OTHER],
+      [OTHER, OWNER],
+      [OWNER, THIRD],
+      [THIRD, OWNER]
+    ] as const) {
+      verify(w, a, b);
+    }
+    let hold: Promise<void> | null = null;
+    let reached!: () => void;
+    const laptop = ownerEngine(w, {
+      flushProject: async () => {
+        if (!hold) return;
+        reached();
+        await hold;
+      }
+    });
+    const migration = () =>
+      rows<{ state: string; started_at: string; attempt: number }>(
+        srv,
+        `SELECT state, started_at, attempt FROM e2ee_project_migrations
+         WHERE project_id = ?`,
+        projectId
+      )[0];
+
+    // The members are invited and ready, and the owner approves them on
+    // the laptop while the project has no migration yet.
+    await failure(laptop.migrate(projectId));
+    await publishKeys(w, memberDevice(w, other, 'other_laptop'));
+    await publishKeys(w, memberDevice(w, third, 'third_laptop'));
+    await laptop.approve(projectId);
+    expect(laptop.approvedFor).toBe('none');
+    const spentBefore = laptop.spent;
+
+    // The laptop read "none", checked the approval, and now flushes the
+    // project's edits before its start.
+    let release!: () => void;
+    hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const flushing = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    const running = failure(laptop.migrate(projectId));
+    await flushing;
+    expect(migration()).toBeUndefined();
+
+    // Meanwhile the owner's desktop (another device: the laptop's Web Lock
+    // does not reach it) starts a staging and cancels it.
+    const desktop = createProjectMigrationsApi(
+      memberDevice(w, owner, 'owner_desktop').fetcher
+    );
+    const started = await desktop.start(projectId, {
+      direction: 'encrypt',
+      deviceId: 'owner_desktop'
+    });
+    for (;;) {
+      if ((await desktop.abandon(projectId, started.leaseId)).complete) break;
+    }
+    const cancelled = migration()!;
+    expect(cancelled).toMatchObject({ state: 'abandoned', attempt: 1 });
+
+    // The laptop's start names the attempt it read, which is gone: the
+    // Worker starts nothing, the approval is forgotten, and the owner is
+    // shown the members again. No receipt carries the old approval.
+    hold = null;
+    release();
+    const asked = await running;
+    expect(asked).toBeInstanceOf(MigrationApprovalNeededError);
+    expect(laptop.spent).toBeGreaterThan(spentBefore);
+    expect(laptop.receipts.get(projectId)).toBeNull();
+    expect(migration()).toEqual(cancelled);
+    expect(formatOf(srv, projectId)).toBe(1);
+    expect(laptop.progress.at(-1)).toMatchObject({
+      phase: 'members',
+      attempt: `abandoned#1@${cancelled.started_at}`,
+      error: { code: MIGRATION_APPROVAL_CODE }
+    });
+
+    // Approved again for the attempt as it stands, it goes ahead.
+    await laptop.approve(projectId);
+    expect(laptop.approvedFor).toBe(`abandoned#1@${cancelled.started_at}`);
+    await laptop.migrate(projectId);
+    expect(formatOf(srv, projectId)).toBe(2);
+    expect(migration()!.attempt).toBe(2);
+  });
+
   it('never adds a member by another project’s invitation the server lists for this one', async () => {
     const w = world();
     const { srv } = w;
@@ -1317,7 +1411,7 @@ describe('migrating a shared plaintext project (slice 7-4)', () => {
     // An approval of only one of them, or of another identity, is not one
     // (each given for this staging, as shown).
     ownerSide.approvedFor = ownerSide.progress.at(-1)!.attempt;
-    expect(ownerSide.approvedFor).toMatch(/^staging@/);
+    expect(ownerSide.approvedFor).toMatch(/^staging#1@/);
     for (const approval of [
       shown.filter((entry) => entry.userId === OTHER),
       shown.map((entry) =>

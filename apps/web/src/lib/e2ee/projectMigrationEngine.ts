@@ -58,6 +58,7 @@
 import {
   E2EE_MIGRATION_CODES,
   type ArtifactRecord,
+  type E2eeMigrationAttemptExpectation,
   type E2eeProjectMigrationRecord,
   type ProjectDocument,
   type ProjectSummary,
@@ -205,8 +206,9 @@ export interface MigrationProgress {
 /**
  * Slice 7-4: which of a project's migrations an owner's approval of its
  * members was given for, as the Worker records it for every tab and
- * device: none yet, or one record's state and start. A start writes a new
- * start time and a cancel or restart abandons the record, so an approval
+ * device: none yet, or one record's state, attempt counter (migration
+ * 0053; every new staging moves it on) and start. A start begins a new
+ * attempt and a cancel or restart abandons the record, so an approval
  * given before either no longer matches, in any tab (#1465 review).
  */
 export type MigrationAttempt = string;
@@ -214,7 +216,29 @@ export type MigrationAttempt = string;
 export function migrationAttemptOf(
   migration: E2eeProjectMigrationRecord | null | undefined
 ): MigrationAttempt {
-  return migration ? `${migration.state}@${migration.startedAt}` : 'none';
+  if (!migration) return 'none';
+  return migration.attempt === undefined
+    ? `${migration.state}@${migration.startedAt}`
+    : `${migration.state}#${migration.attempt}@${migration.startedAt}`;
+}
+
+/**
+ * The attempt a start was decided on, as the Worker checks it in the
+ * statement that starts or resumes (#1465 review): a start, cancel or
+ * restart from another tab or device after the read refuses the start
+ * (E2EE_MIGRATION_ATTEMPT_CHANGED) instead of going ahead with an
+ * approval given for what was read.
+ */
+export function expectedAttemptOf(
+  migration: E2eeProjectMigrationRecord | null | undefined
+): E2eeMigrationAttemptExpectation {
+  return migration
+    ? {
+        state: migration.state,
+        attempt: migration.attempt ?? null,
+        startedAt: migration.startedAt
+      }
+    : { state: 'none', attempt: null, startedAt: null };
 }
 
 export interface MigrationEngineDeps {
@@ -273,6 +297,11 @@ class RestartError extends Error {
 /** Abandons, restarts and lease resumes one project may take (judgment). */
 const MAX_RESTARTS = 2;
 const MAX_RESUMES = 3;
+/**
+ * Starts refused because the attempt changed elsewhere since it was read
+ * (#1465 review), each followed by reading it again (judgment).
+ */
+const MAX_REREADS = 3;
 const MAX_STEP_CALLS = 500;
 
 /** The Worker's refusal code, from any of the clients' error classes. */
@@ -457,6 +486,8 @@ interface RunApproval {
   ): readonly MigrationMemberApproval[] | undefined;
   /** The approval went ahead with the staging `attempt`. */
   bind(attempt: MigrationAttempt): void;
+  /** The attempt it was given for is gone: never used again. */
+  forget(): void;
   /** Recorded for its staging (or not): see `migrate`. */
   spend(recorded: boolean): void;
 }
@@ -526,7 +557,16 @@ export function createProjectMigrationEngine(
     const started = await migrations
       .start(
         projectId,
-        { direction: 'encrypt', deviceId: deps.deviceId },
+        {
+          direction: 'encrypt',
+          deviceId: deps.deviceId,
+          // Exactly the attempt this run read and decided on (and the
+          // owner approved the members for), checked by the Worker in the
+          // statement that starts or resumes it: another tab or device may
+          // have started, cancelled or restarted it since, and this Web
+          // Lock does not reach other devices (#1465 review).
+          expectedAttempt: expectedAttemptOf(existing)
+        },
         stored
       )
       .catch((error: unknown) => {
@@ -595,6 +635,11 @@ export function createProjectMigrationEngine(
         // Gone ahead with this staging: a resume of it still counts.
         if (approvedMembers) approvedFor = attempt;
       },
+      forget() {
+        if (!approvedMembers) return;
+        approvedMembers = undefined;
+        options.onApprovalSpent?.();
+      },
       spend(recorded) {
         if (!approvedMembers) return;
         // A receipt this browser could not keep leaves the approval with
@@ -605,6 +650,7 @@ export function createProjectMigrationEngine(
     };
     let restarts = 0;
     let resumes = 0;
+    let rereads = 0;
     for (;;) {
       try {
         await runOnce(project, check, report, () => progress, approval);
@@ -620,6 +666,17 @@ export function createProjectMigrationEngine(
         ) {
           report({ phase: 'members', error: migrationErrorOf(error) });
           throw error;
+        }
+        if (codeOf(error) === E2EE_MIGRATION_CODES.attemptChanged) {
+          // The attempt this run read is gone (started, cancelled or
+          // restarted elsewhere) and nothing was started: an approval
+          // given for it is forgotten, and the next read shows the
+          // members again for the owner to approve.
+          approval.forget();
+          if (rereads < MAX_REREADS) {
+            rereads++;
+            continue;
+          }
         }
         if (
           codeOf(error) === E2EE_MIGRATION_CODES.leaseLost &&
