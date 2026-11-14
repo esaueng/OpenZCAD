@@ -4232,14 +4232,20 @@ export const MAX_ARTIFACT_UPLOAD_BYTES =
 /** Unfinished upload sessions one account may hold at once. */
 export const MAX_ACTIVE_ARTIFACT_UPLOAD_SESSIONS = 16;
 /**
- * Ceiling on finalized artifact bytes per account, attributed to the project
- * owner. Uploads are otherwise unmetered R2 writes on an open-signup beta —
- * without an account ceiling, a scripted client can park unbounded storage on
- * the operator's bucket (32 MiB × 64 parts per artifact, no artifact count
- * limit). The Free allowance, 1 GiB, covers real use (the largest supported
- * STEP import is 128 MB) while bounding abuse; Premium raises it.
+ * The Free account's one storage allowance: everything the account stores,
+ * attributed to the project owner — documents, revisions and source assets
+ * (plaintext or encrypted) together with imports, exports and encrypted
+ * content blobs, in one bucket (migration 0049). Uploads and saves are
+ * otherwise unmetered writes on an open-signup beta; 1 GiB covers real use
+ * (the largest supported STEP import is 128 MB) while bounding abuse.
+ * Premium raises it.
  */
-export const MAX_ACCOUNT_ARTIFACT_BYTES = 1024 * 1024 * 1024;
+export const MAX_ACCOUNT_STORAGE_BYTES = 1024 * 1024 * 1024;
+/**
+ * @deprecated One allowance covers artifacts and projects alike; use
+ * {@link MAX_ACCOUNT_STORAGE_BYTES}. Kept equal to it.
+ */
+export const MAX_ACCOUNT_ARTIFACT_BYTES = MAX_ACCOUNT_STORAGE_BYTES;
 /**
  * Explicit ceiling on the unfinished portion of account artifact usage. It
  * matches the 2 GiB that migration 0017's reservation triggers hard-code, so
@@ -4322,7 +4328,21 @@ export type AccountTier = 'free' | 'premium';
 export interface AccountEntitlements {
   tier: AccountTier;
   projectLimit: number;
+  /**
+   * The account's one storage allowance, for everything it stores: projects,
+   * save states, imports, exports and encrypted files. Older servers omit it;
+   * read {@link projectStorageLimitBytes} then.
+   */
+  storageLimitBytes?: number;
+  /**
+   * @deprecated Equal to `storageLimitBytes`; kept for clients that predate
+   * the single allowance.
+   */
   projectStorageLimitBytes: number;
+  /**
+   * @deprecated Equal to `storageLimitBytes`; kept for clients that predate
+   * the single allowance.
+   */
   artifactLimitBytes: number;
   ai: {
     requestLimit: number;
@@ -5343,10 +5363,10 @@ export const MAX_CLOUD_PROJECT_WRITE_BYTES =
 /** Account limits include projects in the recycle bin until hard deletion. */
 export const MAX_ACCOUNT_PROJECTS = 100;
 /**
- * Free project storage per owner: stored documents, revisions and
- * externalized source assets, plaintext or encrypted. Premium raises it.
+ * @deprecated One allowance covers projects and artifacts alike; use
+ * {@link MAX_ACCOUNT_STORAGE_BYTES}. Kept equal to it.
  */
-export const MAX_ACCOUNT_PROJECT_STORAGE_BYTES = 1024 * 1024 * 1024;
+export const MAX_ACCOUNT_PROJECT_STORAGE_BYTES = MAX_ACCOUNT_STORAGE_BYTES;
 
 /** Serialized size of `document`, measured the way the store measures it. */
 export function persistedDocumentBytes(document: ProjectDocument): number {
@@ -5377,26 +5397,49 @@ export const MAX_LOCAL_CHECKPOINT_DOCUMENTS = 25;
 /** What an account is currently storing, for the settings panel. */
 export interface AccountStorageUsage {
   entitlements?: AccountEntitlements;
+  /**
+   * Projects the account owns outside the recycle bin (archived included),
+   * as the library lists them.
+   */
   projectCount: number;
+  /**
+   * Projects in the recycle bin, kept until they are deleted for good. Their
+   * bytes still count toward `storageBytes`. Older servers omit it.
+   */
+  trashedProjectCount?: number;
   /** Bytes held by the current copy of each project. */
   documentBytes: number;
   /** Bytes held by saved revisions, across every project. */
   revisionBytes: number;
   /**
-   * How many revisions are retained in total. Reported separately from the
-   * bytes because retention bounds the count, not the size — later revisions of
-   * a project are larger than earlier ones, so a flat byte total cannot show
-   * that pruning is working.
+   * How many named save states are retained in total. Reported separately
+   * from the bytes because retention bounds the count, not the size — later
+   * revisions of a project are larger than earlier ones, so a flat byte total
+   * cannot show that pruning is working.
    */
   revisionCount: number;
   /**
-   * Project storage as the account's quota measures it, against
-   * `entitlements.projectStorageLimitBytes`: inline documents and revisions,
-   * stored (compressed) R2 objects and source assets, and retained encrypted
-   * envelopes. Unlike `documentBytes + revisionBytes` (logical sizes, for the
-   * erasure preview), this is what a save is refused against.
+   * Project storage as the account's quota measures it: inline documents and
+   * revisions, stored (compressed) R2 objects and source assets, and retained
+   * encrypted envelopes. Unlike `documentBytes + revisionBytes` (logical
+   * sizes, for the erasure preview), this is the project share of
+   * `storageBytes`.
    */
   projectStorageBytes: number;
+  /**
+   * Everything the account stores, against `storageLimitBytes`, as the quota
+   * counts it: project storage (`projectStorageBytes`), finalized files
+   * (`artifactBytes`) and uploads in flight (`artifactReservedBytes`).
+   * Older servers omit it.
+   */
+  storageBytes?: number;
+  /**
+   * Bytes reserved by uploads still in flight: they hold their room until
+   * they finish or are abandoned. Older servers omit it.
+   */
+  artifactReservedBytes?: number;
+  /** The account's one storage allowance. Older servers omit it. */
+  storageLimitBytes?: number;
   /** The per-document ceiling, so the client can name it without hardcoding. */
   documentLimitBytes: number;
   maxRevisionsPerProject: number;
@@ -5404,7 +5447,10 @@ export interface AccountStorageUsage {
   artifactBytes: number;
   /** How many finalized artifacts the account's projects hold. */
   artifactCount: number;
-  /** The account-wide artifact ceiling, for the same no-hardcoding reason. */
+  /**
+   * @deprecated Equal to `storageLimitBytes`: files and projects share one
+   * allowance. Kept for clients that predate it.
+   */
   artifactLimitBytes: number;
 }
 

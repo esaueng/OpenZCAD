@@ -125,6 +125,51 @@ export class ApiError extends Error {
 
 export const PROJECT_DOCUMENT_UNAVAILABLE_CODE = 'PROJECT_DOCUMENT_UNAVAILABLE';
 
+/**
+ * A save held back while earlier saves' replaced copies are still being
+ * freed (migration 0049): each attempt frees more, so it is retried, not
+ * reported as a quota refusal or an unreachable account.
+ */
+export const PROJECT_STORAGE_CLEANUP_PENDING_CODE =
+  'PROJECT_STORAGE_CLEANUP_PENDING';
+
+export function isProjectStorageCleanupPendingError(
+  error: unknown
+): error is ApiError {
+  return (
+    error instanceof ApiError &&
+    error.status === 503 &&
+    error.code === PROJECT_STORAGE_CLEANUP_PENDING_CODE
+  );
+}
+
+/**
+ * Runs an account write, trying it again while the account answers that
+ * earlier saves' copies are still being freed: each attempt frees a bounded
+ * share, and the refusal comes before anything is written, so a retry never
+ * saves twice. Stops early (null) once `stillWanted` says the save no longer
+ * applies, e.g. the project was closed meanwhile.
+ */
+export async function retryWhileStorageCleanupPending<T>(
+  write: () => Promise<T>,
+  stillWanted: () => boolean,
+  options: { attempts?: number; delayMs?: number } = {}
+): Promise<T | null> {
+  const attempts = options.attempts ?? 8;
+  const delayMs = options.delayMs ?? 1_000;
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await write();
+    } catch (error) {
+      if (!isProjectStorageCleanupPendingError(error) || attempt >= attempts) {
+        throw error;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    if (!stillWanted()) return null;
+  }
+}
+
 export function isProjectDocumentUnavailableError(
   error: unknown
 ): error is ApiError {

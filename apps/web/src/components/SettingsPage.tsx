@@ -126,26 +126,54 @@ import {
 } from './PersonalInfo';
 
 /**
- * Names the ceiling even before anyone is near it. A limit discovered only at
- * the moment a save is refused reads as a bug; a limit stated up front reads as
- * a limit.
+ * The parts of the one storage allowance. Older servers (and the e2e stubs)
+ * may omit them; an absent part reads as nothing stored.
  */
-function storageHint(usage: AccountStorageUsage | null): string {
-  if (!usage) {
-    return 'Projects and revisions saved to your account.';
-  }
-  return `${countLabel(usage.projectCount, 'project', 'projects')} · ${countLabel(usage.revisionCount, 'revision', 'revisions')}. Up to ${formatBytes(usage.documentLimitBytes)} and ${usage.maxRevisionsPerProject.toLocaleString()} revisions per project.`;
+function storageParts(usage: AccountStorageUsage): {
+  projects: number;
+  files: number;
+} {
+  const partial = usage as Partial<AccountStorageUsage>;
+  return {
+    projects: partial.projectStorageBytes ?? 0,
+    // Uploads in flight hold their room, so they read as files.
+    files: (partial.artifactBytes ?? 0) + (partial.artifactReservedBytes ?? 0)
+  };
 }
 
-/** Usage against an allowance, naming an overage outright. */
+/**
+ * Everything the account stores, against its one allowance: project storage
+ * and finalized files. Older servers send only the two parts.
+ */
+function storedBytes(usage: AccountStorageUsage): number {
+  const { projects, files } = storageParts(usage);
+  return usage.storageBytes ?? projects + files;
+}
+
+/** What the one storage allowance is made of, and what it holds. */
+function storageHint(usage: AccountStorageUsage | null): string {
+  if (!usage) {
+    return 'Projects, save states, imports and exports saved to your account.';
+  }
+  const { projects, files } = storageParts(usage);
+  const trashed = usage.trashedProjectCount ?? 0;
+  const counts = [
+    countLabel(usage.projectCount, 'project', 'projects'),
+    ...(trashed > 0 ? [`${trashed.toLocaleString()} in trash`] : []),
+    countLabel(usage.revisionCount, 'save state', 'save states')
+  ].join(' · ');
+  return `Projects ${formatBytes(projects)} · Imports and exports ${formatBytes(files)}. ${counts}.`;
+}
+
+/**
+ * Usage against an allowance, naming an overage outright. The meter names the
+ * ceiling even before anyone is near it: a limit discovered only at the
+ * moment a save is refused reads as a bug; one stated up front reads as a
+ * limit.
+ */
 function allowanceFigure(usedBytes: number, limitBytes: number): string {
   const figure = `${formatBytes(usedBytes)} of ${formatBytes(limitBytes)}`;
   return usedBytes > limitBytes ? `${figure} · over allowance` : figure;
-}
-
-/** Cloud file usage against the allowance, naming an overage outright. */
-function fileStorageFigure(usage: AccountStorageUsage): string {
-  return allowanceFigure(usage.artifactBytes, usage.artifactLimitBytes);
 }
 
 type SectionId = SettingsSectionId;
@@ -867,10 +895,14 @@ export function SettingsPage({
     };
   }, [active, cloudFunctionsEnabled, session]);
 
-  /** The owner's project-storage allowance; older servers omit it. */
-  const projectStorageLimit = (
-    storageUsage?.entitlements ?? session?.entitlements
-  )?.projectStorageLimitBytes;
+  /** The owner's one storage allowance; older servers name it otherwise. */
+  const storageEntitlements =
+    storageUsage?.entitlements ?? session?.entitlements;
+  const storageLimit =
+    storageUsage?.storageLimitBytes ??
+    storageEntitlements?.storageLimitBytes ??
+    storageEntitlements?.projectStorageLimitBytes ??
+    (storageUsage as Partial<AccountStorageUsage> | null)?.artifactLimitBytes;
 
   // The Encryption section exists only for an account the server opened the
   // beta to; asked once per signed-in account while Settings is open.
@@ -2306,7 +2338,7 @@ export function SettingsPage({
                           title="Membership"
                           hint={
                             session.entitlements
-                              ? `${countLabel(session.entitlements.projectLimit, 'cloud project', 'cloud projects')} · ${formatBytes(session.entitlements.projectStorageLimitBytes)} project storage · ${formatBytes(session.entitlements.artifactLimitBytes)} cloud file storage · ${session.entitlements.ai.requestLimit.toLocaleString()} hosted AI requests per ${(session.entitlements.ai.windowSeconds / 60).toLocaleString()} minutes`
+                              ? `${countLabel(session.entitlements.projectLimit, 'cloud project', 'cloud projects')} · ${formatBytes(session.entitlements.storageLimitBytes ?? session.entitlements.projectStorageLimitBytes)} storage · ${session.entitlements.ai.requestLimit.toLocaleString()} hosted AI requests per ${(session.entitlements.ai.windowSeconds / 60).toLocaleString()} minutes`
                               : 'Limits appear after your account reconnects.'
                           }
                           details={
@@ -2678,51 +2710,41 @@ export function SettingsPage({
                   {session || restoringSignedIn ? (
                     <Group title="Storage">
                       <SettingRow
-                        title="Account storage"
+                        title="Storage"
                         hint={storageHint(storageUsage)}
+                        details={
+                          (storageUsage?.trashedProjectCount ?? 0) > 0
+                            ? {
+                                summary: 'Trash counts toward storage',
+                                body: 'Projects in the trash are still stored, so they count until they are deleted.'
+                              }
+                            : undefined
+                        }
                       >
-                        {storageUsage && projectStorageLimit ? (
+                        {storageUsage && storageLimit ? (
                           <span className="settings-meter-figure">
                             <Meter
-                              used={storageUsage.projectStorageBytes}
-                              limit={projectStorageLimit}
-                              label="Account storage used"
+                              used={storedBytes(storageUsage)}
+                              limit={storageLimit}
+                              label="Storage used"
                               valueText={allowanceFigure(
-                                storageUsage.projectStorageBytes,
-                                projectStorageLimit
+                                storedBytes(storageUsage),
+                                storageLimit
                               )}
                             />
                             <span>
                               {allowanceFigure(
-                                storageUsage.projectStorageBytes,
-                                projectStorageLimit
+                                storedBytes(storageUsage),
+                                storageLimit
                               )}
                             </span>
                           </span>
                         ) : (
                           <Status>
                             {storageUsage
-                              ? formatBytes(storageUsage.projectStorageBytes)
+                              ? formatBytes(storedBytes(storageUsage))
                               : '—'}
                           </Status>
-                        )}
-                      </SettingRow>
-                      <SettingRow
-                        title="Cloud file storage"
-                        hint="Imports and exports. Existing files stay if you go over."
-                      >
-                        {storageUsage ? (
-                          <span className="settings-meter-figure">
-                            <Meter
-                              used={storageUsage.artifactBytes}
-                              limit={storageUsage.artifactLimitBytes}
-                              label="Cloud file storage used"
-                              valueText={fileStorageFigure(storageUsage)}
-                            />
-                            <span>{fileStorageFigure(storageUsage)}</span>
-                          </span>
-                        ) : (
-                          <Status>—</Status>
                         )}
                       </SettingRow>
                     </Group>
