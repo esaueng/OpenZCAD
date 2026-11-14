@@ -264,7 +264,22 @@ const LOADING_PROJECT_TILES = 10;
 
 /** The Projects shelf's narrowing, beside its heading. */
 type ShelfFilter = 'all' | 'pinned' | 'attention' | 'local';
-type ShelfSort = 'custom' | 'edited' | 'name';
+type ShelfSort = 'custom' | 'edited' | 'name' | 'size';
+
+/**
+ * The size sort's order: largest first, and a row with no figure (unmeasured,
+ * or locked) after every row that has one, where its size cannot mislead.
+ */
+function largestFirst(a: number | undefined, b: number | undefined): number {
+  if (a === undefined) return b === undefined ? 0 : 1;
+  if (b === undefined) return -1;
+  return b - a;
+}
+
+/** The size the list shows for a project: none for one this build cannot open. */
+function shownBytes(project: ProjectSummary): number | undefined {
+  return projectNeedsUpdate(project) ? undefined : project.documentBytes;
+}
 type ShelfLayout = 'grid' | 'list';
 
 const SHELF_FILTERS: ReadonlyArray<{ id: ShelfFilter; label: string }> = [
@@ -363,7 +378,11 @@ function readLibraryView(): LibraryView {
     ) {
       view.filter = stored.filter;
     }
-    if (stored.sort === 'edited' || stored.sort === 'name') {
+    if (
+      stored.sort === 'edited' ||
+      stored.sort === 'name' ||
+      stored.sort === 'size'
+    ) {
       view.sort = stored.sort;
     }
     if (typeof stored.query === 'string') {
@@ -990,9 +1009,12 @@ export function StartScreen({
             Number(projectOrganization(b).pinned) -
             Number(projectOrganization(a).pinned);
           if (pinned !== 0) return pinned;
-          return sort === 'edited'
-            ? b.updatedAt.localeCompare(a.updatedAt)
-            : a.name.localeCompare(b.name, undefined, { numeric: true });
+          if (sort === 'edited') return b.updatedAt.localeCompare(a.updatedAt);
+          if (sort === 'size') {
+            const bySize = largestFirst(shownBytes(a), shownBytes(b));
+            if (bySize !== 0) return bySize;
+          }
+          return a.name.localeCompare(b.name, undefined, { numeric: true });
         });
   // Folders gather projects only on the unfiltered shelf; a filter or a search
   // looks through them, showing every matching project on its own.
@@ -1013,11 +1035,18 @@ export function StartScreen({
     ? []
     : sort === 'custom'
       ? folders
-      : [...folders].sort((a, b) =>
-          sort === 'edited'
-            ? latestEdit(b).localeCompare(latestEdit(a))
-            : a.name.localeCompare(b.name, undefined, { numeric: true })
-        );
+      : [...folders].sort((a, b) => {
+          if (sort === 'edited')
+            return latestEdit(b).localeCompare(latestEdit(a));
+          if (sort === 'size') {
+            const bySize = largestFirst(
+              folderBytes(folderMembers(a)),
+              folderBytes(folderMembers(b))
+            );
+            if (bySize !== 0) return bySize;
+          }
+          return a.name.localeCompare(b.name, undefined, { numeric: true });
+        });
 
   // A project sent to another shelf takes its tile, and the focused control in
   // it, off the page, which would leave focus on nothing. Once it is gone the
@@ -2100,7 +2129,7 @@ export function StartScreen({
             {/* The list has Size and Saves columns; a card leaves both out. */}
             {layout === 'list' &&
               renderSize(
-                locked ? undefined : project.documentBytes,
+                shownBytes(project),
                 'Document size',
                 locked
                   ? undefined
@@ -3503,6 +3532,7 @@ export function StartScreen({
                       <option value="custom">Custom order</option>
                       <option value="edited">Last edited</option>
                       <option value="name">Name</option>
+                      <option value="size">Size</option>
                     </select>
                   </label>
                 ) : (
@@ -3519,6 +3549,7 @@ export function StartScreen({
                       <option value="custom">Custom order</option>
                       <option value="edited">Last edited</option>
                       <option value="name">Name</option>
+                      <option value="size">Size</option>
                     </select>
                   </span>
                 )}
