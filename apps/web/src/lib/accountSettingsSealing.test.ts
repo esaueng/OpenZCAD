@@ -12,7 +12,7 @@ import {
 } from '@openzcad/crypto';
 import { api } from './api';
 import { subscribeAccountSettingsMerged } from './accountSettingsEvents';
-import { sealSettings } from './e2ee/sealedSettings';
+import { openSettings, sealSettings } from './e2ee/sealedSettings';
 import { saveLocalAppSettings } from './appSettings';
 import { desktopFetch } from './desktopBridge';
 
@@ -258,8 +258,8 @@ describe('settings of an account whose library is encrypted', () => {
     const read = await api.getSettings();
     expect(read.settings.assistant.customInstructions).toBe('');
     const merges: AppSettings[] = [];
-    const stop = subscribeAccountSettingsMerged((_, settings) =>
-      merges.push(settings)
+    const stop = subscribeAccountSettingsMerged((_, __, saved) =>
+      merges.push(saved)
     );
     try {
       // Unlocked, the user changes one setting.
@@ -292,6 +292,92 @@ describe('settings of an account whose library is encrypted', () => {
     } finally {
       stop();
     }
+  });
+
+  it('merges an edit queued behind the first save after unlocking', async () => {
+    const account = privateSettings();
+    const { record } = await sealSettings(
+      {
+        accountKey: ACCOUNT_KEY,
+        userId: state.userId,
+        pins: { read: () => 0, write: () => undefined }
+      },
+      account
+    );
+    state.libraryEncrypted = true;
+    const patches = worker(() =>
+      response(accountServerSettings(account), { sealedSettings: record })
+    );
+    const read = await api.getSettings();
+    state.account = { accountKey: ACCOUNT_KEY };
+    const first = structuredClone(read.settings);
+    first.general.defaultUnits = 'cm';
+    // The second edit was queued from the page's unmerged settings.
+    const second = structuredClone(first);
+    second.appearance.density = 'compact';
+    await api.updateSettings({ settings: first, expectedRevision: 1 });
+    await api.updateSettings({ settings: second, expectedRevision: 2 });
+    const stored = await openSettings(
+      {
+        accountKey: ACCOUNT_KEY,
+        userId: state.userId,
+        pins: { read: () => 0, write: () => undefined }
+      },
+      patches[1]!.sealedSettings as string
+    );
+    expect(stored?.assistant.customInstructions).toBe(SECRET);
+    expect(stored?.appearance.theme).toBe('light');
+    expect(stored?.general.defaultUnits).toBe('cm');
+    expect(stored?.appearance.density).toBe('compact');
+  });
+
+  it('keeps the merge across a reload before the edit synced', async () => {
+    const account = privateSettings();
+    const { record } = await sealSettings(
+      {
+        accountKey: ACCOUNT_KEY,
+        userId: state.userId,
+        pins: { read: () => 0, write: () => undefined }
+      },
+      account
+    );
+    state.libraryEncrypted = true;
+    worker(() =>
+      response(accountServerSettings(account), { sealedSettings: record })
+    );
+    // Locked: the page shows this device's defaults; the user edits one.
+    const read = await api.getSettings();
+    const edited = structuredClone(read.settings);
+    edited.general.defaultUnits = 'cm';
+    saveLocalAppSettings(edited, null);
+    // Reload, keys unlocked this time.
+    vi.resetModules();
+    const reloaded = await import('./api');
+    state.account = { accountKey: ACCOUNT_KEY };
+    const patches = worker(() =>
+      response(accountServerSettings(account), { sealedSettings: record })
+    );
+    const again = await reloaded.api.getSettings();
+    expect(again.settings.assistant.customInstructions).toBe(SECRET);
+    expect(again.settings.general.defaultUnits).toBe('cm');
+    // Startup keeps the unsynced device copy and saves it.
+    await reloaded.api.updateSettings({
+      settings: edited,
+      expectedRevision: 1
+    });
+    const { openSettings: openAfterReload } =
+      await import('./e2ee/sealedSettings');
+    const stored = await openAfterReload(
+      {
+        accountKey: ACCOUNT_KEY,
+        userId: state.userId,
+        pins: { read: () => 0, write: () => undefined }
+      },
+      patches[0]!.sealedSettings as string
+    );
+    expect(stored?.assistant.customInstructions).toBe(SECRET);
+    expect(stored?.appearance.theme).toBe('light');
+    expect(stored?.general.defaultUnits).toBe('cm');
   });
 
   it('refuses to save rather than guess when the library rule cannot be read', async () => {

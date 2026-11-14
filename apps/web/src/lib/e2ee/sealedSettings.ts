@@ -156,39 +156,3 @@ export async function openSettings(
   keys.pins.write(sequence);
   return settings;
 }
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function sameValue(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
-}
-
-function mergeValue(base: unknown, ours: unknown, theirs: unknown): unknown {
-  if (isPlainObject(base) && isPlainObject(ours) && isPlainObject(theirs)) {
-    const merged: Record<string, unknown> = {};
-    for (const key of new Set([...Object.keys(ours), ...Object.keys(theirs)]))
-      merged[key] = mergeValue(base[key], ours[key], theirs[key]);
-    return merged;
-  }
-  // A field this device left as it was takes the account's value; one it
-  // changed keeps the change.
-  return sameValue(ours, base) ? theirs : ours;
-}
-
-/**
- * Settings a device edited while it could not open the account's sealed
- * record, merged onto that record: each field this device changed from
- * `base` (what it showed when it read the record locked) keeps its value,
- * every other field takes the account's. Without it the first save after
- * unlocking would replace the account's settings with this device's
- * defaults.
- */
-export function mergeSettingsOntoAccount(
-  base: AppSettings,
-  ours: AppSettings,
-  theirs: AppSettings
-): AppSettings {
-  return normalizeAppSettings(mergeValue(base, ours, theirs));
-}

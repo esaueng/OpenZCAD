@@ -17,6 +17,7 @@ import {
 } from '../lib/cloudSettingsAutosave';
 import { errorMessage } from '../lib/errors';
 import { subscribeAccountSettingsMerged } from '../lib/accountSettingsEvents';
+import { mergeSettingsOntoAccount } from '../lib/settingsMerge';
 import { savedPanelWidths } from '../lib/panelWidths';
 
 export interface AppSettingsSyncInput {
@@ -234,10 +235,17 @@ export function useAppSettingsSync({
   // holds, so the next save carries it rather than undoing the merge.
   useEffect(
     () =>
-      subscribeAccountSettingsMerged((userId, settings) => {
+      subscribeAccountSettingsMerged((userId, sent, saved) => {
         if (cloudSettingsSessionUserRef.current !== userId) return;
-        appSettingsRef.current = settings;
-        setAppSettings(settings);
+        // An edit made while the save was on its way stays: only fields
+        // unchanged since it was sent take the account's value.
+        const next = mergeSettingsOntoAccount(
+          sent,
+          appSettingsRef.current,
+          saved
+        );
+        appSettingsRef.current = next;
+        setAppSettings(next);
       }),
     []
   );

@@ -1486,11 +1486,17 @@ account whose library is encrypted (the rule above) stores them sealed.
   (`SETTINGS_ENCRYPTION_REQUIRED`); an account that stores settings readable
   drops any sealed record on its next write.
 - **Reading locked, saving unlocked.** A device that read the record while
-  locked showed its own values. Its first save once unlocked merges onto the
-  record it read: each field changed since that read keeps the device's
-  value, every other field takes the record's, and the page adopts the
-  result. Without it, a fresh device's first save would replace the
-  account's settings with its defaults.
+  locked showed its own values, and keeps that state per account in device
+  storage (what it showed, and the record or the account's settings once
+  opened). While it exists, every sealed save merges onto the account's
+  settings: each field changed since what the device showed or last sent
+  keeps the device's value, every other field takes the account's. A save
+  that merged becomes the new base, so an edit queued behind it merges too,
+  and the state survives a reload before the edit synced. The page folds the
+  merged result into what it shows, keeping edits made meanwhile. The state
+  ends with the first save that sends exactly what the merge gives. Without
+  it, a fresh device's first save would replace the account's settings with
+  its defaults.
 - **Unanswered library rule.** Only a Worker without the encryption routes
   reads as "not encrypted"; one that cannot be reached or fails refuses the
   save (`E2EE_PREFERENCE_UNVERIFIED`), so settings never leave readable on a
