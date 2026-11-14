@@ -69,6 +69,66 @@ describe('InPlaceCommandBar', () => {
     expect(screen.getByRole('region', { name: '3D viewport' })).toHaveFocus();
   });
 
+  // QA 2026-11-14 finding #18: the bar's status line showed the rebuild's
+  // warning as written, kernel ids and all.
+  it.each([
+    [
+      'Draft',
+      'Remus draft refused: the draft moves a corner of curved face 139; re-trimming a curved neighbour against the taper is not implemented',
+      "A face next to this one is curved, and re-trimming a curved face to fit isn't supported yet. Try faces that only meet flat faces."
+    ],
+    [
+      'Split',
+      'the cutting plane crosses curved edge 36; trimming a curve to the plane is not implemented here, and a chord across it would not be the same edge',
+      "The cutting plane crosses a curved edge, which splitting can't trim yet. Move the plane so it misses fillets and curved edges."
+    ],
+    [
+      'Solid offset',
+      'Remus solid offset refused: assembly failed: wire loop walk: no unvisited edge from vertex 2685',
+      'Solid offset could not rebuild this body. It currently works on bodies with flat faces and sharp edges; fillets, shells and curved faces are not supported yet.'
+    ]
+  ])(
+    'leads a %s refusal with plain words and keeps the kernel text behind details',
+    (title, diagnostic, sentence) => {
+      render(
+        <InPlaceCommandBar
+          title={title}
+          hint="Pick faces"
+          refusal={diagnostic}
+          canFinish={false}
+          onDone={vi.fn()}
+          onCancel={vi.fn()}
+        />
+      );
+      expect(screen.getByRole('status').textContent).toBe(sentence);
+      const disclosure = screen
+        .getByText('Technical details')
+        .closest('details');
+      expect(disclosure).toHaveProperty('open', false);
+      expect(disclosure?.textContent).toContain(diagnostic);
+    }
+  );
+
+  it('shows an adapter sentence as it is, with nothing to disclose', () => {
+    const sentence =
+      'Fillet could not be created on 1 selected edge with radius 30. Try a smaller radius: radius 15 builds here.';
+    render(
+      <InPlaceCommandBar
+        title="Fillet"
+        hint="Pick edges"
+        refusal={sentence}
+        canFinish={false}
+        onDone={vi.fn()}
+        onCancel={vi.fn()}
+        unitLabel="mm"
+      />
+    );
+    expect(screen.getByRole('status').textContent).toBe(
+      'Fillet could not be created on 1 selected edge with radius 30 mm. Try a smaller radius: radius 15 mm builds here.'
+    );
+    expect(screen.queryByText('Technical details')).toBeNull();
+  });
+
   it('explains a body-removing cut and preserves its diagnostic behind details', () => {
     const diagnostic = 'Empty result: cut target fully contained in tool';
     render(

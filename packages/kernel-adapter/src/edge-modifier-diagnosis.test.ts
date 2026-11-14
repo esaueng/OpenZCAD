@@ -257,8 +257,12 @@ describe('edge modifier failure diagnosis', { timeout: 60_000 }, () => {
       'Fillet could not be created on 1 selected edge with radius 30.'
     );
     // The ladder's rung (9) is raised toward the request over round sizes:
-    // 15 builds and 20 refuses, so 15 is the size quoted.
-    expect(message).toContain('Try a smaller radius: radius 15 builds here.');
+    // 15 builds and 20 refuses; a finer pass in the same six-call budget
+    // then finds 17.5 and 17.75 build while 18 (the face width) refuses.
+    // A single pass used to stop at 15 with calls to spare (QA 2026-11-14).
+    expect(message).toContain(
+      'Try a smaller radius: radius 17.75 builds here.'
+    );
     // The ceiling aimed the ladder but must not be quoted: it is not a size
     // that works, and on other bodies it is not even a bound — see the plate
     // test below.
@@ -699,6 +703,39 @@ describe('edge modifier failure diagnosis', { timeout: 60_000 }, () => {
     } finally {
       adapter.dispose();
     }
+  });
+});
+
+/**
+ * QA 2026-11-14 (P3): rounding all twelve edges of a 40 mm cube builds at
+ * R19.6 and is refused at R19.7, yet a refusal at R20 offered "radius 15
+ * builds here" — the refinement stopped once two round sizes 5 apart
+ * bracketed the limit. It now refines again inside the same call budget.
+ */
+describe('fillet suggestion on a whole cube', () => {
+  it('quotes a size near the real limit, not the first round bracket', () => {
+    const kernel = new RemusKernel();
+    const cube = kernel.makeBox(40, 40, 40);
+    const edges = Array.from(kernel.getSolidEdges(cube));
+    expect(edges).toHaveLength(12);
+    expect(
+      refineAcceptedEdgeModifierSize(kernel, cube, edges, 'fillet', 10, 20)
+    ).toBeGreaterThan(19);
+    const message = edgeModifierFailureMessage(
+      kernel,
+      cube,
+      edges,
+      'fillet',
+      20,
+      false,
+      null
+    );
+    const quoted = Number(/radius ([\d.]+) builds here/.exec(message)?.[1]);
+    expect(quoted).toBeGreaterThan(19);
+    expect(quoted).toBeLessThan(20);
+    const rounded = applyEdgeModifier(kernel, cube, edges, 'fillet', quoted);
+    expect(rounded).not.toBeNull();
+    expect(kernel.validateSolid(rounded!)).toBe(0);
   });
 });
 

@@ -397,3 +397,109 @@ describe('exact-only typed refusals', () => {
     });
   });
 });
+
+/**
+ * QA 2026-11-14 finding #18: refusals on zcad.app led with the kernel's own
+ * words — "Remus draft refused: …", `corner 139`, `face Some(Id(409))`,
+ * `exact_only_unattainable (quality_refused)`, `radius-too-large: resize
+ * blend`. The raw strings below are the pinned kernel's wording (read from
+ * the Remus binary) with the ids the QA run reported.
+ */
+describe('kernel refusals named in the 2026-11-14 production QA', () => {
+  const KERNEL_NOTATION =
+    /Remus|Some\(|Id\(|\b[a-z]+_[a-z_]+\b|\b(?:face|edge|vertex|wire|corner) \d|-too-|not implemented/;
+
+  const cases: Array<[string, string]> = [
+    [
+      'Remus draft refused: the draft moves a corner of curved face 139; re-trimming a curved neighbour against the taper is not implemented',
+      "A face next to this one is curved, and re-trimming a curved face to fit isn't supported yet. Try faces that only meet flat faces."
+    ],
+    [
+      'the chamfer has to rebuild the boundary of face 12, which carries a curved edge; re-trimming a curved boundary against the bevel is not implemented',
+      "A face next to this one is curved, and re-trimming a curved face to fit isn't supported yet. Try faces that only meet flat faces."
+    ],
+    [
+      'the cutting plane crosses curved edge 36; trimming a curve to the plane is not implemented here, and a chord across it would not be the same edge',
+      "The cutting plane crosses a curved edge, which splitting can't trim yet. Move the plane so it misses fillets and curved edges."
+    ],
+    [
+      "the cutting plane crosses inner wire 0 of face 32; that hole would stop being a hole and become a notch in the face's own boundary, which is not implemented",
+      "The cutting plane runs through a hole in a face, which splitting can't handle yet. Move the plane clear of holes and openings."
+    ],
+    [
+      'the cutting plane crosses face 18, whose surface is not planar; the section across it is not a straight edge and is not implemented',
+      "The cutting plane crosses a curved face, which splitting can't cut yet. Move the plane so it crosses only flat faces."
+    ],
+    [
+      'the cutting plane contains edge 36 of the solid; splitting along an existing edge has no unambiguous answer',
+      'The cutting plane lies exactly along an existing edge. Move the plane slightly off the edge.'
+    ],
+    [
+      'Remus solid offset refused: assembly failed: wire loop walk: no unvisited edge from vertex 2685 (40 visited, 3 in loop)',
+      'Solid offset could not rebuild this body. It currently works on bodies with flat faces and sharp edges; fillets, shells and curved faces are not supported yet.'
+    ],
+    [
+      'Remus shell refused: shell interference: offset faces 4 and 9 cross',
+      'The shell could not be built with this wall thickness. Try a thinner wall or different open faces.'
+    ],
+    [
+      'resize blend: exact reconstruction refused: blend-aware planar move requires a prismatic sharp support neighborhood',
+      'This face meets a fillet, and a face next to a fillet can only move when the faces around it are flat with sharp edges. Change the size on the original shape in History instead.'
+    ],
+    [
+      'radius-too-large: resize blend: blend radius 25 exceeds the 12 available between its supports',
+      'That radius is too large for the faces this blend joins. Try a smaller radius.'
+    ],
+    [
+      // Capitalised, so it used to pass as a product sentence.
+      'Offset refused at face Some(Id(409)), edge None',
+      'The exact kernel could not build this result.'
+    ],
+    [
+      'Hole refused: exact_only_unattainable (quality_refused)',
+      'The exact kernel could not build this result.'
+    ],
+    [
+      'Remus pattern journal rejected: instance 3 names no source face',
+      'The exact kernel could not build this result.'
+    ]
+  ];
+
+  it.each(cases)('puts %j into plain words', (raw, sentence) => {
+    const plain = plainRefusal(raw);
+    expect(plain).toEqual({ message: sentence, detail: raw });
+    expect(plain.message).not.toMatch(KERNEL_NOTATION);
+  });
+
+  it('lets the kernel category speak for a capitalised kernel line', () => {
+    expect(
+      plainRefusal(
+        'Hole refused: exact_only_unattainable (quality_refused)',
+        'quality_refused'
+      ).message
+    ).toBe(
+      'The exact kernel could not build this exactly, and an approximate result was declined.'
+    );
+  });
+
+  it('still names the wrapped operation ahead of the category', () => {
+    expect(
+      plainRefusal(
+        'Remus draft refused: draft angle leaves face 4 without a boundary',
+        'unsupported'
+      ).message
+    ).toBe(
+      'The draft could not be built on these faces. Try a smaller angle or fewer faces.'
+    );
+  });
+
+  it('leaves product sentences with user names and face labels alone', () => {
+    for (const sentence of [
+      'Subtract refused: "left_bracket" and "Box 2" could not be cut exactly, and an approximate result was declined.',
+      'Pick a flat face; Face 18 is curved.',
+      'Subtract refused: subtracting "Left block" and "Right block" would leave nothing, because the tool covers the whole body. Make the tool smaller or move it so part of the body remains.'
+    ]) {
+      expect(plainRefusal(sentence)).toEqual({ message: sentence });
+    }
+  });
+});

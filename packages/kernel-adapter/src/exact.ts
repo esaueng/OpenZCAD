@@ -46,6 +46,7 @@ export type {
 import { recognizePlanarEmboss } from './planar-emboss';
 import {
   rebuildReporter,
+  type RebuildProgress,
   type RebuildProgressListener
 } from './rebuild-progress';
 export type {
@@ -2430,7 +2431,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     );
 
     const report = rebuildReporter(onProgress);
-    let featureDone: (() => void) | undefined;
+    let featureDone:
+      ((outcome?: RebuildProgress['outcome']) => void) | undefined;
     let executedFeatures = 0;
     // The feature the next build step runs: each step builds one.
     let nextBuildIndex = startIndex;
@@ -2448,7 +2450,16 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
       result: ExactBuildResult,
       idleView?: IdleLineageView
     ) => {
-      featureDone?.();
+      const featureId = features[index]?.featureId;
+      featureDone?.(
+        result.featureWarnings.some(
+          (warning) =>
+            warning.featureId === featureId &&
+            (warning.kind === 'build-failed' || warning.kind === 'refusal')
+        )
+          ? 'failed'
+          : 'built'
+      );
       nextBuildIndex = index + 1;
       if (index <= checkpointIndices.at(-1)!)
         axialExtent.observe(index, result);

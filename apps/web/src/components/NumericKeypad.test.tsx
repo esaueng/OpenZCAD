@@ -1101,7 +1101,12 @@ describe('a refusal on the control', () => {
     // Remedies are the verified ones only.
     fireEvent.click(screen.getByRole('button', { name: 'Pick another edge' }));
     expect(onPickAnother).toHaveBeenCalledOnce();
-    fireEvent.click(screen.getByRole('button', { name: 'Technical details' }));
+    // The kernel's words open in place; the activity log is one step on.
+    const technical = screen.getByRole('button', { name: 'Technical details' });
+    fireEvent.click(technical);
+    expect(technical).toHaveAttribute('aria-expanded', 'true');
+    expect(op.onViewDetails).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Open activity log' }));
     expect(op.onViewDetails).toHaveBeenCalledOnce();
 
     const input = screen.getByRole('textbox', { name: 'Radius' });
