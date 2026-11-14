@@ -1,7 +1,7 @@
 import {
   ISO_METRIC_COARSE_THREADS,
   PIPE_THREAD_SIZES,
-  UNIT_TO_MM,
+  millimetresPerUnit,
   isPipeThreadSize,
   isoMetricThreadLabel,
   pipeThreadForFace,
@@ -202,7 +202,7 @@ function pipeSpecFor(
     ? pipeThreadForFace(
         standard,
         threadFaceKind(face),
-        2 * geometry.radius * UNIT_TO_MM[units]
+        2 * geometry.radius * millimetresPerUnit(units)
       )
     : null;
 }
@@ -232,7 +232,7 @@ export function pipeThreadDefaultLength(
     radius: geometry.radius,
     faceLength: geometry.length,
     clearance,
-    mm: UNIT_TO_MM[units]
+    mm: millimetresPerUnit(units)
   });
   return Math.max(end - Math.max(offset, 0), 0);
 }
@@ -675,7 +675,7 @@ function fitClearance(fit: string | undefined, units: UnitSystem): number {
       : fit === 'exact'
         ? FIT_CLEARANCE_MM.exact
         : FIT_CLEARANCE_MM.print;
-  return mm / UNIT_TO_MM[units];
+  return mm / millimetresPerUnit(units);
 }
 
 /**
@@ -776,7 +776,7 @@ export function threadEditOptions(
   evaluate: (value: ParamValue) => number | null,
   units: UnitSystem
 ): Record<string, string> {
-  const mm = UNIT_TO_MM[units];
+  const mm = millimetresPerUnit(units);
   const number = (value: ParamValue | undefined) =>
     value === undefined ? null : evaluate(value);
   const close = (a: number, b: number) =>
@@ -859,7 +859,7 @@ export function threadRequestFields(
     'targetBodyId' | 'faceHash' | 'faceReference'
   > = { profile };
   const iso = standard ? null : isoSize(options.size);
-  const mm = UNIT_TO_MM[units];
+  const mm = millimetresPerUnit(units);
   if (standard) {
     // The pipe size sets the diameter and pitch; Auto leaves it to the face.
     if (isPipeThreadSize(options.pipeSize)) fields.pipeSize = options.pipeSize;
@@ -979,7 +979,7 @@ export function keepStoredEndKinds(
         radius: face.radius,
         faceLength: face.length,
         clearance,
-        mm: UNIT_TO_MM[pipe.units]
+        mm: millimetresPerUnit(pipe.units)
       });
       // One the offset leaves no length is refused by the build.
       return end - offset > 1e-9 * Math.max(end, 1) ? end - offset : null;

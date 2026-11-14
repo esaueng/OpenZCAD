@@ -48,7 +48,7 @@ import {
 import {
   FULL_REVOLVE_ANGLE_DEG,
   MAX_MESH_SOLID_CONVERSION_TRIANGLES,
-  UNIT_TO_MM,
+  millimetresPerUnit,
   isDatumPlaneRef,
   type BodyId,
   type DatumPlaneSource,
@@ -568,7 +568,7 @@ function buildImportedStepFeature(
     // witnesses match the coordinates every later feature sees. The
     // checksum cache above stays in millimetre form, which keeps a
     // cached import correct across a document units change.
-    const documentScale = 1 / UNIT_TO_MM[document.units];
+    const documentScale = 1 / millimetresPerUnit(document.units);
     if (documentScale !== 1) {
       solids = solids.map((solid) =>
         kernel.copyAndTransformSolid(solid, uniformScaleMatrix(documentScale))

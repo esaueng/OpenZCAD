@@ -6,6 +6,7 @@ import {
   resolveParamValue
 } from '@openzcad/document-core';
 import type { SketchSolveOutcome } from '@openzcad/kernel-adapter/exact';
+import { ownEntry } from '@openzcad/shared';
 import type {
   EntityId,
   ProjectDocument,
@@ -49,7 +50,9 @@ export async function checkSketchEdit(
       ...target,
       warnings: derived.warnings,
       featureWarnings: derived.featureWarnings,
-      bodyPresent: Boolean(derived.bodyRepresentations[target.resultBodyId]),
+      bodyPresent: Boolean(
+        ownEntry(derived.bodyRepresentations, target.resultBodyId)
+      ),
       documentMoved: false
     });
     if (refusal)
@@ -140,7 +143,7 @@ export async function sketchEntitiesEditCommands(
   relations: readonly AnyCommand[] = []
 ): Promise<AnyCommand[]> {
   const befores = updates.map(({ objectId }) => {
-    const before = base.nodes[objectId];
+    const before = ownEntry(base.nodes, objectId);
     if (before?.kind !== 'sketch-object')
       throw new Error('The selected geometry is no longer available.');
     return before;
@@ -167,7 +170,7 @@ export async function sketchEntitiesEditCommands(
   const scope = getParameterScope(prospective).scope;
   for (const [index, { objectId, data }] of updates.entries()) {
     const before = befores[index]!;
-    const result = after.nodes[objectId];
+    const result = ownEntry(after.nodes, objectId);
     if (result?.kind !== 'sketch-object') continue;
     for (const [key, requested] of Object.entries(data)) {
       const previous = (before.data as unknown as Record<string, unknown>)[key];

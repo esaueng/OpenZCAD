@@ -55,6 +55,7 @@ import {
 } from '@openzcad/document-core';
 import {
   isFeatureSuppressed,
+  ownEntry,
   type FeatureNode,
   type ParamValue,
   type PrimitiveKind,
@@ -197,7 +198,7 @@ function featureResidue(featureKind: string, data: unknown): unknown {
     };
     const known =
       (primitive.primitiveKind
-        ? PRIMITIVE_DIMENSIONS[primitive.primitiveKind]
+        ? ownEntry(PRIMITIVE_DIMENSIONS, primitive.primitiveKind)
         : undefined) ?? [];
     return {
       ...(without(data, ['dimensions']) as Record<string, unknown>),
@@ -208,14 +209,14 @@ function featureResidue(featureKind: string, data: unknown): unknown {
     const operation = (data as { operation?: { kind?: string } }).operation;
     const allowed =
       (operation?.kind
-        ? DIRECT_EDIT_DIMENSION_FIELDS[operation.kind]
+        ? ownEntry(DIRECT_EDIT_DIMENSION_FIELDS, operation.kind)
         : undefined) ?? [];
     return {
       ...(without(data, ['operation']) as Record<string, unknown>),
       operation: without(operation, allowed)
     };
   }
-  return without(data, DIMENSION_FIELDS[featureKind] ?? []);
+  return without(data, ownEntry(DIMENSION_FIELDS, featureKind) ?? []);
 }
 
 function sketchObjectResidue(object: unknown): unknown {
@@ -225,7 +226,7 @@ function sketchObjectResidue(object: unknown): unknown {
     objectKind: kind,
     data: without(
       data,
-      (kind ? SKETCH_OBJECT_DIMENSION_FIELDS[kind] : undefined) ?? []
+      (kind ? ownEntry(SKETCH_OBJECT_DIMENSION_FIELDS, kind) : undefined) ?? []
     )
   };
 }
@@ -266,14 +267,14 @@ function featureSizes(
   switch (feature.data.featureKind) {
     case 'primitive': {
       const dimensions = (data.dimensions ?? {}) as Record<string, ParamValue>;
-      return (PRIMITIVE_DIMENSIONS[feature.data.primitiveKind] ?? []).map(
-        (key) => [`${id}:dimensions.${key}`, dimensions[key]]
-      );
+      return (
+        ownEntry(PRIMITIVE_DIMENSIONS, feature.data.primitiveKind) ?? []
+      ).map((key) => [`${id}:dimensions.${key}`, dimensions[key]]);
     }
     case 'direct-edit': {
       const operation = (data.operation ?? {}) as Record<string, unknown>;
       const kind = typeof operation.kind === 'string' ? operation.kind : '';
-      return (DIRECT_EDIT_DIMENSION_FIELDS[kind] ?? [])
+      return (ownEntry(DIRECT_EDIT_DIMENSION_FIELDS, kind) ?? [])
         .filter((key) => key !== 'parameterBinding')
         .map((key) => [
           `${id}:operation.${key}`,
@@ -281,10 +282,9 @@ function featureSizes(
         ]);
     }
     default:
-      return (DIMENSION_FIELDS[feature.data.featureKind] ?? []).map((key) => [
-        `${id}:${key}`,
-        data[key] as ParamValue | undefined
-      ]);
+      return (ownEntry(DIMENSION_FIELDS, feature.data.featureKind) ?? []).map(
+        (key) => [`${id}:${key}`, data[key] as ParamValue | undefined]
+      );
   }
 }
 

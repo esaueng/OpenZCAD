@@ -58,6 +58,7 @@
 import {
   E2EE_MIGRATION_CODES,
   type ArtifactRecord,
+  type E2eeMigrationAttemptExpectation,
   type E2eeProjectMigrationRecord,
   type ProjectDocument,
   type ProjectSummary,
@@ -78,10 +79,20 @@ import { meshPayloadArchive } from '../importArchival';
 import type { InvitationContext } from './invitations';
 import {
   MigrationMembersNotReadyError,
+  MIGRATION_APPROVAL_CODE,
+  MigrationApprovalNeededError,
+  isReceiptFor,
+  memoryApprovalReceipts,
   prepareMigrationMembers,
   readdMigrationMembers,
+  requireMembersApproved,
   requireMembersReady,
+  stagedGroupApproved,
+  stagedGroupMembers,
+  unconfirmedReadds,
+  type MigrationApprovalReceipts,
   type MigrationMember,
+  type MigrationMemberApproval,
   type MigrationSharing
 } from './migrationMembers';
 import type { ProjectGroupContext } from './projectGroups';
@@ -185,6 +196,12 @@ export interface MigrationProgress {
   /** Slice 7-4: a shared project's members and where each stands. */
   readonly members?: readonly MigrationMember[];
   /**
+   * Slice 7-4: the migration attempt the members shown belong to
+   * ({@link migrationAttemptOf}): an approval of them is given for it, and
+   * a run of any other attempt asks again.
+   */
+  readonly attempt?: MigrationAttempt;
+  /**
    * Slice 7-4 (decision M8): the plaintext links and pending invitations
    * the cutover revoked, which the page offers to reissue encrypted.
    */
@@ -192,6 +209,44 @@ export interface MigrationProgress {
     readonly shareLinks: MigrationSharing['shareLinks'];
     readonly invitations: MigrationSharing['invitations'];
   };
+}
+
+/**
+ * Slice 7-4: which of a project's migrations an owner's approval of its
+ * members was given for, as the Worker records it for every tab and
+ * device: none yet, or one record's state, attempt counter (migration
+ * 0053; every new staging moves it on) and start. A start begins a new
+ * attempt and a cancel or restart abandons the record, so an approval
+ * given before either no longer matches, in any tab (#1465 review).
+ */
+export type MigrationAttempt = string;
+
+export function migrationAttemptOf(
+  migration: E2eeProjectMigrationRecord | null | undefined
+): MigrationAttempt {
+  if (!migration) return 'none';
+  return migration.attempt === undefined
+    ? `${migration.state}@${migration.startedAt}`
+    : `${migration.state}#${migration.attempt}@${migration.startedAt}`;
+}
+
+/**
+ * The attempt a start was decided on, as the Worker checks it in the
+ * statement that starts or resumes (#1465 review): a start, cancel or
+ * restart from another tab or device after the read refuses the start
+ * (E2EE_MIGRATION_ATTEMPT_CHANGED) instead of going ahead with an
+ * approval given for what was read.
+ */
+export function expectedAttemptOf(
+  migration: E2eeProjectMigrationRecord | null | undefined
+): E2eeMigrationAttemptExpectation {
+  return migration
+    ? {
+        state: migration.state,
+        attempt: migration.attempt ?? null,
+        startedAt: migration.startedAt
+      }
+    : { state: 'none', attempt: null, startedAt: null };
 }
 
 export interface MigrationEngineDeps {
@@ -205,6 +260,12 @@ export interface MigrationEngineDeps {
   /** The encrypted clients, built once over the leased fetcher. */
   createStaging(leased: Fetch): MigrationStagingClients;
   readonly leases?: MigrationLeaseStore;
+  /**
+   * Slice 7-4: this browser's record of the owner's approval of each
+   * staging's members (`MigrationApprovalReceipt`), so a reload resumes the
+   * staging it approved without asking again. In memory by default.
+   */
+  readonly approvalReceipts?: MigrationApprovalReceipts;
   /** Saves this page's pending edits to the project before staging begins. */
   flushProject?(projectId: string): Promise<void>;
   /**
@@ -245,7 +306,12 @@ export class MigrationPausedError extends Error {
 class RestartError extends Error {
   constructor(
     readonly reason:
-      'stale' | 'device-removed' | 'unfinished-start' | 'unreadable-journal',
+      | 'stale'
+      | 'device-removed'
+      | 'unfinished-start'
+      | 'unreadable-journal'
+      | 'unconfirmed-readd'
+      | 'unapproved-member',
     message: string
   ) {
     super(message);
@@ -256,6 +322,11 @@ class RestartError extends Error {
 /** Abandons, restarts and lease resumes one project may take (judgment). */
 const MAX_RESTARTS = 2;
 const MAX_RESUMES = 3;
+/**
+ * Starts refused because the attempt changed elsewhere since it was read
+ * (#1465 review), each followed by reading it again (judgment).
+ */
+const MAX_REREADS = 3;
 const MAX_STEP_CALLS = 500;
 
 /** The Worker's refusal code, from any of the clients' error classes. */
@@ -292,6 +363,8 @@ export function migrationErrorOf(error: unknown): MigrationError {
             ? `${message} Encryption starts once everyone listed below is ready.`
             : message
       };
+    case MIGRATION_APPROVAL_CODE:
+      return { code, retryable: false, message };
     case E2EE_MIGRATION_CODES.leased:
       return {
         code,
@@ -395,11 +468,53 @@ export function migratableProjects(
 export interface ProjectMigrationEngine {
   /**
    * Encrypts one project end to end, resuming whatever was staged. Rejects
-   * with {@link MigrationPausedError} when `signal` aborts.
+   * with {@link MigrationPausedError} when `signal` aborts. A shared
+   * project's members are added back only as `options.approvedMembers`
+   * names them (the owner's approval of the roster shown, by contact code
+   * and signed role); without it, or once the roster differs, it stops
+   * before staging or the cutover and asks for approval. The approval is
+   * spent once (`onApprovalSpent`): when this browser recorded it for the
+   * staging it went ahead with (`MigrationApprovalReceipt`), or when that
+   * staging was dropped to start again; a later staging asks again. It
+   * counts only for the attempt it was given for (`approvedFor`): once
+   * another tab or device started, cancelled or restarted the migration,
+   * it is forgotten and the owner is asked again.
    */
-  migrate(project: ProjectSummary, signal?: AbortSignal): Promise<void>;
+  migrate(
+    project: ProjectSummary,
+    signal?: AbortSignal,
+    options?: MigrateOptions
+  ): Promise<void>;
   /** Drops a staging and unlocks the plaintext (the lease holder only). */
   cancel(projectId: string): Promise<void>;
+}
+
+export interface MigrateOptions {
+  readonly approvedMembers?: readonly MigrationMemberApproval[];
+  /**
+   * The attempt `approvedMembers` was given for (the `attempt` of the
+   * progress that showed them); an approval without it is never used.
+   */
+  readonly approvedFor?: MigrationAttempt;
+  /**
+   * Told once `approvedMembers` is spent (recorded for its staging, or
+   * dropped with it): the caller must not pass it again.
+   */
+  readonly onApprovalSpent?: () => void;
+}
+
+/** One run's hold on the owner's approval (see `migrate`). */
+interface RunApproval {
+  /** The approval, if it was given for `attempt`; otherwise forgotten. */
+  for(
+    attempt: MigrationAttempt
+  ): readonly MigrationMemberApproval[] | undefined;
+  /** The approval went ahead with the staging `attempt`. */
+  bind(attempt: MigrationAttempt): void;
+  /** The attempt it was given for is gone: never used again. */
+  forget(): void;
+  /** Recorded for its staging (or not): see `migrate`. */
+  spend(recorded: boolean): void;
 }
 
 export function createProjectMigrationEngine(
@@ -407,6 +522,39 @@ export function createProjectMigrationEngine(
 ): ProjectMigrationEngine {
   const { migrations, plaintext } = deps;
   const leases = deps.leases ?? memoryLeaseStore();
+  const receipts = deps.approvalReceipts ?? memoryApprovalReceipts();
+  /**
+   * The approval this browser recorded for exactly the staging `migration`
+   * (its attempt counter and start: #1465 review, two stagings may start in
+   * the same millisecond).
+   */
+  const receiptFor = (
+    projectId: string,
+    migration: E2eeProjectMigrationRecord | null
+  ) => {
+    const receipt = migration ? receipts.get(projectId) : null;
+    return receipt &&
+      migration &&
+      receipt.projectId === projectId &&
+      isReceiptFor(receipt, migration)
+      ? receipt.members
+      : null;
+  };
+  /**
+   * The attempt `read` is gone (E2EE_MIGRATION_ATTEMPT_CHANGED): a receipt
+   * recorded for a staging that began when it did is no longer evidence
+   * for whatever runs now, even one with the same start (#1465 review).
+   */
+  const forgetReceiptOf = (
+    projectId: string,
+    read: E2eeProjectMigrationRecord | null
+  ) => {
+    const receipt = receipts.get(projectId);
+    if (!receipt) return;
+    if (!read || receipt.stagingStartedAt === read.startedAt) {
+      receipts.delete(projectId);
+    }
+  };
   let currentLease: string | null = null;
   const leased: Fetch = (input, init) =>
     currentLease
@@ -428,6 +576,7 @@ export function createProjectMigrationEngine(
     const lease = leases.get(projectId);
     await stepAll(() => migrations.abandon(projectId, lease));
     leases.delete(projectId);
+    receipts.delete(projectId);
     currentLease = null;
     // The staged ciphertext is gone: so is what this browser accepted of
     // it, or the next staging would read as a rollback.
@@ -456,10 +605,22 @@ export function createProjectMigrationEngine(
     const started = await migrations
       .start(
         projectId,
-        { direction: 'encrypt', deviceId: deps.deviceId },
+        {
+          direction: 'encrypt',
+          deviceId: deps.deviceId,
+          // Exactly the attempt this run read and decided on (and the
+          // owner approved the members for), checked by the Worker in the
+          // statement that starts or resumes it: another tab or device may
+          // have started, cancelled or restarted it since, and this Web
+          // Lock does not reach other devices (#1465 review).
+          expectedAttempt: expectedAttemptOf(existing)
+        },
         stored
       )
       .catch((error: unknown) => {
+        if (codeOf(error) === E2EE_MIGRATION_CODES.attemptChanged) {
+          forgetReceiptOf(projectId, existing);
+        }
         // The room could not confirm what it holds, so the Worker staged
         // nothing (a room's unsaved edits must not be purged): a failed
         // start the owner retries.
@@ -479,7 +640,8 @@ export function createProjectMigrationEngine(
 
   async function migrate(
     project: ProjectSummary,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    options: MigrateOptions = {}
   ): Promise<void> {
     const projectId = project.projectId;
     let progress: MigrationProgress = {
@@ -504,20 +666,68 @@ export function createProjectMigrationEngine(
     };
     report({});
 
+    // The owner's approval given now, until it is spent: recorded for the
+    // staging it went ahead with (the receipt carries it from then on), or
+    // dropped with a staging started again, which the owner approves anew.
+    let approvedMembers = options.approvedMembers;
+    let approvedFor = options.approvedFor;
+    const approval: RunApproval = {
+      for(attempt) {
+        // Given for another attempt (one that another tab or device has
+        // since started, cancelled or restarted): forgotten, and the owner
+        // is asked again.
+        if (approvedMembers && approvedFor !== attempt) {
+          approvedMembers = undefined;
+          options.onApprovalSpent?.();
+        }
+        return approvedMembers;
+      },
+      bind(attempt) {
+        // Gone ahead with this staging: a resume of it still counts.
+        if (approvedMembers) approvedFor = attempt;
+      },
+      forget() {
+        if (!approvedMembers) return;
+        approvedMembers = undefined;
+        options.onApprovalSpent?.();
+      },
+      spend(recorded) {
+        if (!approvedMembers) return;
+        // A receipt this browser could not keep leaves the approval with
+        // this run, which still needs it; nothing else reuses it.
+        if (recorded) approvedMembers = undefined;
+        options.onApprovalSpent?.();
+      }
+    };
     let restarts = 0;
     let resumes = 0;
+    let rereads = 0;
     for (;;) {
       try {
-        await runOnce(project, check, report, () => progress);
+        await runOnce(project, check, report, () => progress, approval);
         return;
       } catch (error) {
         if (error instanceof MigrationPausedError) {
           report({ phase: 'paused' });
           throw error;
         }
-        if (error instanceof MigrationMembersNotReadyError) {
+        if (
+          error instanceof MigrationMembersNotReadyError ||
+          error instanceof MigrationApprovalNeededError
+        ) {
           report({ phase: 'members', error: migrationErrorOf(error) });
           throw error;
+        }
+        if (codeOf(error) === E2EE_MIGRATION_CODES.attemptChanged) {
+          // The attempt this run read is gone (started, cancelled or
+          // restarted elsewhere) and nothing was started: an approval
+          // given for it is forgotten, and the next read shows the
+          // members again for the owner to approve.
+          approval.forget();
+          if (rereads < MAX_REREADS) {
+            rereads++;
+            continue;
+          }
         }
         if (
           codeOf(error) === E2EE_MIGRATION_CODES.leaseLost &&
@@ -530,6 +740,11 @@ export function createProjectMigrationEngine(
         const restart =
           error instanceof RestartError ||
           codeOf(error) === E2EE_MIGRATION_CODES.stale;
+        if (restart) {
+          // The staging it approved is dropped: so is the approval.
+          approvedMembers = undefined;
+          options.onApprovalSpent?.();
+        }
         if (restart && restarts < MAX_RESTARTS) {
           restarts++;
           await abandonAll(projectId);
@@ -545,14 +760,18 @@ export function createProjectMigrationEngine(
     project: ProjectSummary,
     check: (step: string) => Promise<void>,
     report: (change: Partial<MigrationProgress>) => void,
-    current: () => MigrationProgress
+    current: () => MigrationProgress,
+    approval: RunApproval
   ): Promise<void> {
     const projectId = project.projectId;
     await check('status');
     const status = (await migrations.status(projectId, leases.get(projectId)))
       .migration;
+    const attempt = migrationAttemptOf(status);
+    const approvedMembers = approval.for(attempt);
     if (status?.state === 'cutover' || status?.state === 'purging') {
       leases.delete(projectId);
+      receipts.delete(projectId);
       deps.onCutoverFound?.(projectId);
       return purgeAll(projectId, (phase) => report({ phase, cutOver: true }));
     }
@@ -571,6 +790,11 @@ export function createProjectMigrationEngine(
     // resumed staging that waits for a member still reads as locked.
     const invitations = staging().invitations;
     let sharing: MigrationSharing | null = null;
+    let approved: Map<string, MigrationMemberApproval> | null = null;
+    // Members a staging re-added without an acceptance the owner can
+    // review (an older app version's): that staging is dropped and staged
+    // again (below, once its lease is held), so they are asked about.
+    let unconfirmed = false;
     if (invitations) {
       await check('members');
       sharing = await prepareMigrationMembers(
@@ -580,13 +804,27 @@ export function createProjectMigrationEngine(
       );
       report({
         plaintextLocked,
+        attempt,
         ...(sharing.members.length ? { members: sharing.members } : {})
       });
       requireMembersReady(sharing);
+      unconfirmed = unconfirmedReadds(sharing).length > 0;
+      // The owner approves the roster shown, by contact code and signed
+      // role, before anything is staged or locked; for a staging resumed,
+      // the whole staged roster, members already re-added included,
+      // unless this browser recorded that approval for this staging.
+      if (!unconfirmed) {
+        approved = requireMembersApproved(
+          sharing,
+          approvedMembers,
+          receiptFor(projectId, status?.state === 'staging' ? status : null)
+        );
+      }
     }
     report({ phase: 'starting', error: undefined, plaintextLocked });
     const { lease, migration } = await acquire(projectId, status);
-    report({ plaintextLocked: true });
+    approval.bind(migrationAttemptOf(migration));
+    report({ plaintextLocked: true, attempt: migrationAttemptOf(migration) });
     const resuming = status?.state === 'staging';
     if (resuming && migration.stagedVersion === 0) {
       // A start that may have left a group without a version: nothing
@@ -595,6 +833,34 @@ export function createProjectMigrationEngine(
         'unfinished-start',
         'The last attempt stopped before its first version.'
       );
+    }
+    if (unconfirmed) {
+      throw new RestartError(
+        'unconfirmed-readd',
+        'Members were added back without an approval you can check; encryption starts again.'
+      );
+    }
+    if (invitations && resuming) {
+      // The staged group is what holds keys to everything staged so far:
+      // nothing more is written to it while it holds anyone the owner did
+      // not approve, by identity and role, whatever the server lists (a
+      // member an older staging re-added and the listing leaves out).
+      await requireStagedGroupApproved(
+        invitations,
+        projectId,
+        approved ?? new Map()
+      );
+    }
+    if (approvedMembers && approved?.size) {
+      // What the owner approved now, recorded for this staging: a reload
+      // resumes it without asking again; any other staging asks.
+      receipts.set({
+        projectId,
+        stagingAttempt: migration.attempt ?? null,
+        stagingStartedAt: migration.startedAt,
+        members: [...approved.values()]
+      });
+      approval.spend(receiptFor(projectId, migration) !== null);
     }
     const renewal = renewLease(projectId, lease);
     try {
@@ -606,7 +872,9 @@ export function createProjectMigrationEngine(
           invitations,
           migrations,
           projectId,
-          lease
+          lease,
+          approvedMembers,
+          receiptFor(projectId, migration)
         );
         report({ members: sharing.members });
       } else if (invitations) {
@@ -619,6 +887,20 @@ export function createProjectMigrationEngine(
         );
       }
       await check('cutover');
+      if (invitations && sharing) {
+        // Just before the cutover, the staged group holds exactly the
+        // roster the owner approved, read from the group itself.
+        await requireStagedGroupApproved(
+          invitations,
+          projectId,
+          requireMembersApproved(
+            sharing,
+            approvedMembers,
+            receiptFor(projectId, migration)
+          ),
+          true
+        );
+      }
       deps.beforeCutover?.(projectId);
       report({ phase: 'cutover' });
       await migrations.cutover(projectId, lease);
@@ -634,6 +916,7 @@ export function createProjectMigrationEngine(
       });
     }
     leases.delete(projectId);
+    receipts.delete(projectId);
     currentLease = null;
     deps.onCutover?.(projectId);
     await check('purge');
@@ -1019,6 +1302,27 @@ export function createProjectMigrationEngine(
         'Some save states could not be carried into the encrypted history. Nothing was changed; your project stays as it is.',
         E2EE_MIGRATION_CODES.revisionsIncomplete,
         { revisionIds: uncovered.map((r) => r.revisionId) }
+      );
+    }
+  }
+
+  /**
+   * Starts the staging again unless its MLS group holds exactly members
+   * the owner approved (with `complete`, all of them): someone in it whom
+   * the owner did not approve, by the identity and role shown, or whom
+   * this device cannot verify, could read what was staged.
+   */
+  async function requireStagedGroupApproved(
+    invitations: InvitationContext,
+    projectId: string,
+    approved: ReadonlyMap<string, MigrationMemberApproval>,
+    complete = false
+  ): Promise<void> {
+    const group = await stagedGroupMembers(invitations, projectId);
+    if (!stagedGroupApproved(group, approved, complete)) {
+      throw new RestartError(
+        'unapproved-member',
+        'The encrypted copy holds someone you did not approve; encryption starts again.'
       );
     }
   }

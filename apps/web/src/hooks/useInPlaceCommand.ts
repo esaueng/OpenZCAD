@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ownEntry } from '@openzcad/shared';
 import type {
   BodyId,
   FeatureData,
@@ -811,7 +812,7 @@ export function useInPlaceCommand(
           base &&
           (frame?.check
             ? unresolved === null
-            : bodyId && result.derived.bodyRepresentations[bodyId]) &&
+            : bodyId && ownEntry(result.derived.bodyRepresentations, bodyId)) &&
           !fresh
         );
         setPreviewValid(valid);

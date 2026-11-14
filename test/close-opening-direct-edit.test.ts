@@ -414,6 +414,162 @@ describe('closing a shaped window by pushing its floor', () => {
 });
 
 /**
+ * A window cut across a thicker strip of wall — a rib along the inside, the
+ * way a case's rail band thickens the wall a port crosses. The window floor
+ * is then an L where the window takes the rib's end, or a T where the rib
+ * runs through it, with a reflex corner at each side of the rib, and pushing
+ * it up to the top still closes the window exactly.
+ */
+describe('closing a window whose floor is not convex', () => {
+  interface Ribbed {
+    /** Where the 8-wide rib starts along the wall. */
+    ribX: number;
+    /** How far the rib stands proud of the wall's inside. */
+    ribDepth: number;
+    /** How far the whole part sits above the origin. */
+    lift: number;
+  }
+
+  /** The window (x 20 to 36) across a full-height rib inside the wall. */
+  async function ribbedWindow({ ribX, ribDepth, lift }: Ribbed) {
+    const ribbedVolume = WALL_VOLUME + 8 * ribDepth * 40;
+    const floorArea =
+      16 * 4 + (Math.min(36, ribX + 8) - Math.max(20, ribX)) * ribDepth;
+    adapter ??= await createExactKernelAdapter();
+    let document = createProjectDocument('Window', toUserId('user_window'));
+    const place = (name: string, x: number, y: number, z: number) => {
+      document = transformBody(document, {
+        name,
+        targetBodyId: document.bodyOrder.at(-1)!,
+        translation: { x, y, z: z + lift },
+        rotationDeg: { x: 0, y: 0, z: 0 }
+      }).document;
+      return document.bodyOrder.at(-1)!;
+    };
+    document = addPrimitiveFeature(document, {
+      name: 'Wall',
+      primitiveKind: 'box',
+      dimensions: { width: 60, height: 4, depth: 40 }
+    });
+    const wall =
+      lift === 0
+        ? document.bodyOrder.at(-1)!
+        : place('Place the wall', 0, 0, 0);
+    document = addPrimitiveFeature(document, {
+      name: 'Rib',
+      primitiveKind: 'box',
+      dimensions: { width: 8, height: ribDepth, depth: 40 }
+    });
+    const rib = place('Place the rib', ribX, 4, 0);
+    document = addPrimitiveFeature(document, {
+      name: 'Window tool',
+      primitiveKind: 'box',
+      dimensions: { width: 16, height: 10, depth: WINDOW_HEIGHT }
+    });
+    const tool = place('Place the window', 20, -3, 10);
+    // Volumes far from the origin keep fewer exact digits.
+    const digits = lift === 0 ? 6 : 3;
+    const manager = new CommandManager(document);
+    manager.execute(
+      commandFactories.booleanBodies({
+        name: 'Add the rib',
+        operation: 'union',
+        targetBodyIds: [wall, rib]
+      })
+    );
+    const ribbedId = manager.document.bodyOrder.at(-1)!;
+    const ribbed = (await adapter.syncDocument(manager.document))
+      .bodyRepresentations[ribbedId]!;
+    expect(ribbed.volume).toBeCloseTo(ribbedVolume, digits);
+    manager.execute(
+      commandFactories.booleanBodies({
+        name: 'Cut the window',
+        operation: 'subtract',
+        targetBodyIds: [ribbedId, tool]
+      })
+    );
+    const derived = await adapter.syncDocument(manager.document);
+    expect(derived.warnings).toEqual([]);
+    const bodyId = [...manager.document.bodyOrder]
+      .reverse()
+      .find(
+        (id) =>
+          derived.bodyRepresentations[id] &&
+          !derived.bodyRepresentations[id].consumed
+      )!;
+    expect(derived.bodyRepresentations[bodyId]!.volume).toBeCloseTo(
+      ribbedVolume - floorArea * WINDOW_HEIGHT,
+      digits
+    );
+    const floor = derived.bodyRepresentations[bodyId]!.topology!.faces.find(
+      (face) =>
+        face.geometry?.surfaceType === 'plane' &&
+        face.geometry.normal!.z > 0.9 &&
+        Math.abs(face.geometry.center.z - (10 + lift)) < 1e-6
+    );
+    expect(floor?.geometry!.area).toBeCloseTo(floorArea, digits);
+    return {
+      document: { ...manager.document, derived },
+      bodyId,
+      floor: floor!,
+      floorArea,
+      ribbedVolume,
+      ribbedFaceCount: ribbed.faceCount,
+      digits
+    };
+  }
+
+  for (const [shape, ribbed] of [
+    // The window takes the rib's end: one reflex corner.
+    ['an L-shaped floor', { ribX: 16, ribDepth: 1, lift: 0 }],
+    // The rib runs through the window: a reflex corner at each side of it.
+    ['a T-shaped floor', { ribX: 24, ribDepth: 1, lift: 0 }],
+    // A 0.05 rib on a part a kilometre up: the outline's tolerance follows
+    // the face, not how far from the origin it is.
+    [
+      'a thin-ribbed floor far from the origin',
+      { ribX: 16, ribDepth: 0.05, lift: 1e6 }
+    ]
+  ] as const) {
+    it(`pushes ${shape} to the top and closes the window`, async () => {
+      const {
+        document,
+        bodyId,
+        floor,
+        floorArea,
+        ribbedVolume,
+        ribbedFaceCount,
+        digits
+      } = await ribbedWindow(ribbed);
+
+      // Short of the top the kernel's own move does it, as before.
+      const partial = await edit(document, bodyId, offsetBottom(floor, 10));
+      expect(partial.warnings).toEqual([]);
+      expect(partial.bodyRepresentations[bodyId]!.volume).toBeCloseTo(
+        ribbedVolume - floorArea * (WINDOW_HEIGHT - 10),
+        digits
+      );
+
+      // At the top, and past it into the wall above, the window closes and
+      // the ribbed wall is whole again: nothing more, nothing less.
+      for (const offset of [WINDOW_HEIGHT, 20]) {
+        const closed = await edit(
+          document,
+          bodyId,
+          offsetBottom(floor, offset)
+        );
+        expect(closed.warnings).toEqual([]);
+        const body = closed.bodyRepresentations[bodyId]!;
+        expect(body.volume).toBeCloseTo(ribbedVolume, digits);
+        expect(body.faceCount).toBe(ribbedFaceCount);
+        expect(body.bbox.max.z).toBeCloseTo(40 + ribbed.lift, 6);
+        expect(body.bbox.max.y).toBeCloseTo(4 + ribbed.ribDepth, 6);
+      }
+    }, 60_000);
+  }
+});
+
+/**
  * A round port cut through the wall by a cylinder. Its wall is inferred to
  * the cylinder that cut it, and deleting that tool would leave the subtract
  * with nothing to cut; Delete on the wall heals it instead.

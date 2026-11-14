@@ -4,7 +4,7 @@ import {
   newCanonicalPlaneRef
 } from '@openzcad/geometry';
 import {
-  UNIT_TO_MM,
+  millimetresPerUnit,
   type ProjectDocument,
   type SketchObjectData,
   type UnitSystem
@@ -712,8 +712,8 @@ export function importDxfSketch(
       `This DXF uses a unit OpenZCAD cannot read ($INSUNITS ${unitCode}).`
     );
   }
-  const sourceMm = known ? known.mm : UNIT_TO_MM[unitless];
-  const documentMm = UNIT_TO_MM[documentUnits];
+  const sourceMm = known ? known.mm : millimetresPerUnit(unitless);
+  const documentMm = millimetresPerUnit(documentUnits);
   // `|| 0` folds -0 to 0, so stored coordinates never carry a signed zero.
   const s = (value: number) => {
     // No rounding of any kind: every value is converted the same way, so

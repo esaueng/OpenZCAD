@@ -1,4 +1,9 @@
-import type { ProjectDocument, UnitSystem } from '@openzcad/shared';
+import {
+  UNIT_TO_MM,
+  ownEntry,
+  type ProjectDocument,
+  type UnitSystem
+} from '@openzcad/shared';
 import type { CadPatchProposal, CadSelectionContext } from './index';
 
 const NUMBER = '[-+]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)';
@@ -14,13 +19,6 @@ const ALL_EDGES = new RegExp(
     `(${NUMBER})\\s*(${UNIT})?(?:\\s+(?:radius|fillet))?)?$`,
   'i'
 );
-const UNIT_TO_MM: Record<UnitSystem, number> = {
-  mm: 1,
-  cm: 10,
-  m: 1000,
-  inch: 25.4
-};
-
 /** Deliberately accepts one whole-part operation, never a qualified subset. */
 export function parseAllEdgesFilletRequest(prompt: string) {
   let text = prompt
@@ -111,11 +109,16 @@ export function createAllEdgesFilletProposal(
   }
   // Match the manual tool's 2-document-unit default. Explicit units are
   // converted once; the history stores the actual radius in document units.
+  // An unknown unit has no size, so the radius is refused below rather than
+  // read through an inherited member.
+  const fromMillimetres = ownEntry(UNIT_TO_MM, request.unit ?? document.units);
+  const toMillimetres = ownEntry(UNIT_TO_MM, document.units);
   const radius =
     request.radius === null
       ? 2
-      : (request.radius * UNIT_TO_MM[request.unit ?? document.units]) /
-        UNIT_TO_MM[document.units];
+      : fromMillimetres === undefined || toMillimetres === undefined
+        ? Number.NaN
+        : (request.radius * fromMillimetres) / toMillimetres;
   if (!Number.isFinite(radius) || radius <= 0) {
     return { error: 'The fillet radius must be a positive finite length.' };
   }

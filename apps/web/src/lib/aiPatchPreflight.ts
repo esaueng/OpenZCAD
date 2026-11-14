@@ -22,7 +22,7 @@ import type {
   FeatureId,
   ProjectDocument
 } from '@openzcad/shared';
-import { isFeatureSuppressed } from '@openzcad/shared';
+import { ownEntry, isFeatureSuppressed } from '@openzcad/shared';
 import { affectedFeatureTargets } from './affectedFeatureTargets';
 import { validatedFeatureRejection } from './featureValidation';
 import { exactWarningBaseline, newExactWarnings } from './exactWarnings';
@@ -161,7 +161,9 @@ async function datumPatchTargets(
     const rejection = validatedFeatureRejection({
       featureName: target.featureName,
       featureId: target.featureId,
-      bodyPresent: Boolean(derived.bodyRepresentations[target.resultBodyId]),
+      bodyPresent: Boolean(
+        ownEntry(derived.bodyRepresentations, target.resultBodyId)
+      ),
       warnings: derived.warnings,
       ...(derived.featureWarnings
         ? { featureWarnings: derived.featureWarnings }
@@ -242,8 +244,8 @@ function assertPreservedGeometry(
   }
 
   for (const bodyId of baseIds) {
-    const before = base.bodyRepresentations[bodyId as BodyId]!;
-    const after = candidate.bodyRepresentations[bodyId as BodyId]!;
+    const before = ownEntry(base.bodyRepresentations, bodyId as BodyId)!;
+    const after = ownEntry(candidate.bodyRepresentations, bodyId as BodyId)!;
     const span = Math.max(
       before.bbox.max.x - before.bbox.min.x,
       before.bbox.max.y - before.bbox.min.y,
@@ -371,7 +373,7 @@ function selectedExactEdges(
   bodyId: BodyId,
   operation: StagedEdgeModifier
 ) {
-  const body = candidate.derived.bodyRepresentations[bodyId];
+  const body = ownEntry(candidate.derived.bodyRepresentations, bodyId);
   if (body?.consumed) {
     throw new Error(
       `${operation.name} cannot modify a body consumed by the staged prefix.`
@@ -507,7 +509,7 @@ export async function preflightCadPatch(
     ...(await datumPatchTargets(base, candidate, derived, commands))
   ];
   const missing = targets.find(
-    (target) => !derived.bodyRepresentations[target.resultBodyId]
+    (target) => !ownEntry(derived.bodyRepresentations, target.resultBodyId)
   );
   if (missing) {
     throw new Error(

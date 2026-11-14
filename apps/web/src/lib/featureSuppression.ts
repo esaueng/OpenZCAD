@@ -1,6 +1,7 @@
 import { commandFactories, type AnyCommand } from '@openzcad/command-system';
 import { findFeature } from '@openzcad/document-core';
 import {
+  ownEntry,
   FEATURE_SUPPRESSED_METADATA_KEY,
   isFeatureSuppressed,
   type FeatureId,
@@ -78,7 +79,7 @@ export function featureFailureReason(
       feature.featureId
     ) ??
     (featureResultBodyIds(feature).some(
-      (id) => !derived.bodyRepresentations[id]
+      (id) => !ownEntry(derived.bodyRepresentations, id)
     )
       ? 'The dependent feature did not produce its result body.'
       : null)

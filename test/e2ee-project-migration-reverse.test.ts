@@ -1209,6 +1209,45 @@ describe('turning an encrypted project back into plaintext', () => {
     expect((await srv.call('GET', '/api/account/storage')).status).toBe(200);
   });
 
+  it('restarts an abandoned decryption although D1 counts the counter’s trigger write as a change (#1465 review)', async () => {
+    const srv = roomServer();
+    const { projectId } = await encryptedProject(srv, { revisions: 1 });
+    const desktop = reverseOn(srv, owner, 'owner_desktop');
+    const api = createProjectMigrationsApi(desktop.d.fetcher);
+    const first = await api.start(
+      projectId,
+      { direction: 'decrypt', deviceId: 'owner_desktop' },
+      null
+    );
+    const attempt = migrationRow(srv, projectId)!.attempt as number;
+    for (let step = 0; step < 50; step++) {
+      if ((await api.abandon(projectId, first.leaseId)).complete) break;
+    }
+    expect(migrationRow(srv, projectId)).toMatchObject({
+      direction: 'decrypt',
+      state: 'abandoned',
+      purge_cursor: null
+    });
+    // The restart writes the row and the counter's trigger writes it
+    // again: D1 reports two changes, and the start still goes ahead.
+    const second = await api.start(
+      projectId,
+      { direction: 'decrypt', deviceId: 'owner_desktop' },
+      null
+    );
+    expect(second.migration).toMatchObject({
+      direction: 'decrypt',
+      state: 'staging',
+      attempt: attempt + 1,
+      leaseHeld: true
+    });
+    expect(migrationRow(srv, projectId)).toMatchObject({
+      state: 'staging',
+      attempt: attempt + 1,
+      lease_id: second.leaseId
+    });
+  });
+
   it('leaves a purge its browser dropped to the scheduled sweep', async () => {
     const srv = roomServer();
     const encrypted = await encryptedProject(srv, { revisions: 1 });

@@ -35,6 +35,16 @@ describe('plainRefusal', () => {
       'That diameter does not fit the existing supports and fillets. Try a smaller diameter.'
     );
   });
+  it.each(['__proto__', 'constructor', 'toString'])(
+    'falls back for a category named "%s"',
+    (category) => {
+      // A raw kernel sentence, so the category sentence is consulted.
+      const plain = plainRefusal('boolean operation failed', category);
+      expect(typeof plain.message).toBe('string');
+      expect(plain.message.length).toBeGreaterThan(0);
+    }
+  );
+
   it('keeps a sentence the adapter wrote, and its detail', () => {
     expect(
       plainRefusal(

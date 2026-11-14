@@ -7,6 +7,7 @@ import {
   type ExtrudeOperationInference,
   type ExtrudeUnionMeasurement
 } from '@openzcad/kernel-adapter/extrude-inference';
+import { ownEntry } from '@openzcad/shared';
 import type {
   BodyId,
   FeatureId,
@@ -75,7 +76,7 @@ function inferenceBody(
   bodyId: BodyId,
   derived: DerivedState
 ): ExtrudeInferenceBody | null {
-  const body = derived.bodyRepresentations[bodyId];
+  const body = ownEntry(derived.bodyRepresentations, bodyId);
   return body
     ? {
         bodyId,
@@ -152,7 +153,10 @@ export async function resolveExtrudeOperation(
       );
     }
     if (targetBodyId) {
-      const target = options.base.derived.bodyRepresentations[targetBodyId];
+      const target = ownEntry(
+        options.base.derived.bodyRepresentations,
+        targetBodyId
+      );
       if (!target || target.consumed) {
         throw new Error(
           'The selected extrusion target is no longer available. Select a target body.'
@@ -198,7 +202,7 @@ export async function resolveExtrudeOperation(
 
   const liveTargets = options.base.bodyOrder.flatMap((bodyId) => {
     const body = inferenceBody(bodyId, newBodyDerived);
-    const rendered = newBodyDerived.bodyRepresentations[bodyId];
+    const rendered = ownEntry(newBodyDerived.bodyRepresentations, bodyId);
     return body && rendered && !rendered.consumed ? [body] : [];
   });
   const candidates = liveTargets.filter((target) =>

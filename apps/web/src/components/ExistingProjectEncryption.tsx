@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import {
+  Check,
   Copy,
   Link2,
   Lock,
@@ -19,6 +20,8 @@ import {
 } from '../lib/e2ee/projectMigrations';
 import type { MigrationProgress } from '../lib/e2ee/projectMigrationEngine';
 import {
+  approvalOf,
+  MIGRATION_APPROVAL_CODE,
   migrationMemberAction,
   type MigrationMember,
   type MigrationMemberState
@@ -303,7 +306,7 @@ function MemberReadiness({
         <li key={member.userId}>
           <span className="encryption-migration-member">
             <strong>{member.email ?? 'A member'}</strong>
-            {` · ${roleLabel(member.role)} · `}
+            {` · ${roleLabel(member.signedRole ?? member.role)} · `}
             <Status
               tone={
                 member.state === 'ready' || member.state === 'readded'
@@ -314,6 +317,15 @@ function MemberReadiness({
               {MEMBER_STATE_LABELS[member.state]}
             </Status>
           </span>
+          {(member.state === 'ready' || member.state === 'readded') &&
+          member.acceptor ? (
+            <code
+              className="encryption-code"
+              aria-label={`Contact code of ${member.email ?? 'this member'}`}
+            >
+              {member.acceptor.code}
+            </code>
+          ) : null}
           <span className="encryption-migration-member-action">
             {migrationMemberAction(member)}
           </span>
@@ -494,6 +506,20 @@ function ProjectRow({
     unfinished;
   const active =
     progress.phase !== 'waiting' && progress.phase !== 'done' && !stopped;
+  // Every member ready: the owner approves them as shown, by contact code
+  // and signed role, before anything is staged or switched over.
+  const members = progress.members ?? [];
+  const approvable =
+    progress.phase === 'members' &&
+    progress.error?.code === MIGRATION_APPROVAL_CODE &&
+    members.some(
+      (member) =>
+        (member.state === 'ready' || member.state === 'readded') &&
+        member.acceptor
+    ) &&
+    members.every(
+      (member) => member.state === 'ready' || member.state === 'readded'
+    );
   return (
     <div
       className="encryption-migration-item"
@@ -523,6 +549,24 @@ function ProjectRow({
       >
         {stopped ? (
           <span className="encryption-actions">
+            {approvable ? (
+              <button
+                className="primary"
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  controller.approveMembers(
+                    progress.projectId,
+                    approvalOf(members),
+                    progress.attempt
+                  );
+                  void controller.run([progress.projectId]);
+                }}
+              >
+                <Check size={13} aria-hidden="true" />
+                Approve and encrypt
+              </button>
+            ) : null}
             <button
               className="secondary"
               type="button"

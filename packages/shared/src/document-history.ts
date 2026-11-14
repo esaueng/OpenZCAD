@@ -3,6 +3,14 @@ import { drawingSetError } from './drawings';
 import { objectFolderSetError } from './object-folders';
 import { assemblySetError } from './assembly';
 import {
+  documentFeatureKinds,
+  historyChangeIdentifierError,
+  isReservedRecordKey,
+  nodeIdentityError,
+  nodeMapKeyError,
+  type FeatureKinds
+} from './document-validation';
+import {
   referenceImageSetError,
   type ReferenceImage
 } from './reference-images';
@@ -110,6 +118,7 @@ export function isDocumentHistory(
   )
     return false;
   const ids = new Set<string>();
+  let features: FeatureKinds | undefined;
   for (const entry of value.entries) {
     if (
       !record(entry) ||
@@ -151,7 +160,20 @@ export function isDocumentHistory(
         if (
           change.key !== undefined &&
           (typeof change.key !== 'string' ||
+            isReservedRecordKey(change.key) ||
             !['nodes', 'assets', 'shaprImports'].includes(String(change.field)))
+        )
+          return false;
+        // Undo and redo restore a whole node map verbatim as well.
+        if (
+          change.field === 'nodes' &&
+          (change.key === undefined
+            ? [change.before, change.after].some(
+                (side) => nodeMapKeyError(side) !== null
+              )
+            : [change.before, change.after].some(
+                (side) => record(side) && nodeIdentityError(side) !== null
+              ))
         )
           return false;
         if (!Object.hasOwn(change, 'before') && !Object.hasOwn(change, 'after'))
@@ -196,6 +218,13 @@ export function isDocumentHistory(
         )
           return false;
       } else return false;
+      // Undo and redo publish these values as they are: a root reference,
+      // an id list, a node snapshot or a whole map. None may use a reserved
+      // name as an id or key; the change's field and key say which it is.
+      // A stored feature.update is judged by its feature's kind, which any
+      // entry may restore.
+      features ??= documentFeatureKinds({ editHistory: value });
+      if (historyChangeIdentifierError(change, features) !== null) return false;
     }
   }
   try {

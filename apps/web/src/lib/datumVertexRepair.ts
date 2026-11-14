@@ -8,6 +8,7 @@ import {
 } from '@openzcad/document-core';
 import { GEOMETRY_LINEAR_TOLERANCE } from '@openzcad/geometry';
 import {
+  ownEntry,
   deepClone,
   isFeatureSuppressed,
   type EdgeVertexPointSource,
@@ -80,7 +81,7 @@ function qualifiedVertex(
     ![clickPoint.x, clickPoint.y, clickPoint.z].every(Number.isFinite)
   )
     throw new Error('Click near one end of the edge to choose a vertex.');
-  const body = document.derived.bodyRepresentations[selection.bodyId];
+  const body = ownEntry(document.derived.bodyRepresentations, selection.bodyId);
   const edges = body?.topology?.edges;
   if (
     (selection.hash !== undefined &&

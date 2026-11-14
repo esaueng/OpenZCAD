@@ -45,8 +45,11 @@ import { flushProjectEdits, setMigratingProjects } from '../migrationStatus';
 import type { InvitationContext } from './invitations';
 import { getKeySessionRevision } from './keySession';
 import {
+  parseApprovalReceipt,
   reinviteToEncryptedProject,
-  reissuePlaintextShareLinks
+  reissuePlaintextShareLinks,
+  type MigrationApprovalReceipts,
+  type MigrationMemberApproval
 } from './migrationMembers';
 import {
   createMigrationPlaintextSource,
@@ -57,6 +60,7 @@ import {
   createProjectMigrationEngine,
   migratableProjects,
   migrationErrorOf,
+  type MigrationAttempt,
   type MigrationLeaseStore,
   type MigrationProgress,
   type MigrationStagingClients,
@@ -104,6 +108,7 @@ export interface MigrationControllerDeps {
   }>;
   readonly locks?: MigrationLocks | null;
   readonly leases?: MigrationLeaseStore;
+  readonly approvalReceipts?: MigrationApprovalReceipts;
   readonly renewEveryMs?: number;
   /**
    * Slice 7-4: the page's share links and invitations of encrypted
@@ -134,9 +139,22 @@ export interface MigrationController {
   ): Promise<void>;
   pause(): void;
   /**
-   * Drops a project's staging and unlocks its plaintext. A project whose
-   * cutover was asked for stays held as encrypted on this device
-   * (`unresolved`) until it is retried or reset.
+   * Slice 7-4: the owner's approval of a shared project's members as shown
+   * (contact code and signed role of each), for the migration attempt that
+   * showed them (`MigrationProgress.attempt`), which the next run of that
+   * project adds back exactly; a changed roster asks again, and so does
+   * any other attempt (one another tab started, cancelled or restarted).
+   */
+  approveMembers(
+    projectId: string,
+    approval: readonly MigrationMemberApproval[],
+    attempt: MigrationAttempt | undefined
+  ): void;
+  /**
+   * Drops a project's staging and unlocks its plaintext, and forgets any
+   * approval of its members not yet spent: a new staging asks again. A
+   * project whose cutover was asked for stays held as encrypted on this
+   * device (`unresolved`) until it is retried or reset.
    */
   cancel(projectId: string): Promise<void>;
   /**
@@ -160,6 +178,48 @@ export interface MigrationController {
 }
 
 /** Leases kept in this browser's storage, per account and project. */
+/**
+ * Slice 7-4: this browser's record of the owner's approval of each
+ * staging's members, by account and project, in local storage (the server
+ * never supplies it). One that cannot be read or written is absent: the
+ * owner is asked again.
+ */
+export function localStorageApprovalReceipts(
+  userId: string
+): MigrationApprovalReceipts {
+  const key = (projectId: string) =>
+    `openzcad-e2ee-migration-approval:${userId}:${projectId}`;
+  return {
+    get(projectId) {
+      try {
+        const stored = globalThis.localStorage?.getItem(key(projectId));
+        return stored
+          ? parseApprovalReceipt(JSON.parse(stored), projectId)
+          : null;
+      } catch {
+        return null;
+      }
+    },
+    set(receipt) {
+      try {
+        globalThis.localStorage?.setItem(
+          key(receipt.projectId),
+          JSON.stringify(receipt)
+        );
+      } catch {
+        // The owner is then asked again after a reload.
+      }
+    },
+    delete(projectId) {
+      try {
+        globalThis.localStorage?.removeItem(key(projectId));
+      } catch {
+        // Nothing to forget.
+      }
+    }
+  };
+}
+
 export function localStorageLeases(userId: string): MigrationLeaseStore {
   const key = (projectId: string) =>
     `openzcad-e2ee-migration-lease:${userId}:${projectId}`;
@@ -264,6 +324,8 @@ export function createMigrationController(
           ?.locks ?? null)
       : deps.locks;
   const leases = deps.leases ?? localStorageLeases(deps.userId);
+  const approvalReceipts =
+    deps.approvalReceipts ?? localStorageApprovalReceipts(deps.userId);
   const listeners = new Set<() => void>();
   let summaries: ProjectSummary[] = [];
   let state: MigrationRunState = {
@@ -299,6 +361,21 @@ export function createMigrationController(
    * only listed.
    */
   const driven = new Set<string>();
+  /**
+   * The owner's approval of each shared project's members, as shown, and
+   * the attempt it was given for, until a run spends it (records it for
+   * the staging it went ahead with, or drops that staging), finds the
+   * attempt changed (another tab started, cancelled or restarted it while
+   * this one waited for the lock) or the owner cancels here: it never
+   * carries over to a staging begun afterwards.
+   */
+  const approvals = new Map<
+    string,
+    {
+      readonly members: readonly MigrationMemberApproval[];
+      readonly attempt: MigrationAttempt | undefined;
+    }
+  >();
 
   /**
    * A sequence bumped on every {@link update}, and its value when each
@@ -336,6 +413,7 @@ export function createMigrationController(
       loadSource: async (checksum) =>
         (await import('../localProjectStore')).loadSourceBlob(checksum),
       leases,
+      approvalReceipts,
       createStaging: (leased) => opened.open(leased),
       flushProject: flushProjectEdits,
       // The pin must outlive this page and any lost answer: save it, with
@@ -629,10 +707,33 @@ export function createMigrationController(
         // A project that failed waits for its own retry (one waiting for
         // its members is checked again on every run).
         if (!wanted && progress?.phase === 'error') continue;
+        const approval = approvals.get(project.projectId);
+        // Spent once: recorded for the staging it went ahead with, or
+        // dropped with it. A newer approval given meanwhile stays.
+        const spent = () => {
+          if (approvals.get(project.projectId) === approval) {
+            approvals.delete(project.projectId);
+          }
+        };
         try {
           await run.during(project.projectId, async () =>
-            (await engineFor()).migrate(project, signal)
+            (await engineFor()).migrate(
+              project,
+              signal,
+              approval
+                ? {
+                    approvedMembers: approval.members,
+                    // Checked against the attempt as it stands now that
+                    // this tab holds the lock: another attempt asks again.
+                    ...(approval.attempt !== undefined
+                      ? { approvedFor: approval.attempt }
+                      : {}),
+                    onApprovalSpent: spent
+                  }
+                : {}
+            )
           );
+          spent();
         } catch (error) {
           if (error instanceof MigrationPausedError) break;
           // Reported on the project by the engine (an error, or members
@@ -677,6 +778,9 @@ export function createMigrationController(
   subscribeEncryptedPins(() => set({ projects: state.projects }));
 
   return {
+    approveMembers(projectId, approval, attempt) {
+      approvals.set(projectId, { members: [...approval], attempt });
+    },
     getState: () => state,
     subscribe(listener) {
       listeners.add(listener);
@@ -742,6 +846,8 @@ export function createMigrationController(
     },
     async cancel(projectId) {
       if (state.running) return;
+      // Whatever the owner approved belonged to the staging being dropped.
+      approvals.delete(projectId);
       const project = summaries.find((p) => p.projectId === projectId);
       try {
         await run.during(projectId, async () =>

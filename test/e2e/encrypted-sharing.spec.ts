@@ -315,7 +315,16 @@ test('invites to an encrypted project, verifies both ways and opens it as the in
   await dialog.getByRole('button', { name: /^Verify / }).click();
   const aliceEncryption = alice.getByRole('dialog', { name: 'Settings' });
   await verifyContact(aliceEncryption, BOB_EMAIL, aliceSeed.recoveryKey);
-  // Verified: her browser adds Bob by an MLS Commit with the role.
+  // Verified. The invitation went out before, so it names no identity:
+  // she confirms the contact who accepted, by the code Contacts shows,
+  // and her browser adds Bob by an MLS Commit with the role.
+  const confirmation = aliceEncryption.getByText(
+    `${BOB_EMAIL} accepted your invitation to project ${projectId} as a viewer. Add them?`
+  );
+  await expect(confirmation).toBeVisible({ timeout: SYNC_BUDGET_MS });
+  await aliceEncryption
+    .getByRole('button', { name: `Add ${BOB_EMAIL}` })
+    .click();
   await expect
     .poll(
       () =>

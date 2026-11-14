@@ -3,7 +3,12 @@ import {
   findSketch,
   getParameterScope
 } from '@openzcad/document-core';
-import type { EntityId, ProjectDocument, SketchId } from '@openzcad/shared';
+import {
+  ownEntry,
+  type EntityId,
+  type ProjectDocument,
+  type SketchId
+} from '@openzcad/shared';
 
 export function sketchGeometryDeleteRefusal(
   document: ProjectDocument | undefined,
@@ -36,11 +41,10 @@ export function sketchSolveEvidenceKey(
     units: document.units,
     scope: getParameterScope(document),
     plane: sketch.planeRef,
-    objects: sketch.objectIds.map((id) =>
-      document.nodes[id]?.kind === 'sketch-object'
-        ? [id, document.nodes[id].data]
-        : null
-    ),
+    objects: sketch.objectIds.map((id) => {
+      const node = ownEntry(document.nodes, id);
+      return node?.kind === 'sketch-object' ? [id, node.data] : null;
+    }),
     constraints: sketch.constraints ?? []
   });
 }

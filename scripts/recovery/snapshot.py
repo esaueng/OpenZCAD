@@ -103,6 +103,10 @@ def load_sql(data: bytes):
         raise SnapshotError('SQL export is invalid or uses unsupported operations.') from None
 
 
+# Migrations above 0050 reviewed one by one (other numbers are still in review).
+REVIEWED_AFTER_0050 = frozenset({53, 54})
+
+
 def required_objects(db):
     tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     if 'd1_migrations' not in tables:
@@ -118,7 +122,13 @@ def required_objects(db):
     # no stored objects or keys.
     # 0050 adds r2_key_tombstones: transient claims on keys a cleanup is
     # deleting, never objects a restore needs.
-    if max(int(name[:4]) for name in migrations) > 50:
+    # 0053 adds only e2ee_project_migrations.attempt (a counter): no stored
+    # objects or keys.
+    # 0054 adds only e2ee_invitations.acceptance_statement and
+    # acceptance_signature (signed public statements): no stored objects or keys.
+    # 0051-0052 are not reviewed.
+    if any(int(name[:4]) > 50 and int(name[:4]) not in REVIEWED_AFTER_0050
+           for name in migrations):
         raise SnapshotError('Review new migrations before using this snapshot tool.')
     version = max(int(name[:4]) for name in migrations)
     reviewed = sorted(path.name for path in

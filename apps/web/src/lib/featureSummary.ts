@@ -1,11 +1,12 @@
-import type {
-  BooleanOperation,
-  DirectEditOperation,
-  EdgeTopologyReferenceV5,
-  FeatureNode,
-  ParamValue,
-  UnitSystem,
-  Vector3
+import {
+  ownEntry,
+  type BooleanOperation,
+  type DirectEditOperation,
+  type EdgeTopologyReferenceV5,
+  type FeatureNode,
+  type ParamValue,
+  type UnitSystem,
+  type Vector3
 } from '@openzcad/shared';
 import { pipeThreadLabel } from '@openzcad/shared';
 import { edgeSelectionName, storedLoopEdges } from './edgeLoops';
@@ -53,7 +54,7 @@ function booleanOperands(
   if (bodyIds.length === 0) return null;
   const names = bodyIds.map((bodyId) => bodyName?.(bodyId)?.trim());
   if (names.every((name): name is string => Boolean(name))) {
-    return names.join(BOOLEAN_JOINERS[operation]);
+    return names.join(ownEntry(BOOLEAN_JOINERS, operation) ?? ', ');
   }
   return `${bodyIds.length} bod${bodyIds.length === 1 ? 'y' : 'ies'}`;
 }

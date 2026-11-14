@@ -1,5 +1,9 @@
 import { evaluateFieldExpression } from '@openzcad/document-core';
-import { UNIT_TO_MM, type UnitSystem } from '@openzcad/shared';
+import {
+  millimetresPerUnit,
+  ownEntry,
+  type UnitSystem
+} from '@openzcad/shared';
 
 /**
  * Pure math for the floating numeric keypad: on-screen placement and value
@@ -255,9 +259,9 @@ export function typedUnitValue(raw: string): TypedUnitValue | undefined {
   const value = Number(match[1]);
   const suffix = match[2] ?? '';
   const unit =
-    TYPED_UNITS[suffix.toLowerCase()] ??
+    ownEntry(TYPED_UNITS, suffix.toLowerCase()) ??
     // Plural spellings are common enough to be worth accepting.
-    TYPED_UNITS[suffix.toLowerCase().replace(/e?s$/u, '')];
+    ownEntry(TYPED_UNITS, suffix.toLowerCase().replace(/e?s$/u, ''));
   if (unit === undefined || !Number.isFinite(value)) {
     return undefined;
   }
@@ -329,7 +333,8 @@ export function evaluateKeypadInput(
     if (entryUnit === 'deg' || entryUnit === 'count') {
       return normalize(plainNumber, false);
     }
-    const factor = UNIT_TO_MM[entryUnit] / UNIT_TO_MM[documentUnits];
+    const factor =
+      millimetresPerUnit(entryUnit) / millimetresPerUnit(documentUnits);
     return normalize(plainNumber * factor, false);
   }
   // A unit typed into the field wins over the selected chip. Angles have one
@@ -339,7 +344,8 @@ export function evaluateKeypadInput(
       ? undefined
       : typedUnitValue(trimmed);
   if (typed) {
-    const factor = UNIT_TO_MM[typed.unit] / UNIT_TO_MM[documentUnits];
+    const factor =
+      millimetresPerUnit(typed.unit) / millimetresPerUnit(documentUnits);
     return normalize(typed.value * factor, false, typed.unit);
   }
   try {

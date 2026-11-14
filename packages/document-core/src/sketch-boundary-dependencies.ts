@@ -1,4 +1,5 @@
 import {
+  ownEntry,
   boundaryProvenanceObjectIds,
   isBoundaryProvenance,
   MAX_SKETCH_POLYGON_SIDES,
@@ -32,7 +33,7 @@ export function assertSketchPromotionMemberUpdate(
     throw new Error(
       'This converted member owns a saved line or center alias. Its kind and construction-helper role cannot change.'
     );
-  const original = document.nodes[objectId];
+  const original = ownEntry(document.nodes, objectId);
   if (
     original?.kind === 'sketch-object' &&
     !original.data.construction &&
@@ -96,7 +97,7 @@ export function assertSketchBoundaryTopologyPreserved(
     ): string => {
       const sketch = findSketch(document, node.sketchId);
       const object = sketch?.objectIds.includes(objectId)
-        ? document.nodes[objectId]
+        ? ownEntry(document.nodes, objectId)
         : undefined;
       const promotion = sketch?.promotions?.find(
         (p) => p.sourceObjectId === objectId

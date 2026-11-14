@@ -26,7 +26,10 @@ import {
   setMigratingProjects
 } from '../lib/migrationStatus';
 import type * as MigrationMembersModule from '../lib/e2ee/migrationMembers';
-import type { MigrationMember } from '../lib/e2ee/migrationMembers';
+import {
+  MIGRATION_APPROVAL_CODE,
+  type MigrationMember
+} from '../lib/e2ee/migrationMembers';
 import { reissuePlaintextShareLinks } from '../lib/e2ee/migrationMembers';
 import {
   beginEncryptCutover,
@@ -104,13 +107,14 @@ function fakeEngine(
   behave: (
     project: ProjectSummary,
     report: (change: Partial<MigrationProgress>) => void,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    options?: Parameters<ProjectMigrationEngine['migrate']>[2]
   ) => Promise<void>
 ) {
   const migrated: string[] = [];
   let onProgress: (progress: MigrationProgress) => void = () => undefined;
   const engine: ProjectMigrationEngine = {
-    async migrate(summary, signal) {
+    async migrate(summary, signal, options) {
       migrated.push(summary.projectId);
       let progress: MigrationProgress = {
         projectId: summary.projectId,
@@ -126,7 +130,7 @@ function fakeEngine(
         onProgress(progress);
       };
       report({});
-      await behave(summary, report, signal);
+      await behave(summary, report, signal, options);
     },
     cancel: vi.fn(async () => undefined)
   };
@@ -422,6 +426,50 @@ describe('the migration controller', () => {
     expect(fake.migrated).toEqual(['proj_old']);
     expect(controller.getState().projects[0]?.phase).toBe('paused');
     expect([...migratingProjects()]).toEqual([]);
+  });
+
+  it('never carries the owner’s approval of members past a cancel, or past the staging it was recorded for', async () => {
+    const approval = [
+      {
+        userId: 'user_editor',
+        role: 'editor' as const,
+        identityKeyHash: 'a'.repeat(64)
+      }
+    ];
+    const given: unknown[] = [];
+    let recorded = false;
+    const fake = fakeEngine(async (summary, report, _signal, options) => {
+      if (summary.projectId !== 'proj_old') {
+        report({ phase: 'done' });
+        return;
+      }
+      given.push(options?.approvedMembers);
+      // The staging records the approval for itself (or not), then the
+      // run is interrupted before its cutover.
+      if (recorded && options?.approvedMembers) options.onApprovalSpent?.();
+      report({ phase: 'paused', plaintextLocked: true });
+      throw new MigrationPausedError();
+    });
+    const controller = controllerWith(fake, null, {
+      plaintext: { listProjects: async () => [PROJECTS[1]!] } as never
+    });
+
+    // Approved, interrupted before the staging recorded it, cancelled: a
+    // staging begun afterwards asks again.
+    controller.approveMembers('proj_old', approval, 'none');
+    await controller.run(['proj_old']);
+    await controller.cancel('proj_old');
+    expect(fake.engine.cancel).toHaveBeenCalledWith('proj_old');
+    await controller.run(['proj_old']);
+    expect(given).toEqual([approval, undefined]);
+
+    // Approved again and recorded for the staging, then interrupted: the
+    // approval is spent, so no later run passes it again.
+    recorded = true;
+    controller.approveMembers('proj_old', approval, 'none');
+    await controller.run(['proj_old']);
+    await controller.run(['proj_old']);
+    expect(given).toEqual([approval, undefined, approval, undefined]);
   });
 });
 
@@ -1356,6 +1404,190 @@ describe('a shared project (slice 7-4)', () => {
     expect(
       within(older).queryByRole('button', { name: 'Invite again' })
     ).toBeNull();
+  });
+
+  it('shows each ready member by contact code and signed role, and encrypts only once the owner approves exactly them', async () => {
+    const ready = (
+      email: string,
+      role: MigrationMember['role'],
+      code: string
+    ): MigrationMember => ({
+      ...member(email, role, 'ready'),
+      signedRole: role,
+      acceptor: {
+        userId: `user_${email}`,
+        identityKeyHash: code.replace(/\D/g, ''),
+        code,
+        email
+      }
+    });
+    const roster = [
+      ready('editor@example.com', 'editor', '11111 22222'),
+      ready('viewer@example.com', 'viewer', '33333 44444')
+    ];
+    const approvals: unknown[] = [];
+    const approvedFor: unknown[] = [];
+    const fake = fakeEngine(async (summary, report, _signal, options) => {
+      if (summary.projectId !== 'proj_old') {
+        report({ phase: 'done' });
+        return;
+      }
+      approvals.push(options?.approvedMembers);
+      approvedFor.push(options?.approvedFor);
+      if (!options?.approvedMembers) {
+        report({
+          phase: 'members',
+          attempt: 'abandoned@2026-10-02T00:00:00.000Z',
+          members: roster,
+          error: {
+            code: MIGRATION_APPROVAL_CODE,
+            message:
+              'Check each member’s contact code and role below, then approve.',
+            retryable: false
+          }
+        });
+        throw new Error('approve');
+      }
+      report({
+        phase: 'done',
+        error: undefined,
+        members: roster.map((m) => ({ ...m, state: 'readded' as const }))
+      });
+    });
+    const controller = controllerWith(fake);
+    render(
+      <ExistingProjectEncryption
+        userId="user_alice"
+        unlocked
+        controller={controller}
+        isOpen={async () => true}
+      />
+    );
+    await clickEncryptProjects();
+    const older = await screen.findByRole('listitem', {
+      name: 'Older bracket'
+    });
+    const members = await within(older).findByRole('list', {
+      name: 'Members of Older bracket'
+    });
+    expect(
+      within(members).getByLabelText('Contact code of editor@example.com')
+    ).toHaveTextContent('11111 22222');
+    expect(
+      within(members).getByLabelText('Contact code of viewer@example.com')
+    ).toHaveTextContent('33333 44444');
+    expect(members).toHaveTextContent('viewer@example.com · Viewer ·');
+    expect(within(older).getByRole('alert')).toHaveTextContent(
+      'Check each member’s contact code and role below, then approve.'
+    );
+    expect(approvals).toEqual([undefined]);
+
+    fireEvent.click(
+      within(older).getByRole('button', { name: 'Approve and encrypt' })
+    );
+    await waitFor(() =>
+      expect(within(older).getByText('Encrypted')).toBeTruthy()
+    );
+    expect(approvals.at(-1)).toEqual([
+      {
+        userId: 'user_editor@example.com',
+        role: 'editor',
+        identityKeyHash: '1111122222'
+      },
+      {
+        userId: 'user_viewer@example.com',
+        role: 'viewer',
+        identityKeyHash: '3333344444'
+      }
+    ]);
+    // Given for the attempt that showed them: any other one asks again.
+    expect(approvedFor.at(-1)).toBe('abandoned@2026-10-02T00:00:00.000Z');
+  });
+
+  it('asks the owner to approve members a resumed staging already re-added, by code, before it switches over', async () => {
+    const readded = (
+      email: string,
+      role: MigrationMember['role'],
+      code: string
+    ): MigrationMember => ({
+      ...member(email, role, 'readded'),
+      signedRole: role,
+      acceptor: {
+        userId: `user_${email}`,
+        identityKeyHash: code.replace(/\D/g, ''),
+        code,
+        email
+      }
+    });
+    const roster = [
+      readded('editor@example.com', 'editor', '55555 66666'),
+      readded('viewer@example.com', 'viewer', '77777 88888')
+    ];
+    const approvals: unknown[] = [];
+    const fake = fakeEngine(async (summary, report, _signal, options) => {
+      if (summary.projectId !== 'proj_old') {
+        report({ phase: 'done' });
+        return;
+      }
+      approvals.push(options?.approvedMembers);
+      if (!options?.approvedMembers) {
+        report({
+          phase: 'members',
+          plaintextLocked: true,
+          members: roster,
+          error: {
+            code: MIGRATION_APPROVAL_CODE,
+            message:
+              'Check each member’s contact code and role below, then approve.',
+            retryable: false
+          }
+        });
+        throw new Error('approve');
+      }
+      report({ phase: 'done', error: undefined, members: roster });
+    });
+    const controller = controllerWith(fake);
+    render(
+      <ExistingProjectEncryption
+        userId="user_alice"
+        unlocked
+        controller={controller}
+        isOpen={async () => true}
+      />
+    );
+    await clickEncryptProjects();
+    const older = await screen.findByRole('listitem', {
+      name: 'Older bracket'
+    });
+    const members = await within(older).findByRole('list', {
+      name: 'Members of Older bracket'
+    });
+    expect(
+      within(members).getByLabelText('Contact code of editor@example.com')
+    ).toHaveTextContent('55555 66666');
+    expect(
+      within(members).getByLabelText('Contact code of viewer@example.com')
+    ).toHaveTextContent('77777 88888');
+    expect(approvals).toEqual([undefined]);
+
+    fireEvent.click(
+      within(older).getByRole('button', { name: 'Approve and encrypt' })
+    );
+    await waitFor(() =>
+      expect(within(older).getByText('Encrypted')).toBeTruthy()
+    );
+    expect(approvals.at(-1)).toEqual([
+      {
+        userId: 'user_editor@example.com',
+        role: 'editor',
+        identityKeyHash: '5555566666'
+      },
+      {
+        userId: 'user_viewer@example.com',
+        role: 'viewer',
+        identityKeyHash: '7777788888'
+      }
+    ]);
   });
 
   it('keeps a resumed staging that waits for a member read-only, and cancellable', async () => {
