@@ -1774,6 +1774,11 @@ export async function createProjectGroup(
     forgetEpochRoles(ctx.account.userId, projectId);
   }
   await rememberExpectedProjectOwner(ctx, projectId, ctx.account.list);
+  // Every Commit of the group starts here: its removals pass through this
+  // device. Written before the group exists; a later rejoin forgets it.
+  await ctx.removalChecks?.historyEstablished?.(projectId).catch(() => {
+    // Best effort: without it, the owner confirms each Add.
+  });
   // The server has no group, so nothing stored here belongs to one.
   const stale = await ctx.sessions.leaf(ref);
   if (stale) await ctx.sessions.discardSession(ref, stale.signatureKey);
@@ -2149,6 +2154,9 @@ export async function joinProjectGroup(
     const history = await loadHistory(ctx, projectId, group);
     const psk = await newestRejoinPsk(ctx, projectId, group);
     const directory = await directoryFor(ctx, projectId, group);
+    // The archive's history is imported, not processed here: removals in
+    // it are never reported, so this browser no longer knows them all.
+    await ctx.removalChecks?.historyUnknown?.(projectId);
     const result = await ctx.sessions.rejoin(
       ref,
       device,
@@ -2649,6 +2657,19 @@ export interface RemovalCheck {
 export interface RemovalChecks {
   /** Durably marks `projectId`'s state as about to advance; throws if not. */
   begin(projectId: string): Promise<RemovalCheck>;
+  /**
+   * This device starts `projectId`'s group, so every later removal passes
+   * through it: the owner's sweep may add a bound invitee without asking.
+   * Best effort; without it, each Add needs the owner's confirmation.
+   */
+  historyEstablished?(projectId: string): Promise<void>;
+  /**
+   * This device is about to take `projectId`'s state from history it did
+   * not process (an external rejoin), so removals before it are unknown
+   * here: every Add needs the owner's confirmation from now on. Throws when
+   * that cannot be written, and the rejoin does not go ahead.
+   */
+  historyUnknown?(projectId: string): Promise<void>;
 }
 
 /**

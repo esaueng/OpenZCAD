@@ -425,16 +425,26 @@ the browser side first, then the Worker's defense in depth.
 - Crypto: `signProjectInvitation`, `verifyProjectInvitation`,
   `invitationEmailHash` ("OZI", seven days; version 2 adds
   `invitationLinkTokenHash` of the emailed link's token, which the owner's
-  browser makes), and the invitee's signed acceptance
+  browser makes; version 3 adds `inviteeIdentityKeyHash`, the identity of
+  the verified contact invited, with an optional link), and the invitee's
+  signed acceptance
   (`signInvitationAcceptance`, `verifyInvitationAcceptance`, "OZJ") in
   `packages/crypto/src/invitations.ts`.
-- Browser: `inviteToEncryptedProject`, `acceptEncryptedInvitation` (records
-  intent only when the returned statement names the opened link's token),
-  `confirmEncryptedInvitation` (the explicit Join, from the verified
-  statement), `publishInvitationKeyPackages`, `addInvitedMember`,
+- Browser: `inviteToEncryptedProject` (binds the identity of the one
+  verified contact listed under the address, when there is one),
+  `acceptEncryptedInvitation` (records intent only when the returned
+  statement names the opened link's token, and keeps that token's hash: a
+  link intent without it counts for nothing), `confirmEncryptedInvitation`
+  (the explicit Join, from the verified statement, naming the inviter by
+  their contact code), `publishInvitationKeyPackages`, `addInvitedMember`
+  (automatic only for a statement bound to the accepting identity in a
+  project whose removal history this browser saw; otherwise only with the
+  owner's `confirmedIdentity`), `declineInvitation`,
   `completeReadyInvitations`, `joinWelcomedProjects` and the removal checks
-  that block automatic re-adds across tabs (`invitationRemovalChecks`,
-  `recordRemovedMembers`) in `apps/web/src/lib/e2ee/invitations.ts`;
+  and removal-history marks that gate automatic adds across tabs
+  (`invitationRemovalChecks`, `recordRemovedMembers`) in
+  `apps/web/src/lib/e2ee/invitations.ts`; the owner's confirmation in
+  `ProjectSharingDialog.tsx` and `EncryptedInvitations.tsx`;
   `addInvitee` and `joinProjectByWelcome` (full-history verification, issue
   #817) in `projectGroups.ts`; link capture in `encryptedInvitationLink.ts`.
 - Worker: `apps/web/worker/e2eeInvitations.ts` (`prepareAddCommit` gates an
@@ -676,6 +686,19 @@ class and SQLite with Node devices and the in-process MLS engine. Rust
 and on the scenario and archive tests.
 
 ## 6. Known limitations and deferrals
+
+- **Which contact an address belongs to.** An invitation is bound to a
+  verified contact's identity when Contacts lists exactly one verified
+  contact under the typed address. Contacts' addresses are the server's
+  labels (the signed contacts list names identities, not addresses), so the
+  binding narrows automatic adds to the owner's verified contacts rather
+  than proving the address. Every unbound acceptance needs the owner's
+  confirmation by contact code.
+- **Removal history on other owner devices.** Only an owner device that
+  created a project's group (with this version) adds automatically there;
+  a device that joined
+  from the history asks the owner for every Add. Rebuilding removals from
+  the authenticated membership history would let it vouch too (follow-up).
 
 - **Fork consistency only.** A server can keep members on separate
   branches forever. An independently accepted account state now rejects a

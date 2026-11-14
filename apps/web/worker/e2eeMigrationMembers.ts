@@ -28,6 +28,7 @@
  * KeyPackages, not who compared codes with whom.
  */
 import {
+  MAX_PROJECT_INVITATION_BYTES,
   ProjectInvitationError,
   decodeProjectInvitation,
   invitationEmailHash,
@@ -60,7 +61,7 @@ import {
   type Authorization
 } from './e2eeProjects';
 
-const MAX_STATEMENT_BYTES = 601;
+const MAX_STATEMENT_BYTES = MAX_PROJECT_INVITATION_BYTES;
 /** An ISO time after every `completed_at`: nothing counts as re-added. */
 export const NEVER = '9999-12-31T23:59:59.999Z';
 const SIGNATURE_BYTES = 65;

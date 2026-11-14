@@ -28,10 +28,19 @@
  *   is open, no tab adds anyone to that project automatically, since a tab
  *   that reads the advanced state never sees the removal again. A removal
  *   record that fails to write leaves one open too.
+ * - **Removal history** (the owner's browser). The projects whose removals
+ *   this browser has seen from the start: it created the group, so every
+ *   later Commit passed through it. A device that took a project's state
+ *   from history it did not process (an external rejoin, say on a new
+ *   device) has no record of removals before it, so the mark is deleted
+ *   first; without it, every Add to that project needs the owner's
+ *   confirmation.
  * - **Intents** (the invitee's devices). Which invitations the person
  *   accepted on this device: the link they opened from the email (when the
- *   owner-signed statement names that link's token), or an in-app
- *   confirmation that showed the verified inviter and role. This device
+ *   owner-signed statement names that link's token, which the intent
+ *   keeps), or an in-app confirmation that showed the verified inviter and
+ *   role. A link intent an older version kept without the token counts
+ *   for nothing: that invitation is joined only by an explicit Join. This device
  *   signs an acceptance only for one of these, never for an invitation the
  *   server merely lists.
  *
@@ -81,6 +90,16 @@ export interface RemovalCheckMark {
   readonly startedAt: number;
 }
 
+/**
+ * A project whose removals this browser has seen since its group began
+ * (the owner's side): it created the group here.
+ */
+export interface RemovalHistoryMark {
+  readonly projectId: string;
+  /** Unix milliseconds. */
+  readonly since: number;
+}
+
 /** An invitation the person accepted on this device (the invitee's side). */
 export interface InvitationIntent {
   readonly projectId: string;
@@ -90,6 +109,12 @@ export interface InvitationIntent {
   readonly statementHash: string;
   /** How: the emailed link opened here, or the in-app confirmation. */
   readonly source: 'link' | 'confirmed';
+  /**
+   * For a link intent: hex `invitationLinkTokenHash` of the link opened,
+   * which the statement names. A link intent without it (kept by an older
+   * version) counts for nothing.
+   */
+  readonly linkTokenHash?: string;
   /** Unix milliseconds. */
   readonly intendedAt: number;
 }
@@ -117,6 +142,12 @@ export interface InvitationStore {
     checkId: string
   ): Promise<void>;
   removalChecks(userId: string): Promise<RemovalCheckMark[]>;
+  establishRemovalHistory(
+    userId: string,
+    entry: RemovalHistoryMark
+  ): Promise<void>;
+  forgetRemovalHistory(userId: string, projectId: string): Promise<void>;
+  removalHistory(userId: string): Promise<RemovalHistoryMark[]>;
   rememberIntent(userId: string, entry: InvitationIntent): Promise<void>;
   intents(userId: string): Promise<InvitationIntent[]>;
 }
@@ -196,15 +227,25 @@ function readRemovalCheck(value: unknown): RemovalCheckMark | null {
     : null;
 }
 
+function readRemovalHistory(value: unknown): RemovalHistoryMark | null {
+  const entry = value as Partial<RemovalHistoryMark> | null;
+  return entry && isText(entry.projectId) && Number.isSafeInteger(entry.since)
+    ? { projectId: entry.projectId, since: entry.since! }
+    : null;
+}
+
+const isHashHex = (value: unknown): value is string =>
+  typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
+
 function readIntent(value: unknown): InvitationIntent | null {
   const entry = value as Partial<InvitationIntent> | null;
   return entry &&
     isText(entry.projectId) &&
     isText(entry.invitationId) &&
     isText(entry.inviterUserId) &&
-    typeof entry.statementHash === 'string' &&
-    /^[0-9a-f]{64}$/.test(entry.statementHash) &&
+    isHashHex(entry.statementHash) &&
     (entry.source === 'link' || entry.source === 'confirmed') &&
+    (entry.linkTokenHash === undefined || isHashHex(entry.linkTokenHash)) &&
     Number.isSafeInteger(entry.intendedAt)
     ? {
         projectId: entry.projectId,
@@ -212,6 +253,9 @@ function readIntent(value: unknown): InvitationIntent | null {
         inviterUserId: entry.inviterUserId,
         statementHash: entry.statementHash,
         source: entry.source,
+        ...(entry.linkTokenHash !== undefined
+          ? { linkTokenHash: entry.linkTokenHash }
+          : {}),
         intendedAt: entry.intendedAt!
       }
     : null;
@@ -223,6 +267,7 @@ export function memoryInvitationStore(): InvitationStore {
   const published = new Map<string, PublishedKeyPackage>();
   const removed = new Map<string, RemovedMember>();
   const checks = new Map<string, RemovalCheckMark>();
+  const history = new Map<string, RemovalHistoryMark>();
   const intents = new Map<string, InvitationIntent>();
   const id = (...parts: string[]) => JSON.stringify(parts);
   const ofUser = <T>(map: Map<string, T>, userId: string) =>
@@ -261,6 +306,13 @@ export function memoryInvitationStore(): InvitationStore {
       checks.delete(id(userId, projectId, checkId));
     },
     removalChecks: async (userId) => ofUser(checks, userId).map(([, v]) => v),
+    establishRemovalHistory: async (userId, entry) => {
+      history.set(id(userId, entry.projectId), { ...entry });
+    },
+    forgetRemovalHistory: async (userId, projectId) => {
+      history.delete(id(userId, projectId));
+    },
+    removalHistory: async (userId) => ofUser(history, userId).map(([, v]) => v),
     rememberIntent: async (userId, entry) => {
       intents.set(id(userId, entry.invitationId), { ...entry });
     },
@@ -275,12 +327,13 @@ const PUBLISHED = 'published';
 const REMOVED = 'removed';
 const INTENTS = 'intents';
 const REMOVAL_CHECKS = 'removalChecks';
+const REMOVAL_HISTORY = 'removalHistory';
 
 let opening: Promise<IDBDatabase> | null = null;
 
 function openDatabase(): Promise<IDBDatabase> {
   opening ??= new Promise<IDBDatabase>((resolve, reject) => {
-    const request = indexedDB.open(INVITATION_DATABASE, 4);
+    const request = indexedDB.open(INVITATION_DATABASE, 5);
     request.onupgradeneeded = () => {
       const db = request.result;
       for (const name of [
@@ -289,7 +342,8 @@ function openDatabase(): Promise<IDBDatabase> {
         PUBLISHED,
         REMOVED,
         INTENTS,
-        REMOVAL_CHECKS
+        REMOVAL_CHECKS,
+        REMOVAL_HISTORY
       ]) {
         if (!db.objectStoreNames.contains(name)) db.createObjectStore(name);
       }
@@ -393,6 +447,12 @@ export function indexedDbInvitationStore(): InvitationStore {
     endRemovalCheck: (userId, projectId, checkId) =>
       remove(REMOVAL_CHECKS, [userId, projectId, checkId]),
     removalChecks: (userId) => all(REMOVAL_CHECKS, userId, readRemovalCheck),
+    establishRemovalHistory: (userId, entry) =>
+      put(REMOVAL_HISTORY, [userId, entry.projectId], { ...entry }),
+    forgetRemovalHistory: (userId, projectId) =>
+      remove(REMOVAL_HISTORY, [userId, projectId]),
+    removalHistory: (userId) =>
+      all(REMOVAL_HISTORY, userId, readRemovalHistory),
     rememberIntent: (userId, entry) =>
       put(INTENTS, [userId, entry.invitationId], { ...entry }),
     intents: (userId) => all(INTENTS, userId, readIntent)

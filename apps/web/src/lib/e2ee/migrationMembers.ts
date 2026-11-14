@@ -32,6 +32,7 @@ import {
   type E2eeMigrationMemberRecord,
   type E2eeMigrationMembersResponse
 } from '@openzcad/shared';
+import { toHex } from '@openzcad/crypto';
 import { ApiError } from '../api';
 import {
   addInvitedMember,
@@ -239,8 +240,15 @@ export async function readdMigrationMembers(
   for (const member of current.members) {
     if (member.state !== 'ready') continue;
     // Starting the cutover with this member list is the owner's explicit
-    // action: someone this browser once saw removed is added back too.
-    await addInvitedMember(ctx, member.invitation!, { confirmReAdd: true });
+    // action, for each member as the verified contact they are now:
+    // someone this browser once saw removed is added back too.
+    const person = await ctx.people.inspect(member.userId);
+    if (person?.status !== 'verified' || !person.list) {
+      throw new MigrationMembersNotReadyError([{ ...member, state: 'verify' }]);
+    }
+    await addInvitedMember(ctx, member.invitation!, {
+      confirmedIdentity: toHex(person.list.identityKeyHash)
+    });
   }
   const after = await describeSharing(
     ctx,

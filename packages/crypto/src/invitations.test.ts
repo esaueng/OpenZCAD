@@ -10,6 +10,7 @@ import {
   MAX_PROJECT_INVITATION_LIFETIME_MS,
   PROJECT_INVITATION_VERSION_1,
   PROJECT_INVITATION_VERSION_2,
+  PROJECT_INVITATION_VERSION_3,
   ProjectInvitationError,
   decodeInvitationAcceptance,
   decodeProjectInvitation,
@@ -182,6 +183,98 @@ describe('owner-signed project invitations (slice 5-3a)', () => {
     });
   });
 
+  it('binds the invited contact identity in version 3, with or without a link', async () => {
+    const { device, deviceRaw, value } = await fixture();
+    const inviteeIdentityKeyHash = patternBytes(32, 7);
+    const linkTokenHash = await invitationLinkTokenHash('A'.repeat(43));
+    const bound: ProjectInvitation = {
+      ...value,
+      linkTokenHash,
+      inviteeIdentityKeyHash
+    };
+    const bytes = encodeProjectInvitation(bound);
+    expect([...bytes.subarray(0, 4)]).toEqual([
+      0x4f,
+      0x5a,
+      0x49,
+      PROJECT_INVITATION_VERSION_3
+    ]);
+    // Identity, link flag, link.
+    expect(bytes.byteLength).toBe(
+      encodeProjectInvitation(value).byteLength + 32 + 1 + 32
+    );
+    expect(decodeProjectInvitation(bytes)).toEqual(bound);
+    const unlinked: ProjectInvitation = { ...value, inviteeIdentityKeyHash };
+    const unlinkedBytes = encodeProjectInvitation(unlinked);
+    expect(unlinkedBytes[3]).toBe(PROJECT_INVITATION_VERSION_3);
+    expect(unlinkedBytes.byteLength).toBe(
+      encodeProjectInvitation(value).byteLength + 33
+    );
+    expect(decodeProjectInvitation(unlinkedBytes)).toEqual(unlinked);
+    // The longest possible statement fits the bound every reader checks.
+    const id = 'a'.repeat(128);
+    expect(
+      encodeProjectInvitation({
+        ...bound,
+        projectId: id,
+        invitationId: id,
+        inviterUserId: id,
+        signerDeviceId: id
+      }).byteLength
+    ).toBe(MAX_PROJECT_INVITATION_BYTES);
+    const signed = await signProjectInvitation(device.privateKey, bound);
+    await expect(
+      verifyProjectInvitation(signed, deviceRaw, {
+        now: T,
+        expected: { linkTokenHash }
+      })
+    ).resolves.toEqual(bound);
+    // The identity is signed: another contact's breaks the signature, and
+    // so does dropping it (a version 2 statement of the same fields).
+    await refusedWith(
+      verifyProjectInvitation(
+        {
+          statement: encodeProjectInvitation({
+            ...bound,
+            inviteeIdentityKeyHash: patternBytes(32, 9)
+          }),
+          signature: signed.signature
+        },
+        deviceRaw,
+        { now: T }
+      ),
+      'signature'
+    );
+    await refusedWith(
+      verifyProjectInvitation(
+        {
+          statement: encodeProjectInvitation({ ...value, linkTokenHash }),
+          signature: signed.signature
+        },
+        deviceRaw,
+        { now: T }
+      ),
+      'signature'
+    );
+    // A link flag other than 0 or 1, or a flag that disagrees with the
+    // bytes that follow, is malformed.
+    const flagAt = unlinkedBytes.byteLength - 1;
+    const badFlag = unlinkedBytes.slice();
+    badFlag[flagAt] = 2;
+    throwsCode(() => decodeProjectInvitation(badFlag), 'malformed');
+    const claimsLink = unlinkedBytes.slice();
+    claimsLink[flagAt] = 1;
+    throwsCode(() => decodeProjectInvitation(claimsLink), 'malformed');
+    throwsCode(
+      () =>
+        encodeProjectInvitation({
+          ...value,
+          inviteeIdentityKeyHash: new Uint8Array(31)
+        }),
+      'invalid-argument'
+    );
+  });
+
   it('hashes the normalized email under its own label', async () => {
     const a = await invitationEmailHash('Bob@Example.com');
     expect(a).toEqual(await invitationEmailHash('  bob@example.com'));
@@ -320,7 +413,7 @@ describe('owner-signed project invitations (slice 5-3a)', () => {
     badRole[roleAt] = 3;
     throwsCode(() => decodeProjectInvitation(badRole), 'malformed');
     const newer = new Uint8Array(bytes);
-    newer[3] = 3;
+    newer[3] = 4;
     throwsCode(() => decodeProjectInvitation(newer), 'unsupported-version');
     // A version 1 body relabelled version 2 lacks its link token hash.
     const relabelled = new Uint8Array(bytes);

@@ -237,10 +237,15 @@ test('encrypts a shared project once its member is ready, and the member opens i
     .first()
     .click();
   await verifyContact(bobSettings, ALICE_EMAIL, bobSeed.recoveryKey);
-  // The Join names the role the verified statement signs and Alice by the
-  // fingerprint Bob compared, not by the server's email text.
+  // The Join names the role the verified statement signs and shows Alice
+  // by the contact code Bob compared, not by the server's email text.
+  await expect(
+    bobSettings.getByText(
+      /^Your verified contact invited you to project \S+ as an editor$/
+    )
+  ).toBeVisible({ timeout: SYNC_BUDGET_MS });
   const join = bobSettings.getByRole('button', {
-    name: /^Join project \S+ from Your verified contact .+ as an editor$/
+    name: /^Join project \S+ as an editor$/
   });
   await expect(join).toBeVisible({ timeout: SYNC_BUDGET_MS });
   await join.click();

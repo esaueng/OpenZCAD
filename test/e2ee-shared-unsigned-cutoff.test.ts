@@ -22,8 +22,10 @@ import {
   releaseDevelopmentE2eeWrite
 } from '../apps/web/worker/e2eeWriteAuthorization';
 import { createE2eeInvitationsApi } from '@openzcad/shared';
+import { toHex } from '@openzcad/crypto';
 import {
   acceptEncryptedInvitation,
+  addInvitedMember,
   inviteToEncryptedProject,
   joinWelcomedProjects,
   publishInvitationKeyPackages,
@@ -214,9 +216,14 @@ describe('a co-member’s revoked device without a signed cutoff (slice 5-7)', (
     expect(
       await publishInvitationKeyPackages(invitationsOf(otherDesktop))
     ).toEqual([invitation.invitationId]);
+    // The owner confirms the contact who accepted (this invitation names
+    // no identity, and this browser keeps no removal history).
     const sync = await syncInvitations(ownerCtx);
     expect(sync.errors).toEqual([]);
-    expect(sync.added).toEqual([invitation.invitationId]);
+    expect(sync.outgoing).toMatchObject([{ state: 'confirm-add' }]);
+    await addInvitedMember(ownerCtx, sync.outgoing[0]!.record, {
+      confirmedIdentity: toHex(other.list.identityKeyHash)
+    });
 
     // The invitee's devices join by their Welcomes: their own directory
     // names the old device, which no statement covers for this project.

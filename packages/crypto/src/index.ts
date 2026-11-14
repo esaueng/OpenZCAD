@@ -418,6 +418,7 @@ export {
   MAX_PROJECT_INVITATION_LIFETIME_MS,
   PROJECT_INVITATION_VERSION_1,
   PROJECT_INVITATION_VERSION_2,
+  PROJECT_INVITATION_VERSION_3,
   ProjectInvitationError,
   decodeInvitationAcceptance,
   decodeProjectInvitation,

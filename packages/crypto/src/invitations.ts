@@ -39,11 +39,21 @@ import type { SigningPrivateKey } from './external-keys';
  * cannot answer a link with another invitation. A version 1 statement
  * (an older app, or a migration invitation, which has no link) is still
  * verified, but it is joined only on the person's explicit confirmation.
+ *
+ * Version 3 adds `inviteeIdentityKeyHash`: the identity key of the person
+ * the owner invited, when the owner had already verified them as a
+ * contact. The owner's browser then adds without asking only the account
+ * whose acceptance names that identity, so wherever the server delivers
+ * the link, nobody else is added automatically. An invitation without it
+ * (versions 1 and 2) is added only once the owner confirms the contact who
+ * accepted. A version 3 statement may name a link or not.
  */
 
 export const PROJECT_INVITATION_VERSION_1 = 1;
 /** Version 1 plus the emailed link's token hash. */
 export const PROJECT_INVITATION_VERSION_2 = 2;
+/** Version 1 plus the invited contact's identity key hash, and any link's. */
+export const PROJECT_INVITATION_VERSION_3 = 3;
 
 const INVITATION_MAGIC = Uint8Array.of(0x4f, 0x5a, 0x49); // "OZI"
 
@@ -77,14 +87,21 @@ export interface ProjectInvitation {
    * Absent from a version 1 statement, which binds no link.
    */
   readonly linkTokenHash?: Uint8Array;
+  /**
+   * `publicKeyHash` of the invitee's identity key (version 3): the owner
+   * invited a contact they had verified, and only an acceptance by that
+   * identity is added without the owner's confirmation. Absent from
+   * versions 1 and 2.
+   */
+  readonly inviteeIdentityKeyHash?: Uint8Array;
 }
 
 /**
  * Largest canonical invitation: three longest ids and the signer id, and a
- * version 2 statement's link token hash.
+ * version 3 statement's identity hash, link flag and link token hash.
  */
 export const MAX_PROJECT_INVITATION_BYTES =
-  3 + 1 + 4 * (1 + MAX_ID_BYTES) + HASH_BYTES + 1 + 8 + 8 + 2 * HASH_BYTES;
+  3 + 1 + 4 * (1 + MAX_ID_BYTES) + HASH_BYTES + 1 + 8 + 8 + 3 * HASH_BYTES + 1;
 
 export type InvitationFailure =
   /** The signature does not verify under the given signing key. */
@@ -164,6 +181,22 @@ function checkInvitation(value: ProjectInvitation, code: E2eeErrorCode): void {
   if (value.linkTokenHash !== undefined && !isHash(value.linkTokenHash)) {
     fail('linkTokenHash must be 32 bytes');
   }
+  if (
+    value.inviteeIdentityKeyHash !== undefined &&
+    !isHash(value.inviteeIdentityKeyHash)
+  ) {
+    fail('inviteeIdentityKeyHash must be 32 bytes');
+  }
+}
+
+/** The version a statement encodes as: the newest field it carries. */
+function invitationVersion(value: ProjectInvitation): number {
+  if (value.inviteeIdentityKeyHash !== undefined) {
+    return PROJECT_INVITATION_VERSION_3;
+  }
+  return value.linkTokenHash !== undefined
+    ? PROJECT_INVITATION_VERSION_2
+    : PROJECT_INVITATION_VERSION_1;
 }
 
 /**
@@ -204,16 +237,16 @@ export async function invitationLinkTokenHash(token: string): Promise<Bytes> {
  * Canonical bytes: `"OZI" | u8 version | u8 length + project id | u8 length
  * + invitation id | u8 length + inviter user id | 32-byte invitee email hash
  * | u8 role (1 editor, 2 viewer) | u64 issuedAt | u64 expiresAt | u8 length
- * + signer device id | 32-byte signer key hash`, then for version 2 only a
- * `32-byte link token hash`. A value with `linkTokenHash` encodes as
- * version 2, one without as version 1.
+ * + signer device id | 32-byte signer key hash`; then for version 2 a
+ * `32-byte link token hash`, and for version 3 a `32-byte invitee identity
+ * key hash | u8 link (0 or 1)` followed, with a link, by its `32-byte link
+ * token hash`. A value with `inviteeIdentityKeyHash` encodes as version 3,
+ * one with only `linkTokenHash` as version 2, one with neither as version 1.
  */
 export function encodeProjectInvitation(value: ProjectInvitation): Bytes {
   checkInvitation(value, 'invalid-argument');
-  const linked = value.linkTokenHash !== undefined;
-  const writer = new ByteWriter()
-    .bytes(INVITATION_MAGIC)
-    .u8(linked ? PROJECT_INVITATION_VERSION_2 : PROJECT_INVITATION_VERSION_1);
+  const version = invitationVersion(value);
+  const writer = new ByteWriter().bytes(INVITATION_MAGIC).u8(version);
   writeId(writer, value.projectId);
   writeId(writer, value.invitationId);
   writeId(writer, value.inviterUserId);
@@ -224,7 +257,12 @@ export function encodeProjectInvitation(value: ProjectInvitation): Bytes {
     .u64(value.expiresAt);
   writeId(writer, value.signerDeviceId);
   writer.bytes(value.signerKeyHash);
-  if (linked) writer.bytes(value.linkTokenHash);
+  if (version === PROJECT_INVITATION_VERSION_3) {
+    writer
+      .bytes(value.inviteeIdentityKeyHash!)
+      .u8(value.linkTokenHash !== undefined ? 1 : 0);
+  }
+  if (value.linkTokenHash !== undefined) writer.bytes(value.linkTokenHash);
   return writer.finish();
 }
 
@@ -243,7 +281,8 @@ export function decodeProjectInvitation(bytes: Uint8Array): ProjectInvitation {
   const version = reader.u8();
   if (
     version !== PROJECT_INVITATION_VERSION_1 &&
-    version !== PROJECT_INVITATION_VERSION_2
+    version !== PROJECT_INVITATION_VERSION_2 &&
+    version !== PROJECT_INVITATION_VERSION_3
   ) {
     throw new E2eeError(
       'unsupported-version',
@@ -262,10 +301,19 @@ export function decodeProjectInvitation(bytes: Uint8Array): ProjectInvitation {
   const expiresAt = reader.u64();
   const signerDeviceId = readId(reader);
   const signerKeyHash = copyBytes(reader.bytes(HASH_BYTES));
-  const linkTokenHash =
-    version === PROJECT_INVITATION_VERSION_2
-      ? copyBytes(reader.bytes(HASH_BYTES))
-      : undefined;
+  let inviteeIdentityKeyHash: Uint8Array | undefined;
+  let linked = version === PROJECT_INVITATION_VERSION_2;
+  if (version === PROJECT_INVITATION_VERSION_3) {
+    inviteeIdentityKeyHash = copyBytes(reader.bytes(HASH_BYTES));
+    const flag = reader.u8();
+    if (flag > 1) {
+      throw new E2eeError('malformed', `Unknown invitation link flag ${flag}`);
+    }
+    linked = flag === 1;
+  }
+  const linkTokenHash = linked
+    ? copyBytes(reader.bytes(HASH_BYTES))
+    : undefined;
   reader.end();
   const value: ProjectInvitation = {
     projectId,
@@ -277,7 +325,8 @@ export function decodeProjectInvitation(bytes: Uint8Array): ProjectInvitation {
     expiresAt,
     signerDeviceId,
     signerKeyHash,
-    ...(linkTokenHash ? { linkTokenHash } : {})
+    ...(linkTokenHash ? { linkTokenHash } : {}),
+    ...(inviteeIdentityKeyHash ? { inviteeIdentityKeyHash } : {})
   };
   checkInvitation(value, 'malformed');
   if (!equalBytes(encodeProjectInvitation(value), bytes)) {

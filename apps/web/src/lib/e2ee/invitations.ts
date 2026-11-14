@@ -8,7 +8,10 @@
  *   owner, a hash of the invitee's email, the role, seven days of validity,
  *   this device and its key hash, and a hash of the link's token) and posts
  *   it with the email and token, which the Worker mails and forgets (it
- *   keeps hashes). This browser keeps the email for the pending list.
+ *   keeps hashes). This browser keeps the email for the pending list. When
+ *   the address is that of exactly one verified contact, the statement
+ *   (version 3) also names that contact's identity key: only they are then
+ *   added without asking.
  * - **Invitee: accept, verify, publish.** Accepting binds the account; the
  *   invitee's browser checks the statement against the owner's device list
  *   and, once the owner is a verified contact (slice 5-1, the mutual
@@ -22,10 +25,11 @@
  *   A device signs only for an invitation the person accepted on it: the
  *   emailed link opened there, when the statement the server answers with
  *   names that link's token (`acceptEncryptedInvitation`), or the in-app
- *   confirmation that shows the inviter, by the verified contact's
- *   fingerprint, and the role and project the verified statement names
- *   (`confirmEncryptedInvitation`; a version 1 statement, which names no
- *   link, always needs it). An invitation the server merely lists
+ *   confirmation that shows the inviter, by the contact code Contacts
+ *   shows for them, and the role and project the verified statement names
+ *   (`confirmEncryptedInvitation`; a statement that names no link always
+ *   needs it, and so does a link an older version recorded without its
+ *   token). An invitation the server merely lists
  *   is never signed in the background: the server could list another
  *   person's invitation, and the signed-in email it reports is no check
  *   (nothing the account signs binds an email). The account's other
@@ -41,8 +45,14 @@
  *   one Add Commit with the statement's role travels with the Welcome and
  *   the owner's wraps of the new epoch (`addInvitee`). The account added is
  *   the one whose device signed the acceptance, never merely the one the
- *   server names; an account this browser saw removed from the project is
- *   added back only on the owner's explicit confirmation. That check runs
+ *   server names. The server delivers the email, so whoever accepted is
+ *   added without asking only when the statement names their identity
+ *   (the owner invited that verified contact) and this browser has seen
+ *   every removal from the project since its group began; otherwise the
+ *   owner confirms the contact who accepted, shown by the contact code
+ *   Contacts shows (`confirm-add`), or declines. An account this browser
+ *   saw removed from the project is added back only on the owner's
+ *   explicit confirmation (`confirm-re-add`). That check runs
  *   again on every attempt of the Add Commit, after catching up, so a
  *   removal another device of the owner made meanwhile stops it. A Commit
  *   advances this browser's state of the project only inside a durable
@@ -59,6 +69,7 @@
  * lagging member device (no KeyPackage route outside invitations yet).
  */
 import {
+  contactVerificationCode,
   decodeInvitationAcceptance,
   decodeProjectInvitation,
   fromBase64Url,
@@ -112,17 +123,17 @@ export interface InvitationPerson {
   readonly status: 'verified' | 'seen' | 'no-keys';
   /** Their device list, checked against this browser's pins. */
   readonly list: VerifiedDeviceList | null;
-  /**
-   * Their identity fingerprint from the key this browser checked (and, for
-   * a verified contact, compared codes over): the label an invitation's
-   * inviter is shown by, where `email` is only the server's word.
-   */
-  readonly fingerprint?: string | null;
 }
 
 export interface InvitationPeople {
   /** Null when the server will not look them up (no relation, M2). */
   inspect(userId: string): Promise<InvitationPerson | null>;
+  /**
+   * The one verified contact Contacts lists under `email`, or null (none,
+   * or more than one). The owner's invitation to that address names their
+   * identity key, so nobody else is added without the owner's say.
+   */
+  verifiedByEmail?(email: string): Promise<InvitationPerson | null>;
 }
 
 export interface InvitationContext {
@@ -140,29 +151,53 @@ export function contactInvitationPeople(
   contacts: ContactsContext,
   account: AccountView
 ): InvitationPeople {
-  return {
-    async inspect(userId) {
-      const book = await loadContacts(contacts, account);
-      try {
-        const view = await inspectContact(contacts, book, userId);
-        return {
-          userId,
-          email: view.email,
-          status:
-            view.status === 'verified' && !view.keyChanged
-              ? 'verified'
-              : view.status === 'no-keys'
-                ? 'no-keys'
-                : 'seen',
-          list: view.list,
-          fingerprint: view.fingerprint
-        };
-      } catch (error) {
-        if (error instanceof E2eeApiError && error.status === 404) return null;
-        throw error;
-      }
+  const inspect = async (
+    book: Awaited<ReturnType<typeof loadContacts>>,
+    userId: string
+  ): Promise<InvitationPerson | null> => {
+    try {
+      const view = await inspectContact(contacts, book, userId);
+      return {
+        userId,
+        email: view.email,
+        status:
+          view.status === 'verified' && !view.keyChanged
+            ? 'verified'
+            : view.status === 'no-keys'
+              ? 'no-keys'
+              : 'seen',
+        list: view.list
+      };
+    } catch (error) {
+      if (error instanceof E2eeApiError && error.status === 404) return null;
+      throw error;
     }
   };
+  return {
+    async inspect(userId) {
+      return inspect(await loadContacts(contacts, account), userId);
+    },
+    async verifiedByEmail(email) {
+      const address = email.trim().toLowerCase();
+      const book = await loadContacts(contacts, account);
+      const matches = book.contacts.filter(
+        (contact) =>
+          contact.standing === 'verified' &&
+          contact.email?.trim().toLowerCase() === address
+      );
+      if (matches.length !== 1) return null;
+      const person = await inspect(book, matches[0]!.userId);
+      return person?.status === 'verified' && person.list ? person : null;
+    }
+  };
+}
+
+/**
+ * The contact code Contacts shows for `list` (their identity key with
+ * their device-list head): how the invitations name a verified contact.
+ */
+export async function contactCodeOf(list: VerifiedDeviceList): Promise<string> {
+  return (await contactVerificationCode(list.identityKey, list.headHash)).code;
 }
 
 export type InvitationErrorCode =
@@ -185,9 +220,15 @@ export type InvitationErrorCode =
   | 'acceptance-invalid'
   /**
    * This account was removed from the project: adding it back takes the
-   * owner's explicit confirmation (`confirmReAdd`).
+   * owner's explicit confirmation (`confirmedIdentity`).
    */
-  | 'removed-member';
+  | 'removed-member'
+  /**
+   * The owner confirms this Add first (`confirmedIdentity`): the
+   * invitation names no identity, or this browser has not seen every
+   * removal from the project.
+   */
+  | 'needs-confirmation';
 
 export class InvitationError extends Error {
   override readonly name = 'InvitationError';
@@ -392,6 +433,32 @@ export function invitationRemovalChecks(
       return {
         end: () => store.endRemovalCheck(accountUserId, projectId, checkId)
       };
+    },
+    async historyEstablished(projectId) {
+      await store.establishRemovalHistory(accountUserId, {
+        projectId,
+        since: Date.now()
+      });
+    },
+    async historyUnknown(projectId) {
+      try {
+        await store.forgetRemovalHistory(accountUserId, projectId);
+      } catch {
+        // A mark this browser cannot delete must not vouch for a history
+        // it no longer saw whole: an open check stops every tab instead.
+        latchPage(store, accountUserId);
+        try {
+          await store.beginRemovalCheck(accountUserId, {
+            projectId,
+            checkId: randomId('history_'),
+            startedAt: Date.now()
+          });
+        } catch {
+          throw new Error(
+            'This browser could not note that it is joining the project from its history, so it stopped. Reload and try again.'
+          );
+        }
+      }
     }
   };
 }
@@ -440,14 +507,16 @@ interface RemovalView {
   readonly removed: readonly RemovedMember[];
   /** Projects with an open removal check, in any tab of this browser. */
   readonly unsettled: ReadonlySet<string>;
+  /** Projects whose every removal this browser saw (it made the group). */
+  readonly known: ReadonlySet<string>;
 }
 
 /**
- * The accounts this browser saw removed from projects and the projects
- * whose removals may not be written down yet, or null when its store
- * cannot say (a read failed, or this page could not write): then everyone
- * counts as removed (fail closed), so the sweep adds nobody and the owner
- * confirms each Add.
+ * The accounts this browser saw removed from projects, the projects whose
+ * removals may not be written down yet and those whose whole removal
+ * history it saw, or null when its store cannot say (a read failed, or
+ * this page could not write): then the sweep adds nobody and the owner
+ * confirms each Add (fail closed).
  */
 async function removedMembers(
   ctx: InvitationContext
@@ -455,36 +524,57 @@ async function removedMembers(
   const userId = ctx.groups.account.userId;
   if (unrecordedRemovals.get(ctx.store)?.has(userId)) return null;
   try {
-    const [removed, checks] = await Promise.all([
+    const [removed, checks, history] = await Promise.all([
       ctx.store.removedMembers(userId),
-      ctx.store.removalChecks(userId)
+      ctx.store.removalChecks(userId),
+      ctx.store.removalHistory(userId)
     ]);
     return {
       removed,
-      unsettled: new Set(checks.map((check) => check.projectId))
+      unsettled: new Set(checks.map((check) => check.projectId)),
+      known: new Set(history.map((mark) => mark.projectId))
     };
   } catch {
     return null;
   }
 }
 
-const isRemoved = (
+/**
+ * How an Add of `memberUserId` to `projectId` may go ahead: `removed`
+ * (this browser saw them removed: the owner confirms adding them back),
+ * `confirm` (the owner confirms: the invitation names no identity, or this
+ * browser cannot vouch that it saw every removal from the project), or
+ * `automatic`.
+ */
+function addGate(
   view: RemovalView | null,
   projectId: string,
-  memberUserId: string | null
-) =>
-  view === null ||
-  view.unsettled.has(projectId) ||
-  view.removed.some(
-    (entry) => entry.projectId === projectId && entry.userId === memberUserId
-  );
+  memberUserId: string,
+  bound: boolean
+): 'removed' | 'confirm' | 'automatic' {
+  if (
+    view?.removed.some(
+      (entry) => entry.projectId === projectId && entry.userId === memberUserId
+    )
+  ) {
+    return 'removed';
+  }
+  return !bound ||
+    view === null ||
+    view.unsettled.has(projectId) ||
+    !view.known.has(projectId)
+    ? 'confirm'
+    : 'automatic';
+}
 
 // --- Owner ------------------------------------------------------------------
 
 /**
  * Invite `email` to an encrypted project this account owns, as `role`: this
  * device signs the statement, the Worker mails the link. The email stays in
- * this browser only.
+ * this browser only. When `email` is the address of one verified contact,
+ * the statement names their identity key: only an acceptance by them is
+ * added without the owner's confirmation.
  */
 export async function inviteToEncryptedProject(
   ctx: InvitationContext,
@@ -496,8 +586,15 @@ export async function inviteToEncryptedProject(
   // The link's token is made here and signed into the statement, so the
   // invitee's browser can tell the server answered its link with it.
   const token = randomToken();
+  // Without a contact to bind, the owner confirms whoever accepts.
+  const contact = ctx.people.verifiedByEmail
+    ? await ctx.people.verifiedByEmail(address).catch(() => null)
+    : null;
   const signed = await signInvitationStatement(ctx, projectId, address, role, {
-    linkToken: token
+    linkToken: token,
+    ...(contact?.status === 'verified' && contact.list
+      ? { inviteeIdentityKeyHash: contact.list.identityKeyHash }
+      : {})
   });
   const { invitation } = await ctx.api.create(projectId, {
     email: address,
@@ -526,16 +623,20 @@ function randomToken(): string {
  * This device signs an invitation statement for `email` as `role` (seven
  * days of validity), base64url-encoded with its signature: version 2,
  * naming `options.linkToken`'s hash, for an emailed invitation; version 1
- * without one. Shared by {@link inviteToEncryptedProject} and slice 7-4's
- * re-add invitations of a shared plaintext project's existing members,
- * which have no link (their members confirm in the app).
+ * without one; version 3 when `options.inviteeIdentityKeyHash` names the
+ * verified contact invited. Shared by {@link inviteToEncryptedProject} and
+ * slice 7-4's re-add invitations of a shared plaintext project's existing
+ * members, which have no link (their members confirm in the app).
  */
 export async function signInvitationStatement(
   ctx: InvitationContext,
   projectId: string,
   email: string,
   role: E2eeInvitationRole,
-  options: { readonly linkToken?: string } = {}
+  options: {
+    readonly linkToken?: string;
+    readonly inviteeIdentityKeyHash?: Uint8Array;
+  } = {}
 ): Promise<{ invitationId: string; statement: string; signature: string }> {
   const { device, listed } = certifiedDevice(ctx);
   const address = email.trim().toLowerCase();
@@ -552,6 +653,9 @@ export async function signInvitationStatement(
     signerKeyHash: await publicKeyHash(listed.signingKey),
     ...(options.linkToken !== undefined
       ? { linkTokenHash: await invitationLinkTokenHash(options.linkToken) }
+      : {}),
+    ...(options.inviteeIdentityKeyHash !== undefined
+      ? { inviteeIdentityKeyHash: options.inviteeIdentityKeyHash }
       : {})
   };
   const signed = await signProjectInvitation(device.signing.privateKey, value);
@@ -576,22 +680,59 @@ export type OwnerInvitationState =
    */
   | 'needs-acceptance'
   /**
-   * Verified and accepted, but removed from this project before (or this
-   * page failed to write a removal down, so it cannot tell): only the
-   * owner's explicit confirmation adds them.
+   * Verified and accepted, but this browser saw them removed from this
+   * project before: only the owner's explicit confirmation adds them back.
    */
   | 'confirm-re-add'
-  /** Verified, accepted, with KeyPackages: this browser adds them. */
+  /**
+   * A verified contact accepted, with KeyPackages, but the invitation names
+   * no identity (the server delivered the email), or this browser has not
+   * seen every removal from the project: the owner confirms the contact
+   * shown (`acceptor`) or declines.
+   */
+  | 'confirm-add'
+  /**
+   * The invitation names a verified contact, but another account accepted
+   * it: never added. Revoke it and invite again.
+   */
+  | 'accepted-by-other'
+  /**
+   * Verified, accepted by the very contact the invitation names, with
+   * KeyPackages, and every removal from the project seen here: this
+   * browser adds them.
+   */
   | 'ready'
   | 'completed'
   | 'revoked'
   | 'expired';
+
+/**
+ * The verified contact whose device signed an invitation's acceptance, as
+ * the owner's confirmation names them: from their verified device list,
+ * never from the server's listing.
+ */
+export interface InvitationAcceptor {
+  readonly userId: string;
+  /** Hex `publicKeyHash` of their identity key. */
+  readonly identityKeyHash: string;
+  /** Their contact code, as Contacts shows it. */
+  readonly code: string;
+  /** The address Contacts lists them under: the server's word. */
+  readonly email: string | null;
+}
 
 export interface OwnerInvitation {
   readonly record: E2eeInvitationRecord;
   readonly state: OwnerInvitationState;
   /** The address this browser sent it to, or the accepted invitee's. */
   readonly email: string | null;
+  /**
+   * This account's statement, verified against its own device list: the
+   * role and project a confirmation shows. Null when it does not verify.
+   */
+  readonly statement: ProjectInvitation | null;
+  /** Who accepted, once their signed acceptance verifies; else null. */
+  readonly acceptor: InvitationAcceptor | null;
 }
 
 function ownerState(
@@ -601,7 +742,8 @@ function ownerState(
     readonly verified: boolean;
     readonly claimedHere: boolean;
     readonly accepted: boolean;
-    readonly removed: boolean;
+    readonly otherAccepted: boolean;
+    readonly gate: ReturnType<typeof addGate>;
   }
 ): OwnerInvitationState {
   if (record.completedAt) return 'completed';
@@ -614,33 +756,51 @@ function ownerState(
   if (waiting === 0) return 'waiting-for-keys';
   if (!standing.verified) return 'waiting-for-verification';
   if (!standing.accepted) return 'needs-acceptance';
-  return standing.removed ? 'confirm-re-add' : 'ready';
+  if (standing.otherAccepted) return 'accepted-by-other';
+  return standing.gate === 'removed'
+    ? 'confirm-re-add'
+    : standing.gate === 'confirm'
+      ? 'confirm-add'
+      : 'ready';
 }
 
 /**
- * Whether `record` carries a valid signed acceptance by `person`, for a
- * statement this account signed: what `addInvitedMember` checks again.
+ * `record`'s statement, when this account's device signed it, and the
+ * verified contact `person` whose device signed a valid acceptance of it:
+ * what `addInvitedMember` checks again.
  */
 async function acceptedBy(
   ctx: InvitationContext,
   record: E2eeInvitationRecord,
   person: InvitationPerson | null,
   at: number
-): Promise<boolean> {
+): Promise<{
+  statement: ProjectInvitation | null;
+  acceptor: InvitationAcceptor | null;
+}> {
+  let statement: ProjectInvitation;
+  try {
+    statement = await verifiedStatement(record, ctx.groups.account.list, at);
+  } catch {
+    return { statement: null, acceptor: null };
+  }
   if (!record.acceptance || person?.status !== 'verified' || !person.list) {
-    return false;
+    return { statement, acceptor: null };
   }
   try {
-    const statement = await verifiedStatement(
-      record,
-      ctx.groups.account.list,
-      at
-    );
     await verifiedAcceptance(record, statement, person.list);
-    return true;
   } catch {
-    return false;
+    return { statement, acceptor: null };
   }
+  return {
+    statement,
+    acceptor: {
+      userId: person.userId,
+      identityKeyHash: toHex(person.list.identityKeyHash),
+      code: await contactCodeOf(person.list),
+      email: person.email
+    }
+  };
 }
 
 async function describe(
@@ -670,15 +830,29 @@ async function describe(
     const claimed = await ctx.store
       .claim(userId, record.invitationId)
       .catch(() => null);
+    const { statement, acceptor } = await acceptedBy(ctx, record, person, at);
+    const named = statement?.inviteeIdentityKeyHash;
+    const bound =
+      named !== undefined &&
+      acceptor !== null &&
+      toHex(named) === acceptor.identityKeyHash;
     out.push({
       record,
       state: ownerState(record, at, {
         verified: person?.status === 'verified',
         claimedHere: claimed !== null,
-        accepted: await acceptedBy(ctx, record, person, at),
-        removed: isRemoved(removed, record.projectId, record.acceptedByUserId)
+        accepted: acceptor !== null,
+        otherAccepted: named !== undefined && acceptor !== null && !bound,
+        gate: addGate(
+          removed,
+          record.projectId,
+          record.acceptedByUserId ?? '',
+          bound
+        )
       }),
-      email: emails.get(record.invitationId) ?? person?.email ?? null
+      email: emails.get(record.invitationId) ?? person?.email ?? null,
+      statement,
+      acceptor
     });
   }
   return out;
@@ -771,17 +945,24 @@ async function checkedKeyPackage(
  * must be this account's, signed by one of its certified devices and still
  * valid; the invitee must be a verified contact (an unverified one is never
  * added, whatever the server says) whose certified device signed an
- * acceptance of exactly this statement as the recipient of its email hash;
- * an account this browser saw removed from the project is added back only
- * with `confirmReAdd` (the owner's explicit action, never the sweep); their
- * KeyPackages are claimed once (or taken from this browser's earlier
+ * acceptance of exactly this statement as the recipient of its email hash,
+ * and, when the statement names an identity, with that identity.
+ *
+ * Without `confirmedIdentity` (the sweep), it goes ahead only for a
+ * statement that names the accepting identity, in a project whose every
+ * removal this browser saw, for an account it never saw removed from it
+ * (`needs-confirmation`, `removed-member`). `confirmedIdentity` is the
+ * owner's explicit confirmation of the hex identity key hash the
+ * confirmation showed (`OwnerInvitation.acceptor`; the migration cutover
+ * names each verified member's): the acceptance must be by exactly it.
+ * The KeyPackages are claimed once (or taken from this browser's earlier
  * claim), each checked, and added in one Commit with the statement's role.
  * The claim is dropped once the Add lands.
  */
 export async function addInvitedMember(
   ctx: InvitationContext,
   invitation: E2eeInvitationRecord,
-  options: { readonly confirmReAdd?: boolean } = {}
+  options: { readonly confirmedIdentity?: string } = {}
 ): Promise<ProjectGroupState> {
   const userId = ctx.groups.account.userId;
   certifiedDevice(ctx);
@@ -812,14 +993,41 @@ export async function addInvitedMember(
   }
   // The account added is the one whose device accepted this statement.
   await verifiedAcceptance(invitation, statement, person.list);
+  const identity = toHex(person.list.identityKeyHash);
+  const named = statement.inviteeIdentityKeyHash;
+  if (named !== undefined && toHex(named) !== identity) {
+    throw new InvitationError(
+      'acceptance-invalid',
+      'Someone other than the contact you invited accepted this invitation. Nothing was added.'
+    );
+  }
+  const confirmed = options.confirmedIdentity;
+  if (confirmed !== undefined && confirmed !== identity) {
+    throw new InvitationError(
+      'acceptance-invalid',
+      'Someone other than the contact you confirmed accepted this invitation. Nothing was added.'
+    );
+  }
   // Asked before claiming anything, and again on every attempt of the
   // Commit after catching up: a removal processed there stops the Add.
   const authorize = async () => {
-    if (options.confirmReAdd) return;
-    if (isRemoved(await removedMembers(ctx), invitation.projectId, invitee)) {
+    if (confirmed !== undefined) return;
+    const gate = addGate(
+      await removedMembers(ctx),
+      invitation.projectId,
+      invitee,
+      named !== undefined
+    );
+    if (gate === 'removed') {
       throw new InvitationError(
         'removed-member',
         'This person was removed from the project. Confirm adding them back in the project’s sharing settings.'
+      );
+    }
+    if (gate === 'confirm') {
+      throw new InvitationError(
+        'needs-confirmation',
+        'Confirm adding this person in the project’s sharing settings.'
       );
     }
   };
@@ -894,7 +1102,7 @@ export async function addInvitedMember(
   await ctx.store
     .dropClaim(userId, invitation.invitationId)
     .catch(() => undefined);
-  if (options.confirmReAdd) {
+  if (confirmed !== undefined) {
     await ctx.store
       .forgetRemoved(userId, invitation.projectId, invitee)
       .catch(() => undefined);
@@ -903,9 +1111,27 @@ export async function addInvitedMember(
 }
 
 /**
+ * The owner declines an accepted invitation (or revokes one): the Worker
+ * closes it and drops its KeyPackages, and this browser forgets its claim.
+ * Nobody is added.
+ */
+export async function declineInvitation(
+  ctx: InvitationContext,
+  projectId: string,
+  invitationId: string
+): Promise<void> {
+  await ctx.api.revoke(projectId, invitationId);
+  await ctx.store
+    .dropClaim(ctx.groups.account.userId, invitationId)
+    .catch(() => undefined);
+}
+
+/**
  * Add every invitee of `invitations` who is ready (verified, accepted by
- * signature, with KeyPackages, never removed from the project). One that
- * fails stays pending and is reported; the rest still go ahead.
+ * signature by the contact the invitation names, with KeyPackages, in a
+ * project whose every removal this browser saw, never removed from it).
+ * Everyone else waits for the owner. One that fails stays pending and is
+ * reported; the rest still go ahead.
  */
 export async function completeReadyInvitations(
   ctx: InvitationContext,
@@ -941,7 +1167,8 @@ async function rememberIntent(
   ctx: Pick<InvitationContext, 'groups' | 'store' | 'now'>,
   statement: ProjectInvitation,
   statementHash: string,
-  source: InvitationIntent['source']
+  source: InvitationIntent['source'],
+  linkTokenHash?: string
 ): Promise<void> {
   await ctx.store.rememberIntent(ctx.groups.account.userId, {
     projectId: statement.projectId,
@@ -949,6 +1176,7 @@ async function rememberIntent(
     inviterUserId: statement.inviterUserId,
     statementHash,
     source,
+    ...(linkTokenHash !== undefined ? { linkTokenHash } : {}),
     intendedAt: (ctx.now ?? Date.now)()
   });
 }
@@ -1014,7 +1242,8 @@ export async function acceptEncryptedInvitation(
     ctx,
     statement,
     await statementHashOf(invitation),
-    'link'
+    'link',
+    toHex(opened)
   ).then(
     () => true,
     () => false
@@ -1086,10 +1315,11 @@ export interface InviteeInvitation {
   /** Hex `invitationStatementHash` of that statement; null with it. */
   readonly statementHash: string | null;
   /**
-   * The owner's identity fingerprint, from the key this browser checked
-   * (compared in codes once verified): how a Join names the inviter.
+   * The owner's contact code, as Contacts shows it, from the device list
+   * this browser checked (and compared codes over, once verified): how a
+   * Join names the inviter. Null with `statement`.
    */
-  readonly ownerFingerprint: string | null;
+  readonly ownerCode: string | null;
 }
 
 /**
@@ -1156,20 +1386,32 @@ async function acceptedHere(
 }
 
 /**
- * Whether the person accepted exactly `record`'s statement on this device
- * (the link they opened here, or the in-app confirmation).
+ * Whether the person accepted exactly `record`'s statement on this device:
+ * the in-app confirmation, or the link they opened here, which counts only
+ * when `statement` names that very link's token. A link intent kept
+ * without its token (an older version), or for a statement that names no
+ * link, counts for nothing: that invitation needs the explicit Join.
  */
 async function intendedHere(
   intents: readonly InvitationIntent[],
-  record: E2eeInvitationRecord
+  record: E2eeInvitationRecord,
+  statement: ProjectInvitation
 ): Promise<boolean> {
   const hash = await statementHashOf(record);
+  const link =
+    statement.linkTokenHash !== undefined
+      ? toHex(statement.linkTokenHash)
+      : null;
   return intents.some(
     (intent) =>
       intent.invitationId === record.invitationId &&
       intent.projectId === record.projectId &&
       intent.inviterUserId === record.inviterUserId &&
-      intent.statementHash === hash
+      intent.statementHash === hash &&
+      (intent.source === 'confirmed' ||
+        (intent.source === 'link' &&
+          link !== null &&
+          intent.linkTokenHash === link))
   );
 }
 
@@ -1213,7 +1455,7 @@ export async function acceptedInvitations(
             ctx.groups.account.list
           );
           state =
-            !accepted && !(await intendedHere(intents, record))
+            !accepted && !(await intendedHere(intents, record, statement))
               ? 'confirm'
               : published.has(record.invitationId) && accepted
                 ? 'waiting-for-owner'
@@ -1230,7 +1472,8 @@ export async function acceptedInvitations(
       ownerEmail: owner?.email ?? null,
       statement: verified,
       statementHash: verified ? await statementHashOf(record) : null,
-      ownerFingerprint: verified ? (owner?.fingerprint ?? null) : null
+      ownerCode:
+        verified && owner?.list ? await contactCodeOf(owner.list) : null
     });
   }
   return out;
@@ -1281,7 +1524,9 @@ export async function publishInvitationKeyPackages(
       statement,
       ctx.groups.account.list
     );
-    if (!accepted && !(await intendedHere(intents, record))) continue;
+    if (!accepted && !(await intendedHere(intents, record, statement))) {
+      continue;
+    }
     await rememberExpectedProjectOwner(
       ctx.groups,
       record.projectId,

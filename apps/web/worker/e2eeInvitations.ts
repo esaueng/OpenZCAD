@@ -45,6 +45,7 @@
  * unknown to them.
  */
 import {
+  MAX_PROJECT_INVITATION_BYTES,
   E2eeError,
   MAX_INVITATION_ACCEPTANCE_BYTES,
   ProjectInvitationError,
@@ -123,8 +124,8 @@ export function isE2eeInvitationPath(pathname: string): boolean {
   );
 }
 
-/** A canonical invitation statement is at most 601 bytes (crypto). */
-const MAX_STATEMENT_BYTES = 601;
+/** The longest canonical invitation statement (crypto). */
+const MAX_STATEMENT_BYTES = MAX_PROJECT_INVITATION_BYTES;
 const SIGNATURE_BYTES = 65;
 /** Judgment: a P-256 KeyPackage is well under 1 KiB; leave room. */
 const MAX_KEY_PACKAGE_BYTES = 16 * 1024;

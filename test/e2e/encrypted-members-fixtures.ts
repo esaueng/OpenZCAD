@@ -367,6 +367,11 @@ export async function addSharedMember(
   await dialog.getByRole('button', { name: /^Verify / }).click();
   const aliceEncryption = alice.getByRole('dialog', { name: 'Settings' });
   await verifyContact(aliceEncryption, member.email, world.aliceRecoveryKey);
+  // The invitation went out before she verified them, so it names no
+  // identity: she confirms the contact who accepted, by their code.
+  await aliceEncryption
+    .getByRole('button', { name: `Add ${member.email}` })
+    .click({ timeout: SYNC_BUDGET_MS });
   await expect
     .poll(
       () =>

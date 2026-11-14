@@ -67,12 +67,18 @@ export interface EncryptedSharingClient {
     email: string,
     role: ProjectMemberRole
   ): Promise<void>;
+  /** Revokes an invitation, or declines one someone accepted. */
   revoke(projectId: string, invitationId: string): Promise<void>;
   /**
-   * The owner's explicit confirmation that adds back someone removed from
-   * the project before (`confirm-re-add`): never done in the background.
+   * The owner's explicit confirmation of the contact who accepted
+   * (`confirm-add`, or `confirm-re-add` for someone removed before), by
+   * the identity the confirmation showed: never done in the background.
    */
-  addBack?(projectId: string, invitationId: string): Promise<void>;
+  confirmAdd?(
+    projectId: string,
+    invitationId: string,
+    identityKeyHash: string
+  ): Promise<void>;
   /**
    * The owner's role change of a member (slice 5-4): an MLS Commit the
    * Worker mirrors into the member list.
@@ -123,11 +129,19 @@ export const pageEncryptedSharingClient: EncryptedSharingClient = {
     );
   },
   async revoke(projectId, invitationId) {
-    const { encryptedInvitations } =
-      await import('../lib/e2ee/encryptedProjects');
-    await (await encryptedInvitations()).api.revoke(projectId, invitationId);
+    const [{ encryptedInvitations }, { declineInvitation }] = await Promise.all(
+      [
+        import('../lib/e2ee/encryptedProjects'),
+        import('../lib/e2ee/invitations')
+      ]
+    );
+    await declineInvitation(
+      await encryptedInvitations(),
+      projectId,
+      invitationId
+    );
   },
-  async addBack(projectId, invitationId) {
+  async confirmAdd(projectId, invitationId, identityKeyHash) {
     const [{ encryptedInvitations }, invitations] = await Promise.all([
       import('../lib/e2ee/encryptedProjects'),
       import('../lib/e2ee/invitations')
@@ -137,11 +151,17 @@ export const pageEncryptedSharingClient: EncryptedSharingClient = {
     const invitation = listed.find(
       (entry) => entry.record.invitationId === invitationId
     );
-    if (!invitation || invitation.state !== 'confirm-re-add') {
-      throw new Error('This invitation is not waiting to be added back.');
+    if (
+      !invitation ||
+      !CONFIRMABLE_STATES.has(invitation.state) ||
+      invitation.acceptor?.identityKeyHash !== identityKeyHash
+    ) {
+      throw new Error(
+        'This invitation changed since you reviewed it. Nothing was added; check it again.'
+      );
     }
     await invitations.addInvitedMember(ctx, invitation.record, {
-      confirmReAdd: true
+      confirmedIdentity: identityKeyHash
     });
   },
   async changeRole(projectId, userId, role) {
@@ -165,6 +185,8 @@ const ENCRYPTED_STATE_LABELS: Record<OwnerInvitation['state'], string> = {
   'waiting-for-verification': 'Waiting for you to verify',
   'needs-acceptance': 'Waiting for them to accept again',
   'confirm-re-add': 'Removed before: confirm to add back',
+  'confirm-add': 'Accepted: confirm to add',
+  'accepted-by-other': 'Accepted by someone you did not invite',
   ready: 'Adding',
   completed: 'Added',
   revoked: 'Revoked',
@@ -177,7 +199,15 @@ const OPEN_ENCRYPTED_STATES = new Set<OwnerInvitation['state']>([
   'waiting-for-verification',
   'needs-acceptance',
   'confirm-re-add',
+  'confirm-add',
+  'accepted-by-other',
   'ready'
+]);
+
+/** Invitations the owner confirms (or declines) before anyone is added. */
+const CONFIRMABLE_STATES = new Set<OwnerInvitation['state']>([
+  'confirm-add',
+  'confirm-re-add'
 ]);
 
 export interface ProjectSharingDialogProps {
@@ -239,6 +269,12 @@ const ROLE_LABELS: Record<ProjectAccessRole, string> = {
   owner: 'Owner',
   editor: 'Editor',
   viewer: 'Viewer'
+};
+
+/** An invitation's role in a sentence. */
+const ROLE_ARTICLES: Record<'editor' | 'viewer', string> = {
+  editor: 'an editor',
+  viewer: 'a viewer'
 };
 
 const LINK_MODE_LABELS: Record<ProjectShareLinkMode, string> = {
@@ -1060,6 +1096,101 @@ export function ProjectSharingDialog({
                             ? invitation.email
                             : `Invitation ${index + 1}`;
                         const invitee = invitation.record.acceptedByUserId;
+                        const acceptor = invitation.acceptor;
+                        const statement = invitation.statement;
+                        if (
+                          CONFIRMABLE_STATES.has(invitation.state) &&
+                          acceptor &&
+                          statement?.projectId === projectId &&
+                          encryptedClient.confirmAdd
+                        ) {
+                          // Named from the verified acceptance and statement
+                          // only: the contact code Contacts shows, the role
+                          // this account signed.
+                          const who =
+                            personalInfoVisible && acceptor.email
+                              ? acceptor.email
+                              : 'Your verified contact';
+                          const id = invitation.record.invitationId;
+                          return (
+                            <li key={id} className="sharing-confirm-row">
+                              <div
+                                className="sharing-confirm"
+                                role="group"
+                                aria-label={`Confirm ${who}`}
+                              >
+                                <p className="sharing-confirm-title">
+                                  {who} accepted your invitation to{' '}
+                                  {projectName ?? 'this project'} as{' '}
+                                  {ROLE_ARTICLES[statement.role]}. Add them?
+                                </p>
+                                <p className="sharing-hint">
+                                  {invitation.state === 'confirm-re-add'
+                                    ? 'You removed them from this project before. '
+                                    : ''}
+                                  Add them only if this is the contact code
+                                  Contacts shows for the person you invited:
+                                </p>
+                                <code
+                                  className="encryption-code"
+                                  aria-label="Their contact code"
+                                >
+                                  {acceptor.code}
+                                </code>
+                                <div className="sharing-confirm-actions">
+                                  {onVerifyContact ? (
+                                    <button
+                                      type="button"
+                                      className="secondary"
+                                      disabled={interactionBusy}
+                                      onClick={() =>
+                                        onVerifyContact(acceptor.userId)
+                                      }
+                                    >
+                                      Open contact
+                                    </button>
+                                  ) : null}
+                                  <button
+                                    type="button"
+                                    className="secondary"
+                                    disabled={interactionBusy}
+                                    onClick={() =>
+                                      void mutate(`decline:${id}`, async () => {
+                                        await encryptedClient.revoke(
+                                          projectId,
+                                          id
+                                        );
+                                        await refresh();
+                                      })
+                                    }
+                                  >
+                                    Decline
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="primary"
+                                    disabled={interactionBusy}
+                                    onClick={() =>
+                                      void mutate(
+                                        `confirm-add:${id}`,
+                                        async () => {
+                                          await encryptedClient.confirmAdd!(
+                                            projectId,
+                                            id,
+                                            acceptor.identityKeyHash
+                                          );
+                                          await refresh();
+                                        }
+                                      )
+                                    }
+                                  >
+                                    Add
+                                  </button>
+                                </div>
+                              </div>
+                            </li>
+                          );
+                        }
                         return (
                           <li
                             key={invitation.record.invitationId}
@@ -1097,29 +1228,6 @@ export function ProjectSharingDialog({
                                 onClick={() => onVerifyContact(invitee)}
                               >
                                 Verify
-                              </button>
-                            ) : null}
-                            {invitation.state === 'confirm-re-add' &&
-                            encryptedClient.addBack ? (
-                              <button
-                                type="button"
-                                className="secondary sharing-verify"
-                                aria-label={`Add ${label} back`}
-                                disabled={interactionBusy}
-                                onClick={() =>
-                                  void mutate(
-                                    `add-back:${invitation.record.invitationId}`,
-                                    async () => {
-                                      await encryptedClient.addBack!(
-                                        projectId,
-                                        invitation.record.invitationId
-                                      );
-                                      await refresh();
-                                    }
-                                  )
-                                }
-                              >
-                                Add back
                               </button>
                             ) : null}
                             <button

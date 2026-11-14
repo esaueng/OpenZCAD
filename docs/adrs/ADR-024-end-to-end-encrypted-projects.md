@@ -583,7 +583,16 @@ comparison, which is safe only because of its commitment step.
   signs an acceptance of that exact statement, and the owner adds only an
   account whose device signed one. An invitation the server merely lists,
   or one whose statement names no link, is joined only on the invitee's
-  explicit confirmation of the verified statement.
+  explicit confirmation of the verified statement. The server delivers the
+  email, so the address alone never decides who is added: when the owner
+  invites an address that belongs to a contact they verified, the
+  statement (version 3) also names that contact's identity key, and the
+  owner's browser adds automatically only an acceptance by that identity.
+  Every other acceptance waits for the owner to confirm the accepting
+  contact, shown by the same contact code Contacts shows, or to decline it.
+  Automatic adds also require that the owner's browser saw every removal
+  from the project since its group began (it created the group); a device
+  that joined from the project's history asks the owner for every Add.
 - **Invitation emails** name the sender, not the project.
 - **Share links** become `#share=<token>.<key>.<owner>`, where `<owner>` is
   the full hash of the owner's identity key; the fragment never reaches the
