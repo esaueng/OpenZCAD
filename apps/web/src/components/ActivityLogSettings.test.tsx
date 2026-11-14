@@ -101,7 +101,33 @@ describe('ActivityLogSettings', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Copied 4 entries.');
 
     await user.click(screen.getByRole('button', { name: 'Clear' }));
+    // "Confirm destructive actions" is on by default: Clear asks first.
+    const dialog = screen.getByRole('alertdialog', {
+      name: 'Clear the activity log?'
+    });
+    expect(dialog).toHaveTextContent('4 entries are removed.');
+    expect(
+      within(dialog).getByRole('button', { name: 'Cancel' })
+    ).toHaveFocus();
+    await user.click(within(dialog).getByRole('button', { name: 'Clear log' }));
     expect(getActivityLogSnapshot().entries).toHaveLength(0);
     expect(screen.getByText('Nothing logged yet.')).toBeTruthy();
+  });
+
+  it('keeps the log when Clear is cancelled', async () => {
+    const user = userEvent.setup();
+    render(<ActivityLogSettings />);
+    await user.click(screen.getByRole('button', { name: 'Clear' }));
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(getActivityLogSnapshot().entries).toHaveLength(4);
+  });
+
+  it('clears without asking when confirmations are off', async () => {
+    const user = userEvent.setup();
+    render(<ActivityLogSettings confirmDestructive={false} />);
+    await user.click(screen.getByRole('button', { name: 'Clear' }));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(getActivityLogSnapshot().entries).toHaveLength(0);
   });
 });

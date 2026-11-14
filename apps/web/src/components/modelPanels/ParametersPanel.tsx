@@ -12,6 +12,7 @@ export type ParametersPanelProps = Pick<
   | 'parameterValues'
   | 'parameterMinimums'
   | 'onSetParameter'
+  | 'onParameterAddRefused'
   | 'onSetParameterQuantity'
   | 'parameterQuantitySuggestions'
   | 'onViewActivityLog'
@@ -41,6 +42,7 @@ export function ParametersPanel({
   parameterValues,
   parameterMinimums,
   onSetParameter,
+  onParameterAddRefused,
   onSetParameterQuantity,
   parameterQuantitySuggestions,
   onViewActivityLog,
@@ -93,6 +95,9 @@ export function ParametersPanel({
         <AddParameterRow
           existingNames={parameters.map((parameter) => parameter.name)}
           onSet={onSetParameter}
+          {...(onParameterAddRefused
+            ? { onRefused: onParameterAddRefused }
+            : {})}
           onConfigureToggle={onConfigureToggle}
           bodies={bodies}
         />

@@ -672,6 +672,30 @@ button.save-state:active:not(:disabled),
   cursor: default;
 }
 
+/* A share-link visitor's session (design review I73): one plain chip in
+   place of the save, presence and account chips, none of which applied. */
+.topbar-share-state {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 9px;
+  color: var(--color-text);
+  background: var(--color-surface-2);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  cursor: default;
+}
+
+.topbar-share-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  white-space: nowrap;
+}
+
 .collaboration-state.live {
   color: var(--color-success);
 }

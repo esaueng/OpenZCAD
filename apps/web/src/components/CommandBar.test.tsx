@@ -412,7 +412,10 @@ describe('CommandBar', () => {
     await userEvent.type(search, '{Enter}');
     expect(onAsk).toHaveBeenCalledWith('fillet the top edges 2 mm');
     expect(search).toHaveValue('');
-    expect(search).not.toHaveFocus();
+    // 13 November review I9: focus stays in the prompt for the follow-up
+    // instead of falling to <body> while the answer is on its way.
+    expect(search).toHaveFocus();
+    expect(screen.queryAllByRole('option')).toHaveLength(0);
   });
 
   it('says what Enter does with plain words, and where commands are', async () => {
@@ -565,7 +568,7 @@ describe('CommandBar', () => {
     expect(search).toHaveFocus();
     expect(screen.queryAllByRole('option')).toHaveLength(0);
     expect(screen.getByRole('status')).toHaveTextContent(
-      'No matching command.'
+      'No command matches “round”. Clear the field and press ↓ to list every command, or search “help” for the keyboard shortcuts.'
     );
   });
 
@@ -581,12 +584,12 @@ describe('CommandBar', () => {
 
     await userEvent.click(search);
     await userEvent.keyboard('{Enter}p{Escape}');
-    expect(keys).toEqual(['apply', 'preview', 'reject']);
+    expect(keys).toEqual(['apply', 'preview', 'escape']);
     // Taken: the letter was not typed and Escape did not drop focus.
     expect(search).toHaveValue('');
     expect(search).toHaveFocus();
     await userEvent.keyboard('{Control>}{ArrowUp}{/Control}');
-    expect(keys).toEqual(['apply', 'preview', 'reject', 'history']);
+    expect(keys).toEqual(['apply', 'preview', 'escape', 'history']);
 
     window.removeEventListener(ASSISTANT_PROMPT_KEY_EVENT, take);
     // Nothing listening: `p` is a letter, and one Escape clears it and
@@ -602,7 +605,7 @@ describe('CommandBar', () => {
     await userEvent.keyboard('q{Escape}');
     expect(search).toHaveValue('');
     expect(search).not.toHaveFocus();
-    expect(keys).toEqual(['apply', 'preview', 'reject', 'history']);
+    expect(keys).toEqual(['apply', 'preview', 'escape', 'history']);
     window.removeEventListener(ASSISTANT_PROMPT_KEY_EVENT, take);
   });
 
@@ -798,13 +801,57 @@ describe('CommandBar pointer and empty states', () => {
     expect(rows[1]).toHaveAttribute('aria-selected', 'false');
   });
 
+  it('lists the commands on ArrowDown in the empty field, or for an empty draft (I20)', async () => {
+    const commands = [
+      command('fillet', 'Fillet', 'Modify'),
+      command('fit', 'Fit view', 'View')
+    ];
+    const { rerender } = render(
+      <Bar commands={commands} onAsk={vi.fn()} draft={null} />
+    );
+    const search = searchField();
+    search.focus();
+    expect(screen.queryByRole('listbox')).toBeNull();
+    await userEvent.keyboard('{ArrowDown}');
+    expect(visibleLabels()).toEqual(['Fillet', 'Fit view']);
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByRole('listbox')).toBeNull();
+
+    // The host's Ctrl+K opens the bar with an empty draft.
+    rerender(
+      <Bar commands={commands} onAsk={vi.fn()} draft={{ id: 1, text: '' }} />
+    );
+    expect(search).toHaveFocus();
+    expect(visibleLabels()).toEqual(['Fillet', 'Fit view']);
+  });
+
+  it('never makes a disabled best match the row Enter or Tab takes (I24)', async () => {
+    const extrude = command('extrude', 'Extrude', 'Create', {
+      disabledReason: 'Create a sketch first'
+    });
+    const exportStep = command('export', 'Export STEP', 'File');
+    render(<Bar commands={[extrude, exportStep]} />);
+    await userEvent.type(searchField(), '/ex');
+    const rows = screen.getAllByRole('option');
+    expect(rows[0]).toHaveTextContent('Extrude');
+    expect(rows[0]).toHaveAttribute('aria-selected', 'false');
+    expect(rows[1]).toHaveAttribute('aria-selected', 'true');
+    // The ghost completes the command that can run, not the disabled one.
+    expect(document.querySelector('.command-bar-ghost')).toHaveTextContent(
+      '/export STEP'
+    );
+    await userEvent.keyboard('{Enter}');
+    expect(extrude.run).not.toHaveBeenCalled();
+    expect(exportStep.run).toHaveBeenCalledTimes(1);
+  });
+
   it('says nothing matched outside the listbox, and drops the key row', async () => {
     render(<Bar commands={[command('fillet', 'Fillet', 'Modify')]} />);
     const search = searchField();
     await userEvent.type(search, '/zzz');
     expect(screen.queryByRole('listbox')).toBeNull();
     expect(screen.getByRole('status')).toHaveTextContent(
-      'No matching command.'
+      'No command matches “zzz”. Clear the field and press ↓ to list every command, or search “help” for the keyboard shortcuts.'
     );
     // Not the ask hint's float, which a docked assistant stream hides.
     expect(

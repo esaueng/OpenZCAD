@@ -19,6 +19,7 @@ import {
   createProjectDocument
 } from '@openzcad/document-core';
 import {
+  drawingPaperPerModelUnit,
   formatDrawingScale,
   toUserId,
   type BodyId,
@@ -30,6 +31,7 @@ import {
 } from '@openzcad/shared';
 import { DrawingWorkspace, resetRetainedProjections } from './DrawingWorkspace';
 import { DrawingProjectionClient } from '../lib/drawing/projectionClient';
+import { WHEEL_DEVICE_STORAGE_KEY } from '../lib/wheelDeviceMemory';
 import {
   createStarterSheet,
   drawingSourceFingerprint,
@@ -186,6 +188,7 @@ function setup(
   const bodies = { [bodyId]: cube(options.size, options.exactFaces) };
   const onCommand = vi.fn((_command: AnyCommand) => true);
   const onStatus = vi.fn();
+  const onAnnounceUndoable = vi.fn();
   render(
     <DrawingWorkspace
       document={document}
@@ -197,9 +200,10 @@ function setup(
       editDisabledReason={options.editDisabledReason ?? null}
       onCommand={onCommand}
       onStatus={onStatus}
+      onAnnounceUndoable={onAnnounceUndoable}
     />
   );
-  return { onCommand, onStatus };
+  return { onCommand, onStatus, onAnnounceUndoable };
 }
 
 function starter(fingerprint: string): DrawingSheet {
@@ -632,6 +636,30 @@ describe('DrawingWorkspace', () => {
     } finally {
       window.removeEventListener('keydown', reached);
     }
+  });
+
+  it('names what a view or sheet delete removed, with Undo (I2)', async () => {
+    const fingerprint = drawingSourceFingerprint({ [bodyId]: cube() }, [
+      bodyId
+    ])!;
+    const { onCommand, onAnnounceUndoable } = setup({
+      sheet: starter(fingerprint)
+    });
+    await userEvent.click(screen.getByRole('button', { name: 'Front view' }));
+    await userEvent.click(screen.getByRole('button', { name: /Delete view/ }));
+    expect(onCommand.mock.calls.at(-1)?.[0].kind).toBe('drawing.view.delete');
+    expect(onAnnounceUndoable).toHaveBeenLastCalledWith('Deleted Front view.');
+
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Sheet actions' })
+    );
+    await userEvent.click(
+      screen.getByRole('menuitem', { name: /Delete sheet/ })
+    );
+    expect(onCommand.mock.calls.at(-1)?.[0].kind).toBe('drawing.sheet.delete');
+    expect(onAnnounceUndoable).toHaveBeenLastCalledWith(
+      'Deleted Sheet 1 and its 4 views.'
+    );
   });
 
   it('waits, rather than drawing or exporting, while the model rebuilds', () => {
@@ -1993,6 +2021,105 @@ describe('DrawingWorkspace QA fixes', () => {
     expect(screen.queryByRole('status')).toBeNull();
   });
 
+  it('refits the views to a new paper in the same undo step (I64)', async () => {
+    // A3 to A4 left the starter's side and isometric views off the page,
+    // and export refused until "Fit views to sheet".
+    const sheet = starter(fingerprint());
+    const onCommand = vi.fn((_command: AnyCommand) => true);
+    const shared = {
+      bodies: { [bodyId]: cube() },
+      geometryPending: false,
+      defaultBodyIds: [bodyId],
+      requestTessellation: displayTessellation({ [bodyId]: cube() }),
+      editDisabledReason: null,
+      onCommand,
+      onStatus: vi.fn()
+    };
+    const before = withSheets([sheet]);
+    const { rerender } = render(
+      <DrawingWorkspace document={before} {...shared} />
+    );
+    const canvas = screen.getByRole('application', { name: 'Sheet Sheet 1' });
+    await waitFor(() =>
+      expect(
+        canvas.querySelectorAll('.drawing-view.is-placeholder')
+      ).toHaveLength(0)
+    );
+    await userEvent.selectOptions(screen.getByLabelText('Paper'), 'A4');
+    expect(onCommand).toHaveBeenCalledTimes(1);
+    const command = onCommand.mock.calls[0]![0];
+    expect(command.label).toBe('Paper A4 landscape');
+    const kinds = command.commands?.map((entry) => entry.kind) ?? [];
+    expect(kinds[0]).toBe('drawing.sheet.update');
+    expect(kinds.slice(1)).toEqual(
+      sheet.views.map(() => 'drawing.view.update')
+    );
+    expect(shared.onStatus).toHaveBeenLastCalledWith(
+      expect.stringMatching(/^Changed the paper to A4 landscape and fitted/)
+    );
+    command.validate(before);
+    const after = command.apply(before);
+    expect(after.drawings!.sheets[0]!.paper).toEqual({
+      size: 'A4',
+      orientation: 'landscape'
+    });
+    rerender(<DrawingWorkspace document={after} {...shared} />);
+    await waitFor(() =>
+      expect(
+        screen.getByRole<HTMLButtonElement>('button', { name: 'Export PDF' })
+          .disabled
+      ).toBe(false)
+    );
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('offers the orientation the sheet lacks and adds a free view clear of the others (I65)', async () => {
+    const sheet = starter(fingerprint());
+    const { onCommand } = setup({ sheet });
+    const select = screen.getByLabelText<HTMLSelectElement>('New view');
+    // The starter shows Front, Top, Left and Isometric: Right is next, not
+    // a second Front.
+    expect(sheet.views.map((view) => view.orientation).sort()).toEqual([
+      'front',
+      'iso',
+      'left',
+      'top'
+    ]);
+    expect(select.value).toBe('right');
+    // A second isometric has no base to line up with: it lands in free
+    // space, not in the middle of the sheet over the starter's views.
+    await userEvent.selectOptions(select, 'iso');
+    await userEvent.click(screen.getByRole('button', { name: /Add view/ }));
+    const { view } = onCommand.mock.calls[0]![0].payload as {
+      view: DrawingSheet['views'][number];
+    };
+    expect(view.parentViewId).toBeUndefined();
+    const k = drawingPaperPerModelUnit(sheet.scale, 'mm');
+    const boxOf = (entry: DrawingSheet['views'][number]) => {
+      const extent = estimateViewExtent(
+        { [bodyId]: cube() },
+        [bodyId],
+        entry.orientation
+      )!;
+      const width = (extent.maxU - extent.minU) * k;
+      const height = (extent.maxV - extent.minV) * k;
+      return {
+        x0: entry.centerMm.x - width / 2,
+        x1: entry.centerMm.x + width / 2,
+        y0: entry.centerMm.y - height / 2,
+        y1: entry.centerMm.y + height / 2
+      };
+    };
+    const added = boxOf(view);
+    for (const existing of sheet.views.map(boxOf))
+      expect(
+        added.x1 <= existing.x0 ||
+          added.x0 >= existing.x1 ||
+          added.y1 <= existing.y0 ||
+          added.y0 >= existing.y1
+      ).toBe(true);
+  });
+
   it('warns, without refusing, about sheet text the PDF font prints as "?"', () => {
     // QA F008: U+2300 prints as Ø; a star has no stand-in and becomes "?".
     setup({ sheet: starter(fingerprint()) });
@@ -2031,18 +2158,24 @@ describe('DrawingWorkspace QA fixes', () => {
       expect(button('Fit sheet').disabled).toBe(true);
     });
 
-    it('zooms about the pointer with Ctrl+wheel, and scrolls only once zoomed', () => {
+    it('zooms about the pointer on a plain wheel, as Build does, and pans on a swipe (I66)', () => {
       const rect = mockCanvas();
       try {
         setup({ sheet: starter(fingerprint()) });
         const canvas = screen.getByRole('application', {
           name: 'Sheet Sheet 1'
         });
-        // happy-dom's WheelEvent has no modifier keys or pointer position
-        // (it extends UIEvent), so they are set on the event as a browser
-        // would deliver them. Returns whether the default went ahead.
+        // happy-dom's WheelEvent has no modifier keys, horizontal delta or
+        // pointer position (it extends UIEvent), so they are set on the
+        // event as a browser would deliver them. Returns whether the default
+        // went ahead.
         const wheel = (
-          init: { deltaY: number; ctrlKey?: boolean },
+          init: {
+            deltaY: number;
+            deltaX?: number;
+            deltaMode?: number;
+            ctrlKey?: boolean;
+          },
           at = { x: 0, y: 0 }
         ) => {
           const event = new WheelEvent('wheel', {
@@ -2051,6 +2184,8 @@ describe('DrawingWorkspace QA fixes', () => {
             cancelable: true
           });
           for (const [key, value] of Object.entries({
+            deltaX: init.deltaX ?? 0,
+            deltaMode: init.deltaMode ?? 0,
             ctrlKey: init.ctrlKey ?? false,
             metaKey: false,
             shiftKey: false,
@@ -2064,14 +2199,10 @@ describe('DrawingWorkspace QA fixes', () => {
           });
           return result;
         };
-        // A plain wheel on a fitted sheet is left to the page.
-        expect(wheel({ deltaY: 100 })).toBe(true);
-        expect(viewBox()).toEqual([0, 0, 420, 297]);
-        // The pointer at (210, 150) px is over paper (105, 75) mm (SVG y
-        // down); zooming in keeps that point under it.
-        expect(wheel({ deltaY: -300, ctrlKey: true }, { x: 210, y: 150 })).toBe(
-          false
-        );
+        // A plain wheel notch on a fitted sheet zooms, where it once did
+        // nothing. The pointer at (210, 150) px is over paper (105, 75) mm
+        // (SVG y down); zooming in keeps that point under it.
+        expect(wheel({ deltaY: -300 }, { x: 210, y: 150 })).toBe(false);
         const [x0, y0, width, height] = viewBox();
         const zoom = 420 / width;
         expect(zoom).toBeGreaterThan(1.5);
@@ -2079,12 +2210,23 @@ describe('DrawingWorkspace QA fixes', () => {
         const pxPerMm = 2 * zoom;
         expect(x0 + width / 2 + (210 - 420) / pxPerMm).toBeCloseTo(105, 1);
         expect(y0 + height / 2 + (150 - 297) / pxPerMm).toBeCloseTo(75, 1);
-        // Zoomed, a plain wheel scrolls the sheet.
-        expect(wheel({ deltaY: 80 })).toBe(false);
-        expect(viewBox()[1]).toBeCloseTo(y0 + 80 / pxPerMm, 2);
-        expect(viewBox()[0]).toBeCloseTo(x0, 2);
+        // Ctrl+wheel (and a pinch) still zooms: out, here.
+        expect(wheel({ deltaY: 100, ctrlKey: true }, { x: 210, y: 150 })).toBe(
+          false
+        );
+        const zoomed = viewBox();
+        expect(420 / zoomed[2]).toBeLessThan(zoom);
+        // A two-axis swipe is a trackpad's: it pans the zoomed sheet, at
+        // the same zoom.
+        expect(wheel({ deltaY: 40, deltaX: 30 })).toBe(false);
+        const panned = viewBox();
+        expect(panned[2]).toBeCloseTo(zoomed[2], 6);
+        expect(panned[0]).toBeCloseTo(zoomed[0] + 30 / (2 * (420 / zoomed[2])), 2);
+        expect(panned[1]).toBeCloseTo(zoomed[1] + 40 / (2 * (420 / zoomed[2])), 2);
       } finally {
         rect.mockRestore();
+        // The swipe taught the classifier a trackpad; forget it.
+        window.localStorage.removeItem(WHEEL_DEVICE_STORAGE_KEY);
       }
     });
 

@@ -153,6 +153,7 @@ import {
   CirclePause,
   CirclePlay,
   Combine,
+  Cog,
   Copy,
   Crosshair,
   Download,
@@ -160,11 +161,13 @@ import {
   FolderOpen,
   Grid3x3,
   History as HistoryIcon,
+  Keyboard,
   Layers3,
   Maximize2,
   Monitor,
   PenLine,
   Move3d,
+  Orbit,
   Redo2,
   Ruler,
   Save,
@@ -172,7 +175,7 @@ import {
   ScanEye,
   Settings as SettingsIcon,
   Scissors,
-  Slice,
+  SquareSplitVertical,
   SlidersHorizontal,
   ListOrdered,
   Spline,
@@ -267,10 +270,12 @@ import type {
   ProjectOrganization,
   ProjectStatus,
   ProjectSummary,
+  SaveProjectDocumentRequest,
   SketchConstraintData,
   SketchId,
   SketchNode,
   SketchObjectData,
+  SketchPlaneRef,
   TopologySelection,
   UnitSystem
 } from '@openzcad/shared';
@@ -320,6 +325,7 @@ import {
   residualConstraintObjectIds,
   sketchDefinedState,
   topResidualConstraints,
+  constraintRefusalMessage,
   unreferencedSnapRefusal,
   type ConstraintPick,
   type DrivingDimensionKind
@@ -361,9 +367,12 @@ import {
 import { textPlacementBudgetError } from './lib/sketch/textPlacement';
 import { prefersSavingData } from './lib/saveData';
 import { useSurfaceReady } from './hooks/useSurfaceReady';
+import { useOnline } from './hooks/useOnline';
 import {
   lazyWithStaleChunkNotice,
+  isOffline,
   loadWhenOnline,
+  OFFLINE_CHUNK_MESSAGE,
   preloadableLazy,
   onStaleChunk,
   watchPreloadErrors,
@@ -393,16 +402,21 @@ import {
 } from './lib/e2ee/encryptedInvitationLink';
 import { requestContactVerification } from './lib/e2ee/contactFocus';
 import { watchBuildVersion } from './lib/buildVersionWatch';
-import { commandOutcomeMessage } from './lib/commandOutcome';
+import {
+  commandOutcomeMessage,
+  historyStepMessage
+} from './lib/commandOutcome';
 import { tintPreviewResultBodies } from './lib/previewBodyTint';
 import { remappedBlendEdge } from './lib/inPlace/blendEdgeRemap';
 import { cancelCommandChipEntry } from './lib/inPlace/chipCancel';
 import { commandChipName } from './lib/inPlace/chipNames';
+import { loneBodyFor } from './lib/inPlace/loneBody';
 import {
   presentedDiagnostics,
   shownFeatureWarnings
 } from './lib/diagnosticsRows';
 import { sweepFacetingAdvisories } from './lib/sweepFaceting';
+import { loftFacetingAdvisories } from './lib/loftFaceting';
 import { primitiveDimensionLabel } from './lib/primitiveDimensionLabel';
 import { useRememberedSection } from './hooks/useRememberedSection';
 import { newBlendFacePick } from './lib/blendRearm';
@@ -466,7 +480,10 @@ import {
 } from './lib/shaprImportWorkerClient';
 import { rebuildImportInDisposableWorker } from './lib/importRebuildWorkerClient';
 import { shaprMigrationDraft } from './lib/shaprMigration';
-import { presentedWorkspaceSaveState } from './lib/workspaceSaveStatePresentation';
+import {
+  autosaveReportedSaveState,
+  presentedWorkspaceSaveState
+} from './lib/workspaceSaveStatePresentation';
 import { showsWorkspaceEmptyState } from './lib/workspaceEmptyState';
 import {
   CheckpointSaveError,
@@ -512,6 +529,7 @@ import {
 import { countReactCommit, mark, measure, timed, timedAsync } from './lib/perf';
 import { beginEditTrace } from './lib/editTrace';
 import { traceFaceDrag, traceFaceDragPublish } from './lib/faceDragTrace';
+import { quantityTypedIn } from './lib/parameterQuantity';
 import {
   modalHoldsKeyboard,
   modalLendsWorkspaceKeys,
@@ -523,7 +541,8 @@ import {
   exportFileStem,
   formatMeasuredQuantity,
   formatNumber,
-  inferContentType
+  inferContentType,
+  previewExpression
 } from './lib/model';
 import {
   sketchValueResolver,
@@ -547,6 +566,7 @@ import {
 import {
   TOOL_GROUPS,
   TOOL_META,
+  liveCylindricalFace,
   toolDisabledReason,
   type ToolAvailability,
   type ToolId
@@ -559,6 +579,10 @@ import {
   type CommandSelection
 } from './lib/commandContext';
 import { WorkspaceColumn } from './components/WorkspaceColumn';
+import {
+  LIVE_SESSION_CONNECTING,
+  LiveSessionNotice
+} from './components/LiveSessionNotice';
 import { WorkspaceEmptyState } from './components/WorkspaceEmptyState';
 import {
   ActivityLogButton,
@@ -613,6 +637,7 @@ import {
 } from './components/WorkspaceLoading';
 import type { AuthConfigStatus } from './components/SettingsPage';
 import {
+  copyBaseName,
   DEMO_DEFINITIONS,
   VISUAL_SELECTION_ACCEPTANCE_DEMO
 } from './lib/demoDefinitions';
@@ -768,6 +793,14 @@ import {
   resolveImportedBlendFace
 } from './lib/interaction/filletFaceEdit';
 import { ToastHost } from './components/Toast';
+import { useConfirm } from './components/ConfirmDialog';
+import {
+  describeFailure as describePlainFailure,
+  describeProjectImportFailure,
+  describeShaprImportFailure,
+  describeShareOpenFailure,
+  unsupportedImportMessage
+} from './lib/plainFailure';
 import {
   commandPaletteShortcut,
   idleWorkspaceHint,
@@ -888,8 +921,15 @@ import { useBuildToolNavigation } from './hooks/useBuildToolNavigation';
 import { useResponsiveFraming } from './hooks/useResponsiveFraming';
 import { parameterDisplayName } from './lib/parameterDisplayName';
 import { featurePaletteLabel, withDistinctLabels } from './lib/paletteLabels';
-import { DISPLAY_MODE_LABELS } from './lib/displayMode';
+import { DISPLAY_MODE_LABELS, DISPLAY_MODE_ORDER } from './lib/displayMode';
 import { ContextMenu, type ContextMenuState } from './components/ContextMenu';
+import {
+  FACE_VERB_PREFIX,
+  LOOK_AT_FACE_ITEM_ID,
+  selectOtherMenuItem,
+  withFaceVerbs,
+  type ViewportMenuState
+} from './lib/viewportMenu';
 import type {
   ResolveExtrudeOptions,
   ResolvedExtrude
@@ -937,7 +977,8 @@ import type {
   BodyAppearancePreview,
   FaceResizeCommit,
   OffsetCommitOutcome,
-  NormalToFaceRequest
+  NormalToFaceRequest,
+  ViewportContextMenuOptions
 } from './components/ModelViewer';
 import type { OrientationLink } from './components/viewer/orientationCube';
 import type {
@@ -1622,6 +1663,7 @@ import {
   requestNewAxis,
   resolveNewAxis,
   valueInRange,
+  valueRangeSentence,
   type InPlaceRequest,
   type ResolvedInPlaceRequest,
   type BodyPick,
@@ -1720,6 +1762,7 @@ import {
   activeResumePrompt,
   failingFeatureIds,
   HistoryResumeRefusal,
+  resumeHistoryMessage,
   rollbackMarkerMove,
   rowResume,
   rowResumeAlreadyFailing,
@@ -1806,7 +1849,12 @@ import {
   shouldAdoptAccountSettings
 } from './lib/appSettings';
 import { useCommandFold } from './hooks/useCommandFold';
-import { sketchObjectLabels } from './lib/sketch/objectLabels';
+import { sketchExitEscape } from './lib/interaction/sketchExitConfirm';
+import {
+  sketchObjectLabels,
+  sketchPointNamer
+} from './lib/sketch/objectLabels';
+import { regionsOutsideHoles } from './lib/sketch/extrudePreselect';
 import {
   commandFoldsTools,
   loadPanelState,
@@ -2012,11 +2060,6 @@ const DISABLED_COLLABORATION_ROLLOUT: ProjectCollaborationCapabilitiesResponse =
   };
 const projectSharingClient = createProjectSharingClient();
 const localUserId = toUserId('user_local_browser');
-const DISPLAY_MODE_ORDER: DisplayMode[] = [
-  'shaded-edges',
-  'shaded',
-  'wireframe'
-];
 
 interface OffsetEditPlan {
   command: AnyCommand;
@@ -2337,6 +2380,8 @@ interface PendingShaprImport {
   phase: ShaprImportDialogPhase;
   progress: string;
   error: string | null;
+  /** The reader's raw words behind `error`, for its Details disclosure. */
+  errorDetail?: string | undefined;
   inspection: ShaprPairInspection | null;
 }
 
@@ -2833,11 +2878,6 @@ export function App() {
    * features are added but never appears over someone's existing model.
    */
   const [tourProjectId, setTourProjectId] = useState<string | null>(null);
-  /**
-   * The step that project's tour has reached. The card unmounts while a
-   * command or a sketch runs, so the step is kept here, by project.
-   */
-  const tourStepRef = useRef<{ projectId: string; index: number } | null>(null);
   /** The export dialog has been opened this session — the tour's last signal. */
   const [tourExportSeen, setTourExportSeen] = useState(false);
   const [settingsBusy, setSettingsBusy] = useState(false);
@@ -3126,6 +3166,8 @@ export function App() {
     before: BodyTopology['faces'] | undefined;
   } | null>(null);
   const [sketchConstruction, setSketchConstruction] = useState(false);
+  /** When a first Escape armed leaving the sketch (I43), or null. */
+  const sketchExitArmedAtRef = useRef<number | null>(null);
   /**
    * Offset for the next canonical-plane sketch, as typed. Kept as text so a
    * half-entered value ("-", "1.") survives a keystroke; the ghost planes and
@@ -3179,6 +3221,8 @@ export function App() {
    * status is set, not when the toast is raised.
    */
   const lastStatusAtRef = useRef(statusEntry.at);
+  /** The status stamp of a commit's outcome, which offers Undo while shown. */
+  const [undoableStatusAt, setUndoableStatusAt] = useState<number | null>(null);
   /**
    * Informational messages expire (lib/statusLifetime); `sticky` is for text
    * that describes a mode the user is still in, such as sketching on a plane.
@@ -3209,6 +3253,9 @@ export function App() {
   // The status line is the log; a toast is the notice. Only actions whose
   // outcome is otherwise invisible in the viewport raise one.
   const [toast, setToast] = useState<ToastModel | null>(null);
+  // Every destructive confirm in the app shell (library deletes, demo reset,
+  // settings reset) asks in-page; see ConfirmDialog for why never natively.
+  const { confirm: confirmInPage, dialog: confirmDialog } = useConfirm();
   /**
    * A confirmed update and an interrupted download are separate facts. Keep
    * their Reload offers on the start screen after the toast expires.
@@ -3220,15 +3267,21 @@ export function App() {
     (
       message: string,
       action?: ToastAction,
-      options?: { repeatsStatusAt?: number }
+      options?: { repeatsStatusAt?: number; tone?: 'warning' }
     ) => {
       toastIdRef.current += 1;
       const id = toastIdRef.current;
-      recordActivity({ level: 'ready', source: 'notice', message });
-      const repeats =
-        options?.repeatsStatusAt === undefined
+      recordActivity({
+        level: options?.tone === 'warning' ? 'warning' : 'ready',
+        source: 'notice',
+        message
+      });
+      const repeats = {
+        ...(options?.repeatsStatusAt === undefined
           ? {}
-          : { repeatsStatusAt: options.repeatsStatusAt };
+          : { repeatsStatusAt: options.repeatsStatusAt }),
+        ...(options?.tone ? { tone: options.tone } : {})
+      };
       // An action-bearing toast (the delete Undo above all) is never silently
       // replaced by a text-only notice: the action moves into the slot the new
       // message would have taken, so Undo stays one click away no matter how
@@ -3258,6 +3311,14 @@ export function App() {
   useEffect(() => {
     onStartScreenRef.current = doc === null;
   }, [doc]);
+  /**
+   * CAD files dropped on the start screen, waiting for the project made for
+   * them; `projectId` is that project's once it is on screen.
+   */
+  const pendingStartImportRef = useRef<{
+    files: File[];
+    projectId: string | null;
+  } | null>(null);
   useEffect(() => {
     let stopped = false;
     const watch = watchBuildVersion({
@@ -3273,7 +3334,35 @@ export function App() {
     });
     let interruptionRecorded = false;
     let libraryAnswered = false;
+    let offlineAnswered = false;
+    // 13 November review I5: a download that failed offline used to raise
+    // "Load failed · Reload", and it stayed after the connection returned.
+    // Offline, a reload could lose the app shell itself, so none is offered;
+    // the lazy surfaces retry their own download on reconnect, and anything
+    // that fails again once online reports through the ordinary path below.
+    // Reconnecting only asks the version watch whether an update explains it.
+    let failedOffline = false;
+    const onOnline = () => {
+      if (!failedOffline) return;
+      failedOffline = false;
+      offlineAnswered = false;
+      watch.checkNow();
+    };
+    window.addEventListener('online', onOnline);
     const stopStale = onStaleChunk(() => {
+      if (isOffline()) {
+        failedOffline = true;
+        if (offlineAnswered) return;
+        offlineAnswered = true;
+        if (onStartScreenRef.current) announce(OFFLINE_CHUNK_MESSAGE);
+        else
+          recordActivity({
+            level: 'warning',
+            source: 'notice',
+            message: OFFLINE_CHUNK_MESSAGE
+          });
+        return;
+      }
       // A failed download alone also occurs offline; only the version watch
       // can prove that an update exists, so ask it rather than assume.
       setDownloadInterrupted(true);
@@ -3296,14 +3385,18 @@ export function App() {
     const stopPreload = watchPreloadErrors();
     return () => {
       stopped = true;
+      window.removeEventListener('online', onOnline);
       watch();
       stopStale();
       stopPreload();
     };
   }, [announce]);
+  // Never suggest a reload while offline: it could lose the app shell.
+  const browserOnline = useOnline();
+  const loadFailureShown = downloadInterrupted && browserOnline;
   const reloadPrompt: ReloadPrompt | null = newBuildAvailable
     ? 'update'
-    : downloadInterrupted
+    : loadFailureShown
       ? 'interrupted'
       : null;
   // Load what a click opens while the page is idle, so its first open is not
@@ -3855,7 +3948,9 @@ export function App() {
     }
   );
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
-  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [contextMenu, setContextMenu] = useState<ViewportMenuState | null>(
+    null
+  );
   const contextMenuExit = useDelayedUnmount(contextMenu, OVERLAY_EXIT_MS);
   const orientationRef = useRef<OrientationLink | null>(null);
   /** Click point + normal of the latest topology pick (drag-handle anchor). */
@@ -3886,6 +3981,12 @@ export function App() {
   toolRef.current = tool;
   /** Open exact-value entry (anchored keypad) for the armed handle. */
   const [keypad, setKeypad] = useState<KeypadRequest | null>(null);
+  // A typed in-place value outside its command's range keeps the keypad
+  // open with this sentence under the field, until the entry changes.
+  const [keypadRangeError, setKeypadRangeError] = useState<{
+    valueId: string;
+    message: string;
+  } | null>(null);
   const keypadRef = useRef(keypad);
   keypadRef.current = keypad;
   /** Latest pointer/entry value stays transient until an exact frame lands. */
@@ -4476,6 +4577,12 @@ export function App() {
     useState<ProjectConflict | null>(null);
   const accountConflictRef = useRef(accountConflict);
   accountConflictRef.current = accountConflict;
+  /**
+   * "Decide later" on an account question keeps it: the Conflict chip asks it
+   * again (design review I74). A re-raised question is a new object and shows.
+   */
+  const [dismissedAccountConflict, setDismissedAccountConflict] =
+    useState<ProjectConflict | null>(null);
   /** Hides an account question while it is being re-asked after a room choice. */
   const [accountRecheckProjectId, setAccountRecheckProjectId] = useState<
     string | null
@@ -4987,6 +5094,10 @@ export function App() {
   const [regionExtrudeEntryError, setRegionExtrudeEntryError] = useState<
     string | null
   >(null);
+  /** Why a running command's open keypad entry does not evaluate (Done waits). */
+  const [commandEntryError, setCommandEntryError] = useState<string | null>(
+    null
+  );
   const extrudeEditRequest = useRef(0);
   const reusableRegionExtrudePreview = useRef<ResolvedExtrudePreview | null>(
     null
@@ -5976,8 +6087,8 @@ export function App() {
                     : collaborationRollout.editLeasesEnforced &&
                         !activeCollaborationLease
                       ? collaboration.status === 'lease-denied'
-                        ? 'Another collaborator holds the edit lease'
-                        : 'Waiting for the project edit lease'
+                        ? 'Someone else is editing this project right now'
+                        : LIVE_SESSION_CONNECTING
                       : null;
   // Being encrypted locks the document as firmly as a second tab does; the
   // second tab keeps its own notice.
@@ -6003,6 +6114,9 @@ export function App() {
           : assembleMode
             ? 'Assemble mode edits the assembly only — switch to Build to model'
             : projectEditDisabledReason;
+  // The seat is waiting for the live session: one notice says so, and the
+  // tools keep their own descriptions (design review I10).
+  const liveSessionConnecting = editDisabledReason === LIVE_SESSION_CONNECTING;
   // D01 sheet edits answer to the project's own locks in Draw and Build (a
   // read-only seat or a second tab refuses them), and to the reading
   // workspaces' locks in View and Tweak, where a drawing-only undo or redo
@@ -6052,6 +6166,24 @@ export function App() {
   // mode was entered or the project was opened in a second tab.
   const editDisabledReasonRef = useRef(editDisabledReason);
   editDisabledReasonRef.current = editDisabledReason;
+  // Files dropped on the start screen import into the project made for them
+  // once it is on screen and editable: an account project can wait a moment
+  // for its live session, and importing before then would only be refused.
+  useEffect(() => {
+    const pending = pendingStartImportRef.current;
+    if (!pending || !doc) return;
+    if (pending.projectId === null) {
+      pending.projectId = doc.projectId;
+    } else if (pending.projectId !== doc.projectId) {
+      pendingStartImportRef.current = null;
+      return;
+    }
+    if (editDisabledReason) return;
+    pendingStartImportRef.current = null;
+    void handleImportFiles(pending.files);
+    // handleImportFiles is this render's, which holds the new document.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc?.projectId, editDisabledReason]);
   const parameterEditDisabledReasonRef = useRef(parameterEditDisabledReason);
   parameterEditDisabledReasonRef.current = parameterEditDisabledReason;
   const drawingEditDisabledReasonRef = useRef(drawingEditDisabledReason);
@@ -6061,6 +6193,11 @@ export function App() {
   const projectRenameDisabledReasonRef = useRef(projectRenameDisabledReason);
   projectRenameDisabledReasonRef.current = projectRenameDisabledReason;
 
+  /** "Cannot use Box: …": one stop, even after a reason that ends in "…". */
+  function cannotSentence(action: string, reason: string): string {
+    return `Cannot ${action}: ${reason}${/[.…!?]$/.test(reason) ? '' : '.'}`;
+  }
+
   function ensureCanEdit(action = 'edit this project'): boolean {
     const reason = editDisabledReasonRef.current;
     if (!reason) {
@@ -6069,7 +6206,7 @@ export function App() {
     setStatus(
       projectOpenElsewhereRef.current
         ? PROJECT_OPEN_ELSEWHERE_NOTICE
-        : `Cannot ${action}: ${reason}.`
+        : cannotSentence(action, reason)
     );
     return false;
   }
@@ -6089,7 +6226,7 @@ export function App() {
     setStatus(
       projectOpenElsewhereRef.current
         ? PROJECT_OPEN_ELSEWHERE_NOTICE
-        : `Cannot ${action}: ${reason}.`
+        : cannotSentence(action, reason)
     );
     return false;
   }
@@ -6110,7 +6247,7 @@ export function App() {
     setStatus(
       projectOpenElsewhereRef.current
         ? PROJECT_OPEN_ELSEWHERE_NOTICE
-        : `Cannot ${action}: ${reason}.`
+        : cannotSentence(action, reason)
     );
     return false;
   }
@@ -6123,7 +6260,7 @@ export function App() {
     setStatus(
       projectOpenElsewhereRef.current
         ? PROJECT_OPEN_ELSEWHERE_NOTICE
-        : `Cannot ${action}: ${reason}.`
+        : cannotSentence(action, reason)
     );
     return false;
   }
@@ -6446,7 +6583,7 @@ export function App() {
     const controller = new CloudProjectAutosave({
       api,
       onStatus(status) {
-        setSaveState(status.state);
+        setSaveState(autosaveReportedSaveState(status.state, status.error));
         if (status.state === 'repair' && status.projectId) {
           accountDocumentUnavailableProjectIdRef.current = status.projectId;
           setCloudAvailable(false);
@@ -7825,7 +7962,12 @@ export function App() {
       currentFaceGeometryPreview?.geometry.bodyRepresentations ??
       currentGeometrySnapshot?.bodyRepresentations ??
       shown?.derived.bodyRepresentations;
-    const faceting = shown ? sweepFacetingAdvisories(shown, shownBodies) : [];
+    const faceting = shown
+      ? [
+          ...sweepFacetingAdvisories(shown, shownBodies),
+          ...loftFacetingAdvisories(shown, shownBodies)
+        ]
+      : [];
     const featureWarnings = currentFaceGeometryPreview
       ? currentFaceGeometryPreview.geometry.featureWarnings
       : currentGeometrySnapshot
@@ -8821,13 +8963,19 @@ export function App() {
     () => countClosedProfileSketches(doc, parameterScope.scope),
     [doc, parameterScope]
   );
+  const hasCylindricalFace = useMemo(
+    () => liveCylindricalFace(liveBodyRepresentations, hiddenBodyIds),
+    [liveBodyRepresentations, hiddenBodyIds]
+  );
   const availability: ToolAvailability = {
     editDisabledReason,
+    editDisabledExplained: liveSessionConnecting,
     sketchCount: sketchOptions.length,
     closedProfileSketchCount,
     liveBodyCount: committedBodyCount,
     exactGeometryReady: displayedGeometryComplete,
-    hasEdgeSelected: selectedEdges.length > 0
+    hasEdgeSelected: selectedEdges.length > 0,
+    ...(hasCylindricalFace !== undefined ? { hasCylindricalFace } : {})
   };
   // What the palette, the verb rail and the command bar show. Launching
   // a tool still reads `availability`, so a tool that needs the finished
@@ -9706,6 +9854,7 @@ export function App() {
     // includes the armed operation: an edge picked for the Fillet tool arms
     // one, and leaving it armed kept its "Fillet · Ready" chip and its lane
     // instructions up over the fillet they had just made.
+    offerUndoForCommit();
     dispatchInteraction({ type: 'commit-complete' });
     setTool(null);
     setSelectedFeatureNode(null);
@@ -9713,6 +9862,17 @@ export function App() {
     setSelectedEdges([]);
     setSelectedBodyIds([]);
     setSelectedSketchProfileId(null);
+  }
+
+  /**
+   * "Added box." offered no Undo, though Delete and Duplicate do (13 November
+   * review I22). A toast per add would break the rule that only outcomes the
+   * viewport cannot show raise one, so the status line itself offers Undo
+   * while it still reports the commit. The success status is set just after
+   * a validated commit's `onSuccess` returns, hence the microtask.
+   */
+  function offerUndoForCommit(): void {
+    queueMicrotask(() => setUndoableStatusAt(lastStatusAtRef.current));
   }
 
   /**
@@ -9887,6 +10047,38 @@ export function App() {
     [doc]
   );
 
+  const extrudeReturnRef = useRef<{
+    sketchId: SketchId;
+    plane: SketchPlaneRef;
+    version: number;
+  } | null>(null);
+  const previousInteractionModeRef = useRef(interaction.mode);
+  useEffect(() => {
+    const previous = previousInteractionModeRef.current;
+    previousInteractionModeRef.current = interaction.mode;
+    const back = extrudeReturnRef.current;
+    if (!back || previous !== 'region' || interaction.mode === 'region') {
+      return;
+    }
+    extrudeReturnRef.current = null;
+    // Built (the document moved on) or replaced by another command: stay.
+    if (
+      interaction.mode !== 'idle' ||
+      managerRef.current?.document.version !== back.version ||
+      !findSketch(managerRef.current.document, back.sketchId)
+    ) {
+      return;
+    }
+    setSelectedProfiles([]);
+    dispatchInteraction({
+      type: 'enter-sketch',
+      plane: back.plane,
+      sketchId: back.sketchId
+    });
+    setStatus('Extrude canceled · back in the sketch.');
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs on the mode change alone
+  }, [interaction.mode]);
+
   function startExtrude(sketchId: SketchId) {
     const view = sketchViews.find(
       (candidate) => candidate.sketchId === sketchId
@@ -9931,7 +10123,15 @@ export function App() {
     // back). The commit path infers add/cut from drag direction and the
     // kernel's classification. With no prior selection, every valid profile
     // extrudes together; the largest one anchors the arrow.
-    const chosen = existing.length > 0 ? existing : available;
+    // I42: with nothing picked, the regions outside holes; a circle drawn
+    // as a hole is not extruded into a plug.
+    const outside = new Set(
+      regionsOutsideHoles(view?.regions ?? []).map(({ profileId }) => profileId)
+    );
+    const chosen =
+      existing.length > 0
+        ? existing
+        : available.filter(({ profileId }) => outside.has(profileId));
     const anchor = chosen.reduce(
       (best, candidate) => (candidate.area > best.area ? candidate : best),
       chosen[0]!
@@ -9946,6 +10146,15 @@ export function App() {
     setSelectedSketchProfileId(sketchId);
     setSelectedProfiles(chosen);
     setTool(null);
+    // Cancelled before it builds, an Extrude started in a sketch returns
+    // to that sketch rather than to Build (I42).
+    extrudeReturnRef.current = activeSketch
+      ? {
+          sketchId,
+          plane: activeSketch.plane,
+          version: managerRef.current?.document.version ?? -1
+        }
+      : null;
     if (activeSketch) {
       dispatchInteraction({ type: 'exit-sketch' });
     } else if (interaction.mode !== 'idle') {
@@ -10079,10 +10288,18 @@ export function App() {
     }
     // Bodies selected first (in the Objects panel, say) are its bodies, in
     // the order they were picked: a subtract's first is its base.
-    const initialBodies = selectedBodyIds.flatMap((bodyId) => {
+    const chosenBodies = selectedBodyIds.flatMap((bodyId) => {
       const body = inPlaceBodyPick(bodyId);
       return body ? [body] : [];
     });
+    // With nothing chosen, a model's only body is the body, as it is for
+    // Move: Scale, Mirror and the rest asked to "Click the body" of it.
+    const loneBodyId =
+      chosenBodies.length === 0 && !selectedFace && sweptFaces.length === 0
+        ? loneBodyFor(tool, representations, hiddenBodyIds)
+        : null;
+    const loneBody = loneBodyId ? inPlaceBodyPick(loneBodyId) : null;
+    const initialBodies = loneBody ? [loneBody] : chosenBodies;
     // Edges selected first (the rail's Fillet, the edge's own
     // context menu) are a fillet's or chamfer's edges, in pick order.
     const initialEdges = IN_PLACE_TOOL_SPECS[tool].edgeMode
@@ -11259,9 +11476,8 @@ export function App() {
         });
         setMoveSnap(null);
         setTool('transform');
-        setStatus(
-          'Move sketch: drag the arrows — centers snap to faces of other bodies, Shift is free.'
-        );
+        // The Move bar says the step; a toast said it a second time.
+        retireStatusMessage();
         return true;
       }
       // WF-07 (resolved): Move used to be two UIs for one command, and which
@@ -11288,9 +11504,7 @@ export function App() {
         });
         setMoveSnap(null);
         setTool('transform');
-        setStatus(
-          'Move/Rotate: drag the arrows or rings — snapping follows your zoom, Shift is free.'
-        );
+        retireStatusMessage();
         return true;
       }
     }
@@ -11331,6 +11545,20 @@ export function App() {
    * preview can never outlive the card that made it, and nobody has to count
    * presses to reach a clean workspace.
    */
+  /**
+   * Cancels a Move and says so, as every other command's Cancel does: an
+   * Escape out of Move used to report nothing.
+   */
+  function cancelMove() {
+    const sketch = movePreview?.target === 'sketch';
+    cancelPanel();
+    setStatus(
+      sketch
+        ? 'Move canceled; the sketch is unchanged.'
+        : 'Move canceled; nothing was added.'
+    );
+  }
+
   function cancelPanel() {
     cancelPendingRegionExtrusion();
     cancelDirectManipulationRef.current?.();
@@ -11734,13 +11962,30 @@ export function App() {
     setStatus(`${normalToFaceTarget.label}: viewing normal to face.`);
   }
 
+  /**
+   * Shows the model in `mode`. The toast names it at once rather than after
+   * the last message's dwell: paced, W pressed three times left "Wireframe"
+   * up while the model already showed Shaded + edges (I54).
+   */
+  function setDisplayMode(mode: DisplayMode) {
+    viewerSettingsRef.current = {
+      ...viewerSettingsRef.current,
+      displayMode: mode
+    };
+    setViewerSettings((current) => ({ ...current, displayMode: mode }));
+    setStatus(`Display: ${DISPLAY_MODE_LABELS[mode]}.`, { immediate: true });
+  }
+
   function cycleDisplayMode() {
-    const index = DISPLAY_MODE_ORDER.indexOf(viewerSettings.displayMode);
-    const next =
+    // From the latest mode, not this render's: two presses before a render
+    // would otherwise both step from the same mode.
+    const index = DISPLAY_MODE_ORDER.indexOf(
+      viewerSettingsRef.current.displayMode
+    );
+    setDisplayMode(
       DISPLAY_MODE_ORDER[(index + 1) % DISPLAY_MODE_ORDER.length] ??
-      'shaded-edges';
-    setViewerSettings((current) => ({ ...current, displayMode: next }));
-    setStatus(`Display: ${DISPLAY_MODE_LABELS[next]}.`);
+        'shaded-edges'
+    );
   }
 
   function toggleProjection() {
@@ -11756,13 +12001,38 @@ export function App() {
    * it off returns exactly the mode, the hidden bodies and the selection
    * that were on screen before.
    */
+  /**
+   * Flips the orbit mode preference, which is an account setting like any
+   * other: the same change Settings → Controls → Orbit makes, synced the same
+   * way. The camera reads it per update, so the next drag uses it.
+   */
+  function toggleOrbitMode() {
+    const current = appSettingsRef.current;
+    const orbitMode =
+      current.viewport.orbitMode === 'turntable' ? 'free' : 'turntable';
+    handleAppSettingsChange({
+      ...current,
+      viewport: { ...current.viewport, orbitMode }
+    });
+    setStatus(
+      orbitMode === 'turntable'
+        ? 'Turntable orbit · Z stays up and a drag stops at the top and bottom views.'
+        : 'Free orbit · a drag carries over the top and bottom views.',
+      { unlogged: true }
+    );
+  }
+
   function toggleXray() {
     const next = !viewerSettingsRef.current.xray;
+    viewerSettingsRef.current = { ...viewerSettingsRef.current, xray: next };
     setViewerSettings((current) => ({ ...current, xray: next }));
+    // At once, like the display mode it rides over: the Display menu's
+    // X-ray switch and its toast must not disagree.
     setStatus(
       next
         ? `X-ray on · faces at ${appSettings.viewport.xrayOpacity}% · picks and box selection go through them.`
-        : 'X-ray off.'
+        : 'X-ray off.',
+      { immediate: true }
     );
   }
 
@@ -11919,6 +12189,14 @@ export function App() {
       persistSectionView(undefined);
       clearSectionOutline();
       setStatus('Section view off.', { immediate: true });
+      return;
+    }
+    // An empty stage has nothing to cut; the palette says so rather than
+    // leaving a cut on with no controls to carry into the next mode (I49).
+    if (!viewerBodies.some((body) => !body.consumed)) {
+      setStatus('Nothing to cut yet · add or show a body first.', {
+        immediate: true
+      });
       return;
     }
     // Switching the cut on brings its controls back, even when they were
@@ -12630,7 +12908,7 @@ export function App() {
           ? // Signed out is the normal state, and the Settings footer already
             // reads "Device only"; the header stays quiet rather than repeat it.
             ''
-          : 'Beta sign-in unavailable · device settings remain active.'
+          : 'Cloud unavailable · settings and projects stay on this device.'
       );
       return;
     }
@@ -12773,7 +13051,11 @@ export function App() {
   async function handleDeleteAssistantCredential() {
     if (
       appSettings.general.confirmDestructiveActions &&
-      !window.confirm('Remove the saved personal AI credential?')
+      !(await confirmInPage({
+        title: 'Remove the saved personal AI credential?',
+        body: 'The assistant stops using it until you add a credential again.',
+        confirmLabel: 'Remove'
+      }))
     ) {
       return;
     }
@@ -13205,12 +13487,14 @@ export function App() {
     }
   }
 
-  function handleResetAppSettings() {
+  async function handleResetAppSettings() {
     if (
       appSettings.general.confirmDestructiveActions &&
-      !window.confirm(
-        'Reset application settings on this device? Projects are not deleted.'
-      )
+      !(await confirmInPage({
+        title: 'Reset settings on this device?',
+        body: 'Every setting goes back to its default. Projects are not deleted.',
+        confirmLabel: 'Reset settings'
+      }))
     ) {
       return;
     }
@@ -13242,7 +13526,12 @@ export function App() {
     setSettingsMessage('Viewport defaults applied to the current view.');
   }
 
-  async function handleCreateProject(name: string, units: UnitSystem) {
+  /** Resolves true once the new project is the one on screen. */
+  async function handleCreateProject(
+    name: string,
+    units: UnitSystem
+  ): Promise<boolean> {
+    let opened = false;
     const isCurrent = beginProjectNavigation();
     const activeProjectSince = snapshotActiveProject();
     setAssistantCollapsed(true);
@@ -13255,6 +13544,7 @@ export function App() {
       await saveLocalProject(localDocument);
       if (!isCurrent()) return;
       hydrateDocument(localDocument, { activeProjectSince });
+      opened = true;
       setProjects((current) => [
         summarizeLocalDocument(localDocument),
         ...current
@@ -13268,16 +13558,16 @@ export function App() {
       // This is a failed device save, not a cloud-create failure. Do not enter
       // the offline fallback and replace the unsaved project on screen.
       finishBusy();
-      return;
+      return false;
     }
     try {
-      if (!isCurrent()) return;
+      if (!isCurrent()) return false;
       if (!session) {
         // The document effect's flush lands on 'local' once the device write
         // is done; forcing it here would show "Local only" for a frame and
         // then the spinner the effect reports anyway.
         await createLocal(localUserId);
-        return;
+        return opened;
       }
       // The browser builds the new document and the account stores it as
       // sent (ADR-024 Phase 1). The route trims the name it compares with.
@@ -13297,16 +13587,18 @@ export function App() {
         response.document.projectId,
         response.document.version
       );
-      if (!isCurrent()) return;
+      if (!isCurrent()) return false;
       setCloudAvailable(true);
       setCloudProjectIds((current) =>
         new Set(current).add(response.document.projectId)
       );
       hydrateDocument(response.document, { activeProjectSince });
+      opened = true;
       setProjects((current) => [response.project, ...current]);
       setStatus(`Created ${response.project.name}.`);
+      return true;
     } catch (error) {
-      if (!isCurrent()) return;
+      if (!isCurrent()) return false;
       // A refused request is not an unreachable one. Falling back to local mode
       // on a validation failure would persist exactly the project the server
       // just rejected, so surface it and let the user correct the input.
@@ -13317,7 +13609,7 @@ export function App() {
       ) {
         setCloudAvailable(true);
         setStatus(errorMessage(error, 'Could not create the project.'));
-        return;
+        return false;
       }
       const sessionExpired = error instanceof ApiError && error.status === 401;
       if (sessionExpired) {
@@ -13328,6 +13620,7 @@ export function App() {
         sessionExpired ? localUserId : (session?.userId ?? localUserId),
         `${errorMessage(error, 'Cloud unavailable')} Working locally · save it to your account later.`
       );
+      return opened;
     } finally {
       finishBusy();
     }
@@ -14014,11 +14307,7 @@ export function App() {
           setSharePage({
             phase: 'error',
             title: 'We couldn’t open this shared model',
-            message: describeFailure
-              ? describeFailure(error)
-              : errorMessage(error, 'Could not open the share link.'),
-            guidance:
-              'Check your connection and try again. If it keeps failing, ask the owner to check the link.',
+            ...describeShareOpenFailure(error, describeFailure),
             retryable: true
           });
         }
@@ -14099,9 +14388,10 @@ export function App() {
   }
 
   /**
-   * Make a copy, from Tweak's rail or (for an encrypted link) View's: an
-   * encrypted link's signed-in visitor chooses between the account and this
-   * device (slice 5-11); every other visitor gets the device copy, as before.
+   * Make a copy, from Tweak's rail or (for an encrypted link) View's: a
+   * signed-in visitor chooses between the account and this device, whatever
+   * the link (slice 5-11; design review I85, where a plaintext link copied
+   * to the device unasked). A signed-out visitor gets the device copy.
    */
   const [shareCopyChoice, setShareCopyChoice] = useState<{
     accountEncrypts: boolean | null;
@@ -14110,7 +14400,7 @@ export function App() {
   function requestShareCopy() {
     const active = shareSessionRef.current;
     if (!active) return;
-    if (!active.encryptedMode || !session) {
+    if (!session) {
       void handleMakeShareCopy();
       return;
     }
@@ -14354,6 +14644,94 @@ export function App() {
     );
   }
 
+  /**
+   * A library action that failed. The library's only status is one grey
+   * line in its sidebar foot, so a failure there also raises a toast in a
+   * warning tone; the raw text goes to the activity log, not the message.
+   */
+  function reportLibraryFailure(error: unknown, fallback: string) {
+    const plain = describePlainFailure(error, { fallback, technical: true });
+    setStatus(plain.message, plain.detail ? { detail: plain.detail } : {});
+    if (onStartScreenRef.current) {
+      announce(plain.message, undefined, { tone: 'warning' });
+    }
+  }
+
+  /**
+   * Renames a project from the library's tile or its Properties, without
+   * opening it (design review I14: renaming meant opening the project and
+   * waiting on the kernel). An account project is written there first,
+   * fenced on the version just read; see `renameLibraryProject`.
+   */
+  async function handleRenameLibraryProject(
+    project: ProjectSummary,
+    name: string
+  ): Promise<boolean> {
+    if (name.trim() === project.name) return true;
+    const inAccount =
+      Boolean(session) && cloudProjectIds.has(project.projectId);
+    if (session && !inAccount && !accountProjectListReached) {
+      // Unknown, not device-only: renaming this device's copy alone could
+      // leave the account's under the old name.
+      const message = `Your account could not be reached, so ${project.name} was not renamed. Try again once it is back.`;
+      setStatus(message);
+      announce(message, undefined, { tone: 'warning' });
+      return false;
+    }
+    setBusy(true);
+    try {
+      const { renameLibraryProject } =
+        await import('./lib/libraryProjectRename');
+      const stored = await renameLibraryProject(project.projectId, name, {
+        actorUserId: session?.userId ?? localUserId,
+        loadLocal: loadLocalProject,
+        saveLocal: saveLocalProject,
+        ...(inAccount
+          ? {
+              account: {
+                load: (projectId: string) => api.loadProject(projectId),
+                save: (input: SaveProjectDocumentRequest) =>
+                  api.saveProjectDocument(input),
+                markSynced: saveLastSyncedVersion
+              }
+            }
+          : {})
+      });
+      if (inAccount) {
+        remoteVersionsRef.current.set(project.projectId, stored.version);
+      }
+      setProjects((current) =>
+        current.map((candidate) =>
+          candidate.projectId === project.projectId
+            ? {
+                ...candidate,
+                name: stored.name,
+                documentVersion: stored.version
+              }
+            : candidate
+        )
+      );
+      setStatus(`Renamed ${project.name} to ${stored.name}.`);
+      return true;
+    } catch (error) {
+      const { LibraryRenameRefusal } =
+        await import('./lib/libraryProjectRename');
+      if (error instanceof LibraryRenameRefusal) {
+        setStatus(error.message);
+        announce(error.message, undefined, { tone: 'warning' });
+      } else if (error instanceof ApiError && error.status === 409) {
+        const message = `${project.name} changed in your account since this list was loaded. Open it to rename it.`;
+        setStatus(message);
+        announce(message, undefined, { tone: 'warning' });
+      } else {
+        reportLibraryFailure(error, `Could not rename ${project.name}.`);
+      }
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function handleMoveProjectToShelf(
     project: ProjectSummary,
     status: ProjectStatus
@@ -14369,9 +14747,57 @@ export function App() {
             ? `Archived ${project.name}.`
             : `Restored ${project.name}.`
       );
+      announceShelfMove([project], project.name, status);
     } catch (error) {
-      setStatus(errorMessage(error, `Could not move ${project.name}.`));
+      reportLibraryFailure(error, `Could not move ${project.name}.`);
     }
+  }
+
+  /**
+   * Move to trash and Archive take a project off the shelf in view, so they
+   * answer with a toast that names what went and an Undo that puts each one
+   * back on the shelf it came from; a Restore needs neither.
+   */
+  function announceShelfMove(
+    moved: readonly ProjectSummary[],
+    what: string,
+    status: ProjectStatus
+  ) {
+    if (moved.length === 0 || (status !== 'deleted' && status !== 'archived')) {
+      return;
+    }
+    const previous = moved.map((project) => ({
+      project,
+      status: project.organization?.status ?? 'active'
+    }));
+    announce(
+      status === 'deleted'
+        ? `Moved ${what} to the trash.`
+        : `Archived ${what}.`,
+      {
+        label: 'Undo',
+        run: () => {
+          void (async () => {
+            let failure: unknown;
+            for (const { project, status: back } of previous) {
+              try {
+                await persistOrganization(project.projectId, (current) =>
+                  applyOrganizationUpdate(current, { status: back })
+                );
+              } catch (error) {
+                failure ??= error;
+              }
+            }
+            setStatus(
+              failure
+                ? errorMessage(failure, `Could not put back ${what}.`)
+                : `Put back ${what}.`
+            );
+          })();
+        }
+      },
+      { repeatsStatusAt: lastStatusAtRef.current }
+    );
   }
 
   /** Several projects onto one shelf, from the library's selection. */
@@ -14380,6 +14806,7 @@ export function App() {
     status: ProjectStatus
   ) {
     let moved = 0;
+    const movedProjects: ProjectSummary[] = [];
     let failure: unknown;
     for (const project of targets) {
       try {
@@ -14387,6 +14814,7 @@ export function App() {
           applyOrganizationUpdate(current, { status })
         );
         moved += 1;
+        movedProjects.push(project);
       } catch (error) {
         failure ??= error;
       }
@@ -14396,11 +14824,9 @@ export function App() {
         ? targets[0]!.name
         : countLabel(moved, 'project', 'projects');
     if (failure) {
-      setStatus(
-        errorMessage(
-          failure,
-          `Moved ${countLabel(moved, 'project', 'projects')}; ${targets.length - moved} could not be moved.`
-        )
+      reportLibraryFailure(
+        failure,
+        `Moved ${countLabel(moved, 'project', 'projects')}; ${targets.length - moved} could not be moved.`
       );
       return;
     }
@@ -14411,6 +14837,7 @@ export function App() {
           ? `Archived ${what}.`
           : `Restored ${what}.`
     );
+    announceShelfMove(movedProjects, what, status);
   }
 
   /** Pins or unpins several projects, from the library's selection. */
@@ -14432,13 +14859,11 @@ export function App() {
       targets.length === 1
         ? targets[0]!.name
         : countLabel(targets.length, 'project', 'projects');
-    setStatus(
-      failure
-        ? errorMessage(failure, `Could not update every project.`)
-        : pinned
-          ? `Pinned ${what}.`
-          : `Unpinned ${what}.`
-    );
+    if (failure) {
+      reportLibraryFailure(failure, 'Could not update every project.');
+      return;
+    }
+    setStatus(pinned ? `Pinned ${what}.` : `Unpinned ${what}.`);
   }
 
   async function handleTogglePin(project: ProjectSummary) {
@@ -14452,7 +14877,7 @@ export function App() {
         pinned ? `Pinned ${project.name}.` : `Unpinned ${project.name}.`
       );
     } catch (error) {
-      setStatus(errorMessage(error, `Could not update ${project.name}.`));
+      reportLibraryFailure(error, `Could not update ${project.name}.`);
     }
   }
 
@@ -14495,7 +14920,7 @@ export function App() {
           : undefined;
       });
     } catch (error) {
-      setStatus(errorMessage(error, 'Could not reorder the projects.'));
+      reportLibraryFailure(error, 'Could not reorder the projects.');
       return;
     }
     if (pin && pinnedName !== undefined) {
@@ -14550,6 +14975,32 @@ export function App() {
    * fallback, the derived-projection rescue and the shelf bookkeeping below,
    * which is where the interesting failure modes live.
    */
+  /**
+   * Gives a copy its source's card picture before its tile mounts. A tile
+   * that reads no picture asks the backfill, which finds none for a project
+   * never opened, and the copy showed the bare placeholder cube until it was.
+   * Never throws: the copy is complete without a picture.
+   */
+  async function seedCopyThumbnail(
+    source: ProjectDocument,
+    copy: ProjectDocument
+  ): Promise<void> {
+    try {
+      const [{ seedRecoveryCopyThumbnail }, { renderPartThumbnail }] =
+        await Promise.all([
+          import('./lib/recoveryCopyThumbnail'),
+          import('./lib/partThumbnail')
+        ]);
+      await seedRecoveryCopyThumbnail(source, copy, {
+        loadCached: loadProjectThumbnail,
+        save: saveProjectThumbnail,
+        render: renderPartThumbnail
+      });
+    } catch {
+      // A placeholder, filled the first time the copy is opened and left.
+    }
+  }
+
   async function handleDuplicateProject(
     project: ProjectSummary,
     saveState?: ProjectCheckpoint
@@ -14652,6 +15103,7 @@ export function App() {
               response.project.organization
             ).catch(() => undefined);
           }
+          await seedCopyThumbnail(localSource ?? localCopy, localCopy);
           setProjects((current) =>
             [...current, response.project].sort(compareProjectSummaries)
           );
@@ -14691,7 +15143,7 @@ export function App() {
       const copy = duplicateProjectDocument(
         source,
         duplicateProjectName(
-          head.name,
+          copyBaseName(head.projectId, head.name),
           projects.map((summary) => summary.name)
         ),
         session?.userId ?? localUserId,
@@ -14713,6 +15165,7 @@ export function App() {
       await saveLocalProjectOrganization(copy.projectId, organization, {
         mirrorPending: true
       }).catch(() => undefined);
+      await seedCopyThumbnail(source, copy);
       setProjects((current) =>
         [...current, summarizeLocalDocument(copy, organization)].sort(
           compareProjectSummaries
@@ -14930,9 +15383,11 @@ export function App() {
   async function handleDeleteProjectForever(project: ProjectSummary) {
     if (
       appSettings.general.confirmDestructiveActions &&
-      !window.confirm(
-        `Permanently delete “${project.name}”? This cannot be undone.`
-      )
+      !(await confirmInPage({
+        title: `Delete “${project.name}” forever?`,
+        body: 'This cannot be undone.',
+        confirmLabel: 'Delete forever'
+      }))
     ) {
       return;
     }
@@ -14941,7 +15396,7 @@ export function App() {
       await destroyProjects([project]);
       setStatus(`Deleted ${project.name} permanently.`);
     } catch (error) {
-      setStatus(errorMessage(error, 'Could not delete the project.'));
+      reportLibraryFailure(error, 'Could not delete the project.');
     } finally {
       setBusy(false);
     }
@@ -14956,9 +15411,11 @@ export function App() {
     if (
       targets.length === 0 ||
       (appSettings.general.confirmDestructiveActions &&
-        !window.confirm(
-          `Permanently delete ${countLabel(targets.length, 'project', 'projects')}? This cannot be undone.`
-        ))
+        !(await confirmInPage({
+          title: `Delete ${countLabel(targets.length, 'project', 'projects')} forever?`,
+          body: 'This cannot be undone.',
+          confirmLabel: 'Delete forever'
+        })))
     ) {
       return;
     }
@@ -14969,7 +15426,7 @@ export function App() {
         `Deleted ${countLabel(targets.length, 'project', 'projects')} permanently.`
       );
     } catch (error) {
-      setStatus(errorMessage(error, 'Could not delete every project.'));
+      reportLibraryFailure(error, 'Could not delete every project.');
     } finally {
       setBusy(false);
     }
@@ -14986,9 +15443,11 @@ export function App() {
     const name = definition.name.replace('Demo · ', '');
     if (
       appSettings.general.confirmDestructiveActions &&
-      !window.confirm(
-        `Reset the ${name} sample? Your changes to it are discarded; save a copy first to keep them.`
-      )
+      !(await confirmInPage({
+        title: `Reset the ${name} sample?`,
+        body: 'Your changes to it are discarded. Save a copy first to keep them.',
+        confirmLabel: 'Reset sample'
+      }))
     ) {
       return false;
     }
@@ -14998,7 +15457,7 @@ export function App() {
       setStatus(`Reset ${name}. It opens as the original.`);
       return true;
     } catch (error) {
-      setStatus(errorMessage(error, `Could not reset ${name}.`));
+      reportLibraryFailure(error, `Could not reset ${name}.`);
       return false;
     } finally {
       setBusy(false);
@@ -15011,9 +15470,11 @@ export function App() {
     }
     if (
       appSettings.general.confirmDestructiveActions &&
-      !window.confirm(
-        `Permanently delete ${countLabel(trashed.length, 'project', 'projects')} in the trash? This cannot be undone.`
-      )
+      !(await confirmInPage({
+        title: 'Empty the trash?',
+        body: `${countLabel(trashed.length, 'project is', 'projects are')} deleted forever. This cannot be undone.`,
+        confirmLabel: 'Empty trash'
+      }))
     ) {
       return;
     }
@@ -15024,7 +15485,7 @@ export function App() {
         `Emptied the trash · ${countLabel(trashed.length, 'project', 'projects')} deleted.`
       );
     } catch (error) {
-      setStatus(errorMessage(error, 'Could not empty the trash.'));
+      reportLibraryFailure(error, 'Could not empty the trash.');
     } finally {
       setBusy(false);
     }
@@ -15125,7 +15586,7 @@ export function App() {
     } else {
       setToast(null);
     }
-    setStatus(label ? `Undo ${label}` : 'Undo');
+    setStatus(historyStepMessage('undo', label));
   }
 
   function handleRedo() {
@@ -15181,7 +15642,7 @@ export function App() {
       };
     }
     setToast(null);
-    setStatus(label ? `Redo ${label}` : 'Redo');
+    setStatus(historyStepMessage('redo', label));
   }
 
   /**
@@ -15419,9 +15880,12 @@ export function App() {
       return;
     }
     if (
-      !window.confirm(
-        `Restore ${localDocument.name} in your account from the copy saved on this device?\n\nThe unreadable current account copy will be replaced. Existing revisions are not changed.`
-      )
+      !(await confirmInPage({
+        title: `Restore ${localDocument.name} in your account from the copy saved on this device?`,
+        body: 'The unreadable current account copy will be replaced. Existing revisions are not changed.',
+        confirmLabel: 'Restore from this device',
+        tone: 'default'
+      }))
     ) {
       setStatus(
         'Account restore canceled. Your work remains saved on this device.'
@@ -15551,7 +16015,7 @@ export function App() {
                 ? 'synced'
                 : 'syncing'
             );
-            setStatus('Saved revision.');
+            setStatus('Made a save point.');
           }
         } catch (error) {
           if (isCurrent()) {
@@ -15614,7 +16078,7 @@ export function App() {
         await saveLocalProject(savingDocument);
         if (isCurrentProject())
           setStatus(
-            'Saved revision on this device · sharing through the room.'
+            'Made a save point on this device · sharing through the room.'
           );
         return;
       }
@@ -15682,7 +16146,13 @@ export function App() {
         }
         setCloudAvailable(false);
         setSaveState('local');
-        setStatus('Saved on this device.');
+        // Autosave already says "Saved on this device."; this save also made
+        // a save point in Revisions, so it says so (I22).
+        setStatus(
+          reason === DEFAULT_SAVE_REASON
+            ? 'Made a save point on this device.'
+            : `Made save point “${reason}” on this device.`
+        );
         return;
       }
       // A queued autosave writing the same document behind this one would race
@@ -15742,7 +16212,7 @@ export function App() {
         // controller gives it to writes already queued; this, to the model.
         showAccountEcho(withEchoedSavePoints(savingManager.document, saved));
         setCloudAvailable(true);
-        setStatus(sourceWarning ?? 'Saved revision.');
+        setStatus(sourceWarning ?? 'Made a save point.');
         return;
       }
       const restored = withLocalDerived(saved, savingManager.document);
@@ -15759,7 +16229,7 @@ export function App() {
       if (savingManager.document.version !== savingDocument.version) {
         await saveLocalProject(savingManager.document);
       }
-      setStatus(sourceWarning ?? 'Saved revision.');
+      setStatus(sourceWarning ?? 'Made a save point.');
     } catch (error) {
       if (!isCurrentProject()) {
         return;
@@ -15814,6 +16284,22 @@ export function App() {
   }
 
   const aiPreviewEpochRef = useRef(0);
+  // Bumped when something opens over the stage that the model should stay
+  // clear of: the viewer reframes only if part of the model is covered.
+  const [clearStageRequest, setClearStageRequest] = useState(0);
+  const sectionControlsShown =
+    viewerSettings.sectionView !== undefined &&
+    panelState.sectionPanelOpen !== false;
+  useEffect(() => {
+    if (sectionControlsShown) setClearStageRequest((request) => request + 1);
+  }, [sectionControlsShown]);
+  // The measurement workbench floats over View's and Tweak's stage (a
+  // phone's sheet across its foot, I47): what it measures stays in view.
+  // Build's workbench is a command card and never moves the camera.
+  const measuringOverStage = measuring && modelingLocked;
+  useEffect(() => {
+    if (measuringOverStage) setClearStageRequest((request) => request + 1);
+  }, [measuringOverStage]);
 
   /** D06 slice E: a proposal that edits a drawing sheet, not the model. */
   function isDrawingProposal(proposal: CadPatchProposal): boolean {
@@ -15891,6 +16377,9 @@ export function App() {
         };
       }
       setPreviewDoc(preflight.candidate);
+      // The proposal is reviewed on the model: keep it clear of the
+      // assistant's stream and the panels (I6).
+      setClearStageRequest((request) => request + 1);
       setStatus('Previewing exact proposed geometry.');
       return { ok: true };
     } catch (error) {
@@ -16146,7 +16635,7 @@ export function App() {
       return;
     }
     if (!/\.(?:stl|step|stp|3mf|obj|glb|ply)$/i.test(file.name)) {
-      setStatus(`Unsupported import format: ${file.name}`);
+      refuseImportOnCard(file.name, unsupportedImportMessage(file.name));
       return;
     }
 
@@ -16403,7 +16892,7 @@ export function App() {
         } = await import('./lib/meshImportWorkerClient');
         const format = meshImportFormatForFileName(file.name);
         if (!format) {
-          setStatus(`Unsupported import format: ${file.name}`);
+          refuseImportOnCard(file.name, unsupportedImportMessage(file.name));
           return;
         }
         // The open document's units, not millimetres: the import runs the
@@ -16604,6 +17093,18 @@ export function App() {
     }
   }
 
+  /**
+   * A file refused before it was read. The import card says so too: it used
+   * to keep showing the previous run's failure ("Not imported empty.stl")
+   * while this refusal went only to the status line (review I4).
+   */
+  function refuseImportOnCard(fileName: string, message: string) {
+    setStatus(message);
+    const sink = createImportProgressSink();
+    sink.start({ fileName, phases: ['reading'], cancellable: false });
+    sink.finish({ tone: 'error', message });
+  }
+
   function createImportProgressSink(): ImportProgressSink {
     // New per run, so a second import replaces the card rather than being
     // merged into the first one's phases.
@@ -16646,6 +17147,32 @@ export function App() {
   }
 
   /**
+   * Files dropped on the start screen, or picked through its Import. A
+   * backup restores as it does from the File menu; CAD files make a new
+   * project named for them, and the import then runs in it once it is on
+   * screen — the same import Import CAD files runs, with its units prompt
+   * and progress card. The workspace's own drop target is not mounted here,
+   * and before this the browser opened or downloaded the file instead.
+   */
+  async function handleStartScreenFiles(files: File[], units: UnitSystem) {
+    const { planStartScreenImport } = await import('./lib/startScreenImport');
+    const plan = planStartScreenImport(files);
+    if (plan.kind === 'refuse') {
+      setStatus(plan.message);
+      announce(plan.message, undefined, { tone: 'warning' });
+      return;
+    }
+    if (plan.kind === 'backup') {
+      await handleImportProject(plan.file);
+      return;
+    }
+    pendingStartImportRef.current = { files: plan.files, projectId: null };
+    if (!(await handleCreateProject(plan.name, units))) {
+      pendingStartImportRef.current = null;
+    }
+  }
+
+  /**
    * Files dropped on the viewport. A backup restores as its own project, so
    * it travels alone; anything else is the File menu's import, same rules.
    */
@@ -16656,7 +17183,10 @@ export function App() {
       return;
     }
     if (files.length !== 1) {
-      setStatus('Drop one .openzcad backup on its own.');
+      refuseImportOnCard(
+        countLabel(files.length, 'file', 'files'),
+        'Drop one .openzcad backup on its own.'
+      );
       return;
     }
     await handleImportProject(backups[0]!);
@@ -16666,7 +17196,10 @@ export function App() {
     const shaprFiles = files.filter((file) => /\.shapr$/i.test(file.name));
     if (shaprFiles.length === 0) {
       if (files.length !== 1) {
-        setStatus('Select one STEP or mesh file, or one .shapr + STEP pair.');
+        refuseImportOnCard(
+          countLabel(files.length, 'file', 'files'),
+          'Select one STEP or mesh file, or one .shapr + STEP pair.'
+        );
         return;
       }
       await handleImportFile(files[0]!);
@@ -16730,11 +17263,17 @@ export function App() {
       if (controller.signal.aborted) {
         return;
       }
-      const message = errorMessage(error, 'Shapr3D preview failed.');
-      setStatus(message);
+      const plain = describeShaprImportFailure(error);
+      setStatus(plain.message, plain.detail ? { detail: plain.detail } : {});
       setPendingShaprImport((current) =>
         current
-          ? { ...current, phase: 'preview', progress: '', error: message }
+          ? {
+              ...current,
+              phase: 'preview',
+              progress: '',
+              error: plain.message,
+              errorDetail: plain.detail
+            }
           : null
       );
     } finally {
@@ -17177,9 +17716,19 @@ export function App() {
       });
     } catch (error) {
       trackDetail('error_import');
-      const message = errorMessage(error, 'Unable to read backup.');
-      if (isCurrent()) setStatus(`Project import failed: ${message}`);
-      sink.finish({ tone: 'error', message });
+      // A STEP or STL picked through "All files" used to fail with the JSON
+      // parser's words; say what the file is and where it goes instead.
+      const plain = await describeProjectImportFailure(error, file);
+      if (isCurrent()) {
+        setStatus(
+          `Project import failed. ${plain.message}`,
+          plain.detail ? { detail: plain.detail } : {}
+        );
+        if (onStartScreenRef.current) {
+          announce(plain.message, undefined, { tone: 'warning' });
+        }
+      }
+      sink.finish({ tone: 'error', message: plain.message });
     } finally {
       projectTransferRef.current = false;
       setProjectTransferBusy(false);
@@ -17689,6 +18238,30 @@ export function App() {
         : `Sketching on the ${plane} plane offset ${offset} ${doc?.units ?? ''} · Finish Sketch when done.`,
       { sticky: true }
     );
+  }
+
+  /**
+   * Re-opens a sketch step in the viewport, from the Inspector's button or
+   * a History row's double-click. It opens in Select (see `enter-sketch`).
+   */
+  function editSketchFeatureInViewport(feature: FeatureNode) {
+    if (feature.data.featureKind !== 'sketch' || !doc) {
+      return;
+    }
+    const sketch = findSketch(doc, feature.data.sketchId);
+    if (sketch) {
+      selectFeatureNode(null, 'pinned');
+      setTool(null);
+      dispatchInteraction({
+        type: 'enter-sketch',
+        plane: sketch.planeRef,
+        sketchId: sketch.sketchId
+      });
+      // Same reason as the revert pill: entering a sketch from the tree
+      // changes what every key does, so it should say so rather than leaving
+      // the previous message in place.
+      setStatus(`Editing ${sketch.name} · Finish Sketch when done.`);
+    }
   }
 
   function startSketchOnFace(target: FaceTarget): boolean {
@@ -20235,6 +20808,8 @@ export function App() {
   // orphans it.
   useEffect(() => {
     if (interaction.mode !== 'sketch') {
+      // A first Escape armed in one sketch never confirms leaving the next.
+      sketchExitArmedAtRef.current = null;
       setSketchSolveStatus(null);
       setSketchSolving(false);
       setSketchDimensionDraft(null);
@@ -20412,8 +20987,17 @@ export function App() {
     sketchLabels
   ]);
 
+  const sketchSolveSnapshotRef = useRef(sketchSolveSnapshot);
+  sketchSolveSnapshotRef.current = sketchSolveSnapshot;
   useEffect(() => {
     setSketchDiagnosticPoints([]);
+    // A commit records its solve status for the state it commits, in the
+    // same batch as the document change. Clearing the colours here as well
+    // dropped every committed classification, so a fully constrained sketch
+    // stayed blue until a manual Solve (I38). Only a stale status is cleared.
+    if (sketchSolveSnapshotRef.current?.key === currentSketchSolveKey) {
+      return;
+    }
     setSketchSolveDiagnosticObjectIds([]);
     setSketchDefinedObjectIds([]);
   }, [currentSketchSolveKey, editingSketchNode?.sketchId]);
@@ -20436,7 +21020,11 @@ export function App() {
       .filter(({ origin }) => origin !== 'promotion-structure')
       .map(({ constraintId, data }) => ({
         constraintId: String(constraintId),
-        label: describeConstraint(data, nameOf),
+        label: describeConstraint(
+          data,
+          nameOf,
+          sketchPointNamer(editingSketchNode, sketchLabels)
+        ),
         targets: constraintInspectionTargets(
           doc,
           editingSketchNode,
@@ -20467,7 +21055,11 @@ export function App() {
       .map(({ constraintId, data }) => ({
         constraintId: String(constraintId),
         kind: data.constraintKind,
-        label: describeConstraint(data, nameOf),
+        label: describeConstraint(
+          data,
+          nameOf,
+          sketchPointNamer(editingSketchNode, sketchLabels)
+        ),
         editable:
           data.constraintKind === 'distance' ||
           data.constraintKind === 'angle' ||
@@ -20566,9 +21158,15 @@ export function App() {
       selectedSketchEntity && interaction.mode === 'sketch'
         ? {
             kind: selectedSketchEntity.data.objectKind,
-            fitting: constraintToolsForObject(
-              selectedSketchEntity.data.objectKind
-            ).map(({ kind }) => kind)
+            fitting: [
+              ...constraintToolsForObject(
+                selectedSketchEntity.data.objectKind
+              ).map(({ kind }) => kind),
+              // A selected line's length (I39).
+              ...(selectedSketchEntity.data.objectKind === 'line'
+                ? (['distance'] as const)
+                : [])
+            ]
           }
         : null,
     [selectedSketchEntity, interaction.mode]
@@ -20579,6 +21177,78 @@ export function App() {
    * so single-pick tools finish here and two-pick tools arm with one pick
    * left. Choosing the armed tool again disarms it, as on the rail.
    */
+  /** Finish Sketch: every edit is already committed, so nothing is lost. */
+  function finishSketchSession() {
+    dispatchInteraction({ type: 'exit-sketch' });
+    setTool(null);
+    setSketchEditError(null);
+    setSketchDiagnosticPoints([]);
+    setStatus(`${editingSketchName} finished.`);
+  }
+
+  /**
+   * A selected line's length as a driving distance (I39): its two ends are
+   * the picks, so the value prompt opens at once, prefilled with the
+   * current length.
+   */
+  function startLineLengthDimension(objectId: string) {
+    if (!doc || !editingSketchNode) return;
+    if (
+      sketchSolving ||
+      geometryBusy ||
+      !requireCurrentSketchGeometry(editingSketchNode.sketchId)
+    )
+      return;
+    const picks: ConstraintPick[] = [
+      { kind: 'point', objectId, point: 'start' },
+      { kind: 'point', objectId, point: 'end' }
+    ];
+    const measured = measureDrivingDimension(
+      doc,
+      editingSketchNode,
+      'distance',
+      picks,
+      (value) =>
+        evalParamValue(value, parameterScope.scope, doc.units) ?? undefined
+    );
+    if ('error' in measured) {
+      setStatus(measured.error);
+      return;
+    }
+    dispatchInteraction({ type: 'sketch-constraint-tool', kind: null });
+    setSketchDimensionDraft({
+      kind: 'distance',
+      picks,
+      documentVersion: doc.version
+    });
+    setKeypad({
+      kind: 'sketch-dimension',
+      label: 'Distance',
+      initial: String(measured.value),
+      unitKind: 'length'
+    });
+    setStatus('Distance: enter the line’s driving length.');
+  }
+
+  /**
+   * The Dimension key: the selection decides what it measures, and with
+   * nothing selected it arms Distance for two picks.
+   */
+  function startSmartDimension() {
+    if (interaction.mode !== 'sketch') return;
+    const kind = selectedSketchEntity?.data.objectKind;
+    if (selectedSketchEntity && kind === 'line') {
+      startLineLengthDimension(selectedSketchEntity.id);
+      return;
+    }
+    if (selectedSketchEntity && (kind === 'circle' || kind === 'arc')) {
+      handleSelectionConstraintTool('radius');
+      return;
+    }
+    dispatchInteraction({ type: 'sketch-constraint-tool', kind: 'distance' });
+    setStatus(constraintToolSpec('distance').hint);
+  }
+
   function handleSelectionConstraintTool(kind: SketchConstraintToolKind) {
     if (
       interaction.mode !== 'sketch' ||
@@ -20590,6 +21260,14 @@ export function App() {
     }
     if (interaction.session.pendingConstraint?.kind === kind) {
       dispatchInteraction({ type: 'sketch-constraint-tool', kind: null });
+      return;
+    }
+    // A line is dimensioned by its length: one pick, not two endpoints.
+    if (
+      kind === 'distance' &&
+      selectedSketchEntity.data.objectKind === 'line'
+    ) {
+      startLineLengthDimension(selectedSketchEntity.id);
       return;
     }
     const plan = planConstraintFromSelection(
@@ -20777,6 +21455,46 @@ export function App() {
   }
 
   /**
+   * Explains a relation or dimension the solver refused. Nothing was
+   * committed, so the committed sketch keeps its solve status and Undo still
+   * undoes the step before. The message leads with the refused value and
+   * names what it fights in people's words, never the refused constraint
+   * itself as its own culprit.
+   */
+  function reportSketchConstraintRefusal(
+    base: ProjectDocument,
+    prospective: ProjectDocument,
+    sketchId: SketchId,
+    outcome: SketchSolveOutcome,
+    refused: string,
+    replacedConstraintIds: readonly string[] = []
+  ) {
+    const committed = new Set(
+      (findSketch(base, sketchId)?.constraints ?? []).map(({ constraintId }) =>
+        String(constraintId)
+      )
+    );
+    const attempted = new Set(replacedConstraintIds);
+    for (const { constraintId } of findSketch(prospective, sketchId)
+      ?.constraints ?? []) {
+      if (!committed.has(String(constraintId))) {
+        attempted.add(String(constraintId));
+      }
+    }
+    const culprits = topResidualConstraints(
+      prospective,
+      findSketch(prospective, sketchId),
+      outcome.constraintResiduals,
+      2,
+      attempted
+    );
+    setSketchEditError(constraintRefusalMessage(refused, culprits));
+    setStatus(
+      `${refused} was not added: it conflicts with ${culprits[0] ?? 'the existing constraints'}.`
+    );
+  }
+
+  /**
    * Adds a relation and applies it in the same edit, holding its first pick
    * so the others move to meet it (ZC-041). When the hold makes it
    * unsatisfiable (only the first pick can move), it applies free and says
@@ -20846,22 +21564,15 @@ export function App() {
         return;
       }
       if (!solves(outcome)) {
-        setSketchSolveStatus(
-          solveStatusFor(outcome, findSketch(prospective, sketchId))
-        );
-        const culprits = topResidualConstraints(
+        // The refused attempt never reached the document, so its residuals
+        // must not paint the committed sketch as conflicted (I35): the
+        // last committed solve status stands.
+        reportSketchConstraintRefusal(
+          base,
           prospective,
-          findSketch(prospective, sketchId),
-          outcome.constraintResiduals,
-          2
-        );
-        const culpritSuffix =
-          culprits.length > 0 ? ` Likely culprit: ${culprits.join('; ')}.` : '';
-        setSketchEditError(
-          `${label} conflicts with existing constraints.${culpritSuffix} Edit or remove a conflicting constraint; no change was applied.`
-        );
-        setStatus(
-          `${label} refused: ${solveStatusLabel(outcome)};${culpritSuffix} no change was applied.`
+          sketchId,
+          outcome,
+          label
         );
         return;
       }
@@ -21217,23 +21928,21 @@ export function App() {
         );
         return;
       }
-      setSketchSolveStatus(
-        solveStatusFor(outcome, findSketch(prospective, sketchId))
-      );
       if (!outcome.converged || outcome.rolledBack) {
-        const culprits = topResidualConstraints(
+        // As for a relation: a refused value leaves the committed sketch,
+        // and its solve status, exactly as they were (I35).
+        const numeric = Number.isFinite(Number(raw));
+        const unit =
+          draft.kind === 'angle'
+            ? '°'
+            : ` ${base.units === 'inch' ? 'in' : base.units}`;
+        reportSketchConstraintRefusal(
+          base,
           prospective,
-          findSketch(prospective, sketchId),
-          outcome.constraintResiduals,
-          2
-        );
-        const culpritSuffix =
-          culprits.length > 0 ? ` Likely culprit: ${culprits.join('; ')}.` : '';
-        setSketchEditError(
-          `${spec.label} dimension conflicts with existing constraints.${culpritSuffix} Edit or remove a conflicting constraint; no change was applied.`
-        );
-        setStatus(
-          `${spec.label} dimension refused: ${solveStatusLabel(outcome)};${culpritSuffix} no change was applied.`
+          sketchId,
+          outcome,
+          `${spec.label} ${raw.trim()}${numeric ? unit : ''}`,
+          draft.constraintId ? [draft.constraintId] : []
         );
         return;
       }
@@ -21333,13 +22042,20 @@ export function App() {
       return 'Parameter editing is unavailable.';
     }
     const request = ++parameterEditRequest.current;
+    // A name the table does not have was being added, not changed: the lane
+    // said "Parameter 2bad was not changed." of a name that never existed.
+    const existing = listParameters(manager.document).find(
+      (parameter) => parameter.name === name
+    );
     const refuse = (message: string) => {
       if (
         parameterEditRequest.current === request &&
         managerRef.current === manager
       )
         setStatus(
-          `Parameter ${parameterDisplayName(name, listParameters(manager.document).find((parameter) => parameter.name === name)?.description)} was not changed.`,
+          existing
+            ? `Parameter ${parameterDisplayName(name, existing.description)} was not changed.`
+            : `Parameter ${name} was not added.`,
           { detail: message }
         );
       return message;
@@ -21365,11 +22081,22 @@ export function App() {
         geometry.syncOnce(document)
       );
       if (!current()) return stale();
+      // A new parameter takes the quantity its own units state: `width =
+      // 40 mm` is a length, not a unitless 40.
+      const added = !listParameters(base).some((p) => p.name === name);
+      const typed =
+        quantity !== undefined || !added
+          ? quantity
+          : quantityTypedIn(
+              expression,
+              getParameterScope(base).scope,
+              base.units
+            );
       const parameterCommand = commandFactories.setParameter({
         name,
         expression,
         ...(addOnly ? { addOnly: true } : {}),
-        ...(quantity !== undefined ? { quantity } : {})
+        ...(typed !== undefined ? { quantity: typed } : {})
       });
       parameterCommand.validate(base);
       let prospective = parameterCommand.apply(base);
@@ -21452,7 +22179,6 @@ export function App() {
         (p) => p.name === name
       )?.toggle;
       // setParameter both adds and changes one; say which happened.
-      const added = !listParameters(base).some((p) => p.name === name);
       if (toggle)
         setHiddenBodyIds(
           (hidden) =>
@@ -21634,6 +22360,64 @@ export function App() {
       setStatus('Deleted constraint.');
     }
   }
+
+  // I38: the committed sketch is classified after every change that has no
+  // status of its own yet (a drawn entity, a held relation, a delete, an
+  // undo), so its colours and the DOF chip always describe what is on the
+  // canvas. Classification only: nothing is committed from this solve.
+  const classifySketchId = editingSketchNode?.sketchId ?? null;
+  const classifyConstraintCount = editingSketchNode?.constraints?.length ?? 0;
+  useEffect(() => {
+    const base = managerRef.current?.document;
+    if (
+      !base ||
+      !classifySketchId ||
+      !currentSketchSolveKey ||
+      sketchSolving ||
+      classifyConstraintCount === 0 ||
+      sketchSolveSnapshotRef.current?.key === currentSketchSolveKey
+    ) {
+      return;
+    }
+    const key = currentSketchSolveKey;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      geometry
+        .solveSketch(base, classifySketchId)
+        .then((outcome) => {
+          const session = interactionRef.current;
+          if (
+            cancelled ||
+            session.mode !== 'sketch' ||
+            session.session.sketchId !== classifySketchId ||
+            sketchSolveEvidenceKey(
+              managerRef.current?.document,
+              classifySketchId
+            ) !== key ||
+            sketchSolveSnapshotRef.current?.key === key
+          ) {
+            return;
+          }
+          setSketchSolveStatus(
+            solveStatusFor(outcome, findSketch(base, classifySketchId))
+          );
+        })
+        .catch(() => {
+          // A classification that cannot run leaves the chip as it was; an
+          // explicit Solve reports the error.
+        });
+    }, 200);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `geometry` and the status helpers are stable for the session
+  }, [
+    currentSketchSolveKey,
+    classifySketchId,
+    classifyConstraintCount,
+    sketchSolving
+  ]);
 
   async function handleSolveSketch() {
     setSketchEditError(null);
@@ -22288,6 +23072,10 @@ export function App() {
     datumLabel: (featureId) =>
       (doc && findFeature(doc, featureId)?.name) ?? 'Datum axis',
     bodyBounds: (bodyId) => inPlaceBodyPick(bodyId),
+    liveBodyIds: () =>
+      Object.values(representations)
+        .filter((body) => !body.consumed && !hiddenBodyIds.has(body.bodyId))
+        .map((body) => body.bodyId),
     evaluate: (value) =>
       evalParamValue(value, parameterScope.scope, doc?.units),
     imagePlaneBasis,
@@ -22939,7 +23727,22 @@ export function App() {
       inPlaceUnits,
       parameterScope.scope
     );
-    if (!evaluation.ok || evaluation.value === undefined) return false;
+    if (!evaluation.ok || evaluation.value === undefined) {
+      // Refused, so Done waits: it would take the value held while the
+      // field shows another. The field names the problem and offers to
+      // define a missing name.
+      const missing = previewExpression(
+        text,
+        parameterScope.scope
+      ).undefinedParameter;
+      inPlace.refuseValue(
+        valueId,
+        missing
+          ? `${valueSpec.label}: ${missing} is not defined yet.`
+          : `${valueSpec.label} was not applied: ${(evaluation.error ?? 'not a number or expression').replace(/\.$/, '')}.`
+      );
+      return false;
+    }
     // Expressions stay parametric in the stored feature.
     const accepted = inPlace.setValue(
       valueId,
@@ -26012,6 +26815,7 @@ export function App() {
     if (!open) {
       return false;
     }
+    setKeypadRangeError(null);
     if (open.kind === 'command' && open.commandValueId) {
       // Back to the value the handle showed when the chip was tapped.
       const valueId = open.commandValueId;
@@ -28002,10 +28806,11 @@ export function App() {
   }
 
   function handleResumeHistory() {
+    const history = liveFeatures();
     moveRollbackMarker(
-      rollbackMarkerMove(liveFeatures(), null),
+      rollbackMarkerMove(history, null),
       'Resume full history',
-      'Full history resumed. Manually suppressed features remain suppressed.'
+      resumeHistoryMessage(history)
     );
   }
 
@@ -28034,7 +28839,8 @@ export function App() {
     x: number,
     y: number,
     entries: { item: ContextMenuState['items'][number]; run(): void }[],
-    heading?: string
+    heading?: string,
+    face?: ViewportMenuState['face']
   ) {
     contextMenuActionsRef.current = Object.fromEntries(
       entries.map((entry) => [entry.item.id, entry.run])
@@ -28043,18 +28849,31 @@ export function App() {
       x,
       y,
       items: entries.map((entry) => entry.item),
-      ...(heading ? { heading } : {})
+      ...(heading ? { heading } : {}),
+      ...(face ? { face } : {})
     });
   }
 
   function handleViewportContextMenu(
     x: number,
     y: number,
-    selection: TopologySelection | null
+    selection: TopologySelection | null,
+    options: ViewportContextMenuOptions = {}
   ) {
     if (!doc) {
       return;
     }
+    // I18: over stacked targets the menu leads with Select other, whose list
+    // reopens this menu for the target chosen from it.
+    const selectOther = options.selectOther;
+    const leading = selectOther
+      ? [
+          {
+            item: selectOtherMenuItem(selectOther.count),
+            run: selectOther.open
+          }
+        ]
+      : [];
     // A running command owns both its geometry and empty viewport space.
     // A preview can move an edge away from the pointer before right-click.
     if (!modelingLocked && inPlaceRef.current.active) {
@@ -28066,12 +28885,14 @@ export function App() {
     // the viewport controls someone reading a model actually wants.
     if (!selection || modelingLocked) {
       openContextMenu(x, y, [
+        ...leading,
         {
           item: {
             id: 'fit',
             label: 'Fit view',
             icon: <Maximize2 size={13} aria-hidden="true" />,
-            shortcut: menuShortcut('view-fit')
+            shortcut: menuShortcut('view-fit'),
+            section: leading.length > 0
           },
           run: () => setFitSignal((value) => value + 1)
         },
@@ -28122,17 +28943,23 @@ export function App() {
     }
     // Actions wait for the clicked selection to land. An unapplied Move
     // owns the question first; a menu here would act on the old selection.
-    if (handleSelectTopologyFromViewer(selection, false, undefined, { x, y })) {
+    // The keyboard's menu is for the selection as it stands, so it picks
+    // nothing (a multi-selection stays whole).
+    if (
+      !options.keyboard &&
+      handleSelectTopologyFromViewer(selection, false, undefined, { x, y })
+    ) {
       setContextMenu(null);
       return;
     }
-    openViewportSelectionContextMenu(x, y, selection);
+    openViewportSelectionContextMenu(x, y, selection, leading);
   }
 
   function openViewportSelectionContextMenu(
     x: number,
     y: number,
-    selection: TopologySelection
+    selection: TopologySelection,
+    leading: { item: ContextMenuState['items'][number]; run(): void }[] = []
   ) {
     const owner = managerRef.current;
     const current = owner?.document;
@@ -28169,17 +28996,22 @@ export function App() {
     const body = current.derived.bodyRepresentations[selection.bodyId];
     const feature = selectionFeature(current, body, selection);
     const edge = selection.kind === 'edge';
+    // Union and Subtract say why they are greyed out, as the rail does.
+    const combineReason =
+      viewerBodies.length < 2 ? 'Needs a second body to combine with' : null;
     openContextMenu(
       x,
       y,
       [
+        ...leading,
         ...(edge
           ? [
               {
                 item: {
                   id: 'fillet',
                   label: 'Fillet edge…',
-                  icon: <Spline size={13} aria-hidden="true" />
+                  icon: <Spline size={13} aria-hidden="true" />,
+                  section: leading.length > 0
                 },
                 run: runCurrent((handlers) => handlers.launchTool('fillet'))
               },
@@ -28199,7 +29031,7 @@ export function App() {
             label: 'Move / Rotate…',
             icon: <Move3d size={13} aria-hidden="true" />,
             shortcut: menuShortcut('tool-transform'),
-            section: edge
+            section: edge || leading.length > 0
           },
           run: runCurrent((handlers) => handlers.launchTool('transform'))
         },
@@ -28209,7 +29041,7 @@ export function App() {
             label: 'Union…',
             icon: <Combine size={13} aria-hidden="true" />,
             shortcut: menuShortcut('tool-union'),
-            disabled: viewerBodies.length < 2
+            ...(combineReason ? { disabled: true, detail: combineReason } : {})
           },
           run: runCurrent((handlers) => handlers.launchTool('union'))
         },
@@ -28219,7 +29051,7 @@ export function App() {
             label: 'Subtract…',
             icon: <Scissors size={13} aria-hidden="true" />,
             shortcut: menuShortcut('tool-subtract'),
-            disabled: viewerBodies.length < 2
+            ...(combineReason ? { disabled: true, detail: combineReason } : {})
           },
           run: runCurrent((handlers) => handlers.launchTool('subtract'))
         },
@@ -28273,7 +29105,14 @@ export function App() {
             ]
           : [])
       ],
-      topologySelectionLabel(body, selection)
+      topologySelectionLabel(body, selection),
+      selection.kind === 'face'
+        ? {
+            bodyId: selection.bodyId,
+            topologyId: selection.topologyId,
+            hash: selection.hash
+          }
+        : undefined
     );
   }
 
@@ -29039,7 +29878,10 @@ export function App() {
       if (global === 'command-palette') {
         event.preventDefault();
         setShortcutsOpen(false);
-        setPaletteOpen((open) => !open);
+        // Opening lists the commands that run here (an empty draft), so the
+        // key visibly does something before a word is typed (I20).
+        if (paletteOpen) setPaletteOpen(false);
+        else draftPrompt('');
         return;
       }
       if (paletteOpen || shortcutsOpen) {
@@ -29163,7 +30005,7 @@ export function App() {
       if (movePreview) {
         if (event.key === 'Escape') {
           event.preventDefault();
-          cancelPanel();
+          cancelMove();
           return;
         }
         // As for an in-place command: Enter on the Move bar's own controls
@@ -29276,6 +30118,42 @@ export function App() {
         if (sketchCommand === 'sketch-extrude') {
           event.preventDefault();
           startExtrude(interaction.session.sketchId as SketchId);
+          return;
+        }
+        if (sketchCommand === 'sketch-dimension') {
+          event.preventDefault();
+          startSmartDimension();
+          return;
+        }
+        if (sketchCommand === 'sketch-construction') {
+          event.preventDefault();
+          setSketchConstruction((on) => !on);
+          return;
+        }
+        if (
+          sketchCommand === 'sketch-trim' ||
+          sketchCommand === 'sketch-offset'
+        ) {
+          event.preventDefault();
+          const editKind = sketchCommand === 'sketch-trim' ? 'trim' : 'offset';
+          dispatchInteraction({
+            type: 'sketch-edit-tool',
+            kind:
+              interaction.session.pendingEdit?.kind === editKind
+                ? null
+                : editKind
+          });
+          return;
+        }
+        if (sketchCommand === 'sketch-finish') {
+          event.preventDefault();
+          finishSketchSession();
+          return;
+        }
+        // Select all would select the page's text, which is never what a
+        // sketch means by it (I46).
+        if (meta && event.key.toLowerCase() === 'a' && !event.altKey) {
+          event.preventDefault();
           return;
         }
         // A relation picked from its glyph is the narrower selection, so
@@ -29456,6 +30334,15 @@ export function App() {
             return;
           }
           if (interaction.mode === 'sketch') {
+            if (event.defaultPrevented) {
+              // A value prompt (a dimension, a fillet radius, an offset)
+              // spent this press closing itself: it cancels the value and
+              // climbs no rung, so it neither leaves nor arms the exit
+              // (I43). Read before our own preventDefault below, which
+              // would otherwise make every press look spent.
+              sketchExitArmedAtRef.current = null;
+              return;
+            }
             // Inside a sketch Escape still climbs its ladder one rung per
             // press: chain, pick sequence, tool, selection, then the sketch.
             event.preventDefault();
@@ -29474,6 +30361,23 @@ export function App() {
             // sketch had already been left — only Finish Sketch said
             // anything. Both dispatch the same exit, so both can say so.
             const leftSketch = escapeTarget(interaction) === 'exit-sketch';
+            if (leftSketch) {
+              // I43: the last rung asks before it leaves; a reflex second
+              // Escape after closing a prompt or deselecting stays put.
+              const step = sketchExitEscape(
+                sketchExitArmedAtRef.current,
+                performance.now()
+              );
+              sketchExitArmedAtRef.current = step.armedAt;
+              if (!step.leave) {
+                setStatus(
+                  'Press Esc again to leave the sketch, or choose Finish Sketch. Your geometry is kept either way.'
+                );
+                return;
+              }
+            } else {
+              sketchExitArmedAtRef.current = null;
+            }
             dispatchInteraction({ type: 'escape' });
             if (leftSketch) {
               setStatus('Sketch closed.');
@@ -29669,6 +30573,9 @@ export function App() {
         case 'view-xray':
           toggleXray();
           return;
+        case 'view-orbit-mode':
+          toggleOrbitMode();
+          return;
         case 'selection-filter': {
           // A vertex repair picks edges whatever the manual filter says
           // (selectionFilter above; picking a sketch plane, which forces
@@ -29862,6 +30769,7 @@ export function App() {
           desktopAuthorizationApproved={desktopAuthorizationApproved}
           desktopAuthorizationCode={desktopAuthorizationCode}
           workspaceOpen={doc !== null}
+          documentUnits={doc?.units}
           onDesktopAuthorizationCodeChange={setDesktopAuthorizationCode}
           onChange={handleAppSettingsChange}
           onCloudFunctionsEnabledChange={handleCloudFunctionsEnabledChange}
@@ -29877,7 +30785,7 @@ export function App() {
           onApproveDesktopLogin={handleApproveDesktopLogin}
           onLogout={handleLogout}
           onDeleteCloudData={handleDeleteCloudData}
-          onReset={handleResetAppSettings}
+          onReset={() => void handleResetAppSettings()}
           onApplyViewportDefaults={applyViewportDefaults}
           onExportDiagnostics={handleExportDiagnostics}
           onExportInteractionLog={() => void handleExportInteractionLog()}
@@ -29893,6 +30801,9 @@ export function App() {
       <>
         <StartScreen
           onImportProject={(file) => void handleImportProject(file)}
+          onImportFiles={(files, units) =>
+            void handleStartScreenFiles(files, units)
+          }
           projects={projects}
           status={status}
           previousWorkspaceStatus={previousWorkspaceStatus.current}
@@ -29900,7 +30811,7 @@ export function App() {
             newBuildAvailable ? () => window.location.reload() : undefined
           }
           onReloadForLoadFailure={
-            downloadInterrupted ? () => window.location.reload() : undefined
+            loadFailureShown ? () => window.location.reload() : undefined
           }
           // Discovery must finish before a new/opened part can commit: the
           // startup result would otherwise replace its session and listing.
@@ -29927,11 +30838,16 @@ export function App() {
           onOpenSettings={openSettings}
           onSignIn={() => openSettingsAt('account')}
           onDuplicate={(project) => void handleDuplicateProject(project)}
+          onRename={handleRenameLibraryProject}
           loadProperties={loadProperties}
           cloudProjectIds={cloudProjectIds}
           accountProjectListReached={accountProjectListReached}
           conflictedProjectIds={conflictedProjectIds}
           signedIn={Boolean(session)}
+          cloudUnavailable={
+            cloudFunctionsEnabled && authConfigStatus === 'unavailable'
+          }
+          onRetryCloud={() => void handleRefreshAuthConfig()}
           onSaveToAccount={(project) => void handleSaveToAccount(project)}
           onSaveAllToAccount={(candidates) =>
             void handleSaveAllToAccount(candidates)
@@ -29978,6 +30894,7 @@ export function App() {
           workspace="Projects"
         />
         {settingsOverlay}
+        {confirmDialog}
         <ToastHost toast={toast} onDismiss={dismissToast} />
       </>
     );
@@ -30038,7 +30955,8 @@ export function App() {
       ? 'warning'
       : !exactGeometryReady
         ? 'running'
-        : /fail|error|invalid|unable|denied|not changed|not applied|no change|refus/i.test(
+        : // A refusal is a warning, not a "ready" dot (design review I77).
+          /fail|error|invalid|unable|denied|cannot|can't|not changed|not applied|no change|refus/i.test(
               status
             )
           ? 'warning'
@@ -30108,18 +31026,23 @@ export function App() {
         setActiveMeasurementId((current) => (current === id ? null : current));
         setStatus('Measurement removed.');
       }}
-      onClear={() => {
-        if (
-          appSettings.general.confirmDestructiveActions &&
-          !window.confirm('Clear every measurement in this project?')
-        ) {
-          return;
-        }
-        setMeasurements([]);
-        setActiveMeasurementId(null);
-        clearMeasurementPicks();
-        setStatus('Measurement list cleared.');
-      }}
+      onClear={() =>
+        void (async () => {
+          if (
+            appSettings.general.confirmDestructiveActions &&
+            !(await confirmInPage({
+              title: 'Clear every measurement in this project?',
+              confirmLabel: 'Clear measurements'
+            }))
+          ) {
+            return;
+          }
+          setMeasurements([]);
+          setActiveMeasurementId(null);
+          clearMeasurementPicks();
+          setStatus('Measurement list cleared.');
+        })()
+      }
       onCopy={(measurement) => void copyMeasurements(measurement)}
       onExport={exportMeasurements}
     />
@@ -30405,6 +31328,18 @@ export function App() {
       run: toggleXray
     },
     {
+      id: 'view-orbit-mode',
+      label:
+        appSettings.viewport.orbitMode === 'turntable'
+          ? 'Orbit: switch to free'
+          : 'Orbit: switch to turntable',
+      group: 'View',
+      keywords: ['orbit mode', 'turntable', 'free orbit', 'upside down'],
+      shortcut: keymap.label('view-orbit-mode'),
+      icon: <Orbit size={16} aria-hidden="true" />,
+      run: toggleOrbitMode
+    },
+    {
       id: 'view-show-all',
       label: 'Show all bodies',
       group: 'View',
@@ -30439,7 +31374,7 @@ export function App() {
         : 'Section view: on',
       group: 'View',
       keywords: ['section', 'cut', 'clip', 'plane'],
-      icon: <Slice size={16} aria-hidden="true" />,
+      icon: <SquareSplitVertical size={16} aria-hidden="true" />,
       disabledReason: viewerBodies.length === 0 ? 'Create a body first' : null,
       run: toggleSectionView
     },
@@ -30565,7 +31500,9 @@ export function App() {
       // palette is the other way to them, found by what they are for.
       id: 'file-export-diagnostics',
       label: 'Export diagnostics',
-      group: 'File',
+      // Not "File": the File menu no longer holds it (I24). Settings ›
+      // Advanced does, under troubleshooting.
+      group: 'Support',
       keywords: ['troubleshooting', 'support', 'sanitized', 'json', 'report'],
       icon: <Download size={16} aria-hidden="true" />,
       run: handleExportDiagnostics
@@ -30573,7 +31510,7 @@ export function App() {
     {
       id: 'file-export-interaction-log',
       label: 'Export interaction log',
-      group: 'File',
+      group: 'Support',
       keywords: [
         'troubleshooting',
         'support',
@@ -30596,6 +31533,8 @@ export function App() {
       id: 'file-home',
       label: 'Back to projects',
       group: 'File',
+      // The library is where a new project starts and every project opens.
+      keywords: ['home', 'library', 'projects', 'new', 'open', 'start'],
       icon: <FolderOpen size={16} aria-hidden="true" />,
       run: () => void handleGoHome()
     },
@@ -30607,6 +31546,7 @@ export function App() {
             id: 'workspace-mode-view',
             label: 'Switch to View mode',
             group: 'General',
+            keywords: ['read', 'inspect', 'mode', 'workspace'],
             shortcut: modeShortcut('view'),
             icon: <Eye size={16} aria-hidden="true" />,
             run: () => handleWorkspaceMode('view')
@@ -30619,6 +31559,7 @@ export function App() {
             id: 'workspace-mode-tweak',
             label: 'Switch to Tweak mode',
             group: 'General',
+            keywords: ['parameters', 'mode', 'workspace'],
             shortcut: modeShortcut('tweak'),
             icon: <SlidersHorizontal size={16} aria-hidden="true" />,
             disabledReason: tweakModeDisabledReason,
@@ -30632,10 +31573,26 @@ export function App() {
             id: 'workspace-mode-build',
             label: 'Switch to Build mode',
             group: 'General',
+            keywords: ['model', 'modeling', 'edit', 'mode', 'workspace'],
             shortcut: modeShortcut('build'),
             icon: <Box size={16} aria-hidden="true" />,
             disabledReason: buildModeDisabledReason,
             run: () => handleWorkspaceMode('build')
+          } satisfies PaletteCommand
+        ]
+      : []),
+    // The mode switch offers Assemble; the bar did not (I20).
+    ...(!assembleMode
+      ? [
+          {
+            id: 'workspace-mode-assemble',
+            label: 'Switch to Assemble mode',
+            group: 'General',
+            keywords: ['assembly', 'joints', 'motion', 'mode', 'workspace'],
+            shortcut: modeShortcut('assemble'),
+            icon: <Cog size={16} aria-hidden="true" />,
+            disabledReason: assembleModeDisabledReason,
+            run: () => handleWorkspaceMode('assemble')
           } satisfies PaletteCommand
         ]
       : []),
@@ -30645,10 +31602,66 @@ export function App() {
             id: 'workspace-mode-drawing',
             label: 'Switch to Draw mode',
             group: 'General',
+            keywords: ['drawing', 'sheet', '2d', 'mode', 'workspace'],
             shortcut: modeShortcut('drawing'),
             icon: <DraftingCompass size={16} aria-hidden="true" />,
             disabledReason: drawingModeDisabledReason,
             run: () => handleWorkspaceMode('drawing')
+          } satisfies PaletteCommand
+        ]
+      : []),
+    {
+      // The overlay the ? key opens, under the words people search for it
+      // by (I20: "help", "shortcuts" and "keyboard" found nothing).
+      id: 'app-help',
+      label: 'Help & keyboard shortcuts',
+      group: 'General',
+      keywords: [
+        'help',
+        'shortcuts',
+        'keyboard',
+        'keys',
+        'controls',
+        'hotkeys'
+      ],
+      shortcut: keymap.label('shortcut-reference'),
+      icon: <Keyboard size={16} aria-hidden="true" />,
+      run: () => setShortcutsOpen(true)
+    },
+    ...(doc && !shareSession
+      ? [
+          {
+            // The project name in the top bar is the rename field; the
+            // command opens it as a click on the name does.
+            id: 'project-rename',
+            label: 'Rename project',
+            group: 'File',
+            keywords: ['rename', 'name', 'title'],
+            icon: <PenLine size={16} aria-hidden="true" />,
+            run: () =>
+              document
+                .querySelector<HTMLButtonElement>('.project-title-button')
+                ?.click()
+          } satisfies PaletteCommand,
+          {
+            id: 'project-duplicate',
+            label: 'Duplicate project',
+            group: 'File',
+            keywords: ['duplicate', 'copy', 'clone'],
+            icon: <Copy size={16} aria-hidden="true" />,
+            disabledReason: projectTransferBusy
+              ? 'Project transfer in progress'
+              : null,
+            run: () => {
+              const current = managerRef.current?.document;
+              if (!current) return;
+              void handleDuplicateProject(
+                projects.find(
+                  (summary) => summary.projectId === current.projectId
+                ) ??
+                  summarizeLocalDocument(current, DEFAULT_PROJECT_ORGANIZATION)
+              );
+            }
           } satisfies PaletteCommand
         ]
       : []),
@@ -31275,6 +32288,9 @@ export function App() {
       onResumeHistory={handleResumeHistory}
       onRenameFeature={handleRenameFeature}
       onDeleteFeatures={editDisabledReason ? undefined : handleDeleteFeatures}
+      onEditSketch={
+        editDisabledReason ? undefined : editSketchFeatureInViewport
+      }
       units={doc?.units ?? 'mm'}
       onConfigureToggle={(name, bodyIds) => {
         if (ensureCanEdit('configure an on/off parameter')) {
@@ -31286,6 +32302,9 @@ export function App() {
       onPreviewParameter={handlePreviewParameter}
       onSetParameter={(name, expression) =>
         handleSetParameter(name, expression)
+      }
+      onParameterAddRefused={(name, message) =>
+        setStatus(`Parameter ${name} was not added.`, { detail: message })
       }
       onSetParameterQuantity={(name, quantity, expression) => {
         const current = parameters.find((entry) => entry.name === name);
@@ -31343,13 +32362,7 @@ export function App() {
         className="workspace-column-finish"
         title="Finish Sketch"
         aria-label="Finish Sketch"
-        onClick={() => {
-          dispatchInteraction({ type: 'exit-sketch' });
-          setTool(null);
-          setSketchEditError(null);
-          setSketchDiagnosticPoints([]);
-          setStatus(`${editingSketchName} finished.`);
-        }}
+        onClick={finishSketchSession}
       >
         <Check size={16} aria-hidden="true" />
         <span className="workspace-column-finish-label">Finish Sketch</span>
@@ -31461,6 +32474,9 @@ export function App() {
           : null
       }
       onDropFiles={(files) => void handleDroppedFiles(files)}
+      onRefuseDroppedFiles={() =>
+        setStatus('Finish or cancel the open dialog, then drop the file again.')
+      }
       sidebarWidth={sidebarWidth}
       assistantWidth={assistantWidth}
       sidebarResizer={
@@ -31493,6 +32509,16 @@ export function App() {
               : null
           }
           onReviewEditFailure={openActivityLog}
+          onReviewConflict={
+            collaboration.conflict?.projectId === doc.projectId &&
+            dismissedRoomConflict === roomConflictKey
+              ? () => setDismissedRoomConflict(null)
+              : !collaboration.conflict &&
+                  accountConflict?.projectId === doc.projectId &&
+                  dismissedAccountConflict === accountConflict
+                ? () => setDismissedAccountConflict(null)
+                : undefined
+          }
           geometryPending={!geometry.isReadyFor(doc)}
           geometryFailed={geometry.state.phase === 'failed'}
           projectTransferBusy={projectTransferBusy}
@@ -31545,7 +32571,22 @@ export function App() {
           }
           collaborationStatus={collaboration.status}
           collaborationFailure={collaboration.failureReason}
+          readOnlySeat={
+            activeProjectIsCloud &&
+            !shareSession &&
+            (collaboration.role === 'viewer' ||
+              collaboration.status === 'read-only')
+          }
           collaboratorCount={collaboration.members.length}
+          shareSession={
+            shareSession
+              ? {
+                  // A plaintext link always opens in Tweak.
+                  mode: shareSession.encryptedMode ?? 'tweak',
+                  onMakeCopy: requestShareCopy
+                }
+              : null
+          }
           projectSharingEnabled={
             cloudFunctionsEnabled && projectSharingPreferenceEnabled
           }
@@ -31603,8 +32644,12 @@ export function App() {
             }
             onView={requestView}
             {...(savedViewsControl ? { savedViews: savedViewsControl } : {})}
-            onCycleDisplayMode={cycleDisplayMode}
+            onDisplayMode={setDisplayMode}
+            onToggleXray={toggleXray}
             onToggleProjection={toggleProjection}
+            onToggleOrbitMode={toggleOrbitMode}
+            onToggleSection={toggleSectionView}
+            nothingToSection={!viewerBodies.some((body) => !body.consumed)}
           />
         ) : // The sketch session brings its own tool rail. Before it, while
         // the plane is being picked, the plane chooser in the command slot
@@ -31651,7 +32696,8 @@ export function App() {
             onViewActivityLog={openActivityLog}
             onExportStep={() => void handleExportStep()}
             onOpenMeshExport={() => setMeshExportOpen(true)}
-            share={shareSession ? { onMakeCopy: requestShareCopy } : null}
+            // Make a copy is the top bar's labelled button now (I73).
+            share={null}
             panelOpen={panelState.tweakPanelOpen}
             onTogglePanel={() =>
               setPanelState((current) => ({
@@ -31764,6 +32810,7 @@ export function App() {
             fitSignal={fitSignal}
             autoFrame={autoFrame}
             creationFrame={creationFrame}
+            clearStageRequest={clearStageRequest}
             viewRequest={projectViewRequest}
             normalToFaceRequest={normalToFaceRequest}
             units={doc.units}
@@ -32311,14 +33358,7 @@ export function App() {
             modeOverlay={
               modelingLocked ? (
                 <>
-                  {viewMode && (
-                    <ViewModeRail
-                      {...partsProps}
-                      {...(shareSession?.encryptedMode
-                        ? { onMakeCopy: requestShareCopy }
-                        : {})}
-                    />
-                  )}
+                  {viewMode && <ViewModeRail {...partsProps} />}
                   {viewMode && (
                     <AssemblyPlayer
                       projectId={doc.projectId}
@@ -32329,6 +33369,7 @@ export function App() {
                     <MotionStudyTimeline
                       floating
                       assembly={doc.assembly}
+                      lengthUnit={doc.units}
                       execute={executeCommand}
                     />
                   )}
@@ -32344,6 +33385,9 @@ export function App() {
                     units={doc.units}
                     scope={parameterScope.scope}
                     anchorRef={keypadAnchorRef}
+                    // An entry that does not evaluate holds Done: it would
+                    // take the value held while the keypad shows another.
+                    onEntryError={setCommandEntryError}
                     onPreview={(value) => {
                       const valueId = keypad.commandValueId!;
                       const valueSpec = inPlaceSpec?.values.find(
@@ -32355,13 +33399,47 @@ export function App() {
                       if (valueSpec && !valueInRange(valueSpec, value)) {
                         return;
                       }
+                      setKeypadRangeError(null);
                       commandSetterRef.current?.(valueId, value);
                       inPlace.previewValue(valueId, value);
                     }}
                     onCommit={(value, raw) => {
+                      const valueId = keypad.commandValueId!;
+                      const valueSpec = inPlaceSpec?.values.find(
+                        (candidate) => candidate.id === valueId
+                      );
+                      // Out of range, the keypad stays open on what was
+                      // typed and says the range at the field. It used to
+                      // close, and the chip went back to the old value.
+                      if (valueSpec && !valueInRange(valueSpec, value)) {
+                        setKeypadRangeError({
+                          valueId,
+                          message: valueRangeSentence(
+                            valueSpec,
+                            valueSpec.unit === 'length'
+                              ? doc.units === 'inch'
+                                ? 'in'
+                                : doc.units
+                              : valueSpec.unit === 'angle'
+                                ? '°'
+                                : ''
+                          )
+                        });
+                        // Still refused on the bar as before, so Done
+                        // waits; only the keypad no longer closes on it.
+                        commitInPlaceKeypadValue(keypad, value, raw);
+                        return;
+                      }
+                      setKeypadRangeError(null);
                       setKeypad(null);
                       commitInPlaceKeypadValue(keypad, value, raw);
                     }}
+                    {...(keypadRangeError?.valueId === keypad.commandValueId
+                      ? {
+                          commitRefused: true,
+                          commitDisabledReason: keypadRangeError.message
+                        }
+                      : {})}
                     // One value has nowhere to step to: Tab stays the
                     // browser's there.
                     {...(inPlaceTypedValueIds.length > 1 &&
@@ -32628,14 +33706,17 @@ export function App() {
             onMeasure={toggleMeasure}
             onView={requestView}
             {...(savedViewsControl ? { savedViews: savedViewsControl } : {})}
-            onCycleDisplayMode={cycleDisplayMode}
+            onDisplayMode={setDisplayMode}
+            onToggleXray={toggleXray}
             onToggleProjection={toggleProjection}
+            onToggleOrbitMode={toggleOrbitMode}
             sectionRange={
               viewerSettings.sectionView
                 ? sectionAxisRange(viewerSettings.sectionView.plane)
                 : null
             }
             onToggleSection={toggleSectionView}
+            nothingToSection={!viewerBodies.some((body) => !body.consumed)}
             sectionPanelOpen={panelState.sectionPanelOpen}
             onSectionPanelOpenChange={(open) =>
               setPanelState((current) =>
@@ -32681,14 +33762,17 @@ export function App() {
                 }
                 historyOpen={panelShowing('history')}
                 exportSeen={tourExportSeen}
-                startIndex={
-                  tourStepRef.current?.projectId === doc.projectId
-                    ? tourStepRef.current.index
-                    : 0
+                // The step reached, kept per device: the card unmounts while
+                // a command or a sketch runs, and a second empty project
+                // picks up where the first left off (I16).
+                startIndex={panelState.workspaceTourStep}
+                onIndexChange={(index) =>
+                  setPanelState((current) =>
+                    current.workspaceTourStep === index
+                      ? current
+                      : { ...current, workspaceTourStep: index }
+                  )
                 }
-                onIndexChange={(index) => {
-                  tourStepRef.current = { projectId: doc.projectId, index };
-                }}
                 onDismiss={() =>
                   setPanelState((current) => ({
                     ...current,
@@ -32735,7 +33819,14 @@ export function App() {
                 document={doc}
                 execute={assembleApp.execute}
                 onStatus={assembleApp.onStatus}
-                onAnnounce={(message) => announce(message)}
+                onAnnounce={(message, options) =>
+                  announce(
+                    message,
+                    options?.undo
+                      ? { label: 'Undo', run: handleUndo }
+                      : undefined
+                  )
+                }
                 bodyBounds={assemblyBodyBounds}
                 reducedMotion={appSettings.appearance.reducedMotion}
               />
@@ -33115,27 +34206,7 @@ export function App() {
                   );
                 }}
                 onEditModelingFeature={openModelingFeatureEditor}
-                onEditSketchInViewport={(feature) => {
-                  if (feature.data.featureKind !== 'sketch' || !doc) {
-                    return;
-                  }
-                  const sketch = findSketch(doc, feature.data.sketchId);
-                  if (sketch) {
-                    selectFeatureNode(null, 'pinned');
-                    setTool(null);
-                    dispatchInteraction({
-                      type: 'enter-sketch',
-                      plane: sketch.planeRef,
-                      sketchId: sketch.sketchId
-                    });
-                    // Same reason as the revert pill: entering a sketch from
-                    // the tree changes what every key does, so it should say
-                    // so rather than leaving the previous message in place.
-                    setStatus(
-                      `Editing ${sketch.name} · Finish Sketch when done.`
-                    );
-                  }
-                }}
+                onEditSketchInViewport={editSketchFeatureInViewport}
                 onApplyTransform={(feature, value) =>
                   applyValidatedFeature(
                     commandFactories.updateFeature(
@@ -33251,6 +34322,10 @@ export function App() {
                 editDisabledReason={drawingEditDisabledReason}
                 onCommand={(command) => executeCommand(command)}
                 onStatus={(message, options) => setStatus(message, options)}
+                onAnnounceUndoable={(message) =>
+                  announce(message, { label: 'Undo', run: handleUndo })
+                }
+                pointerNavigation={appSettings.viewport.pointerNavigation}
                 onAssistantSource={handleDrawingAssistantSource}
                 onActiveSheetChange={setDrawingActiveSheetId}
                 previewAnnotations={drawingPreview}
@@ -33302,6 +34377,11 @@ export function App() {
               sketchPlaneCardShown
             }
             onOpenLog={openActivityLog}
+            onUndo={
+              undoableStatusAt === statusEntry.at && managerRef.current?.canUndo
+                ? handleUndo
+                : undefined
+            }
             prompt={workspacePrompt}
             promptResting={workspacePrompt === idleHint}
             instructionDetails={
@@ -33324,7 +34404,13 @@ export function App() {
             // the guidance row: the same line, remedies and Why? the control
             // shows, where the eye returns when the model has nothing to say.
             notice={
-              !keypad && calloutWithOperation?.operation?.error ? (
+              liveSessionConnecting &&
+              !(!keypad && calloutWithOperation?.operation?.error) ? (
+                <LiveSessionNotice
+                  key={doc.projectId}
+                  onRetry={collaboration.reconnect}
+                />
+              ) : !keypad && calloutWithOperation?.operation?.error ? (
                 <EditRefusal
                   operation={calloutWithOperation.operation}
                   variant="bar"
@@ -33349,7 +34435,17 @@ export function App() {
                   }
                   hint={inPlace.hint}
                   refusal={inPlace.refusal}
-                  canFinish={inPlace.canFinish}
+                  unitLabel={displayLengthName(doc.units)}
+                  onTrySize={(dimension, size) => {
+                    commitInPlacePanelValue(dimension, formatNumber(size));
+                  }}
+                  canFinish={
+                    inPlace.canFinish &&
+                    !(keypad?.kind === 'command' && commandEntryError)
+                  }
+                  previewPending={
+                    inPlace.request !== null && inPlace.refusal === null
+                  }
                   options={inPlace.optionSpecs.map((option) => ({
                     ...option,
                     value: inPlace.options[option.id] ?? option.initial
@@ -33380,6 +34476,7 @@ export function App() {
                   onValueCommit={commitInPlacePanelValue}
                   onValueRestore={inPlace.dropRefusal}
                   onValuePreview={previewInPlacePanelValue}
+                  scope={parameterScope.scope}
                   onDone={() => inPlace.done()}
                   onCancel={cancelInPlaceCommand}
                 />
@@ -33600,7 +34697,7 @@ export function App() {
                     )
                   }
                   onConfirm={confirmMove}
-                  onCancel={cancelPanel}
+                  onCancel={cancelMove}
                   copy={
                     movePreview.target === 'sketch'
                       ? undefined
@@ -33625,6 +34722,7 @@ export function App() {
             warningCount={diagnostics.length}
             documentVersion={doc.version}
             saveState={presentedSaveState}
+            orbitMode={appSettings.viewport.orbitMode}
             repeatingToast={statusRepeatedByToast(toast)}
             searchBar={
               <CommandBar
@@ -33758,16 +34856,45 @@ export function App() {
                 setPanelState((current) => ({
                   ...current,
                   workspaceTourDismissed: false,
-                  workspaceTourMinimized: false
+                  workspaceTourMinimized: false,
+                  // Asked for again: from the start, not where it was left.
+                  workspaceTourStep: 0
                 }));
               }}
             />
           )}
           {contextMenuExit.rendered ? (
             <ContextMenu
-              menu={contextMenuExit.rendered}
+              menu={withFaceVerbs(
+                contextMenuExit.rendered,
+                renderedSelectedTopology?.kind === 'face'
+                  ? renderedSelectedTopology
+                  : null,
+                calloutWithOperation?.anchor === 'selection'
+                  ? calloutWithOperation.verbs
+                  : null,
+                {
+                  disabledReason: normalToFaceTarget
+                    ? null
+                    : 'The face is not flat',
+                  shortcut: menuShortcut('view-normal-to-face')
+                }
+              )}
               closing={contextMenuExit.closing}
-              onSelect={(itemId) => contextMenuActionsRef.current[itemId]?.()}
+              onSelect={(itemId) => {
+                // A face's verbs act as its rail buttons do (I19).
+                if (itemId.startsWith(FACE_VERB_PREFIX)) {
+                  calloutWithOperation?.onVerb(
+                    itemId.slice(
+                      FACE_VERB_PREFIX.length
+                    ) as SelectionCalloutVerbId
+                  );
+                } else if (itemId === LOOK_AT_FACE_ITEM_ID) {
+                  requestNormalToSelectedFace();
+                } else {
+                  contextMenuActionsRef.current[itemId]?.();
+                }
+              }}
               onClose={() => setContextMenu(null)}
             />
           ) : null}
@@ -33965,12 +35092,13 @@ export function App() {
             accountConflict.projectId === doc.projectId &&
             !collaboration.conflict &&
             !roomConnectingForProject &&
-            accountRecheckProjectId !== doc.projectId && (
+            accountRecheckProjectId !== doc.projectId &&
+            dismissedAccountConflict !== accountConflict && (
               <ProjectConflictDialog
                 conflict={accountConflict}
                 busy={busy}
                 onResolve={resolveAccountConflict}
-                onClose={() => setAccountConflict(null)}
+                onClose={() => setDismissedAccountConflict(accountConflict)}
               />
             )}
           {importUnitsPrompt && (
@@ -34069,12 +35197,14 @@ export function App() {
               phase={pendingShaprImport.phase}
               progress={pendingShaprImport.progress}
               error={pendingShaprImport.error}
+              errorDetail={pendingShaprImport.errorDetail}
               inspection={pendingShaprImport.inspection}
               onCancel={cancelShaprImport}
               onApply={() => void applyShaprImport()}
             />
           )}
           {settingsOverlay}
+          {confirmDialog}
         </>
       }
     />

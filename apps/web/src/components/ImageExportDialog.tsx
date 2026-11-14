@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ImageDown } from 'lucide-react';
 import type { UnitSystem } from '@openzcad/shared';
 import { imageSizeProblem, IMAGE_EXPORT_MAX_SIDE } from '../lib/imageExport';
+import { submitOnEnter } from '../lib/submitOnEnter';
 import { useModalFocus } from '../lib/useModalFocus';
 
 export type ImageExportKind = 'png' | 'svg';
@@ -80,7 +81,7 @@ export function ImageExportDialog({
   onExportPng,
   onExportSvg
 }: ImageExportDialogProps) {
-  const dialogRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLFormElement>(null);
   useModalFocus(dialogRef, { autoFocus: true });
 
   const viewWidth = Math.max(1, Math.round(viewSize.width));
@@ -166,18 +167,27 @@ export function ImageExportDialog({
 
   return (
     <div className="modal-backdrop">
-      <div
+      {/* A form, so Enter in Width or Height exports; runExport keeps the
+          size guard, whose message stands in for the browser's. */}
+      <form
         ref={dialogRef}
         className="export-dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby="image-export-title"
         tabIndex={-1}
+        noValidate
+        onSubmit={(event) => {
+          event.preventDefault();
+          runExport();
+        }}
         onKeyDown={(event) => {
           if (event.key === 'Escape') {
             event.stopPropagation();
             onClose();
+            return;
           }
+          submitOnEnter(event);
         }}
       >
         <h2 id="image-export-title">
@@ -253,28 +263,30 @@ export function ImageExportDialog({
                   </button>
                 ))}
               </div>
-              <label className="export-dialog-custom">
-                <span>Width (px)</span>
-                <input
-                  type="number"
-                  min={16}
-                  max={maxSide}
-                  step={1}
-                  value={width}
-                  onChange={(event) => setWidth(event.target.value)}
-                />
-              </label>
-              <label className="export-dialog-custom">
-                <span>Height (px)</span>
-                <input
-                  type="number"
-                  min={16}
-                  max={maxSide}
-                  step={1}
-                  value={height}
-                  onChange={(event) => setHeight(event.target.value)}
-                />
-              </label>
+              <div className="export-dialog-size">
+                <label>
+                  <span>Width (px)</span>
+                  <input
+                    type="number"
+                    min={16}
+                    max={maxSide}
+                    step={1}
+                    value={width}
+                    onChange={(event) => setWidth(event.target.value)}
+                  />
+                </label>
+                <label>
+                  <span>Height (px)</span>
+                  <input
+                    type="number"
+                    min={16}
+                    max={maxSide}
+                    step={1}
+                    value={height}
+                    onChange={(event) => setHeight(event.target.value)}
+                  />
+                </label>
+              </div>
               {sizeProblem ? (
                 <p className="export-dialog-error" role="alert">
                   {sizeProblem}
@@ -337,17 +349,12 @@ export function ImageExportDialog({
           <button type="button" className="secondary" onClick={onClose}>
             Cancel
           </button>
-          <button
-            type="button"
-            className="primary"
-            disabled={blocked}
-            onClick={runExport}
-          >
+          <button type="submit" className="primary" disabled={blocked}>
             <ImageDown size={13} aria-hidden="true" />
             Export {kind === 'png' ? 'PNG' : 'SVG'}
           </button>
         </div>
-      </div>
+      </form>
     </div>
   );
 }

@@ -142,6 +142,7 @@ test(
     await owner.links
       .getByRole('button', { name: 'Revoke View only link' })
       .click();
+    await owner.links.getByRole('button', { name: 'Revoke link' }).click();
     await expect(owner.links.getByText('Only invited people')).toBeVisible({
       timeout: COMMIT_BUDGET_MS
     });

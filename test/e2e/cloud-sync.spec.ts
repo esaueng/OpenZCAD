@@ -35,131 +35,136 @@ const SYNC_BUDGET_MS = process.env.CI ? 30_000 : 10_000;
 
 const accountUserId = toUserId('user_cloud_sync_e2e');
 
-test('keeps exact geometry and undo through a save echo and reopens compatible saved history without a conflict', { tag: '@ci-smoke' }, async ({
-  page
-}, testInfo) => {
-  const browserErrors: string[] = [];
-  page.on('pageerror', (error) => browserErrors.push(error.message));
-  page.on('console', (message) => {
-    // This fixture deliberately has no thumbnail upload service. Its mocked
-    // 404 is expected; application exceptions and all other console errors fail.
-    if (message.type() !== 'error') return;
-    if (
-      message.location().url.endsWith('/api/uploads') &&
-      message.text().includes('404 (Not Found)')
-    )
-      return;
-    browserErrors.push(message.text());
-  });
-  const api = new SharedCloudProjectApi();
-  await api.install(page);
-  await page.addInitScript(() => {
-    const counters = window as unknown as { __saveFlowBroadcasts: number };
-    counters.__saveFlowBroadcasts = 0;
-    const NativeWorker = window.Worker;
-    window.Worker = class extends NativeWorker {
-      override postMessage(
-        message: unknown,
-        options?: StructuredSerializeOptions | Transferable[]
-      ) {
-        const request = message as { type?: string; requestId?: string };
-        if (request.type === 'sync' && !request.requestId)
-          counters.__saveFlowBroadcasts++;
-        if (Array.isArray(options)) super.postMessage(message, options);
-        else super.postMessage(message, options);
-      }
-    };
-  });
-  await page.goto('/');
-  await page.getByLabel('Project name').fill('Save Flow');
-  await page.getByRole('button', { name: 'New project' }).click();
-  await createPrimitiveInPlace(page, 'box');
-  await expect(
-    page.getByRole('status', { name: 'Saved', exact: true })
-  ).toBeVisible({ timeout: SYNC_BUDGET_MS });
-  const count = () =>
-    page.evaluate(
-      () =>
-        (window as unknown as { __saveFlowBroadcasts: number })
-          .__saveFlowBroadcasts
-    );
-  const broadcasts = await count();
-  // A server echo can advance the fence without changing the exact model.
-  await page.route('**/api/projects/*/revisions', async (route) => {
-    if (route.request().method() !== 'POST') return route.fallback();
-    const payload = (await withHydratedDocument(
-      route.request().postDataJSON()
-    )) as {
-      document: ProjectDocument;
-      reason: string;
-      savedRevisionId?: string;
-    };
-    const version = payload.document.version + 1;
-    // The browser minted the save point (ADR-024 Phase 1); this echo keeps it
-    // and moves the version, which a pre-Phase 1 server did by minting.
-    api.project = withoutDerivedProjection(
-      payload.savedRevisionId
-        ? {
-            ...payload.document,
-            version,
-            checkpoints: payload.document.checkpoints.map(
-              (checkpoint, index) =>
-                index === payload.document.checkpoints.length - 1
-                  ? { ...checkpoint, documentVersion: version }
-                  : checkpoint
-            )
-          }
-        : createSavedRevision({ ...payload.document, version }, payload.reason)
-    );
-    await route.fulfill({ json: api.project });
-  });
-  const savedCheckpoints = api.project!.checkpoints.length;
-  await page.keyboard.press('ControlOrMeta+s');
-  await expect
-    .poll(() => api.project?.checkpoints.length)
-    .toBe(savedCheckpoints + 1);
-  await expect
-    .poll(() => api.project?.checkpoints.at(-1)?.reason)
-    .toBe('Manual save');
-  await expect(
-    page.getByRole('status', { name: 'Saved', exact: true })
-  ).toBeVisible();
-  expect(await count()).toBe(broadcasts);
-  await expect(
-    page.getByRole('button', { name: 'Undo', exact: true })
-  ).toBeEnabled();
-
-  await page.getByTitle('Back to projects').click();
-  // Another saved checkpoint at the SAME version used to raise 8-vs-8.
-  api.project = withoutDerivedProjection(
-    createSavedRevision(api.project!, 'Before drilling')
-  );
-  await page.locator('.start-tile-open', { hasText: 'Save Flow' }).click();
-  await expect(
-    page.getByRole('status', { name: 'Saved', exact: true })
-  ).toBeVisible({ timeout: SYNC_BUDGET_MS });
-  await expect(
-    page.getByRole('dialog', { name: 'This project changed in two places' })
-  ).toHaveCount(0);
-  expect(await count()).toBe(broadcasts);
-  const reopenedCheckpoints = api.project.checkpoints.length;
-  await page.keyboard.press('ControlOrMeta+s');
-  await expect
-    .poll(() => api.project?.checkpoints.length)
-    .toBe(reopenedCheckpoints + 1);
-  await expect(
-    page.getByRole('status', { name: 'Saved', exact: true })
-  ).toBeVisible();
-  await expect
-    .poll(() =>
-      api.project?.checkpoints.some(
-        (checkpoint) => checkpoint.reason === 'Before drilling'
+test(
+  'keeps exact geometry and undo through a save echo and reopens compatible saved history without a conflict',
+  { tag: '@ci-smoke' },
+  async ({ page }, testInfo) => {
+    const browserErrors: string[] = [];
+    page.on('pageerror', (error) => browserErrors.push(error.message));
+    page.on('console', (message) => {
+      // This fixture deliberately has no thumbnail upload service. Its mocked
+      // 404 is expected; application exceptions and all other console errors fail.
+      if (message.type() !== 'error') return;
+      if (
+        message.location().url.endsWith('/api/uploads') &&
+        message.text().includes('404 (Not Found)')
       )
-    )
-    .toBe(true);
-  await page.screenshot({ path: testInfo.outputPath('save-flow.png') });
-  expect(browserErrors).toEqual([]);
-});
+        return;
+      browserErrors.push(message.text());
+    });
+    const api = new SharedCloudProjectApi();
+    await api.install(page);
+    await page.addInitScript(() => {
+      const counters = window as unknown as { __saveFlowBroadcasts: number };
+      counters.__saveFlowBroadcasts = 0;
+      const NativeWorker = window.Worker;
+      window.Worker = class extends NativeWorker {
+        override postMessage(
+          message: unknown,
+          options?: StructuredSerializeOptions | Transferable[]
+        ) {
+          const request = message as { type?: string; requestId?: string };
+          if (request.type === 'sync' && !request.requestId)
+            counters.__saveFlowBroadcasts++;
+          if (Array.isArray(options)) super.postMessage(message, options);
+          else super.postMessage(message, options);
+        }
+      };
+    });
+    await page.goto('/');
+    await page.getByLabel('Project name').fill('Save Flow');
+    await page.getByRole('button', { name: 'New project' }).click();
+    await createPrimitiveInPlace(page, 'box');
+    await expect(
+      page.getByRole('status', { name: 'Saved', exact: true })
+    ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+    const count = () =>
+      page.evaluate(
+        () =>
+          (window as unknown as { __saveFlowBroadcasts: number })
+            .__saveFlowBroadcasts
+      );
+    const broadcasts = await count();
+    // A server echo can advance the fence without changing the exact model.
+    await page.route('**/api/projects/*/revisions', async (route) => {
+      if (route.request().method() !== 'POST') return route.fallback();
+      const payload = (await withHydratedDocument(
+        route.request().postDataJSON()
+      )) as {
+        document: ProjectDocument;
+        reason: string;
+        savedRevisionId?: string;
+      };
+      const version = payload.document.version + 1;
+      // The browser minted the save point (ADR-024 Phase 1); this echo keeps it
+      // and moves the version, which a pre-Phase 1 server did by minting.
+      api.project = withoutDerivedProjection(
+        payload.savedRevisionId
+          ? {
+              ...payload.document,
+              version,
+              checkpoints: payload.document.checkpoints.map(
+                (checkpoint, index) =>
+                  index === payload.document.checkpoints.length - 1
+                    ? { ...checkpoint, documentVersion: version }
+                    : checkpoint
+              )
+            }
+          : createSavedRevision(
+              { ...payload.document, version },
+              payload.reason
+            )
+      );
+      await route.fulfill({ json: api.project });
+    });
+    const savedCheckpoints = api.project!.checkpoints.length;
+    await page.keyboard.press('ControlOrMeta+s');
+    await expect
+      .poll(() => api.project?.checkpoints.length)
+      .toBe(savedCheckpoints + 1);
+    await expect
+      .poll(() => api.project?.checkpoints.at(-1)?.reason)
+      .toBe('Manual save');
+    await expect(
+      page.getByRole('status', { name: 'Saved', exact: true })
+    ).toBeVisible();
+    expect(await count()).toBe(broadcasts);
+    await expect(
+      page.getByRole('button', { name: 'Undo', exact: true })
+    ).toBeEnabled();
+
+    await page.getByTitle('Back to projects').click();
+    // Another saved checkpoint at the SAME version used to raise 8-vs-8.
+    api.project = withoutDerivedProjection(
+      createSavedRevision(api.project!, 'Before drilling')
+    );
+    await page.locator('.start-tile-open', { hasText: 'Save Flow' }).click();
+    await expect(
+      page.getByRole('status', { name: 'Saved', exact: true })
+    ).toBeVisible({ timeout: SYNC_BUDGET_MS });
+    await expect(
+      page.getByRole('dialog', { name: 'This project changed in two places' })
+    ).toHaveCount(0);
+    expect(await count()).toBe(broadcasts);
+    const reopenedCheckpoints = api.project.checkpoints.length;
+    await page.keyboard.press('ControlOrMeta+s');
+    await expect
+      .poll(() => api.project?.checkpoints.length)
+      .toBe(reopenedCheckpoints + 1);
+    await expect(
+      page.getByRole('status', { name: 'Saved', exact: true })
+    ).toBeVisible();
+    await expect
+      .poll(() =>
+        api.project?.checkpoints.some(
+          (checkpoint) => checkpoint.reason === 'Before drilling'
+        )
+      )
+      .toBe(true);
+    await page.screenshot({ path: testInfo.outputPath('save-flow.png') });
+    expect(browserErrors).toEqual([]);
+  }
+);
 
 function projectIdFrom(url: string): string {
   const parts = new URL(url).pathname.split('/');
@@ -484,7 +489,11 @@ test('drains a pending account edit before opening a public share', async ({
   );
   await page.route('**/api/share', (route) =>
     route.fulfill({
-      json: { document: shared, project: { projectId: shared.projectId, name: shared.name }, mode: 'tweak' }
+      json: {
+        document: shared,
+        project: { projectId: shared.projectId, name: shared.name },
+        mode: 'tweak'
+      }
     })
   );
   await page.goto('/');
@@ -801,7 +810,7 @@ test('does not write to the account when a project is only reopened', async ({
   await page.getByRole('button', { name: 'New project' }).click();
   await expect(
     page.getByRole('group', { name: 'Workspace status', exact: true })
-  ).toContainText('syncSynced', { timeout: SYNC_BUDGET_MS });
+  ).toContainText('syncSaved', { timeout: SYNC_BUDGET_MS });
 
   documentWrites = 0;
   await page.reload();
@@ -810,7 +819,7 @@ test('does not write to the account when a project is only reopened', async ({
   ).toContainText('Reopen Echo');
   await expect(
     page.getByRole('group', { name: 'Workspace status', exact: true })
-  ).toContainText('syncSynced', { timeout: SYNC_BUDGET_MS });
+  ).toContainText('syncSaved', { timeout: SYNC_BUDGET_MS });
   // Outlasts this fixture's 1 s cloud-autosave delay, so a queued mirror of the
   // adopted document would have been sent by now.
   await page.waitForTimeout(3000);
@@ -855,26 +864,27 @@ test('restores an unreadable account document from the confirmed device copy', a
   );
 
   const attemptsBeforeRetry = api.projectLoadAttempts;
-  const restorePrompt = page.waitForEvent('dialog').then(async (dialog) => {
-    const message = dialog.message();
-    await dialog.dismiss();
-    return message;
+  // Asked in-page: embedded browsers answer a native confirm unseen.
+  const restorePrompt = page.getByRole('alertdialog', {
+    name: /^Restore Repair Fixture edited locally in your account/
   });
   await page.getByRole('button', { name: 'Repair needed' }).click();
+  await expect(restorePrompt).toBeVisible({ timeout: SYNC_BUDGET_MS });
+  await expect(
+    restorePrompt.getByRole('button', { name: 'Cancel' })
+  ).toBeFocused();
+  await restorePrompt.getByRole('button', { name: 'Cancel' }).click();
+  await expect(restorePrompt).toHaveCount(0);
   await expect(
     page.getByRole('button', { name: 'Repair needed' })
   ).toBeVisible();
   expect(api.projectLoadAttempts).toBe(attemptsBeforeRetry + 1);
-  expect(await restorePrompt).toContain(
-    'Restore Repair Fixture edited locally in your account'
-  );
   expect(api.project?.name).toBe('Repair Fixture');
 
-  const acceptRestore = page
-    .waitForEvent('dialog')
-    .then((dialog) => dialog.accept());
   await page.getByRole('button', { name: 'Repair needed' }).click();
-  await acceptRestore;
+  await restorePrompt
+    .getByRole('button', { name: 'Restore from this device' })
+    .click({ timeout: SYNC_BUDGET_MS });
   await expect
     .poll(() => api.project?.name, { timeout: SYNC_BUDGET_MS })
     .toBe('Repair Fixture edited locally');
@@ -1053,13 +1063,13 @@ for (const uploadAvailable of [true, false]) {
       )
         restores++;
     });
-    const accepted = page
-      .waitForEvent('dialog')
-      .then((dialog) => dialog.accept());
     await page
       .getByRole('button', { name: 'Repair needed', exact: true })
       .click();
-    await accepted;
+    await page
+      .getByRole('alertdialog')
+      .getByRole('button', { name: 'Restore from this device' })
+      .click({ timeout: SYNC_BUDGET_MS });
     await expect
       .poll(() => archive.attempts, { timeout: SYNC_BUDGET_MS })
       .toBeGreaterThan(0);
@@ -1166,7 +1176,7 @@ test('does not restore an unreadable account document from an older device copy'
   await page.getByRole('button', { name: 'Repair needed' }).click();
   await expect(
     page.getByRole('button', {
-      name: /Open activity log\. Current status: The account record is newer/
+      name: /Open activity log — current status: The account record is newer/
     })
   ).toBeVisible();
   expect(documentWrites).toBe(0);
@@ -1288,7 +1298,7 @@ for (const resolution of [
         });
         await expect(
           pageA.getByRole('group', { name: 'Workspace status', exact: true })
-        ).toContainText('syncSynced');
+        ).toContainText('syncSaved');
 
         await pageA.reload();
         await expect(
@@ -1366,6 +1376,23 @@ for (const resolution of [
         await expect(
           conflict.getByRole('button', { name: /^Cloud/ })
         ).toContainText('Newer');
+        // Design review I74: each row names its own copy, and "Decide later"
+        // is not a dead end — the Conflict chip asks again.
+        await expect(
+          conflict.getByRole('button', { name: /^This browser/ })
+        ).toContainText('“Device B unsent edit”');
+        await expect(
+          conflict.getByRole('button', { name: /^Cloud/ })
+        ).toContainText('“Device A account edit”');
+        await expect(conflict).not.toContainText(/\b1 (edits|save points)\b/);
+        if (resolution === 'use-remote') {
+          await conflict.getByRole('button', { name: 'Decide later' }).click();
+          await expect(conflict).toBeHidden();
+          await pageB
+            .getByRole('button', { name: /^Conflict: choose a version/ })
+            .click();
+          await expect(conflict).toBeVisible();
+        }
         if (resolution === 'keep-mine') {
           await conflict.getByRole('button', { name: choice }).focus();
           await pageB.keyboard.press('Enter');
@@ -1397,7 +1424,10 @@ for (const resolution of [
             hasText: 'Device B unsent edit (copy)'
           });
           await expect(copy).toBeVisible();
-          await expect(copy.locator('time')).toHaveAttribute('title', / · 1 save$/);
+          await expect(copy.locator('time')).toHaveAttribute(
+            'title',
+            / · 1 save$/
+          );
           await copy.click();
           await expect(
             pageB.getByRole('button', { name: 'Undo', exact: true })
@@ -1506,9 +1536,9 @@ test('resumes a workspace on another device and carries undo and redo back acros
     });
     await expect(prompt).toBeVisible({ timeout: SYNC_BUDGET_MS });
     await a.getByRole('button', { name: 'Open with default view' }).click();
-    await expect(
-      a.getByRole('region', { name: 'Modeling guide' })
-    ).toHaveCount(0);
+    await expect(a.getByRole('region', { name: 'Modeling guide' })).toHaveCount(
+      0
+    );
     await expect(
       a.getByRole('button', { name: 'Redo', exact: true })
     ).toBeEnabled();

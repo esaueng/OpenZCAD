@@ -139,4 +139,25 @@ describe('ImageExportDialog', () => {
     await userEvent.keyboard('{Escape}');
     expect(props.onClose).toHaveBeenCalled();
   });
+
+  // I67: Enter in Width or Height did nothing; the dialog had no form.
+  it('exports with Enter in a size field, and not while the size is refused', async () => {
+    const user = userEvent.setup();
+    const props = renderDialog();
+    const width = screen.getByLabelText('Width (px)');
+    await user.clear(width);
+    await user.type(width, '99999{Enter}');
+    expect(props.onExportPng).not.toHaveBeenCalled();
+
+    await user.clear(width);
+    await user.type(width, '600{Enter}');
+    expect(props.onExportPng).toHaveBeenCalledOnce();
+    expect(props.onExportPng).toHaveBeenCalledWith({
+      width: 600,
+      height: 800,
+      transparent: false,
+      showGrid: true
+    });
+    expect(props.onClose).toHaveBeenCalled();
+  });
 });

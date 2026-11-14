@@ -33,4 +33,30 @@ describe('ContextMenu', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }));
     expect(onSelect).toHaveBeenCalledWith('delete');
   });
+
+  it('marks an item that opens another menu', () => {
+    render(
+      <ContextMenu
+        menu={{
+          x: 10,
+          y: 10,
+          items: [
+            { id: 'other', label: 'Select other', submenu: true },
+            { id: 'fit', label: 'Fit view' }
+          ]
+        }}
+        onSelect={() => {}}
+        onClose={() => {}}
+      />
+    );
+    const other = screen.getByRole('menuitem', { name: 'Select other' });
+    expect(other).toHaveAttribute('aria-haspopup', 'menu');
+    expect(other.querySelector('.context-menu-submenu')).toHaveAttribute(
+      'aria-hidden',
+      'true'
+    );
+    expect(
+      screen.getByRole('menuitem', { name: 'Fit view' })
+    ).not.toHaveAttribute('aria-haspopup');
+  });
 });

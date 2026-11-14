@@ -97,8 +97,10 @@ import {
 import { labelWithKey, useKeymap } from '../../lib/keymap';
 import { platformShortcutLabel } from '../../lib/platformShortcut';
 import { QuestionCard } from './QuestionCard';
+import { useConfirm } from '../ConfirmDialog';
 import { ProposalCard } from './ProposalCard';
 import { RichText } from './RichText';
+import { latestScrollTop } from '../../lib/assistant/threadScroll';
 import {
   AssistantConsentChip,
   AssistantConsentDialog
@@ -408,6 +410,7 @@ export function AssistantPanel({
     []
   );
   const [notice, setNotice] = useState<string | null>(null);
+  const { confirm: confirmInPage, dialog: confirmDialog } = useConfirm();
   // The stream's one live region. It stays mounted and changes only when a
   // turn starts or lands: a region rendered together with its content is
   // missed, and one fed every streamed delta reads out half-sentences.
@@ -781,9 +784,25 @@ export function AssistantPanel({
   const scrollToLatest = useCallback((behavior: ScrollBehavior = 'smooth') => {
     const thread = threadRef.current;
     if (thread) {
-      thread.scrollTo({ top: thread.scrollHeight, behavior });
+      thread.scrollTo({ top: latestScrollTop(thread), behavior });
     }
   }, []);
+
+  // The user's own new ask always comes into view, wherever the thread was
+  // left: a long reply can stop the follow above it (latestScrollTop), and
+  // the next ask must not then land out of sight.
+  const latestAskId = lastAsk?.id ?? null;
+  const shownAskIdRef = useRef(latestAskId);
+  useLayoutEffect(() => {
+    if (latestAskId === shownAskIdRef.current) {
+      return;
+    }
+    shownAskIdRef.current = latestAskId;
+    if (!collapsed && !hidden && latestAskId !== null) {
+      scrollToLatest('instant');
+      setAtBottom(true);
+    }
+  }, [latestAskId, collapsed, hidden, scrollToLatest]);
 
   // Keep the newest turn in view — but only when the user is already reading the
   // end of the thread. Yanking someone out of scrollback to show a reply is how
@@ -1037,6 +1056,15 @@ export function AssistantPanel({
         setNotice(
           'The assistant is still answering the last ask. Press Enter again when it finishes.'
         );
+      } else {
+        // Said where the question was asked: the status line alone left a
+        // signed-out ask looking like a search that found nothing (I8).
+        const reason =
+          statusNotice ??
+          (status || statusError
+            ? "The assistant can't answer questions right now."
+            : 'The assistant is still starting. Press Enter again in a moment.');
+        setNotice(`${reason} Your question is back in the prompt line.`);
       }
       return;
     }
@@ -1199,12 +1227,14 @@ export function AssistantPanel({
     void send(ask.text, attachments);
   }
 
-  function clearThread() {
+  async function clearThread() {
     if (
       confirmDestructive &&
-      !window.confirm(
-        'Clear the AI conversation for this project? This cannot be undone.'
-      )
+      !(await confirmInPage({
+        title: 'Clear the conversation?',
+        body: 'The AI conversation for this project is removed. This cannot be undone.',
+        confirmLabel: 'Clear conversation'
+      }))
     ) {
       return;
     }
@@ -1319,8 +1349,9 @@ export function AssistantPanel({
 
   // The prompt line's keys, while it is empty: Enter applies the proposal
   // waiting at the foot of the stream (or sends a drawing that waits there),
-  // `p` previews it, Escape rejects it, ⌘↑ opens scrollback. Kept in a ref so
-  // one listener sees the current turn.
+  // `p` previews it, Escape hides that preview, ⌘↑ opens scrollback. Escape
+  // never rejects: a rejection is final, and the press was usually meant to
+  // leave the field. Kept in a ref so one listener sees the current turn.
   const promptKeyRef = useRef<
     (key: AssistantPromptKeyDetail['key']) => boolean
   >(() => false);
@@ -1362,7 +1393,11 @@ export function AssistantPanel({
       void previewProposal(openProposal.id, openProposal.proposal);
       return true;
     }
-    rejectProposal(openProposal.id);
+    // Escape: hide the preview, or let the field have the key.
+    if (conversation.previewEntryId !== openProposal.id) {
+      return false;
+    }
+    void previewProposal(openProposal.id, openProposal.proposal);
     return true;
   };
   // Files pasted into the prompt line attach the way a drop here does, and
@@ -1579,7 +1614,7 @@ export function AssistantPanel({
               title="Clear this project's conversation"
               aria-label="Clear this project's conversation"
               disabled={applyingEntryId !== null}
-              onClick={clearThread}
+              onClick={() => void clearThread()}
             >
               <Trash2 size={13} aria-hidden="true" />
             </button>
@@ -1761,40 +1796,44 @@ export function AssistantPanel({
             </span>
           </div>
         )}
-        {(onAnalyze ||
-          (entries.length > 0 && verifiedSuggestions.length > 0)) && (
+        {onAnalyze && (
           <div className="assistant-actions-row">
-            {onAnalyze && (
+            <button
+              type="button"
+              className="assistant-verified-action"
+              disabled={thinking || analysisBusy || applyingEntryId !== null}
+              onClick={() => {
+                void analyzeSelection();
+              }}
+            >
+              {analysisBusy
+                ? 'Analyzing selected geometry…'
+                : 'Analyze selected geometry'}
+            </button>
+          </div>
+        )}
+        {/* Once a thread exists the recipes fold under one line: listed
+            whole, they stood under every conversation however long
+            (13 November review, I72). One click still opens them. */}
+        {entries.length > 0 && verifiedSuggestions.length > 0 && (
+          <details className="assistant-edit-catalog">
+            <summary>Verified recipes ({verifiedSuggestions.length})</summary>
+            {verifiedSuggestions.map((suggestion) => (
               <button
+                key={suggestion.id}
                 type="button"
                 className="assistant-verified-action"
-                disabled={thinking || analysisBusy || applyingEntryId !== null}
-                onClick={() => {
-                  void analyzeSelection();
-                }}
+                disabled={thinking || applyingEntryId !== null}
+                onClick={() => applySuggestion(suggestion)}
               >
-                {analysisBusy
-                  ? 'Analyzing selected geometry…'
-                  : 'Analyze selected geometry'}
+                <Sparkles size={12} aria-hidden="true" />
+                <span>{suggestion.label}</span>
+                <span className="assistant-suggestion-badge">
+                  {suggestion.previewOnly ? 'Preview' : 'Verified'}
+                </span>
               </button>
-            )}
-            {entries.length > 0 &&
-              verifiedSuggestions.map((suggestion) => (
-                <button
-                  key={suggestion.id}
-                  type="button"
-                  className="assistant-verified-action"
-                  disabled={thinking || applyingEntryId !== null}
-                  onClick={() => applySuggestion(suggestion)}
-                >
-                  <Sparkles size={12} aria-hidden="true" />
-                  <span>{suggestion.label}</span>
-                  <span className="assistant-suggestion-badge">
-                    {suggestion.previewOnly ? 'Preview' : 'Verified'}
-                  </span>
-                </button>
-              ))}
-          </div>
+            ))}
+          </details>
         )}
         {(editCatalog.candidates.length > 0 ||
           editCatalog.measuredOnly.length > 0) && (
@@ -1849,6 +1888,7 @@ export function AssistantPanel({
           onCancel={() => consentPrompt.resolve(false)}
         />
       )}
+      {confirmDialog}
     </section>
   );
 }

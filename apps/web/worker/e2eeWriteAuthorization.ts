@@ -3,6 +3,15 @@ import { sessionWriteCredential } from './sessionCredentials';
 export interface E2eeWriteAuthorization {
   readonly sql: string;
   readonly binds: readonly unknown[];
+  /**
+   * The session or desktop token the write is admitted under, so a write
+   * that ends the account's other sessions can keep this one. Never sent
+   * to a browser.
+   */
+  readonly credential?: {
+    readonly table: 'auth_sessions' | 'desktop_access_tokens';
+    readonly tokenHash: string;
+  };
   dispose(): Promise<void>;
 }
 
@@ -89,6 +98,7 @@ function writeAuthorization(
   // still use live rows inside the transaction, so they revoke every write.
   const admittedAt = Math.floor(Date.now() / 1000);
   return {
+    credential: { table, tokenHash },
     sql: `NOT EXISTS (SELECT 1 FROM account_erasure_requests WHERE user_id = ?)
       AND EXISTS (SELECT 1 FROM ${table}
         WHERE token_hash = ? AND user_id = ? AND expires_at >= ?

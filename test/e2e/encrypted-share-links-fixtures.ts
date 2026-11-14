@@ -178,31 +178,26 @@ export async function ownerWithShareLink(
   });
 
   // Sharing needs the identity key's confirmation (the share delegation).
-  await expect(
-    links.getByRole('button', { name: 'Create link' })
-  ).toBeDisabled();
-  const confirmSharing = links.getByRole('button', {
-    name: 'Confirm sharing…'
-  });
+  // Create link asks for it and then makes the link: one action (I79).
+  const create = links.getByRole('button', { name: 'Create link' });
   // Opacity-zero controls still pass toBeVisible and click in Playwright.
-  // The owner must be able to discover confirmation without hover or focus.
+  // The owner must be able to discover it without hover or focus.
   await alice.mouse.move(0, 0);
-  await expect(confirmSharing).toHaveCSS('opacity', '1');
-  await confirmSharing.click();
+  await expect(create).toHaveCSS('opacity', '1');
+  await expect(
+    links.getByRole('button', { name: 'Confirm sharing…' })
+  ).toHaveCount(0);
+  await create.click();
   const confirm = links.getByRole('group', { name: 'Confirm sharing' });
   await confirm.getByLabel('Recovery key').fill(seeded.recoveryKey);
   await confirm
     .getByRole('button', { name: 'Confirm with recovery key' })
     .click();
   await expect(confirm).toHaveCount(0, { timeout: COMMIT_BUDGET_MS });
-  await expect(
-    links.getByRole('button', { name: 'Confirm sharing…' })
-  ).toHaveCount(0);
   expect(
     server.db.prepare('SELECT COUNT(*) AS n FROM e2ee_share_delegations').get()
   ).toEqual({ n: 1 });
 
-  await links.getByRole('button', { name: 'Create link' }).click();
   const url = links.getByRole('textbox', { name: 'Share link', exact: true });
   await expect(url).toHaveValue(/#share=[\w-]{43}\.[\w-]{43}\.[\w-]{43}$/, {
     timeout: COMMIT_BUDGET_MS

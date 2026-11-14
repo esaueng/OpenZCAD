@@ -1,0 +1,5 @@
+---
+row: K10
+---
+
+2026-11-13 issue #1242 (Subtract of overlapping curved STEP bodies) re-qualified on the `2026.1.135` pin: `test/subtract-curved-operands.test.ts` imports the four named recipes (revolve/sweep, revolve/trimmed NURBS, sweep/sweep, sweep/loft) as OCCT-written STEP from `test/fixtures/step/subtract-curved/` and checks commit, reload, Undo and STEP export against OCCT reference volumes and an overlap witness. The primary recipe now cuts correctly (175.430 vs OCCT 175.430 mm³); the other three refuse by type before consuming either input. `cut_kept_tool_material` no longer relies on the kernel's point classifier alone: a tessellation-based witness (winding numbers and point-to-mesh distance, four chord deflections clear) also refuses, and both now run when the measured overlap is zero as well as unmeasured (`test/subtract-classifier-blind.test.ts`). Open upstream: the primary cut result and the swept target fail STEP export (arena edge residual; zero-length closed NURBS pcurve), and closed-section OCCT lofts fail STEP import.

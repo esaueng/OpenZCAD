@@ -552,11 +552,24 @@ test('settings name their sections and search individual settings', async ({
   // Leaving the field pulls a refused value to the nearest bound storage
   // keeps, rather than showing it while the default is what gets saved.
   await expect(page.getByLabel('Linear snap increment')).toHaveValue('0.001');
+
+  // I69 (13 November review): field of view 500 became 90 in silence. The
+  // range is printed under the field, and the pull to a bound is announced.
+  await page.getByRole('button', { name: 'Viewport', exact: true }).click();
+  const fieldOfView = page.getByLabel('Perspective field of view');
+  await expect(fieldOfView).toHaveAccessibleDescription(/^\d+° – \d+°$/);
+  await fieldOfView.fill('500');
+  await fieldOfView.press('Tab');
+  await expect(fieldOfView).not.toHaveValue('500');
+  await expect(
+    page.getByRole('status').filter({ hasText: '500° is above the maximum' })
+  ).toBeVisible();
   await page.getByRole('button', { name: 'General', exact: true }).click();
 
-  // The search itself is desktop-only, but below 580px the nav collapses to
-  // icons whose labels are hidden; those buttons used to reach the
-  // accessibility tree with no name at all.
+  // Below 580px the nav narrows to a rail. Its buttons once reached the
+  // accessibility tree with no name; then they showed icons alone, and the
+  // search went with the labels (13 November review, I70). Each section now
+  // reads by name under its icon, and the search stays in the head.
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(
     page.getByRole('button', { name: 'General', exact: true })
@@ -564,6 +577,23 @@ test('settings name their sections and search individual settings', async ({
   await expect(
     page.getByRole('button', { name: 'Viewport', exact: true })
   ).toBeVisible();
+  for (const label of ['Viewport', 'Privacy & data', 'Advanced']) {
+    await expect(
+      page.locator('.settings-nav nav button span', { hasText: label })
+    ).toBeVisible();
+  }
+  await expect(page.getByLabel('Find a setting')).toBeVisible();
+  await page.getByLabel('Find a setting').fill('Default units');
+  await expect(
+    page.getByRole('button', { name: 'Viewport', exact: true })
+  ).toHaveCount(0);
+  await page.getByLabel('Find a setting').fill('');
+  const overflow = await page.evaluate(
+    () =>
+      document.documentElement.scrollWidth -
+      document.documentElement.clientWidth
+  );
+  expect(overflow).toBeLessThanOrEqual(0);
 
   await page
     .getByRole('button', {
@@ -580,8 +610,9 @@ const DARK_GROUND = 'rgb(16, 18, 21)';
 const LIGHT_GROUND = 'rgb(242, 242, 242)';
 const DARK_SURFACE = 'rgb(24, 27, 31)';
 const LIGHT_SURFACE = 'rgb(250, 250, 250)';
-// The 3D stage behind the canvas turns with the chrome.
-const DARK_STAGE = 'rgb(16, 18, 21)';
+// The 3D stage behind the canvas turns with the chrome. The dark stage is
+// the neutral graphite `--color-viewport-bg` (#18191c, #1293), not the ground.
+const DARK_STAGE = 'rgb(24, 25, 28)';
 const LIGHT_STAGE = 'rgb(238, 238, 238)';
 
 function pageGround(page: Page) {
@@ -1290,9 +1321,13 @@ test('reset settings revokes analytics consent and persists the default', async 
     exact: true
   });
   await consent.check();
-  page.once('dialog', (dialog) => dialog.accept());
   await page.getByRole('button', { name: 'Advanced', exact: true }).click();
   await page
+    .getByRole('button', { name: 'Reset settings', exact: true })
+    .click();
+  // Asked in-page, never with a native confirm.
+  await page
+    .getByRole('alertdialog', { name: 'Reset settings on this device?' })
     .getByRole('button', { name: 'Reset settings', exact: true })
     .click();
   await page

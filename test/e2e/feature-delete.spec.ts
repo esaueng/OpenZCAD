@@ -146,7 +146,15 @@ test('deleting a history feature raises an undoable toast that counts its depend
   await page.locator('.feature-row-main', { hasText: /^Boss/ }).first().click();
   await page.keyboard.press('Delete');
   await expect(confirm).toBeVisible();
-  await expect(confirm.getByRole('button', { name: 'Delete' })).toBeFocused();
+  // Focus starts on Cancel: a reflex Enter after Del keeps every dependent.
+  await expect(confirm.getByRole('button', { name: 'Cancel' })).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(confirm).toHaveCount(0);
+  await expect(
+    summary.getByLabel(/ · 17 features · 1 body\. Sync /)
+  ).toBeVisible();
+  await page.keyboard.press('Delete');
+  await expect(confirm).toBeVisible();
   await confirm.getByRole('button', { name: 'Delete' }).click();
 
   const toast = page.locator('.toast');
@@ -185,7 +193,7 @@ test('deleting a history feature raises an undoable toast that counts its depend
   ).toBeVisible({
     timeout: 60_000
   });
-  await expect(status).toContainText('Undo Delete Boss');
+  await expect(status).toContainText('Undid Delete Boss.');
 });
 
 /**
