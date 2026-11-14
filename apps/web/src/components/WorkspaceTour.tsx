@@ -9,6 +9,7 @@ import {
   advanceOnSignals,
   advanceThroughCompleted,
   tourStepBody,
+  tourStepTarget,
   WORKSPACE_TOUR_STEPS,
   type WorkspaceTourSignals
 } from '../lib/workspaceTour';
@@ -129,6 +130,8 @@ export function WorkspaceTour({
   }, [finished]);
 
   const step = WORKSPACE_TOUR_STEPS[index];
+  const signals = { featureCount, hasSelection, historyOpen, exportSeen };
+  const target = tourStepTarget(index, signals);
 
   // Outline the chrome region the step talks about. Imperative by design:
   // the targets (tool palette, History control) belong to other components, and
@@ -137,22 +140,25 @@ export function WorkspaceTour({
   // The tool palette arrives in its own chunk after the workspace paints,
   // so the target may not exist when the step starts: watch the document
   // until it does rather than pointing at nothing.
+  // A selector list names several parts (the rail and its foot); each is
+  // outlined as it arrives.
   useEffect(() => {
-    const selector = step?.targetSelector;
-    if (!selector) {
+    if (!target) {
       return;
     }
     const doc = globalThis.document;
-    let target: HTMLElement | null = null;
+    const pending = target.split(',').map((part) => part.trim());
+    const outlined: HTMLElement[] = [];
     let observer: MutationObserver | null = null;
     const outline = () => {
-      const found = doc.querySelector(selector);
-      if (!(found instanceof HTMLElement)) {
-        return false;
+      for (let at = pending.length - 1; at >= 0; at -= 1) {
+        const found = doc.querySelector(pending[at]!);
+        if (!(found instanceof HTMLElement)) continue;
+        found.classList.add('tour-target');
+        outlined.push(found);
+        pending.splice(at, 1);
       }
-      target = found;
-      target.classList.add('tour-target');
-      return true;
+      return pending.length === 0;
     };
     if (!outline() && typeof MutationObserver === 'function') {
       observer = new MutationObserver(() => {
@@ -165,9 +171,9 @@ export function WorkspaceTour({
     }
     return () => {
       observer?.disconnect();
-      target?.classList.remove('tour-target');
+      for (const element of outlined) element.classList.remove('tour-target');
     };
-  }, [step]);
+  }, [target]);
 
   if (finished || !step) {
     return null;

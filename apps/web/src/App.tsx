@@ -2877,11 +2877,6 @@ export function App() {
    * features are added but never appears over someone's existing model.
    */
   const [tourProjectId, setTourProjectId] = useState<string | null>(null);
-  /**
-   * The step that project's tour has reached. The card unmounts while a
-   * command or a sketch runs, so the step is kept here, by project.
-   */
-  const tourStepRef = useRef<{ projectId: string; index: number } | null>(null);
   /** The export dialog has been opened this session — the tour's last signal. */
   const [tourExportSeen, setTourExportSeen] = useState(false);
   const [settingsBusy, setSettingsBusy] = useState(false);
@@ -33733,14 +33728,17 @@ export function App() {
                 }
                 historyOpen={panelShowing('history')}
                 exportSeen={tourExportSeen}
-                startIndex={
-                  tourStepRef.current?.projectId === doc.projectId
-                    ? tourStepRef.current.index
-                    : 0
+                // The step reached, kept per device: the card unmounts while
+                // a command or a sketch runs, and a second empty project
+                // picks up where the first left off (I16).
+                startIndex={panelState.workspaceTourStep}
+                onIndexChange={(index) =>
+                  setPanelState((current) =>
+                    current.workspaceTourStep === index
+                      ? current
+                      : { ...current, workspaceTourStep: index }
+                  )
                 }
-                onIndexChange={(index) => {
-                  tourStepRef.current = { projectId: doc.projectId, index };
-                }}
                 onDismiss={() =>
                   setPanelState((current) => ({
                     ...current,
@@ -34290,6 +34288,10 @@ export function App() {
                 editDisabledReason={drawingEditDisabledReason}
                 onCommand={(command) => executeCommand(command)}
                 onStatus={(message, options) => setStatus(message, options)}
+                onAnnounceUndoable={(message) =>
+                  announce(message, { label: 'Undo', run: handleUndo })
+                }
+                pointerNavigation={appSettings.viewport.pointerNavigation}
                 onAssistantSource={handleDrawingAssistantSource}
                 onActiveSheetChange={setDrawingActiveSheetId}
                 previewAnnotations={drawingPreview}
@@ -34820,7 +34822,9 @@ export function App() {
                 setPanelState((current) => ({
                   ...current,
                   workspaceTourDismissed: false,
-                  workspaceTourMinimized: false
+                  workspaceTourMinimized: false,
+                  // Asked for again: from the start, not where it was left.
+                  workspaceTourStep: 0
                 }));
               }}
             />

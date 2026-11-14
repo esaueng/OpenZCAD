@@ -8,6 +8,7 @@ import {
   registerAssemblyCommitHandlers
 } from '../../lib/assembly/assemblyRuntime';
 import { setAnimatePrefs } from '../../lib/assembly/assemblyUi';
+import { createDefaultStudy } from '../../lib/assembly/motionStudy';
 import { AssemblyPanel } from './AssemblyPanel';
 
 afterEach(() => {
@@ -206,7 +207,7 @@ describe('AssemblyPanel (one left sidebar)', () => {
     fireEvent.change(screen.getByRole('combobox', { name: 'Playback' }), {
       target: { value: 'loop' }
     });
-    fireEvent.change(screen.getByRole('combobox', { name: 'Sweep time' }), {
+    fireEvent.change(screen.getByRole('combobox', { name: 'Speed' }), {
       target: { value: '0.4' }
     });
     fireEvent.click(screen.getByRole('button', { name: 'Play' }));
@@ -220,11 +221,16 @@ describe('AssemblyPanel (one left sidebar)', () => {
     expect(getAssemblyRuntime().playback).toBeNull();
   });
 
-  it('saves a position as a chip, applies it and deletes it', () => {
+  it('saves a position from its own section, applies, renames and deletes it (I58)', () => {
     const fixture = scissorsManager({ joint: true });
-    select(() => assemblyRuntime.selectJoint('joint_pin'));
     const { commands, rerender } = renderPanel(fixture);
-    fireEvent.click(screen.getByRole('button', { name: 'Save position' }));
+    // Positions save every joint, so they live beside the joints, not
+    // inside one joint's details: no joint needs to be open.
+    expect(screen.queryByLabelText('Pivot details')).toBeNull();
+    const positions = () => screen.getByRole('region', { name: 'Positions' });
+    fireEvent.click(
+      within(positions()).getByRole('button', { name: 'Save position' })
+    );
     const field = screen.getByRole('textbox', { name: 'Position name' });
     fireEvent.change(field, { target: { value: 'Open' } });
     fireEvent.keyDown(field, { key: 'Enter' });
@@ -233,13 +239,50 @@ describe('AssemblyPanel (one left sidebar)', () => {
       payload: { name: 'Open', values: { joint_pin: [12] } }
     });
     rerender();
-    fireEvent.click(screen.getByRole('button', { name: 'Open' }));
+    fireEvent.click(within(positions()).getByRole('button', { name: 'Open' }));
     expect(commands.at(-1)).toEqual({
       kind: 'assembly.pose.set',
       payload: { values: { joint_pin: [12] } }
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Delete Open' }));
+
+    fireEvent.doubleClick(
+      within(positions()).getByRole('button', { name: 'Open' })
+    );
+    const rename = screen.getByRole('textbox', { name: 'Rename Open' });
+    fireEvent.change(rename, { target: { value: 'Wide open' } });
+    fireEvent.keyDown(rename, { key: 'Enter' });
+    const saved = fixture.manager.document.assembly?.positions ?? [];
+    expect(saved.map((p) => [p.name, p.values])).toEqual([
+      ['Wide open', { joint_pin: [12] }]
+    ]);
+    rerender();
+    fireEvent.click(
+      within(positions()).getByRole('button', { name: 'Delete Wide open' })
+    );
     expect(commands.at(-1)?.kind).toBe('assembly.position.delete');
+  });
+
+  it('says a joint value is keyed into the open study, not saved as the rest pose (I59)', () => {
+    const fixture = scissorsManager({ joint: true });
+    fixture.manager.execute(
+      commandFactories.setAssemblyStudy({
+        study: createDefaultStudy(fixture.manager.document.assembly, 'study_1')
+      })
+    );
+    const { rerender } = renderPanel(fixture);
+    fireEvent.click(screen.getByRole('button', { name: /^Pivot/ }));
+    rerender();
+    expect(screen.getByLabelText('Pivot details')).not.toHaveTextContent(
+      'Recording into'
+    );
+    select(() => {
+      assemblyRuntime.selectStudy('study_1');
+      assemblyRuntime.setStudyTime(2);
+    });
+    rerender();
+    expect(screen.getByRole('note')).toHaveTextContent(
+      'Recording into Motion 1: a value set here is keyed at 2.00 s.'
+    );
   });
 
   it('opens a part under its row: how it moves, fix in place, remove', () => {

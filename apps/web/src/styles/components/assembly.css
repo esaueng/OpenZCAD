@@ -378,6 +378,12 @@
   cursor: default;
 }
 
+/* A row with nothing to click (the bill of materials) shows no hover fill,
+   which would promise an action it does not have (review I66). */
+.assembly-row-line:has(> .assembly-row-main.is-static:only-child):hover {
+  background: none;
+}
+
 .assembly-row.is-selected .assembly-row-main {
   color: var(--color-selected-text);
 }
@@ -567,7 +573,7 @@
 
 .assembly-position-apply,
 .assembly-position-delete {
-  min-height: 22px;
+  min-height: 24px;
   color: var(--color-text);
   background: none;
   border: 0;
@@ -583,7 +589,7 @@
 .assembly-position-delete {
   display: inline-grid;
   place-items: center;
-  width: 20px;
+  width: 24px;
   padding: 0;
   color: var(--color-text-subtle);
 }
@@ -617,6 +623,19 @@
 
 .assembly-link-button:hover {
   color: var(--color-accent-hi);
+}
+
+.assembly-recording {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+}
+
+.assembly-recording .motion-recording-dot {
+  transform: translateY(-1px);
 }
 
 .assembly-link-button.is-danger {

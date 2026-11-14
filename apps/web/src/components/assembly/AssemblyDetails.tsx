@@ -20,7 +20,6 @@ import {
   type AssemblyDofLimit,
   type AssemblyDofUnit,
   type AssemblyJoint,
-  type AssemblyPlayback,
   type AssemblySet,
   type ProjectDocument,
   type UnitSystem
@@ -38,8 +37,6 @@ import {
 import type { AssemblyViewModel } from '../../lib/assembly/assemblyView';
 import { gearCouplingMismatch } from '../../lib/assembly/gearCouplingCheck';
 import {
-  ANIMATE_MODES,
-  ANIMATE_SPEEDS,
   assemblyLengthScale,
   defaultLimit,
   dofLabel,
@@ -52,7 +49,9 @@ import {
   unsolvedReasonText,
   useAnimatePrefs
 } from '../../lib/assembly/assemblyUi';
+import { formatStudyTime } from '../../lib/assembly/motionStudy';
 import { AssemblyNameField } from './AssemblyNameField';
+import { PlaybackControl } from './PlaybackControl';
 import { gearMeshCardContext } from './gearMeshEntry';
 
 export interface AssemblyDetailsProps {
@@ -155,8 +154,12 @@ export function JointDetails({
   onDelete?(): void;
 }) {
   const playback = useAssemblyRuntime((s) => s.playback);
+  const studyId = useAssemblyRuntime((s) => s.selectedStudyId);
+  const studyTimeS = useAssemblyRuntime((s) => s.studyTimeS);
+  const study = studyId
+    ? model.set.studies.find((candidate) => candidate.id === studyId)
+    : undefined;
   const prefs = useAnimatePrefs();
-  const [savingPosition, setSavingPosition] = useState(false);
   const app = { document, execute, onStatus };
   const lengthUnit = document.units;
   const lengthScale = assemblyLengthScale(lengthUnit);
@@ -193,14 +196,6 @@ export function JointDetails({
       )
     );
 
-  const currentValues = (): Record<string, number[]> =>
-    Object.fromEntries(
-      model.set.joints.map((j) => [
-        j.id,
-        [...(model.solution.values.get(j.id) ?? j.values)]
-      ])
-    );
-
   return (
     <div
       id={`assembly-details-${joint.id}`}
@@ -216,6 +211,18 @@ export function JointDetails({
         <p className="assembly-banner" role="status">
           <TriangleAlert size={14} aria-hidden="true" />
           <span>Can’t move: {unsolvedReasonText(unsolved)}.</span>
+        </p>
+      ) : null}
+      {study ? (
+        // With a study open, a value set here becomes a key at the playhead
+        // (the timeline's pose sink), not the rest pose: never silently.
+        <p className="assembly-recording" role="note">
+          <span className="motion-recording-dot" aria-hidden="true" />
+          <span>
+            Recording into {study.name}: a value set here is keyed at{' '}
+            {formatStudyTime(Math.min(studyTimeS, study.durationS))} s. Close
+            the study to change where the joint rests.
+          </span>
         </p>
       ) : null}
 
@@ -372,107 +379,18 @@ export function JointDetails({
             )}
             {playing ? 'Pause' : 'Play'}
           </button>
-          <select
-            className="assembly-select"
-            aria-label="Playback"
-            value={prefs.mode}
-            onChange={(event) =>
-              setAnimatePrefs({
-                mode: event.currentTarget.value as AssemblyPlayback
-              })
-            }
-          >
-            {ANIMATE_MODES.map((option) => (
-              <option key={option.mode} value={option.mode}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-          <select
-            className="assembly-select"
-            aria-label="Sweep time"
-            value={prefs.sweepS}
-            onChange={(event) =>
-              setAnimatePrefs({ sweepS: Number(event.currentTarget.value) })
-            }
-          >
-            {ANIMATE_SPEEDS.map((option) => (
-              <option key={option.sweepS} value={option.sweepS}>
-                {option.label}
-              </option>
-            ))}
-          </select>
+          <PlaybackControl
+            mode={prefs.mode}
+            onModeChange={(mode) => setAnimatePrefs({ mode })}
+            sweepS={prefs.sweepS}
+            onSweepChange={(sweepS) => setAnimatePrefs({ sweepS })}
+          />
         </div>
       ) : null}
       {sweepReason && units.length > 0 ? (
         <p className="assembly-muted">{sweepReason}</p>
       ) : null}
 
-      <div className="assembly-positions" role="group" aria-label="Positions">
-        {model.set.positions.map((position) => (
-          <span key={position.id} className="assembly-position-chip">
-            <button
-              type="button"
-              className="assembly-position-apply"
-              title={`Move the joints to ${position.name}`}
-              onClick={() => {
-                assemblyRuntime.stop();
-                execute(
-                  commandFactories.setAssemblyPose(
-                    { values: position.values },
-                    `Apply position ${position.name}`
-                  )
-                );
-              }}
-            >
-              {position.name}
-            </button>
-            <button
-              type="button"
-              className="assembly-position-delete"
-              aria-label={`Delete ${position.name}`}
-              title="Delete"
-              onClick={() =>
-                execute(
-                  commandFactories.deleteAssemblyPosition({
-                    positionId: position.id
-                  })
-                )
-              }
-            >
-              <X size={11} aria-hidden="true" />
-            </button>
-          </span>
-        ))}
-        {savingPosition ? (
-          <AssemblyNameField
-            value={nextPositionName(model.set)}
-            label="Position name"
-            autoFocus
-            commitUnchanged
-            onDone={() => setSavingPosition(false)}
-            onCommit={(name) =>
-              execute(
-                commandFactories.saveAssemblyPosition({
-                  positionId: createId<'AssemblyPosition'>('pos'),
-                  name,
-                  values: currentValues()
-                })
-              )
-            }
-          />
-        ) : (
-          <button
-            type="button"
-            className="assembly-link-button"
-            title="Save where every joint is now, to come back to"
-            onClick={() => setSavingPosition(true)}
-          >
-            <Plus size={12} aria-hidden="true" />
-            Save position
-          </button>
-        )}
-      </div>
       {onDelete ? (
         <div className="assembly-detail-actions">
           <button
@@ -550,6 +468,117 @@ export function ComponentDetails({
           Remove from assembly
         </button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Saved positions (AS06): where every joint is, saved under a name to come
+ * back to. They belong to the whole assembly, not to one joint, so they sit
+ * in their own section. A chip applies its position; a double-click renames
+ * it; × deletes it. Each is one undoable command.
+ */
+export function AssemblyPositions({
+  execute,
+  model
+}: Pick<AssemblyDetailsProps, 'execute' | 'model'>) {
+  const [saving, setSaving] = useState(false);
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const currentValues = (): Record<string, number[]> =>
+    Object.fromEntries(
+      model.set.joints.map((j) => [
+        j.id,
+        [...(model.solution.values.get(j.id) ?? j.values)]
+      ])
+    );
+  return (
+    <div className="assembly-positions" role="group" aria-label="Positions">
+      {model.set.positions.map((position) =>
+        renaming === position.id ? (
+          <AssemblyNameField
+            key={position.id}
+            value={position.name}
+            label={`Rename ${position.name}`}
+            autoFocus
+            onDone={() => setRenaming(null)}
+            onCommit={(name) =>
+              execute(
+                // Saving under the same id replaces it: a rename keeps the
+                // values and the chip's place.
+                commandFactories.saveAssemblyPosition({
+                  positionId: position.id,
+                  name,
+                  values: position.values
+                })
+              )
+            }
+          />
+        ) : (
+          <span key={position.id} className="assembly-position-chip">
+            <button
+              type="button"
+              className="assembly-position-apply"
+              title={`Move the joints to ${position.name} · double-click to rename`}
+              onClick={(event) => {
+                if (event.detail > 1) return;
+                assemblyRuntime.stop();
+                execute(
+                  commandFactories.setAssemblyPose(
+                    { values: position.values },
+                    `Apply position ${position.name}`
+                  )
+                );
+              }}
+              onDoubleClick={() => setRenaming(position.id)}
+            >
+              {position.name}
+            </button>
+            <button
+              type="button"
+              className="assembly-position-delete"
+              aria-label={`Delete ${position.name}`}
+              title="Delete"
+              onClick={() =>
+                execute(
+                  commandFactories.deleteAssemblyPosition({
+                    positionId: position.id
+                  })
+                )
+              }
+            >
+              <X size={12} aria-hidden="true" />
+            </button>
+          </span>
+        )
+      )}
+      {saving ? (
+        <AssemblyNameField
+          value={nextPositionName(model.set)}
+          label="Position name"
+          autoFocus
+          commitUnchanged
+          onDone={() => setSaving(false)}
+          onCommit={(name) =>
+            execute(
+              commandFactories.saveAssemblyPosition({
+                positionId: createId<'AssemblyPosition'>('pos'),
+                name,
+                values: currentValues()
+              })
+            )
+          }
+        />
+      ) : (
+        <button
+          type="button"
+          className="assembly-link-button"
+          title="Save where every joint is now, to come back to"
+          onClick={() => setSaving(true)}
+        >
+          <Plus size={12} aria-hidden="true" />
+          Save position
+        </button>
+      )}
     </div>
   );
 }

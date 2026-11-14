@@ -3,6 +3,7 @@ import {
   advanceOnSignals,
   advanceThroughCompleted,
   tourStepBody,
+  tourStepTarget,
   WORKSPACE_TOUR_STEPS,
   type WorkspaceTourSignals
 } from './workspaceTour';
@@ -86,18 +87,40 @@ describe('workspace tour', () => {
     ).toBe(2);
   });
 
-  it('moves on from the history step when History is opened from it', () => {
-    // The step stayed put while the user did exactly what it asked.
+  it('holds the history step over the panel it opened (I16)', () => {
+    // Moving on as History opened took the grip, row and rollback tips away
+    // while the panel was still arriving: the step stays, until Next.
     const shown = signals({ featureCount: 1, hasSelection: true });
-    expect(advanceOnSignals(2, shown, { ...shown, historyOpen: true })).toBe(3);
-    // Opened and the export dialog already seen: nothing is left to teach.
+    const open = { ...shown, historyOpen: true };
+    expect(advanceOnSignals(2, shown, open)).toBe(2);
     expect(
       advanceOnSignals(
         2,
         { ...shown, exportSeen: true },
-        { ...shown, exportSeen: true, historyOpen: true }
+        { ...open, exportSeen: true }
       )
-    ).toBe(WORKSPACE_TOUR_STEPS.length);
+    ).toBe(2);
+    // It points at the History button, then at the panel that opened.
+    expect(tourStepTarget(2, shown)).toBe(
+      '.rail-panels [aria-label="History panel"]'
+    );
+    expect(tourStepTarget(2, open)).toBe('.model-panel-history');
+  });
+
+  it('names and outlines the rail foot, and points the last step at File (I16)', () => {
+    const [create, , , exportStep] = WORKSPACE_TOUR_STEPS;
+    for (const touch of [false, true]) {
+      const body = tourStepBody(create!, () => 'B', touch);
+      expect(body).toContain('More tools (⋯) at its foot');
+      expect(body).not.toContain('Tools at its foot');
+      expect(tourStepBody(exportStep!, () => 'B', touch)).toMatch(
+        /^File › Export /
+      );
+    }
+    expect(tourStepTarget(0, signals())).toBe(
+      '.tool-palette, .command-more-toggle'
+    );
+    expect(tourStepTarget(3, signals())).toBe('.file-menu > summary');
   });
 
   it("reads opening History as the history step's action only", () => {
