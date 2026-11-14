@@ -40,6 +40,7 @@ function recordingTransport(overrides?: Partial<ArtifactUploadTransport>): {
 
 const session = {
   projectId: 'proj_upload',
+  payload: 'plaintext' as const,
   uploadSessionId: 'us_1',
   uploadUrl: '/api/uploads/us_1/content'
 };
@@ -61,7 +62,10 @@ describe('planUploadParts', () => {
     for (const total of [OLD_SINGLE_PUT_CAP - 1, OLD_SINGLE_PUT_CAP + 1]) {
       const parts = planUploadParts(total);
       expect(parts.length).toBe(2);
-      expect(parts[0]).toMatchObject({ start: 0, end: ARTIFACT_UPLOAD_PART_BYTES });
+      expect(parts[0]).toMatchObject({
+        start: 0,
+        end: ARTIFACT_UPLOAD_PART_BYTES
+      });
       expect(parts[1]!.end).toBe(total);
     }
   });
@@ -85,12 +89,10 @@ describe('uploadArtifactBody', () => {
 
   it('chunks larger bodies and completes with every part', async () => {
     const { transport, calls } = recordingTransport();
-    await uploadArtifactBody(
-      transport,
-      session,
-      new Blob(['a'.repeat(20)]),
-      { partBytes: 8, retryDelay: noDelay }
-    );
+    await uploadArtifactBody(transport, session, new Blob(['a'.repeat(20)]), {
+      partBytes: 8,
+      retryDelay: noDelay
+    });
     expect(calls).toEqual([
       'create',
       'part:1:8',
@@ -105,12 +107,18 @@ describe('uploadArtifactBody', () => {
     let remaining = ARTIFACT_PART_UPLOAD_ATTEMPTS - 1;
     const flaky: ArtifactUploadTransport = {
       ...shared.transport,
-      async uploadArtifactPart(s, u, partNumber, body) {
+      async uploadArtifactPart(s, u, partNumber, body, context) {
         if (partNumber === 2 && remaining > 0) {
           remaining -= 1;
           throw new Error('flaky network');
         }
-        return shared.transport.uploadArtifactPart(s, u, partNumber, body);
+        return shared.transport.uploadArtifactPart(
+          s,
+          u,
+          partNumber,
+          body,
+          context
+        );
       }
     };
     await uploadArtifactBody(flaky, session, new Blob(['a'.repeat(20)]), {
@@ -136,9 +144,9 @@ describe('uploadArtifactBody', () => {
         retryDelay: noDelay
       })
     ).rejects.toThrow('storage down');
-    expect(
-      shared.calls.filter((call) => call === 'part-attempt').length
-    ).toBe(ARTIFACT_PART_UPLOAD_ATTEMPTS);
+    expect(shared.calls.filter((call) => call === 'part-attempt').length).toBe(
+      ARTIFACT_PART_UPLOAD_ATTEMPTS
+    );
     expect(shared.calls.at(-1)).toBe('abort:upload_test');
   });
 

@@ -14,6 +14,7 @@
 import type { ProjectSummary } from '@openzcad/shared';
 import { api, forgetEncryptedProject } from '../api';
 import { desktopFetch } from '../desktopBridge';
+import { migrationFetch } from '../projectWriteGate';
 import { flushProjectEdits } from '../migrationStatus';
 import { getKeySessionRevision } from './keySession';
 import {
@@ -95,7 +96,11 @@ function idle(project: ProjectSummary): MigrationProgress {
 export function createDecryptionController(
   deps: DecryptionControllerDeps
 ): DecryptionController {
-  const fetcher = deps.fetcher ?? desktopFetch;
+  // This device's own decrypt run: its requests stage the project's
+  // plaintext beside its ciphertext before the cutover, which the write
+  // gate otherwise refuses for a project pinned as encrypted. Still refused
+  // while the project may not be written (`projectWriteGate.ts`).
+  const fetcher = deps.fetcher ?? migrationFetch('decrypt', desktopFetch);
   const migrations = deps.migrations ?? createProjectMigrationsApi(fetcher);
   const listProjects =
     deps.listProjects ?? (async () => (await api.listProjects()).projects);

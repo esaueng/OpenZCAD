@@ -2,7 +2,11 @@ import { saveFile } from './saveFile';
 import type { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { LEGACY_PROJECT_FRAME_CONTENT_TYPE } from '@openzcad/shared';
 import { assertCloudFunctionsEnabled, cloudRequestSignal } from './cloudMode';
-import { checkOutboundRequest } from './projectWriteGate';
+import {
+  checkOutboundRequest,
+  checkProjectRequest,
+  type ResolvedProjectRequest
+} from './projectWriteGate';
 
 export type DesktopMenuCommand =
   | 'open-model'
@@ -371,25 +375,33 @@ function tauriCore(): ReturnType<typeof importTauriCore> {
 
 /**
  * Routes cloud requests through Rust so bearer credentials never enter the
- * WebView, localStorage, URLs, logs, or frontend bundles. A request that
- * writes a project this tab may not write is refused before it is sent
- * (`projectWriteGate.ts`).
+ * WebView, localStorage, URLs, logs, or frontend bundles.
+ *
+ * A request that writes a project this tab may not write, or carries
+ * plaintext of a project this device holds as encrypted, is refused
+ * (`projectWriteGate.ts`): resolved from the request's own context first,
+ * then checked again synchronously immediately before `fetch` or the
+ * native invoke, after every await here, with nothing awaited between
+ * that check and the send.
  */
 export async function desktopFetch(
   input: RequestInfo | URL,
   init: RequestInit = {}
 ): Promise<Response> {
-  // Synchronously, before anything is awaited or sent.
-  checkOutboundRequest(input, init);
-  return sendCloudRequest(input, init);
+  // Refused early, before anything is awaited, and again at the send.
+  const request = checkOutboundRequest(input, init);
+  return sendCloudRequest(input, init, request);
 }
 
 async function sendCloudRequest(
   input: RequestInfo | URL,
-  init: RequestInit
+  init: RequestInit,
+  request: ResolvedProjectRequest
 ): Promise<Response> {
   const signal = cloudRequestSignal(init.signal);
   if (!isDesktopApp()) {
+    // Immediately before the send: nothing is awaited in between.
+    checkProjectRequest(request);
     return fetch(input, { ...init, signal });
   }
   if (signal.aborted) {
@@ -420,6 +432,10 @@ async function sendCloudRequest(
   if (signal.aborted) {
     throw new DOMException('The operation was aborted.', 'AbortError');
   }
+  // Immediately before the native send, after loading Tauri and reading
+  // the body: a pin, an unresolved switch or a reset noted meanwhile
+  // sends nothing. Nothing is awaited between this check and the invoke.
+  checkProjectRequest(request);
   const result = await invoke<NativeApiResponse>('desktop_api_request', {
     request: {
       method: init.method ?? 'GET',

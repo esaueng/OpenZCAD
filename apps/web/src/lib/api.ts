@@ -73,7 +73,12 @@ import { splitProjectStorageUpload } from '@openzcad/persistence';
 import { desktopFetch, isDesktopApp } from './desktopBridge';
 import type * as EncryptedProjectsModule from './e2ee/encryptedProjects';
 import { localStoragePreferencePins } from './e2ee/preferencePins';
-import { installProjectWriteGate } from './projectWriteGate';
+import {
+  installProjectWriteGate,
+  projectRequest,
+  type ProjectRequestContext,
+  type ProjectWriteCheck
+} from './projectWriteGate';
 import {
   localStorageEncryptedProjectPins,
   type EncryptedProjectPinStore
@@ -486,8 +491,51 @@ export function requireProjectWritable(projectId: string): void {
   if (refusal) throw refusal;
 }
 
-// Every project write through `desktopFetch` asks first.
-installProjectWriteGate(requireProjectWritable);
+export const E2EE_PLAINTEXT_REFUSED_CODE = 'E2EE_PLAINTEXT_REFUSED';
+
+/**
+ * A request decided as plaintext before the project was pinned as
+ * encrypted here (by a listing or another tab) reached its send: refused
+ * there, so nothing went out without encryption.
+ */
+export function plaintextRefusedError(
+  details?: Record<string, unknown>
+): ApiError {
+  return new ApiError(
+    409,
+    'This device now keeps this project end-to-end encrypted, so nothing was sent without encryption. Your changes stay on this device; try again to send them encrypted.',
+    E2EE_PLAINTEXT_REFUSED_CODE,
+    details
+  );
+}
+
+/**
+ * The gate's check, run synchronously immediately before each request or
+ * room frame is sent (`projectWriteGate.ts`): no write of a project this
+ * tab may not write, and no plaintext of a project this device holds as
+ * encrypted now, whatever its sender decided before it awaited anything.
+ * This device's own decrypt run stages plaintext before its cutover.
+ */
+const checkProjectSend: ProjectWriteCheck = ({
+  projectId,
+  payload,
+  migration
+}) => {
+  requireProjectWritable(projectId);
+  if (
+    payload === 'plaintext' &&
+    migration !== 'decrypt' &&
+    isEncryptedProject(projectId)
+  ) {
+    throw plaintextRefusedError({ projectId });
+  }
+};
+
+installProjectWriteGate(checkProjectSend);
+
+/** A request carrying the project's content in plaintext. */
+const plaintextOf = (projectId: string, init: RequestInit = {}): RequestInit =>
+  projectRequest({ projectId, payload: 'plaintext' }, init);
 
 /**
  * Whether another tab reset pins this tab still holds in memory, so this
@@ -1344,14 +1392,14 @@ export const api = {
     };
     return requestJson<DuplicateProjectResponse>(
       `/api/projects/${encodeURIComponent(projectId)}/duplicate`,
-      {
+      plaintextOf(projectId, {
         method: 'POST',
         body: JSON.stringify(
           request.document
             ? await withSplitStorage(request, 'document')
             : request
         )
-      }
+      })
     );
   },
   /** The project's retained save states, newest first, without documents. */
@@ -1435,7 +1483,7 @@ export const api = {
         : payload.document;
     return requestJson<ProjectDocument>(
       `/api/projects/${encodeURIComponent(payload.projectId)}/revisions`,
-      {
+      plaintextOf(payload.projectId, {
         method: 'POST',
         body: JSON.stringify(
           await withSplitStorage(
@@ -1449,7 +1497,7 @@ export const api = {
             'document'
           )
         )
-      }
+      })
     );
   },
   /**
@@ -1477,59 +1525,78 @@ export const api = {
     const body = JSON.stringify(await withSplitStorage(payload, 'document'));
     return requestJson<SaveProjectDocumentResponse>(
       `/api/projects/${encodeURIComponent(payload.projectId)}/document`,
-      {
+      plaintextOf(payload.projectId, {
         method: 'PUT',
         body,
         keepalive:
           options?.keepalive === true && new Blob([body]).size <= 60_000
-      }
+      })
     );
   },
   createUploadSession: async (payload: CreateUploadSessionRequest) => {
     if (isEncryptedProject(payload.projectId)) {
       throw encryptedLocalOnly('Files');
     }
-    return requestJson<CreateUploadSessionResponse>('/api/uploads', {
-      method: 'POST',
-      body: JSON.stringify(payload)
-    });
+    return requestJson<CreateUploadSessionResponse>(
+      '/api/uploads',
+      plaintextOf(payload.projectId, {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      })
+    );
   },
-  uploadArtifact: async (uploadUrl: string, body: Blob) => {
+  /**
+   * The upload-session requests: each carries the context its uploader
+   * declared (`uploadArtifactBody`), since the session's routes name no
+   * project.
+   */
+  uploadArtifact: async (
+    uploadUrl: string,
+    body: Blob,
+    context: ProjectRequestContext
+  ) => {
     if (
       !isDesktopApp() &&
       new URL(uploadUrl, window.location.href).origin !== window.location.origin
     ) {
       throw new Error('Artifact upload URL must use the application origin.');
     }
-    const response = await desktopFetch(uploadUrl, {
-      method: 'PUT',
-      headers: { 'content-type': body.type || 'application/octet-stream' },
-      body
-    });
+    const response = await desktopFetch(
+      uploadUrl,
+      projectRequest(context, {
+        method: 'PUT',
+        headers: { 'content-type': body.type || 'application/octet-stream' },
+        body
+      })
+    );
     if (!response.ok) {
       throw new Error(
         (await response.text()) || `Upload failed (${response.status}).`
       );
     }
   },
-  createMultipartUpload: (uploadSessionId: string) =>
+  createMultipartUpload: (
+    uploadSessionId: string,
+    context: ProjectRequestContext
+  ) =>
     requestJson<CreateMultipartUploadResponse>(
       `/api/uploads/${encodeURIComponent(uploadSessionId)}/multipart`,
-      { method: 'POST' }
+      projectRequest(context, { method: 'POST' })
     ),
   uploadArtifactPart: async (
     uploadSessionId: string,
     uploadId: string,
     partNumber: number,
-    body: Blob
+    body: Blob,
+    context: ProjectRequestContext
   ): Promise<UploadedArtifactPart> => {
     const response = await desktopFetch(
       `/api/uploads/${encodeURIComponent(uploadSessionId)}/parts/${partNumber}?uploadId=${encodeURIComponent(uploadId)}`,
-      {
+      projectRequest(context, {
         method: 'PUT',
         headers: { 'content-type': 'application/octet-stream' },
         body
-      }
+      })
     );
     if (!response.ok) {
       throw new Error(
@@ -1541,15 +1608,16 @@ export const api = {
   },
   completeMultipartUpload: async (
     uploadSessionId: string,
-    payload: CompleteMultipartUploadRequest
+    payload: CompleteMultipartUploadRequest,
+    context: ProjectRequestContext
   ) => {
     const response = await desktopFetch(
       `/api/uploads/${encodeURIComponent(uploadSessionId)}/multipart/complete`,
-      {
+      projectRequest(context, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(payload)
-      }
+      })
     );
     if (!response.ok) {
       throw new Error(
@@ -1558,10 +1626,14 @@ export const api = {
       );
     }
   },
-  abortMultipartUpload: async (uploadSessionId: string, uploadId: string) => {
+  abortMultipartUpload: async (
+    uploadSessionId: string,
+    uploadId: string,
+    context: ProjectRequestContext
+  ) => {
     const response = await desktopFetch(
       `/api/uploads/${encodeURIComponent(uploadSessionId)}/multipart?uploadId=${encodeURIComponent(uploadId)}`,
-      { method: 'DELETE' }
+      projectRequest(context, { method: 'DELETE' })
     );
     if (!response.ok) {
       throw new Error(
@@ -1571,10 +1643,13 @@ export const api = {
     }
   },
   finalizeArtifact: (payload: FinalizeArtifactRequest) =>
-    requestJson<{ artifactId: string | null }>('/api/artifacts/finalize', {
-      method: 'POST',
-      body: JSON.stringify(payload)
-    }),
+    requestJson<{ artifactId: string | null }>(
+      '/api/artifacts/finalize',
+      plaintextOf(payload.projectId, {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      })
+    ),
   discardMeshPayload: async (
     projectId: string,
     artifactId: string,

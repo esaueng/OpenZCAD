@@ -21,7 +21,8 @@ import {
 import { desktopFetch } from './desktopBridge';
 import {
   ENCRYPTED_PROJECT_PIN_PREFIX,
-  ENCRYPTED_PROJECT_PIN_FAILED_KEY
+  ENCRYPTED_PROJECT_PIN_FAILED_KEY,
+  encryptedProjectPinKey
 } from './e2ee/encryptedProjectPins';
 import { createDecryptionController } from './e2ee/projectDecryption';
 import type * as DecryptionEngineModule from './e2ee/projectDecryptionEngine';
@@ -622,7 +623,7 @@ describe('resetting pins this device could not save', () => {
       await listAs(lost, 2);
       expect(isEncryptedProject(lost)).toBe(true);
       expect(
-        window.localStorage.getItem(ENCRYPTED_PROJECT_PIN_PREFIX + lost)
+        window.localStorage.getItem(encryptedProjectPinKey(lost))
       ).not.toBeNull();
     } finally {
       window.localStorage.removeItem(ENCRYPTED_PROJECT_PIN_FAILED_KEY);

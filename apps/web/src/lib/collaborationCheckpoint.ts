@@ -9,6 +9,7 @@ import {
 } from '@openzcad/persistence';
 import type { ProjectDocument, ProjectEditLease } from '@openzcad/shared';
 import { desktopFetch } from './desktopBridge';
+import { projectRequest } from './projectWriteGate';
 import {
   abortableCheckpoint,
   normalizeCheckpointReason,
@@ -186,19 +187,24 @@ export async function saveCollaborationCheckpoint(
       const response = await abortableCheckpoint(
         desktopFetch(
           `/api/projects/${encodeURIComponent(snapshot.projectId)}/collaboration`,
-          {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            signal: controls.controller.signal,
-            body: JSON.stringify({
-              clientId: controls.clientId,
-              leaseId: lease.leaseId,
-              baseVersion,
-              document: minted,
-              checkpointReason: label,
-              savedRevisionId
-            })
-          }
+          // Plaintext: refused at its send if the project is pinned as
+          // encrypted meanwhile (`projectWriteGate.ts`).
+          projectRequest(
+            { projectId: snapshot.projectId, payload: 'plaintext' },
+            {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              signal: controls.controller.signal,
+              body: JSON.stringify({
+                clientId: controls.clientId,
+                leaseId: lease.leaseId,
+                baseVersion,
+                document: minted,
+                checkpointReason: label,
+                savedRevisionId
+              })
+            }
+          )
         ),
         controls.controller.signal
       );

@@ -15,6 +15,7 @@ import {
 import { desktopFetch } from './desktopBridge';
 import {
   ENCRYPTED_PROJECT_PIN_PREFIX,
+  encryptedProjectPinKey,
   localStorageEncryptedProjectPins
 } from './e2ee/encryptedProjectPins';
 import { createEncryptedDocumentsApi } from './e2ee/encryptedDocumentsApi';
@@ -26,6 +27,7 @@ import { createReplacedEnvelopesApi } from './e2ee/replacedEnvelopes';
 import { createProjectMigrationsApi } from './e2ee/projectMigrationsApi';
 import { loadEncryptedRoomCodec } from './e2ee/encryptedRoomCodec';
 import {
+  projectRequest,
   projectWriteBlocked,
   ungatedFetch,
   UnownedProjectWriteError
@@ -105,6 +107,8 @@ function writePaths(projectId: string): [string, () => Promise<unknown>][] {
   const blobs = createContentBlobsApi();
   const replaced = createReplacedEnvelopesApi();
   const id = toProjectId(projectId);
+  const plaintext = (init: RequestInit) =>
+    projectRequest({ projectId, payload: 'plaintext' }, init);
   return [
     [
       'document save',
@@ -149,22 +153,28 @@ function writePaths(projectId: string): [string, () => Promise<unknown>][] {
     [
       'plaintext upload session',
       () =>
-        desktopFetch('/api/uploads', {
-          method: 'POST',
-          body: JSON.stringify({ projectId, kind: 'thumbnail' })
-        })
+        desktopFetch(
+          '/api/uploads',
+          plaintext({
+            method: 'POST',
+            body: JSON.stringify({ projectId, kind: 'thumbnail' })
+          })
+        )
     ],
     [
       'plaintext artifact finalize',
       () =>
-        desktopFetch('/api/artifacts/finalize', {
-          method: 'POST',
-          body: JSON.stringify({
-            projectId,
-            uploadSessionId: 'upload_1',
-            artifactId: 'artifact_1'
+        desktopFetch(
+          '/api/artifacts/finalize',
+          plaintext({
+            method: 'POST',
+            body: JSON.stringify({
+              projectId,
+              uploadSessionId: 'upload_1',
+              artifactId: 'artifact_1'
+            })
           })
-        })
+        )
     ],
     [
       'encrypted measurements',
@@ -175,7 +185,10 @@ function writePaths(projectId: string): [string, () => Promise<unknown>][] {
       () =>
         desktopFetch(
           `/api/projects/${encodeURIComponent(projectId)}/measurements`,
-          { method: 'PUT', body: JSON.stringify({ expectedRevision: 1 }) }
+          plaintext({
+            method: 'PUT',
+            body: JSON.stringify({ expectedRevision: 1 })
+          })
         )
     ],
     [
@@ -187,7 +200,7 @@ function writePaths(projectId: string): [string, () => Promise<unknown>][] {
       () =>
         desktopFetch(
           `/api/projects/${encodeURIComponent(projectId)}/workspace-sessions`,
-          { method: 'PUT', body: JSON.stringify({ projectId }) }
+          plaintext({ method: 'PUT', body: JSON.stringify({ projectId }) })
         )
     ],
     [
@@ -195,7 +208,7 @@ function writePaths(projectId: string): [string, () => Promise<unknown>][] {
       () =>
         desktopFetch(
           `/api/projects/${encodeURIComponent(projectId)}/collaboration`,
-          { method: 'POST', body: '{}' }
+          plaintext({ method: 'POST', body: '{}' })
         )
     ],
     ['copy', () => api.duplicateProject(projectId)],
@@ -247,7 +260,12 @@ describe('a switch to encryption this device did not see finish', () => {
           await codeOf(
             uploadArtifactBody(
               transport(),
-              { ...session, projectId: other, uploadUrl: session.uploadUrl! },
+              {
+                ...session,
+                projectId: other,
+                payload: 'plaintext',
+                uploadUrl: session.uploadUrl!
+              },
               body,
               { partBytes: 8, retryDelay: () => Promise.resolve() }
             )
@@ -263,10 +281,16 @@ describe('a switch to encryption this device did not see finish', () => {
     // switch is noted unresolved, and a part goes out in the same task,
     // before anything could have read the answer that opened it.
     const other = 'proj_gate_upload_race';
-    const opened = await desktopFetch('/api/uploads', {
-      method: 'POST',
-      body: JSON.stringify({ projectId: other, kind: 'source' })
-    });
+    const opened = await desktopFetch(
+      '/api/uploads',
+      projectRequest(
+        { projectId: other, payload: 'plaintext' },
+        {
+          method: 'POST',
+          body: JSON.stringify({ projectId: other, kind: 'source' })
+        }
+      )
+    );
     const { session } = (await opened.json()) as {
       session: { uploadSessionId: string };
     };
@@ -278,11 +302,15 @@ describe('a switch to encryption this device did not see finish', () => {
         session.uploadSessionId,
         'mp_1',
         1,
-        new Blob(['x'])
+        new Blob(['x']),
+        undefined as never
       )
     ).rejects.toBeInstanceOf(UnownedProjectWriteError);
     await expect(
-      uploadTransport().createMultipartUpload(session.uploadSessionId)
+      uploadTransport().createMultipartUpload(
+        session.uploadSessionId,
+        undefined as never
+      )
     ).rejects.toBeInstanceOf(UnownedProjectWriteError);
     expect(network).not.toHaveBeenCalled();
   });
@@ -328,6 +356,7 @@ describe('an upload session', () => {
   const projectId = 'proj_gate_upload_open';
   const session = {
     projectId,
+    payload: 'plaintext' as const,
     uploadSessionId: 'upload_open',
     uploadUrl: '/api/uploads/upload_open/content'
   };
@@ -361,7 +390,11 @@ describe('an upload session', () => {
       })
     ).rejects.toBeInstanceOf(UnownedProjectWriteError);
     await expect(
-      api.completeMultipartUpload('upload_open', { uploadId: 'mp', parts: [] })
+      api.completeMultipartUpload(
+        'upload_open',
+        { uploadId: 'mp', parts: [] },
+        undefined as never
+      )
     ).rejects.toBeInstanceOf(UnownedProjectWriteError);
     expect(network).not.toHaveBeenCalled();
   });
@@ -418,7 +451,7 @@ describe('a reset made in another tab', () => {
       { projectId: toProjectId(projectId), storageFormat: 2 }
     ]);
     expect(
-      window.localStorage.getItem(ENCRYPTED_PROJECT_PIN_PREFIX + projectId)
+      window.localStorage.getItem(encryptedProjectPinKey(projectId))
     ).not.toBeNull();
 
     otherTab().resetProject(projectId);
@@ -429,9 +462,8 @@ describe('a reset made in another tab', () => {
     rememberProjectFormats([
       { projectId: toProjectId(projectId), storageFormat: 2 }
     ]);
-    expect(
-      window.localStorage.getItem(ENCRYPTED_PROJECT_PIN_PREFIX + projectId)
-    ).toBeNull();
+    // No pin under the generation the reset saved: a fresh tab sees none.
+    expect(otherTab().has(projectId)).toBe(false);
     expect(projectWriteBlocked(projectId)).toBe(true);
   });
 

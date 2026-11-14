@@ -480,7 +480,8 @@ describe('archiving a mesh import', () => {
     expect(transport.uploadArtifactPart).toHaveBeenCalledOnce();
     expect(transport.abortMultipartUpload).toHaveBeenCalledWith(
       'upload_mesh-payload',
-      'multipart_mesh'
+      'multipart_mesh',
+      { projectId: 'proj_mesh_upload', payload: 'plaintext' }
     );
     expect(transport.completeMultipartUpload).not.toHaveBeenCalled();
     expect(transport.finalizeArtifact).not.toHaveBeenCalled();

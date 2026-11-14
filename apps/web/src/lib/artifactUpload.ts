@@ -3,38 +3,55 @@ import {
   type CompleteMultipartUploadRequest,
   type UploadedArtifactPart
 } from '@openzcad/shared';
-import { writingProject } from './projectWriteGate';
+import type { ProjectRequestContext } from './projectWriteGate';
 
 /**
  * The subset of the API client an artifact upload needs. Injected so the
  * chunking, retry, and abort behavior is testable without a network.
+ *
+ * Every method takes the request's context (`projectWriteGate.ts`): the
+ * session's routes name no project, so each request carries the project
+ * it writes and whether its body is plaintext or encrypted, and the gate
+ * checks that immediately before the request is sent.
  */
 export interface ArtifactUploadTransport {
-  uploadArtifact(uploadUrl: string, body: Blob): Promise<void>;
-  createMultipartUpload(uploadSessionId: string): Promise<{ uploadId: string }>;
+  uploadArtifact(
+    uploadUrl: string,
+    body: Blob,
+    context: ProjectRequestContext
+  ): Promise<void>;
+  createMultipartUpload(
+    uploadSessionId: string,
+    context: ProjectRequestContext
+  ): Promise<{ uploadId: string }>;
   uploadArtifactPart(
     uploadSessionId: string,
     uploadId: string,
     partNumber: number,
-    body: Blob
+    body: Blob,
+    context: ProjectRequestContext
   ): Promise<UploadedArtifactPart>;
   completeMultipartUpload(
     uploadSessionId: string,
-    payload: CompleteMultipartUploadRequest
+    payload: CompleteMultipartUploadRequest,
+    context: ProjectRequestContext
   ): Promise<void>;
   abortMultipartUpload(
     uploadSessionId: string,
-    uploadId: string
+    uploadId: string,
+    context: ProjectRequestContext
   ): Promise<void>;
 }
 
 /**
  * An upload session as its opener holds it: the project the opener asked
- * the session for (never taken from the account's answer), and the
- * session id and upload URL the account answered with.
+ * the session for (never taken from the account's answer), whether the
+ * body it uploads is plaintext or encrypted, and the session id and
+ * upload URL the account answered with.
  */
 export interface ArtifactUploadSession {
   projectId: string;
+  payload: 'plaintext' | 'encrypted';
   uploadSessionId: string;
   uploadUrl: string;
 }
@@ -120,8 +137,8 @@ export function planUploadParts(
  * multipart state is aborted (best-effort — the expired-session purge is the
  * backstop) before the error propagates to the caller.
  *
- * Every request is sent as a write of `session.projectId`, so the write
- * gate checks that project immediately before each one is sent.
+ * Every request carries the session's project and payload as its context,
+ * so the write gate checks them immediately before each one is sent.
  */
 export async function uploadArtifactBody(
   transport: ArtifactUploadTransport,
@@ -146,13 +163,15 @@ export async function uploadArtifactBody(
 ): Promise<void> {
   const partBytes = options?.partBytes ?? ARTIFACT_UPLOAD_PART_BYTES;
   const uploadUrl = verifiedUploadUrl(session);
-  const asWrite = <T>(send: () => Promise<T>): Promise<T> =>
-    writingProject(session.projectId, send);
+  const context: ProjectRequestContext = {
+    projectId: session.projectId,
+    payload: session.payload
+  };
   const onProgress = options?.onProgress;
   const signal = options?.signal;
   signal?.throwIfAborted();
   if (body.size <= partBytes) {
-    await asWrite(() => transport.uploadArtifact(uploadUrl, body));
+    await transport.uploadArtifact(uploadUrl, body, context);
     onProgress?.(body.size, body.size);
     return;
   }
@@ -160,8 +179,9 @@ export async function uploadArtifactBody(
     options?.retryDelay ??
     ((attempt: number) =>
       new Promise<void>((resolve) => setTimeout(resolve, attempt * 1000)));
-  const { uploadId } = await asWrite(() =>
-    transport.createMultipartUpload(session.uploadSessionId)
+  const { uploadId } = await transport.createMultipartUpload(
+    session.uploadSessionId,
+    context
   );
   try {
     const parts: UploadedArtifactPart[] = [];
@@ -172,7 +192,7 @@ export async function uploadArtifactBody(
       parts.push(
         await uploadPartWithRetry(
           transport,
-          asWrite,
+          context,
           session.uploadSessionId,
           uploadId,
           plan.partNumber,
@@ -184,23 +204,22 @@ export async function uploadArtifactBody(
       // measured rather than a part count scaled to look like bytes.
       onProgress?.(plan.end, body.size);
     }
-    await asWrite(() =>
-      transport.completeMultipartUpload(session.uploadSessionId, {
-        uploadId,
-        parts
-      })
+    await transport.completeMultipartUpload(
+      session.uploadSessionId,
+      { uploadId, parts },
+      context
     );
   } catch (error) {
-    await asWrite(() =>
-      transport.abortMultipartUpload(session.uploadSessionId, uploadId)
-    ).catch(() => undefined);
+    await transport
+      .abortMultipartUpload(session.uploadSessionId, uploadId, context)
+      .catch(() => undefined);
     throw error;
   }
 }
 
 async function uploadPartWithRetry(
   transport: ArtifactUploadTransport,
-  asWrite: <T>(send: () => Promise<T>) => Promise<T>,
+  context: ProjectRequestContext,
   uploadSessionId: string,
   uploadId: string,
   partNumber: number,
@@ -210,13 +229,12 @@ async function uploadPartWithRetry(
   let lastError: unknown;
   for (let attempt = 1; attempt <= ARTIFACT_PART_UPLOAD_ATTEMPTS; attempt++) {
     try {
-      return await asWrite(() =>
-        transport.uploadArtifactPart(
-          uploadSessionId,
-          uploadId,
-          partNumber,
-          body
-        )
+      return await transport.uploadArtifactPart(
+        uploadSessionId,
+        uploadId,
+        partNumber,
+        body,
+        context
       );
     } catch (error) {
       lastError = error;

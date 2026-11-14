@@ -39,13 +39,18 @@
  * accounts), and like the version pins (`versionPins.ts`) are not cleared at
  * sign-out.
  *
- * Each pin and each unresolved record carries the project's reset
- * generation it was written under (`NO_RESET` before the first reset), and
- * one written under an older generation than the saved one is absent (a
- * value that names no generation still counts, as is safe). A
- * tab that checked the old generation and writes its pin after another tab
- * reset the project therefore cannot undo that reset, however the two
- * tabs' storage operations interleave.
+ * Each pin and each unresolved record is kept under a key of its own for
+ * the project's reset generation it was written under
+ * (`<prefix><projectId>:<generation>`, `NO_RESET` before the first reset),
+ * and only the record of the generation saved now counts. A tab that
+ * checked an older generation and writes after another tab reset the
+ * project writes a key nobody reads: it cannot undo that reset, nor
+ * overwrite a pin or record another tab made under the newer generation,
+ * however the tabs' storage operations interleave. A reset removes only
+ * the records of the generations it replaced, never one of a newer
+ * generation another tab may have written meanwhile. A record kept under
+ * the bare `<prefix><projectId>` (written before records had generation
+ * keys) still counts unless it names an older generation, as is safe.
  *
  * Each pin is its own storage key, so tabs never read-modify-write a shared
  * list (one tab's write cannot drop another's pin), and there is no limit
@@ -137,16 +142,16 @@ export interface EncryptedProjectPinStore {
 }
 
 /**
- * One key per pinned project: `<prefix><projectId>` = the project's reset
- * generation the pin was written under.
+ * One key per pinned project and reset generation:
+ * `<prefix><projectId>:<generation>` (`encryptedProjectPinKey`).
  */
 export const ENCRYPTED_PROJECT_PIN_PREFIX =
   'openzcad:e2ee-encrypted-project:v1:';
 
 /**
  * One key per project whose encrypt cutover this device asked for and has
- * not seen complete: `<prefix><projectId>` = the project's reset
- * generation the record was written under.
+ * not seen complete, and reset generation:
+ * `<prefix><projectId>:<generation>` (`encryptCutoverUnresolvedKey`).
  */
 export const ENCRYPTED_PROJECT_UNRESOLVED_PREFIX =
   'openzcad:e2ee-encrypt-cutover-unresolved:v1:';
@@ -186,7 +191,24 @@ export const NO_RESET = '1';
 /** `NO_RESET` or a reset token (`resetToken`). */
 const GENERATION = /^(?:1|[0-9a-z]+\.[0-9A-Za-z-]+)$/;
 
-const PROJECT_ID = /^[!-~]{1,128}$/;
+/** Printable, without `:`, so a generation key names one project. */
+const PROJECT_ID = /^[!-9;-~]{1,128}$/;
+
+/** The pin of `projectId` written under `generation`. */
+export function encryptedProjectPinKey(
+  projectId: string,
+  generation: string = NO_RESET
+): string {
+  return `${ENCRYPTED_PROJECT_PIN_PREFIX}${projectId}:${generation}`;
+}
+
+/** The unresolved-cutover record of `projectId` under `generation`. */
+export function encryptCutoverUnresolvedKey(
+  projectId: string,
+  generation: string = NO_RESET
+): string {
+  return `${ENCRYPTED_PROJECT_UNRESOLVED_PREFIX}${projectId}:${generation}`;
+}
 
 type PinStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 
@@ -327,24 +349,53 @@ export function localStorageEncryptedProjectPins(
       ? (seenResets.get(projectId) ?? NO_RESET)
       : undefined;
   /**
-   * Whether the record at `key` is there and was written under the
-   * project's saved generation; `undefined` when storage cannot be read.
+   * Whether the project has a record under `prefix` for the generation
+   * saved now; `undefined` when storage cannot be read. Records of older
+   * generations are not read at all: a tab that had not seen a reset may
+   * still write one, and it changes nothing.
    */
-  const current = (key: string, projectId: string): boolean | undefined => {
-    const value = read(key);
-    if (value === undefined) return undefined;
-    if (value === null) return false;
-    // A value that names no generation is held as there, as is safe.
-    if (!GENERATION.test(value)) return true;
-    const generation = read(ENCRYPTED_PROJECT_RESET_PREFIX + projectId);
-    if (generation === undefined) return undefined;
-    // Older than the last reset: the reset removed it, and this was
-    // written back by a tab that had not seen that reset.
-    return value === (generation ?? NO_RESET);
+  const current = (prefix: string, projectId: string): boolean | undefined => {
+    const saved = read(ENCRYPTED_PROJECT_RESET_PREFIX + projectId);
+    if (saved === undefined) return undefined;
+    const generation = saved ?? NO_RESET;
+    const keyed = read(`${prefix}${projectId}:${generation}`);
+    if (keyed === undefined) return undefined;
+    if (keyed !== null) return true;
+    const legacy = read(prefix + projectId);
+    if (legacy === undefined) return undefined;
+    if (legacy === null) return false;
+    // A bare record that names no generation is held as there, as is
+    // safe; one that names an older generation was removed by its reset.
+    return !GENERATION.test(legacy) || legacy === generation;
+  };
+  /**
+   * Removes the project's bare records and its records of `generations`,
+   * each one a generation this tab's reset replaced. Never a newer
+   * generation's: another tab may have pinned the project again since.
+   */
+  const removeRecords = (projectId: string, generations: Iterable<string>) => {
+    if (!storage) return;
+    const keys = new Set<string>();
+    for (const prefix of [
+      ENCRYPTED_PROJECT_PIN_PREFIX,
+      ENCRYPTED_PROJECT_UNRESOLVED_PREFIX
+    ]) {
+      keys.add(prefix + projectId);
+      for (const generation of generations) {
+        keys.add(`${prefix}${projectId}:${generation}`);
+      }
+    }
+    for (const key of keys) {
+      try {
+        storage.removeItem(key);
+      } catch {
+        // Not removed: it names a replaced generation, so nothing reads it.
+      }
+    }
   };
   const stored = (projectId: string): boolean => {
     if (!storage) return false;
-    const saved = current(ENCRYPTED_PROJECT_PIN_PREFIX + projectId, projectId);
+    const saved = current(ENCRYPTED_PROJECT_PIN_PREFIX, projectId);
     if (saved === undefined) {
       degraded = true;
       return false;
@@ -375,41 +426,70 @@ export function localStorageEncryptedProjectPins(
     const tag = writeTag(projectId);
     if (tag !== undefined) {
       try {
-        storage.setItem(ENCRYPTED_PROJECT_PIN_PREFIX + projectId, tag);
+        storage.setItem(encryptedProjectPinKey(projectId, tag), tag);
       } catch {
         // Fall through to the read-back.
       }
-      if (stored(projectId)) return true;
-      // Reset in another tab meanwhile: the pin is absent by that reset,
-      // not lost, so this tab only goes stale.
+      // Reset in another tab meanwhile: this pin was written under the
+      // replaced generation, so nobody reads it; not lost, so this tab
+      // only goes stale (whatever was pinned since stays as it is).
       if (resetElsewhere(projectId)) return false;
+      if (stored(projectId)) return true;
     }
     // Not saved, so a reload would not know it: hold everything as
     // encrypted, here, in other tabs and after a reload.
     recordFailure();
     return false;
   };
+  /** This page's own unresolved records, as `own` holds its pins. */
+  const ownUnresolved = new Set<string>();
+  /** The generation this page wrote each of its unresolved records under. */
+  const unresolvedTags = new Map<string, string>();
+  /**
+   * Unpins the project and drops its unresolved record. A new generation
+   * is saved first, which alone retires every record of the older ones;
+   * then the records of the generations it replaced (the one saved just
+   * before, and those this tab wrote under) are removed, never a newer
+   * one's.
+   */
   const forget = (projectId: string) => {
     if (!PROJECT_ID.test(projectId)) return;
     own.delete(projectId);
+    ownUnresolved.delete(projectId);
+    const older = new Set<string>();
+    const written = writeTag(projectId);
+    if (written !== undefined) older.add(written);
+    const ownTag = unresolvedTags.get(projectId);
+    if (ownTag !== undefined) older.add(ownTag);
+    unresolvedTags.delete(projectId);
+    const replaced = read(ENCRYPTED_PROJECT_RESET_PREFIX + projectId);
+    if (replaced !== undefined) older.add(replaced ?? NO_RESET);
     markReset(projectId);
-    if (!storage) return;
-    try {
-      storage.removeItem(ENCRYPTED_PROJECT_PIN_PREFIX + projectId);
-    } catch {
-      // Still pinned in storage: it stays encrypted, which is safe.
-    }
+    // The generation saved now is never removed.
+    const saved = read(ENCRYPTED_PROJECT_RESET_PREFIX + projectId);
+    if (saved === undefined) return;
+    older.delete(saved ?? NO_RESET);
+    removeRecords(projectId, older);
   };
-  /** This page's own unresolved records, as `own` holds its pins. */
-  const ownUnresolved = new Set<string>();
+  /**
+   * Removes the unresolved record this page wrote, under the generation it
+   * wrote it under: never a record another tab made under a newer one.
+   */
   const resolveCutover = (projectId: string) => {
     ownUnresolved.delete(projectId);
     if (!storage) return;
-    try {
-      storage.removeItem(ENCRYPTED_PROJECT_UNRESOLVED_PREFIX + projectId);
-    } catch {
-      // Still recorded: the project keeps reading as unfinished, and a
-      // complete backup of it refuses, which is safe.
+    const tag = unresolvedTags.get(projectId) ?? writeTag(projectId);
+    unresolvedTags.delete(projectId);
+    const keys = [ENCRYPTED_PROJECT_UNRESOLVED_PREFIX + projectId];
+    if (tag !== undefined)
+      keys.push(encryptCutoverUnresolvedKey(projectId, tag));
+    for (const key of keys) {
+      try {
+        storage.removeItem(key);
+      } catch {
+        // Still recorded: the project keeps reading as unfinished, and a
+        // complete backup of it refuses, which is safe.
+      }
     }
   };
   return {
@@ -456,16 +536,18 @@ export function localStorageEncryptedProjectPins(
       if (resetElsewhere(projectId)) return false;
       ownUnresolved.add(projectId);
       if (!storage) return false;
-      const key = ENCRYPTED_PROJECT_UNRESOLVED_PREFIX + projectId;
       const tag = writeTag(projectId);
       if (tag !== undefined) {
+        unresolvedTags.set(projectId, tag);
         try {
-          storage.setItem(key, tag);
+          storage.setItem(encryptCutoverUnresolvedKey(projectId, tag), tag);
         } catch {
           // Fall through to the read-back.
         }
-        if (current(key, projectId)) return true;
         if (resetElsewhere(projectId)) return false;
+        if (current(ENCRYPTED_PROJECT_UNRESOLVED_PREFIX, projectId)) {
+          return true;
+        }
       }
       recordFailure();
       return false;
@@ -478,14 +560,10 @@ export function localStorageEncryptedProjectPins(
       if (ownUnresolved.has(projectId)) return true;
       if (!storage) return false;
       // Unreadable reads as unresolved.
-      return (
-        current(ENCRYPTED_PROJECT_UNRESOLVED_PREFIX + projectId, projectId) ??
-        true
-      );
+      return current(ENCRYPTED_PROJECT_UNRESOLVED_PREFIX, projectId) ?? true;
     },
     resetProject(projectId) {
       forget(projectId);
-      resolveCutover(projectId);
     },
     resetDegraded() {
       if (!storage) return false;
@@ -511,9 +589,7 @@ export function localStorageEncryptedProjectPins(
         if (!stored(projectId)) own.delete(projectId);
       }
       for (const projectId of [...ownUnresolved]) {
-        if (
-          !current(ENCRYPTED_PROJECT_UNRESOLVED_PREFIX + projectId, projectId)
-        ) {
+        if (!current(ENCRYPTED_PROJECT_UNRESOLVED_PREFIX, projectId)) {
           ownUnresolved.delete(projectId);
         }
       }

@@ -108,6 +108,8 @@ export async function archiveArtifact(
       transport,
       {
         projectId,
+        // Decided before the session opened: checked again at each send.
+        payload: 'plaintext',
         uploadSessionId: upload.uploadSessionId,
         uploadUrl: upload.uploadUrl
       },

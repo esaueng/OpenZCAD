@@ -6,6 +6,9 @@ import {
   ENCRYPTED_PROJECT_PINS_RESET_KEY,
   ENCRYPTED_PROJECT_RESET_PREFIX,
   ENCRYPTED_PROJECT_UNRESOLVED_PREFIX,
+  NO_RESET,
+  encryptCutoverUnresolvedKey,
+  encryptedProjectPinKey,
   localStorageEncryptedProjectPins,
   type EncryptedProjectPinStore
 } from './encryptedProjectPins';
@@ -179,12 +182,12 @@ describe('encrypted project pins', () => {
     const pins = localStorageEncryptedProjectPins(storage);
     expect(pins.markCutoverUnresolved('proj_switching')).toBe(true);
     expect(
-      storage.values.has(ENCRYPTED_PROJECT_UNRESOLVED_PREFIX + 'proj_switching')
+      storage.values.has(encryptCutoverUnresolvedKey('proj_switching'))
     ).toBe(true);
     // Its own key beside the pin: no shared list is read and rewritten.
-    expect(
-      storage.values.has(ENCRYPTED_PROJECT_PIN_PREFIX + 'proj_switching')
-    ).toBe(false);
+    expect(storage.values.has(encryptedProjectPinKey('proj_switching'))).toBe(
+      false
+    );
 
     const reloaded = localStorageEncryptedProjectPins(storage);
     expect(reloaded.cutoverUnresolved('proj_switching')).toBe(true);
@@ -407,18 +410,18 @@ describe('encrypted project pins', () => {
     it.each([
       [
         'pin',
-        ENCRYPTED_PROJECT_PIN_PREFIX,
+        encryptedProjectPinKey,
         (pins: EncryptedProjectPinStore) => pins.pin('proj_race')
       ],
       [
         'unresolved record',
-        ENCRYPTED_PROJECT_UNRESOLVED_PREFIX,
+        encryptCutoverUnresolvedKey,
         (pins: EncryptedProjectPinStore) =>
           pins.markCutoverUnresolved('proj_race')
       ]
     ])(
       'keeps a reset made between another tab’s check and its %s write',
-      (_name, prefix, write) => {
+      (_name, keyOf, write) => {
         const storage = memoryStorage();
         const owner = localStorageEncryptedProjectPins(storage);
         owner.pin('proj_race');
@@ -433,7 +436,7 @@ describe('encrypted project pins', () => {
         expect(write(other.pins)).toBe(false);
         expect(other.interleave).toBeNull();
         // The write landed, under the generation before the reset.
-        expect(storage.values.has(prefix + 'proj_race')).toBe(true);
+        expect(storage.values.has(keyOf('proj_race', NO_RESET))).toBe(true);
 
         const fresh = localStorageEncryptedProjectPins(storage);
         expect(fresh.has('proj_race')).toBe(false);
@@ -454,20 +457,19 @@ describe('encrypted project pins', () => {
       owner.markCutoverUnresolved('proj_order');
       const other = localStorageEncryptedProjectPins(storage);
       expect(other.has('proj_order')).toBe(true);
-      const stalePin = storage.getItem(
-        ENCRYPTED_PROJECT_PIN_PREFIX + 'proj_order'
-      );
-      const staleRecord = storage.getItem(
-        ENCRYPTED_PROJECT_UNRESOLVED_PREFIX + 'proj_order'
-      );
+      const pinKey = encryptedProjectPinKey('proj_order');
+      const recordKey = encryptCutoverUnresolvedKey('proj_order');
+      const stalePin = storage.getItem(pinKey);
+      const staleRecord = storage.getItem(recordKey);
+      expect(stalePin).not.toBeNull();
+      expect(staleRecord).not.toBeNull();
       owner.resetProject('proj_order');
+      expect(storage.values.has(pinKey)).toBe(false);
+      expect(storage.values.has(recordKey)).toBe(false);
       // The other tab's writes, as it made them under the old generation,
       // land after the reset removed them.
-      storage.setItem(ENCRYPTED_PROJECT_PIN_PREFIX + 'proj_order', stalePin!);
-      storage.setItem(
-        ENCRYPTED_PROJECT_UNRESOLVED_PREFIX + 'proj_order',
-        staleRecord!
-      );
+      storage.setItem(pinKey, stalePin!);
+      storage.setItem(recordKey, staleRecord!);
       const fresh = localStorageEncryptedProjectPins(storage);
       expect(fresh.has('proj_order')).toBe(false);
       expect(fresh.cutoverUnresolved('proj_order')).toBe(false);
@@ -476,6 +478,125 @@ describe('encrypted project pins', () => {
       expect(localStorageEncryptedProjectPins(storage).has('proj_order')).toBe(
         true
       );
+    });
+
+    it.each([
+      [
+        'pin',
+        (pins: EncryptedProjectPinStore) => pins.pin('proj_again'),
+        (pins: EncryptedProjectPinStore) => pins.has('proj_again')
+      ],
+      [
+        'unresolved record',
+        (pins: EncryptedProjectPinStore) =>
+          pins.markCutoverUnresolved('proj_again'),
+        (pins: EncryptedProjectPinStore) => pins.cutoverUnresolved('proj_again')
+      ]
+    ])(
+      'never lets a write checked before a reset overwrite the %s made after it',
+      (_name, write, holds) => {
+        const storage = memoryStorage();
+        localStorageEncryptedProjectPins(storage).pin('proj_again');
+        // Tab A checks generation G0 ...
+        const stale = interleavedTab(storage);
+        expect(stale.pins.has('proj_again')).toBe(true);
+        // ... tab B resets the project to G1, and a tab that saw G1 pins
+        // it again (or begins another cutover) ...
+        const owner = localStorageEncryptedProjectPins(storage);
+        expect(owner.has('proj_again')).toBe(true);
+        stale.interleave = () => {
+          owner.resetProject('proj_again');
+          const fresh = localStorageEncryptedProjectPins(storage);
+          expect(fresh.pin('proj_again')).toBe(true);
+          expect(write(fresh)).toBe(true);
+        };
+        // ... then A's G0 write lands.
+        expect(write(stale.pins)).toBe(false);
+        expect(stale.interleave).toBeNull();
+
+        const reloaded = localStorageEncryptedProjectPins(storage);
+        expect(reloaded.degraded).toBe(false);
+        expect(reloaded.has('proj_again')).toBe(true);
+        expect(holds(reloaded)).toBe(true);
+        expect(stale.pins.resetElsewhere('proj_again')).toBe(true);
+      }
+    );
+
+    it('removes only records of the generations a reset replaced', () => {
+      const storage = memoryStorage();
+      const owner = localStorageEncryptedProjectPins(storage);
+      owner.pin('proj_cleanup');
+      owner.markCutoverUnresolved('proj_cleanup');
+      // Between the reset saving its new generation and removing the old
+      // records, a tab that loads now pins the project and begins another
+      // cutover under that new generation.
+      let pinnedAgain = false;
+      const resetting = localStorageEncryptedProjectPins({
+        getItem: (key) => storage.getItem(key),
+        setItem: (key, value) => storage.setItem(key, value),
+        removeItem: (key) => {
+          if (!pinnedAgain) {
+            pinnedAgain = true;
+            const fresh = localStorageEncryptedProjectPins(storage);
+            expect(fresh.pin('proj_cleanup')).toBe(true);
+            expect(fresh.markCutoverUnresolved('proj_cleanup')).toBe(true);
+          }
+          storage.removeItem(key);
+        }
+      });
+      expect(resetting.has('proj_cleanup')).toBe(true);
+      resetting.resetProject('proj_cleanup');
+      expect(pinnedAgain).toBe(true);
+
+      const reloaded = localStorageEncryptedProjectPins(storage);
+      expect(reloaded.has('proj_cleanup')).toBe(true);
+      expect(reloaded.cutoverUnresolved('proj_cleanup')).toBe(true);
+      // The replaced generation's records are gone.
+      expect(storage.values.has(encryptedProjectPinKey('proj_cleanup'))).toBe(
+        false
+      );
+      expect(
+        storage.values.has(encryptCutoverUnresolvedKey('proj_cleanup'))
+      ).toBe(false);
+    });
+
+    it('resolves only the unresolved record it wrote, never a newer one', () => {
+      const storage = memoryStorage();
+      const first = localStorageEncryptedProjectPins(storage);
+      first.pin('proj_resolve');
+      expect(first.markCutoverUnresolved('proj_resolve')).toBe(true);
+      // Another tab resets the project and begins its own cutover.
+      const second = localStorageEncryptedProjectPins(storage);
+      expect(second.has('proj_resolve')).toBe(true);
+      second.resetProject('proj_resolve');
+      expect(second.pin('proj_resolve')).toBe(true);
+      expect(second.markCutoverUnresolved('proj_resolve')).toBe(true);
+      // The first tab's own (older) cutover call answers.
+      first.resolveCutover('proj_resolve');
+      expect(
+        localStorageEncryptedProjectPins(storage).cutoverUnresolved(
+          'proj_resolve'
+        )
+      ).toBe(true);
+    });
+
+    it('still counts a bare record written before generation keys', () => {
+      const storage = memoryStorage();
+      storage.setItem(ENCRYPTED_PROJECT_PIN_PREFIX + 'proj_legacy', NO_RESET);
+      storage.setItem(
+        ENCRYPTED_PROJECT_UNRESOLVED_PREFIX + 'proj_legacy',
+        NO_RESET
+      );
+      const pins = localStorageEncryptedProjectPins(storage);
+      expect(pins.has('proj_legacy')).toBe(true);
+      expect(pins.cutoverUnresolved('proj_legacy')).toBe(true);
+      pins.resetProject('proj_legacy');
+      expect(
+        storage.values.has(ENCRYPTED_PROJECT_PIN_PREFIX + 'proj_legacy')
+      ).toBe(false);
+      const reloaded = localStorageEncryptedProjectPins(storage);
+      expect(reloaded.has('proj_legacy')).toBe(false);
+      expect(reloaded.cutoverUnresolved('proj_legacy')).toBe(false);
     });
 
     it('leaves the resetting tab holding what a reload would', () => {

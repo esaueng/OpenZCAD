@@ -10,7 +10,7 @@ import {
 } from '../lib/api';
 import {
   ENCRYPTED_PROJECT_PIN_FAILED_KEY,
-  ENCRYPTED_PROJECT_PIN_PREFIX
+  encryptedProjectPinKey
 } from '../lib/e2ee/encryptedProjectPins';
 import { EncryptedPinRecovery, PinResetDialog } from './EncryptedPinReset';
 
@@ -117,9 +117,9 @@ describe('Settings › Encryption › On this device', () => {
       expect(
         window.localStorage.getItem(ENCRYPTED_PROJECT_PIN_FAILED_KEY)
       ).toBeNull();
-      expect(
-        window.localStorage.getItem(ENCRYPTED_PROJECT_PIN_PREFIX + kept)
-      ).toBe('1');
+      expect(window.localStorage.getItem(encryptedProjectPinKey(kept))).toBe(
+        '1'
+      );
       expect(isEncryptedProject(kept)).toBe(true);
       expect(
         screen.getByText(/This device’s list of encrypted projects works again/)

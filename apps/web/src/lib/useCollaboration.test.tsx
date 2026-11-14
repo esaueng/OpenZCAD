@@ -30,6 +30,7 @@ import {
 } from './useCollaboration';
 import { parseServerMessage } from './useCollaboration';
 import { installProjectWriteGate } from './projectWriteGate';
+import { expectDeclaredProjectContext } from '../test/projectRequestContext';
 
 vi.mock('react', async (importOriginal) => {
   const actual = await importOriginal<typeof React>();
@@ -428,6 +429,11 @@ describe('HTTP collaboration response ownership', () => {
         (error: unknown) => error
       );
       expect(fetch).toHaveBeenCalledOnce();
+      // Keep my version's HTTP submission carries its plaintext context.
+      expectDeclaredProjectContext(
+        fetch.mock.calls as unknown as [string, RequestInit][],
+        { projectId: base.projectId, payload: 'plaintext' }
+      );
       if (outcome === 'body') {
         await act(async () =>
           resolve({
@@ -896,6 +902,11 @@ describe('useCollaboration lease ordering', () => {
     ]);
     expect(onConflict).not.toHaveBeenCalled();
     expect(fetch).toHaveBeenCalledTimes(2);
+    // Both submissions carry their plaintext context to the send.
+    expectDeclaredProjectContext(fetch.mock.calls, {
+      projectId: base.projectId,
+      payload: 'plaintext'
+    });
     const body = JSON.parse(fetch.mock.calls[1]![1]!.body as string) as {
       baseVersion: number;
       document: ProjectDocument;
@@ -1716,7 +1727,7 @@ describe('a room write the project write gate refuses', () => {
       () => null,
       (error: unknown) => error
     );
-    installProjectWriteGate((projectId) => {
+    installProjectWriteGate(({ projectId }) => {
       throw new Error(`Refused for ${projectId}.`);
     });
     await act(async () => {

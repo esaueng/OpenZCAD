@@ -7,7 +7,7 @@ import {
 import { isEncryptedProject } from './api';
 import { verifiedUploadUrl } from './artifactUpload';
 import { encryptedBlobSource } from './e2ee/blobReferences';
-import { writingProject } from './projectWriteGate';
+import type { ProjectRequestContext } from './projectWriteGate';
 
 export interface ThumbnailCloudTransport {
   createUploadSession(input: {
@@ -28,7 +28,11 @@ export interface ThumbnailCloudTransport {
     uploadSessionId: string;
     artifactId: ArtifactId;
   }): Promise<{ artifactId: string | null }>;
-  uploadArtifact(uploadUrl: string, body: Blob): Promise<void>;
+  uploadArtifact(
+    uploadUrl: string,
+    body: Blob,
+    context: ProjectRequestContext
+  ): Promise<void>;
 }
 
 /**
@@ -144,9 +148,12 @@ export async function uploadCloudThumbnail(
     uploadSessionId: session.uploadSessionId,
     uploadUrl: session.uploadUrl
   });
-  await writingProject(input.projectId, () =>
-    transport.uploadArtifact(uploadUrl, body)
-  );
+  // Plaintext of this project: refused at its send if the project is
+  // pinned as encrypted meanwhile (`projectWriteGate.ts`).
+  await transport.uploadArtifact(uploadUrl, body, {
+    projectId: input.projectId,
+    payload: 'plaintext'
+  });
   const finalized = await transport.finalizeArtifact({
     projectId: input.projectId,
     uploadSessionId: session.uploadSessionId,
