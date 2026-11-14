@@ -677,6 +677,7 @@ button.save-state:active:not(:disabled),
 .topbar-share-state {
   display: inline-flex;
   align-items: center;
+  gap: 6px;
   min-height: 30px;
   padding: 0 9px;
   color: var(--color-text);
@@ -830,6 +831,17 @@ button.save-state:focus-visible,
 
   .collaboration-state > .stable-label {
     display: none;
+  }
+
+  /* A seat that may only look says so in words (design review I77): the
+     glyph alone read as "people", and "Read-only" was only in the tooltip.
+     It holds no reserve, since leaving this state hides the label again. */
+  .collaboration-state.is-read-only > .stable-label {
+    display: inline-grid;
+  }
+
+  .collaboration-state.is-read-only > .stable-label::after {
+    content: none;
   }
 
   .collaboration-state > .live-badge {
