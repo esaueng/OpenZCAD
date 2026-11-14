@@ -30,7 +30,8 @@ export interface SqliteD1Options {
 /**
  * A D1 binding backed by real SQLite: the production statements run as
  * written — joins, `json_extract`, triggers and `changes()` included — instead
- * of being matched as query text.
+ * of being matched as query text. `meta.changes` counts what triggers wrote,
+ * as D1's does.
  *
  * It holds the line D1 holds and SQLite does not: more than
  * {@link D1_MAX_BOUND_PARAMETERS} bound parameters fails the statement, and
@@ -54,6 +55,10 @@ export function sqliteD1(
     }
     return run(db.prepare(sql));
   };
+  const totalChanges = () =>
+    Number(
+      (db.prepare('SELECT total_changes() AS n').get() as { n: number }).n
+    );
   const toBinding = (value: unknown): SQLInputValue => {
     if (value === undefined) {
       throw new Error("D1_TYPE_ERROR: Type 'undefined' not supported");
@@ -72,22 +77,29 @@ export function sqliteD1(
     });
     const run = () => {
       // D1 runs a row-returning statement through run() too and hands the
-      // rows back in `results`; a write with RETURNING changed each row.
+      // rows back in `results`.
       if (/^\s*(SELECT|WITH)\b/i.test(sql)) {
         return all();
       }
-      if (/\bRETURNING\b/i.test(sql)) {
-        const { results } = all();
-        return { results, success: true, meta: { changes: results.length } };
-      }
-      const result = execute(sql, bindings, (prepared) =>
-        prepared.run(...bindings)
-      );
-      return {
-        results: [],
-        success: true,
-        meta: { changes: Number(result.changes) }
-      };
+      // D1 reports `meta.changes` as SQLite's total_changes() moved by the
+      // statement, so rows its triggers wrote count too (one UPDATE that
+      // fires a trigger updating one more row reports 2), unlike
+      // sqlite3_changes(). Measured the same way here, so a Worker that
+      // tests a write by its change count sees what D1 tells it.
+      // Measured around this statement alone: what `onStatement` writes
+      // first stands for another writer, which D1 does not count here.
+      const returning = /\bRETURNING\b/i.test(sql);
+      return execute(sql, bindings, (prepared) => {
+        const before = totalChanges();
+        const results = returning
+          ? (prepared.all(...bindings) as Record<string, unknown>[])
+          : (prepared.run(...bindings), []);
+        return {
+          results,
+          success: true,
+          meta: { changes: totalChanges() - before }
+        };
+      });
     };
     return {
       sql,

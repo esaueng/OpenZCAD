@@ -1032,7 +1032,7 @@ export const isE2eeInvitationStorageReady = cachedSchemaProbe(
 );
 
 /**
- * Whether migration 0049's signed-acceptance columns of `e2ee_invitations`
+ * Whether migration 0054's signed-acceptance columns of `e2ee_invitations`
  * exist. Invitations must not depend on them: until they are there, no
  * statement names them, every acceptance reads null (so owners add
  * nobody), and only posting an acceptance answers 503.
@@ -1040,22 +1040,6 @@ export const isE2eeInvitationStorageReady = cachedSchemaProbe(
 export const isE2eeInvitationAcceptanceReady = cachedSchemaProbe(
   `SELECT COUNT(*) AS ready FROM pragma_table_info('e2ee_invitations')
    WHERE name IN ('acceptance_statement', 'acceptance_signature')`,
-  (row) => row?.ready === 2
-);
-
-/**
- * Whether migration 0053's attempt counter of `e2ee_project_migrations`
- * (the column and the trigger that moves it on) exists. Until it does, no
- * statement names it, records carry no `attempt`, and a start's
- * `expectedAttempt` is checked against the state and start time instead.
- */
-export const isE2eeMigrationAttemptReady = cachedSchemaProbe(
-  `SELECT
-     (SELECT COUNT(*) FROM pragma_table_info('e2ee_project_migrations')
-      WHERE name = 'attempt')
-     + (SELECT COUNT(*) FROM sqlite_master
-        WHERE type = 'trigger' AND name = 'e2ee_project_migration_attempt')
-     AS ready`,
   (row) => row?.ready === 2
 );
 

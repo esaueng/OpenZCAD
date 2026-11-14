@@ -81,6 +81,7 @@ import {
   MigrationMembersNotReadyError,
   MIGRATION_APPROVAL_CODE,
   MigrationApprovalNeededError,
+  isReceiptFor,
   memoryApprovalReceipts,
   prepareMigrationMembers,
   readdMigrationMembers,
@@ -498,14 +499,37 @@ export function createProjectMigrationEngine(
   const { migrations, plaintext } = deps;
   const leases = deps.leases ?? memoryLeaseStore();
   const receipts = deps.approvalReceipts ?? memoryApprovalReceipts();
-  /** The approval this browser recorded for the staging `startedAt`. */
-  const receiptFor = (projectId: string, startedAt: string | undefined) => {
-    const receipt = startedAt ? receipts.get(projectId) : null;
+  /**
+   * The approval this browser recorded for exactly the staging `migration`
+   * (its attempt counter and start: #1465 review, two stagings may start in
+   * the same millisecond).
+   */
+  const receiptFor = (
+    projectId: string,
+    migration: E2eeProjectMigrationRecord | null
+  ) => {
+    const receipt = migration ? receipts.get(projectId) : null;
     return receipt &&
+      migration &&
       receipt.projectId === projectId &&
-      receipt.stagingStartedAt === startedAt
+      isReceiptFor(receipt, migration)
       ? receipt.members
       : null;
+  };
+  /**
+   * The attempt `read` is gone (E2EE_MIGRATION_ATTEMPT_CHANGED): a receipt
+   * recorded for a staging that began when it did is no longer evidence
+   * for whatever runs now, even one with the same start (#1465 review).
+   */
+  const forgetReceiptOf = (
+    projectId: string,
+    read: E2eeProjectMigrationRecord | null
+  ) => {
+    const receipt = receipts.get(projectId);
+    if (!receipt) return;
+    if (!read || receipt.stagingStartedAt === read.startedAt) {
+      receipts.delete(projectId);
+    }
   };
   let currentLease: string | null = null;
   const leased: Fetch = (input, init) =>
@@ -570,6 +594,9 @@ export function createProjectMigrationEngine(
         stored
       )
       .catch((error: unknown) => {
+        if (codeOf(error) === E2EE_MIGRATION_CODES.attemptChanged) {
+          forgetReceiptOf(projectId, existing);
+        }
         // The room could not confirm what it holds, so the Worker staged
         // nothing (a room's unsaved edits must not be purged): a failed
         // start the owner retries.
@@ -766,10 +793,7 @@ export function createProjectMigrationEngine(
         approved = requireMembersApproved(
           sharing,
           approvedMembers,
-          receiptFor(
-            projectId,
-            status?.state === 'staging' ? status.startedAt : undefined
-          )
+          receiptFor(projectId, status?.state === 'staging' ? status : null)
         );
       }
     }
@@ -808,10 +832,11 @@ export function createProjectMigrationEngine(
       // resumes it without asking again; any other staging asks.
       receipts.set({
         projectId,
+        stagingAttempt: migration.attempt ?? null,
         stagingStartedAt: migration.startedAt,
         members: [...approved.values()]
       });
-      approval.spend(receiptFor(projectId, migration.startedAt) !== null);
+      approval.spend(receiptFor(projectId, migration) !== null);
     }
     const renewal = renewLease(projectId, lease);
     try {
@@ -825,7 +850,7 @@ export function createProjectMigrationEngine(
           projectId,
           lease,
           approvedMembers,
-          receiptFor(projectId, migration.startedAt)
+          receiptFor(projectId, migration)
         );
         report({ members: sharing.members });
       } else if (invitations) {
@@ -847,7 +872,7 @@ export function createProjectMigrationEngine(
           requireMembersApproved(
             sharing,
             approvedMembers,
-            receiptFor(projectId, migration.startedAt)
+            receiptFor(projectId, migration)
           ),
           true
         );

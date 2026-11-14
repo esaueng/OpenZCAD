@@ -94,7 +94,6 @@ import {
   isE2eeContentBlobStorageReady,
   isE2eeDeviceRemovalStorageReady,
   isE2eeInvitationStorageReady,
-  isE2eeMigrationAttemptReady,
   isE2eeMlsProposalStorageReady,
   isE2eeProjectGroupStorageReady,
   isE2eeProjectMigrationStorageReady,
@@ -130,7 +129,8 @@ import {
   refuseDeviceListMoved,
   requireCertifiedDevice,
   runBatch,
-  type Authorization
+  type Authorization,
+  type BatchResult
 } from './e2eeProjects';
 import { ENCRYPTED_DOCUMENT_MARKER } from './e2eeProjectDocuments';
 import {
@@ -671,20 +671,22 @@ function expectedAttemptOf(
 
 /**
  * Whether the row is still the attempt the caller read: none, or the same
- * state and start time, and the same counter once migration 0053 is there
- * and the caller read one.
+ * state and start time, and the same counter whenever the caller read one
+ * (migration 0053). A counter the caller read is never dropped: a row
+ * without one (no migration 0053 where the caller saw it) is not that
+ * attempt, so the start writes nothing (#1465 review: a cached schema probe
+ * must not turn a counted expectation into a state-and-time one).
  */
 function isExpectedAttempt(
   row: MigrationRow | null,
-  expected: E2eeMigrationAttemptExpectation,
-  counted: boolean
+  expected: E2eeMigrationAttemptExpectation
 ): boolean {
   if (expected.state === 'none') return row === null;
   return (
     row !== null &&
     row.state === expected.state &&
     row.started_at === expected.startedAt &&
-    (!counted || expected.attempt === null || row.attempt === expected.attempt)
+    (expected.attempt === null || row.attempt === expected.attempt)
   );
 }
 
@@ -692,16 +694,17 @@ function isExpectedAttempt(
  * {@link isExpectedAttempt} as SQL over `table`'s existing row, for the
  * statement that writes it, so nothing another tab or device wrote since
  * the read slips in between. True without an expectation; never true for
- * `none` (an existing row is not none).
+ * `none` (an existing row is not none). Only after {@link isExpectedAttempt}
+ * passed on the row read: a counted expectation then names the column,
+ * which that row showed exists.
  */
 function expectedAttemptSql(
   table: string,
-  expected: E2eeMigrationAttemptExpectation | null,
-  counted: boolean
+  expected: E2eeMigrationAttemptExpectation | null
 ): { sql: string; binds: unknown[] } {
   if (!expected) return { sql: '1', binds: [] };
   if (expected.state === 'none') return { sql: '0', binds: [] };
-  const byCounter = counted && expected.attempt !== null;
+  const byCounter = expected.attempt !== null;
   return {
     sql: `(${table}.state = ? AND ${table}.started_at = ?${
       byCounter ? ` AND ${table}.attempt = ?` : ''
@@ -712,6 +715,15 @@ function expectedAttemptSql(
       ...(byCounter ? [expected.attempt] : [])
     ]
   };
+}
+
+/**
+ * Whether a start's upsert wrote its row, by the row its `RETURNING`
+ * hands back. D1's `meta.changes` includes rows a trigger changed, so a
+ * restart (the row and then migration 0053's counter) reports two.
+ */
+function startedRow(result: BatchResult | undefined): boolean {
+  return (result?.results?.length ?? 0) === 1;
 }
 
 const attemptChanged = (): never =>
@@ -749,13 +761,12 @@ async function start(
       'Restore this project from the recycle bin before encrypting it.'
     );
   }
-  const counted = await isE2eeMigrationAttemptReady(ctx.db);
   const existing = await migrationRow(ctx.db, projectId);
   // #1465 review: the attempt the browser decided on (and the owner
   // approved the members for) is still the one here. The statements below
   // fence on it again, so a start, cancel or restart elsewhere in between
   // writes nothing either.
-  if (expected && !isExpectedAttempt(existing, expected, counted)) {
+  if (expected && !isExpectedAttempt(existing, expected)) {
     attemptChanged();
   }
   if (
@@ -803,11 +814,7 @@ async function start(
         }
       );
     }
-    const fence = expectedAttemptSql(
-      'e2ee_project_migrations',
-      expected,
-      counted
-    );
+    const fence = expectedAttemptSql('e2ee_project_migrations', expected);
     const results = await runBatch(ctx.db, [
       ctx.db
         .prepare(
@@ -833,7 +840,7 @@ async function start(
     ]);
     if ((results[0]?.meta?.changes ?? 0) !== 1) {
       const current = await migrationRow(ctx.db, projectId);
-      if (expected && !isExpectedAttempt(current, expected, counted)) {
+      if (expected && !isExpectedAttempt(current, expected)) {
         attemptChanged();
       }
       if (current?.state === 'staging') {
@@ -871,11 +878,7 @@ async function start(
     // One statement, fenced on everything checked above, the attempt the
     // browser read included: a new row only when it read none, and an
     // existing row only while it is still the one it read.
-    const fence = expectedAttemptSql(
-      'e2ee_project_migrations',
-      expected,
-      counted
-    );
+    const fence = expectedAttemptSql('e2ee_project_migrations', expected);
     const results = await runBatch(ctx.db, [
       ctx.db
         .prepare(
@@ -906,7 +909,8 @@ async function start(
              cutover_at = NULL, finished_at = NULL
            WHERE e2ee_project_migrations.state IN ('abandoned', 'done')
              AND e2ee_project_migrations.purge_cursor IS NULL
-             AND ${fence.sql}`
+             AND ${fence.sql}
+           RETURNING project_id`
         )
         .bind(
           projectId,
@@ -926,9 +930,12 @@ async function start(
           ...fence.binds
         )
     ]);
-    if ((results[0]?.meta?.changes ?? 0) !== 1) {
+    // Started exactly when the statement returned its row. Not
+    // `meta.changes`: D1 counts trigger writes in it, and a restart
+    // fires migration 0053's attempt trigger (#1465 review).
+    if (!startedRow(results[0])) {
       const current = await migrationRow(ctx.db, projectId);
-      if (expected && !isExpectedAttempt(current, expected, counted)) {
+      if (expected && !isExpectedAttempt(current, expected)) {
         attemptChanged();
       }
       if (current?.state === 'staging') {
@@ -2329,7 +2336,8 @@ async function startDecrypt(
              started_at = excluded.started_at, updated_at = excluded.updated_at,
              cutover_at = NULL, finished_at = NULL
            WHERE e2ee_project_migrations.state IN ('abandoned', 'done')
-             AND e2ee_project_migrations.purge_cursor IS NULL`
+             AND e2ee_project_migrations.purge_cursor IS NULL
+           RETURNING project_id`
         )
         .bind(
           projectId,
@@ -2347,7 +2355,10 @@ async function startDecrypt(
           ...plaintextRowsBinds(projectId)
         )
     ]);
-    if ((results[0]?.meta?.changes ?? 0) !== 1) {
+    // Started exactly when the statement returned its row. Not
+    // `meta.changes`: D1 counts trigger writes in it, and a restart
+    // fires migration 0053's attempt trigger (#1465 review).
+    if (!startedRow(results[0])) {
       const current = await migrationRow(ctx.db, projectId);
       if (current?.state === 'staging') {
         refuse(

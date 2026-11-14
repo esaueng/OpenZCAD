@@ -54,7 +54,8 @@ import {
   E2EE_MIGRATION_CODES,
   type E2eeInvitationRecord,
   type E2eeMigrationMemberRecord,
-  type E2eeMigrationMembersResponse
+  type E2eeMigrationMembersResponse,
+  type E2eeProjectMigrationRecord
 } from '@openzcad/shared';
 import { toHex } from '@openzcad/crypto';
 import { ApiError } from '../api';
@@ -126,16 +127,38 @@ export const MIGRATION_APPROVAL_CODE = 'E2EE_MIGRATION_MEMBERS_UNAPPROVED';
 /**
  * The owner's approval of a staging's roster, as this browser recorded it
  * when the staging went ahead with it: bound to the project and the
- * staging (its `startedAt`), with each approved account, identity and
- * signed role. Kept on this device only (the server never sees or supplies
- * it), so a reload resumes that staging without asking again, while a
- * staging this browser did not approve (another, or an older app
- * version's) asks.
+ * staging (its attempt counter and `startedAt`), with each approved
+ * account, identity and signed role. Kept on this device only (the server
+ * never sees or supplies it), so a reload resumes that staging without
+ * asking again, while a staging this browser did not approve (another, or
+ * an older app version's) asks.
  */
 export interface MigrationApprovalReceipt {
   readonly projectId: string;
+  /**
+   * The staging's attempt counter (migration 0053), or null from a Worker
+   * without one. Two stagings may share a start time, never a counter: a
+   * receipt counts only for the staging whose counter and start it names
+   * (#1465 review), so one kept without a counter (an older app's, or from
+   * before migration 0053) never counts for a staging that has one.
+   */
+  readonly stagingAttempt: number | null;
   readonly stagingStartedAt: string;
   readonly members: readonly MigrationMemberApproval[];
+}
+
+/**
+ * Whether `receipt` was recorded for exactly the staging `migration` is:
+ * the same counter (or neither has one) and the same start.
+ */
+export function isReceiptFor(
+  receipt: MigrationApprovalReceipt,
+  migration: Pick<E2eeProjectMigrationRecord, 'attempt' | 'startedAt'>
+): boolean {
+  return (
+    receipt.stagingStartedAt === migration.startedAt &&
+    receipt.stagingAttempt === (migration.attempt ?? null)
+  );
 }
 
 export interface MigrationApprovalReceipts {
@@ -162,8 +185,17 @@ export function parseApprovalReceipt(
 ): MigrationApprovalReceipt | null {
   if (!value || typeof value !== 'object') return null;
   const receipt = value as Record<string, unknown>;
+  // Absent in a receipt from before the counter: read as none, which then
+  // matches only a staging without one.
+  const stagingAttempt = receipt.stagingAttempt ?? null;
   if (
     receipt.projectId !== projectId ||
+    (stagingAttempt !== null &&
+      !(
+        typeof stagingAttempt === 'number' &&
+        Number.isSafeInteger(stagingAttempt) &&
+        stagingAttempt >= 1
+      )) ||
     typeof receipt.stagingStartedAt !== 'string' ||
     !receipt.stagingStartedAt ||
     !Array.isArray(receipt.members)
@@ -185,7 +217,12 @@ export function parseApprovalReceipt(
     }
     members.push({ userId, role, identityKeyHash });
   }
-  return { projectId, stagingStartedAt: receipt.stagingStartedAt, members };
+  return {
+    projectId,
+    stagingAttempt,
+    stagingStartedAt: receipt.stagingStartedAt,
+    members
+  };
 }
 
 /** What a shared project's migration carries over, or offers to reissue. */

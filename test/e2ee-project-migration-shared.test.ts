@@ -72,6 +72,7 @@ import {
   approvalOf,
   memoryApprovalReceipts,
   migrationMemberAction,
+  parseApprovalReceipt,
   prepareMigrationMembers,
   type MigrationApprovalReceipts,
   type MigrationMemberApproval,
@@ -1446,6 +1447,105 @@ describe('migrating a shared plaintext project (slice 7-4)', () => {
     expect(formatOf(srv, projectId)).toBe(2);
     expect(welcomes()).toHaveLength(2);
     expect(ownerSide.receipts.get(projectId)).toBeNull();
+  });
+
+  it('counts a receipt only for the attempt it names, and forgets it once that attempt changed (#1465 review)', async () => {
+    const w = world();
+    const { srv } = w;
+    const { projectId } = await sharedPlaintext(w);
+    for (const [a, b] of [
+      [OWNER, OTHER],
+      [OTHER, OWNER],
+      [OWNER, THIRD],
+      [THIRD, OWNER]
+    ] as const) {
+      verify(w, a, b);
+    }
+    let between: (() => void) | null = null;
+    const ownerSide = ownerEngine(w, {
+      beforeStep: (step) => {
+        if (step === 'members' && between) {
+          const run = between;
+          between = null;
+          run();
+        }
+        if (step === 'cutover') throw new Error('Interrupted');
+      }
+    });
+    await failure(ownerSide.migrate(projectId));
+    await publishKeys(w, memberDevice(w, other, 'other_laptop'));
+    await publishKeys(w, memberDevice(w, third, 'third_laptop'));
+    await ownerSide.approve(projectId);
+    expect(await failure(ownerSide.migrate(projectId))).toMatchObject({
+      message: 'Interrupted'
+    });
+    const row = () =>
+      rows<{ attempt: number; started_at: string; state: string }>(
+        srv,
+        'SELECT * FROM e2ee_project_migrations WHERE project_id = ?',
+        projectId
+      )[0]!;
+    const staged = row();
+    expect(staged).toMatchObject({ state: 'staging', attempt: 1 });
+    // Recorded with the staging's counter as well as its start.
+    const receipt = ownerSide.receipts.get(projectId)!;
+    expect(receipt).toMatchObject({
+      stagingAttempt: 1,
+      stagingStartedAt: staged.started_at
+    });
+
+    // Another attempt's receipt that began in the same millisecond, or one
+    // kept without a counter (an older app's), is not this staging's.
+    const { stagingAttempt: _attempt, ...legacy } = receipt;
+    expect(parseApprovalReceipt(legacy, projectId)).toEqual({
+      ...receipt,
+      stagingAttempt: null
+    });
+    ownerSide.approved = null;
+    for (const stored of [
+      { ...receipt, stagingAttempt: 2 },
+      parseApprovalReceipt(legacy, projectId)!
+    ]) {
+      ownerSide.receipts.set(stored);
+      expect(await failure(ownerSide.migrate(projectId))).toMatchObject({
+        code: MIGRATION_APPROVAL_CODE,
+        changed: false
+      });
+      expect(row()).toEqual(staged);
+    }
+
+    // Its own receipt, but after this page read the staging another device
+    // cancels it and starts again in the same millisecond: the start is
+    // refused, the receipt forgotten, and the owner asked again.
+    ownerSide.receipts.set(receipt);
+    between = () => {
+      srv.db
+        .prepare(
+          `UPDATE e2ee_project_migrations SET state = 'abandoned'
+           WHERE project_id = ?`
+        )
+        .run(projectId);
+      srv.db
+        .prepare(
+          `UPDATE e2ee_project_migrations
+           SET state = 'staging', device_id = 'owner_desktop', lease_id = ?,
+               lease_expires_at = ?
+           WHERE project_id = ?`
+        )
+        .run('d'.repeat(43), Date.now() + 600_000, projectId);
+    };
+    expect(await failure(ownerSide.migrate(projectId))).toMatchObject({
+      code: MIGRATION_APPROVAL_CODE,
+      changed: false
+    });
+    expect(between).toBeNull();
+    expect(row()).toMatchObject({
+      state: 'staging',
+      attempt: 2,
+      started_at: staged.started_at
+    });
+    expect(ownerSide.receipts.get(projectId)).toBeNull();
+    expect(formatOf(srv, projectId)).toBe(1);
   });
 
   it('drops a resumed staging whose re-added members have no acceptance to review, and adds them again once approved', async () => {
