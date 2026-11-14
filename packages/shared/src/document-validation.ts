@@ -368,7 +368,9 @@ const FEATURE_DATA_ENUMS: Readonly<
     profile: valuesOf<ThreadProfile>({
       'iso-metric': true,
       printable: true,
-      custom: true
+      custom: true,
+      npt: true,
+      bspt: true
     }),
     hand: valuesOf<ThreadHand>({ right: true, left: true }),
     anchor: THREAD_ANCHORS
