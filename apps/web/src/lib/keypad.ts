@@ -1,5 +1,9 @@
 import { evaluateFieldExpression } from '@openzcad/document-core';
-import { millimetresPerUnit, type UnitSystem } from '@openzcad/shared';
+import {
+  millimetresPerUnit,
+  ownEntry,
+  type UnitSystem
+} from '@openzcad/shared';
 
 /**
  * Pure math for the floating numeric keypad: on-screen placement and value
@@ -255,9 +259,9 @@ export function typedUnitValue(raw: string): TypedUnitValue | undefined {
   const value = Number(match[1]);
   const suffix = match[2] ?? '';
   const unit =
-    TYPED_UNITS[suffix.toLowerCase()] ??
+    ownEntry(TYPED_UNITS, suffix.toLowerCase()) ??
     // Plural spellings are common enough to be worth accepting.
-    TYPED_UNITS[suffix.toLowerCase().replace(/e?s$/u, '')];
+    ownEntry(TYPED_UNITS, suffix.toLowerCase().replace(/e?s$/u, ''));
   if (unit === undefined || !Number.isFinite(value)) {
     return undefined;
   }

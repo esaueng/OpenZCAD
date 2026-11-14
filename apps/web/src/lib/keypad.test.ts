@@ -485,3 +485,12 @@ describe('radial notation and parameter names', () => {
     ).toContain('radius_target');
   });
 });
+
+describe('typed unit suffixes from stored expressions', () => {
+  it.each(['1 constructor', '1 toString', '1 __proto__', '2 constructors'])(
+    'reads no inherited member for "%s"',
+    (raw) => {
+      expect(typedUnitValue(raw)).toBeUndefined();
+    }
+  );
+});
