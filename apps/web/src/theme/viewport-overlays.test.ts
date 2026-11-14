@@ -5,9 +5,9 @@ import { describe, expect, it } from 'vitest';
 /**
  * HUD cards over the stage paint their own dark ground in every theme, so
  * any of them that reads `--color-text` goes dark-on-dark the moment the
- * theme flips: the rotate-view icons and the topology pick list both
- * vanished that way. Those cards read the viewport text tokens instead, and
- * those tokens never re-theme. (What is drawn straight on the stage, with no
+ * theme flips: the rotate-view icons, and the topology pick list before it
+ * became chrome (#1441), both vanished that way. Those cards read the
+ * viewport text tokens instead, and those tokens never re-theme. (What is drawn straight on the stage, with no
  * card, reads the stage ink, which does — see contrast.test.ts.)
  */
 const tokens = readFileSync(resolve(__dirname, './tokens.css'), 'utf8');
@@ -112,6 +112,22 @@ describe('viewport overlay text tokens', () => {
     }
   });
 
+  it('paints the Select other pick list as chrome, like the context menu', () => {
+    // #1441 (design review 13 Nov, I18) moved the list off its dark HUD card
+    // onto the chrome's surface tokens: opened from the context menu, it
+    // read as a dark slab beside the light menu in the light theme.
+    const css = readFileSync(
+      resolve(__dirname, '../styles/components/viewer.css'),
+      'utf8'
+    ).replace(/\/\*[\s\S]*?\*\//g, '');
+    const block = ruleBlocks(css).find(
+      (rule) => rule.selector === '.topology-pick-list'
+    );
+    expect(block).toBeDefined();
+    expect(block!.body).toMatch(/background:\s*var\(--color-surface/);
+    expect(block!.body).toMatch(/(^|[^-])color:\s*var\(--color-text\)/m);
+  });
+
   it('paints the viewport HUD in viewport hues, never re-themed chrome ones', () => {
     // These paint on the always-dark stage, but the light theme darkens the
     // accents, the success green and the amber, and turns the surfaces and
@@ -141,7 +157,7 @@ describe('viewport overlay text tokens', () => {
 
 /** HUD elements drawn on the viewport's dark stage. */
 const HUD_SUBJECT =
-  /\.(handle-value-chip|handle-label-chip|handle-dimension-prefix|sketch-snap-marker|sketch-center-(target|axis)|sketch-dim-label|sketch-grab-handle|sketch-rotate-ring|sketch-grid-indicator|snap-glyph|selection-band|selection-callout-verb|topology-pick-list[\w-]*)\b/;
+  /\.(handle-value-chip|handle-label-chip|handle-dimension-prefix|sketch-snap-marker|sketch-center-(target|axis)|sketch-dim-label|sketch-grab-handle|sketch-rotate-ring|sketch-grid-indicator|snap-glyph|selection-band|selection-callout-verb)\b/;
 
 /** Chrome tokens the light theme repaints. */
 const CHROME_HUE =
