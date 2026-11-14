@@ -314,3 +314,23 @@ describe('start screen first-run polish', () => {
     expect(css).not.toMatch(/^\.start-tile\.is-pinned \.start-tile-pin\s*\{/m);
   });
 });
+
+describe('start screen folder navigation', () => {
+  // 14 Nov 2026 recording: with a folder open, Projects kept its accent wash
+  // beside the folder's, so two rows claimed to be the place shown.
+  it('lights only the open folder beside the folder list', () => {
+    expect(rule(css, '.start-shelf-tabs button.is-parent')).not.toMatch(
+      /background/
+    );
+  });
+
+  it('keeps Projects lit on the narrow strip, where no folder row shows', () => {
+    const narrow = css
+      .split(/@media\s*\(max-width:\s*900px\)/)
+      .find((chunk) => /\.start-folders\s*\{\s*display:\s*none/.test(chunk));
+    expect(narrow).toBeDefined();
+    expect(rule(narrow!, '.start-shelf-tabs button.is-parent')).toMatch(
+      /background:\s*var\(--color-accent-dim\)/
+    );
+  });
+});

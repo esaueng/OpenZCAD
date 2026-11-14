@@ -1527,6 +1527,31 @@ describe('StartScreen folders and selection', () => {
     expect(names()).toEqual(['Fixtures', 'Alpha plate', 'Delta plate']);
   });
 
+  it('highlights the open folder in the column, not also the Projects shelf', () => {
+    // 14 Nov 2026 recording: opening a folder left Projects lit beside it.
+    seedFolder([parts[1]!.projectId, parts[2]!.projectId]);
+    renderStartScreen({ projects: parts });
+    const projectsTab = document.getElementById('start-shelf-tab-active')!;
+    const folderLink = document.querySelector('.start-folder-link')!;
+    expect(projectsTab).toHaveClass('is-active');
+    expect(folderLink).not.toHaveClass('is-active');
+
+    fireEvent.click(folderLink);
+    expect(folderLink).toHaveClass('is-active');
+    expect(folderLink).toHaveAttribute('aria-current', 'page');
+    expect(projectsTab).not.toHaveClass('is-active');
+    // Still the shelf the folder is on, for the strip and assistive tech.
+    expect(projectsTab).toHaveClass('is-parent');
+    expect(projectsTab).toHaveAttribute('aria-selected', 'true');
+
+    fireEvent.click(projectsTab);
+    expect(projectsTab).toHaveClass('is-active');
+    expect(projectsTab).not.toHaveClass('is-parent');
+    expect(document.querySelector('.start-folder-link')).not.toHaveClass(
+      'is-active'
+    );
+  });
+
   it('looks through folders while searching', () => {
     seedFolder([parts[1]!.projectId]);
     renderStartScreen({ projects: parts });
