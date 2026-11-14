@@ -83,8 +83,7 @@ import {
   Notice,
   SettingRow,
   Status,
-  Summary,
-  Toggle
+  Summary
 } from './settingsControls';
 import { ProjectEncryptionPreference } from './ProjectEncryptionPreference';
 import { ExistingProjectEncryption } from './ExistingProjectEncryption';
@@ -564,7 +563,7 @@ function AccountPanel({
         {removalLeft ? <Notice tone="warning">{removalLeft}</Notice> : null}
         <SettingRow
           title="Your fingerprint"
-          hint="People compare it to verify you."
+          hint="Your identity. It changes only when you replace your keys. Compare it on your own devices if one says its device list did not verify. People verify you with your contact code instead, under Contacts."
         >
           <code className="encryption-code" aria-label="Your fingerprint">
             {account.fingerprint}
@@ -746,7 +745,7 @@ function AccountPanel({
         <RecoveryKeyFlow
           {...shared}
           title="Replace recovery key"
-          intro="This also replaces your identity: other devices must be approved again, and contacts must verify your new fingerprint."
+          intro="This also replaces your identity: other devices must be approved again, and people who verified you must compare contact codes with you again."
           finishLabel="Replace recovery key"
           askOldKey
           onFinish={(secret, oldSecret) =>
@@ -1493,7 +1492,7 @@ function RecoveryKeyFlow({
         <>
           <SettingRow
             title="Your recovery key"
-            hint="Your only way back if you lose every device. Nobody, including OpenZCAD, can recover it."
+            hint="Your way back if you lose every device. Nobody, including OpenZCAD, can recover it: if you lose access to your keys (every device, any passkey you add, and this recovery key), your encrypted cloud projects cannot be recovered, by you or by us."
           >
             <div className="encryption-recovery">
               <code className="encryption-code" aria-label="Recovery key">
@@ -1519,15 +1518,20 @@ function RecoveryKeyFlow({
               </div>
             </div>
           </SettingRow>
+          {/* An acknowledgement, so a checkbox rather than a setting's
+              switch, and it names what is at stake (design review I80). */}
           <SettingRow
-            title="I saved my recovery key"
-            hint="In a password manager or on paper, not only on this device."
+            title="Before you continue"
+            hint="Save it in a password manager or on paper, not only on this device. Without it, your devices and any passkey you add, your encrypted projects are lost."
           >
-            <Toggle
-              checked={saved}
-              label="I saved my recovery key"
-              onChange={setSaved}
-            />
+            <label className="encryption-acknowledge">
+              <input
+                type="checkbox"
+                checked={saved}
+                onChange={(event) => setSaved(event.target.checked)}
+              />
+              I saved my recovery key
+            </label>
           </SettingRow>
           <div className="settings-button-row">
             <button

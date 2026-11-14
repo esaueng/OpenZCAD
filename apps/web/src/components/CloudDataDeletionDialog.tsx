@@ -229,6 +229,15 @@ export function CloudDataDeletionDialog({
                 Local projects and settings on this device will remain. Projects
                 owned by other people will not be deleted.
               </p>
+              {scope !== 'projects' ? (
+                // What it means for encryption, said before, not after
+                // (design review I84): the key tables go with the profile.
+                <p>
+                  If you set up end-to-end encryption, the keys stored with your
+                  account go too: your identity, your devices and their wrapped
+                  keys. Your recovery key will no longer unlock anything.
+                </p>
+              ) : null}
               <small>
                 Live OpenZCAD cloud data is removed immediately. Provider
                 disaster-recovery copies may remain for Cloudflare’s documented

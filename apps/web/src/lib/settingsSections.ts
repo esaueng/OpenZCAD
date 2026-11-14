@@ -238,7 +238,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'Compare the codes',
       'Certify the new device',
       'Your recovery key',
-      'I saved my recovery key',
+      'Before you continue',
       'Confirm recovery key',
       'Current recovery key',
       'Recovery key to confirm'
