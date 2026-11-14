@@ -11,4 +11,4 @@ the whole body; Technical details open in place; fillet/chamfer suggestions
 refine past the first round bracket; the rebuild debug line reports each
 feature's outcome (`refusalLanguage.test.ts`, `InPlaceCommandBar.test.tsx`,
 `EditRefusal.test.tsx`, `exact-boolean-refusal.test.ts`,
-`edge-modifier-diagnosis.test.ts`, `exact-cancellation.test.ts`).
+`edge-modifier-diagnosis.test.ts`, `exact-cancellation.test.ts`; PR #1494).
