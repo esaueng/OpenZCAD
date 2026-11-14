@@ -3006,34 +3006,40 @@ export function StartScreen({
               />
             )}
           </div>
-          {/* No visible Name and Units captions: the fields sit in the New
-              project card under its button, and "mm" names its own field.
-              The captions read as form chrome over a one-click action. */}
-          <label className="start-field start-field-name">
-            <input
-              value={name}
-              aria-label="Project name"
-              placeholder="Project name"
-              aria-invalid={nameTooLong || undefined}
-              aria-describedby={nameTooLong ? 'project-name-error' : undefined}
-              onChange={(event) => setName(event.target.value)}
-            />
-          </label>
-          <label className="start-field start-field-units">
-            <select
-              value={units}
-              aria-label="Units"
-              onChange={(event) => {
-                unitsEdited.current = true;
-                setUnits(event.target.value as UnitSystem);
-              }}
-            >
-              <option value="mm">mm</option>
-              <option value="cm">cm</option>
-              <option value="m">m</option>
-              <option value="inch">in</option>
-            </select>
-          </label>
+          {/* No visible Name and Units captions: the fields sit under New
+              project, and "mm" names its own field. The captions read as
+              form chrome over a one-click action. Name and units share one
+              box, the units as its suffix: two boxes side by side read as
+              two separate questions. */}
+          <div className="start-launch-field">
+            <label className="start-field start-field-name">
+              <input
+                value={name}
+                aria-label="Project name"
+                placeholder="Project name"
+                aria-invalid={nameTooLong || undefined}
+                aria-describedby={
+                  nameTooLong ? 'project-name-error' : undefined
+                }
+                onChange={(event) => setName(event.target.value)}
+              />
+            </label>
+            <label className="start-field start-field-units">
+              <select
+                value={units}
+                aria-label="Units"
+                onChange={(event) => {
+                  unitsEdited.current = true;
+                  setUnits(event.target.value as UnitSystem);
+                }}
+              >
+                <option value="mm">mm</option>
+                <option value="cm">cm</option>
+                <option value="m">m</option>
+                <option value="inch">in</option>
+              </select>
+            </label>
+          </div>
           {nameTooLong ? (
             <small
               id="project-name-error"
