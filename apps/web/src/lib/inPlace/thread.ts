@@ -10,6 +10,7 @@ import {
   pipeThreadLabel,
   pipeThreadReach,
   pipeThreadSpec,
+  threadSpanOnFace,
   type FeatureData,
   type ParamValue,
   type PipeThreadStandard,
@@ -936,20 +937,19 @@ export function threadRequestFields(
 }
 
 /**
- * An edit keeps each finished end's stored kind, a chamfer or (schema v57)
- * a runout, while the span stands as stored. The one Ends row cannot tell
- * the two apart, and working the kind out again from where the span reaches
- * would turn a runout stored at an end of the face (a thread against a
- * shoulder) into a chamfer.
+ * The kind each finished end takes, a chamfer or (schema v57) a runout,
+ * settled by the rule the build checks it by (`threadSpanOnFace`: the same
+ * evaluated offset and length, the same arithmetic and the same snap),
+ * never by comparing the edit with what it started from.
  *
- * "As stored" is judged as the span builds, never as it is written: the
- * same face and anchor, an offset and length that evaluate (with the
- * build's evaluator) to the stored ones within rounding, an absent offset
- * being 0 and an absent length the rest of the face, and each end on the
- * same side of the build's snap (it reaches its end of the face, or stops
- * short of it). A value that does not evaluate, a moved extent, or an end
- * that crossed the snap lets the reach decide again, as does an end no
- * longer asked for.
+ * - A runout the edited feature stores stays a runout: the kernel builds
+ *   one at any end, a shoulder at the end of the face included, which the
+ *   one Ends row could not otherwise express.
+ * - Every other finished end is a chamfer where the span reaches that end
+ *   of the face and a runout where it stops short, so a chamfer the build
+ *   would refuse is never written.
+ * - Where the span does not resolve (an expression with no value, a pipe
+ *   thread left to its standard length), the panel's own reach stands.
  */
 export function keepStoredEndKinds(
   thread: ThreadRequest,
@@ -957,48 +957,38 @@ export function keepStoredEndKinds(
   face: Pick<ThreadFace, 'length' | 'radius'> | null,
   evaluate: ((value: ParamValue) => number | null) | undefined
 ): ThreadRequest {
-  if (saved?.featureKind !== 'thread' || !face) return thread;
-  const sameFace =
-    thread.faceHash === saved.faceHash ||
-    (thread.faceReference !== undefined &&
-      saved.faceReference !== undefined &&
-      thread.faceReference.lineageName === saved.faceReference.lineageName);
-  if (!sameFace || (thread.anchor ?? 'start') !== (saved.anchor ?? 'start')) {
-    return thread;
-  }
-  const number = (value: ParamValue | undefined, absent: number) =>
+  const number = (value: ParamValue | undefined) =>
     value === undefined
-      ? absent
+      ? undefined
       : typeof value === 'number'
         ? value
         : (evaluate?.(value) ?? null);
-  /** The span as it builds, along the face from the end it starts at. */
-  const span = (data: Pick<ThreadRequest, 'offset' | 'length'>) => {
-    const offset = number(data.offset, 0);
-    if (offset === null || !Number.isFinite(offset)) return null;
-    const length = number(data.length, face.length - offset);
-    return length === null || !Number.isFinite(length)
-      ? null
-      : { offset, length };
-  };
-  const now = span(thread);
-  const before = span(saved);
-  if (!now || !before) return thread;
-  const close = (a: number, b: number) =>
-    Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(a), Math.abs(b));
-  // The build's snap, within which a span reaches an end of the face
-  // (`threadReach`, and the adapter's `threadChamfersShortOfFace`).
-  const reach = ({ offset, length }: { offset: number; length: number }) =>
-    threadReach({ held: true, offset, length, face });
-  const [reachNow, reachBefore] = [reach(now), reach(before)];
-  if (
-    !close(now.offset, before.offset) ||
-    !close(now.length, before.length) ||
-    reachNow.near !== reachBefore.near ||
-    reachNow.far !== reachBefore.far
-  ) {
-    return thread;
-  }
+  const offset = number(thread.offset) ?? 0;
+  const typed = number(thread.length);
+  const pipe = thread.profile === 'npt' || thread.profile === 'bspt';
+  // An absent length is the rest of the face from the offset, as the build
+  // reads it; a pipe thread's is its standard's, which only the build knows.
+  const length =
+    typed === undefined
+      ? !face || pipe || offset === null
+        ? null
+        : face.length - offset
+      : typed;
+  const span =
+    face &&
+    offset !== null &&
+    Number.isFinite(offset) &&
+    length !== null &&
+    Number.isFinite(length)
+      ? threadSpanOnFace({
+          offset,
+          length,
+          anchor: thread.anchor ?? 'start',
+          faceLength: face.length,
+          radius: face.radius
+        })
+      : null;
+  const stored = saved?.featureKind === 'thread' ? saved : undefined;
   const next: ThreadRequest = { ...thread };
   const keys = {
     start: { chamfer: 'chamferStart', runout: 'runoutStart' },
@@ -1006,15 +996,19 @@ export function keepStoredEndKinds(
   } as const;
   for (const end of ['start', 'end'] as const) {
     const { chamfer, runout } = keys[end];
-    const stored = saved[chamfer]
-      ? chamfer
-      : saved[runout]
-        ? runout
-        : undefined;
-    if (!stored || !(next[chamfer] || next[runout])) continue;
+    if (!(next[chamfer] || next[runout])) continue;
+    const kind = stored?.[runout]
+      ? runout
+      : span
+        ? (end === 'start' ? span.reachesStart : span.reachesEnd)
+          ? chamfer
+          : runout
+        : next[chamfer]
+          ? chamfer
+          : runout;
     delete next[chamfer];
     delete next[runout];
-    next[stored] = true;
+    next[kind] = true;
   }
   return next;
 }

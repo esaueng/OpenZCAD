@@ -1404,7 +1404,13 @@ describe('in-place thread edits keep a stored end kind (review #1458)', () => {
       ...(changes.values ?? {})
     };
     // The document's evaluator, as the build uses it.
-    const formulas: Record<string, number> = { '2+3': 5, '0*1': 0 };
+    const formulas: Record<string, number> = {
+      '2+3': 5,
+      '0*1': 0,
+      // A parameter the user has since set to 2.
+      gap: 2,
+      '19.99999998+0': 19.99999998
+    };
     const calculate = (value: ParamValue) =>
       typeof value === 'number' ? value : (formulas[value] ?? null);
     const numbers = Object.fromEntries(
@@ -1510,12 +1516,74 @@ describe('in-place thread edits keep a stored end kind (review #1458)', () => {
     expect(thread.chamferStart).toBeUndefined();
   });
 
-  it('lets the reach decide again once the extent is edited', () => {
+  it('keeps a stored runout through an extent edit, where it stays valid', () => {
     const shorter = finish(stored({ offset: 0 }), { values: { length: 4 } });
-    expect(shorter.chamferStart).toBe(true);
-    expect(shorter.runoutStart).toBeUndefined();
+    expect(shorter.runoutStart).toBe(true);
+    expect(shorter.chamferStart).toBeUndefined();
     const setOff = finish(stored(), { values: { offset: 1 } });
-    // Set off from the start, that end stops short: a runout by the reach.
     expect(setOff.runoutStart).toBe(true);
+  });
+
+  // The Ø6 × 20 boss of Sol's re-check of 43425cad: its snap is 2e-8.
+  const long: FacePick = {
+    ...BOSS,
+    cylinder: { ...BOSS.cylinder!, axisEnd: { x: 0, y: 0, z: 20 } }
+  };
+  const chamfered = (fields: Partial<ThreadRequest>) =>
+    stored({ runoutStart: undefined, chamferStart: true, ...fields });
+
+  it('finishes a stored chamfer a parameter change set off the face as a runout (re-check of 43425cad)', () => {
+    // Stored with offset `gap` when gap was 0; gap is now 2. Untouched, and
+    // with the offset typed as 2, the start stops short of the face: the
+    // build refuses a chamfer there, so it runs out.
+    const edits: Record<string, ParamValue>[] = [{}, { offset: 2 }];
+    for (const values of edits) {
+      const thread = finish(chamfered({ offset: 'gap' }), {
+        face: long,
+        values
+      });
+      expect(thread.chamferStart, JSON.stringify(values)).toBeUndefined();
+      expect(thread.runoutStart, JSON.stringify(values)).toBe(true);
+    }
+  });
+
+  it('settles an end at the snap by the build’s own arithmetic (re-check of 43425cad)', () => {
+    // From the far end, length 19.9999999801 puts the start 1.99e-8 off the
+    // face's start: inside the snap, so the stored chamfer stands.
+    const stand = finish(chamfered({ anchor: 'end', length: 19.9999999801 }), {
+      face: long
+    });
+    expect(stand.chamferStart).toBe(true);
+    // Typed as `19.99999998+0` the build places the start at
+    // 20 − 0 − 19.99999998 = 2.000000165e-8, past it: a runout.
+    const past = finish(chamfered({ anchor: 'end', length: 19.9999999801 }), {
+      face: long,
+      values: { length: '19.99999998+0' }
+    });
+    expect(past.chamferStart).toBeUndefined();
+    expect(past.runoutStart).toBe(true);
+  });
+
+  it('holds to the snap in an inch document, where it is under any rounding tolerance', () => {
+    // The same boss in inches: 0.7874 long, snap 7.874e-10 in.
+    const inches: FacePick = {
+      ...BOSS,
+      cylinder: {
+        ...BOSS.cylinder!,
+        axisEnd: { x: 0, y: 0, z: 20 / 25.4 },
+        radius: 3 / 25.4
+      }
+    };
+    const inch = chamfered({ length: 5 / 25.4, offset: 7.8e-10 });
+    expect(finish(inch, { face: inches, units: 'inch' }).chamferStart).toBe(
+      true
+    );
+    const moved = finish(inch, {
+      face: inches,
+      units: 'inch',
+      values: { offset: 7.9e-10 }
+    });
+    expect(moved.chamferStart).toBeUndefined();
+    expect(moved.runoutStart).toBe(true);
   });
 });

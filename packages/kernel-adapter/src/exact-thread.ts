@@ -22,6 +22,7 @@ import {
   pipeThreadForm,
   pipeThreadReach,
   pipeThreadSpec,
+  threadSpanOnFace,
   type FeatureId,
   type FeatureNode,
   type ParamValue,
@@ -311,10 +312,14 @@ export function resolveThread(
     lowerFlankAngleDeg: form.lowerFlankAngleDeg,
     starts,
     hand: data.hand ?? 'right',
-    offset:
-      (data.anchor ?? 'start') === 'end'
-        ? faceLength - offset - length
-        : offset,
+    // Placed by the rule the Thread panel shares (`threadSpanOnFace`).
+    offset: threadSpanOnFace({
+      offset,
+      length,
+      anchor: data.anchor ?? 'start',
+      faceLength,
+      radius
+    }).start,
     length,
     phaseDeg: values.optional(data.phaseDeg, 'phase') ?? 0,
     chamfer: threadChamfers(data, values),
@@ -399,7 +404,13 @@ function resolvePipeThread(
     lowerFlankAngleDeg: form.flankAngleDeg,
     starts: Math.round(values.optional(data.starts, 'starts') ?? 1),
     hand: data.hand ?? 'right',
-    offset: fittingEnd === 'end' ? faceLength - offset - length : offset,
+    offset: threadSpanOnFace({
+      offset,
+      length,
+      anchor: fittingEnd,
+      faceLength,
+      radius
+    }).start,
     length,
     phaseDeg: values.optional(data.phaseDeg, 'phase') ?? 0,
     chamfer: threadChamfers(data, values),
@@ -502,14 +513,19 @@ export function threadChamfersShortOfFace(
   thread: Pick<ResolvedThread, 'offset' | 'length' | 'chamfer'>,
   face: { radius: number; faceLength: number }
 ): ('start' | 'end')[] {
-  const snap = 1e-9 * Math.max(face.faceLength, face.radius);
-  const stop = thread.offset + thread.length;
-  if (thread.offset < -snap || stop > face.faceLength + snap) return [];
+  // The rule the Thread panel shares, so it never asks for a chamfer here.
+  const span = threadSpanOnFace({
+    offset: thread.offset,
+    length: thread.length,
+    faceLength: face.faceLength,
+    radius: face.radius
+  });
+  if (span.outside) return [];
   const short: ('start' | 'end')[] = [];
-  if (thread.chamfer.start !== undefined && thread.offset > snap) {
+  if (thread.chamfer.start !== undefined && !span.reachesStart) {
     short.push('start');
   }
-  if (thread.chamfer.end !== undefined && stop < face.faceLength - snap) {
+  if (thread.chamfer.end !== undefined && !span.reachesEnd) {
     short.push('end');
   }
   return short;

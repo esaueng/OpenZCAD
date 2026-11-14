@@ -28,9 +28,11 @@ import {
 import {
   requireBuiltAsAsked,
   resolveThread,
+  threadChamfersShortOfFace,
   threadEndSpec,
   threadPrintAdvisories
 } from '../packages/kernel-adapter/src/exact-thread';
+import { keepStoredEndKinds } from '../apps/web/src/lib/inPlace/thread';
 
 type ThreadData = Extract<FeatureData, { featureKind: 'thread' }>;
 
@@ -308,6 +310,70 @@ describe('pipe thread gauge plane and length from the fitting face (review #1458
         1
       ).shortOfStandard
     ).toBeUndefined();
+  });
+});
+
+describe('the Thread panel and the build settle thread ends by one rule (review #1458)', () => {
+  // Sol's re-check of 43425cad found 120 spans near the snap where the
+  // panel chamfered an end the build refused. Both now place the span with
+  // `threadSpanOnFace`; across spans straddling each end's snap, in mm and
+  // in inches, from either anchor, the panel asks for a chamfer exactly
+  // where the build accepts one.
+  it('chamfers exactly the ends the build accepts, across the snap', () => {
+    const steps = [-3, -1.5, -1, -0.999, 0, 0.999, 1, 1.001, 1.5, 3];
+    let checked = 0;
+    for (const unit of [1, 25.4]) {
+      const faceLength = 20 / unit;
+      const radius = 3 / unit;
+      const snap = 1e-9 * faceLength;
+      for (const anchor of ['start', 'end'] as const) {
+        for (const near of steps) {
+          for (const far of steps) {
+            const offset = Math.max(near * snap, 0);
+            const length = faceLength - offset - far * snap;
+            if (!(length > 0)) continue;
+            const request = keepStoredEndKinds(
+              {
+                targetBodyId: 'body_x' as BodyId,
+                faceHash: 1,
+                profile: 'iso-metric',
+                ...(offset === 0 ? {} : { offset }),
+                length,
+                ...(anchor === 'end' ? { anchor } : {}),
+                chamferStart: true,
+                chamferEnd: true
+              },
+              undefined,
+              { length: faceLength, radius },
+              (value) => (typeof value === 'number' ? value : null)
+            );
+            const built = resolveThread(
+              data(request),
+              values,
+              { kind: 'external', radius, faceLength },
+              1
+            );
+            const span = built.offset + built.length;
+            if (built.offset < -snap || span > faceLength + snap) continue;
+            const refused = threadChamfersShortOfFace(built, {
+              radius,
+              faceLength
+            });
+            expect(
+              refused,
+              JSON.stringify({ unit, anchor, near, far })
+            ).toEqual([]);
+            // Every end is finished: what is not a chamfer runs out.
+            expect(Boolean(request.chamferStart || request.runoutStart)).toBe(
+              true
+            );
+            expect(Boolean(request.chamferEnd || request.runoutEnd)).toBe(true);
+            checked += 1;
+          }
+        }
+      }
+    }
+    expect(checked).toBeGreaterThanOrEqual(300);
   });
 });
 

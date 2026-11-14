@@ -5594,3 +5594,4 @@ export * from './legacy-project-storage';
 export * from './import-limits';
 export * from './mesh-buffer-equality';
 export * from './pipe-threads';
+export * from './thread-span';

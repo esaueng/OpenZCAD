@@ -957,24 +957,26 @@ describe('an untouched edit writes the feature back as stored', () => {
       tool: 'thread',
       thread: shoulderFields
     });
-    // A stored chamfer at a stopped-short end (a v53 thread is never one,
-    // but a command may write it) stays a chamfer the same way.
+    // A chamfer stored at a stopped-short end (a v53 thread is never one,
+    // but a command may write it) is one the build refuses: the edit
+    // finishes that end as a runout instead.
     const stoppedChamfer: FeatureData = {
       ...shoulder,
       runoutStart: undefined,
       chamferEnd: true
     };
-    const {
-      featureKind: _c,
-      runoutStart: _s2,
-      ...stoppedFields
-    } = stoppedChamfer;
     expect(untouched(feature(stoppedChamfer), {}, ctx)).toEqual({
       tool: 'thread',
-      thread: stoppedFields
+      thread: {
+        targetBodyId: BODY,
+        faceHash: 31,
+        profile: 'iso-metric',
+        length: 5,
+        runoutEnd: true
+      }
     });
-    // Its extent edited, the reach decides again: from the face's start the
-    // span reaches that end, which takes the chamfer.
+    // A stored runout is valid wherever it stands: its extent edited, it
+    // stays a runout.
     expect(untouched(feature(shoulder), { length: 4 }, ctx)).toEqual({
       tool: 'thread',
       thread: {
@@ -982,7 +984,7 @@ describe('an untouched edit writes the feature back as stored', () => {
         faceHash: 31,
         profile: 'iso-metric',
         length: 4,
-        chamferStart: true
+        runoutStart: true
       }
     });
   });
