@@ -49,13 +49,13 @@ afterEach(() => {
 describe('AssemblyStudiesSection', () => {
   it('adds a default study and opens it with the playhead at its end', () => {
     const { manager, executed, view } = mount(pivotProject({ study: false }));
-    expect(screen.queryByRole('list', { name: 'Motion studies' })).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Add motion study' }));
+    expect(screen.queryByRole('list', { name: 'Animations' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Add animation' }));
     expect(executed.map((c) => c.kind)).toEqual(['assembly.study.set']);
     expect(manager.document.assembly?.studies).toEqual([
       {
         id: 'study_new_1',
-        name: 'Motion 1',
+        name: 'Animation 1',
         durationS: 2,
         playback: 'loop',
         tracks: [
@@ -72,13 +72,13 @@ describe('AssemblyStudiesSection', () => {
     expect(getAssemblyRuntime().studyTimeS).toBe(2);
     expect(
       screen
-        .getByRole('button', { name: /^Motion 1/ })
+        .getByRole('button', { name: /^Animation 1/ })
         .getAttribute('aria-pressed')
     ).toBe('true');
-    fireEvent.click(screen.getByRole('button', { name: 'Add motion study' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add animation' }));
     expect(manager.document.assembly?.studies.map((s) => s.name)).toEqual([
-      'Motion 1',
-      'Motion 2'
+      'Animation 1',
+      'Animation 2'
     ]);
     view.unmount();
   });

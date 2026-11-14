@@ -89,7 +89,7 @@ export interface AssemblyPanelProps {
    * Undo when `undo` is set.
    */
   onAnnounce?(message: string, options?: { undo?: boolean }): void;
-  /** Replaces the Motion section (tests). */
+  /** Replaces the Animations section (tests). */
   studies?: ReactNode;
   /** Body boxes in modelled coordinates, for Set up motion's axis and range. */
   bodyBounds?: MotionSetupBounds;
@@ -375,7 +375,7 @@ function AssemblyLists({
             }
           >
             <MoveVertical size={13} aria-hidden="true" />
-            Motion
+            Make it move
           </button>
         ) : null}
         <button
@@ -757,7 +757,7 @@ function AssemblyLists({
               (joint) => ASSEMBLY_JOINT_DOFS[joint.kind].length > 0
             )) && (
             <Section
-              title="Motion"
+              title="Animations"
               count={set.studies.length}
               action={
                 <AddStudyButton

@@ -84,6 +84,75 @@ export function importedFaceDeletion(
   };
 }
 
+/**
+ * Several faces of one body deleted together, as one replayable direct edit:
+ * the faces around them extend until the body closes again. Selecting every
+ * wall of a window or pocket and deleting them fills it. Works on any body,
+ * native or imported; the exact rebuild refuses a set it cannot heal (three
+ * walls of a four-walled window) and leaves the body as it was.
+ */
+export function faceSetDeletion(
+  document: ProjectDocument,
+  selections: readonly TopologySelection[]
+) {
+  const bodyId = selections[0]?.bodyId;
+  if (
+    !bodyId ||
+    selections.length < 2 ||
+    selections.some(
+      (selection) => selection.bodyId !== bodyId || selection.kind !== 'face'
+    )
+  ) {
+    throw new Error('Select two or more faces on one body to delete them.');
+  }
+  const body = document.derived.bodyRepresentations[bodyId];
+  if (!body || body.consumed) {
+    throw new Error('Select faces on a current body.');
+  }
+  const faces = selections.map((selection) => {
+    const resolved = resolveSelectionTopology(body, selection);
+    const face =
+      resolved?.kind === 'face'
+        ? body.topology?.faces.find(
+            (candidate) => candidate.topologyId === resolved.topologyId
+          )
+        : undefined;
+    if (!face?.geometry) {
+      throw new Error(
+        'A selected face is no longer on the model. Select the faces again.'
+      );
+    }
+    return {
+      faceHash: face.hash,
+      ...(face.reference ? { faceReference: face.reference } : {}),
+      sourceSurfaceType: face.geometry.surfaceType,
+      sourceArea: face.geometry.area,
+      sourceCenter: face.geometry.center
+    };
+  });
+  if (new Set(faces.map((face) => face.faceHash)).size !== faces.length) {
+    throw new Error('The same face is selected twice. Select the faces again.');
+  }
+  const [first, ...additionalFaces] = faces;
+  const name = `Delete ${faces.length} faces`;
+  const command = commandFactories.directEditBody({
+    name,
+    targetBodyId: bodyId,
+    operation: { kind: 'remove-faces', ...first!, additionalFaces }
+  });
+  return {
+    command,
+    target: {
+      featureName: name,
+      ...(command.payload.ids
+        ? { featureId: command.payload.ids.featureId }
+        : {}),
+      resultBodyId: bodyId
+    },
+    successMessage: `Deleted ${faces.length} faces and closed the gap.`
+  };
+}
+
 /** Remove an operation, keeping its input and all rebuildable later steps.
  * Only body operands are reconnected. A pick of a deleted bore/band must
  * refuse in the exact rebuild; it is never guessed onto a different face.

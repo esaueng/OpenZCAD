@@ -120,6 +120,12 @@ export interface E2eeShareSnapshotPosition {
   /** Lowercase hex version hash of the snapshot envelope. */
   snapshotHash: string;
   signerDeviceId: string;
+  /**
+   * Base64url version signature of the stored snapshot (`u8 1 | u64
+   * signedAt | r || s`): its signed time is what visitors order against the
+   * link's statement, so the owner republishes by it.
+   */
+  signature: string;
   updatedAt: string;
 }
 

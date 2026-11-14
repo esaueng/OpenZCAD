@@ -757,6 +757,7 @@ import {
   isRemovableDetail,
   selectedFeatureFaces
 } from './lib/selectionFeature';
+import { toggleFaceInSet } from './lib/faceSetSelection';
 import { cylinderResizeFold } from './lib/interaction/cylinderResizeFold';
 import {
   cylinderRadialFrame,
@@ -1849,6 +1850,7 @@ import {
   shouldAdoptAccountSettings
 } from './lib/appSettings';
 import { useCommandFold } from './hooks/useCommandFold';
+import { sketchExitEscape } from './lib/interaction/sketchExitConfirm';
 import {
   sketchObjectLabels,
   sketchPointNamer
@@ -3165,6 +3167,8 @@ export function App() {
     before: BodyTopology['faces'] | undefined;
   } | null>(null);
   const [sketchConstruction, setSketchConstruction] = useState(false);
+  /** When a first Escape armed leaving the sketch (I43), or null. */
+  const sketchExitArmedAtRef = useRef<number | null>(null);
   /**
    * Offset for the next canonical-plane sketch, as typed. Kept as text so a
    * half-entered value ("-", "1.") survives a keystroke; the ghost planes and
@@ -18892,6 +18896,46 @@ export function App() {
       setSelectedTopology(selection);
       return;
     }
+    // Shift on another face of the body whose face is selected adds it to a
+    // face set (Shift on a held face takes it back out), the set a box sweep
+    // with the Face filter makes: Delete removes the set and heals the body.
+    // Shift on a face of another body keeps selecting bodies, as before.
+    if (
+      additive &&
+      selection.kind === 'face' &&
+      tool === null &&
+      interaction.mode !== 'sketch'
+    ) {
+      const held =
+        boxSelectedFaces ??
+        (selectedTopology?.kind === 'face' ? [selectedTopology] : null);
+      if (
+        held &&
+        held.length > 0 &&
+        held.every((face) => face.bodyId === selection.bodyId)
+      ) {
+        const next = toggleFaceInSet(held, selection);
+        if (next.length === 0) {
+          clearSelection();
+          return;
+        }
+        if (interaction.mode !== 'idle') {
+          dispatchInteraction({ type: 'clear' });
+        }
+        const bodyIds = [selection.bodyId];
+        setSelectedEdges([]);
+        setSelectedTopology(null);
+        setSelectedBodyIds(bodyIds);
+        setBoxFaces({ bodyIds, faces: next });
+        inferFeatureNodeFor(selection.bodyId);
+        setStatus(
+          next.length === 1
+            ? '1 face selected.'
+            : `${next.length} faces selected · Delete removes them and closes the gap.`
+        );
+        return;
+      }
+    }
     // Sketch entry: with the Sketch tool armed, a planar face click starts a
     // face-attached sketch instead of arming the offset handle.
     if (
@@ -20805,6 +20849,8 @@ export function App() {
   // orphans it.
   useEffect(() => {
     if (interaction.mode !== 'sketch') {
+      // A first Escape armed in one sketch never confirms leaving the next.
+      sketchExitArmedAtRef.current = null;
       setSketchSolveStatus(null);
       setSketchSolving(false);
       setSketchDimensionDraft(null);
@@ -28059,6 +28105,51 @@ export function App() {
       );
   }
 
+  /**
+   * Several faces of one body, picked with Shift or swept with a box: delete
+   * them together and heal the body, so every wall of a window or pocket
+   * deleted at once fills it. A replayable, undoable direct edit.
+   */
+  function handleDeleteFaces(selections: readonly TopologySelection[]) {
+    if (!requireDisplayedGeometryComplete()) return;
+    const manager = managerRef.current;
+    const base = manager?.document;
+    if (!base) return;
+    const faces = selections.map((selection) => ({ ...selection }));
+    void import('./lib/featureDeletion')
+      .then(({ faceSetDeletion }) => {
+        const current = manager.document;
+        if (
+          managerRef.current !== manager ||
+          current.projectId !== base.projectId ||
+          current.version !== base.version
+        ) {
+          setStatus(
+            'The model changed. Select the faces again before deleting them.'
+          );
+          return;
+        }
+        const removal = faceSetDeletion(current, faces);
+        void validatedFeature.runTransaction([removal.command], {
+          label: removal.command.label,
+          targets: [removal.target],
+          validatingMessage: `Checking the removal of ${faces.length} faces…`,
+          successMessage: removal.successMessage,
+          onFailure: (message) => announce(message),
+          onSuccess: () => {
+            clearSelection();
+            announce(removal.successMessage, {
+              label: 'Undo',
+              run: handleUndo
+            });
+          }
+        });
+      })
+      .catch((error: unknown) =>
+        setStatus(errorMessage(error, 'Could not delete these faces.'))
+      );
+  }
+
   function handleDeleteFeature(featureId: FeatureId, name: string) {
     // Counted before the delete: afterwards the source is gone and the walk
     // has nothing to start from. A load-bearing delete announces its blast
@@ -30329,6 +30420,15 @@ export function App() {
             return;
           }
           if (interaction.mode === 'sketch') {
+            if (event.defaultPrevented) {
+              // A value prompt (a dimension, a fillet radius, an offset)
+              // spent this press closing itself: it cancels the value and
+              // climbs no rung, so it neither leaves nor arms the exit
+              // (I43). Read before our own preventDefault below, which
+              // would otherwise make every press look spent.
+              sketchExitArmedAtRef.current = null;
+              return;
+            }
             // Inside a sketch Escape still climbs its ladder one rung per
             // press: chain, pick sequence, tool, selection, then the sketch.
             event.preventDefault();
@@ -30347,6 +30447,23 @@ export function App() {
             // sketch had already been left — only Finish Sketch said
             // anything. Both dispatch the same exit, so both can say so.
             const leftSketch = escapeTarget(interaction) === 'exit-sketch';
+            if (leftSketch) {
+              // I43: the last rung asks before it leaves; a reflex second
+              // Escape after closing a prompt or deselecting stays put.
+              const step = sketchExitEscape(
+                sketchExitArmedAtRef.current,
+                performance.now()
+              );
+              sketchExitArmedAtRef.current = step.armedAt;
+              if (!step.leave) {
+                setStatus(
+                  'Press Esc again to leave the sketch, or choose Finish Sketch. Your geometry is kept either way.'
+                );
+                return;
+              }
+            } else {
+              sketchExitArmedAtRef.current = null;
+            }
             dispatchInteraction({ type: 'escape' });
             if (leftSketch) {
               setStatus('Sketch closed.');
@@ -30427,6 +30544,33 @@ export function App() {
               setActiveMeasurementId(null);
               setStatus('Measurement removed.');
             }
+            return;
+          }
+          // Several faces picked together are deleted together and healed,
+          // whatever built the body: every wall of a window closes it.
+          if (
+            featureSelectionSource !== 'pinned' &&
+            boxSelectedFaces &&
+            boxSelectedFaces.length > 1
+          ) {
+            event.preventDefault();
+            if (
+              new Set(boxSelectedFaces.map((face) => face.bodyId)).size > 1
+            ) {
+              setStatus(
+                'Faces on different bodies cannot be deleted together. Select faces on one body.'
+              );
+              return;
+            }
+            if (
+              !(
+                isOperationState(interaction) &&
+                interaction.phase !== 'armed' &&
+                interaction.phase !== 'failed'
+              ) &&
+              validateSelectionEdit({ acceptCompleteCommit: true })
+            )
+              handleDeleteFaces(boxSelectedFaces);
             return;
           }
           // A STEP face is healed by a replayable direct edit. Its import
@@ -32547,6 +32691,15 @@ export function App() {
               collaboration.status === 'read-only')
           }
           collaboratorCount={collaboration.members.length}
+          shareSession={
+            shareSession
+              ? {
+                  // A plaintext link always opens in Tweak.
+                  mode: shareSession.encryptedMode ?? 'tweak',
+                  onMakeCopy: requestShareCopy
+                }
+              : null
+          }
           projectSharingEnabled={
             cloudFunctionsEnabled && projectSharingPreferenceEnabled
           }
@@ -32656,7 +32809,8 @@ export function App() {
             onViewActivityLog={openActivityLog}
             onExportStep={() => void handleExportStep()}
             onOpenMeshExport={() => setMeshExportOpen(true)}
-            share={shareSession ? { onMakeCopy: requestShareCopy } : null}
+            // Make a copy is the top bar's labelled button now (I73).
+            share={null}
             panelOpen={panelState.tweakPanelOpen}
             onTogglePanel={() =>
               setPanelState((current) => ({
@@ -33317,14 +33471,7 @@ export function App() {
             modeOverlay={
               modelingLocked ? (
                 <>
-                  {viewMode && (
-                    <ViewModeRail
-                      {...partsProps}
-                      {...(shareSession?.encryptedMode
-                        ? { onMakeCopy: requestShareCopy }
-                        : {})}
-                    />
-                  )}
+                  {viewMode && <ViewModeRail {...partsProps} />}
                   {viewMode && (
                     <AssemblyPlayer
                       projectId={doc.projectId}
