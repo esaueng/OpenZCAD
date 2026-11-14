@@ -173,6 +173,12 @@ in `.github/workflows/macos-desktop.yml`.
   lockfile update; do not hand-edit the
   resolved SHA. Any kernel update still needs the full CI matrix, especially
   `pnpm test:parity-corpus` and Playwright.
+- Every Vite build (root, filtered web and desktop) checks the installed
+  Remus files against `remus-checksums.json` and fails on any mismatch; dev
+  and preview servers only warn. Building with `REMUS_WASM_PKG` /
+  `REMUS_WASM_IO_PKG` overlays needs `OZ_ALLOW_LOCAL_REMUS=1`, and that
+  `+local` output cannot be deployed: `deploy:beta`, `deploy:selfhost` and
+  Wrangler's custom build step (`pnpm check:release-build`) refuse it.
 
 ## Enforced boundaries
 

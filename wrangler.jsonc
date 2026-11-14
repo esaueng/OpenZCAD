@@ -7,6 +7,10 @@
   "main": "./apps/web/worker/index.ts",
   "compatibility_date": "2026-04-12",
   "compatibility_flags": ["nodejs_compat"],
+  // Wrangler runs this before every deploy and version upload. It refuses an
+  // apps/web/dist that did not pass the Remus package gate or that came from
+  // local (+local) Remus packages: scripts/check-release-build.mjs.
+  "build": { "command": "pnpm -w run check:release-build" },
   // Cloudflare does not generate Preview URLs for Workers that implement a DO.
   "preview_urls": false,
   "observability": {

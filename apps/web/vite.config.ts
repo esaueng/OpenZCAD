@@ -11,6 +11,10 @@ import {
 } from './src/lib/assistant/pdfjsAssets';
 import { resolveSourceCommit } from './build/sourceCommit';
 import { localRemusPackages } from './build/localRemus';
+import {
+  remusArtifactGate,
+  type RemusArtifactStamp
+} from './build/remusArtifactGate';
 import { remusTranslatorRetry } from './build/remusTranslatorRetry';
 import { lazyChunkPrefetch } from './build/lazyChunkPrefetch';
 import {
@@ -126,7 +130,11 @@ function sourceCommit(): string {
 
 function buildMetadata(
   commit: string,
-  remus: { version: string; commit: string }
+  remus: {
+    version: string;
+    commit: string;
+    artifacts?: RemusArtifactStamp;
+  }
 ): PluginOption {
   return {
     name: 'openzcad-build-metadata',
@@ -263,7 +271,18 @@ function pdfjsAssets(): PluginOption {
 
 export default defineConfig(async ({ command, isPreview, mode }) => {
   const localRemus = await localRemusPackages(process.env);
-  const remus = localRemus?.build ?? (await remusBuildInfo());
+  // Every build, web or desktop, filtered or not, verifies the Remus packages
+  // it bundles; dev and preview only warn. See build/remusArtifactGate.ts.
+  const remusArtifacts = remusArtifactGate({
+    command,
+    repoRoot: fileURLToPath(new URL('../..', import.meta.url)),
+    env: process.env,
+    overlay: localRemus?.aliases ?? null
+  });
+  const remus = {
+    ...(localRemus?.build ?? (await remusBuildInfo())),
+    ...(remusArtifacts && !localRemus ? { artifacts: remusArtifacts } : {})
+  };
   const commit = sourceCommit();
   const isDesktop = mode === 'desktop';
   const plugins = [];
