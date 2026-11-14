@@ -1678,18 +1678,22 @@ export function StartScreen({
     label: string,
     unmeasured: string | undefined
   ) {
-    const measured = bytes !== undefined && Number.isFinite(bytes);
+    if (bytes === undefined || !Number.isFinite(bytes)) {
+      return (
+        <span className="start-tile-size" title={unmeasured}>
+          —
+        </span>
+      );
+    }
+    // A <data> element carries the exact byte count behind the rounded label.
     return (
-      <span
+      <data
         className="start-tile-size"
-        title={
-          measured
-            ? `${label}: ${formatBytes(bytes, 'iec')}. Saved model data and undo history; imported source files are not included.`
-            : unmeasured
-        }
+        value={bytes}
+        title={`${label}: ${formatBytes(bytes, 'iec')}. Saved model data and undo history; imported source files are not included.`}
       >
-        {measured ? formatBytes(bytes, 'iec') : '—'}
-      </span>
+        {formatBytes(bytes, 'iec')}
+      </data>
     );
   }
 

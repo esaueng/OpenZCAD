@@ -46,12 +46,15 @@ export function summarizeLocalDocument(
  */
 export function withSavedVersion(
   summary: ProjectSummary,
-  document: ProjectDocument
+  document: ProjectDocument,
+  // Measuring serializes the document: a caller inside a state updater, which
+  // React may run more than once, measures first and passes the figure in.
+  documentBytes = measuredDocumentBytes(document)
 ): ProjectSummary {
   return {
     ...summary,
     documentVersion: document.version,
-    documentBytes: measuredDocumentBytes(document)
+    documentBytes
   };
 }
 

@@ -1649,6 +1649,11 @@ describe('StartScreen folders and selection', () => {
     expect(folder.querySelector('.start-tile-size')).toHaveTextContent(
       '4.5 KiB'
     );
+    // The exact count stays readable behind the rounded label.
+    expect(folder.querySelector('data.start-tile-size')).toHaveAttribute(
+      'value',
+      '4608'
+    );
     // A project with no measured size reads as a dash, and says why.
     const unsized = screen
       .getByRole('button', { name: /^Charlie plate, edited/ })

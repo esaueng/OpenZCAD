@@ -1652,6 +1652,7 @@ import {
   projectNeedsUpdate,
   resolveShelfThumbnail,
   cachedThumbnailSource,
+  measuredDocumentBytes,
   summarizeLocalDocument,
   withSavedVersion
 } from './lib/projectShelf';
@@ -14822,10 +14823,14 @@ export function App() {
       if (inAccount) {
         remoteVersionsRef.current.set(project.projectId, stored.version);
       }
+      const storedBytes = measuredDocumentBytes(stored);
       setProjects((current) =>
         current.map((candidate) =>
           candidate.projectId === project.projectId
-            ? { ...withSavedVersion(candidate, stored), name: stored.name }
+            ? {
+                ...withSavedVersion(candidate, stored, storedBytes),
+                name: stored.name
+              }
             : candidate
         )
       );
@@ -15222,8 +15227,12 @@ export function App() {
             ).catch(() => undefined);
           }
           await seedCopyThumbnail(localSource ?? localCopy, localCopy);
+          // Measured on what the account now holds: uploading the copy's
+          // images saves a version after the one the response describes, and
+          // an encrypted account's response carries no size at all.
+          const copyRow = withSavedVersion(response.project, copied);
           setProjects((current) =>
-            [...current, response.project].sort(compareProjectSummaries)
+            [...current, copyRow].sort(compareProjectSummaries)
           );
           setStatus(
             [
