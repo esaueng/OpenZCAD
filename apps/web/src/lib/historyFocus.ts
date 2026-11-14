@@ -242,7 +242,7 @@ function lineageTracer(document: ProjectDocument) {
         continue;
       }
       const head = rest.split('.', 1)[0] ?? '';
-      const owners = HEAD_KINDS[head];
+      const owners = ownEntry(HEAD_KINDS, head);
       if (!owners || owners.includes(kind)) {
         return { origin: current.featureId, bodies };
       }

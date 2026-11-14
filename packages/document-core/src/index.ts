@@ -1772,10 +1772,9 @@ export function addSketchObjects(
   if (!sketch) {
     throw new Error(`Sketch ${input.sketchId} not found.`);
   }
+  const supplied = suppliedIds(input.ids);
   const objectNodeIds = input.objects.map(
-    (_, index) =>
-      suppliedIds(input.ids)?.objectNodeIds[index] ??
-      toEntityId(createId('ent'))
+    (_, index) => supplied?.objectNodeIds[index] ?? toEntityId(createId('ent'))
   );
   input.objects.forEach((object) =>
     assertSketchObjectContentSchema(object, document.schemaVersion)

@@ -1,10 +1,14 @@
+import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   addPrimitiveFeature,
   addSketchConstraint,
+  addSketchObjects,
   addSketchFeature,
+  assertSafeDocumentIdentifiers,
   assertStorableDocument,
   createProjectDocument,
+  documentIdentifierError,
   findSketch,
   evaluateExpression,
   getNode,
@@ -498,6 +502,53 @@ describe('supplied creation ids', () => {
     }
   );
 
+  it('checks bulk sketch object ids once, not once per object', () => {
+    const { document, sketchId } = addSketchFeature(
+      createProjectDocument('Bulk', owner),
+      {
+        name: 'Profile',
+        planeRef: { type: 'canonical', plane: 'XY', offset: 0 },
+        objects: [{ objectKind: 'line', x1: 0, y1: 0, x2: 1, y2: 0 }]
+      }
+    );
+    const count = 400;
+    const objects = Array.from({ length: count }, (_, index) => ({
+      objectKind: 'line' as const,
+      x1: index,
+      y1: 0,
+      x2: index,
+      y2: 1
+    }));
+    let reads = 0;
+    const objectNodeIds = new Proxy(
+      Array.from({ length: count }, (_, index) => `ent_bulk_${index}`),
+      {
+        get(target, key, receiver) {
+          if (typeof key === 'string' && /^\d+$/.test(key)) reads += 1;
+          return Reflect.get(target, key, receiver) as unknown;
+        }
+      }
+    ) as EntityId[];
+    const { objectNodeIds: added } = addSketchObjects(document, {
+      sketchId,
+      objects,
+      ids: { objectNodeIds }
+    });
+    expect(added).toHaveLength(count);
+    // One pass to check the ids and one to assign them; re-checking the
+    // whole list for each object would read it count × count times.
+    expect(reads).toBeLessThanOrEqual(2 * count);
+    const forged = [...objectNodeIds];
+    forged[count - 1] = '__proto__' as EntityId;
+    expect(() =>
+      addSketchObjects(document, {
+        sketchId,
+        objects,
+        ids: { objectNodeIds: forged }
+      })
+    ).toThrow(/reserved/);
+  });
+
   it('refuses a supplied id that is not a string', () => {
     expect(() =>
       addPrimitiveFeature(valid(), {
@@ -984,4 +1035,63 @@ describe('persisted enum selectors and freeform values', () => {
     ])
       expect(reservedIdentifierError(text)).toBeNull();
   });
+});
+
+describe('documents from earlier writers', () => {
+  /**
+   * Written by the document-core writer at 8dcb1643b (7cfee9ed1^): two
+   * primitives, a sketch extrusion, a union and a mesh import. Its bodies
+   * carry the first spellings of `representationSource` (`mock`, `composite`
+   * and `mesh-reference`), which no migration rewrites.
+   */
+  const firstWriter = (): Record<string, unknown> =>
+    JSON.parse(
+      readFileSync(
+        'test/fixtures/legacy-documents/writer-8dcb1643b.json',
+        'utf8'
+      )
+    ) as Record<string, unknown>;
+
+  it('opens a document the first writer saved', () => {
+    const document = firstWriter();
+    expect(reservedDocumentIdentifierError(document)).toBeNull();
+    // The identifier guard runs before normalization on every read.
+    expect(() => assertSafeDocumentIdentifiers(document)).not.toThrow();
+    const normalized = normalizeDocument(
+      document as unknown as ProjectDocument
+    );
+    // Every check this guard adds, node references included. (Its mesh
+    // import has no stored payload, which an older, separate check of
+    // `assertStorableDocument` refuses.)
+    expect(documentIdentifierError(normalized)).toBeNull();
+  });
+
+  it.each(['mock', 'native', 'composite', 'mesh-reference'])(
+    'accepts the earlier representationSource "%s" on a current document',
+    (source) => {
+      const value = received((json) => {
+        const body = Object.values(json.nodes).find(
+          (node) => (node as { kind?: string }).kind === 'body'
+        ) as unknown as Record<string, unknown>;
+        body.representationSource = source;
+      });
+      expect(reservedDocumentIdentifierError(value as object)).toBeNull();
+      expect(() => assertStorableDocument(value)).not.toThrow();
+    }
+  );
+
+  it.each([...RESERVED, 'valueOf', 'hologram'])(
+    'still refuses the representationSource "%s"',
+    (source) => {
+      const value = received((json) => {
+        const body = Object.values(json.nodes).find(
+          (node) => (node as { kind?: string }).kind === 'body'
+        ) as unknown as Record<string, unknown>;
+        body.representationSource = source;
+      });
+      expect(refusal(value)).toMatch(
+        /representationSource" has the unknown value/
+      );
+    }
+  );
 });

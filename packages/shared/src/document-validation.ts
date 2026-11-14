@@ -211,6 +211,20 @@ function valuesOf<T extends string>(members: Record<T, true>): Set<string> {
 }
 
 /**
+ * `representationSource` spellings the first document writer stored (before
+ * 7cfee9ed1): `mock` for primitives and extrusions, `composite` for booleans,
+ * `mesh-reference` for mesh imports, and `native`, which its type also
+ * allowed. No migration rewrites them, so saved projects still carry them.
+ * Every other union below has only ever gained members.
+ */
+const LEGACY_REPRESENTATION_SOURCES = [
+  'mock',
+  'native',
+  'composite',
+  'mesh-reference'
+] as const;
+
+/**
  * Persisted enum fields whose name means the same union everywhere a
  * document, its history or a stored command carries it. Their values index
  * lookup tables (an icon per primitive or pattern kind, the dimensions each
@@ -286,11 +300,14 @@ const ENUM_FIELDS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ],
   [
     'representationSource',
-    valuesOf<BodyNode['representationSource']>({
-      brep: true,
-      'step-import': true,
-      'mesh-import': true
-    })
+    new Set([
+      ...valuesOf<BodyNode['representationSource']>({
+        brep: true,
+        'step-import': true,
+        'mesh-import': true
+      }),
+      ...LEGACY_REPRESENTATION_SOURCES
+    ])
   ]
 ]);
 
