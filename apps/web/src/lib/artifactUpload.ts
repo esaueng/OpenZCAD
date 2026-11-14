@@ -3,6 +3,7 @@ import {
   type CompleteMultipartUploadRequest,
   type UploadedArtifactPart
 } from '@openzcad/shared';
+import { writingProject } from './projectWriteGate';
 
 /**
  * The subset of the API client an artifact upload needs. Injected so the
@@ -25,6 +26,56 @@ export interface ArtifactUploadTransport {
     uploadSessionId: string,
     uploadId: string
   ): Promise<void>;
+}
+
+/**
+ * An upload session as its opener holds it: the project the opener asked
+ * the session for (never taken from the account's answer), and the
+ * session id and upload URL the account answered with.
+ */
+export interface ArtifactUploadSession {
+  projectId: string;
+  uploadSessionId: string;
+  uploadUrl: string;
+}
+
+/**
+ * The session's upload URL, if it is this application's own content route
+ * for that same session: a root-relative `/api/uploads/<id>/content`.
+ * Anything else the account answers with (another origin, another
+ * session, another route) is refused before a byte is sent.
+ */
+export function verifiedUploadUrl(session: {
+  uploadSessionId: string;
+  uploadUrl: string;
+}): string {
+  const path = uploadContentPath(session.uploadUrl);
+  if (!path || path.sessionId !== session.uploadSessionId) {
+    throw new Error(
+      'The account answered with an upload address for something else. Nothing was sent.'
+    );
+  }
+  return path.pathname;
+}
+
+/** A root-relative content route's path and session, or null. */
+function uploadContentPath(
+  uploadUrl: string
+): { pathname: string; sessionId: string } | null {
+  const base = 'http://upload.invalid';
+  if (!uploadUrl.startsWith('/') || uploadUrl.startsWith('//')) return null;
+  try {
+    const url = new URL(uploadUrl, base);
+    if (url.origin !== base || url.search || url.hash) return null;
+    const segment = /^\/api\/uploads\/([^/]+)\/content$/.exec(
+      url.pathname
+    )?.[1];
+    return segment
+      ? { pathname: url.pathname, sessionId: decodeURIComponent(segment) }
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 /** One initial try plus two retries per part before the upload is aborted. */
@@ -68,10 +119,13 @@ export function planUploadParts(
  * retried a bounded number of times; when the upload still fails, the
  * multipart state is aborted (best-effort — the expired-session purge is the
  * backstop) before the error propagates to the caller.
+ *
+ * Every request is sent as a write of `session.projectId`, so the write
+ * gate checks that project immediately before each one is sent.
  */
 export async function uploadArtifactBody(
   transport: ArtifactUploadTransport,
-  session: { uploadSessionId: string; uploadUrl: string },
+  session: ArtifactUploadSession,
   body: Blob,
   options?: {
     partBytes?: number;
@@ -91,11 +145,14 @@ export async function uploadArtifactBody(
   }
 ): Promise<void> {
   const partBytes = options?.partBytes ?? ARTIFACT_UPLOAD_PART_BYTES;
+  const uploadUrl = verifiedUploadUrl(session);
+  const asWrite = <T>(send: () => Promise<T>): Promise<T> =>
+    writingProject(session.projectId, send);
   const onProgress = options?.onProgress;
   const signal = options?.signal;
   signal?.throwIfAborted();
   if (body.size <= partBytes) {
-    await transport.uploadArtifact(session.uploadUrl, body);
+    await asWrite(() => transport.uploadArtifact(uploadUrl, body));
     onProgress?.(body.size, body.size);
     return;
   }
@@ -103,8 +160,8 @@ export async function uploadArtifactBody(
     options?.retryDelay ??
     ((attempt: number) =>
       new Promise<void>((resolve) => setTimeout(resolve, attempt * 1000)));
-  const { uploadId } = await transport.createMultipartUpload(
-    session.uploadSessionId
+  const { uploadId } = await asWrite(() =>
+    transport.createMultipartUpload(session.uploadSessionId)
   );
   try {
     const parts: UploadedArtifactPart[] = [];
@@ -115,6 +172,7 @@ export async function uploadArtifactBody(
       parts.push(
         await uploadPartWithRetry(
           transport,
+          asWrite,
           session.uploadSessionId,
           uploadId,
           plan.partNumber,
@@ -126,20 +184,23 @@ export async function uploadArtifactBody(
       // measured rather than a part count scaled to look like bytes.
       onProgress?.(plan.end, body.size);
     }
-    await transport.completeMultipartUpload(session.uploadSessionId, {
-      uploadId,
-      parts
-    });
+    await asWrite(() =>
+      transport.completeMultipartUpload(session.uploadSessionId, {
+        uploadId,
+        parts
+      })
+    );
   } catch (error) {
-    await transport
-      .abortMultipartUpload(session.uploadSessionId, uploadId)
-      .catch(() => undefined);
+    await asWrite(() =>
+      transport.abortMultipartUpload(session.uploadSessionId, uploadId)
+    ).catch(() => undefined);
     throw error;
   }
 }
 
 async function uploadPartWithRetry(
   transport: ArtifactUploadTransport,
+  asWrite: <T>(send: () => Promise<T>) => Promise<T>,
   uploadSessionId: string,
   uploadId: string,
   partNumber: number,
@@ -149,11 +210,13 @@ async function uploadPartWithRetry(
   let lastError: unknown;
   for (let attempt = 1; attempt <= ARTIFACT_PART_UPLOAD_ATTEMPTS; attempt++) {
     try {
-      return await transport.uploadArtifactPart(
-        uploadSessionId,
-        uploadId,
-        partNumber,
-        body
+      return await asWrite(() =>
+        transport.uploadArtifactPart(
+          uploadSessionId,
+          uploadId,
+          partNumber,
+          body
+        )
       );
     } catch (error) {
       lastError = error;

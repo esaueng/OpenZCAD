@@ -511,6 +511,32 @@ export function createMigrationController(
       if (!newest()) return;
       // Unfinished purges first: their plaintext copies still remain.
       summaries = [...finishing, ...migratable];
+      const inSummaries = new Set<string>(summaries.map((p) => p.projectId));
+      // A switch this device never saw finish keeps its row whatever the
+      // account says of it (encrypted and done, or not listed at all), so
+      // the confirmed reset its refusals point to stays in Settings. One
+      // the account reports finished reads as done: retrying cannot
+      // resolve it, only the reset can.
+      const unresolvedRows: MigrationProgress[] = [
+        ...listed
+          .filter(
+            (project) =>
+              !inSummaries.has(project.projectId) &&
+              encryptCutoverUnresolved(project.projectId)
+          )
+          .map((project) => ({
+            ...(known.get(project.projectId) ?? waiting(project)),
+            phase: 'done' as const,
+            cutOver: true
+          })),
+        ...state.projects.filter(
+          (progress) =>
+            !inSummaries.has(progress.projectId) &&
+            !listed.some((p) => p.projectId === progress.projectId) &&
+            encryptCutoverUnresolved(progress.projectId)
+        )
+      ];
+      const kept = new Set(unresolvedRows.map((p) => p.projectId));
       const found: MigrationProgress[] = [
         ...finishing.map((project) => ({
           // One this page's runs have no record of stopped before its
@@ -535,10 +561,12 @@ export function createMigrationController(
         ),
         // Slice 7-4: an encrypted project keeps its row while it still
         // offers encrypted links or invitations in place of revoked ones.
+        ...unresolvedRows,
         ...state.projects.filter(
           (progress) =>
             progress.phase === 'done' &&
-            !summaries.some((p) => p.projectId === progress.projectId) &&
+            !inSummaries.has(progress.projectId) &&
+            !kept.has(progress.projectId) &&
             ((progress.revoked?.shareLinks.length ?? 0) > 0 ||
               (progress.revoked?.invitations.length ?? 0) > 0)
         )

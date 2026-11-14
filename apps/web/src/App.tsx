@@ -6680,7 +6680,9 @@ export function App() {
       ? 'Viewers cannot replace the live version.'
       : !activeCollaborationLease
         ? 'Keeping this device’s version requires an active edit lease.'
-        : null;
+        : migrationEditReason
+          ? `${migrationEditReason}. This device’s version can’t replace the live one now.`
+          : null;
 
   useEffect(() => {
     savePanelState(panelState);

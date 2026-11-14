@@ -70,7 +70,10 @@ function phaseLabel(progress: MigrationProgress): string {
     case 'purging':
       return 'Deleting the plaintext copy…';
     case 'done':
-      return 'Encrypted';
+      // The account says it finished; this device never saw its answer.
+      return progress.unresolved
+        ? 'Encrypted, not confirmed on this device'
+        : 'Encrypted';
     case 'paused':
       return 'Paused';
     case 'error':
@@ -503,11 +506,13 @@ function ProjectRow({
           <>
             <Status
               tone={
-                progress.phase === 'done'
+                progress.phase === 'done' && !progress.unresolved
                   ? 'good'
-                  : progress.phase === 'error'
+                  : progress.phase === 'done'
                     ? 'warning'
-                    : undefined
+                    : progress.phase === 'error'
+                      ? 'warning'
+                      : undefined
               }
             >
               {phaseLabel(progress)}
@@ -579,7 +584,7 @@ function ProjectRow({
         >
           {pinProblemText('unresolved')}{' '}
           {progress.phase === 'done'
-            ? 'Your account reports the switch finished, but this device didn’t see its own request succeed, so it keeps the project read-only and can’t fully back it up until you reset it.'
+            ? 'Your account reports the switch finished, but this device never got the answer to its own request, so it keeps the project read-only and can’t fully back it up. Retrying can’t confirm a switch that already finished: confirm the reset to clear this device’s record. The project stays encrypted on your account, and this device holds it as encrypted again the next time your projects are listed.'
             : 'This device keeps it encrypted, so it can’t save or fully back it up until you retry or reset it.'}
         </Notice>
       ) : null}

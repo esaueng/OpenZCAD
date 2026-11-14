@@ -6,7 +6,8 @@ import {
   ENCRYPTED_PROJECT_PINS_RESET_KEY,
   ENCRYPTED_PROJECT_RESET_PREFIX,
   ENCRYPTED_PROJECT_UNRESOLVED_PREFIX,
-  localStorageEncryptedProjectPins
+  localStorageEncryptedProjectPins,
+  type EncryptedProjectPinStore
 } from './encryptedProjectPins';
 
 function memoryStorage() {
@@ -62,7 +63,7 @@ describe('encrypted project pins', () => {
     );
   });
 
-  it('treats any stored value as a pin and ignores invalid ids', () => {
+  it('treats a stored value that names no reset generation as a pin and ignores invalid ids', () => {
     const storage = memoryStorage();
     storage.setItem(`${ENCRYPTED_PROJECT_PIN_PREFIX}proj_odd`, '{not json');
     const pins = localStorageEncryptedProjectPins(storage);
@@ -380,6 +381,101 @@ describe('encrypted project pins', () => {
       expect(other.resetElsewhere('proj_any')).toBe(true);
       expect(other.has('proj_any')).toBe(true);
       expect(other.pinDurably('proj_any')).toBe(false);
+    });
+
+    /**
+     * A tab whose writes run `interleave` (another tab's step) after its
+     * own checks and just before its write lands in storage.
+     */
+    function interleavedTab(storage: ReturnType<typeof memoryStorage>) {
+      const tab = {
+        interleave: null as (() => void) | null,
+        pins: localStorageEncryptedProjectPins({
+          getItem: (key) => storage.getItem(key),
+          removeItem: (key) => storage.removeItem(key),
+          setItem: (key, value) => {
+            const step = tab.interleave;
+            tab.interleave = null;
+            step?.();
+            storage.setItem(key, value);
+          }
+        })
+      };
+      return tab;
+    }
+
+    it.each([
+      [
+        'pin',
+        ENCRYPTED_PROJECT_PIN_PREFIX,
+        (pins: EncryptedProjectPinStore) => pins.pin('proj_race')
+      ],
+      [
+        'unresolved record',
+        ENCRYPTED_PROJECT_UNRESOLVED_PREFIX,
+        (pins: EncryptedProjectPinStore) =>
+          pins.markCutoverUnresolved('proj_race')
+      ]
+    ])(
+      'keeps a reset made between another tab’s check and its %s write',
+      (_name, prefix, write) => {
+        const storage = memoryStorage();
+        const owner = localStorageEncryptedProjectPins(storage);
+        owner.pin('proj_race');
+        owner.markCutoverUnresolved('proj_race');
+        const other = interleavedTab(storage);
+        // The other tab has checked the generation it started with.
+        expect(other.pins.has('proj_race')).toBe(true);
+        expect(other.pins.resetElsewhere('proj_race')).toBe(false);
+        // The owner's confirmed reset lands after that check and before
+        // the other tab's write.
+        other.interleave = () => owner.resetProject('proj_race');
+        expect(write(other.pins)).toBe(false);
+        expect(other.interleave).toBeNull();
+        // The write landed, under the generation before the reset.
+        expect(storage.values.has(prefix + 'proj_race')).toBe(true);
+
+        const fresh = localStorageEncryptedProjectPins(storage);
+        expect(fresh.has('proj_race')).toBe(false);
+        expect(fresh.cutoverUnresolved('proj_race')).toBe(false);
+        expect(fresh.degraded).toBe(false);
+        expect(owner.has('proj_race')).toBe(false);
+        expect(owner.cutoverUnresolved('proj_race')).toBe(false);
+        // The writing tab went stale rather than degrading the store.
+        expect(other.pins.resetElsewhere('proj_race')).toBe(true);
+        expect(other.pins.degraded).toBe(false);
+      }
+    );
+
+    it('keeps a reset whichever of the two writes lands last', () => {
+      const storage = memoryStorage();
+      const owner = localStorageEncryptedProjectPins(storage);
+      owner.pin('proj_order');
+      owner.markCutoverUnresolved('proj_order');
+      const other = localStorageEncryptedProjectPins(storage);
+      expect(other.has('proj_order')).toBe(true);
+      const stalePin = storage.getItem(
+        ENCRYPTED_PROJECT_PIN_PREFIX + 'proj_order'
+      );
+      const staleRecord = storage.getItem(
+        ENCRYPTED_PROJECT_UNRESOLVED_PREFIX + 'proj_order'
+      );
+      owner.resetProject('proj_order');
+      // The other tab's writes, as it made them under the old generation,
+      // land after the reset removed them.
+      storage.setItem(ENCRYPTED_PROJECT_PIN_PREFIX + 'proj_order', stalePin!);
+      storage.setItem(
+        ENCRYPTED_PROJECT_UNRESOLVED_PREFIX + 'proj_order',
+        staleRecord!
+      );
+      const fresh = localStorageEncryptedProjectPins(storage);
+      expect(fresh.has('proj_order')).toBe(false);
+      expect(fresh.cutoverUnresolved('proj_order')).toBe(false);
+      // A pin made after the reset, in a tab that saw it, holds.
+      expect(fresh.pin('proj_order')).toBe(true);
+      expect(localStorageEncryptedProjectPins(storage).has('proj_order')).toBe(
+        true
+      );
     });
 
     it('leaves the resetting tab holding what a reload would', () => {

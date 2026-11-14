@@ -25,7 +25,12 @@ import {
 import { createReplacedEnvelopesApi } from './e2ee/replacedEnvelopes';
 import { createProjectMigrationsApi } from './e2ee/projectMigrationsApi';
 import { loadEncryptedRoomCodec } from './e2ee/encryptedRoomCodec';
-import { projectWriteBlocked, ungatedFetch } from './projectWriteGate';
+import {
+  projectWriteBlocked,
+  ungatedFetch,
+  UnownedProjectWriteError
+} from './projectWriteGate';
+import { uploadArtifactBody } from './artifactUpload';
 
 // The room codec's store: the gate refuses before it is ever used.
 const roomAccess = vi.hoisted(() => ({
@@ -44,7 +49,11 @@ const network = vi.fn(
     new Response(
       JSON.stringify({
         ok: true,
-        session: { uploadSessionId: 'upload_open', uploadUrl: '/api/uploads/x' }
+        uploadId: 'mp_1',
+        session: {
+          uploadSessionId: 'upload_open',
+          uploadUrl: '/api/uploads/upload_open/content'
+        }
       }),
       { status: 200, headers: { 'content-type': 'application/json' } }
     )
@@ -218,21 +227,63 @@ describe('a switch to encryption this device did not see finish', () => {
     expect(sentFor(projectId)).toEqual([]);
   });
 
-  it('stops a part upload into a session opened before it', async () => {
-    const other = 'proj_gate_upload_late';
-    await desktopFetch('/api/uploads', {
+  it.each([
+    ['the account upload routes', () => api],
+    ['the encrypted upload routes', () => uploadTransport()]
+  ])(
+    'stops each part upload into a session opened before it (%s)',
+    async (_name, transport) => {
+      const other = `proj_gate_upload_late_${_name.length}`;
+      const { session } = await api.createUploadSession({
+        projectId: toProjectId(other),
+        fileName: 'part.bin',
+        contentType: 'application/octet-stream',
+        kind: 'source'
+      } as never);
+      beginEncryptCutover(other);
+      network.mockClear();
+      for (const body of [new Blob(['x']), new Blob(['x'.repeat(20)])]) {
+        expect(
+          await codeOf(
+            uploadArtifactBody(
+              transport(),
+              { ...session, projectId: other, uploadUrl: session.uploadUrl! },
+              body,
+              { partBytes: 8, retryDelay: () => Promise.resolve() }
+            )
+          )
+        ).toBe(E2EE_CUTOVER_UNRESOLVED_CODE);
+      }
+      expect(network).not.toHaveBeenCalled();
+    }
+  );
+
+  it('refuses a part sent before its session’s answer is noted anywhere', async () => {
+    // The race the response-noting gate lost: the session opens, the
+    // switch is noted unresolved, and a part goes out in the same task,
+    // before anything could have read the answer that opened it.
+    const other = 'proj_gate_upload_race';
+    const opened = await desktopFetch('/api/uploads', {
       method: 'POST',
-      body: JSON.stringify({ projectId: other, kind: 'thumbnail' })
+      body: JSON.stringify({ projectId: other, kind: 'source' })
     });
-    // The session's project is noted from the answer.
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    const { session } = (await opened.json()) as {
+      session: { uploadSessionId: string };
+    };
     beginEncryptCutover(other);
     network.mockClear();
-    expect(
-      await codeOf(
-        uploadTransport().uploadArtifact('/api/uploads/upload_open', new Blob())
+    // Unnamed: refused, whoever's session it is.
+    await expect(
+      api.uploadArtifactPart(
+        session.uploadSessionId,
+        'mp_1',
+        1,
+        new Blob(['x'])
       )
-    ).toBe(E2EE_CUTOVER_UNRESOLVED_CODE);
+    ).rejects.toBeInstanceOf(UnownedProjectWriteError);
+    await expect(
+      uploadTransport().createMultipartUpload(session.uploadSessionId)
+    ).rejects.toBeInstanceOf(UnownedProjectWriteError);
     expect(network).not.toHaveBeenCalled();
   });
 
@@ -271,6 +322,72 @@ describe('a project nothing holds back', () => {
     await write().catch(() => undefined);
     expect(sentFor(projectId).length).toBeGreaterThan(0);
   });
+});
+
+describe('an upload session', () => {
+  const projectId = 'proj_gate_upload_open';
+  const session = {
+    projectId,
+    uploadSessionId: 'upload_open',
+    uploadUrl: '/api/uploads/upload_open/content'
+  };
+  const noDelay = { retryDelay: () => Promise.resolve() };
+
+  it('sends a writable project’s upload, every part as that project’s', async () => {
+    await uploadArtifactBody(api, session, new Blob(['x'.repeat(20)]), {
+      partBytes: 8,
+      ...noDelay
+    });
+    await uploadArtifactBody(api, session, new Blob(['x']));
+    expect(
+      network.mock.calls.map(
+        ([input, init]) => `${init?.method ?? 'GET'} ${pathOf(input)}`
+      )
+    ).toEqual([
+      'POST /api/uploads/upload_open/multipart',
+      'PUT /api/uploads/upload_open/parts/1?uploadId=mp_1',
+      'PUT /api/uploads/upload_open/parts/2?uploadId=mp_1',
+      'PUT /api/uploads/upload_open/parts/3?uploadId=mp_1',
+      'POST /api/uploads/upload_open/multipart/complete',
+      'PUT /api/uploads/upload_open/content'
+    ]);
+  });
+
+  it('refuses a request into a session nobody named the project of', async () => {
+    await expect(
+      desktopFetch('/api/uploads/upload_open/content', {
+        method: 'PUT',
+        body: new Blob(['x'])
+      })
+    ).rejects.toBeInstanceOf(UnownedProjectWriteError);
+    await expect(
+      api.completeMultipartUpload('upload_open', { uploadId: 'mp', parts: [] })
+    ).rejects.toBeInstanceOf(UnownedProjectWriteError);
+    expect(network).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['another session', '/api/uploads/upload_other/content'],
+    [
+      'another origin',
+      'https://elsewhere.example/api/uploads/upload_open/content'
+    ],
+    [
+      'a protocol-relative address',
+      '//elsewhere.example/api/uploads/upload_open/content'
+    ],
+    ['another route', '/api/projects/proj_other/document'],
+    ['a query', '/api/uploads/upload_open/content?to=elsewhere'],
+    ['a dot segment', '/api/uploads/upload_other/../upload_open/content/..']
+  ])(
+    'refuses an upload address for %s, sending nothing',
+    async (_name, uploadUrl) => {
+      await expect(
+        uploadArtifactBody(api, { ...session, uploadUrl }, new Blob(['x']))
+      ).rejects.toThrow('upload address for something else');
+      expect(network).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe('a reset made in another tab', () => {

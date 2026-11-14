@@ -2,7 +2,7 @@ import { saveFile } from './saveFile';
 import type { invoke as tauriInvoke } from '@tauri-apps/api/core';
 import { LEGACY_PROJECT_FRAME_CONTENT_TYPE } from '@openzcad/shared';
 import { assertCloudFunctionsEnabled, cloudRequestSignal } from './cloudMode';
-import { checkOutboundRequest, noteOutboundResponse } from './projectWriteGate';
+import { checkOutboundRequest } from './projectWriteGate';
 
 export type DesktopMenuCommand =
   | 'open-model'
@@ -381,9 +381,7 @@ export async function desktopFetch(
 ): Promise<Response> {
   // Synchronously, before anything is awaited or sent.
   checkOutboundRequest(input, init);
-  const response = await sendCloudRequest(input, init);
-  noteOutboundResponse(input, init, response);
-  return response;
+  return sendCloudRequest(input, init);
 }
 
 async function sendCloudRequest(

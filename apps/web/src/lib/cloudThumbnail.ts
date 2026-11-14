@@ -5,7 +5,9 @@ import {
   type ProjectId
 } from '@openzcad/shared';
 import { isEncryptedProject } from './api';
+import { verifiedUploadUrl } from './artifactUpload';
 import { encryptedBlobSource } from './e2ee/blobReferences';
+import { writingProject } from './projectWriteGate';
 
 export interface ThumbnailCloudTransport {
   createUploadSession(input: {
@@ -138,7 +140,13 @@ export async function uploadCloudThumbnail(
     throw new Error('Thumbnail upload is unavailable.');
   }
   // A 360x200 WebP is many orders of magnitude below the multipart boundary.
-  await transport.uploadArtifact(session.uploadUrl, body);
+  const uploadUrl = verifiedUploadUrl({
+    uploadSessionId: session.uploadSessionId,
+    uploadUrl: session.uploadUrl
+  });
+  await writingProject(input.projectId, () =>
+    transport.uploadArtifact(uploadUrl, body)
+  );
   const finalized = await transport.finalizeArtifact({
     projectId: input.projectId,
     uploadSessionId: session.uploadSessionId,

@@ -180,7 +180,11 @@ export function createMigrationPlaintextTarget(
       }
       await uploadArtifactBody(
         uploads,
-        { uploadSessionId: session.uploadSessionId, uploadUrl: session.uploadUrl },
+        {
+          projectId,
+          uploadSessionId: session.uploadSessionId,
+          uploadUrl: session.uploadUrl
+        },
         input.body
       );
       const finalized = await json<{ artifactId: string | null }>(

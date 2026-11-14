@@ -527,19 +527,24 @@ export function createEncryptedContentBlobs(
       if (!started.committed) {
         // The writer's output through the ordinary single-part or multipart
         // session: part boundaries need no alignment with chunks.
-        await uploadArtifactBody(transport, started.session, envelope, {
-          ...(ctx.partBytes ? { partBytes: ctx.partBytes } : {}),
-          ...(input.onUploadProgress
-            ? {
-                onProgress: (uploaded: number, total: number) =>
-                  input.onUploadProgress!(
-                    Math.round((uploaded / total) * input.body.size),
-                    input.body.size
-                  )
-              }
-            : {}),
-          ...(input.signal ? { signal: input.signal } : {})
-        });
+        await uploadArtifactBody(
+          transport,
+          { ...started.session, projectId },
+          envelope,
+          {
+            ...(ctx.partBytes ? { partBytes: ctx.partBytes } : {}),
+            ...(input.onUploadProgress
+              ? {
+                  onProgress: (uploaded: number, total: number) =>
+                    input.onUploadProgress!(
+                      Math.round((uploaded / total) * input.body.size),
+                      input.body.size
+                    )
+                }
+              : {}),
+            ...(input.signal ? { signal: input.signal } : {})
+          }
+        );
         input.signal?.throwIfAborted();
         const finalized = await api.finalize(projectId, reference.blobId, {
           uploadSessionId: started.session.uploadSessionId,
@@ -587,9 +592,12 @@ export function createEncryptedContentBlobs(
         // Committed meanwhile by someone else, under a key this page does
         // not hold: never name it with this reference.
         if (started.committed) missing();
-        await uploadArtifactBody(transport, started.session, envelope, {
-          ...(ctx.partBytes ? { partBytes: ctx.partBytes } : {})
-        });
+        await uploadArtifactBody(
+          transport,
+          { ...started.session, projectId },
+          envelope,
+          { ...(ctx.partBytes ? { partBytes: ctx.partBytes } : {}) }
+        );
         const tag = await assetDedupeHash(
           await dedupeKeyOf(projectId),
           plaintext

@@ -38,7 +38,11 @@ function recordingTransport(overrides?: Partial<ArtifactUploadTransport>): {
   return { transport, calls };
 }
 
-const session = { uploadSessionId: 'us_1', uploadUrl: '/api/uploads/us_1/content' };
+const session = {
+  projectId: 'proj_upload',
+  uploadSessionId: 'us_1',
+  uploadUrl: '/api/uploads/us_1/content'
+};
 const noDelay = () => Promise.resolve();
 
 describe('planUploadParts', () => {

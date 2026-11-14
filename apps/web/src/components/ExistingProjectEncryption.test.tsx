@@ -1075,6 +1075,72 @@ describe('Settings › Encryption › Encrypt existing projects', () => {
       treatProjectAsNotEncrypted('proj_old', { confirmedByOwner: true });
     }
   });
+
+  it('keeps a finished switch whose answer was lost in Settings until it is reset', async () => {
+    // The account lists it encrypted and its status says done, but this
+    // device never saw its own cutover answer.
+    beginEncryptCutover('proj_enc');
+    const status = vi.fn(async () => ({
+      migration: { state: 'done' as const }
+    }));
+    const controller = controllerWith(
+      fakeEngine(async () => undefined),
+      null,
+      { migrations: { status } as unknown as ProjectMigrationsApi }
+    );
+    try {
+      render(
+        <ExistingProjectEncryption
+          userId="user_alice"
+          unlocked
+          controller={controller}
+          isOpen={async () => true}
+        />
+      );
+      const row = await screen.findByRole('listitem', {
+        name: 'Already encrypted'
+      });
+      expect(status).toHaveBeenCalledWith('proj_enc');
+      expect(
+        within(row).getByText('Encrypted, not confirmed on this device')
+      ).toBeTruthy();
+      expect(
+        within(row).getByText(
+          /Retrying can’t confirm a switch that already finished/
+        )
+      ).toBeTruthy();
+      expect(
+        within(row).queryByRole('button', { name: 'Retry encryption' })
+      ).toBeNull();
+      // Every later refresh keeps it, whatever the account answers.
+      await act(async () => {
+        await controller.refresh();
+        await controller.refresh();
+      });
+      expect(
+        controller.getState().projects.find((p) => p.projectId === 'proj_enc')
+      ).toMatchObject({ phase: 'done', unresolved: true });
+
+      fireEvent.click(
+        within(row).getByRole('button', {
+          name: 'Treat as not encrypted on this device'
+        })
+      );
+      fireEvent.click(within(row).getByRole('checkbox'));
+      fireEvent.click(
+        within(row).getByRole('button', { name: 'Treat as not encrypted' })
+      );
+      expect(encryptCutoverUnresolved('proj_enc')).toBe(false);
+      await act(async () => {
+        await controller.refresh();
+      });
+      expect(
+        controller.getState().projects.some((p) => p.projectId === 'proj_enc')
+      ).toBe(false);
+    } finally {
+      treatProjectAsNotEncrypted('proj_enc', { confirmedByOwner: true });
+    }
+  });
 });
 
 describe('a shared project (slice 7-4)', () => {

@@ -15,6 +15,7 @@ import {
 } from './conflictRecovery';
 import { desktopFetch } from './desktopBridge';
 import { projectPreservesLocalWork } from './localProjectStore';
+import { sendProjectFrame } from './projectWriteGate';
 import {
   collaborationDocument,
   parseServerMessage,
@@ -194,7 +195,10 @@ export async function keepLocalRoomVersion(
           resolve,
           reject
         };
-        socket.send(payload);
+        // Refused (an unfinished switch to encryption, or a reset in
+        // another tab): nothing is sent, and the conflict stays open with
+        // the refusal shown in its dialog.
+        sendProjectFrame(pending.projectId, socket, payload);
       });
     } catch (error) {
       if (isCurrentRoom()) {

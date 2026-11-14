@@ -8,6 +8,13 @@
  * view states, room submissions over HTTP and copies alike, whichever
  * module sends them.
  *
+ * Upload-session routes name no project, so their senders name it
+ * (`writingProject`), from the caller that opened the session, never from
+ * the account's answers; an upload-session request nobody named is
+ * refused. Room frames that carry the project's content go through
+ * `sendProjectFrame`, which asks the same check just before the socket
+ * sends.
+ *
  * The only requests that pass unchecked are this device's own encrypt
  * migration's (`ungatedFetch`): the run that resolves the switch.
  *
@@ -22,15 +29,25 @@ export type ProjectWriteCheck = (projectId: string) => void;
 
 let check: ProjectWriteCheck | null = null;
 let ungated = 0;
+/** The project the request being sent now writes, as its sender named it. */
+let declared: string | null = null;
 
-/** Upload session id → the project it was opened for. */
-const uploadSessions = new Map<string, string>();
-const MAX_UPLOAD_SESSIONS = 512;
+/**
+ * Refuses a request into an upload session whose sender did not name the
+ * project it writes, or named another project than the request does.
+ * Session ids are the account's, so nothing in the request itself says
+ * whose they are: an unnamed one is refused, never let through.
+ */
+export class UnownedProjectWriteError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'UnownedProjectWriteError';
+  }
+}
 
 export function installProjectWriteGate(gate: ProjectWriteCheck | null): void {
   check = gate;
 }
-
 const READS = new Set(['GET', 'HEAD', 'OPTIONS']);
 /** `/api/projects/<word>` routes that name no project. */
 const UNSCOPED = new Set(['reorder', 'purge']);
@@ -78,7 +95,11 @@ function bodyProject(body: unknown): string | null {
   return null;
 }
 
-/** The project a request writes, if it writes one. */
+/**
+ * The project a request writes, if it writes one. A request into an upload
+ * session writes the project its sender declared (`writingProject`), and
+ * is refused without one.
+ */
 export function writtenProject(
   input: RequestInfo | URL,
   init: RequestInit = {}
@@ -89,16 +110,26 @@ export function writtenProject(
   ).toUpperCase();
   if (READS.has(method)) return null;
   const path = pathOf(input);
+  let named: string | null = null;
   if (path) {
     const project = PROJECT_ROUTE.exec(path);
-    if (project?.[1] && !UNSCOPED.has(project[1])) return decode(project[1]);
-    const upload = UPLOAD_ROUTE.exec(path);
-    if (upload?.[1]) {
-      const owner = uploadSessions.get(decode(upload[1]));
-      if (owner) return owner;
+    if (project?.[1] && !UNSCOPED.has(project[1])) named = decode(project[1]);
+    else if (UPLOAD_ROUTE.test(path)) {
+      if (!declared) {
+        throw new UnownedProjectWriteError(
+          'An upload did not say which project it belongs to. Nothing was sent.'
+        );
+      }
+      return declared;
     }
   }
-  return bodyProject(init.body);
+  named ??= bodyProject(init.body);
+  if (declared && named && named !== declared) {
+    throw new UnownedProjectWriteError(
+      'A write named another project than the one it was sent for. Nothing was sent.'
+    );
+  }
+  return declared ?? named;
 }
 
 /**
@@ -130,38 +161,35 @@ export function projectWriteBlocked(projectId: string): boolean {
 }
 
 /**
- * Notes which project an upload session belongs to, from the answer that
- * opened it, so its part uploads are checked against that project too.
+ * Sends a frame that carries the project's content over its room socket,
+ * asking the gate in the same synchronous step, immediately before the
+ * send: whatever was awaited before (sealing, a lazy import, a lease),
+ * a refusal made meanwhile sends nothing. Throws the gate's refusal.
  */
-export function noteOutboundResponse(
-  input: RequestInfo | URL,
-  init: RequestInit,
-  response: Response
+export function sendProjectFrame(
+  projectId: string,
+  socket: Pick<WebSocket, 'send'>,
+  frame: string
 ): void {
-  if (!response.ok || (init.method ?? 'GET').toUpperCase() !== 'POST') return;
-  const path = pathOf(input);
-  if (!path) return;
-  let projectId: string | null = null;
-  if (path === '/api/uploads') projectId = bodyProject(init.body);
-  else if (/^\/api\/e2ee\/projects\/[^/]+\/blobs\/uploads$/.test(path)) {
-    projectId = writtenProject(input, init);
+  check?.(projectId);
+  socket.send(frame);
+}
+
+/**
+ * Sends `send` as a write of `projectId`: every request it makes
+ * synchronously (as `desktopFetch` checks, before its first await) is
+ * checked against that project. Upload-session requests name no project
+ * in their path, so their senders declare it here; the project comes from
+ * the caller that opened the session, never from the account's answers.
+ */
+export function writingProject<T>(projectId: string, send: () => T): T {
+  const outer = declared;
+  declared = projectId;
+  try {
+    return send();
+  } finally {
+    declared = outer;
   }
-  if (!projectId) return;
-  const owner = projectId;
-  void response
-    .clone()
-    .json()
-    .then((body: unknown) => {
-      const session = (body as { session?: { uploadSessionId?: unknown } })
-        ?.session;
-      if (typeof session?.uploadSessionId !== 'string') return;
-      if (uploadSessions.size >= MAX_UPLOAD_SESSIONS) {
-        const oldest = uploadSessions.keys().next().value;
-        if (oldest !== undefined) uploadSessions.delete(oldest);
-      }
-      uploadSessions.set(session.uploadSessionId, owner);
-    })
-    .catch(() => undefined);
 }
 
 /**

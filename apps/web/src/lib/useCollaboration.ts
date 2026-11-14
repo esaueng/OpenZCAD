@@ -29,7 +29,7 @@ import {
   desktopFetch,
   isDesktopApp
 } from './desktopBridge';
-import { projectWriteBlocked } from './projectWriteGate';
+import { projectWriteBlocked, sendProjectFrame } from './projectWriteGate';
 import { cloudFunctionsAreEnabled } from './cloudMode';
 import { listLocalOnlyImportSources } from './importArchival';
 import { noteProjectMigrating } from './migrationStatus';
@@ -619,6 +619,7 @@ export function useCollaboration({
         return true;
       }
       const payload = frame(normalized);
+      const sentBefore = lastSentVersionRef.current;
       pendingDocument = current;
       lastSentVersionRef.current = current.version;
       if (new TextEncoder().encode(payload).byteLength > MAX_MESSAGE_BYTES) {
@@ -657,7 +658,14 @@ export function useCollaboration({
           });
         return false;
       }
-      socket.send(payload);
+      try {
+        sendProjectFrame(projectId, socket, payload);
+      } catch {
+        // Refused by the write gate: the edit stays on this device.
+        pendingDocument = null;
+        lastSentVersionRef.current = sentBefore;
+        return false;
+      }
       lastSentVersionRef.current = current.version;
       return true;
     };
@@ -743,7 +751,11 @@ export function useCollaboration({
         };
         const payload = JSON.stringify({ type: 'e2ee-document', ...body });
         if (new TextEncoder().encode(payload).byteLength <= MAX_MESSAGE_BYTES) {
-          if (socket.readyState === WebSocket.OPEN) socket.send(payload);
+          // Asked again here, after sealing: a reset or an unfinished
+          // switch noted meanwhile sends nothing (the catch reports it).
+          if (socket.readyState === WebSocket.OPEN) {
+            sendProjectFrame(projectId, socket, payload);
+          }
           return;
         }
         // Too large for a frame: the same submission over HTTP. A refusal
