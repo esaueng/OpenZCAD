@@ -229,8 +229,12 @@ export class CloudProjectAutosave {
    * limit may resume a size refusal; other halts need an explicit new baseline.
    */
   #halted: 'conflict' | 'repair' | 'refused' | null = null;
-  /** The last state announced, and the failure it carried. */
-  #lastStatus: { state: CloudProjectSyncState; error?: unknown } | null = null;
+  /**
+   * The last halting state announced (conflict, repair, refused) and the
+   * failure it carried, kept through later pause or connectivity
+   * announcements so a re-announced halt still explains itself.
+   */
+  #haltStatus: { state: CloudProjectSyncState; error?: unknown } | null = null;
   /**
    * The browser refused to upload an edit other devices could not open
    * (ADR-024 Phase 1). Like a size refusal, a newer edit that passes the same
@@ -303,10 +307,10 @@ export class CloudProjectAutosave {
    */
   reannounceHalt(): boolean {
     if (!this.#halted) return false;
-    const last = this.#lastStatus;
+    const cause = this.#haltStatus;
     this.#emit(
       this.#halted,
-      last?.state === this.#halted ? last.error : undefined
+      cause?.state === this.#halted ? cause.error : undefined
     );
     return true;
   }
@@ -1044,7 +1048,9 @@ export class CloudProjectAutosave {
   }
 
   #emit(state: CloudProjectSyncState, error?: unknown): void {
-    this.#lastStatus = { state, error };
+    if (state === 'conflict' || state === 'repair' || state === 'refused') {
+      this.#haltStatus = { state, error };
+    }
     this.#options.onStatus?.({
       state,
       projectId: this.#project?.projectId ?? this.#pending?.projectId ?? null,

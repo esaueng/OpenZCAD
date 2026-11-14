@@ -280,6 +280,30 @@ describe('explicit checkpoints', () => {
     controller.dispose();
   });
 
+  it('keeps the halting failure through later pause and connectivity announcements', async () => {
+    const refusal = new ApiError(
+      413,
+      'Account storage limit reached.',
+      'PROJECT_STORAGE_QUOTA',
+      { limitBytes: 1_000 }
+    );
+    const respond = vi.fn().mockRejectedValue(refusal);
+    const { controller, statuses, setConnectivity } = harness({ respond });
+    const base = documentAt(2);
+    controller.openProject(base.projectId, 2);
+    controller.schedule(documentAt(3, base));
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+    await controller.whenIdle();
+    expect(lastState(statuses)).toBe('refused');
+    // Later announcements replace what is shown, not why autosave halted.
+    controller.configure({ enabled: false });
+    setConnectivity(false);
+    setConnectivity(true);
+    expect(controller.reannounceHalt()).toBe(true);
+    expect(statuses.at(-1)).toMatchObject({ state: 'refused', error: refusal });
+    controller.dispose();
+  });
+
   it('announces nothing for a checkpoint whose project moved on', async () => {
     const { controller, statuses } = harness();
     const base = documentAt(2);
