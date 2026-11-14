@@ -2077,7 +2077,9 @@ test('signs in with an email code only when cloud profile access is requested', 
   await expect(page.getByRole('dialog', { name: 'Settings' })).toContainText(
     'maker@example.com'
   );
-  await page.getByRole('button', { name: 'Hide personal info' }).click();
+  await page
+    .getByRole('button', { name: 'maker@example.com', exact: true })
+    .click();
   await page.getByLabel('Email sign-in code').fill('000000');
   await page.getByRole('button', { name: 'Sign in' }).click();
   await expect(page.locator('.settings-save-message')).toContainText(
@@ -2102,8 +2104,11 @@ test('signs in with an email code only when cloud profile access is requested', 
   const signOut = page.getByRole('button', { name: 'Sign out' });
   await expect(signOut).toBeVisible();
   await expect(
-    page.locator('.setting-row', { has: signOut }).locator('.setting-title')
-  ).toHaveText('Name hidden');
+    page
+      .locator('.setting-row', { has: signOut })
+      .locator('.setting-title')
+      .getByRole('button', { name: 'Show personal info' })
+  ).toBeVisible();
   await expect(page.locator('.settings-save-message')).not.toContainText(
     'maker@example.com'
   );

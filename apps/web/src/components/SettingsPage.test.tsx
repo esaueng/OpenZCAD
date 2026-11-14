@@ -1886,33 +1886,43 @@ describe('settings privacy and data section', () => {
     ).toHaveAttribute('href', '/privacy');
   });
 
-  it('starts profile details hidden and keeps the choice when settings reopen', async () => {
+  it('starts profile details blurred, reveals them in place and keeps the choice when settings reopen', async () => {
     const user = userEvent.setup();
     const view = renderSettings(null, { initialSection: 'account', session });
+    const profileRow = screen
+      .getByRole('button', { name: 'Sign out' })
+      .closest<HTMLElement>('.setting-row')!;
+    const profile = within(profileRow);
     expect(view.container.innerHTML).not.toContain(session.email);
-    expect(screen.getByText('Name hidden')).toBeVisible();
-    expect(screen.getByText('Email hidden')).toBeVisible();
-    // The label names the action and so carries the state; aria-pressed on
-    // top of it announced "Hide personal info, pressed".
-    const show = screen.getByRole('button', { name: 'Show personal info' });
-    expect(show).not.toHaveAttribute('aria-pressed');
-    await user.click(show);
-    expect(screen.getByText(session.displayName)).toBeVisible();
-    expect(screen.getByText(session.email)).toBeVisible();
-    const hide = screen.getByRole('button', { name: 'Hide personal info' });
-    expect(hide).not.toHaveAttribute('aria-pressed');
-    await user.click(hide);
+    // The fixture's name is a word the button's own label contains, so the
+    // check reads the text a screenshot shows.
+    expect(profileRow.textContent).not.toContain(session.displayName);
+    // The name and email are their own switches: no separate show button.
+    expect(screen.queryByText('Personal information')).toBeNull();
+    const [name, email] = profile.getAllByRole('button', {
+      name: 'Show personal info'
+    });
+    expect(name).not.toHaveAttribute('aria-pressed');
+    await user.click(email!);
+    expect(profile.getByRole('button', { name: session.email })).toBeVisible();
+    // One switch: the name shows with the email, as project sharing does.
+    const shownName = profile.getByRole('button', {
+      name: session.displayName
+    });
+    expect(shownName).toHaveAttribute('title', 'Hide personal info');
+    await user.click(shownName);
     expect(view.container.innerHTML).not.toContain(session.email);
+    expect(profileRow.textContent).not.toContain(session.displayName);
     await user.click(
-      screen.getByRole('button', { name: 'Show personal info' })
+      profile.getAllByRole('button', { name: 'Show personal info' })[0]!
     );
     view.unmount();
     // The switch is session state shared with project sharing, not panel state.
     renderSettings(null, { initialSection: 'account', session });
-    expect(screen.getByText(session.displayName)).toBeVisible();
     expect(
-      screen.getByRole('button', { name: 'Hide personal info' })
+      screen.getByRole('button', { name: session.displayName })
     ).toBeVisible();
+    expect(screen.getByRole('button', { name: session.email })).toBeVisible();
   });
 
   it('keeps all cloud deletion functions together on Privacy & data', async () => {
@@ -2241,7 +2251,7 @@ describe('settings privacy and data section', () => {
     expect(within(dialog).getByText(session.email)).toBeVisible();
     expect(confirmation).toHaveAttribute('type', 'text');
     await user.click(
-      within(dialog).getByRole('button', { name: 'Hide personal info' })
+      within(dialog).getByRole('button', { name: session.email })
     );
     expect(dialog.innerHTML).not.toContain(session.email);
     expect(confirmation).toHaveAttribute('type', 'password');

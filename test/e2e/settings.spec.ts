@@ -99,22 +99,30 @@ test('hides profile details by default, keeps disclosure across reopen and reset
   await page.getByRole('button', { name: 'Open settings' }).click();
   await page.getByRole('button', { name: 'Account', exact: true }).click();
   const settings = page.getByRole('dialog', { name: 'Settings' });
-  await expect(
-    settings.getByText('Name hidden', { exact: true })
-  ).toBeVisible();
+  const profile = settings.locator('.setting-row', {
+    has: page.getByRole('button', { name: 'Sign out' })
+  });
+  const hidden = profile.getByRole('button', { name: 'Show personal info' });
+  // The name and the email, each blurred and each its own switch.
+  await expect(hidden).toHaveCount(2);
   await expect(settings).not.toContainText('Screenshot Person');
   await expect(settings).not.toContainText('screenshot@example.com');
-  await settings.getByRole('button', { name: 'Show personal info' }).click();
+  await hidden.last().click();
   await expect(
-    settings.getByText('Screenshot Person', { exact: true })
+    profile.getByRole('button', { name: 'Screenshot Person', exact: true })
   ).toBeVisible();
   await expect(
-    settings.getByText('screenshot@example.com', { exact: true })
+    profile.getByRole('button', {
+      name: 'screenshot@example.com',
+      exact: true
+    })
   ).toBeVisible();
-  await settings.getByRole('button', { name: 'Hide personal info' }).click();
+  await profile
+    .getByRole('button', { name: 'screenshot@example.com', exact: true })
+    .click();
   await expect(settings).not.toContainText('Screenshot Person');
   await expect(settings).not.toContainText('screenshot@example.com');
-  await settings.getByRole('button', { name: 'Show personal info' }).click();
+  await hidden.first().click();
   await page
     .getByRole('button', {
       name: 'Close settings and go back to projects',
@@ -128,8 +136,9 @@ test('hides profile details by default, keeps disclosure across reopen and reset
   ).toBeVisible();
   await page.reload();
   await expect(
-    settings.getByText('Name hidden', { exact: true })
-  ).toBeVisible();
+    profile.getByRole('button', { name: 'Show personal info' })
+  ).toHaveCount(2);
+  await expect(settings).not.toContainText('Screenshot Person');
 });
 
 test('suggests a part name without focusing it and retains its draft on reload', async ({

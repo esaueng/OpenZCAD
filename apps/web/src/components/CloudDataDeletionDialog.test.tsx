@@ -98,7 +98,8 @@ describe('CloudDataDeletionDialog', () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
-  it('describes a masked email instead of styling it as text to type', async () => {
+  it('blurs a stand-in for the email until it is clicked', async () => {
+    const user = userEvent.setup();
     vi.spyOn(api, 'accountDeletionPreview').mockResolvedValue({
       ...preview,
       confirmationKind: 'email',
@@ -112,11 +113,25 @@ describe('CloudDataDeletionDialog', () => {
       />
     );
 
-    const prompt = await screen.findByText(
-      'Type your email address to confirm'
-    );
-    expect(prompt.querySelector('strong')).toBeNull();
+    const show = await screen.findByRole('button', {
+      name: 'Show personal info'
+    });
+    expect(show.closest('span')).toHaveTextContent(/^Type .+ to confirm$/);
     expect(document.body.innerHTML).not.toContain('person@example.com');
+    const field = screen.getByLabelText('Deletion confirmation');
+    act(() => field.blur());
+    expect(field).toHaveAttribute('type', 'password');
+    // Not inside a label: a label with no target takes its first labelable
+    // descendant, which would make the reveal button the label's control.
+    expect(show.closest('label')).toBeNull();
+    await user.click(show);
+    expect(
+      screen.getByRole('button', { name: 'person@example.com' })
+    ).toBeVisible();
+    // Clicking the text inside the label reveals it without moving focus to
+    // the field, which would also unmask it for another reason.
+    expect(field).not.toHaveFocus();
+    expect(field).toHaveAttribute('type', 'text');
   });
 
   // Design review I78: the masked email field hid typos, and a mismatch only
