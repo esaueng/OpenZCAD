@@ -1032,6 +1032,18 @@ export const isE2eeInvitationStorageReady = cachedSchemaProbe(
 );
 
 /**
+ * Whether migration 0054's signed-acceptance columns of `e2ee_invitations`
+ * exist. Invitations must not depend on them: until they are there, no
+ * statement names them, every acceptance reads null (so owners add
+ * nobody), and only posting an acceptance answers 503.
+ */
+export const isE2eeInvitationAcceptanceReady = cachedSchemaProbe(
+  `SELECT COUNT(*) AS ready FROM pragma_table_info('e2ee_invitations')
+   WHERE name IN ('acceptance_statement', 'acceptance_signature')`,
+  (row) => row?.ready === 2
+);
+
+/**
  * Whether migration 0039's proposal table exists (ADR-024 Phase 5, slice
  * 5-5: a departing member's SelfRemove, stored for another member to
  * commit). Only the proposal routes, the Commit route's settlement of

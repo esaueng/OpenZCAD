@@ -15,6 +15,34 @@
  * - **Published** (the invitee's devices). Which invitations this device
  *   published a KeyPackage for, so it publishes once, and later looks for
  *   its Welcome.
+ * - **Removed** (the owner's browser). Which accounts a Commit this browser
+ *   sent or processed took out of a project (`onMembersRemoved`). An
+ *   invitation for one of them is never completed by the background sweep:
+ *   adding them back takes the owner's explicit confirmation. The owner's
+ *   own removal is written here before its Commit is sent, so a page that
+ *   closes in between still remembers it.
+ * - **Removal checks** (the owner's browser). A mark written before a
+ *   Commit advances this browser's state of a project the account owns,
+ *   and deleted once every removal that Commit made is in **Removed** (or
+ *   the state did not advance). Every tab reads the same marks: while one
+ *   is open, no tab adds anyone to that project automatically, since a tab
+ *   that reads the advanced state never sees the removal again. A removal
+ *   record that fails to write leaves one open too.
+ * - **Removal history** (the owner's browser). The projects whose removals
+ *   this browser has seen from the start: it created the group, so every
+ *   later Commit passed through it. A device that took a project's state
+ *   from history it did not process (an external rejoin, say on a new
+ *   device) has no record of removals before it, so the mark is deleted
+ *   first; without it, every Add to that project needs the owner's
+ *   confirmation.
+ * - **Intents** (the invitee's devices). Which invitations the person
+ *   accepted on this device: the link they opened from the email (when the
+ *   owner-signed statement names that link's token, which the intent
+ *   keeps), or an in-app confirmation that showed the verified inviter and
+ *   role. A link intent an older version kept without the token counts
+ *   for nothing: that invitation is joined only by an explicit Join. This device
+ *   signs an acceptance only for one of these, never for an invitation the
+ *   server merely lists.
  *
  * Everything is kept per account, like the contact pins; a memory store
  * stands in where IndexedDB is unavailable.
@@ -41,6 +69,56 @@ export interface PublishedKeyPackage {
   readonly publishedAt: number;
 }
 
+export interface RemovedMember {
+  readonly projectId: string;
+  /** The account removed from the project. */
+  readonly userId: string;
+  /** Unix milliseconds. */
+  readonly removedAt: number;
+}
+
+/**
+ * A step whose removals may not be recorded yet (the owner's side): open
+ * while a Commit advances the project's state, and after a removal record
+ * failed to write.
+ */
+export interface RemovalCheckMark {
+  readonly projectId: string;
+  /** Unique per step, so one tab's end never closes another's mark. */
+  readonly checkId: string;
+  /** Unix milliseconds. */
+  readonly startedAt: number;
+}
+
+/**
+ * A project whose removals this browser has seen since its group began
+ * (the owner's side): it created the group here.
+ */
+export interface RemovalHistoryMark {
+  readonly projectId: string;
+  /** Unix milliseconds. */
+  readonly since: number;
+}
+
+/** An invitation the person accepted on this device (the invitee's side). */
+export interface InvitationIntent {
+  readonly projectId: string;
+  readonly invitationId: string;
+  readonly inviterUserId: string;
+  /** Hex SHA-256 of the invitation statement they accepted. */
+  readonly statementHash: string;
+  /** How: the emailed link opened here, or the in-app confirmation. */
+  readonly source: 'link' | 'confirmed';
+  /**
+   * For a link intent: hex `invitationLinkTokenHash` of the link opened,
+   * which the statement names. A link intent without it (kept by an older
+   * version) counts for nothing.
+   */
+  readonly linkTokenHash?: string;
+  /** Unix milliseconds. */
+  readonly intendedAt: number;
+}
+
 export interface InvitationStore {
   rememberEmail(userId: string, entry: InvitationEmail): Promise<void>;
   emails(userId: string): Promise<InvitationEmail[]>;
@@ -50,6 +128,28 @@ export interface InvitationStore {
   markPublished(userId: string, entry: PublishedKeyPackage): Promise<void>;
   published(userId: string): Promise<PublishedKeyPackage[]>;
   dropPublished(userId: string, projectId: string): Promise<void>;
+  rememberRemoved(userId: string, entry: RemovedMember): Promise<void>;
+  removedMembers(userId: string): Promise<RemovedMember[]>;
+  forgetRemoved(
+    userId: string,
+    projectId: string,
+    memberUserId: string
+  ): Promise<void>;
+  beginRemovalCheck(userId: string, entry: RemovalCheckMark): Promise<void>;
+  endRemovalCheck(
+    userId: string,
+    projectId: string,
+    checkId: string
+  ): Promise<void>;
+  removalChecks(userId: string): Promise<RemovalCheckMark[]>;
+  establishRemovalHistory(
+    userId: string,
+    entry: RemovalHistoryMark
+  ): Promise<void>;
+  forgetRemovalHistory(userId: string, projectId: string): Promise<void>;
+  removalHistory(userId: string): Promise<RemovalHistoryMark[]>;
+  rememberIntent(userId: string, entry: InvitationIntent): Promise<void>;
+  intents(userId: string): Promise<InvitationIntent[]>;
 }
 
 const isText = (value: unknown, max = 512): value is string =>
@@ -99,10 +199,76 @@ function readPublished(value: unknown): PublishedKeyPackage | null {
     : null;
 }
 
+function readRemoved(value: unknown): RemovedMember | null {
+  const entry = value as Partial<RemovedMember> | null;
+  return entry &&
+    isText(entry.projectId) &&
+    isText(entry.userId) &&
+    Number.isSafeInteger(entry.removedAt)
+    ? {
+        projectId: entry.projectId,
+        userId: entry.userId,
+        removedAt: entry.removedAt!
+      }
+    : null;
+}
+
+function readRemovalCheck(value: unknown): RemovalCheckMark | null {
+  const entry = value as Partial<RemovalCheckMark> | null;
+  return entry &&
+    isText(entry.projectId) &&
+    isText(entry.checkId) &&
+    Number.isSafeInteger(entry.startedAt)
+    ? {
+        projectId: entry.projectId,
+        checkId: entry.checkId,
+        startedAt: entry.startedAt!
+      }
+    : null;
+}
+
+function readRemovalHistory(value: unknown): RemovalHistoryMark | null {
+  const entry = value as Partial<RemovalHistoryMark> | null;
+  return entry && isText(entry.projectId) && Number.isSafeInteger(entry.since)
+    ? { projectId: entry.projectId, since: entry.since! }
+    : null;
+}
+
+const isHashHex = (value: unknown): value is string =>
+  typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
+
+function readIntent(value: unknown): InvitationIntent | null {
+  const entry = value as Partial<InvitationIntent> | null;
+  return entry &&
+    isText(entry.projectId) &&
+    isText(entry.invitationId) &&
+    isText(entry.inviterUserId) &&
+    isHashHex(entry.statementHash) &&
+    (entry.source === 'link' || entry.source === 'confirmed') &&
+    (entry.linkTokenHash === undefined || isHashHex(entry.linkTokenHash)) &&
+    Number.isSafeInteger(entry.intendedAt)
+    ? {
+        projectId: entry.projectId,
+        invitationId: entry.invitationId,
+        inviterUserId: entry.inviterUserId,
+        statementHash: entry.statementHash,
+        source: entry.source,
+        ...(entry.linkTokenHash !== undefined
+          ? { linkTokenHash: entry.linkTokenHash }
+          : {}),
+        intendedAt: entry.intendedAt!
+      }
+    : null;
+}
+
 export function memoryInvitationStore(): InvitationStore {
   const emails = new Map<string, InvitationEmail>();
   const claims = new Map<string, StoredClaim>();
   const published = new Map<string, PublishedKeyPackage>();
+  const removed = new Map<string, RemovedMember>();
+  const checks = new Map<string, RemovalCheckMark>();
+  const history = new Map<string, RemovalHistoryMark>();
+  const intents = new Map<string, InvitationIntent>();
   const id = (...parts: string[]) => JSON.stringify(parts);
   const ofUser = <T>(map: Map<string, T>, userId: string) =>
     [...map].filter(([key]) => (JSON.parse(key) as string[])[0] === userId);
@@ -125,7 +291,32 @@ export function memoryInvitationStore(): InvitationStore {
     published: async (userId) => ofUser(published, userId).map(([, v]) => v),
     dropPublished: async (userId, projectId) => {
       published.delete(id(userId, projectId));
-    }
+    },
+    rememberRemoved: async (userId, entry) => {
+      removed.set(id(userId, entry.projectId, entry.userId), { ...entry });
+    },
+    removedMembers: async (userId) => ofUser(removed, userId).map(([, v]) => v),
+    forgetRemoved: async (userId, projectId, memberUserId) => {
+      removed.delete(id(userId, projectId, memberUserId));
+    },
+    beginRemovalCheck: async (userId, entry) => {
+      checks.set(id(userId, entry.projectId, entry.checkId), { ...entry });
+    },
+    endRemovalCheck: async (userId, projectId, checkId) => {
+      checks.delete(id(userId, projectId, checkId));
+    },
+    removalChecks: async (userId) => ofUser(checks, userId).map(([, v]) => v),
+    establishRemovalHistory: async (userId, entry) => {
+      history.set(id(userId, entry.projectId), { ...entry });
+    },
+    forgetRemovalHistory: async (userId, projectId) => {
+      history.delete(id(userId, projectId));
+    },
+    removalHistory: async (userId) => ofUser(history, userId).map(([, v]) => v),
+    rememberIntent: async (userId, entry) => {
+      intents.set(id(userId, entry.invitationId), { ...entry });
+    },
+    intents: async (userId) => ofUser(intents, userId).map(([, v]) => v)
   };
 }
 
@@ -133,15 +324,27 @@ export const INVITATION_DATABASE = 'openzcad-e2ee-invitations';
 const EMAILS = 'emails';
 const CLAIMS = 'claims';
 const PUBLISHED = 'published';
+const REMOVED = 'removed';
+const INTENTS = 'intents';
+const REMOVAL_CHECKS = 'removalChecks';
+const REMOVAL_HISTORY = 'removalHistory';
 
 let opening: Promise<IDBDatabase> | null = null;
 
 function openDatabase(): Promise<IDBDatabase> {
   opening ??= new Promise<IDBDatabase>((resolve, reject) => {
-    const request = indexedDB.open(INVITATION_DATABASE, 1);
+    const request = indexedDB.open(INVITATION_DATABASE, 5);
     request.onupgradeneeded = () => {
       const db = request.result;
-      for (const name of [EMAILS, CLAIMS, PUBLISHED]) {
+      for (const name of [
+        EMAILS,
+        CLAIMS,
+        PUBLISHED,
+        REMOVED,
+        INTENTS,
+        REMOVAL_CHECKS,
+        REMOVAL_HISTORY
+      ]) {
         if (!db.objectStoreNames.contains(name)) db.createObjectStore(name);
       }
     };
@@ -230,7 +433,29 @@ export function indexedDbInvitationStore(): InvitationStore {
     markPublished: (userId, entry) =>
       put(PUBLISHED, [userId, entry.projectId], { ...entry }),
     published: (userId) => all(PUBLISHED, userId, readPublished),
-    dropPublished: (userId, projectId) => remove(PUBLISHED, [userId, projectId])
+    dropPublished: (userId, projectId) =>
+      remove(PUBLISHED, [userId, projectId]),
+    rememberRemoved: (userId, entry) =>
+      put(REMOVED, [userId, entry.projectId, entry.userId], { ...entry }),
+    removedMembers: (userId) => all(REMOVED, userId, readRemoved),
+    forgetRemoved: (userId, projectId, memberUserId) =>
+      remove(REMOVED, [userId, projectId, memberUserId]),
+    beginRemovalCheck: (userId, entry) =>
+      put(REMOVAL_CHECKS, [userId, entry.projectId, entry.checkId], {
+        ...entry
+      }),
+    endRemovalCheck: (userId, projectId, checkId) =>
+      remove(REMOVAL_CHECKS, [userId, projectId, checkId]),
+    removalChecks: (userId) => all(REMOVAL_CHECKS, userId, readRemovalCheck),
+    establishRemovalHistory: (userId, entry) =>
+      put(REMOVAL_HISTORY, [userId, entry.projectId], { ...entry }),
+    forgetRemovalHistory: (userId, projectId) =>
+      remove(REMOVAL_HISTORY, [userId, projectId]),
+    removalHistory: (userId) =>
+      all(REMOVAL_HISTORY, userId, readRemovalHistory),
+    rememberIntent: (userId, entry) =>
+      put(INTENTS, [userId, entry.invitationId], { ...entry }),
+    intents: (userId) => all(INTENTS, userId, readIntent)
   };
 }
 
