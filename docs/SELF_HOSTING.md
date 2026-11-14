@@ -93,7 +93,8 @@ Worker checks before any D1 work: sign-in verification and desktop refresh
 (`AUTH_REQUEST_LIMITER`), desktop sign-in start (`DESKTOP_START_LIMITER`),
 desktop sign-in polling (`DESKTOP_EXCHANGE_LIMITER`),
 anonymous assistant requests (`ANONYMOUS_ASSISTANT_LIMITER`), plaintext
-share-link reads (`SHARE_LINK_LIMITER`) and signed-in reads
+share-link reads (`SHARE_LINK_LIMITER`, and the coarser
+`SHARE_READ_CEILING_LIMITER`, which has no D1 fallback) and signed-in reads
 (`ACCOUNT_READ_LIMITER`). They need no resource to be created. Each
 `namespace_id` is any positive integer not used by another rate-limit binding
 in your account. Keep each binding's name, `limit` and 60-second `period` as

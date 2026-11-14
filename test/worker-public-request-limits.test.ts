@@ -374,6 +374,27 @@ describe('Workers rate-limit bindings', () => {
     );
   });
 
+  it.each([
+    `/api/share/${SHARE_TOKEN}`,
+    `/api/share/${SHARE_TOKEN}/assets/asset-1`,
+    `/api/share/${SHARE_TOKEN}/sources/source-1`
+  ])(
+    'refuse share-link reads past the ceiling before any D1 work (%s)',
+    async (path) => {
+      const { env, statements } = hostedEnv();
+      const ceiling = limiter(false);
+      const response = await worker.fetch(
+        new Request(`https://example.com${path}`, {
+          headers: { 'cf-connecting-ip': ADDRESS }
+        }),
+        { ...env, SHARE_READ_CEILING_LIMITER: ceiling }
+      );
+      expect(response.status).toBe(429);
+      expect(statements).toEqual([]);
+      expect(ceiling.limit).toHaveBeenCalledOnce();
+    }
+  );
+
   it('count in the binding alone while it admits, writing no D1 limiter row', async () => {
     const { env, statements } = hostedEnv();
     const response = await worker.fetch(

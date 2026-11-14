@@ -41,6 +41,7 @@ import {
   enforceApiRateLimit,
   enforcePublicRequestRateLimit,
   enforceRequestLimit,
+  enforceWorkersCeiling,
   isApiRateLimitSpent,
   markApiRateLimitSpent,
   publicRequestBucket,
@@ -1075,6 +1076,11 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     const address = limited
       ? await publicRequestBucket(request, env, 'share')
       : null;
+    // A coarse ceiling in the Workers binding first, so refused reads never
+    // reach the load budget's D1 lookup below.
+    if (address) {
+      await enforceWorkersCeiling(env, 'SHARE_READ_CEILING_LIMITER', address);
+    }
     const tokenHash = token ? await hashProjectInvitationToken(token) : null;
     const loadBucket =
       address && tokenHash ? `${address}:load:${tokenHash.slice(0, 32)}` : null;

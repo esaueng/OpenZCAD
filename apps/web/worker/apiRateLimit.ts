@@ -128,6 +128,13 @@ export const REQUEST_LIMITS = {
    */
   SHARE_LINK_LIMITER: 300,
   /**
+   * Every plaintext share-link read per address, checked in the Workers
+   * binding alone before a load's own budget is looked up in D1, so a
+   * flood of reads never reaches D1 (judgment: eight loads of a model with
+   * a few thousand sources stay well under it).
+   */
+  SHARE_READ_CEILING_LIMITER: 6_000,
+  /**
    * Signed-in GET and HEAD requests, per account. Writes keep their tighter
    * `api:` budget; reads get one generous enough for loading a large
    * project's assets or encrypted blobs several times a minute.
@@ -166,6 +173,31 @@ export async function enforceRequestLimit(
     }
   }
   await enforceApiRateLimit(env, bucket, REQUEST_LIMITS[limiter]);
+}
+
+/**
+ * Counts one request against `bucket` in the named Workers rate-limit
+ * binding only: a coarse ceiling in front of D1 work. Without the binding,
+ * or when it is unavailable, nothing is counted here: counting it in D1
+ * would add the very write the ceiling is there to spare.
+ */
+export async function enforceWorkersCeiling(
+  env: CloudflareEnv & RequestLimiterEnv,
+  limiter: RequestLimiter,
+  bucket: string
+): Promise<void> {
+  if (env.ENVIRONMENT === 'development' && env.PRODUCTION_GUARD === undefined)
+    return;
+  const binding = env[limiter];
+  if (!binding || typeof binding.limit !== 'function') return;
+  let outcome: { success: boolean };
+  try {
+    outcome = await binding.limit({ key: bucket });
+  } catch {
+    return;
+  }
+  if (!outcome.success)
+    throw new HttpError(429, 'API request limit reached. Try again later.');
 }
 
 /** Counts one signed-in read against the account's read budget. */
