@@ -4745,6 +4745,8 @@ test('sketches on the wall of a drag-style extrusion and on a hash-only face', a
   await expect(
     page.getByRole('toolbar', { name: 'Sketch tools' })
   ).toBeVisible();
+  // Line, then the exit's confirmation (I43), then out.
+  await page.keyboard.press('Escape');
   await page.keyboard.press('Escape');
   await page.keyboard.press('Escape');
   await expect(page.getByRole('contentinfo')).toContainText('Sketch closed');

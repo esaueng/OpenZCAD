@@ -1849,6 +1849,7 @@ import {
   shouldAdoptAccountSettings
 } from './lib/appSettings';
 import { useCommandFold } from './hooks/useCommandFold';
+import { sketchExitEscape } from './lib/interaction/sketchExitConfirm';
 import {
   sketchObjectLabels,
   sketchPointNamer
@@ -3165,6 +3166,8 @@ export function App() {
     before: BodyTopology['faces'] | undefined;
   } | null>(null);
   const [sketchConstruction, setSketchConstruction] = useState(false);
+  /** When a first Escape armed leaving the sketch (I43), or null. */
+  const sketchExitArmedAtRef = useRef<number | null>(null);
   /**
    * Offset for the next canonical-plane sketch, as typed. Kept as text so a
    * half-entered value ("-", "1.") survives a keystroke; the ghost planes and
@@ -20805,6 +20808,8 @@ export function App() {
   // orphans it.
   useEffect(() => {
     if (interaction.mode !== 'sketch') {
+      // A first Escape armed in one sketch never confirms leaving the next.
+      sketchExitArmedAtRef.current = null;
       setSketchSolveStatus(null);
       setSketchSolving(false);
       setSketchDimensionDraft(null);
@@ -30329,6 +30334,15 @@ export function App() {
             return;
           }
           if (interaction.mode === 'sketch') {
+            if (event.defaultPrevented) {
+              // A value prompt (a dimension, a fillet radius, an offset)
+              // spent this press closing itself: it cancels the value and
+              // climbs no rung, so it neither leaves nor arms the exit
+              // (I43). Read before our own preventDefault below, which
+              // would otherwise make every press look spent.
+              sketchExitArmedAtRef.current = null;
+              return;
+            }
             // Inside a sketch Escape still climbs its ladder one rung per
             // press: chain, pick sequence, tool, selection, then the sketch.
             event.preventDefault();
@@ -30347,6 +30361,23 @@ export function App() {
             // sketch had already been left — only Finish Sketch said
             // anything. Both dispatch the same exit, so both can say so.
             const leftSketch = escapeTarget(interaction) === 'exit-sketch';
+            if (leftSketch) {
+              // I43: the last rung asks before it leaves; a reflex second
+              // Escape after closing a prompt or deselecting stays put.
+              const step = sketchExitEscape(
+                sketchExitArmedAtRef.current,
+                performance.now()
+              );
+              sketchExitArmedAtRef.current = step.armedAt;
+              if (!step.leave) {
+                setStatus(
+                  'Press Esc again to leave the sketch, or choose Finish Sketch. Your geometry is kept either way.'
+                );
+                return;
+              }
+            } else {
+              sketchExitArmedAtRef.current = null;
+            }
             dispatchInteraction({ type: 'escape' });
             if (leftSketch) {
               setStatus('Sketch closed.');
