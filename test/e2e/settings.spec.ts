@@ -610,8 +610,9 @@ const DARK_GROUND = 'rgb(16, 18, 21)';
 const LIGHT_GROUND = 'rgb(242, 242, 242)';
 const DARK_SURFACE = 'rgb(24, 27, 31)';
 const LIGHT_SURFACE = 'rgb(250, 250, 250)';
-// The 3D stage behind the canvas turns with the chrome.
-const DARK_STAGE = 'rgb(16, 18, 21)';
+// The 3D stage behind the canvas turns with the chrome. The dark stage is
+// the neutral graphite `--color-viewport-bg` (#18191c, #1293), not the ground.
+const DARK_STAGE = 'rgb(24, 25, 28)';
 const LIGHT_STAGE = 'rgb(238, 238, 238)';
 
 function pageGround(page: Page) {
@@ -1320,9 +1321,13 @@ test('reset settings revokes analytics consent and persists the default', async 
     exact: true
   });
   await consent.check();
-  page.once('dialog', (dialog) => dialog.accept());
   await page.getByRole('button', { name: 'Advanced', exact: true }).click();
   await page
+    .getByRole('button', { name: 'Reset settings', exact: true })
+    .click();
+  // Asked in-page, never with a native confirm.
+  await page
+    .getByRole('alertdialog', { name: 'Reset settings on this device?' })
     .getByRole('button', { name: 'Reset settings', exact: true })
     .click();
   await page

@@ -11,6 +11,11 @@ import {
 } from './src/lib/assistant/pdfjsAssets';
 import { resolveSourceCommit } from './build/sourceCommit';
 import { localRemusPackages } from './build/localRemus';
+import {
+  remusArtifactGate,
+  remusOutputStampPlugin,
+  type RemusArtifactStamp
+} from './build/remusArtifactGate';
 import { remusTranslatorRetry } from './build/remusTranslatorRetry';
 import { lazyChunkPrefetch } from './build/lazyChunkPrefetch';
 import {
@@ -126,7 +131,11 @@ function sourceCommit(): string {
 
 function buildMetadata(
   commit: string,
-  remus: { version: string; commit: string }
+  remus: {
+    version: string;
+    commit: string;
+    artifacts?: RemusArtifactStamp;
+  }
 ): PluginOption {
   return {
     name: 'openzcad-build-metadata',
@@ -263,7 +272,19 @@ function pdfjsAssets(): PluginOption {
 
 export default defineConfig(async ({ command, isPreview, mode }) => {
   const localRemus = await localRemusPackages(process.env);
-  const remus = localRemus?.build ?? (await remusBuildInfo());
+  // Every build, web or desktop, filtered or not, verifies the Remus packages
+  // it bundles; dev and preview only warn. See build/remusArtifactGate.ts.
+  const repoRoot = fileURLToPath(new URL('../..', import.meta.url));
+  const remusArtifacts = remusArtifactGate({
+    command,
+    repoRoot,
+    env: process.env,
+    overlay: localRemus?.aliases ?? null
+  });
+  const remus = {
+    ...(localRemus?.build ?? (await remusBuildInfo())),
+    ...(remusArtifacts && !localRemus ? { artifacts: remusArtifacts } : {})
+  };
   const commit = sourceCommit();
   const isDesktop = mode === 'desktop';
   const plugins = [];
@@ -275,7 +296,13 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
     pdfjsAssets(),
     textFontAssets(),
     buildMetadata(commit, remus),
-    lazyChunkPrefetch()
+    lazyChunkPrefetch(),
+    // Last: ties the stamp to the written output (emitted module paths and a
+    // digest of every file) for scripts/check-release-build.mjs.
+    remusOutputStampPlugin({
+      repoRoot,
+      stamped: Boolean(remusArtifacts && !localRemus)
+    })
   );
 
   const nodeMajor = Number.parseInt(
@@ -446,8 +473,24 @@ export default defineConfig(async ({ command, isPreview, mode }) => {
             import.meta.url
           )
         ),
+        // The 3D mouse connection lives in the entry chunk (App and
+        // Settings share it); its decoder imports nothing.
+        '@openzcad/viewport/space-mouse': fileURLToPath(
+          new URL(
+            '../../packages/viewport/src/input/spaceMouse.ts',
+            import.meta.url
+          )
+        ),
         '@openzcad/viewport/types': fileURLToPath(
           new URL('../../packages/viewport/src/types.ts', import.meta.url)
+        ),
+        // The drawing chunk reads the wheel the way Build does; the package
+        // index would bring three into it.
+        '@openzcad/viewport/wheel-gesture': fileURLToPath(
+          new URL(
+            '../../packages/viewport/src/input/wheelGesture.ts',
+            import.meta.url
+          )
         ),
         // Same reason as the text loader above: the io-shapr index pulls the
         // zip reader, SQLite-WASM and the MessagePack decoder, and the module

@@ -1,5 +1,10 @@
 import * as THREE from 'three';
 import type { ViewerMesh } from '../pick/meshes';
+import {
+  CUT_LIGHTNESS_SHIFT,
+  SECTION_HATCH,
+  withSectionHatch
+} from './sectionHatch';
 
 /** Raster-only section geometry, never a document face or a picking target. */
 export const SECTION_CAP = 'viewport-section-cap';
@@ -273,8 +278,10 @@ export function updateSectionCap(
     caps.delete(mesh);
     if (!plane || !position) return;
     const geometry = sectionCapGeometry(mesh.geometry, plane);
+    // Hatched and shaded down like the exact cut (sectionHatch.ts), so the
+    // cap reads as the inside of the body rather than more of its outside.
     const cap = geometry
-      ? new THREE.Mesh(geometry, mesh.material.clone())
+      ? new THREE.Mesh(geometry, withSectionHatch(mesh.material.clone()))
       : null;
     if (cap) {
       cap.name = SECTION_CAP;
@@ -297,6 +304,9 @@ export function updateSectionCap(
   if (cap) {
     cap.castShadow = mesh.castShadow;
     cap.material.copy(mesh.material);
+    // `copy` brings the body's userData with it; the cap stays hatched.
+    cap.material.userData[SECTION_HATCH] = true;
+    cap.material.color.offsetHSL(0, 0, CUT_LIGHTNESS_SHIFT);
     cap.material.clippingPlanes = null;
     cap.material.side = THREE.DoubleSide;
     // Hover animation updates emissive, and X-ray or appearance changes
@@ -304,7 +314,7 @@ export function updateSectionCap(
     cap.onBeforeRender = () => {
       const target = cap.material;
       const source = mesh.material;
-      target.color.copy(source.color);
+      target.color.copy(source.color).offsetHSL(0, 0, CUT_LIGHTNESS_SHIFT);
       target.emissive.copy(source.emissive);
       if (target.transparent !== source.transparent) target.needsUpdate = true;
       target.opacity = source.opacity;

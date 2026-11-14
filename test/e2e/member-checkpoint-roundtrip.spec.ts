@@ -407,7 +407,7 @@ test('does not record a restore when the room changes while its saved revision l
   await startNamedSave(page);
   await expect.poll(server.requested).toBe(true);
   server.release();
-  await expect(page.getByRole('contentinfo')).toContainText('Saved revision.');
+  await expect(page.getByRole('contentinfo')).toContainText('Made a save point.');
   await createPrimitiveInPlace(page, 'cylinder');
   await expectBodyCount(page, 2);
   await expect.poll(() => server.read().bodyOrder.length).toBe(2);
@@ -661,7 +661,7 @@ test('a clicked member checkpoint survives buffered edits and restores through t
     expect(server.read().bodyOrder).toHaveLength(1);
     server.release();
     await expect(page.getByRole('contentinfo')).toContainText(
-      'Saved revision.'
+      'Made a save point.'
     );
     await expectBodyCount(page, 2);
     await expect(
@@ -731,7 +731,7 @@ test('a late member checkpoint leaves the newer share navigation and status unch
     releaseShare = resolve;
   });
   let shareRequested = false;
-  await page.route('**/api/share/*', async (route) => {
+  await page.route('**/api/share', async (route) => {
     shareRequested = true;
     await shareGate;
     return route.fulfill({
@@ -1038,7 +1038,7 @@ for (const [sendTiming, ackFault, sourceArchived] of [
         await expect(page.getByRole('contentinfo')).toContainText(
           ackFault === 'lost'
             ? 'The named save is stored on this device.'
-            : 'Saved revision.'
+            : 'Made a save point.'
         );
       await expect(
         page.locator('.revision-row', { hasText: 'Clicked box' })

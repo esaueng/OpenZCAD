@@ -65,8 +65,10 @@ function componentTitles(name: string): Map<string, string[]> {
 
 const SPLICED = new Map([
   ...componentTitles('AnalyticsConsent.tsx'),
+  ...componentTitles('AssistantConnectionSettings.tsx'),
   ...componentTitles('DataDownload.tsx'),
-  ...componentTitles('EncryptionSettings.tsx')
+  ...componentTitles('EncryptionSettings.tsx'),
+  ...componentTitles('SpaceMouseSettings.tsx')
 ]);
 
 function renderedSettingsBySection(): Map<string, string[]> {
@@ -119,6 +121,13 @@ describe('settings search index', () => {
     ]);
     expect(SPLICED.get('CloudStatisticsConsent')).toEqual([
       'Cloud account statistics'
+    ]);
+    // The assistant's toggle and credential rows come from
+    // AssistantConnectionSettings.tsx (split out of SettingsPage in #1319).
+    expect(SPLICED.get('AssistantConnectionSettings')).toEqual([
+      'AI assistant',
+      'Credential source',
+      'Built-in assistant'
     ]);
     // The Encryption rows come from its lazy component.
     expect(SPLICED.get('EncryptionSettings')).toContain('Your fingerprint');

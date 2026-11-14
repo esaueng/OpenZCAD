@@ -237,6 +237,11 @@ test(
     // fixed fraction of the canvas is the middle of one face, or empty stage.
     const stack = await locatePickStack(canvas);
     await page.mouse.click(stack.x, stack.y, { button: 'right' });
+    // The view menu leads with Select other over stacked targets (I18).
+    await page
+      .locator('.context-menu')
+      .getByRole('menuitem', { name: /^Select other/ })
+      .click();
     await expect(pickList).toBeVisible();
     await expect(pickList.getByRole('menuitem')).toHaveText(
       stack.labels.map((label, index) => `${label}${stack.kinds[index]}`)

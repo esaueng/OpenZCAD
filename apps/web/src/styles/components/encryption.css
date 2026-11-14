@@ -173,3 +173,19 @@
   display: grid;
   gap: var(--sp-1);
 }
+
+/* Setup's last step, "Encrypt new projects?" (design review I75): the
+   choice, ticked by default, and the button that keeps it. */
+.encryption-setup-choice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.encryption-setup-choice label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+}

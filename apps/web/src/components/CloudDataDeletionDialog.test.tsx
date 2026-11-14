@@ -2,8 +2,11 @@ import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AccountDeletionPreview } from '@openzcad/shared';
-import { api } from '../lib/api';
-import { CloudDataDeletionDialog } from './CloudDataDeletionDialog';
+import { api, ApiError } from '../lib/api';
+import {
+  CloudDataDeletionDialog,
+  deletionFailureMessage
+} from './CloudDataDeletionDialog';
 
 const preview: AccountDeletionPreview = {
   confirmationKind: 'phrase',
@@ -140,5 +143,71 @@ describe('CloudDataDeletionDialog', () => {
     );
     expect(prompt.querySelector('strong')).toBeNull();
     expect(document.body.innerHTML).not.toContain('person@example.com');
+  });
+
+  // Design review I78: the masked email field hid typos, and a mismatch only
+  // left the button disabled.
+  it('unmasks the email while typing and says when it does not match', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, 'accountDeletionPreview').mockResolvedValue({
+      ...preview,
+      confirmationKind: 'email',
+      confirmationText: 'person@example.com'
+    });
+    render(
+      <CloudDataDeletionDialog
+        scope="profile"
+        onConfirm={vi.fn()}
+        onClose={vi.fn()}
+      />
+    );
+    const field = await screen.findByLabelText('Deletion confirmation');
+    expect(field).toHaveFocus();
+    expect(field).toHaveAttribute('type', 'text');
+    // A prefix of the address is not yet a mismatch.
+    await user.type(field, 'person@');
+    expect(screen.queryByText(/doesn’t match/)).toBeNull();
+    await user.type(field, 'exmaple.com');
+    expect(
+      screen.getByText('That doesn’t match your account’s email address.')
+    ).toBeVisible();
+    expect(field).toHaveAttribute('aria-invalid', 'true');
+    await user.tab();
+    expect(field).toHaveAttribute('type', 'password');
+    expect(
+      screen.getByText('That doesn’t match your account’s email address.')
+    ).toBeVisible();
+  });
+
+  // Design review I84.
+  it('offers to download the data first', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, 'accountDeletionPreview').mockResolvedValue(preview);
+    const onDownloadFirst = vi.fn();
+    render(
+      <CloudDataDeletionDialog
+        scope="projects"
+        onConfirm={vi.fn()}
+        onClose={vi.fn()}
+        onDownloadFirst={onDownloadFirst}
+      />
+    );
+    await user.click(
+      await screen.findByRole('button', { name: 'Download your data first' })
+    );
+    expect(onDownloadFirst).toHaveBeenCalledOnce();
+  });
+
+  it('says a server failure may have stopped partway, and a refusal did nothing', () => {
+    expect(
+      deletionFailureMessage(new ApiError(500, 'Internal error.'))
+    ).toMatch(
+      /Internal error\. Deletion may have stopped partway.*Nothing on this device was deleted\. Try again to finish\./
+    );
+    expect(
+      deletionFailureMessage(
+        new ApiError(400, 'Type your email address exactly to continue.')
+      )
+    ).toBe('Type your email address exactly to continue.');
   });
 });

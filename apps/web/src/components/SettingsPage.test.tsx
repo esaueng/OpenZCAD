@@ -1114,6 +1114,8 @@ describe('settings controls section', () => {
     // meaning everywhere, then the pointer.
     expect([...headers].map((header) => header.textContent)).toEqual([
       'Navigation',
+      expect.stringContaining('3D mouse'),
+      'SpaceMouse keys',
       expect.stringContaining('Keyboard'),
       expect.stringContaining('Fixed keys'),
       'Mouse & pointer'
@@ -1122,7 +1124,7 @@ describe('settings controls section', () => {
       screen.getByRole('button', { name: 'Reset all shortcuts' })
     ).toBeDisabled();
     // The banner's guidance lives on beside the one header.
-    expect(headers[1]).toHaveTextContent(
+    expect(headers[3]).toHaveTextContent(
       'Workspace shortcuts pause while you type in a field'
     );
   });
@@ -1603,6 +1605,162 @@ describe('settings desktop account section', () => {
     }
   });
 
+  it('says a refused sign-in code at the field', async () => {
+    // 13 November review I4: the refusal showed only in small mono text
+    // beside the Settings title, and the field had no error state.
+    const user = userEvent.setup();
+    const refused = Object.assign(new Error('That sign-in code is invalid.'), {
+      status: 400
+    });
+    const onVerifyLoginCode = vi.fn().mockRejectedValue(refused);
+    Object.defineProperty(window, 'turnstile', {
+      configurable: true,
+      value: {
+        render: vi.fn(
+          (
+            _container: HTMLElement,
+            options: { callback(token: string): void }
+          ) => {
+            options.callback('turnstile-token');
+            return 'widget-1';
+          }
+        ),
+        remove: vi.fn(),
+        reset: vi.fn()
+      }
+    });
+    const script = document.createElement('script');
+    script.dataset.openzcadTurnstile = 'true';
+    document.head.append(script);
+    try {
+      renderSettings(null, {
+        initialSection: 'account',
+        authConfig: {
+          mode: 'email-code',
+          emailCodeEnabled: true,
+          turnstileSiteKey: 'site-key'
+        },
+        authConfigStatus: 'ready',
+        onRequestLoginCode: vi.fn().mockResolvedValue({
+          challengeId: 'challenge-1',
+          expiresInSeconds: 600
+        }),
+        onVerifyLoginCode
+      });
+      await user.type(
+        screen.getByLabelText('Email address'),
+        'person@example.com'
+      );
+      await user.click(screen.getByRole('button', { name: 'Email me a code' }));
+      const codeField = await screen.findByLabelText('Email sign-in code');
+      await user.type(codeField, '111111');
+      await user.click(screen.getByRole('button', { name: 'Sign in' }));
+      await waitFor(() => expect(codeField).toHaveAttribute('aria-invalid'));
+      expect(codeField).toHaveAccessibleDescription(
+        'That sign-in code is invalid.'
+      );
+      // The refused code is cleared (I81), so the next digit is the edit.
+      await user.type(codeField, '1');
+      expect(codeField).not.toHaveAttribute('aria-invalid');
+      expect(codeField).not.toHaveAccessibleDescription();
+    } finally {
+      script.remove();
+      delete (window as Window & { turnstile?: unknown }).turnstile;
+    }
+  });
+
+  // Design review I81: no Resend, a placeholder that looked typed, and a
+  // wrong code left in the field.
+  it('clears a wrong code, uses a neutral placeholder and offers a new code after a wait', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const onVerifyLoginCode = vi
+      .fn()
+      .mockRejectedValue(new Error('That sign-in code is invalid.'));
+    const onRequestLoginCode = vi
+      .fn()
+      .mockResolvedValueOnce({
+        challengeId: 'challenge-1',
+        expiresInSeconds: 600
+      })
+      .mockResolvedValueOnce({
+        challengeId: 'challenge-2',
+        expiresInSeconds: 600
+      });
+    Object.defineProperty(window, 'turnstile', {
+      configurable: true,
+      value: {
+        render: vi.fn(
+          (
+            _container: HTMLElement,
+            options: { callback(token: string): void }
+          ) => {
+            options.callback('turnstile-token');
+            return 'widget-1';
+          }
+        ),
+        remove: vi.fn(),
+        reset: vi.fn()
+      }
+    });
+    const script = document.createElement('script');
+    script.dataset.openzcadTurnstile = 'true';
+    document.head.append(script);
+    try {
+      renderSettings(null, {
+        initialSection: 'account',
+        authConfig: {
+          mode: 'email-code',
+          emailCodeEnabled: true,
+          turnstileSiteKey: 'site-key'
+        },
+        authConfigStatus: 'ready',
+        onRequestLoginCode,
+        onVerifyLoginCode
+      });
+      await user.type(
+        screen.getByLabelText('Email address'),
+        'person@example.com'
+      );
+      await user.click(screen.getByRole('button', { name: 'Email me a code' }));
+      const codeField = await screen.findByLabelText('Email sign-in code');
+      expect(codeField).toHaveAttribute('placeholder', '6-digit code');
+      await user.type(codeField, '123456');
+      await user.click(screen.getByRole('button', { name: 'Sign in' }));
+      await waitFor(() => expect(codeField).toHaveValue(''));
+      expect(codeField).toHaveFocus();
+
+      expect(
+        screen.getByRole('button', { name: /^Send a new code/ })
+      ).toBeDisabled();
+      await act(async () => {
+        vi.advanceTimersByTime(30_000);
+      });
+      const resend = await screen.findByRole('button', {
+        name: 'Send a new code'
+      });
+      await waitFor(() => expect(resend).toBeEnabled());
+      await user.click(resend);
+      expect(onRequestLoginCode).toHaveBeenLastCalledWith(
+        'person@example.com',
+        'turnstile-token'
+      );
+      await user.type(
+        await screen.findByLabelText('Email sign-in code'),
+        '654321'
+      );
+      await user.click(screen.getByRole('button', { name: 'Sign in' }));
+      expect(onVerifyLoginCode).toHaveBeenLastCalledWith(
+        'challenge-2',
+        '654321'
+      );
+    } finally {
+      script.remove();
+      delete (window as Window & { turnstile?: unknown }).turnstile;
+      vi.useRealTimers();
+    }
+  });
+
   it('links the privacy policy from the email sign-in form', () => {
     Object.defineProperty(window, 'turnstile', {
       configurable: true,
@@ -1965,10 +2123,56 @@ describe('settings privacy and data section', () => {
     renderSettings(readyHealth, { initialSection: 'privacy', session });
 
     await user.click(screen.getByText('What’s collected'));
-    expect(screen.getByText(/Local operations require opt-in\./)).toBeVisible();
     expect(
-      screen.getByText(/This expanded scope requires a fresh choice\./)
+      screen.getByText(
+        /Local operations are counted only with this switch on\./
+      )
     ).toBeVisible();
+    expect(
+      screen.getByText(/this expanded scope requires a fresh choice\./)
+    ).toBeVisible();
+  });
+
+  // I10 (13 November review): one paragraph of jargon became a plain list of
+  // what is sent, what never is, and how to stop — every statement kept.
+  it('says what analytics send, never send, and how to stop', async () => {
+    const user = userEvent.setup();
+    renderSettings(readyHealth, { initialSection: 'privacy', session });
+
+    await user.click(screen.getByText('What’s collected'));
+    const disclosure = screen.getByText('What’s collected').closest('details')!;
+    for (const heading of ['Sent', 'Never sent', 'How to stop']) {
+      expect(within(disclosure).getByText(heading)).toBeVisible();
+    }
+    // Glimpse is named, and said what it is.
+    expect(disclosure).toHaveTextContent(
+      'Glimpse, the usage-counting service OpenZCAD runs for itself'
+    );
+    for (const statement of [
+      'feature categories, workflow steps and exports',
+      'Diagnostic codes',
+      'part count, project file size and transfer size',
+      'Coarse timings',
+      'Model contents or geometry',
+      'File names or project names',
+      'Anything that identifies you',
+      'It is off until you turn it on.',
+      'Turn it off here and sending stops at once.',
+      'Do Not Track or Global Privacy Control',
+      'turning off Cloud features, pauses sending and keeps this choice',
+      'kept in this browser only, and separately for each app',
+      'cannot be traced back to you or removed',
+      'basic server counters measure API activity and reliability'
+    ]) {
+      expect(disclosure).toHaveTextContent(statement);
+    }
+    expect(
+      within(disclosure).getByRole('link', { name: 'privacy policy' })
+    ).toHaveAttribute('href', expect.stringContaining('/privacy'));
+    // Wording only: the switch still starts off.
+    expect(
+      screen.getByRole('checkbox', { name: 'Optional usage analytics' })
+    ).not.toBeChecked();
   });
 
   it('shows storage usage on Account, where the profile that owns it is', async () => {
@@ -2025,6 +2229,11 @@ describe('settings privacy and data section', () => {
     expect(confirm).toBeDisabled();
     expect(dialog.innerHTML).not.toContain(session.email);
     const confirmation = within(dialog).getByLabelText('Deletion confirmation');
+    // Masked only while it is not being typed in (design review I78): the
+    // field shows what is typed while focused and masks again on blur.
+    act(() => confirmation.focus());
+    expect(confirmation).toHaveAttribute('type', 'text');
+    act(() => confirmation.blur());
     expect(confirmation).toHaveAttribute('type', 'password');
     await user.click(
       within(dialog).getByRole('button', { name: 'Show personal info' })

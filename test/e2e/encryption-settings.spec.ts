@@ -225,6 +225,49 @@ test('sets up encryption only after the recovery key is confirmed', async ({
   await expect(again.getByText('Unlocked', { exact: true })).toBeVisible();
 });
 
+// Design review I75: setup said "Encryption is on" while new projects were
+// still created unencrypted. It now ends with "Encrypt new projects?", ticked.
+test('ends setup by asking to encrypt new projects, ticked by default', async ({
+  page,
+  context
+}) => {
+  const server = createE2eeServer({ projectsEnabled: true });
+  await stubApi(page);
+  await installE2eeServer(context, server);
+  await page.goto('/');
+  const settings = await openEncryptionSettings(page);
+  await settings.getByRole('button', { name: 'Set up encryption' }).click();
+  const recoveryKey = (await settings
+    .getByLabel('Recovery key', { exact: true })
+    .textContent())!;
+  await settings
+    .getByRole('checkbox', { name: 'I saved my recovery key' })
+    .check();
+  await settings.getByRole('button', { name: 'Continue' }).click();
+  await settings.getByLabel('Confirm recovery key').fill(recoveryKey);
+  await settings.getByRole('button', { name: 'Finish setup' }).click();
+  await expect(settings.getByText('Encrypt new projects?')).toBeVisible({
+    timeout: 30_000
+  });
+  const choice = settings.getByRole('checkbox', {
+    name: 'Encrypt new projects'
+  });
+  await expect(choice).toBeChecked();
+  await expect(settings).toContainText(
+    'Projects you already have stay as they are until you encrypt them below.'
+  );
+  await settings.getByRole('button', { name: 'Done', exact: true }).click();
+  await expect(settings.getByText('Encrypt new projects?')).toHaveCount(0);
+  await expect(choice).toBeChecked();
+  expect(
+    server.db
+      .prepare(
+        'SELECT encrypt_new_projects AS on_ FROM e2ee_project_preferences'
+      )
+      .get()
+  ).toEqual({ on_: 1 });
+});
+
 test('removes another device with the recovery key and rotates the keys', async ({
   page,
   context
@@ -245,9 +288,17 @@ test('removes another device with the recovery key and rotates the keys', async 
     .get() as { n: number };
 
   await settings.getByRole('button', { name: 'Remove Old laptop' }).click();
-  await settings
-    .getByLabel('Recovery key', { exact: true })
-    .fill(seeded.recoveryKey);
+  const recoveryKey = settings.getByLabel('Recovery key', { exact: true });
+  // A mistyped key is said under the field, not in the page's top alert.
+  await recoveryKey.fill('not-a-key');
+  await settings.getByRole('button', { name: 'Remove device' }).click();
+  await expect(recoveryKey).toHaveAttribute('aria-invalid', 'true');
+  await expect(recoveryKey).toHaveAccessibleDescription(
+    /^That is not a recovery key\./
+  );
+  await expect(settings.getByText('Old laptop', { exact: true })).toBeVisible();
+  await recoveryKey.fill(seeded.recoveryKey);
+  await expect(recoveryKey).not.toHaveAttribute('aria-invalid');
   await settings.getByRole('button', { name: 'Remove device' }).click();
   await expect(settings.getByText('Old laptop')).toHaveCount(0);
   await expect(settings.getByText('1 certified')).toBeVisible();

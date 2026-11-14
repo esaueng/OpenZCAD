@@ -672,6 +672,31 @@ button.save-state:active:not(:disabled),
   cursor: default;
 }
 
+/* A share-link visitor's session (design review I73): one plain chip in
+   place of the save, presence and account chips, none of which applied. */
+.topbar-share-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 9px;
+  color: var(--color-text);
+  background: var(--color-surface-2);
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+  cursor: default;
+}
+
+.topbar-share-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  white-space: nowrap;
+}
+
 .collaboration-state.live {
   color: var(--color-success);
 }
@@ -806,6 +831,17 @@ button.save-state:focus-visible,
 
   .collaboration-state > .stable-label {
     display: none;
+  }
+
+  /* A seat that may only look says so in words (design review I77): the
+     glyph alone read as "people", and "Read-only" was only in the tooltip.
+     It holds no reserve, since leaving this state hides the label again. */
+  .collaboration-state.is-read-only > .stable-label {
+    display: inline-grid;
+  }
+
+  .collaboration-state.is-read-only > .stable-label::after {
+    content: none;
   }
 
   .collaboration-state > .live-badge {

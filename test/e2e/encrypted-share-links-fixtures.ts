@@ -4,6 +4,7 @@ import {
   handleEncryptedSharedBlob,
   handleEncryptedSharedSnapshot
 } from '../../apps/web/worker/e2eeShareLinks';
+import { SHARE_LINK_TOKEN_HEADER, shareLinkTokenPath } from '@openzcad/shared';
 import { d1Database } from '../d1-sqlite';
 import {
   createPrimitiveInPlace,
@@ -49,16 +50,22 @@ export function anonymousSnapshot(server: E2eeServer, token: string) {
 }
 
 /**
- * Routes a visitor context's `/api/e2ee/share/…` calls (the snapshot and
- * its content blobs) to the Worker's anonymous handlers. Nothing else of
+ * Routes a visitor context's `/api/e2ee/share…` calls (the snapshot and
+ * its content blobs) to the Worker's anonymous handlers, with the token
+ * from the request header placed as the Worker places it. Nothing else of
  * `/api/e2ee` is served to it: a visitor has no session.
  */
 export async function installAnonymousShareRoutes(
   context: BrowserContext,
   server: E2eeServer
 ): Promise<void> {
-  await context.route('**/api/e2ee/share/**', async (route) => {
-    const { pathname } = new URL(route.request().url());
+  await context.route(/\/api\/e2ee\/share(\/|$)/, async (route) => {
+    const requested = new URL(route.request().url()).pathname;
+    const pathname =
+      shareLinkTokenPath(
+        requested,
+        route.request().headers()[SHARE_LINK_TOKEN_HEADER] ?? '!'
+      ) ?? requested;
     const db = d1Database(server.db);
     const response = pathname.includes('/blobs/')
       ? await handleEncryptedSharedBlob(
@@ -171,31 +178,26 @@ export async function ownerWithShareLink(
   });
 
   // Sharing needs the identity key's confirmation (the share delegation).
-  await expect(
-    links.getByRole('button', { name: 'Create link' })
-  ).toBeDisabled();
-  const confirmSharing = links.getByRole('button', {
-    name: 'Confirm sharing…'
-  });
+  // Create link asks for it and then makes the link: one action (I79).
+  const create = links.getByRole('button', { name: 'Create link' });
   // Opacity-zero controls still pass toBeVisible and click in Playwright.
-  // The owner must be able to discover confirmation without hover or focus.
+  // The owner must be able to discover it without hover or focus.
   await alice.mouse.move(0, 0);
-  await expect(confirmSharing).toHaveCSS('opacity', '1');
-  await confirmSharing.click();
+  await expect(create).toHaveCSS('opacity', '1');
+  await expect(
+    links.getByRole('button', { name: 'Confirm sharing…' })
+  ).toHaveCount(0);
+  await create.click();
   const confirm = links.getByRole('group', { name: 'Confirm sharing' });
   await confirm.getByLabel('Recovery key').fill(seeded.recoveryKey);
   await confirm
     .getByRole('button', { name: 'Confirm with recovery key' })
     .click();
   await expect(confirm).toHaveCount(0, { timeout: COMMIT_BUDGET_MS });
-  await expect(
-    links.getByRole('button', { name: 'Confirm sharing…' })
-  ).toHaveCount(0);
   expect(
     server.db.prepare('SELECT COUNT(*) AS n FROM e2ee_share_delegations').get()
   ).toEqual({ n: 1 });
 
-  await links.getByRole('button', { name: 'Create link' }).click();
   const url = links.getByRole('textbox', { name: 'Share link', exact: true });
   await expect(url).toHaveValue(/#share=[\w-]{43}\.[\w-]{43}\.[\w-]{43}$/, {
     timeout: COMMIT_BUDGET_MS

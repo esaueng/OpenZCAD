@@ -32,7 +32,8 @@
     "lint": "node --max-old-space-size=6144 node_modules/eslint/bin/eslint.js apps packages test types --ext .ts,.tsx",
     "format": "prettier --write .",
     "selfhost:check": "node scripts/validate-deployment-config.mjs --config wrangler.selfhost.jsonc --target selfhost",
-    "deploy:selfhost": "pnpm selfhost:check && pnpm build && pnpm --filter @openzcad/web exec wrangler d1 migrations apply DB --remote --config ../../wrangler.selfhost.jsonc && pnpm --filter @openzcad/web exec wrangler deploy --config ../../wrangler.selfhost.jsonc",
+    "check:release-build": "node scripts/check-release-build.mjs",
+    "deploy:selfhost": "pnpm selfhost:check && pnpm build && pnpm check:release-build && pnpm --filter @openzcad/web exec wrangler d1 migrations apply DB --remote --config ../../wrangler.selfhost.jsonc && pnpm --filter @openzcad/web exec wrangler deploy --config ../../wrangler.selfhost.jsonc",
     "deploy:beta": "pnpm --filter @openzcad/web deploy:beta",
     "audit:dependencies": "pnpm audit --audit-level=high"
   },

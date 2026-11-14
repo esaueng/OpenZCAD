@@ -108,7 +108,7 @@ describe('WorkspaceReadout', () => {
     );
     expect(
       screen.getByLabelText(
-        /Bracket · 2 features · 1 body\. Sync Synced\. Preview active, not applied\./
+        /Bracket · 2 features · 1 body\. Sync Saved\. Preview active, not applied\./
       )
     ).toBeInTheDocument();
   });
@@ -400,11 +400,46 @@ describe('WorkspaceReadout', () => {
       screen.getByRole('group', { name: 'Workspace status' })
     ).toHaveTextContent('sync');
     expect(
-      screen.getByLabelText('Bracket · 2 features · 1 body. Sync Synced.')
+      screen.getByLabelText('Bracket · 2 features · 1 body. Sync Saved.')
     ).toBeInTheDocument();
     expect(screen.getByRole('contentinfo')).toHaveTextContent(
       'Shift+Click adds to selection'
     );
+  });
+
+  it('offers Undo beside the outcome of a commit, named without a trailing period', async () => {
+    // 13 November review I22 and I9: "Added box." had no Undo, and the
+    // toast's name read "Open activity log." with a trailing period.
+    const user = userEvent.setup();
+    const onUndo = vi.fn();
+    const { rerender } = render(
+      <WorkspaceReadout
+        status="Added box."
+        statusAt={Date.now()}
+        tone="ready"
+        onOpenLog={vi.fn()}
+        onUndo={onUndo}
+        {...SUMMARY}
+      />
+    );
+    expect(
+      screen.getByRole('button', {
+        name: 'Open activity log — current status: Added box.'
+      })
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Undo: Added box.' }));
+    expect(onUndo).toHaveBeenCalledOnce();
+
+    rerender(
+      <WorkspaceReadout
+        status="Added box."
+        statusAt={Date.now()}
+        tone="ready"
+        onOpenLog={vi.fn()}
+        {...SUMMARY}
+      />
+    );
+    expect(screen.queryByRole('button', { name: /^Undo/ })).toBeNull();
   });
 
   it('carries the orbit mode in the summary for assistive tech', () => {
@@ -526,7 +561,7 @@ describe('WorkspaceReadout pacing', () => {
       expect(container.querySelector('.workspace-toast-more')).toBeNull();
       expect(
         screen.getByRole('button', {
-          name: 'Open activity log. Current status: Reopened Bracket.'
+          name: 'Open activity log — current status: Reopened Bracket.'
         })
       ).toHaveAttribute('title', 'Reopened Bracket. — View activity log');
     } finally {
@@ -555,7 +590,7 @@ describe('WorkspaceReadout pacing', () => {
       ).toHaveTextContent(/^2 warnings in log$/);
       expect(
         screen.getByRole('button', {
-          name: 'Open activity log. Current status: Reopened Bracket.'
+          name: 'Open activity log — current status: Reopened Bracket.'
         })
       ).toHaveAttribute(
         'title',
@@ -833,7 +868,7 @@ describe('WorkspaceReadout message lifetime', () => {
       );
       expect(
         screen.getByRole('button', {
-          name: `Open activity log. Current status: ${REFUSAL} · Starting geometry worker`
+          name: `Open activity log — current status: ${REFUSAL} · Starting geometry worker`
         })
       ).toBeInTheDocument();
 

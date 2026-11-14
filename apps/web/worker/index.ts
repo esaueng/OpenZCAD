@@ -37,11 +37,23 @@ import {
 import { encryptedRoomHeaders, notifyEncryptedRoom } from './e2eeRoom';
 import {
   assertApiRateLimitAvailable,
+  enforceAccountReadRateLimit,
   enforceApiRateLimit,
+  enforcePublicRequestRateLimit,
+  enforceRequestLimit,
+  enforceWorkersCeiling,
+  SHARED_LOAD_GRANT_SECONDS,
+  SHARED_LOAD_MAX_LOADS,
+  SHARED_LOAD_SLACK,
+  SHARED_LOAD_SOURCE_FACTOR,
   isApiRateLimitSpent,
   markApiRateLimitSpent,
-  publicRequestBucket
+  publicRequestBucket,
+  purgeStaleRateLimitBuckets,
+  type RequestLimiterEnv
 } from './apiRateLimit';
+import { redactPath } from './redactPath';
+import { shareCapabilityPathname } from './shareCapability';
 import { serveAssetFallback } from './assetFallback';
 import { JsonComplexityGuard } from '@openzcad/shared';
 import {
@@ -93,6 +105,7 @@ import {
 } from '@openzcad/persistence';
 import {
   HttpError,
+  MAX_ASSISTANT_PROPOSAL_BODY_BYTES,
   openProjectStorageRequest,
   parseCreateProjectRequest,
   parseAssistantProposalRequest,
@@ -140,13 +153,16 @@ import {
   getDesktopAuthConfig,
   identifyAssistantIdentity,
   refreshDesktopAuthorization,
+  purgeExpiredAuthRows,
   startDesktopAuthorization,
   startEmailLogin,
   verifyEmailLogin
 } from './auth';
 import {
+  anonymousAssistantStatus,
   clearAssistantCredentialValidation,
   deleteAssistantCredential,
+  deploymentAssistantAllowed,
   getAppSettings,
   isProjectSharingPreferenceEnabled,
   markAssistantCredentialValidated,
@@ -210,11 +226,14 @@ import {
   MAX_ARTIFACT_UPLOAD_PARTS,
   MAX_CLOUD_PROJECT_WRITE_BYTES,
   LEGACY_PROJECT_FRAME_CONTENT_TYPE,
-  toUserId
+  importedSourceReferenceOf,
+  toUserId,
+  type ProjectDocument
 } from '@openzcad/shared';
 
 type Env = CloudflareEnv &
-  GlimpseEnv & {
+  GlimpseEnv &
+  RequestLimiterEnv & {
     ASSETS?: { fetch(request: Request): Promise<Response> };
     PROJECT_ROOM?: DurableObjectNamespace<ProjectCollaborationRoom>;
   };
@@ -222,6 +241,22 @@ type Env = CloudflareEnv &
 /** Upper bound for JSON request bodies; protects against oversized payloads. */
 const MAX_JSON_BODY_BYTES = 25 * 1024 * 1024;
 const MAX_ARTIFACT_BODY_BYTES = 25 * 1024 * 1024;
+/**
+ * Sign-in request bodies: a few short strings (an email and a Turnstile
+ * token of at most 2,048 characters, a challenge id and code, or desktop
+ * PKCE values and a refresh token). Read before any account exists, so they
+ * get a cap sized to that rather than to a project document.
+ */
+const MAX_AUTH_BODY_BYTES = 4 * 1024;
+/**
+ * A validated document read of a plaintext link grants that address, for
+ * that link, a per-minute budget of asset and source reads sized to the
+ * import sources the document names, like the encrypted routes' load budget
+ * (#923): two reads per source and some slack, so a model with more sources
+ * than the address budget still loads at once. Each further document read
+ * within the grant's lifetime adds another load's worth, up to a cap, so
+ * several viewers behind one address can open the link together.
+ */
 /** Cache only a proven-ready schema; failures stay retryable without a deploy. */
 const projectStorageReadyEnvironments = new WeakSet<Env>();
 const d1ProjectStorageReadyEnvironments = new WeakSet<Env>();
@@ -461,6 +496,16 @@ function json(
     status,
     headers
   });
+}
+
+function assistantNotConfigured(): Response {
+  return json(
+    {
+      error: 'AI is disabled or not configured for this user.',
+      code: 'AI_NOT_CONFIGURED'
+    },
+    503
+  );
 }
 
 async function readJsonBody(
@@ -854,9 +899,93 @@ async function assertAssistantProjectAllowed(
   return null;
 }
 
+/** Distinct import sources a shared document names (its assets and sources). */
+function sharedImportSourceCount(document: ProjectDocument): number {
+  const artifacts = new Set<string>();
+  for (const node of Object.values(document.nodes)) {
+    if (node.kind !== 'feature' || !importedSourceReferenceOf(node.data))
+      continue;
+    artifacts.add((node.data as { artifactId: string }).artifactId);
+  }
+  return artifacts.size;
+}
+
+/**
+ * Adds one validated load's budget to an address's grant for a plaintext
+ * link: a fresh grant once the last one lapsed, otherwise the sum, capped.
+ * The grant lives `SHARED_LOAD_GRANT_SECONDS` from the latest load.
+ */
+async function grantSharedLoadBudget(
+  env: Env,
+  loadBucket: string,
+  perLoad: number
+): Promise<void> {
+  if (!env.DB) return;
+  const minute = Math.floor(Date.now() / 60_000) * 60;
+  await env.DB.prepare(
+    `INSERT INTO auth_rate_limits (bucket, window_start, request_count)
+       VALUES (?, ?, ?)
+       ON CONFLICT(bucket) DO UPDATE SET
+         request_count = CASE
+           WHEN auth_rate_limits.window_start >= ?
+             THEN MIN(auth_rate_limits.request_count + excluded.request_count, ?)
+           ELSE excluded.request_count
+         END,
+         window_start = excluded.window_start`
+  )
+    .bind(
+      `${loadBucket}:grant`,
+      minute,
+      perLoad,
+      minute - SHARED_LOAD_GRANT_SECONDS,
+      perLoad * SHARED_LOAD_MAX_LOADS
+    )
+    .run();
+}
+
+/**
+ * Counts one asset or source read against this minute's share of the
+ * address's live grant for the link, in one statement: false, with nothing
+ * written, when there is no live grant or this minute's budget is spent.
+ */
+async function takeSharedLoadBudget(
+  env: Env,
+  loadBucket: string
+): Promise<boolean> {
+  if (!env.DB) return false;
+  const minute = Math.floor(Date.now() / 60_000) * 60;
+  const grant = `${loadBucket}:grant`;
+  const since = minute - SHARED_LOAD_GRANT_SECONDS;
+  const usage = await env.DB.prepare(
+    `INSERT INTO auth_rate_limits (bucket, window_start, request_count)
+       SELECT ?, ?, 1
+       WHERE EXISTS (
+         SELECT 1 FROM auth_rate_limits WHERE bucket = ? AND window_start >= ?
+       )
+       ON CONFLICT(bucket) DO UPDATE SET
+         window_start = excluded.window_start,
+         request_count = CASE
+           WHEN auth_rate_limits.window_start = excluded.window_start
+             THEN auth_rate_limits.request_count + 1
+           ELSE 1
+         END
+       WHERE auth_rate_limits.window_start != excluded.window_start
+         OR auth_rate_limits.request_count < (
+           SELECT g.request_count FROM auth_rate_limits AS g
+           WHERE g.bucket = ? AND g.window_start >= ?
+         )
+       RETURNING request_count`
+  )
+    .bind(`${loadBucket}:used`, minute, grant, since, grant, since)
+    .first<{ request_count: number }>();
+  return usage !== null;
+}
+
 async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
-  const { pathname } = url;
+  // A share-link read may carry its token in a header, kept out of the URL
+  // that request logs record; the handlers below see the path form.
+  const pathname = shareCapabilityPathname(request, url.pathname);
 
   if (request.method === 'GET' && pathname === '/api/health') {
     if (env.ENVIRONMENT !== 'development') {
@@ -939,11 +1068,33 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
         sharedProjectAssetMatch ??
         sharedProjectMatch)![1]!
     );
-    if (!token) {
+    // Counted per client address before the token is looked up, like the
+    // encrypted share routes below: an asset or source read within a load
+    // of its link counts against that load's budget, everything else
+    // against the address's budget.
+    const limited = env.ENVIRONMENT !== 'development';
+    const address = limited
+      ? await publicRequestBucket(request, env, 'share')
+      : null;
+    // A coarse ceiling in the Workers binding first, so refused reads never
+    // reach the load budget's D1 lookup below.
+    if (address) {
+      await enforceWorkersCeiling(env, 'SHARE_READ_CEILING_LIMITER', address);
+    }
+    const tokenHash = token ? await hashProjectInvitationToken(token) : null;
+    const loadBucket =
+      address && tokenHash ? `${address}:load:${tokenHash.slice(0, 32)}` : null;
+    const withinLoad =
+      loadBucket !== null &&
+      !sharedProjectMatch &&
+      (await takeSharedLoadBudget(env, loadBucket));
+    if (address && !withinLoad) {
+      await enforceRequestLimit(env, 'SHARE_LINK_LIMITER', address);
+    }
+    if (!token || !tokenHash) {
       return sharedNotFound();
     }
     const sharedPersistence = createPersistenceService(env);
-    const tokenHash = await hashProjectInvitationToken(token);
     if (sharedProjectSourceMatch) {
       const source = await sharedPersistence.loadSharedProjectImportSource(
         tokenHash,
@@ -986,6 +1137,14 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
       await sharedPersistence.loadSharedProjectByTokenHash(tokenHash);
     if (!shared) {
       return sharedNotFound();
+    }
+    if (loadBucket) {
+      await grantSharedLoadBudget(
+        env,
+        loadBucket,
+        sharedImportSourceCount(shared.document) * SHARED_LOAD_SOURCE_FACTOR +
+          SHARED_LOAD_SLACK
+      );
     }
     // Already the share projection: the current model only, with no undo
     // history, command log, save-state names or owner id.
@@ -1269,7 +1428,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   }
 
   if (request.method === 'POST' && pathname === '/api/auth/email/start') {
-    const payload = await readJsonBody(request);
+    const payload = await readJsonBody(request, MAX_AUTH_BODY_BYTES);
     const input =
       payload && typeof payload === 'object'
         ? (payload as Record<string, unknown>)
@@ -1288,7 +1447,13 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   }
 
   if (request.method === 'POST' && pathname === '/api/auth/desktop/start') {
-    const payload = await readJsonBody(request);
+    await enforcePublicRequestRateLimit(
+      request,
+      env,
+      'desktop-start',
+      'DESKTOP_START_LIMITER'
+    );
+    const payload = await readJsonBody(request, MAX_AUTH_BODY_BYTES);
     const input =
       payload && typeof payload === 'object'
         ? (payload as Record<string, unknown>)
@@ -1308,7 +1473,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   }
 
   if (request.method === 'POST' && pathname === '/api/auth/desktop/approve') {
-    const payload = await readJsonBody(request);
+    const payload = await readJsonBody(request, MAX_AUTH_BODY_BYTES);
     const input =
       payload && typeof payload === 'object'
         ? (payload as Record<string, unknown>)
@@ -1324,7 +1489,13 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   }
 
   if (request.method === 'POST' && pathname === '/api/auth/desktop/exchange') {
-    const payload = await readJsonBody(request);
+    await enforcePublicRequestRateLimit(
+      request,
+      env,
+      'desktop-exchange',
+      'DESKTOP_EXCHANGE_LIMITER'
+    );
+    const payload = await readJsonBody(request, MAX_AUTH_BODY_BYTES);
     const input =
       payload && typeof payload === 'object'
         ? (payload as Record<string, unknown>)
@@ -1342,7 +1513,13 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   }
 
   if (request.method === 'POST' && pathname === '/api/auth/desktop/refresh') {
-    const payload = await readJsonBody(request);
+    await enforcePublicRequestRateLimit(
+      request,
+      env,
+      'desktop-refresh',
+      'AUTH_REQUEST_LIMITER'
+    );
+    const payload = await readJsonBody(request, MAX_AUTH_BODY_BYTES);
     const input =
       payload && typeof payload === 'object'
         ? (payload as Record<string, unknown>)
@@ -1364,7 +1541,13 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   }
 
   if (request.method === 'POST' && pathname === '/api/auth/email/verify') {
-    const payload = await readJsonBody(request);
+    await enforcePublicRequestRateLimit(
+      request,
+      env,
+      'auth-verify',
+      'AUTH_REQUEST_LIMITER'
+    );
+    const payload = await readJsonBody(request, MAX_AUTH_BODY_BYTES);
     const input =
       payload && typeof payload === 'object'
         ? (payload as Record<string, unknown>)
@@ -1382,9 +1565,10 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
         entitlements: accountEntitlements(env, authenticated.session.email)
       },
       200,
-      {
-        'set-cookie': authenticated.cookie
-      }
+      [
+        ['set-cookie', authenticated.cookie],
+        ['set-cookie', authenticated.knownDeviceCookie]
+      ]
     );
   }
 
@@ -1397,6 +1581,11 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
   if (request.method === 'GET' && pathname === '/api/assistant/status') {
     try {
       const identity = await identifyAssistantIdentity(request, env);
+      // An anonymous caller has no stored settings or credential, so its
+      // status is the deployment default, answered without D1. An account's
+      // status read counts like its other reads.
+      if (identity.anonymous) return json(anonymousAssistantStatus(env));
+      await enforceAccountReadRateLimit(env, identity.userId);
       const settings = await getAppSettings(
         identity.userId,
         env,
@@ -1420,9 +1609,25 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
 
   if (request.method === 'POST' && pathname === '/api/assistant/proposals') {
     const identity = await identifyAssistantIdentity(request, env);
+    if (identity.anonymous) {
+      // The deployment's assistant serves only signed-in accounts outside
+      // development, so refuse an anonymous caller before reading its body
+      // or touching D1, with the answer it would otherwise reach last.
+      if (!deploymentAssistantAllowed(undefined, env)) {
+        return assistantNotConfigured();
+      }
+      await enforcePublicRequestRateLimit(
+        request,
+        env,
+        'assistant',
+        'ANONYMOUS_ASSISTANT_LIMITER'
+      );
+    }
     const userId = identity.userId;
     await assertAccountNotErasing(env.DB, userId);
-    const payload = parseAssistantProposalRequest(await readJsonBody(request));
+    const payload = parseAssistantProposalRequest(
+      await readJsonBody(request, MAX_ASSISTANT_PROPOSAL_BODY_BYTES)
+    );
     const consentedRoute = await assertAssistantProjectAllowed(
       env,
       identity,
@@ -1430,13 +1635,7 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     );
     const assistant = await resolveUserAssistant(userId, env, identity.email);
     if (!assistant.effective.configured) {
-      return json(
-        {
-          error: 'AI is disabled or not configured for this user.',
-          code: 'AI_NOT_CONFIGURED'
-        },
-        503
-      );
+      return assistantNotConfigured();
     }
     // An encrypted project's consent names who receives the data: another
     // key source, provider or model needs the user's consent again.
@@ -1483,6 +1682,9 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
 
   const session = await authenticateRequest(request, env);
   const userId = session.userId;
+  if (request.method === 'GET' || request.method === 'HEAD') {
+    await enforceAccountReadRateLimit(env, userId);
+  }
   if (pathname.startsWith('/api/e2ee/')) {
     try {
       if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method)) {
@@ -2635,6 +2837,10 @@ export default {
   async scheduled(_controller: unknown, env: Env): Promise<void> {
     assertSafeRuntimeConfiguration(env);
     await createPersistenceService(env).purgeExpiredUploadSessions();
+    // Request-path limiters no longer reclaim stale windows themselves.
+    await purgeStaleRateLimitBuckets(env);
+    // Nor does desktop sign-in start reclaim expired sign-in rows.
+    await purgeExpiredAuthRows(env);
     // Purges and abandons of project migrations a browser left behind, and
     // of stagings whose owner may no longer migrate (or, for a decrypt
     // staging, no longer use the reverse path, slice 7-3). Where encryption
@@ -2894,7 +3100,7 @@ async function dispatchApiRequest(
       console.error(
         'Project document storage unavailable.',
         request.method,
-        pathname,
+        redactPath(pathname),
         error
       );
       return json(
@@ -2920,7 +3126,7 @@ async function dispatchApiRequest(
     }
     console.error('Unhandled API error.', {
       method: request.method,
-      pathname,
+      pathname: redactPath(pathname),
       errorName: error instanceof Error ? error.name : 'UnknownError'
     });
     return json({ error: 'Internal error' }, 500);

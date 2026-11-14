@@ -97,6 +97,7 @@ import {
 import { labelWithKey, useKeymap } from '../../lib/keymap';
 import { platformShortcutLabel } from '../../lib/platformShortcut';
 import { QuestionCard } from './QuestionCard';
+import { useConfirm } from '../ConfirmDialog';
 import { ProposalCard } from './ProposalCard';
 import { RichText } from './RichText';
 import { latestScrollTop } from '../../lib/assistant/threadScroll';
@@ -409,6 +410,7 @@ export function AssistantPanel({
     []
   );
   const [notice, setNotice] = useState<string | null>(null);
+  const { confirm: confirmInPage, dialog: confirmDialog } = useConfirm();
   // The stream's one live region. It stays mounted and changes only when a
   // turn starts or lands: a region rendered together with its content is
   // missed, and one fed every streamed delta reads out half-sentences.
@@ -1054,6 +1056,15 @@ export function AssistantPanel({
         setNotice(
           'The assistant is still answering the last ask. Press Enter again when it finishes.'
         );
+      } else {
+        // Said where the question was asked: the status line alone left a
+        // signed-out ask looking like a search that found nothing (I8).
+        const reason =
+          statusNotice ??
+          (status || statusError
+            ? "The assistant can't answer questions right now."
+            : 'The assistant is still starting. Press Enter again in a moment.');
+        setNotice(`${reason} Your question is back in the prompt line.`);
       }
       return;
     }
@@ -1216,12 +1227,14 @@ export function AssistantPanel({
     void send(ask.text, attachments);
   }
 
-  function clearThread() {
+  async function clearThread() {
     if (
       confirmDestructive &&
-      !window.confirm(
-        'Clear the AI conversation for this project? This cannot be undone.'
-      )
+      !(await confirmInPage({
+        title: 'Clear the conversation?',
+        body: 'The AI conversation for this project is removed. This cannot be undone.',
+        confirmLabel: 'Clear conversation'
+      }))
     ) {
       return;
     }
@@ -1601,7 +1614,7 @@ export function AssistantPanel({
               title="Clear this project's conversation"
               aria-label="Clear this project's conversation"
               disabled={applyingEntryId !== null}
-              onClick={clearThread}
+              onClick={() => void clearThread()}
             >
               <Trash2 size={13} aria-hidden="true" />
             </button>
@@ -1875,6 +1888,7 @@ export function AssistantPanel({
           onCancel={() => consentPrompt.resolve(false)}
         />
       )}
+      {confirmDialog}
     </section>
   );
 }

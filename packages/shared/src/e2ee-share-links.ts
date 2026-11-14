@@ -29,7 +29,8 @@
  * - `PUT …/share-links/:shareId/snapshot` (owner or editor): a frame with
  *   the signed share-snapshot envelope.
  * - `GET`/`PUT /api/e2ee/share-delegation` (the account itself).
- * - `GET /api/e2ee/share/:token` (anonymous): a frame with the snapshot
+ * - `GET /api/e2ee/share` with the token in `SHARE_LINK_TOKEN_HEADER`
+ *   (anonymous; also served as `/api/e2ee/share/:token`): a frame with the snapshot
  *   envelope, its signature, the visitor's wrap of its version key, the
  *   author's signing key, the statement, the delegation and the owner's
  *   identity key. Never a plaintext project.
@@ -39,6 +40,7 @@ import {
   decodeE2eeFrame,
   encodeE2eeFrame
 } from './e2ee-project-documents';
+import { SHARE_LINK_TOKEN_HEADER } from './share-link-token';
 
 export type E2eeShareLinkMode = 'view' | 'tweak';
 
@@ -120,6 +122,12 @@ export interface E2eeShareSnapshotPosition {
   /** Lowercase hex version hash of the snapshot envelope. */
   snapshotHash: string;
   signerDeviceId: string;
+  /**
+   * Base64url version signature of the stored snapshot (`u8 1 | u64
+   * signedAt | r || s`): its signed time is what visitors order against the
+   * link's statement, so the owner republishes by it.
+   */
+  signature: string;
   updatedAt: string;
 }
 
@@ -316,10 +324,12 @@ export function createE2eeShareLinksApi(fetcher: Fetch): E2eeShareLinksApi {
     putDelegation: (delegation) =>
       call('/api/e2ee/share-delegation', 'PUT', delegation),
     async shared(token) {
-      const response = await fetcher(
-        `/api/e2ee/share/${encodeURIComponent(token)}`,
-        { method: 'GET', credentials: 'omit' }
-      );
+      // The token goes in a header, never the URL (share-link-token.ts).
+      const response = await fetcher('/api/e2ee/share', {
+        method: 'GET',
+        credentials: 'omit',
+        headers: { [SHARE_LINK_TOKEN_HEADER]: token }
+      });
       if (response.status === 404) return null;
       if (!response.ok) throw await refusal(response);
       const frame = decodeE2eeFrame(

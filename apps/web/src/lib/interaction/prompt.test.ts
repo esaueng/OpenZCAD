@@ -167,9 +167,27 @@ describe('the Escape line matches the ladder it describes', () => {
     expect(commandPrompt(sketchState('select', false, 'a'))?.escape).toBe(
       'deselects'
     );
+    // I43: the last rung needs a second press.
     expect(commandPrompt(sketchState('select'))?.escape).toBe(
-      'leaves the sketch'
+      'twice leaves the sketch'
     );
+  });
+
+  it('gives a half-drawn rectangle its own step, not the line chain’s (I46)', () => {
+    const rectangle = commandPrompt(sketchState('rectangle', true));
+    expect(rectangle?.step).toMatch(/opposite corner/);
+    expect(rectangle?.escape).toBe('cancels the shape');
+    expect(commandPrompt(sketchState('line', true))?.step).toBe(
+      'Click the next point · Enter finishes'
+    );
+  });
+
+  it('lets a value prompt open in a sketch own Escape (I43)', () => {
+    expect(
+      commandPromptText(sketchState('select'), 'diameter', {
+        editor: { state: 'ready', explaining: false }
+      })
+    ).toBe('Enter apply · Esc cancel');
   });
 
   it('stays silent about Escape while a value is being validated', () => {

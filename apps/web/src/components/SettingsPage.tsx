@@ -109,7 +109,13 @@ import {
   Toggle,
   type SegmentOption
 } from './settingsControls';
+import {
+  SpaceMousePreferenceRows,
+  SpaceMouseSettings
+} from './SpaceMouseSettings';
+import { SPACE_MOUSE_KEY_REFERENCE } from '../lib/spaceMouseActions';
 import { CloudDataDeletionDialog } from './CloudDataDeletionDialog';
+import { describeFailure } from '../lib/plainFailure';
 import { DataDownload } from './DataDownload';
 import { ActivityLogSettings } from './ActivityLogSettings';
 import {
@@ -206,6 +212,9 @@ interface SettingsPageProps {
   onDismissProjectInvitation(): void;
   onClose(): void;
 }
+
+/** How long after a sign-in code is sent a new one can be asked for. */
+const LOGIN_CODE_RESEND_DELAY_MS = 30_000;
 
 export type AuthConfigStatus = 'loading' | 'ready' | 'unavailable';
 
@@ -768,7 +777,23 @@ export function SettingsPage({
   const [loginEmail, setLoginEmail] = useState('');
   const personalInfoVisible = usePersonalInfoVisible();
   const [loginCode, setLoginCode] = useState('');
+  // A refused code is said at the field, not only in the page's status
+  // line beside the title (13 November review I4).
+  const [loginCodeError, setLoginCodeError] = useState<string | null>(null);
   const [loginChallengeId, setLoginChallengeId] = useState<string | null>(null);
+  const loginCodeRef = useRef<HTMLInputElement>(null);
+  // A new code can be asked for a short while after the last one was sent,
+  // so a slow email is not answered with a flood of codes (I81).
+  const [resendReady, setResendReady] = useState(false);
+  useEffect(() => {
+    setResendReady(false);
+    if (!loginChallengeId) return;
+    const timer = window.setTimeout(
+      () => setResendReady(true),
+      LOGIN_CODE_RESEND_DELAY_MS
+    );
+    return () => window.clearTimeout(timer);
+  }, [loginChallengeId]);
   const [turnstileToken, setTurnstileToken] = useState('');
   const [turnstileReset, setTurnstileReset] = useState(0);
   const [storageUsage, setStorageUsage] = useState<AccountStorageUsage | null>(
@@ -1140,7 +1165,7 @@ export function SettingsPage({
                 {!cloudFunctionsEnabled
                   ? 'Offline mode'
                   : authConfigStatus === 'unavailable'
-                    ? 'Cloud unreachable'
+                    ? 'Cloud unavailable'
                     : accountResolving && !accountState
                       ? 'Checking account…'
                       : session
@@ -1581,6 +1606,22 @@ export function SettingsPage({
                   />
                 </SettingRow>
               </Group>
+              {/* A 3D mouse is navigation too, so its settings sit right
+                  under it rather than past the keyboard reference. */}
+              <Group title="3D mouse" note="Chrome and Edge">
+                <SpaceMouseSettings />
+                <SpaceMousePreferenceRows
+                  value={settings.viewport.spaceMouse}
+                  onChange={(spaceMouse) =>
+                    patch({
+                      viewport: { ...settings.viewport, spaceMouse }
+                    })
+                  }
+                />
+              </Group>
+              <Group title="SpaceMouse keys">
+                <ControlReferenceGroups groups={[SPACE_MOUSE_KEY_REFERENCE]} />
+              </Group>
               {/* Every remappable command with its live keys. A key can mean
                   one thing per context (C is Cylinder in the workspace and
                   Circle in a sketch); the editor's groups are those contexts.
@@ -1753,9 +1794,17 @@ export function SettingsPage({
               {/* Until the account is known these hold their saved values
                   but stay disabled: a live switch beside a footer that
                   still says "Device only" claimed a sync nothing runs. */}
+              {/* Signed out, these are settings for later: they say so
+                  rather than read as running (I8). */}
               <Group
                 title="Cloud"
-                note={cloudPending ? 'Checking account…' : undefined}
+                note={
+                  cloudPending
+                    ? 'Checking account…'
+                    : cloudFunctionsEnabled && !session
+                      ? 'Applies after sign-in. Until then everything saves on this device only.'
+                      : undefined
+                }
               >
                 <SettingRow
                   title="Cloud autosave"
@@ -1929,7 +1978,26 @@ export function SettingsPage({
                   </Group>
 
                   <Group title="Token">
-                    {!session ? (
+                    {!session && authConfigStatus === 'unavailable' ? (
+                      // The same words and action Account shows: its Sign in
+                      // led to a page that offered only Retry (I86).
+                      <Notice
+                        action={
+                          <button
+                            className="secondary"
+                            type="button"
+                            disabled={busy}
+                            onClick={() => void onRefreshAuthConfig()}
+                          >
+                            <RefreshCcw size={13} aria-hidden="true" />
+                            Retry
+                          </button>
+                        }
+                      >
+                        Sign-in could not be reached, so a personal token can’t
+                        be stored right now.
+                      </Notice>
+                    ) : !session ? (
                       <Notice
                         action={
                           <button
@@ -2331,8 +2399,8 @@ export function SettingsPage({
                           </button>
                         }
                       >
-                        Sign-in could not be reached. Local projects are
-                        unaffected.
+                        Cloud unavailable: sign-in could not be reached.
+                        Projects keep saving on this device.
                       </Notice>
                     ) : desktopApp ? (
                       authConfig?.desktopAuthEnabled ? (
@@ -2373,10 +2441,22 @@ export function SettingsPage({
                           className="settings-auth-form"
                           onSubmit={(event) => {
                             event.preventDefault();
+                            setLoginCodeError(null);
                             void onVerifyLoginCode(
                               loginChallengeId,
                               loginCode.trim()
-                            ).catch(() => undefined);
+                            ).catch((error: unknown) => {
+                              setLoginCodeError(
+                                describeFailure(error, {
+                                  fallback:
+                                    'That code did not work. Check it and try again.'
+                                }).message
+                              );
+                              // A wrong code is cleared for the next try
+                              // rather than left to be edited (I81).
+                              setLoginCode('');
+                              loginCodeRef.current?.focus();
+                            });
                           }}
                         >
                           <span>
@@ -2397,17 +2477,35 @@ export function SettingsPage({
                               autoComplete="one-time-code"
                               pattern="[0-9]{6}"
                               aria-label="Email sign-in code"
-                              placeholder="000000"
+                              ref={loginCodeRef}
+                              aria-invalid={loginCodeError ? true : undefined}
+                              aria-describedby={
+                                loginCodeError
+                                  ? 'settings-login-code-error'
+                                  : undefined
+                              }
+                              // Digits looked already typed (design review I81).
+                              placeholder="6-digit code"
                               // No maxLength: it cuts a pasted " 730418" before
                               // the digit filter runs and drops the last digit.
-                              onChange={(event) =>
+                              onChange={(event) => {
+                                setLoginCodeError(null);
                                 setLoginCode(
                                   event.target.value
                                     .replace(/\D/g, '')
                                     .slice(0, 6)
-                                )
-                              }
+                                );
+                              }}
                             />
+                            {loginCodeError ? (
+                              <small
+                                id="settings-login-code-error"
+                                className="settings-field-error"
+                                role="alert"
+                              >
+                                {loginCodeError}
+                              </small>
+                            ) : null}
                             <span className="settings-button-row">
                               <button
                                 className="primary"
@@ -2424,11 +2522,49 @@ export function SettingsPage({
                                 onClick={() => {
                                   setLoginChallengeId(null);
                                   setLoginCode('');
+                                  setLoginCodeError(null);
                                 }}
                               >
                                 Use another email
                               </button>
                             </span>
+                            {/* Resend (design review I81): the email form's
+                              security check, then a new code to the same
+                              address, after a short wait. */}
+                            <div className="settings-auth-resend">
+                              <TurnstileWidget
+                                siteKey={authConfig.turnstileSiteKey}
+                                resetSignal={turnstileReset}
+                                onToken={setTurnstileToken}
+                              />
+                              <button
+                                className="secondary"
+                                type="button"
+                                disabled={
+                                  busy || !resendReady || !turnstileToken
+                                }
+                                onClick={() => {
+                                  void onRequestLoginCode(
+                                    loginEmail.trim(),
+                                    turnstileToken
+                                  )
+                                    .then((response) => {
+                                      setLoginCode('');
+                                      setLoginChallengeId(response.challengeId);
+                                    })
+                                    .catch(() => undefined)
+                                    .finally(() => {
+                                      setTurnstileToken('');
+                                      setTurnstileReset((value) => value + 1);
+                                    });
+                                }}
+                              >
+                                <Mail size={14} aria-hidden="true" />
+                                {resendReady
+                                  ? 'Send a new code'
+                                  : 'Send a new code (in a moment)'}
+                              </button>
+                            </div>
                           </div>
                         </form>
                       ) : (
@@ -2507,7 +2643,11 @@ export function SettingsPage({
                     </SettingRow>
                     <SettingRow
                       title="Preference synchronization"
-                      hint="Preferences follow your account."
+                      hint={
+                        session
+                          ? 'Preferences follow your account.'
+                          : 'After sign-in, preferences follow your account. Until then they stay on this device.'
+                      }
                     >
                       {cloudPending ? (
                         <Status>Checking…</Status>
@@ -2691,7 +2831,11 @@ export function SettingsPage({
             </Section>
           )}
 
-          {active === 'activity' && anyMatch && <ActivityLogSettings />}
+          {active === 'activity' && anyMatch && (
+            <ActivityLogSettings
+              confirmDestructive={settings.general.confirmDestructiveActions}
+            />
+          )}
 
           {active === 'advanced' && anyMatch && (
             <Section
@@ -2830,6 +2974,17 @@ export function SettingsPage({
             setDeletionScope(null);
           }}
           onClose={() => setDeletionScope(null)}
+          onDownloadFirst={() => {
+            setDeletionScope(null);
+            // To the control that keeps a copy (design review I84).
+            requestAnimationFrame(() => {
+              const download = document.querySelector<HTMLElement>(
+                '[data-download-all-data]'
+              );
+              download?.scrollIntoView({ block: 'center' });
+              download?.focus();
+            });
+          }}
         />
       ) : null}
     </div>

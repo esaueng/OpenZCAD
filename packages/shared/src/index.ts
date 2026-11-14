@@ -43,6 +43,7 @@ export * from './e2ee-contacts';
 export * from './e2ee-assistant-consents';
 export * from './e2ee-invitations';
 export * from './e2ee-share-links';
+export * from './share-link-token';
 export * from './e2ee-project-migrations';
 import type { ReferenceImageSet } from './reference-images';
 export type Brand<T, Name extends string> = T & { readonly __brand: Name };
@@ -611,6 +612,23 @@ export type DirectEditOperation =
       sourceAxisEnd?: Vector3;
     }
   | {
+      /**
+       * Delete several faces of one body together and heal the gap the way
+       * Remus's `defeature` does: the faces around them extend until they
+       * close again. Selecting every wall of an opening closes the opening.
+       * The face fields name the first face, as every direct edit names one;
+       * `additionalFaces` are the rest, each pinned the same way.
+       */
+      kind: 'remove-faces';
+      faceHash: number;
+      faceReference?: FaceTopologyReferenceV5;
+      sourceSurfaceType: string;
+      sourceArea: number;
+      sourceCenter: Vector3;
+      /** The other faces removed with the first; at least one. */
+      additionalFaces: RemovedFaceSnapshot[];
+    }
+  | {
       kind: 'offset-face';
       faceHash: number;
       faceReference?: FaceTopologyReferenceV5;
@@ -682,6 +700,15 @@ export type DirectEditOperation =
       /** Every band to remove, the seed's carrier included. */
       blends: RecordedBlendCarrier[];
     };
+
+/** One face a `remove-faces` edit deletes, pinned as it was when picked. */
+export interface RemovedFaceSnapshot {
+  faceHash: number;
+  faceReference?: FaceTopologyReferenceV5;
+  sourceSurfaceType: string;
+  sourceArea: number;
+  sourceCenter: Vector3;
+}
 
 /** Exact analytic carrier of one blend band, as `resize-blend` records it. */
 export interface RecordedBlendCarrier {
@@ -4551,6 +4578,103 @@ export const SETTINGS_ORBIT_MODES: readonly SettingsOrbitMode[] = [
  * a device's meaning for hardware the classification reads wrongly.
  */
 export type SettingsPointerNavigation = 'auto' | 'mouse' | 'trackpad';
+
+/** A 3D mouse cap axis, named for what it does to the view. */
+export type SpaceMouseAxisName =
+  'pan-x' | 'pan-y' | 'zoom' | 'tilt' | 'spin' | 'roll';
+
+export const SPACE_MOUSE_AXIS_NAMES: readonly SpaceMouseAxisName[] = [
+  'pan-x',
+  'pan-y',
+  'zoom',
+  'tilt',
+  'spin',
+  'roll'
+];
+
+/** What a 3D mouse turns the view about. */
+export type SpaceMouseRotateAbout = 'model' | 'orbit-point';
+
+/** How a 3Dconnexion SpaceMouse moves the view. */
+export interface SpaceMouseSettings {
+  /** Pan and zoom speed, as a whole percentage of the default. */
+  panZoomSpeed: number;
+  /** Tilt, spin and roll speed, as a whole percentage of the default. */
+  rotationSpeed: number;
+  /** Cap travel ignored around rest, as a whole percentage of full travel. */
+  deadZone: number;
+  /** Only the axis pushed hardest acts, so a push never also turns. */
+  dominantAxis: boolean;
+  /** The selection's or the model's centre, or the orbit point. */
+  rotateAbout: SpaceMouseRotateAbout;
+  /** Whether rolling the cap rolls the view. */
+  roll: boolean;
+  /** Axes that move the view the other way. */
+  reversed: SpaceMouseAxisName[];
+}
+
+export const SPACE_MOUSE_SPEED_BOUNDS = {
+  min: 10,
+  max: 400,
+  default: 100
+} as const;
+
+export const SPACE_MOUSE_DEAD_ZONE_BOUNDS = {
+  min: 0,
+  max: 40,
+  default: 8
+} as const;
+
+export const DEFAULT_SPACE_MOUSE_SETTINGS: SpaceMouseSettings = {
+  panZoomSpeed: SPACE_MOUSE_SPEED_BOUNDS.default,
+  rotationSpeed: SPACE_MOUSE_SPEED_BOUNDS.default,
+  deadZone: SPACE_MOUSE_DEAD_ZONE_BOUNDS.default,
+  dominantAxis: false,
+  rotateAbout: 'model',
+  roll: true,
+  reversed: []
+};
+
+/**
+ * Stored 3D mouse settings read leniently, field by field: anything missing
+ * or malformed (an older client, a newer one's unknown axis) falls back to
+ * its default, and numbers are clamped and rounded to their bounds.
+ */
+export function normalizeSpaceMouseSettings(
+  value: unknown
+): SpaceMouseSettings {
+  const record =
+    value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {};
+  const bounded = (
+    candidate: unknown,
+    bounds: { min: number; max: number; default: number }
+  ) =>
+    typeof candidate === 'number' && Number.isFinite(candidate)
+      ? Math.round(Math.min(bounds.max, Math.max(bounds.min, candidate)))
+      : bounds.default;
+  const defaults = DEFAULT_SPACE_MOUSE_SETTINGS;
+  return {
+    panZoomSpeed: bounded(record.panZoomSpeed, SPACE_MOUSE_SPEED_BOUNDS),
+    rotationSpeed: bounded(record.rotationSpeed, SPACE_MOUSE_SPEED_BOUNDS),
+    deadZone: bounded(record.deadZone, SPACE_MOUSE_DEAD_ZONE_BOUNDS),
+    dominantAxis:
+      typeof record.dominantAxis === 'boolean'
+        ? record.dominantAxis
+        : defaults.dominantAxis,
+    rotateAbout:
+      record.rotateAbout === 'model' || record.rotateAbout === 'orbit-point'
+        ? record.rotateAbout
+        : defaults.rotateAbout,
+    roll: typeof record.roll === 'boolean' ? record.roll : defaults.roll,
+    reversed: Array.isArray(record.reversed)
+      ? SPACE_MOUSE_AXIS_NAMES.filter((axis) =>
+          (record.reversed as unknown[]).includes(axis)
+        )
+      : []
+  };
+}
 /**
  * Which sketch relations draw a glyph on their geometry: all of them, only
  * those that mention the selected entity, or none. Presentation only.
@@ -4650,6 +4774,8 @@ export interface AppSettings {
      * fingers navigate.
      */
     pencilDrawsOnly: boolean;
+    /** How a 3Dconnexion SpaceMouse moves the view. */
+    spaceMouse: SpaceMouseSettings;
   };
   sketching: {
     /** Sketch-plane grid visibility is independent from grid snapping. */
@@ -4807,7 +4933,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     fieldOfView: VIEWPORT_FIELD_OF_VIEW_BOUNDS.default,
     xrayOpacity: XRAY_OPACITY_BOUNDS.default,
     touchHistoryGestures: true,
-    pencilDrawsOnly: true
+    pencilDrawsOnly: true,
+    spaceMouse: DEFAULT_SPACE_MOUSE_SETTINGS
   },
   sketching: {
     gridVisible: true,

@@ -145,7 +145,7 @@ export const KEYMAP_COMMANDS: readonly KeymapCommand[] = [
   ),
   command(
     'workspace-mode-cycle',
-    'Cycle View, Tweak and Build',
+    'Next workspace mode',
     'view-mode',
     'global',
     'Ctrl+Shift+M'
@@ -178,6 +178,20 @@ export const KEYMAP_COMMANDS: readonly KeymapCommand[] = [
   // Pressed again on its tool, it steps between linked and unlinked.
   command('sketch-project', 'Project edges', 'sketch-mode', 'sketch', 'U'),
   command('sketch-extrude', 'Extrude the sketch', 'sketch-mode', 'sketch', 'E'),
+  // A selected line takes its length, a circle or arc its radius; with
+  // nothing selected it arms Distance.
+  command('sketch-dimension', 'Dimension', 'sketch-mode', 'sketch', 'D'),
+  command(
+    'sketch-construction',
+    'Toggle construction geometry',
+    'sketch-mode',
+    'sketch',
+    'X'
+  ),
+  // Unbound by default, so a user can give them keys.
+  command('sketch-trim', 'Trim', 'sketch-mode', 'sketch'),
+  command('sketch-offset', 'Offset', 'sketch-mode', 'sketch'),
+  command('sketch-finish', 'Finish the sketch', 'sketch-mode', 'sketch'),
   command('assembly-joint', 'Add a joint', 'assemble-mode', 'assemble', 'J'),
   command(
     'assembly-ground',

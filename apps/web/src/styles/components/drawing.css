@@ -714,6 +714,24 @@
   outline-offset: -2px;
 }
 
+/* Where a dragged tab lands: an insertion bar on the tab's leading edge. */
+.drawing-sheet-tab.is-drop-target {
+  box-shadow: inset 2px 0 0 var(--color-accent);
+}
+
+.drawing-sheet-tab-rename {
+  flex: 0 0 auto;
+  width: 140px;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--color-accent-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--fs-sm);
+}
+
 .drawing-sheet-tab-paper {
   color: var(--color-text-subtle);
   font-family: var(--font-mono);

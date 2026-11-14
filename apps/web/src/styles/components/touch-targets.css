@@ -1,0 +1,286 @@
+/* ─────────────────────────────────────────────────────────────
+   Every control a finger can reach is 44 px (I1, design review
+   13 November 2026).
+
+   The Build rails and the command card were 44 px on touch
+   (target-size.css), but nearly everything else kept its desktop size:
+   the start screen's tile controls at 20–24 px, the top bar's Share, File
+   and Settings at 28, the View and Tweak rails at 30, the tour's buttons
+   at 28, the drawer filters at 22. test/e2e/touch-targets.spec.ts scans
+   both screens at 390 × 844 with touch and fails under 44 px.
+
+   One rule in three forms, by how much room a control has:
+
+   - Alone in its row, it keeps its drawn size and an invisible ::after
+     reaches out to 44 px on each short axis, centred on it, as
+     target-size.css does for 24 px. Nothing in the layout moves. The
+     zero-specificity `position: relative` gives way to a control that is
+     already positioned (a chip, a tile corner). A control a rule sets
+     `position: static` cannot take one: its reach would span whatever
+     positioned box holds it. (The Tools drawer's "Scroll to …" row, which
+     is, covered the whole drawer, Close included; drawn 44 px tall it
+     covered a tile in a phone-on-its-side drawer. It is a shortcut out of
+     the tab order to groups the list also scrolls to, and keeps its size.)
+   - Packed against neighbours (rails, segmented tabs, a row of icons), a
+     reach would land on the next control, so it is drawn at 44 px, as the
+     Build rails are.
+   - Rows in a list or menu are 44 px tall.
+
+   Nothing waits for hover: a device without one shows every action that
+   a pointer would reveal. `pointer: coarse` is what a phone or tablet
+   reports; after every sizing rule in the cascade, before touch.css.
+   ───────────────────────────────────────────────────────────── */
+
+@media (pointer: coarse) {
+  /* Alone in its row: an invisible reach. */
+  :where(
+    button.brand,
+    .topbar .topbar-actions > :is(button, .topbar-action),
+    .topbar .topbar-actions .topbar-menu > summary,
+    .topbar .save-state,
+    .topbar .project-title-button,
+    .start-settings-button,
+    .start-launch-create,
+    .start-launch-import,
+    .start-filter,
+    .start-account-action,
+    .start-tile-select,
+    .start-tile-action,
+    .demo-action,
+    .workspace-toast-body,
+    .workspace-hint-help summary,
+    .command-bar-attach,
+    .command-flyout-view,
+    .command-flyout-reset,
+    .handle-value-chip:not([data-state='deferred']),
+    .settings-close,
+    .settings-details-toggle
+  ) {
+    position: relative;
+  }
+
+  :where(
+    button.brand,
+    .topbar .topbar-actions > :is(button, .topbar-action),
+    .topbar .topbar-actions .topbar-menu > summary,
+    .topbar .save-state,
+    .topbar .project-title-button,
+    .start-settings-button,
+    .start-launch-create,
+    .start-launch-import,
+    .start-filter,
+    .start-account-action,
+    .start-tile-select,
+    .start-tile-action,
+    .demo-action,
+    .workspace-toast-body,
+    .workspace-hint-help summary,
+    .command-bar-attach,
+    .command-flyout-view,
+    .command-flyout-reset,
+    .handle-value-chip:not([data-state='deferred']),
+    .settings-close,
+    .settings-details-toggle
+  )::after {
+    content: '';
+    position: absolute;
+    inset: min(0px, calc((100% - 44px) / 2));
+  }
+
+  /* Packed against neighbours: drawn at 44 px. The top bar's actions sit
+     4 px apart, so they take the width and reach for the height. */
+  .topbar .topbar-actions > :is(button, .topbar-action),
+  .topbar .topbar-actions .topbar-menu > summary {
+    min-width: 44px;
+    flex-basis: 44px;
+  }
+
+  .topbar .topbar-actions .topbar-action,
+  .topbar .topbar-actions :is(.collaboration-state, .account-state) {
+    width: 44px;
+  }
+
+  /* Folded to its glyph beside the name, the save status was 18 px wide. */
+  .topbar .topbar-identity > .save-state {
+    min-width: 44px;
+    justify-content: center;
+  }
+
+  /* The name's breadcrumb clips it to an ellipsis across, and clipped its
+     reach up and down with it; it clips across only. */
+  .topbar .breadcrumb {
+    overflow: visible;
+    overflow-x: clip;
+  }
+
+  .start-shelf-tabs button,
+  .start-layout-button,
+  .view-mode-button,
+  .view-rail > button,
+  .tweak-rail button,
+  .workspace-tour .icon-button,
+  .workspace-tour-next,
+  .measurement-mode-tabs button,
+  .measurement-dock button,
+  .measurement-radial-toggle button,
+  .keymap-actions button,
+  .assistant-head-action,
+  .settings-segmented span {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .view-rail > button,
+  .tweak-rail button,
+  .workspace.column-layout .view-mode-button,
+  .workspace.column-layout .view-mode-button.wide {
+    width: 44px;
+    height: 44px;
+  }
+
+  /* Fields and rows: 44 px tall. */
+  .start-search input,
+  .start-sort select,
+  .start-empty-actions > button,
+  .start-tile-menu [role='menuitem'],
+  .topbar-menu-item,
+  .palette-row,
+  .assistant-suggestion,
+  .assistant-verified-action,
+  .assistant-panel summary,
+  .settings-head .settings-search {
+    min-height: 44px;
+  }
+
+  /* Rows that hold a 44 px control. */
+  .assistant-head {
+    height: 44px;
+  }
+
+  /* The launch card's field labels follow its two buttons and painted over
+     their reach; the buttons stand over them. */
+  .start-launch-create,
+  .start-launch-import {
+    z-index: 1;
+  }
+
+  /* The brand's reach would end on the project name 7 px away. */
+  .topbar button.brand {
+    margin-right: 5px;
+  }
+
+  /* Units and Precision share the row with Ø and R, whose fourth column
+     ran off the dock's edge at 44 px: the fields give way. */
+  .measurement-display-controls {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  }
+
+  .measurement-radial-toggle {
+    grid-template-columns: repeat(2, 44px);
+  }
+
+  /* The field inside the bar's 1px border is the 44 px target. */
+  .workspace.column-layout {
+    --command-bar-h: 46px;
+  }
+
+  /* The bar's help opens 30 px up from the bar's foot, clear of a 34 px
+     bar; it stays clear of the taller one. */
+  .workspace.column-layout .workspace-hint-help > p {
+    bottom: calc(var(--command-bar-h) - 4px);
+  }
+
+  /* A switch's invisible checkbox already covers it; it reaches 44 px tall
+     the same way, past the 22 px track. */
+  .settings-toggle input {
+    inset: min(0px, calc((100% - 44px) / 2));
+    width: auto;
+    height: auto;
+  }
+
+  /* A demo card's Save a copy and Reset stood 2 px apart; far enough
+     apart that each 24 px button's reach is its own. */
+  .demo-actions {
+    gap: 20px;
+  }
+
+  /* Revealed without hover. */
+  .start-tile-action,
+  .start-tile-select,
+  .demo-actions {
+    opacity: 1;
+  }
+}
+
+/* The Tools drawer's search and filters. On a phone on its side (540 px
+   and under) the drawer is about 210 px tall, and at 44 px its head left
+   the list 41 px, under one tool's height; there they keep their size. */
+@media (pointer: coarse) and (min-height: 541px) {
+  .command-flyout-search,
+  .command-flyout-filter button {
+    min-height: 44px;
+  }
+}
+
+/* A touch-only device has no keys to press: the hints that name them are
+   noise there (I23), and the File menu named Ctrl+S on a phone. A tablet
+   with a keyboard and trackpad reports hover and keeps them. */
+@media (hover: none) and (pointer: coarse) {
+  .topbar-menu-key,
+  .palette-row kbd,
+  .command-tile kbd,
+  .in-place-command kbd {
+    display: none;
+  }
+}
+
+/* At a phone's width the command list cut what it says (I23): the hint
+   lane read "Enter runs · Es…" and a disabled command's reason "Create a
+   sketch f…" or "Selec…", the one line that says why it cannot run. Both
+   wrap there; the reason takes a line of its own under the name, in from
+   the icon. */
+@media (max-width: 520px) {
+  .command-bar-keys {
+    white-space: normal;
+  }
+
+  .palette-row:has(> .palette-reason) {
+    flex-wrap: wrap;
+    row-gap: 0;
+    padding-block: 5px;
+  }
+
+  .palette-row > .palette-reason {
+    flex: 1 0 100%;
+    padding-left: calc(18px + var(--sp-2));
+    white-space: normal;
+  }
+}
+
+/* On a phone (quiet-stage.css, `max-width: 620px`) the tool rail stands
+   the 32 px readout reserve above the stage's foot, which cleared the
+   34 px search bar by 8 px. The bar is 46 px on touch, and at 360 × 640
+   the rail's foot ran 4 px over it: the reserve grows with the bar. */
+@media (pointer: coarse) and (max-width: 620px) and (min-height: 541px) {
+  .workspace.column-layout {
+    --scale-rule-reserve: calc(var(--command-bar-h) - 2px);
+  }
+}
+
+/* View's bar stands over Tweak's sheet on a phone: seven 30 px tools ended
+   above the sheet, but at 44 px the bar is 339 px tall and ran 95 px down
+   into it at 390 × 844. With the sheet up it takes two columns, as the
+   touch instrument rail does (target-size.css), and ends above it. */
+@media (pointer: coarse) and (max-width: 520px) {
+  .workspace.column-layout:has(.tweak-flyouts.is-open) .view-mode-bar {
+    display: grid;
+    grid-template-columns: repeat(2, 44px);
+    justify-content: center;
+    width: calc(var(--rail-w) * 2 - 8px);
+  }
+
+  .workspace.column-layout:has(.tweak-flyouts.is-open) .view-mode-divider {
+    grid-column: 1 / -1;
+    justify-self: center;
+  }
+}

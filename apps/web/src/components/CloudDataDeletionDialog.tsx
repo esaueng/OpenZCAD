@@ -6,7 +6,7 @@ import type {
   AccountDeletionPreview,
   AccountDeletionScope
 } from '@openzcad/shared';
-import { api } from '../lib/api';
+import { api, ApiError } from '../lib/api';
 import { useModalFocus } from '../lib/useModalFocus';
 import { PersonalInfoToggle } from './PersonalInfoToggle';
 
@@ -14,6 +14,20 @@ interface CloudDataDeletionDialogProps {
   scope: AccountDeletionScope;
   onConfirm(scope: AccountDeletionScope, confirmation: string): Promise<void>;
   onClose(): void;
+  /** Closes the dialog at "Download all data" (design review I84). */
+  onDownloadFirst?(): void;
+}
+
+/**
+ * A refusal the server gives before deleting anything (a typo, deletion
+ * unavailable) is its own message. Anything else may have stopped partway:
+ * say so, and that trying again finishes it (design review I84).
+ */
+export function deletionFailureMessage(caught: unknown): string {
+  const message =
+    caught instanceof Error ? caught.message : 'Cloud data deletion failed.';
+  if (caught instanceof ApiError && caught.status < 500) return message;
+  return `${message} Deletion may have stopped partway, so some cloud data may already be gone. Nothing on this device was deleted. Try again to finish.`;
 }
 
 const COPY: Record<
@@ -54,7 +68,8 @@ function inventory(
 export function CloudDataDeletionDialog({
   scope,
   onConfirm,
-  onClose
+  onClose,
+  onDownloadFirst
 }: CloudDataDeletionDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -62,6 +77,8 @@ export function CloudDataDeletionDialog({
   const [preview, setPreview] = useState<AccountDeletionPreview | null>(null);
   const [confirmation, setConfirmation] = useState('');
   const [personalInfoVisible, setPersonalInfoVisible] = useState(false);
+  // Masked only while not being typed in (design review I78).
+  const [confirmationFocused, setConfirmationFocused] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const copy = COPY[scope];
@@ -119,6 +136,19 @@ export function CloudDataDeletionDialog({
       : confirmation.trim() === preview.confirmationText)
   );
 
+  // A typed value that cannot become the expected one says so, instead of
+  // only leaving the button disabled (design review I78).
+  const typed =
+    preview?.confirmationKind === 'email'
+      ? confirmation.trim().toLowerCase()
+      : confirmation.trim();
+  const mismatch = Boolean(
+    preview &&
+    typed !== '' &&
+    !matches &&
+    (!confirmationFocused || !preview.confirmationText.startsWith(typed))
+  );
+
   const submit = async () => {
     if (!matches || busy) {
       return;
@@ -128,9 +158,7 @@ export function CloudDataDeletionDialog({
     try {
       await onConfirm(scope, confirmation);
     } catch (caught) {
-      setError(
-        caught instanceof Error ? caught.message : 'Cloud data deletion failed.'
-      );
+      setError(deletionFailureMessage(caught));
       setBusy(false);
     }
   };
@@ -185,6 +213,18 @@ export function CloudDataDeletionDialog({
                   will immediately lose access to projects you own.
                 </p>
               ) : null}
+              {onDownloadFirst ? (
+                <p>
+                  <button
+                    type="button"
+                    className="cloud-deletion-download"
+                    onClick={onDownloadFirst}
+                  >
+                    Download your data first
+                  </button>{' '}
+                  to keep a copy of what will be deleted.
+                </p>
+              ) : null}
               <p>
                 Local projects and settings on this device will remain. Projects
                 owned by other people will not be deleted.
@@ -219,10 +259,18 @@ export function CloudDataDeletionDialog({
               <input
                 ref={inputRef}
                 type={
-                  preview.confirmationKind === 'email' && !personalInfoVisible
+                  preview.confirmationKind === 'email' &&
+                  !personalInfoVisible &&
+                  !confirmationFocused
                     ? 'password'
                     : 'text'
                 }
+                aria-invalid={mismatch || undefined}
+                aria-describedby={
+                  mismatch ? 'cloud-deletion-mismatch' : undefined
+                }
+                onFocus={() => setConfirmationFocused(true)}
+                onBlur={() => setConfirmationFocused(false)}
                 autoComplete="off"
                 autoCapitalize="none"
                 spellCheck={false}
@@ -232,6 +280,13 @@ export function CloudDataDeletionDialog({
                 onChange={(event) => setConfirmation(event.currentTarget.value)}
               />
             </label>
+            {mismatch ? (
+              <p id="cloud-deletion-mismatch" className="cloud-deletion-error">
+                {preview.confirmationKind === 'email'
+                  ? 'That doesn’t match your account’s email address.'
+                  : 'That doesn’t match. Type it exactly as shown.'}
+              </p>
+            ) : null}
             {preview.confirmationKind === 'email' ? (
               <PersonalInfoToggle
                 visible={personalInfoVisible}

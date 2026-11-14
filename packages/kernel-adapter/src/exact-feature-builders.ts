@@ -8,8 +8,12 @@ import { buildGearFeature } from './exact-gear';
 import { buildThreadFeature } from './exact-thread';
 import { requireValidSolid } from './kernel-validation';
 import {
+  cutKeptToolMaterialMeshRefusal,
   cutKeptToolMaterialRefusal,
-  cutRetainedToolMaterialWitness
+  cutRetainedToolMaterialMeshWitness,
+  cutRetainedToolMaterialWitness,
+  intersectKeptOutsideMaterialRefusal,
+  intersectKeptOutsideMaterialWitness
 } from './result-acceptance';
 import {
   carryAnalyticFaces,
@@ -919,6 +923,23 @@ function buildExtrudeFeature(
       }
     }
     const { operandLineage, extrusionSolid, coaxial, solid } = combined;
+    // The Boolean feature's intersect gate (#1244), for the same operation
+    // reached through an extrusion: material the result holds outside the
+    // target or the extrusion is a wrong body, whatever route rebuilt it.
+    if (operation === 'intersect') {
+      const witness = intersectKeptOutsideMaterialWitness(
+        kernel,
+        targetSolid,
+        extrusionSolid,
+        solid
+      );
+      if (witness) {
+        throw intersectKeptOutsideMaterialRefusal(witness, [
+          operandNames[0]!,
+          operandNames[1]!
+        ]);
+      }
+    }
     if (combined.union) {
       ctx.strictVerdicts?.set(solid, combined.union.verdict);
     }
@@ -2159,6 +2180,7 @@ function combineBooleanOperands(
         bodyName(document, data.targetBodyIds[index]!)
       ];
       let overlapMeasured = false;
+      let sharedWithTool = 0;
       if (subtracting) {
         try {
           // An intersect that refuses says nothing either way, and a
@@ -2172,10 +2194,11 @@ function combineBooleanOperands(
           );
           if (common.status === 'ok') {
             overlapMeasured = true;
-            sharedWithTools += kernel.volume(
+            sharedWithTool = kernel.volume(
               common.solid,
               MEASUREMENT_DEFLECTION
             );
+            sharedWithTools += sharedWithTool;
           }
         } catch {
           // Neither does a kernel that throws instead of answering.
@@ -2207,13 +2230,23 @@ function combineBooleanOperands(
               ctx.cancellation,
               operandNames
             ));
-      // Where the overlap could not be measured the removed-volume gate
-      // below has nothing to compare against. Measured on the pin: a box
-      // minus a torus half-embedded in its top face refuses the exact
-      // intersect, yet `cutDetailed` reports `ok` and returns the box
-      // untouched. A point the kernel classifies inside the target, the
-      // tool and the cut settles that the cut did not take.
-      if (subtracting && !overlapMeasured && coaxial === null) {
+      // Where the overlap could not be measured, or measured as nothing,
+      // the removed-volume gate below has nothing to compare against.
+      // Measured on the pin: a box minus a torus half-embedded in its top
+      // face refuses the exact intersect, yet `cutDetailed` reports `ok`
+      // and returns the box untouched. A point the kernel classifies inside
+      // the target, the tool and the cut settles that the cut did not take.
+      //
+      // The classifier is not the only witness. Issue #1242 filed curved
+      // operands whose cut returned the target unchanged while that same
+      // classifier misplaced their overlap, so it found nothing to refuse.
+      // The tessellated search encloses a point by the three meshes instead,
+      // without asking the classifier.
+      if (
+        subtracting &&
+        coaxial === null &&
+        !(overlapMeasured && sharedWithTool > GEOMETRY_EPSILON)
+      ) {
         const witness = cutRetainedToolMaterialWitness(
           kernel,
           target,
@@ -2221,6 +2254,35 @@ function combineBooleanOperands(
           solid
         );
         if (witness) throw cutKeptToolMaterialRefusal('subtract', witness);
+        const meshWitness = cutRetainedToolMaterialMeshWitness(
+          kernel,
+          target,
+          tool,
+          solid
+        );
+        if (meshWitness) {
+          throw cutKeptToolMaterialMeshRefusal('subtract', meshWitness);
+        }
+      }
+      // An intersection is defined to hold only material inside both
+      // operands. Measured on Remus 2026.1.122 (#1244): a torus and a holed
+      // block intersected `ok` in both orders and kept the block's hole. A
+      // point the kernel classifies inside the result and outside either
+      // operand settles that the result is wrong, on every route that
+      // rebuilds this feature: preview, commit, reload and upstream edits.
+      if (!subtracting) {
+        const witness = intersectKeptOutsideMaterialWitness(
+          kernel,
+          target,
+          tool,
+          solid
+        );
+        if (witness) {
+          throw intersectKeptOutsideMaterialRefusal(witness, [
+            operandNames[0]!,
+            operandNames[1]!
+          ]);
+        }
       }
       if (!pairwiseOperands) {
         probeDeclined = `The ${data.operation} reduced ${operands.length} operands in sequence; the entity-evolution entry points are pairwise.`;

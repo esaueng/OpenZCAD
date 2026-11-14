@@ -12,11 +12,11 @@ import { unitLabel } from './measurements';
 import { evalParamValue, formatNumber } from './model';
 
 /**
- * "5 edges · r 2 mm": a blend over several edges says how many, so two
+ * "5 edges · R 2 mm": a blend over several edges says how many, so two
  * fillets of one radius still read apart. A single edge needs no count.
  *
  * A rim a boolean split into four arcs is the one closed edge the user
- * clicked, and the readout said so; the row reads "closed edge · r 3.8 mm"
+ * clicked, and the readout said so; the row reads "closed edge · R 3.8 mm"
  * rather than a count of arcs. Without stored witnesses for every edge the
  * row keeps the plain count.
  */
@@ -369,7 +369,9 @@ export function featureValueSummary(
       return withEdgeCount(
         data.edgeHashes,
         data.edgeReferences,
-        end !== null ? `r ${radius}–${end} ${unit}` : `r ${radius} ${unit}`
+        // "R", as the fillet's own radius chip and Options field name it:
+        // History said "r 2 mm" of the value the card had called "R".
+        end !== null ? `R ${radius}–${end} ${unit}` : `R ${radius} ${unit}`
       );
     }
     case 'chamfer': {

@@ -553,7 +553,8 @@ export function TextSketchForm({
       <TextObjectFields value={text} onChange={setText} />
       <div className="field-pair">
         <ExprInput
-          label="Size (em)"
+          label={`Em size (${length.documentUnits === 'inch' ? 'in' : length.documentUnits})`}
+          ariaLabel="Em size"
           value={values.size ?? ''}
           scope={scope}
           quantity={length}

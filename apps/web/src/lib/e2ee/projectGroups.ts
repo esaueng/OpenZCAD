@@ -85,6 +85,7 @@ import {
   MAX_ARCHIVED_KEYS,
   decodeMlsAuthorityManifest,
   signMlsAuthorityManifest,
+  signMlsCommitSubmission,
   mlsAuthorityResetHash,
   verifyMlsAuthorityReset,
   decodeMlsAuthorityTrust,
@@ -818,6 +819,24 @@ export async function projectRevocationCutoffs(
 /** The account's identity generation, as the account key names it. */
 function currentGeneration(ctx: ProjectGroupContext): number {
   return ctx.account.generation ?? 1;
+}
+
+/**
+ * The identity generation of a verified device list a reset is checked
+ * against: this account's own, or what the lookup that served a
+ * co-member's list reported (`VerifiedDeviceList.generation`). The lookup's
+ * generation is not signed: the server could relabel it. A reset still has
+ * to be signed by the list's identity key and name that generation, so the
+ * server cannot forge one, but the generation is not independently
+ * authenticated (see `inspectContact`).
+ */
+function listGeneration(
+  ctx: Pick<ProjectGroupContext, 'account'>,
+  list: VerifiedDeviceList
+): number | undefined {
+  return list.userId === ctx.account.userId
+    ? (ctx.account.generation ?? 1)
+    : list.generation;
 }
 
 /**
@@ -1585,7 +1604,8 @@ export async function authorityManifestForState(
     await verifyMlsAuthorityReset(
       { ...value, roots, checkpoint: null },
       resetGeneration,
-      ctx.account.list
+      ctx.account.list,
+      currentGeneration(ctx)
     );
   }
   const context = parseGroupInfoContext(groupInfo);
@@ -1934,13 +1954,27 @@ async function submitPending(
     }
   );
   const leaf = next.external ? await ctx.sessions.leaf(ref) : null;
+  const kind = next.external ? 'external' : 'commit';
+  // The Worker sequences only a Commit this device signed, with the key
+  // its account's device list certifies for it.
+  const signature = await signMlsCommitSubmission(device.signing.privateKey, {
+    userId: ctx.account.userId,
+    projectId,
+    deviceId: device.deviceId,
+    kind,
+    epoch: next.epoch - 1,
+    keyEpoch,
+    message: pending.commit,
+    groupInfo: next.groupInfo
+  });
   try {
     const response = await ctx.api.submitCommit(projectId, {
       epoch: next.epoch - 1,
-      kind: next.external ? 'external' : 'commit',
+      kind,
       deviceId: device.deviceId,
       message: b64(pending.commit),
       groupInfo: b64(next.groupInfo),
+      signature: b64(signature),
       ...(leaf
         ? {
             leaf: {
@@ -3900,7 +3934,8 @@ export async function epochAuthority(
         await verifyMlsAuthorityReset(
           trustedManifest,
           generation,
-          manifestOwner
+          manifestOwner,
+          listGeneration(ctx, manifestOwner)
         );
     }
     const group = await fetchGroup(ctx, projectId);
@@ -3916,7 +3951,8 @@ export async function epochAuthority(
         ? await verifyMlsAuthorityReset(
             trustedManifest,
             root.generation + 1,
-            resetOwner
+            resetOwner,
+            listGeneration(ctx, resetOwner)
           )
         : null;
     for (const list of lists) {

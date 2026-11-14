@@ -3,6 +3,7 @@ import {
   useEffect,
   useMemo,
   useRef,
+  useId,
   useState,
   useSyncExternalStore,
   type ReactNode
@@ -144,6 +145,8 @@ function AccountEncryptionSettings({ userId }: { userId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [flow, setFlow] = useState<Flow>(null);
+  // Setup just finished here: end it with "Encrypt new projects?" (I75).
+  const [justSetUp, setJustSetUp] = useState(false);
 
   const run = useCallback(
     async (work: () => Promise<EncryptionState | void>) => {
@@ -240,12 +243,14 @@ function AccountEncryptionSettings({ userId }: { userId: string }) {
               {...shared}
               title="Set up encryption"
               finishLabel="Finish setup"
-              onFinish={(secret) =>
-                setUpEncryption(ctx, {
+              onFinish={async (secret) => {
+                const next = await setUpEncryption(ctx, {
                   recoverySecret: secret,
                   label: defaultDeviceLabel(navigator.userAgent)
-                })
-              }
+                });
+                setJustSetUp(true);
+                return next;
+              }}
             />
           ) : (
             <Group>
@@ -285,6 +290,8 @@ function AccountEncryptionSettings({ userId }: { userId: string }) {
               <ProjectEncryptionPreference
                 userId={userId}
                 unlocked={unlocked}
+                afterSetup={justSetUp}
+                onAfterSetupDone={() => setJustSetUp(false)}
               />
               <ExistingProjectEncryption userId={userId} unlocked={unlocked} />
             </>
@@ -633,11 +640,13 @@ function AccountPanel({
             >
               {device.deviceId === thisDevice?.deviceId ? (
                 <Status tone="good">This device</Status>
-              ) : (
+              ) : certified ? (
+                // A locked device shows no Remove at all: a disabled one
+                // beside the only certified device read as a threat (I83).
                 <button
                   className="secondary"
                   type="button"
-                  disabled={busy || !certified}
+                  disabled={busy}
                   aria-label={`Remove ${device.label}`}
                   onClick={() =>
                     setFlow({
@@ -650,13 +659,13 @@ function AccountPanel({
                   <Trash2 size={14} aria-hidden="true" />
                   Remove
                 </button>
-              )}
+              ) : null}
             </SettingRow>
           ))}
         {certified ? (
           <SettingRow
             title="Add a device"
-            hint="On the new device, open Settings › Encryption and choose Ask for approval. Its request appears here."
+            hint="On the new device, open Settings › Encryption and choose Ask for approval. It then appears here under Devices asking to join, with Scan code and Compare codes."
           />
         ) : null}
       </Group>
@@ -930,7 +939,7 @@ function EnrollPanel({
         {step.step === 'waiting' ? (
           <SettingRow
             title="Scan this code"
-            hint="On an unlocked device, open Settings › Encryption and scan it, or choose Compare codes."
+            hint="On an unlocked device, open Settings › Encryption. This device is listed under Devices asking to join: choose Scan code and point its camera here, or Compare codes."
           >
             <ScanCodeDisplay code={step.scanCode} />
           </SettingRow>
@@ -1606,6 +1615,12 @@ function RecoveryKeyFlow({
   );
 }
 
+function isWrongRecoveryKey(error: unknown): error is EncryptionFlowError {
+  return (
+    error instanceof EncryptionFlowError && error.code === 'wrong-recovery-key'
+  );
+}
+
 /** Asks for the recovery key to authorize one action. */
 function RecoveryKeyEntry({
   title,
@@ -1625,6 +1640,10 @@ function RecoveryKeyEntry({
 }) {
   const { busy, run, setFlow } = shared;
   const [text, setText] = useState('');
+  // A wrong key is said under the field it was typed in. It used to land in
+  // the page's alert at the top, hundreds of pixels above (review I4).
+  const [keyError, setKeyError] = useState<string | null>(null);
+  const errorId = useId();
   return (
     <Group title={title} tone={danger ? 'danger' : undefined}>
       {intro ? <Notice tone="info">{intro}</Notice> : null}
@@ -1636,11 +1655,21 @@ function RecoveryKeyEntry({
           className="settings-text-wide"
           value={text}
           aria-label="Recovery key"
+          aria-invalid={keyError ? true : undefined}
+          aria-describedby={keyError ? errorId : undefined}
           autoComplete="off"
           spellCheck={false}
           placeholder="XXXX-XXXX-…"
-          onChange={(event) => setText(event.target.value)}
+          onChange={(event) => {
+            setKeyError(null);
+            setText(event.target.value);
+          }}
         />
+        {keyError ? (
+          <small id={errorId} className="settings-field-error" role="alert">
+            {keyError}
+          </small>
+        ) : null}
       </SettingRow>
       <div className="settings-button-row">
         <button
@@ -1649,12 +1678,28 @@ function RecoveryKeyEntry({
           disabled={busy || text.trim() === ''}
           onClick={() =>
             void run(async () => {
-              const secret = await readRecoveryKey(text);
+              setKeyError(null);
+              let secret: Bytes;
+              try {
+                secret = await readRecoveryKey(text);
+              } catch (error) {
+                if (isWrongRecoveryKey(error)) {
+                  setKeyError(error.message);
+                  return;
+                }
+                throw error;
+              }
               try {
                 const next = await onSubmit(secret);
                 setText('');
                 setFlow(null);
                 return next;
+              } catch (error) {
+                if (isWrongRecoveryKey(error)) {
+                  setKeyError(error.message);
+                  return;
+                }
+                throw error;
               } finally {
                 secret.fill(0);
               }
