@@ -17,6 +17,9 @@ import {
 } from './result-acceptance';
 import {
   carryAnalyticFaces,
+  draftLineage,
+  SHELL_DRAFT_LINEAGE_FACE_LIMIT,
+  shellLineage,
   holeLineage,
   withBoundaryEdgeLineage
 } from './exact-operation-lineage';
@@ -1710,6 +1713,16 @@ function buildSplitFeature(
   inheritMeshOrigin(result, data.targetBodyId, data.secondBodyId);
 }
 
+/** A lineage worth publishing: it names at least one face or edge. */
+function hasVerifiedLineage(
+  lineage: RemusLineageState | null
+): lineage is RemusLineageState {
+  return (
+    !!lineage &&
+    (lineage.faceReferences.size > 0 || lineage.edgeReferences.size > 0)
+  );
+}
+
 function buildShellFeature(
   ctx: FeatureBuildContext,
   feature: FeatureNode,
@@ -1741,13 +1754,24 @@ function buildShellFeature(
     thickness,
     openingFaces
   });
+  const lineage = shellLineage(
+    kernel,
+    target.solids[0]!,
+    solid,
+    target.lineage,
+    feature.featureId,
+    openingFaces,
+    thickness
+  );
   result.consumed.add(data.targetBodyId);
   result.shapes.set(feature.bodyId, {
     solids: [solid],
-    lineage: remusHashOnlyLineage(
-      'shell',
-      'The pinned bridge does not expose removed, offset, and generated face relations.'
-    )
+    lineage: hasVerifiedLineage(lineage)
+      ? lineage
+      : remusHashOnlyLineage(
+          'shell',
+          `No kept, rim or inner face passed the exact carrier and uniqueness checks, or a body has more than ${SHELL_DRAFT_LINEAGE_FACE_LIMIT} faces.`
+        )
   });
   inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
 }
@@ -1829,13 +1853,26 @@ function buildDraftFeature(
     neutralPoint,
     angleDegrees
   });
+  const lineage = draftLineage(
+    kernel,
+    target.solids[0]!,
+    solid,
+    target.lineage,
+    feature.featureId,
+    faces,
+    pullDirection,
+    neutralPoint,
+    angleDegrees
+  );
   result.consumed.add(data.targetBodyId);
   result.shapes.set(feature.bodyId, {
     solids: [solid],
-    lineage: remusHashOnlyLineage(
-      'draft',
-      'Draft topology has no verified output evolution relation.'
-    )
+    lineage: hasVerifiedLineage(lineage)
+      ? lineage
+      : remusHashOnlyLineage(
+          'draft',
+          `No kept or drafted face passed the exact carrier and uniqueness checks, or a body has more than ${SHELL_DRAFT_LINEAGE_FACE_LIMIT} faces.`
+        )
   });
   inheritMeshOrigin(result, data.targetBodyId, feature.bodyId);
 }
