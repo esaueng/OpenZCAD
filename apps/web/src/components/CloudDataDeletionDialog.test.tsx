@@ -7,6 +7,16 @@ import {
   CloudDataDeletionDialog,
   deletionFailureMessage
 } from './CloudDataDeletionDialog';
+import { setPersonalInfoVisible, usePersonalInfoVisible } from './PersonalInfo';
+
+/** What the rest of the app reads from the shared switch. */
+function ElsewhereInTheApp() {
+  return (
+    <output aria-label="Personal info elsewhere">
+      {usePersonalInfoVisible() ? 'shown' : 'hidden'}
+    </output>
+  );
+}
 
 const preview: AccountDeletionPreview = {
   confirmationKind: 'phrase',
@@ -158,6 +168,53 @@ describe('CloudDataDeletionDialog', () => {
     // the field, which would also unmask it for another reason.
     expect(field).not.toHaveFocus();
     expect(field).toHaveAttribute('type', 'text');
+  });
+
+  // One switch for the whole app: the dialog used to keep its own, so an
+  // email shown in Settings was hidden again here, and showing it here did
+  // not reach Settings or project sharing.
+  it('follows the shared personal info switch both ways', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, 'accountDeletionPreview').mockResolvedValue({
+      ...preview,
+      confirmationKind: 'email',
+      confirmationText: 'person@example.com'
+    });
+    act(() => setPersonalInfoVisible(true));
+    render(
+      <>
+        <ElsewhereInTheApp />
+        <CloudDataDeletionDialog
+          scope="profile"
+          onConfirm={vi.fn()}
+          onClose={vi.fn()}
+        />
+      </>
+    );
+
+    // Shown elsewhere, it opens shown.
+    const shown = await screen.findByRole('button', {
+      name: 'person@example.com'
+    });
+    const field = screen.getByLabelText('Deletion confirmation');
+    act(() => field.blur());
+    expect(field).toHaveAttribute('type', 'text');
+
+    // Hidden here, it is hidden everywhere.
+    await user.click(shown);
+    expect(document.body.innerHTML).not.toContain('person@example.com');
+    expect(field).toHaveAttribute('type', 'password');
+    expect(screen.getByLabelText('Personal info elsewhere')).toHaveTextContent(
+      'hidden'
+    );
+
+    // And shown here, everywhere.
+    await user.click(
+      screen.getByRole('button', { name: 'Show personal info' })
+    );
+    expect(screen.getByLabelText('Personal info elsewhere')).toHaveTextContent(
+      'shown'
+    );
   });
 
   // Design review I78: the masked email field hid typos, and a mismatch only
