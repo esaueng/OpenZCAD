@@ -42,15 +42,42 @@ export function SavedViewsSection({
   // workspace's shortcuts (S armed Sketch) (I54).
   const [naming, setNaming] = useState<string | null>(null);
   const nameRef = useRef<HTMLInputElement | null>(null);
+  // Enter, Escape and the blur that follows them all end one naming; only
+  // the first counts, so Escape never saves what the blur still holds.
+  const settledRef = useRef(false);
   useEffect(() => {
     if (naming) {
+      settledRef.current = false;
       nameRef.current?.focus();
       nameRef.current?.select();
     }
   }, [naming]);
+  // Ended from the keyboard, the field hands focus to its row's button
+  // rather than letting it fall to the page.
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const [refocus, setRefocus] = useState<string | null>(null);
+  useEffect(() => {
+    if (!refocus) return;
+    Array.from(
+      listRef.current?.querySelectorAll<HTMLButtonElement>(
+        '[data-saved-view]'
+      ) ?? []
+    )
+      .find((button) => button.dataset.savedView === refocus)
+      ?.focus();
+    setRefocus(null);
+  }, [refocus]);
 
-  function finishNaming(view: SavedView, name: string) {
+  function settle(view: SavedView, keyboard: boolean): boolean {
+    if (settledRef.current) return false;
+    settledRef.current = true;
     setNaming(null);
+    if (keyboard) setRefocus(view.id);
+    return true;
+  }
+
+  function finishNaming(view: SavedView, name: string, keyboard = false) {
+    if (!settle(view, keyboard)) return;
     if (name.trim() === '' || name.trim() === view.name) return;
     const renamed = renameSavedView(projectId, view.id, name);
     if (!renamed) {
@@ -81,7 +108,12 @@ export function SavedViewsSection({
   }
 
   return (
-    <div className="saved-views" role="group" aria-label="Saved views">
+    <div
+      ref={listRef}
+      className="saved-views"
+      role="group"
+      aria-label="Saved views"
+    >
       {views.map((view) => (
         <div key={view.id} className="saved-views-row">
           {naming === view.id ? (
@@ -96,10 +128,11 @@ export function SavedViewsSection({
                 event.stopPropagation();
                 if (event.key === 'Enter') {
                   event.preventDefault();
-                  finishNaming(view, event.currentTarget.value);
+                  finishNaming(view, event.currentTarget.value, true);
                 } else if (event.key === 'Escape') {
+                  // Keeps the name it had; the flyout stays open.
                   event.preventDefault();
-                  setNaming(null);
+                  settle(view, true);
                 }
               }}
               onBlur={(event) => finishNaming(view, event.currentTarget.value)}
@@ -108,6 +141,7 @@ export function SavedViewsSection({
             <button
               type="button"
               className="saved-views-apply"
+              data-saved-view={view.id}
               aria-label={`Go to ${view.name}`}
               onClick={() => onApply(view)}
               onDoubleClick={() => setNaming(view.id)}

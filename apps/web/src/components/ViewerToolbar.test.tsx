@@ -810,9 +810,20 @@ describe('the standard views flyout', () => {
     window.removeEventListener('keydown', shortcut);
     fireEvent.keyDown(name, { key: 'Enter' });
     expect(onStatus).toHaveBeenLastCalledWith('Renamed View 2 to Bolt side.');
-    expect(
+    const renamed = saved().getByRole('button', { name: 'Go to Bolt side' });
+    // Named from the keyboard, the keyboard stays on the row.
+    expect(document.activeElement).toBe(renamed);
+    // Escape puts a rename away unchanged and leaves the flyout open.
+    fireEvent.doubleClick(renamed);
+    const again = saved().getByRole('textbox', { name: 'Name Bolt side' });
+    fireEvent.change(again, { target: { value: 'Discarded' } });
+    fireEvent.keyDown(again, { key: 'Escape' });
+    fireEvent.blur(again);
+    expect(onStatus).toHaveBeenLastCalledWith('Renamed View 2 to Bolt side.');
+    expect(trigger).toHaveAttribute('aria-expanded', 'true');
+    expect(document.activeElement).toBe(
       saved().getByRole('button', { name: 'Go to Bolt side' })
-    ).toBeDefined();
+    );
     // Going to a view closes the panel and returns the keyboard.
     fireEvent.click(saved().getByRole('button', { name: 'Go to View 1' }));
     expect(onApply).toHaveBeenCalledWith(

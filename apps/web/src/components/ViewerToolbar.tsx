@@ -367,6 +367,14 @@ export function ViewerToolbar({
     }
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === 'Escape') {
+        // A saved view's name field takes its own Escape: it puts the
+        // name away and leaves the flyout open.
+        if (
+          event.target instanceof HTMLInputElement &&
+          anchorRef.current?.contains(event.target)
+        ) {
+          return;
+        }
         event.stopPropagation();
         setViewsOpen(false);
         triggerRef.current?.focus();
