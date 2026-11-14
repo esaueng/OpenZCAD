@@ -20,6 +20,7 @@ export * from './assembly-kinematics';
 export * from './gear-mesh-types';
 export * from './gear-mesh';
 import type { DocumentHistory } from './document-history';
+import { ownEntry } from './document-validation';
 import type { KeymapOverrides } from './keymap-settings';
 import type { DrawingSet } from './drawings';
 import type {
@@ -5402,7 +5403,7 @@ export const FEATURE_COLORS: Record<FeatureKind, string> = {
 };
 
 export const featureColor = (kind: FeatureKind): string =>
-  FEATURE_COLORS[kind] ?? FEATURE_COLORS.primitive;
+  ownEntry(FEATURE_COLORS, kind) ?? FEATURE_COLORS.primitive;
 
 /**
  * The colour a body's own metadata asks for, or null when it asks for none:

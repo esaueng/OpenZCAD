@@ -148,8 +148,9 @@ function derivedProjectionError(value: object): string | null {
 }
 
 /**
- * No reserved name as a key, id or selector anywhere in the document: its
- * maps, nodes, history, stored commands (see `reservedIdentifierError`) and
+ * No reserved name as a key, id or selector, and no enum value outside its
+ * union, anywhere in the document: its maps, nodes, history, stored commands
+ * (see `reservedIdentifierError`; freeform metadata values are text) and
  * the names its derived projection carries ({@link derivedProjectionError}).
  * Unlike {@link documentIdentifierError} it does not require node references
  * to resolve, so a device copy or backup with an ordinary dangling reference

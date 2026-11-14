@@ -51,7 +51,8 @@ import {
 import {
   isFeatureManuallySuppressed,
   isFeatureRollbackSuppressed,
-  isFeatureSuppressed
+  isFeatureSuppressed,
+  ownEntry
 } from '@openzcad/shared';
 import type {
   BodyRepresentation,
@@ -166,15 +167,19 @@ export function featureIcon(feature: FeatureNode): ReactNode {
   const data = feature.data;
   switch (data.featureKind) {
     case 'primitive':
-      return PRIMITIVE_ICONS[data.primitiveKind] ?? OTHER_FEATURE_ICON;
+      return (
+        ownEntry(PRIMITIVE_ICONS, data.primitiveKind) ?? OTHER_FEATURE_ICON
+      );
     case 'boolean':
-      return BOOLEAN_ICONS[data.operation] ?? OTHER_FEATURE_ICON;
+      return ownEntry(BOOLEAN_ICONS, data.operation) ?? OTHER_FEATURE_ICON;
     case 'pattern':
-      return PATTERN_ICONS[data.patternKind] ?? OTHER_FEATURE_ICON;
+      return ownEntry(PATTERN_ICONS, data.patternKind) ?? OTHER_FEATURE_ICON;
     case 'direct-edit':
-      return DIRECT_EDIT_ICONS[data.operation?.kind] ?? OTHER_FEATURE_ICON;
+      return (
+        ownEntry(DIRECT_EDIT_ICONS, data.operation?.kind) ?? OTHER_FEATURE_ICON
+      );
     default:
-      return KIND_ICONS[feature.featureKind] ?? OTHER_FEATURE_ICON;
+      return ownEntry(KIND_ICONS, feature.featureKind) ?? OTHER_FEATURE_ICON;
   }
 }
 

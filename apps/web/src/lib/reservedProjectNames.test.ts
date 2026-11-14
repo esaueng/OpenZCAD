@@ -7,6 +7,7 @@ import {
   createProjectDocument,
   createSavedRevision,
   listNodesByKind,
+  setNodeMetadata,
   setParameter,
   UnstorableDocumentError
 } from '@openzcad/document-core';
@@ -78,6 +79,27 @@ function withParameterName(
       JSON.stringify(name)
     )
   ) as ProjectDocument;
+}
+
+/** The project as received, with its primitive's kind replaced. */
+function withPrimitiveKind(
+  document: ProjectDocument,
+  kind: string
+): ProjectDocument {
+  return JSON.parse(
+    JSON.stringify(document).replaceAll(
+      '"primitiveKind":"box"',
+      `"primitiveKind":${JSON.stringify(kind)}`
+    )
+  ) as ProjectDocument;
+}
+
+/** The project with metadata `role: "constructor"` on its active part. */
+function withMetadataRole(document: ProjectDocument): ProjectDocument {
+  return setNodeMetadata(document, {
+    nodeId: document.activePartId,
+    metadata: { role: 'constructor' }
+  });
 }
 
 const FORGED = [
@@ -166,6 +188,25 @@ describe('backup import refuses reserved names', () => {
     );
   });
 
+  it('refuses a primitive kind outside its union', async () => {
+    const text = backupText(withPrimitiveKind(boxProject(), '__proto__'));
+    await expect(parseProjectBackup(text)).rejects.toBeInstanceOf(
+      UnstorableDocumentError
+    );
+    const result = await importInWorker(text);
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error).toMatch(
+      /primitiveKind" has the unknown value "__proto__"/
+    );
+  });
+
+  it('imports a project whose metadata uses a reserved name as a value', async () => {
+    const result = await importInWorker(
+      backupText(withMetadataRole(boxProject()))
+    );
+    expect(result.ok).toBe(true);
+  });
+
   it('refuses a backup handed to the copy step without parsing', () => {
     const backup = {
       format: 'openzcad-project',
@@ -239,6 +280,26 @@ describe('device copies with reserved names', () => {
     await expect(
       loadLocalSaveState(saved.projectId, checkpoint.checkpointId)
     ).rejects.toThrow(/cannot be opened: .*reserved/);
+  });
+
+  it('will not open or save a project with a primitive kind outside its union', async () => {
+    const forged = withPrimitiveKind(boxProject('proj_forged'), 'constructor');
+    await seedRaw(LOCAL_PROJECT_DOCUMENT_STORE, forged);
+    await expect(loadLocalProject('proj_forged')).rejects.toThrow(
+      /cannot be opened: .*primitiveKind" has the unknown value "constructor"/
+    );
+    await expect(saveLocalProject(forged)).rejects.toThrow(
+      /cannot be saved: .*primitiveKind" has the unknown value/
+    );
+  });
+
+  it('opens and saves a project whose metadata uses a reserved name as a value', async () => {
+    const project = withMetadataRole(boxProject('proj_metadata'));
+    await seedRaw(LOCAL_PROJECT_DOCUMENT_STORE, project);
+    expect((await loadLocalProject('proj_metadata'))?.projectId).toBe(
+      'proj_metadata'
+    );
+    await expect(saveLocalProject(project)).resolves.not.toThrow();
   });
 
   it('will not store an imported project with a reserved name', async () => {

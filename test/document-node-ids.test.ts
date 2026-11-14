@@ -11,10 +11,12 @@ import {
   getParameterScope,
   isLiveAssemblyBody,
   normalizeDocument,
+  patternBody,
   renameNode,
   reservedDocumentIdentifierError,
   setNodeMetadata,
   setParameter,
+  setParameterDescription,
   UnstorableDocumentError
 } from '@openzcad/document-core';
 import {
@@ -769,4 +771,217 @@ describe('sketch point selectors', () => {
       expect(sent).toEqual([]);
     }
   );
+});
+
+describe('persisted enum selectors and freeform values', () => {
+  /** A box, patterned twice along x. */
+  function patterned(): ProjectDocument {
+    const document = valid();
+    return patternBody(document, {
+      name: 'Row',
+      targetBodyId: document.bodyOrder[0]!,
+      patternKind: 'linear',
+      count: 2,
+      axis: 'x',
+      spacing: 10
+    }).document;
+  }
+
+  /** `document` as received, with one feature's data edited. */
+  function withFeatureData(
+    document: ProjectDocument,
+    featureKind: string,
+    edit: (data: Record<string, unknown>) => void
+  ): unknown {
+    const json = JSON.parse(JSON.stringify(document)) as {
+      nodes: Record<
+        string,
+        { kind?: string; featureKind?: string; data: Record<string, unknown> }
+      >;
+    };
+    const node = Object.values(json.nodes).find(
+      (candidate) =>
+        candidate.kind === 'feature' && candidate.featureKind === featureKind
+    )!;
+    edit(node.data);
+    return JSON.parse(JSON.stringify(json));
+  }
+
+  it.each([...RESERVED, 'valueOf', 'hexagon'])(
+    'refuses a primitive whose primitiveKind is "%s"',
+    (kind) => {
+      const value = withFeatureData(valid(), 'primitive', (data) => {
+        data.primitiveKind = kind;
+      });
+      expect(reservedDocumentIdentifierError(value as object)).toMatch(
+        /primitiveKind" has the unknown value/
+      );
+      expect(refusal(value)).toMatch(/primitiveKind" has the unknown value/);
+    }
+  );
+
+  it.each([...RESERVED, 'valueOf', 'spiral'])(
+    'refuses a pattern whose patternKind is "%s"',
+    (kind) => {
+      const value = withFeatureData(patterned(), 'pattern', (data) => {
+        data.patternKind = kind;
+      });
+      expect(reservedDocumentIdentifierError(value as object)).toMatch(
+        /patternKind" has the unknown value/
+      );
+      expect(refusal(value)).toMatch(/patternKind" has the unknown value/);
+    }
+  );
+
+  it.each([
+    ['axis', 'constructor'],
+    ['axis', 'w'],
+    ['axis2', '__proto__']
+  ])('refuses a pattern whose %s is "%s"', (field, axis) => {
+    const value = withFeatureData(patterned(), 'pattern', (data) => {
+      data[field] = axis;
+    });
+    expect(refusal(value)).toMatch(
+      new RegExp(`${field}" has the unknown value`)
+    );
+  });
+
+  it('still accepts every generated primitive and pattern', () => {
+    for (const primitiveKind of [
+      'box',
+      'cylinder',
+      'sphere',
+      'cone',
+      'torus'
+    ] as const) {
+      const document = addPrimitiveFeature(
+        createProjectDocument('Kinds', owner),
+        { name: 'Solid', primitiveKind, dimensions: {} }
+      );
+      expect(() => assertStorableDocument(document)).not.toThrow();
+    }
+    expect(() => assertStorableDocument(patterned())).not.toThrow();
+  });
+
+  it('refuses a forged primitiveKind in undo history or a stored command', () => {
+    const manager = new CommandManager(createProjectDocument('Kinds', owner));
+    manager.execute(
+      commandFactories.addPrimitive({
+        name: 'Box',
+        primitiveKind: 'box',
+        dimensions: { width: 1, height: 1, depth: 1 }
+      })
+    );
+    const commandLog = JSON.parse(
+      JSON.stringify(manager.document.commandLog)
+    ) as unknown;
+    expect(JSON.stringify(commandLog)).toContain('"primitiveKind":"box"');
+    manager.undo();
+    // Only the redo snapshot and the stored command still hold the box.
+    const stored = JSON.parse(JSON.stringify(manager.document)) as {
+      editHistory: unknown;
+    };
+    expect(JSON.stringify(stored.editHistory)).toContain(
+      '"primitiveKind":"box"'
+    );
+    const forge = (part: unknown) =>
+      JSON.parse(
+        JSON.stringify(part).replaceAll(
+          '"primitiveKind":"box"',
+          '"primitiveKind":"__proto__"'
+        )
+      ) as unknown;
+    expect(
+      refusal({ ...stored, editHistory: forge(stored.editHistory) })
+    ).toMatch(/primitiveKind" has the unknown value "__proto__"/);
+    expect(reservedIdentifierError(forge(commandLog), 'commandLog')).toMatch(
+      /primitiveKind" has the unknown value "__proto__"/
+    );
+    const pattern = {
+      kind: 'pattern.add',
+      payload: { patternKind: 'toString', axis: 'x' }
+    };
+    expect(reservedIdentifierError([pattern], 'commandLog')).toMatch(
+      /patternKind" has the unknown value "toString"/
+    );
+  });
+
+  it('accepts a reserved name as a metadata value, with its undo history', () => {
+    const document = valid();
+    const nodeId = document.activePartId;
+    const direct = setNodeMetadata(document, {
+      nodeId,
+      metadata: { role: 'constructor' }
+    });
+    expect(() => assertStorableDocument(direct)).not.toThrow();
+    expect(reservedDocumentIdentifierError(direct)).toBeNull();
+
+    const manager = new CommandManager(document);
+    manager.execute(
+      commandFactories.setNodeMetadata({
+        nodeId,
+        metadata: {
+          role: 'constructor',
+          kind: 'toString',
+          point: 'valueOf',
+          primitiveKind: '__proto__',
+          sourceId: 'prototype'
+        }
+      })
+    );
+    const executed = manager.document;
+    expect(JSON.stringify(executed.editHistory)).toContain(
+      '"role":"constructor"'
+    );
+    manager.undo();
+    const undone = manager.document;
+    manager.redo();
+    for (const stored of [executed, undone, manager.document]) {
+      const received = JSON.parse(JSON.stringify(stored)) as ProjectDocument;
+      expect(received.editHistory?.entries.length).toBeGreaterThan(0);
+      expect(reservedDocumentIdentifierError(received)).toBeNull();
+      expect(() => assertStorableDocument(received)).not.toThrow();
+    }
+    expect(getNode(manager.document, nodeId)?.metadata?.role).toBe(
+      'constructor'
+    );
+  });
+
+  it('still refuses a reserved metadata key', () => {
+    const value = received((json) => {
+      const node = json.nodes[json.activePartId] as unknown as {
+        metadata?: Record<string, unknown>;
+      };
+      node.metadata = { constructor: 'x' };
+    });
+    expect(refusal(value)).toMatch(/reserved key "constructor"/);
+  });
+
+  it('accepts reserved names as names, descriptions, notes and other text', () => {
+    let document = setParameter(valid(), { name: 'width', expression: '5' });
+    document = setParameterDescription(document, {
+      name: 'width',
+      description: 'constructor'
+    });
+    document = renameNode(document, {
+      nodeId: document.activePartId,
+      name: 'toString'
+    });
+    const value = withFeatureData(document, 'primitive', (data) => {
+      (data.dimensions as Record<string, unknown>).width = 'valueOf';
+    });
+    expect(reservedDocumentIdentifierError(value as object)).toBeNull();
+    expect(() => assertStorableDocument(value)).not.toThrow();
+    for (const text of [
+      { name: 'constructor' },
+      { description: 'prototype' },
+      { notes: 'toString' },
+      { label: '__proto__' },
+      { text: 'valueOf' },
+      { expression: 'constructor' },
+      { kind: 'note', text: 'hasOwnProperty' },
+      { title: 'isPrototypeOf', caption: 'toLocaleString' }
+    ])
+      expect(reservedIdentifierError(text)).toBeNull();
+  });
 });

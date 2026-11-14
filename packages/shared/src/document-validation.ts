@@ -1,3 +1,28 @@
+import type {
+  AxisId,
+  BodyNode,
+  BooleanKeepOriginals,
+  BooleanOperation,
+  ExtrudeEndCondition,
+  ExtrudeOperation,
+  FeatureData,
+  FeatureKind,
+  GearFit,
+  GearHand,
+  GearSizing,
+  GearType,
+  PatternKind,
+  PrimitiveKind,
+  RevolveAxis,
+  TextFontStyle,
+  ThreadAnchor,
+  ThreadHand,
+  ThreadProfile,
+  ThroughAllSide,
+  UnitSystem,
+  VariableFilletLaw
+} from './index';
+
 /** Limits apply before normalization, cloning, or recursive history traversal. */
 export const MAX_DOCUMENT_DEPTH = 64;
 export const MAX_DOCUMENT_VALUES = 500_000;
@@ -178,11 +203,192 @@ const ID_LIST_FIELDS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Enum-like selector fields. Their values index lookup tables and handle maps
- * (a constraint's `point` picks a solver handle, `kind` and `featureKind`
- * pick a table entry, `axis` picks a coordinate), so a reserved name there
- * would resolve an inherited member too. No legitimate value of these fields
- * is a reserved name.
+ * The values of a closed union as a set, checked against the type: the
+ * record must name every member and nothing else.
+ */
+function valuesOf<T extends string>(members: Record<T, true>): Set<string> {
+  return new Set(Object.keys(members));
+}
+
+/**
+ * Persisted enum fields whose name means the same union everywhere a
+ * document, its history or a stored command carries it. Their values index
+ * lookup tables (an icon per primitive or pattern kind, the dimensions each
+ * primitive is built from), so they must be one of the union's members:
+ * anything else, a reserved name included, is refused.
+ */
+const ENUM_FIELDS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  [
+    'primitiveKind',
+    valuesOf<PrimitiveKind>({
+      box: true,
+      cylinder: true,
+      sphere: true,
+      cone: true,
+      torus: true
+    })
+  ],
+  [
+    'patternKind',
+    valuesOf<PatternKind>({ linear: true, circular: true, grid: true })
+  ],
+  [
+    'gearType',
+    valuesOf<GearType>({
+      external: true,
+      internal: true,
+      rack: true,
+      bevel: true,
+      worm: true,
+      'worm-wheel': true,
+      'enveloping-worm': true,
+      'enveloping-wheel': true
+    })
+  ],
+  [
+    'sizing',
+    valuesOf<GearSizing>({
+      module: true,
+      'circular-pitch': true,
+      'diametral-pitch': true
+    })
+  ],
+  [
+    'endCondition',
+    valuesOf<ExtrudeEndCondition>({
+      blind: true,
+      'through-all': true,
+      'to-face': true
+    })
+  ],
+  [
+    'throughAllSide',
+    valuesOf<ThroughAllSide>({ forward: true, backward: true, both: true })
+  ],
+  ['depthMode', valuesOf<'blind' | 'through'>({ blind: true, through: true })],
+  [
+    'fontStyle',
+    valuesOf<TextFontStyle>({
+      regular: true,
+      bold: true,
+      italic: true,
+      boldItalic: true
+    })
+  ],
+  ['radiusLaw', valuesOf<VariableFilletLaw>({ linear: true, scurve: true })],
+  [
+    'assumedUnits',
+    valuesOf<UnitSystem>({ mm: true, cm: true, m: true, inch: true })
+  ],
+  [
+    'bodyType',
+    valuesOf<BodyNode['bodyType']>({ solid: true, 'mesh-reference': true })
+  ],
+  [
+    'representationSource',
+    valuesOf<BodyNode['representationSource']>({
+      brep: true,
+      'step-import': true,
+      'mesh-import': true
+    })
+  ]
+]);
+
+const AXIS_IDS = valuesOf<AxisId>({ x: true, y: true, z: true });
+
+type FeatureDataOf<K extends FeatureKind> = Extract<
+  FeatureData,
+  { featureKind: K }
+>;
+
+/**
+ * Enum fields whose name is shared with other structures (an `axis` is a
+ * vector elsewhere, an `operation` an object), checked against their union
+ * on the data of a feature node, by its kind.
+ */
+const FEATURE_DATA_ENUMS: Readonly<
+  Partial<Record<FeatureKind, ReadonlyMap<string, ReadonlySet<string>>>>
+> = {
+  pattern: new Map([
+    ['axis', AXIS_IDS],
+    ['axis2', AXIS_IDS]
+  ]),
+  boolean: new Map([
+    [
+      'operation',
+      valuesOf<BooleanOperation>({
+        union: true,
+        subtract: true,
+        intersect: true
+      })
+    ],
+    [
+      'keepOriginals',
+      valuesOf<BooleanKeepOriginals>({ all: true, target: true, tools: true })
+    ]
+  ]),
+  extrude: new Map([
+    [
+      'operation',
+      valuesOf<ExtrudeOperation>({
+        'new-body': true,
+        add: true,
+        cut: true,
+        intersect: true
+      })
+    ]
+  ]),
+  revolve: new Map([
+    ['axis', valuesOf<RevolveAxis>({ horizontal: true, vertical: true })]
+  ]),
+  loft: new Map([
+    [
+      'mode',
+      valuesOf<FeatureDataOf<'loft'>['mode']>({ ruled: true, smooth: true })
+    ]
+  ]),
+  sweep: new Map([
+    [
+      'mode',
+      valuesOf<FeatureDataOf<'sweep'>['mode']>({ standard: true, smooth: true })
+    ]
+  ]),
+  hole: new Map([
+    [
+      'style',
+      valuesOf<FeatureDataOf<'hole'>['style']>({
+        simple: true,
+        counterbore: true,
+        countersink: true
+      })
+    ]
+  ]),
+  gear: new Map([
+    ['hand', valuesOf<GearHand>({ right: true, left: true })],
+    ['fit', valuesOf<GearFit>({ 'keep-diameter': true, module: true })],
+    ['anchor', valuesOf<ThreadAnchor>({ start: true, end: true })]
+  ]),
+  thread: new Map([
+    [
+      'profile',
+      valuesOf<ThreadProfile>({
+        'iso-metric': true,
+        printable: true,
+        custom: true
+      })
+    ],
+    ['hand', valuesOf<ThreadHand>({ right: true, left: true })],
+    ['anchor', valuesOf<ThreadAnchor>({ start: true, end: true })]
+  ])
+};
+
+/**
+ * Selector fields whose values are not one closed union across the schema
+ * (`kind` names a node, a command or an annotation; `featureKind` also names
+ * a recognized imported feature). Their values index tables and handle maps
+ * too (a constraint's `point` picks a solver handle, `axis` a coordinate), so
+ * a reserved name is refused there; no legitimate value of them is one. Any
+ * field ending in `Kind` is one as well.
  */
 const SELECTOR_FIELDS: ReadonlySet<string> = new Set([
   'point',
@@ -190,22 +396,41 @@ const SELECTOR_FIELDS: ReadonlySet<string> = new Set([
   'side',
   'end',
   'kind',
-  'featureKind',
-  'constraintKind',
-  'objectKind',
   'units',
   'unit',
   'mode',
   'direction',
   'operation',
-  'role'
+  'role',
+  'style',
+  'profile',
+  'hand',
+  'anchor',
+  'fit',
+  'plane',
+  'method',
+  'align',
+  'quantity',
+  'keepOriginals'
+]);
+
+/**
+ * Fields holding the owner's own data: node `metadata` (arbitrary keys and
+ * string, number or boolean values) and a primitive's `dimensions`
+ * (expression text). Their keys are still keys and are checked; their values
+ * are text, so a metadata `role` of "constructor" is not a selector.
+ */
+const FREEFORM_FIELDS: ReadonlySet<string> = new Set([
+  'metadata',
+  'dimensions'
 ]);
 
 /** Whether a string under `field` is a key, id or selector: never reserved. */
 function isKeyLikeField(field: string | undefined): boolean {
   return (
     isIdentifierField(field) ||
-    (field !== undefined && SELECTOR_FIELDS.has(field))
+    (field !== undefined &&
+      (SELECTOR_FIELDS.has(field) || /[a-z]Kind$/.test(field)))
   );
 }
 
@@ -222,13 +447,20 @@ function parameterNamesOf(value: Record<string, unknown>): unknown[] {
 }
 
 /**
- * Refuses a reserved name used where a document keeps a key: any object key
- * (every map in a document, its history and its command payloads), any id
- * field (see {@link isIdentifierField}), any enum-like selector such as a
- * constraint's `point` (see `SELECTOR_FIELDS`) and any parameter name, including
- * those in stored `parameter.*` commands. `field` names the property `value`
- * sits under, so a bare id such as a history change's `before` is judged by
- * its change's field. Other strings, such as display names, are not keys and
+ * Refuses a reserved name used where a document keeps a key, and an enum
+ * value outside its union:
+ * - any object key, everywhere (every map in a document, its history and its
+ *   command payloads, freeform metadata included);
+ * - outside freeform data (`FREEFORM_FIELDS`): any id field (see
+ *   {@link isIdentifierField}), any selector such as a constraint's `point`
+ *   (see `SELECTOR_FIELDS`) and any parameter name, including those in stored
+ *   `parameter.*` commands;
+ * - outside freeform data: an enum field (`ENUM_FIELDS`, and on a feature
+ *   node's data `FEATURE_DATA_ENUMS`) holding anything but a member of its
+ *   union.
+ * `field` names the property `value` sits under, so a bare id such as a
+ * history change's `before` is judged by its change's field. Other strings,
+ * such as display names, descriptions and metadata values, are not keys and
  * may be anything.
  */
 export function reservedIdentifierError(
@@ -239,6 +471,9 @@ export function reservedIdentifierError(
     value: unknown;
     field: string | undefined;
     parent: Entry | null;
+    freeform: boolean;
+    /** The union this value must belong to, when its field has one. */
+    members?: ReadonlySet<string>;
   }
   const path = (entry: Entry): string => {
     const parts: string[] = [];
@@ -246,11 +481,22 @@ export function reservedIdentifierError(
       if (at.field !== undefined) parts.unshift(at.field);
     return parts.join('.') || 'document';
   };
-  const pending: Entry[] = [{ value, field, parent: null }];
+  const pending: Entry[] = [
+    {
+      value,
+      field,
+      parent: null,
+      freeform: field !== undefined && FREEFORM_FIELDS.has(field),
+      members: field === undefined ? undefined : ENUM_FIELDS.get(field)
+    }
+  ];
   while (pending.length) {
     const entry = pending.pop()!;
     const current = entry.value;
     if (typeof current === 'string') {
+      if (entry.freeform) continue;
+      if (entry.members && !entry.members.has(current))
+        return `"${path(entry)}" has the unknown value "${current}".`;
       if (RESERVED_RECORD_KEYS.has(current) && isKeyLikeField(entry.field))
         return `"${path(entry)}" uses the reserved id "${current}".`;
       continue;
@@ -260,15 +506,35 @@ export function reservedIdentifierError(
       // (an imported mesh's `number[]` payload) cheap to walk.
       for (const item of current)
         if (typeof item !== 'number')
-          pending.push({ value: item, field: entry.field, parent: entry });
+          pending.push({ ...entry, value: item, parent: entry });
       continue;
     }
     if (!isDocumentRecord(current) || ArrayBuffer.isView(current)) continue;
+    const owner = entry.parent?.value;
+    const featureEnums =
+      !entry.freeform &&
+      entry.field === 'data' &&
+      isDocumentRecord(owner) &&
+      owner.kind === 'feature' &&
+      typeof current.featureKind === 'string' &&
+      Object.hasOwn(FEATURE_DATA_ENUMS, current.featureKind)
+        ? FEATURE_DATA_ENUMS[current.featureKind as FeatureKind]
+        : undefined;
     for (const key of Object.keys(current)) {
       if (RESERVED_RECORD_KEYS.has(key))
         return `"${path(entry)}" uses the reserved key "${key}".`;
-      pending.push({ value: current[key], field: key, parent: entry });
+      const freeform = entry.freeform || FREEFORM_FIELDS.has(key);
+      pending.push({
+        value: current[key],
+        field: key,
+        parent: entry,
+        freeform,
+        members: freeform
+          ? undefined
+          : (featureEnums?.get(key) ?? ENUM_FIELDS.get(key))
+      });
     }
+    if (entry.freeform) continue;
     for (const name of parameterNamesOf(current))
       if (typeof name === 'string' && RESERVED_RECORD_KEYS.has(name))
         return `"${path(entry)}" uses the reserved parameter name "${name}".`;
