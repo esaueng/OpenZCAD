@@ -360,10 +360,15 @@ function uniqueFaceOn(
   return matches.size === 1 ? [...matches][0]! : null;
 }
 
+/**
+ * Every planar result face, measured, or null when any one cannot be: an
+ * unmeasured face may lie on a constructed carrier, so a match that looks
+ * unique among the others proves nothing.
+ */
 function resultPlanes(
   kernel: RemusKernel,
   candidates: readonly { handle: number; kind: string; witness: unknown }[]
-): Map<number, OrientedPlane> {
+): Map<number, OrientedPlane> | null {
   const planes = new Map<number, OrientedPlane>();
   for (const candidate of candidates) {
     if (
@@ -372,7 +377,8 @@ function resultPlanes(
     )
       continue;
     const plane = orientedPlaneOf(kernel, candidate.handle);
-    if (plane) planes.set(candidate.handle, plane);
+    if (!plane) return null;
+    planes.set(candidate.handle, plane);
   }
   return planes;
 }
@@ -470,8 +476,8 @@ export function shellLineage(
   // unnamed one can take the constructed name.
   const planes = resultPlanes(kernel, candidates);
   const assignments: RemusSemanticAssignment[] = [];
-  // An unmeasurable source plane could land on any carrier: name nothing
-  // new, but still publish what was carried.
+  // An unmeasurable source or result plane could sit on any carrier: name
+  // nothing new, but still publish what was carried.
   const measured = sourcePlanes(kernel, sourceWitnesses);
   // What each planar source face can become: an opening leaves a rim on
   // its own plane; a kept face stays on its plane and may grow a wall one
@@ -488,7 +494,7 @@ export function shellLineage(
     constructed.set(handle, built);
     claims.set(handle, openings.has(handle) ? built : [plane, ...built]);
   }
-  for (const handle of measured ? source.faceReferences.keys() : []) {
+  for (const handle of measured && planes ? source.faceReferences.keys() : []) {
     const witness = sourceWitnesses.get(handle);
     if (witness?.surfaceType !== 'plane') continue;
     const reference = verifiedSourceFace(source, handle, witness);
@@ -496,7 +502,7 @@ export function shellLineage(
     if (!reference || !carriers || contested(handle, carriers, claims))
       continue;
     const opening = openings.has(handle);
-    const face = uniqueFaceOn(planes, carriers);
+    const face = planes ? uniqueFaceOn(planes, carriers) : null;
     if (face === null || carried.faceReferences.has(face)) continue;
     const candidate = candidates.find(
       (c) => c.kind === 'face' && c.handle === face
@@ -559,8 +565,8 @@ export function draftLineage(
   // unnamed one can take the constructed name.
   const planes = resultPlanes(kernel, candidates);
   const assignments: RemusSemanticAssignment[] = [];
-  // An unmeasurable source plane could land on any carrier: name nothing
-  // new, but still publish what was carried.
+  // An unmeasurable source or result plane could sit on any carrier: name
+  // nothing new, but still publish what was carried.
   const measured = sourcePlanes(kernel, sourceWitnesses);
   // What each planar source face can become: an undrafted face stays on its
   // plane; a drafted one turns about its hinge either way. A drafted plane
@@ -568,7 +574,7 @@ export function draftLineage(
   // could land on any, and no drafted face is named.
   const tilted = new Map<number, Carrier[]>();
   const claims = new Map<number, Carrier[]>();
-  let unpredictable = !measured;
+  let unpredictable = !measured || !planes;
   for (const [handle, plane] of measured ?? []) {
     if (!drafted.has(handle)) {
       claims.set(handle, [plane]);
@@ -602,7 +608,7 @@ export function draftLineage(
     const carriers = reference ? tilted.get(handle) : undefined;
     if (!reference || !carriers || contested(handle, carriers, claims))
       continue;
-    const face = uniqueFaceOn(planes, carriers);
+    const face = planes ? uniqueFaceOn(planes, carriers) : null;
     if (face === null || carried.faceReferences.has(face)) continue;
     const candidate = candidates.find(
       (c) => c.kind === 'face' && c.handle === face

@@ -166,6 +166,8 @@ interface PlaneFace {
   handle: number;
   normal: [number, number, number];
   point: [number, number, number];
+  /** A measurement the kernel fails to give for this face. */
+  unmeasured?: 'vertices' | 'normal';
 }
 
 const planeWitness = (face: PlaneFace): FaceWitnessV1 => ({
@@ -212,8 +214,12 @@ function planeKernel(
         (solid === 1 ? sourceFaces : resultFaces).map((face) => face.handle)
       ),
     getFaceEdges: () => new Uint32Array([]),
-    getFaceNormal: (face: number) => Float64Array.from(all.get(face)!.normal),
-    getFaceVertices: (face: number) => new Uint32Array([face]),
+    getFaceNormal: (face: number) =>
+      all.get(face)!.unmeasured === 'normal'
+        ? Float64Array.from([Number.NaN, 0, 0])
+        : Float64Array.from(all.get(face)!.normal),
+    getFaceVertices: (face: number) =>
+      new Uint32Array(all.get(face)!.unmeasured === 'vertices' ? [] : [face]),
     getVertexPosition: (vertex: number) =>
       Float64Array.from(all.get(vertex)!.point)
   } as unknown as RemusKernel;
@@ -380,5 +386,144 @@ describe('constructed shell and draft names', () => {
         )
       )
     ).toEqual([]);
+  });
+});
+
+describe('constructed names beside an unmeasurable result face', () => {
+  const producer = toFeatureId('feature_unmeasured');
+  const top: PlaneFace = { handle: 1, normal: [0, 0, 1], point: [5, 5, 10] };
+  // A second patch on the very carrier the name is proved on, and a face
+  // nowhere near it.
+  const elsewhere: PlaneFace = {
+    handle: 12,
+    normal: [1, 0, 0],
+    point: [40, 5, 5]
+  };
+  const modes = ['vertices', 'normal'] as const;
+
+  /**
+   * The target alone is named; a second patch on its carrier refuses the
+   * name whether or not that patch can be measured; a measurable face
+   * elsewhere does not.
+   */
+  function expectRefusedBeside(
+    build: (kernel: RemusKernel) => ReturnType<typeof shellLineage>,
+    target: PlaneFace,
+    twin: PlaneFace,
+    name: string
+  ) {
+    expect(
+      constructedNames(build(planeKernel([top], [target, elsewhere])))
+    ).toEqual([name]);
+    expect(constructedNames(build(planeKernel([top], [target, twin])))).toEqual(
+      []
+    );
+    for (const unmeasured of modes) {
+      expect(
+        constructedNames(
+          build(planeKernel([top], [target, { ...twin, unmeasured }]))
+        ),
+        `twin without ${unmeasured}`
+      ).toEqual([]);
+    }
+  }
+
+  it('refuses a shell inner wall beside an unmeasurable patch', () => {
+    expectRefusedBeside(
+      (kernel) =>
+        shellLineage(kernel, 1, 2, named([top], { 1: 'top' }), producer, [], 2),
+      { handle: 10, normal: [0, 0, 1], point: [5, 5, 8] },
+      { handle: 11, normal: [0, 0, 1], point: [25, 5, 8] },
+      `shell.face.inner.${JSON.stringify([feature, 'top'])}`
+    );
+  });
+
+  it('refuses a shell rim beside an unmeasurable patch', () => {
+    expectRefusedBeside(
+      (kernel) =>
+        shellLineage(
+          kernel,
+          1,
+          2,
+          named([top], { 1: 'top' }),
+          producer,
+          [1],
+          2
+        ),
+      { handle: 10, normal: [0, 0, 1], point: [1, 1, 10] },
+      { handle: 11, normal: [0, 0, 1], point: [25, 5, 10] },
+      `shell.face.rim.${JSON.stringify([feature, 'top'])}`
+    );
+  });
+
+  it('refuses a drafted face beside an unmeasurable patch', () => {
+    const side: PlaneFace = { handle: 1, normal: [1, 0, 0], point: [10, 5, 5] };
+    const angle = (10 * Math.PI) / 180;
+    const normal: [number, number, number] = [
+      Math.cos(angle),
+      0,
+      Math.sin(angle)
+    ];
+    const build = (kernel: RemusKernel) =>
+      draftLineage(
+        kernel,
+        1,
+        2,
+        named([side], { 1: 'side' }),
+        producer,
+        [1],
+        { x: 0, y: 0, z: 1 },
+        { x: 0, y: 0, z: 0 },
+        10
+      );
+    const target: PlaneFace = { handle: 10, normal, point: [10, 5, 0] };
+    const twin: PlaneFace = { handle: 11, normal, point: [10, 25, 0] };
+    const name = `draft.face.${JSON.stringify([feature, 'side'])}`;
+    expect(
+      constructedNames(build(planeKernel([side], [target, elsewhere])))
+    ).toEqual([name]);
+    expect(
+      constructedNames(build(planeKernel([side], [target, twin])))
+    ).toEqual([]);
+    for (const unmeasured of modes) {
+      expect(
+        constructedNames(
+          build(planeKernel([side], [target, { ...twin, unmeasured }]))
+        ),
+        `twin without ${unmeasured}`
+      ).toEqual([]);
+    }
+  });
+
+  it('keeps carried names when constructed names are withheld', () => {
+    // The kept top carries by exact witness; an unmeasurable result patch
+    // withholds only the shell's own names.
+    const kept: PlaneFace = { ...top, handle: 20 };
+    const broken: PlaneFace = {
+      handle: 21,
+      normal: [0, 0, 1],
+      point: [5, 5, 8],
+      unmeasured: 'vertices'
+    };
+    vi.mocked(topologyCandidatesForSolid).mockReset();
+    const kernel = planeKernel([top], [kept, broken]);
+    // Same witness as the source top, so it carries.
+    vi.mocked(topologyCandidatesForSolid).mockImplementation(
+      (_kernel, solid) =>
+        solid === 1
+          ? [f(1, planeWitness(top))]
+          : [f(20, planeWitness(top)), f(21, planeWitness(broken))]
+    );
+    const state = shellLineage(
+      kernel,
+      1,
+      2,
+      named([top], { 1: 'top' }),
+      producer,
+      [],
+      2
+    );
+    expect(constructedNames(state)).toEqual([]);
+    expect(state?.faceReferences.get(20)?.lineageName).toBe('top');
   });
 });
