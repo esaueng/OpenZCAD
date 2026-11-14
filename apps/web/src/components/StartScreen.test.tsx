@@ -2484,11 +2484,12 @@ describe('StartScreen storage readout', () => {
           resolve = done;
         })
     );
-    const { result, rerender } = renderHook(
-      ({ key }: { key: string | null }) =>
-        useAccountStorageUsage(load, 'account', key),
-      { initialProps: { key: '1:0:0' } }
-    );
+    const { result, rerender } = renderHook<
+      ReturnType<typeof useAccountStorageUsage>,
+      { key: string | null }
+    >(({ key }) => useAccountStorageUsage(load, 'account', key), {
+      initialProps: { key: '1:0:0' }
+    });
     rerender({ key: null });
     await act(async () => resolve(storageReport()));
     expect(result.current.usage?.storageBytes).toBe(42 * MB);
