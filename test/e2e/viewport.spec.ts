@@ -12,7 +12,8 @@ import {
   revealModelPanel,
   finishInPlaceCommand,
   extrudeBar,
-  openMoveOptions
+  openMoveOptions,
+  pressTool
 } from './openzcad-fixtures';
 import type { Locator, Page } from '@playwright/test';
 
@@ -740,6 +741,22 @@ test('the orientation widget snaps to a view the rail cannot reach', async ({
   await selectRailView(page, /^Isometric view/);
   await pollLiveDirection([1, -1, 0.9]);
   const wobbleFace = widget.getByRole('button', { name: 'Right view' });
+  // The cube's hit layer catches up with a camera only once it rests
+  // (`HIT_LAYER_SETTLE_MS`), relabelling its facets: wait until the face's
+  // own centre takes a press, so the listener and the press both land on it.
+  await expect
+    .poll(() =>
+      wobbleFace.evaluate((element) => {
+        const box = element.getBoundingClientRect();
+        return (
+          document.elementFromPoint(
+            box.left + box.width / 2,
+            box.top + box.height / 2
+          ) === element
+        );
+      })
+    )
+    .toBe(true);
   await wobbleFace.evaluate((element) => {
     const browserWindow = window as typeof window & {
       __ozOrientationWobbleClicks?: number;
@@ -1213,7 +1230,7 @@ test('double-clicking a filleted rim takes the whole run of edges', async ({
   // and arcs — the shape the whole feature exists for. A raw box has only
   // sharp corners, so every run on one would be a single edge.
   // U09 phase 7: in place, every edge from Options, the default radius.
-  await page.getByRole('button', { name: /^Fillet/ }).click();
+  await pressTool(page, /^Fillet/);
   const filletBar = page.getByRole('group', { name: 'Fillet command' });
   await filletBar.locator('summary').click();
   await filletBar.getByRole('button', { name: 'Select all 12 edges' }).click();
@@ -1373,7 +1390,7 @@ test('the selection filter changes what a click takes', async ({ page }) => {
 
   // Arming Fillet narrows to edges on its own: the choice is the tool's
   // rather than the user's.
-  await page.getByRole('button', { name: /^Fillet/ }).click();
+  await pressTool(page, /^Fillet/);
   await expect(viewer).toHaveAttribute('data-selection-filter', 'edge');
   await expect(viewer).toHaveAttribute('data-selection-filter-source', 'tool');
 });
@@ -1390,7 +1407,7 @@ test('dragging a box selects several bodies at once', async ({ page }) => {
     page.locator('.feature-row-main', { hasText: 'Box' })
   ).toBeVisible();
 
-  await page.getByRole('button', { name: /^Move \(M\)/ }).click();
+  await pressTool(page, /^Move \(M\)/);
   const moveControls = page.getByRole('form', { name: 'Move controls' });
   await openMoveOptions(moveControls);
   await moveControls.getByLabel('Move X in mm').fill('-90');
@@ -1695,7 +1712,10 @@ test('releasing an orbit eases out instead of stopping dead', async ({
     throw new Error('Viewer canvas is not laid out.');
   }
   const startX = bounds.x + bounds.width / 2;
-  const startY = bounds.y + bounds.height * 0.6;
+  // Above the origin: an empty project's stage invitation (#1374) hangs
+  // just under it, and a press on one of its buttons is a click, not an
+  // orbit.
+  const startY = bounds.y + bounds.height * 0.35;
   await page.keyboard.down('Shift');
   await page.mouse.move(startX, startY);
   await page.mouse.down();
@@ -1783,7 +1803,10 @@ test('an orbit draws the view cube without touching the page', async ({
     throw new Error('Viewer canvas is not laid out.');
   }
   const startX = bounds.x + bounds.width / 2;
-  const startY = bounds.y + bounds.height * 0.6;
+  // Above the origin: an empty project's stage invitation (#1374) hangs
+  // just under it, and a press on one of its buttons is a click, not an
+  // orbit.
+  const startY = bounds.y + bounds.height * 0.35;
   await page.keyboard.down('Shift');
   await page.mouse.move(startX, startY);
   await page.mouse.down();

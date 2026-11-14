@@ -493,12 +493,17 @@ for (const viewport of VIEWPORTS) {
     const historyRow = modelPanel(page, 'History')
       .locator('.feature-row-main')
       .first();
+    const objectRow = modelPanel(page, 'Objects')
+      .locator('.body-row-main')
+      .first();
     const parameterField = modelPanel(page, 'Parameters')
       .locator('.param-row input')
       .first();
     await expect(historyRow).toBeVisible();
+    await expect(objectRow).toBeVisible();
     await expect(parameterField).toBeVisible();
-    const rowBefore = (await box(historyRow)).height;
+    const historyBefore = (await box(historyRow)).height;
+    const rowBefore = (await box(objectRow)).height;
     const fieldBefore = (await box(parameterField)).height;
 
     await toggleSetting(page, 'Compact rows');
@@ -509,13 +514,18 @@ for (const viewport of VIEWPORTS) {
     ).toHaveAttribute('aria-checked', 'true');
     await closeMenu(page);
     await expect(page.locator('.model-panel.is-compact')).toHaveCount(3);
-    const rowAfter = (await box(historyRow)).height;
+    const historyAfter = (await box(historyRow)).height;
+    const rowAfter = (await box(objectRow)).height;
     const fieldAfter = (await box(parameterField)).height;
     expect(rowAfter).toBeLessThan(rowBefore);
     expect(fieldAfter).toBeLessThan(fieldBefore);
     // Still a whole pointer target.
     expect(rowAfter).toBeGreaterThanOrEqual(24);
     expect(fieldAfter).toBeGreaterThanOrEqual(24);
+    // History's one-line steps already sit at that 24px floor (#1372), so
+    // Compact keeps them there rather than shrinking them.
+    expect(historyBefore).toBe(24);
+    expect(historyAfter).toBe(24);
 
     await page.reload();
     await expect(page.locator('.model-panel.is-compact')).toHaveCount(3, {

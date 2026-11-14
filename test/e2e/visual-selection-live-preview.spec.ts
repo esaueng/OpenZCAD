@@ -699,9 +699,16 @@ test('streams exact planar previews and restores invalid or canceled offsets', a
   await expect(chip).toHaveAttribute('data-state', 'warning', {
     timeout: PREVIEW_BUDGET_MS
   });
+  // A refused frame is not the refusal while the hand is still on the
+  // handle (#1334): the operation stays Dragging, and Failed, with its card,
+  // lands only on release (the next test lets go there).
+  const operation = page.getByRole('region', {
+    name: 'Offset Face operation'
+  });
   await expect(
-    page.getByRole('region', { name: 'Offset Face operation' })
-  ).toContainText('Failed');
+    operation.locator('.selection-callout-phase-dot')
+  ).toHaveAttribute('aria-label', 'Dragging');
+  await expect(operation).not.toContainText('Failed');
   expect(await readAxisLength()).toBeCloseTo(lastValid!, 4);
   // A value that builds again recovers the gesture in place.
   await page.mouse.move(

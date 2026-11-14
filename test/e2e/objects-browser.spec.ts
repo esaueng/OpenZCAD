@@ -4,7 +4,13 @@ import {
   extrudeSketch
 } from '@openzcad/document-core';
 import { toUserId } from '@openzcad/shared';
-import { createProject, expect, stubApi, test } from './openzcad-fixtures';
+import {
+  createProject,
+  expect,
+  revealModelPanel,
+  stubApi,
+  test
+} from './openzcad-fixtures';
 
 for (const viewport of [
   { width: 1440, height: 1000 },
@@ -123,6 +129,14 @@ for (const viewport of [
     await filter.selectOption('all');
     // The stored section key still opens the renamed section after reload.
     await page.reload();
+    if (viewport.width <= 520) {
+      // A phone opens on the model with no panel drawn (#1382); its rail
+      // button brings the stored Objects section back.
+      await expect(
+        page.getByRole('heading', { name: 'Objects 3', exact: true })
+      ).toHaveCount(0);
+      await revealModelPanel(page, 'Objects');
+    }
     await expect(
       page.getByRole('heading', { name: 'Objects 3', exact: true })
     ).toBeVisible();
