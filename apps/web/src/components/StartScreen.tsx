@@ -2629,7 +2629,9 @@ export function StartScreen({
             items: orderedItems.filter(itemPinned)
           },
           {
-            label: 'Projects',
+            // Not "Projects": the shelf's heading already says that, so the
+            // page read Projects, Pinned, Projects.
+            label: 'Others',
             group: 'parts',
             items: orderedItems.filter((item) => !itemPinned(item))
           }
@@ -2696,7 +2698,7 @@ export function StartScreen({
       ? [
           { label: 'Pinned', count: previousLayout.pinned, offset: 0 },
           {
-            label: 'Projects',
+            label: 'Others',
             count: previousLayout.all - previousLayout.pinned,
             offset: previousLayout.pinned
           }
@@ -2984,18 +2986,20 @@ export function StartScreen({
               />
             )}
           </div>
+          {/* No visible Name and Units captions: the fields sit in the New
+              project card under its button, and "mm" names its own field.
+              The captions read as form chrome over a one-click action. */}
           <label className="start-field start-field-name">
-            <span className="start-field-label">Name</span>
             <input
               value={name}
               aria-label="Project name"
+              placeholder="Project name"
               aria-invalid={nameTooLong || undefined}
               aria-describedby={nameTooLong ? 'project-name-error' : undefined}
               onChange={(event) => setName(event.target.value)}
             />
           </label>
           <label className="start-field start-field-units">
-            <span className="start-field-label">Units</span>
             <select
               value={units}
               aria-label="Units"
@@ -3510,7 +3514,17 @@ export function StartScreen({
                           </div>
                         )}
                       <div
-                        className={`start-tile-grid ${layout === 'list' ? 'is-list' : `is-${cardSize}`}`}
+                        className={[
+                          'start-tile-grid',
+                          layout === 'list' ? 'is-list' : `is-${cardSize}`,
+                          // Every card here is pinned, and the label or the
+                          // filter already says so: no pin on each card.
+                          group.group === 'pinned' || activeFilter === 'pinned'
+                            ? 'is-all-pinned'
+                            : ''
+                        ]
+                          .filter(Boolean)
+                          .join(' ')}
                         data-tile-group={canReorder ? group.group : undefined}
                       >
                         {group.items.map((item) =>

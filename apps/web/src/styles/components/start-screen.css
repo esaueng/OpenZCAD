@@ -498,16 +498,7 @@
 
 .start-field {
   display: grid;
-  gap: 4px;
   min-width: 0;
-}
-
-.start-field-label {
-  color: var(--color-text-subtle);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mini);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
 }
 
 .start-field input,
@@ -542,13 +533,12 @@
   cursor: pointer;
 }
 
-/* Centred on the 30px select from the label's foot, so the visible label
-   above it on narrow screens does not move it. */
+/* Centred on the select, which is the label's whole height at any size. */
 .start-field-units::after {
   content: '';
   position: absolute;
   right: 10px;
-  bottom: 12px;
+  top: calc(50% - 3px);
   width: 10px;
   height: 6px;
   background: var(--color-text-muted);
@@ -566,9 +556,8 @@
 }
 
 /* In the column a once-a-session action should not take a third of it, so
-   the hint steps aside. The labels stay: the name arrives filled in with a
-   suggestion, and an unlabelled filled field beside a button read as a
-   search box rather than as the new project's name. */
+   the hint steps aside. The fields carry no captions either: they sit in the
+   tinted New project card, directly under its button. */
 @media (min-width: 901px) {
   .start-launch-hint:not(.is-taken) {
     display: none;
@@ -2140,9 +2129,10 @@
   opacity: 1;
 }
 
-/* The Pinned group has no label, so a pinned card's or folder's pin stays
-   in sight. */
-.start-tile.is-pinned .start-tile-pin {
+/* A pinned card's or folder's pin stays in sight where pinned and unpinned
+   cards mix (a search, Needs attention). Under the Pinned label, or with the
+   Pinned filter on, every card is pinned, and a pin on each repeated it. */
+.start-tile-grid:not(.is-all-pinned) .start-tile.is-pinned .start-tile-pin {
   opacity: 1;
 }
 
@@ -2410,8 +2400,8 @@
     display: none;
   }
 
-  /* The launch card is two rows — New project, then name and units under
-     their labels — so it costs the shelf little height. The hint can go; an
+  /* The launch card is two rows — New project, then name and units — so it
+     costs the shelf little height. The hint can go; an
      error still takes its own row. */
   .start-launch {
     padding: var(--sp-3) var(--sp-3) 0;

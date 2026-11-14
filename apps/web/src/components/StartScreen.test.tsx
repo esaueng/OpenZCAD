@@ -710,14 +710,17 @@ describe('StartScreen library discovery', () => {
     );
   });
 
-  it("labels the new project's name field in view, not only for a screen reader", () => {
-    // It arrives filled with a suggested name; unlabelled beside a button it
-    // read as a search box.
+  it('names the launch fields without visible captions', () => {
+    // 14 Nov 2026: NAME and UNITS over the fields read as form chrome over a
+    // one-click action. The card and its button frame them; assistive
+    // technology still hears their names.
     renderStartScreen({ projects: [], signedIn: false });
     const field = screen.getByLabelText('Project name');
-    const label = field.closest('label');
-    expect(label).not.toBeNull();
-    expect(within(label!).getByText('Name')).toHaveClass('start-field-label');
+    expect(field).toHaveAttribute('placeholder', 'Project name');
+    expect(screen.getByLabelText('Units')).toBeInTheDocument();
+    const form = field.closest('form')!;
+    expect(within(form).queryByText('Name')).toBeNull();
+    expect(within(form).queryByText('Units')).toBeNull();
   });
 });
 
@@ -2122,7 +2125,22 @@ describe('StartScreen sidebar and shelf edge', () => {
       [...body.querySelectorAll(':scope > h3.start-group-label')].map(
         (label) => label.textContent
       )
-    ).toEqual(['Pinned', 'Projects']);
+    ).toEqual(['Pinned', 'Others']);
+  });
+
+  it('leaves the pin off cards the Pinned label already names', () => {
+    // Under "Pinned" a resting pin on every card said it twice; where
+    // pinned and unpinned cards mix, the pin is how they tell apart.
+    const { container } = renderStartScreen({ projects: pinnedAndLoose() });
+    const grids = container.querySelectorAll('.start-body > .start-tile-grid');
+    expect(grids[0]).toHaveClass('is-all-pinned');
+    expect(grids[1]).not.toHaveClass('is-all-pinned');
+    fireEvent.change(screen.getByLabelText('Search projects'), {
+      target: { value: 'part' }
+    });
+    expect(
+      container.querySelector('.start-tile-grid.is-all-pinned')
+    ).toBeNull();
   });
 
   it('counts projects, not tiles, in the Pinned tab and group labels', () => {
