@@ -19,7 +19,7 @@
 
 import { splineBezierSegments } from '@openzcad/geometry';
 import { formatDxfNumber, type DxfEntity } from '@openzcad/io-dxf';
-import type { UnitSystem } from '@openzcad/shared';
+import { millimetresPerUnit, type UnitSystem } from '@openzcad/shared';
 
 export interface SketchSvgOptions {
   readonly units: UnitSystem;
@@ -34,13 +34,6 @@ export interface SketchSvgOptions {
 
 /** Stroke width on paper, in millimetres: a fine pen, visible at 1:1. */
 const STROKE_MM = 0.25;
-
-const MM_PER_UNIT: Record<UnitSystem, number> = {
-  mm: 1,
-  cm: 10,
-  m: 1000,
-  inch: 25.4
-};
 
 /** The physical unit `width`/`height` are stated in, and its size in document units. */
 const SVG_LENGTH: Record<UnitSystem, { suffix: string; perUnit: number }> = {
@@ -372,7 +365,7 @@ export function writeSketchSvg(
   ) {
     throw new Error('The sketch extent is not finite.');
   }
-  const stroke = STROKE_MM / MM_PER_UNIT[options.units];
+  const stroke = STROKE_MM / millimetresPerUnit(options.units);
   // Half a stroke of margin each side, so the outermost curves are not
   // clipped down the middle of their pen line.
   const pad = stroke / 2;

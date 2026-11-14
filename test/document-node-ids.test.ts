@@ -7,6 +7,7 @@ import {
   addSketchFeature,
   assertSafeDocumentIdentifiers,
   assertStorableDocument,
+  createBodyFeatureIds,
   createProjectDocument,
   documentIdentifierError,
   findSketch,
@@ -205,7 +206,14 @@ describe('document node ids', () => {
         {
           id: 'entry_1',
           label: 'Edit',
-          changes: [{ kind: 'value', field: 'nodes', key: 'ent_ok', after: {} }]
+          changes: [
+            {
+              kind: 'value',
+              field: 'nodes',
+              key: 'ent_ok',
+              after: { id: 'ent_ok' }
+            }
+          ]
         }
       ],
       cursor: 1,
@@ -1923,4 +1931,382 @@ describe('document units', () => {
       ).toThrow(/Unknown units/);
     }
   });
+});
+
+const storedCommand = (kind: string, payload: unknown): SerializedCommand => ({
+  kind,
+  payload,
+  replayVersion: 1,
+  label: kind,
+  timestamp: new Date(0).toISOString()
+});
+
+const changeHistory = (projectId: string, changes: unknown[]) => ({
+  schemaVersion: 1,
+  projectId,
+  actorUserId: owner,
+  entries: [{ id: 'entry_1', label: 'Edit', changes }],
+  cursor: 1,
+  trimmed: 0
+});
+
+describe('a feature id reused by another kind', () => {
+  /**
+   * The reported sequence: revolve F, set its axis to vertical, delete F,
+   * then pattern a box as F again. The update is a revolve's, wherever the
+   * pattern now is.
+   */
+  function reusedSequence(base: ProjectDocument) {
+    const sketch = commandFactories.addSketch({
+      name: 'Profile',
+      plane: 'XZ',
+      offset: 0,
+      object: {
+        objectKind: 'rectangle',
+        width: 4,
+        height: 4,
+        centerX: 10,
+        centerY: 10
+      }
+    });
+    const revolveIds = createBodyFeatureIds();
+    const sketchId = (sketch.payload as { ids: { sketchId: string } }).ids
+      .sketchId;
+    return {
+      featureId: revolveIds.featureId,
+      commands: [
+        sketch,
+        commandFactories.revolveSketch({
+          name: 'Ring',
+          sketchId: sketchId as never,
+          axis: 'horizontal',
+          ids: revolveIds
+        }),
+        commandFactories.updateFeature({
+          featureId: revolveIds.featureId,
+          data: { axis: 'vertical' }
+        }),
+        commandFactories.deleteFeature({ featureId: revolveIds.featureId }),
+        commandFactories.patternBody({
+          name: 'Grid',
+          targetBodyId: base.bodyOrder[0]!,
+          patternKind: 'grid',
+          count: 2,
+          axis: 'x',
+          spacing: 10,
+          axis2: 'y',
+          ids: { ...createBodyFeatureIds(), featureId: revolveIds.featureId }
+        })
+      ]
+    };
+  }
+
+  it('judges each update by the kind its feature had where the update sits', () => {
+    const base = valid();
+    const { featureId, commands } = reusedSequence(base);
+    const manager = new CommandManager(base);
+    for (const command of commands) manager.execute(command);
+    const saved = JSON.parse(JSON.stringify(manager.document)) as {
+      commandLog: SerializedCommand[];
+      editHistory: unknown;
+    };
+    // Stored, in its log and its undo history.
+    expect(() => assertStorableDocument(saved)).not.toThrow();
+    expect(
+      isDocumentHistory(saved.editHistory, manager.document.projectId)
+    ).toBe(true);
+    // Replayed, and run as one transaction.
+    expect(() => replayCommands(base, saved.commandLog)).not.toThrow();
+    expect(() =>
+      new CommandManager(base).runTransaction('Rebuild', commands)
+    ).not.toThrow();
+    // The pattern F is now judged as a pattern, in every place.
+    const patternUpdate = (axis: string) =>
+      commandFactories.updateFeature({
+        featureId,
+        data: { axis } as never
+      });
+    expect(() =>
+      new CommandManager(manager.document).execute(patternUpdate('vertical'))
+    ).toThrow(/axis" has the unknown value "vertical"/);
+    expect(() =>
+      new CommandManager(manager.document).execute(patternUpdate('z'))
+    ).not.toThrow();
+    expect(() =>
+      new CommandManager(base).runTransaction('Rebuild', [
+        ...commands,
+        patternUpdate('vertical')
+      ])
+    ).toThrow(/axis" has the unknown value "vertical"/);
+    expect(
+      refusal({
+        ...saved,
+        commandLog: [
+          ...saved.commandLog,
+          JSON.parse(JSON.stringify(patternUpdate('vertical').serialize()))
+        ]
+      })
+    ).toMatch(/axis" has the unknown value "vertical"/);
+    // Before the reuse the revolve's own enums still apply.
+    const early = saved.commandLog
+      .slice(0, 3)
+      .map((command, index) =>
+        index === 2
+          ? { ...command, payload: { featureId, data: { axis: 'x' } } }
+          : command
+      );
+    expect(reservedIdentifierError(early, 'commandLog')).toMatch(
+      /axis" has the unknown value "x"/
+    );
+  });
+
+  it('holds an update after its feature was deleted to every kind', () => {
+    const base = valid();
+    const { featureId, commands } = reusedSequence(base);
+    const log = commands
+      .slice(0, 4)
+      .map((command) => command.serialize() as SerializedCommand);
+    const after = (data: Record<string, unknown>) =>
+      reservedIdentifierError(
+        [...log, storedCommand('feature.update', { featureId, data })],
+        'commandLog'
+      );
+    expect(after({ axis: 'z' })).toBeNull();
+    expect(after({ axis: 'sideways' })).toMatch(
+      /axis" has the unknown value "sideways"/
+    );
+  });
+});
+
+describe('feature and node ids are strings', () => {
+  /** A box whose feature id is the number 123, as JSON from storage. */
+  function numericFeature(): ProjectDocument {
+    const json = JSON.parse(JSON.stringify(valid())) as {
+      nodes: Record<string, Record<string, unknown>>;
+      featureOrder: unknown[];
+    };
+    const node = Object.values(json.nodes).find(
+      (candidate) => candidate.kind === 'feature'
+    )!;
+    const featureId = node.featureId;
+    node.featureId = 123;
+    json.featureOrder = json.featureOrder.map((id) =>
+      id === featureId ? 123 : id
+    );
+    return json as unknown as ProjectDocument;
+  }
+
+  it('refuses a document whose feature, body or node id is no string', () => {
+    expect(refusal(numericFeature())).toMatch(/invalid "featureId"/);
+    for (const [kind, field] of [
+      ['body', 'bodyId'],
+      ['feature', 'featureId'],
+      ['project', 'id']
+    ] as const) {
+      const json = JSON.parse(JSON.stringify(valid())) as {
+        nodes: Record<string, Record<string, unknown>>;
+      };
+      const node = Object.values(json.nodes).find(
+        (candidate) => candidate.kind === kind
+      )!;
+      node[field] = 7;
+      expect(refusal(json)).toMatch(/has an invalid/);
+      delete node[field];
+      expect(refusal(json)).toMatch(/has an invalid/);
+    }
+  });
+
+  it('refuses a numeric feature id in a node snapshot in undo history', () => {
+    const json = JSON.parse(JSON.stringify(valid())) as ProjectDocument & {
+      nodes: Record<string, Record<string, unknown>>;
+    };
+    const [key, node] = Object.entries(json.nodes).find(
+      ([, candidate]) => candidate.kind === 'feature'
+    )!;
+    const history = changeHistory(json.projectId, [
+      {
+        kind: 'value',
+        field: 'nodes',
+        key,
+        before: { ...node, featureId: 123 },
+        after: node
+      }
+    ]);
+    expect(isDocumentHistory(history, json.projectId)).toBe(false);
+  });
+
+  it('refuses a command naming its feature or node by a number', () => {
+    const document = numericFeature();
+    const update = commandFactories.updateFeature({
+      featureId: 123 as never,
+      data: { primitiveKind: {} } as never
+    });
+    expect(() => new CommandManager(document).execute(update)).toThrow(
+      /featureId" must be a string/
+    );
+    expect(() =>
+      replayCommands(valid(), [update.serialize() as SerializedCommand])
+    ).toThrow(/featureId" must be a string/);
+    for (const kind of ['feature.delete', 'node.rename']) {
+      expect(
+        reservedIdentifierError(
+          [storedCommand(kind, { featureId: 1, nodeId: 2, name: 'x' })],
+          'commandLog'
+        )
+      ).toMatch(/must be a string/);
+    }
+    // A string id, or none, is fine.
+    expect(
+      reservedIdentifierError(
+        [storedCommand('node.rename', { nodeId: 'node_1', name: 'x' })],
+        'commandLog'
+      )
+    ).toBeNull();
+  });
+
+  it('keeps fields that are strings on every kind strict for an unknown target', () => {
+    const unknown = (data: Record<string, unknown>) =>
+      reservedIdentifierError(
+        [storedCommand('feature.update', { featureId: 'feature_gone', data })],
+        'commandLog'
+      );
+    for (const data of [
+      { primitiveKind: {} },
+      { patternKind: 1 },
+      { mode: ['ruled'] },
+      { style: null },
+      { positionAnchor: {} }
+    ])
+      expect(unknown(data)).toMatch(/must be one of its known values/);
+    // Fields some kind holds as an object or vector still may.
+    for (const data of [
+      { axis: { x: 0, y: 0, z: 1 } },
+      { operation: { kind: 'move-face' } },
+      { profile: { sketchId: 'sketch_1', all: true } }
+    ])
+      expect(unknown(data)).toBeNull();
+  });
+});
+
+describe('units are never missing', () => {
+  type Json = Record<string, unknown> & {
+    projectId: string;
+    nodes: Record<string, Record<string, unknown>>;
+    rootNodeId: string;
+  };
+  const json = () => JSON.parse(JSON.stringify(valid())) as Json;
+
+  it('refuses a document or project node without units', () => {
+    const document = json();
+    delete document.units;
+    expect(refusal(document)).toMatch(/missing its "units"/);
+    const project = json();
+    delete project.nodes[project.rootNodeId]!.units;
+    expect(refusal(project)).toMatch(/missing its "units"/);
+  });
+
+  it('refuses undo history that would delete the units', () => {
+    const value = json();
+    const project = value.nodes[value.rootNodeId]!;
+    const { units: _units, ...withoutUnits } = project;
+    for (const change of [
+      { kind: 'value', field: 'units', before: 'mm' },
+      { kind: 'value', field: 'units', after: 'inch' },
+      { kind: 'value', field: 'units', before: undefined, after: 'mm' },
+      {
+        kind: 'value',
+        field: 'nodes',
+        key: value.rootNodeId,
+        before: project,
+        after: withoutUnits
+      }
+    ]) {
+      const history = changeHistory(value.projectId, [change]);
+      expect(isDocumentHistory(history, value.projectId)).toBe(false);
+      expect(refusal({ ...value, editHistory: history })).toMatch(
+        /missing its "(before|after|units)"|invalid or unsupported undo history/
+      );
+    }
+  });
+});
+
+describe('optional feature enums', () => {
+  it.each([
+    [
+      'feature.hole',
+      { style: 'simple', depthMode: 'blind' },
+      'positionAnchor',
+      'centroid',
+      'corner'
+    ],
+    ['feature.helical-sweep', {}, 'construction', 'in-place', 'offset'],
+    ['feature.thread', { profile: 'npt' }, 'pipeSize', '1/2', '5/8']
+  ])(
+    'holds %s %j %s to its values, absent or not',
+    (kind, base, field, good, bad) => {
+      const featureKind =
+        COMMAND_FEATURE_KINDS[kind as keyof typeof COMMAND_FEATURE_KINDS];
+      const ids = { featureId: 'feature_f', featureNodeId: 'node_f' };
+      const create = (payload: Record<string, unknown>) =>
+        reservedIdentifierError(
+          [storedCommand(kind, { ...base, ...payload, ids })],
+          'commandLog'
+        );
+      // A creation command, and a later update of what it created.
+      expect(create({})).toBeNull();
+      expect(create({ [field]: good })).toBeNull();
+      for (const value of [bad, 'constructor', 1, {}])
+        expect(create({ [field]: value })).toMatch(
+          /has the unknown value|must be one of its known values/
+        );
+      const update = (value: unknown) =>
+        reservedIdentifierError(
+          [
+            storedCommand(kind, { ...base, ids }),
+            storedCommand('feature.update', {
+              featureId: 'feature_f',
+              data: { [field]: value }
+            })
+          ],
+          'commandLog'
+        );
+      expect(update(good)).toBeNull();
+      expect(update(bad)).toMatch(/has the unknown value/);
+      // A live feature node, and its snapshot in undo history.
+      const document = JSON.parse(JSON.stringify(valid())) as ProjectDocument;
+      const node = (value: unknown) => ({
+        id: 'node_f',
+        kind: 'feature',
+        parentId: document.rootNodeId,
+        name: 'F',
+        featureId: 'feature_f',
+        featureKind,
+        data: {
+          featureKind,
+          ...base,
+          ...(value === undefined ? {} : { [field]: value })
+        }
+      });
+      const live = (value: unknown) =>
+        reservedIdentifierError({
+          ...document,
+          nodes: { ...document.nodes, node_f: node(value) }
+        });
+      expect(live(undefined)).toBeNull();
+      expect(live(good)).toBeNull();
+      expect(live(bad)).toMatch(/has the unknown value/);
+      const history = (value: unknown) =>
+        changeHistory(document.projectId, [
+          {
+            kind: 'value',
+            field: 'nodes',
+            key: 'node_f',
+            before: undefined,
+            after: node(value)
+          }
+        ]);
+      expect(isDocumentHistory(history(good), document.projectId)).toBe(true);
+      expect(isDocumentHistory(history(bad), document.projectId)).toBe(false);
+    }
+  );
 });

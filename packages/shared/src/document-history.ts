@@ -6,6 +6,7 @@ import {
   documentFeatureKinds,
   historyChangeIdentifierError,
   isReservedRecordKey,
+  nodeIdentityError,
   nodeMapKeyError,
   type FeatureKinds
 } from './document-validation';
@@ -171,10 +172,7 @@ export function isDocumentHistory(
                 (side) => nodeMapKeyError(side) !== null
               )
             : [change.before, change.after].some(
-                (side) =>
-                  record(side) &&
-                  side.id !== undefined &&
-                  (typeof side.id !== 'string' || isReservedRecordKey(side.id))
+                (side) => record(side) && nodeIdentityError(side) !== null
               ))
         )
           return false;

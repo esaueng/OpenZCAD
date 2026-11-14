@@ -17,6 +17,7 @@ import {
   assemblySetError,
   referenceImageSetError,
   reservedIdentifierError,
+  reservedNameError,
   sketchConstraintShapeError,
   type ProjectDocument
 } from '@openzcad/shared';
@@ -128,10 +129,7 @@ function derivedProjectionError(value: object): string | null {
         typeof mesh === 'object' && mesh !== null
           ? (mesh as { reference?: unknown }).reference
           : undefined;
-      const error = reservedIdentifierError(
-        { ...rest, mesh: { reference } },
-        undefined
-      );
+      const error = reservedNameError({ ...rest, mesh: { reference } });
       if (error)
         return `"document.derived.bodyRepresentations.${bodyId}": ${error}`;
     }
@@ -181,12 +179,16 @@ export function assertSafeDocumentIdentifiers(value: unknown): void {
 /**
  * The key and reference checks a document must pass wherever it is published:
  * no reserved name as a key, id or selector anywhere in it
- * ({@link reservedDocumentIdentifierError}), and node references that name
- * nodes as {@link nodeReferenceError} requires. Returns the refusal, or null.
+ * ({@link reservedDocumentIdentifierError}), node references that name
+ * nodes as {@link nodeReferenceError} requires, and the document's `units`,
+ * which every length is read through. Returns the refusal, or null.
  */
 export function documentIdentifierError(value: object): string | null {
   return (
     nodeReferenceError(value as Record<string, unknown>) ??
+    ((value as { units?: unknown }).units === undefined
+      ? '"document" is missing its "units".'
+      : null) ??
     reservedDocumentIdentifierError(value)
   );
 }
