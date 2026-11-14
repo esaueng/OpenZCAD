@@ -54,6 +54,36 @@ describe('loading the automatic migration controller', () => {
     expect(controller.dispose).toHaveBeenCalledOnce();
   });
 
+  // offline-startup.spec.ts on PR #1418: a load that failed because the
+  // page went offline opened Settings over the startup screen's offline
+  // wait. Offline it is only retried, when the page comes back online.
+  it('says nothing of a load that fails offline, and retries it online', async () => {
+    const { startAutomaticMigration } =
+      await import('./automaticMigrationLoader');
+    const { controller, module } = controllerModule();
+    const load = vi
+      .fn<() => Promise<AutomaticMigrationModule>>()
+      .mockRejectedValueOnce(chunkError())
+      .mockResolvedValue(module);
+    const attention = vi.fn();
+    const onLine = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    try {
+      const migration = startAutomaticMigration('account', attention, {
+        load
+      });
+      await migration.loaded();
+      expect(attention).not.toHaveBeenCalled();
+
+      onLine.mockReturnValue(true);
+      window.dispatchEvent(new Event('online'));
+      await vi.waitFor(() => expect(controller.check).toHaveBeenCalledOnce());
+      expect(attention).not.toHaveBeenCalled();
+      migration.dispose();
+    } finally {
+      onLine.mockRestore();
+    }
+  });
+
   it('retries on an encryption-state change and a key session becoming ready', async () => {
     const { startAutomaticMigration } =
       await import('./automaticMigrationLoader');

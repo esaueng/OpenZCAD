@@ -31,10 +31,6 @@ import { uploadCloudThumbnail } from './cloudThumbnail';
 import { desktopFetch } from './desktopBridge';
 import { uploadTransport } from './e2ee/encryptedContentBlobs';
 import { localStorageEncryptedProjectPins } from './e2ee/encryptedProjectPins';
-import {
-  localStorageConsentPins,
-  type VerifiedAssistantConsent
-} from './e2ee/assistantConsentPins';
 import { createEncryptedDocumentsApi } from './e2ee/encryptedDocumentsApi';
 import { projectMeasurementCloudApi } from './measurementCloudSync';
 import {
@@ -642,99 +638,81 @@ describe('an assistant request', () => {
     expect(nativeSends()).toEqual([]);
   });
 
-  /** This device's consent log, as every tab reads it. */
-  const consentLog = () => localStorageConsentPins(window.localStorage);
+  // Owner decision (2026-11-14): no consent exception in this PR. A
+  // request for a project this device holds as encrypted is refused before
+  // the send, whatever consent the panel verified (`consentedProjectId`).
+  it.each([
+    ['pinned', (projectId: string) => otherTab().pin(projectId)],
+    [
+      'unresolved',
+      (projectId: string) => otherTab().markCutoverUnresolved(projectId)
+    ],
+    [
+      'required to stay encrypted',
+      (projectId: string) => otherTab().requireEncryption(projectId)
+    ]
+  ])(
+    'refuses a %s project even with its consent verified',
+    async (state, hold) => {
+      const projectId = `proj_assistant_held_${state.replace(/\W/g, '_')}`;
+      expect(hold(projectId)).toBe(true);
+      desktop();
+      await expect(
+        streamAssistantReply({
+          prompt: 'Hi',
+          digest: assistantDigest(projectId),
+          consentedProjectId: projectId
+        })
+      ).rejects.toMatchObject({ code: 'AI_E2EE_PROJECT' });
+      // The send gate refuses the request itself too, whatever sent it.
+      await expect(
+        desktopFetch(
+          '/api/assistant/proposals',
+          assistantProjectRequest(projectId, { method: 'POST', body: '{}' })
+        )
+      ).rejects.toBeInstanceOf(ApiError);
+      expect(nativeSends()).toEqual([]);
+    }
+  );
 
-  /** This device verified an Allow at `sequence` (`verify` records it). */
-  function verifiedConsent(
-    projectId: string,
-    sequence = 1
-  ): VerifiedAssistantConsent {
-    expect(consentLog().observe('user_ctx', projectId, sequence, true)).toBe(
-      'accepted'
-    );
-    return { userId: 'user_ctx', projectId, sequence };
-  }
-
-  it('carries only that project’s verified consent', async () => {
-    const projectId = 'proj_assistant_consented';
+  it('refuses a pinned project in the browser too, consent or not', async () => {
+    const projectId = 'proj_assistant_held_browser';
     otherTab().pin(projectId);
-    desktop();
-    await streamAssistantReply({
-      prompt: 'Hi',
-      digest: assistantDigest(projectId),
-      consent: verifiedConsent(projectId)
-    }).catch(() => undefined);
-    // Sent (an empty reply is retried once).
-    expect(nativeSends().length).toBeGreaterThan(0);
-    // Without that consent on the request itself, nothing is sent.
-    vi.mocked(invoke).mockClear();
+    await expect(
+      streamAssistantReply({
+        prompt: 'Hi',
+        digest: assistantDigest(projectId),
+        consentedProjectId: projectId
+      })
+    ).rejects.toMatchObject({ code: 'AI_E2EE_PROJECT' });
     await expect(
       desktopFetch(
         '/api/assistant/proposals',
-        projectRequest(
-          { projectId, payload: 'plaintext' },
-          { method: 'POST', body: '{}' }
-        )
+        assistantProjectRequest(projectId, { method: 'POST', body: '{}' })
       )
     ).rejects.toMatchObject({ code: E2EE_PLAINTEXT_REFUSED_CODE });
-    expect(nativeSends()).toEqual([]);
+    expect(network).not.toHaveBeenCalled();
   });
 
-  // Review round 10, finding 2: tab A read Allow (sequence 1); tab B then
-  // durably stored Stop (sequence 2); the account released the old Allow to
-  // A late, and A's read still answered "verified, allowed".
-  it('refuses a verified consent another tab revoked before the send', async () => {
-    const projectId = 'proj_assistant_revoked';
-    otherTab().pin(projectId);
-    const consent = verifiedConsent(projectId, 1);
-    desktop((command) => {
-      if (command === 'desktop_prepare_access') {
-        // Tab B's Stop, saved and verified: it revokes A's record.
-        consentLog().observe('user_ctx', projectId, 2, false);
-      }
-    });
-    await expect(
-      streamAssistantReply({
-        prompt: 'Hi',
-        digest: assistantDigest(projectId),
-        consent
-      })
-    ).rejects.toBeDefined();
-    expect(nativeSends()).toEqual([]);
+  it('sends a project this device does not hold as encrypted, as on main', async () => {
+    const projectId = 'proj_assistant_plain';
+    desktop();
+    await streamAssistantReply({
+      prompt: 'Hi',
+      digest: assistantDigest(projectId)
+    }).catch(() => undefined);
+    expect(nativeSends().length).toBeGreaterThan(0);
   });
 
-  it('refuses a consent a Stop recorded here outranks, even one whose save failed', async () => {
-    const projectId = 'proj_assistant_stop_unsaved';
-    otherTab().pin(projectId);
-    const consent = verifiedConsent(projectId, 3);
-    desktop((command) => {
-      if (command === 'desktop_prepare_access') {
-        // Recorded before the Stop's save, which never reached the account.
-        consentLog().stop('user_ctx', projectId);
-      }
-    });
-    await expect(
-      streamAssistantReply({
-        prompt: 'Hi',
-        digest: assistantDigest(projectId),
-        consent
-      })
-    ).rejects.toBeDefined();
-    expect(nativeSends()).toEqual([]);
-  });
-
-  it('checks the consent again before a native retry', async () => {
-    const projectId = 'proj_assistant_retry_revoked';
-    otherTab().pin(projectId);
-    const consent = verifiedConsent(projectId, 1);
+  it('checks the project again before a native retry', async () => {
+    const projectId = 'proj_assistant_retry_pinned';
     (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ =
       {};
     let readied = 0;
     vi.mocked(invoke).mockImplementation(async (command: string) => {
       if (command === 'desktop_prepare_access') {
         readied += 1;
-        if (readied > 1) consentLog().stop('user_ctx', projectId);
+        if (readied > 1) otherTab().pin(projectId);
         return `handle-${readied}`;
       }
       return { status: 401, body: [], contentType: 'application/json' };
@@ -742,28 +720,10 @@ describe('an assistant request', () => {
     await expect(
       desktopFetch(
         '/api/assistant/proposals',
-        assistantProjectRequest(projectId, consent, {
-          method: 'POST',
-          body: '{}'
-        })
+        assistantProjectRequest(projectId, { method: 'POST', body: '{}' })
       )
     ).rejects.toMatchObject({ code: E2EE_PLAINTEXT_REFUSED_CODE });
     expect(nativeSends()).toHaveLength(1);
-  });
-
-  it('refuses a consent this device can no longer read', async () => {
-    const projectId = 'proj_assistant_pin_lost';
-    otherTab().pin(projectId);
-    desktop();
-    // Verified, but its pin is gone (storage cleared): unknown is not allowed.
-    await expect(
-      streamAssistantReply({
-        prompt: 'Hi',
-        digest: assistantDigest(projectId),
-        consent: { userId: 'user_ctx', projectId, sequence: 1 }
-      })
-    ).rejects.toBeDefined();
-    expect(nativeSends()).toEqual([]);
   });
 });
 

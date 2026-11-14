@@ -85,7 +85,6 @@ import {
   type EncryptedProjectPinStore
 } from './e2ee/encryptedProjectPins';
 import { unlockedAccount } from './e2ee/unlockedKeys';
-import { assistantConsentCurrent } from './e2ee/assistantConsentPins';
 import type { EncryptedProjectStore } from './e2ee/encryptedProjectStore';
 import { getKeySessionRevision, isCurrentKeySession } from './e2ee/keySession';
 import { prioritizeShelfEntries } from './projectShelf';
@@ -620,10 +619,11 @@ export function plaintextRefusedError(
  * This device's own decrypt run stages plaintext before its cutover.
  *
  * An assistant request is not a write of its project, but carries its
- * content in plaintext: refused for a project this device holds as
- * encrypted, or whose switch to encryption did not finish here, unless
- * this account's assistant consent verified for that very project
- * (ADR-024 Phase 6), and refused in a tab that must reload first.
+ * content in plaintext: refused for any project this device holds as
+ * encrypted (pinned, switch to encryption not seen to finish here, or
+ * carrying an encryption requirement), whatever consent exists, and in a
+ * tab that must reload first. The assistant is off for end-to-end
+ * encrypted projects on this device for now.
  */
 const checkProjectSend: ProjectWriteCheck = ({
   projectId,
@@ -635,12 +635,6 @@ const checkProjectSend: ProjectWriteCheck = ({
     const pins = encryptedProjectPins();
     if (pins.resetElsewhere(projectId)) throw pinsResetElsewhere({ projectId });
     if (!encryptionRequired(projectId)) return;
-    // The consent this request was verified for must still be this
-    // device's latest word for the project now, at the send: a Stop saved
-    // or recorded since (in any tab) refuses it.
-    if (assistant.consent && assistantConsentCurrent(assistant.consent)) {
-      return;
-    }
     throw plaintextRefusedError({ projectId });
   }
   requireProjectWritable(projectId);

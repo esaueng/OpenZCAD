@@ -5,8 +5,10 @@
  * The controller registers its own retry triggers (back online, an
  * encryption-state change, a key session becoming ready), so a chunk that
  * never arrives would leave automatic migration off for the whole session
- * with nothing said. This loader lives in the entry chunk instead: a failed
- * load is reported (`AUTOMATIC_MIGRATION_LOAD_ERROR`), and the same three
+ * with nothing said. This loader lives in the entry chunk instead: a load
+ * that fails while the page is online is reported
+ * (`AUTOMATIC_MIGRATION_LOAD_ERROR`; offline it is only retried), and the
+ * same three
  * triggers retry the load until it succeeds or the session ends. Once the
  * controller has loaded, its own listeners take over.
  */
@@ -35,6 +37,10 @@ export interface AutomaticMigrationLoaderOptions {
 
 const loadController = () =>
   import('./automaticMigration') as Promise<AutomaticMigrationModule>;
+
+/** Whether the browser says it is offline now. */
+const offline = () =>
+  typeof navigator !== 'undefined' && navigator.onLine === false;
 
 /**
  * Starts the controller for `userId`, loading it first. `attention` hears
@@ -80,7 +86,12 @@ export function startAutomaticMigration(
           void started.check();
         },
         () => {
-          // Reported, and retried on the next trigger below.
+          // Retried on the next trigger below. Reported only while this
+          // page is online: offline, a chunk is expected not to arrive, and
+          // coming back online retries it. Reporting it would open
+          // Settings over whatever the page shows offline (the startup
+          // screen's "You're offline" wait, `offline-startup.spec.ts`).
+          if (offline()) return;
           failed = true;
           if (live()) attention(AUTOMATIC_MIGRATION_LOAD_ERROR);
         }

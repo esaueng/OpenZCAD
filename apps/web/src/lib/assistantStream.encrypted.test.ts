@@ -8,13 +8,16 @@ import { AssistantStreamError, streamAssistantReply } from './assistantStream';
 import { desktopFetch } from './desktopBridge';
 
 const encrypted = vi.hoisted(() => new Set<string>());
+/** Held as encrypted here without a pin (unresolved, or required). */
+const required = vi.hoisted(() => new Set<string>());
 vi.mock('./api', () => ({
   ApiError: class ApiError extends Error {
     code?: string;
   },
   E2EE_CUTOVER_UNRESOLVED_CODE: 'E2EE_CUTOVER_UNRESOLVED',
   E2EE_PLAINTEXT_REFUSED_CODE: 'E2EE_PLAINTEXT_REFUSED',
-  encryptCutoverUnresolved: () => false,
+  encryptionRequired: (projectId: string | null | undefined) =>
+    projectId ? encrypted.has(projectId) || required.has(projectId) : false,
   isEncryptedProject: (projectId: string | null | undefined) =>
     projectId ? encrypted.has(projectId) : false
 }));
@@ -25,6 +28,7 @@ vi.mock('./desktopBridge', () => ({
 
 afterEach(() => {
   encrypted.clear();
+  required.clear();
   vi.clearAllMocks();
 });
 
@@ -62,32 +66,24 @@ describe('the assistant and this page’s encrypted-project marker', () => {
     await expect(refused).rejects.toMatchObject({ code: 'AI_E2EE_PROJECT' });
     expect(desktopFetch).not.toHaveBeenCalled();
 
-    // The panel marks a request whose consent verified just before sending.
+    // PR #1418, owner decision 2026-11-14: a project this device holds as
+    // encrypted is refused even when the panel verified its consent.
     await expect(
       streamAssistantReply({
         prompt: 'Make the wall 3 mm',
         digest: digest('proj_secret'),
-        consent: {
-          userId: 'user_1',
-          projectId: 'proj_secret',
-          sequence: 1
-        }
+        consentedProjectId: 'proj_secret'
       })
-    ).rejects.toBeDefined();
-    expect(desktopFetch).toHaveBeenCalledTimes(1);
-    // Consent for another project lets nothing through.
+    ).rejects.toMatchObject({ code: 'AI_E2EE_PROJECT' });
+    required.add('proj_required');
     await expect(
       streamAssistantReply({
         prompt: 'Hi',
-        digest: digest('proj_secret'),
-        consent: {
-          userId: 'user_1',
-          projectId: 'proj_other',
-          sequence: 1
-        }
+        digest: digest('proj_required'),
+        consentedProjectId: 'proj_required'
       })
     ).rejects.toMatchObject({ code: 'AI_E2EE_PROJECT' });
-    expect(desktopFetch).toHaveBeenCalledTimes(1);
+    expect(desktopFetch).not.toHaveBeenCalled();
 
     // A plaintext project still reaches the route.
     await expect(

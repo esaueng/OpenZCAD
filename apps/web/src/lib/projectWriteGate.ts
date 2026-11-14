@@ -22,13 +22,12 @@
  *
  * A request's context says which project it writes, whether its payload
  * is the project's content in plaintext or encrypted (`projectRequest`),
- * whether it is an assistant request with that project's verified consent
- * record (`assistantProjectRequest`: its account, project and sequence,
- * compared at the send with this device's latest consent and revocations),
- * and whether it is one of this device's own migration requests, bound to
- * the run's project and routes and to the run still working on that
- * project when the request leaves (`migrationRun`). It is attached to the request itself, never kept in
- * module state that an await could unwind or another request could see.
+ * whether it is an assistant request about that project
+ * (`assistantProjectRequest`), and whether it is one of this device's own
+ * migration requests, bound to the run's project and routes and to the run
+ * still working on that project when the request leaves (`migrationRun`).
+ * It is attached to the request itself, never kept in module state that
+ * an await could unwind or another request could see.
  * Any new sender of project content must declare it the same way;
  * `projectRequestContext.test.ts` asserts every content path does, and
  * `projectRouteInventory.test.ts` that every Worker route is classified.
@@ -80,26 +79,9 @@ interface MigrationContext {
   readonly live: () => boolean;
 }
 
-/**
- * The consent record an assistant request was verified for, right before
- * it was sent (`e2ee/assistantConsentPins.ts`).
- */
-export interface AssistantConsentRecord {
-  readonly userId: string;
-  readonly projectId: string;
-  readonly sequence: number;
-}
-
 interface RequestContext {
   readonly project?: ProjectRequestContext;
   readonly migration?: MigrationContext;
-  /**
-   * The consent record this account's assistant consent verified, right
-   * before the request (ADR-024 Phase 6): an assistant request about that
-   * project, and only that project, may then carry its model digest, if
-   * the record is still this device's latest word when the request leaves.
-   */
-  readonly assistantConsent?: AssistantConsentRecord;
   /** A create whose body carries no project's content (`contentFreeCreate`). */
   readonly contentFree?: true;
 }
@@ -110,14 +92,6 @@ const CONTEXT: unique symbol = Symbol('openzcad.projectRequest');
 export type ProjectRequestInit = RequestInit & {
   readonly [CONTEXT]?: RequestContext;
 };
-
-/** What an assistant request carries of its consent (null: not one). */
-export interface AssistantRequestConsent {
-  /** This account's consent verified for this very project. */
-  readonly consented: boolean;
-  /** The verified record, for the check at the send; null when none. */
-  readonly consent: AssistantConsentRecord | null;
-}
 
 /** A request as the gate resolved it, before it is sent. */
 export interface ResolvedProjectRequest {
@@ -132,8 +106,11 @@ export interface ResolvedProjectRequest {
    * checked like any other.
    */
   readonly migrationLive?: () => boolean;
-  /** An assistant request about the project, with its consent. */
-  readonly assistant: AssistantRequestConsent | null;
+  /**
+   * An assistant request about the project: refused for any project this
+   * device holds as encrypted, whatever consent exists (PR #1418).
+   */
+  readonly assistant: boolean;
 }
 
 /**
@@ -144,7 +121,7 @@ export type ProjectWriteCheck = (request: {
   readonly projectId: string;
   readonly payload: ProjectPayload;
   readonly migration: MigrationKind | null;
-  readonly assistant: AssistantRequestConsent | null;
+  readonly assistant: boolean;
 }) => void;
 
 let check: ProjectWriteCheck | null = null;
@@ -198,27 +175,17 @@ export function projectRequest(
 /**
  * `init` (copied) declared as an assistant request about `projectId`,
  * whose model digest, conversation and attachments are that project's
- * content in plaintext. `consent`: the record of this account's assistant
- * consent for this project verified right before the request; it
- * authorizes this project's request and nothing else, and only while it is
- * still this device's latest consent when the request leaves.
+ * content in plaintext. Refused at the send for any project this device
+ * holds as encrypted (pinned, switch unresolved, or carrying an encryption
+ * requirement), with no consent exception: the assistant is off for
+ * end-to-end encrypted projects on this device for now.
  */
 export function assistantProjectRequest(
   projectId: string,
-  consent: AssistantConsentRecord | null,
   init: RequestInit = {}
 ): ProjectRequestInit {
   return withContext(init, {
-    project: { projectId, payload: 'plaintext' },
-    ...(consent && consent.projectId === projectId
-      ? {
-          assistantConsent: {
-            userId: consent.userId,
-            projectId: consent.projectId,
-            sequence: consent.sequence
-          }
-        }
-      : {})
+    project: { projectId, payload: 'plaintext' }
   });
 }
 
@@ -508,7 +475,7 @@ export function resolveProjectRequest(
       projectId: null,
       payload: 'none',
       migration: null,
-      assistant: null
+      assistant: false
     };
   }
   const path = pathOf(input);
@@ -535,7 +502,7 @@ export function resolveProjectRequest(
       payload: 'plaintext',
       migration,
       ...(migrationLive ? { migrationLive } : {}),
-      assistant: null
+      assistant: false
     };
   }
   if (route.content && !declared && migration !== 'encrypt') {
@@ -545,7 +512,7 @@ export function resolveProjectRequest(
         projectId: null,
         payload: 'none',
         migration: null,
-        assistant: null
+        assistant: false
       };
     }
     throw new UndeclaredProjectRequestError(
@@ -557,18 +524,8 @@ export function resolveProjectRequest(
     payload: route.plaintext ? 'plaintext' : (declared?.payload ?? 'none'),
     migration,
     ...(migrationLive ? { migrationLive } : {}),
-    assistant: route.assistant ? assistantConsentOf(context, projectId) : null
+    assistant: route.assistant
   };
-}
-
-function assistantConsentOf(
-  context: RequestContext | undefined,
-  projectId: string | null
-): AssistantRequestConsent {
-  const consent = context?.assistantConsent;
-  return consent && projectId !== null && consent.projectId === projectId
-    ? { consented: true, consent }
-    : { consented: false, consent: null };
 }
 
 /**
@@ -614,7 +571,7 @@ export function projectWriteBlocked(
 ): boolean {
   if (!check) return false;
   try {
-    check({ projectId, payload, migration: null, assistant: null });
+    check({ projectId, payload, migration: null, assistant: false });
     return false;
   } catch {
     return true;
@@ -638,7 +595,7 @@ export function sendProjectFrame(
     projectId: context.projectId,
     payload: context.payload,
     migration: null,
-    assistant: null
+    assistant: false
   });
   socket.send(frame);
 }

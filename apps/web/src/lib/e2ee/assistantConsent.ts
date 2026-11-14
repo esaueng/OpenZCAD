@@ -2,13 +2,12 @@
  * Per-project assistant consent on encrypted projects (ADR-024 Phase 6,
  * slice 6-1). The record `{userId, projectId, allowed, copyVersion, route,
  * sequence}` is MAC'd under a key the account key derives
- * (`@openzcad/crypto` assistant consent), stored by the Worker and checked
- * against this device's consent log (`assistantConsentPins.ts`): a server
- * copy whose MAC does not verify, that names another account or project,
- * that is older than a record this device has seen, or that a Stop on this
- * device revoked is refused, and the assistant then sends nothing. A
- * server-forged consent therefore never makes this browser send. Loaded on
- * demand (it brings the crypto package), only for an encrypted project.
+ * (`@openzcad/crypto` assistant consent), stored by the Worker and pinned on
+ * this device per project: a server copy whose MAC does not verify, that
+ * names another account or project, or whose sequence is older than the pin
+ * is refused, and the assistant then sends nothing. A server-forged consent
+ * therefore never makes this browser send. Loaded on demand (it brings the
+ * crypto package), only for an encrypted project.
  */
 import {
   encodeAssistantConsent,
@@ -27,12 +26,6 @@ import {
   type E2eeSaveAssistantConsentRequest
 } from '@openzcad/shared';
 import { desktopFetch } from '../desktopBridge';
-import {
-  localStorageConsentPins,
-  type ConsentEntry,
-  type ConsentPinStore,
-  type ConsentTicket
-} from './assistantConsentPins';
 import { E2eeApiError } from './e2eeApi';
 import { unlockedAccount } from './unlockedKeys';
 
@@ -101,14 +94,62 @@ export function createAssistantConsentApi(
   };
 }
 
-export {
-  assistantConsentCurrent,
-  localStorageConsentPins,
-  memoryConsentPins,
-  type ConsentPinStore,
-  type ConsentTicket,
-  type VerifiedAssistantConsent
-} from './assistantConsentPins';
+/** The highest consent sequence this device accepted, per account and project. */
+export interface ConsentPinStore {
+  read(userId: string, projectId: string): Promise<number | null>;
+  write(userId: string, projectId: string, sequence: number): Promise<void>;
+}
+
+const PIN_KEY = (userId: string, projectId: string) =>
+  `openzcad:e2ee-assistant-consent-pin:v1:${userId}:${projectId}`;
+
+/**
+ * Pins in localStorage. Storage that is blocked or cleared loses the pin,
+ * which only weakens rollback detection back to first use; it never makes a
+ * forged record verify.
+ */
+export function localStorageConsentPins(
+  storage: Pick<Storage, 'getItem' | 'setItem'> | null = typeof window ===
+  'undefined'
+    ? null
+    : window.localStorage
+): ConsentPinStore {
+  return {
+    async read(userId, projectId) {
+      try {
+        const value = Number(
+          storage?.getItem(PIN_KEY(userId, projectId)) ?? NaN
+        );
+        return Number.isSafeInteger(value) && value >= 1 ? value : null;
+      } catch {
+        return null;
+      }
+    },
+    async write(userId, projectId, sequence) {
+      try {
+        const current = await this.read(userId, projectId);
+        // A pin only moves forward, whichever tab writes it.
+        if (current === null || sequence > current) {
+          storage?.setItem(PIN_KEY(userId, projectId), String(sequence));
+        }
+      } catch {
+        /* Best effort: see above. */
+      }
+    }
+  };
+}
+
+export function memoryConsentPins(): ConsentPinStore {
+  const pins = new Map<string, number>();
+  return {
+    read: async (userId, projectId) =>
+      pins.get(PIN_KEY(userId, projectId)) ?? null,
+    write: async (userId, projectId, sequence) => {
+      const key = PIN_KEY(userId, projectId);
+      if (sequence > (pins.get(key) ?? 0)) pins.set(key, sequence);
+    }
+  };
+}
 
 export interface AssistantConsentContext {
   readonly userId: string;
@@ -131,13 +172,8 @@ export type AssistantConsentState =
     }
   | {
       readonly kind: 'refused';
-      /**
-       * Bad MAC or malformed (`unverified`); older than a record this device
-       * has seen (`rollback`); an Allow a Stop on this device revoked, or
-       * consent latched closed here (`stopped`); this device's consent log
-       * could not be read or written (`unrecorded`).
-       */
-      readonly reason: 'unverified' | 'rollback' | 'stopped' | 'unrecorded';
+      /** Bad MAC or malformed (`unverified`); older than the pin (`rollback`). */
+      readonly reason: 'unverified' | 'rollback';
       readonly message: string;
       /** What a fresh write must exceed. */
       readonly floor: number;
@@ -147,27 +183,17 @@ const UNVERIFIED_MESSAGE =
   'The account’s copy of your assistant choice for this project did not verify with your keys, so it is not trusted and nothing is sent.';
 const ROLLBACK_MESSAGE =
   'The account returned an older assistant choice for this project than this device has seen, so it is not trusted and nothing is sent.';
-export const ASSISTANT_CONSENT_STOPPED_HERE_MESSAGE =
-  'The assistant was stopped for this project on this device, so the account’s earlier Allow is not used here and nothing is sent. Allow it again to continue.';
-export const ASSISTANT_CONSENT_UNRECORDED_MESSAGE =
-  'This device could not record your assistant choice for this project, so the assistant stays stopped here and nothing is sent. Once this browser’s storage works again, choose Allow to turn it back on.';
-
-const REFUSALS = {
-  rollback: ROLLBACK_MESSAGE,
-  stopped: ASSISTANT_CONSENT_STOPPED_HERE_MESSAGE,
-  unrecorded: ASSISTANT_CONSENT_UNRECORDED_MESSAGE
-} as const;
 
 async function verify(
   ctx: AssistantConsentContext,
   projectId: string,
-  stored: E2eeAssistantConsentRecord
+  stored: E2eeAssistantConsentRecord,
+  pinned: number | null
 ): Promise<AssistantConsentState> {
-  const floor = () =>
-    Math.max(
-      ctx.pins.seen(ctx.userId, projectId) ?? 0,
-      Number.isSafeInteger(stored.sequence) ? stored.sequence : 0
-    );
+  const floor = Math.max(
+    pinned ?? 0,
+    Number.isSafeInteger(stored.sequence) ? stored.sequence : 0
+  );
   let opened;
   try {
     opened = await openAssistantConsent(
@@ -180,7 +206,7 @@ async function verify(
       kind: 'refused',
       reason: 'unverified',
       message: UNVERIFIED_MESSAGE,
-      floor: floor()
+      floor
     };
   }
   // Only the MAC'd record counts; the Worker's columns must agree with it.
@@ -194,25 +220,18 @@ async function verify(
       kind: 'refused',
       reason: 'unverified',
       message: UNVERIFIED_MESSAGE,
-      floor: Math.max(floor(), opened.sequence)
+      floor: Math.max(floor, opened.sequence)
     };
   }
-  // Decided against this device's consent log as it stands now, after the
-  // last await: a Stop that came while the record was verified revokes it.
-  const outcome = ctx.pins.observe(
-    ctx.userId,
-    projectId,
-    opened.sequence,
-    opened.allowed
-  );
-  if (outcome !== 'accepted') {
+  if (pinned !== null && opened.sequence < pinned) {
     return {
       kind: 'refused',
-      reason: outcome,
-      message: REFUSALS[outcome],
-      floor: floor()
+      reason: 'rollback',
+      message: ROLLBACK_MESSAGE,
+      floor
     };
   }
+  await ctx.pins.write(ctx.userId, projectId, opened.sequence);
   return {
     kind: 'verified',
     allowed: opened.allowed,
@@ -223,144 +242,84 @@ async function verify(
   };
 }
 
-/** Reads and verifies this account's consent for one project. */
+/** Reads, verifies and pins this account's consent for one project. */
 export async function loadAssistantConsent(
   ctx: AssistantConsentContext,
   projectId: string
 ): Promise<AssistantConsentState> {
-  const { consent } = await ctx.api.load(projectId);
+  const [{ consent }, pinned] = await Promise.all([
+    ctx.api.load(projectId),
+    ctx.pins.read(ctx.userId, projectId)
+  ]);
   if (!consent) {
-    const seen = ctx.pins.seen(ctx.userId, projectId);
-    if (seen === undefined) {
-      return {
-        kind: 'refused',
-        reason: 'unrecorded',
-        message: ASSISTANT_CONSENT_UNRECORDED_MESSAGE,
-        floor: 0
-      };
-    }
     // A record this device saw that the account no longer has is a
     // rollback; refusing it costs nothing, since refusing sends nothing.
-    return seen === null
+    return pinned === null
       ? { kind: 'none', floor: 0 }
       : {
           kind: 'refused',
           reason: 'rollback',
           message: ROLLBACK_MESSAGE,
-          floor: seen
+          floor: pinned
         };
   }
-  return verify(ctx, projectId, consent);
+  return verify(ctx, projectId, consent, pinned);
 }
 
 /**
- * Verifies a record from the account's list (Settings › Encryption)
- * against the same log. Never trusts the Worker's columns on their own.
+ * Verifies a record from the account's list (Settings › Encryption), with
+ * the same pin. Never trusts the Worker's columns on their own.
  */
 export async function verifyListedConsent(
   ctx: AssistantConsentContext,
   stored: E2eeAssistantConsentRecord
 ): Promise<AssistantConsentState> {
-  return verify(ctx, stored.projectId, stored);
+  return verify(
+    ctx,
+    stored.projectId,
+    stored,
+    await ctx.pins.read(ctx.userId, stored.projectId)
+  );
 }
 
-export const ASSISTANT_CONSENT_STOPPED_MESSAGE =
-  'The assistant was stopped for this project while it was being allowed, so it stays stopped and nothing was sent.';
-
 /**
- * What a save was registered as before its caller's first await: the
- * Allow's ticket (`ConsentPinStore.beginAllow`, null when it could not be
- * recorded) or the Stop's entry (`ConsentPinStore.stop`). Registered on the
- * call, before anything is awaited, when not given.
- */
-export type ConsentRegistration =
-  { readonly ticket: ConsentTicket | null } | { readonly stop: ConsentEntry };
-
-/**
- * Writes the next record, past everything this device's log and the
- * account (`floor`) know of. `allowed = false` is a revocation. The answer
- * must be the record just written.
- *
- * An Allow is registered in the log before anything is awaited, and gets
- * its sequence durably before the record is sent, so a Stop at any later
- * point (before the save, during it, or while its answer is verified)
- * revokes it; an Allow refused or failed after that is given up
- * (`withdraw`), so its record is never used here even if the account
- * stored it. A Stop is registered likewise and holds on this device
- * whatever becomes of its save.
+ * Writes the next record, one past everything this device knows of: its
+ * pin and the account's last sequence (`floor`). `allowed = false` is a
+ * revocation. The answer must be the record just written.
  */
 export async function saveAssistantConsent(
   ctx: AssistantConsentContext,
   projectId: string,
   choice: { allowed: boolean; route: string },
-  floor: number,
-  registered?: ConsentRegistration
+  floor: number
 ): Promise<AssistantConsentState> {
-  const stopped = () =>
-    new E2eeApiError(409, ASSISTANT_CONSENT_STOPPED_MESSAGE);
-  const unrecorded = () =>
-    new E2eeApiError(409, ASSISTANT_CONSENT_UNRECORDED_MESSAGE);
-  let allow: ConsentTicket | null = null;
-  let sequence: number;
-  if (choice.allowed) {
-    allow =
-      registered && 'ticket' in registered
-        ? registered.ticket
-        : ctx.pins.beginAllow(ctx.userId, projectId);
-    if (!allow) throw unrecorded();
-    const assigned = ctx.pins.assign(allow, floor);
-    if (assigned.kind === 'stopped') {
-      ctx.pins.withdraw(allow);
-      throw stopped();
-    }
-    if (assigned.kind === 'unrecorded') throw unrecorded();
-    sequence = assigned.sequence;
-  } else {
-    const stop =
-      registered && 'stop' in registered
-        ? registered.stop
-        : ctx.pins.stop(ctx.userId, projectId);
-    sequence = Math.max(floor + 1, stop.sequence ?? 0);
+  const pinned = await ctx.pins.read(ctx.userId, projectId);
+  const sequence = Math.max(pinned ?? 0, floor) + 1;
+  const record = encodeAssistantConsent({
+    userId: ctx.userId,
+    projectId,
+    allowed: choice.allowed,
+    copyVersion: ASSISTANT_CONSENT_COPY_VERSION,
+    route: choice.allowed ? choice.route : '',
+    sequence
+  });
+  const mac = await macAssistantConsent(ctx.accountKey, record);
+  const { consent } = await ctx.api.save(projectId, {
+    record: toBase64Url(record),
+    recordMac: toBase64Url(mac)
+  });
+  if (!consent || consent.record !== toBase64Url(record)) {
+    throw new E2eeApiError(
+      502,
+      'The account did not store this choice as sent. Try again.'
+    );
   }
-  const ticket = allow;
-  try {
-    const record = encodeAssistantConsent({
-      userId: ctx.userId,
-      projectId,
-      allowed: choice.allowed,
-      copyVersion: ASSISTANT_CONSENT_COPY_VERSION,
-      route: choice.allowed ? choice.route : '',
-      sequence
-    });
-    const mac = await macAssistantConsent(ctx.accountKey, record);
-    if (ticket && !ctx.pins.ticketCurrent(ticket)) throw stopped();
-    const { consent } = await ctx.api.save(projectId, {
-      record: toBase64Url(record),
-      recordMac: toBase64Url(mac)
-    });
-    if (ticket && !ctx.pins.ticketCurrent(ticket)) throw stopped();
-    if (!consent || consent.record !== toBase64Url(record)) {
-      throw new E2eeApiError(
-        502,
-        'The account did not store this choice as sent. Try again.'
-      );
-    }
-    const state = await verify(ctx, projectId, consent);
-    if (ticket) {
-      if (!ctx.pins.ticketCurrent(ticket)) throw stopped();
-      if (state.kind === 'refused') {
-        throw state.reason === 'stopped'
-          ? stopped()
-          : new E2eeApiError(409, state.message);
-      }
-    }
-    return state;
-  } catch (error) {
-    // Refused or failed after its sequence was assigned: given up, so the
-    // record (if the account stored it) is never used on this device.
-    if (ticket) ctx.pins.withdraw(ticket);
-    throw error;
-  }
+  return verify(
+    ctx,
+    projectId,
+    consent,
+    await ctx.pins.read(ctx.userId, projectId)
+  );
 }
 
 /** What a write must exceed, from any state. */

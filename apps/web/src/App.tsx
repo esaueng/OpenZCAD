@@ -441,6 +441,7 @@ import {
   encryptedPinProblem,
   encryptedPinsResetElsewhere,
   encryptedProjectResetElsewhere,
+  encryptionRequired,
   encryptsNewProjects,
   isEncryptedPinProblemError,
   isEncryptedProject,
@@ -456,7 +457,10 @@ import {
 import type { ProjectListingProgress } from './lib/api';
 import { saveShareLinkCopy } from './lib/shareLinkCopy';
 import { createCloudConfigurationReads } from './lib/cloudConfigurationReads';
-import { assistantDisabledReason } from './lib/assistant/encryptedProject';
+import {
+  assistantDisabledReason,
+  ENCRYPTED_PROJECT_ASSISTANT_NOTICE
+} from './lib/assistant/encryptedProject';
 import {
   refreshEncryptedMemberRole,
   useEncryptedMemberRole
@@ -8660,9 +8664,19 @@ export function App() {
         }
       : projects.find((project) => project.projectId === doc.projectId)
     : undefined;
+  // PR #1418: the assistant is off for every project this device holds as
+  // encrypted (pinned, switch unresolved, or carrying an encryption
+  // requirement), whatever consent the account holds. No consent gate is
+  // mounted for it, so nothing asks; the send gate refuses it as well.
+  // Re-read on every render, which `useEncryptedPins` triggers on change.
+  const assistantHeldEncrypted = doc
+    ? encryptionRequired(doc.projectId)
+    : false;
   const assistantConsent = useAssistantConsentGate(
     session?.userId ?? null,
-    cloudFunctionsEnabled && appSettings.assistant.enabled
+    cloudFunctionsEnabled &&
+      appSettings.assistant.enabled &&
+      !assistantHeldEncrypted
       ? assistantProject
       : undefined
   );
@@ -34728,11 +34742,12 @@ export function App() {
               request={assistantRequest}
               onDraft={draftPrompt}
               onActivity={setAssistantActivity}
-              disabledReason={assistantDisabledReason(
-                assistantProject,
-                assistantConsent
-              )}
-              consent={assistantConsent}
+              disabledReason={
+                assistantHeldEncrypted
+                  ? ENCRYPTED_PROJECT_ASSISTANT_NOTICE
+                  : assistantDisabledReason(assistantProject, assistantConsent)
+              }
+              consent={assistantHeldEncrypted ? null : assistantConsent}
             />
           </ErrorBoundary>
         ) : null

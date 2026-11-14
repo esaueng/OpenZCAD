@@ -141,8 +141,6 @@ export function AssistantAccessSettings({
     setBusy(entry.projectId);
     setError(null);
     try {
-      // The Stop is registered in this device's consent log on the call,
-      // before anything is awaited, as the panel's is.
       await saveAssistantConsent(
         ctx,
         entry.projectId,

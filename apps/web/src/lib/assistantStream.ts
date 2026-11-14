@@ -12,13 +12,12 @@ import {
   ApiError,
   E2EE_CUTOVER_UNRESOLVED_CODE,
   E2EE_PLAINTEXT_REFUSED_CODE,
-  encryptCutoverUnresolved,
+  encryptionRequired,
   isEncryptedProject
 } from './api';
 import { ENCRYPTED_PROJECT_ASSISTANT_NOTICE } from './assistant/encryptedProject';
 import { desktopFetch } from './desktopBridge';
 import { assistantProjectRequest } from './projectWriteGate';
-import type { VerifiedAssistantConsent } from './e2ee/assistantConsentPins';
 
 interface AssistantStreamOptions {
   signal?: AbortSignal;
@@ -83,12 +82,11 @@ export interface AssistantTurnRequest {
   attachments?: readonly AssistantAttachment[];
   /**
    * Set by the panel once this account's consent for the project verified
-   * right before sending (ADR-024 Phase 6): the record's account, project
-   * and sequence. Never sent; without it an encrypted project's request is
-   * refused here, and with it the send gate refuses the request at its
-   * send if this device has since seen a later consent or a revocation.
+   * right before sending (ADR-024 Phase 6). Never sent; without it an
+   * encrypted project's request is refused here. It lifts nothing for a
+   * project this device holds as encrypted (PR #1418).
    */
-  consent?: VerifiedAssistantConsent;
+  consentedProjectId?: string;
 }
 
 export interface AssistantStatus {
@@ -348,13 +346,13 @@ async function streamAssistantReplyAttempt(
 ): Promise<AssistantReply> {
   // ADR-024 D7 and Phase 6: nothing of an encrypted project reaches the
   // assistant, whichever entry point asked, unless its consent verified.
+  // PR #1418: nothing of a project this device holds as encrypted (pinned,
+  // switch unresolved, or carrying an encryption requirement) reaches it at
+  // all, consent or not; the send gate refuses it again at the send.
   const projectId = request.digest.projectId;
-  const consent =
-    request.consent?.projectId === projectId ? request.consent : null;
-  const consented = consent !== null;
   if (
-    !consented &&
-    (isEncryptedProject(projectId) || encryptCutoverUnresolved(projectId))
+    encryptionRequired(projectId) ||
+    (isEncryptedProject(projectId) && request.consentedProjectId !== projectId)
   ) {
     throw new AssistantStreamError(
       'AI_E2EE_PROJECT',
@@ -364,12 +362,12 @@ async function streamAssistantReplyAttempt(
   let response: Response;
   try {
     // The digest, conversation and attachments are the project's content
-    // in plaintext: declared as such, with the consent bound to this
-    // project, so the gate checks them again immediately before the send
-    // (`projectWriteGate.ts`) whatever was pinned meanwhile.
+    // in plaintext: declared as such, so the gate checks them again
+    // immediately before the send (`projectWriteGate.ts`) whatever was
+    // pinned meanwhile.
     response = await desktopFetch(
       '/api/assistant/proposals',
-      assistantProjectRequest(projectId, consent, {
+      assistantProjectRequest(projectId, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({

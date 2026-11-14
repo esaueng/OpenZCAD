@@ -18,12 +18,6 @@ import {
 } from '@openzcad/shared';
 import type * as ConsentModule from '../e2ee/assistantConsent';
 import type { AssistantConsentState } from '../e2ee/assistantConsent';
-import {
-  pageConsentPins,
-  type ConsentPinStore,
-  type ConsentTicket,
-  type VerifiedAssistantConsent
-} from '../e2ee/assistantConsentPins';
 import { ENCRYPTED_PROJECT_ASSISTANT_NOTICE } from './encryptedProject';
 
 export type { AssistantConsentState };
@@ -59,12 +53,6 @@ export interface AssistantConsentGate {
   readonly error: string | null;
   /** True when the verified record permits exactly this provider route. */
   permits(route: string): boolean;
-  /**
-   * The verified record that permits this route, as its request carries it
-   * (`assistantProjectRequest`): the send gate checks it again, at the
-   * send, against this device's latest consent and revocations.
-   */
-  grant(route: string): VerifiedAssistantConsent | null;
   confirm(route: string): Promise<AssistantConsentDecision>;
   allow(route: string): Promise<boolean>;
   stop(): Promise<boolean>;
@@ -108,13 +96,6 @@ export interface AssistantConsentGateOptions {
     module: Module,
     userId: string
   ) => ConsentModule.AssistantConsentContext | null;
-  /**
-   * This device's consent log (the page's localStorage log by default):
-   * Allows and Stops are registered in it when clicked, before anything is
-   * awaited, and every grant is checked against it. Must be the log the
-   * context's `pins` write to.
-   */
-  readonly pins?: ConsentPinStore;
 }
 
 /**
@@ -147,18 +128,9 @@ export function useAssistantConsentGate(
   const generation = useRef(0);
   const statusRef = useRef(status);
   statusRef.current = status;
-  const pins = options.pins ?? pageConsentPins();
-  const pinsRef = useRef(pins);
-  pinsRef.current = pins;
-  // Re-render when this device's log may have changed (a Stop or Allow in
-  // any tab): `permits` and `grant` read the log itself, every time.
-  const [, setLogRevision] = useState(0);
-  useEffect(() => {
-    if (!projectId || !userId) return;
-    return pins.subscribe(userId, projectId, () =>
-      setLogRevision((revision) => revision + 1)
-    );
-  }, [pins, projectId, userId]);
+  // Set by Stop until an Allow succeeds: a revocation that failed to save
+  // still stops this page from sending on the account's older record.
+  const stoppedRef = useRef(false);
 
   const read = useCallback(async (): Promise<AssistantConsentGateStatus> => {
     if (!projectId) return { kind: 'unavailable', reason: '' };
@@ -189,14 +161,13 @@ export function useAssistantConsentGate(
 
   useEffect(() => {
     if (!projectId) return;
+    stoppedRef.current = false;
     const current = ++generation.current;
     setStatus({ kind: 'checking' });
     setError(null);
     void read()
       .then((next) => {
-        if (generation.current !== current) return;
-        statusRef.current = next;
-        setStatus(next);
+        if (generation.current === current) setStatus(next);
       })
       .catch((caught: unknown) => {
         if (generation.current !== current) return;
@@ -209,31 +180,18 @@ export function useAssistantConsentGate(
     };
   }, [projectId, read]);
 
-  const grant = useCallback(
-    (route: string): VerifiedAssistantConsent | null => {
-      const current = statusRef.current;
-      if (!projectId || !userId || current.kind !== 'ready') return null;
-      const state = current.state;
-      if (
-        state.kind !== 'verified' ||
-        !state.allowed ||
-        state.route !== route ||
-        state.copyVersion !== ASSISTANT_CONSENT_COPY_VERSION
-      ) {
-        return null;
-      }
-      const consent = { userId, projectId, sequence: state.sequence };
-      // Still this device's latest word in the stored log: no Stop since,
-      // in any tab, and not latched closed.
-      return pinsRef.current.current(consent) ? consent : null;
-    },
-    [projectId, userId]
-  );
-
-  const permits = useCallback(
-    (route: string) => grant(route) !== null,
-    [grant]
-  );
+  const permits = useCallback((route: string) => {
+    const current = statusRef.current;
+    if (current.kind !== 'ready') return false;
+    const state = current.state;
+    return (
+      state.kind === 'verified' &&
+      state.allowed &&
+      state.route === route &&
+      state.copyVersion === ASSISTANT_CONSENT_COPY_VERSION &&
+      !stoppedRef.current
+    );
+  }, []);
 
   const confirm = useCallback(
     async (route: string): Promise<AssistantConsentDecision> => {
@@ -251,14 +209,6 @@ export function useAssistantConsentGate(
       }
       setStatus(next);
       statusRef.current = next;
-      if (
-        next.kind === 'ready' &&
-        next.state.kind === 'refused' &&
-        (next.state.reason === 'unrecorded' || next.state.reason === 'stopped')
-      ) {
-        // Why the account's Allow is not used here; Allow again lifts it.
-        setError(next.state.message);
-      }
       if (next.kind === 'unavailable') {
         return { kind: 'blocked', message: next.reason };
       }
@@ -275,24 +225,12 @@ export function useAssistantConsentGate(
     async (allowed: boolean, route: string): Promise<boolean> => {
       if (!projectId || !userId) return false;
       const current = generation.current;
-      const log = pinsRef.current;
-      // Registered in this device's log before anything is awaited: a Stop
-      // revokes every Allow registered before it, in any tab, whether or
-      // not its save succeeds; an Allow gets its sequence durably before
-      // it is sent, so a Stop at any later point covers it too.
-      let ticket: ConsentTicket | null = null;
-      let stopEntry: ReturnType<ConsentPinStore['stop']> | null = null;
-      if (allowed) ticket = log.beginAllow(userId, projectId);
-      else stopEntry = log.stop(userId, projectId);
+      if (!allowed) stoppedRef.current = true;
       setError(null);
       try {
         const module = await loadRef.current();
-        if (allowed && !ticket) {
-          throw new Error(module.ASSISTANT_CONSENT_UNRECORDED_MESSAGE);
-        }
         const ctx = contextRef.current(module, userId);
         if (!ctx) {
-          if (ticket) log.withdraw(ticket);
           setStatus({ kind: 'locked' });
           setError(ASSISTANT_CONSENT_LOCKED_NOTICE);
           return false;
@@ -307,28 +245,18 @@ export function useAssistantConsentGate(
           ctx,
           projectId,
           { allowed, route },
-          floor,
-          ticket ? { ticket } : stopEntry ? { stop: stopEntry } : undefined
+          floor
         );
-        if (ticket && !log.ticketCurrent(ticket)) {
-          throw new Error(module.ASSISTANT_CONSENT_STOPPED_MESSAGE);
-        }
         if (generation.current === current) {
           const next = { kind: 'ready', state } as const;
           setStatus(next);
           statusRef.current = next;
         }
         if (!allowed) return true;
-        if (!module.consentPermits(state, route) || !grant(route)) {
-          // Not this route, or refused since: never used on this device.
-          if (ticket) log.withdraw(ticket);
-          return false;
-        }
-        return true;
+        const permitted = module.consentPermits(state, route);
+        if (permitted) stoppedRef.current = false;
+        return permitted;
       } catch (caught) {
-        // Refused or failed: an Allow is given up, so its record (even one
-        // the account stored) is never used here.
-        if (ticket) log.withdraw(ticket);
         if (generation.current === current) {
           setError(
             message(
@@ -339,8 +267,8 @@ export function useAssistantConsentGate(
             )
           );
           if (!allowed) {
-            // Whatever the account still holds, the Stop holds on this
-            // device (its log entry, or the latch when that failed).
+            // Whatever the account still holds, this page sends nothing
+            // more until the user allows it again (see stoppedRef).
             const blocked = {
               kind: 'ready',
               state: { kind: 'none', floor: 0 }
@@ -352,7 +280,7 @@ export function useAssistantConsentGate(
         return false;
       }
     },
-    [grant, projectId, userId]
+    [projectId, userId]
   );
 
   const allow = useCallback((route: string) => write(true, route), [write]);
@@ -361,8 +289,8 @@ export function useAssistantConsentGate(
   return useMemo(
     () =>
       projectId
-        ? { projectId, status, error, permits, grant, confirm, allow, stop }
+        ? { projectId, status, error, permits, confirm, allow, stop }
         : null,
-    [allow, confirm, error, grant, permits, projectId, status, stop]
+    [allow, confirm, error, permits, projectId, status, stop]
   );
 }

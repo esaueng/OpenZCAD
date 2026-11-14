@@ -253,7 +253,6 @@
     "src/lib/assembly/assemblyView.test.ts",
     "src/lib/assembly/coupledDrive.test.tsx",
     "src/lib/assembly/motionSetup.test.ts",
-    "src/lib/assistant/consentGate.stops.test.tsx",
     "src/lib/cloudConfigurationReads.test.ts",
     "src/lib/commandContext.test.ts",
     "src/lib/commandOutcome.test.ts",
