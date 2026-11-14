@@ -57,7 +57,7 @@
  *   to 1 at the staged head, and moves the account's artifact usage from
  *   the encrypted blobs to the staged files. It refuses (413, the quota
  *   codes) when the owner's usage after it would exceed their storage
- *   allowance (one bucket for projects and files, migration 0048), in the
+ *   allowance (one bucket for projects and files, migration 0049), in the
  *   same statement that ends the staging's quota exemption.
  * - The purge clears the room's encrypted ledger, then drops the groups,
  *   versions, envelopes, blobs and their R2 objects, wraps and archives a
@@ -1169,7 +1169,7 @@ async function cutover(
   } satisfies E2eeMigrationCutoverResponse);
 }
 
-/** Everything the owner stores, as migration 0048's triggers measure it. */
+/** Everything the owner stores, as migration 0049's triggers measure it. */
 function storedByOwnerSql(): string {
   return `(COALESCE((SELECT qp.bytes FROM account_project_storage qp
                      WHERE qp.user_id = ?), 0)
@@ -1178,7 +1178,7 @@ function storedByOwnerSql(): string {
                 WHERE qu.owner_user_id = ?), 0))`;
 }
 
-/** The owner's one storage allowance (migration 0048). */
+/** The owner's one storage allowance (migration 0049). */
 const OWNER_LIMIT_SQL = `COALESCE((SELECT project_storage_limit_bytes FROM users
                            WHERE id = ?), 2147483648)`;
 
@@ -1187,7 +1187,7 @@ const OWNER_LIMIT_SQL = `COALESCE((SELECT project_storage_limit_bytes FROM users
  * removed the plaintext. Staged ciphertext counts toward nothing while
  * staging (decision M10, migration 0042), so the cutover, which ends that
  * exemption, must not publish it over the account's one storage allowance
- * (migration 0048). The cutover's own statement carries the negation of
+ * (migration 0049). The cutover's own statement carries the negation of
  * `over`, so nothing between the check and the batch can move it.
  *
  * What the cutover changes: the project's retained envelopes and its
@@ -2214,11 +2214,11 @@ interface Condition {
  * documents count toward nothing while staging (migration 0043), so a lease
  * holder could stage more than the encrypted project held; the cutover,
  * which ends that exemption, must not publish it over the account's one
- * storage allowance (migration 0048). The condition holds when the cutover
+ * storage allowance (migration 0049). The condition holds when the cutover
  * would; the cutover's own statement carries its negation, so nothing
  * between the check and the batch can move it.
  *
- * Everything the account stores now (migration 0048's project storage and
+ * Everything the account stores now (migration 0049's project storage and
  * the file usage, finalized and reserved), plus what the cutover changes:
  * the staged files join the file usage and the encrypted blobs leave it (as
  * the cutover's usage update computes it), the project's staged document

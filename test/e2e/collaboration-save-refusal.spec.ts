@@ -138,10 +138,12 @@ for (const refusal of ['oversize', 'rejected', 'update-required'] as const) {
       exact: true
     });
     if (refusal === 'rejected') {
-      await expect(
-        page.getByRole('button', { name: 'Open project sharing · Unavailable' })
-      ).toHaveAttribute(
-        'title',
+      // The reason opens in the app's own help (hover, keyboard focus or a
+      // long-press), not only in a hover-only title (I77).
+      await page
+        .getByRole('button', { name: 'Open project sharing · Unavailable' })
+        .hover();
+      await expect(page.getByRole('tooltip')).toContainText(
         'Connection refused: The room refused this edit.'
       );
     }
@@ -153,3 +155,102 @@ for (const refusal of ['oversize', 'rejected', 'update-required'] as const) {
     expect(accountWrites).toBe(0);
   });
 }
+
+// Design review I10: while the seat waits for its edit lease, one notice says
+// "Connecting to the live session…" in plain words; tools keep their own
+// descriptions; a refused press is a warning, not a "ready" dot; the notice
+// goes once the lease arrives.
+test('says plainly that editing waits for the live session', async ({
+  page
+}) => {
+  const document = createProjectDocument(
+    'Member waiting for the session',
+    toUserId('other_owner')
+  );
+  const summary = {
+    projectId: document.projectId,
+    name: document.name,
+    revisionCount: 1,
+    documentVersion: document.version,
+    updatedAt: document.derived.updatedAt
+  };
+  await stubApi(page, { collaborationRole: 'editor' });
+  await page.route('**/api/projects', (route) =>
+    route.fulfill({
+      json:
+        route.request().method() === 'POST'
+          ? { project: summary, document }
+          : { projects: [summary] }
+    })
+  );
+  await page.addInitScript(() => {
+    const browser = window as unknown as { __saveSocket: WebSocket };
+    const Original = window.WebSocket;
+    window.WebSocket = class extends Original {
+      constructor(url: string | URL, protocols?: string | string[]) {
+        super(url, protocols);
+        browser.__saveSocket = this;
+      }
+    };
+  });
+  await page.goto('/');
+  await page.getByLabel('Project name').fill(document.name);
+  await page.getByRole('button', { name: 'New project' }).click();
+  await expect(page.locator('.breadcrumb')).toContainText(document.name);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () =>
+          (window as unknown as { __saveSocket?: WebSocket }).__saveSocket
+            ?.readyState
+      )
+    )
+    .toBe(1);
+  await page.evaluate((document) => {
+    (
+      window as unknown as { __saveSocket: WebSocket }
+    ).__saveSocket.dispatchEvent(
+      new MessageEvent('message', {
+        data: JSON.stringify({
+          type: 'state',
+          members: [],
+          document,
+          role: 'editor',
+          lease: null
+        })
+      })
+    );
+  }, document);
+  const notice = page.locator('.live-session-notice');
+  await expect(notice).toContainText('Connecting to the live session…');
+  await expect(page.locator('body')).not.toContainText(/edit lease/i);
+  // Tools stay greyed (their rows keep their own descriptions: unit-tested
+  // in tools.test.ts), and a refused press says why in the same words.
+  const box = page.getByRole('button', { name: /^Box\b/ }).first();
+  await expect(box).toHaveAttribute('aria-disabled', 'true');
+  await page.keyboard.press('b');
+  await expect(page.getByRole('contentinfo')).toContainText(
+    'Connecting to the live session…'
+  );
+  await expect(page.getByRole('contentinfo')).not.toContainText(/lease/i);
+  await page.evaluate((document) => {
+    (
+      window as unknown as { __saveSocket: WebSocket }
+    ).__saveSocket.dispatchEvent(
+      new MessageEvent('message', {
+        data: JSON.stringify({
+          type: 'lease-granted',
+          lease: {
+            leaseId: 'member_waiting_lease',
+            projectId: document.projectId,
+            userId: 'user_e2e',
+            clientId: sessionStorage.getItem('openzcad-collaboration-client'),
+            expiresAt: Date.now() + 60_000
+          }
+        })
+      })
+    );
+  }, document);
+  await expect(notice).toHaveCount(0);
+  await expect(box).not.toHaveAttribute('aria-disabled', 'true');
+});

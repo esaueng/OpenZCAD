@@ -22,6 +22,19 @@ describe('ShortcutsOverlay', () => {
     ).toBeInTheDocument();
   });
 
+  it('writes keys as the workspace does, and the mode key as a step (I21, I24)', () => {
+    render(<ShortcutsOverlay onClose={vi.fn()} />);
+    const dialog = screen.getByRole('dialog', { name: 'Help & controls' });
+    const keys = Array.from(dialog.querySelectorAll('kbd')).map(
+      (kbd) => kbd.textContent ?? ''
+    );
+    // happy-dom is not a Mac: "Ctrl+…", as tooltips and menus write it.
+    expect(keys).toContain('Ctrl+Shift+M');
+    expect(keys.some((key) => key.includes('Ctrl/Cmd'))).toBe(false);
+    expect(keys.some((key) => key.includes(' + '))).toBe(false);
+    expect(within(dialog).getByText('Next workspace mode')).toBeVisible();
+  });
+
   it('lets the keyboard reach and scroll the whole list', () => {
     // Close was the only tab stop, so the half of the reference below the
     // fold could not be scrolled into view without a mouse.

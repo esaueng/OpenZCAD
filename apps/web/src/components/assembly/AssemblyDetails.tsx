@@ -1,5 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link2, Pause, Pin, Play, Plus, TriangleAlert, X } from 'lucide-react';
+import {
+  Link2,
+  Pause,
+  Pin,
+  Play,
+  Plus,
+  Trash2,
+  TriangleAlert,
+  X
+} from 'lucide-react';
 import { commandFactories } from '@openzcad/command-system';
 import {
   ASSEMBLY_JOINT_DOFS,
@@ -13,7 +22,8 @@ import {
   type AssemblyJoint,
   type AssemblyPlayback,
   type AssemblySet,
-  type ProjectDocument
+  type ProjectDocument,
+  type UnitSystem
 } from '@openzcad/shared';
 import {
   removeAssemblyComponent,
@@ -30,6 +40,7 @@ import { gearCouplingMismatch } from '../../lib/assembly/gearCouplingCheck';
 import {
   ANIMATE_MODES,
   ANIMATE_SPEEDS,
+  assemblyLengthScale,
   defaultLimit,
   dofLabel,
   JOINT_KIND_META,
@@ -55,11 +66,13 @@ function NumberField({
   value,
   label,
   unit,
+  lengthUnit,
   onCommit
 }: {
   value: number;
   label: string;
   unit?: AssemblyDofUnit;
+  lengthUnit?: UnitSystem;
   onCommit(value: number): void;
 }) {
   const shown = Number((Math.round(value * 1000) / 1000).toString());
@@ -87,7 +100,9 @@ function NumberField({
           }
         }}
       />
-      {unit ? <span className="assembly-unit">{unitSymbol(unit)}</span> : null}
+      {unit ? (
+        <span className="assembly-unit">{unitSymbol(unit, lengthUnit)}</span>
+      ) : null}
     </span>
   );
 }
@@ -98,8 +113,10 @@ function NumberField({
  */
 export function couplingSummary(
   set: Pick<AssemblySet, 'joints'>,
-  coupling: AssemblyCoupling
+  coupling: AssemblyCoupling,
+  lengthUnit: UnitSystem = 'mm'
 ): string {
+  const length = unitSymbol('mm', lengthUnit);
   const unitOf = (end: AssemblyCoupling['driver']) => {
     const found = set.joints.find((j) => j.id === end.jointId);
     return found ? ASSEMBLY_JOINT_DOFS[found.kind][end.dof] : undefined;
@@ -112,8 +129,10 @@ export function couplingSummary(
     return `${number(size)} turns per turn, ${
       coupling.ratio < 0 ? 'the other way' : 'the same way'
     }`;
-  if (from === 'deg' && to === 'mm') return `${number(size * 360)} mm per turn`;
-  if (from === 'mm' && to === 'deg') return `${number(360 / size)} mm per turn`;
+  if (from === 'deg' && to === 'mm')
+    return `${number(size * 360)} ${length} per turn`;
+  if (from === 'mm' && to === 'deg')
+    return `${number(360 / size)} ${length} per turn`;
   return `ratio ${number(size)}`;
 }
 
@@ -128,12 +147,19 @@ export function JointDetails({
   execute,
   onStatus,
   model,
-  joint
-}: AssemblyDetailsProps & { joint: AssemblyJoint }) {
+  joint,
+  onDelete
+}: AssemblyDetailsProps & {
+  joint: AssemblyJoint;
+  /** Deletes this joint (the panel announces it, with Undo). */
+  onDelete?(): void;
+}) {
   const playback = useAssemblyRuntime((s) => s.playback);
   const prefs = useAnimatePrefs();
   const [savingPosition, setSavingPosition] = useState(false);
   const app = { document, execute, onStatus };
+  const lengthUnit = document.units;
+  const lengthScale = assemblyLengthScale(lengthUnit);
   const units = ASSEMBLY_JOINT_DOFS[joint.kind];
   const values = model.solution.values.get(joint.id) ?? joint.values;
   const unsolved = model.solution.unsolved.get(joint.id) ?? null;
@@ -195,7 +221,7 @@ export function JointDetails({
 
       {units.map((unit, dof) => {
         const value = values[dof] ?? 0;
-        const range = sliderRange(unit, joint.limits[dof], value);
+        const range = sliderRange(unit, joint.limits[dof], value, lengthUnit);
         const label = dofLabel(joint.kind, dof);
         const limit = joint.limits[dof] ?? null;
         const withLimit = (next: AssemblyDofLimit | null) =>
@@ -212,7 +238,7 @@ export function JointDetails({
                 aria-label={`${label} slider`}
                 min={range.min}
                 max={range.max}
-                step={unit === 'deg' ? 0.5 : 0.1}
+                step={unit === 'deg' ? 0.5 : lengthScale.step}
                 value={value}
                 disabled={unsolved !== null}
                 onChange={(event) =>
@@ -225,6 +251,7 @@ export function JointDetails({
               <NumberField
                 value={value}
                 unit={unit}
+                lengthUnit={lengthUnit}
                 label={label}
                 onCommit={(next) => {
                   preview(dof, next);
@@ -240,7 +267,7 @@ export function JointDetails({
                   onChange={(event) =>
                     withLimit(
                       event.currentTarget.checked
-                        ? defaultLimit(unit, value)
+                        ? defaultLimit(unit, value, lengthUnit)
                         : null
                     )
                   }
@@ -264,6 +291,7 @@ export function JointDetails({
                   <NumberField
                     value={limit.max}
                     unit={unit}
+                    lengthUnit={lengthUnit}
                     label={`${label} maximum`}
                     onCommit={(max) =>
                       max >= limit.min
@@ -303,7 +331,7 @@ export function JointDetails({
             <Link2 size={13} aria-hidden="true" />
             <span>
               {coupling.name}: moves with {other?.name ?? 'another joint'} ·{' '}
-              {couplingSummary(model.set, coupling)}
+              {couplingSummary(model.set, coupling, lengthUnit)}
             </span>
             <button
               type="button"
@@ -445,6 +473,19 @@ export function JointDetails({
           </button>
         )}
       </div>
+      {onDelete ? (
+        <div className="assembly-detail-actions">
+          <button
+            type="button"
+            className="assembly-link-button is-danger"
+            title="Delete this joint (Delete). Undo brings it back."
+            onClick={onDelete}
+          >
+            <Trash2 size={12} aria-hidden="true" />
+            Delete joint
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }

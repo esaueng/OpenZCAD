@@ -2949,7 +2949,7 @@
       "payload": {
         "joint": {
           "id": "joint_ea1c3a16-ea0d-4a5a-8868-8982f7e0ff89",
-          "name": "Revolute 1",
+          "name": "Pivot",
           "kind": "revolute",
           "parent": {
             "componentId": "comp_ea0bb644-0b5a-4cda-95c0-3b3e12af904a",
@@ -3096,7 +3096,7 @@
     "joints": [
       {
         "id": "joint_ea1c3a16-ea0d-4a5a-8868-8982f7e0ff89",
-        "name": "Revolute 1",
+        "name": "Pivot",
         "kind": "revolute",
         "parent": {
           "componentId": "comp_ea0bb644-0b5a-4cda-95c0-3b3e12af904a",

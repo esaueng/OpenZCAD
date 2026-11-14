@@ -96,7 +96,7 @@ export function accountEntitlements(
 ): ServerAccountEntitlements {
   const tier = accountTier(env, email);
   const ai = accountAiLimits(env, email);
-  // One bucket per account (migration 0048): projects and files share it.
+  // One bucket per account (migration 0049): projects and files share it.
   const storageLimitBytes =
     tier === 'premium'
       ? positiveInteger(
@@ -131,7 +131,7 @@ const syncedAccountLimits = new WeakMap<D1Database, Promise<void>>();
  * Brings every account's derived limits (`users.artifact_limit_bytes`,
  * `project_limit`, `project_storage_limit_bytes`, migration 0022) in line
  * with this deployment's tier policy, once per isolate and database. Since
- * migration 0048 both byte columns hold the one storage allowance: the
+ * migration 0049 both byte columns hold the one storage allowance: the
  * quota triggers read `project_storage_limit_bytes`, and the in-flight
  * reservation check and older Workers read `artifact_limit_bytes`.
  *

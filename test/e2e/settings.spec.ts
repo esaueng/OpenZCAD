@@ -610,8 +610,9 @@ const DARK_GROUND = 'rgb(16, 18, 21)';
 const LIGHT_GROUND = 'rgb(242, 242, 242)';
 const DARK_SURFACE = 'rgb(24, 27, 31)';
 const LIGHT_SURFACE = 'rgb(250, 250, 250)';
-// The 3D stage behind the canvas turns with the chrome.
-const DARK_STAGE = 'rgb(16, 18, 21)';
+// The 3D stage behind the canvas turns with the chrome. The dark stage is
+// the neutral graphite `--color-viewport-bg` (#18191c, #1293), not the ground.
+const DARK_STAGE = 'rgb(24, 25, 28)';
 const LIGHT_STAGE = 'rgb(238, 238, 238)';
 
 function pageGround(page: Page) {

@@ -1948,7 +1948,7 @@ export class InMemoryPersistenceService implements PersistenceService {
   }
 
   /**
-   * As migration 0048's triggers: a write that grows the owner's project
+   * As migration 0049's triggers: a write that grows the owner's project
    * storage is refused once everything the account stores (projects and
    * files, finalized and reserved) would go over the one allowance.
    */

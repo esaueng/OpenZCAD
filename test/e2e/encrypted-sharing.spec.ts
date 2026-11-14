@@ -1,4 +1,4 @@
-import type { BrowserContext, Page } from '@playwright/test';
+import type { BrowserContext, Page, Request } from '@playwright/test';
 import { withEncryptedProjectInfo } from '../../apps/web/worker/e2eeProjectDocuments';
 import { d1Database } from '../d1-sqlite';
 import {
@@ -212,9 +212,30 @@ test('invites to an encrypted project, verifies both ways and opens it as the in
   ).toBeVisible({ timeout: SYNC_BUDGET_MS });
 
   // She invites Bob from the sharing dialog: the encrypted branch.
+  // Design review I79 saw the Worker's format-gate refusal in a red banner
+  // and suspected a plaintext sharing call. The dialog reads only the
+  // metadata route the gate lets through; every other call is encrypted.
+  const plaintextCalls: string[] = [];
+  const recordPlaintext = (request: Request) => {
+    const path = new URL(request.url()).pathname;
+    if (/^\/api\/(projects\/proj_|share)/.test(path)) {
+      plaintextCalls.push(`${request.method()} ${path}`);
+    }
+  };
+  alice.on('request', recordPlaintext);
   await alice.getByRole('button', { name: /Open project sharing/ }).click();
   const dialog = alice.getByRole('dialog', { name: 'Project sharing' });
   await expect(dialog).toBeVisible();
+  await expect(
+    dialog.getByRole('region', { name: 'Encrypted share links' })
+  ).toBeVisible();
+  await expect(dialog.getByRole('alert')).toHaveCount(0);
+  alice.off('request', recordPlaintext);
+  expect(
+    plaintextCalls.filter(
+      (call) => !/^GET \/api\/projects\/proj_[^/]+\/sharing$/.test(call)
+    )
+  ).toEqual([]);
   // Its only link is an encrypted one (slice 5-10), never a plaintext one.
   await expect(
     dialog.getByRole('region', { name: 'Encrypted share links' })

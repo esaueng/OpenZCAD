@@ -1426,7 +1426,7 @@ function storedBytesOf(srv: Server): number {
   return sum('project_document_objects') + sum('project_storage_assets');
 }
 
-/** Sets the owner's one storage allowance (both columns, migration 0048). */
+/** Sets the owner's one storage allowance (both columns, migration 0049). */
 function setLimit(srv: Server, bytes: number) {
   srv.db
     .prepare(
@@ -1436,7 +1436,7 @@ function setLimit(srv: Server, bytes: number) {
 }
 
 /**
- * Everything the owner stores, as migration 0048's triggers measure it:
+ * Everything the owner stores, as migration 0049's triggers measure it:
  * project storage (staged plaintext excluded) plus file usage.
  */
 function storedNow(srv: Server): number {
@@ -1584,7 +1584,7 @@ describe('the owner’s limits at the cutover', () => {
     const { projectId } = await encryptedProject(srv, { revisions: 1 });
     // Fill the account to its allowance exactly with another project's
     // file: every new upload session would be refused, but a decrypt
-    // staging's are admitted (migration 0048), and the cutover is checked
+    // staging's are admitted (migration 0049), and the cutover is checked
     // for growth instead.
     const filler = (
       (await (

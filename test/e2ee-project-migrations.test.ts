@@ -1971,7 +1971,7 @@ describe('purging the plaintext', () => {
 
 // --- Quota ------------------------------------------------------------------------------
 
-/** Sets the owner's one storage allowance (both columns, migration 0048). */
+/** Sets the owner's one storage allowance (both columns, migration 0049). */
 function setLimit(srv: Server, bytes: number) {
   srv.db
     .prepare(
@@ -1980,7 +1980,7 @@ function setLimit(srv: Server, bytes: number) {
     .run(bytes, OWNER);
 }
 
-/** Everything the owner stores, as migration 0048's triggers measure it. */
+/** Everything the owner stores, as migration 0049's triggers measure it. */
 function storedNow(srv: Server): number {
   return (
     srv.db

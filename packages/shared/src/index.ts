@@ -4177,7 +4177,7 @@ export const MAX_ACTIVE_ARTIFACT_UPLOAD_SESSIONS = 16;
  * The Free account's one storage allowance: everything the account stores,
  * attributed to the project owner — documents, revisions and source assets
  * (plaintext or encrypted) together with imports, exports and encrypted
- * content blobs, in one bucket (migration 0048). Uploads and saves are
+ * content blobs, in one bucket (migration 0049). Uploads and saves are
  * otherwise unmetered writes on an open-signup beta; 1 GiB covers real use
  * (the largest supported STEP import is 128 MB) while bounding abuse.
  * Premium raises it.

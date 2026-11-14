@@ -44,7 +44,7 @@ describe('ViewOptionsMenu', () => {
     expect(button).toHaveAttribute('aria-expanded', 'true');
     const menu = within(screen.getByRole('menu', { name: 'Panel layout' }));
 
-    const layouts = within(menu.getByRole('group', { name: 'Layout' }));
+    const layouts = within(menu.getByRole('group', { name: 'Presets' }));
     expect(
       layouts.getAllByRole('menuitemradio').map((item) => item.textContent)
     ).toEqual([
@@ -115,7 +115,7 @@ describe('ViewOptionsMenu', () => {
     expect(screen.getByRole('menu')).toBeInTheDocument();
     // No preset matches a rearranged layout.
     for (const item of within(
-      screen.getByRole('group', { name: 'Layout' })
+      screen.getByRole('group', { name: 'Presets' })
     ).getAllByRole('menuitemradio')) {
       expect(item).toHaveAttribute('aria-checked', 'false');
     }

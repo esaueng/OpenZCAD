@@ -92,6 +92,31 @@
 .project-properties-actions {
   display: flex;
   justify-content: flex-end;
+  /* Pinned to the dialog's foot while its rows scroll: at 900 px tall the
+     Close sat below the fold, under a dozen rows of sizes. */
+  position: sticky;
+  bottom: calc(-1 * var(--sp-4));
+  margin: 0 calc(-1 * var(--sp-4)) calc(-1 * var(--sp-4));
+  padding: var(--sp-2) var(--sp-4) var(--sp-4);
+  background: var(--color-surface);
+  border-top: var(--border-thin);
+}
+
+/* The name is edited in place: Enter or leaving the field renames. */
+.project-properties-name {
+  display: grid;
+  gap: var(--sp-1);
+}
+
+.project-properties-name input {
+  width: 100%;
+  min-height: 28px;
+  font-size: var(--fs-sm);
+}
+
+.project-properties-name small {
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
 }
 
 .project-properties-note {
@@ -313,6 +338,22 @@
 
 .cloud-deletion-error {
   color: var(--color-error);
+}
+
+/* "Download your data first": a link in the impact text (design review I84). */
+.cloud-deletion-download {
+  padding: 0;
+  border: 0;
+  color: var(--color-accent-hi);
+  background: transparent;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.cloud-deletion-download:hover {
+  color: var(--color-text);
 }
 
 /* The personal-info toggle is a button, not a full-width bar. */
@@ -1883,4 +1924,8 @@
 .modal-backdrop .secondary:not(.danger, :hover:not(:disabled), :focus-visible) {
   background: transparent;
   border-color: transparent;
+}
+
+.conflict-choice-name {
+  color: var(--color-text);
 }

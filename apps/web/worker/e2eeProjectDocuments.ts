@@ -759,7 +759,7 @@ async function quotaRefusal(ctx: Context, error: unknown): Promise<never> {
     );
   }
   // A copy's blobs count against the owner's one storage allowance (0034,
-  // 0048).
+  // 0049).
   if (message.includes('artifact_account_quota')) {
     const row = await ctx.db
       .prepare('SELECT project_storage_limit_bytes FROM users WHERE id = ?')

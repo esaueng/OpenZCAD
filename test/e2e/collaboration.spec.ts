@@ -1033,6 +1033,39 @@ for (const departure of ['fragment', 'home'] as const) {
   });
 }
 
+// Design review I85: a signed-in visitor of a plaintext link got a device
+// copy unasked, while an encrypted link asked where to put it. Both ask.
+test('asks a signed-in visitor of a plaintext link where to put the copy', async ({
+  page
+}) => {
+  await stubApi(page);
+  const document = createProjectDocument('Signed-in source', toUserId('owner'));
+  await page.route('**/api/share/*', (route) =>
+    route.fulfill({
+      json: { document, project: { projectId: document.projectId, name: document.name }, mode: 'tweak' }
+    })
+  );
+  await page.goto(`/#share=${'p'.repeat(43)}`);
+  await page.getByRole('button', { name: 'Make a copy', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Make a copy', exact: true });
+  await expect(dialog).toBeVisible();
+  await expect(
+    dialog.getByRole('button', { name: 'Copy to your account' })
+  ).toBeEnabled();
+  await dialog
+    .getByRole('button', { name: 'Keep on this device only' })
+    .click();
+  await expect(dialog).toHaveCount(0);
+  await expect(
+    page.getByRole('button', { name: 'Rename project' })
+  ).toContainText('Signed-in source');
+  await expect(
+    page
+      .getByRole('group', { name: 'Workspace mode' })
+      .getByRole('button', { name: 'Build' })
+  ).toBeEnabled();
+});
+
 test('makes a durable share copy without storing the owner snapshot', async ({
   page
 }) => {
@@ -2099,16 +2132,28 @@ test('explains beta auth and Turnstile readiness failures', async ({
   );
 
   await page.goto('/');
+  // Design review I8: the start screen names the state as the rest of the
+  // app does and offers Retry, not a Sign in that leads to a page saying
+  // sign-in cannot be reached.
+  await expect(
+    page.getByText('Cloud unavailable', { exact: true })
+  ).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Retry the cloud connection' })
+  ).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Sign in', exact: true })
+  ).toHaveCount(0);
   await page.getByRole('button', { name: 'Open settings' }).click();
   await page.getByRole('button', { name: 'Account', exact: true }).click();
   await expect(
     page.getByRole('alert').filter({
-      hasText: 'Sign-in could not be reached'
+      hasText: 'Cloud unavailable: sign-in could not be reached'
     })
   ).toBeVisible();
   await expect(page.getByLabel('Email address')).toHaveCount(0);
   await expect(page.locator('.settings-save-message')).toContainText(
-    'Beta sign-in unavailable'
+    'Cloud unavailable · settings and projects stay on this device.'
   );
 
   await page.unrouteAll({ behavior: 'wait' });

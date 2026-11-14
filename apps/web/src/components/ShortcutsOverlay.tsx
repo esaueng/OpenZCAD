@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
+import { platformShortcutLabel } from '../lib/platformShortcut';
 import {
   liveKeyboardGroups,
   POINTER_CONTROL_GROUPS
@@ -22,6 +23,17 @@ interface ShortcutsOverlayProps {
  * user who tries the obvious gesture clears their selection rather than
  * turning the model.
  */
+/**
+ * A reference chord as the rest of the workspace writes it on this device:
+ * "Ctrl+S" here (⌘S on a Mac), not the reference's "Ctrl/Cmd+S", which
+ * disagreed with every tooltip and menu (I24).
+ */
+function shownKey(key: string): string {
+  return key.includes('Ctrl/Cmd')
+    ? platformShortcutLabel(key.replaceAll('Ctrl/Cmd', 'Ctrl'))
+    : key;
+}
+
 export function ShortcutsOverlay({
   onClose,
   onTour,
@@ -146,7 +158,9 @@ export function ShortcutsOverlay({
                     <dd>
                       <span className="shortcut-key-sequence">
                         {item.keys.length > 0
-                          ? item.keys.map((key) => <kbd key={key}>{key}</kbd>)
+                          ? item.keys.map((key) => (
+                              <kbd key={key}>{shownKey(key)}</kbd>
+                            ))
                           : 'Unassigned'}
                       </span>
                     </dd>

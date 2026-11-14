@@ -21,7 +21,10 @@ afterEach(() => {
 
 function renderPanel(
   manager: ReturnType<typeof scissorsManager>,
-  extra: { saveBomCsv?: (fileName: string, csv: string) => void } = {}
+  extra: {
+    saveBomCsv?: (fileName: string, csv: string) => void;
+    onAnnounce?: (message: string, options?: { undo?: boolean }) => void;
+  } = {}
 ) {
   const recorder = recordingExecute(manager.manager);
   registerAssemblyCommitHandlers({
@@ -328,6 +331,46 @@ describe('AssemblyPanel (one left sidebar)', () => {
       kind: 'assembly.component.delete',
       payload: { componentId: 'comp_b' }
     });
+  });
+
+  it('says why Motion has nothing to set up when every part is fixed or joined (I55)', () => {
+    const fixture = scissorsManager({ joint: true });
+    const { onStatus } = renderPanel(fixture);
+    const reason =
+      'Every part is fixed or already moves on a joint. Open a joint to change its motion.';
+    const motion = screen.getByRole('button', { name: 'Motion' });
+    expect(motion).toHaveAttribute('aria-disabled', 'true');
+    expect(motion).toHaveAttribute('title', reason);
+    fireEvent.click(motion);
+    expect(onStatus).toHaveBeenCalledWith(reason);
+    // It never opens a card that starts in an error.
+    expect(getAssemblyRuntime().motionSetup).toBeNull();
+  });
+
+  it('deletes a joint from its details or the Delete key, with Undo (I2)', () => {
+    const fixture = scissorsManager({ joint: true });
+    const onAnnounce = vi.fn();
+    const { commands, rerender } = renderPanel(fixture, { onAnnounce });
+    fireEvent.click(screen.getByRole('button', { name: /^Pivot/ }));
+    rerender();
+    const details = screen.getByLabelText('Pivot details');
+    fireEvent.click(
+      within(details).getByRole('button', { name: 'Delete joint' })
+    );
+    expect(commands.at(-1)).toEqual({
+      kind: 'assembly.joint.delete',
+      payload: { jointId: 'joint_pin' }
+    });
+    expect(getAssemblyRuntime().selectedJointId).toBeNull();
+    expect(onAnnounce).toHaveBeenCalledWith('Deleted Pivot.', { undo: true });
+
+    fixture.manager.undo();
+    rerender();
+    fireEvent.keyDown(screen.getByRole('button', { name: /^Pivot/ }), {
+      key: 'Delete'
+    });
+    expect(fixture.manager.document.assembly?.joints).toEqual([]);
+    expect(onAnnounce).toHaveBeenCalledTimes(2);
   });
 
   it('opens the joint tool in the sidebar, and starts empty assemblies from the first run', () => {

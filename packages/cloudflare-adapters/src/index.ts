@@ -614,6 +614,17 @@ export const isE2eeProjectGroupStorageReady = cachedSchemaProbe(
   (row) => row?.ready === E2EE_PROJECT_GROUP_TABLES.length
 );
 
+/**
+ * Migration 0048: each MLS Commit keeps its submitting device's signature.
+ * Commits are refused (503) until it exists, since only signed Commits
+ * count as a device removal's rotation.
+ */
+export const isE2eeCommitSignatureStorageReady = cachedSchemaProbe(
+  `SELECT COUNT(*) AS ready FROM pragma_table_info('e2ee_mls_commits')
+   WHERE name = 'sender_signature'`,
+  (row) => row?.ready === 1
+);
+
 /** Migration 0044: account-authenticated MLS roots and membership state. */
 export const isE2eeProjectAuthorityStorageReady = cachedSchemaProbe(
   `SELECT COUNT(*) AS ready FROM pragma_table_info('e2ee_project_authority')
@@ -3624,7 +3635,7 @@ export class D1R2PersistenceService implements PersistenceService {
    * over their storage allowance. This refuses a further staged file early,
    * once what is staged so far would already do so at the cutover: the
    * account's file usage and project storage (one allowance, migration
-   * 0048), plus what the cutover adds (the staged files, documents and
+   * 0049), plus what the cutover adds (the staged files, documents and
    * assets, less the encrypted blobs and envelopes it stops counting), when
    * that grows the account. A staging that shrinks it is never refused, so
    * an account at its allowance can still decrypt. Advisory only; the
@@ -3668,7 +3679,7 @@ export class D1R2PersistenceService implements PersistenceService {
 
   /**
    * The owner's project storage as the quota triggers measure it (migration
-   * 0048's `account_project_storage`): plaintext as
+   * 0049's `account_project_storage`): plaintext as
    * `plaintextProjectStorageBytes` counts it, plus retained encrypted
    * envelopes.
    */
@@ -3715,7 +3726,7 @@ export class D1R2PersistenceService implements PersistenceService {
     // Legacy rows without an account use the database's Free fallback.
     if (!owner) return;
     const limits = accountEntitlements(this.env, owner.email ?? undefined);
-    // Both byte columns hold the one storage allowance (migration 0048).
+    // Both byte columns hold the one storage allowance (migration 0049).
     await this.env
       .DB!.prepare(
         `UPDATE users SET artifact_limit_bytes = ?, project_limit = ?, project_storage_limit_bytes = ?
@@ -3805,7 +3816,7 @@ export class D1R2PersistenceService implements PersistenceService {
     // The unary + keeps SQLite from answering `document_object_id IS NULL`
     // through the document-object indexes, which hold every account's
     // inline rows under one key: it walks this owner's projects (and their
-    // revisions) instead, as migration 0048's view does.
+    // revisions) instead, as migration 0049's view does.
     const row = await this.env
       .DB!.prepare(
         `SELECT
@@ -6797,7 +6808,7 @@ export class D1R2PersistenceService implements PersistenceService {
 
   /**
    * Refuses an R2 document write the quota triggers would refuse at commit:
-   * everything the owner stores (project storage as migration 0048 measures
+   * everything the owner stores (project storage as migration 0049 measures
    * it, and file usage, finalized and reserved, in the same allowance), plus
    * the incoming bytes, over the one storage allowance. Plaintext staged
    * beside an encrypted project (slice 7-3) counts only from its cutover on,

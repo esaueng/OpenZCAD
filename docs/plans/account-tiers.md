@@ -35,7 +35,7 @@ requests already running on an older configuration may finish under that policy.
 | Concurrent AI requests            | 2            | 8               |
 
 Storage is one allowance per account (migration
-`0048_unified_account_storage.sql`): projects, save states and source assets
+`0049_unified_account_storage.sql`): projects, save states and source assets
 (plaintext or encrypted) and imports, exports and encrypted files, including
 pending upload reservations, all count against the same bucket. Free is
 1 GiB in total, not 1 GiB for projects plus 1 GiB for files.
@@ -92,7 +92,7 @@ hard-code it; the in-flight reservation ceiling stays 2 GiB for every tier. Atom
 Workers, single-part finalization and multipart reservations. Direct database
 writers must not treat a stale derived value as a current membership lookup.
 
-Migration `0048_unified_account_storage.sql` makes storage one allowance. It
+Migration `0049_unified_account_storage.sql` makes storage one allowance. It
 adds no column: both `artifact_limit_bytes` and `project_storage_limit_bytes`
 hold the same unified value (the Worker writes it to both; the migration
 copies the larger into both for any row where they differ), and every quota
@@ -134,7 +134,7 @@ by the frontend.
 
 ## Rollout and verification
 
-Apply migration 0022 (and 0048 for the single allowance) before routing
+Apply migration 0022 (and 0049 for the single allowance) before routing
 traffic to the new Worker. Keep the previous
 migration intact; this is an additive migration with replacement quota triggers.
 Do not deploy the new upload code without the new column. An older Worker remains

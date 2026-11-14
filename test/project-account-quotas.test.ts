@@ -75,7 +75,7 @@ describe('project quota preflight', () => {
         first: async () =>
           query.includes('AS project_count')
             ? { project_count: 0 }
-            : // Project storage as the quota measures it (migration 0048),
+            : // Project storage as the quota measures it (migration 0049),
               // already at the account's one allowance.
               query.includes('FROM project_document_objects objects')
               ? { bytes: MAX_ACCOUNT_STORAGE_BYTES }

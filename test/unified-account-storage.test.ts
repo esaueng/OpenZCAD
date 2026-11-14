@@ -86,7 +86,7 @@ function uploadSession(db: DatabaseSync, id: string) {
   ).run(id, `artifact_${id}`, PROJECT, `uploads/${id}`, OWNER);
 }
 
-describe('one storage allowance per account (migration 0048)', () => {
+describe('one storage allowance per account (migration 0049)', () => {
   it('refuses a project save once files fill the combined bucket', () => {
     // 100 inline project bytes + 9,900 file bytes: exactly at the limit.
     const db = account(10_000);
@@ -114,7 +114,7 @@ describe('one storage allowance per account (migration 0048)', () => {
       'project_account_document_quota'
     );
 
-    // Before 0048 each allowance was separate: the same project save fit
+    // Before 0049 each allowance was separate: the same project save fit
     // its own 10,000 bytes. Shrinking, or a write that grows nothing, passes.
     db.prepare('UPDATE projects SET document_bytes = 60 WHERE id = ?').run(
       PROJECT
@@ -225,7 +225,7 @@ describe('one storage allowance per account (migration 0048)', () => {
       .filter((name) => name.endsWith('.sql'))
       .sort();
     const db = new DatabaseSync(':memory:');
-    for (const file of files.filter((name) => name < '0048'))
+    for (const file of files.filter((name) => name < '0049'))
       db.exec(readFileSync(new URL(file, dir), 'utf8'));
     const insert = db.prepare(
       `INSERT INTO users (id, email, created_at, artifact_limit_bytes,
@@ -234,7 +234,7 @@ describe('one storage allowance per account (migration 0048)', () => {
     );
     insert.run('u_files', CREATED, 2 * GIB, GIB);
     insert.run('u_projects', CREATED, GIB, 3 * GIB);
-    for (const file of files.filter((name) => name >= '0048'))
+    for (const file of files.filter((name) => name >= '0049'))
       db.exec(readFileSync(new URL(file, dir), 'utf8'));
     expect(
       db

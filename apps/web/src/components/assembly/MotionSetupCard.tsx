@@ -16,7 +16,7 @@ import {
   useAssemblyRuntime,
   type AssemblyMotionSetupState
 } from '../../lib/assembly/assemblyRuntime';
-import { ANIMATE_MODES } from '../../lib/assembly/assemblyUi';
+import { ANIMATE_MODES, unitSymbol } from '../../lib/assembly/assemblyUi';
 import { MOTION_SETUP_PREVIEW_JOINT_ID } from '../../lib/assembly/assemblyView';
 import {
   defaultMotionRange,
@@ -25,6 +25,8 @@ import {
   MOTION_SETUP_SWEEPS,
   motionSetupAxisLabel,
   motionSetupJoint,
+  motionSetupMovers,
+  motionSetupUnavailableReason,
   type MotionSetupBounds,
   type MotionSetupContext,
   type MotionSetupDraft,
@@ -55,6 +57,7 @@ export function motionSetupContext(
     set,
     solution: solveAssembly(set),
     bodyOf: (componentId) => bodies.get(componentId) ?? null,
+    lengthUnit: document.units,
     ...(bounds ? { bounds } : {})
   };
 }
@@ -65,7 +68,7 @@ export function openMotionSetup(
   options: { bounds?: MotionSetupBounds; reducedMotion?: boolean } = {}
 ): boolean {
   const context = motionSetupContext(document, options.bounds);
-  if (!context || context.set.components.length < 2) return false;
+  if (!context || motionSetupUnavailableReason(context) !== null) return false;
   assemblyRuntime.openMotionSetup(
     defaultMotionSetup(context),
     !options.reducedMotion
@@ -123,8 +126,20 @@ function MotionSetupForm({
 
   if (!context) return null;
   const { set } = context;
-  const unit = draft.move === 'slide' ? 'mm' : '°';
+  const unit = unitSymbol(
+    draft.move === 'slide' ? 'mm' : 'deg',
+    context.lengthUnit
+  );
   const base = set.components.find((c) => c.id === draft.baseId);
+  // Fixed parts and parts a joint already moves are left out: choosing one
+  // could only end in a refusal.
+  const movers = motionSetupMovers(context, draft.baseId);
+  const moverOf = (baseId: string) => {
+    const options = motionSetupMovers(context, baseId);
+    return options.some((c) => c.id === draft.movingId)
+      ? draft.movingId
+      : (options[0]?.id ?? null);
+  };
 
   const update = (partial: Partial<MotionSetupDraft>) => {
     const next = { ...draft, ...partial };
@@ -172,15 +187,7 @@ function MotionSetupForm({
             value={draft.baseId ?? ''}
             onChange={(event) => {
               const baseId = event.currentTarget.value;
-              update({
-                baseId,
-                ...(baseId === draft.movingId
-                  ? {
-                      movingId:
-                        set.components.find((c) => c.id !== baseId)?.id ?? null
-                    }
-                  : {})
-              });
+              update({ baseId, movingId: moverOf(baseId) });
             }}
           >
             {set.components.map((c) => (
@@ -200,17 +207,19 @@ function MotionSetupForm({
             className="assembly-select"
             aria-label="Part that moves"
             value={draft.movingId ?? ''}
+            disabled={movers.length === 0}
             onChange={(event) =>
               update({ movingId: event.currentTarget.value })
             }
           >
-            {set.components
-              .filter((c) => c.id !== draft.baseId)
-              .map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
+            {movers.length === 0 ? (
+              <option value="">No part left to move</option>
+            ) : null}
+            {movers.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
           </select>
         </SetupStep>
         <SetupStep index={3} title="Motion">
@@ -348,7 +357,9 @@ function MotionSetupForm({
 
       {'error' in result ? (
         <p className="form-error" role="alert">
-          {result.error}
+          {movers.length === 0
+            ? `Nothing can move against ${base?.name ?? 'that part'}: every other part is fixed or already moves on a joint. Choose another part to stay put.`
+            : result.error}
         </p>
       ) : null}
 

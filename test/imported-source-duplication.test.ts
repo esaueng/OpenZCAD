@@ -806,7 +806,7 @@ describe.each(['memory', 'D1/R2'] as const)(
     });
 
     it('charges copied bytes to quota and removes the incomplete destination on refusal', async () => {
-      // Projects share the one storage allowance (migration 0048), so the
+      // Projects share the one storage allowance (migration 0049), so the
       // allowance is set as the copy uploads its file: room for everything
       // stored so far, the copy's document included, but not the file.
       let service: PersistenceService;

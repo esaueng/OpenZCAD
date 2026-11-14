@@ -34,6 +34,7 @@ import {
   deriveJointFrame,
   type FramePickResult
 } from '../../lib/assembly/framePick';
+import { assemblyLengthScale } from '../../lib/assembly/assemblyUi';
 import { AssemblyGlyphLayer, ASSEMBLY_GLYPH_COLORS } from './assemblyGlyphs';
 
 /**
@@ -100,8 +101,13 @@ interface Drag {
 const DRAG_THRESHOLD_PX = 3;
 /** Vertex, centroid and axis-end snaps reach this far from the hit, CSS px. */
 const SNAP_RADIUS_PX = 8;
-/** Drag value steps unless Shift asks for the free value (as command rigs). */
-const DRAG_STEP = { deg: 1, mm: 0.1 } as const;
+/**
+ * Drag value steps unless Shift asks for the free value (as command rigs): a
+ * degree, or the length slider's step in the document's unit.
+ */
+function dragStep(unit: 'deg' | 'mm', view: AssemblyViewModel | null): number {
+  return unit === 'deg' ? 1 : assemblyLengthScale(view?.lengthUnit).step;
+}
 /** Assemble's value chip reuses the Move readout's look. */
 const CHIP_CLASS = 'move-gizmo-hud';
 const ACCENT_CSS = `#${ASSEMBLY_GLYPH_COLORS.selected.toString(16).padStart(6, '0')}`;
@@ -510,7 +516,7 @@ export class AssemblyViewport {
     const reading = readAssemblyDrag(
       drag.session,
       this.deps.picker.raycaster.ray,
-      event.shiftKey ? 0 : DRAG_STEP[drag.unit]
+      event.shiftKey ? 0 : dragStep(drag.unit, this.view)
     );
     if (reading) {
       const previous = drag.last;
@@ -526,7 +532,12 @@ export class AssemblyViewport {
     if (shown)
       this.showChip(
         event,
-        formatAssemblyDragValue(shown.value, drag.unit, shown.atLimit),
+        formatAssemblyDragValue(
+          shown.value,
+          drag.unit,
+          shown.atLimit,
+          this.view?.lengthUnit
+        ),
         shown.atLimit !== null
       );
   }

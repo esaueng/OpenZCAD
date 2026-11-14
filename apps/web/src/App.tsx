@@ -153,6 +153,7 @@ import {
   CirclePause,
   CirclePlay,
   Combine,
+  Cog,
   Copy,
   Crosshair,
   Download,
@@ -160,6 +161,7 @@ import {
   FolderOpen,
   Grid3x3,
   History as HistoryIcon,
+  Keyboard,
   Layers3,
   Maximize2,
   Monitor,
@@ -173,7 +175,7 @@ import {
   ScanEye,
   Settings as SettingsIcon,
   Scissors,
-  Slice,
+  SquareSplitVertical,
   SlidersHorizontal,
   ListOrdered,
   Spline,
@@ -268,6 +270,7 @@ import type {
   ProjectOrganization,
   ProjectStatus,
   ProjectSummary,
+  SaveProjectDocumentRequest,
   SketchConstraintData,
   SketchId,
   SketchNode,
@@ -364,9 +367,12 @@ import {
 import { textPlacementBudgetError } from './lib/sketch/textPlacement';
 import { prefersSavingData } from './lib/saveData';
 import { useSurfaceReady } from './hooks/useSurfaceReady';
+import { useOnline } from './hooks/useOnline';
 import {
   lazyWithStaleChunkNotice,
+  isOffline,
   loadWhenOnline,
+  OFFLINE_CHUNK_MESSAGE,
   preloadableLazy,
   onStaleChunk,
   watchPreloadErrors,
@@ -396,7 +402,10 @@ import {
 } from './lib/e2ee/encryptedInvitationLink';
 import { requestContactVerification } from './lib/e2ee/contactFocus';
 import { watchBuildVersion } from './lib/buildVersionWatch';
-import { commandOutcomeMessage } from './lib/commandOutcome';
+import {
+  commandOutcomeMessage,
+  historyStepMessage
+} from './lib/commandOutcome';
 import { tintPreviewResultBodies } from './lib/previewBodyTint';
 import { remappedBlendEdge } from './lib/inPlace/blendEdgeRemap';
 import { cancelCommandChipEntry } from './lib/inPlace/chipCancel';
@@ -471,7 +480,10 @@ import {
 } from './lib/shaprImportWorkerClient';
 import { rebuildImportInDisposableWorker } from './lib/importRebuildWorkerClient';
 import { shaprMigrationDraft } from './lib/shaprMigration';
-import { presentedWorkspaceSaveState } from './lib/workspaceSaveStatePresentation';
+import {
+  autosaveReportedSaveState,
+  presentedWorkspaceSaveState
+} from './lib/workspaceSaveStatePresentation';
 import { showsWorkspaceEmptyState } from './lib/workspaceEmptyState';
 import {
   CheckpointSaveError,
@@ -554,6 +566,7 @@ import {
 import {
   TOOL_GROUPS,
   TOOL_META,
+  liveCylindricalFace,
   toolDisabledReason,
   type ToolAvailability,
   type ToolId
@@ -566,6 +579,10 @@ import {
   type CommandSelection
 } from './lib/commandContext';
 import { WorkspaceColumn } from './components/WorkspaceColumn';
+import {
+  LIVE_SESSION_CONNECTING,
+  LiveSessionNotice
+} from './components/LiveSessionNotice';
 import { WorkspaceEmptyState } from './components/WorkspaceEmptyState';
 import {
   ActivityLogButton,
@@ -620,6 +637,7 @@ import {
 } from './components/WorkspaceLoading';
 import type { AuthConfigStatus } from './components/SettingsPage';
 import {
+  copyBaseName,
   DEMO_DEFINITIONS,
   VISUAL_SELECTION_ACCEPTANCE_DEMO
 } from './lib/demoDefinitions';
@@ -903,8 +921,15 @@ import { useBuildToolNavigation } from './hooks/useBuildToolNavigation';
 import { useResponsiveFraming } from './hooks/useResponsiveFraming';
 import { parameterDisplayName } from './lib/parameterDisplayName';
 import { featurePaletteLabel, withDistinctLabels } from './lib/paletteLabels';
-import { DISPLAY_MODE_LABELS } from './lib/displayMode';
+import { DISPLAY_MODE_LABELS, DISPLAY_MODE_ORDER } from './lib/displayMode';
 import { ContextMenu, type ContextMenuState } from './components/ContextMenu';
+import {
+  FACE_VERB_PREFIX,
+  LOOK_AT_FACE_ITEM_ID,
+  selectOtherMenuItem,
+  withFaceVerbs,
+  type ViewportMenuState
+} from './lib/viewportMenu';
 import type {
   ResolveExtrudeOptions,
   ResolvedExtrude
@@ -952,7 +977,8 @@ import type {
   BodyAppearancePreview,
   FaceResizeCommit,
   OffsetCommitOutcome,
-  NormalToFaceRequest
+  NormalToFaceRequest,
+  ViewportContextMenuOptions
 } from './components/ModelViewer';
 import type { OrientationLink } from './components/viewer/orientationCube';
 import type {
@@ -2033,11 +2059,6 @@ const DISABLED_COLLABORATION_ROLLOUT: ProjectCollaborationCapabilitiesResponse =
   };
 const projectSharingClient = createProjectSharingClient();
 const localUserId = toUserId('user_local_browser');
-const DISPLAY_MODE_ORDER: DisplayMode[] = [
-  'shaded-edges',
-  'shaded',
-  'wireframe'
-];
 
 interface OffsetEditPlan {
   command: AnyCommand;
@@ -3202,6 +3223,8 @@ export function App() {
    * status is set, not when the toast is raised.
    */
   const lastStatusAtRef = useRef(statusEntry.at);
+  /** The status stamp of a commit's outcome, which offers Undo while shown. */
+  const [undoableStatusAt, setUndoableStatusAt] = useState<number | null>(null);
   /**
    * Informational messages expire (lib/statusLifetime); `sticky` is for text
    * that describes a mode the user is still in, such as sketching on a plane.
@@ -3290,6 +3313,14 @@ export function App() {
   useEffect(() => {
     onStartScreenRef.current = doc === null;
   }, [doc]);
+  /**
+   * CAD files dropped on the start screen, waiting for the project made for
+   * them; `projectId` is that project's once it is on screen.
+   */
+  const pendingStartImportRef = useRef<{
+    files: File[];
+    projectId: string | null;
+  } | null>(null);
   useEffect(() => {
     let stopped = false;
     const watch = watchBuildVersion({
@@ -3305,7 +3336,35 @@ export function App() {
     });
     let interruptionRecorded = false;
     let libraryAnswered = false;
+    let offlineAnswered = false;
+    // 13 November review I5: a download that failed offline used to raise
+    // "Load failed · Reload", and it stayed after the connection returned.
+    // Offline, a reload could lose the app shell itself, so none is offered;
+    // the lazy surfaces retry their own download on reconnect, and anything
+    // that fails again once online reports through the ordinary path below.
+    // Reconnecting only asks the version watch whether an update explains it.
+    let failedOffline = false;
+    const onOnline = () => {
+      if (!failedOffline) return;
+      failedOffline = false;
+      offlineAnswered = false;
+      watch.checkNow();
+    };
+    window.addEventListener('online', onOnline);
     const stopStale = onStaleChunk(() => {
+      if (isOffline()) {
+        failedOffline = true;
+        if (offlineAnswered) return;
+        offlineAnswered = true;
+        if (onStartScreenRef.current) announce(OFFLINE_CHUNK_MESSAGE);
+        else
+          recordActivity({
+            level: 'warning',
+            source: 'notice',
+            message: OFFLINE_CHUNK_MESSAGE
+          });
+        return;
+      }
       // A failed download alone also occurs offline; only the version watch
       // can prove that an update exists, so ask it rather than assume.
       setDownloadInterrupted(true);
@@ -3328,14 +3387,18 @@ export function App() {
     const stopPreload = watchPreloadErrors();
     return () => {
       stopped = true;
+      window.removeEventListener('online', onOnline);
       watch();
       stopStale();
       stopPreload();
     };
   }, [announce]);
+  // Never suggest a reload while offline: it could lose the app shell.
+  const browserOnline = useOnline();
+  const loadFailureShown = downloadInterrupted && browserOnline;
   const reloadPrompt: ReloadPrompt | null = newBuildAvailable
     ? 'update'
-    : downloadInterrupted
+    : loadFailureShown
       ? 'interrupted'
       : null;
   // Load what a click opens while the page is idle, so its first open is not
@@ -3887,7 +3950,9 @@ export function App() {
     }
   );
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
-  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [contextMenu, setContextMenu] = useState<ViewportMenuState | null>(
+    null
+  );
   const contextMenuExit = useDelayedUnmount(contextMenu, OVERLAY_EXIT_MS);
   const orientationRef = useRef<OrientationLink | null>(null);
   /** Click point + normal of the latest topology pick (drag-handle anchor). */
@@ -4514,6 +4579,12 @@ export function App() {
     useState<ProjectConflict | null>(null);
   const accountConflictRef = useRef(accountConflict);
   accountConflictRef.current = accountConflict;
+  /**
+   * "Decide later" on an account question keeps it: the Conflict chip asks it
+   * again (design review I74). A re-raised question is a new object and shows.
+   */
+  const [dismissedAccountConflict, setDismissedAccountConflict] =
+    useState<ProjectConflict | null>(null);
   /** Hides an account question while it is being re-asked after a room choice. */
   const [accountRecheckProjectId, setAccountRecheckProjectId] = useState<
     string | null
@@ -6018,8 +6089,8 @@ export function App() {
                     : collaborationRollout.editLeasesEnforced &&
                         !activeCollaborationLease
                       ? collaboration.status === 'lease-denied'
-                        ? 'Another collaborator holds the edit lease'
-                        : 'Waiting for the project edit lease'
+                        ? 'Someone else is editing this project right now'
+                        : LIVE_SESSION_CONNECTING
                       : null;
   // Being encrypted locks the document as firmly as a second tab does; the
   // second tab keeps its own notice.
@@ -6045,6 +6116,9 @@ export function App() {
           : assembleMode
             ? 'Assemble mode edits the assembly only — switch to Build to model'
             : projectEditDisabledReason;
+  // The seat is waiting for the live session: one notice says so, and the
+  // tools keep their own descriptions (design review I10).
+  const liveSessionConnecting = editDisabledReason === LIVE_SESSION_CONNECTING;
   // D01 sheet edits answer to the project's own locks in Draw and Build (a
   // read-only seat or a second tab refuses them), and to the reading
   // workspaces' locks in View and Tweak, where a drawing-only undo or redo
@@ -6094,6 +6168,24 @@ export function App() {
   // mode was entered or the project was opened in a second tab.
   const editDisabledReasonRef = useRef(editDisabledReason);
   editDisabledReasonRef.current = editDisabledReason;
+  // Files dropped on the start screen import into the project made for them
+  // once it is on screen and editable: an account project can wait a moment
+  // for its live session, and importing before then would only be refused.
+  useEffect(() => {
+    const pending = pendingStartImportRef.current;
+    if (!pending || !doc) return;
+    if (pending.projectId === null) {
+      pending.projectId = doc.projectId;
+    } else if (pending.projectId !== doc.projectId) {
+      pendingStartImportRef.current = null;
+      return;
+    }
+    if (editDisabledReason) return;
+    pendingStartImportRef.current = null;
+    void handleImportFiles(pending.files);
+    // handleImportFiles is this render's, which holds the new document.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc?.projectId, editDisabledReason]);
   const parameterEditDisabledReasonRef = useRef(parameterEditDisabledReason);
   parameterEditDisabledReasonRef.current = parameterEditDisabledReason;
   const drawingEditDisabledReasonRef = useRef(drawingEditDisabledReason);
@@ -6103,6 +6195,11 @@ export function App() {
   const projectRenameDisabledReasonRef = useRef(projectRenameDisabledReason);
   projectRenameDisabledReasonRef.current = projectRenameDisabledReason;
 
+  /** "Cannot use Box: …": one stop, even after a reason that ends in "…". */
+  function cannotSentence(action: string, reason: string): string {
+    return `Cannot ${action}: ${reason}${/[.…!?]$/.test(reason) ? '' : '.'}`;
+  }
+
   function ensureCanEdit(action = 'edit this project'): boolean {
     const reason = editDisabledReasonRef.current;
     if (!reason) {
@@ -6111,7 +6208,7 @@ export function App() {
     setStatus(
       projectOpenElsewhereRef.current
         ? PROJECT_OPEN_ELSEWHERE_NOTICE
-        : `Cannot ${action}: ${reason}.`
+        : cannotSentence(action, reason)
     );
     return false;
   }
@@ -6131,7 +6228,7 @@ export function App() {
     setStatus(
       projectOpenElsewhereRef.current
         ? PROJECT_OPEN_ELSEWHERE_NOTICE
-        : `Cannot ${action}: ${reason}.`
+        : cannotSentence(action, reason)
     );
     return false;
   }
@@ -6152,7 +6249,7 @@ export function App() {
     setStatus(
       projectOpenElsewhereRef.current
         ? PROJECT_OPEN_ELSEWHERE_NOTICE
-        : `Cannot ${action}: ${reason}.`
+        : cannotSentence(action, reason)
     );
     return false;
   }
@@ -6165,7 +6262,7 @@ export function App() {
     setStatus(
       projectOpenElsewhereRef.current
         ? PROJECT_OPEN_ELSEWHERE_NOTICE
-        : `Cannot ${action}: ${reason}.`
+        : cannotSentence(action, reason)
     );
     return false;
   }
@@ -6488,7 +6585,7 @@ export function App() {
     const controller = new CloudProjectAutosave({
       api,
       onStatus(status) {
-        setSaveState(status.state);
+        setSaveState(autosaveReportedSaveState(status.state, status.error));
         if (status.state === 'repair' && status.projectId) {
           accountDocumentUnavailableProjectIdRef.current = status.projectId;
           setCloudAvailable(false);
@@ -8868,13 +8965,19 @@ export function App() {
     () => countClosedProfileSketches(doc, parameterScope.scope),
     [doc, parameterScope]
   );
+  const hasCylindricalFace = useMemo(
+    () => liveCylindricalFace(liveBodyRepresentations, hiddenBodyIds),
+    [liveBodyRepresentations, hiddenBodyIds]
+  );
   const availability: ToolAvailability = {
     editDisabledReason,
+    editDisabledExplained: liveSessionConnecting,
     sketchCount: sketchOptions.length,
     closedProfileSketchCount,
     liveBodyCount: committedBodyCount,
     exactGeometryReady: displayedGeometryComplete,
-    hasEdgeSelected: selectedEdges.length > 0
+    hasEdgeSelected: selectedEdges.length > 0,
+    ...(hasCylindricalFace !== undefined ? { hasCylindricalFace } : {})
   };
   // What the palette, the verb rail and the command bar show. Launching
   // a tool still reads `availability`, so a tool that needs the finished
@@ -9753,6 +9856,7 @@ export function App() {
     // includes the armed operation: an edge picked for the Fillet tool arms
     // one, and leaving it armed kept its "Fillet · Ready" chip and its lane
     // instructions up over the fillet they had just made.
+    offerUndoForCommit();
     dispatchInteraction({ type: 'commit-complete' });
     setTool(null);
     setSelectedFeatureNode(null);
@@ -9760,6 +9864,17 @@ export function App() {
     setSelectedEdges([]);
     setSelectedBodyIds([]);
     setSelectedSketchProfileId(null);
+  }
+
+  /**
+   * "Added box." offered no Undo, though Delete and Duplicate do (13 November
+   * review I22). A toast per add would break the rule that only outcomes the
+   * viewport cannot show raise one, so the status line itself offers Undo
+   * while it still reports the commit. The success status is set just after
+   * a validated commit's `onSuccess` returns, hence the microtask.
+   */
+  function offerUndoForCommit(): void {
+    queueMicrotask(() => setUndoableStatusAt(lastStatusAtRef.current));
   }
 
   /**
@@ -11849,13 +11964,30 @@ export function App() {
     setStatus(`${normalToFaceTarget.label}: viewing normal to face.`);
   }
 
+  /**
+   * Shows the model in `mode`. The toast names it at once rather than after
+   * the last message's dwell: paced, W pressed three times left "Wireframe"
+   * up while the model already showed Shaded + edges (I54).
+   */
+  function setDisplayMode(mode: DisplayMode) {
+    viewerSettingsRef.current = {
+      ...viewerSettingsRef.current,
+      displayMode: mode
+    };
+    setViewerSettings((current) => ({ ...current, displayMode: mode }));
+    setStatus(`Display: ${DISPLAY_MODE_LABELS[mode]}.`, { immediate: true });
+  }
+
   function cycleDisplayMode() {
-    const index = DISPLAY_MODE_ORDER.indexOf(viewerSettings.displayMode);
-    const next =
+    // From the latest mode, not this render's: two presses before a render
+    // would otherwise both step from the same mode.
+    const index = DISPLAY_MODE_ORDER.indexOf(
+      viewerSettingsRef.current.displayMode
+    );
+    setDisplayMode(
       DISPLAY_MODE_ORDER[(index + 1) % DISPLAY_MODE_ORDER.length] ??
-      'shaded-edges';
-    setViewerSettings((current) => ({ ...current, displayMode: next }));
-    setStatus(`Display: ${DISPLAY_MODE_LABELS[next]}.`);
+        'shaded-edges'
+    );
   }
 
   function toggleProjection() {
@@ -11894,11 +12026,15 @@ export function App() {
 
   function toggleXray() {
     const next = !viewerSettingsRef.current.xray;
+    viewerSettingsRef.current = { ...viewerSettingsRef.current, xray: next };
     setViewerSettings((current) => ({ ...current, xray: next }));
+    // At once, like the display mode it rides over: the Display menu's
+    // X-ray switch and its toast must not disagree.
     setStatus(
       next
         ? `X-ray on · faces at ${appSettings.viewport.xrayOpacity}% · picks and box selection go through them.`
-        : 'X-ray off.'
+        : 'X-ray off.',
+      { immediate: true }
     );
   }
 
@@ -12055,6 +12191,14 @@ export function App() {
       persistSectionView(undefined);
       clearSectionOutline();
       setStatus('Section view off.', { immediate: true });
+      return;
+    }
+    // An empty stage has nothing to cut; the palette says so rather than
+    // leaving a cut on with no controls to carry into the next mode (I49).
+    if (!viewerBodies.some((body) => !body.consumed)) {
+      setStatus('Nothing to cut yet · add or show a body first.', {
+        immediate: true
+      });
       return;
     }
     // Switching the cut on brings its controls back, even when they were
@@ -12766,7 +12910,7 @@ export function App() {
           ? // Signed out is the normal state, and the Settings footer already
             // reads "Device only"; the header stays quiet rather than repeat it.
             ''
-          : 'Beta sign-in unavailable · device settings remain active.'
+          : 'Cloud unavailable · settings and projects stay on this device.'
       );
       return;
     }
@@ -13384,7 +13528,12 @@ export function App() {
     setSettingsMessage('Viewport defaults applied to the current view.');
   }
 
-  async function handleCreateProject(name: string, units: UnitSystem) {
+  /** Resolves true once the new project is the one on screen. */
+  async function handleCreateProject(
+    name: string,
+    units: UnitSystem
+  ): Promise<boolean> {
+    let opened = false;
     const isCurrent = beginProjectNavigation();
     const activeProjectSince = snapshotActiveProject();
     setAssistantCollapsed(true);
@@ -13397,6 +13546,7 @@ export function App() {
       await saveLocalProject(localDocument);
       if (!isCurrent()) return;
       hydrateDocument(localDocument, { activeProjectSince });
+      opened = true;
       setProjects((current) => [
         summarizeLocalDocument(localDocument),
         ...current
@@ -13410,16 +13560,16 @@ export function App() {
       // This is a failed device save, not a cloud-create failure. Do not enter
       // the offline fallback and replace the unsaved project on screen.
       finishBusy();
-      return;
+      return false;
     }
     try {
-      if (!isCurrent()) return;
+      if (!isCurrent()) return false;
       if (!session) {
         // The document effect's flush lands on 'local' once the device write
         // is done; forcing it here would show "Local only" for a frame and
         // then the spinner the effect reports anyway.
         await createLocal(localUserId);
-        return;
+        return opened;
       }
       // The browser builds the new document and the account stores it as
       // sent (ADR-024 Phase 1). The route trims the name it compares with.
@@ -13439,16 +13589,18 @@ export function App() {
         response.document.projectId,
         response.document.version
       );
-      if (!isCurrent()) return;
+      if (!isCurrent()) return false;
       setCloudAvailable(true);
       setCloudProjectIds((current) =>
         new Set(current).add(response.document.projectId)
       );
       hydrateDocument(response.document, { activeProjectSince });
+      opened = true;
       setProjects((current) => [response.project, ...current]);
       setStatus(`Created ${response.project.name}.`);
+      return true;
     } catch (error) {
-      if (!isCurrent()) return;
+      if (!isCurrent()) return false;
       // A refused request is not an unreachable one. Falling back to local mode
       // on a validation failure would persist exactly the project the server
       // just rejected, so surface it and let the user correct the input.
@@ -13459,7 +13611,7 @@ export function App() {
       ) {
         setCloudAvailable(true);
         setStatus(errorMessage(error, 'Could not create the project.'));
-        return;
+        return false;
       }
       const sessionExpired = error instanceof ApiError && error.status === 401;
       if (sessionExpired) {
@@ -13470,6 +13622,7 @@ export function App() {
         sessionExpired ? localUserId : (session?.userId ?? localUserId),
         `${errorMessage(error, 'Cloud unavailable')} Working locally · save it to your account later.`
       );
+      return opened;
     } finally {
       finishBusy();
     }
@@ -14237,9 +14390,10 @@ export function App() {
   }
 
   /**
-   * Make a copy, from Tweak's rail or (for an encrypted link) View's: an
-   * encrypted link's signed-in visitor chooses between the account and this
-   * device (slice 5-11); every other visitor gets the device copy, as before.
+   * Make a copy, from Tweak's rail or (for an encrypted link) View's: a
+   * signed-in visitor chooses between the account and this device, whatever
+   * the link (slice 5-11; design review I85, where a plaintext link copied
+   * to the device unasked). A signed-out visitor gets the device copy.
    */
   const [shareCopyChoice, setShareCopyChoice] = useState<{
     accountEncrypts: boolean | null;
@@ -14248,7 +14402,7 @@ export function App() {
   function requestShareCopy() {
     const active = shareSessionRef.current;
     if (!active) return;
-    if (!active.encryptedMode || !session) {
+    if (!session) {
       void handleMakeShareCopy();
       return;
     }
@@ -14505,6 +14659,81 @@ export function App() {
     }
   }
 
+  /**
+   * Renames a project from the library's tile or its Properties, without
+   * opening it (design review I14: renaming meant opening the project and
+   * waiting on the kernel). An account project is written there first,
+   * fenced on the version just read; see `renameLibraryProject`.
+   */
+  async function handleRenameLibraryProject(
+    project: ProjectSummary,
+    name: string
+  ): Promise<boolean> {
+    if (name.trim() === project.name) return true;
+    const inAccount =
+      Boolean(session) && cloudProjectIds.has(project.projectId);
+    if (session && !inAccount && !accountProjectListReached) {
+      // Unknown, not device-only: renaming this device's copy alone could
+      // leave the account's under the old name.
+      const message = `Your account could not be reached, so ${project.name} was not renamed. Try again once it is back.`;
+      setStatus(message);
+      announce(message, undefined, { tone: 'warning' });
+      return false;
+    }
+    setBusy(true);
+    try {
+      const { renameLibraryProject } =
+        await import('./lib/libraryProjectRename');
+      const stored = await renameLibraryProject(project.projectId, name, {
+        actorUserId: session?.userId ?? localUserId,
+        loadLocal: loadLocalProject,
+        saveLocal: saveLocalProject,
+        ...(inAccount
+          ? {
+              account: {
+                load: (projectId: string) => api.loadProject(projectId),
+                save: (input: SaveProjectDocumentRequest) =>
+                  api.saveProjectDocument(input),
+                markSynced: saveLastSyncedVersion
+              }
+            }
+          : {})
+      });
+      if (inAccount) {
+        remoteVersionsRef.current.set(project.projectId, stored.version);
+      }
+      setProjects((current) =>
+        current.map((candidate) =>
+          candidate.projectId === project.projectId
+            ? {
+                ...candidate,
+                name: stored.name,
+                documentVersion: stored.version
+              }
+            : candidate
+        )
+      );
+      setStatus(`Renamed ${project.name} to ${stored.name}.`);
+      return true;
+    } catch (error) {
+      const { LibraryRenameRefusal } =
+        await import('./lib/libraryProjectRename');
+      if (error instanceof LibraryRenameRefusal) {
+        setStatus(error.message);
+        announce(error.message, undefined, { tone: 'warning' });
+      } else if (error instanceof ApiError && error.status === 409) {
+        const message = `${project.name} changed in your account since this list was loaded. Open it to rename it.`;
+        setStatus(message);
+        announce(message, undefined, { tone: 'warning' });
+      } else {
+        reportLibraryFailure(error, `Could not rename ${project.name}.`);
+      }
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function handleMoveProjectToShelf(
     project: ProjectSummary,
     status: ProjectStatus
@@ -14748,6 +14977,32 @@ export function App() {
    * fallback, the derived-projection rescue and the shelf bookkeeping below,
    * which is where the interesting failure modes live.
    */
+  /**
+   * Gives a copy its source's card picture before its tile mounts. A tile
+   * that reads no picture asks the backfill, which finds none for a project
+   * never opened, and the copy showed the bare placeholder cube until it was.
+   * Never throws: the copy is complete without a picture.
+   */
+  async function seedCopyThumbnail(
+    source: ProjectDocument,
+    copy: ProjectDocument
+  ): Promise<void> {
+    try {
+      const [{ seedRecoveryCopyThumbnail }, { renderPartThumbnail }] =
+        await Promise.all([
+          import('./lib/recoveryCopyThumbnail'),
+          import('./lib/partThumbnail')
+        ]);
+      await seedRecoveryCopyThumbnail(source, copy, {
+        loadCached: loadProjectThumbnail,
+        save: saveProjectThumbnail,
+        render: renderPartThumbnail
+      });
+    } catch {
+      // A placeholder, filled the first time the copy is opened and left.
+    }
+  }
+
   async function handleDuplicateProject(
     project: ProjectSummary,
     saveState?: ProjectCheckpoint
@@ -14850,6 +15105,7 @@ export function App() {
               response.project.organization
             ).catch(() => undefined);
           }
+          await seedCopyThumbnail(localSource ?? localCopy, localCopy);
           setProjects((current) =>
             [...current, response.project].sort(compareProjectSummaries)
           );
@@ -14889,7 +15145,7 @@ export function App() {
       const copy = duplicateProjectDocument(
         source,
         duplicateProjectName(
-          head.name,
+          copyBaseName(head.projectId, head.name),
           projects.map((summary) => summary.name)
         ),
         session?.userId ?? localUserId,
@@ -14911,6 +15167,7 @@ export function App() {
       await saveLocalProjectOrganization(copy.projectId, organization, {
         mirrorPending: true
       }).catch(() => undefined);
+      await seedCopyThumbnail(source, copy);
       setProjects((current) =>
         [...current, summarizeLocalDocument(copy, organization)].sort(
           compareProjectSummaries
@@ -15331,7 +15588,7 @@ export function App() {
     } else {
       setToast(null);
     }
-    setStatus(label ? `Undo ${label}` : 'Undo');
+    setStatus(historyStepMessage('undo', label));
   }
 
   function handleRedo() {
@@ -15387,7 +15644,7 @@ export function App() {
       };
     }
     setToast(null);
-    setStatus(label ? `Redo ${label}` : 'Redo');
+    setStatus(historyStepMessage('redo', label));
   }
 
   /**
@@ -15760,7 +16017,7 @@ export function App() {
                 ? 'synced'
                 : 'syncing'
             );
-            setStatus('Saved revision.');
+            setStatus('Made a save point.');
           }
         } catch (error) {
           if (isCurrent()) {
@@ -15823,7 +16080,7 @@ export function App() {
         await saveLocalProject(savingDocument);
         if (isCurrentProject())
           setStatus(
-            'Saved revision on this device · sharing through the room.'
+            'Made a save point on this device · sharing through the room.'
           );
         return;
       }
@@ -15891,7 +16148,13 @@ export function App() {
         }
         setCloudAvailable(false);
         setSaveState('local');
-        setStatus('Saved on this device.');
+        // Autosave already says "Saved on this device."; this save also made
+        // a save point in Revisions, so it says so (I22).
+        setStatus(
+          reason === DEFAULT_SAVE_REASON
+            ? 'Made a save point on this device.'
+            : `Made save point “${reason}” on this device.`
+        );
         return;
       }
       // A queued autosave writing the same document behind this one would race
@@ -15951,7 +16214,7 @@ export function App() {
         // controller gives it to writes already queued; this, to the model.
         showAccountEcho(withEchoedSavePoints(savingManager.document, saved));
         setCloudAvailable(true);
-        setStatus(sourceWarning ?? 'Saved revision.');
+        setStatus(sourceWarning ?? 'Made a save point.');
         return;
       }
       const restored = withLocalDerived(saved, savingManager.document);
@@ -15968,7 +16231,7 @@ export function App() {
       if (savingManager.document.version !== savingDocument.version) {
         await saveLocalProject(savingManager.document);
       }
-      setStatus(sourceWarning ?? 'Saved revision.');
+      setStatus(sourceWarning ?? 'Made a save point.');
     } catch (error) {
       if (!isCurrentProject()) {
         return;
@@ -16023,6 +16286,22 @@ export function App() {
   }
 
   const aiPreviewEpochRef = useRef(0);
+  // Bumped when something opens over the stage that the model should stay
+  // clear of: the viewer reframes only if part of the model is covered.
+  const [clearStageRequest, setClearStageRequest] = useState(0);
+  const sectionControlsShown =
+    viewerSettings.sectionView !== undefined &&
+    panelState.sectionPanelOpen !== false;
+  useEffect(() => {
+    if (sectionControlsShown) setClearStageRequest((request) => request + 1);
+  }, [sectionControlsShown]);
+  // The measurement workbench floats over View's and Tweak's stage (a
+  // phone's sheet across its foot, I47): what it measures stays in view.
+  // Build's workbench is a command card and never moves the camera.
+  const measuringOverStage = measuring && modelingLocked;
+  useEffect(() => {
+    if (measuringOverStage) setClearStageRequest((request) => request + 1);
+  }, [measuringOverStage]);
 
   /** D06 slice E: a proposal that edits a drawing sheet, not the model. */
   function isDrawingProposal(proposal: CadPatchProposal): boolean {
@@ -16100,6 +16379,9 @@ export function App() {
         };
       }
       setPreviewDoc(preflight.candidate);
+      // The proposal is reviewed on the model: keep it clear of the
+      // assistant's stream and the panels (I6).
+      setClearStageRequest((request) => request + 1);
       setStatus('Previewing exact proposed geometry.');
       return { ok: true };
     } catch (error) {
@@ -16864,6 +17146,32 @@ export function App() {
     shaprPreviewAbortRef.current?.abort();
     shaprPreviewAbortRef.current = null;
     setPendingShaprImport(null);
+  }
+
+  /**
+   * Files dropped on the start screen, or picked through its Import. A
+   * backup restores as it does from the File menu; CAD files make a new
+   * project named for them, and the import then runs in it once it is on
+   * screen — the same import Import CAD files runs, with its units prompt
+   * and progress card. The workspace's own drop target is not mounted here,
+   * and before this the browser opened or downloaded the file instead.
+   */
+  async function handleStartScreenFiles(files: File[], units: UnitSystem) {
+    const { planStartScreenImport } = await import('./lib/startScreenImport');
+    const plan = planStartScreenImport(files);
+    if (plan.kind === 'refuse') {
+      setStatus(plan.message);
+      announce(plan.message, undefined, { tone: 'warning' });
+      return;
+    }
+    if (plan.kind === 'backup') {
+      await handleImportProject(plan.file);
+      return;
+    }
+    pendingStartImportRef.current = { files: plan.files, projectId: null };
+    if (!(await handleCreateProject(plan.name, units))) {
+      pendingStartImportRef.current = null;
+    }
   }
 
   /**
@@ -28531,7 +28839,8 @@ export function App() {
     x: number,
     y: number,
     entries: { item: ContextMenuState['items'][number]; run(): void }[],
-    heading?: string
+    heading?: string,
+    face?: ViewportMenuState['face']
   ) {
     contextMenuActionsRef.current = Object.fromEntries(
       entries.map((entry) => [entry.item.id, entry.run])
@@ -28540,18 +28849,31 @@ export function App() {
       x,
       y,
       items: entries.map((entry) => entry.item),
-      ...(heading ? { heading } : {})
+      ...(heading ? { heading } : {}),
+      ...(face ? { face } : {})
     });
   }
 
   function handleViewportContextMenu(
     x: number,
     y: number,
-    selection: TopologySelection | null
+    selection: TopologySelection | null,
+    options: ViewportContextMenuOptions = {}
   ) {
     if (!doc) {
       return;
     }
+    // I18: over stacked targets the menu leads with Select other, whose list
+    // reopens this menu for the target chosen from it.
+    const selectOther = options.selectOther;
+    const leading = selectOther
+      ? [
+          {
+            item: selectOtherMenuItem(selectOther.count),
+            run: selectOther.open
+          }
+        ]
+      : [];
     // A running command owns both its geometry and empty viewport space.
     // A preview can move an edge away from the pointer before right-click.
     if (!modelingLocked && inPlaceRef.current.active) {
@@ -28563,12 +28885,14 @@ export function App() {
     // the viewport controls someone reading a model actually wants.
     if (!selection || modelingLocked) {
       openContextMenu(x, y, [
+        ...leading,
         {
           item: {
             id: 'fit',
             label: 'Fit view',
             icon: <Maximize2 size={13} aria-hidden="true" />,
-            shortcut: menuShortcut('view-fit')
+            shortcut: menuShortcut('view-fit'),
+            section: leading.length > 0
           },
           run: () => setFitSignal((value) => value + 1)
         },
@@ -28619,17 +28943,23 @@ export function App() {
     }
     // Actions wait for the clicked selection to land. An unapplied Move
     // owns the question first; a menu here would act on the old selection.
-    if (handleSelectTopologyFromViewer(selection, false, undefined, { x, y })) {
+    // The keyboard's menu is for the selection as it stands, so it picks
+    // nothing (a multi-selection stays whole).
+    if (
+      !options.keyboard &&
+      handleSelectTopologyFromViewer(selection, false, undefined, { x, y })
+    ) {
       setContextMenu(null);
       return;
     }
-    openViewportSelectionContextMenu(x, y, selection);
+    openViewportSelectionContextMenu(x, y, selection, leading);
   }
 
   function openViewportSelectionContextMenu(
     x: number,
     y: number,
-    selection: TopologySelection
+    selection: TopologySelection,
+    leading: { item: ContextMenuState['items'][number]; run(): void }[] = []
   ) {
     const owner = managerRef.current;
     const current = owner?.document;
@@ -28666,17 +28996,22 @@ export function App() {
     const body = current.derived.bodyRepresentations[selection.bodyId];
     const feature = selectionFeature(current, body, selection);
     const edge = selection.kind === 'edge';
+    // Union and Subtract say why they are greyed out, as the rail does.
+    const combineReason =
+      viewerBodies.length < 2 ? 'Needs a second body to combine with' : null;
     openContextMenu(
       x,
       y,
       [
+        ...leading,
         ...(edge
           ? [
               {
                 item: {
                   id: 'fillet',
                   label: 'Fillet edge…',
-                  icon: <Spline size={13} aria-hidden="true" />
+                  icon: <Spline size={13} aria-hidden="true" />,
+                  section: leading.length > 0
                 },
                 run: runCurrent((handlers) => handlers.launchTool('fillet'))
               },
@@ -28696,7 +29031,7 @@ export function App() {
             label: 'Move / Rotate…',
             icon: <Move3d size={13} aria-hidden="true" />,
             shortcut: menuShortcut('tool-transform'),
-            section: edge
+            section: edge || leading.length > 0
           },
           run: runCurrent((handlers) => handlers.launchTool('transform'))
         },
@@ -28706,7 +29041,7 @@ export function App() {
             label: 'Union…',
             icon: <Combine size={13} aria-hidden="true" />,
             shortcut: menuShortcut('tool-union'),
-            disabled: viewerBodies.length < 2
+            ...(combineReason ? { disabled: true, detail: combineReason } : {})
           },
           run: runCurrent((handlers) => handlers.launchTool('union'))
         },
@@ -28716,7 +29051,7 @@ export function App() {
             label: 'Subtract…',
             icon: <Scissors size={13} aria-hidden="true" />,
             shortcut: menuShortcut('tool-subtract'),
-            disabled: viewerBodies.length < 2
+            ...(combineReason ? { disabled: true, detail: combineReason } : {})
           },
           run: runCurrent((handlers) => handlers.launchTool('subtract'))
         },
@@ -28770,7 +29105,14 @@ export function App() {
             ]
           : [])
       ],
-      topologySelectionLabel(body, selection)
+      topologySelectionLabel(body, selection),
+      selection.kind === 'face'
+        ? {
+            bodyId: selection.bodyId,
+            topologyId: selection.topologyId,
+            hash: selection.hash
+          }
+        : undefined
     );
   }
 
@@ -29536,7 +29878,10 @@ export function App() {
       if (global === 'command-palette') {
         event.preventDefault();
         setShortcutsOpen(false);
-        setPaletteOpen((open) => !open);
+        // Opening lists the commands that run here (an empty draft), so the
+        // key visibly does something before a word is typed (I20).
+        if (paletteOpen) setPaletteOpen(false);
+        else draftPrompt('');
         return;
       }
       if (paletteOpen || shortcutsOpen) {
@@ -30430,6 +30775,9 @@ export function App() {
       <>
         <StartScreen
           onImportProject={(file) => void handleImportProject(file)}
+          onImportFiles={(files, units) =>
+            void handleStartScreenFiles(files, units)
+          }
           projects={projects}
           status={status}
           previousWorkspaceStatus={previousWorkspaceStatus.current}
@@ -30437,7 +30785,7 @@ export function App() {
             newBuildAvailable ? () => window.location.reload() : undefined
           }
           onReloadForLoadFailure={
-            downloadInterrupted ? () => window.location.reload() : undefined
+            loadFailureShown ? () => window.location.reload() : undefined
           }
           // Discovery must finish before a new/opened part can commit: the
           // startup result would otherwise replace its session and listing.
@@ -30464,11 +30812,16 @@ export function App() {
           onOpenSettings={openSettings}
           onSignIn={() => openSettingsAt('account')}
           onDuplicate={(project) => void handleDuplicateProject(project)}
+          onRename={handleRenameLibraryProject}
           loadProperties={loadProperties}
           cloudProjectIds={cloudProjectIds}
           accountProjectListReached={accountProjectListReached}
           conflictedProjectIds={conflictedProjectIds}
           signedIn={Boolean(session)}
+          cloudUnavailable={
+            cloudFunctionsEnabled && authConfigStatus === 'unavailable'
+          }
+          onRetryCloud={() => void handleRefreshAuthConfig()}
           onSaveToAccount={(project) => void handleSaveToAccount(project)}
           onSaveAllToAccount={(candidates) =>
             void handleSaveAllToAccount(candidates)
@@ -30576,7 +30929,8 @@ export function App() {
       ? 'warning'
       : !exactGeometryReady
         ? 'running'
-        : /fail|error|invalid|unable|denied|not changed|not applied|no change|refus/i.test(
+        : // A refusal is a warning, not a "ready" dot (design review I77).
+          /fail|error|invalid|unable|denied|cannot|can't|not changed|not applied|no change|refus/i.test(
               status
             )
           ? 'warning'
@@ -30994,7 +31348,7 @@ export function App() {
         : 'Section view: on',
       group: 'View',
       keywords: ['section', 'cut', 'clip', 'plane'],
-      icon: <Slice size={16} aria-hidden="true" />,
+      icon: <SquareSplitVertical size={16} aria-hidden="true" />,
       disabledReason: viewerBodies.length === 0 ? 'Create a body first' : null,
       run: toggleSectionView
     },
@@ -31120,7 +31474,9 @@ export function App() {
       // palette is the other way to them, found by what they are for.
       id: 'file-export-diagnostics',
       label: 'Export diagnostics',
-      group: 'File',
+      // Not "File": the File menu no longer holds it (I24). Settings ›
+      // Advanced does, under troubleshooting.
+      group: 'Support',
       keywords: ['troubleshooting', 'support', 'sanitized', 'json', 'report'],
       icon: <Download size={16} aria-hidden="true" />,
       run: handleExportDiagnostics
@@ -31128,7 +31484,7 @@ export function App() {
     {
       id: 'file-export-interaction-log',
       label: 'Export interaction log',
-      group: 'File',
+      group: 'Support',
       keywords: [
         'troubleshooting',
         'support',
@@ -31151,6 +31507,8 @@ export function App() {
       id: 'file-home',
       label: 'Back to projects',
       group: 'File',
+      // The library is where a new project starts and every project opens.
+      keywords: ['home', 'library', 'projects', 'new', 'open', 'start'],
       icon: <FolderOpen size={16} aria-hidden="true" />,
       run: () => void handleGoHome()
     },
@@ -31162,6 +31520,7 @@ export function App() {
             id: 'workspace-mode-view',
             label: 'Switch to View mode',
             group: 'General',
+            keywords: ['read', 'inspect', 'mode', 'workspace'],
             shortcut: modeShortcut('view'),
             icon: <Eye size={16} aria-hidden="true" />,
             run: () => handleWorkspaceMode('view')
@@ -31174,6 +31533,7 @@ export function App() {
             id: 'workspace-mode-tweak',
             label: 'Switch to Tweak mode',
             group: 'General',
+            keywords: ['parameters', 'mode', 'workspace'],
             shortcut: modeShortcut('tweak'),
             icon: <SlidersHorizontal size={16} aria-hidden="true" />,
             disabledReason: tweakModeDisabledReason,
@@ -31187,10 +31547,26 @@ export function App() {
             id: 'workspace-mode-build',
             label: 'Switch to Build mode',
             group: 'General',
+            keywords: ['model', 'modeling', 'edit', 'mode', 'workspace'],
             shortcut: modeShortcut('build'),
             icon: <Box size={16} aria-hidden="true" />,
             disabledReason: buildModeDisabledReason,
             run: () => handleWorkspaceMode('build')
+          } satisfies PaletteCommand
+        ]
+      : []),
+    // The mode switch offers Assemble; the bar did not (I20).
+    ...(!assembleMode
+      ? [
+          {
+            id: 'workspace-mode-assemble',
+            label: 'Switch to Assemble mode',
+            group: 'General',
+            keywords: ['assembly', 'joints', 'motion', 'mode', 'workspace'],
+            shortcut: modeShortcut('assemble'),
+            icon: <Cog size={16} aria-hidden="true" />,
+            disabledReason: assembleModeDisabledReason,
+            run: () => handleWorkspaceMode('assemble')
           } satisfies PaletteCommand
         ]
       : []),
@@ -31200,10 +31576,66 @@ export function App() {
             id: 'workspace-mode-drawing',
             label: 'Switch to Draw mode',
             group: 'General',
+            keywords: ['drawing', 'sheet', '2d', 'mode', 'workspace'],
             shortcut: modeShortcut('drawing'),
             icon: <DraftingCompass size={16} aria-hidden="true" />,
             disabledReason: drawingModeDisabledReason,
             run: () => handleWorkspaceMode('drawing')
+          } satisfies PaletteCommand
+        ]
+      : []),
+    {
+      // The overlay the ? key opens, under the words people search for it
+      // by (I20: "help", "shortcuts" and "keyboard" found nothing).
+      id: 'app-help',
+      label: 'Help & keyboard shortcuts',
+      group: 'General',
+      keywords: [
+        'help',
+        'shortcuts',
+        'keyboard',
+        'keys',
+        'controls',
+        'hotkeys'
+      ],
+      shortcut: keymap.label('shortcut-reference'),
+      icon: <Keyboard size={16} aria-hidden="true" />,
+      run: () => setShortcutsOpen(true)
+    },
+    ...(doc && !shareSession
+      ? [
+          {
+            // The project name in the top bar is the rename field; the
+            // command opens it as a click on the name does.
+            id: 'project-rename',
+            label: 'Rename project',
+            group: 'File',
+            keywords: ['rename', 'name', 'title'],
+            icon: <PenLine size={16} aria-hidden="true" />,
+            run: () =>
+              document
+                .querySelector<HTMLButtonElement>('.project-title-button')
+                ?.click()
+          } satisfies PaletteCommand,
+          {
+            id: 'project-duplicate',
+            label: 'Duplicate project',
+            group: 'File',
+            keywords: ['duplicate', 'copy', 'clone'],
+            icon: <Copy size={16} aria-hidden="true" />,
+            disabledReason: projectTransferBusy
+              ? 'Project transfer in progress'
+              : null,
+            run: () => {
+              const current = managerRef.current?.document;
+              if (!current) return;
+              void handleDuplicateProject(
+                projects.find(
+                  (summary) => summary.projectId === current.projectId
+                ) ??
+                  summarizeLocalDocument(current, DEFAULT_PROJECT_ORGANIZATION)
+              );
+            }
           } satisfies PaletteCommand
         ]
       : []),
@@ -32051,6 +32483,16 @@ export function App() {
               : null
           }
           onReviewEditFailure={openActivityLog}
+          onReviewConflict={
+            collaboration.conflict?.projectId === doc.projectId &&
+            dismissedRoomConflict === roomConflictKey
+              ? () => setDismissedRoomConflict(null)
+              : !collaboration.conflict &&
+                  accountConflict?.projectId === doc.projectId &&
+                  dismissedAccountConflict === accountConflict
+                ? () => setDismissedAccountConflict(null)
+                : undefined
+          }
           geometryPending={!geometry.isReadyFor(doc)}
           geometryFailed={geometry.state.phase === 'failed'}
           projectTransferBusy={projectTransferBusy}
@@ -32103,6 +32545,12 @@ export function App() {
           }
           collaborationStatus={collaboration.status}
           collaborationFailure={collaboration.failureReason}
+          readOnlySeat={
+            activeProjectIsCloud &&
+            !shareSession &&
+            (collaboration.role === 'viewer' ||
+              collaboration.status === 'read-only')
+          }
           collaboratorCount={collaboration.members.length}
           projectSharingEnabled={
             cloudFunctionsEnabled && projectSharingPreferenceEnabled
@@ -32161,9 +32609,12 @@ export function App() {
             }
             onView={requestView}
             {...(savedViewsControl ? { savedViews: savedViewsControl } : {})}
-            onCycleDisplayMode={cycleDisplayMode}
+            onDisplayMode={setDisplayMode}
+            onToggleXray={toggleXray}
             onToggleProjection={toggleProjection}
             onToggleOrbitMode={toggleOrbitMode}
+            onToggleSection={toggleSectionView}
+            nothingToSection={!viewerBodies.some((body) => !body.consumed)}
           />
         ) : // The sketch session brings its own tool rail. Before it, while
         // the plane is being picked, the plane chooser in the command slot
@@ -32323,6 +32774,7 @@ export function App() {
             fitSignal={fitSignal}
             autoFrame={autoFrame}
             creationFrame={creationFrame}
+            clearStageRequest={clearStageRequest}
             viewRequest={projectViewRequest}
             normalToFaceRequest={normalToFaceRequest}
             units={doc.units}
@@ -32888,6 +33340,7 @@ export function App() {
                     <MotionStudyTimeline
                       floating
                       assembly={doc.assembly}
+                      lengthUnit={doc.units}
                       execute={executeCommand}
                     />
                   )}
@@ -33224,7 +33677,8 @@ export function App() {
             onMeasure={toggleMeasure}
             onView={requestView}
             {...(savedViewsControl ? { savedViews: savedViewsControl } : {})}
-            onCycleDisplayMode={cycleDisplayMode}
+            onDisplayMode={setDisplayMode}
+            onToggleXray={toggleXray}
             onToggleProjection={toggleProjection}
             onToggleOrbitMode={toggleOrbitMode}
             sectionRange={
@@ -33233,6 +33687,7 @@ export function App() {
                 : null
             }
             onToggleSection={toggleSectionView}
+            nothingToSection={!viewerBodies.some((body) => !body.consumed)}
             sectionPanelOpen={panelState.sectionPanelOpen}
             onSectionPanelOpenChange={(open) =>
               setPanelState((current) =>
@@ -33332,7 +33787,14 @@ export function App() {
                 document={doc}
                 execute={assembleApp.execute}
                 onStatus={assembleApp.onStatus}
-                onAnnounce={(message) => announce(message)}
+                onAnnounce={(message, options) =>
+                  announce(
+                    message,
+                    options?.undo
+                      ? { label: 'Undo', run: handleUndo }
+                      : undefined
+                  )
+                }
                 bodyBounds={assemblyBodyBounds}
                 reducedMotion={appSettings.appearance.reducedMotion}
               />
@@ -33879,6 +34341,11 @@ export function App() {
               sketchPlaneCardShown
             }
             onOpenLog={openActivityLog}
+            onUndo={
+              undoableStatusAt === statusEntry.at && managerRef.current?.canUndo
+                ? handleUndo
+                : undefined
+            }
             prompt={workspacePrompt}
             promptResting={workspacePrompt === idleHint}
             instructionDetails={
@@ -33901,7 +34368,13 @@ export function App() {
             // the guidance row: the same line, remedies and Why? the control
             // shows, where the eye returns when the model has nothing to say.
             notice={
-              !keypad && calloutWithOperation?.operation?.error ? (
+              liveSessionConnecting &&
+              !(!keypad && calloutWithOperation?.operation?.error) ? (
+                <LiveSessionNotice
+                  key={doc.projectId}
+                  onRetry={collaboration.reconnect}
+                />
+              ) : !keypad && calloutWithOperation?.operation?.error ? (
                 <EditRefusal
                   operation={calloutWithOperation.operation}
                   variant="bar"
@@ -33926,9 +34399,16 @@ export function App() {
                   }
                   hint={inPlace.hint}
                   refusal={inPlace.refusal}
+                  unitLabel={displayLengthName(doc.units)}
+                  onTrySize={(dimension, size) => {
+                    commitInPlacePanelValue(dimension, formatNumber(size));
+                  }}
                   canFinish={
                     inPlace.canFinish &&
                     !(keypad?.kind === 'command' && commandEntryError)
+                  }
+                  previewPending={
+                    inPlace.request !== null && inPlace.refusal === null
                   }
                   options={inPlace.optionSpecs.map((option) => ({
                     ...option,
@@ -34347,9 +34827,36 @@ export function App() {
           )}
           {contextMenuExit.rendered ? (
             <ContextMenu
-              menu={contextMenuExit.rendered}
+              menu={withFaceVerbs(
+                contextMenuExit.rendered,
+                renderedSelectedTopology?.kind === 'face'
+                  ? renderedSelectedTopology
+                  : null,
+                calloutWithOperation?.anchor === 'selection'
+                  ? calloutWithOperation.verbs
+                  : null,
+                {
+                  disabledReason: normalToFaceTarget
+                    ? null
+                    : 'The face is not flat',
+                  shortcut: menuShortcut('view-normal-to-face')
+                }
+              )}
               closing={contextMenuExit.closing}
-              onSelect={(itemId) => contextMenuActionsRef.current[itemId]?.()}
+              onSelect={(itemId) => {
+                // A face's verbs act as its rail buttons do (I19).
+                if (itemId.startsWith(FACE_VERB_PREFIX)) {
+                  calloutWithOperation?.onVerb(
+                    itemId.slice(
+                      FACE_VERB_PREFIX.length
+                    ) as SelectionCalloutVerbId
+                  );
+                } else if (itemId === LOOK_AT_FACE_ITEM_ID) {
+                  requestNormalToSelectedFace();
+                } else {
+                  contextMenuActionsRef.current[itemId]?.();
+                }
+              }}
               onClose={() => setContextMenu(null)}
             />
           ) : null}
@@ -34547,12 +35054,13 @@ export function App() {
             accountConflict.projectId === doc.projectId &&
             !collaboration.conflict &&
             !roomConnectingForProject &&
-            accountRecheckProjectId !== doc.projectId && (
+            accountRecheckProjectId !== doc.projectId &&
+            dismissedAccountConflict !== accountConflict && (
               <ProjectConflictDialog
                 conflict={accountConflict}
                 busy={busy}
                 onResolve={resolveAccountConflict}
-                onClose={() => setAccountConflict(null)}
+                onClose={() => setDismissedAccountConflict(accountConflict)}
               />
             )}
           {importUnitsPrompt && (

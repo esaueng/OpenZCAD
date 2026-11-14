@@ -887,7 +887,7 @@ describe('accounting', () => {
     const storage = await srv.call('GET', '/api/account/storage');
     expect(storage.status).toBe(200);
     // Fill the account to just below its one storage allowance (files and
-    // projects, migration 0048) with a plaintext artifact.
+    // projects, migration 0049) with a plaintext artifact.
     const created = await srv.call('POST', '/api/projects', {
       body: { name: 'Plain', initialDocument: initialDocument('Plain') }
     });

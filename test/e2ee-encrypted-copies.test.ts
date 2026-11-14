@@ -429,7 +429,7 @@ describe('copies', () => {
     const { projectId } = await projectWithImport(srv, laptop);
     const request = await buildCopy(laptop, projectId, 'Bracket');
     // The copy's ciphertext does not fit the owner's one storage allowance
-    // (files and projects together, migration 0048).
+    // (files and projects together, migration 0049).
     const used = rows<{ bytes: number }>(
       srv,
       `SELECT COALESCE((SELECT bytes FROM account_project_storage
@@ -1050,7 +1050,7 @@ describe('plaintext projects', () => {
           !/sqlite_master|pragma_table_info/.test(sql) &&
           // Decision D2's check of the opt-in, as before this slice.
           !/FROM e2ee_project_preferences/.test(sql) &&
-          // The one storage allowance (migration 0048) measures encrypted
+          // The one storage allowance (migration 0049) measures encrypted
           // envelopes and excludes staged plaintext: reads, no writes.
           !/^\s*SELECT[\s\S]*(e2ee_decrypt_staged_projects|SUM\(v\.envelope_bytes\))/.test(
             sql

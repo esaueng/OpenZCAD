@@ -230,7 +230,7 @@ function JointToolForm({
                       setLimit(
                         dof,
                         event.currentTarget.checked
-                          ? defaultLimit(unit, 0)
+                          ? defaultLimit(unit, 0, document.units)
                           : null
                       )
                     }
@@ -254,7 +254,9 @@ function JointToolForm({
                         setLimit(dof, { min: Math.min(max, limit.min), max })
                       }
                     />
-                    <span className="assembly-unit">{unitSymbol(unit)}</span>
+                    <span className="assembly-unit">
+                      {unitSymbol(unit, document.units)}
+                    </span>
                   </span>
                 ) : null}
               </div>
