@@ -1496,7 +1496,13 @@ account whose library is encrypted (the rule above) stores them sealed.
   merged result into what it shows, keeping edits made meanwhile. The state
   ends with the first save that sends exactly what the merge gives. Without
   it, a fresh device's first save would replace the account's settings with
-  its defaults.
+  its defaults. The device keeps one copy of the settings, so once another
+  account reads or saves them there, every other account's state is dropped
+  rather than merged against a copy that is no longer its own. If the record
+  to merge onto cannot be opened (sealed under another account key, behind
+  this device's pin, or altered), a save sends the readable part only and
+  leaves the record as it is; the device's private edits wait until a
+  device seals a record it can open.
 - **Unanswered library rule.** Only a Worker without the encryption routes
   reads as "not encrypted"; one that cannot be reached or fails refuses the
   save (`E2EE_PREFERENCE_UNVERIFIED`), so settings never leave readable on a

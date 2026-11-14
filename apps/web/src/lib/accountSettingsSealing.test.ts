@@ -380,6 +380,72 @@ describe('settings of an account whose library is encrypted', () => {
     expect(stored?.general.defaultUnits).toBe('cm');
   });
 
+  it('never merges another account’s device copy into this account', async () => {
+    const accountA = privateSettings();
+    const { record } = await sealSettings(
+      {
+        accountKey: ACCOUNT_KEY,
+        userId: state.userId,
+        pins: { read: () => 0, write: () => undefined }
+      },
+      accountA
+    );
+    state.libraryEncrypted = true;
+    const userA = state.userId;
+    // A reads while locked: its merge state remembers the defaults shown.
+    worker(() =>
+      response(accountServerSettings(accountA), { sealedSettings: record })
+    );
+    await api.getSettings();
+    // B signs in on this device; its settings become the device copy.
+    state.userId = `${userA}_b`;
+    const settingsB = structuredClone(DEFAULT_APP_SETTINGS);
+    settingsB.assistant.customInstructions = 'B’s own instructions.';
+    saveLocalAppSettings(settingsB, 1);
+    worker(() => response(settingsB));
+    await api.getSettings();
+    // A again, unlocked, after a reload.
+    vi.resetModules();
+    const reloaded = await import('./api');
+    state.userId = userA;
+    state.account = { accountKey: ACCOUNT_KEY };
+    worker(() =>
+      response(accountServerSettings(accountA), { sealedSettings: record })
+    );
+    const read = await reloaded.api.getSettings();
+    expect(read.settings.assistant.customInstructions).toBe(SECRET);
+  });
+
+  it('keeps a record it cannot open rather than sealing defaults over it', async () => {
+    // Sealed under an account key this device does not hold (a rotation).
+    const otherKey = Uint8Array.from({ length: 32 }, (_, index) => 255 - index);
+    const { record } = await sealSettings(
+      {
+        accountKey: otherKey,
+        userId: state.userId,
+        pins: { read: () => 0, write: () => undefined }
+      },
+      privateSettings()
+    );
+    state.libraryEncrypted = true;
+    const patches = worker(() =>
+      response(accountServerSettings(privateSettings()), {
+        sealedSettings: record
+      })
+    );
+    const read = await api.getSettings();
+    state.account = { accountKey: ACCOUNT_KEY };
+    const edited = structuredClone(read.settings);
+    edited.general.defaultUnits = 'cm';
+    await api.updateSettings({ settings: edited, expectedRevision: 1 });
+    await api.updateSettings({ settings: edited, expectedRevision: 2 });
+    // The readable part saves; the record the account holds is left alone,
+    // every time, until a device can merge onto it.
+    expect(patches).toHaveLength(2);
+    for (const sent of patches)
+      expect(sent).not.toHaveProperty('sealedSettings');
+  });
+
   it('refuses to save rather than guess when the library rule cannot be read', async () => {
     vi.mocked(desktopFetch).mockImplementation(async (input) => {
       if (input === '/api/session') return json({ userId: state.userId });

@@ -674,6 +674,32 @@ function saveMergeState(userId: string, state: SettingsMergeState | null) {
   }
 }
 
+/**
+ * The device keeps one copy of the settings, whichever account last used
+ * it. Once another account reads or saves them here, an earlier account's
+ * merge state describes a copy that is gone, and merging against it would
+ * carry that other account's settings into it: drop every state but
+ * `userId`'s.
+ */
+function dropOtherMergeStates(userId: string): void {
+  for (const other of [...mergeStates.keys()])
+    if (other !== userId) mergeStates.delete(other);
+  try {
+    const storage = globalThis.localStorage;
+    if (!storage) return;
+    const prefix = `${MERGE_STATE_PREFIX}:`;
+    const stale: string[] = [];
+    for (let index = 0; index < storage.length; index += 1) {
+      const key = storage.key(index);
+      if (key?.startsWith(prefix) && key !== `${prefix}${userId}`)
+        stale.push(key);
+    }
+    for (const key of stale) storage.removeItem(key);
+  } catch {
+    // Unreadable storage holds no state to carry over either.
+  }
+}
+
 /** The highest sealed-settings sequence this page has seen the account hold. */
 const accountRecordSequences = new Map<string, number>();
 
@@ -699,6 +725,7 @@ function noteAccountRecord(
 async function readAccountSettings(): Promise<AppSettingsResponse> {
   const response = await requestJson<AppSettingsResponse>('/api/settings');
   const userId = await sessionUserId();
+  if (userId) dropOtherMergeStates(userId);
   if (response.sealedSettings) {
     const sealed = await sealedSettingsKeys(userId);
     if (userId) {
@@ -800,7 +827,14 @@ async function writeAccountSettings(
   const userId = await sessionUserId();
   const sealed = await sealedSettingsKeys(userId);
   let settings = payload.settings;
+  if (sealed) dropOtherMergeStates(sealed.keys.userId);
   const state = sealed ? loadMergeState(sealed.keys.userId) : null;
+  // The account's record could not be opened to merge onto (sealed under
+  // another account key, older than this device's pin, or altered): keep it
+  // rather than seal this device's untouched values over it. The readable
+  // part still saves; the rest stays on this device, merged once a device
+  // seals a record this one can open.
+  let keepRecord = false;
   if (sealed && state) {
     const theirs =
       state.theirs ??
@@ -815,15 +849,18 @@ async function writeAccountSettings(
     }
     if (theirs) {
       settings = mergeSettingsOntoAccount(state.base, payload.settings, theirs);
+    } else {
+      keepRecord = true;
     }
   }
-  const sealing = sealed
-    ? await sealed.sealing.sealSettings(
-        sealed.keys,
-        settings,
-        accountRecordSequences.get(sealed.keys.userId) ?? 0
-      )
-    : null;
+  const sealing =
+    sealed && !keepRecord
+      ? await sealed.sealing.sealSettings(
+          sealed.keys,
+          settings,
+          accountRecordSequences.get(sealed.keys.userId) ?? 0
+        )
+      : null;
   const response = await requestJson<AppSettingsResponse>('/api/settings', {
     method: 'PATCH',
     body: JSON.stringify({
