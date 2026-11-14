@@ -187,6 +187,12 @@ export interface MigrationProgress {
   /** Slice 7-4: a shared project's members and where each stands. */
   readonly members?: readonly MigrationMember[];
   /**
+   * Slice 7-4: the migration attempt the members shown belong to
+   * ({@link migrationAttemptOf}): an approval of them is given for it, and
+   * a run of any other attempt asks again.
+   */
+  readonly attempt?: MigrationAttempt;
+  /**
    * Slice 7-4 (decision M8): the plaintext links and pending invitations
    * the cutover revoked, which the page offers to reissue encrypted.
    */
@@ -194,6 +200,21 @@ export interface MigrationProgress {
     readonly shareLinks: MigrationSharing['shareLinks'];
     readonly invitations: MigrationSharing['invitations'];
   };
+}
+
+/**
+ * Slice 7-4: which of a project's migrations an owner's approval of its
+ * members was given for, as the Worker records it for every tab and
+ * device: none yet, or one record's state and start. A start writes a new
+ * start time and a cancel or restart abandons the record, so an approval
+ * given before either no longer matches, in any tab (#1465 review).
+ */
+export type MigrationAttempt = string;
+
+export function migrationAttemptOf(
+  migration: E2eeProjectMigrationRecord | null | undefined
+): MigrationAttempt {
+  return migration ? `${migration.state}@${migration.startedAt}` : 'none';
 }
 
 export interface MigrationEngineDeps {
@@ -400,7 +421,10 @@ export interface ProjectMigrationEngine {
    * before staging or the cutover and asks for approval. The approval is
    * spent once (`onApprovalSpent`): when this browser recorded it for the
    * staging it went ahead with (`MigrationApprovalReceipt`), or when that
-   * staging was dropped to start again; a later staging asks again.
+   * staging was dropped to start again; a later staging asks again. It
+   * counts only for the attempt it was given for (`approvedFor`): once
+   * another tab or device started, cancelled or restarted the migration,
+   * it is forgotten and the owner is asked again.
    */
   migrate(
     project: ProjectSummary,
@@ -414,10 +438,27 @@ export interface ProjectMigrationEngine {
 export interface MigrateOptions {
   readonly approvedMembers?: readonly MigrationMemberApproval[];
   /**
+   * The attempt `approvedMembers` was given for (the `attempt` of the
+   * progress that showed them); an approval without it is never used.
+   */
+  readonly approvedFor?: MigrationAttempt;
+  /**
    * Told once `approvedMembers` is spent (recorded for its staging, or
    * dropped with it): the caller must not pass it again.
    */
   readonly onApprovalSpent?: () => void;
+}
+
+/** One run's hold on the owner's approval (see `migrate`). */
+interface RunApproval {
+  /** The approval, if it was given for `attempt`; otherwise forgotten. */
+  for(
+    attempt: MigrationAttempt
+  ): readonly MigrationMemberApproval[] | undefined;
+  /** The approval went ahead with the staging `attempt`. */
+  bind(attempt: MigrationAttempt): void;
+  /** Recorded for its staging (or not): see `migrate`. */
+  spend(recorded: boolean): void;
 }
 
 export function createProjectMigrationEngine(
@@ -538,25 +579,35 @@ export function createProjectMigrationEngine(
     // staging it went ahead with (the receipt carries it from then on), or
     // dropped with a staging started again, which the owner approves anew.
     let approvedMembers = options.approvedMembers;
-    const spend = (recorded: boolean) => {
-      if (!approvedMembers) return;
-      // A receipt this browser could not keep leaves the approval with
-      // this run, which still needs it; nothing else reuses it.
-      if (recorded) approvedMembers = undefined;
-      options.onApprovalSpent?.();
+    let approvedFor = options.approvedFor;
+    const approval: RunApproval = {
+      for(attempt) {
+        // Given for another attempt (one that another tab or device has
+        // since started, cancelled or restarted): forgotten, and the owner
+        // is asked again.
+        if (approvedMembers && approvedFor !== attempt) {
+          approvedMembers = undefined;
+          options.onApprovalSpent?.();
+        }
+        return approvedMembers;
+      },
+      bind(attempt) {
+        // Gone ahead with this staging: a resume of it still counts.
+        if (approvedMembers) approvedFor = attempt;
+      },
+      spend(recorded) {
+        if (!approvedMembers) return;
+        // A receipt this browser could not keep leaves the approval with
+        // this run, which still needs it; nothing else reuses it.
+        if (recorded) approvedMembers = undefined;
+        options.onApprovalSpent?.();
+      }
     };
     let restarts = 0;
     let resumes = 0;
     for (;;) {
       try {
-        await runOnce(
-          project,
-          check,
-          report,
-          () => progress,
-          approvedMembers,
-          spend
-        );
+        await runOnce(project, check, report, () => progress, approval);
         return;
       } catch (error) {
         if (error instanceof MigrationPausedError) {
@@ -602,13 +653,14 @@ export function createProjectMigrationEngine(
     check: (step: string) => Promise<void>,
     report: (change: Partial<MigrationProgress>) => void,
     current: () => MigrationProgress,
-    approvedMembers: readonly MigrationMemberApproval[] | undefined,
-    spend: (recorded: boolean) => void
+    approval: RunApproval
   ): Promise<void> {
     const projectId = project.projectId;
     await check('status');
     const status = (await migrations.status(projectId, leases.get(projectId)))
       .migration;
+    const attempt = migrationAttemptOf(status);
+    const approvedMembers = approval.for(attempt);
     if (status?.state === 'cutover' || status?.state === 'purging') {
       leases.delete(projectId);
       receipts.delete(projectId);
@@ -644,6 +696,7 @@ export function createProjectMigrationEngine(
       );
       report({
         plaintextLocked,
+        attempt,
         ...(sharing.members.length ? { members: sharing.members } : {})
       });
       requireMembersReady(sharing);
@@ -665,7 +718,8 @@ export function createProjectMigrationEngine(
     }
     report({ phase: 'starting', error: undefined, plaintextLocked });
     const { lease, migration } = await acquire(projectId, status);
-    report({ plaintextLocked: true });
+    approval.bind(migrationAttemptOf(migration));
+    report({ plaintextLocked: true, attempt: migrationAttemptOf(migration) });
     const resuming = status?.state === 'staging';
     if (resuming && migration.stagedVersion === 0) {
       // A start that may have left a group without a version: nothing
@@ -700,7 +754,7 @@ export function createProjectMigrationEngine(
         stagingStartedAt: migration.startedAt,
         members: [...approved.values()]
       });
-      spend(receiptFor(projectId, migration.startedAt) !== null);
+      approval.spend(receiptFor(projectId, migration.startedAt) !== null);
     }
     const renewal = renewLease(projectId, lease);
     try {

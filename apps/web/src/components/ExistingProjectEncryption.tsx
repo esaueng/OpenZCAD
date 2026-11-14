@@ -541,7 +541,8 @@ function ProjectRow({
                 onClick={() => {
                   controller.approveMembers(
                     progress.projectId,
-                    approvalOf(members)
+                    approvalOf(members),
+                    progress.attempt
                   );
                   void controller.run([progress.projectId]);
                 }}

@@ -40,6 +40,7 @@ import {
   createProjectMigrationEngine,
   migratableProjects,
   migrationErrorOf,
+  type MigrationAttempt,
   type MigrationLeaseStore,
   type MigrationProgress,
   type MigrationStagingClients,
@@ -119,12 +120,15 @@ export interface MigrationController {
   pause(): void;
   /**
    * Slice 7-4: the owner's approval of a shared project's members as shown
-   * (contact code and signed role of each), which the next run of that
-   * project adds back exactly; a changed roster asks again.
+   * (contact code and signed role of each), for the migration attempt that
+   * showed them (`MigrationProgress.attempt`), which the next run of that
+   * project adds back exactly; a changed roster asks again, and so does
+   * any other attempt (one another tab started, cancelled or restarted).
    */
   approveMembers(
     projectId: string,
-    approval: readonly MigrationMemberApproval[]
+    approval: readonly MigrationMemberApproval[],
+    attempt: MigrationAttempt | undefined
   ): void;
   /**
    * Drops a project's staging and unlocks its plaintext, and forgets any
@@ -309,12 +313,20 @@ export function createMigrationController(
    */
   const driven = new Set<string>();
   /**
-   * The owner's approval of each shared project's members, as shown, until
-   * a run spends it (records it for the staging it went ahead with, or
-   * drops that staging) or the owner cancels: it never carries over to a
-   * staging begun afterwards.
+   * The owner's approval of each shared project's members, as shown, and
+   * the attempt it was given for, until a run spends it (records it for
+   * the staging it went ahead with, or drops that staging), finds the
+   * attempt changed (another tab started, cancelled or restarted it while
+   * this one waited for the lock) or the owner cancels here: it never
+   * carries over to a staging begun afterwards.
    */
-  const approvals = new Map<string, readonly MigrationMemberApproval[]>();
+  const approvals = new Map<
+    string,
+    {
+      readonly members: readonly MigrationMemberApproval[];
+      readonly attempt: MigrationAttempt | undefined;
+    }
+  >();
 
   /**
    * A sequence bumped on every {@link update}, and its value when each
@@ -620,10 +632,21 @@ export function createMigrationController(
         try {
           await (
             await engineFor()
-          ).migrate(project, signal, {
-            approvedMembers: approval,
-            onApprovalSpent: spent
-          });
+          ).migrate(
+            project,
+            signal,
+            approval
+              ? {
+                  approvedMembers: approval.members,
+                  // Checked against the attempt as it stands now that
+                  // this tab holds the lock: another attempt asks again.
+                  ...(approval.attempt !== undefined
+                    ? { approvedFor: approval.attempt }
+                    : {}),
+                  onApprovalSpent: spent
+                }
+              : {}
+          );
           spent();
         } catch (error) {
           if (error instanceof MigrationPausedError) break;
@@ -666,8 +689,8 @@ export function createMigrationController(
   }
 
   return {
-    approveMembers(projectId, approval) {
-      approvals.set(projectId, [...approval]);
+    approveMembers(projectId, approval, attempt) {
+      approvals.set(projectId, { members: [...approval], attempt });
     },
     getState: () => state,
     subscribe(listener) {

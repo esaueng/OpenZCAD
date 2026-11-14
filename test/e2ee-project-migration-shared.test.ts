@@ -55,8 +55,16 @@ import {
   createProjectMigrationEngine,
   memoryLeaseStore,
   migrationErrorOf,
-  type MigrationProgress
+  type MigrationAttempt,
+  type MigrationLeaseStore,
+  type MigrationProgress,
+  type ProjectMigrationEngine
 } from '../apps/web/src/lib/e2ee/projectMigrationEngine';
+import {
+  createMigrationController,
+  type MigrationController,
+  type MigrationLocks
+} from '../apps/web/src/lib/e2ee/projectMigrations';
 import {
   MIGRATION_APPROVAL_CODE,
   MigrationApprovalNeededError,
@@ -251,10 +259,13 @@ interface Owner {
   approve(projectId: string): Promise<MigrationMemberApproval[]>;
   /** Sets the approval the next runs carry (null: none). */
   approved: MigrationMemberApproval[] | null;
+  /** The migration attempt it was given for, as the engine showed it. */
+  approvedFor: MigrationAttempt | undefined;
   /** What this browser recorded of the owner's approval, per staging. */
   receipts: MigrationApprovalReceipts;
   /** How often the engine said the approval it was given is spent. */
   spent: number;
+  engine: ProjectMigrationEngine;
 }
 
 type MembersAnswer = Awaited<ReturnType<ProjectMigrationsApi['members']>>;
@@ -265,16 +276,23 @@ function ownerEngine(
     beforeStep?: (step: string, projectId: string) => void | Promise<void>;
     /** What the server answers the owner's member listings instead. */
     tamper?: (projectId: string, answer: MembersAnswer) => MembersAnswer;
+    /** Another tab of the same browser: its device and storage. */
+    browser?: {
+      d: Device;
+      receipts: MigrationApprovalReceipts;
+      leases: MigrationLeaseStore;
+    };
+    onProgress?: (progress: MigrationProgress) => void;
   } = {}
 ): Owner {
-  const d = memberDevice(w, owner, 'owner_laptop');
+  const d = options.browser?.d ?? memberDevice(w, owner, 'owner_laptop');
   const base = d.fetcher;
   const invitations = invitationsOf(w, d);
   const progress: MigrationProgress[] = [];
   const plaintext = createMigrationPlaintextSource(base);
   const api = createProjectMigrationsApi(base);
   const tamper = options.tamper;
-  const receipts = memoryApprovalReceipts();
+  const receipts = options.browser?.receipts ?? memoryApprovalReceipts();
   const engine = createProjectMigrationEngine({
     deviceId: 'owner_laptop',
     fetcher: base,
@@ -286,7 +304,7 @@ function ownerEngine(
         }
       : api,
     plaintext,
-    leases: memoryLeaseStore(),
+    leases: options.browser?.leases ?? memoryLeaseStore(),
     approvalReceipts: receipts,
     createStaging: (leased) => {
       d.fetcher = leased;
@@ -304,7 +322,10 @@ function ownerEngine(
         }
       };
     },
-    onProgress: (p) => progress.push(p),
+    onProgress: (p) => {
+      progress.push(p);
+      options.onProgress?.(p);
+    },
     ...(options.beforeStep ? { beforeStep: options.beforeStep } : {})
   });
   const side: Owner = {
@@ -312,8 +333,10 @@ function ownerEngine(
     invitations,
     progress,
     approved: null,
+    approvedFor: undefined,
     receipts,
     spent: 0,
+    engine,
     async migrate(projectId) {
       const summary = (await plaintext.listProjects()).find(
         (p) => p.projectId === projectId
@@ -324,6 +347,9 @@ function ownerEngine(
         side.approved
           ? {
               approvedMembers: side.approved,
+              ...(side.approvedFor !== undefined
+                ? { approvedFor: side.approvedFor }
+                : {}),
               onApprovalSpent: () => void side.spent++
             }
           : {}
@@ -333,10 +359,71 @@ function ownerEngine(
       const asked = await failure(side.migrate(projectId));
       expect(asked).toBeInstanceOf(MigrationApprovalNeededError);
       side.approved = approvalOf(progress.at(-1)!.members!);
+      side.approvedFor = progress.at(-1)!.attempt;
       return side.approved;
     }
   };
   return side;
+}
+
+/** One browser's Web Locks, as its tabs share them (`ifAvailable` only). */
+function browserLocks(): MigrationLocks {
+  const held = new Set<string>();
+  return {
+    async request(name, _options, callback) {
+      if (held.has(name)) return callback(null);
+      held.add(name);
+      try {
+        return await callback({});
+      } finally {
+        held.delete(name);
+      }
+    }
+  };
+}
+
+/**
+ * A tab of the owner's browser: the page's migration controller over the
+ * real engine, sharing the browser's device, storage and Web Locks.
+ */
+function ownerTab(
+  w: World,
+  browser: {
+    d: Device;
+    receipts: MigrationApprovalReceipts;
+    leases: MigrationLeaseStore;
+    locks: MigrationLocks;
+  },
+  beforeStep?: (step: string, projectId: string) => void | Promise<void>
+): MigrationController {
+  let forward: (progress: MigrationProgress) => void = () => undefined;
+  // Built now, over the device's own fetcher (a staging later swaps it).
+  const side = ownerEngine(w, {
+    browser,
+    onProgress: (progress) => forward(progress),
+    ...(beforeStep ? { beforeStep } : {})
+  });
+  const base = browser.d.fetcher;
+  return createMigrationController({
+    userId: OWNER,
+    fetcher: base,
+    migrations: createProjectMigrationsApi(base),
+    plaintext: createMigrationPlaintextSource(base),
+    locks: browser.locks,
+    leases: browser.leases,
+    approvalReceipts: browser.receipts,
+    openStaging: async () => {
+      throw new Error('not used');
+    },
+    followUps: {
+      shareLinks: async () => ({}) as never,
+      invitations: async () => ({}) as never
+    },
+    createEngine: (onProgress) => {
+      forward = onProgress;
+      return side.engine;
+    }
+  });
 }
 
 // --- The shared plaintext project ----------------------------------------------------
@@ -930,7 +1017,125 @@ describe('migrating a shared plaintext project (slice 7-4)', () => {
     expect(again).toBeInstanceOf(MigrationMembersNotReadyError);
     await publishKeys(w, memberDevice(w, other, 'other_laptop'));
     await publishKeys(w, memberDevice(w, third, 'third_laptop'));
+    // The approval given before belonged to the abandoned attempt: the
+    // owner approves the members again.
+    await ownerSide.approve(projectId);
     await ownerSide.migrate(projectId);
+    expect(formatOf(srv, projectId)).toBe(2);
+  });
+
+  it('asks again in a tab whose approval waited for the run while another tab cancelled that attempt (#1465 review)', async () => {
+    const w = world();
+    const { srv } = w;
+    const { projectId } = await sharedPlaintext(w);
+    for (const [a, b] of [
+      [OWNER, OTHER],
+      [OTHER, OWNER],
+      [OWNER, THIRD],
+      [THIRD, OWNER]
+    ] as const) {
+      verify(w, a, b);
+    }
+    const browser = {
+      d: memberDevice(w, owner, 'owner_laptop'),
+      receipts: memoryApprovalReceipts(),
+      leases: memoryLeaseStore(),
+      locks: browserLocks()
+    };
+    let hold: Promise<void> | null = null;
+    let reached!: () => void;
+    const tabA = ownerTab(w, browser, async (step) => {
+      if (step === 'read' && hold) {
+        reached();
+        await hold;
+      }
+    });
+    const tabB = ownerTab(w, browser);
+    const row = (tab: MigrationController) =>
+      tab.getState().projects.find((p) => p.projectId === projectId)!;
+    const migration = () =>
+      rows<{ state: string; started_at: string }>(
+        srv,
+        'SELECT state, started_at FROM e2ee_project_migrations WHERE project_id = ?',
+        projectId
+      )[0];
+    const asks = (tab: MigrationController) =>
+      expect(row(tab)).toMatchObject({
+        phase: 'members',
+        error: { code: MIGRATION_APPROVAL_CODE }
+      });
+
+    // The members are invited and ready; both tabs show them for approval.
+    await tabA.run([projectId]);
+    await publishKeys(w, memberDevice(w, other, 'other_laptop'));
+    await publishKeys(w, memberDevice(w, third, 'third_laptop'));
+    await tabA.run([projectId]);
+    await tabB.run([projectId]);
+    asks(tabA);
+    asks(tabB);
+    expect(migration()).toBeUndefined();
+
+    // Tab A: approved, and staging, holding the run.
+    let release!: () => void;
+    hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const staged = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    tabA.approveMembers(
+      projectId,
+      approvalOf(row(tabA).members!),
+      row(tabA).attempt
+    );
+    const running = tabA.run([projectId]);
+    await staged;
+    const first = migration()!;
+    expect(first.state).toBe('staging');
+
+    // Tab B: the owner approves there too, but tab A holds the run.
+    tabB.approveMembers(
+      projectId,
+      approvalOf(row(tabB).members!),
+      row(tabB).attempt
+    );
+    await tabB.run([projectId]);
+    expect(tabB.getState().otherTab).toBe(true);
+
+    // Tab A pauses, and the owner cancels that staging there.
+    tabA.pause();
+    release();
+    hold = null;
+    await running;
+    expect(row(tabA).phase).toBe('paused');
+    await tabA.cancel(projectId);
+    expect(migration()).toMatchObject({
+      state: 'abandoned',
+      started_at: first.started_at
+    });
+
+    // Tab B checks again: the approval it holds was given before the
+    // attempt tab A cancelled, so nothing is staged and it asks again.
+    await tabB.run([projectId]);
+    asks(tabB);
+    expect(migration()).toMatchObject({
+      state: 'abandoned',
+      started_at: first.started_at
+    });
+    expect(formatOf(srv, projectId)).toBe(1);
+    // Forgotten, not merely skipped: the next check asks again too.
+    await tabB.run([projectId]);
+    asks(tabB);
+    expect(migration()!.state).toBe('abandoned');
+
+    // Approved anew for the attempt as it stands, it goes ahead.
+    tabB.approveMembers(
+      projectId,
+      approvalOf(row(tabB).members!),
+      row(tabB).attempt
+    );
+    await tabB.run([projectId]);
+    expect(row(tabB).phase).toBe('done');
     expect(formatOf(srv, projectId)).toBe(2);
   });
 
@@ -1109,7 +1314,10 @@ describe('migrating a shared plaintext project (slice 7-4)', () => {
       [OTHER, 'readded', 'editor', await contactCodeOf(other.list)],
       [THIRD, 'readded', 'viewer', await contactCodeOf(third.list)]
     ]);
-    // An approval of only one of them, or of another identity, is not one.
+    // An approval of only one of them, or of another identity, is not one
+    // (each given for this staging, as shown).
+    ownerSide.approvedFor = ownerSide.progress.at(-1)!.attempt;
+    expect(ownerSide.approvedFor).toMatch(/^staging@/);
     for (const approval of [
       shown.filter((entry) => entry.userId === OTHER),
       shown.map((entry) =>

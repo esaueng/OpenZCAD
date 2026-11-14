@@ -450,7 +450,7 @@ describe('the migration controller', () => {
 
     // Approved, interrupted before the staging recorded it, cancelled: a
     // staging begun afterwards asks again.
-    controller.approveMembers('proj_old', approval);
+    controller.approveMembers('proj_old', approval, 'none');
     await controller.run(['proj_old']);
     await controller.cancel('proj_old');
     expect(fake.engine.cancel).toHaveBeenCalledWith('proj_old');
@@ -460,7 +460,7 @@ describe('the migration controller', () => {
     // Approved again and recorded for the staging, then interrupted: the
     // approval is spent, so no later run passes it again.
     recorded = true;
-    controller.approveMembers('proj_old', approval);
+    controller.approveMembers('proj_old', approval, 'none');
     await controller.run(['proj_old']);
     await controller.run(['proj_old']);
     expect(given).toEqual([approval, undefined, approval, undefined]);
@@ -1264,15 +1264,18 @@ describe('a shared project (slice 7-4)', () => {
       ready('viewer@example.com', 'viewer', '33333 44444')
     ];
     const approvals: unknown[] = [];
+    const approvedFor: unknown[] = [];
     const fake = fakeEngine(async (summary, report, _signal, options) => {
       if (summary.projectId !== 'proj_old') {
         report({ phase: 'done' });
         return;
       }
       approvals.push(options?.approvedMembers);
+      approvedFor.push(options?.approvedFor);
       if (!options?.approvedMembers) {
         report({
           phase: 'members',
+          attempt: 'abandoned@2026-10-02T00:00:00.000Z',
           members: roster,
           error: {
             code: MIGRATION_APPROVAL_CODE,
@@ -1335,6 +1338,8 @@ describe('a shared project (slice 7-4)', () => {
         identityKeyHash: '3333344444'
       }
     ]);
+    // Given for the attempt that showed them: any other one asks again.
+    expect(approvedFor.at(-1)).toBe('abandoned@2026-10-02T00:00:00.000Z');
   });
 
   it('asks the owner to approve members a resumed staging already re-added, by code, before it switches over', async () => {
