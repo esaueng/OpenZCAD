@@ -109,16 +109,21 @@ import {
   Toggle,
   type SegmentOption
 } from './settingsControls';
+import {
+  SpaceMousePreferenceRows,
+  SpaceMouseSettings
+} from './SpaceMouseSettings';
+import { SPACE_MOUSE_KEY_REFERENCE } from '../lib/spaceMouseActions';
 import { CloudDataDeletionDialog } from './CloudDataDeletionDialog';
 import { describeFailure } from '../lib/plainFailure';
 import { DataDownload } from './DataDownload';
 import { ActivityLogSettings } from './ActivityLogSettings';
 import {
-  PersonalInfoToggle,
   PrivateEmailInput,
+  PrivateText,
   setPersonalInfoVisible,
   usePersonalInfoVisible
-} from './PersonalInfoToggle';
+} from './PersonalInfo';
 
 /**
  * The parts of the one storage allowance. Older servers (and the e2e stubs)
@@ -1633,6 +1638,22 @@ export function SettingsPage({
                   />
                 </SettingRow>
               </Group>
+              {/* A 3D mouse is navigation too, so its settings sit right
+                  under it rather than past the keyboard reference. */}
+              <Group title="3D mouse" note="Chrome and Edge">
+                <SpaceMouseSettings />
+                <SpaceMousePreferenceRows
+                  value={settings.viewport.spaceMouse}
+                  onChange={(spaceMouse) =>
+                    patch({
+                      viewport: { ...settings.viewport, spaceMouse }
+                    })
+                  }
+                />
+              </Group>
+              <Group title="SpaceMouse keys">
+                <ControlReferenceGroups groups={[SPACE_MOUSE_KEY_REFERENCE]} />
+              </Group>
               {/* Every remappable command with its live keys. A key can mean
                   one thing per context (C is Cylinder in the workspace and
                   Circle in a sketch); the editor's groups are those contexts.
@@ -2242,14 +2263,18 @@ export function SettingsPage({
                       <>
                         <SettingRow
                           title={
-                            personalInfoVisible
-                              ? session.displayName
-                              : 'Name hidden'
+                            <PrivateText
+                              value={session.displayName}
+                              visible={personalInfoVisible}
+                              onChange={setPersonalInfoVisible}
+                            />
                           }
                           hint={
-                            personalInfoVisible
-                              ? (session.email ?? session.userId)
-                              : 'Email hidden'
+                            <PrivateText
+                              value={session.email ?? session.userId}
+                              visible={personalInfoVisible}
+                              onChange={setPersonalInfoVisible}
+                            />
                           }
                         >
                           <button
@@ -2474,9 +2499,11 @@ export function SettingsPage({
                             <strong>Enter the email code</strong>
                             <small>
                               Sent to{' '}
-                              {personalInfoVisible
-                                ? loginEmail
-                                : 'your email address'}
+                              <PrivateText
+                                value={loginEmail}
+                                visible={personalInfoVisible}
+                                onChange={setPersonalInfoVisible}
+                              />
                               . It expires in 10 minutes.
                             </small>
                           </span>
@@ -2643,15 +2670,6 @@ export function SettingsPage({
                         Email sign-in isn’t available on this server yet.
                       </Notice>
                     )}
-                    <SettingRow
-                      title="Personal information"
-                      hint="Names and emails stay hidden for screenshots until you reload."
-                    >
-                      <PersonalInfoToggle
-                        visible={personalInfoVisible}
-                        onChange={setPersonalInfoVisible}
-                      />
-                    </SettingRow>
                     <SettingRow
                       title="Preference synchronization"
                       hint={

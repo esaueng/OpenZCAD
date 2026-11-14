@@ -731,7 +731,7 @@ test('a late member checkpoint leaves the newer share navigation and status unch
     releaseShare = resolve;
   });
   let shareRequested = false;
-  await page.route('**/api/share/*', async (route) => {
+  await page.route('**/api/share', async (route) => {
     shareRequested = true;
     await shareGate;
     return route.fulfill({

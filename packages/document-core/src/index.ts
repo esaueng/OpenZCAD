@@ -48,7 +48,8 @@ import {
 export { assertSketchBoundaryTopologyPreserved } from './sketch-boundary-dependencies';
 import {
   assertDocumentContentSchema,
-  assertSketchObjectContentSchema
+  assertSketchObjectContentSchema,
+  assertThreadContentSchema
 } from './document-content-schema';
 export * from './sketch-composites';
 export * from './sketch-projections';
@@ -1076,6 +1077,8 @@ export function normalizeDocument(input: ProjectDocument): ProjectDocument {
   // derive them from a legacy object or promote an older carrier silently.
   // Schema v37 boundary provenance and conversion ownership are authored.
   // Opening older content never converts it or invents source witnesses.
+  // Schema v56 -> v57 thread runouts and pipe threads are optional fields on
+  // a thread; absent keeps the v53 thread, so nothing is rewritten.
   // Schema v16 -> v17 allows reference-form mesh payloads. Keep existing
   // embedded triangles and pre-release references as written; the version
   // boundary prevents older clients from accepting meshes they cannot rebuild.
@@ -3665,6 +3668,10 @@ export function threadBody(
   input: ThreadInput
 ): { document: ProjectDocument; bodyId: BodyId } {
   const { name, ids, ...parameters } = input;
+  // Schema v57 runouts and pipe threads are refused on a document that
+  // declares an older schema, as v56 couplings are: written there, the
+  // document would no longer open.
+  assertThreadContentSchema(parameters, document.schemaVersion);
   return addBodyResultFeature(
     document,
     name,
@@ -4670,7 +4677,10 @@ const FEATURE_DATA_KEYS: Record<FeatureKind, readonly string[]> = {
     'phaseDeg',
     'chamferStart',
     'chamferEnd',
-    'chamferAngleDeg'
+    'chamferAngleDeg',
+    'runoutStart',
+    'runoutEnd',
+    'pipeSize'
   ],
   // `secondBodyId` is body wiring, not a parameter: never patchable.
   split: ['targetBodyId', 'plane', 'keepOriginal'],
@@ -4833,7 +4843,10 @@ const FEATURE_DATA_CLEARABLE_KEYS: Partial<
     'phaseDeg',
     'chamferStart',
     'chamferEnd',
-    'chamferAngleDeg'
+    'chamferAngleDeg',
+    'runoutStart',
+    'runoutEnd',
+    'pipeSize'
   ],
   // M14: every tooth-form override falls back to its documented default;
   // `pitch` may go only where the gear keeps a cylinder's diameter, and
@@ -4918,6 +4931,9 @@ export function updateFeature(
   }
   if (input.data) {
     assertFeatureProfileProvenance(input.data, document);
+    if (feature.featureKind === 'thread') {
+      assertThreadContentSchema(input.data, document.schemaVersion);
+    }
     const patch = { ...input.data } as Record<string, unknown>;
     if (
       'featureKind' in patch &&

@@ -1,4 +1,18 @@
-import type { TopologySelection } from '@openzcad/shared';
+import type { BodyId, TopologySelection } from '@openzcad/shared';
+
+/**
+ * The body a held face set is on: the body Shift adds faces of. Null when no
+ * face is held or the faces span bodies (a box sweep across two parts).
+ */
+export function heldFaceSetBody(
+  held: readonly TopologySelection[] | null
+): BodyId | null {
+  const bodyId = held?.[0]?.bodyId;
+  return bodyId &&
+    held.every((face) => face.kind === 'face' && face.bodyId === bodyId)
+    ? bodyId
+    : null;
+}
 
 /** Whether two face picks name the same face of the same body. */
 export function sameFacePick(

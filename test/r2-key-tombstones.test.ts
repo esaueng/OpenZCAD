@@ -1,0 +1,404 @@
+import { describe, expect, it, vi, type Mock } from 'vitest';
+import worker from '../apps/web/worker/index';
+import { CommandManager, commandFactories } from '@openzcad/command-system';
+import {
+  assertClaimedDeleteComplete,
+  claimObjectKeysForDelete,
+  ObjectKeyDeleteRetryError,
+  R2_KEY_DELETE_WINDOW_MS,
+  R2_KEY_TOMBSTONE_TTL_MS
+} from '@openzcad/cloudflare-adapters';
+import {
+  createProjectDocument,
+  withoutDerivedProjection
+} from '@openzcad/document-core';
+import { splitProjectStorageUpload } from '@openzcad/persistence';
+import { toUserId, type ProjectDocument } from '@openzcad/shared';
+import { migratedDatabase, sqliteD1 } from './support/sqlite-d1';
+
+const OWNER = toUserId('user_beta_dev');
+const CREATED = '2026-11-13T00:00:00.000Z';
+const STEP_TEXT = `ISO-10303-21;\n${'CLOSED_SHELL'.repeat(20_000)}\nEND-ISO-10303-21;`;
+
+function database() {
+  const db = migratedDatabase();
+  db.prepare('INSERT INTO users (id, email, created_at) VALUES (?, ?, ?)').run(
+    OWNER,
+    'dev@example.test',
+    CREATED
+  );
+  db.prepare(
+    `INSERT INTO projects (id, user_id, name, document_json, updated_at)
+     VALUES ('p1', ?, 'Project', '{}', ?)`
+  ).run(OWNER, CREATED);
+  return db;
+}
+
+function asset(
+  db: ReturnType<typeof database>,
+  id: string,
+  key: string,
+  checksum = id
+) {
+  db.prepare(
+    `INSERT INTO project_storage_assets
+       (id, project_id, kind, object_key, checksum_sha256, logical_bytes,
+        stored_bytes, content_encoding, created_at)
+     VALUES (?, 'p1', 'step-source', ?, ?, 10, 10, 'gzip', ?)`
+  ).run(id, key, checksum, CREATED);
+}
+
+function session(db: ReturnType<typeof database>, id: string, key: string) {
+  db.prepare(
+    `INSERT INTO upload_sessions
+       (id, artifact_id, project_id, object_key, file_name, content_type,
+        kind, metadata_json, expires_at, owner_user_id, reserved_bytes,
+        reservation_state, upload_protocol_version)
+     VALUES (?, ?, 'p1', ?, 'f.step', 'model/step', 'snapshot', '{}',
+             '2099-01-01T00:00:00.000Z', ?, 0, 'open', 1)`
+  ).run(id, `artifact_${id}`, key, OWNER);
+}
+
+describe('R2 key tombstones (migration 0050)', () => {
+  it('claims a key only while no other row names it', async () => {
+    const db = database();
+    const d1 = sqliteD1(db);
+    asset(db, 'a_old', 'assets/k');
+    // The cleanup removing a_old may claim its key...
+    const mine = await claimObjectKeysForDelete(d1, ['assets/k'], {
+      assets: ['a_old']
+    });
+    expect([...mine.keys]).toEqual(['assets/k']);
+    await mine.release();
+    // ...but not while another row names it.
+    session(db, 's_new', 'assets/k');
+    const blocked = await claimObjectKeysForDelete(d1, ['assets/k'], {
+      assets: ['a_old']
+    });
+    expect([...blocked.keys]).toEqual([]);
+    await blocked.release();
+  });
+
+  it('refuses every new row naming a key while it is claimed, and only then', async () => {
+    const db = database();
+    const d1 = sqliteD1(db);
+    const claim = await claimObjectKeysForDelete(d1, ['blobs/k', 'assets/k']);
+    expect(claim.keys.size).toBe(2);
+    expect(() => session(db, 's1', 'blobs/k')).toThrow('r2_key_deleting');
+    expect(() => asset(db, 'a1', 'assets/k')).toThrow('r2_key_deleting');
+    // A second deleter cannot claim a key already claimed.
+    const second = await claimObjectKeysForDelete(d1, ['blobs/k']);
+    expect(second.keys.size).toBe(0);
+    await second.release();
+    await claim.release();
+    session(db, 's1', 'blobs/k');
+    asset(db, 'a1', 'assets/k');
+  });
+
+  it('claims nothing once its fence no longer holds', async () => {
+    const db = database();
+    const claim = await claimObjectKeysForDelete(
+      sqliteD1(db),
+      ['assets/k'],
+      {},
+      { sql: 'EXISTS (SELECT 1 FROM projects WHERE id = ?)', binds: ['gone'] }
+    );
+    expect(claim.keys.size).toBe(0);
+  });
+
+  it('lets a claim that outlived its deleter go: it blocks nothing and can be taken again', async () => {
+    const db = database();
+    db.prepare(
+      `INSERT INTO r2_key_tombstones (object_key, token, created_at)
+       VALUES ('assets/k', 'dead', ?)`
+    ).run(Date.now() - R2_KEY_TOMBSTONE_TTL_MS - 60_000);
+    asset(db, 'a1', 'assets/other');
+    session(db, 's1', 'assets/k');
+    db.prepare('DELETE FROM upload_sessions').run();
+    const claim = await claimObjectKeysForDelete(sqliteD1(db), ['assets/k']);
+    expect([...claim.keys]).toEqual(['assets/k']);
+    await claim.release();
+    expect(
+      db.prepare('SELECT COUNT(*) AS n FROM r2_key_tombstones').get()
+    ).toEqual({ n: 0 });
+  });
+});
+
+describe('a source asset whose object vanished before its row landed', () => {
+  it('is stored again once the save commits', async () => {
+    const db = database();
+    const objects = new Map<string, ArrayBuffer>();
+    let dropped: string | null = null;
+    const bucket = {
+      put: vi.fn(async (key: string, body: ArrayBuffer) => {
+        // A cleanup deletes the content-addressed key right after this
+        // write's put, under a claim it releases before the row lands.
+        if (!dropped && key.includes('/assets/')) {
+          dropped = key;
+          return;
+        }
+        objects.set(key, body.slice(0));
+      }),
+      get: vi.fn(async (key: string) => {
+        const body = objects.get(key);
+        return body
+          ? { arrayBuffer: async () => body.slice(0), size: body.byteLength }
+          : null;
+      }),
+      head: vi.fn(async (key: string) => {
+        const body = objects.get(key);
+        return body ? { size: body.byteLength } : null;
+      }),
+      delete: vi.fn(async (keys: string | string[]) => {
+        for (const key of typeof keys === 'string' ? [keys] : keys)
+          objects.delete(key);
+      })
+    };
+    const env = {
+      ENVIRONMENT: 'development' as const,
+      AUTH_MODE: 'development' as const,
+      DB: sqliteD1(db),
+      PROJECT_STORAGE: bucket as unknown as R2Bucket,
+      ARTIFACTS: {} as R2Bucket,
+      PROJECT_ROOM: { getByName: vi.fn() }
+    };
+    const manager = new CommandManager(
+      createProjectDocument('Split bracket', OWNER)
+    );
+    manager.execute(
+      commandFactories.importStep({
+        name: 'Bracket STEP',
+        artifactId: 'artifact_split_step',
+        sourceName: 'bracket.step',
+        stepText: STEP_TEXT
+      })
+    );
+    const document: ProjectDocument = withoutDerivedProjection(
+      manager.document
+    );
+    const split = await splitProjectStorageUpload(document);
+    const created = await worker.fetch(
+      new Request('https://example.com/api/projects', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: document.name,
+          initialDocument: split.document,
+          storageAssets: split.storageAssets
+        })
+      }),
+      env
+    );
+    expect(created.status).toBe(201);
+    expect(dropped).not.toBeNull();
+    const keys = (
+      db.prepare('SELECT object_key FROM project_storage_assets').all() as {
+        object_key: string;
+      }[]
+    ).map((row) => row.object_key);
+    expect(keys).toContain(dropped);
+    // The asset's row names it, and its bytes are there.
+    for (const key of keys) expect(objects.has(key)).toBe(true);
+  });
+});
+
+describe('claimed R2 deletes (PR #1473 review)', () => {
+  it('reports another deleter’s fresh claim as contended, not as a key a row names', async () => {
+    const db = database();
+    const d1 = sqliteD1(db);
+    const first = await claimObjectKeysForDelete(d1, ['assets/k']);
+    const second = await claimObjectKeysForDelete(d1, ['assets/k']);
+    expect([...second.keys]).toEqual([]);
+    expect([...second.contended]).toEqual(['assets/k']);
+    await second.release();
+    await first.release();
+    session(db, 's1', 'assets/k');
+    const named = await claimObjectKeysForDelete(d1, ['assets/k']);
+    expect([...named.keys]).toEqual([]);
+    expect([...named.contended]).toEqual([]);
+  });
+
+  it('waits for every started delete before answering, and keeps the claim on a key whose delete failed', async () => {
+    const db = database();
+    const d1 = sqliteD1(db);
+    const claim = await claimObjectKeysForDelete(d1, ['k/1', 'k/2']);
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    let firstDone = false;
+    const bucket = {
+      delete: vi.fn(async (key: string) => {
+        if (key === 'k/1') {
+          await released;
+          firstDone = true;
+          return;
+        }
+        throw new Error('R2 delete failed');
+      })
+    };
+    let answered = false;
+    const pending = claim.deleteObjects(bucket).then((outcome) => {
+      answered = true;
+      return outcome;
+    });
+    for (let tick = 0; tick < 20; tick++) await Promise.resolve();
+    // k/2 already failed, but k/1 is still in flight: no answer yet, so no
+    // caller can release the claim under it.
+    expect(bucket.delete).toHaveBeenCalledTimes(2);
+    expect(answered).toBe(false);
+    release();
+    const outcome = await pending;
+    expect(firstDone).toBe(true);
+    expect([...outcome.deleted]).toEqual(['k/1']);
+    expect([...outcome.failed.keys()]).toEqual(['k/2']);
+    expect(() => assertClaimedDeleteComplete(claim, outcome)).toThrow(
+      'R2 delete failed'
+    );
+    await claim.release();
+    // The failed delete's key stays claimed until the claim lapses.
+    expect(
+      db.prepare('SELECT object_key FROM r2_key_tombstones').all()
+    ).toEqual([{ object_key: 'k/2' }]);
+    expect(() => session(db, 's1', 'k/2')).toThrow('r2_key_deleting');
+    session(db, 's2', 'k/1');
+    // A later cleanup takes the settling claim over and deletes again; its
+    // release still leaves the key blocked until the claim lapses.
+    const retry = await claimObjectKeysForDelete(d1, ['k/2']);
+    expect([...retry.keys]).toEqual(['k/2']);
+    expect([...retry.contended]).toEqual([]);
+    const retried = await retry.deleteObjects({ delete: async () => {} });
+    expect([...retried.deleted]).toEqual(['k/2']);
+    await retry.release();
+    expect(() => session(db, 's3', 'k/2')).toThrow('r2_key_deleting');
+  });
+
+  it('starts no delete once its claim is no longer held: an expired claim taken over by a writer deletes nothing', async () => {
+    const db = database();
+    const d1 = sqliteD1(db);
+    const claim = await claimObjectKeysForDelete(d1, ['assets/k']);
+    expect([...claim.keys]).toEqual(['assets/k']);
+    // The deleter stalls past the claim's lifetime: the claim lapses, a
+    // second cleanup drops it, and a writer stores a new row under the key.
+    db.prepare('UPDATE r2_key_tombstones SET created_at = ?').run(
+      Date.now() - R2_KEY_TOMBSTONE_TTL_MS - 60_000
+    );
+    const other = await claimObjectKeysForDelete(d1, ['assets/k']);
+    await other.release();
+    asset(db, 'a_new', 'assets/k');
+    const bucket = { delete: vi.fn(async () => {}) };
+    const outcome = await claim.deleteObjects(bucket);
+    expect(bucket.delete).not.toHaveBeenCalled();
+    expect([...outcome.lapsed]).toEqual(['assets/k']);
+    expect(() => assertClaimedDeleteComplete(claim, outcome)).toThrow(
+      ObjectKeyDeleteRetryError
+    );
+  });
+
+  it('starts no delete after its delete window, though the claim still blocks writers', async () => {
+    const db = database();
+    const d1 = sqliteD1(db);
+    const claim = await claimObjectKeysForDelete(d1, ['assets/k']);
+    const now = Date.now();
+    const clock = vi
+      .spyOn(Date, 'now')
+      .mockReturnValue(now + R2_KEY_DELETE_WINDOW_MS + 1);
+    try {
+      const bucket = { delete: vi.fn(async () => {}) };
+      const outcome = await claim.deleteObjects(bucket);
+      expect(bucket.delete).not.toHaveBeenCalled();
+      expect([...outcome.lapsed]).toEqual(['assets/k']);
+    } finally {
+      clock.mockRestore();
+    }
+    // A delete is never issued later than this window, so writers stay
+    // blocked for the TTL's remaining margin after the last possible one.
+    expect(
+      R2_KEY_TOMBSTONE_TTL_MS - R2_KEY_DELETE_WINDOW_MS
+    ).toBeGreaterThanOrEqual(45 * 60 * 1000);
+    expect(() => asset(db, 'a1', 'assets/k')).toThrow('r2_key_deleting');
+    await claim.release();
+  });
+});
+
+describe('a staged decryption revision whose asset repair failed', () => {
+  it('is not journaled, and its retry stages it again with its assets', async () => {
+    const { D1R2PersistenceService } =
+      await import('@openzcad/cloudflare-adapters');
+    const { createSavedRevision } = await import('@openzcad/document-core');
+    const { objectBucket } = await import('./support/e2ee-documents');
+    const db = database();
+    db.prepare('UPDATE projects SET storage_format = 2 WHERE id = ?').run('p1');
+    const manager = new CommandManager({
+      ...createProjectDocument('Source in an old revision', OWNER),
+      projectId: 'p1'
+    } as ProjectDocument);
+    manager.execute(
+      commandFactories.importStep({
+        name: 'Old source',
+        artifactId: 'artifact_local_old',
+        sourceName: 'old.step',
+        stepText: STEP_TEXT
+      })
+    );
+    const document = createSavedRevision(
+      withoutDerivedProjection(manager.document),
+      'Source before it was removed'
+    );
+    const revisionId = document.revisions.at(-1)!.revisionId;
+    const bucket = objectBucket();
+    const putMock = bucket.put as unknown as Mock<
+      (key: string, body: ArrayBuffer | Uint8Array) => Promise<void>
+    >;
+    const put = putMock.getMockImplementation()!;
+    let assetPuts = 0;
+    let assetKey = '';
+    putMock.mockImplementation(async (key, body) => {
+      if (key.includes('/assets/')) {
+        assetKey = key;
+        assetPuts++;
+        // A cleanup removed the first put's bytes before the row landed...
+        if (assetPuts === 1) return;
+        // ...and storing them again after the commit fails once.
+        if (assetPuts === 2) throw new Error('transient re-put outage');
+      }
+      return put(key, body);
+    });
+    const service = new D1R2PersistenceService({
+      DB: sqliteD1(db),
+      PROJECT_STORAGE: bucket,
+      ARTIFACTS: bucket
+    } as never);
+    const input = {
+      projectId: 'p1',
+      document,
+      revision: { revisionId, reason: 'Source before it was removed' },
+      fence: { sql: '1', binds: [] }
+    };
+    await expect(service.stageDecryptedDocument(OWNER, input)).rejects.toThrow(
+      'transient re-put outage'
+    );
+    // The save state is not journaled as staged until its assets are in
+    // R2: no revision row landed, so the retry stages it again.
+    expect(
+      db.prepare('SELECT id FROM revisions WHERE id = ?').get(revisionId)
+    ).toBeUndefined();
+    expect(bucket.objects.has(assetKey)).toBe(false);
+    putMock.mockImplementation(put);
+    const objectsBefore = db
+      .prepare('SELECT id FROM project_document_objects')
+      .all();
+    const retried = await service.stageDecryptedDocument(OWNER, input);
+    expect(retried.staged).toBe(false);
+    expect(bucket.objects.has(assetKey)).toBe(true);
+    // It reuses the failed attempt's committed object: no second copy.
+    expect(db.prepare('SELECT id FROM project_document_objects').all()).toEqual(
+      objectsBefore
+    );
+    expect(objectsBefore).toContainEqual({ id: retried.objectId });
+    expect(
+      db.prepare('SELECT id FROM revisions WHERE id = ?').get(revisionId)
+    ).toEqual({ id: revisionId });
+    // A retry after that answers staged, with its assets still in place.
+    const again = await service.stageDecryptedDocument(OWNER, input);
+    expect(again.staged).toBe(true);
+    expect(bucket.objects.has(assetKey)).toBe(true);
+  });
+});

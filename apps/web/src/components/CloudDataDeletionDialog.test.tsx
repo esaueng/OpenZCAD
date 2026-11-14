@@ -51,6 +51,32 @@ describe('CloudDataDeletionDialog', () => {
     ).toBeVisible();
   });
 
+  // Design review I84: nothing said what deleting the profile does to
+  // encryption keys.
+  it.each([
+    ['profile', true],
+    ['all', true],
+    ['projects', false]
+  ] as const)(
+    'for %s, says whether the encryption keys go too',
+    async (scope, shown) => {
+      vi.spyOn(api, 'accountDeletionPreview').mockResolvedValue(preview);
+      render(
+        <CloudDataDeletionDialog
+          scope={scope}
+          onConfirm={vi.fn()}
+          onClose={vi.fn()}
+        />
+      );
+      await screen.findByLabelText('Deletion confirmation');
+      const sentence = screen.queryByText(
+        /Your recovery key will no longer unlock anything\./
+      );
+      if (shown) expect(sentence).toBeVisible();
+      else expect(sentence).toBeNull();
+    }
+  );
+
   it('keeps focus on the delete button while it runs and after it fails', async () => {
     const user = userEvent.setup();
     vi.spyOn(api, 'accountDeletionPreview').mockResolvedValue(preview);
@@ -98,7 +124,8 @@ describe('CloudDataDeletionDialog', () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
-  it('describes a masked email instead of styling it as text to type', async () => {
+  it('blurs a stand-in for the email until it is clicked', async () => {
+    const user = userEvent.setup();
     vi.spyOn(api, 'accountDeletionPreview').mockResolvedValue({
       ...preview,
       confirmationKind: 'email',
@@ -112,11 +139,25 @@ describe('CloudDataDeletionDialog', () => {
       />
     );
 
-    const prompt = await screen.findByText(
-      'Type your email address to confirm'
-    );
-    expect(prompt.querySelector('strong')).toBeNull();
+    const show = await screen.findByRole('button', {
+      name: 'Show personal info'
+    });
+    expect(show.closest('span')).toHaveTextContent(/^Type .+ to confirm$/);
     expect(document.body.innerHTML).not.toContain('person@example.com');
+    const field = screen.getByLabelText('Deletion confirmation');
+    act(() => field.blur());
+    expect(field).toHaveAttribute('type', 'password');
+    // Not inside a label: a label with no target takes its first labelable
+    // descendant, which would make the reveal button the label's control.
+    expect(show.closest('label')).toBeNull();
+    await user.click(show);
+    expect(
+      screen.getByRole('button', { name: 'person@example.com' })
+    ).toBeVisible();
+    // Clicking the text inside the label reveals it without moving focus to
+    // the field, which would also unmask it for another reason.
+    expect(field).not.toHaveFocus();
+    expect(field).toHaveAttribute('type', 'text');
   });
 
   // Design review I78: the masked email field hid typos, and a mismatch only

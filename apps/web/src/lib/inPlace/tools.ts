@@ -176,7 +176,23 @@ export interface FacePick {
    * where a thread on it starts, how long it may run, and what it is sized
    * from. `axisStart` is the face's start (its lower end along the axis).
    */
-  cylinder?: { axisStart: Vector3; axisEnd: Vector3; radius: number };
+  cylinder?: {
+    axisStart: Vector3;
+    axisEnd: Vector3;
+    radius: number;
+    /**
+     * Schema v57 pipe threads: whether the body's material lies inside the
+     * face (a boss) or outside it (a bore), read from the body's mesh; absent
+     * where the mesh cannot say. A thread's build reads the solid itself.
+     */
+    boss?: boolean;
+    /**
+     * The face's length along its axis as the kernel measured it, which the
+     * thread build reads: a thread's ends are settled from this, not from
+     * the axis ends, which a transformed face can carry a few bits apart.
+     */
+    axialLength?: number;
+  };
   /**
    * `point` is where an edited hole already stands, not a click: its stored
    * position is kept, expressions and all, until the face is clicked again.
@@ -306,6 +322,10 @@ export interface InPlaceValueContext {
   raws?: Readonly<Record<string, string>>;
   /** The edited feature's stored data; absent when creating. */
   saved?: FeatureData;
+  /** Each option's value, for a check that reads one (a thread's profile). */
+  options?: Readonly<Record<string, string>>;
+  /** The document's length unit. */
+  units?: UnitSystem;
 }
 
 export type ValueUnit = 'angle' | 'length' | 'count';
@@ -795,7 +815,9 @@ export interface InPlaceToolSpec {
   defaults?(
     slots: InPlaceSlots,
     ctx: InPlaceContext,
-    numbers: Record<string, number>
+    numbers: Record<string, number>,
+    /** Each option's value (a thread's profile sets its length). */
+    options?: Readonly<Record<string, string>>
   ): Record<string, number>;
   /**
    * Other values a value's change carries with it (a box hung under a face

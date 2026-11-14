@@ -88,16 +88,15 @@
   }
 
   /* Packed against neighbours: drawn at 44 px. The top bar's actions sit
-     4 px apart, so they take the width and reach for the height. */
+     4 px apart, so they take the width and reach for the height. At least
+     44 px, not exactly: a tablet wide enough to label them ("File",
+     "Settings", "Cloud unavailable") drew each label out of its 44 px box
+     and over the next action. */
   .topbar .topbar-actions > :is(button, .topbar-action),
-  .topbar .topbar-actions .topbar-menu > summary {
-    min-width: 44px;
-    flex-basis: 44px;
-  }
-
+  .topbar .topbar-actions .topbar-menu > summary,
   .topbar .topbar-actions .topbar-action,
   .topbar .topbar-actions :is(.collaboration-state, .account-state) {
-    width: 44px;
+    min-width: 44px;
   }
 
   /* Folded to its glyph beside the name, the save status was 18 px wide. */
@@ -149,6 +148,16 @@
   .assistant-verified-action,
   .assistant-panel summary,
   .settings-head .settings-search {
+    min-height: 44px;
+  }
+
+  /* A hidden name or email is its own reveal button, and the profile's two
+     sit one above the other, so a reach would land on the other. Each is
+     drawn 44 px tall instead; the row grows rather than overlapping. */
+  .private-text {
+    display: inline-flex;
+    align-items: center;
+    min-width: 44px;
     min-height: 44px;
   }
 
@@ -254,6 +263,14 @@
     flex: 1 0 100%;
     padding-left: calc(18px + var(--sp-2));
     white-space: normal;
+  }
+
+  /* A row with a wrapped reason is taller than its min-height. With more
+     rows than the list shows, an auto track stays at that min-height, and
+     the reason's second line ran over the next row's name ("exporting."
+     over "Export mesh…"). Each row takes the height of what it says. */
+  .palette-list {
+    grid-auto-rows: max-content;
   }
 }
 

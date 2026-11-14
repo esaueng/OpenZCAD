@@ -48,7 +48,7 @@ import { FailureDetails } from './FailureDetails';
 import {
   PrivateEmailInput,
   usePersonalInfoVisible
-} from './PersonalInfoToggle';
+} from './PersonalInfo';
 
 const defaultClient = createProjectSharingClient();
 const defaultShareLinkClient = createProjectShareLinkClient();

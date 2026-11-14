@@ -84,9 +84,22 @@ tracked config already declares the `PROJECT_ROOM` Durable Object binding and
 its `v1` SQLite migration; Wrangler applies that class migration on the first
 Worker deployment. Keep the binding name, class name, and migration tag.
 
-The hourly cron in the example runs the existing expired-upload cleanup. You
-may change its schedule, but keep a schedule if uploads are enabled. Cron
-schedules are UTC.
+The hourly cron in the example runs the existing expired-upload cleanup and
+reclaims expired rate-limit and sign-in rows from D1. You may change its schedule, but
+keep a schedule if uploads are enabled. Cron schedules are UTC.
+
+The example's `ratelimits` entries are Workers rate-limit bindings that the
+Worker checks before any D1 work: sign-in verification and desktop refresh
+(`AUTH_REQUEST_LIMITER`), desktop sign-in start (`DESKTOP_START_LIMITER`),
+desktop sign-in polling (`DESKTOP_EXCHANGE_LIMITER`),
+anonymous assistant requests (`ANONYMOUS_ASSISTANT_LIMITER`), plaintext
+share-link reads (`SHARE_LINK_LIMITER`, and the coarser
+`SHARE_READ_CEILING_LIMITER`, which has no D1 fallback) and signed-in reads
+(`ACCOUNT_READ_LIMITER`). They need no resource to be created. Each
+`namespace_id` is any positive integer not used by another rate-limit binding
+in your account. Keep each binding's name, `limit` and 60-second `period` as
+they are: the Worker passes the same limits, and without a binding it counts
+that limit in D1 instead, which works but costs a D1 write per request.
 
 ## Configure email and Turnstile
 
@@ -234,6 +247,13 @@ The deploy command applies forward D1 migrations before publishing code. Do not
 delete or recreate D1, R2, or the Worker to update OpenZCAD. Review migration
 files before upgrading and test a backup when an update changes storage.
 
+Migration `0050_r2_key_tombstones.sql` adds a small `r2_key_tombstones` table
+and insert guards. Cleanups that delete R2 objects under reusable keys
+(content-addressed source assets, encrypted blobs) claim each key there
+first, so a cleanup that resumes late can never delete bytes a newer row
+stores under the same key. Claims expire after an hour, and nothing needs
+operator attention. Migration numbers can have gaps.
+
 **Upgrading across migration 0049** (`0049_unified_account_storage.sql`):
 account storage becomes one allowance. Projects, save states and source assets
 now share a single bucket with imports, exports and encrypted files, where
@@ -241,7 +261,9 @@ before each side had its own allowance: Free accounts get 1 GiB in total and
 Premium 25 GiB, set with `PREMIUM_STORAGE_LIMIT_BYTES` (the older
 `PREMIUM_PROJECT_STORAGE_LIMIT_BYTES` and `PREMIUM_ARTIFACT_LIMIT_BYTES`
 still apply, in that order, while it is unset). The migration redefines the
-quota triggers and adds no column; nothing is deleted. An account whose
+quota triggers and adds two object-id columns
+(`project_document_objects.supersedes_object_id`,
+`project_storage_assets.added_by_object_id`); nothing is deleted. An account whose
 combined usage is already over its allowance keeps its data, but saves and
 uploads that would add storage are refused until it frees space.
 Encryption migrations stage within the same allowance, projected to their
@@ -357,8 +379,7 @@ content, so it requires the owners' explicit consent and a private recovery
 backup. If that is unacceptable, remain on the prior release until a separately
 reviewed encrypted-to-encrypted upgrader is available.
 
-Confirm that `SELECT COUNT(*) FROM e2ee_project_groups` is zero before retrying
-0044. Then deploy the new release, re-encrypt through the normal verified
+Confirm that `SELECT COUNT(*) FROM e2ee_project_groups` is zero before retrying 0044. Then deploy the new release, re-encrypt through the normal verified
 migration flow, and restore sharing with new verified invitations and links.
 Check head content, source files and retained revisions in the owner browser
 before considering the transition complete. This is a gated format change;

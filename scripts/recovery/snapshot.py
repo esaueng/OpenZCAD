@@ -33,6 +33,8 @@ OBJECT_COLUMNS = {
     # Transient work is retained in SQL but is not a committed object.
     'upload_sessions': {'object_key'},
     'artifact_mesh_discards': {'object_key'},
+    # Migration 0050: a cleanup's claim on a key it is deleting.
+    'r2_key_tombstones': {'object_key'},
 }
 
 
@@ -106,7 +108,7 @@ def required_objects(db):
     if 'd1_migrations' not in tables:
         raise SnapshotError('SQL export has no migration ledger.')
     migrations = [row[0] for row in db.execute('SELECT name FROM d1_migrations ORDER BY name')]
-    if not migrations or any(not re.fullmatch(r'00[0-4][0-9]_[a-z0-9_]+\.sql', name) for name in migrations):
+    if not migrations or any(not re.fullmatch(r'00[0-5][0-9]_[a-z0-9_]+\.sql', name) for name in migrations):
         raise SnapshotError('Unsupported migration ledger.')
     # 0047 adds only glimpse_account_consent.version: no stored objects or keys.
     # 0048 adds only e2ee_mls_commits.sender_signature: no stored objects or keys.
@@ -114,7 +116,9 @@ def required_objects(db):
     # project_document_objects.supersedes_object_id and
     # project_storage_assets.added_by_object_id (object ids, not keys):
     # no stored objects or keys.
-    if max(int(name[:4]) for name in migrations) > 49:
+    # 0050 adds r2_key_tombstones: transient claims on keys a cleanup is
+    # deleting, never objects a restore needs.
+    if max(int(name[:4]) for name in migrations) > 50:
         raise SnapshotError('Review new migrations before using this snapshot tool.')
     version = max(int(name[:4]) for name in migrations)
     reviewed = sorted(path.name for path in

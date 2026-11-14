@@ -19,7 +19,7 @@ import {
 } from '@openzcad/shared';
 import type { ProjectSharingClient } from '../lib/projectSharing';
 import type { ProjectShareLinkClient } from '../lib/projectShareClient';
-import { setPersonalInfoVisible } from './PersonalInfoToggle';
+import { setPersonalInfoVisible } from './PersonalInfo';
 import {
   ProjectSharingDialog,
   type EncryptedSharingClient

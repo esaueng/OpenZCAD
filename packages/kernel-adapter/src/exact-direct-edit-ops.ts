@@ -2072,6 +2072,8 @@ export function applyDirectEdit(
     // A drag preview moves the same face of the same restored source every
     // frame, so it reuses the kernel's distance-independent analysis.
     const faces = new Uint32Array([face]);
+    // Set when the push was carried past a collision by the exact sweep.
+    let sweptPastCollision = false;
     const moveFace = (): ReturnType<typeof journaledMove> => {
       try {
         return journaledMove(
@@ -2096,7 +2098,10 @@ export function applyDirectEdit(
             geometry.center,
             offset
           );
-          if (swept !== null) return { solid: swept, relation: null };
+          if (swept !== null) {
+            sweptPastCollision = true;
+            return { solid: swept, relation: null };
+          }
         }
         // A neighbour that would collapse is a limit on the value, not an
         // internal failure: say so, and how far the face can go.
@@ -2117,10 +2122,16 @@ export function applyDirectEdit(
     }
     // Closure and volume checks still accept Remus's triangulated fallback.
     // Preserve the last exact body instead of committing/exporting its facets.
-    const facetFallback = directEditFacetFallbackWarning({
-      operands: sourceCensus,
-      result: censusOfSolids(faceCensus, [output])
-    });
+    // The sweep is exact-only booleans and the kernel's defeature, neither
+    // of which facets; the curvature it removes is the curvature it covers
+    // (a closed window's rounded corners), which this census would misread
+    // as `moveFaces` abandoning its exact surfaces.
+    const facetFallback = sweptPastCollision
+      ? null
+      : directEditFacetFallbackWarning({
+          operands: sourceCensus,
+          result: censusOfSolids(faceCensus, [output])
+        });
     if (facetFallback) {
       throw new Error(facetFallback);
     }

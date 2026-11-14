@@ -1,0 +1,31 @@
+/* A name or email that hides itself for screenshots (PrivateText). Hidden, a
+   blurred stand-in of the same shape; shown, the value. Either way the text is
+   the button, so it keeps the font, size and colour of the line around it and
+   only the pointer says it can be clicked. */
+.private-text {
+  display: inline;
+  max-width: 100%;
+  font: inherit;
+  letter-spacing: inherit;
+  text-align: inherit;
+  overflow-wrap: anywhere;
+  border-radius: var(--radius-sm);
+}
+
+.private-text.shown:hover {
+  color: var(--color-text);
+}
+
+.private-text-mask {
+  filter: blur(4px);
+  user-select: none;
+  /* Hiding again shows the stand-in sharp for a beat, then veils it, so the
+     change reads as the value being swapped out rather than smudged. */
+  animation: private-text-veil var(--dur-base) var(--ease-out);
+}
+
+@keyframes private-text-veil {
+  from {
+    filter: blur(0);
+  }
+}

@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { BodyId, TopologySelection } from '@openzcad/shared';
-import { sameFacePick, toggleFaceInSet } from './faceSetSelection';
+import {
+  heldFaceSetBody,
+  sameFacePick,
+  toggleFaceInSet
+} from './faceSetSelection';
 
 const body = 'body_a' as BodyId;
 const face = (topologyId: string, hash: number): TopologySelection => ({
@@ -33,5 +37,22 @@ describe('toggleFaceInSet', () => {
     expect(
       sameFacePick(face('f1', 1), { ...face('f1', 1), bodyId: 'b' as BodyId })
     ).toBe(false);
+  });
+});
+
+describe('heldFaceSetBody', () => {
+  it('names the body every held face is on', () => {
+    expect(heldFaceSetBody([face('f1', 1), face('f2', 2)])).toBe(body);
+    expect(heldFaceSetBody(null)).toBeNull();
+    expect(heldFaceSetBody([])).toBeNull();
+    expect(
+      heldFaceSetBody([
+        face('f1', 1),
+        { ...face('f2', 2), bodyId: 'b' as BodyId }
+      ])
+    ).toBeNull();
+    expect(
+      heldFaceSetBody([{ bodyId: body, kind: 'edge', topologyId: 'e1' }])
+    ).toBeNull();
   });
 });

@@ -140,3 +140,19 @@ describe('sketch palette and labels', () => {
     expect(focus).toMatch(/outline:\s*2px solid var\(--color-preselect\)/);
   });
 });
+
+describe('sketch state chip', () => {
+  it('wraps a two-digit count inside the chip instead of overflowing it', () => {
+    // "12 DOF" is wider than the 30px chip; on one line it ran out past the
+    // border (13 November review recheck, I38).
+    const chip = rule(
+      sheet('quiet-stage.css'),
+      '.workspace-column .sketch-rail button.sketch-dof-chip'
+    );
+    expect(chip).toMatch(/white-space:\s*normal/);
+    expect(chip).not.toMatch(/white-space:\s*nowrap/);
+    // Two lines fit the chip's 20px inside its border.
+    expect(chip).toMatch(/height:\s*22px/);
+    expect(chip).toMatch(/line-height:\s*10px/);
+  });
+});

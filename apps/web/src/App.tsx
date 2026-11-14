@@ -4,6 +4,12 @@ import {
   persistStorageForInstalledApp
 } from './lib/appleTouch';
 import { registerOfflineShell } from './lib/offlineShell';
+import { spaceMouse } from './lib/spaceMouse';
+import {
+  dispatchEmulatedKey,
+  spaceMouseAction,
+  type SpaceMouseAction
+} from './lib/spaceMouseActions';
 import {
   localHistoryAppend,
   retainLocalHistoryAppend,
@@ -459,6 +465,7 @@ import {
   sourceUploadMessage
 } from './lib/accountImportSources';
 import type { ArchiveArtifactInput } from './lib/archiveArtifact';
+import { cloudArchivable } from './lib/cloudArchivable';
 import {
   archiveLocalOnlyImportSources,
   createInFlightImportChecksums,
@@ -759,8 +766,9 @@ import {
   isRemovableDetail,
   selectedFeatureFaces
 } from './lib/selectionFeature';
-import { toggleFaceInSet } from './lib/faceSetSelection';
+import { heldFaceSetBody, toggleFaceInSet } from './lib/faceSetSelection';
 import { cylinderResizeFold } from './lib/interaction/cylinderResizeFold';
+import { facePickCylinder, facePickKey } from './lib/inPlace/cylinderSide';
 import {
   cylinderRadialFrame,
   type CylinderRadiusEdit,
@@ -885,7 +893,11 @@ import {
   type SelectionCalloutOperation,
   type SelectionCalloutVerbId
 } from './lib/selectionCallout';
-import { ghostBodiesFor, historyFeatureFocus } from './lib/historyFocus';
+import {
+  ghostBodiesFor,
+  historyFeatureFocus,
+  isCutFace
+} from './lib/historyFocus';
 import { useLocalAutoFrame } from './hooks/useLocalAutoFrame';
 import type { AutoFrameRequest } from './lib/autoFrame';
 import { useOffsetFaceHandle } from './hooks/useOffsetFaceHandle';
@@ -3112,6 +3124,10 @@ export function App() {
     selectedEdges.length === 0
       ? boxFaces.faces
       : null;
+  /** The faces a Shift pick adds to: a swept or Shift-built set, or one face. */
+  const heldFaces =
+    boxSelectedFaces ??
+    (selectedTopology?.kind === 'face' ? [selectedTopology] : null);
   const [selectedSketchProfileId, setSelectedSketchProfileId] =
     useState<SketchId | null>(null);
   const [selectedProfiles, setSelectedProfiles] = useState<RegionPickData[]>(
@@ -3892,6 +3908,60 @@ export function App() {
     []
   );
   const [fitSignal, setFitSignal] = useState(0);
+  // A 3D mouse this browser already allows reopens with no prompt. Its keys
+  // run the same commands as the keyboard (spaceMouseActions.ts); the roll
+  // key turns the camera, so the viewer answers that one.
+  const spaceMouseActionRef = useRef<(action: SpaceMouseAction) => void>(
+    () => undefined
+  );
+  spaceMouseActionRef.current = (action) => {
+    switch (action.kind) {
+      case 'menu':
+        openSettingsAt('controls');
+        return;
+      case 'fit':
+        setFitSignal((value) => value + 1);
+        return;
+      case 'view':
+        requestView(action.view);
+        return;
+      case 'normal-to-face':
+        requestNormalToSelectedFace();
+        return;
+      case 'projection':
+        toggleProjection();
+        return;
+      case 'display':
+        cycleDisplayMode();
+        return;
+      case 'rotation-lock':
+        setStatus(
+          spaceMouse.isRotationLocked
+            ? '3D mouse rotation locked: pan and zoom only.'
+            : '3D mouse rotation unlocked.',
+          { unlogged: true }
+        );
+        return;
+      case 'key':
+        dispatchEmulatedKey(action.key, action.pressed);
+        return;
+      case 'roll':
+        return;
+    }
+  };
+  // The 3D mouse reads the cap with the account's own settings, applied at
+  // once to a cap that is held.
+  const spaceMouseSettings = appSettings.viewport.spaceMouse;
+  useEffect(() => {
+    spaceMouse.setPreferences(spaceMouseSettings);
+  }, [spaceMouseSettings]);
+  useEffect(() => {
+    void spaceMouse.restore();
+    return spaceMouse.subscribeButtons((event) => {
+      const action = spaceMouseAction(event);
+      if (action) spaceMouseActionRef.current(action);
+    });
+  }, []);
   const [presentedGeometry, setPresentedGeometry] = useState<{
     projectId: string;
     generation: number;
@@ -11110,6 +11180,11 @@ export function App() {
     }
     if (!face) return null;
     const geometry = face.geometry;
+    const cylinder = facePickCylinder(
+      geometry,
+      representations[resolvedBodyId]?.mesh,
+      face
+    );
     return {
       bodyId: resolvedBodyId,
       hash: face.hash,
@@ -11120,18 +11195,7 @@ export function App() {
       ...(geometry?.normal ? { normal: geometry.normal } : {}),
       ...(geometry?.centroid ? { centroid: geometry.centroid } : {}),
       ...(geometry?.center ? { center: geometry.center } : {}),
-      ...(geometry?.surfaceType === 'cylinder' &&
-      geometry.axisStart &&
-      geometry.axisEnd &&
-      geometry.radius !== undefined
-        ? {
-            cylinder: {
-              axisStart: geometry.axisStart,
-              axisEnd: geometry.axisEnd,
-              radius: geometry.radius
-            }
-          }
-        : {}),
+      ...(cylinder ? { cylinder } : {}),
       ...(point ? { point } : {})
     };
   }
@@ -16536,7 +16600,13 @@ export function App() {
     // Local-first imports/exports keep their bytes on this device. A protected
     // upload cannot succeed before this project has an account copy, and its
     // failed request would add a console error to an otherwise valid import.
-    if (!sessionRef.current || !remoteVersionsRef.current.has(doc.projectId)) {
+    if (
+      !cloudArchivable(
+        Boolean(sessionRef.current),
+        doc.projectId,
+        remoteVersionsRef.current
+      )
+    ) {
       throw new Error(
         'Cloud archival needs an account project. The file stays on this device.'
       );
@@ -18937,14 +19007,8 @@ export function App() {
       tool === null &&
       interaction.mode !== 'sketch'
     ) {
-      const held =
-        boxSelectedFaces ??
-        (selectedTopology?.kind === 'face' ? [selectedTopology] : null);
-      if (
-        held &&
-        held.length > 0 &&
-        held.every((face) => face.bodyId === selection.bodyId)
-      ) {
+      const held = heldFaces;
+      if (held && heldFaceSetBody(held) === selection.bodyId) {
         const next = toggleFaceInSet(held, selection);
         if (next.length === 0) {
           clearSelection();
@@ -24369,15 +24433,7 @@ export function App() {
     // hash, its plane, a saved hole's place on it), so its handles follow
     // a face an update moved.
     let facesMoved = false;
-    const placed = (pick: FacePick) =>
-      JSON.stringify([
-        pick.hash,
-        pick.topologyId,
-        pick.normal,
-        pick.centroid,
-        pick.center,
-        pick.point
-      ]);
+    const placed = facePickKey;
     const faces = inPlaceEditPicks.faces.flatMap((pick) => {
       const body = representations[pick.bodyId];
       if (!body?.topology) return [pick];
@@ -28093,7 +28149,15 @@ export function App() {
     });
   }
 
-  function handleDeleteImportedFace(selection: TopologySelection) {
+  /**
+   * Heals one face by a replayable direct edit: a face of an imported STEP
+   * part, which has no history to delete, or a face a subtract cut, whose
+   * inferred feature (the cutting tool) the cut still needs.
+   */
+  function handleDeleteImportedFace(
+    selection: TopologySelection,
+    origin: 'imported' | 'cut' = 'imported'
+  ) {
     // A pick may demand lineage while a complete validated body is already
     // displayed. The candidate rebuild re-resolves its face before healing.
     if (!requireDisplayedGeometryComplete()) return;
@@ -28101,7 +28165,7 @@ export function App() {
     const base = manager?.document;
     if (!base) return;
     void import('./lib/featureDeletion')
-      .then(({ importedFaceDeletion }) => {
+      .then(({ importedFaceDeletion, cutFaceDeletion }) => {
         const current = manager.document;
         if (
           managerRef.current !== manager ||
@@ -28113,11 +28177,17 @@ export function App() {
           );
           return;
         }
-        const removal = importedFaceDeletion(current, selection);
+        const removal =
+          origin === 'cut'
+            ? cutFaceDeletion(current, selection)
+            : importedFaceDeletion(current, selection);
         void validatedFeature.runTransaction([removal.command], {
           label: removal.command.label,
           targets: [removal.target],
-          validatingMessage: 'Checking imported feature removal…',
+          validatingMessage:
+            origin === 'cut'
+              ? 'Checking the cut removal…'
+              : 'Checking imported feature removal…',
           successMessage: removal.successMessage,
           onFailure: (message) => announce(message),
           onSuccess: () => {
@@ -28131,7 +28201,12 @@ export function App() {
       })
       .catch((error: unknown) =>
         setStatus(
-          errorMessage(error, 'Could not remove this imported feature.')
+          errorMessage(
+            error,
+            origin === 'cut'
+              ? 'Could not fill this cut.'
+              : 'Could not remove this imported feature.'
+          )
         )
       );
   }
@@ -30623,6 +30698,27 @@ export function App() {
               validateSelectionEdit({ acceptCompleteCommit: true })
             )
               handleDeleteImportedFace(selectedTopology);
+            return;
+          }
+          // A face a subtract cut — the wall of a round hole — is healed in
+          // place. The feature it is inferred to is the cutting tool, and
+          // deleting that would leave the subtract with nothing to cut.
+          if (
+            featureSelectionSource !== 'pinned' &&
+            selectedTopology?.kind === 'face' &&
+            doc &&
+            isCutFace(doc, selectedTopology)
+          ) {
+            event.preventDefault();
+            if (
+              !(
+                isOperationState(interaction) &&
+                interaction.phase !== 'armed' &&
+                interaction.phase !== 'failed'
+              ) &&
+              validateSelectionEdit({ acceptCompleteCommit: true })
+            )
+              handleDeleteImportedFace(selectedTopology, 'cut');
             return;
           }
           // A drag or a commit still in flight owns the selection; Delete
@@ -33497,6 +33593,11 @@ export function App() {
                 }
               : {})}
             facePickOnly={toFacePick !== null}
+            faceSetPickBodyId={
+              tool === null && interaction.mode !== 'sketch'
+                ? heldFaceSetBody(heldFaces)
+                : null
+            }
             modeOverlay={
               modelingLocked ? (
                 <>
@@ -34496,7 +34597,18 @@ export function App() {
                   run={importRun}
                   onCancel={cancelImportRun}
                   onDismiss={dismissImportRun}
-                  onArchiveNow={archiveImportSourcesFromCard}
+                  // The same test archiveArtifact applies: signed out, or
+                  // signed in with a device-only project, the upload can
+                  // only fail (I8), so there is no Archive now.
+                  onArchiveNow={
+                    cloudArchivable(
+                      Boolean(session),
+                      doc.projectId,
+                      remoteVersionsRef.current
+                    )
+                      ? archiveImportSourcesFromCard
+                      : undefined
+                  }
                 />
               </Suspense>
             )}
