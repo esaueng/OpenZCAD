@@ -531,7 +531,7 @@ test(
     await expect(
       setup.getByRole('combobox', { name: 'Part that moves' })
     ).toHaveValue('comp_b');
-    await expect(setup.getByRole('combobox', { name: 'Cycle' })).toHaveValue(
+    await expect(setup.getByRole('combobox', { name: 'Playback' })).toHaveValue(
       'ping-pong'
     );
     // The preview moves the part on screen before anything is saved.

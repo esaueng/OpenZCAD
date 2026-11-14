@@ -8,17 +8,13 @@ import {
   type PointerEvent as ReactPointerEvent
 } from 'react';
 import {
-  ArrowLeftRight,
-  ArrowRight,
   DiamondPlus,
   Pause,
   Play,
   Plus,
-  Repeat,
   SkipBack,
   Trash2,
-  X,
-  type LucideIcon
+  X
 } from 'lucide-react';
 import { commandFactories, type AnyCommand } from '@openzcad/command-system';
 import {
@@ -27,11 +23,11 @@ import {
   motionStudyValues,
   type AssemblyCouplingEnd,
   type AssemblyMotionStudy,
-  type AssemblyPlayback,
   type AssemblySet,
   type UnitSystem
 } from '@openzcad/shared';
 import { unitSymbol } from '../../lib/assembly/assemblyUi';
+import { PlaybackControl } from './PlaybackControl';
 import {
   assemblyRuntime,
   getAssemblyRuntime,
@@ -81,16 +77,6 @@ export interface MotionStudyTimelineProps {
   /** The document's unit: a slide's values are in it. */
   lengthUnit?: UnitSystem;
 }
-
-const PLAYBACK_MODES: {
-  mode: AssemblyPlayback;
-  label: string;
-  Icon: LucideIcon;
-}[] = [
-  { mode: 'once', label: 'Play once', Icon: ArrowRight },
-  { mode: 'loop', label: 'Loop', Icon: Repeat },
-  { mode: 'ping-pong', label: 'Back and forth', Icon: ArrowLeftRight }
-];
 
 const SPEEDS = [0.5, 1, 2] as const;
 
@@ -265,10 +251,6 @@ export function MotionStudyTimeline({
   const jointById = new Map(set.joints.map((j) => [j.id, j]));
   const untracked = untrackedMotions(set, saved);
   const moves = saved.tracks.some((track) => track.keys.length > 1);
-  const mode =
-    PLAYBACK_MODES.find((m) => m.mode === saved.playback) ?? PLAYBACK_MODES[1]!;
-  const nextMode =
-    PLAYBACK_MODES[(PLAYBACK_MODES.indexOf(mode) + 1) % PLAYBACK_MODES.length]!;
 
   function commit(
     next: AssemblyMotionStudy | null,
@@ -602,22 +584,15 @@ export function MotionStudyTimeline({
               seek(value);
           }}
         />
-        <button
-          type="button"
-          className="motion-icon-button"
-          aria-label={`Playback: ${mode.label}`}
-          title={`${mode.label} · click for ${nextMode.label.toLowerCase()}`}
-          disabled={readOnly}
-          onClick={() =>
-            commit(
-              { ...saved, playback: nextMode.mode },
-              'Change motion playback',
-              ''
-            )
-          }
-        >
-          <mode.Icon size={14} aria-hidden="true" />
-        </button>
+        <span className="motion-playback">
+          <PlaybackControl
+            mode={saved.playback}
+            disabled={readOnly}
+            onModeChange={(playback) =>
+              commit({ ...saved, playback }, 'Change motion playback', '')
+            }
+          />
+        </span>
         <button
           type="button"
           className="motion-speed"
@@ -713,13 +688,21 @@ export function MotionStudyTimeline({
           </div>
         )}
 
+        {!note && !selection && study.tracks.length === 0 && (
+          <span className="motion-timeline-hint">Add a joint to animate</span>
+        )}
+        {/* While a study is open, moving a part or typing a joint value
+            keys it at the playhead instead of changing the rest pose: say
+            so the whole time, not only before the first key (review I59). */}
         {!note &&
           !selection &&
-          (study.tracks.length === 0 || (!moves && !readOnly)) && (
-            <span className="motion-timeline-hint">
-              {study.tracks.length === 0
-                ? 'Add a joint to animate'
-                : 'Move a part to key it here'}
+          !readOnly &&
+          !playing &&
+          study.tracks.length > 0 && (
+            <span className="motion-timeline-recording">
+              <span className="motion-recording-dot" aria-hidden="true" />
+              Recording keys at {formatStudyTime(t)} s
+              {moves ? '' : ' · move a part to set it, then Play'}
             </span>
           )}
         {note && (

@@ -4,7 +4,6 @@ import { assemblyComponentBodies } from '@openzcad/document-core';
 import {
   solveAssembly,
   type AssemblyDofLimit,
-  type AssemblyPlayback,
   type ProjectDocument
 } from '@openzcad/shared';
 import {
@@ -16,13 +15,12 @@ import {
   useAssemblyRuntime,
   type AssemblyMotionSetupState
 } from '../../lib/assembly/assemblyRuntime';
-import { ANIMATE_MODES, unitSymbol } from '../../lib/assembly/assemblyUi';
+import { unitSymbol } from '../../lib/assembly/assemblyUi';
 import { MOTION_SETUP_PREVIEW_JOINT_ID } from '../../lib/assembly/assemblyView';
 import {
   defaultMotionRange,
   defaultMotionSetup,
   MOTION_SETUP_AXES,
-  MOTION_SETUP_SWEEPS,
   motionSetupAxisLabel,
   motionSetupJoint,
   motionSetupMovers,
@@ -33,6 +31,7 @@ import {
   type MotionSetupMove
 } from '../../lib/assembly/motionSetup';
 import { JointKindIcon } from './JointKindIcon';
+import { PlaybackControl } from './PlaybackControl';
 import { isLiveBody } from './useAssemblyModel';
 
 export interface MotionSetupCardProps {
@@ -310,36 +309,14 @@ function MotionSetupForm({
               : ''}
           </span>
         </SetupStep>
-        <SetupStep index={5} title="Cycle">
+        <SetupStep index={5} title="Playback">
           <span className="assembly-setup-cycle">
-            <select
-              className="assembly-select"
-              aria-label="Cycle"
-              value={draft.mode}
-              onChange={(event) =>
-                update({ mode: event.currentTarget.value as AssemblyPlayback })
-              }
-            >
-              {ANIMATE_MODES.map((option) => (
-                <option key={option.mode} value={option.mode}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-            <select
-              className="assembly-select"
-              aria-label="Speed"
-              value={draft.sweepS}
-              onChange={(event) =>
-                update({ sweepS: Number(event.currentTarget.value) })
-              }
-            >
-              {MOTION_SETUP_SWEEPS.map((option) => (
-                <option key={option.sweepS} value={option.sweepS}>
-                  {option.label} · {option.sweepS} s
-                </option>
-              ))}
-            </select>
+            <PlaybackControl
+              mode={draft.mode}
+              onModeChange={(mode) => update({ mode })}
+              sweepS={draft.sweepS}
+              onSweepChange={(sweepS) => update({ sweepS })}
+            />
           </span>
         </SetupStep>
       </ol>

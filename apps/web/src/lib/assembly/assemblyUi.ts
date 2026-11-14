@@ -266,11 +266,12 @@ export const ANIMATE_MODES: readonly {
   { mode: 'ping-pong', label: 'Back and forth' }
 ];
 
+/** One set of named speeds wherever a sweep's speed is chosen. */
 export const ANIMATE_SPEEDS: readonly { sweepS: number; label: string }[] = [
-  { sweepS: 3, label: '3 s' },
-  { sweepS: 1.5, label: '1.5 s' },
-  { sweepS: 0.75, label: '0.75 s' },
-  { sweepS: 0.4, label: '0.4 s' }
+  { sweepS: 3, label: 'Slow · 3 s' },
+  { sweepS: 1.5, label: 'Normal · 1.5 s' },
+  { sweepS: 0.75, label: 'Fast · 0.75 s' },
+  { sweepS: 0.4, label: 'Faster · 0.4 s' }
 ];
 
 let animatePrefs: AnimatePrefs = { mode: 'ping-pong', sweepS: 1.5 };

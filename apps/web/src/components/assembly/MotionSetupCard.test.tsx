@@ -85,9 +85,9 @@ describe('Set up motion card', () => {
     expect(within(form).getByRole('textbox', { name: 'Slide to' })).toHaveValue(
       '40'
     );
-    expect(within(form).getByRole('combobox', { name: 'Cycle' })).toHaveValue(
-      'ping-pong'
-    );
+    expect(
+      within(form).getByRole('combobox', { name: 'Playback' })
+    ).toHaveValue('ping-pong');
     // The viewport previews the joint Create makes, sweeping.
     expect(getAssemblyRuntime().motionSetup).toMatchObject({
       previewing: true,
@@ -140,7 +140,7 @@ describe('Set up motion card', () => {
     const to = within(form).getByRole('textbox', { name: 'Turn to' });
     fireEvent.change(to, { target: { value: '45' } });
     fireEvent.blur(to);
-    fireEvent.change(within(form).getByRole('combobox', { name: 'Cycle' }), {
+    fireEvent.change(within(form).getByRole('combobox', { name: 'Playback' }), {
       target: { value: 'loop' }
     });
     fireEvent.change(within(form).getByRole('combobox', { name: 'Speed' }), {
