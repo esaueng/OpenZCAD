@@ -1,5 +1,6 @@
 import { FeatureBuildError } from '../lib/featureValidation';
 import { useRef } from 'react';
+import { ownEntry } from '@openzcad/shared';
 import type { FeatureId, BodyId, ProjectDocument } from '@openzcad/shared';
 import { CommandManager, type AnyCommand } from '@openzcad/command-system';
 import { errorMessage } from '../lib/errors';
@@ -369,7 +370,7 @@ export function useValidatedFeatureCommit(
             ? { featureWarnings: derived.featureWarnings }
             : {}),
           bodyPresent: Boolean(
-            derived.bodyRepresentations[target.resultBodyId]
+            ownEntry(derived.bodyRepresentations, target.resultBodyId)
           ),
           documentMoved
         });
@@ -385,9 +386,10 @@ export function useValidatedFeatureCommit(
         // this edit newly consumes — a Boolean or Split that stops keeping,
         // or newly takes, a body a later feature uses (M11).
         if (
-          derived.bodyRepresentations[target.resultBodyId]?.consumed === true &&
-          current.derived.bodyRepresentations[target.resultBodyId]?.consumed ===
-            false
+          ownEntry(derived.bodyRepresentations, target.resultBodyId)
+            ?.consumed === true &&
+          ownEntry(current.derived.bodyRepresentations, target.resultBodyId)
+            ?.consumed === false
         ) {
           throw new FeatureBuildError(
             `${target.featureName} would lose its body: this change consumes it.`,

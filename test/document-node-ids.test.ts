@@ -3,18 +3,30 @@ import {
   addPrimitiveFeature,
   assertStorableDocument,
   createProjectDocument,
+  evaluateExpression,
   getNode,
+  getParameterScope,
+  isLiveAssemblyBody,
   normalizeDocument,
   renameNode,
   setNodeMetadata,
+  setParameter,
   UnstorableDocumentError
 } from '@openzcad/document-core';
+import {
+  CommandManager,
+  commandFactories,
+  replayCommands
+} from '@openzcad/command-system';
 import {
   documentEnvelopeError,
   isDocumentHistory,
   ownEntry,
+  reservedIdentifierError,
+  toBodyId,
   toUserId,
-  type ProjectDocument
+  type ProjectDocument,
+  type SerializedCommand
 } from '@openzcad/shared';
 
 const owner = toUserId('user_node_ids');
@@ -232,5 +244,279 @@ describe('document node ids', () => {
   it('refuses to normalize a node map with a reserved key', () => {
     const value = withNodeKey('__proto__') as ProjectDocument;
     expect(() => normalizeDocument(value)).toThrow(/reserved node id/);
+  });
+});
+
+/** A history whose one entry holds `changes`, as storage returns it. */
+function historyOf(document: ProjectDocument, changes: unknown[]): unknown {
+  return JSON.parse(
+    JSON.stringify({
+      schemaVersion: 1,
+      projectId: document.projectId,
+      actorUserId: owner,
+      entries: [{ id: 'entry_1', label: 'Edit', changes }],
+      cursor: 1,
+      trimmed: 0
+    })
+  ) as unknown;
+}
+
+/** `value` serialized with `placeholder` replaced by `id`, kept as an own key. */
+function withName(value: unknown, placeholder: string, id: string): unknown {
+  return JSON.parse(
+    JSON.stringify(value).replaceAll(
+      JSON.stringify(placeholder),
+      JSON.stringify(id)
+    )
+  ) as unknown;
+}
+
+describe('ids that key other document maps', () => {
+  it.each(RESERVED)('refuses a body whose body id is "%s"', (id) => {
+    const document = valid();
+    const value = withName(document, document.bodyOrder[0]!, id);
+    expect(refusal(value)).toMatch(/reserved id/);
+  });
+
+  it('never reports an inherited member as a live assembly body', () => {
+    const document = valid();
+    for (const id of [...RESERVED, 'hasOwnProperty'])
+      expect(isLiveAssemblyBody(document, toBodyId(id))).toBe(false);
+  });
+
+  it.each(RESERVED)('refuses "%s" as a parameter name', (name) => {
+    const document = valid();
+    expect(() => setParameter(document, { name, expression: '5' })).toThrow(
+      /not a valid parameter name/
+    );
+    const manager = new CommandManager(document);
+    expect(() =>
+      manager.execute(commandFactories.setParameter({ name, expression: '5' }))
+    ).toThrow();
+    expect(manager.document).toBe(document);
+  });
+
+  it('refuses a stored parameter or parameter command with a reserved name', () => {
+    const named = setParameter(valid(), { name: 'width', expression: '5' });
+    expect(() => assertStorableDocument(named)).not.toThrow();
+    expect(refusal(withName(named, 'width', '__proto__'))).toMatch(
+      /reserved (parameter name|key)/
+    );
+    const logged = {
+      ...valid(),
+      commandLog: [
+        {
+          kind: 'parameter.set',
+          payload: { name: 'width', expression: '5' },
+          replayVersion: 1,
+          label: 'Set parameter',
+          timestamp: new Date(0).toISOString()
+        }
+      ]
+    };
+    expect(refusal(withName(logged, 'width', 'constructor'))).toMatch(
+      /reserved parameter name/
+    );
+  });
+
+  it('never resolves an inherited member in an expression', () => {
+    const { scope } = getParameterScope(valid());
+    for (const name of ['constructor', 'toString', 'valueOf'])
+      expect(() => evaluateExpression(name, scope)).toThrow(
+        /Unknown identifier/
+      );
+  });
+
+  it('refuses a reserved key in any document map', () => {
+    const document = valid();
+    const nodeId = document.activePartId;
+    const value = JSON.parse(
+      JSON.stringify(document).replace(
+        `"${nodeId}":{`,
+        `"${nodeId}":{"metadata":{"__proto__":{"polluted":true}},`
+      )
+    ) as unknown;
+    expect(refusal(value)).toMatch(/reserved key "__proto__"/);
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+
+  it('accepts display names that match a reserved name', () => {
+    // Display names are not keys: a part may be called "constructor".
+    const base = valid();
+    const document = renameNode(base, {
+      nodeId: base.activePartId,
+      name: 'constructor'
+    });
+    expect(reservedIdentifierError(document)).toBeNull();
+    expect(() => assertStorableDocument(document)).not.toThrow();
+  });
+});
+
+describe('undo history references', () => {
+  it.each(['activePartId', 'rootNodeId', 'rootAssemblyId'])(
+    'refuses a %s change that restores a reserved name',
+    (field) => {
+      const document = valid();
+      const ok = historyOf(document, [
+        {
+          kind: 'value',
+          field,
+          before: document.activePartId,
+          after: document.activePartId
+        }
+      ]);
+      expect(isDocumentHistory(ok, document.projectId)).toBe(true);
+      for (const id of RESERVED) {
+        const bad = historyOf(document, [
+          { kind: 'value', field, before: id, after: document.activePartId }
+        ]);
+        expect(isDocumentHistory(bad, document.projectId)).toBe(false);
+      }
+    }
+  );
+
+  it('refuses a node snapshot whose references use a reserved name', () => {
+    const document = valid();
+    const part = document.nodes[document.activePartId]!;
+    for (const snapshot of [
+      { ...part, parentId: '__proto__' },
+      { ...part, childIds: ['constructor'] },
+      { ...part, metadata: JSON.parse('{"__proto__":{"x":1}}') as unknown }
+    ]) {
+      const history = historyOf(document, [
+        {
+          kind: 'value',
+          field: 'nodes',
+          key: document.activePartId,
+          before: snapshot,
+          after: part
+        }
+      ]);
+      expect(isDocumentHistory(history, document.projectId)).toBe(false);
+    }
+    const order = historyOf(document, [
+      {
+        kind: 'splice',
+        field: 'featureOrder',
+        index: 0,
+        before: ['__proto__'],
+        after: []
+      }
+    ]);
+    expect(isDocumentHistory(order, document.projectId)).toBe(false);
+  });
+
+  it('refuses to publish an undo that restores a reserved reference', () => {
+    const document = valid();
+    const manager = new CommandManager(document);
+    // A history built in memory is trusted by the manager, so the restored
+    // document itself is checked before undo publishes it.
+    const tampered = {
+      ...document,
+      editHistory: {
+        schemaVersion: 1,
+        projectId: document.projectId,
+        actorUserId: owner,
+        entries: [
+          {
+            id: 'entry_1',
+            label: 'Edit',
+            changes: [
+              {
+                kind: 'value',
+                field: 'activePartId',
+                before: '__proto__',
+                after: document.activePartId
+              }
+            ]
+          }
+        ],
+        cursor: 1,
+        trimmed: 0
+      }
+    } as unknown as ProjectDocument;
+    manager.document = tampered;
+    expect(() => manager.undo()).toThrow(/Undo refused/);
+    expect(manager.document).toBe(tampered);
+    expect(manager.document.activePartId).toBe(document.activePartId);
+  });
+});
+
+describe('supplied creation ids', () => {
+  const box = {
+    name: 'Box',
+    primitiveKind: 'box' as const,
+    dimensions: { width: 1, height: 1, depth: 1 }
+  };
+  const ids = {
+    featureId: 'feat_supplied',
+    featureNodeId: 'ent_supplied_feature',
+    bodyId: 'body_supplied',
+    bodyNodeId: 'ent_supplied_body'
+  };
+  const stored = (payload: unknown): SerializedCommand => ({
+    kind: 'primitive.add',
+    payload,
+    replayVersion: 1,
+    label: 'Add box',
+    timestamp: new Date(0).toISOString()
+  });
+
+  it('still accepts ordinary supplied ids', () => {
+    const document = addPrimitiveFeature(valid(), {
+      ...box,
+      ids: ids as never
+    });
+    expect(getNode(document, 'ent_supplied_feature')?.kind).toBe('feature');
+  });
+
+  it.each(['featureNodeId', 'bodyNodeId', 'featureId', 'bodyId'] as const)(
+    'refuses a reserved %s before writing anything',
+    (field) => {
+      const document = valid();
+      for (const id of RESERVED) {
+        const input = { ...box, ids: { ...ids, [field]: id } as never };
+        expect(() => addPrimitiveFeature(document, input)).toThrow(/reserved/);
+        const manager = new CommandManager(document);
+        expect(() =>
+          manager.execute(commandFactories.addPrimitive(input))
+        ).toThrow(/reserved/);
+        expect(manager.document).toBe(document);
+      }
+    }
+  );
+
+  it('refuses a supplied id that is not a string', () => {
+    expect(() =>
+      addPrimitiveFeature(valid(), {
+        ...box,
+        ids: { ...ids, featureNodeId: 7 } as never
+      })
+    ).toThrow(/must be a string/);
+  });
+
+  it('refuses a stored creation command with a reserved id, nested or not', () => {
+    const base = valid();
+    const command = stored({ ...box, ids: { ...ids, featureNodeId: 'x' } });
+    const transaction: SerializedCommand = {
+      kind: 'transaction',
+      payload: [command],
+      replayVersion: 1,
+      label: 'Batch',
+      timestamp: new Date(0).toISOString()
+    };
+    for (const log of [[command], [transaction]]) {
+      const document = withName(
+        { ...base, commandLog: [...base.commandLog, ...log] },
+        'x',
+        '__proto__'
+      );
+      expect(refusal(document)).toMatch(/reserved id "__proto__"/);
+      const replayed = withName(log, 'x', '__proto__') as SerializedCommand[];
+      expect(() =>
+        replayCommands(createProjectDocument('Replay', owner), replayed)
+      ).toThrow(/reserved id "__proto__"/);
+    }
+    expect(prototypeNames()).not.toContain('kind');
   });
 });

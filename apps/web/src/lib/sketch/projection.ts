@@ -13,6 +13,7 @@ import {
   projectableCurveFromTopology,
   type PlaneBasis
 } from '@openzcad/geometry';
+import { ownEntry } from '@openzcad/shared';
 import type {
   DerivedState,
   EdgeTopology,
@@ -68,7 +69,7 @@ function linkedSources(
 ): SketchProjectionSource[] {
   return (sketch?.objectIds ?? []).flatMap((objectId) => {
     if (objectId === except) return [];
-    const node = document.nodes[objectId];
+    const node = ownEntry(document.nodes, objectId);
     const projection =
       node?.kind === 'sketch-object' ? node.data.projection : undefined;
     return projection?.mode === 'linked' ? [projection.source] : [];
@@ -81,8 +82,8 @@ function pickedEdges(
   selection: TopologySelection
 ): EdgeTopology[] {
   const edges =
-    document.derived.bodyRepresentations[selection.bodyId]?.topology?.edges ??
-    [];
+    ownEntry(document.derived.bodyRepresentations, selection.bodyId)?.topology
+      ?.edges ?? [];
   if (selection.kind === 'edge') {
     const edge = edges.find((candidate) =>
       selection.topologyId !== undefined
@@ -227,7 +228,7 @@ export function projectionWriteBackCommand(
     derived.sketchProjections ?? {}
   )) {
     if (state.status !== 'moved') continue;
-    const node = document.nodes[objectId];
+    const node = ownEntry(document.nodes, objectId);
     const sketch = sketchOf(document, objectId);
     const current = node?.kind === 'sketch-object' ? node.data : undefined;
     const moved = state.data.projection;
@@ -333,7 +334,7 @@ export function sketchProjectionRows(
   sketch: SketchNode
 ): SketchProjectionRow[] {
   return sketch.objectIds.flatMap((objectId) => {
-    const node = document.nodes[objectId];
+    const node = ownEntry(document.nodes, objectId);
     if (node?.kind !== 'sketch-object' || !node.data.projection) return [];
     const projection = node.data.projection;
     const state =

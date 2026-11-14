@@ -2,6 +2,7 @@ import {
   booleanConsumedBodyIds,
   listFeaturesInOrder
 } from '@openzcad/document-core';
+import { ownEntry } from '@openzcad/shared';
 import type {
   BodyId,
   FeatureId,
@@ -122,7 +123,7 @@ export function failedHistoryExportBodies(
       // A failed feature that replaces its input now hands that input
       // through under its own id (ADR-017, November 2026): the input is
       // consumed and the stand-in under the result id is what is withheld.
-      const body = document.derived.bodyRepresentations[bodyId];
+      const body = ownEntry(document.derived.bodyRepresentations, bodyId);
       if (!withheld.has(bodyId) && body && !body.consumed) {
         withheld.set(bodyId, { bodyId, ...reason });
       }

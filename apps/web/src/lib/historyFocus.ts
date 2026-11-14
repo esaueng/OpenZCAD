@@ -1,3 +1,4 @@
+import { ownEntry } from '@openzcad/shared';
 import type {
   BodyId,
   BodyRepresentation,
@@ -143,7 +144,7 @@ export function ghostBodiesFor(
     return [];
   }
   return focus.ghostBodyIds.flatMap((bodyId) => {
-    const body = document.derived.bodyRepresentations[bodyId];
+    const body = ownEntry(document.derived.bodyRepresentations, bodyId);
     return body ? [body] : [];
   });
 }

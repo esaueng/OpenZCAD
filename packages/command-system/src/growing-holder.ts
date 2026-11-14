@@ -1,4 +1,4 @@
-import { isInPlaceTransform } from '@openzcad/shared';
+import { ownEntry, isInPlaceTransform } from '@openzcad/shared';
 import {
   constantRigidTransform,
   createBodyFeatureIds,
@@ -1000,7 +1000,7 @@ export function growingHolderHistories(
         !sameValue(sketchNode.planeRef.offset, bridge.offset) ||
         sketchNode.objectIds.length !== bridge.section.length ||
         sketchNode.objectIds.some((id, index) => {
-          const node = document.nodes[id];
+          const node = ownEntry(document.nodes, id);
           return (
             node?.kind !== 'sketch-object' ||
             !sameNumericObject(node.data, bridge.section[index])

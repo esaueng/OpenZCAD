@@ -15,6 +15,7 @@ import {
   objectFolderSetError,
   assemblySetError,
   referenceImageSetError,
+  reservedIdentifierError,
   type ProjectDocument
 } from '@openzcad/shared';
 import { assertDocumentContentSchema } from './document-content-schema';
@@ -85,6 +86,20 @@ function nodeReferenceError(record: Record<string, unknown>): string | null {
   return null;
 }
 
+/**
+ * The key and reference checks a document must pass wherever it is published:
+ * no reserved name as a key or id anywhere in it (its maps, nodes, history
+ * and stored commands; see `reservedIdentifierError`), and node references
+ * that name nodes as {@link nodeReferenceError} requires. Returns the
+ * refusal, or null. Live derived geometry is skipped, as it is never stored.
+ */
+export function documentIdentifierError(value: object): string | null {
+  return (
+    nodeReferenceError(value as Record<string, unknown>) ??
+    reservedIdentifierError(storedProjection(value))
+  );
+}
+
 function check(condition: unknown, message: string): void {
   if (!condition) throw new UnstorableDocumentError(message);
 }
@@ -128,8 +143,8 @@ export function assertStorableDocument(value: unknown): ProjectDocument {
   const envelope = documentEnvelopeError(stored);
   if (envelope) throw new UnstorableDocumentError(envelope);
   const record = value as Record<string, unknown>;
-  const references = nodeReferenceError(record);
-  if (references) throw new UnstorableDocumentError(references);
+  const identifiers = documentIdentifierError(record);
+  if (identifiers) throw new UnstorableDocumentError(identifiers);
   check(
     typeof record.schemaVersion !== 'number' ||
       record.schemaVersion <= PROJECT_DOCUMENT_SCHEMA_VERSION,

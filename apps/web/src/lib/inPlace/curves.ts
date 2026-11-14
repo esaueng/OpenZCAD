@@ -1,4 +1,5 @@
 import type { PlaneBasis } from '@openzcad/geometry';
+import { ownEntry } from '@openzcad/shared';
 import type {
   ProjectDocument,
   SketchId,
@@ -48,7 +49,7 @@ export function sketchCurveCandidates(
     );
     if (sketch?.kind !== 'sketch') continue;
     for (const objectId of sketch.objectIds) {
-      const node = document.nodes[objectId];
+      const node = ownEntry(document.nodes, objectId);
       if (node?.kind !== 'sketch-object') continue;
       const data: SketchObjectData = node.data;
       if (data.construction === true || data.objectKind === 'text') continue;

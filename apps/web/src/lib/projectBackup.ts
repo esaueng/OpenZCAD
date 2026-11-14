@@ -1,4 +1,5 @@
 import {
+  ownEntry,
   documentNodesWithHistory,
   documentAssetsWithHistory,
   referenceImagesWithHistory,
@@ -384,7 +385,7 @@ export function importProjectCopy(
         if (historical.kind === 'project') historical.projectId = projectId;
       }
     }
-    const root = document.nodes[document.rootNodeId];
+    const root = ownEntry(document.nodes, document.rootNodeId);
     if (root?.kind === 'project') root.projectId = projectId;
     for (const asset of documentAssetsWithHistory(document))
       asset.storage = 'local';

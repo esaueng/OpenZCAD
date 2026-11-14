@@ -19,6 +19,7 @@ import { mergeJsonRecords } from './collaboration-merge';
 export { hasJsonPrefix, sameJson } from './collaboration-merge';
 export {
   assertStorableDocument,
+  documentIdentifierError,
   UnstorableDocumentError
 } from './storable-document';
 import {
@@ -74,7 +75,8 @@ export {
 import {
   isDocumentHistory,
   isReservedRecordKey,
-  ownEntry
+  ownEntry,
+  suppliedIds
 } from '@openzcad/shared';
 import {
   BODY_COLOR_CHOSEN_METADATA_KEY,
@@ -1461,7 +1463,7 @@ export function addPrimitiveFeature(
 ): ProjectDocument {
   const next = cloneDocument(document);
   const { featureId, featureNodeId, bodyId, bodyNodeId } =
-    input.ids ?? createBodyFeatureIds();
+    suppliedIds(input.ids) ?? createBodyFeatureIds();
 
   const feature: FeatureNode = {
     id: featureNodeId,
@@ -1513,7 +1515,7 @@ export function addSketchFeature(
     requireEarlierDatum(document, planeRef.datumFeatureId, null);
   }
   const ids = normalizeSketchFeatureIds(
-    input.ids ?? createSketchFeatureIds(objects.length)
+    suppliedIds(input.ids) ?? createSketchFeatureIds(objects.length)
   );
   const { featureId, featureNodeId, sketchId, sketchNodeId } = ids;
   const objectNodeIds = objects.map(
@@ -1769,7 +1771,9 @@ export function addSketchObjects(
     throw new Error(`Sketch ${input.sketchId} not found.`);
   }
   const objectNodeIds = input.objects.map(
-    (_, index) => input.ids?.objectNodeIds[index] ?? toEntityId(createId('ent'))
+    (_, index) =>
+      suppliedIds(input.ids)?.objectNodeIds[index] ??
+      toEntityId(createId('ent'))
   );
   input.objects.forEach((object) =>
     assertSketchObjectContentSchema(object, document.schemaVersion)
@@ -2160,7 +2164,8 @@ export function addSketchConstraint(
   }
   validateSketchConstraint(next, sketch, input.constraint);
   const constraintId =
-    input.ids?.constraintId ?? toSketchConstraintId(createId('scon'));
+    suppliedIds(input.ids)?.constraintId ??
+    toSketchConstraintId(createId('scon'));
   const constraint: SketchConstraint = {
     constraintId,
     data: input.constraint
@@ -2573,7 +2578,7 @@ export function extrudeSketch(
   validateExtrudeExtent(input, extrudeParamResolver(document));
   const next = cloneDocument(document);
   const { featureId, featureNodeId, bodyId, bodyNodeId } =
-    input.ids ?? createBodyFeatureIds();
+    suppliedIds(input.ids) ?? createBodyFeatureIds();
 
   next.nodes[featureNodeId] = {
     id: featureNodeId,
@@ -2649,7 +2654,7 @@ export function revolveSketch(
   assertFeatureProfileProvenance(input, document);
   const next = cloneDocument(document);
   const { featureId, featureNodeId, bodyId, bodyNodeId } =
-    input.ids ?? createBodyFeatureIds();
+    suppliedIds(input.ids) ?? createBodyFeatureIds();
 
   next.nodes[featureNodeId] = {
     id: featureNodeId,
@@ -2713,7 +2718,7 @@ export function loftSections(
         ? {}
         : { endPoint: deepClone(input.endPoint) })
     },
-    input.ids,
+    suppliedIds(input.ids),
     input.bodyName
   );
 }
@@ -2736,7 +2741,7 @@ export function sweepProfile(
       // frame every sweep authored before guide rails existed swept with.
       ...(input.guide === undefined ? {} : { guide: deepClone(input.guide) })
     },
-    input.ids,
+    suppliedIds(input.ids),
     input.bodyName
   );
 }
@@ -2764,7 +2769,7 @@ export function helicalSweepProfile(
         ? {}
         : { construction: input.construction })
     },
-    input.ids,
+    suppliedIds(input.ids),
     input.bodyName
   );
 }
@@ -2785,7 +2790,7 @@ export function booleanBodies(
   });
   const next = cloneDocument(document);
   const { featureId, featureNodeId, bodyId, bodyNodeId } =
-    input.ids ?? createBodyFeatureIds();
+    suppliedIds(input.ids) ?? createBodyFeatureIds();
 
   next.nodes[featureNodeId] = {
     id: featureNodeId,
@@ -3237,7 +3242,8 @@ export function addDatumAxis(
 ): { document: ProjectDocument; featureId: FeatureId } {
   validateDatumAxisDefinition(document, input.definition, null);
   const next = cloneDocument(document);
-  const { featureId, featureNodeId } = input.ids ?? createFeatureOnlyIds();
+  const { featureId, featureNodeId } =
+    suppliedIds(input.ids) ?? createFeatureOnlyIds();
   next.nodes[featureNodeId] = {
     id: featureNodeId,
     kind: 'feature',
@@ -3264,7 +3270,8 @@ export function addDatumPlane(
 ): { document: ProjectDocument; featureId: FeatureId } {
   validateDatumPlaneDefinition(document, input.definition, null);
   const next = cloneDocument(document);
-  const { featureId, featureNodeId } = input.ids ?? createFeatureOnlyIds();
+  const { featureId, featureNodeId } =
+    suppliedIds(input.ids) ?? createFeatureOnlyIds();
   next.nodes[featureNodeId] = {
     id: featureNodeId,
     kind: 'feature',
@@ -3318,7 +3325,8 @@ export function transformBody(
     return transformCopyBody(document, input, transform);
   }
   const next = cloneDocument(document);
-  const { featureId, featureNodeId } = input.ids ?? createFeatureOnlyIds();
+  const { featureId, featureNodeId } =
+    suppliedIds(input.ids) ?? createFeatureOnlyIds();
 
   next.nodes[featureNodeId] = {
     id: featureNodeId,
@@ -3369,18 +3377,19 @@ function transformCopyBody(
   if (!document.bodyOrder.includes(input.targetBodyId)) {
     throw new Error(`Copy source body ${input.targetBodyId} not found.`);
   }
+  const supplied = suppliedIds(input.ids);
   const ids =
-    input.ids && 'bodyId' in input.ids
-      ? input.ids
-      : { ...createBodyFeatureIds(), ...input.ids };
+    supplied && 'bodyId' in supplied
+      ? supplied
+      : { ...createBodyFeatureIds(), ...supplied };
   const { featureId, featureNodeId, bodyId, bodyNodeId } = ids;
   if (document.bodyOrder.includes(bodyId)) {
     throw new Error(`Copy result body ${bodyId} already exists.`);
   }
   if (
     document.featureOrder.includes(featureId) ||
-    document.nodes[featureNodeId] !== undefined ||
-    document.nodes[bodyNodeId] !== undefined ||
+    ownEntry(document.nodes, featureNodeId) !== undefined ||
+    ownEntry(document.nodes, bodyNodeId) !== undefined ||
     featureNodeId === bodyNodeId
   ) {
     throw new Error('Copy identifiers must be new and distinct.');
@@ -3455,7 +3464,8 @@ export function directEditBody(
   input: DirectEditInput
 ): { document: ProjectDocument; bodyId: BodyId } {
   const next = cloneDocument(document);
-  const { featureId, featureNodeId } = input.ids ?? createFeatureOnlyIds();
+  const { featureId, featureNodeId } =
+    suppliedIds(input.ids) ?? createFeatureOnlyIds();
 
   next.nodes[featureNodeId] = {
     id: featureNodeId,
@@ -3521,7 +3531,7 @@ function addBodyResultFeature(
 ): { document: ProjectDocument; bodyId: BodyId } {
   const next = cloneDocument(document);
   const { featureId, featureNodeId, bodyId, bodyNodeId } =
-    ids ?? createBodyFeatureIds();
+    suppliedIds(ids) ?? createBodyFeatureIds();
   next.nodes[featureNodeId] = {
     id: featureNodeId,
     kind: 'feature',
@@ -3577,7 +3587,7 @@ export function addSplitFeature(
     keepOriginal: input.keepOriginal
   });
   const next = cloneDocument(document);
-  const ids = input.ids ?? createSplitFeatureIds();
+  const ids = suppliedIds(input.ids) ?? createSplitFeatureIds();
   const { featureId, featureNodeId, bodyId, bodyNodeId } = ids;
   next.nodes[featureNodeId] = {
     id: featureNodeId,
@@ -3644,7 +3654,7 @@ export function holeBody(
     name,
     'hole',
     deepClone({ featureKind: 'hole', targetBodyId, ...parameters }),
-    input.ids
+    suppliedIds(input.ids)
   );
 }
 
@@ -3700,7 +3710,7 @@ export function mirrorBody(
       targetBodyId: input.targetBodyId,
       plane: deepClone(input.plane)
     },
-    input.ids
+    suppliedIds(input.ids)
   );
 }
 
@@ -3721,7 +3731,7 @@ export function shellBody(
         : {}),
       thickness: input.thickness
     },
-    input.ids
+    suppliedIds(input.ids)
   );
 }
 
@@ -3738,7 +3748,7 @@ export function offsetSolidBody(
       targetBodyId: input.targetBodyId,
       distance: input.distance
     },
-    input.ids
+    suppliedIds(input.ids)
   );
 }
 
@@ -3761,7 +3771,7 @@ export function draftBody(
       neutralPoint: deepClone(input.neutralPoint),
       angleDeg: input.angleDeg
     },
-    input.ids
+    suppliedIds(input.ids)
   );
 }
 
@@ -3782,7 +3792,7 @@ export function thickenFace(
         : {}),
       thickness: input.thickness
     },
-    input.ids
+    suppliedIds(input.ids)
   );
 }
 
@@ -3811,7 +3821,7 @@ export function filletEdges(
           }
         : {})
     },
-    input.ids
+    suppliedIds(input.ids)
   );
 }
 
@@ -3834,7 +3844,7 @@ export function chamferEdges(
       ...(input.angleDeg !== undefined ? { angleDeg: input.angleDeg } : {}),
       ...(input.distance2 !== undefined ? { distance2: input.distance2 } : {})
     },
-    input.ids
+    suppliedIds(input.ids)
   );
 }
 
@@ -3860,7 +3870,7 @@ export function patternBody(
       ...(input.count2 !== undefined ? { count2: input.count2 } : {}),
       ...(input.axisRef ? { axisRef: datumAxisRefOnly(input.axisRef) } : {})
     },
-    input.ids
+    suppliedIds(input.ids)
   );
 }
 
@@ -3879,7 +3889,7 @@ export function importMeshBody(
   }
   const next = cloneDocument(document);
   const { featureId, featureNodeId, bodyId, bodyNodeId } =
-    input.ids ?? createBodyFeatureIds();
+    suppliedIds(input.ids) ?? createBodyFeatureIds();
 
   next.nodes[featureNodeId] = {
     id: featureNodeId,
@@ -3934,7 +3944,7 @@ export function importStepBody(
   }
   const next = cloneDocument(document);
   const { featureId, featureNodeId, bodyId, bodyNodeId } =
-    input.ids ?? createBodyFeatureIds();
+    suppliedIds(input.ids) ?? createBodyFeatureIds();
 
   next.nodes[featureNodeId] = {
     id: featureNodeId,
@@ -3991,10 +4001,13 @@ export function importShaprGuided(
   document: ProjectDocument,
   input: ShaprGuidedImportInput
 ): { document: ProjectDocument; bodyId: BodyId; importId: ShaprImportId } {
-  if (!input.step.ids) {
+  const stepIds = suppliedIds(input.step.ids);
+  if (!stepIds) {
     throw new Error('A guided SHAPR import requires deterministic STEP ids.');
   }
-  const importId = input.importId ?? toShaprImportId(createId('shapr'));
+  const importId =
+    suppliedIds({ importId: input.importId }).importId ??
+    toShaprImportId(createId('shapr'));
   if (document.shaprImports[importId]) {
     throw new Error(`SHAPR import ${importId} already exists.`);
   }
@@ -4003,8 +4016,8 @@ export function importShaprGuided(
     ...deepClone(input.migration),
     importId,
     exactGeometry: {
-      featureId: input.step.ids.featureId,
-      bodyId: input.step.ids.bodyId,
+      featureId: stepIds.featureId,
+      bodyId: stepIds.bodyId,
       stepChecksumSha256: input.migration.companionStepChecksumSha256,
       validation: 'exact-kernel-preflight'
     }
@@ -4020,7 +4033,12 @@ export function importShaprGuided(
 export const PARAMETER_NAME_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 
 export function isValidParameterName(name: string): boolean {
-  return PARAMETER_NAME_PATTERN.test(name) && !RESERVED_IDENTIFIERS.has(name);
+  return (
+    PARAMETER_NAME_PATTERN.test(name) &&
+    !RESERVED_IDENTIFIERS.has(name) &&
+    // A parameter name is a key of the expression scope.
+    !isReservedRecordKey(name)
+  );
 }
 
 export function listParameters(document: ProjectDocument): ParameterNode[] {
@@ -4092,7 +4110,8 @@ export function setParameter(
       else delete existing.quantity;
     }
   } else {
-    const { parameterId, parameterNodeId } = input.ids ?? createParameterIds();
+    const { parameterId, parameterNodeId } =
+      suppliedIds(input.ids) ?? createParameterIds();
     next.nodes[parameterNodeId] = {
       id: parameterNodeId,
       kind: 'parameter',
@@ -4142,7 +4161,7 @@ export function configureParameterToggle(
     if (!findBodyNode(document, bodyId)) {
       throw new Error(`Body "${bodyId}" does not exist.`);
     }
-    if (document.derived.bodyRepresentations[bodyId]?.consumed) {
+    if (ownEntry(document.derived.bodyRepresentations, bodyId)?.consumed) {
       throw new Error(
         'Choose a separate result body, not a consumed source body.'
       );
@@ -4572,7 +4591,7 @@ export function getParameterScope(
 function refreshParameterValues(document: ProjectDocument): void {
   const { scope } = getParameterScope(document);
   for (const parameter of listParameters(document)) {
-    const value = scope[parameter.name];
+    const value = ownEntry(scope, parameter.name);
     if (value !== undefined) {
       parameter.value = value;
     }
@@ -6284,7 +6303,7 @@ function parseExpressionQuantity(
   }
 
   function parseCall(name: string): ExpressionQuantity {
-    const fn = EXPRESSION_FUNCTIONS[name];
+    const fn = ownEntry(EXPRESSION_FUNCTIONS, name);
     if (!fn) {
       throw new Error(`Unknown function "${name}" in expression.`);
     }
@@ -6362,17 +6381,19 @@ function parseExpressionQuantity(
         position += 1;
         return parseCall(token.name);
       }
-      const constant = EXPRESSION_CONSTANTS[token.name];
+      const constant = ownEntry(EXPRESSION_CONSTANTS, token.name);
       if (constant !== undefined) {
         return quantity(constant);
       }
-      const value = scope[token.name];
+      // Only the scope's own names: an inherited member is no parameter.
+      const value = ownEntry(scope, token.name);
       if (value === undefined) {
         throw new Error(`Unknown identifier "${token.name}" in expression.`);
       }
       // A typed parameter (F05) brings its dimension; unitless ones and any
       // plain scope value stay dimensionless, exactly as before v21.
-      const kind = (scope as KindedScope)[PARAMETER_KINDS]?.[token.name];
+      const kinds = (scope as KindedScope)[PARAMETER_KINDS];
+      const kind = kinds ? ownEntry(kinds, token.name) : undefined;
       return quantity(
         value,
         kind === 'length' ? 1 : 0,
@@ -6768,7 +6789,7 @@ export function findParameterReferences(
   name: string
 ): ParameterReference[] {
   const { scope } = getParameterScope(document);
-  if (scope[name] === undefined) {
+  if (ownEntry(scope, name) === undefined) {
     // An unevaluatable parameter is read by nobody: every expression naming
     // it already fails, so the delete repairs the document rather than
     // breaking it.

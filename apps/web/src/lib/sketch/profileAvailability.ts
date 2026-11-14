@@ -3,6 +3,7 @@ import {
   resolvedSketchDocument
 } from '@openzcad/document-core';
 import { computeSketchRegions } from '@openzcad/geometry';
+import { ownEntry } from '@openzcad/shared';
 import type { ProjectDocument } from '@openzcad/shared';
 import { sketchValueResolver } from './valueResolver';
 
@@ -16,7 +17,7 @@ export function countClosedProfileSketches(
   const resolve = sketchValueResolver(scope, document.units);
   return listNodesByKind(document, 'sketch').filter((sketch) => {
     const objects = sketch.objectIds.flatMap((objectId) => {
-      const node = view.nodes[objectId];
+      const node = ownEntry(view.nodes, objectId);
       return node?.kind === 'sketch-object'
         ? [{ id: objectId, data: node.data }]
         : [];

@@ -6,6 +6,7 @@ import {
   listFeaturesInOrder
 } from '@openzcad/document-core';
 import {
+  ownEntry,
   isFeatureSuppressed,
   type BodyId,
   type BodyRepresentation,
@@ -112,7 +113,7 @@ function legacyConstruction(doc: ProjectDocument): Construction | null {
     (bridge.data.operation && bridge.data.operation !== 'new-body') ||
     !sketch.objectIds.length ||
     sketch.objectIds.some((id) => {
-      const node = doc.nodes[id];
+      const node = ownEntry(doc.nodes, id);
       return (
         node?.kind !== 'sketch-object' ||
         !['line', 'arc'].includes(node.objectKind) ||
@@ -330,7 +331,7 @@ function previewPreparedParameter(
         )
       )
         return null;
-      const body = base.derived.bodyRepresentations[recipe.result];
+      const body = ownEntry(base.derived.bodyRepresentations, recipe.result);
       if (!body) return null;
       let preview: ParameterPreviewBody = {
         bodyId: body.bodyId,
@@ -340,7 +341,10 @@ function previewPreparedParameter(
         parts: []
       };
       for (const part of recipe.parts) {
-        const representation = base.derived.bodyRepresentations[part.bodyId];
+        const representation = ownEntry(
+          base.derived.bodyRepresentations,
+          part.bodyId
+        );
         if (!representation) return null;
         const matrix = identity();
         axes.forEach((axis, i) => {
@@ -471,7 +475,7 @@ function sameStructure(
   prepared: PreparedParameterState
 ): boolean {
   for (const [id, text] of prepared.stepTexts) {
-    const node = document.nodes[id];
+    const node = ownEntry(document.nodes, id);
     if (
       node?.kind !== 'feature' ||
       node.data.featureKind !== 'imported-step' ||

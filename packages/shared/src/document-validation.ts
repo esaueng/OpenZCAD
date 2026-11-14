@@ -111,6 +111,30 @@ export function isReservedRecordKey(key: unknown): boolean {
   return typeof key === 'string' && RESERVED_RECORD_KEYS.has(key);
 }
 
+/**
+ * Ids a command supplies for what it creates (`input.ids`): each must be a
+ * string, or a list of strings, that is not a reserved name. Checked before
+ * anything is written, since each becomes a key of `nodes` or another map.
+ * Returns `ids` unchanged.
+ */
+export function suppliedIds<T>(ids: T): T {
+  if (ids === undefined) return ids;
+  if (!isDocumentRecord(ids))
+    throw new Error('Supplied ids must be an object.');
+  for (const [field, value] of Object.entries(ids)) {
+    if (value === undefined) continue;
+    for (const id of Array.isArray(value) ? value : [value]) {
+      if (typeof id !== 'string')
+        throw new Error(`Supplied id "${field}" must be a string.`);
+      if (RESERVED_RECORD_KEYS.has(id))
+        throw new Error(
+          `Supplied id "${field}" uses the reserved name "${id}".`
+        );
+    }
+  }
+  return ids;
+}
+
 /** A key the record holds itself: never an inherited member or a reserved name. */
 export function isOwnRecordKey(
   record: Record<string, unknown>,
@@ -128,9 +152,92 @@ export function ownEntry<T>(
   record: Readonly<Record<string, T>>,
   key: unknown
 ): T | undefined {
-  return isOwnRecordKey(record, key)
-    ? record[key]
-    : undefined;
+  return isOwnRecordKey(record, key) ? record[key] : undefined;
+}
+
+/**
+ * Whether a property holds ids: `id`, a `…Id` field or a `…Ids` list.
+ * Documents, history snapshots and command payloads name every node, body,
+ * feature, sketch, parameter, constraint and annotation this way, and those
+ * ids are used as keys of plain-object maps.
+ */
+export function isIdentifierField(field: string | undefined): boolean {
+  return (
+    field !== undefined &&
+    (field === 'id' || ID_LIST_FIELDS.has(field) || /[a-z0-9]Ids?$/.test(field))
+  );
+}
+
+/** The document's ordered id lists. */
+const ID_LIST_FIELDS: ReadonlySet<string> = new Set([
+  'featureOrder',
+  'bodyOrder',
+  'sketchOrder',
+  'parameterOrder',
+  'shaprImportOrder'
+]);
+
+/** A parameter name is a key of the expression scope. */
+function parameterNamesOf(value: Record<string, unknown>): unknown[] {
+  if (value.kind === 'parameter') return [value.name];
+  if (
+    typeof value.kind === 'string' &&
+    value.kind.startsWith('parameter.') &&
+    isDocumentRecord(value.payload)
+  )
+    return [value.payload.name, value.payload.newName];
+  return [];
+}
+
+/**
+ * Refuses a reserved name used where a document keeps a key: any object key
+ * (every map in a document, its history and its command payloads), any id
+ * field (see {@link isIdentifierField}) and any parameter name, including
+ * those in stored `parameter.*` commands. `field` names the property `value`
+ * sits under, so a bare id such as a history change's `before` is judged by
+ * its change's field. Other strings, such as display names, are not keys and
+ * may be anything.
+ */
+export function reservedIdentifierError(
+  value: unknown,
+  field?: string
+): string | null {
+  interface Entry {
+    value: unknown;
+    field: string | undefined;
+    parent: Entry | null;
+  }
+  const path = (entry: Entry): string => {
+    const parts: string[] = [];
+    for (let at: Entry | null = entry; at; at = at.parent)
+      if (at.field !== undefined) parts.unshift(at.field);
+    return parts.join('.') || 'document';
+  };
+  const pending: Entry[] = [{ value, field, parent: null }];
+  while (pending.length) {
+    const entry = pending.pop()!;
+    const current = entry.value;
+    if (typeof current === 'string') {
+      if (RESERVED_RECORD_KEYS.has(current) && isIdentifierField(entry.field))
+        return `"${path(entry)}" uses the reserved id "${current}".`;
+      continue;
+    }
+    if (Array.isArray(current)) {
+      for (const item of current)
+        pending.push({ value: item, field: entry.field, parent: entry });
+      continue;
+    }
+    if (!isDocumentRecord(current)) continue;
+    for (const key of Object.keys(current)) {
+      if (RESERVED_RECORD_KEYS.has(key))
+        return `"${path(entry)}" uses the reserved key "${key}".`;
+      pending.push({ value: current[key], field: key, parent: entry });
+    }
+    for (const name of parameterNamesOf(current))
+      if (typeof name === 'string' && RESERVED_RECORD_KEYS.has(name))
+        return `"${path(entry)}" uses the reserved parameter name "${name}".`;
+  }
+  return null;
 }
 
 /**

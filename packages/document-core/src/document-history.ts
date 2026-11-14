@@ -1,4 +1,5 @@
 import {
+  ownEntry,
   documentNodesWithHistory,
   HISTORY_FIELDS,
   importedSourceReferenceOf,
@@ -330,7 +331,7 @@ export function archiveHistorySources(
     const sourceKey = key(source);
     if (replacement && node.featureId === replacement.featureId) {
       retained.set(sourceKey, source);
-      if (document.nodes[node.id] === node) current = source;
+      if (ownEntry(document.nodes, node.id) === node) current = source;
     }
     const { artifactId } = node.data as { artifactId: string };
     if (artifactId.startsWith('artifact_local_')) {

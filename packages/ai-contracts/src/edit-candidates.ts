@@ -4,6 +4,7 @@ import {
   listFeaturesInOrder,
   listParameters
 } from '@openzcad/document-core';
+import { ownEntry } from '@openzcad/shared';
 import type {
   BodyId,
   EditAnalysisRequest,
@@ -140,10 +141,10 @@ function recipesForBody(
   const opening = createGrowingHolderProposal(document, selection);
   const source = unmodifiedImportedSource(document, bodyId);
   if (opening) proposals.unshift(opening);
-  const emboss =
-    document.derived.bodyRepresentations[
-      bodyId as keyof typeof document.derived.bodyRepresentations
-    ]?.topology?.recognizedPlanarEmboss;
+  const emboss = ownEntry(
+    document.derived.bodyRepresentations,
+    bodyId as keyof typeof document.derived.bodyRepresentations
+  )?.topology?.recognizedPlanarEmboss;
   const existingNames = new Set(
     listParameters(document).map((parameter) => parameter.name)
   );
@@ -197,9 +198,10 @@ function recipesForBody(
                 : []
             );
     const bodyName =
-      document.derived.bodyRepresentations[
+      ownEntry(
+        document.derived.bodyRepresentations,
         bodyId as keyof typeof document.derived.bodyRepresentations
-      ]?.name ?? bodyId;
+      )?.name ?? bodyId;
     return {
       proposal,
       candidate: {
@@ -231,7 +233,7 @@ export function createEditCandidateCatalog(
     ...selection.topologies.map((item) => item.bodyId)
   ]);
   const bodies = document.bodyOrder.filter((bodyId) => {
-    const body = document.derived.bodyRepresentations[bodyId];
+    const body = ownEntry(document.derived.bodyRepresentations, bodyId);
     return (
       body && !body.consumed && (selected.size === 0 || selected.has(bodyId))
     );
@@ -243,7 +245,7 @@ export function createEditCandidateCatalog(
   const measuredOnly: MeasuredEditValue[] = boundedBodies
     .flatMap((bodyId) =>
       (
-        document.derived.bodyRepresentations[bodyId]?.topology
+        ownEntry(document.derived.bodyRepresentations, bodyId)?.topology
           ?.recognizedImportedFeatures ?? []
       ).flatMap((feature) => {
         const base = { bodyId: String(bodyId), unit: document.units };
@@ -290,7 +292,9 @@ export function createEditCandidateCatalog(
       all.length < MAX_CANDIDATES &&
       bodies.length <= MAX_CANDIDATES &&
       bodies.every(
-        (id) => (document.derived.bodyRepresentations[id]?.faceCount ?? 0) <= 64
+        (id) =>
+          (ownEntry(document.derived.bodyRepresentations, id)?.faceCount ??
+            0) <= 64
       )
   };
 }

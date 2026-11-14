@@ -1,4 +1,5 @@
 import {
+  ownEntry,
   FEATURE_ROLLBACK_SUPPRESSED_METADATA_KEY,
   FEATURE_SUPPRESSED_METADATA_KEY,
   toProjectId,
@@ -172,7 +173,7 @@ export function createProjectDiagnosticBundle(
   delete diagnosticDocument.assembly;
 
   const bodies = document.bodyOrder.flatMap((bodyId) => {
-    const body = document.derived.bodyRepresentations[bodyId];
+    const body = ownEntry(document.derived.bodyRepresentations, bodyId);
     if (!body) {
       return [];
     }

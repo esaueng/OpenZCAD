@@ -2,7 +2,11 @@ import type { ProjectDocument, UserId } from './index';
 import { drawingSetError } from './drawings';
 import { objectFolderSetError } from './object-folders';
 import { assemblySetError } from './assembly';
-import { isReservedRecordKey, nodeMapKeyError } from './document-validation';
+import {
+  isReservedRecordKey,
+  nodeMapKeyError,
+  reservedIdentifierError
+} from './document-validation';
 import {
   referenceImageSetError,
   type ReferenceImage
@@ -213,6 +217,15 @@ export function isDocumentHistory(
         )
           return false;
       } else return false;
+      // Undo and redo publish these values as they are: a root reference,
+      // an id list, a node snapshot or a whole map. None may use a reserved
+      // name as an id or key; the change's field names a bare value.
+      if (
+        [change.before, change.after].some(
+          (side) => reservedIdentifierError(side, String(change.field)) !== null
+        )
+      )
+        return false;
     }
   }
   try {

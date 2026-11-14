@@ -5,6 +5,7 @@ import {
   resolveParamValue
 } from '@openzcad/document-core';
 import {
+  ownEntry,
   isFeatureSuppressed,
   type BodyId,
   type FaceTopologyReferenceV5,
@@ -687,7 +688,10 @@ function sideClearOfTools(
   bodyId: BodyId,
   faceHash: number
 ): boolean {
-  const topology = document.derived.bodyRepresentations[bodyId]?.topology;
+  const topology = ownEntry(
+    document.derived.bodyRepresentations,
+    bodyId
+  )?.topology;
   if (!topology) return false;
   const lineage = new Map(
     topology.faces.map((face) => [face.hash, face.reference?.lineageName])

@@ -13,6 +13,7 @@ import {
 // Type-only on purpose: a value import would pull the WASM-bearing module
 // into the main bundle and fail the build's bundle-size check.
 import type { SketchSolveOutcome } from '@openzcad/kernel-adapter/exact';
+import { ownEntry } from '@openzcad/shared';
 import type {
   ParamValue,
   ProjectDocument,
@@ -98,7 +99,7 @@ export function solvedSketchCommands(
     if (!sketch.objectIds.includes(solved.objectId)) {
       continue;
     }
-    const node = document.nodes[solved.objectId];
+    const node = ownEntry(document.nodes, solved.objectId);
     if (node?.kind !== 'sketch-object') {
       continue;
     }

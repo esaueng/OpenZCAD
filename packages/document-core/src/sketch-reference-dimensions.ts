@@ -1,5 +1,6 @@
 import {
   ownEntry,
+  suppliedIds,
   createSketchReferenceAnnotationId,
   deepClone,
   documentNodesWithHistory,
@@ -180,7 +181,7 @@ function prepareReferenceDimension(
       'A reference dimension stores measured targets, not a driving value.'
     );
   const annotationId =
-    input.ids?.annotationId ?? createSketchReferenceAnnotationId();
+    suppliedIds(input.ids)?.annotationId ?? createSketchReferenceAnnotationId();
   const reference = { annotationId, data: deepClone(input.data) };
   assertSketchReferenceDimensions(
     {

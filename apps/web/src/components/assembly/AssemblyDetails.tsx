@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link2, Pause, Pin, Play, Plus, TriangleAlert, X } from 'lucide-react';
 import { commandFactories } from '@openzcad/command-system';
 import {
+  ownEntry,
   ASSEMBLY_JOINT_DOFS,
   coupledJointLimits,
   couplingsOfJoint,
@@ -465,7 +466,7 @@ export function ComponentDetails({
     : undefined;
   const bodyId = model.bodyByComponent.get(component.id) ?? null;
   const bodyName = bodyId
-    ? (document.derived.bodyRepresentations[bodyId]?.name ?? bodyId)
+    ? (ownEntry(document.derived.bodyRepresentations, bodyId)?.name ?? bodyId)
     : null;
   const roleText =
     role === 'grounded'

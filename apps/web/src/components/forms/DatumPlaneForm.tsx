@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Trash2 } from 'lucide-react';
 import type { AnyCommand, CommandManager } from '@openzcad/command-system';
+import { ownEntry } from '@openzcad/shared';
 import type {
   BodyId,
   EdgeVertexPointSource,
@@ -781,9 +782,10 @@ export function DatumPlaneWorkspaceCard({
     const attachment = faceSketchAttachment({
       bodyId: selection.bodyId,
       pickedHash: selection.hash,
-      face: document.derived.bodyRepresentations[
+      face: ownEntry(
+        document.derived.bodyRepresentations,
         selection.bodyId
-      ]?.topology?.faces.find((face) => face.hash === selection.hash)
+      )?.topology?.faces.find((face) => face.hash === selection.hash)
     });
     const ref = attachment.ok ? attachment.planeRef : null;
     pickedFace = !attachment.ok

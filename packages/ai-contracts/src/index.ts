@@ -6,6 +6,7 @@ import {
   resolvedSketchDocument
 } from '@openzcad/document-core';
 import {
+  ownEntry,
   isFeatureSuppressed,
   isImportedSourceReference,
   isReadOnlyRecognizedImportedFeature
@@ -1141,7 +1142,10 @@ export function createCadDocumentDigest(
   let remainingEdges = MAX_DIGEST_EDGES;
   let remainingFaces = MAX_DIGEST_FACES;
   for (const bodyId of topologyPriority) {
-    const body = document.derived.bodyRepresentations[bodyId as BodyId];
+    const body = ownEntry(
+      document.derived.bodyRepresentations,
+      bodyId as BodyId
+    );
     if (!body?.topology || body.consumed) {
       continue;
     }
@@ -1296,7 +1300,7 @@ export function createCadDocumentDigest(
     // Meshes are deliberately dropped here: the model needs each body's
     // identity, liveness, and placement, never its triangles.
     bodies: document.bodyOrder.flatMap((bodyId) => {
-      const body = document.derived.bodyRepresentations[bodyId];
+      const body = ownEntry(document.derived.bodyRepresentations, bodyId);
       return body
         ? [
             {

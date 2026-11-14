@@ -1,4 +1,5 @@
 import { findSketch } from '@openzcad/document-core';
+import { ownEntry } from '@openzcad/shared';
 import type { ProjectDocument, SketchNode } from '@openzcad/shared';
 import { constraintReferencesObject } from './constraints';
 import { sketchObjectLabels } from './objectLabels';
@@ -36,7 +37,7 @@ export function constraintInspectionTargets(
       return [];
     }
     seen.add(objectId);
-    const node = document.nodes[objectId];
+    const node = ownEntry(document.nodes, objectId);
     return node?.kind === 'sketch-object'
       ? [
           {
