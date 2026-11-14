@@ -42,3 +42,11 @@ BEFORE UPDATE ON project_instances
 BEGIN
   SELECT RAISE(ABORT, 'project_instance_immutable');
 END;
+
+-- An account erasure request's own identity: a random token set when the
+-- request is first recorded and kept by its retries. An attempt reads it
+-- back from the statement that records the request, lists the projects it
+-- erases only while that very request is still open, and stops once a
+-- retry completed it, instead of continuing against projects created since.
+ALTER TABLE account_erasure_requests ADD COLUMN request_token TEXT
+  CHECK (request_token IS NULL OR length(request_token) BETWEEN 1 AND 64);

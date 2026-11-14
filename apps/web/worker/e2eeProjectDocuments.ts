@@ -59,7 +59,6 @@ import {
   type E2eeProjectState,
   type E2eeRevisionMetadata,
   type E2eeRevisionsResponse,
-  type E2eeCopyFrom,
   type E2eeSaveVersionResponse,
   type E2eeStoredVersion,
   type E2eeVersionLogEntry,
@@ -69,8 +68,12 @@ import {
 } from '@openzcad/shared';
 import {
   claimObjectKeysForDelete,
-  drainPendingBodies,
-  isPendingBodyStorageReady,
+  drainPendingObjects,
+  forgetPendingObjects,
+  isPendingObjectStorageReady,
+  PENDING_OBJECT_GRACE_MS,
+  PENDING_OBJECTS_PER_PROJECT,
+  recordPendingObject,
   isE2eeContentBlobStorageReady,
   isE2eeProjectGroupStorageReady,
   isE2eeProjectVersionStorageReady,
@@ -118,7 +121,7 @@ import {
   copyBucket,
   copyFromField,
   discardCopiedObjects,
-  repairCopiedObjects,
+  verifyCopiedObjects,
   insertAdoption,
   insertCopiedBlobs,
   prepareCopy,
@@ -652,6 +655,8 @@ async function versionBody(ctx: Context, row: VersionRow): Promise<Uint8Array> {
 interface StoredBody {
   key: string | null;
   inline: string | null;
+  /** This write attempt's pending record of `key` (migration 0051). */
+  attempt?: string;
 }
 
 /** Puts a body where it belongs: inline when small, R2 otherwise. */
@@ -676,20 +681,36 @@ async function storeBody(
   // nonce of this write attempt. Every attempt stores its own object, so no
   // other attempt's rollback (which deletes only its own key) can remove the
   // body a committed row names.
-  const key = `e2ee/${projectId}/v/${version.hash}.${crypto.randomUUID()}`;
+  const attempt = crypto.randomUUID();
+  const key = `e2ee/${projectId}/v/${version.hash}.${attempt}`;
   const bucket = ctx.bucket;
   // Recorded before the put (migration 0051): a body this attempt cannot
-  // remove after a failure stays discoverable, and is deleted by retention
-  // or with its project. Its version row clears the record when it commits.
-  const pending = await isPendingBodyStorageReady(ctx.db);
+  // remove after a failure stays discoverable and is reclaimed (retention,
+  // the scheduled sweep, the project's deletion); its version row clears
+  // the record when it commits. A project holding too many such bodies
+  // already takes no new one until they are reclaimed.
+  const pending = await isPendingObjectStorageReady(ctx.db);
   if (pending) {
-    await ctx.db
-      .prepare(
-        `INSERT INTO e2ee_pending_bodies (object_key, project_id, created_at)
-         VALUES (?, ?, ?)`
-      )
-      .bind(key, projectId, Date.now())
-      .run();
+    const recorded = await recordPendingObject(ctx.db, {
+      key,
+      attempt,
+      projectId,
+      bucket: 'project-storage',
+      cap: PENDING_OBJECTS_PER_PROJECT
+    });
+    if (!recorded) {
+      await drainPendingObjects(
+        ctx.db,
+        { 'project-storage': bucket },
+        projectId,
+        { olderThanMs: PENDING_OBJECT_GRACE_MS }
+      ).catch(() => false);
+      refuse(
+        503,
+        'STORAGE_CLEANUP_BUSY',
+        'Earlier failed saves of this project are still being cleaned up. Try again later.'
+      );
+    }
   }
   try {
     await bucket.put(key, version.envelope);
@@ -698,19 +719,14 @@ async function storeBody(
     const stored = bucket.head ? await bucket.head(key) : await bucket.get(key);
     if (!stored) throw new Error('The stored body is missing.');
   } catch {
-    try {
-      await bucket.delete(key);
-      if (pending) await forgetPendingBody(ctx, key);
-    } catch {
-      // Left pending: retention or the project's deletion removes it.
-    }
+    await discardBody(ctx, { key, inline: null, attempt });
     refuse(
       503,
       'PROJECT_STORAGE_UNAVAILABLE',
       'The account copy of this project could not be stored right now. Try again.'
     );
   }
-  return { key, inline: null };
+  return { key, inline: null, attempt };
 }
 
 /**
@@ -718,7 +734,7 @@ async function storeBody(
  * since migration 0051 carry a per-attempt nonce, so only this attempt ever
  * writes this key; bodies of older rows were keyed by version hash alone, so
  * every body delete still goes through a migration 0050 claim taken while no
- * version row names the key.
+ * version row (and no other attempt's pending record) names the key.
  */
 async function discardBody(ctx: Context, body: StoredBody): Promise<void> {
   if (!body.key || !ctx.bucket) return;
@@ -729,45 +745,39 @@ async function discardBody(ctx: Context, body: StoredBody): Promise<void> {
       )
       .bind(body.key)
       .first<{ used: number }>();
-    if (!used && (await deleteBodies(ctx, [body.key])).has(body.key)) {
-      await forgetPendingBody(ctx, body.key);
+    if (
+      !used &&
+      (await deleteBodies(ctx, [body.key], body.attempt)).has(body.key) &&
+      body.attempt
+    ) {
+      await forgetPendingObjects(ctx.db, body.attempt, [body.key]);
     }
   } catch {
-    // Left pending: retention or the project's deletion removes it.
+    // Left pending: retention, the sweep or the project's deletion removes it.
   }
-}
-
-/** Drops a body's pending record (migration 0051) once its object is gone. */
-async function forgetPendingBody(ctx: Context, key: string): Promise<void> {
-  if (!(await isPendingBodyStorageReady(ctx.db))) return;
-  await ctx.db
-    .prepare('DELETE FROM e2ee_pending_bodies WHERE object_key = ?')
-    .bind(key)
-    .run();
 }
 
 /**
  * Deletes version bodies no row names any more, each under a claim; the
- * keys it deleted.
+ * keys it deleted. `attempt`: the deleting write's own pending record.
  */
 async function deleteBodies(
   ctx: Context,
-  keys: readonly string[]
+  keys: readonly string[],
+  attempt?: string
 ): Promise<ReadonlySet<string>> {
   if (!ctx.bucket || keys.length === 0) return new Set();
-  const claim = await claimObjectKeysForDelete(ctx.db, keys);
+  const claim = await claimObjectKeysForDelete(
+    ctx.db,
+    keys,
+    attempt ? { pending: [attempt] } : {}
+  );
   try {
     return (await claim.deleteObjects(ctx.bucket)).deleted;
   } finally {
     await claim.release();
   }
 }
-
-/**
- * Bodies left pending this long belong to no save still in flight: one that
- * old can no longer commit them (its record is gone once drained).
- */
-const PENDING_BODY_GRACE_MS = 60 * 60 * 1000;
 
 function insertVersion(
   ctx: Context,
@@ -1027,10 +1037,15 @@ async function retain(ctx: Context, projectId: string): Promise<void> {
   }
   // Bodies failed saves could not remove (migration 0051).
   try {
-    await drainPendingBodies(ctx.db, ctx.bucket, projectId, {
-      olderThanMs: PENDING_BODY_GRACE_MS,
-      limit: 16
-    });
+    await drainPendingObjects(
+      ctx.db,
+      { 'project-storage': ctx.bucket, artifacts: ctx.blobs.bucket },
+      projectId,
+      {
+        olderThanMs: PENDING_OBJECT_GRACE_MS,
+        limit: 16
+      }
+    );
   } catch {
     // Housekeeping: the next save, or the project's deletion, retries.
   }
@@ -1119,12 +1134,13 @@ async function writeVersion(
       );
     }
   }
+  // A co-member's pending rotation (slice 5-7), atomically. Its refusal
+  // comes before the body is stored, so a refused save stores nothing.
+  const rotationFence = await memberRotationFence(ctx.db, projectId, keyEpoch);
   const body = await storeBody(ctx, projectId, version);
   const now = new Date().toISOString();
   const newVersion = version.header.documentVersion;
   const signerFence = deviceListUnchanged(ctx.userId, version.signerList);
-  // A co-member's pending rotation (slice 5-7), atomically.
-  const rotationFence = await memberRotationFence(ctx.db, projectId, keyEpoch);
   // Every later statement lands only once the head moved to this version.
   const moved = {
     sql: `EXISTS (SELECT 1 FROM projects WHERE id = ? AND document_version = ?
@@ -1338,14 +1354,15 @@ async function writeStagedVersion(
       );
     }
   }
+  // As writeVersion: a removed signer cannot stage after its revocation,
+  // and a pending rotation (slice 5-7) holds the write off, atomically; its
+  // refusal comes before the body is stored.
+  const rotationFence = await memberRotationFence(ctx.db, projectId, keyEpoch);
   const body = await storeBody(ctx, projectId, version);
   const now = new Date().toISOString();
   const newVersion = version.header.documentVersion;
   const fence = projectFence(access, projectId, ctx.userId, 'owner');
-  // As writeVersion: a removed signer cannot stage after its revocation,
-  // and a pending rotation (slice 5-7) holds the write off, atomically.
   const signerFence = deviceListUnchanged(ctx.userId, version.signerList);
-  const rotationFence = await memberRotationFence(ctx.db, projectId, keyEpoch);
   // Every later statement lands only once the staged head moved here.
   const moved = {
     sql: `EXISTS (SELECT 1 FROM e2ee_project_migrations
@@ -1570,29 +1587,6 @@ async function saveRevision(
  * is this one, by envelope hash (slice 4-8). A retried create whose
  * acknowledgement was lost is answered as created, never refused.
  */
-/**
- * Once a create's rows are committed: its copied objects are in R2, copied
- * again if a concurrent attempt's rollback removed them before the rows
- * landed (migration 0050). Its body needs no such repair: every attempt
- * stores its own, verified before the commit.
- */
-async function finishCreated(
-  ctx: Context,
-  projectId: string,
-  version: CheckedVersion,
-  copyFrom: E2eeCopyFrom | null
-): Promise<void> {
-  if (copyFrom && copyFrom.blobIds.length) {
-    await repairCopiedObjects(
-      ctx.db,
-      copyBucket(ctx.blobs.bucket),
-      projectId,
-      copyFrom.projectId,
-      copyFrom.blobIds
-    );
-  }
-}
-
 async function storedCreate(
   ctx: Context,
   projectId: string,
@@ -1688,12 +1682,7 @@ async function createProject(
     invalid('The first project info is sequence 1, with no previous one');
   }
   const stored = await storedCreate(ctx, projectId, version);
-  if (stored) {
-    // A first attempt may have committed and then failed to repair its
-    // copied objects or its body: its retry finishes that first.
-    await finishCreated(ctx, projectId, version, copyFrom);
-    return stored;
-  }
+  if (stored) return stored;
   const copy = copyFrom
     ? await prepareCopy(
         ctx.db,
@@ -1718,24 +1707,31 @@ async function createProject(
   }
   const body = await storeBody(ctx, projectId, version);
   const copied: string[] = [];
+  // This create's pending records of the objects it copies (migration 0051).
+  const copyAttempt = crypto.randomUUID();
+  let sortOrder: number;
   try {
     if (copy && objects) {
-      await copyBlobObjects(objects, projectId, copy.rows, copied);
+      await copyBlobObjects(objects, projectId, copy.rows, copied, undefined, {
+        db: ctx.db,
+        attempt: copyAttempt
+      });
+      await verifyCopiedObjects(objects, copied);
     }
+    // A copy lands next to its source on the shelf, as a plaintext one does.
+    sortOrder = copy
+      ? ((
+          await ctx.db
+            .prepare('SELECT sort_order FROM projects WHERE id = ?')
+            .bind(copy.sourceProjectId)
+            .first<{ sort_order: number | null }>()
+        )?.sort_order ?? 0)
+      : 0;
   } catch (error) {
     await discardBody(ctx, body);
-    await discardCopiedObjects(ctx.db, objects, copied);
+    await discardCopiedObjects(ctx.db, objects, copied, copyAttempt);
     throw error;
   }
-  // A copy lands next to its source on the shelf, as a plaintext one does.
-  const sortOrder = copy
-    ? ((
-        await ctx.db
-          .prepare('SELECT sort_order FROM projects WHERE id = ?')
-          .bind(copy.sourceProjectId)
-          .first<{ sort_order: number | null }>()
-      )?.sort_order ?? 0)
-    : 0;
   const now = new Date().toISOString();
   const db = ctx.db;
   // The version and the info were checked against this same list.
@@ -1853,7 +1849,7 @@ async function createProject(
   }
   const rollBack = async () => {
     await discardBody(ctx, body);
-    await discardCopiedObjects(db, objects, copied);
+    await discardCopiedObjects(db, objects, copied, copyAttempt);
   };
   let results: Awaited<ReturnType<typeof runVersionBatch>>;
   try {
@@ -1866,10 +1862,7 @@ async function createProject(
       error.code === 'E2EE_CONFLICT'
     ) {
       const winner = await storedCreate(ctx, projectId, version);
-      if (winner) {
-        await finishCreated(ctx, projectId, version, copyFrom);
-        return winner;
-      }
+      if (winner) return winner;
       if (adoption) {
         await requireNotAdopted(ctx.db, ctx.userId, adoption.localProjectId);
       }
@@ -1886,10 +1879,7 @@ async function createProject(
   if (!accepted) {
     await rollBack();
     const winner = await storedCreate(ctx, projectId, version);
-    if (winner) {
-      await finishCreated(ctx, projectId, version, copyFrom);
-      return winner;
-    }
+    if (winner) return winner;
     if (await deviceListMoved(db, ctx.userId, account)) {
       refuseDeviceListMoved();
     }
@@ -1925,7 +1915,6 @@ async function createProject(
       'Sign in again before creating an encrypted project.'
     );
   }
-  await finishCreated(ctx, projectId, version, copyFrom);
   return json(
     {
       projectId,

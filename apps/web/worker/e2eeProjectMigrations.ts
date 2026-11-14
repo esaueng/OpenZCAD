@@ -99,7 +99,7 @@ import {
   isE2eeProjectVersionStorageReady,
   assertClaimedDeleteComplete,
   claimObjectKeysForDelete,
-  drainPendingBodies,
+  drainPendingObjects,
   ObjectKeyDeleteRetryError,
   isE2eeReverseStorageReady,
   isE2eeShareLinkStorageReady,
@@ -1454,13 +1454,21 @@ async function dropStaged(
       return { complete: false, objects };
     }
   }
-  // Bodies failed encrypted saves left pending (migration 0051), all of
-  // them: no encrypted save of this project can commit now.
+  // Objects failed encrypted writes left pending (migration 0051), all of
+  // them: no encrypted write of this project can commit now.
   if (
-    await drainPendingBodies(db, projectStorageBucket(env), projectId, {
-      fence: { sql: fence, binds: [projectId] },
-      limit: MIGRATION_STEP_OBJECTS
-    })
+    await drainPendingObjects(
+      db,
+      {
+        'project-storage': projectStorageBucket(env),
+        artifacts: artifactBucket(env)
+      },
+      projectId,
+      {
+        fence: { sql: fence, binds: [projectId] },
+        limit: MIGRATION_STEP_OBJECTS
+      }
+    )
   ) {
     return { complete: false, objects };
   }

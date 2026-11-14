@@ -594,64 +594,160 @@ export async function projectInstanceId(
   return row?.instance_id ?? null;
 }
 
-/** Whether migration 0051's pending version bodies are installed. */
-export const isPendingBodyStorageReady = cachedSchemaProbe(
+/** Whether migration 0051's pending R2 objects are installed. */
+export const isPendingObjectStorageReady = cachedSchemaProbe(
   `SELECT COUNT(*) AS ready FROM sqlite_master
-   WHERE type = 'table' AND name = 'e2ee_pending_bodies'`,
+   WHERE type = 'table' AND name = 'r2_pending_objects'`,
   (row) => row?.ready === 1
 );
 
+/** Which bucket a pending object (migration 0051) lives in. */
+export type PendingObjectBucket = 'project-storage' | 'artifacts';
+
+/** The buckets a drain of pending objects deletes from. */
+export type PendingObjectBuckets = Partial<
+  Record<PendingObjectBucket, { delete(key: string): Promise<unknown> } | null>
+>;
+
+/** Pending objects one project may hold at once (each write admits one). */
+export const PENDING_OBJECTS_PER_PROJECT = 8;
+
 /**
- * Deletes the R2 objects of version bodies a failed save left recorded as
- * pending (migration 0051), each under a key claim (fenced on `fence` when
- * given), then their rows. Only rows at least `olderThanMs` old: a younger
- * one may belong to a save still in flight (one older than that cannot
- * commit it any more, since its row is gone). True while more are left.
+ * Records that `attempt` is about to put `key` (migration 0051), before the
+ * put: from then on no cleanup can claim the key while the record stands,
+ * and the row that names the key clears it. With `cap`, refused (false)
+ * once the project already holds that many pending objects in `bucket`, so
+ * failed writes cannot accumulate stored bytes without bound.
  */
-export async function drainPendingBodies(
+export async function recordPendingObject(
   db: D1Database,
-  bucket: { delete(key: string): Promise<unknown> } | null,
-  projectId: string,
+  input: {
+    key: string;
+    attempt: string;
+    projectId: string;
+    bucket: PendingObjectBucket;
+    cap?: number;
+  }
+): Promise<boolean> {
+  const result = await db
+    .prepare(
+      `INSERT INTO r2_pending_objects
+         (object_key, attempt, project_id, bucket, created_at)
+       SELECT ?, ?, ?, ?, ?
+       WHERE (SELECT COUNT(*) FROM r2_pending_objects
+              WHERE project_id = ? AND bucket = ?) < ?`
+    )
+    .bind(
+      input.key,
+      input.attempt,
+      input.projectId,
+      input.bucket,
+      Date.now(),
+      input.projectId,
+      input.bucket,
+      input.cap ?? Number.MAX_SAFE_INTEGER
+    )
+    .run();
+  return (result.meta?.changes ?? 0) === 1;
+}
+
+/** Drops `attempt`'s records of `keys` once their objects are gone. */
+export async function forgetPendingObjects(
+  db: D1Database,
+  attempt: string,
+  keys: readonly string[]
+): Promise<void> {
+  if (!keys.length || !(await isPendingObjectStorageReady(db))) return;
+  await db
+    .prepare(
+      `DELETE FROM r2_pending_objects WHERE attempt = ?
+         AND object_key IN (SELECT value FROM json_each(?))`
+    )
+    .bind(attempt, JSON.stringify(keys))
+    .run();
+}
+
+/** Pending objects older than this belong to no write still in flight. */
+export const PENDING_OBJECT_GRACE_MS = 60 * 60 * 1000;
+
+/**
+ * Deletes the R2 objects that failed writes left recorded as pending
+ * (migration 0051), each under a key claim (fenced on `fence` when given),
+ * then their records: those of `projectId`, or with null the oldest of any
+ * project (the scheduled sweep). Only records at least `olderThanMs` old: a
+ * younger one may belong to a write still in flight. True while more are
+ * left.
+ */
+export async function drainPendingObjects(
+  db: D1Database,
+  buckets: PendingObjectBuckets,
+  projectId: string | null,
   options: {
     olderThanMs?: number;
     fence?: { sql: string; binds: readonly unknown[] };
     limit?: number;
   } = {}
 ): Promise<boolean> {
-  if (!bucket || !(await isPendingBodyStorageReady(db))) return false;
+  if (!(await isPendingObjectStorageReady(db))) return false;
   const limit = options.limit ?? 64;
   const { results } = await db
     .prepare(
-      `SELECT object_key FROM e2ee_pending_bodies
-       WHERE project_id = ? AND created_at <= ?
-       ORDER BY created_at LIMIT ?`
+      `SELECT object_key, attempt, bucket FROM r2_pending_objects
+       WHERE ${projectId === null ? '?1 IS NULL' : 'project_id = ?1'}
+         AND created_at <= ?2
+       ORDER BY created_at LIMIT ?3`
     )
     .bind(projectId, Date.now() - (options.olderThanMs ?? 0), limit + 1)
-    .all<{ object_key: string }>();
-  const keys = (results ?? []).slice(0, limit).map((row) => row.object_key);
-  if (!keys.length) return false;
-  const claim = await claimObjectKeysForDelete(db, keys, {}, options.fence);
+    .all<{
+      object_key: string;
+      attempt: string;
+      bucket: PendingObjectBucket;
+    }>();
+  const rows = (results ?? []).slice(0, limit);
+  if (!rows.length) return false;
+  const claim = await claimObjectKeysForDelete(
+    db,
+    rows.map((row) => row.object_key),
+    { pending: rows.map((row) => row.attempt) },
+    options.fence
+  );
   try {
-    const outcome = await claim.deleteObjects(bucket);
-    // A key a version names was committed (its row should have gone with
-    // that commit): only the row goes.
-    const done = keys.filter(
-      (key) =>
-        outcome.deleted.has(key) ||
-        (!claim.keys.has(key) && !claim.contended.has(key))
+    const deleted = new Set<string>();
+    for (const bucket of ['project-storage', 'artifacts'] as const) {
+      const target = buckets[bucket];
+      const keys = rows
+        .filter((row) => row.bucket === bucket)
+        .map((row) => row.object_key);
+      if (!target || !keys.length) continue;
+      for (const key of (await claim.deleteObjects(target, keys)).deleted) {
+        deleted.add(key);
+      }
+    }
+    // A key a committed row names lost its records with that commit; one
+    // still recorded here is only the record.
+    const done = rows.filter(
+      (row) =>
+        deleted.has(row.object_key) ||
+        (!claim.keys.has(row.object_key) &&
+          !claim.contended.has(row.object_key))
     );
     if (done.length) {
       await db
         .prepare(
-          `DELETE FROM e2ee_pending_bodies
-           WHERE object_key IN (SELECT value FROM json_each(?))${
-             options.fence ? ` AND ${options.fence.sql}` : ''
-           }`
+          `DELETE FROM r2_pending_objects
+           WHERE EXISTS (SELECT 1 FROM json_each(?) d
+                         WHERE json_extract(d.value, '$[0]') = object_key
+                           AND json_extract(d.value, '$[1]') = attempt)${
+                             options.fence ? ` AND ${options.fence.sql}` : ''
+                           }`
         )
-        .bind(JSON.stringify(done), ...(options.fence?.binds ?? []))
+        .bind(
+          JSON.stringify(done.map((row) => [row.object_key, row.attempt])),
+          ...(options.fence?.binds ?? [])
+        )
         .run();
     }
-    return (results ?? []).length > limit || done.length < keys.length;
+    return (results ?? []).length > limit || done.length < rows.length;
   } finally {
     await claim.release();
   }
@@ -711,6 +807,12 @@ export interface OwnObjectRows {
    * deleter's own.
    */
   readonly projects?: readonly string[];
+  /**
+   * Write attempts whose pending records (migration 0051) the deleter is
+   * removing: their records do not keep their keys alive. Any other
+   * attempt's record does, for the write is still in flight.
+   */
+  readonly pending?: readonly string[];
 }
 
 /** What `ObjectKeyClaim.deleteObjects` did, key by key. */
@@ -860,6 +962,7 @@ export async function claimObjectKeysForDelete(
     );
   }
   const token = crypto.randomUUID();
+  const pendingReady = await isPendingObjectStorageReady(db);
   const listed = JSON.stringify(unique);
   const ids = (values?: readonly string[]) => JSON.stringify(values ?? []);
   // A claim that outlived its deleter blocks nothing; it is dropped here
@@ -906,6 +1009,14 @@ export async function claimObjectKeysForDelete(
                              SELECT 1 FROM json_each(?10) w
                              WHERE json_extract(w.value, '$[0]') = v.project_id
                                AND json_extract(w.value, '$[1]') = v.document_version))
+         ${
+           pendingReady
+             ? `AND NOT EXISTS (SELECT 1 FROM r2_pending_objects q
+                         WHERE q.object_key = k.value
+                           AND q.project_id NOT IN (SELECT value FROM json_each(?11))
+                           AND q.attempt NOT IN (SELECT value FROM json_each(?12)))`
+             : ''
+         }
          AND ${fence ? fence.sql : '1'}
        ON CONFLICT (object_key) DO UPDATE
          SET token = excluded.token, created_at = excluded.created_at
@@ -927,6 +1038,7 @@ export async function claimObjectKeysForDelete(
         (own.versions ?? []).map((row) => [row.projectId, row.documentVersion])
       ),
       ids(own.projects),
+      ...(pendingReady ? [ids(own.pending)] : []),
       ...(fence?.binds ?? [])
     )
     .run();
@@ -8278,7 +8390,7 @@ export class D1R2PersistenceService implements PersistenceService {
       }
     }
     const versionsReady = await isE2eeProjectVersionStorageReady(this.env.DB);
-    const pendingReady = await isPendingBodyStorageReady(this.env.DB);
+    const pendingReady = await isPendingObjectStorageReady(this.env.DB);
     const blobsReady = await isE2eeContentBlobStorageReady(this.env.DB);
     const projectBucket = this.projectStorageBucket();
     // Every key a project's rows name, claimed (migration 0050) under its
@@ -8317,11 +8429,12 @@ export class D1R2PersistenceService implements PersistenceService {
                WHERE project_id = ? AND envelope_key IS NOT NULL`
             )
           : [];
-        // Bodies failed saves left pending (migration 0051).
+        // Objects failed writes left pending (migration 0051).
         if (pendingReady) {
           bodyKeys.push(
             ...(await keysOf(
-              'SELECT object_key FROM e2ee_pending_bodies WHERE project_id = ?'
+              `SELECT object_key FROM r2_pending_objects
+               WHERE project_id = ? AND bucket = 'project-storage'`
             ))
           );
         }
@@ -8336,6 +8449,14 @@ export class D1R2PersistenceService implements PersistenceService {
               'SELECT object_key FROM e2ee_content_blobs WHERE project_id = ?'
             )
           : [];
+        if (pendingReady) {
+          blobKeys.push(
+            ...(await keysOf(
+              `SELECT object_key FROM r2_pending_objects
+               WHERE project_id = ? AND bucket = 'artifacts'`
+            ))
+          );
+        }
         if (blobKeys.length && !this.env.ARTIFACTS) {
           throw new ArtifactStorageError(
             'Encrypted project storage is unavailable.'
@@ -8508,7 +8629,7 @@ export class D1R2PersistenceService implements PersistenceService {
           'DELETE FROM project_adoptions WHERE cloud_project_id IN',
           ...migrationTables,
           ...(pendingReady
-            ? ['DELETE FROM e2ee_pending_bodies WHERE project_id IN']
+            ? ['DELETE FROM r2_pending_objects WHERE project_id IN']
             : []),
           'DELETE FROM projects WHERE id IN',
           'DELETE FROM project_copy_cleanup_claims WHERE project_id IN'

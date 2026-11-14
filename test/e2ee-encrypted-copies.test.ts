@@ -1171,54 +1171,110 @@ describe('copied objects under reused keys (migration 0050)', () => {
     expect(objectKeys(srv, copyId)).toEqual([key]);
     expect(rows(srv, 'SELECT object_key FROM r2_key_tombstones')).toEqual([]);
   });
+});
 
-  it('copies a blob again when a rollback removed it before the copy’s rows landed, also on the create’s retry', async () => {
+describe('a copy whose source goes away (PR #1477 review, round 3)', () => {
+  it('a rollback cannot remove a copy’s bytes before its rows land, so deleting the source afterwards loses nothing', async () => {
     const srv = server();
     const laptop = device(srv, owner, 'owner_laptop');
     const { projectId, blobId, step } = await projectWithImport(srv, laptop);
     const request = await buildCopy(laptop, projectId, 'Bracket');
     const copyId = request.document!.projectId;
     const key = `e2ee/${copyId}/${blobId}`;
-    // The copy's object is removed twice: once right after its put (before
-    // its rows land), and once more after the commit, as if the repair
-    // itself had failed and the client retried the create.
     const putMock = srv.bucket.put as unknown as Mock<
       (key: string, body: ArrayBuffer | Uint8Array) => Promise<void>
     >;
     const put = putMock.getMockImplementation()!;
-    let firstPut = true;
+    let once = true;
     putMock.mockImplementation(async (written, body) => {
-      if (written === key && firstPut) {
-        firstPut = false;
-        return;
+      await put(written, body);
+      // Another attempt's rollback runs right after this copy's put,
+      // before its rows land.
+      if (written === key && once) {
+        once = false;
+        await discardCopiedObjects(
+          srv.env.DB as D1Database,
+          srv.bucket as never,
+          [key],
+          'another-attempt'
+        );
       }
-      return put(written, body);
     });
-    let dropped = 0;
-    laptop.answer = async (path, init, response) => {
+    // The source is deleted as soon as the copy's rows commit.
+    const db = srv.env.DB as D1Database;
+    const batch = db.batch.bind(db);
+    let sourceDeleted = false;
+    db.batch = async (statements: D1PreparedStatement[]) => {
+      const result = await batch(statements);
       if (
-        path === '/api/e2ee/projects' &&
-        init.method === 'POST' &&
-        !dropped++
+        !sourceDeleted &&
+        statements.some((statement) =>
+          (statement as unknown as { sql?: string }).sql?.includes(
+            'INSERT INTO projects'
+          )
+        )
       ) {
-        expect(response.status).toBe(201);
-        // The first request repaired its object after the commit.
-        expect(srv.bucket.objects.has(key)).toBe(true);
-        srv.bucket.objects.delete(key);
-        throw new TypeError('Failed to fetch');
+        sourceDeleted = true;
+        expect(
+          (await srv.call('DELETE', `/api/projects/${projectId}`)).status
+        ).toBe(204);
       }
-      return response;
+      return result;
     };
     const { document } = await laptop.store.copyProject({
       sourceProjectId: projectId,
       document: request.document!
     });
-    laptop.answer = undefined;
+    db.batch = batch;
+    expect(sourceDeleted).toBe(true);
     expect(document.projectId).toBe(copyId);
-    // The retry found the copy committed and copied the missing blob again.
-    expect(objectKeys(srv, copyId)).toEqual([key]);
+    expect(srv.bucket.objects.has(key)).toBe(true);
+    expect(
+      rows(
+        srv,
+        'SELECT object_key FROM r2_pending_objects WHERE object_key = ?',
+        key
+      )
+    ).toEqual([]);
     const desktop = device(srv, owner, 'owner_desktop');
     await desktop.store.loadProject(copyId);
     expect(await desktop.blobs.read(copyId, blobId)).toEqual(step);
+  });
+
+  it('refuses a copy retryably, committing nothing, when a copied object is missing before its rows land', async () => {
+    const srv = server();
+    const laptop = device(srv, owner, 'owner_laptop');
+    const { projectId, blobId } = await projectWithImport(srv, laptop);
+    const request = await buildCopy(laptop, projectId, 'Bracket');
+    const copyId = request.document!.projectId;
+    const key = `e2ee/${copyId}/${blobId}`;
+    const putMock = srv.bucket.put as unknown as Mock<
+      (key: string, body: ArrayBuffer | Uint8Array) => Promise<void>
+    >;
+    const put = putMock.getMockImplementation()!;
+    let lost = true;
+    putMock.mockImplementation(async (written, body) => {
+      // The put is lost.
+      if (written === key && lost) {
+        lost = false;
+        return;
+      }
+      return put(written, body);
+    });
+    await refusedWith(
+      laptop.store.copyProject({
+        sourceProjectId: projectId,
+        document: request.document!
+      }),
+      503,
+      'E2EE_COPY_SOURCE_UNAVAILABLE'
+    );
+    expect(projectIds(srv)).not.toContain(copyId);
+    // The retry copies and commits it.
+    await laptop.store.copyProject({
+      sourceProjectId: projectId,
+      document: request.document!
+    });
+    expect(srv.bucket.objects.has(key)).toBe(true);
   });
 });

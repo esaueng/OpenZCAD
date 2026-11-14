@@ -58,6 +58,16 @@ function database(
         if (query.includes('SELECT scope FROM account_erasure_requests')) {
           return fence.existingScope ? { scope: fence.existingScope } : null;
         }
+        // Recording the request answers its identity (RETURNING): a new
+        // request, or the open one of the same scope it joins.
+        if (query.includes('INSERT INTO account_erasure_requests')) {
+          const scope = call.params[1];
+          return fence.changes === 1 || fence.existingScope === scope
+            ? { identity: 1 }
+            : null;
+        }
+        // The request is still open for every later step.
+        if (query.includes('SELECT 1 AS current')) return { current: 1 };
         return null;
       },
       async all() {

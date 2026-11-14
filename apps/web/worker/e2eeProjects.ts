@@ -928,7 +928,7 @@ export async function runBatch(
     }
     // Migration 0051: this write's body was drained as abandoned before
     // its version could commit; the save stores it again on retry.
-    if (message.includes('e2ee_body_not_pending')) {
+    if (message.includes('r2_object_not_pending')) {
       refuse(
         503,
         'PROJECT_STORAGE_UNAVAILABLE',

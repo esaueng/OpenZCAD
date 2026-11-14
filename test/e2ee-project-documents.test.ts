@@ -2371,7 +2371,7 @@ describe('bodies a failed save could not remove (PR #1477 review, round 2)', () 
     expect(failed.status).toBe(503);
     expect(srv.bucket.objects.has(orphan)).toBe(true);
     // The failed attempt's body stays recorded, so it can be found again.
-    expect(rows(srv, 'SELECT object_key FROM e2ee_pending_bodies')).toEqual([
+    expect(rows(srv, 'SELECT object_key FROM r2_pending_objects')).toEqual([
       { object_key: orphan }
     ]);
     deleteMock.mockImplementation(remove);
@@ -2389,14 +2389,14 @@ describe('bodies a failed save could not remove (PR #1477 review, round 2)', () 
       (await srv.call('DELETE', `/api/projects/${projectId}`)).status
     ).toBe(204);
     expect(srv.bucket.objects.has(orphan)).toBe(false);
-    expect(rows(srv, 'SELECT object_key FROM e2ee_pending_bodies')).toEqual([]);
+    expect(rows(srv, 'SELECT object_key FROM r2_pending_objects')).toEqual([]);
   });
 
   it('removes such a body once it is old enough that no save can still commit it', async () => {
     const srv = server();
     const { projectId, orphan } = await failedBody(srv);
     srv.db
-      .prepare('UPDATE e2ee_pending_bodies SET created_at = ?')
+      .prepare('UPDATE r2_pending_objects SET created_at = ?')
       .run(Date.now() - 2 * 60 * 60 * 1000);
     // The next save's retention drains it.
     const laptop = device(srv, owner, 'owner_laptop');
@@ -2421,7 +2421,7 @@ describe('bodies a failed save could not remove (PR #1477 review, round 2)', () 
     );
     expect((await putVersion(srv, projectId, next)).status).toBe(200);
     expect(srv.bucket.objects.has(orphan)).toBe(false);
-    expect(rows(srv, 'SELECT object_key FROM e2ee_pending_bodies')).toEqual([]);
+    expect(rows(srv, 'SELECT object_key FROM r2_pending_objects')).toEqual([]);
     // A drained body can never be committed afterwards.
     expect(() =>
       srv.db
@@ -2440,6 +2440,153 @@ describe('bodies a failed save could not remove (PR #1477 review, round 2)', () 
           orphan,
           'w'.repeat(55)
         )
-    ).toThrow('e2ee_body_not_pending');
+    ).toThrow('r2_object_not_pending');
+  });
+});
+
+describe('bodies of refused and failed saves stay bounded (PR #1477 review, round 3)', () => {
+  const large = () => {
+    const payload = new Uint8Array(400_000);
+    for (let offset = 0; offset < payload.length; offset += 65_536) {
+      crypto.getRandomValues(
+        payload.subarray(offset, Math.min(payload.length, offset + 65_536))
+      );
+    }
+    return payload;
+  };
+
+  it('stores no body for a save a pending member rotation refuses, however often it is repeated', async () => {
+    const account = await makeAccount(OWNER, ['dev_a', 'dev_b']);
+    const srv = newServer([account]);
+    const laptop = device(srv, account, 'dev_a');
+    const { document: v1 } = await createEncrypted(laptop);
+    const projectId = v1.projectId;
+    const head = headOf(srv, projectId);
+    const hand = await handVersion(
+      laptop,
+      projectId,
+      {
+        documentVersion: v1.version + 1,
+        keyEpoch: 0,
+        previousVersionHash: fromHex(head.version_hash)
+      },
+      { expectedVersion: v1.version, plaintext: large() }
+    );
+    // A device is revoked and its signed cutoff stored; the project's key
+    // rotation has not happened yet.
+    await account.revoke(srv.db, 'dev_b');
+    const entry = account.list.entries.at(-1)!;
+    const signed = await signRevocationCutoffs(account.identityPrivateKey, {
+      userId: OWNER,
+      generation: 1,
+      entrySequence: entry.entry.sequence,
+      entryHash: entry.hash,
+      issuedAt: Date.now(),
+      cutoffs: [
+        {
+          projectId,
+          cutoffEpoch: 1,
+          head: {
+            documentVersion: v1.version,
+            versionHash: fromHex(head.version_hash)
+          }
+        }
+      ]
+    });
+    expect(
+      (
+        await srv.call('PUT', '/api/e2ee/revocation-cutoffs', {
+          body: {
+            generation: 1,
+            entrySequence: entry.entry.sequence,
+            statement: toBase64Url(signed.statement),
+            signature: toBase64Url(signed.signature)
+          }
+        })
+      ).status
+    ).toBe(200);
+    const putsBefore = srv.bucket.put.mock.calls.length;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const save = await putVersion(srv, projectId, hand);
+      expect(save.status).toBe(409);
+      expect(await save.json()).toMatchObject({
+        code: 'E2EE_MEMBER_ROTATION_PENDING'
+      });
+    }
+    // Refused before any body was stored.
+    expect(
+      srv.bucket.put.mock.calls
+        .slice(putsBefore)
+        .filter(([key]) => String(key).includes('/v/'))
+    ).toEqual([]);
+    expect(rows(srv, 'SELECT object_key FROM r2_pending_objects')).toEqual([]);
+  });
+
+  it('holds at most a few failed bodies per project, and the scheduled sweep reclaims them without another save', async () => {
+    const worker = (await import('../apps/web/worker/index')).default;
+    const srv = server();
+    const laptop = device(srv, owner, 'owner_laptop');
+    const { document: v1 } = await createEncrypted(laptop);
+    const projectId = v1.projectId;
+    const head = headOf(srv, projectId);
+    const hand = await handVersion(
+      laptop,
+      projectId,
+      {
+        documentVersion: v1.version + 1,
+        keyEpoch: 0,
+        previousVersionHash: fromHex(head.version_hash)
+      },
+      { expectedVersion: v1.version, plaintext: large() }
+    );
+    // Every body's confirmation and removal fail: each save leaves one.
+    const bucket = srv.bucket as unknown as {
+      head?: (key: string) => Promise<unknown>;
+    };
+    const head0 = bucket.head;
+    bucket.head = async (key: string) => {
+      if (key.includes('/v/')) throw new Error('transient head outage');
+      return head0 ? head0(key) : null;
+    };
+    const deleteMock = srv.bucket.delete as unknown as Mock<
+      (key: string) => Promise<void>
+    >;
+    const remove = deleteMock.getMockImplementation()!;
+    deleteMock.mockImplementation(async (key: string) => {
+      if (key.includes('/v/')) throw new Error('transient delete outage');
+      return remove(key);
+    });
+    const codes: string[] = [];
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const save = await putVersion(srv, projectId, hand);
+      expect(save.status).toBe(503);
+      codes.push(((await save.json()) as { code: string }).code);
+    }
+    // Eight left behind, then no new body is stored at all.
+    expect(codes.slice(0, 8)).toEqual(
+      Array(8).fill('PROJECT_STORAGE_UNAVAILABLE')
+    );
+    expect(codes.slice(8)).toEqual([
+      'STORAGE_CLEANUP_BUSY',
+      'STORAGE_CLEANUP_BUSY'
+    ]);
+    const pending = rows<{ object_key: string }>(
+      srv,
+      'SELECT object_key FROM r2_pending_objects'
+    );
+    expect(pending).toHaveLength(8);
+    deleteMock.mockImplementation(remove);
+    bucket.head = head0;
+    // An hour on, the scheduled sweep removes them with no save at all.
+    srv.db
+      .prepare('UPDATE r2_pending_objects SET created_at = ?')
+      .run(Date.now() - 2 * 60 * 60 * 1000);
+    await worker.scheduled({}, srv.env);
+    expect(rows(srv, 'SELECT object_key FROM r2_pending_objects')).toEqual([]);
+    for (const { object_key } of pending) {
+      expect(srv.bucket.objects.has(object_key)).toBe(false);
+    }
+    // And the save goes through.
+    expect((await putVersion(srv, projectId, hand)).status).toBe(200);
   });
 });

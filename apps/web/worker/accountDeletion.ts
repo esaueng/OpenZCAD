@@ -22,6 +22,7 @@ import type {
   UserId
 } from '@openzcad/shared';
 import {
+  cachedSchemaProbe,
   isProjectInstanceReady,
   type CloudflareEnv,
   type ProjectCollaborationRoom
@@ -195,32 +196,71 @@ export async function assertAccountNotErasing(
   }
 }
 
+/** Whether migration 0052's erasure request tokens are installed. */
+const isErasureRequestTokenReady = cachedSchemaProbe(
+  `SELECT COUNT(*) AS ready FROM pragma_table_info('account_erasure_requests')
+   WHERE name = 'request_token'`,
+  (row) => row?.ready === 1
+);
+
+/**
+ * Which erasure request an attempt serves: its token (migration 0052), set
+ * when the request was first recorded and kept by its retries, or before
+ * that migration its `started_at`.
+ */
+interface ErasureRequest {
+  column: 'request_token' | 'started_at';
+  value: string | number;
+}
+
+/** `account_erasure_requests` row `r` is still `request`. */
+function requestOpen(request: ErasureRequest): string {
+  return `EXISTS (SELECT 1 FROM account_erasure_requests r
+                  WHERE r.user_id = ? AND r.${request.column} = ?)`;
+}
+
+/**
+ * Records the erasure request, or joins the open one of the same scope,
+ * and answers its identity from that same statement: no later read can
+ * pick up a request another attempt completed (or one started since).
+ */
 async function beginErasure(
   db: D1Database,
   userId: UserId,
   scope: AccountDeletionScope
-): Promise<void> {
+): Promise<ErasureRequest> {
   const timestamp = Math.floor(Date.now() / 1_000);
-  const result = await db
+  const tokens = await isErasureRequestTokenReady(db);
+  const column = tokens ? 'request_token' : 'started_at';
+  const row = await db
     .prepare(
       `INSERT INTO account_erasure_requests
-         (user_id, scope, started_at, updated_at)
-       VALUES (?, ?, ?, ?)
-       ON CONFLICT(user_id) DO UPDATE SET updated_at = excluded.updated_at
-       WHERE account_erasure_requests.scope = excluded.scope`
+         (user_id, scope, started_at, updated_at${tokens ? ', request_token' : ''})
+       VALUES (?, ?, ?, ?${tokens ? ', ?' : ''})
+       ON CONFLICT(user_id) DO UPDATE SET updated_at = excluded.updated_at${
+         tokens
+           ? `, request_token = COALESCE(account_erasure_requests.request_token,
+                                         excluded.request_token)`
+           : ''
+       }
+       WHERE account_erasure_requests.scope = excluded.scope
+       RETURNING ${column} AS identity`
     )
-    .bind(userId, scope, timestamp, timestamp)
-    .run();
-  if (result.meta?.changes === 1) {
-    return;
+    .bind(
+      userId,
+      scope,
+      timestamp,
+      timestamp,
+      ...(tokens ? [crypto.randomUUID()] : [])
+    )
+    .first<{ identity: string | number | null }>();
+  if (row && row.identity !== null && row.identity !== undefined) {
+    return { column, value: row.identity };
   }
   const existing = await db
     .prepare(`SELECT scope FROM account_erasure_requests WHERE user_id = ?`)
     .bind(userId)
     .first<{ scope: AccountDeletionScope }>();
-  if (existing?.scope === scope) {
-    return;
-  }
   throw new AccountDeletionError(
     409,
     'ACCOUNT_ERASURE_SCOPE_CONFLICT',
@@ -235,9 +275,12 @@ async function beginErasure(
  */
 async function ownedProjectInstances(
   db: D1Database,
-  userId: UserId
+  userId: UserId,
+  request?: ErasureRequest
 ): Promise<OwnedProjectInstance[]> {
   const instances = await isProjectInstanceReady(db);
+  // With `request`, listed only while that very request is open, in the
+  // same statement: an attempt a retry already completed lists nothing.
   const rows = await db
     .prepare(
       `SELECT p.id, ${
@@ -246,9 +289,11 @@ async function ownedProjectInstances(
               WHERE i.project_id = p.id)`
           : 'NULL'
       } AS instance_id
-       FROM projects p WHERE p.user_id = ? ORDER BY p.id`
+       FROM projects p WHERE p.user_id = ?${
+         request ? ` AND ${requestOpen(request)}` : ''
+       } ORDER BY p.id`
     )
-    .bind(userId)
+    .bind(userId, ...(request ? [userId, request.value] : []))
     .all<{ id: string; instance_id: string | null }>();
   return (rows.results ?? []).map((row) => ({
     projectId: row.id,
@@ -273,30 +318,28 @@ async function remainingInstances(
 }
 
 /**
- * Whether this erasure request (by its `started_at`, migration 0014) is
- * still the one in progress: a retry that completed it removed its row, so
- * a stale attempt that resumes afterwards stops instead of continuing.
+ * Whether `request` is still open: a retry that completed it removed its
+ * row, so a stale attempt that resumes afterwards stops instead of going on.
  */
 async function erasureStillCurrent(
   db: D1Database,
   userId: UserId,
-  startedAt: number | null
+  request: ErasureRequest
 ): Promise<boolean> {
-  if (startedAt === null) return true;
   return !!(await db
-    .prepare(
-      `SELECT 1 AS current FROM account_erasure_requests
-       WHERE user_id = ? AND started_at = ?`
-    )
-    .bind(userId, startedAt)
+    .prepare(`SELECT 1 AS current WHERE ${requestOpen(request)}`)
+    .bind(userId, request.value)
     .first<{ current: number }>());
 }
 
+/** False when the request stopped being current before every room went. */
 async function eraseProjectRooms(
   env: AccountDeletionEnv,
-  projects: readonly OwnedProjectInstance[]
-): Promise<void> {
+  projects: readonly OwnedProjectInstance[],
+  stillCurrent: () => Promise<boolean>
+): Promise<boolean> {
   for (const { projectId, instance } of projects) {
+    if (!(await stillCurrent())) return false;
     const response = await env.PROJECT_ROOM!.getByName(projectId).fetch(
       new Request(
         `https://project-room.internal/?projectId=${encodeURIComponent(projectId)}`,
@@ -314,6 +357,7 @@ async function eraseProjectRooms(
       throw new Error(`Project room erasure failed for ${projectId}.`);
     }
   }
+  return true;
 }
 
 function profileCleanupStatements(
@@ -497,18 +541,10 @@ export async function deleteAccountData(
   }
 
   const db = env.DB!;
-  await beginErasure(db, session.userId, input.scope);
-  // This attempt's request, by when it started: an overlapping retry that
-  // completes the request removes it, and this attempt then stops.
-  const startedAt =
-    (
-      await db
-        .prepare(
-          `SELECT started_at FROM account_erasure_requests WHERE user_id = ?`
-        )
-        .bind(session.userId)
-        .first<{ started_at: number }>()
-    )?.started_at ?? null;
+  // This attempt's request: an overlapping retry that completes it removes
+  // it, and this attempt then stops before its next destructive step.
+  const request = await beginErasure(db, session.userId, input.scope);
+  const stillCurrent = () => erasureStillCurrent(db, session.userId, request);
   const completedElsewhere = (projectIds: ProjectId[]) =>
     ({
       ok: true,
@@ -518,10 +554,12 @@ export async function deleteAccountData(
     }) satisfies DeleteAccountDataResponse;
   let deletedProjectIds: ProjectId[] = [];
   if (input.scope === 'projects' || input.scope === 'all') {
-    const before = await ownedProjectInstances(db, session.userId);
+    const before = await ownedProjectInstances(db, session.userId, request);
     const beforeIds = before.map((row) => row.projectId as ProjectId);
-    await eraseProjectRooms(env, before);
-    if (!(await erasureStillCurrent(db, session.userId, startedAt))) {
+    if (
+      !(await eraseProjectRooms(env, before, stillCurrent)) ||
+      !(await stillCurrent())
+    ) {
       return completedElsewhere(beforeIds);
     }
     const removed = await persistence.deleteOwnedProjects(
@@ -535,14 +573,17 @@ export async function deleteAccountData(
       throw new Error('Owned cloud projects remain after deletion.');
     }
   }
-  if (!(await erasureStillCurrent(db, session.userId, startedAt))) {
+  if (!(await stillCurrent())) {
     return completedElsewhere(deletedProjectIds);
   }
 
   if (input.scope === 'projects') {
     await db
-      .prepare(`DELETE FROM account_erasure_requests WHERE user_id = ?`)
-      .bind(session.userId)
+      .prepare(
+        `DELETE FROM account_erasure_requests
+         WHERE user_id = ? AND ${request.column} = ?`
+      )
+      .bind(session.userId, request.value)
       .run();
   } else {
     const email = session.email?.trim().toLowerCase();

@@ -34,37 +34,54 @@ BEGIN
   );
 END;
 
--- Bodies being written. A save records its body's key here before the R2
--- put; the version row that names the body clears it (trigger below). A
--- row left behind is an attempt that failed after its put and could not
--- remove its own object: project deletion, the encrypted-data drop and
--- retention delete those objects (under a claim) and then the row. A
--- per-attempt key (`…/v/<hash>.<nonce>`) can name a version only while
--- its row is still here, so a body drained as abandoned is never committed.
-CREATE TABLE IF NOT EXISTS e2ee_pending_bodies (
-  object_key TEXT PRIMARY KEY CHECK (length(object_key) BETWEEN 1 AND 512),
+-- Objects being written before their rows (migration 0050's writers that
+-- put bytes first): encrypted version bodies and encrypted-copy blobs. A
+-- writer records each key here, under its own attempt token, before the R2
+-- put; the row that then names the key clears every record of it (triggers
+-- below). While another attempt's record names a key, no cleanup can claim
+-- it, so a rollback never removes bytes an attempt still in flight wrote.
+-- A record left behind is an attempt that failed and could not remove its
+-- own object: project deletion, the encrypted-data drop, retention and the
+-- scheduled sweep delete those objects (under a claim) and then the record.
+-- A per-attempt version body (`…/v/<hash>.<nonce>`) can name a version only
+-- while it is still recorded, so a body drained as abandoned never commits.
+CREATE TABLE IF NOT EXISTS r2_pending_objects (
+  object_key TEXT NOT NULL CHECK (length(object_key) BETWEEN 1 AND 512),
+  attempt TEXT NOT NULL CHECK (length(attempt) BETWEEN 1 AND 64),
   project_id TEXT NOT NULL,
-  created_at INTEGER NOT NULL CHECK (created_at >= 0)
+  bucket TEXT NOT NULL CHECK (bucket IN ('project-storage', 'artifacts')),
+  created_at INTEGER NOT NULL CHECK (created_at >= 0),
+  PRIMARY KEY (object_key, attempt)
 ) WITHOUT ROWID;
 
-CREATE INDEX IF NOT EXISTS e2ee_pending_bodies_project
-  ON e2ee_pending_bodies (project_id, created_at);
+CREATE INDEX IF NOT EXISTS r2_pending_objects_project
+  ON r2_pending_objects (project_id, created_at);
 
-DROP TRIGGER IF EXISTS e2ee_pending_body_required;
-CREATE TRIGGER e2ee_pending_body_required
+CREATE INDEX IF NOT EXISTS r2_pending_objects_age
+  ON r2_pending_objects (created_at);
+
+DROP TRIGGER IF EXISTS r2_pending_version_body_required;
+CREATE TRIGGER r2_pending_version_body_required
 BEFORE INSERT ON e2ee_project_versions
 WHEN NEW.envelope_key GLOB '*/v/*.*'
   AND NOT EXISTS (
-    SELECT 1 FROM e2ee_pending_bodies WHERE object_key = NEW.envelope_key
+    SELECT 1 FROM r2_pending_objects WHERE object_key = NEW.envelope_key
   )
 BEGIN
-  SELECT RAISE(ABORT, 'e2ee_body_not_pending');
+  SELECT RAISE(ABORT, 'r2_object_not_pending');
 END;
 
-DROP TRIGGER IF EXISTS e2ee_pending_body_committed;
-CREATE TRIGGER e2ee_pending_body_committed
+DROP TRIGGER IF EXISTS r2_pending_version_body_committed;
+CREATE TRIGGER r2_pending_version_body_committed
 AFTER INSERT ON e2ee_project_versions
 WHEN NEW.envelope_key IS NOT NULL
 BEGIN
-  DELETE FROM e2ee_pending_bodies WHERE object_key = NEW.envelope_key;
+  DELETE FROM r2_pending_objects WHERE object_key = NEW.envelope_key;
+END;
+
+DROP TRIGGER IF EXISTS r2_pending_content_blob_committed;
+CREATE TRIGGER r2_pending_content_blob_committed
+AFTER INSERT ON e2ee_content_blobs
+BEGIN
+  DELETE FROM r2_pending_objects WHERE object_key = NEW.object_key;
 END;
