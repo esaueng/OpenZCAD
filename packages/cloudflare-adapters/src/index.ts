@@ -3146,7 +3146,11 @@ export class D1R2PersistenceService implements PersistenceService {
         documentVersion: saved.version,
         updatedAt: saved.updatedAt,
         lastRevisionId: document.revisions.at(-1)?.revisionId,
-        revisionCount: document.revisions.length
+        revisionCount: document.revisions.length,
+        // A new version: the copy state's size described the previous one.
+        documentBytes: persistedDocumentBytes(
+          withoutDerivedProjection(document)
+        )
       },
       document: {
         ...document,
@@ -7861,6 +7865,8 @@ export class D1R2PersistenceService implements PersistenceService {
         revisionCount: document.revisions.length,
         updatedAt,
         documentVersion: document.version,
+        // The figure the row was just written with.
+        documentBytes: persistedDocumentBytes(document),
         organization
       };
     }
@@ -7909,6 +7915,7 @@ export class D1R2PersistenceService implements PersistenceService {
       lastRevisionId: document.revisions.at(-1)?.revisionId,
       revisionCount: document.revisions.length,
       updatedAt,
+      documentBytes: persistedDocumentBytes(document),
       organization
     };
   }

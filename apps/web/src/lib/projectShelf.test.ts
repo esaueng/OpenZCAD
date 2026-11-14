@@ -1,8 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 import { toArtifactId, type ProjectSummary } from '@openzcad/shared';
 import {
+  createProjectDocument,
+  withoutDerivedProjection
+} from '@openzcad/document-core';
+import { persistedDocumentBytes, toUserId } from '@openzcad/shared';
+import {
   cachedThumbnailSource,
   mergeProjectSummaries,
+  summarizeLocalDocument,
+  withSavedVersion,
   retainPendingShelfOrder,
   prioritizeShelfEntries,
   withVerifiedShelfMetadata,
@@ -24,6 +31,35 @@ it('verifies pinned and visible cards first without dropping or mutating records
     )
   ).toEqual(['pinned', 'visible', 'offscreen', 'other']);
   expect(records[0]?.projectId).toBe('offscreen');
+});
+
+describe('sizes on rows the app adds or moves itself', () => {
+  const document = createProjectDocument('Bracket', toUserId('user_size'));
+  const measured = (doc: typeof document) =>
+    persistedDocumentBytes(withoutDerivedProjection(doc));
+
+  // Review of #1512: a created or duplicated project read "Not measured yet"
+  // until the next listing.
+  it('measures a document the device just stored', () => {
+    expect(summarizeLocalDocument(document).documentBytes).toBe(
+      measured(document)
+    );
+  });
+
+  // Review of #1512: a rename moved the row's version but kept the size of
+  // the version before.
+  it('moves the size with the version', () => {
+    const before = summarizeLocalDocument(document);
+    const renamed = {
+      ...document,
+      name: 'Bracket with a much longer name than before',
+      version: document.version + 1
+    };
+    const after = withSavedVersion(before, renamed);
+    expect(after.documentVersion).toBe(renamed.version);
+    expect(after.documentBytes).toBe(measured(renamed));
+    expect(after.documentBytes).toBeGreaterThan(before.documentBytes!);
+  });
 });
 
 describe('merged project sizes', () => {

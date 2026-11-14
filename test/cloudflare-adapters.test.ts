@@ -24,6 +24,7 @@ import {
 import {
   MAX_PERSISTED_DOCUMENT_BYTES,
   MAX_PROJECT_REVISION_RECORDS,
+  persistedDocumentBytes,
   toArtifactId,
   toProjectId,
   toUploadSessionId,
@@ -32,7 +33,8 @@ import {
 import {
   addPrimitiveFeature,
   createProjectDocument,
-  mergeCollaborationDocuments
+  mergeCollaborationDocuments,
+  withoutDerivedProjection
 } from '@openzcad/document-core';
 import { CommandManager, commandFactories } from '@openzcad/command-system';
 import { RevisionConflictError } from '@openzcad/persistence';
@@ -1240,6 +1242,25 @@ describe('cloudflare adapters', () => {
       service.purgeExpiredProjects(toUserId('user_test'))
     ).rejects.toThrow('R2 unavailable');
     expect(batch).not.toHaveBeenCalled();
+  });
+
+  it('returns a new project with the size its row records, as the listing reads it', async () => {
+    const owner = toUserId('user_size_owner');
+    const db = migratedDatabase();
+    db.prepare(
+      `INSERT INTO users (id, email, created_at) VALUES (?, ?, ?)`
+    ).run(owner, 'owner@example.com', '2026-01-01T00:00:00.000Z');
+    const service = new D1R2PersistenceService({ DB: sqliteD1(db) });
+
+    // Without it a copy or new project showed "not measured" until the next
+    // listing, though the row already held its size.
+    const created = await service.createProject(owner, { name: 'Sized' });
+    const expected = persistedDocumentBytes(
+      withoutDerivedProjection(created.document)
+    );
+    expect(created.project.documentBytes).toBe(expected);
+    const listed = await service.listProjects(owner);
+    expect(listed.projects[0]?.documentBytes).toBe(expected);
   });
 
   it.each([

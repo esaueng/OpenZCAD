@@ -1,14 +1,59 @@
+import { withoutDerivedProjection } from '@openzcad/document-core';
 import {
   compareProjectSummaries,
   isSupportedProjectFormat,
+  persistedDocumentBytes,
   PROJECT_FORMAT_UNSUPPORTED_MESSAGE,
   projectOrganization,
   SUPPORTED_PROJECT_FORMATS,
+  type ProjectDocument,
   type ProjectOrganization,
   type ProjectStatus,
   type ProjectSummary
 } from '@openzcad/shared';
 import type { ProjectThumbnailRecord } from './localProjectStore';
+
+/**
+ * A document's size as every store records it: the canonical document,
+ * without its derived projection (see {@link ProjectSummary.documentBytes}).
+ */
+export function measuredDocumentBytes(document: ProjectDocument): number {
+  return persistedDocumentBytes(withoutDerivedProjection(document));
+}
+
+/**
+ * Start-screen summary of a document held on this device, for a row the app
+ * adds before the next listing: a project just created, copied or imported.
+ */
+export function summarizeLocalDocument(
+  document: ProjectDocument,
+  organization?: ProjectOrganization
+): ProjectSummary {
+  return {
+    projectId: document.projectId,
+    name: document.name,
+    lastRevisionId: document.revisions.at(-1)?.revisionId,
+    updatedAt: document.derived.updatedAt,
+    revisionCount: document.checkpoints.length,
+    documentBytes: measuredDocumentBytes(document),
+    ...(organization ? { organization } : {})
+  };
+}
+
+/**
+ * A shelf row moved to a version the app just saved. The size moves with the
+ * version: left as it was, it would describe the version before.
+ */
+export function withSavedVersion(
+  summary: ProjectSummary,
+  document: ProjectDocument
+): ProjectSummary {
+  return {
+    ...summary,
+    documentVersion: document.version,
+    documentBytes: measuredDocumentBytes(document)
+  };
+}
 
 /** What a shelf card says for a project stored in a format this build cannot open. */
 export const PROJECT_UPDATE_REQUIRED_LABEL =

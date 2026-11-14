@@ -1651,7 +1651,9 @@ import {
   PROJECT_FORMAT_UNSUPPORTED_MESSAGE,
   projectNeedsUpdate,
   resolveShelfThumbnail,
-  cachedThumbnailSource
+  cachedThumbnailSource,
+  summarizeLocalDocument,
+  withSavedVersion
 } from './lib/projectShelf';
 import { preparePartThumbnails } from './components/PartThumbnail';
 import { folderStorageKey, readLibraryFolders } from './lib/libraryFolders';
@@ -2170,21 +2172,6 @@ function desktopAuthorizationAttemptFromLocation(): string | null {
     'desktopAuth'
   );
   return attempt && /^[A-Za-z0-9-]{16,64}$/.test(attempt) ? attempt : null;
-}
-
-/** Start-screen summary of a document held on this device. */
-function summarizeLocalDocument(
-  document: ProjectDocument,
-  organization?: ProjectOrganization
-): ProjectSummary {
-  return {
-    projectId: document.projectId,
-    name: document.name,
-    lastRevisionId: document.revisions.at(-1)?.revisionId,
-    updatedAt: document.derived.updatedAt,
-    revisionCount: document.checkpoints.length,
-    ...(organization ? { organization } : {})
-  };
 }
 
 interface HydrateOptions {
@@ -14838,11 +14825,7 @@ export function App() {
       setProjects((current) =>
         current.map((candidate) =>
           candidate.projectId === project.projectId
-            ? {
-                ...candidate,
-                name: stored.name,
-                documentVersion: stored.version
-              }
+            ? { ...withSavedVersion(candidate, stored), name: stored.name }
             : candidate
         )
       );
