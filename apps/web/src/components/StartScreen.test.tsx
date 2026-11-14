@@ -2485,8 +2485,9 @@ describe('StartScreen storage readout', () => {
         })
     );
     const { result, rerender } = renderHook(
-      ({ key }) => useAccountStorageUsage(load, 'account', key),
-      { initialProps: { key: '1:0:0' as string | null } }
+      ({ key }: { key: string | null }) =>
+        useAccountStorageUsage(load, 'account', key),
+      { initialProps: { key: '1:0:0' } }
     );
     rerender({ key: null });
     await act(async () => resolve(storageReport()));
