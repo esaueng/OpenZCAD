@@ -106,3 +106,24 @@ export function useCollapsedFolders(projectId: string | null): {
   );
   return { collapsed: current.collapsed, toggle, expand };
 }
+
+/**
+ * The bodies selected after a click on a folder row. A plain click picks the
+ * folder's bodies alone, so an empty folder clears the selection rather than
+ * leaving the previous pick behind. ⌘/Shift toggles the folder as it toggles
+ * a body: one already wholly picked leaves the selection, anything else
+ * joins it, and an empty folder changes nothing.
+ */
+export function folderClickSelection<T>(
+  selected: readonly T[],
+  folderBodies: readonly T[],
+  additive: boolean
+): T[] {
+  if (!additive) return [...folderBodies];
+  if (folderBodies.length === 0) return [...selected];
+  const inFolder = new Set(folderBodies);
+  if (folderBodies.every((id) => selected.includes(id))) {
+    return selected.filter((id) => !inFolder.has(id));
+  }
+  return [...new Set([...selected, ...folderBodies])];
+}
