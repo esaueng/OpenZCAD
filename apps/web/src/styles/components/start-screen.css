@@ -955,6 +955,10 @@
   .start-toolbar {
     position: relative;
     z-index: 4;
+    /* The filter row's 40px under the gap, on every shelf: Archive and
+       Trash have no filters, and the padding ate their 40px, lifting the
+       title 5px against Projects. */
+    min-height: calc(40px + var(--island-gap));
     padding-top: var(--island-gap);
     background: var(--color-bg);
   }
@@ -1670,7 +1674,7 @@
 .start-tile-grid.is-list .start-tile-open {
   grid-template-columns:
     52px minmax(0, 1fr) clamp(7rem, 12vw, 170px) clamp(6.5rem, 11vw, 160px)
-    56px 88px;
+    76px 88px;
 }
 
 .start-list-head {
@@ -1768,8 +1772,10 @@
   order: 3;
 }
 
+/* Wide enough for a folder's "12 projects" as well as a part's saves. */
 .start-tile-grid.is-list .start-tile-rev {
   order: 4;
+  white-space: nowrap;
 }
 
 .start-tile-grid.is-list .start-tile-purge {
@@ -2060,6 +2066,11 @@
 
   .start-tile-grid.is-list .start-tile-rev {
     display: none;
+  }
+
+  /* A folder's count is its only line under the name. */
+  .start-tile-grid.is-list .start-tile-folder .start-tile-rev {
+    display: inline;
   }
 }
 
