@@ -6270,6 +6270,27 @@ export function App() {
   assemblyEditDisabledReasonRef.current = assemblyEditDisabledReason;
   const projectRenameDisabledReasonRef = useRef(projectRenameDisabledReason);
   projectRenameDisabledReasonRef.current = projectRenameDisabledReason;
+  // An import into a project that is still empty and still wears its
+  // suggested name names the project for the file once the import lands as
+  // its first content (lib/importProjectName, loaded with the first import:
+  // the main chunk is at its size budget).
+  const importNamingRef = useRef<
+    ((next: ProjectDocument) => string | null | undefined) | null
+  >(null);
+  useEffect(() => {
+    const name = doc ? importNamingRef.current?.(doc) : null;
+    if (name === undefined) return;
+    importNamingRef.current = null;
+    if (doc && name && projectRenameDisabledReasonRef.current === null) {
+      executeCommand(
+        commandFactories.renameNode({ nodeId: doc.rootNodeId, name }),
+        undefined,
+        'rename'
+      );
+    }
+    // executeCommand is this render's, which holds the changed document.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc]);
 
   /** "Cannot use Box: …": one stop, even after a reason that ends in "…". */
   function cannotSentence(action: string, reason: string): string {
@@ -17342,6 +17363,9 @@ export function App() {
   }
 
   async function handleImportFiles(files: File[]) {
+    importNamingRef.current = doc
+      ? (await import('./lib/importProjectName')).watchImportNaming(doc, files)
+      : null;
     const shaprFiles = files.filter((file) => /\.shapr$/i.test(file.name));
     if (shaprFiles.length === 0) {
       if (files.length !== 1) {
@@ -18271,7 +18295,7 @@ export function App() {
     switch (command) {
       case 'open-model':
         void openDesktopCadFile()
-          .then((file) => (file ? handleImportFile(file) : undefined))
+          .then((file) => (file ? handleImportFiles([file]) : undefined))
           .catch((error) => {
             setStatus(errorMessage(error, 'Could not open the CAD model.'));
           });
