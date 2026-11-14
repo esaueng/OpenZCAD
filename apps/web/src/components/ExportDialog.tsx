@@ -13,8 +13,11 @@ import {
   type UnitSystem
 } from '@openzcad/shared';
 import { countLabel } from '../lib/toasts';
+import { submitOnEnter } from '../lib/submitOnEnter';
 import { useModalFocus } from '../lib/useModalFocus';
 import { StableLabel } from './StableLabel';
+import { describeFailure, type PlainFailure } from '../lib/plainFailure';
+import { FailureDetails } from './FailureDetails';
 
 /** Worker export formats this dialog can request; `stl` is ASCII. */
 export type MeshExportDialogFormat =
@@ -187,7 +190,7 @@ export function ExportDialog({
   documentUnits = 'mm',
   onExportUnitsChange
 }: ExportDialogProps) {
-  const dialogRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLFormElement>(null);
   // Escape must still close the dialog when focus has fallen out of it (a
   // click on the backdrop drops it on the body). The workspace keymap stands
   // down while the dialog is open, so nothing else would take the key.
@@ -204,7 +207,9 @@ export function ExportDialog({
   const [angle, setAngle] = useState<AngleOption>(20);
   const [phase, setPhase] = useState<'idle' | 'checking'>('idle');
   const [progress, setProgress] = useState<ExportProgress | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // A failed check is not a failed export: it says so, and keeps the
+  // kernel's own words under Details rather than as the message.
+  const [error, setError] = useState<PlainFailure | null>(null);
   const [report, setReport] = useState<{
     deflection: number;
     angle: AngleOption;
@@ -298,9 +303,11 @@ export function ExportDialog({
     } catch (checkError) {
       setReport(null);
       setError(
-        checkError instanceof Error
-          ? checkError.message
-          : 'The printability check failed.'
+        describeFailure(checkError, {
+          fallback:
+            'The watertightness check could not run on this model. The export is unaffected.',
+          technical: true
+        })
       );
     } finally {
       setPhase('idle');
@@ -309,7 +316,7 @@ export function ExportDialog({
   }
 
   function runExport() {
-    if (deflection === null || phase !== 'idle') {
+    if (deflection === null || phase !== 'idle' || bodies.length === 0) {
       return;
     }
     const angularTolerance = angularToleranceFor(angle);
@@ -324,18 +331,27 @@ export function ExportDialog({
 
   return (
     <div className="modal-backdrop">
-      <div
+      {/* A form, so Enter in any field exports; runExport keeps its guard,
+          and the app's own range message stands in for the browser's. */}
+      <form
         ref={dialogRef}
         className="export-dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby="export-dialog-title"
         tabIndex={-1}
+        noValidate
+        onSubmit={(event) => {
+          event.preventDefault();
+          runExport();
+        }}
         onKeyDown={(event) => {
           if (event.key === 'Escape') {
             event.stopPropagation();
             onClose();
+            return;
           }
+          submitOnEnter(event);
         }}
       >
         <h2 id="export-dialog-title">
@@ -551,9 +567,10 @@ export function ExportDialog({
             appeared here pushed the buttons down under the pointer. */}
         <div className="export-dialog-status">
           {error ? (
-            <p className="export-dialog-error" role="alert">
-              {error}
-            </p>
+            <div className="export-dialog-check-failed" role="alert">
+              <p>{error.message}</p>
+              <FailureDetails detail={error.detail} />
+            </div>
           ) : phase !== 'idle' && progress ? (
             <p className="export-dialog-progress" role="status">
               <LoaderCircle size={13} className="spin" aria-hidden="true" />
@@ -567,18 +584,17 @@ export function ExportDialog({
             Cancel
           </button>
           <button
-            type="button"
+            type="submit"
             className="primary"
             disabled={
               deflection === null || phase !== 'idle' || bodies.length === 0
             }
-            onClick={runExport}
           >
             <Download size={13} aria-hidden="true" />
             Export {FORMAT_LABELS[format]}
           </button>
         </div>
-      </div>
+      </form>
     </div>
   );
 }

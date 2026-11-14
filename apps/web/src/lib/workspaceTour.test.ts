@@ -3,6 +3,7 @@ import {
   advanceOnSignals,
   advanceThroughCompleted,
   tourStepBody,
+  tourStepTarget,
   WORKSPACE_TOUR_STEPS,
   type WorkspaceTourSignals
 } from './workspaceTour';
@@ -38,6 +39,27 @@ describe('workspace tour', () => {
     );
   });
 
+  it('speaks to a finger on a touch-only device (I12)', () => {
+    for (const step of WORKSPACE_TOUR_STEPS) {
+      const touch = tourStepBody(step, () => 'B', true);
+      expect(touch.length).toBeGreaterThan(0);
+      // No key to press, nothing to click or right-click.
+      expect(touch).not.toMatch(/\bpress\b|\bclick|right-click|\bEnter\b/i);
+    }
+    const [create, , history] = WORKSPACE_TOUR_STEPS;
+    expect(tourStepBody(create!, () => 'B', true)).toContain(
+      'Tap Box (the cube)'
+    );
+    expect(tourStepBody(create!, () => 'B', true)).toContain('then Done');
+    expect(tourStepBody(history!, () => 'B', true)).toContain(
+      'touch and hold a row'
+    );
+    // The desktop wording is unchanged.
+    expect(tourStepBody(history!, () => 'B')).toContain(
+      'right-click a row for actions'
+    );
+  });
+
   it('advances exactly through the steps the user already did', () => {
     expect(advanceThroughCompleted(0, signals())).toBe(0);
     expect(advanceThroughCompleted(0, signals({ featureCount: 1 }))).toBe(1);
@@ -65,18 +87,40 @@ describe('workspace tour', () => {
     ).toBe(2);
   });
 
-  it('moves on from the history step when History is opened from it', () => {
-    // The step stayed put while the user did exactly what it asked.
+  it('holds the history step over the panel it opened (I16)', () => {
+    // Moving on as History opened took the grip, row and rollback tips away
+    // while the panel was still arriving: the step stays, until Next.
     const shown = signals({ featureCount: 1, hasSelection: true });
-    expect(advanceOnSignals(2, shown, { ...shown, historyOpen: true })).toBe(3);
-    // Opened and the export dialog already seen: nothing is left to teach.
+    const open = { ...shown, historyOpen: true };
+    expect(advanceOnSignals(2, shown, open)).toBe(2);
     expect(
       advanceOnSignals(
         2,
         { ...shown, exportSeen: true },
-        { ...shown, exportSeen: true, historyOpen: true }
+        { ...open, exportSeen: true }
       )
-    ).toBe(WORKSPACE_TOUR_STEPS.length);
+    ).toBe(2);
+    // It points at the History button, then at the panel that opened.
+    expect(tourStepTarget(2, shown)).toBe(
+      '.rail-panels [aria-label="History panel"]'
+    );
+    expect(tourStepTarget(2, open)).toBe('.model-panel-history');
+  });
+
+  it('names and outlines the rail foot, and points the last step at File (I16)', () => {
+    const [create, , , exportStep] = WORKSPACE_TOUR_STEPS;
+    for (const touch of [false, true]) {
+      const body = tourStepBody(create!, () => 'B', touch);
+      expect(body).toContain('More tools (⋯) at its foot');
+      expect(body).not.toContain('Tools at its foot');
+      expect(tourStepBody(exportStep!, () => 'B', touch)).toMatch(
+        /^File › Export /
+      );
+    }
+    expect(tourStepTarget(0, signals())).toBe(
+      '.tool-palette, .command-more-toggle'
+    );
+    expect(tourStepTarget(3, signals())).toBe('.file-menu > summary');
   });
 
   it("reads opening History as the history step's action only", () => {

@@ -234,6 +234,13 @@ export const KEYBOARD_CONTROL_GROUPS = [
           'See through faces to hidden edges, and pick or box-select through them.'
       },
       {
+        id: 'orbit-mode',
+        ...bound('view-orbit-mode'),
+        action: 'Toggle orbit mode',
+        detail:
+          'Switch between free orbiting, which carries over the top and bottom, and a turntable that keeps Z up.'
+      },
+      {
         id: 'hide-panels',
         ...bound('panels-hide-all'),
         action: 'Hide or show the model panels',
@@ -251,9 +258,9 @@ export const KEYBOARD_CONTROL_GROUPS = [
       {
         id: 'workspace-mode',
         ...bound('workspace-mode-cycle'),
-        action: 'Cycle View, Tweak and Build',
+        action: 'Next workspace mode',
         detail:
-          'A shared project you can only read stays in View, and says why.'
+          'Steps through View, Tweak, Build, Assemble and Draw, skipping any that are unavailable. A shared project you can only read stays in View, and says why.'
       },
       {
         id: 'measure',
@@ -456,7 +463,7 @@ export const POINTER_CONTROL_GROUPS = [
     items: [
       {
         id: 'orbit',
-        keys: ['Shift + left-drag'],
+        keys: ['Shift+Left-drag'],
         action: 'Orbit',
         detail: 'Rotate around the most recently selected point.'
       },
@@ -505,7 +512,7 @@ export const POINTER_CONTROL_GROUPS = [
       },
       {
         id: 'add-selection',
-        keys: ['Shift + click'],
+        keys: ['Shift+Click'],
         action: 'Toggle in the selection',
         detail: 'Adds an unselected item or removes a selected item.'
       },
@@ -542,10 +549,10 @@ export const POINTER_CONTROL_GROUPS = [
     items: [
       {
         id: 'context-menu',
-        keys: ['Right-click'],
-        action: 'Select other or open the context menu',
+        keys: ['Right-click', 'Shift+F10'],
+        action: 'Open the context menu',
         detail:
-          'Lists stacked topology under the pointer; a single target opens its actions.'
+          'Acts on what is under the pointer; over stacked targets the menu starts with Select other. Shift+F10 or the Menu key opens it for the selection.'
       },
       {
         id: 'drag-handle',

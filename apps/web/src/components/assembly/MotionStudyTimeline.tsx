@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -7,17 +8,13 @@ import {
   type PointerEvent as ReactPointerEvent
 } from 'react';
 import {
-  ArrowLeftRight,
-  ArrowRight,
   DiamondPlus,
   Pause,
   Play,
   Plus,
-  Repeat,
   SkipBack,
   Trash2,
-  X,
-  type LucideIcon
+  X
 } from 'lucide-react';
 import { commandFactories, type AnyCommand } from '@openzcad/command-system';
 import {
@@ -26,9 +23,11 @@ import {
   motionStudyValues,
   type AssemblyCouplingEnd,
   type AssemblyMotionStudy,
-  type AssemblyPlayback,
-  type AssemblySet
+  type AssemblySet,
+  type UnitSystem
 } from '@openzcad/shared';
+import { unitSymbol } from '../../lib/assembly/assemblyUi';
+import { PlaybackControl } from './PlaybackControl';
 import {
   assemblyRuntime,
   getAssemblyRuntime,
@@ -75,17 +74,9 @@ export interface MotionStudyTimelineProps {
    * instead of filling the container the layout gives it.
    */
   floating?: boolean;
+  /** The document's unit: a slide's values are in it. */
+  lengthUnit?: UnitSystem;
 }
-
-const PLAYBACK_MODES: {
-  mode: AssemblyPlayback;
-  label: string;
-  Icon: LucideIcon;
-}[] = [
-  { mode: 'once', label: 'Play once', Icon: ArrowRight },
-  { mode: 'loop', label: 'Loop', Icon: Repeat },
-  { mode: 'ping-pong', label: 'Back and forth', Icon: ArrowLeftRight }
-];
 
 const SPEEDS = [0.5, 1, 2] as const;
 
@@ -146,7 +137,8 @@ export function MotionStudyTimeline({
   execute,
   onClose,
   readOnly = false,
-  floating = false
+  floating = false,
+  lengthUnit = 'mm'
 }: MotionStudyTimelineProps) {
   const selectedStudyId = useAssemblyRuntime((s) => s.selectedStudyId);
   const studyTimeS = useAssemblyRuntime((s) => s.studyTimeS);
@@ -219,6 +211,33 @@ export function MotionStudyTimeline({
       setSelectedTrack(null);
   }, [saved, selection, selectedTrack]);
 
+  // Floating over the stage, the timeline publishes its height to the
+  // viewer area, which lifts the notice lane above it: "New motion study
+  // Motion 1 added." sat on the first track (I7).
+  const timelineRef = useRef<HTMLElement | null>(null);
+  const timelineShown = Boolean(assembly && saved);
+  useLayoutEffect(() => {
+    const element = timelineRef.current;
+    const viewer = element?.closest<HTMLElement>('.viewer-area');
+    if (!floating || !timelineShown || !element || !viewer) return;
+    const measure = () => {
+      viewer.style.setProperty(
+        '--motion-timeline-h',
+        `${Math.ceil(element.getBoundingClientRect().height)}px`
+      );
+    };
+    measure();
+    const observer =
+      typeof ResizeObserver === 'undefined'
+        ? null
+        : new ResizeObserver(measure);
+    observer?.observe(element);
+    return () => {
+      observer?.disconnect();
+      viewer.style.removeProperty('--motion-timeline-h');
+    };
+  }, [floating, timelineShown]);
+
   if (!assembly || !saved) {
     poseRef.current = () => false;
     return null;
@@ -232,10 +251,6 @@ export function MotionStudyTimeline({
   const jointById = new Map(set.joints.map((j) => [j.id, j]));
   const untracked = untrackedMotions(set, saved);
   const moves = saved.tracks.some((track) => track.keys.length > 1);
-  const mode =
-    PLAYBACK_MODES.find((m) => m.mode === saved.playback) ?? PLAYBACK_MODES[1]!;
-  const nextMode =
-    PLAYBACK_MODES[(PLAYBACK_MODES.indexOf(mode) + 1) % PLAYBACK_MODES.length]!;
 
   function commit(
     next: AssemblyMotionStudy | null,
@@ -503,10 +518,10 @@ export function MotionStudyTimeline({
     : undefined;
 
   const keyUnit = selectedKeyTrack
-    ? dofUnit(selectedKeyJoint?.kind ?? 'revolute', selectedKeyTrack.dof) ===
-      'deg'
-      ? '°'
-      : 'mm'
+    ? unitSymbol(
+        dofUnit(selectedKeyJoint?.kind ?? 'revolute', selectedKeyTrack.dof),
+        lengthUnit
+      )
     : '';
 
   return (
@@ -516,6 +531,7 @@ export function MotionStudyTimeline({
           ? 'motion-timeline motion-timeline-floating'
           : 'motion-timeline'
       }
+      ref={timelineRef}
       aria-label={`Motion study ${saved.name}`}
       tabIndex={0}
       onKeyDown={onKeyDown}
@@ -568,22 +584,15 @@ export function MotionStudyTimeline({
               seek(value);
           }}
         />
-        <button
-          type="button"
-          className="motion-icon-button"
-          aria-label={`Playback: ${mode.label}`}
-          title={`${mode.label} · click for ${nextMode.label.toLowerCase()}`}
-          disabled={readOnly}
-          onClick={() =>
-            commit(
-              { ...saved, playback: nextMode.mode },
-              'Change motion playback',
-              ''
-            )
-          }
-        >
-          <mode.Icon size={14} aria-hidden="true" />
-        </button>
+        <span className="motion-playback">
+          <PlaybackControl
+            mode={saved.playback}
+            disabled={readOnly}
+            onModeChange={(playback) =>
+              commit({ ...saved, playback }, 'Change motion playback', '')
+            }
+          />
+        </span>
         <button
           type="button"
           className="motion-speed"
@@ -679,13 +688,21 @@ export function MotionStudyTimeline({
           </div>
         )}
 
+        {!note && !selection && study.tracks.length === 0 && (
+          <span className="motion-timeline-hint">Add a joint to animate</span>
+        )}
+        {/* While a study is open, moving a part or typing a joint value
+            keys it at the playhead instead of changing the rest pose: say
+            so the whole time, not only before the first key (review I59). */}
         {!note &&
           !selection &&
-          (study.tracks.length === 0 || (!moves && !readOnly)) && (
-            <span className="motion-timeline-hint">
-              {study.tracks.length === 0
-                ? 'Add a joint to animate'
-                : 'Move a part to key it here'}
+          !readOnly &&
+          !playing &&
+          study.tracks.length > 0 && (
+            <span className="motion-timeline-recording">
+              <span className="motion-recording-dot" aria-hidden="true" />
+              Recording keys at {formatStudyTime(t)} s
+              {moves ? '' : ' · move a part to set it, then Play'}
             </span>
           )}
         {note && (
@@ -773,7 +790,7 @@ export function MotionStudyTimeline({
                         ? `${joint.name} · ${dofName(joint.kind, dof)}`
                         : joint.name}
                       <span className="motion-track-menu-unit">
-                        {dofUnit(joint.kind, dof) === 'deg' ? '°' : 'mm'}
+                        {unitSymbol(dofUnit(joint.kind, dof), lengthUnit)}
                       </span>
                     </button>
                   ))}
@@ -846,7 +863,7 @@ export function MotionStudyTimeline({
                   {name}
                 </button>
                 <span className="motion-track-value">
-                  {formatDofValue(evaluateTrack(track, t), unit)}
+                  {formatDofValue(evaluateTrack(track, t), unit, lengthUnit)}
                 </span>
                 {!readOnly && (
                   <button
@@ -905,7 +922,7 @@ export function MotionStudyTimeline({
                         top: `${keyValueY(track, key.value)}%`
                       }}
                       aria-pressed={selected}
-                      aria-label={`Key at ${formatStudyTime(key.t)} s, ${formatDofValue(key.value, unit)}`}
+                      aria-label={`Key at ${formatStudyTime(key.t)} s, ${formatDofValue(key.value, unit, lengthUnit)}`}
                       onPointerDown={(event) =>
                         onKeyPointerDown(event, trackIndex, keyIndex)
                       }

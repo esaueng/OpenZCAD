@@ -96,7 +96,7 @@ test('a signed-in Duplicate sends the copy the browser built', async ({
   await addBox(page);
   await expect(
     page.getByRole('group', { name: 'Workspace status' })
-  ).toContainText('Synced');
+  ).toContainText('Saved');
   const sourceProjectId = account.latest!.projectId;
 
   await page.getByTitle('Back to projects').click();

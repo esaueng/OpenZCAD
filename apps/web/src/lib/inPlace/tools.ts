@@ -373,6 +373,8 @@ export interface InPlaceContext {
   linearSnap?: number | null;
   /** A body's bounding box, for references measured on it (a draft's base). */
   bodyBounds?(bodyId: BodyId): { min: Vector3; max: Vector3 } | null;
+  /** The bodies already in the model (live, not hidden). */
+  liveBodyIds?(): readonly BodyId[];
   /**
    * The stored data of the feature being edited, for whatever the command
    * keeps as stored rather than showing (a hole's position until it is
@@ -2782,7 +2784,10 @@ const gear: InPlaceToolSpec = {
     return { rimDiameter: module * (teeth + 10.5) };
   },
   hint(slots) {
-    if (!slots.plane) return 'Pick a plane or flat face';
+    // Module and teeth are chips on the placed gear: the summary names them
+    // before there is a field to change them, so the hint says where it is.
+    if (!slots.plane)
+      return 'Pick a plane or flat face · then set module and teeth on the gear';
     if (slots.plane.kind === 'datum') {
       return 'Pick a ghost plane or flat face instead';
     }
@@ -3043,7 +3048,12 @@ const gearTeeth: InPlaceToolSpec = {
         'diametralPitch'
       ]
     },
-    { label: 'Length', boxed: true, compact: true, items: ['faceWidth', 'offset'] },
+    {
+      label: 'Length',
+      boxed: true,
+      compact: true,
+      items: ['faceWidth', 'offset']
+    },
     ...GEAR_FORM_SECTIONS
   ],
   summary: gearSummary,
@@ -4292,7 +4302,7 @@ const scale: InPlaceToolSpec = {
       id: 'pivot',
       label: 'About',
       choices: [
-        { value: 'centre', label: 'Body centre' },
+        { value: 'centre', label: 'Body center' },
         { value: 'origin', label: 'Origin' },
         { value: 'typed', label: 'Point' }
       ],
@@ -4955,8 +4965,11 @@ function edgeReferences(
 
 function edgeHint(slots: InPlaceSlots, what: string, drag: string): string {
   const count = slots.edges.length;
+  // The size has no field until an edge is picked: its handle stands on the
+  // first edge, and Options lists it from then on. The hint said "Options
+  // sets the radius" over an Options panel with no radius in it.
   if (count === 0)
-    return `Click the edges to ${what} · Options sets the ${what === 'fillet' ? 'radius' : 'distance'}`;
+    return `Click the edges to ${what} · then drag or type the ${what === 'fillet' ? 'radius' : 'distance'}`;
   return `${count} ${count === 1 ? 'edge' : 'edges'} · drag the ${drag}`;
 }
 
@@ -5235,9 +5248,12 @@ function primitiveSpec(kind: PrimitiveKind): InPlaceToolSpec {
       },
       { label: 'Position', boxed: true, compact: true, items: ['x', 'y', 'z'] }
     ],
-    hint(slots) {
-      return slots.placement
-        ? 'Drag the arrows, or tap a size to type'
+    hint(slots, _options, ctx) {
+      if (slots.placement) return 'Drag the arrows, or tap a size to type';
+      // It previews at the origin, inside whatever stands there already:
+      // nothing said Done would make a separate body where it shows.
+      return (ctx?.liveBodyIds?.().length ?? 0) > 0
+        ? 'Drag a footprint on the ground or a face · Done adds it as a separate body where it shows'
         : 'Drag a footprint on the ground or a face';
     },
     // It stands on the ground at the origin until a drag places it, so
@@ -5415,6 +5431,29 @@ export function valueInRange(spec: ValueSpec, value: number): boolean {
     min === undefined || (spec.exclusive ? value > min : value >= min);
   const belowMax = max === undefined || (openMax ? value < max : value <= max);
   return aboveMin && belowMax;
+}
+
+/**
+ * The range a typed value fell outside, as one sentence for the keypad that
+ * stays open on it: "Width must be more than 0 mm." The status lane's own
+ * refusal ("Box width takes at least 0.001.") gave no unit, and closed the
+ * keypad, so the typed value was shown nowhere (13 November review I4).
+ * `unit` is what follows a number: "mm", "°", or "" for a count.
+ */
+export function valueRangeSentence(spec: ValueSpec, unit: string): string {
+  const amount = (value: number) =>
+    unit === '' ? `${value}` : unit === '°' ? `${value}°` : `${value} ${unit}`;
+  const min = spec.min ?? 0;
+  const openMin = spec.exclusive === true || spec.exclusive === 'min';
+  const openMax = spec.exclusive === true;
+  const whole = spec.integer ? 'a whole number ' : '';
+  if (spec.max === undefined) {
+    return `${spec.label} must be ${whole}${openMin ? 'more than' : 'at least'} ${amount(min)}.`;
+  }
+  if (!openMin && !openMax) {
+    return `${spec.label} must be ${whole}from ${amount(min)} to ${amount(spec.max)}.`;
+  }
+  return `${spec.label} must be ${whole}${openMin ? 'more than' : 'at least'} ${amount(min)} and ${openMax ? 'less than' : 'at most'} ${amount(spec.max)}.`;
 }
 
 /**

@@ -3,7 +3,8 @@ import {
   fireEvent,
   render,
   screen,
-  waitFor
+  waitFor,
+  within
 } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ComponentProps } from 'react';
@@ -130,25 +131,37 @@ afterEach(() => {
  * by document undo, which knows about geometry rather than about the thread.
  */
 describe('clearing the assistant conversation', () => {
-  it('asks first, and keeps the thread when the answer is no', async () => {
-    const confirm = vi.fn().mockReturnValue(false);
-    vi.stubGlobal('confirm', confirm);
+  // In-page, never `window.confirm()`: embedded and automated browsers answer
+  // a native confirm with Cancel unseen, so Clear did nothing there.
+  it('asks in-page with focus on Cancel, and keeps the thread on Cancel', async () => {
+    const native = vi.fn().mockReturnValue(true);
+    vi.stubGlobal('confirm', native);
     const { user, clear } = await renderPanel();
 
     await user.click(clear);
 
-    expect(confirm).toHaveBeenCalledOnce();
+    const dialog = await screen.findByRole('alertdialog', {
+      name: 'Clear the conversation?'
+    });
+    expect(native).not.toHaveBeenCalled();
+    const cancel = within(dialog).getByRole('button', { name: 'Cancel' });
+    expect(cancel).toHaveFocus();
+    // A reflex Enter keeps the conversation.
+    await user.keyboard('{Enter}');
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
     expect(loadAssistantThread(doc.projectId)).toHaveLength(2);
     expect(
       screen.getByText('Put a 6 mm hole through the boss')
     ).toBeInTheDocument();
   });
 
-  it('clears the thread when the answer is yes', async () => {
-    vi.stubGlobal('confirm', vi.fn().mockReturnValue(true));
+  it('clears the thread when Clear conversation is confirmed', async () => {
     const { user, clear } = await renderPanel();
 
     await user.click(clear);
+    await user.click(
+      await screen.findByRole('button', { name: 'Clear conversation' })
+    );
 
     await waitFor(() =>
       expect(loadAssistantThread(doc.projectId)).toHaveLength(0)
@@ -157,13 +170,11 @@ describe('clearing the assistant conversation', () => {
   });
 
   it('does not ask when the user has turned confirmations off', async () => {
-    const confirm = vi.fn().mockReturnValue(true);
-    vi.stubGlobal('confirm', confirm);
     const { user, clear } = await renderPanel({ confirmDestructive: false });
 
     await user.click(clear);
 
-    expect(confirm).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alertdialog')).toBeNull();
     await waitFor(() =>
       expect(loadAssistantThread(doc.projectId)).toHaveLength(0)
     );
@@ -476,6 +487,11 @@ describe('asking from the prompt line', () => {
     // The hand-back fires on mount, before the status load settles, so the
     // reason arrives later than the draft does.
     expect(await screen.findAllByRole('status')).not.toHaveLength(0);
+    // And the panel says where the question went (I8: a signed-out ask
+    // looked like a search that found nothing).
+    expect(
+      await screen.findByText(/Your question is back in the prompt line\./)
+    ).toBeVisible();
   });
 
   it('offers its openers as drafts for the prompt line', async () => {
@@ -648,7 +664,8 @@ describe('selection grounding for assistant follow-ups', () => {
 
 /**
  * The proposal waiting at the foot of the stream is driven from the empty
- * prompt line: Enter applies, `p` previews, Escape rejects. The keys arrive
+ * prompt line: Enter applies, `p` previews, Escape hides the preview and
+ * never rejects (I71, 13 November review). The keys arrive
  * as window events the bar sends, and the stream says when it took one.
  * A restored proposal reopens as rejected, so the open one comes from a
  * stubbed reply.
@@ -736,7 +753,7 @@ describe('prompt keys on the open proposal', () => {
     return { ...view, card: card as HTMLElement, props };
   }
 
-  it('applies, previews and rejects the newest open proposal', async () => {
+  it('applies and previews the newest open proposal; Escape only hides the preview', async () => {
     const { card, props } = await renderWithOpenProposal();
     // The reply was previewed on arrival; the keyed actions say which key
     // drives them.
@@ -754,10 +771,35 @@ describe('prompt keys on the open proposal', () => {
     expect(taken).toBe(true);
     // Previewing already: the key hides the preview.
     expect(props.onPreview).toHaveBeenLastCalledWith(null);
+    // Nothing to hide: Escape is the field's, to leave it, and the proposal
+    // stays open. It used to be rejected for good.
     await act(async () => {
-      taken = sendAssistantPromptKey('reject');
+      taken = sendAssistantPromptKey('escape');
+    });
+    expect(taken).toBe(false);
+    expect(card).toHaveClass('open');
+    expect(
+      screen.getByRole('button', { name: 'Reject' }).querySelector('kbd')
+    ).toBeNull();
+
+    // Previewing again, Escape takes the preview down and nothing else.
+    await act(async () => {
+      sendAssistantPromptKey('preview');
+    });
+    await waitFor(() =>
+      expect(props.onPreview).toHaveBeenLastCalledWith(
+        expect.objectContaining({ proposalId: 'proposal_keys' })
+      )
+    );
+    await act(async () => {
+      taken = sendAssistantPromptKey('escape');
     });
     expect(taken).toBe(true);
+    await waitFor(() => expect(props.onPreview).toHaveBeenLastCalledWith(null));
+    expect(card).toHaveClass('open');
+
+    // Reject is a click.
+    fireEvent.click(screen.getByRole('button', { name: 'Reject' }));
     await waitFor(() => expect(card).toHaveClass('rejected'));
     // Nothing open any more: the keys fall through to the bar.
     await act(async () => {
@@ -803,10 +845,10 @@ describe('prompt keys on the open proposal', () => {
     const later = document.querySelectorAll('.assistant-card.proposal')[1]!;
     expect(later).toHaveClass('open');
 
-    // Escape rejects the newest; Enter then applies the one before it.
-    await act(async () => {
-      sendAssistantPromptKey('reject');
-    });
+    // Rejecting the newest by its button; Enter then applies the one before.
+    fireEvent.click(
+      within(later as HTMLElement).getByRole('button', { name: 'Reject' })
+    );
     await waitFor(() => expect(later).toHaveClass('rejected'));
     let taken = false;
     await act(async () => {
@@ -1381,5 +1423,55 @@ describe('the stream as a record', () => {
     // The same node, now carrying the news: nothing streams into it.
     expect(window.document.querySelector('[aria-live="polite"]')).toBe(region);
     expect(region).toHaveTextContent('The assistant replied.');
+  });
+});
+
+/** The 13 November review's assistant thread findings (I72). */
+describe('the assistant thread', () => {
+  it('survives a status that says only it is not configured', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ configured: false }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' }
+          })
+      )
+    );
+    await renderPanel();
+    // The panel stays up and says why it cannot answer, rather than falling
+    // over into its error boundary.
+    expect(
+      await screen.findByText(/AI_API_KEY|personal token|not configured/)
+    ).toBeInTheDocument();
+    expect(screen.getByText('Put a 6 mm hole through the boss')).toBeVisible();
+  });
+
+  it('folds the verified recipes under one line once a thread exists', async () => {
+    const project = allEdgeDocument();
+    saveAssistantThread(
+      project.projectId,
+      [
+        {
+          kind: 'user',
+          id: 'entry_ask',
+          text: 'Round it off',
+          attachments: [],
+          answers: [],
+          at: 1
+        }
+      ],
+      1
+    );
+    await renderPanel({ document: project });
+    const summary = await screen.findByText(/^Verified recipes \(\d+\)$/);
+    const recipes = summary.closest('details')!;
+    expect(recipes.open).toBe(false);
+    expect(
+      recipes.querySelectorAll('.assistant-verified-action').length
+    ).toBeGreaterThan(0);
+    // No recipe stands loose under the thread (Analyze is not offered here).
+    expect(document.querySelector('.assistant-actions-row')).toBeNull();
   });
 });

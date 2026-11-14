@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { Link2Off, LoaderCircle, RotateCw } from 'lucide-react';
 import { BrandMark } from './BrandMark';
+import { FailureDetails } from './FailureDetails';
 import { useModalFocus } from '../lib/useModalFocus';
 
 export type SharePageState =
@@ -10,6 +11,8 @@ export type SharePageState =
       title: string;
       message: string;
       guidance: string;
+      /** The raw failure text, for a Details disclosure. */
+      detail?: string;
       /** A transient failure: retrying the same link can succeed. */
       retryable: boolean;
     };
@@ -72,6 +75,7 @@ export function SharePage({
           </p>
         </div>
         {!loading && <p className="share-page-guidance">{state.guidance}</p>}
+        {!loading && <FailureDetails detail={state.detail} />}
         <div className="share-page-actions">
           {canRetry ? (
             <button className="primary" type="button" onClick={onRetry}>

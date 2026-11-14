@@ -36,12 +36,15 @@ import {
 import type { CollaborationStatus } from '../lib/useCollaboration';
 import { useModalFocus } from '../lib/useModalFocus';
 import { StableLabel } from './StableLabel';
+import { ShareLinkRevokeConfirm } from './ShareLinkRevokeConfirm';
 import {
   EncryptedShareLinks,
   type EncryptedShareLinkClient
 } from './EncryptedShareLinks';
 import type { OwnerInvitation } from '../lib/e2ee/invitations';
 import { useEncryptionStatus } from '../lib/e2ee/encryptionStatus';
+import { describeFailure, type PlainFailure } from '../lib/plainFailure';
+import { FailureDetails } from './FailureDetails';
 import {
   PrivateEmailInput,
   usePersonalInfoVisible
@@ -222,8 +225,10 @@ const PRESENCE_LABELS: Record<CollaborationMember['status'], string> = {
   idle: 'Idle'
 };
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : 'The sharing request failed.';
+function errorMessage(error: unknown): PlainFailure {
+  // A proxy's HTML page or a dropped connection read as "Unexpected token
+  // '<', "<!doctype "… is not valid JSON"; the raw text is under Details.
+  return describeFailure(error, { fallback: 'The sharing request failed.' });
 }
 
 function initialOf(name: string): string {
@@ -367,7 +372,7 @@ export function ProjectSharingDialog({
   const [invitationSentTo, setInvitationSentTo] = useState<string | null>(null);
   const [hydrating, setHydrating] = useState(role === 'owner');
   const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<PlainFailure | null>(null);
   const [anchor, setAnchor] = useState<PopoverAnchor | null>(null);
   const [confirmingLeave, setConfirmingLeave] = useState(false);
   const actionOriginRef = useRef<HTMLElement | null>(null);
@@ -726,8 +731,9 @@ export function ProjectSharingDialog({
             aria-live="polite"
             role={error ? 'alert' : 'status'}
           >
-            {error ?? (busy ? 'Working…' : null)}
+            {error?.message ?? (busy ? 'Working…' : null)}
           </p>
+          <FailureDetails detail={error?.detail} />
           {localProject ? (
             <section className="sharing-section sharing-local">
               <h3>Save this project to your account</h3>
@@ -1296,6 +1302,8 @@ function PlaintextShareLinks({
   onRevoke
 }: PlaintextShareLinksProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
+  // The link whose Revoke is waiting for a yes (design review I2).
+  const [revokingId, setRevokingId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   // Keyed by link, so a newly created link starts unnamed.
   const [createdDraft, setCreatedDraft] = useState({ id: '', name: '' });
@@ -1466,6 +1474,31 @@ function PlaintextShareLinks({
                 </li>
               );
             }
+            if (revokingId === shareLink.shareLinkId) {
+              return (
+                <li key={shareLink.shareLinkId} className="sharing-confirm-row">
+                  <ShareLinkRevokeConfirm
+                    name={name}
+                    disabled={disabled}
+                    onCancel={() => {
+                      setRevokingId(null);
+                      // Back to the row's Revoke, for the keyboard.
+                      requestAnimationFrame(() =>
+                        document
+                          .querySelector<HTMLElement>(
+                            `[data-share-link-revoke="${shareLink.shareLinkId}"]`
+                          )
+                          ?.focus()
+                      );
+                    }}
+                    onRevoke={() => {
+                      setRevokingId(null);
+                      onRevoke(shareLink);
+                    }}
+                  />
+                </li>
+              );
+            }
             return (
               <li key={shareLink.shareLinkId}>
                 <span className="sharing-row-text">
@@ -1495,8 +1528,9 @@ function PlaintextShareLinks({
                       ? `Revoke share link created ${createdLabel(shareLink.createdAt)}`
                       : `Revoke share link ${shareLink.label}`
                   }
+                  data-share-link-revoke={shareLink.shareLinkId}
                   disabled={disabled}
-                  onClick={() => onRevoke(shareLink)}
+                  onClick={() => setRevokingId(shareLink.shareLinkId)}
                 >
                   Revoke
                 </button>

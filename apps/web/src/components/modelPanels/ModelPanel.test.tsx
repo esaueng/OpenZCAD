@@ -204,9 +204,13 @@ describe('ModelPanel', () => {
       const restore = await screen.findByRole('button', {
         name: 'Restore Device-only milestone'
       });
-      expect(
-        screen.getByTitle(/Device-only milestone.*Stored on this device/)
-      ).toBeInTheDocument();
+      // Its details, opened from the row, say where it is stored.
+      await userEvent.click(
+        screen.getByRole('button', { name: 'Device-only milestone' })
+      );
+      expect(restore.closest('.revision-row')).toHaveTextContent(
+        /Stored on this device/
+      );
       await userEvent.click(restore);
       expect(first.props.onRestoreCheckpoint).toHaveBeenCalledExactlyOnceWith(
         point

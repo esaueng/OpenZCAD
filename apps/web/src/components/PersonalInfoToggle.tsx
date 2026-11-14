@@ -1,5 +1,9 @@
 import { Eye, EyeOff } from 'lucide-react';
-import { useSyncExternalStore, type InputHTMLAttributes } from 'react';
+import {
+  useState,
+  useSyncExternalStore,
+  type InputHTMLAttributes
+} from 'react';
 
 // Settings owns the only switch; project sharing follows it. Memory only, so
 // every page load starts hidden for screenshots.
@@ -53,16 +57,32 @@ export function PersonalInfoToggle({
   );
 }
 
+/**
+ * An email field masked for screenshots, but only while it is not being
+ * typed in: a masked field hid typos from the person typing (design review
+ * I78). Focused, it shows what was typed; on blur it masks again.
+ */
 export function PrivateEmailInput({
   visible,
+  onFocus,
+  onBlur,
   ...props
 }: Omit<InputHTMLAttributes<HTMLInputElement>, 'type'> & {
   visible: boolean;
 }) {
+  const [focused, setFocused] = useState(false);
   return (
     <input
       {...props}
-      type={visible ? 'email' : 'password'}
+      type={visible || focused ? 'email' : 'password'}
+      onFocus={(event) => {
+        setFocused(true);
+        onFocus?.(event);
+      }}
+      onBlur={(event) => {
+        setFocused(false);
+        onBlur?.(event);
+      }}
       ref={(input) => {
         if (!input) return;
         // Password masking must preserve the browser's email validation.

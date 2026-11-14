@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { Download } from 'lucide-react';
 import type { AppSettings, AuthSession } from '@openzcad/shared';
 import type { DataExportSummary } from '../lib/dataExportTypes';
+import { describeFailure } from '../lib/plainFailure';
+import { FailureDetails } from './FailureDetails';
 import { SettingRow, Toggle } from './settingsControls';
 
 export function DataDownload({
@@ -20,6 +22,7 @@ export function DataDownload({
   const [includeDeviceSnapshot, setIncludeDeviceSnapshot] = useState(true);
   const [progress, setProgress] = useState('');
   const [error, setError] = useState('');
+  const [errorDetail, setErrorDetail] = useState<string | undefined>();
   const [completed, setCompleted] = useState<{
     revision: number;
     summary: DataExportSummary;
@@ -48,6 +51,7 @@ export function DataDownload({
     if (preparing) return;
     setPreparing(true);
     setError('');
+    setErrorDetail(undefined);
     setCompleted(null);
     const startedFor = currentIdentity.current.revision;
     const isCurrent = () =>
@@ -75,13 +79,17 @@ export function DataDownload({
     } catch (failure) {
       if (mounted.current) {
         setProgress('');
-        setError(
-          !isCurrent()
-            ? 'Your account changed. Start the download again.'
-            : failure instanceof Error
-              ? failure.message
-              : 'Could not prepare your data. Please try again.'
-        );
+        if (!isCurrent()) {
+          setError('Your account changed. Start the download again.');
+        } else {
+          // A proxy's HTML error page or a dropped connection used to show
+          // here as "Unexpected token '<' … is not valid JSON".
+          const plain = describeFailure(failure, {
+            fallback: 'Could not prepare your data. Please try again.'
+          });
+          setError(plain.message);
+          setErrorDetail(plain.detail);
+        }
       }
     } finally {
       if (mounted.current) setPreparing(false);
@@ -102,6 +110,7 @@ export function DataDownload({
           className="secondary"
           type="button"
           disabled={busy || preparing}
+          data-download-all-data
           onClick={() => void download()}
           aria-busy={preparing}
         >
@@ -139,9 +148,10 @@ export function DataDownload({
             </p>
           ) : null}
           {error ? (
-            <p className="data-download-feedback" role="alert">
-              {error}
-            </p>
+            <div className="data-download-feedback" role="alert">
+              <p>{error}</p>
+              <FailureDetails detail={errorDetail} />
+            </div>
           ) : null}
           {summary &&
           (summary.skippedProjects.length > 0 ||

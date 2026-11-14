@@ -161,7 +161,9 @@ test(
     // Nothing was armed behind the workspace: Build opens on the part with
     // no face's handle or value chip waiting.
     await page.getByRole('button', { name: 'Build', exact: true }).click();
-    await expect(page.getByRole('button', { name: /^Box \(B\)/ })).toBeVisible();
+    await expect(
+      page.getByRole('button', { name: /^Box \(B\)/ })
+    ).toBeVisible();
     await page.waitForTimeout(1_000);
     expect(await picked('e2eSelectedFace')).toBeNull();
     expect(await picked('e2eHandleX')).toBeNull();
@@ -286,7 +288,7 @@ for (const width of [1440, 390]) {
       // An edited local copy still opens in the sample's workspace, even
       // after the user changed modes and collapsed its pivot controls.
       await panel(page)
-        .getByRole('button', { name: /^Revolute 1 / })
+        .getByRole('button', { name: /^Pivot / })
         .click();
       await expect(angle).toHaveCount(0);
       await page.getByRole('button', { name: 'Build', exact: true }).click();
@@ -301,8 +303,11 @@ for (const width of [1440, 390]) {
       const reset = page.getByRole('button', {
         name: 'Reset Scissors to the original'
       });
-      page.once('dialog', (dialog) => dialog.accept());
       await reset.click();
+      await page
+        .getByRole('alertdialog', { name: 'Reset the Scissors sample?' })
+        .getByRole('button', { name: 'Reset sample' })
+        .click();
       await expect(reset).toHaveCount(0);
       await sample.click();
       await ready('30');
@@ -526,7 +531,7 @@ test(
     await expect(
       setup.getByRole('combobox', { name: 'Part that moves' })
     ).toHaveValue('comp_b');
-    await expect(setup.getByRole('combobox', { name: 'Cycle' })).toHaveValue(
+    await expect(setup.getByRole('combobox', { name: 'Playback' })).toHaveValue(
       'ping-pong'
     );
     // The preview moves the part on screen before anything is saved.
@@ -554,5 +559,78 @@ test(
     // Playback saved nothing: one undo removes the motion it set up.
     await page.keyboard.press('ControlOrMeta+z');
     await expect(joints).not.toContainText('Blade B slide');
+  }
+);
+
+// Review I55/I56: a slide's values are model coordinates, so an inch
+// project's "5" is 5 in — the card and the joint row said "mm". And once
+// every part is fixed or already moving, the header's Motion opened a card
+// already in an error; it now says why instead.
+test(
+  'sets up motion in an inch project in inches, then says Motion has nothing left to move',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    test.setTimeout(120_000);
+    let loose = createProjectDocument(
+      'Inch motion setup',
+      toUserId('user_e2e'),
+      'inch'
+    );
+    for (const bodyName of ['Base', 'Slider'])
+      loose = addPrimitiveFeature(loose, {
+        name: bodyName,
+        bodyName,
+        primitiveKind: 'box',
+        dimensions: { width: 4, height: 1, depth: 2 }
+      });
+    const [a, b] = loose.bodyOrder as [BodyId, BodyId];
+    await openDocument(
+      page,
+      addAssemblyComponents(loose, {
+        components: [
+          { componentId: 'comp_a', name: 'Base', bodyId: a, grounded: true },
+          { componentId: 'comp_b', name: 'Slider', bodyId: b, grounded: false }
+        ]
+      })
+    );
+    await assemble(page);
+    const joints = panel(page).getByRole('region', { name: 'Joints' });
+    await joints.getByRole('button', { name: 'Set up motion' }).click();
+    const setup = panel(page).getByRole('region', { name: 'Set up motion' });
+    // Sized in inches: the 1 in tall base, or 2 in before its size is
+    // read — never 5 or 50, the millimetre defaults read as inches.
+    const slideTo = Number(
+      await setup.getByRole('textbox', { name: 'Slide to' }).inputValue()
+    );
+    expect(slideTo).toBeGreaterThan(0);
+    expect(slideTo).toBeLessThanOrEqual(2);
+    await expect(setup.locator('.assembly-unit')).toHaveText('in');
+    await setup.getByRole('button', { name: 'Create and play' }).click();
+    await expect(setup).toHaveCount(0);
+    await joints
+      .getByRole('button', { name: 'Pause Slider slide', exact: true })
+      .click();
+    await expect(joints).toContainText(/\d\.\d\d in/);
+    await expect(joints).not.toContainText(' mm');
+
+    const motion = panel(page).getByRole('button', {
+      name: 'Motion',
+      exact: true
+    });
+    await expect(motion).toHaveAttribute('aria-disabled', 'true');
+    // It stays focusable so the reason can be read and heard: pressing it
+    // says why instead of opening a card that starts in an error.
+    await motion.focus();
+    await page.keyboard.press('Enter');
+    await expect(
+      panel(page).getByRole('region', { name: 'Set up motion' })
+    ).toHaveCount(0);
+    await expect(
+      page
+        .getByText('Every part is fixed or already moves on a joint', {
+          exact: false
+        })
+        .first()
+    ).toBeVisible();
   }
 );

@@ -253,6 +253,10 @@ test('a network failure can be retried into the shared model without going home'
     page.getByRole('heading', { name: 'We couldn’t open this shared model' })
   ).toBeVisible();
   await expect(page.getByRole('main')).toContainText('Check your connection');
+  // The transport's own words sit under Details, not in the message.
+  await expect(page.locator('.share-page-message')).not.toContainText(
+    'Failed to fetch'
+  );
   await page.getByRole('button', { name: 'Try again' }).click();
   await expect(page.locator('.breadcrumb')).toContainText(document.name);
   await expect(
@@ -261,6 +265,26 @@ test('a network failure can be retried into the shared model without going home'
   await expect(page.getByRole('main', { name: 'Shared model' })).toHaveCount(0);
   expect(reads).toBe(2);
   expect(new URL(page.url()).hash).toBe(`#share=${token}`);
+});
+
+test('a server failure does not blame the connection', async ({ page }) => {
+  // 13 November review I3: a 500 read "Internal error." over "Check your
+  // connection and try again".
+  await stubAnonymousApi(page);
+  await page.route('**/api/share/*', (route) =>
+    route.fulfill({ status: 500, json: { error: 'Internal error' } })
+  );
+  await page.goto(`/#share=${token}`);
+  const main = page.getByRole('main');
+  await expect(
+    page.getByRole('heading', { name: 'We couldn’t open this shared model' })
+  ).toBeVisible();
+  await expect(main).toContainText('OpenZCAD’s server had a problem.');
+  await expect(main).not.toContainText('Check your connection');
+  await main.getByText('Details').click();
+  await expect(main.locator('.failure-details code')).toHaveText(
+    '500: Internal error'
+  );
 });
 
 test('loading a share hides the shelf and Back cancels a late completion', async ({

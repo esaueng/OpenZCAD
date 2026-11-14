@@ -419,6 +419,62 @@ describe('settings number fields', () => {
     expect(loadLocalAppSettings().sketching.snapTolerancePx).toBe(24);
   });
 
+  // I69 (13 November review): 500 became 24 with nothing said, and no field
+  // showed its range.
+  it('shows each field’s range and says when a value was pulled to a bound', async () => {
+    const user = userEvent.setup();
+    renderStatefulSettings({ initialSection: 'sketching' });
+    const tolerance = screen.getByLabelText('Sketch snap tolerance');
+    expect(tolerance).toHaveAccessibleDescription(/^\d+ px – 24 px$/);
+
+    await user.clear(tolerance);
+    await user.type(tolerance, '500');
+    await user.tab();
+    expect(
+      screen.getByText('500 px is above the maximum, so it is set to 24 px.')
+    ).toHaveAttribute('role', 'status');
+
+    // The next keystroke takes the note away; an in-range value says nothing.
+    await user.clear(tolerance);
+    await user.type(tolerance, '12');
+    await user.tab();
+    expect(screen.queryByText(/is above the maximum/)).toBeNull();
+    expect(screen.queryByText(/is below the minimum/)).toBeNull();
+  });
+
+  it('says when a value was raised to the minimum', async () => {
+    const user = userEvent.setup();
+    renderStatefulSettings({ initialSection: 'sketching' });
+    const linear = screen.getByLabelText('Linear snap increment');
+    await user.clear(linear);
+    await user.type(linear, '0');
+    await user.tab();
+    expect(linear).toHaveValue(0.001);
+    expect(
+      screen.getByText('0 is below the minimum, so it is set to 0.001.')
+    ).toBeVisible();
+  });
+
+  // I69/I11: the linear snap is in the open project's units, and now says so.
+  it('names the linear snap’s unit from the open project', () => {
+    renderSettings(null, {
+      initialSection: 'sketching',
+      documentUnits: 'inch'
+    });
+    const linear = screen.getByLabelText('Linear snap increment');
+    expect(linear.closest('.settings-unit-input')).toHaveTextContent('in');
+    expect(linear).toHaveAccessibleDescription('0.001 in – 10,000 in');
+    expect(screen.getByText('In this project’s units.')).toBeVisible();
+  });
+
+  it('leaves the linear snap unitless from the start screen', () => {
+    renderSettings(null, { initialSection: 'sketching' });
+    expect(screen.getByText('In each project’s own units.')).toBeVisible();
+    expect(
+      screen.getByLabelText('Linear snap increment')
+    ).toHaveAccessibleDescription('0.001 – 10,000');
+  });
+
   it('does not offer the angular snap no tool reads yet', () => {
     renderSettings(null, { initialSection: 'sketching' });
     expect(screen.queryByLabelText('Angular snap increment')).toBeNull();
@@ -1375,36 +1431,33 @@ describe('settings advanced section', () => {
   });
 
   /**
-   * Production QA UI-04: below 580px the field is hidden, so a filter typed
-   * in a wider window left the rail on its matches with no way out.
+   * Production QA UI-04: below 580px the field used to be hidden, so a filter
+   * typed in a wider window left the rail on its matches with no way out, and
+   * a separate clear button stood in for it. The field now stays at every
+   * width (13 November review, I70; settings.spec.ts checks it at 390px), so
+   * the field itself is the way out, and the stand-in is gone.
    */
-  it('offers a way out of an active filter that does not need the field', async () => {
+  it('leaves an active filter from the field itself, with no stand-in button', async () => {
     const user = userEvent.setup();
     // Start unfiltered: Settings restores the last search it was left on.
     window.localStorage.clear();
     renderSettings();
-    const sectionsBefore = within(
-      screen.getByRole('complementary', { name: 'Settings sections' })
-    ).getAllByRole('button').length;
-    expect(
-      screen.queryByRole('button', { name: /^Clear the filter/ })
-    ).not.toBeInTheDocument();
-
-    await user.type(screen.getByLabelText('Find a setting'), 'snap');
-    const clear = screen.getByRole('button', {
-      name: 'Clear the filter “snap”'
+    const rail = screen.getByRole('complementary', {
+      name: 'Settings sections'
     });
-    await user.click(clear);
+    const sectionsBefore = within(rail).getAllByRole('button').length;
 
-    expect(screen.getByLabelText('Find a setting')).toHaveValue('');
+    const field = screen.getByLabelText('Find a setting');
+    await user.type(field, 'snap');
+    expect(within(rail).getAllByRole('button').length).toBeLessThan(
+      sectionsBefore
+    );
     expect(
       screen.queryByRole('button', { name: /^Clear the filter/ })
     ).not.toBeInTheDocument();
-    expect(
-      within(
-        screen.getByRole('complementary', { name: 'Settings sections' })
-      ).getAllByRole('button')
-    ).toHaveLength(sectionsBefore);
+
+    await user.clear(field);
+    expect(within(rail).getAllByRole('button')).toHaveLength(sectionsBefore);
   });
 
   it('reports cloud project storage as not ready when health fails closed', async () => {
@@ -1547,6 +1600,162 @@ describe('settings desktop account section', () => {
     } finally {
       script.remove();
       delete (window as Window & { turnstile?: unknown }).turnstile;
+    }
+  });
+
+  it('says a refused sign-in code at the field', async () => {
+    // 13 November review I4: the refusal showed only in small mono text
+    // beside the Settings title, and the field had no error state.
+    const user = userEvent.setup();
+    const refused = Object.assign(new Error('That sign-in code is invalid.'), {
+      status: 400
+    });
+    const onVerifyLoginCode = vi.fn().mockRejectedValue(refused);
+    Object.defineProperty(window, 'turnstile', {
+      configurable: true,
+      value: {
+        render: vi.fn(
+          (
+            _container: HTMLElement,
+            options: { callback(token: string): void }
+          ) => {
+            options.callback('turnstile-token');
+            return 'widget-1';
+          }
+        ),
+        remove: vi.fn(),
+        reset: vi.fn()
+      }
+    });
+    const script = document.createElement('script');
+    script.dataset.openzcadTurnstile = 'true';
+    document.head.append(script);
+    try {
+      renderSettings(null, {
+        initialSection: 'account',
+        authConfig: {
+          mode: 'email-code',
+          emailCodeEnabled: true,
+          turnstileSiteKey: 'site-key'
+        },
+        authConfigStatus: 'ready',
+        onRequestLoginCode: vi.fn().mockResolvedValue({
+          challengeId: 'challenge-1',
+          expiresInSeconds: 600
+        }),
+        onVerifyLoginCode
+      });
+      await user.type(
+        screen.getByLabelText('Email address'),
+        'person@example.com'
+      );
+      await user.click(screen.getByRole('button', { name: 'Email me a code' }));
+      const codeField = await screen.findByLabelText('Email sign-in code');
+      await user.type(codeField, '111111');
+      await user.click(screen.getByRole('button', { name: 'Sign in' }));
+      await waitFor(() => expect(codeField).toHaveAttribute('aria-invalid'));
+      expect(codeField).toHaveAccessibleDescription(
+        'That sign-in code is invalid.'
+      );
+      // The refused code is cleared (I81), so the next digit is the edit.
+      await user.type(codeField, '1');
+      expect(codeField).not.toHaveAttribute('aria-invalid');
+      expect(codeField).not.toHaveAccessibleDescription();
+    } finally {
+      script.remove();
+      delete (window as Window & { turnstile?: unknown }).turnstile;
+    }
+  });
+
+  // Design review I81: no Resend, a placeholder that looked typed, and a
+  // wrong code left in the field.
+  it('clears a wrong code, uses a neutral placeholder and offers a new code after a wait', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const onVerifyLoginCode = vi
+      .fn()
+      .mockRejectedValue(new Error('That sign-in code is invalid.'));
+    const onRequestLoginCode = vi
+      .fn()
+      .mockResolvedValueOnce({
+        challengeId: 'challenge-1',
+        expiresInSeconds: 600
+      })
+      .mockResolvedValueOnce({
+        challengeId: 'challenge-2',
+        expiresInSeconds: 600
+      });
+    Object.defineProperty(window, 'turnstile', {
+      configurable: true,
+      value: {
+        render: vi.fn(
+          (
+            _container: HTMLElement,
+            options: { callback(token: string): void }
+          ) => {
+            options.callback('turnstile-token');
+            return 'widget-1';
+          }
+        ),
+        remove: vi.fn(),
+        reset: vi.fn()
+      }
+    });
+    const script = document.createElement('script');
+    script.dataset.openzcadTurnstile = 'true';
+    document.head.append(script);
+    try {
+      renderSettings(null, {
+        initialSection: 'account',
+        authConfig: {
+          mode: 'email-code',
+          emailCodeEnabled: true,
+          turnstileSiteKey: 'site-key'
+        },
+        authConfigStatus: 'ready',
+        onRequestLoginCode,
+        onVerifyLoginCode
+      });
+      await user.type(
+        screen.getByLabelText('Email address'),
+        'person@example.com'
+      );
+      await user.click(screen.getByRole('button', { name: 'Email me a code' }));
+      const codeField = await screen.findByLabelText('Email sign-in code');
+      expect(codeField).toHaveAttribute('placeholder', '6-digit code');
+      await user.type(codeField, '123456');
+      await user.click(screen.getByRole('button', { name: 'Sign in' }));
+      await waitFor(() => expect(codeField).toHaveValue(''));
+      expect(codeField).toHaveFocus();
+
+      expect(
+        screen.getByRole('button', { name: /^Send a new code/ })
+      ).toBeDisabled();
+      await act(async () => {
+        vi.advanceTimersByTime(30_000);
+      });
+      const resend = await screen.findByRole('button', {
+        name: 'Send a new code'
+      });
+      await waitFor(() => expect(resend).toBeEnabled());
+      await user.click(resend);
+      expect(onRequestLoginCode).toHaveBeenLastCalledWith(
+        'person@example.com',
+        'turnstile-token'
+      );
+      await user.type(
+        await screen.findByLabelText('Email sign-in code'),
+        '654321'
+      );
+      await user.click(screen.getByRole('button', { name: 'Sign in' }));
+      expect(onVerifyLoginCode).toHaveBeenLastCalledWith(
+        'challenge-2',
+        '654321'
+      );
+    } finally {
+      script.remove();
+      delete (window as Window & { turnstile?: unknown }).turnstile;
+      vi.useRealTimers();
     }
   });
 
@@ -1972,6 +2181,11 @@ describe('settings privacy and data section', () => {
     expect(confirm).toBeDisabled();
     expect(dialog.innerHTML).not.toContain(session.email);
     const confirmation = within(dialog).getByLabelText('Deletion confirmation');
+    // Masked only while it is not being typed in (design review I78): the
+    // field shows what is typed while focused and masks again on blur.
+    act(() => confirmation.focus());
+    expect(confirmation).toHaveAttribute('type', 'text');
+    act(() => confirmation.blur());
     expect(confirmation).toHaveAttribute('type', 'password');
     await user.click(
       within(dialog).getByRole('button', { name: 'Show personal info' })

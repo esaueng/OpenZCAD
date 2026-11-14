@@ -965,7 +965,10 @@ function reduceInteraction(
         session: {
           sketchId: event.sketchId ?? null,
           plane: event.plane,
-          tool: 'line',
+          // A new sketch arms Line to draw; a re-opened one starts in Select,
+          // so the first drag on its geometry selects rather than adding a
+          // stray line.
+          tool: event.sketchId ? 'select' : 'line',
           circleMode: 'center-radius',
           drawing: false,
           selectedObjectId: null,

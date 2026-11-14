@@ -101,6 +101,12 @@ export interface CollaborationClientState {
   failureReason?: string | null;
   /** Rejoin a failed room using its current head and a fresh edit lease. */
   retryConnection(): void;
+  /**
+   * Starts the room again while it is still connecting or waiting for its
+   * edit lease (the live-session notice's Retry, design review I10). Does
+   * nothing during a conflict, which the user resolves first.
+   */
+  reconnect(): void;
   members: CollaborationMember[];
   role: ProjectAccessRole | null;
   /** The lease held by this browser client, never another member's lease. */
@@ -283,6 +289,16 @@ export function useCollaboration({
       return;
     restartConnection();
   }, [roomWanted, projectId, status, restartConnection]);
+
+  const reconnect = useCallback(() => {
+    if (
+      !roomWanted ||
+      conflictRef.current ||
+      (projectId && readUnresolvedConflict(projectId, 'room'))
+    )
+      return;
+    restartConnection();
+  }, [roomWanted, projectId, restartConnection]);
 
   const settleKeepMine = useCallback((error?: Error) => {
     const pending = keepMineAckRef.current;
@@ -1558,6 +1574,7 @@ export function useCollaboration({
   return {
     status,
     retryConnection,
+    reconnect,
     failureReason:
       statusEntry.projectId === projectId && status === 'rejected'
         ? (statusEntry.reason ?? null)

@@ -1416,6 +1416,32 @@ export async function openAssistant(page: Page) {
   await expect(panel).toBeVisible();
 }
 
+/**
+ * A verified recipe in the assistant, ready to click: a chip in the empty
+ * state, or, once a thread exists, a button under the folded "Verified
+ * recipes" line, which this opens first.
+ */
+export async function verifiedRecipe(
+  page: Page,
+  label: string,
+  timeout = 60_000
+) {
+  const chip = page
+    .locator('.assistant-suggestion, .assistant-verified-action', {
+      hasText: label
+    })
+    .first();
+  await expect(chip).toBeAttached({ timeout });
+  const folded = page.locator('details.assistant-edit-catalog:not([open])', {
+    has: page.locator('.assistant-verified-action', { hasText: label })
+  });
+  if ((await folded.count()) > 0) {
+    await folded.first().locator('summary').click();
+  }
+  await expect(chip).toBeVisible();
+  return chip;
+}
+
 /** Types a question into the prompt line and sends it with Enter. */
 export async function askAssistant(page: Page, text: string) {
   const field = promptField(page);

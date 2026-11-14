@@ -114,7 +114,10 @@ test(
     expect(await focusIsIn(page, '.orientation-widget')).toBe(true);
     const facet = await focusedName(page);
     expect(facet).toMatch(/ view$/);
-    await page.keyboard.press('ArrowRight');
+    // The cube's arrows move by where facets sit on screen (I54): the first
+    // stop is the Right face, at the cube's right edge, so step left.
+    expect(facet).toBe('Right view');
+    await page.keyboard.press('ArrowLeft');
     expect(await focusIsIn(page, '.orientation-widget')).toBe(true);
     expect(await focusedName(page)).not.toBe(facet);
 
@@ -366,6 +369,53 @@ test(
     await page.reload();
     await expect(drawer).toBeVisible({ timeout: 30_000 });
     await expect(search).toHaveValue('');
+    await expect(tiles).toHaveCount(everyTool);
+  }
+);
+
+test(
+  'the Tools drawer keeps its Ready now / All filter, after a reload too',
+  { tag: '@ci-smoke' },
+  async ({ page }) => {
+    await stubApi(page);
+    await createProject(page, 'Remembered filter');
+
+    const drawer = page.getByRole('group', { name: 'Tools drawer' });
+    const toggle = page.getByRole('button', { name: /^More tools/ });
+    const readyNow = drawer.getByRole('button', {
+      name: 'Ready now',
+      exact: true
+    });
+    const all = drawer.getByRole('button', { name: /^All \d+$/ });
+    const tiles = drawer.locator('.command-tile');
+    await expect(drawer).toBeVisible();
+    await expect(all).toHaveAttribute('aria-pressed', 'true');
+    const everyTool = await tiles.count();
+
+    await readyNow.click();
+    await expect(readyNow).toHaveAttribute('aria-pressed', 'true');
+    await expect.poll(() => tiles.count()).toBeLessThan(everyTool);
+    const ready = await tiles.count();
+
+    // Closed and opened again, it still lists what is ready now.
+    await drawer.getByRole('button', { name: 'Close tools drawer' }).click();
+    await expect(drawer).toHaveCount(0);
+    await toggle.click();
+    await expect(readyNow).toHaveAttribute('aria-pressed', 'true');
+    await expect(tiles).toHaveCount(ready);
+
+    // And after a reload.
+    await page.reload();
+    await expect(drawer).toBeVisible({ timeout: 30_000 });
+    await expect(readyNow).toHaveAttribute('aria-pressed', 'true');
+    await expect(tiles).toHaveCount(ready);
+
+    // Back to All, which is remembered the same way.
+    await all.click();
+    await expect(tiles).toHaveCount(everyTool);
+    await page.reload();
+    await expect(drawer).toBeVisible({ timeout: 30_000 });
+    await expect(all).toHaveAttribute('aria-pressed', 'true');
     await expect(tiles).toHaveCount(everyTool);
   }
 );
