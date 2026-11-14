@@ -201,8 +201,10 @@ export interface MigrationEngineDeps {
   /** Saves this page's pending edits to the project before staging begins. */
   flushProject?(projectId: string): Promise<void>;
   /**
-   * Just before the cutover: throws to stop it, e.g. when this device could
-   * not then save that the project is encrypted.
+   * Just before the cutover is asked for: saves that the project is now
+   * encrypted on this device, or throws to stop it. Whatever the cutover's
+   * answer, that stays saved: a lost or failed answer does not prove the
+   * cutover did not happen.
    */
   beforeCutover?(projectId: string): void;
   /** After the cutover: this page now treats the project as encrypted. */

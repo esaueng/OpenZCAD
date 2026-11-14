@@ -31,7 +31,8 @@ const { store, encryptedModule } = vi.hoisted(() => {
     store,
     encryptedModule: {
       encryptedProjectStore: vi.fn(async () => store),
-      encryptedProjectShelf: vi.fn(async () => new Map())
+      encryptedProjectShelf: vi.fn(async () => new Map()),
+      copyEncryptedProject: vi.fn()
     }
   };
 });
@@ -459,6 +460,20 @@ describe('an encrypted project stays encrypted on this device', () => {
       else delete (window as { localStorage?: Storage }).localStorage;
       real.removeItem(ENCRYPTED_PROJECT_PIN_FAILED_KEY);
     }
+  });
+
+  it('refuses an encrypted copy the account answers for under another id', async () => {
+    const sourceId = 'proj_pin_copy_source';
+    await listAs(sourceId, 2);
+    const copy = createProjectDocument('Copy', toUserId('user_owner'));
+    encryptedModule.copyEncryptedProject.mockResolvedValueOnce({
+      project: summary('proj_someone_else', 2),
+      document: copy
+    });
+    await expect(
+      api.duplicateProject(sourceId, { document: copy })
+    ).rejects.toMatchObject({ status: 502 });
+    expect(isEncryptedProject('proj_someone_else')).toBe(false);
   });
 
   it('is unpinned by this device’s own decrypt run', async () => {

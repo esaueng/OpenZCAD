@@ -22,7 +22,7 @@ import type { ProjectSummary } from '@openzcad/shared';
 import {
   pinStorageUnavailable,
   rememberEncryptedProject,
-  requireWritablePins
+  requireDurablePin
 } from '../api';
 import { desktopFetch } from '../desktopBridge';
 import { flushProjectEdits, setMigratingProjects } from '../migrationStatus';
@@ -291,9 +291,10 @@ export function createMigrationController(
       leases,
       createStaging: (leased) => opened.open(leased),
       flushProject: flushProjectEdits,
-      // The pin must outlive this page: check it can be saved before the
-      // cutover, and report a pin that still was not saved after it.
-      beforeCutover: () => requireWritablePins(),
+      // The pin must outlive this page and any lost answer: save it before
+      // asking for the cutover, and keep it whatever the answer, since a
+      // failed answer does not prove the cutover did not happen.
+      beforeCutover: (projectId) => requireDurablePin(projectId),
       onCutover: (projectId) => {
         if (!rememberEncryptedProject(projectId)) throw pinStorageUnavailable();
       },

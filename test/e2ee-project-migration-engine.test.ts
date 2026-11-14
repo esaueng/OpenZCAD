@@ -763,6 +763,24 @@ describe('encrypting an existing project', () => {
     );
   });
 
+  it('saves that the project is encrypted before asking for the cutover', async () => {
+    const srv = roomServer();
+    const plain = await plaintextProject(srv, { revisions: 1 });
+    const projectId = plain.head.projectId;
+    const formatsWhenPinned: number[] = [];
+    const laptop = engineOn(srv, owner, 'owner_laptop', {
+      beforeCutover: (id) => {
+        expect(id).toBe(projectId);
+        formatsWhenPinned.push(formatOf(srv, projectId));
+      }
+    });
+    await migrateFully(laptop, projectId);
+    // Pinned while the account still held it as plaintext: a lost cutover
+    // answer cannot leave this device without the pin.
+    expect(formatsWhenPinned).toEqual([1]);
+    expect(formatOf(srv, projectId)).toBe(2);
+  });
+
   it('refuses while the room holds edits the account never saved', async () => {
     const srv = roomServer();
     const plain = await plaintextProject(srv, { revisions: 1 });

@@ -403,24 +403,30 @@ export function requireDurablePin(projectId: string): void {
   }
 }
 
-/**
- * Refuses unless a pin can be saved right now: before an encrypt cutover,
- * after which the project's pin must not be lost.
- */
-export function requireWritablePins(): void {
-  if (!encryptedProjectPins().writable()) throw pinStorageUnavailable();
-}
-
 /** Refuses before an encrypted create or copy while pins are unavailable. */
 function requirePinStorage(): void {
   if (encryptedProjectPins().degraded) throw pinStorageUnavailable();
 }
 
-/** Pins a project this page just created or copied encrypted, or refuses. */
-function pinCreated<T extends { project: { projectId: string } }>(
-  created: T
-): T {
-  if (!rememberEncryptedProject(created.project.projectId)) {
+/**
+ * Pins a project this page just created or copied encrypted, or refuses.
+ * The document is this page's own; the summary's id comes from the
+ * account's answer, so one that names another project is refused rather
+ * than pinned in its place.
+ */
+function pinCreated<
+  T extends {
+    project: { projectId: string };
+    document: { projectId: string };
+  }
+>(created: T): T {
+  if (created.project.projectId !== created.document.projectId) {
+    throw new ApiError(
+      502,
+      'The account answered for another project than the one this browser created. Nothing more was sent.'
+    );
+  }
+  if (!rememberEncryptedProject(created.document.projectId)) {
     throw pinStorageUnavailable();
   }
   return created;
