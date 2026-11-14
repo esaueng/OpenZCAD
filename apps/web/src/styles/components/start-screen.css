@@ -432,9 +432,13 @@
    the launch the one tinted block on the page; the button and the field's
    own edge group it. New project takes the row, Import is its icon beside
    it, and the name and its units share one box. */
+/* Packed to the top of its row: on the first run the shelf beside the
+   column spans the column's rows, and its height was shared out as gaps
+   between New project and the name. */
 .start-launch {
   grid-area: launch;
   display: grid;
+  align-content: start;
   gap: var(--sp-2);
   padding: 4px 10px 12px;
 }
@@ -442,6 +446,7 @@
 .start-launch-form {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
+  align-content: start;
   gap: 6px;
   align-items: center;
 }

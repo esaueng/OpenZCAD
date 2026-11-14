@@ -194,6 +194,15 @@ describe('start screen folder tab', () => {
   });
 });
 
+describe('start screen launch form', () => {
+  it('packs New project and the name to the top of the launch row', () => {
+    // 14 Nov 2026: on the first run the shelf spans the column's rows, and
+    // its height opened gaps between New project and the name field.
+    expect(rule(css, '.start-launch')).toMatch(/align-content:\s*start/);
+    expect(rule(css, '.start-launch-form')).toMatch(/align-content:\s*start/);
+  });
+});
+
 describe('start screen shelf groups', () => {
   it('styles the Pinned and Projects labels as the column eyebrow', () => {
     // 5 Nov 2026: the groups were unlabelled, so a short Pinned row read as
