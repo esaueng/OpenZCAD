@@ -530,7 +530,8 @@ export type StatementKind =
   | 'share link registration'
   | 'project invitation'
   | 'MLS authority manifest'
-  | 'MLS authority trust';
+  | 'MLS authority trust'
+  | 'MLS commit submission';
 
 /** @internal `u8 1 | r || s` over `label "v1 <kind> signature" | statement`. */
 export async function signStatement(

@@ -15,6 +15,7 @@ import {
 import { useKeymap } from '../lib/keymap';
 import { platformShortcutLabel } from '../lib/platformShortcut';
 import { StableLabel } from './StableLabel';
+import { TOUCH_ONLY_QUERY, useMediaQuery } from '../hooks/useMediaQuery';
 
 interface WorkspaceTourProps extends WorkspaceTourSignals {
   /** Fired on skip AND on finishing the last step — either way it is over. */
@@ -51,6 +52,7 @@ export function WorkspaceTour({
   onIndexChange
 }: WorkspaceTourProps) {
   const keymap = useKeymap();
+  const touchOnly = useMediaQuery(TOUCH_ONLY_QUERY);
   const [localMinimized, setLocalMinimized] = useState(false);
   const minimized = minimizedProp ?? localMinimized;
   const [index, setIndex] = useState(() =>
@@ -236,10 +238,14 @@ export function WorkspaceTour({
       <div hidden={minimized} aria-live="polite" aria-atomic="true">
         <h2 className="workspace-tour-title">{step.title}</h2>
         <p className="workspace-tour-body">
-          {tourStepBody(step, (id) => {
-            const chord = keymap.label(id);
-            return chord ? platformShortcutLabel(chord) : undefined;
-          })}
+          {tourStepBody(
+            step,
+            (id) => {
+              const chord = keymap.label(id);
+              return chord ? platformShortcutLabel(chord) : undefined;
+            },
+            touchOnly
+          )}
         </p>
       </div>
       <footer hidden={minimized} className="workspace-tour-actions">
