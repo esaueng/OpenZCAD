@@ -68,3 +68,18 @@ export function generateCutePartName(
   const animal = CUTE_PART_ANIMALS[pickIndex(CUTE_PART_ANIMALS.length)];
   return `${adjective} ${animal}`;
 }
+
+const ADJECTIVES: ReadonlySet<string> = new Set(CUTE_PART_ADJECTIVES);
+const ANIMALS: ReadonlySet<string> = new Set(CUTE_PART_ANIMALS);
+
+/** Whether `name` is a suggestion `generateCutePartName` could have made. */
+export function isCutePartName(name: string): boolean {
+  const [adjective, animal, ...rest] = name.split(' ');
+  return (
+    rest.length === 0 &&
+    adjective !== undefined &&
+    animal !== undefined &&
+    ADJECTIVES.has(adjective) &&
+    ANIMALS.has(animal)
+  );
+}
