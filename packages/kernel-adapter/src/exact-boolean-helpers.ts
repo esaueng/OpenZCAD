@@ -528,19 +528,13 @@ export function fuseUniformSolidChecked(
   labels?: readonly string[],
   onAccepted?: (solid: number) => void,
   retainDisplayMesh = false,
-  heldLinearDeflection?: number,
-  /**
-   * How many separate groups the operands form, when the caller has already
-   * proved it (the Union feature's connectivity pass). Omitted, the gate
-   * works it out itself — and only on the rare path that needs it.
-   */
-  contactGroups?: number
+  heldLinearDeflection?: number
 ): UnifiedUnion {
   return unifyUnionFacesChecked(
     kernel,
     // `exactFuseAll` refuses by name on a non-exact pair; only a fused
     // solid reaches the gate.
-    fuseAllMergingFaceContacts(kernel, solids, labels, contactGroups),
+    fuseAllMergingFaceContacts(kernel, solids, labels),
     onAccepted,
     retainDisplayMesh,
     heldLinearDeflection
@@ -557,180 +551,19 @@ function releaseScratchSolid(kernel: RemusKernel, solid: number): void {
 }
 
 /**
- * What one solid's boundary says about how many pieces of material it holds.
- *
- * `components` is exact: face-connected boundary components from the
- * kernel's edge-to-face map. Each component's sign is judged on its own:
- * `certainPieces` enclose positive volume beyond doubt, `certainCavities`
- * negative, and `uncertain` could be either. `pieces` is the full count, or
- * null while any component is uncertain.
- *
- * Raw components are not pieces. A body with an enclosed cavity has a second
- * boundary component — the void's — and it is legitimate: its faces point
- * into the void, away from the material, so it encloses negative volume. Two
- * pieces of material that should have merged each enclose positive volume.
+ * A solid's boundary split into face-connected components — exact, from the
+ * kernel's edge-to-face map — or null when the kernel cannot describe it.
  */
-export interface MaterialCensus {
-  readonly components: number;
-  readonly certainPieces: number;
-  readonly certainCavities: number;
-  readonly uncertain: number;
-  readonly pieces: number | null;
-}
-
-/** Display deflection of a refined pass, relative to the component's extent. */
-const REFINED_DEFLECTION_RATIO = 1e-4;
-
-interface ComponentSum {
-  volume: number;
-  /** Σ over triangles of the determinant's absolute-product permanent / 6. */
-  permanent: number;
-  triangles: number;
-  curvedArea: number;
-  deflection: number;
-  low: [number, number, number];
-  high: [number, number, number];
-}
-
-/**
- * Accumulates one face's display triangles into `sum`, about `origin`.
- *
- * Each triangle contributes det(a, b, c) / 6. Alongside it the sum carries
- * what its rounding can be bounded by: the permanent (the determinant with
- * every product made absolute), whose ε multiple bounds the error of
- * evaluating each determinant, and the triangle count, which bounds the
- * error of adding them up (recursive summation of n terms errs by at most
- * γ(n−1) times the sum of their magnitudes, itself at most the permanent).
- */
-function accumulateFace(
-  kernel: RemusKernel,
-  face: number,
-  deflection: number,
-  origin: readonly [number, number, number],
-  sum: ComponentSum
-): void {
-  const curved = kernel.getSurfaceType(face) !== 'plane';
-  const mesh = kernel.tessellateFace(face, deflection);
-  try {
-    const p = mesh.positions;
-    const index = mesh.indices;
-    for (let t = 0; t + 2 < index.length; t += 3) {
-      const a = index[t]! * 3;
-      const b = index[t + 1]! * 3;
-      const c = index[t + 2]! * 3;
-      const ax = p[a]! - origin[0];
-      const ay = p[a + 1]! - origin[1];
-      const az = p[a + 2]! - origin[2];
-      const bx = p[b]! - origin[0];
-      const by = p[b + 1]! - origin[1];
-      const bz = p[b + 2]! - origin[2];
-      const cx = p[c]! - origin[0];
-      const cy = p[c + 1]! - origin[1];
-      const cz = p[c + 2]! - origin[2];
-      sum.volume +=
-        (ax * (by * cz - bz * cy) -
-          ay * (bx * cz - bz * cx) +
-          az * (bx * cy - by * cx)) /
-        6;
-      sum.permanent +=
-        (Math.abs(ax) * (Math.abs(by * cz) + Math.abs(bz * cy)) +
-          Math.abs(ay) * (Math.abs(bx * cz) + Math.abs(bz * cx)) +
-          Math.abs(az) * (Math.abs(bx * cy) + Math.abs(by * cx))) /
-        6;
-      sum.triangles += 1;
-      for (const [x, y, z] of [
-        [ax, ay, az],
-        [bx, by, bz],
-        [cx, cy, cz]
-      ] as const) {
-        sum.low[0] = Math.min(sum.low[0], x);
-        sum.low[1] = Math.min(sum.low[1], y);
-        sum.low[2] = Math.min(sum.low[2], z);
-        sum.high[0] = Math.max(sum.high[0], x);
-        sum.high[1] = Math.max(sum.high[1], y);
-        sum.high[2] = Math.max(sum.high[2], z);
-      }
-      if (curved) {
-        const ux = bx - ax;
-        const uy = by - ay;
-        const uz = bz - az;
-        const vx = cx - ax;
-        const vy = cy - ay;
-        const vz = cz - az;
-        sum.curvedArea +=
-          Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx) /
-          2;
-      }
-    }
-  } finally {
-    mesh.free();
-  }
-}
-
-/**
- * How far a component's summed volume can be from the enclosed volume of the
- * surface it approximates: floating-point rounding (γ(n+5) times the
- * permanent — five roundings inside each determinant, up to n − 1 in the
- * sum), plus the chord error of curved faces, bounded by the deflection
- * times their area. Planar faces tessellate exactly. The chord term is an
- * engineering bound — the mesh lies within the deflection of the surface —
- * not a certified one.
- */
-function componentBand(sum: ComponentSum): number {
-  const k = sum.triangles + 5;
-  const gamma = (k * Number.EPSILON) / (1 - k * Number.EPSILON);
-  return gamma * sum.permanent + sum.curvedArea * sum.deflection;
-}
-
-function emptySum(deflection: number): ComponentSum {
-  return {
-    volume: 0,
-    permanent: 0,
-    triangles: 0,
-    curvedArea: 0,
-    deflection,
-    low: [Infinity, Infinity, Infinity],
-    high: [-Infinity, -Infinity, -Infinity]
-  };
-}
-
-/**
- * Count a solid's pieces of material. Null only when the kernel cannot
- * describe the boundary at all.
- *
- * Volumes are summed about the body's own box centre rather than the world
- * origin: about the world origin a body parked at (1e7, 1e7, 1e7) sums
- * determinants of order 1e21 to a volume of order 1e5, and cancellation left
- * nothing of the sign. A component whose volume lies inside its band
- * ({@link componentBand}) is measured again at a deflection relative to its
- * OWN extent, so a fine feature — a 0.1 mm pin, a thin tube wall — is judged
- * at its own scale rather than the body's. Only a component still inside its
- * band after that is uncertain, and it is uncertain alone: the other
- * components keep their certain signs.
- *
- * A solid in one component is one piece without tessellating anything, which
- * is every ordinary result.
- */
-export function materialCensus(
+export function faceComponentsOf(
   kernel: RemusKernel,
   solid: number
-): MaterialCensus | null {
+): number[][] | null {
   try {
     const faces = Array.from<number>(kernel.getSolidFaces(solid));
     const edgeToFaces = JSON.parse(kernel.edgeToFaceMap(solid)) as Record<
       string,
       number[]
     >;
-    const components = countFaceConnectedComponents(faces, edgeToFaces);
-    if (components <= 1) {
-      return {
-        components,
-        certainPieces: components,
-        certainCavities: 0,
-        uncertain: 0,
-        pieces: components
-      };
-    }
     const parent = new Map(faces.map((face) => [face, face]));
     const root = (face: number): number => {
       let current = face;
@@ -739,77 +572,32 @@ export function materialCensus(
     };
     for (const adjacent of Object.values(edgeToFaces)) {
       for (const face of adjacent.slice(1)) {
+        if (!parent.has(face) || !parent.has(adjacent[0]!)) continue;
         const left = root(adjacent[0]!);
         const right = root(face);
         if (left !== right) parent.set(right, left);
       }
     }
-    const box = kernel.boundingBox(solid);
-    const origin = [
-      (box[0]! + box[3]!) / 2,
-      (box[1]! + box[4]!) / 2,
-      (box[2]! + box[5]!) / 2
-    ] as const;
-    const facesOf = new Map<number, number[]>();
+    const groups = new Map<number, number[]>();
     for (const face of faces) {
       const component = root(face);
-      facesOf.set(component, [...(facesOf.get(component) ?? []), face]);
+      groups.set(component, [...(groups.get(component) ?? []), face]);
     }
-    let certainPieces = 0;
-    let certainCavities = 0;
-    let uncertain = 0;
-    for (const componentFaces of facesOf.values()) {
-      let sum = emptySum(MEASUREMENT_DEFLECTION);
-      for (const face of componentFaces) {
-        accumulateFace(kernel, face, sum.deflection, origin, sum);
-      }
-      if (Math.abs(sum.volume) <= componentBand(sum)) {
-        const extent = Math.hypot(
-          sum.high[0] - sum.low[0],
-          sum.high[1] - sum.low[1],
-          sum.high[2] - sum.low[2]
-        );
-        const refined = extent * REFINED_DEFLECTION_RATIO;
-        if (refined > 0 && refined < sum.deflection) {
-          sum = emptySum(refined);
-          for (const face of componentFaces) {
-            accumulateFace(kernel, face, refined, origin, sum);
-          }
-        }
-      }
-      if (
-        !Number.isFinite(sum.volume) ||
-        Math.abs(sum.volume) <= componentBand(sum)
-      ) {
-        uncertain += 1;
-      } else if (sum.volume > 0) {
-        certainPieces += 1;
-      } else {
-        certainCavities += 1;
-      }
-    }
-    return {
-      components,
-      certainPieces,
-      certainCavities,
-      uncertain,
-      pieces: uncertain === 0 ? certainPieces : null
-    };
+    return [...groups.values()];
   } catch {
     return null;
   }
 }
 
-/** Pieces of material, or null when unknown. See {@link materialCensus}. */
-export function solidMaterialPieces(
-  kernel: RemusKernel,
-  solid: number
-): number | null {
-  return materialCensus(kernel, solid)?.pieces ?? null;
-}
-
-/** Operand count above which the contact repair is not attempted. */
+/** Operand count of one contact group above which no repair is attempted. */
 export const MAX_CONTACT_REPAIR_OPERANDS = 12;
+
+/**
+ * Triangles one certification may tessellate, refinements included. Past it
+ * the certification fails, and with it the union: cost is bounded, and the
+ * bound fails closed.
+ */
+export const MAX_CERTIFY_TRIANGLES = 400_000;
 
 /** Positional tolerance as a fraction of the body's own extent. */
 const EXTENT_TOLERANCE_RATIO = 1e-7;
@@ -836,8 +624,9 @@ function extentTolerance(box: readonly number[]): number {
 /**
  * A point strictly inside `solid`, or null when none is found: the interior
  * grid of its box first, then a point a small step inside the largest
- * triangle of each planar face (exact, unlike a chord of a curved one), at
- * steps down to 1e-5 of the solid's extent for thin walls.
+ * triangle of each planar face, at steps down to 1e-5 of the solid's extent.
+ * The planar face is tessellated at a deflection of 1e-6 of the extent, so
+ * the triangle lies inside a ring only a few µm wide rather than across it.
  */
 export function operandInteriorWitness(
   kernel: RemusKernel,
@@ -856,9 +645,10 @@ export function operandInteriorWitness(
       )
     };
   }
+  const deflection = Math.min(MEASUREMENT_DEFLECTION, extent * 1e-6);
   for (const face of Array.from<number>(kernel.getSolidFaces(solid))) {
     if (kernel.getSurfaceType(face) !== 'plane') continue;
-    const mesh = kernel.tessellateFace(face, MEASUREMENT_DEFLECTION);
+    const mesh = kernel.tessellateFace(face, deflection);
     let best: { centre: number[]; normal: number[]; area: number } | null =
       null;
     try {
@@ -893,13 +683,457 @@ export function operandInteriorWitness(
       const point = [0, 1, 2].map(
         (axis) => best.centre[axis]! - best.normal[axis]! * step
       ) as [number, number, number];
-      if (strictlyInside(kernel, solid, point, step / 4)) {
-        return { point, tolerance: step / 4 };
+      // The clearance stays far below the step: a 0.01 mm wall cannot be
+      // cleared by a quarter of a 0.04 mm step.
+      const clearance = step / 1000;
+      if (insideExactly(kernel, solid, point, clearance)) {
+        return { point, tolerance: clearance };
       }
     }
   }
   return null;
 }
+
+/** One boundary component's display triangles, about a local origin. */
+interface ComponentMesh {
+  readonly faces: readonly number[];
+  readonly deflection: number;
+  /** Nine coordinates per triangle, relative to the certification origin. */
+  readonly triangles: Float64Array;
+  /** 1 where the triangle lies on a curved face (a chord, not the surface). */
+  readonly curved: Uint8Array;
+  readonly low: readonly [number, number, number];
+  readonly high: readonly [number, number, number];
+}
+
+/** Tessellates one component, or null once `budget` would be exceeded. */
+function tessellateComponent(
+  kernel: RemusKernel,
+  faces: readonly number[],
+  deflection: number,
+  origin: readonly [number, number, number],
+  budget: { triangles: number }
+): ComponentMesh | null {
+  const chunks: { coordinates: number[]; curved: boolean }[] = [];
+  let count = 0;
+  for (const face of faces) {
+    const curved = kernel.getSurfaceType(face) !== 'plane';
+    const mesh = kernel.tessellateFace(face, deflection);
+    try {
+      const p = mesh.positions;
+      const index = mesh.indices;
+      const triangles = Math.floor(index.length / 3);
+      budget.triangles -= triangles;
+      if (budget.triangles < 0) return null;
+      const coordinates: number[] = new Array<number>(triangles * 9);
+      for (let t = 0; t < triangles; t += 1) {
+        for (let corner = 0; corner < 3; corner += 1) {
+          const vertex = index[t * 3 + corner]! * 3;
+          for (let axis = 0; axis < 3; axis += 1) {
+            coordinates[t * 9 + corner * 3 + axis] =
+              p[vertex + axis]! - origin[axis]!;
+          }
+        }
+      }
+      chunks.push({ coordinates, curved });
+      count += triangles;
+    } finally {
+      mesh.free();
+    }
+  }
+  const triangles = new Float64Array(count * 9);
+  const curvedFlags = new Uint8Array(count);
+  const low: [number, number, number] = [Infinity, Infinity, Infinity];
+  const high: [number, number, number] = [-Infinity, -Infinity, -Infinity];
+  let offset = 0;
+  for (const chunk of chunks) {
+    triangles.set(chunk.coordinates, offset * 9);
+    curvedFlags.fill(
+      chunk.curved ? 1 : 0,
+      offset,
+      offset + chunk.coordinates.length / 9
+    );
+    for (let index = 0; index < chunk.coordinates.length; index += 3) {
+      for (let axis = 0; axis < 3; axis += 1) {
+        const value = chunk.coordinates[index + axis]!;
+        low[axis] = Math.min(low[axis]!, value);
+        high[axis] = Math.max(high[axis]!, value);
+      }
+    }
+    offset += chunk.coordinates.length / 9;
+  }
+  return { faces, deflection, triangles, curved: curvedFlags, low, high };
+}
+
+/**
+ * Distance from the origin to the triangle (a, b, c): the closest point by
+ * Voronoi region of the triangle (Ericson, Real-Time Collision Detection
+ * §5.1.5), so long sliver triangles on a cylinder wall are measured as they
+ * are rather than by a bounding sphere.
+ */
+function originTriangleDistance(
+  ax: number,
+  ay: number,
+  az: number,
+  bx: number,
+  by: number,
+  bz: number,
+  cx: number,
+  cy: number,
+  cz: number
+): number {
+  const abx = bx - ax;
+  const aby = by - ay;
+  const abz = bz - az;
+  const acx = cx - ax;
+  const acy = cy - ay;
+  const acz = cz - az;
+  // p − a with p at the origin.
+  const apx = -ax;
+  const apy = -ay;
+  const apz = -az;
+  const d1 = abx * apx + aby * apy + abz * apz;
+  const d2 = acx * apx + acy * apy + acz * apz;
+  if (d1 <= 0 && d2 <= 0) return Math.hypot(ax, ay, az);
+  const bpx = -bx;
+  const bpy = -by;
+  const bpz = -bz;
+  const d3 = abx * bpx + aby * bpy + abz * bpz;
+  const d4 = acx * bpx + acy * bpy + acz * bpz;
+  if (d3 >= 0 && d4 <= d3) return Math.hypot(bx, by, bz);
+  const vc = d1 * d4 - d3 * d2;
+  if (vc <= 0 && d1 >= 0 && d3 <= 0) {
+    const v = d1 / (d1 - d3);
+    return Math.hypot(ax + v * abx, ay + v * aby, az + v * abz);
+  }
+  const cpx = -cx;
+  const cpy = -cy;
+  const cpz = -cz;
+  const d5 = abx * cpx + aby * cpy + abz * cpz;
+  const d6 = acx * cpx + acy * cpy + acz * cpz;
+  if (d6 >= 0 && d5 <= d6) return Math.hypot(cx, cy, cz);
+  const vb = d5 * d2 - d1 * d6;
+  if (vb <= 0 && d2 >= 0 && d6 <= 0) {
+    const w = d2 / (d2 - d6);
+    return Math.hypot(ax + w * acx, ay + w * acy, az + w * acz);
+  }
+  const va = d3 * d6 - d5 * d4;
+  if (va <= 0 && d4 - d3 >= 0 && d5 - d6 >= 0) {
+    const w = (d4 - d3) / (d4 - d3 + (d5 - d6));
+    return Math.hypot(
+      bx + w * (cx - bx),
+      by + w * (cy - by),
+      bz + w * (cz - bz)
+    );
+  }
+  const denominator = 1 / (va + vb + vc);
+  const v = vb * denominator;
+  const w = vc * denominator;
+  return Math.hypot(
+    ax + abx * v + acx * w,
+    ay + aby * v + acy * w,
+    az + abz * v + acz * w
+  );
+}
+
+/**
+ * The winding number of the closed component mesh about `point` (Van
+ * Oosterom–Strackee solid angles), and how near the point comes to a curved
+ * triangle: a lower bound on its distance to the nearest one.
+ *
+ * Outward-wound triangles give +1 for a point inside the material a
+ * component bounds and 0 outside it; a cavity's component is wound into the
+ * void, so a point in the surrounding material is outside it and gets 0.
+ * `nearestCurved` is the exact distance to the nearest curved triangle.
+ */
+function componentWinding(
+  mesh: ComponentMesh,
+  point: readonly [number, number, number]
+): { winding: number; nearestCurved: number } {
+  const t = mesh.triangles;
+  let angle = 0;
+  let nearestCurved = Infinity;
+  for (let index = 0; index < mesh.curved.length; index += 1) {
+    const o = index * 9;
+    const ax = t[o]! - point[0];
+    const ay = t[o + 1]! - point[1];
+    const az = t[o + 2]! - point[2];
+    const bx = t[o + 3]! - point[0];
+    const by = t[o + 4]! - point[1];
+    const bz = t[o + 5]! - point[2];
+    const cx = t[o + 6]! - point[0];
+    const cy = t[o + 7]! - point[1];
+    const cz = t[o + 8]! - point[2];
+    const la = Math.hypot(ax, ay, az);
+    const lb = Math.hypot(bx, by, bz);
+    const lc = Math.hypot(cx, cy, cz);
+    const numerator =
+      ax * (by * cz - bz * cy) -
+      ay * (bx * cz - bz * cx) +
+      az * (bx * cy - by * cx);
+    const denominator =
+      la * lb * lc +
+      (ax * bx + ay * by + az * bz) * lc +
+      (ax * cx + ay * cy + az * cz) * lb +
+      (bx * cx + by * cy + bz * cz) * la;
+    angle += 2 * Math.atan2(numerator, denominator);
+    if (mesh.curved[index]) {
+      nearestCurved = Math.min(
+        nearestCurved,
+        originTriangleDistance(ax, ay, az, bx, by, bz, cx, cy, cz)
+      );
+    }
+  }
+  return { winding: angle / (4 * Math.PI), nearestCurved };
+}
+
+/** A proven contact group: its operands, and a witness inside each. */
+interface ContactGroup {
+  readonly solids: readonly number[];
+  readonly witnesses: readonly InteriorWitness[];
+}
+
+/**
+ * Whether each contact group is ONE piece of material in `result`.
+ *
+ * A group is certified when every operand's interior witness has a total
+ * winding number of exactly +1 over the result's boundary components, and
+ * all its witnesses are enclosed by the same components. Two pieces a wall
+ * still separates enclose different witnesses, so they fail; a cavity winds
+ * 0 about the material around it, so it neither helps nor hurts. Evidence is
+ * read per group: a component that encloses none of a group's witnesses
+ * never enters its verdict, so nothing elsewhere in the body can satisfy or
+ * mask it.
+ *
+ * Only components whose box holds a witness are wound. A witness closer to a
+ * curved triangle than twice the chord deflection could sit between the
+ * mesh and the true surface, so that component alone is tessellated again,
+ * finer, down to 1e-7 of its extent; still too close, or past
+ * {@link MAX_CERTIFY_TRIANGLES}, and the group is not certified.
+ */
+function certifyContactGroups(
+  kernel: RemusKernel,
+  result: number,
+  groups: readonly ContactGroup[]
+): boolean[] {
+  const failed = groups.map(() => false);
+  const components = faceComponentsOf(kernel, result);
+  if (components === null) return failed;
+  const box = kernel.boundingBox(result);
+  const origin = [
+    (box[0]! + box[3]!) / 2,
+    (box[1]! + box[4]!) / 2,
+    (box[2]! + box[5]!) / 2
+  ] as const;
+  const budget = { triangles: MAX_CERTIFY_TRIANGLES };
+  const meshes: (ComponentMesh | null)[] = [];
+  for (const faces of components) {
+    const mesh = tessellateComponent(
+      kernel,
+      faces,
+      MEASUREMENT_DEFLECTION,
+      origin,
+      budget
+    );
+    if (mesh === null) return failed;
+    meshes.push(mesh);
+  }
+  return groups.map((group) => {
+    let signature: string | null = null;
+    for (const witness of group.witnesses) {
+      const point = [0, 1, 2].map(
+        (axis) => witness.point[axis]! - origin[axis]!
+      ) as [number, number, number];
+      const enclosing: string[] = [];
+      let total = 0;
+      for (let index = 0; index < meshes.length; index += 1) {
+        let mesh = meshes[index]!;
+        if (
+          [0, 1, 2].some(
+            (axis) =>
+              point[axis]! < mesh.low[axis]! - 2 * mesh.deflection ||
+              point[axis]! > mesh.high[axis]! + 2 * mesh.deflection
+          )
+        ) {
+          continue;
+        }
+        let reading = componentWinding(mesh, point);
+        while (reading.nearestCurved <= 2 * mesh.deflection) {
+          const extent = Math.hypot(
+            mesh.high[0] - mesh.low[0],
+            mesh.high[1] - mesh.low[1],
+            mesh.high[2] - mesh.low[2]
+          );
+          const finer = Math.min(
+            mesh.deflection / 8,
+            Math.max(reading.nearestCurved, 0) / 4
+          );
+          if (!(finer >= extent * 1e-7)) return false;
+          const refined = tessellateComponent(
+            kernel,
+            mesh.faces,
+            finer,
+            origin,
+            budget
+          );
+          if (refined === null) return false;
+          meshes[index] = mesh = refined;
+          reading = componentWinding(mesh, point);
+        }
+        const winding = Math.round(reading.winding);
+        if (Math.abs(reading.winding - winding) > 0.25) return false;
+        if (winding !== 0) {
+          enclosing.push(`${index}:${winding}`);
+          total += winding;
+        }
+      }
+      if (total !== 1) return false;
+      const key = enclosing.join(',');
+      if (signature === null) signature = key;
+      else if (key !== signature) return false;
+    }
+    return true;
+  });
+}
+
+/**
+ * Whether a certified exact distance proves two operands touch, at the
+ * union gate's own numerical contact tolerance (which never bridges a real
+ * gap). Null distances — curved operands — prove nothing here.
+ */
+function provedByDistance(
+  kernel: RemusKernel,
+  left: number,
+  right: number,
+  box: readonly number[]
+): boolean {
+  let distance: number | null;
+  try {
+    distance = certifiedSolidDistance(kernel, left, right);
+  } catch {
+    return false;
+  }
+  const scale = Math.max(1, boxExtent(box), ...box.map(Math.abs));
+  return distance !== null && distance <= Number.EPSILON * scale * 128;
+}
+
+/**
+ * Whether the exact pairwise fuse proves two operands touch: it returns a
+ * strictly valid solid in FEWER face-connected components than the two
+ * operands hold together — the fuse joined them — whose box is exactly
+ * their combined box, to a tolerance relative to that box's size.
+ *
+ * Fewer components, not one: an operand with cavities is several components
+ * on its own, and `solidsShareMaterialOrTouch`, which asks for one, can never
+ * prove a contact with it. Nor does this ask the fused display mesh to
+ * close: far from the origin (a hub on a 2 m flange at 1e7) the fuse is one
+ * valid solid whose display mesh cracks, and the display is no evidence
+ * about contact.
+ */
+function pairwiseFuseJoins(
+  kernel: RemusKernel,
+  left: number,
+  right: number
+): boolean {
+  let joined: number | undefined;
+  try {
+    const outcome = exactBooleanOutcome(kernel, 'fuse', left, right);
+    if (outcome.status !== 'ok') return false;
+    joined = outcome.solid;
+    const union = boxUnion(
+      Array.from<number>(kernel.boundingBox(left)),
+      Array.from<number>(kernel.boundingBox(right))
+    );
+    const box = Array.from<number>(kernel.boundingBox(joined));
+    const tolerance = extentTolerance(union);
+    const before =
+      (faceComponentsOf(kernel, left)?.length ?? Infinity) +
+      (faceComponentsOf(kernel, right)?.length ?? Infinity);
+    return (
+      (faceComponentsOf(kernel, joined)?.length ?? Infinity) < before &&
+      validationReport(kernel, joined).errorCount === 0 &&
+      boxWithin(box, union, tolerance) &&
+      boxWithin(union, box, tolerance)
+    );
+  } catch {
+    return false;
+  } finally {
+    if (joined !== undefined) releaseScratchSolid(kernel, joined);
+  }
+}
+
+/**
+ * The operands' proven contact groups: connected components of the graph
+ * whose edges are pairs proved to share material or touch, with at least
+ * two operands each. Pairs whose boxes do not meet are never tested; the
+ * rest are tried cheapest first — a certified distance, a shared interior
+ * point or positive exact intersection, then one pairwise fuse
+ * ({@link pairwiseFuseJoins}). A pair none of them proves is left alone,
+ * exactly as main leaves it.
+ */
+function provenContactGroups(
+  kernel: RemusKernel,
+  solids: readonly number[]
+): number[][] {
+  const boxes = solids.map((solid) =>
+    Array.from<number>(kernel.boundingBox(solid))
+  );
+  const parent = solids.map((_solid, index) => index);
+  const root = (index: number): number => {
+    let current = index;
+    while (parent[current] !== current) current = parent[current]!;
+    return current;
+  };
+  for (let left = 0; left < solids.length; left += 1) {
+    for (let right = left + 1; right < solids.length; right += 1) {
+      const tolerance = Math.max(
+        extentTolerance(boxes[left]!),
+        extentTolerance(boxes[right]!)
+      );
+      if (!boxesMeet(boxes[left]!, boxes[right]!, tolerance)) continue;
+      if (root(left) === root(right)) continue;
+      let touching: boolean;
+      try {
+        touching =
+          provedByDistance(
+            kernel,
+            solids[left]!,
+            solids[right]!,
+            boxUnion(boxes[left]!, boxes[right]!)
+          ) ||
+          solidsHavePositiveExactIntersection(
+            kernel,
+            solids[left]!,
+            solids[right]!
+          ) ||
+          pairwiseFuseJoins(kernel, solids[left]!, solids[right]!);
+      } catch {
+        touching = false;
+      }
+      if (touching) parent[root(right)] = root(left);
+    }
+  }
+  const groups = new Map<number, number[]>();
+  solids.forEach((_solid, index) => {
+    const group = root(index);
+    groups.set(group, [...(groups.get(group) ?? []), index]);
+  });
+  return [...groups.values()].filter((group) => group.length > 1);
+}
+
+/**
+ * Fault injection for tests: when set, the repair's pairwise fuse calls this
+ * instead of the kernel. The contact proof and every other fuse are
+ * untouched, so a test can hand the repair a bad merge and watch the
+ * preservation checks reject it. Never set outside tests.
+ */
+export const contactRepairFaults: {
+  pairwiseFuse?: (
+    kernel: RemusKernel,
+    left: number,
+    right: number
+  ) => number | null;
+} = {};
 
 interface RepairPart {
   readonly id: number;
@@ -957,20 +1191,45 @@ function volumeSlack(smallest: number, total: number): number {
   );
 }
 
-/** Whether every witness lies strictly inside `solid`. */
+/**
+ * Whether the exact B-rep classifier puts `point` inside `solid`.
+ *
+ * Witnesses use it alone. The tessellation-based second opinion
+ * `strictlyInside` also asks cannot resolve a wall thinner than its chords,
+ * so it misses every witness in a 0.01 mm tube. Nothing rests on this
+ * classifier by itself: certification winds every witness against the
+ * result's own boundary, so a misplaced witness fails closed there.
+ */
+function insideExactly(
+  kernel: RemusKernel,
+  solid: number,
+  point: readonly [number, number, number],
+  tolerance: number
+): boolean {
+  try {
+    return (
+      kernel.classifyPoint(solid, point[0], point[1], point[2], tolerance) ===
+      'inside'
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Whether every witness lies inside `solid` by the exact classifier. */
 function holdsWitnesses(
   kernel: RemusKernel,
   solid: number,
   witnesses: readonly InteriorWitness[]
 ): boolean {
   return witnesses.every((witness) =>
-    strictlyInside(kernel, solid, witness.point, witness.tolerance)
+    insideExactly(kernel, solid, witness.point, witness.tolerance)
   );
 }
 
 /**
- * Re-fuse operands that `fuseAll` left in more pieces than they should be,
- * grouping them rather than folding them in a fixed order.
+ * Re-fuse one contact group's operands, grouping them rather than folding
+ * them in a fixed order.
  *
  * The two fuse entry points fail on complementary contacts. `fuseAll` misses
  * a cylinder cap resting on another cylinder cap (esaueng/remus#1738); the
@@ -979,34 +1238,29 @@ function holdsWitnesses(
  * which `fuseAll` fuses when their caps are shared. A hub of two such bosses
  * standing on a flange needs both, in the right order: no fixed fold of the
  * pairwise fuse builds it, while `fuseAll` of the two bosses, then of that
- * with the flange, does. So pairs merge one at a time — `fuseAll` on any pair first, the
- * pairwise fuse only when no pair merges that way.
+ * with the flange, does. So pairs merge one at a time — `fuseAll` on any
+ * pair first, the pairwise fuse only when no pair merges that way.
  *
  * A merge is counted on exact topology — the candidate has fewer boundary
  * components than its two parts together — and is accepted only if it also
- * PRESERVES their material, judged per operand rather than against the
- * whole: a point strictly inside every operand either part holds must be
- * strictly inside the candidate, each part's box must lie inside the
- * candidate's to a tolerance relative to THAT part's size, the candidate's
- * box inside their union's, and its volume between the larger part's and
- * their sum to a slack tied to the smallest operand. A candidate that loses a
- * 0.5 mm boss off a 2 m flange at (1e7, 1e7, 1e7) fails the boss's witness,
- * its box and its volume, where coordinate-scaled tolerances passed it.
+ * PRESERVES their material, judged per operand: a point strictly inside
+ * every operand either part holds must be strictly inside the candidate,
+ * each part's box must lie inside the candidate's to a tolerance relative to
+ * THAT part's size, the candidate's box inside their union's, and its volume
+ * between the larger part's and their sum to a slack tied to the smallest
+ * operand.
  *
  * Bounded: only pairs whose boxes meet are candidates, at most
  * {@link MAX_CONTACT_REPAIR_OPERANDS} operands are taken, and no pair of
- * parts is tried twice with the same entry point, so a run costs at most two
- * fuses per pair of parts that ever coexist — O(n²) for n operands — and it
- * runs only when the plain `fuseAll` result is in pieces or cannot be read.
- * An operand with no interior witness cannot be proved preserved, so no
- * regroup is attempted.
+ * parts is tried twice with the same entry point — at most two fuses per
+ * pair of parts that ever coexist, O(n²) for n operands.
  *
  * Returns the regrouped solid, owned by the caller, or null when nothing
  * merged.
  */
 function regroupTouchingOperands(
   kernel: RemusKernel,
-  solids: readonly number[]
+  group: ContactGroup
 ): number | null {
   let nextId = 0;
   let parts: RepairPart[] = [];
@@ -1016,24 +1270,27 @@ function regroupTouchingOperands(
     witnesses: readonly InteriorWitness[],
     smallest: number | null
   ): RepairPart | null => {
-    const census = materialCensus(kernel, solid);
-    if (census === null) return null;
+    const components = faceComponentsOf(kernel, solid);
+    if (components === null) return null;
     const volume = kernel.volume(solid, MEASUREMENT_DEFLECTION);
     return {
       id: nextId++,
       solid,
       owned,
-      components: census.components,
+      components: components.length,
       volume,
       box: Array.from<number>(kernel.boundingBox(solid)),
       witnesses,
       smallest: smallest ?? volume
     };
   };
-  for (const solid of solids) {
-    const witness = operandInteriorWitness(kernel, solid);
-    if (witness === null) return null;
-    const part = describe(solid, false, [witness], null);
+  for (let index = 0; index < group.solids.length; index += 1) {
+    const part = describe(
+      group.solids[index]!,
+      false,
+      [group.witnesses[index]!],
+      null
+    );
     if (part === null) return null;
     parts.push(part);
   }
@@ -1045,6 +1302,13 @@ function regroupTouchingOperands(
     try {
       if (strategy === 'fuseAll') {
         return kernel.fuseAll(Uint32Array.from([left.solid, right.solid]));
+      }
+      if (contactRepairFaults.pairwiseFuse) {
+        return contactRepairFaults.pairwiseFuse(
+          kernel,
+          left.solid,
+          right.solid
+        );
       }
       const outcome = exactBooleanOutcome(
         kernel,
@@ -1128,14 +1392,10 @@ function regroupTouchingOperands(
       parts = [...parts.filter((p) => p !== left && p !== right), part];
       merges += 1;
     }
-    if (merges === 0) return null;
-    if (parts.length === 1) {
-      const only = parts[0]!;
-      parts = [];
-      return only.solid;
-    }
-    // What could not merge stays apart, exactly as `fuseAll` keeps it.
-    return kernel.fuseAll(Uint32Array.from(parts.map((part) => part.solid)));
+    if (merges === 0 || parts.length !== 1) return null;
+    const only = parts[0]!;
+    parts = [];
+    return only.solid;
   } catch {
     return null;
   } finally {
@@ -1145,52 +1405,19 @@ function regroupTouchingOperands(
   }
 }
 
-/** How many separate groups the operands form, or null when uncertain. */
-function operandContactGroups(
-  kernel: RemusKernel,
-  solids: readonly number[]
-): number | null {
-  try {
-    const connectivity = analyzeUnionConnectivity(
-      solids.map((solid) => {
-        const box = kernel.boundingBox(solid);
-        return {
-          solid,
-          bounds: {
-            min: { x: box[0]!, y: box[1]!, z: box[2]! },
-            max: { x: box[3]!, y: box[4]!, z: box[5]! }
-          }
-        };
-      }),
-      (left, right) => certifiedSolidDistance(kernel, left, right),
-      (left, right) =>
-        solidsHavePositiveExactIntersection(kernel, left, right) ||
-        solidsShareMaterialOrTouch(kernel, left, right)
-    );
-    return connectivity.uncertain ? null : connectivity.componentCount;
-  } catch {
-    return null;
-  }
-}
-
 /**
  * Whether `candidate` holds the same material as the fused result it would
- * replace: every operand's interior witness strictly inside it, the same box
- * to a tolerance relative to the body's size, and the same volume to a slack
- * tied to the smallest operand — an internal wall changes none of them.
+ * replace: every contact-group witness strictly inside it, the same box to a
+ * tolerance relative to the body's size, and the same volume to a slack tied
+ * to the smallest operand — an internal wall changes none of them.
  */
 function sameMaterial(
   kernel: RemusKernel,
   candidate: number,
   fused: number,
-  solids: readonly number[]
+  solids: readonly number[],
+  witnesses: readonly InteriorWitness[]
 ): boolean {
-  const witnesses: InteriorWitness[] = [];
-  for (const solid of solids) {
-    const witness = operandInteriorWitness(kernel, solid);
-    if (witness === null) return false;
-    witnesses.push(witness);
-  }
   const fusedBox = Array.from<number>(kernel.boundingBox(fused));
   const candidateBox = Array.from<number>(kernel.boundingBox(candidate));
   const tolerance = extentTolerance(fusedBox);
@@ -1207,44 +1434,49 @@ function sameMaterial(
   );
 }
 
+function unmergedContactRefusal(): AdapterRefusal {
+  return new AdapterRefusal(
+    'union_unmerged_contact',
+    'Union refused: where these bodies only touch face to face, the exact ' +
+      'kernel could not merge them, so the result would keep a hidden ' +
+      'internal wall. Overlapping them slightly instead usually clears it.'
+  );
+}
+
 /**
- * `exactFuseAll`, with the face contacts it leaves unmerged merged — or, when
- * that cannot be done, refused by name rather than shipped.
+ * `exactFuseAll`, with every proven contact between operands certified as
+ * merged — repaired where it is not, refused where it cannot be.
  *
- * WORKAROUND for two Remus defects, to be removed with this function, its
- * regroup and its census once both are fixed upstream and the pin carries
- * the fixes: esaueng/remus#1738 (`fuseAll` leaves cap-to-cap cylinders
- * unmerged) and esaueng/remus#1742 (pairwise `fuse` refuses parallel
- * cylinders overlapping by 1 mm or less). `test/touching-cylinder-union.test.ts`
- * holds the oracles the plain `exactFuseAll` must then pass on its own.
+ * WORKAROUND for two Remus defects, to be removed with this function and its
+ * helpers once both are fixed upstream and the pin carries the fixes:
+ * esaueng/remus#1738 (`fuseAll` leaves cap-to-cap cylinders unmerged) and
+ * esaueng/remus#1742 (pairwise `fuse` refuses parallel cylinders overlapping
+ * by 1 mm or less). `test/touching-cylinder-union.test.ts` holds the oracles
+ * the plain `exactFuseAll` must then pass on its own.
  *
- * `fuseAll` joins the groups it judges disjoint "directly without a boolean".
- * On the pinned Remus that judgement misses planar contact between two
- * cylinder caps — a hub standing exactly on a flange, coaxial or not, either
- * operand order — and returns one valid-looking solid that still holds both
- * caps: the flange top stays a full disc under the hub, an internal wall the
- * viewport hides and every face pick, offset, fillet and later cut then works
- * on. A fillet of the hub foot came out convex, and a bore cut dropped the
- * hub. Box-on-box, a cylinder on a box and a cone on a cylinder merge
- * correctly.
+ * `fuseAll` joins the groups it judges disjoint "directly without a boolean",
+ * and on the pin that judgement misses planar contact between two cylinder
+ * caps — a hub standing exactly on a flange — returning one valid-looking
+ * solid that still holds both caps: an internal wall the viewport hides and
+ * every later face pick, fillet and cut works on.
  *
- * The fused result is read with {@link materialCensus}:
+ * The gate is NARROW. It acts only where operands are proved to touch:
  *
- * - One piece (including any enclosed cavities): returned as it is. Every
- *   ordinary union pays only an edge-to-face read.
- * - Anything else — more than one certain piece, or any uncertain component:
- *   regrouped ({@link regroupTouchingOperands}). The regrouped solid replaces
- *   the fused one only with fewer boundary components AND the same material
- *   ({@link sameMaterial}).
- * - Then, if the CERTAIN pieces alone outnumber the groups the operands are
- *   proved to form, refused (`union_unmerged_contact`) — a hidden internal
- *   wall is never returned silently. Uncertain components neither add to
- *   that count nor excuse it: a 0.1 mm pin beside eleven 1 mm pins cannot
- *   hide the eleven.
- *
- * What is never refused is a body whose only evidence of extra pieces is
- * uncertain, or whose operands' contact cannot be proved: an untrustworthy
- * measurement is not evidence against a body.
+ * 1. A result in one face-connected component is returned as it is — main's
+ *    behaviour, for the price of an edge-to-face read.
+ * 2. Otherwise the operands' proven contact groups are found. With none, the
+ *    result is again returned as it is: operands in no proven contact get no
+ *    witness, no tessellation and no repair.
+ * 3. Each contact group must be CERTIFIED as one piece of material
+ *    ({@link certifyContactGroups}). A group that is not is repaired on its
+ *    own operands ({@link regroupTouchingOperands}), and the repaired body
+ *    replaces the fused one only if it holds the same material
+ *    ({@link sameMaterial}) and certifies every group.
+ * 4. Inside a contact group the gate fails CLOSED: a missing witness, an
+ *    unresolvable winding, the triangle budget, a group past
+ *    {@link MAX_CONTACT_REPAIR_OPERANDS}, or a repair that does not certify
+ *    refuses the union (`union_unmerged_contact`). A contact group is never
+ *    passed through on uncertain evidence.
  *
  * Kept off `collapseShape`, where a disjoint pattern tool is in pieces by
  * design.
@@ -1252,45 +1484,77 @@ function sameMaterial(
 export function fuseAllMergingFaceContacts(
   kernel: RemusKernel,
   solids: readonly number[],
-  labels?: readonly string[],
-  contactGroups?: number
+  labels?: readonly string[]
 ): number {
   const fused = exactFuseAll(kernel, solids, labels);
   if (solids.length < 2) return fused;
-  const census = materialCensus(kernel, fused);
-  if (census === null || census.components <= 1) return fused;
-  if (census.uncertain === 0 && census.certainPieces <= 1) return fused;
-  let result = fused;
-  let resultCensus = census;
-  if (solids.length <= MAX_CONTACT_REPAIR_OPERANDS) {
-    const regrouped = regroupTouchingOperands(kernel, solids);
-    if (regrouped !== null) {
-      const regroupedCensus = materialCensus(kernel, regrouped);
-      if (
-        regroupedCensus !== null &&
-        regroupedCensus.components < census.components &&
-        sameMaterial(kernel, regrouped, fused, solids)
-      ) {
+  const components = faceComponentsOf(kernel, fused);
+  if (components === null || components.length <= 1) return fused;
+  const indexGroups = provenContactGroups(kernel, solids);
+  if (indexGroups.length === 0) return fused;
+  const groups: ContactGroup[] = [];
+  for (const indices of indexGroups) {
+    const witnesses: InteriorWitness[] = [];
+    for (const index of indices) {
+      const witness = operandInteriorWitness(kernel, solids[index]!);
+      if (witness === null) {
         releaseScratchSolid(kernel, fused);
-        result = regrouped;
-        resultCensus = regroupedCensus;
-      } else {
-        releaseScratchSolid(kernel, regrouped);
+        throw unmergedContactRefusal();
       }
+      witnesses.push(witness);
     }
+    groups.push({ solids: indices.map((index) => solids[index]!), witnesses });
   }
-  if (resultCensus.certainPieces <= 1) return result;
-  const groups = contactGroups ?? operandContactGroups(kernel, solids);
-  if (groups !== null && resultCensus.certainPieces > groups) {
-    releaseScratchSolid(kernel, result);
-    throw new AdapterRefusal(
-      'union_unmerged_contact',
-      'Union refused: where these bodies only touch face to face, the exact ' +
-        'kernel could not merge them, so the result would keep a hidden ' +
-        'internal wall. Overlapping them slightly instead usually clears it.'
+  const certified = certifyContactGroups(kernel, fused, groups);
+  if (certified.every(Boolean)) return fused;
+  const failing = groups.filter((_group, index) => !certified[index]);
+  const repaired: number[] = [];
+  const release = () => {
+    for (const solid of repaired) releaseScratchSolid(kernel, solid);
+  };
+  for (const group of failing) {
+    const solid =
+      group.solids.length <= MAX_CONTACT_REPAIR_OPERANDS
+        ? regroupTouchingOperands(kernel, group)
+        : null;
+    if (solid === null) {
+      release();
+      releaseScratchSolid(kernel, fused);
+      throw unmergedContactRefusal();
+    }
+    repaired.push(solid);
+  }
+  const replaced = new Set(failing.flatMap((group) => group.solids));
+  let rebuilt: number;
+  try {
+    rebuilt = kernel.fuseAll(
+      Uint32Array.from([
+        ...repaired,
+        ...solids.filter((solid) => !replaced.has(solid))
+      ])
     );
+  } catch {
+    release();
+    releaseScratchSolid(kernel, fused);
+    throw unmergedContactRefusal();
   }
-  return result;
+  release();
+  if (
+    !sameMaterial(
+      kernel,
+      rebuilt,
+      fused,
+      solids,
+      groups.flatMap((group) => group.witnesses)
+    ) ||
+    !certifyContactGroups(kernel, rebuilt, groups).every(Boolean)
+  ) {
+    releaseScratchSolid(kernel, rebuilt);
+    releaseScratchSolid(kernel, fused);
+    throw unmergedContactRefusal();
+  }
+  releaseScratchSolid(kernel, fused);
+  return rebuilt;
 }
 
 /**
