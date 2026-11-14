@@ -13,8 +13,10 @@ import {
   type AssemblySolution,
   type BodyId,
   type RigidTransform,
+  type UnitSystem,
   type Vector3
 } from '@openzcad/shared';
+import { assemblyLengthScale } from './assemblyUi';
 
 /**
  * Set up motion (AS02/AS06): the quick way to make one part move against a
@@ -37,7 +39,7 @@ export interface MotionSetupDraft {
   axis: MotionSetupAxis;
   /** Runs the motion the other way along (or about) the axis. */
   reverse: boolean;
-  /** Joint units: mm for a slide, degrees for a turn. */
+  /** Joint units: the document's length unit for a slide, degrees for a turn. */
   range: AssemblyDofLimit;
   mode: AssemblyPlayback;
   /** Seconds for one sweep across the range. */
@@ -62,7 +64,7 @@ export const MOTION_SETUP_SWEEPS: readonly { sweepS: number; label: string }[] =
     { sweepS: 0.75, label: 'Fast' }
   ];
 
-/** Used when the base's size along the axis is unknown. */
+/** Used when the base's size along the axis is unknown (a mm project). */
 export const DEFAULT_SLIDE_TRAVEL_MM = 50;
 export const DEFAULT_TURN_RANGE_DEG: AssemblyDofLimit = { min: 0, max: 90 };
 
@@ -118,7 +120,7 @@ export function placedBoxCentre(
   });
 }
 
-/** How far a placed box reaches along a world axis, mm. */
+/** How far a placed box reaches along a world axis, in model units. */
 export function placedBoxExtent(
   pose: RigidTransform,
   box: MotionSetupBox,
@@ -136,18 +138,24 @@ export function placedBoxExtent(
 
 /**
  * The default slide: far enough to lift the moving part clear of its base —
- * the base's size along the axis, rounded up to 5 mm — or 50 mm when that
- * size is not known. A part sitting in a holder slides out of it.
+ * the base's size along the axis, rounded up to 5 mm (¼ in) — or 50 mm (2 in)
+ * when that size is not known. A part sitting in a holder slides out of it.
+ * Model coordinates are in the document's unit, so the steps follow it.
  */
 export function defaultSlideTravel(
   basePose: RigidTransform | undefined,
   baseBox: MotionSetupBox | null,
-  axis: MotionSetupAxis
+  axis: MotionSetupAxis,
+  lengthUnit: UnitSystem = 'mm'
 ): number {
-  if (!basePose || !validBox(baseBox)) return DEFAULT_SLIDE_TRAVEL_MM;
+  const scale = assemblyLengthScale(lengthUnit);
+  if (!basePose || !validBox(baseBox)) return scale.travel;
   const extent = placedBoxExtent(basePose, baseBox, axis);
-  if (!(extent > 0)) return DEFAULT_SLIDE_TRAVEL_MM;
-  return Math.min(1000, Math.max(5, Math.ceil(extent / 5 - 1e-9) * 5));
+  if (!(extent > 0)) return scale.travel;
+  const steps = Math.ceil(extent / scale.round - 1e-9);
+  const travel = Math.min(200, Math.max(1, steps)) * scale.round;
+  // 0.25 × 3 is 0.75, not 0.7500000000000001.
+  return Number(travel.toFixed(scale.decimals + 2));
 }
 
 export interface MotionSetupContext {
@@ -157,6 +165,8 @@ export interface MotionSetupContext {
   /** The live body a component shows (follows the body's lineage). */
   bodyOf(componentId: string): BodyId | null;
   bounds?: MotionSetupBounds;
+  /** The document's unit; absent reads as mm. */
+  lengthUnit?: UnitSystem;
 }
 
 function componentBox(
@@ -183,29 +193,72 @@ export function defaultMotionRange(
     max: defaultSlideTravel(
       pose,
       componentBox(context, draft.baseId),
-      draft.axis
+      draft.axis,
+      context.lengthUnit
     )
   };
 }
 
 /**
+ * The parts Set up motion can move against a base: not the base, not fixed,
+ * and not already moved by a joint — a second joint would close a loop, and
+ * one between the same two parts is refused outright. The way to change an
+ * existing motion is that joint's own controls.
+ */
+export function motionSetupMovers(
+  context: Pick<MotionSetupContext, 'set' | 'solution'>,
+  baseId: string | null
+): AssemblySet['components'] {
+  const { set, solution } = context;
+  return set.components.filter(
+    (c) =>
+      c.id !== baseId &&
+      !c.grounded &&
+      (solution.roles.get(c.id) ?? 'free') === 'free' &&
+      (baseId === null || jointAddError(set, baseId, c.id) === null)
+  );
+}
+
+/**
+ * Why Set up motion has nothing to offer, or null when it does: every part
+ * is fixed or already moves on a joint.
+ */
+export function motionSetupUnavailableReason(
+  context: Pick<MotionSetupContext, 'set' | 'solution'>
+): string | null {
+  const { set } = context;
+  if (set.components.length < 2) return 'Add a second part to move it.';
+  const anyMover = set.components.some(
+    (base) => motionSetupMovers(context, base.id).length > 0
+  );
+  if (anyMover) return null;
+  return set.joints.length > 0
+    ? 'Every part is fixed or already moves on a joint. Open a joint to change its motion.'
+    : 'Every part is fixed. Unfix one to make it move.';
+}
+
+/**
  * Where a new setup starts: the fixed part as the base, the first part that
  * is not joined yet as the one that moves, sliding up Z clear of the base and
- * back, as one lifts a tool out of its holder.
+ * back, as one lifts a tool out of its holder. When the fixed part has no
+ * part left to move against it, the first base that does is chosen instead.
  */
 export function defaultMotionSetup(
   context: MotionSetupContext
 ): MotionSetupDraft {
-  const { set, solution } = context;
-  const base =
+  const { set } = context;
+  const preferred =
     set.components.find((c) => c.grounded) ?? set.components[0] ?? null;
-  const others = set.components.filter((c) => c.id !== base?.id);
+  const bases = [
+    ...(preferred ? [preferred] : []),
+    ...set.components.filter((c) => c.id !== preferred?.id)
+  ];
+  const base =
+    bases.find((c) => motionSetupMovers(context, c.id).length > 0) ?? preferred;
   const moving =
-    others.find(
-      (c) => !c.grounded && (solution.roles.get(c.id) ?? 'free') === 'free'
-    ) ??
-    others.find((c) => !c.grounded) ??
-    others[0] ??
+    motionSetupMovers(context, base?.id ?? null)[0] ??
+    set.components.find((c) => c.id !== base?.id && !c.grounded) ??
+    set.components.find((c) => c.id !== base?.id) ??
     null;
   const draft = {
     baseId: base?.id ?? null,

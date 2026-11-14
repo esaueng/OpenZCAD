@@ -163,7 +163,7 @@ describe('Set up motion card', () => {
     expect(getAnimatePrefs()).toEqual({ mode: 'loop', sweepS: 3 });
   });
 
-  it('refuses to move a fixed part, with the reason', () => {
+  it('leaves a fixed part out of Moves, and says why nothing can move', () => {
     renderSetup();
     fireEvent.click(screen.getByRole('button', { name: 'Set up motion' }));
     const form = card();
@@ -171,11 +171,14 @@ describe('Set up motion card', () => {
       within(form).getByRole('combobox', { name: 'Part that stays put' }),
       { target: { value: 'comp_b' } }
     );
-    expect(
-      within(form).getByRole('combobox', { name: 'Part that moves' })
-    ).toHaveValue('comp_a');
+    // Blade A is fixed, so it is not offered as the part that moves.
+    const moves = within(form).getByRole('combobox', {
+      name: 'Part that moves'
+    });
+    expect(moves).toBeDisabled();
+    expect(within(moves).queryByRole('option', { name: 'Blade A' })).toBeNull();
     expect(within(form).getByRole('alert')).toHaveTextContent(
-      'Blade A is fixed in place.'
+      'Nothing can move against Blade B: every other part is fixed or already moves on a joint.'
     );
     expect(
       within(form).getByRole('button', { name: 'Create and play' })

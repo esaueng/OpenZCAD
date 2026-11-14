@@ -12,8 +12,10 @@ import {
   type AssemblySet,
   type AssemblySolution,
   type AssemblyUnsolvedReason,
-  type BodyId
+  type BodyId,
+  type UnitSystem
 } from '@openzcad/shared';
+import { unitLabel } from '../measurements';
 
 /**
  * Presentation helpers for the Assemble workspace (AS01/AS02/AS06): names,
@@ -56,29 +58,74 @@ export function dofCountLabel(count: number): string {
   return `${count} DOF`;
 }
 
-export function unitSymbol(unit: AssemblyDofUnit): string {
-  return unit === 'deg' ? '°' : 'mm';
+/**
+ * A joint's length values are model coordinates, so they are in the
+ * document's unit: an inch project's 5 is 5 in. These are the sizes the
+ * Assemble controls start from in each unit — the millimetre figures they
+ * always had, rounded to what reads naturally in the others.
+ */
+export interface AssemblyLengthScale {
+  /** A slide's travel when the base's size is not known. */
+  travel: number;
+  /** What a default slide rounds up to. */
+  round: number;
+  /** A new length limit's span, and the free slider's reach either way. */
+  limit: number;
+  /** A length slider's step. */
+  step: number;
+  /** Decimals a length is shown with. */
+  decimals: number;
 }
 
-/** "12.0°", "-4.5 mm": one decimal, never "-0.0". */
+const LENGTH_SCALES: Readonly<Record<UnitSystem, AssemblyLengthScale>> = {
+  mm: { travel: 50, round: 5, limit: 100, step: 0.1, decimals: 1 },
+  cm: { travel: 5, round: 0.5, limit: 10, step: 0.01, decimals: 2 },
+  m: { travel: 0.05, round: 0.005, limit: 0.1, step: 0.0001, decimals: 4 },
+  inch: { travel: 2, round: 0.25, limit: 4, step: 0.01, decimals: 2 }
+};
+
+export function assemblyLengthScale(
+  lengthUnit: UnitSystem = 'mm'
+): AssemblyLengthScale {
+  return LENGTH_SCALES[lengthUnit] ?? LENGTH_SCALES.mm;
+}
+
+/** "°" for a turn; the document's length unit ("mm", "in") for a slide. */
+export function unitSymbol(
+  unit: AssemblyDofUnit,
+  lengthUnit: UnitSystem = 'mm'
+): string {
+  return unit === 'deg' ? '°' : unitLabel('length', lengthUnit);
+}
+
+/** "12.0°", "-4.5 mm", "0.25 in": never "-0.0". */
 export function formatAssemblyValue(
   value: number,
-  unit: AssemblyDofUnit
+  unit: AssemblyDofUnit,
+  lengthUnit: UnitSystem = 'mm'
 ): string {
-  const rounded = Math.round(value * 10) / 10;
-  const text = (Object.is(rounded, -0) ? 0 : rounded).toFixed(1);
-  return unit === 'deg' ? `${text}°` : `${text} mm`;
+  const decimals =
+    unit === 'deg' ? 1 : assemblyLengthScale(lengthUnit).decimals;
+  const scale = 10 ** decimals;
+  const rounded = Math.round(value * scale) / scale;
+  const text = (Object.is(rounded, -0) ? 0 : rounded).toFixed(decimals);
+  return unit === 'deg'
+    ? `${text}°`
+    : `${text} ${unitSymbol(unit, lengthUnit)}`;
 }
 
 /** A joint's current values on one line; a rigid joint has none to show. */
 export function jointValueSummary(
   kind: AssemblyJointKind,
-  values: readonly number[]
+  values: readonly number[],
+  lengthUnit: UnitSystem = 'mm'
 ): string {
   const units = ASSEMBLY_JOINT_DOFS[kind];
   if (units.length === 0) return 'Fixed';
   return units
-    .map((unit, index) => formatAssemblyValue(values[index] ?? 0, unit))
+    .map((unit, index) =>
+      formatAssemblyValue(values[index] ?? 0, unit, lengthUnit)
+    )
     .join(' · ');
 }
 
@@ -161,22 +208,29 @@ export function sweepUnavailableReason(
 /** A starting limit for a value that has none: around where it is now. */
 export function defaultLimit(
   unit: AssemblyDofUnit,
-  value: number
+  value: number,
+  lengthUnit: UnitSystem = 'mm'
 ): AssemblyDofLimit {
-  const [min, max] = unit === 'deg' ? [-90, 90] : [0, 100];
+  const [min, max] =
+    unit === 'deg' ? [-90, 90] : [0, assemblyLengthScale(lengthUnit).limit];
   return { min: Math.min(min, value), max: Math.max(max, value) };
 }
 
-/** The slider's travel: the limit, else a turn either way or ±100 mm. */
+/** The slider's travel: the limit, else a turn either way or ±100 mm (4 in). */
 export function sliderRange(
   unit: AssemblyDofUnit,
   limit: AssemblyDofLimit | null | undefined,
-  value: number
+  value: number,
+  lengthUnit: UnitSystem = 'mm'
 ): AssemblyDofLimit {
   if (limit && limit.max > limit.min) return limit;
   if (unit === 'deg')
     return { min: Math.min(-180, value), max: Math.max(180, value) };
-  return { min: Math.min(-100, value - 100), max: Math.max(100, value + 100) };
+  const reach = assemblyLengthScale(lengthUnit).limit;
+  return {
+    min: Math.min(-reach, value - reach),
+    max: Math.max(reach, value + reach)
+  };
 }
 
 /** A stored name: trimmed and within the schema's length. */

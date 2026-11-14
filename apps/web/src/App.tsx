@@ -33340,6 +33340,7 @@ export function App() {
                     <MotionStudyTimeline
                       floating
                       assembly={doc.assembly}
+                      lengthUnit={doc.units}
                       execute={executeCommand}
                     />
                   )}
@@ -33786,7 +33787,14 @@ export function App() {
                 document={doc}
                 execute={assembleApp.execute}
                 onStatus={assembleApp.onStatus}
-                onAnnounce={(message) => announce(message)}
+                onAnnounce={(message, options) =>
+                  announce(
+                    message,
+                    options?.undo
+                      ? { label: 'Undo', run: handleUndo }
+                      : undefined
+                  )
+                }
                 bodyBounds={assemblyBodyBounds}
                 reducedMotion={appSettings.appearance.reducedMotion}
               />
