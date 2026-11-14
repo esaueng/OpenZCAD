@@ -100,7 +100,7 @@ function refusalReason(
   // nothing. "failed internally" sent people looking for a bug.
   if (EMPTY_RESULT.test(kernelMessage)) {
     if (operation === 'cut') {
-      return 'this would remove the whole body, because the tool covers all of it';
+      return `subtracting ${subject} would leave nothing, because the tool covers the whole body`;
     }
     if (operation === 'intersect') {
       return `${subject} do not overlap, so nothing would be left`;

@@ -213,9 +213,9 @@ describe('typed boolean refusal', () => {
       if (outcome.status !== 'refused') return;
       const [sentence, detail] = outcome.refusal.message.split('\n');
       expect(sentence).toBe(
-        'Subtract refused: this would remove the whole body, because the ' +
-          'tool covers all of it. Make the tool smaller or move it so part ' +
-          'of the body remains.'
+        'Subtract refused: subtracting "Box 1" and "Box 2" would leave ' +
+          'nothing, because the tool covers the whole body. Make the tool ' +
+          'smaller or move it so part of the body remains.'
       );
       // The kernel's verdict is kept, and its category is not rewritten.
       expect(detail).toBe(

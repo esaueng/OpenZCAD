@@ -497,7 +497,7 @@ describe('kernel refusals named in the 2026-11-14 production QA', () => {
     for (const sentence of [
       'Subtract refused: "left_bracket" and "Box 2" could not be cut exactly, and an approximate result was declined.',
       'Pick a flat face; Face 18 is curved.',
-      'Subtract refused: this would remove the whole body, because the tool covers all of it. Make the tool smaller or move it so part of the body remains.'
+      'Subtract refused: subtracting "Left block" and "Right block" would leave nothing, because the tool covers the whole body. Make the tool smaller or move it so part of the body remains.'
     ]) {
       expect(plainRefusal(sentence)).toEqual({ message: sentence });
     }
