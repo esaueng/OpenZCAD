@@ -4,6 +4,7 @@ import {
   Fragment,
   Suspense,
   useEffect,
+  useId,
   useLayoutEffect,
   useRef,
   useState,
@@ -37,6 +38,7 @@ import {
   List,
   LoaderCircle,
   Lock,
+  LockOpen,
   MoreHorizontal,
   Pencil,
   Pin,
@@ -58,8 +60,10 @@ import {
 import {
   daysUntilPurge,
   MAX_PROJECT_NAME_LENGTH,
+  PROJECT_STORAGE_FORMAT_E2EE_V1,
   projectOrganization,
   TRASH_RETENTION_DAYS,
+  type AccountStorageUsage,
   type LibraryCardSize,
   type ProjectStatus,
   type ProjectSummary,
@@ -105,6 +109,16 @@ import { BrandMark } from './BrandMark';
 import { DemoModelIcon } from './DemoModelIcon';
 import { PartThumbnail } from './PartThumbnail';
 import type { ProjectProperties } from '../lib/projectProperties';
+import { formatBytes } from '../lib/formatBytes';
+import {
+  StorageBar,
+  StorageUsagePanel,
+  storageFigure,
+  storageSegments,
+  useAccountStorageUsage,
+  useDeviceStorageEstimate
+} from './StorageUsagePanel';
+import { storageLevel, storageLimitOf, storedBytes } from '../lib/storageUsage';
 
 const ProjectPropertiesDialog = lazyWithStaleChunkNotice(async () => ({
   default: (await import('./ProjectPropertiesDialog')).ProjectPropertiesDialog
@@ -238,6 +252,14 @@ interface StartScreenProps {
    * Called as tiles approach the viewport, without rebuilding documents.
    */
   publishThumbnail(project: ProjectSummary): Promise<string | null | undefined>;
+  /**
+   * The account's storage report, for the footer's meter and its details.
+   * Absent signed out or without cloud functions: the footer then measures
+   * this device alone.
+   */
+  loadStorageUsage?(): Promise<AccountStorageUsage>;
+  /** Settings at its Account section, where storage is managed. */
+  onOpenAccountSettings?(): void;
 }
 
 const LOADING_PROJECT_TILES = 10;
@@ -278,16 +300,21 @@ function writeShelfLayout(layout: ShelfLayout) {
 const LIBRARY_VIEW_KEY = 'openzcad.start.view';
 const LIBRARY_DRAFT_KEY = 'openzcad.start.draft';
 
-function readLibraryDraft(): { name: string; units: UnitSystem } | null {
+function readLibraryDraft(): {
+  name: string;
+  units: UnitSystem;
+  /** The name is still the suggestion nobody has typed over. */
+  suggested: boolean;
+} | null {
   try {
     const stored: unknown = JSON.parse(
       sessionStorage.getItem(LIBRARY_DRAFT_KEY) ?? 'null'
     );
     if (!stored || typeof stored !== 'object') return null;
-    const { name, units } = stored as Record<string, unknown>;
+    const { name, units, suggested } = stored as Record<string, unknown>;
     return typeof name === 'string' &&
       (units === 'mm' || units === 'cm' || units === 'm' || units === 'inch')
-      ? { name, units }
+      ? { name, units, suggested: suggested === true }
       : null;
   } catch {
     return null;
@@ -360,6 +387,9 @@ function writeLibraryView(view: LibraryView) {
     // Forgetting the view is the whole failure mode.
   }
 }
+
+/** The one encryption mark a card carries: the exception, not the norm. */
+const NOT_ENCRYPTED_LABEL = 'Not end-to-end encrypted';
 
 const RECOVERY_SUFFIX = / \((?:Recovery|Local copy)\)(?: \(copy(?: \d+)?\))*$/;
 
@@ -550,7 +580,9 @@ export function StartScreen({
   onEmptyTrash,
   loadThumbnail,
   thumbnailAccountId,
-  publishThumbnail
+  publishThumbnail,
+  loadStorageUsage,
+  onOpenAccountSettings
 }: StartScreenProps) {
   const projects = scopePending ? [] : discoveredProjects;
   const settingsKey = useKeymap().label('app-settings');
@@ -562,11 +594,17 @@ export function StartScreen({
     initialDraft?.units ?? defaultUnits
   );
   const unitsEdited = useRef(initialDraft !== null);
+  // The suggested name is selected when the field takes focus, so typing a
+  // real one replaces it rather than landing inside "Lucky Quokka". Once
+  // anything is typed the field behaves as any other, and a click places
+  // the caret.
+  const nameSuggested = useRef(initialDraft?.suggested ?? true);
+  const keepSuggestionSelected = useRef(false);
   useEffect(() => {
     try {
       sessionStorage.setItem(
         LIBRARY_DRAFT_KEY,
-        JSON.stringify({ name, units })
+        JSON.stringify({ name, units, suggested: nameSuggested.current })
       );
     } catch {
       // Draft persistence is optional when browser storage is unavailable.
@@ -828,6 +866,19 @@ export function StartScreen({
   // Held as encrypted on this device while the switch to encryption did
   // not finish here, or while the account lists it otherwise (PR #1418).
   useEncryptedPins();
+  // Encryption is opt-in during the beta (ADR-024). Where the account's own
+  // projects are encrypted, encrypted is the norm and goes unmarked; the
+  // exception, an account project still stored as plaintext, is what a card
+  // marks. An account with none encrypted marks nothing: it would be every
+  // card.
+  const accountEncrypts =
+    signedIn &&
+    accountProjectListReached &&
+    projects.some(
+      (project) =>
+        cloudProjectIds.has(project.projectId) &&
+        project.storageFormat === PROJECT_STORAGE_FORMAT_E2EE_V1
+    );
   const syncEntryById = new Map(
     (syncRun ?? []).map((entry) => [entry.projectId, entry] as const)
   );
@@ -1641,6 +1692,51 @@ export function StartScreen({
     );
   }
 
+  /**
+   * A folder's size is its members' total, and only once every member has
+   * one: a partial sum would read as the folder's size and undercount it.
+   */
+  function folderBytes(members: ProjectSummary[]): number | undefined {
+    if (members.length === 0) return undefined;
+    let total = 0;
+    for (const member of members) {
+      if (projectNeedsUpdate(member) || member.documentBytes === undefined)
+        return undefined;
+      total += member.documentBytes;
+    }
+    return total;
+  }
+
+  /**
+   * The list's Size cell: saved document bytes in Project properties' IEC
+   * units, or a dash with the reason there is no figure. formatBytes rather
+   * than formatProjectBytes, which would pull projectProperties (and the
+   * document model it measures with) out of its lazy chunk.
+   */
+  function renderSize(
+    bytes: number | undefined,
+    label: string,
+    unmeasured: string | undefined
+  ) {
+    if (bytes === undefined || !Number.isFinite(bytes)) {
+      return (
+        <span className="start-tile-size" title={unmeasured}>
+          —
+        </span>
+      );
+    }
+    // A <data> element carries the exact byte count behind the rounded label.
+    return (
+      <data
+        className="start-tile-size"
+        value={bytes}
+        title={`${label}: ${formatBytes(bytes, 'iec')}. Saved model data and undo history; imported source files are not included.`}
+      >
+        {formatBytes(bytes, 'iec')}
+      </data>
+    );
+  }
+
   function renderFolderTile(folder: LibraryFolder) {
     const key = folderKey(folder.id);
     const members = folderMembers(folder);
@@ -1695,7 +1791,8 @@ export function StartScreen({
         >
           <span className="start-tile-thumb start-folder-thumb">
             {/* A row's 52px thumb says "folder" rather than shrinking the
-                cover under its count, which the Saves column now holds. */}
+                cover. A card's cover carries no count: the line under its
+                name says how many projects it holds. */}
             {layout === 'list' ? (
               <Folder className="start-folder-empty-icon" aria-hidden="true" />
             ) : cover ? (
@@ -1710,12 +1807,6 @@ export function StartScreen({
                 className="start-folder-empty-icon"
                 aria-hidden="true"
               />
-            )}
-            {layout !== 'list' && (
-              <span className="start-folder-count" aria-hidden="true">
-                <Folder size={11} aria-hidden="true" />
-                {members.length}
-              </span>
             )}
           </span>
           <span className="start-tile-body">
@@ -1732,6 +1823,13 @@ export function StartScreen({
                   <span className="start-tile-when">
                     {edited ? formatLastEdited(edited) : '—'}
                   </span>
+                  {renderSize(
+                    folderBytes(members),
+                    'Projects in this folder',
+                    members.length === 0
+                      ? undefined
+                      : 'Shown once every project in this folder has a size.'
+                  )}
                   <span className="start-tile-rev">
                     {members.length === 0
                       ? 'Empty'
@@ -1903,10 +2001,18 @@ export function StartScreen({
     const locked = projectNeedsUpdate(project);
     // An encrypted project this build opens (ADR-024 Phase 4); it is
     // duplicated in the browser like any other (slice 4-8).
-    const encrypted = project.storageFormat === 2;
+    const encrypted = project.storageFormat === PROJECT_STORAGE_FORMAT_E2EE_V1;
     // Being encrypted in this tab (ADR-024 Phase 7): it opens read-only.
     const migrating = migratingProjectIds.has(project.projectId);
     const pinProblem = encryptedPinProblem(project.projectId);
+    // In an account whose projects are encrypted, one that is not.
+    const plaintext =
+      accountEncrypts &&
+      !trashed &&
+      cloudProjectIds.has(project.projectId) &&
+      !encrypted &&
+      !locked &&
+      !migrating;
 
     const preview = (
       <>
@@ -1951,18 +2057,17 @@ export function StartScreen({
                   <LoaderCircle size={11} className="spin" aria-hidden="true" />
                 </span>
               ) : (
-                (locked || encrypted) && (
+                // 14 Nov 2026: a lock on every encrypted card marked the
+                // norm. A locked card says so over its preview and under
+                // its name.
+                plaintext && (
                   <span
-                    className="start-tile-mark"
+                    className="start-tile-mark is-plaintext"
                     role="img"
-                    aria-label="End-to-end encrypted"
-                    title={
-                      locked
-                        ? 'End-to-end encrypted. Update OpenZCAD to open this project.'
-                        : 'End-to-end encrypted.'
-                    }
+                    aria-label={NOT_ENCRYPTED_LABEL}
+                    title={`${NOT_ENCRYPTED_LABEL}. It is stored in your account as plaintext.`}
                   >
-                    <Lock size={11} aria-hidden="true" />
+                    <LockOpen size={11} aria-hidden="true" />
                   </span>
                 )
               )}
@@ -2016,7 +2121,15 @@ export function StartScreen({
                 </span>
               )}
             </span>
-            {/* The list has a Saves column; a card leaves the count out. */}
+            {/* The list has Size and Saves columns; a card leaves both out. */}
+            {layout === 'list' &&
+              renderSize(
+                locked ? undefined : project.documentBytes,
+                'Document size',
+                locked
+                  ? undefined
+                  : 'Not measured yet. Recorded the next time this project is saved.'
+              )}
             {layout === 'list' && (
               <span className="start-tile-rev">
                 {project.revisionCount}{' '}
@@ -2109,8 +2222,8 @@ export function StartScreen({
         ? PROJECT_UPDATE_REQUIRED_LABEL
         : migrating && !encrypted
           ? 'being encrypted'
-          : encrypted
-            ? 'end-to-end encrypted'
+          : plaintext
+            ? NOT_ENCRYPTED_LABEL.toLowerCase()
             : null,
       recoveryOf !== null && !trashed ? `recovery copy of ${recoveryOf}` : null,
       localOnly && !trashed && !syncEntry && !conflicted
@@ -2653,7 +2766,9 @@ export function StartScreen({
             items: orderedItems.filter(itemPinned)
           },
           {
-            label: 'Projects',
+            // Not "Projects": the shelf's heading already says that, so the
+            // page read Projects, Pinned, Projects.
+            label: 'Others',
             group: 'parts',
             items: orderedItems.filter((item) => !itemPinned(item))
           }
@@ -2720,7 +2835,7 @@ export function StartScreen({
       ? [
           { label: 'Pinned', count: previousLayout.pinned, offset: 0 },
           {
-            label: 'Projects',
+            label: 'Others',
             count: previousLayout.all - previousLayout.pinned,
             offset: previousLayout.pinned
           }
@@ -2780,6 +2895,34 @@ export function StartScreen({
     partsElsewhere === null;
 
   const cloud = describeCloud();
+
+  // The footer's storage meter, and the details it opens. Asked again when
+  // what the account holds changes — not during a save run, only once it ends.
+  const [storageOpen, setStorageOpen] = useState(false);
+  const storageButtonRef = useRef<HTMLButtonElement>(null);
+  const storagePanelId = useId();
+  const storage = useAccountStorageUsage(
+    signedIn ? loadStorageUsage : undefined,
+    thumbnailAccountId ?? folderAccountId,
+    syncTotals?.active
+      ? null
+      : `${savedToAccountCount}:${shelves.archived.length}:${shelves.deleted.length}`
+  );
+  const deviceStorage = useDeviceStorageEstimate(storageOpen);
+  const storageUsed = storage.usage ? storedBytes(storage.usage) : 0;
+  const storageLimit = storageLimitOf(storage.usage);
+  const storageMeter =
+    storage.usage && storageLimit && !cloud.progress
+      ? {
+          segments: storageSegments(storage.usage),
+          level: storageLevel(storageUsed, storageLimit),
+          figure: storageFigure(storageUsed, storageLimit)
+        }
+      : null;
+  const refreshStorage = storage.refresh;
+  useEffect(() => {
+    if (storageOpen) refreshStorage();
+  }, [storageOpen, refreshStorage]);
   // A run's outcome is in the sentence, and the startup mode texts restate
   // what the sentence already says; anything else is news worth a line.
   const statusLine =
@@ -3008,18 +3151,38 @@ export function StartScreen({
               />
             )}
           </div>
+          {/* No visible Name and Units captions: the fields sit in the New
+              project card under its button, and "mm" names its own field.
+              The captions read as form chrome over a one-click action. */}
           <label className="start-field start-field-name">
-            <span className="start-field-label">Name</span>
             <input
               value={name}
               aria-label="Project name"
+              placeholder="Project name"
               aria-invalid={nameTooLong || undefined}
               aria-describedby={nameTooLong ? 'project-name-error' : undefined}
-              onChange={(event) => setName(event.target.value)}
+              onFocus={(event) => {
+                if (!nameSuggested.current) return;
+                event.currentTarget.select();
+                keepSuggestionSelected.current = true;
+              }}
+              // The click that focused the field would otherwise collapse
+              // the selection to a caret where it landed.
+              onMouseUp={(event) => {
+                if (keepSuggestionSelected.current) event.preventDefault();
+                keepSuggestionSelected.current = false;
+              }}
+              onBlur={() => {
+                keepSuggestionSelected.current = false;
+              }}
+              onChange={(event) => {
+                nameSuggested.current = false;
+                keepSuggestionSelected.current = false;
+                setName(event.target.value);
+              }}
             />
           </label>
           <label className="start-field start-field-units">
-            <span className="start-field-label">Units</span>
             <select
               value={units}
               aria-label="Units"
@@ -3076,7 +3239,14 @@ export function StartScreen({
               }
               className={
                 [
-                  shelf === entry.status ? 'is-active' : '',
+                  // An open folder is the place shown, so its row wears the
+                  // highlight; the shelf holding it steps back (is-parent),
+                  // lit again only where the folder list is not shown.
+                  shelf === entry.status
+                    ? openFolder
+                      ? 'is-parent'
+                      : 'is-active'
+                    : '',
                   reorder.dropTarget?.target === `shelf:${entry.status}`
                     ? 'is-drop-target'
                     : '',
@@ -3446,6 +3616,7 @@ export function StartScreen({
                         <span>Name</span>
                         <span>Status</span>
                         <span>Edited</span>
+                        <span className="start-list-head-size">Size</span>
                         <span>Saves</span>
                       </div>
                     )}
@@ -3470,7 +3641,14 @@ export function StartScreen({
                                   <time>&nbsp;</time>
                                 </span>
                                 {layout === 'list' && (
-                                  <span className="start-tile-rev">&nbsp;</span>
+                                  <>
+                                    <span className="start-tile-size">
+                                      &nbsp;
+                                    </span>
+                                    <span className="start-tile-rev">
+                                      &nbsp;
+                                    </span>
+                                  </>
                                 )}
                               </small>
                             </span>
@@ -3530,11 +3708,22 @@ export function StartScreen({
                             <span>Name</span>
                             <span>Status</span>
                             <span>Edited</span>
+                            <span className="start-list-head-size">Size</span>
                             <span>Saves</span>
                           </div>
                         )}
                       <div
-                        className={`start-tile-grid ${layout === 'list' ? 'is-list' : `is-${cardSize}`}`}
+                        className={[
+                          'start-tile-grid',
+                          layout === 'list' ? 'is-list' : `is-${cardSize}`,
+                          // Every card here is pinned, and the label or the
+                          // filter already says so: no pin on each card.
+                          group.group === 'pinned' || activeFilter === 'pinned'
+                            ? 'is-all-pinned'
+                            : ''
+                        ]
+                          .filter(Boolean)
+                          .join(' ')}
                         data-tile-group={canReorder ? group.group : undefined}
                       >
                         {group.items.map((item) =>
@@ -3808,54 +3997,88 @@ export function StartScreen({
             </span>
           ) : null}
           <div
-            className={`start-account is-${cloud.tone}`}
+            className={`start-account is-${cloud.tone}${storageOpen ? ' is-open' : ''}`}
             role="status"
             aria-live="polite"
           >
-            <div className="start-account-row">
-              <cloud.Icon
-                size={14}
-                aria-hidden="true"
-                className={cloud.spin ? 'spin' : undefined}
+            {/* The whole readout opens the storage details: one button
+                drawn under the line and its meter, with the line's own
+                actions standing above it. */}
+            <div className="start-account-head">
+              <button
+                ref={storageButtonRef}
+                type="button"
+                className="start-account-open"
+                aria-label={
+                  storageMeter
+                    ? `Storage details, ${storageMeter.figure} used`
+                    : 'Storage details'
+                }
+                title={cloud.title}
+                aria-haspopup="dialog"
+                aria-expanded={storageOpen}
+                aria-controls={storageOpen ? storagePanelId : undefined}
+                onClick={() => setStorageOpen((open) => !open)}
               />
-              <span className="start-account-text" title={cloud.title}>
-                {cloud.text}
-              </span>
-              {cloud.action && (
-                <button
-                  type="button"
-                  className="start-account-action"
-                  aria-label={cloud.action.label}
-                  title={cloud.action.label}
-                  disabled={cloud.action.needsIdle && busy}
-                  onClick={cloud.action.run}
-                >
-                  {cloud.action.text}
-                </button>
+              <div className="start-account-row">
+                <cloud.Icon
+                  size={14}
+                  aria-hidden="true"
+                  className={cloud.spin ? 'spin' : undefined}
+                />
+                <span className="start-account-text" title={cloud.title}>
+                  {cloud.text}
+                </span>
+                {storageMeter && !cloud.action && (
+                  <span className="start-account-figure" aria-hidden="true">
+                    {storageMeter.figure}
+                  </span>
+                )}
+                {cloud.action && (
+                  <button
+                    type="button"
+                    className="start-account-action"
+                    aria-label={cloud.action.label}
+                    title={cloud.action.label}
+                    disabled={cloud.action.needsIdle && busy}
+                    onClick={cloud.action.run}
+                  >
+                    {cloud.action.text}
+                  </button>
+                )}
+                {syncTotals && !syncTotals.active && (
+                  <button
+                    type="button"
+                    className="start-account-dismiss"
+                    aria-label="Dismiss sync results"
+                    onClick={onDismissSyncRun}
+                  >
+                    <X size={12} aria-hidden="true" />
+                  </button>
+                )}
+              </div>
+              {cloud.progress && (
+                <div className="start-account-track" aria-hidden="true">
+                  <span
+                    className="start-account-fill"
+                    style={{ width: `${cloud.progress.saved * 100}%` }}
+                  />
+                  <span
+                    className="start-account-fill is-failed"
+                    style={{ width: `${cloud.progress.failed * 100}%` }}
+                  />
+                </div>
               )}
-              {syncTotals && !syncTotals.active && (
-                <button
-                  type="button"
-                  className="start-account-dismiss"
-                  aria-label="Dismiss sync results"
-                  onClick={onDismissSyncRun}
-                >
-                  <X size={12} aria-hidden="true" />
-                </button>
+              {storageMeter && (
+                <StorageBar
+                  segments={storageMeter.segments}
+                  limit={storageLimit}
+                  level={storageMeter.level}
+                  label="Account storage used"
+                  valueText={storageMeter.figure}
+                />
               )}
             </div>
-            {cloud.progress && (
-              <div className="start-account-track" aria-hidden="true">
-                <span
-                  className="start-account-fill"
-                  style={{ width: `${cloud.progress.saved * 100}%` }}
-                />
-                <span
-                  className="start-account-fill is-failed"
-                  style={{ width: `${cloud.progress.failed * 100}%` }}
-                />
-              </div>
-            )}
             {/* What the one-line readout cannot hold hangs below it. */}
             {(syncFailures.length > 0 || statusLine) && (
               <div className="start-account-details">
@@ -3891,6 +4114,34 @@ export function StartScreen({
               </div>
             )}
           </div>
+          {storageOpen && (
+            <StorageUsagePanel
+              id={storagePanelId}
+              signedIn={signedIn}
+              usage={storage.usage}
+              usageState={
+                signedIn && !loadStorageUsage ? 'failed' : storage.state
+              }
+              onRetryUsage={storage.refresh}
+              device={deviceStorage}
+              deviceProjectCount={userProjects.length}
+              localOnlyCount={localOnlyProjects.length}
+              anchorRef={storageButtonRef}
+              onClose={() => setStorageOpen(false)}
+              onShowTrash={() => {
+                selectShelf('deleted');
+                // The panel that held focus is going away; the Trash tab
+                // it led to takes it, as a click on the tab would.
+                globalThis.document
+                  .getElementById('start-shelf-tab-deleted')
+                  ?.focus();
+              }}
+              {...((onOpenAccountSettings ?? onSignIn) && {
+                onOpenAccountSettings: onOpenAccountSettings ?? onSignIn
+              })}
+              {...(onSignIn && { onSignIn })}
+            />
+          )}
         </aside>
       </section>
 
@@ -3944,6 +4195,20 @@ export function StartScreen({
                     ? 'This device only'
                     : 'Unknown — account listing unavailable'
             }
+            // Facts only: the dialog's lazy chunk words them, which keeps
+            // the status text out of the start screen's entry bundle. The
+            // format comes from the current listing: `propertiesProject` is
+            // the summary as it was when the dialog opened, and a migration
+            // can change it while the dialog is still open.
+            encryptionFacts={{
+              storageFormat: (
+                projects.find(
+                  (candidate) =>
+                    candidate.projectId === propertiesProject.projectId
+                ) ?? propertiesProject
+              ).storageFormat,
+              inAccount: cloudProjectIds.has(propertiesProject.projectId)
+            }}
             {...(onRename &&
               !projectNeedsUpdate(propertiesProject) && {
                 // The listed project, whose name a rename here has moved on.

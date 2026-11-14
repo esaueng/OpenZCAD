@@ -27,6 +27,8 @@ import {
 } from './accountImportSources';
 import { listLocalOnlyImportSources } from './importArchival';
 import { ApiError, api, carryEncryptionRequirement } from './api';
+import { withSavedVersion } from './projectShelf';
+
 import { archiveArtifact as archiveArtifactBody } from './archiveArtifact';
 import {
   conflictFromDocuments,
@@ -493,10 +495,9 @@ export async function restoreAccountProjectFromDevice(
   return {
     document: restored,
     project: {
-      ...summary,
+      ...withSavedVersion(summary, restored),
       name: restored.name,
-      updatedAt: saved.updatedAt,
-      documentVersion: saved.version
+      updatedAt: saved.updatedAt
     }
   };
 }
@@ -569,10 +570,11 @@ async function finishAccountSourceSave(
     });
     saved = { ...prepared.document, version: stored.version };
   }
-  await app.acceptAccountDocument(saved, localForAcceptance, {
-    ...summary,
-    documentVersion: saved.version
-  });
+  await app.acceptAccountDocument(
+    saved,
+    localForAcceptance,
+    withSavedVersion(summary, saved)
+  );
   return sourceUploadMessage(prepared.result) ?? undefined;
 }
 

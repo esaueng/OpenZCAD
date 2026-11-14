@@ -852,8 +852,9 @@ export function ViewerShell({
                 })
             : onOffsetPreview
         }
-        onOffsetCommit={(value) => {
-          if (!datumHandle || !onDatumOffsetDrag) return onOffsetCommit(value);
+        onOffsetCommit={(value, reading) => {
+          if (!datumHandle || !onDatumOffsetDrag)
+            return onOffsetCommit(value, reading);
           setDatumDrag(null);
           setDatumGesture((gesture) => gesture + 1);
           return onDatumOffsetDrag(value * datumHandle.sense)

@@ -291,6 +291,7 @@ import {
   faceOffsetChipState,
   offsetChipText,
   offsetLimitChipText,
+  offsetTotalReading,
   rearmedChipMode,
   regionChipState,
   type OffsetChipMode
@@ -1178,8 +1179,14 @@ export interface ModelViewerProps {
   offsetDragTarget: Pick<OffsetHandleTarget, 'bodyId' | 'topologyId'> | null;
   /** Streamed signed offset; App coalesces exact rebuilds. */
   onOffsetPreview(offset: number, exactGeometry?: boolean): void;
-  /** Fired when an offset-handle drag releases with a non-zero offset. */
-  onOffsetCommit(offset: number): OffsetCommitOutcome;
+  /**
+   * Fired when an offset-handle drag releases with a non-zero offset.
+   * `reading.total`: the Total the chip showed at release, when it read one.
+   */
+  onOffsetCommit(
+    offset: number,
+    reading?: { total: number }
+  ): OffsetCommitOutcome;
   /**
    * Clears exact preview geometry and restores the original reference.
    * `atOriginal`: the hand let go back on the face's original position,
@@ -8460,6 +8467,15 @@ export function ModelViewer({
         tagText =
           offsetChipModeRef.current === 'total' ? 'Total ▾' : 'Offset ▾';
       }
+      // The tag decides what a typed number means, so it says so on hover
+      // rather than flipping between Total and Offset unexplained.
+      const tagTitle =
+        rig?.kind !== 'offset-face'
+          ? ''
+          : offsetChipModeRef.current === 'total'
+            ? 'Total: a typed value is the size this face sets · Switch to Offset to type how far it moves'
+            : 'Offset: a typed value is how far the face moves · Switch to Total to type the size it sets';
+      if (radiusLabelChip.title !== tagTitle) radiusLabelChip.title = tagTitle;
       if (lineAngle !== null) {
         // Both pills ride the line, rotated to read along it: the tag first,
         // then the value, each pushed half its own width out from the anchor
@@ -11770,7 +11786,23 @@ export function ModelViewer({
           queueOffsetBodyProxy(finalOffset);
           // A refusal may retain the last accepted exact shape. The
           // re-armed handle follows that projection, never the refused input.
-          const outcome = onOffsetCommitRef.current(finalOffset);
+          // The Total the chip read at release, so the commit can name it
+          // beside the change the history records.
+          const total =
+            rig === offsetRigRef.current
+              ? offsetTotalReading({
+                  rawValue: finalOffset,
+                  mode: offsetChipModeRef.current,
+                  span:
+                    offsetHandleRef.current?.totalBaseline ??
+                    offsetExtentRef.current,
+                  sense: offsetHandleRef.current?.totalSense ?? 1
+                })
+              : null;
+          const outcome = onOffsetCommitRef.current(
+            finalOffset,
+            total === null ? undefined : { total }
+          );
           if (outcome === 'blocked') {
             endOffsetDragWithoutCommit(completed.initialOffset, {
               resetRig: true,

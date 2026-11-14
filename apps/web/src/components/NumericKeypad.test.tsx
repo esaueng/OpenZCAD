@@ -1101,7 +1101,12 @@ describe('a refusal on the control', () => {
     // Remedies are the verified ones only.
     fireEvent.click(screen.getByRole('button', { name: 'Pick another edge' }));
     expect(onPickAnother).toHaveBeenCalledOnce();
-    fireEvent.click(screen.getByRole('button', { name: 'Technical details' }));
+    // The kernel's words open in place; the activity log is one step on.
+    const technical = screen.getByRole('button', { name: 'Technical details' });
+    fireEvent.click(technical);
+    expect(technical).toHaveAttribute('aria-expanded', 'true');
+    expect(op.onViewDetails).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Open activity log' }));
     expect(op.onViewDetails).toHaveBeenCalledOnce();
 
     const input = screen.getByRole('textbox', { name: 'Radius' });
@@ -1667,5 +1672,99 @@ describe('a name no parameter defines yet', () => {
     expect(readout().spoken).toBe('= 40 mm');
     fireEvent.keyDown(input, { key: 'Enter' });
     expect(onCommit).toHaveBeenCalledWith(40, 'foo * 2');
+  });
+});
+
+// QA 2026-11-14 finding #9: the face offset's field took the Total size the
+// face leaves while the hint promised "an exact distance", so typing 5 on a
+// 24 mm body's top face moved it by -19, and a Total of 1e6 went unremarked.
+describe('a face offset says what its number means', () => {
+  function open(request: Partial<KeypadRequest>) {
+    render(
+      <NumericKeypad
+        request={{
+          kind: 'offset',
+          label: 'Total',
+          initial: '',
+          unitKind: 'length',
+          ...request
+        }}
+        units="mm"
+        scope={{}}
+        anchorRef={{ current: null }}
+        onPreview={vi.fn()}
+        onCommit={vi.fn()}
+        onCancel={() => undefined}
+      />
+    );
+  }
+
+  it('reads a Total as the size the face sets, with the move it makes', () => {
+    open({ totalBaseline: 24.01, totalSense: 1, initialOffset: 0 });
+    const input = screen.getByRole('textbox', { name: 'Total' });
+    expect(input).toHaveAccessibleDescription(
+      'Total: the size this face sets, 24.01 mm before this edit'
+    );
+    fireEvent.change(input, { target: { value: '5' } });
+    expect(input).toHaveAccessibleDescription(
+      'Total: the size this face sets, 24.01 mm before this edit · moves the face −19.01 mm'
+    );
+  });
+
+  it('names the size before the edit, not the dragged preview, after a drag', () => {
+    open({
+      totalBaseline: 35,
+      totalSense: 1,
+      initialOffset: 2,
+      initial: '37'
+    });
+    expect(
+      screen.getByRole('textbox', { name: 'Total' })
+    ).toHaveAccessibleDescription(
+      'Total: the size this face sets, 35 mm before this edit · moves the face +2 mm'
+    );
+  });
+
+  it('shows how far an absurd Total moves the face', () => {
+    open({ totalBaseline: 24, totalSense: 1, initialOffset: 0 });
+    const input = screen.getByRole('textbox', { name: 'Total' });
+    fireEvent.change(input, { target: { value: '1e6' } });
+    expect(input).toHaveAccessibleDescription(/moves the face \+999976 mm$/);
+  });
+
+  it('reads a Total on a face whose drag shrinks the span with the sense applied', () => {
+    open({ totalBaseline: 3, totalSense: -1, initialOffset: 0 });
+    const input = screen.getByRole('textbox', { name: 'Total' });
+    fireEvent.change(input, { target: { value: '1' } });
+    expect(input).toHaveAccessibleDescription(/moves the face \+2 mm$/);
+  });
+
+  it('reads an Offset as the signed move itself', () => {
+    open({ label: 'Offset' });
+    expect(
+      screen.getByRole('textbox', { name: 'Offset' })
+    ).toHaveAccessibleDescription(
+      'Offset: how far the face moves, + out, − in'
+    );
+  });
+
+  it('adds nothing to other values', () => {
+    render(
+      <NumericKeypad
+        request={{
+          kind: 'edge',
+          label: 'Radius',
+          initial: '2',
+          unitKind: 'length'
+        }}
+        units="mm"
+        scope={{}}
+        anchorRef={{ current: null }}
+        onPreview={vi.fn()}
+        onCommit={vi.fn()}
+        onCancel={() => undefined}
+      />
+    );
+    expect(document.querySelector('.keypad-meaning')).toBeNull();
   });
 });

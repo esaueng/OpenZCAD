@@ -1668,7 +1668,10 @@ test('preflights and splits a box into two live half bodies', async ({
   const splitBar = page.getByRole('group', { name: 'Split command' });
   await expect(splitBar).toContainText('Pick a plane or flat face');
   await clickGhostPlane(page, 'YZ');
-  await expect(splitBar).toContainText('the cutting plane contains edge');
+  // Plain words lead; the kernel's sentence stays behind Technical details.
+  await expect(splitBar).toContainText(
+    'The cutting plane lies exactly along an existing edge'
+  );
   await expect(
     splitBar.getByRole('button', { name: 'Done', exact: true })
   ).toBeDisabled();

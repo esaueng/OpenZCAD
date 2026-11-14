@@ -1,7 +1,14 @@
 import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { toUserId } from '@openzcad/shared';
-import { D1R2PersistenceService } from '@openzcad/cloudflare-adapters';
+import {
+  MAX_ACCOUNT_PROJECTS,
+  MAX_ACCOUNT_STORAGE_BYTES,
+  toUserId
+} from '@openzcad/shared';
+import {
+  accountEntitlements,
+  D1R2PersistenceService
+} from '@openzcad/cloudflare-adapters';
 import { deleteAccountData } from '../apps/web/worker/accountDeletion';
 import { migratedDatabase, sqliteD1 } from './support/sqlite-d1';
 
@@ -1023,6 +1030,52 @@ describe('sign-in cannot be denied by someone who only knows the email', () => {
     await expect(verify(second.challengeId, sent[1]!)).rejects.toMatchObject({
       code: 'AUTH_CODE_INVALID'
     });
+  });
+
+  it("writes the tier's storage limits when sign-in creates or claims the account row", async () => {
+    // The quota triggers read these columns. Leaving the 2 GiB defaults
+    // would let a new account outgrow its allowance until a refresh.
+    const readLimits = (env: { DB: D1Database }, email: string) =>
+      env.DB.prepare(
+        `SELECT artifact_limit_bytes, project_limit, project_storage_limit_bytes
+         FROM users WHERE email = ?`
+      )
+        .bind(email)
+        .first();
+
+    const free = signInHarness('free@example.com');
+    const freeStart = await free.start('198.51.100.7');
+    await free.verify(freeStart.challengeId, free.sent[0]!);
+    expect(await readLimits(free.env, 'free@example.com')).toEqual({
+      artifact_limit_bytes: MAX_ACCOUNT_STORAGE_BYTES,
+      project_limit: MAX_ACCOUNT_PROJECTS,
+      project_storage_limit_bytes: MAX_ACCOUNT_STORAGE_BYTES
+    });
+
+    const premium = signInHarness('premium@example.com');
+    const env: typeof premium.env & { PREMIUM_USER_EMAILS?: string } =
+      premium.env;
+    env.PREMIUM_USER_EMAILS = 'premium@example.com';
+    const expected = accountEntitlements(env, 'premium@example.com');
+    // An existing row still carrying the column defaults is brought in line.
+    const first = await premium.start('198.51.100.7');
+    await premium.verify(first.challengeId, premium.sent[0]!);
+    await env.DB.prepare(
+      `UPDATE users SET artifact_limit_bytes = 2147483648,
+         project_storage_limit_bytes = 2147483648 WHERE email = ?`
+    )
+      .bind('premium@example.com')
+      .run();
+    const second = await premium.start('203.0.113.1');
+    await premium.verify(second.challengeId, premium.sent[1]!);
+    expect(await readLimits(env, 'premium@example.com')).toEqual({
+      artifact_limit_bytes: expected.storageLimitBytes,
+      project_limit: expected.projectLimit,
+      project_storage_limit_bytes: expected.storageLimitBytes
+    });
+    expect(expected.storageLimitBytes).toBeGreaterThan(
+      MAX_ACCOUNT_STORAGE_BYTES
+    );
   });
 
   it('permits only one session when sibling verifications overlap', async () => {

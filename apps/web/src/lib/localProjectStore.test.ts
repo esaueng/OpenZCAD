@@ -5,11 +5,13 @@ import {
   appendRevision,
   createCheckpoint,
   createProjectDocument,
-  importStepBody
+  importStepBody,
+  withoutDerivedProjection
 } from '@openzcad/document-core';
 import {
   compareProjectSummaries,
   MAX_LOCAL_CHECKPOINT_DOCUMENTS,
+  persistedDocumentBytes,
   toBodyId,
   toProjectId,
   toUserId,
@@ -650,7 +652,9 @@ describe('listLocalProjects', () => {
       lastRevisionId: document.revisions.at(-1)?.revisionId,
       updatedAt: document.derived.updatedAt,
       revisionCount: document.checkpoints.length,
-      documentVersion: document.version
+      documentVersion: document.version,
+      // Measured as the account measures it: without the derived meshes.
+      documentBytes: persistedDocumentBytes(withoutDerivedProjection(document))
     });
   });
 

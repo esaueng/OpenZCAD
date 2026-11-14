@@ -113,6 +113,30 @@ for (const width of [1200, 1000, 901, 700, 561]) {
   });
 }
 
+for (const width of [390, 700, 1440]) {
+  test(
+    'storage details stay reachable at ' + width + 'px',
+    { tag: '@ci-smoke' },
+    async ({ page }) => {
+      await openLibrary(page, width);
+      await page.getByRole('button', { name: /^Storage details/ }).click();
+      const panel = page.getByRole('dialog', { name: 'Storage', exact: true });
+      const box = await panel.boundingBox();
+      if (!box) throw new Error('Storage panel is missing');
+      expect(box.y).toBeGreaterThanOrEqual(0);
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width).toBeLessThanOrEqual(width);
+      await panel
+        .getByRole('button', { name: 'Close storage details' })
+        .click();
+      await expect(panel).toHaveCount(0);
+      await expect(
+        page.getByRole('button', { name: /^Storage details/ })
+      ).toBeFocused();
+    }
+  );
+}
+
 test('a phone wraps the shelf tools under the filters', async ({ page }) => {
   await openLibrary(page, 390);
   const filters = await page.locator('.start-filters').boundingBox();

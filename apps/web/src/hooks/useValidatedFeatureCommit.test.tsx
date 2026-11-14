@@ -342,6 +342,108 @@ describe('validated feature commit', () => {
   });
 });
 
+describe('a run with its rebuild already in hand (QA 2026-11-14 #16)', () => {
+  // A 10 x 10 grid pattern's preview took 72 s; its Done rebuilt the same
+  // candidate from scratch in a disposable worker for another 70 s.
+  function pattern() {
+    const manager = new CommandManager(
+      createProjectDocument('Pattern', toUserId('user_pattern'))
+    );
+    const command = commandFactories.addPrimitive({
+      name: 'Grid pattern',
+      primitiveKind: 'box',
+      dimensions: { width: 10, height: 10, depth: 10 }
+    });
+    const resultBodyId = command.payload.ids!.bodyId;
+    const featureId = command.payload.ids!.featureId;
+    const built = (warnings: string[] = []) => ({
+      bodyRepresentations: {
+        [resultBodyId]: bodyRepresentation(resultBodyId)
+      },
+      exportableBodyIds: [resultBodyId],
+      warnings,
+      featureWarnings: warnings.map((message) => ({
+        featureId,
+        featureName: 'Grid pattern',
+        message,
+        kind: 'refusal' as const
+      })),
+      updatedAt: manager.document.derived.updatedAt
+    });
+    const derive = vi.fn(async () => built());
+    const deriveCancellable = vi.fn(async () => built());
+    const commit = vi.fn(() => true);
+    const { result } = renderHook(() =>
+      useValidatedFeatureCommit({
+        manager: () => manager,
+        derive,
+        deriveCancellable,
+        commit,
+        commitTransaction: () => true,
+        onBusy: vi.fn(),
+        onStatus: vi.fn()
+      })
+    );
+    const run = (prebuilt: ValidatedFeatureRunOptions['prebuilt']) =>
+      act(async () => {
+        outcome = await result.current.run(command, {
+          featureName: 'Grid pattern',
+          featureId,
+          resultBodyId,
+          successMessage: command.label,
+          signal: new AbortController().signal,
+          ...(prebuilt ? { prebuilt } : {})
+        });
+      });
+    let outcome: ValidatedFeatureOutcome | undefined;
+    return {
+      manager,
+      built,
+      derive,
+      deriveCancellable,
+      commit,
+      run,
+      outcome: () => outcome
+    };
+  }
+
+  it('judges and commits the preview rebuild of the same document without rebuilding', async () => {
+    const t = pattern();
+    const derived = t.built();
+    await t.run({
+      projectId: t.manager.document.projectId,
+      version: t.manager.document.version,
+      derived
+    });
+    expect(t.outcome()).toBe('committed');
+    expect(t.deriveCancellable).not.toHaveBeenCalled();
+    expect(t.derive).not.toHaveBeenCalled();
+    expect(t.commit).toHaveBeenCalledWith(expect.anything(), derived);
+  });
+
+  it('still refuses a preview rebuild that failed', async () => {
+    const t = pattern();
+    await t.run({
+      projectId: t.manager.document.projectId,
+      version: t.manager.document.version,
+      derived: t.built(['Feature "Grid pattern": the pattern was refused.'])
+    });
+    expect(t.outcome()).toBe('rejected');
+    expect(t.commit).not.toHaveBeenCalled();
+  });
+
+  it('rebuilds once the model has moved past the preview', async () => {
+    const t = pattern();
+    await t.run({
+      projectId: t.manager.document.projectId,
+      version: t.manager.document.version - 1,
+      derived: t.built()
+    });
+    expect(t.outcome()).toBe('committed');
+    expect(t.deriveCancellable).toHaveBeenCalledOnce();
+  });
+});
+
 describe('validated edit that consumes a dependent body (M11)', () => {
   it('rejects an edit that stops keeping a body a later feature uses', async () => {
     let document = createProjectDocument('Kept', toUserId('user_kept'));
