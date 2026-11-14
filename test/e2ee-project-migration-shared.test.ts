@@ -34,6 +34,8 @@ import {
 import { ProjectCollaborationRoom } from '../apps/web/worker/e2eeRoom';
 import { forgetAllProjectKeys } from '../apps/web/src/lib/e2ee/unlockedProjectKeys';
 import {
+  acceptedInvitations,
+  confirmEncryptedInvitation,
   joinWelcomedProjects,
   publishInvitationKeyPackages,
   type InvitationContext,
@@ -371,9 +373,18 @@ async function failure(promise: Promise<unknown>) {
   };
 }
 
-/** The member's browser: publish keys for every invitation it accepted. */
+/**
+ * The member's browser: confirms each invitation it lists (the member's
+ * Join, inviter and role shown), then publishes keys for them.
+ */
 async function publishKeys(w: World, d: Device) {
-  return publishInvitationKeyPackages(invitationsOf(w, d));
+  const ctx = invitationsOf(w, d);
+  for (const invitation of await acceptedInvitations(ctx)) {
+    if (invitation.state === 'confirm') {
+      await confirmEncryptedInvitation(ctx, invitation.record);
+    }
+  }
+  return publishInvitationKeyPackages(ctx);
 }
 
 // --- Tests -----------------------------------------------------------------------------

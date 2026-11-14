@@ -167,10 +167,11 @@ async function verifyContact(
 /**
  * ADR-024 Phase 7, slice 7-4: Alice encrypts a plaintext project she shares
  * with Bob. Settings › Encryption lists Bob as not ready and says what each
- * of them needs to do; once Bob compared codes with her (his browser then
- * publishes his keys) and she with him, the project is encrypted, Bob is
- * added back by Welcome as an editor, her plaintext link is revoked and an
- * encrypted one is offered, and Bob opens the encrypted project.
+ * of them needs to do; once Bob compared codes with her and confirmed the
+ * invitation (his browser then publishes his keys) and she with him, the
+ * project is encrypted, Bob is added back by Welcome as an editor, her
+ * plaintext link is revoked and an encrypted one is offered, and Bob opens
+ * the encrypted project.
  */
 test('encrypts a shared project once its member is ready, and the member opens it', async ({
   browser
@@ -223,7 +224,9 @@ test('encrypts a shared project once its member is ready, and the member opens i
     server.db.prepare('SELECT COUNT(*) AS n FROM e2ee_project_migrations').get()
   ).toEqual({ n: 0 });
 
-  // Bob compares codes with Alice; his browser publishes his keys.
+  // Bob compares codes with Alice and confirms the invitation, which the
+  // migration bound to his account without a link; his browser then
+  // publishes his keys.
   await bob.reload();
   const bobSettings = await openEncryptionSettings(bob);
   await expect(
@@ -234,6 +237,11 @@ test('encrypts a shared project once its member is ready, and the member opens i
     .first()
     .click();
   await verifyContact(bobSettings, ALICE_EMAIL, bobSeed.recoveryKey);
+  const join = bobSettings.getByRole('button', {
+    name: `Join ${ALICE_EMAIL}’s project as an editor`
+  });
+  await expect(join).toBeVisible({ timeout: SYNC_BUDGET_MS });
+  await join.click();
   await expect
     .poll(
       () =>

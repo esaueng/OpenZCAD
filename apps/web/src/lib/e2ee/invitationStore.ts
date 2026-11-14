@@ -18,7 +18,14 @@
  * - **Removed** (the owner's browser). Which accounts a Commit this browser
  *   sent or processed took out of a project (`onMembersRemoved`). An
  *   invitation for one of them is never completed by the background sweep:
- *   adding them back takes the owner's explicit confirmation.
+ *   adding them back takes the owner's explicit confirmation. The owner's
+ *   own removal is written here before its Commit is sent, so a page that
+ *   closes in between still remembers it.
+ * - **Intents** (the invitee's devices). Which invitations the person
+ *   accepted on this device: the link they opened from the email, or an
+ *   in-app confirmation that showed the inviter and role. This device
+ *   signs an acceptance only for one of these, never for an invitation the
+ *   server merely lists.
  *
  * Everything is kept per account, like the contact pins; a memory store
  * stands in where IndexedDB is unavailable.
@@ -53,6 +60,19 @@ export interface RemovedMember {
   readonly removedAt: number;
 }
 
+/** An invitation the person accepted on this device (the invitee's side). */
+export interface InvitationIntent {
+  readonly projectId: string;
+  readonly invitationId: string;
+  readonly inviterUserId: string;
+  /** Hex SHA-256 of the invitation statement they accepted. */
+  readonly statementHash: string;
+  /** How: the emailed link opened here, or the in-app confirmation. */
+  readonly source: 'link' | 'confirmed';
+  /** Unix milliseconds. */
+  readonly intendedAt: number;
+}
+
 export interface InvitationStore {
   rememberEmail(userId: string, entry: InvitationEmail): Promise<void>;
   emails(userId: string): Promise<InvitationEmail[]>;
@@ -69,6 +89,8 @@ export interface InvitationStore {
     projectId: string,
     memberUserId: string
   ): Promise<void>;
+  rememberIntent(userId: string, entry: InvitationIntent): Promise<void>;
+  intents(userId: string): Promise<InvitationIntent[]>;
 }
 
 const isText = (value: unknown, max = 512): value is string =>
@@ -132,11 +154,33 @@ function readRemoved(value: unknown): RemovedMember | null {
     : null;
 }
 
+function readIntent(value: unknown): InvitationIntent | null {
+  const entry = value as Partial<InvitationIntent> | null;
+  return entry &&
+    isText(entry.projectId) &&
+    isText(entry.invitationId) &&
+    isText(entry.inviterUserId) &&
+    typeof entry.statementHash === 'string' &&
+    /^[0-9a-f]{64}$/.test(entry.statementHash) &&
+    (entry.source === 'link' || entry.source === 'confirmed') &&
+    Number.isSafeInteger(entry.intendedAt)
+    ? {
+        projectId: entry.projectId,
+        invitationId: entry.invitationId,
+        inviterUserId: entry.inviterUserId,
+        statementHash: entry.statementHash,
+        source: entry.source,
+        intendedAt: entry.intendedAt!
+      }
+    : null;
+}
+
 export function memoryInvitationStore(): InvitationStore {
   const emails = new Map<string, InvitationEmail>();
   const claims = new Map<string, StoredClaim>();
   const published = new Map<string, PublishedKeyPackage>();
   const removed = new Map<string, RemovedMember>();
+  const intents = new Map<string, InvitationIntent>();
   const id = (...parts: string[]) => JSON.stringify(parts);
   const ofUser = <T>(map: Map<string, T>, userId: string) =>
     [...map].filter(([key]) => (JSON.parse(key) as string[])[0] === userId);
@@ -166,7 +210,11 @@ export function memoryInvitationStore(): InvitationStore {
     removedMembers: async (userId) => ofUser(removed, userId).map(([, v]) => v),
     forgetRemoved: async (userId, projectId, memberUserId) => {
       removed.delete(id(userId, projectId, memberUserId));
-    }
+    },
+    rememberIntent: async (userId, entry) => {
+      intents.set(id(userId, entry.invitationId), { ...entry });
+    },
+    intents: async (userId) => ofUser(intents, userId).map(([, v]) => v)
   };
 }
 
@@ -175,15 +223,16 @@ const EMAILS = 'emails';
 const CLAIMS = 'claims';
 const PUBLISHED = 'published';
 const REMOVED = 'removed';
+const INTENTS = 'intents';
 
 let opening: Promise<IDBDatabase> | null = null;
 
 function openDatabase(): Promise<IDBDatabase> {
   opening ??= new Promise<IDBDatabase>((resolve, reject) => {
-    const request = indexedDB.open(INVITATION_DATABASE, 2);
+    const request = indexedDB.open(INVITATION_DATABASE, 3);
     request.onupgradeneeded = () => {
       const db = request.result;
-      for (const name of [EMAILS, CLAIMS, PUBLISHED, REMOVED]) {
+      for (const name of [EMAILS, CLAIMS, PUBLISHED, REMOVED, INTENTS]) {
         if (!db.objectStoreNames.contains(name)) db.createObjectStore(name);
       }
     };
@@ -278,7 +327,10 @@ export function indexedDbInvitationStore(): InvitationStore {
       put(REMOVED, [userId, entry.projectId, entry.userId], { ...entry }),
     removedMembers: (userId) => all(REMOVED, userId, readRemoved),
     forgetRemoved: (userId, projectId, memberUserId) =>
-      remove(REMOVED, [userId, projectId, memberUserId])
+      remove(REMOVED, [userId, projectId, memberUserId]),
+    rememberIntent: (userId, entry) =>
+      put(INTENTS, [userId, entry.invitationId], { ...entry }),
+    intents: (userId) => all(INTENTS, userId, readIntent)
   };
 }
 

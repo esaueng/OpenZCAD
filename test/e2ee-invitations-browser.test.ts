@@ -37,16 +37,21 @@ import {
   acceptedInvitations,
   addInvitedMember,
   completeReadyInvitations,
+  confirmEncryptedInvitation,
   inviteToEncryptedProject,
   joinWelcomedProjects,
   projectInvitations,
   publishInvitationKeyPackages,
+  recordRemovedMembers,
   sentInvitations,
   syncInvitations,
   type InvitationContext,
   type InvitationPerson
 } from '../apps/web/src/lib/e2ee/invitations';
-import { memoryInvitationStore } from '../apps/web/src/lib/e2ee/invitationStore';
+import {
+  memoryInvitationStore,
+  type InvitationStore
+} from '../apps/web/src/lib/e2ee/invitationStore';
 import {
   commitProjectGroup,
   joinProjectByWelcome,
@@ -743,9 +748,16 @@ describe('the invitee’s signed acceptance', () => {
 
   it('adds nobody whose acceptance is missing, and takes one an older app never signed', async () => {
     const w = world();
-    const { projectId, ownerCtx, invitation, inviteeCtx } = await published(w);
-    // As an older app version left it: a KeyPackage, no acceptance.
+    const setup = await published(w);
+    const { projectId, ownerCtx, invitation } = setup;
+    // As an older app version left it: a KeyPackage, no acceptance, and no
+    // record on the device that the person accepted it there.
     setAcceptance(w, invitation.invitationId, null, null);
+    const older = memoryInvitationStore();
+    for (const entry of await setup.inviteeCtx.store.published(OTHER)) {
+      await older.markPublished(OTHER, entry);
+    }
+    const inviteeCtx: InvitationContext = { ...setup.inviteeCtx, store: older };
     const outgoing = await sentInvitations(ownerCtx);
     expect(outgoing).toMatchObject([{ state: 'needs-acceptance' }]);
     expect(await completeReadyInvitations(ownerCtx, outgoing)).toMatchObject({
@@ -757,10 +769,24 @@ describe('the invitee’s signed acceptance', () => {
     expect(unclaimed(w, projectId)).toBe(true);
     expect(groupEpoch(w.srv, projectId)).toBe(1);
 
-    // The invitee's next session signs it, without a second KeyPackage.
+    // The invitee's next session signs nothing in the background: they
+    // confirm the invitation in the app first (inviter and role shown).
+    const [listed] = await acceptedInvitations(inviteeCtx);
+    expect(listed).toMatchObject({ state: 'confirm', ownerEmail: OWNER_EMAIL });
+    expect(await publishInvitationKeyPackages(inviteeCtx)).toEqual([]);
+    expect((await syncInvitations(inviteeCtx)).errors).toEqual([]);
+    expect(
+      rows<{ acceptance_statement: string | null }>(
+        w.srv,
+        'SELECT acceptance_statement FROM e2ee_invitations WHERE invitation_id = ?',
+        invitation.invitationId
+      )
+    ).toEqual([{ acceptance_statement: null }]);
+    await confirmEncryptedInvitation(inviteeCtx, listed!.record);
     expect(await acceptedInvitations(inviteeCtx)).toMatchObject([
       { state: 'ready' }
     ]);
+    // It signs then, without a second KeyPackage.
     const before = rows<{ key_package_hash: string }>(
       w.srv,
       'SELECT key_package_hash FROM e2ee_key_packages WHERE project_id = ?',
@@ -906,6 +932,249 @@ describe('the invitee’s signed acceptance', () => {
     });
     expect(memberRole(w.srv, projectId, OTHER)).toBe('viewer');
     expect(await ownerCtx.store.removedMembers(OWNER)).toEqual([]);
+  });
+
+  const acceptanceOf = (w: World, invitationId: string) =>
+    rows<{ acceptance_statement: string | null }>(
+      w.srv,
+      'SELECT acceptance_statement FROM e2ee_invitations WHERE invitation_id = ?',
+      invitationId
+    )[0]!.acceptance_statement;
+
+  const keyPackageCount = (w: World, projectId: string) =>
+    rows<{ device_id: string }>(
+      w.srv,
+      'SELECT device_id FROM e2ee_key_packages WHERE project_id = ?',
+      projectId
+    ).length;
+
+  it('signs nothing for an invitation the server lists for another account, whatever email it reports', async () => {
+    const w = world();
+    // The owner invites the invitee, who accepts by link.
+    const { projectId, ownerCtx, invitation } = await invited(w);
+    // The server lists that invitation to the third account as accepted
+    // by it, and reports the invitee's address as its signed-in email.
+    verify(w, THIRD, OWNER);
+    verify(w, OWNER, THIRD);
+    const carol = emailDevice(w, third, 'third_laptop', { members: [owner] });
+    const record = (await projectInvitations(ownerCtx, projectId))[0]!.record;
+    const posted: string[] = [];
+    carol.before = async (path, init) => {
+      if (init.method === 'POST') posted.push(path);
+    };
+    carol.answer = async (path, _init, response) =>
+      path === '/api/e2ee/invitations'
+        ? Response.json({
+            invitations: [{ ...record, acceptedByUserId: THIRD }]
+          })
+        : response;
+    const carolCtx: InvitationContext = {
+      ...invitationsOf(w, carol),
+      email: INVITEE_EMAIL
+    };
+    const [listed] = await acceptedInvitations(carolCtx);
+    expect(listed).toMatchObject({
+      state: 'confirm',
+      record: { invitationId: invitation.invitationId }
+    });
+    // The background sweep signs and publishes nothing for it.
+    const sync = await syncInvitations(carolCtx);
+    expect(sync.errors).toEqual([]);
+    expect(await publishInvitationKeyPackages(carolCtx)).toEqual([]);
+    expect(posted).toEqual([]);
+    expect(acceptanceOf(w, invitation.invitationId)).toBeNull();
+    expect(keyPackageCount(w, projectId)).toBe(0);
+    // So the owner adds nobody.
+    expect((await syncInvitations(ownerCtx)).added).toEqual([]);
+    expect(memberRole(w.srv, projectId, THIRD)).toBeNull();
+    expect(groupEpoch(w.srv, projectId)).toBe(1);
+  });
+
+  it('signs only an invitation accepted on the device; the account’s other devices then publish', async () => {
+    const w = world();
+    const { projectId, invitation, inviteeCtx } = await invited(w);
+    verify(w, OTHER, OWNER);
+    // A second device of the invitee, which never opened the link, signs
+    // nothing in the background.
+    const desktop = emailDevice(w, other, 'other_desktop', {
+      members: [owner]
+    });
+    const desktopCtx = invitationsOf(w, desktop);
+    expect(await acceptedInvitations(desktopCtx)).toMatchObject([
+      { state: 'confirm' }
+    ]);
+    expect((await syncInvitations(desktopCtx)).errors).toEqual([]);
+    expect(acceptanceOf(w, invitation.invitationId)).toBeNull();
+    expect(keyPackageCount(w, projectId)).toBe(0);
+    // The device that opened the link signs; the other then publishes its
+    // KeyPackage under that acceptance without signing one of its own.
+    expect(await publishInvitationKeyPackages(inviteeCtx)).toEqual([
+      invitation.invitationId
+    ]);
+    const signed = acceptanceOf(w, invitation.invitationId);
+    expect(signed).toBeTruthy();
+    expect(await acceptedInvitations(desktopCtx)).toMatchObject([
+      { state: 'ready' }
+    ]);
+    expect(await publishInvitationKeyPackages(desktopCtx)).toEqual([
+      invitation.invitationId
+    ]);
+    expect(acceptanceOf(w, invitation.invitationId)).toBe(signed);
+    expect(keyPackageCount(w, projectId)).toBe(2);
+  });
+
+  /**
+   * The owner's laptop records the removals its Commits make or process,
+   * as the page does (`onMembersRemoved`, awaited).
+   */
+  function recordingOwner(
+    w: World,
+    laptop: Device,
+    store: InvitationStore
+  ): InvitationContext {
+    return {
+      ...invitationsOf(w, laptop, store),
+      groups: {
+        ...laptop.groups,
+        onMembersRemoved: async (removal) => {
+          await recordRemovedMembers(store, OWNER, removal);
+        }
+      }
+    };
+  }
+
+  /**
+   * The invitee added and removed by the owner's desktop, which the
+   * laptop has not processed; then invited again from the laptop, accepted
+   * and published from a fresh device of the invitee.
+   */
+  async function removedElsewhere(w: World, removeNow: boolean) {
+    const setup = await published(w);
+    const { projectId, laptop } = setup;
+    expect((await syncInvitations(setup.ownerCtx)).added).toHaveLength(1);
+    const ownerDesktop = emailDevice(w, owner, 'owner_desktop', {
+      members: [other]
+    });
+    await joinProjectGroup(ownerDesktop.groups, projectId);
+    const removeFromDesktop = () =>
+      removeMember(ownerDesktop.groups, projectId, OTHER);
+    if (removeNow) await removeFromDesktop();
+    const ownerCtx = recordingOwner(w, laptop, setup.ownerCtx.store);
+    const again = await inviteToEncryptedProject(
+      ownerCtx,
+      projectId,
+      INVITEE_EMAIL,
+      'viewer'
+    );
+    const fresh = emailDevice(w, other, 'other_tablet', { members: [owner] });
+    const freshCtx = invitationsOf(w, fresh);
+    await acceptEncryptedInvitation(freshCtx, w.mail.at(-1)!.token);
+    expect(await publishInvitationKeyPackages(freshCtx)).toEqual([
+      again.invitationId
+    ]);
+    return { ...setup, ownerCtx, again, removeFromDesktop };
+  }
+
+  it('stops an Add whose catch-up processes another device’s removal of the invitee', async () => {
+    const w = world();
+    const { projectId, ownerCtx } = await removedElsewhere(w, true);
+    expect(memberRole(w.srv, projectId, OTHER)).toBeNull();
+    const epoch = groupEpoch(w.srv, projectId);
+    // The laptop has not processed the removal: the invitation lists as
+    // ready, but the Add's catch-up finds the removal and stops.
+    const outgoing = await sentInvitations(ownerCtx);
+    expect(outgoing).toMatchObject([{ state: 'ready' }]);
+    await expect(
+      addInvitedMember(ownerCtx, outgoing[0]!.record)
+    ).rejects.toSatisfy(refusedWith('removed-member'));
+    expect(memberRole(w.srv, projectId, OTHER)).toBeNull();
+    expect(groupEpoch(w.srv, projectId)).toBe(epoch);
+    expect(await ownerCtx.store.removedMembers(OWNER)).toMatchObject([
+      { projectId, userId: OTHER }
+    ]);
+    expect(await sentInvitations(ownerCtx)).toMatchObject([
+      { state: 'confirm-re-add' }
+    ]);
+  });
+
+  it('stops an Add rebuilt after another device’s removal of the invitee took its epoch', async () => {
+    const w = world();
+    const { projectId, laptop, ownerCtx, removeFromDesktop } =
+      await removedElsewhere(w, false);
+    const outgoing = await sentInvitations(ownerCtx);
+    expect(outgoing).toMatchObject([{ state: 'ready' }]);
+    // Just as the laptop sends its Add, the desktop's removal lands first.
+    let raced = false;
+    laptop.before = async (path, init) => {
+      if (
+        raced ||
+        init.method !== 'POST' ||
+        !path.endsWith('/mls/commits') ||
+        typeof init.body !== 'string' ||
+        !init.body.includes('"add"')
+      ) {
+        return;
+      }
+      raced = true;
+      await removeFromDesktop();
+    };
+    await expect(
+      addInvitedMember(ownerCtx, outgoing[0]!.record)
+    ).rejects.toSatisfy(refusedWith('removed-member'));
+    laptop.before = undefined;
+    expect(raced).toBe(true);
+    expect(memberRole(w.srv, projectId, OTHER)).toBeNull();
+    expect(
+      rows<{ device_id: string }>(
+        w.srv,
+        `SELECT device_id FROM e2ee_welcomes WHERE project_id = ?
+         AND device_id = 'other_tablet'`,
+        projectId
+      )
+    ).toEqual([]);
+  });
+
+  it('adds nobody automatically once a removal could not be written down', async () => {
+    const w = world();
+    const setup = await published(w);
+    const { projectId, laptop, inviteeCtx } = setup;
+    expect((await syncInvitations(setup.ownerCtx)).added).toHaveLength(1);
+    expect(await joinWelcomedProjects(inviteeCtx)).toEqual([projectId]);
+    // The removal's record fails to write.
+    const failing: InvitationStore = {
+      ...setup.ownerCtx.store,
+      rememberRemoved: () => Promise.reject(new Error('quota exceeded'))
+    };
+    const ownerCtx = recordingOwner(w, laptop, failing);
+    await removeMember(ownerCtx.groups, projectId, OTHER);
+    expect(memberRole(w.srv, projectId, OTHER)).toBeNull();
+    // Reads say nobody was removed, but this page does not trust them.
+    expect(await failing.removedMembers(OWNER)).toEqual([]);
+
+    const again = await inviteToEncryptedProject(
+      ownerCtx,
+      projectId,
+      INVITEE_EMAIL,
+      'viewer'
+    );
+    const fresh = emailDevice(w, other, 'other_desktop', { members: [owner] });
+    const freshCtx = invitationsOf(w, fresh);
+    await acceptEncryptedInvitation(freshCtx, w.mail.at(-1)!.token);
+    expect(await publishInvitationKeyPackages(freshCtx)).toEqual([
+      again.invitationId
+    ]);
+    const sync = await syncInvitations(ownerCtx);
+    expect(sync.added).toEqual([]);
+    expect(sync.outgoing).toMatchObject([{ state: 'confirm-re-add' }]);
+    await expect(
+      addInvitedMember(ownerCtx, sync.outgoing[0]!.record)
+    ).rejects.toSatisfy(refusedWith('removed-member'));
+    expect(memberRole(w.srv, projectId, OTHER)).toBeNull();
+    // The owner's explicit confirmation still adds them.
+    await addInvitedMember(ownerCtx, sync.outgoing[0]!.record, {
+      confirmReAdd: true
+    });
+    expect(memberRole(w.srv, projectId, OTHER)).toBe('viewer');
   });
 });
 

@@ -90,7 +90,7 @@ export function migrationMemberAction(member: MigrationMember): string {
         ? 'Preparing their invitation to the encrypted project…'
         : 'Their email address is not visible to you; remove them and invite them again after encrypting.';
     case 'waiting-for-keys':
-      return `${who} needs to open OpenZCAD, compare codes with you (Settings › Encryption › Invitations) and stay signed in until their keys arrive.`;
+      return `${who} needs to open OpenZCAD, compare codes with you, confirm your invitation (Settings › Encryption › Invitations) and stay signed in until their keys arrive.`;
     case 'verify':
       return `Compare codes with ${member.email ?? 'them'} in Settings › Encryption › Contacts.`;
     case 'ready':

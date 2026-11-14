@@ -31,6 +31,8 @@ const INCOMING_HINTS: Record<InviteeInvitation['state'], string> = {
     'This invitation does not verify against the owner’s keys. Ask them to invite you again.',
   'waiting-for-owner':
     'Your keys are ready. Waiting for them to verify you and add you.',
+  confirm:
+    'Join only if you expected this invitation from them. Confirming tells them this account accepted it.',
   ready: 'Preparing your keys for the project…',
   'no-device':
     'Open this invitation on a device that holds your encryption keys.'
@@ -43,7 +45,7 @@ const OUTGOING_HINTS: Partial<Record<OwnerInvitation['state'], string>> = {
   'needs-acceptance':
     'Waiting for them to open OpenZCAD again and confirm the invitation.',
   'confirm-re-add':
-    'They were removed from this project before. Add them back from the project’s sharing settings.',
+    'They were removed from this project before, or this browser cannot tell. Add them from the project’s sharing settings.',
   ready: 'Verified. Adding them…'
 };
 
@@ -155,6 +157,27 @@ export function EncryptedInvitations({ ready }: { ready: boolean }) {
     notifyContactsChanged();
   };
 
+  // The person's own confirmation of an invitation this device did not
+  // open by link: only then does it sign the acceptance.
+  const confirm = async (invitation: InviteeInvitation) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const { confirmEncryptedInvitation } =
+        await import('../lib/e2ee/invitations');
+      await confirmEncryptedInvitation(
+        await pageInvitations(),
+        invitation.record
+      );
+    } catch (caught) {
+      setError(messageFor(caught));
+      setBusy(false);
+      return;
+    }
+    setBusy(false);
+    await sync();
+  };
+
   const waitingOutgoing = outgoing.filter(
     (invitation) => OUTGOING_HINTS[invitation.state] !== undefined
   );
@@ -232,6 +255,17 @@ export function EncryptedInvitations({ ready }: { ready: boolean }) {
               >
                 <ShieldCheck size={14} aria-hidden="true" />
                 Verify
+              </button>
+            ) : null}
+            {invitation.state === 'confirm' ? (
+              <button
+                className="primary"
+                type="button"
+                disabled={busy}
+                aria-label={`Join ${owner}’s project as ${ROLE[invitation.record.role]}`}
+                onClick={() => void confirm(invitation)}
+              >
+                Join
               </button>
             ) : null}
           </SettingRow>

@@ -400,9 +400,12 @@ export interface ProjectGroupContext {
    * other members (slice 5-5: an owner's removal or a departure), so the
    * page can offer to reissue the project's share links with new keys
    * (slice 5-10): a removed member could keep reading later snapshots of
-   * links made before the removal. Best effort; a throw is ignored.
+   * links made before the removal. A returned promise is awaited before
+   * the Commit's caller goes on, so a record of the removal (the owner's
+   * invitation sweep never adds them back) is written before any Add this
+   * device builds next. A throw or rejection is ignored.
    */
-  readonly onMembersRemoved?: (removal: MembersRemoved) => void;
+  readonly onMembersRemoved?: (removal: MembersRemoved) => void | Promise<void>;
   /**
    * Told when a Commit this device sent or processed removed leaves of
    * other members who keep at least one leaf (slice 5-7: a co-member's
@@ -2636,7 +2639,7 @@ async function reportRemovals(
     .map(({ userId, deviceId }) => ({ userId, deviceId }));
   try {
     if (userIds.length > 0) {
-      ctx.onMembersRemoved?.({ projectId, keyEpoch, userIds });
+      await ctx.onMembersRemoved?.({ projectId, keyEpoch, userIds });
     }
   } catch {
     // Best effort: the Commit stands either way.
@@ -3171,7 +3174,17 @@ function addRequest(
 export function addInvitee(
   ctx: ProjectGroupContext,
   projectId: string,
-  invitee: InviteeAddition
+  invitee: InviteeAddition,
+  options: {
+    /**
+     * Runs on every attempt after catching up, just before the Add is
+     * built: a throw stops the Add. The caller's last word on whether the
+     * invitee may still be added, after this device processed whatever
+     * Commits came in (a removal of that invitee by another device of the
+     * owner included, recorded by `onMembersRemoved` before this runs).
+     */
+    readonly authorize?: () => Promise<void>;
+  } = {}
 ): Promise<ProjectGroupState> {
   if (invitee.list.userId !== invitee.userId) {
     return Promise.reject(
@@ -3187,6 +3200,7 @@ export function addInvitee(
     );
   }
   return commitLoop(ctx, projectId, async (status, group) => {
+    await options.authorize?.();
     const rotation = await rotationRequest(ctx, projectId, status, group);
     const request: CommitRequest = {
       add: invitee.keyPackages.map((entry) => entry.keyPackage),

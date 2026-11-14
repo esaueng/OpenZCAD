@@ -24,6 +24,7 @@
  */
 import type { ProjectAccessRole } from '@openzcad/shared';
 import { encryptedInvitations } from './encryptedProjects';
+import { recordRemovedMembers } from './invitations';
 import {
   ProjectGroupApiError,
   catchUpProjectGroup,
@@ -102,7 +103,17 @@ export async function removeEncryptedMember(
   projectId: string,
   userId: string
 ): Promise<void> {
-  await removeMember((await encryptedInvitations()).groups, projectId, userId);
+  const ctx = await encryptedInvitations();
+  // Written before the Commit is sent, so a page that closes before the
+  // removal is confirmed still never adds them back without the owner's
+  // confirmation. A removal that then fails leaves only that confirmation
+  // asked for; a write that fails stops this page adding anyone
+  // automatically, and the removal goes ahead.
+  await recordRemovedMembers(ctx.store, ctx.groups.account.userId, {
+    projectId,
+    userIds: [userId]
+  });
+  await removeMember(ctx.groups, projectId, userId);
 }
 
 /**
