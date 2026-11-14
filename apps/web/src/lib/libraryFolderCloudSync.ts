@@ -316,9 +316,10 @@ export function browserFolderSyncHost(
 }
 
 /**
- * Whether this account encrypts, asked once per visit and only after the
- * first read answered. An unanswerable check counts as encrypting, so
- * plaintext names never leave the device on a guess.
+ * Whether this account encrypts, asked only after the first read answered:
+ * a yes holds for the visit, a no is asked again next round. An
+ * unanswerable check counts as encrypting, so plaintext names never leave
+ * the device on a guess.
  */
 const encrypting = new Map<string, Promise<boolean>>();
 
@@ -368,12 +369,20 @@ export async function syncAccountLibraryFolders(
   cancelled: () => boolean
 ): Promise<boolean> {
   try {
-    const { api, encryptsNewProjects } = await import('./api');
+    const { api, encryptsAccountLibrary } = await import('./api');
     const host = browserFolderSyncHost(accountId, api, async () => {
+      // Only "encrypted" is kept for the visit. "Not encrypted" is asked
+      // again every round: this page can encrypt a project or accept an
+      // encrypted invitation at any time, and a round that kept the old
+      // answer would send folder names before the Worker refused them.
       let encrypts = encrypting.get(accountId);
       if (!encrypts) {
-        encrypts = encryptsNewProjects().catch(() => true);
+        encrypts = encryptsAccountLibrary().catch(() => true);
         encrypting.set(accountId, encrypts);
+        void encrypts.then((answer) => {
+          if (!answer && encrypting.get(accountId) === encrypts)
+            encrypting.delete(accountId);
+        });
       }
       if (!(await encrypts)) return plaintextFolderCodec;
       const account = unlockedAccount(accountId);
@@ -387,6 +396,13 @@ export async function syncAccountLibraryFolders(
     });
     return (await syncLibraryFolders(host)) === 'unsupported';
   } catch (error) {
+    // The account started encrypting during this visit (a project was
+    // encrypted, or an encrypted invitation accepted): seal from the next
+    // round on instead of stopping on the plaintext refusal.
+    if (errorCode(error) === 'LIBRARY_FOLDERS_ENCRYPTION_REQUIRED') {
+      encrypting.set(accountId, Promise.resolve(true));
+      return false;
+    }
     return STOP_CODES.has(errorCode(error) ?? '');
   }
 }
