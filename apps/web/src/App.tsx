@@ -883,7 +883,11 @@ import {
   type SelectionCalloutOperation,
   type SelectionCalloutVerbId
 } from './lib/selectionCallout';
-import { ghostBodiesFor, historyFeatureFocus } from './lib/historyFocus';
+import {
+  ghostBodiesFor,
+  historyFeatureFocus,
+  isCutFace
+} from './lib/historyFocus';
 import { useLocalAutoFrame } from './hooks/useLocalAutoFrame';
 import type { AutoFrameRequest } from './lib/autoFrame';
 import { useOffsetFaceHandle } from './hooks/useOffsetFaceHandle';
@@ -28060,7 +28064,15 @@ export function App() {
     });
   }
 
-  function handleDeleteImportedFace(selection: TopologySelection) {
+  /**
+   * Heals one face by a replayable direct edit: a face of an imported STEP
+   * part, which has no history to delete, or a face a subtract cut, whose
+   * inferred feature (the cutting tool) the cut still needs.
+   */
+  function handleDeleteImportedFace(
+    selection: TopologySelection,
+    origin: 'imported' | 'cut' = 'imported'
+  ) {
     // A pick may demand lineage while a complete validated body is already
     // displayed. The candidate rebuild re-resolves its face before healing.
     if (!requireDisplayedGeometryComplete()) return;
@@ -28068,7 +28080,7 @@ export function App() {
     const base = manager?.document;
     if (!base) return;
     void import('./lib/featureDeletion')
-      .then(({ importedFaceDeletion }) => {
+      .then(({ importedFaceDeletion, cutFaceDeletion }) => {
         const current = manager.document;
         if (
           managerRef.current !== manager ||
@@ -28080,11 +28092,17 @@ export function App() {
           );
           return;
         }
-        const removal = importedFaceDeletion(current, selection);
+        const removal =
+          origin === 'cut'
+            ? cutFaceDeletion(current, selection)
+            : importedFaceDeletion(current, selection);
         void validatedFeature.runTransaction([removal.command], {
           label: removal.command.label,
           targets: [removal.target],
-          validatingMessage: 'Checking imported feature removal…',
+          validatingMessage:
+            origin === 'cut'
+              ? 'Checking the cut removal…'
+              : 'Checking imported feature removal…',
           successMessage: removal.successMessage,
           onFailure: (message) => announce(message),
           onSuccess: () => {
@@ -28098,7 +28116,12 @@ export function App() {
       })
       .catch((error: unknown) =>
         setStatus(
-          errorMessage(error, 'Could not remove this imported feature.')
+          errorMessage(
+            error,
+            origin === 'cut'
+              ? 'Could not fill this cut.'
+              : 'Could not remove this imported feature.'
+          )
         )
       );
   }
@@ -30592,6 +30615,27 @@ export function App() {
               validateSelectionEdit({ acceptCompleteCommit: true })
             )
               handleDeleteImportedFace(selectedTopology);
+            return;
+          }
+          // A face a subtract cut — the wall of a round hole — is healed in
+          // place. The feature it is inferred to is the cutting tool, and
+          // deleting that would leave the subtract with nothing to cut.
+          if (
+            featureSelectionSource !== 'pinned' &&
+            selectedTopology?.kind === 'face' &&
+            doc &&
+            isCutFace(doc, selectedTopology)
+          ) {
+            event.preventDefault();
+            if (
+              !(
+                isOperationState(interaction) &&
+                interaction.phase !== 'armed' &&
+                interaction.phase !== 'failed'
+              ) &&
+              validateSelectionEdit({ acceptCompleteCommit: true })
+            )
+              handleDeleteImportedFace(selectedTopology, 'cut');
             return;
           }
           // A drag or a commit still in flight owns the selection; Delete
