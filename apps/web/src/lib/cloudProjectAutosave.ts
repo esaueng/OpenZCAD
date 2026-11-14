@@ -194,19 +194,6 @@ function browserConnectivity(): CloudProjectAutosaveConnectivity {
  * long session costs a bounded number of row updates instead of one full
  * document snapshot per autosave. Explicit saves still write history.
  */
-/**
- * Whether an explicit checkpoint that came back without a save was simply
- * cancelled (the project moved on or changed mode), so the caller should
- * settle the indicator itself. A halted controller already reported its
- * own, more specific state (conflict, refused, repair); overwriting it
- * would hide the action that state offers.
- */
-export function checkpointWasCancelled(
-  controller: Pick<CloudProjectAutosave, 'isHalted'> | null
-): boolean {
-  return !controller?.isHalted;
-}
-
 export class CloudProjectAutosave {
   readonly #options: CloudProjectAutosaveOptions;
   readonly #connectivity: CloudProjectAutosaveConnectivity;
@@ -242,6 +229,8 @@ export class CloudProjectAutosave {
    * limit may resume a size refusal; other halts need an explicit new baseline.
    */
   #halted: 'conflict' | 'repair' | 'refused' | null = null;
+  /** The last state announced, and the failure it carried. */
+  #lastStatus: { state: CloudProjectSyncState; error?: unknown } | null = null;
   /**
    * The browser refused to upload an edit other devices could not open
    * (ADR-024 Phase 1). Like a size refusal, a newer edit that passes the same
@@ -304,6 +293,22 @@ export class CloudProjectAutosave {
 
   get isHalted(): boolean {
     return this.#halted !== null;
+  }
+
+  /**
+   * Announces the halted state again, with the failure that halted it, so a
+   * caller that showed something else meanwhile (an explicit save's
+   * "Saving") puts back the state and the action it offers. False, and
+   * nothing announced, when the controller is not halted.
+   */
+  reannounceHalt(): boolean {
+    if (!this.#halted) return false;
+    const last = this.#lastStatus;
+    this.#emit(
+      this.#halted,
+      last?.state === this.#halted ? last.error : undefined
+    );
+    return true;
   }
 
   /**
@@ -1039,6 +1044,7 @@ export class CloudProjectAutosave {
   }
 
   #emit(state: CloudProjectSyncState, error?: unknown): void {
+    this.#lastStatus = { state, error };
     this.#options.onStatus?.({
       state,
       projectId: this.#project?.projectId ?? this.#pending?.projectId ?? null,

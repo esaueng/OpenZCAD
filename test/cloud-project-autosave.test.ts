@@ -32,7 +32,6 @@ import {
 } from '../apps/web/src/lib/api';
 import worker from '../apps/web/worker/index';
 import {
-  checkpointWasCancelled,
   CloudProjectAutosave,
   PROJECT_AUTOSAVE_IDLE_MS,
   PROJECT_AUTOSAVE_IDLE_RETRY_MS,
@@ -223,13 +222,12 @@ describe('explicit checkpoints', () => {
     [413, 'PROJECT_STORAGE_QUOTA', 'refused'],
     [503, 'PROJECT_DOCUMENT_UNAVAILABLE', 'repair']
   ] as const)(
-    'reports a checkpoint stopped by a %s/%s drain as halted, not cancelled',
+    'announces again a halt by a %s/%s drain that stopped a checkpoint',
     async (status, code, state) => {
-      const respond = vi.fn().mockRejectedValue(
-        new ApiError(status, 'Account write refused.', code, {
-          currentVersion: 5
-        })
-      );
+      const refusal = new ApiError(status, 'Account write refused.', code, {
+        currentVersion: 5
+      });
+      const respond = vi.fn().mockRejectedValue(refusal);
       const { controller, statuses } = harness({ respond });
       const base = documentAt(2);
       controller.openProject(base.projectId, 2);
@@ -242,14 +240,48 @@ describe('explicit checkpoints', () => {
       ).resolves.toBeNull();
       expect(write).not.toHaveBeenCalled();
       expect(lastState(statuses)).toBe(state);
-      // The App keeps the controller's state instead of settling to local.
-      expect(checkpointWasCancelled(controller)).toBe(false);
+      // The App showed "Saving" meanwhile; the controller puts its state back.
+      const before = statuses.length;
+      expect(controller.reannounceHalt()).toBe(true);
+      expect(statuses.length).toBe(before + 1);
+      expect(statuses.at(-1)?.state).toBe(state);
       controller.dispose();
     }
   );
 
-  it('reports a checkpoint whose project moved on as cancelled', async () => {
-    const { controller } = harness();
+  it('announces again a refusal that predates the explicit save, with its error', async () => {
+    const refusal = new ApiError(
+      413,
+      'Account storage limit reached.',
+      'PROJECT_STORAGE_QUOTA',
+      { limitBytes: 1_000 }
+    );
+    const respond = vi.fn().mockRejectedValue(refusal);
+    const { controller, statuses } = harness({ respond });
+    const base = documentAt(2);
+    controller.openProject(base.projectId, 2);
+    const edited = documentAt(3, base);
+    controller.schedule(edited);
+    await vi.advanceTimersByTimeAsync(PROJECT_AUTOSAVE_IDLE_MS);
+    await controller.whenIdle();
+    expect(lastState(statuses)).toBe('refused');
+    // The user presses Save without editing: the halted controller writes
+    // nothing and answers null; re-scheduling the same document is silent.
+    const write = vi.fn(
+      async ({ document }: { document: ProjectDocument }) => document
+    );
+    await expect(
+      controller.saveCheckpoint(base.projectId, () => edited, write)
+    ).resolves.toBeNull();
+    expect(write).not.toHaveBeenCalled();
+    controller.schedule(edited);
+    expect(controller.reannounceHalt()).toBe(true);
+    expect(statuses.at(-1)).toMatchObject({ state: 'refused', error: refusal });
+    controller.dispose();
+  });
+
+  it('announces nothing for a checkpoint whose project moved on', async () => {
+    const { controller, statuses } = harness();
     const base = documentAt(2);
     controller.openProject(base.projectId, 2);
     await expect(
@@ -259,8 +291,9 @@ describe('explicit checkpoints', () => {
         async ({ document }) => document
       )
     ).resolves.toBeNull();
-    expect(checkpointWasCancelled(controller)).toBe(true);
-    expect(checkpointWasCancelled(null)).toBe(true);
+    const before = statuses.length;
+    expect(controller.reannounceHalt()).toBe(false);
+    expect(statuses.length).toBe(before);
     controller.dispose();
   });
 
