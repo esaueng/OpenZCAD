@@ -174,9 +174,10 @@
   cursor: not-allowed;
 }
 
-/* The one line under the row: the unit's help, Checking…, or why the entry
-   does not evaluate. */
+/* The lines under the row: what a face offset's number means, then the
+   unit's help, Checking…, or why the entry does not evaluate. */
 .keypad-help,
+.keypad-meaning,
 .keypad-state,
 .keypad-warning {
   display: flex;
@@ -189,6 +190,7 @@
 }
 
 .keypad-help,
+.keypad-meaning,
 .keypad-state {
   color: var(--color-text-muted);
 }

@@ -8467,6 +8467,15 @@ export function ModelViewer({
         tagText =
           offsetChipModeRef.current === 'total' ? 'Total ▾' : 'Offset ▾';
       }
+      // The tag decides what a typed number means, so it says so on hover
+      // rather than flipping between Total and Offset unexplained.
+      const tagTitle =
+        rig?.kind !== 'offset-face'
+          ? ''
+          : offsetChipModeRef.current === 'total'
+            ? 'Total: a typed value is the size this face sets · Switch to Offset to type how far it moves'
+            : 'Offset: a typed value is how far the face moves · Switch to Total to type the size it sets';
+      if (radiusLabelChip.title !== tagTitle) radiusLabelChip.title = tagTitle;
       if (lineAngle !== null) {
         // Both pills ride the line, rotated to read along it: the tag first,
         // then the value, each pushed half its own width out from the anchor

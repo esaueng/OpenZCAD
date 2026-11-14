@@ -392,6 +392,13 @@ export function keypadFloor(host: HTMLElement): number {
  * companion of every drag handle. One instance serves offsets, radii,
  * extrude heights, and sketch dimensions.
  */
+/** A signed move to the hundredth, as the offset chip writes it: "+5", "−19.01". */
+function signedHundredths(value: number): string {
+  const rounded = Math.round(value * 100) / 100;
+  if (rounded === 0) return '0';
+  return `${rounded > 0 ? '+' : '−'}${formatNumber(Math.abs(rounded))}`;
+}
+
 /** The signed drag value a typed total stands for. */
 function offsetFromTotal(
   total: number,
@@ -452,6 +459,7 @@ export function NumericKeypad({
   const gridId = useId();
   const helpId = useId();
   const stateId = useId();
+  const meaningId = useId();
   const rootRef = useRef<HTMLDivElement | null>(null);
   const rowRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -934,10 +942,28 @@ export function NumericKeypad({
   // An empty field is waiting for a value, not wrong: Apply waits, but it
   // is not called an error until something unreadable is typed.
   const unreadable = state === 'invalid' && value.trim() !== '';
+  // A face offset's number is either the Total size the face leaves or the
+  // signed distance it moves, and the two read nothing alike: typing 5 for
+  // a 24 mm body's top face moved it by -19 (QA 2026-11-14 finding #9). The
+  // field says which one it takes, and in Total what the face does with it,
+  // so a Total of 1e6 is seen to move the face a kilometre.
+  const offsetMeaning =
+    request.kind !== 'offset'
+      ? null
+      : request.totalBaseline === undefined
+        ? 'Offset: how far the face moves, + out, − in'
+        : `Total: the size this face sets, now ${formatNumber(
+            Math.round(request.totalBaseline * 100) / 100
+          )} ${unitText}${
+            evaluation.ok && normalizedValue !== undefined
+              ? ` · moves the face ${signedHundredths(normalizedValue)} ${unitText}`
+              : ''
+          }`;
   const describedBy =
     [
       explained || reasonShown || unreadable ? reasonId : null,
-      state === 'checking' ? stateId : null
+      state === 'checking' ? stateId : null,
+      offsetMeaning === null ? null : meaningId
     ]
       .filter(Boolean)
       .join(' ') || undefined;
@@ -1116,6 +1142,11 @@ export function NumericKeypad({
           <Check size={16} aria-hidden="true" />
         </button>
       </div>
+      {offsetMeaning !== null && (
+        <p className="keypad-meaning" id={meaningId}>
+          {offsetMeaning}
+        </p>
+      )}
       {helpOpen && unitText && (
         <p className="keypad-help" id={helpId} role="note">
           {helpText}

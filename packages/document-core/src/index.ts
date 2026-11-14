@@ -6559,6 +6559,17 @@ function parseExpressionQuantity(
 
   const result = parseAdditive();
   if (position < tokens.length) {
+    // `2,5` stops at the comma: say what a decimal comma reader needs to
+    // know instead of naming the tokens. The comma is never accepted.
+    if (
+      tokens[position]?.type === 'comma' &&
+      tokens[position - 1]?.type === 'number' &&
+      tokens[position + 1]?.type === 'number'
+    ) {
+      throw new Error(
+        'Unexpected trailing tokens in expression: use a point for decimals (2.5, not 2,5).'
+      );
+    }
     throw new Error('Unexpected trailing tokens in expression.');
   }
   if (callError !== undefined) throw callError;
