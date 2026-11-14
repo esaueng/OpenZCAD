@@ -95,7 +95,9 @@ import { LatestTask } from './lib/latestTask';
 import { prepareSaveStateRestore } from './lib/saveStateRestore';
 import { rebuildProgressLabel } from './lib/rebuildProgressLabel';
 import {
-  activeIsolatedBodyId,
+  bodyIsolationState,
+  persistedHiddenBodyIds,
+  releaseIsolationToParameter,
   toggleBodyIsolation,
   type BodyIsolation
 } from './lib/bodyIsolation';
@@ -3555,6 +3557,15 @@ export function App() {
       featureWarnings: derived.featureWarnings ?? []
     });
   }
+  // Isolation is session-local and never saved: while it is on, the view
+  // saves the user's own hidden set from before it (QA 2026-11-14 #17).
+  const [bodyIsolation, setBodyIsolation] = useState<
+    (BodyIsolation & { projectId: string; bodyName: string }) | null
+  >(null);
+  const currentBodyIsolation =
+    bodyIsolation && bodyIsolation.projectId === doc?.projectId
+      ? bodyIsolation
+      : null;
   const {
     projection,
     setProjection,
@@ -3576,7 +3587,9 @@ export function App() {
     onCameraSettled: persistCameraPose,
     persistSection: persistSectionView,
     forget: forgetProjectView
-  } = useProjectView(doc?.projectId ?? null);
+  } = useProjectView(doc?.projectId ?? null, (onScreen) =>
+    persistedHiddenBodyIds(onScreen, currentBodyIsolation)
+  );
   // Read at callback time: the section slider's release handler runs after
   // the change that moved it.
   const viewerSettingsRef = useRef(viewerSettings);
@@ -3615,10 +3628,6 @@ export function App() {
         : [],
     [doc, hiddenBodyIds]
   );
-  // The view's hidden set persists; the prior isolation snapshot is session-local.
-  const [bodyIsolation, setBodyIsolation] = useState<
-    (BodyIsolation & { projectId: string }) | null
-  >(null);
   const [previewDoc, setPreviewDoc] = useState<ProjectDocument | null>(null);
   // D06: an assistant proposal's annotations, drawn on its sheet in Draw.
   const [drawingPreview, setDrawingPreview] = useState<{
@@ -8181,25 +8190,57 @@ export function App() {
     () => partBodies.filter((body) => !hiddenBodyIds.has(body.bodyId)),
     [partBodies, hiddenBodyIds]
   );
-  const isolatedBodyId = useMemo(
+  const isolationState = useMemo(
     () =>
-      activeIsolatedBodyId(
+      bodyIsolationState(
         partBodies.map((body) => body.bodyId),
         hiddenBodyIds,
         localHiddenBodyIds,
-        bodyIsolation?.projectId === doc?.projectId ? bodyIsolation : null
+        currentBodyIsolation,
+        previewDoc !== null
       ),
     [
       partBodies,
       hiddenBodyIds,
       localHiddenBodyIds,
-      bodyIsolation,
-      doc?.projectId
+      currentBodyIsolation,
+      previewDoc
     ]
   );
-  // End the session permanently when its view changes. Merely hiding the
-  // indicator would let an old snapshot revive if the same set returns later.
-  if (bodyIsolation && isolatedBodyId === null) setBodyIsolation(null);
+  const isolatedBodyId =
+    isolationState.kind === 'active' ? isolationState.bodyId : null;
+  // A hidden set the user replaced, or another project, ends the session
+  // permanently: merely hiding the indicator would let an old snapshot revive
+  // if the same set returns later.
+  if (
+    bodyIsolation &&
+    (isolationState.kind === 'replaced' || isolationState.kind === 'none')
+  )
+    setBodyIsolation(null);
+  // The committed model took the isolated body away (deleted, consumed,
+  // undone, or switched off by a parameter). Before QA 2026-11-14 #17 the
+  // session ended silently and left every other body hidden, through a
+  // reload; it now puts back the bodies shown before isolating, and says so.
+  useEffect(() => {
+    if (isolationState.kind !== 'ended' || !currentBodyIsolation) return;
+    const { bodyName } = currentBodyIsolation;
+    setBodyIsolation(null);
+    setHiddenBodyIds(isolationState.hidden);
+    const restored = isolationState.hidden.size;
+    const notice = `Left isolation: ${bodyName} ${isolationState.reason === 'removed' ? 'is no longer in the model' : 'is now hidden'} · ${restored === 0 ? 'all bodies visible' : `${restored} previously hidden ${restored === 1 ? 'body stays' : 'bodies stay'} hidden`}.`;
+    // An Undo, Delete or boolean that ended it already reported its outcome,
+    // perhaps offering Undo; keep that and add the notice to it.
+    const offersUndo = undoableStatusAt === statusEntry.at;
+    setStatus(offersUndo ? `${statusEntry.text} ${notice}` : notice);
+    if (offersUndo) setUndoableStatusAt(lastStatusAtRef.current);
+  }, [
+    isolationState,
+    currentBodyIsolation,
+    setHiddenBodyIds,
+    setStatus,
+    statusEntry,
+    undoableStatusAt
+  ]);
   // Only whether a face drag is in progress matters to the bodies: keyed on
   // the whole interaction, every drag, keypad or selection event handed the
   // viewer a new bodies array and re-ran each of its bodies effects.
@@ -12879,21 +12920,17 @@ export function App() {
       );
       return;
     }
-    const isolation =
-      bodyIsolation && bodyIsolation.projectId === doc?.projectId
-        ? bodyIsolation
-        : null;
     const step = toggleBodyIsolation(
       partBodies.map((body) => body.bodyId),
       bodyId,
       hiddenBodyIds,
       localHiddenBodyIds,
-      isolation
+      currentBodyIsolation
     );
     setHiddenBodyIds(step.hidden);
     setBodyIsolation(
       step.isolation && doc
-        ? { ...step.isolation, projectId: doc.projectId }
+        ? { ...step.isolation, projectId: doc.projectId, bodyName: body.name }
         : null
     );
     if (!step.entered) {
@@ -22482,13 +22519,17 @@ export function App() {
         (p) => p.name === name
       )?.toggle;
       // setParameter both adds and changes one; say which happened.
-      if (toggle)
+      if (toggle) {
         setHiddenBodyIds(
           (hidden) =>
             new Set(
               [...hidden].filter((id) => !toggle.bodyIds.includes(id as BodyId))
             )
         );
+        setBodyIsolation((recorded) =>
+          releaseIsolationToParameter(recorded, toggle.bodyIds)
+        );
+      }
       setStatus(
         added ? `Added parameter ${name}.` : `Parameter ${name} updated.`
       );
