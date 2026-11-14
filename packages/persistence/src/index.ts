@@ -1996,7 +1996,8 @@ export class InMemoryPersistenceService implements PersistenceService {
       ),
       revisionCount: revisions.length,
       projectStorageBytes,
-      storageBytes: projectStorageBytes + artifacts.bytes + artifactReservedBytes,
+      storageBytes:
+        projectStorageBytes + artifacts.bytes + artifactReservedBytes,
       storageLimitBytes: this.storageLimitBytes,
       documentLimitBytes: MAX_PERSISTED_DOCUMENT_BYTES,
       maxRevisionsPerProject: MAX_PROJECT_REVISIONS,

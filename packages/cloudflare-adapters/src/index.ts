@@ -3790,7 +3790,8 @@ export class D1R2PersistenceService implements PersistenceService {
       revisionBytes: (revisions?.revision_bytes ?? 0) + encrypted.revisionBytes,
       revisionCount: (revisions?.revision_count ?? 0) + encrypted.revisionCount,
       projectStorageBytes,
-      storageBytes: projectStorageBytes + artifacts.bytes + artifactReservedBytes,
+      storageBytes:
+        projectStorageBytes + artifacts.bytes + artifactReservedBytes,
       storageLimitBytes: entitlements.storageLimitBytes,
       documentLimitBytes: this.projectDocumentLimitBytes(),
       maxRevisionsPerProject: MAX_PROJECT_REVISIONS,

@@ -1230,7 +1230,15 @@ function encryptCutoverQuota(
     files: {
       sql: `(${blobs} > ${files}
         AND ${storedByOwnerSql()} + ${blobs} - ${files} > ${OWNER_LIMIT_SQL})`,
-      binds: [projectId, projectId, userId, userId, projectId, projectId, userId]
+      binds: [
+        projectId,
+        projectId,
+        userId,
+        userId,
+        projectId,
+        projectId,
+        userId
+      ]
     }
   };
 }
