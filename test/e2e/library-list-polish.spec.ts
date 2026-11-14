@@ -176,3 +176,24 @@ test('Escape while naming a new folder unmakes it', async ({ page }) => {
     'No folder made.'
   );
 });
+
+// 14 Nov 2026: a click into the suggested name put the caret where it
+// landed, so a typed name ran into "Lucky Quokka" instead of replacing it.
+test('a click into the suggested name selects it, so typing replaces it', async ({
+  page
+}) => {
+  await openLibrary(page, false);
+  const field = page.getByLabel('Project name');
+  const suggestion = await field.inputValue();
+  await field.click();
+  await page.keyboard.type('Pump housing');
+  await expect(field).toHaveValue('Pump housing');
+  expect(suggestion).not.toBe('Pump housing');
+  // Once typed over, a click places the caret like any field.
+  await page.locator('body').click({ position: { x: 900, y: 600 } });
+  // Past the text's end: the caret goes there, nothing is selected.
+  const box = (await field.boundingBox())!;
+  await field.click({ position: { x: box.width - 6, y: box.height / 2 } });
+  await page.keyboard.type(' v2');
+  await expect(field).toHaveValue('Pump housing v2');
+});

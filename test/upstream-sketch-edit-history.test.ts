@@ -77,7 +77,11 @@ describe(
       expect((refusal as FeatureBuildError).featureName).toBe(
         'Open-ended duct wall'
       );
-      expect((refusal as Error).message).toMatch(/no longer exists/);
+      // The edited sketch's card names the shell that lost its opening
+      // (QA 2026-11-14 #8), rather than the adapter's "this feature".
+      expect((refusal as Error).message).toMatch(
+        /“Open-ended duct wall” can no longer find an edge or face it was applied to/
+      );
     });
 
     it('accepts a re-applied section whose cap is unchanged', async () => {
