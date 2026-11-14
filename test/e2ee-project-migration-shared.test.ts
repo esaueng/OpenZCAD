@@ -253,6 +253,8 @@ interface Owner {
   approved: MigrationMemberApproval[] | null;
   /** What this browser recorded of the owner's approval, per staging. */
   receipts: MigrationApprovalReceipts;
+  /** How often the engine said the approval it was given is spent. */
+  spent: number;
 }
 
 type MembersAnswer = Awaited<ReturnType<ProjectMigrationsApi['members']>>;
@@ -311,6 +313,7 @@ function ownerEngine(
     progress,
     approved: null,
     receipts,
+    spent: 0,
     async migrate(projectId) {
       const summary = (await plaintext.listProjects()).find(
         (p) => p.projectId === projectId
@@ -318,7 +321,12 @@ function ownerEngine(
       await engine.migrate(
         summary,
         undefined,
-        side.approved ? { approvedMembers: side.approved } : {}
+        side.approved
+          ? {
+              approvedMembers: side.approved,
+              onApprovalSpent: () => void side.spent++
+            }
+          : {}
       );
     },
     async approve(projectId) {
@@ -1070,9 +1078,11 @@ describe('migrating a shared plaintext project (slice 7-4)', () => {
     const welcomes = () =>
       rows(srv, 'SELECT * FROM e2ee_welcomes WHERE project_id = ?', projectId);
     expect(welcomes()).toHaveLength(2);
-    // This browser recorded the approval for this staging.
+    // This browser recorded the approval for this staging, which spent
+    // the approval given: a later staging asks again.
     const receipt = ownerSide.receipts.get(projectId)!;
     expect(receipt.members).toEqual(shown);
+    expect(ownerSide.spent).toBe(1);
 
     // A staging this browser holds no approval of (an earlier app
     // version's, which re-added the members without asking): after a
@@ -1194,6 +1204,79 @@ describe('migrating a shared plaintext project (slice 7-4)', () => {
     await ownerSide.approve(projectId);
     await ownerSide.migrate(projectId);
     expect(formatOf(srv, projectId)).toBe(2);
+  });
+
+  it('drops a resumed staging whose group holds a re-added member the server leaves out of the listing', async () => {
+    const w = world();
+    const { srv } = w;
+    const { projectId } = await sharedPlaintext(w);
+    for (const [a, b] of [
+      [OWNER, OTHER],
+      [OTHER, OWNER],
+      [OWNER, THIRD],
+      [THIRD, OWNER]
+    ] as const) {
+      verify(w, a, b);
+    }
+    let stop = true;
+    let omitted: string | null = null;
+    const ownerSide = ownerEngine(w, {
+      beforeStep: (step) => {
+        if (step === 'cutover' && stop) throw new Error('Interrupted');
+      },
+      tamper: (_projectId, answer) =>
+        omitted
+          ? {
+              ...answer,
+              members: answer.members.filter((m) => m.userId !== omitted)
+            }
+          : answer
+    });
+    await failure(ownerSide.migrate(projectId));
+    await publishKeys(w, memberDevice(w, other, 'other_laptop'));
+    await publishKeys(w, memberDevice(w, third, 'third_laptop'));
+    await ownerSide.approve(projectId);
+    await failure(ownerSide.migrate(projectId));
+    const welcomes = () =>
+      rows(srv, 'SELECT * FROM e2ee_welcomes WHERE project_id = ?', projectId);
+    expect(welcomes()).toHaveLength(2);
+
+    // As an older app version left it: THIRD re-added with no signed
+    // acceptance, no approval recorded by this browser, and the server
+    // now leaves THIRD out of the member listing.
+    srv.db
+      .prepare(
+        `UPDATE e2ee_invitations
+           SET acceptance_statement = NULL, acceptance_signature = NULL
+         WHERE project_id = ? AND accepted_by_user_id = ?`
+      )
+      .run(projectId, THIRD);
+    ownerSide.receipts.delete(projectId);
+    ownerSide.approved = null;
+    stop = false;
+    omitted = THIRD;
+    // The owner is shown, and approves, only the member listed.
+    const shown = await ownerSide.approve(projectId);
+    expect(shown.map((entry) => entry.userId)).toEqual([OTHER]);
+    const spent = ownerSide.spent;
+
+    // The staged group still holds THIRD, whom nobody approved: the
+    // staging is dropped instead of resumed or switched over.
+    const restarted = await failure(ownerSide.migrate(projectId));
+    expect(restarted).toBeInstanceOf(MigrationMembersNotReadyError);
+    expect(formatOf(srv, projectId)).toBe(1);
+    expect(welcomes()).toEqual([]);
+    // The approval went with the staging dropped, unrecorded.
+    expect(ownerSide.spent).toBe(spent + 1);
+    expect(ownerSide.receipts.get(projectId)).toBeNull();
+    expect(
+      rows(
+        srv,
+        'SELECT * FROM e2ee_project_leaves WHERE project_id = ? AND user_id = ?',
+        projectId,
+        THIRD
+      )
+    ).toEqual([]);
   });
 
   it('lands a re-add only while the member’s device list is the one it was checked against (#918)', async () => {

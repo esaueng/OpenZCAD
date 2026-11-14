@@ -33,6 +33,13 @@
  *   member, given now or recorded by this browser for that same staging
  *   (`MigrationApprovalReceipt`). A member re-added without a signed
  *   acceptance the owner can review drops the staging, which starts again.
+ * - **The staged group.** The roster that counts is the staged MLS group's,
+ *   not the server's listing (`stagedGroupMembers`): before a resumed
+ *   staging is written to, and again just before the cutover, everyone in
+ *   the group besides the owner must be an approved identity with the
+ *   approved role (`stagedGroupApproved`), or the staging starts again. A
+ *   member an older staging re-added and the listing leaves out is no
+ *   exception.
  * - **Re-add.** Once the staging is complete, just before the cutover, the
  *   owner adds each member by Welcome with their current role, one Add
  *   Commit per member (`addInvitedMember`), under the migration lease, each
@@ -49,6 +56,7 @@ import {
   type E2eeMigrationMemberRecord,
   type E2eeMigrationMembersResponse
 } from '@openzcad/shared';
+import { toHex } from '@openzcad/crypto';
 import { ApiError } from '../api';
 import {
   addInvitedMember,
@@ -58,6 +66,7 @@ import {
   type InvitationAcceptor,
   type InvitationContext
 } from './invitations';
+import { catchUpProjectGroup } from './projectGroups';
 import type { ProjectMigrationsApi } from './projectMigrationsApi';
 import {
   createShareLink,
@@ -320,6 +329,115 @@ export function requireMembersApproved(
   const byUser = matching(given);
   if (!byUser) throw new MigrationApprovalNeededError(true);
   return byUser;
+}
+
+/**
+ * One account other than the owner's that holds a leaf in the staged MLS
+ * group, as the group's authenticated state names it: the role in the
+ * group's roles extension, and the identity of the verified contact whose
+ * pinned device list certifies every one of its leaves (null when it is not
+ * a verified contact, a leaf's device is not on that list, or the group
+ * gives it no member role).
+ */
+export interface StagedGroupMember {
+  readonly userId: string;
+  readonly role: 'editor' | 'viewer' | null;
+  readonly identityKeyHash: string | null;
+}
+
+/**
+ * Who the staged group holds besides the owner, from this device's own
+ * MLS state of it once caught up with every Commit the sequencer accepted
+ * (another of the owner's devices, or an older app version, may have
+ * added someone). Never the server's member listing: one that leaves out a
+ * member re-added earlier does not hide them here. Null when this device
+ * cannot read the group's state (no certified device, no session, a group
+ * it cannot catch up with): the staged roster is then unknown.
+ */
+export async function stagedGroupMembers(
+  ctx: InvitationContext,
+  projectId: string
+): Promise<StagedGroupMember[] | null> {
+  const groups = ctx.groups;
+  const device = groups.device;
+  const ownerId = groups.account.userId;
+  if (!device || device.userId !== ownerId) return null;
+  try {
+    await catchUpProjectGroup(groups, projectId);
+    const status = await groups.sessions.status({
+      userId: ownerId,
+      deviceId: device.deviceId,
+      projectId
+    });
+    if (!status.inGroup || status.removed || !status.roles) return null;
+    const leaves = new Map<string, string[]>();
+    for (const leaf of status.members) {
+      if (leaf.userId === ownerId) continue;
+      leaves.set(leaf.userId, [
+        ...(leaves.get(leaf.userId) ?? []),
+        leaf.deviceId
+      ]);
+    }
+    const members: StagedGroupMember[] = [];
+    for (const [userId, devices] of leaves) {
+      const held = status.roles.users.find((entry) => entry.userId === userId);
+      const role =
+        held?.role === 'editor' || held?.role === 'viewer' ? held.role : null;
+      const person = await ctx.people.inspect(userId).catch(() => null);
+      const list =
+        person?.status === 'verified' && person.userId === userId
+          ? person.list
+          : null;
+      const certified =
+        !!list &&
+        list.userId === userId &&
+        devices.every((deviceId) =>
+          list.devices.some((listed) => listed.deviceId === deviceId)
+        );
+      members.push({
+        userId,
+        role,
+        identityKeyHash: certified ? toHex(list.identityKeyHash) : null
+      });
+    }
+    return members;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether the staged group holds nobody the owner did not approve: every
+ * account in it besides the owner's is an approved account, by the
+ * approved identity and with the approved role. With `complete` (just
+ * before the cutover), every approved account must also be in it.
+ * `group` null (unreadable) never passes.
+ */
+export function stagedGroupApproved(
+  group: readonly StagedGroupMember[] | null,
+  approved: ReadonlyMap<string, MigrationMemberApproval>,
+  complete = false
+): boolean {
+  if (!group) return false;
+  for (const member of group) {
+    const entry = approved.get(member.userId);
+    if (
+      !entry ||
+      !member.role ||
+      !member.identityKeyHash ||
+      member.role !== entry.role ||
+      member.identityKeyHash !== entry.identityKeyHash
+    ) {
+      return false;
+    }
+  }
+  if (complete) {
+    const present = new Set(group.map((member) => member.userId));
+    for (const userId of approved.keys()) {
+      if (!present.has(userId)) return false;
+    }
+  }
+  return true;
 }
 
 /**

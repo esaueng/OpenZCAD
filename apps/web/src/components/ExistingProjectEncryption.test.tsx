@@ -421,6 +421,50 @@ describe('the migration controller', () => {
     expect(controller.getState().projects[0]?.phase).toBe('paused');
     expect([...migratingProjects()]).toEqual([]);
   });
+
+  it('never carries the owner’s approval of members past a cancel, or past the staging it was recorded for', async () => {
+    const approval = [
+      {
+        userId: 'user_editor',
+        role: 'editor' as const,
+        identityKeyHash: 'a'.repeat(64)
+      }
+    ];
+    const given: unknown[] = [];
+    let recorded = false;
+    const fake = fakeEngine(async (summary, report, _signal, options) => {
+      if (summary.projectId !== 'proj_old') {
+        report({ phase: 'done' });
+        return;
+      }
+      given.push(options?.approvedMembers);
+      // The staging records the approval for itself (or not), then the
+      // run is interrupted before its cutover.
+      if (recorded && options?.approvedMembers) options.onApprovalSpent?.();
+      report({ phase: 'paused', plaintextLocked: true });
+      throw new MigrationPausedError();
+    });
+    const controller = controllerWith(fake, null, {
+      plaintext: { listProjects: async () => [PROJECTS[1]!] } as never
+    });
+
+    // Approved, interrupted before the staging recorded it, cancelled: a
+    // staging begun afterwards asks again.
+    controller.approveMembers('proj_old', approval);
+    await controller.run(['proj_old']);
+    await controller.cancel('proj_old');
+    expect(fake.engine.cancel).toHaveBeenCalledWith('proj_old');
+    await controller.run(['proj_old']);
+    expect(given).toEqual([approval, undefined]);
+
+    // Approved again and recorded for the staging, then interrupted: the
+    // approval is spent, so no later run passes it again.
+    recorded = true;
+    controller.approveMembers('proj_old', approval);
+    await controller.run(['proj_old']);
+    await controller.run(['proj_old']);
+    expect(given).toEqual([approval, undefined, approval, undefined]);
+  });
 });
 
 describe('editing a project while it is encrypted', () => {

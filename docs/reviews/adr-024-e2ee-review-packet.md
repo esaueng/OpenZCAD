@@ -481,7 +481,14 @@ the browser side first, then the Worker's defense in depth.
   re-added; `MigrationApprovalReceipt` (local storage, bound to the
   project, the staging's `startedAt`, and each approved identity and role)
   spares asking again after a reload, and `unconfirmedReadds` restarts a
-  staging whose re-adds carry no reviewable acceptance. A record or
+  staging whose re-adds carry no reviewable acceptance.
+  `stagedGroupMembers` reads the caught-up staged group's leaves and roles
+  extension, and `stagedGroupApproved` restarts the staging before a
+  resumed write and again before the cutover when the group holds anyone
+  not approved by identity and role (a member the server's listing leaves
+  out included), or at the cutover lacks an approved member. The
+  controller drops an approval once the engine records it in a receipt
+  (`onApprovalSpent`), on a restart, and on cancel. A record or
   statement naming another project is never ready, and `addInvitedMember`
   refuses it (`projectId`). UI `ExistingProjectEncryption.tsx`.
 - Worker: `apps/web/worker/e2eeProjectMigrations.ts` (`start`, `renew`,

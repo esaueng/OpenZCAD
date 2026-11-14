@@ -126,7 +126,10 @@ export interface MigrationController {
     projectId: string,
     approval: readonly MigrationMemberApproval[]
   ): void;
-  /** Drops a project's staging and unlocks its plaintext. */
+  /**
+   * Drops a project's staging and unlocks its plaintext, and forgets any
+   * approval of its members not yet spent: a new staging asks again.
+   */
   cancel(projectId: string): Promise<void>;
   /**
    * Slice 7-4 (decision M8): new encrypted links, of the same modes, for
@@ -305,7 +308,12 @@ export function createMigrationController(
    * only listed.
    */
   const driven = new Set<string>();
-  /** The owner's approval of each shared project's members, as shown. */
+  /**
+   * The owner's approval of each shared project's members, as shown, until
+   * a run spends it (records it for the staging it went ahead with, or
+   * drops that staging) or the owner cancels: it never carries over to a
+   * staging begun afterwards.
+   */
   const approvals = new Map<string, readonly MigrationMemberApproval[]>();
 
   /**
@@ -601,13 +609,22 @@ export function createMigrationController(
         // A project that failed waits for its own retry (one waiting for
         // its members is checked again on every run).
         if (!wanted && progress?.phase === 'error') continue;
+        const approval = approvals.get(project.projectId);
+        // Spent once: recorded for the staging it went ahead with, or
+        // dropped with it. A newer approval given meanwhile stays.
+        const spent = () => {
+          if (approvals.get(project.projectId) === approval) {
+            approvals.delete(project.projectId);
+          }
+        };
         try {
           await (
             await engineFor()
           ).migrate(project, signal, {
-            approvedMembers: approvals.get(project.projectId)
+            approvedMembers: approval,
+            onApprovalSpent: spent
           });
-          approvals.delete(project.projectId);
+          spent();
         } catch (error) {
           if (error instanceof MigrationPausedError) break;
           // Reported on the project by the engine (an error, or members
@@ -712,6 +729,8 @@ export function createMigrationController(
     },
     async cancel(projectId) {
       if (state.running) return;
+      // Whatever the owner approved belonged to the staging being dropped.
+      approvals.delete(projectId);
       const project = summaries.find((p) => p.projectId === projectId);
       try {
         await (await engineFor()).cancel(projectId);

@@ -603,6 +603,13 @@ comparison, which is safe only because of its commitment step.
   members already re-added included, given again or recorded on that
   owner's browser for that same staging; a member re-added without an
   acceptance the owner can review drops the staging, which starts again.
+  The roster checked is the staged MLS group's own, not the server's
+  listing: before a resumed staging is written to, and again just before
+  the cutover, every account in the group besides the owner's must be an
+  approved identity (a verified contact certifying each of its leaves)
+  with the approved role in the group's roles, or the staging is dropped
+  and starts again. An approval is spent once: recorded for the staging it
+  went ahead with, or dropped with that staging or a cancel.
   Automatic adds also require that the owner's browser saw every removal
   from the project since its group began (it created the group); a device
   that joined from the project's history asks the owner for every Add.
