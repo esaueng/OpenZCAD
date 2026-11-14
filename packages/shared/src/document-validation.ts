@@ -450,18 +450,25 @@ const FREEFORM_FIELDS: ReadonlySet<string> = new Set([
  * node `metadata` sits on a node, a node snapshot or a metadata command
  * (they name a `kind` or a `nodeId`); primitive `dimensions` sit on primitive
  * feature data or a primitive command (they name a `primitiveKind` or a
- * `featureKind`).
+ * `featureKind`), or on the `data` of a stored `feature.update` command,
+ * which may carry `dimensions` alone.
  */
 function ownsFreeformField(
   record: Readonly<Record<string, unknown>>,
-  key: string
+  key: string,
+  recordField: string | undefined,
+  payloadEntry: { field: string | undefined; parentValue: unknown } | null
 ): boolean {
   if (key === 'metadata')
     return typeof record.kind === 'string' || typeof record.nodeId === 'string';
   if (key === 'dimensions')
     return (
       typeof record.primitiveKind === 'string' ||
-      typeof record.featureKind === 'string'
+      typeof record.featureKind === 'string' ||
+      (recordField === 'data' &&
+        payloadEntry?.field === 'payload' &&
+        isDocumentRecord(payloadEntry.parentValue) &&
+        payloadEntry.parentValue.kind === 'feature.update')
     );
   return false;
 }
@@ -534,6 +541,9 @@ export function reservedIdentifierError(
   while (pending.length) {
     const entry = pending.pop()!;
     const current = entry.value;
+    // An enum field holds one member of its union, never another type.
+    if (entry.members && current !== undefined && typeof current !== 'string')
+      return `"${path(entry)}" must be one of its known values.`;
     if (typeof current === 'string') {
       if (entry.freeform) continue;
       if (entry.members && !entry.members.has(current))
@@ -566,7 +576,18 @@ export function reservedIdentifierError(
         return `"${path(entry)}" uses the reserved key "${key}".`;
       const freeform =
         entry.freeform ||
-        (FREEFORM_FIELDS.has(key) && ownsFreeformField(current, key));
+        (FREEFORM_FIELDS.has(key) &&
+          ownsFreeformField(
+            current,
+            key,
+            entry.field,
+            entry.parent
+              ? {
+                  field: entry.parent.field,
+                  parentValue: entry.parent.parent?.value
+                }
+              : null
+          ));
       pending.push({
         value: current[key],
         field: key,

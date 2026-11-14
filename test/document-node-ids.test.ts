@@ -1040,6 +1040,51 @@ describe('persisted enum selectors and freeform values', () => {
     }
   );
 
+  it.each([null, false, 3, {}, ['box']])(
+    'refuses a primitiveKind that is not a string (%j)',
+    (kind) => {
+      const value = withFeatureData(valid(), 'primitive', (data) => {
+        data.primitiveKind = kind;
+      });
+      expect(reservedDocumentIdentifierError(value as object)).toMatch(
+        /primitiveKind" must be one of its known values/
+      );
+    }
+  );
+
+  it('keeps a dimensions-only feature.update command free text', () => {
+    const command = {
+      kind: 'feature.update',
+      label: 'Edit feature',
+      replayVersion: 1,
+      payload: {
+        featureId: 'feature_1',
+        data: { dimensions: { primitiveKind: 'width', width: '2 * width' } }
+      }
+    };
+    expect(
+      reservedDocumentIdentifierError({ commands: [command] })
+    ).toBeNull();
+    expect(
+      reservedDocumentIdentifierError({
+        commands: [
+          {
+            kind: 'transaction',
+            label: 'Edit',
+            replayVersion: 1,
+            payload: [command]
+          }
+        ]
+      })
+    ).toBeNull();
+    // Elsewhere a primitiveKind is still checked.
+    expect(
+      reservedDocumentIdentifierError({
+        commands: [{ ...command, kind: 'feature.delete' }]
+      })
+    ).not.toBeNull();
+  });
+
   it('still refuses a reserved metadata key', () => {
     const value = received((json) => {
       const node = json.nodes[json.activePartId] as unknown as {
