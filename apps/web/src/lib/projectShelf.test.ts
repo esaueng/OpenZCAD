@@ -26,6 +26,40 @@ it('verifies pinned and visible cards first without dropping or mutating records
   expect(records[0]?.projectId).toBe('offscreen');
 });
 
+describe('merged project sizes', () => {
+  const local = {
+    projectId: 'proj_sized',
+    name: 'Bracket',
+    updatedAt: LISTED,
+    revisionCount: 1,
+    documentVersion: 4
+  } as ProjectSummary;
+
+  it('keeps the newer record’s own size', () => {
+    const [merged] = mergeProjectSummaries(
+      [{ ...local, documentBytes: 900 }],
+      [{ ...local, updatedAt: EARLIER, documentVersion: 3, documentBytes: 700 }]
+    );
+    expect(merged?.documentBytes).toBe(900);
+  });
+
+  it('fills an unmeasured device projection from the account at the same version', () => {
+    const [merged] = mergeProjectSummaries(
+      [local],
+      [{ ...local, documentBytes: 1200 }]
+    );
+    expect(merged?.documentBytes).toBe(1200);
+  });
+
+  it('does not pass off another version’s size as the newer one’s', () => {
+    const [merged] = mergeProjectSummaries(
+      [local],
+      [{ ...local, updatedAt: EARLIER, documentVersion: 3, documentBytes: 700 }]
+    );
+    expect(merged).not.toHaveProperty('documentBytes');
+  });
+});
+
 describe('provisional encrypted shelf refresh', () => {
   const local = {
     projectId: 'proj_pending',

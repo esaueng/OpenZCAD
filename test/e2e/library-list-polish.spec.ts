@@ -9,6 +9,8 @@ const projects = ['Lid', 'Bracket A', 'Bracket B', 'Gearbox'].map(
     name,
     revisionCount: 1,
     updatedAt: '2026-11-13T12:00:00.000Z',
+    // Gearbox (archived) is left unmeasured.
+    ...(index < 3 ? { documentBytes: (index + 1) * 512 * 1024 } : {}),
     organization: {
       status: index === 3 ? 'archived' : 'active',
       pinned: index === 0,
@@ -88,6 +90,34 @@ test(
     expect(head!.y).toBeGreaterThan(pinned!.y);
   }
 );
+
+test('the list shows each project’s size under its Size heading', async ({
+  page
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openLibrary(page);
+  await page.getByRole('button', { name: 'List' }).click();
+  const lid = page.locator('.start-tile-project', { hasText: 'Lid' });
+  await expect(lid.locator('.start-tile-size')).toHaveText('512 KiB');
+  // The folder totals its two brackets (1 MiB + 1.5 MiB).
+  const folder = page.locator('.start-tile-folder', { hasText: 'Brackets' });
+  await expect(folder.locator('.start-tile-size')).toHaveText('2.5 MiB');
+  // Each value sits in the column its heading names, on one line.
+  const heading = await page.locator('.start-list-head-size').boundingBox();
+  const cell = await lid.locator('.start-tile-size').boundingBox();
+  expect(Math.abs(cell!.x - heading!.x)).toBeLessThan(2);
+  expect(cell!.height).toBeLessThan(24);
+
+  // A narrow window gives the column back to the name.
+  await page.setViewportSize({ width: 1050, height: 800 });
+  await expect(page.locator('.start-list-head-size')).toBeHidden();
+  await expect(lid.locator('.start-tile-size')).toBeHidden();
+  const edited = await page
+    .locator('.start-list-head span', { hasText: 'Edited' })
+    .boundingBox();
+  const when = await lid.locator('.start-tile-when').boundingBox();
+  expect(Math.abs(when!.x - edited!.x)).toBeLessThan(2);
+});
 
 test('the shelf header holds still between Projects, Archive and Trash', async ({
   page

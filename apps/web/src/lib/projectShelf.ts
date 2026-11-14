@@ -153,8 +153,20 @@ export function mergeProjectSummaries(
     // The account decides how it stores the project: a device record from
     // before it was encrypted must not make it look openable again.
     const storageFormat = project.storageFormat ?? existing.storageFormat;
+    // A size describes one version. The newer record's own measure wins; an
+    // unmeasured one borrows the other's only when both hold that version,
+    // so a device projection from before sizes were recorded still shows
+    // the account's figure without passing off an older version's.
+    const older = newest === project ? existing : project;
+    const documentBytes =
+      newest.documentBytes ??
+      (newest.documentVersion !== undefined &&
+      older.documentVersion === newest.documentVersion
+        ? older.documentBytes
+        : undefined);
     const summary = {
       ...newest,
+      ...(documentBytes !== undefined ? { documentBytes } : {}),
       ...(pending ? { name: existing.name } : {}),
       ...(thumbnailArtifactId ? { thumbnailArtifactId } : {}),
       ...(organization ? { organization } : {}),

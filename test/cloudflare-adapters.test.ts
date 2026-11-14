@@ -852,6 +852,42 @@ describe('cloudflare adapters', () => {
     );
   });
 
+  it('lists each project’s measured document size, and none for an unmeasured row', async () => {
+    const document = createProjectDocument('Sized', toUserId('user_test'));
+    const row = {
+      name: document.name,
+      updated_at: document.derived.updatedAt,
+      document_json: JSON.stringify(document),
+      document_version: document.version,
+      revision_count: 1,
+      status: 'active',
+      pinned: 0,
+      sort_order: 0,
+      deleted_at: null,
+      archived_at: null
+    };
+    const all = vi.fn(async () => ({
+      results: [
+        { ...row, id: 'project_sized', document_bytes: 4321 },
+        // Migration 0010's default on a row nothing measured.
+        { ...row, id: 'project_unmeasured', document_bytes: 0 }
+      ]
+    }));
+    const prepare = vi.fn((_query: string) => ({
+      // first() answers the storage-format schema probe: not installed.
+      bind: () => ({ all, first: async () => null })
+    }));
+    const service = new D1R2PersistenceService({
+      DB: { prepare } as unknown as D1Database
+    });
+
+    const listed = await service.listProjects(toUserId('user_test'));
+
+    expect(firstQuery(prepare)).toContain('p.document_bytes');
+    expect(listed.projects[0]?.documentBytes).toBe(4321);
+    expect(listed.projects[1]).not.toHaveProperty('documentBytes');
+  });
+
   it('reads shelf state out of the D1 project row', async () => {
     const document = createProjectDocument('Shelved', toUserId('user_test'));
     const all = vi.fn(async () => ({
