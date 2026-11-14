@@ -152,6 +152,16 @@
     min-height: 44px;
   }
 
+  /* A hidden name or email is its own reveal button, and the profile's two
+     sit one above the other, so a reach would land on the other. Each is
+     drawn 44 px tall instead; the row grows rather than overlapping. */
+  .private-text {
+    display: inline-flex;
+    align-items: center;
+    min-width: 44px;
+    min-height: 44px;
+  }
+
   /* Rows that hold a 44 px control. */
   .assistant-head {
     height: 44px;

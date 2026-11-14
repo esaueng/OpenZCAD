@@ -97,12 +97,29 @@ describe('private text', () => {
     const standIn = standInFor(value);
     expect(standIn).toHaveLength(value.length);
     expect(standIn).not.toBe(value);
-    expect(standIn.replace(/[\p{L}\p{N}]/gu, 'x')).toBe(
-      value.replace(/[\p{L}\p{N}]/gu, 'x')
-    );
+    // Only @, dots and spaces stay where they were.
+    const shape = (text: string) => text.replace(/[^@.\s]/gu, 'x');
+    expect(shape(standIn)).toBe(shape(value));
+    for (const [index, char] of [...value].entries()) {
+      if (/[^@.\s]/u.test(char) && /[^\p{L}\p{N}]/u.test(char)) {
+        expect(standIn[index], `punctuation "${char}" kept`).not.toBe(char);
+      }
+    }
     // The same value keeps the same stand-in, so a re-render does not flicker.
     expect(standInFor(value)).toBe(standIn);
-    // A value with nothing to scramble still returns.
-    expect(standInFor('@.')).toBe('@.');
+  });
+
+  // Review of #1483: punctuation and emoji passed through unchanged, so an
+  // account named "___" showed its real name while hidden.
+  it('never shows a value with no letters or digits as itself', () => {
+    for (const value of ['___', '🙂🙂', '@.', ' ', '-+-']) {
+      const standIn = standInFor(value);
+      expect(standIn, value).not.toBe(value);
+      expect([...standIn], value).toHaveLength([...value].length);
+    }
+    render(
+      <PrivateText value="___" visible={false} onChange={() => undefined} />
+    );
+    expect(document.body.innerHTML).not.toContain('___');
   });
 });

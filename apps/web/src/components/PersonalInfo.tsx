@@ -32,31 +32,37 @@ export function usePersonalInfoVisible() {
 }
 
 // A stand-in for each hidden value, made once per value and page load: the
-// same shape (length, @, dots, spaces), none of the characters, so a blurred
-// screenshot cannot be sharpened back into the real text.
+// same shape (length, @, dots and spaces), none of the characters, so a
+// blurred screenshot cannot be sharpened back into the real text. Only those
+// separators survive; every other character, punctuation and emoji included,
+// is replaced, so a name like "___" or "🙂" is not shown as itself.
 const standIns = new Map<string, string>();
 const LOWER = 'abcdefghijklmnopqrstuvwxyz0123456789';
 const UPPER = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+const KEPT = /^[@.\s]$/u;
 
 function pick(alphabet: string) {
   return alphabet[Math.floor(Math.random() * alphabet.length)]!;
 }
 
+function scramble(value: string, keepSeparators: boolean) {
+  return Array.from(value, (char) =>
+    keepSeparators && KEPT.test(char)
+      ? char
+      : /\p{Lu}/u.test(char)
+        ? pick(UPPER)
+        : pick(LOWER)
+  ).join('');
+}
+
 export function standInFor(value: string) {
   let standIn = standIns.get(value);
   if (standIn === undefined) {
-    const scramble = () =>
-      Array.from(value, (char) =>
-        /[A-Z]/.test(char)
-          ? pick(UPPER)
-          : /[\p{L}\p{N}]/u.test(char)
-            ? pick(LOWER)
-            : char
-      ).join('');
-    standIn = scramble();
-    // A stand-in that happens to spell the value would show it.
-    while (standIn === value && /[\p{L}\p{N}]/u.test(value)) {
-      standIn = scramble();
+    standIn = scramble(value, true);
+    // Nothing but separators ("@.", " ") would come back as itself, and any
+    // stand-in that happens to spell the value would show it.
+    while (standIn === value && value.length > 0) {
+      standIn = scramble(value, false);
     }
     standIns.set(value, standIn);
   }
