@@ -560,6 +560,59 @@ describe('encrypted project pins', () => {
       ).toBe(false);
     });
 
+    it('sweeps records a stale tab left under older generations, never a newer one', () => {
+      const values = new Map<string, string>();
+      const storage = {
+        values,
+        getItem: (key: string) => values.get(key) ?? null,
+        setItem: (key: string, value: string) => {
+          values.set(key, value);
+        },
+        removeItem: (key: string) => {
+          values.delete(key);
+        },
+        key: (index: number) => [...values.keys()][index] ?? null,
+        get length() {
+          return values.size;
+        }
+      };
+      const projectId = 'proj_sweep';
+      const generation = (offsetMs: number) =>
+        `${(Date.now() + offsetMs).toString(36)}.tab`;
+      const older = generation(-60_000);
+      const newer = generation(3_600_000);
+      // Left by tabs that wrote under generations no reset of this tab saw.
+      for (const tag of [NO_RESET, older]) {
+        storage.setItem(encryptedProjectPinKey(projectId, tag), tag);
+        storage.setItem(encryptCutoverUnresolvedKey(projectId, tag), tag);
+      }
+      // One another tab wrote after a reset this tab has not seen yet, and
+      // one whose generation cannot be dated.
+      storage.setItem(encryptedProjectPinKey(projectId, newer), newer);
+      storage.setItem(`${ENCRYPTED_PROJECT_PIN_PREFIX}${projectId}:odd`, 'x');
+      // Another project's old record is not this reset's.
+      storage.setItem(encryptedProjectPinKey('proj_other', older), older);
+
+      localStorageEncryptedProjectPins(storage).resetProject(projectId);
+
+      const saved = storage.getItem(ENCRYPTED_PROJECT_RESET_PREFIX + projectId);
+      expect(saved).not.toBeNull();
+      expect(
+        [...values.keys()]
+          .filter((key) => key.includes(projectId))
+          .filter((key) => !key.startsWith(ENCRYPTED_PROJECT_RESET_PREFIX))
+          .sort()
+      ).toEqual(
+        [
+          encryptedProjectPinKey(projectId, newer),
+          `${ENCRYPTED_PROJECT_PIN_PREFIX}${projectId}:odd`
+        ].sort()
+      );
+      expect(values.has(encryptedProjectPinKey('proj_other', older))).toBe(
+        true
+      );
+    });
+
     it('resolves only the unresolved record it wrote, never a newer one', () => {
       const storage = memoryStorage();
       const first = localStorageEncryptedProjectPins(storage);

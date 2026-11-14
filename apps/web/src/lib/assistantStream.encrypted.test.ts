@@ -9,6 +9,12 @@ import { desktopFetch } from './desktopBridge';
 
 const encrypted = vi.hoisted(() => new Set<string>());
 vi.mock('./api', () => ({
+  ApiError: class ApiError extends Error {
+    code?: string;
+  },
+  E2EE_CUTOVER_UNRESOLVED_CODE: 'E2EE_CUTOVER_UNRESOLVED',
+  E2EE_PLAINTEXT_REFUSED_CODE: 'E2EE_PLAINTEXT_REFUSED',
+  encryptCutoverUnresolved: () => false,
   isEncryptedProject: (projectId: string | null | undefined) =>
     projectId ? encrypted.has(projectId) : false
 }));
@@ -38,7 +44,10 @@ describe('the assistant and this page’s encrypted-project marker', () => {
       ENCRYPTED_PROJECT_ASSISTANT_NOTICE
     );
     expect(
-      assistantDisabledReason({ storageFormat: 2 }, { status: { kind: 'ready' } })
+      assistantDisabledReason(
+        { storageFormat: 2 },
+        { status: { kind: 'ready' } }
+      )
     ).toBeNull();
     expect(assistantDisabledReason(undefined)).toBeNull();
   });

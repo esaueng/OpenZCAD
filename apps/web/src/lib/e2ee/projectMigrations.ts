@@ -40,7 +40,7 @@ import {
   type OwnerConfirmation
 } from '../api';
 import { desktopFetch } from '../desktopBridge';
-import { ungatedFetch } from '../projectWriteGate';
+import { migrationRun } from '../projectWriteGate';
 import { flushProjectEdits, setMigratingProjects } from '../migrationStatus';
 import type { InvitationContext } from './invitations';
 import { getKeySessionRevision } from './keySession';
@@ -251,8 +251,11 @@ export function createMigrationController(
   deps: MigrationControllerDeps
 ): MigrationController {
   // This run is what resolves an unfinished switch, so its own requests
-  // pass the project write gate (`projectWriteGate.ts`).
-  const fetcher = deps.fetcher ?? ungatedFetch(desktopFetch);
+  // pass the project write gate (`projectWriteGate.ts`): only those for
+  // the project it is encrypting or cancelling now, to that project's
+  // encrypted routes.
+  const run = migrationRun('encrypt');
+  const fetcher = deps.fetcher ?? run.fetch(desktopFetch);
   const migrations = deps.migrations ?? createProjectMigrationsApi(fetcher);
   const plaintext = deps.plaintext ?? createMigrationPlaintextSource(fetcher);
   const locks =
@@ -627,7 +630,9 @@ export function createMigrationController(
         // its members is checked again on every run).
         if (!wanted && progress?.phase === 'error') continue;
         try {
-          await (await engineFor()).migrate(project, signal);
+          await run.during(project.projectId, async () =>
+            (await engineFor()).migrate(project, signal)
+          );
         } catch (error) {
           if (error instanceof MigrationPausedError) break;
           // Reported on the project by the engine (an error, or members
@@ -739,7 +744,9 @@ export function createMigrationController(
       if (state.running) return;
       const project = summaries.find((p) => p.projectId === projectId);
       try {
-        await (await engineFor()).cancel(projectId);
+        await run.during(projectId, async () =>
+          (await engineFor()).cancel(projectId)
+        );
         if (project) update(waiting(project));
       } catch (error) {
         if (project) {

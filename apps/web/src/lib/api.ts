@@ -74,6 +74,7 @@ import { desktopFetch, isDesktopApp } from './desktopBridge';
 import type * as EncryptedProjectsModule from './e2ee/encryptedProjects';
 import { localStoragePreferencePins } from './e2ee/preferencePins';
 import {
+  contentFreeCreate,
   installProjectWriteGate,
   projectRequest,
   type ProjectRequestContext,
@@ -515,12 +516,28 @@ export function plaintextRefusedError(
  * tab may not write, and no plaintext of a project this device holds as
  * encrypted now, whatever its sender decided before it awaited anything.
  * This device's own decrypt run stages plaintext before its cutover.
+ *
+ * An assistant request is not a write of its project, but carries its
+ * content in plaintext: refused for a project this device holds as
+ * encrypted, or whose switch to encryption did not finish here, unless
+ * this account's assistant consent verified for that very project
+ * (ADR-024 Phase 6), and refused in a tab that must reload first.
  */
 const checkProjectSend: ProjectWriteCheck = ({
   projectId,
   payload,
-  migration
+  migration,
+  assistant
 }) => {
+  if (assistant) {
+    const pins = encryptedProjectPins();
+    if (pins.resetElsewhere(projectId)) throw pinsResetElsewhere({ projectId });
+    if (assistant.consented) return;
+    if (isEncryptedProject(projectId) || pins.cutoverUnresolved(projectId)) {
+      throw plaintextRefusedError({ projectId });
+    }
+    return;
+  }
   requireProjectWritable(projectId);
   if (
     payload === 'plaintext' &&
@@ -856,6 +873,24 @@ export function encryptedLocalOnly(what: string): ApiError {
  */
 export function isEncryptedProject(projectId: string | null | undefined) {
   return projectId ? encryptedProjectPins().has(projectId) : false;
+}
+
+/**
+ * Whether this device holds what it knows of the project's encryption: it
+ * is pinned as encrypted, its switch to encryption did not finish here, or
+ * another tab reset it. A cached copy of such a project is never device
+ * only, whatever the account's listing leaves out: it is not offered to
+ * be saved to the account as a new project, and an adoption of it is only
+ * ever encrypted (`adoptProject`).
+ */
+export function encryptionHeldHere(
+  projectId: string | null | undefined
+): boolean {
+  return (
+    isEncryptedProject(projectId) ||
+    encryptCutoverUnresolved(projectId) ||
+    encryptedProjectResetElsewhere(projectId)
+  );
 }
 
 export const E2EE_PREFERENCE_UNVERIFIED_CODE = 'E2EE_PREFERENCE_UNVERIFIED';
@@ -1208,15 +1243,22 @@ export const api = {
     if (await encryptsNewProjects()) {
       return encrypted();
     }
+    // The new project's own document, in plaintext; a create without one
+    // has the account build it, and sends no project's content.
+    const created = payload.initialDocument ?? payload.document;
     try {
-      return await requestJson<CreateProjectResponse>('/api/projects', {
+      const init: RequestInit = {
         method: 'POST',
         body: JSON.stringify(
           payload.initialDocument
             ? await withSplitStorage(payload, 'initialDocument')
             : payload
         )
-      });
+      };
+      return await requestJson<CreateProjectResponse>(
+        '/api/projects',
+        created ? plaintextOf(created.projectId, init) : contentFreeCreate(init)
+      );
     } catch (error) {
       if (
         !payload.document &&
@@ -1238,6 +1280,13 @@ export const api = {
    * checkpoint. The device id travels beside it as the account's retry key,
    * with the archived import ids localization removed, so a discarded mesh
    * upload still refuses the adoption.
+   *
+   * The device copy of a project this device holds as encrypted (an
+   * account listing that leaves it out makes it look device only) is only
+   * ever adopted encrypted, and not at all while its switch to encryption
+   * is unfinished here or another tab reset it. The plaintext adoption
+   * declares the device project it comes from, so the gate checks that
+   * project again immediately before the document is sent.
    */
   adoptProject: (
     document: ProjectDocument,
@@ -1258,23 +1307,26 @@ export const api = {
         ownerUserId,
         prepared.name
       );
-      return requestJson<CreateProjectResponse>('/api/projects', {
-        method: 'POST',
-        body: JSON.stringify(
-          await withSplitStorage(
-            {
-              name: prepared.name,
-              adoptionProtocolVersion: 2,
-              localProjectId: prepared.projectId,
-              ...(options.sourceArtifactIds?.length
-                ? { sourceArtifactIds: options.sourceArtifactIds }
-                : {}),
-              document: withoutDerivedProjection(adopted)
-            },
-            'document'
+      return requestJson<CreateProjectResponse>(
+        '/api/projects',
+        plaintextOf(prepared.projectId, {
+          method: 'POST',
+          body: JSON.stringify(
+            await withSplitStorage(
+              {
+                name: prepared.name,
+                adoptionProtocolVersion: 2,
+                localProjectId: prepared.projectId,
+                ...(options.sourceArtifactIds?.length
+                  ? { sourceArtifactIds: options.sourceArtifactIds }
+                  : {}),
+                document: withoutDerivedProjection(adopted)
+              },
+              'document'
+            )
           )
-        )
-      });
+        })
+      );
     };
     // An account that encrypts new projects (decision D2) is never sent
     // the plaintext document: the project is created encrypted (slice 4-8),
@@ -1316,7 +1368,14 @@ export const api = {
         throw error;
       }
     };
-    return encryptsNewProjects().then((encrypts) => adopt(encrypts));
+    // Whether the adoption must be encrypted: the device project's own pin
+    // first, then the account's setting (decision D2).
+    const encrypts = async (): Promise<boolean> => {
+      requireProjectWritable(prepared.projectId);
+      if (isEncryptedProject(prepared.projectId)) return true;
+      return encryptsNewProjects();
+    };
+    return encrypts().then((encrypted) => adopt(encrypted));
   },
   loadProject: (projectId: string) =>
     byFormat(

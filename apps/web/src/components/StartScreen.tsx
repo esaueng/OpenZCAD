@@ -98,7 +98,7 @@ import {
 } from '../lib/projectShelf';
 import { syncRunTotals, type SyncEntry } from '../lib/syncRun';
 import { useMigrationLockedProjects } from '../lib/migrationStatus';
-import { encryptedPinProblem } from '../lib/api';
+import { encryptedPinProblem, encryptionHeldHere } from '../lib/api';
 import { pinProblemText, useEncryptedPins } from './EncryptedPinReset';
 import type { DemoDefinition } from '../lib/demoDefinitions';
 import { BrandMark } from './BrandMark';
@@ -809,12 +809,15 @@ export function StartScreen({
   // Demos are rebuilt from their definitions on any device, so they are not
   // work to rescue and would only pad the offer. Trashed projects are excluded
   // for the same reason in reverse: uploading something on its way out is not
-  // what "save my work" means.
+  // what "save my work" means. A project this device holds as encrypted is
+  // never device only, whatever the account's listing leaves out (PR #1418):
+  // saving its cached copy would send it to the account as a new project.
   const localOnlyProjects =
     signedIn && accountProjectListReached
       ? userProjects.filter(
           (project) =>
             !cloudProjectIds.has(project.projectId) &&
+            !encryptionHeldHere(project.projectId) &&
             projectOrganization(project).status !== 'deleted'
         )
       : [];
@@ -1888,7 +1891,8 @@ export function StartScreen({
     const localOnly =
       signedIn &&
       accountProjectListReached &&
-      !cloudProjectIds.has(project.projectId);
+      !cloudProjectIds.has(project.projectId) &&
+      !encryptionHeldHere(project.projectId);
     const conflicted = conflictedProjectIds.has(project.projectId);
     const syncEntry = syncEntryById.get(project.projectId);
     const recoveryOf = recoveryCopyOf(project.name);

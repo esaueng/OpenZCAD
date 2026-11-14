@@ -8,15 +8,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
 import { createProjectDocument } from '@openzcad/document-core';
-import { toProjectId, toUserId, type ProjectDocument } from '@openzcad/shared';
+import {
+  PROJECT_STORAGE_FORMAT_E2EE_V1,
+  toProjectId,
+  toUserId,
+  type ProjectDocument
+} from '@openzcad/shared';
+import type { CadDocumentDigest } from '@openzcad/ai-contracts';
 import {
   api,
   ApiError,
   E2EE_CUTOVER_UNRESOLVED_CODE,
   E2EE_PINS_RESET_ELSEWHERE_CODE,
   E2EE_PLAINTEXT_REFUSED_CODE,
-  isEncryptedProject
+  isEncryptedProject,
+  rememberProjectFormats
 } from './api';
+import { AssistantStreamError, streamAssistantReply } from './assistantStream';
 import { archiveArtifact } from './archiveArtifact';
 import { uploadArtifactBody } from './artifactUpload';
 import { uploadCloudThumbnail } from './cloudThumbnail';
@@ -25,9 +33,9 @@ import { uploadTransport } from './e2ee/encryptedContentBlobs';
 import { localStorageEncryptedProjectPins } from './e2ee/encryptedProjectPins';
 import { projectMeasurementCloudApi } from './measurementCloudSync';
 import {
+  migrationRun,
   projectRequest,
   sendProjectFrame,
-  ungatedFetch,
   UndeclaredProjectRequestError
 } from './projectWriteGate';
 import { workspaceSessionApi } from './workspaceResume';
@@ -255,6 +263,47 @@ describe('every content path declares its request context', () => {
     ).toHaveLength(2);
   });
 
+  it('a new project and an adoption, by the device project it comes from', async () => {
+    const created = freshDocument();
+    await api.createProject({ name: created.name, initialDocument: created });
+    expectDeclaredProjectContext(network.mock.calls, {
+      projectId: created.projectId,
+      payload: 'plaintext'
+    });
+    network.mockClear();
+    const device = freshDocument();
+    await api.adoptProject(device, toUserId('user_ctx')).catch(() => undefined);
+    // The adoption mints the account's id; it declares the device's own.
+    expectDeclaredProjectContext(network.mock.calls, {
+      projectId: device.projectId,
+      payload: 'plaintext'
+    });
+  });
+
+  it('an assistant request, about its project', async () => {
+    const projectId = 'proj_ctx_assistant';
+    await streamAssistantReply({
+      prompt: 'Make the wall 3 mm',
+      digest: assistantDigest(projectId)
+    }).catch(() => undefined);
+    expectDeclaredProjectContext(network.mock.calls, {
+      projectId,
+      payload: 'plaintext'
+    });
+  });
+
+  it.each([
+    ['an import’s finalize', '/api/imports/finalize'],
+    ['an archived file’s finalize', '/api/artifacts/finalize'],
+    ['a create', '/api/projects'],
+    ['an assistant request', '/api/assistant/proposals']
+  ])('refuses %s that declared nothing', async (_name, path) => {
+    await expect(
+      desktopFetch(path, { method: 'POST', body: '{}' })
+    ).rejects.toBeInstanceOf(UndeclaredProjectRequestError);
+    expect(network).not.toHaveBeenCalled();
+  });
+
   it('refuses a content request that declared nothing, sending nothing', async () => {
     for (const path of [
       '/api/projects/proj_ctx_bare/document',
@@ -445,19 +494,22 @@ describe('the desktop app checks again immediately before the native send', () =
     otherTab().pin(projectId);
     otherTab().markCutoverUnresolved(projectId);
     let ordinary: Promise<unknown> | null = null;
-    const migration = ungatedFetch(desktopFetch)(
-      `/api/e2ee/projects/${projectId}/migration/cutover`,
-      {
-        method: 'POST',
-        body: bodyReading(() => {
-          // An ordinary write started while the migration's request
-          // awaits its body: the exemption is not its.
-          ordinary = desktopFetch(`/api/e2ee/projects/${projectId}/document`, {
-            method: 'PUT',
-            body: '{}'
-          });
-        })
-      }
+    const run = migrationRun('encrypt');
+    const migration = run.during(projectId, () =>
+      run.fetch(desktopFetch)(
+        `/api/e2ee/projects/${projectId}/migration/cutover`,
+        {
+          method: 'POST',
+          body: bodyReading(() => {
+            // An ordinary write started while the migration's request
+            // awaits its body: the exemption is not its.
+            ordinary = desktopFetch(
+              `/api/e2ee/projects/${projectId}/document`,
+              { method: 'PUT', body: '{}' }
+            );
+          })
+        }
+      )
     );
     expect((await migration).status).toBe(200);
     expect(await codeOf(ordinary!)).toBe(E2EE_CUTOVER_UNRESOLVED_CODE);
@@ -466,5 +518,327 @@ describe('the desktop app checks again immediately before the native send', () =
         ([, args]) => (args as { request: { path: string } }).request.path
       )
     ).toEqual([`/api/e2ee/projects/${projectId}/migration/cutover`]);
+  });
+});
+
+function assistantDigest(projectId: string): CadDocumentDigest {
+  return { projectId, name: 'Bracket' } as unknown as CadDocumentDigest;
+}
+
+describe('a project the account’s listing leaves out', () => {
+  /** Listed encrypted once, then left out of the next listing. */
+  function pinnedThenOmitted(document: ProjectDocument): void {
+    rememberProjectFormats([
+      {
+        projectId: document.projectId,
+        storageFormat: PROJECT_STORAGE_FORMAT_E2EE_V1
+      }
+    ]);
+    rememberProjectFormats([
+      { projectId: toProjectId('proj_listed_other'), storageFormat: 1 }
+    ]);
+  }
+
+  const plaintextCreates = () =>
+    sentPaths().filter((sent) => /^POST \/api\/projects\/?$/.test(sent));
+
+  it('is never adopted from its device copy in plaintext', async () => {
+    const device = freshDocument();
+    pinnedThenOmitted(device);
+    expect(isEncryptedProject(device.projectId)).toBe(true);
+    // The account does not encrypt new projects (its config is off here):
+    // the device project's own pin decides, so only an encrypted adoption
+    // is tried, and nothing goes to the plaintext create.
+    await expect(
+      api.adoptProject(device, toUserId('user_ctx'))
+    ).rejects.toBeDefined();
+    expect(plaintextCreates()).toEqual([]);
+  });
+
+  it('is not adopted at all while its switch to encryption is unfinished', async () => {
+    const device = freshDocument();
+    otherTab().pin(device.projectId);
+    otherTab().markCutoverUnresolved(device.projectId);
+    expect(await codeOf(api.adoptProject(device, toUserId('user_ctx')))).toBe(
+      E2EE_CUTOVER_UNRESOLVED_CODE
+    );
+    expect(sentPaths()).toEqual([]);
+  });
+
+  it('stops a plaintext adoption when the device project is pinned meanwhile', async () => {
+    const device = freshDocument();
+    const answer = network.getMockImplementation()!;
+    network.mockImplementation(async (input, init) => {
+      // While the account's setting is read, another tab pins it.
+      if (pathOf(input) === '/api/e2ee/config') {
+        otherTab().pin(device.projectId);
+      }
+      return answer(input, init);
+    });
+    try {
+      expect(await codeOf(api.adoptProject(device, toUserId('user_ctx')))).toBe(
+        E2EE_PLAINTEXT_REFUSED_CODE
+      );
+    } finally {
+      network.mockImplementation(answer);
+    }
+    expect(plaintextCreates()).toEqual([]);
+  });
+});
+
+describe('an assistant request', () => {
+  function desktop(meanwhile: (command: string) => void = () => undefined) {
+    (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ =
+      {};
+    vi.mocked(invoke).mockImplementation(async (command: string) => {
+      meanwhile(command);
+      if (command === 'desktop_prepare_access') return true;
+      return {
+        status: 200,
+        body: Array.from(new TextEncoder().encode('{}')),
+        contentType: 'application/json'
+      };
+    });
+  }
+
+  const nativeSends = () =>
+    vi
+      .mocked(invoke)
+      .mock.calls.filter(([command]) => command === 'desktop_api_request');
+
+  it('sends nothing of a project pinned while the desktop app readies its credential', async () => {
+    // Reproduced: the panel saw a plaintext project, the request awaited
+    // the native host, and another tab pinned the project meanwhile.
+    const projectId = 'proj_assistant_native';
+    desktop((command) => {
+      if (command === 'desktop_prepare_access') otherTab().pin(projectId);
+    });
+    const reply = streamAssistantReply({
+      prompt: 'Make the wall 3 mm',
+      digest: assistantDigest(projectId)
+    });
+    await expect(reply).rejects.toBeInstanceOf(AssistantStreamError);
+    await expect(reply).rejects.toMatchObject({ code: 'AI_E2EE_PROJECT' });
+    expect(nativeSends()).toEqual([]);
+  });
+
+  it('sends nothing of a project whose switch is marked unresolved meanwhile', async () => {
+    const projectId = 'proj_assistant_unresolved';
+    desktop((command) => {
+      if (command === 'desktop_prepare_access') {
+        otherTab().pin(projectId);
+        otherTab().markCutoverUnresolved(projectId);
+      }
+    });
+    await expect(
+      streamAssistantReply({ prompt: 'Hi', digest: assistantDigest(projectId) })
+    ).rejects.toMatchObject({ code: 'AI_E2EE_PROJECT' });
+    expect(nativeSends()).toEqual([]);
+  });
+
+  it('carries only that project’s verified consent', async () => {
+    const projectId = 'proj_assistant_consented';
+    otherTab().pin(projectId);
+    desktop();
+    await streamAssistantReply({
+      prompt: 'Hi',
+      digest: assistantDigest(projectId),
+      consentedProjectId: projectId
+    }).catch(() => undefined);
+    // Sent (an empty reply is retried once).
+    expect(nativeSends().length).toBeGreaterThan(0);
+    // Without that consent on the request itself, nothing is sent.
+    vi.mocked(invoke).mockClear();
+    await expect(
+      desktopFetch(
+        '/api/assistant/proposals',
+        projectRequest(
+          { projectId, payload: 'plaintext' },
+          { method: 'POST', body: '{}' }
+        )
+      )
+    ).rejects.toMatchObject({ code: E2EE_PLAINTEXT_REFUSED_CODE });
+    expect(nativeSends()).toEqual([]);
+  });
+});
+
+describe('the desktop app’s credential for a project request', () => {
+  const nativeCommands = () =>
+    vi
+      .mocked(invoke)
+      .mock.calls.map(([command, args]) =>
+        command === 'desktop_api_request' &&
+        (args as { request: { prepared?: boolean } }).request.prepared
+          ? `${command} prepared`
+          : command
+      );
+
+  function desktop(
+    statuses: number[],
+    meanwhile: () => void = () => undefined
+  ) {
+    (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ =
+      {};
+    let readied = 0;
+    vi.mocked(invoke).mockImplementation(async (command: string) => {
+      if (command === 'desktop_prepare_access') {
+        readied += 1;
+        if (readied > 1) meanwhile();
+        return true;
+      }
+      return {
+        status: statuses.shift() ?? 200,
+        body: Array.from(new TextEncoder().encode('{}')),
+        contentType: 'application/json'
+      };
+    });
+  }
+
+  const save = (projectId: string) =>
+    desktopFetch(
+      `/api/projects/${projectId}/document`,
+      projectRequest(
+        { projectId, payload: 'plaintext' },
+        { method: 'PUT', body: '{}' }
+      )
+    );
+
+  it('is readied before the gate’s last check, and sent without a refresh', async () => {
+    desktop([200]);
+    expect((await save('proj_native_prepared')).status).toBe(200);
+    expect(nativeCommands()).toEqual([
+      'desktop_prepare_access',
+      'desktop_api_request prepared'
+    ]);
+  });
+
+  it('checks the gate again before the one retry after a 401', async () => {
+    const projectId = 'proj_native_retry';
+    // The account refuses the credential; while a fresh one is readied,
+    // another tab pins the project.
+    desktop([401], () => otherTab().pin(projectId));
+    expect(await codeOf(save(projectId))).toBe(E2EE_PLAINTEXT_REFUSED_CODE);
+    expect(nativeCommands()).toEqual([
+      'desktop_prepare_access',
+      'desktop_api_request prepared',
+      'desktop_prepare_access'
+    ]);
+  });
+
+  it('retries once with a fresh credential when nothing changed', async () => {
+    desktop([401, 401]);
+    expect((await save('proj_native_retried')).status).toBe(401);
+    expect(nativeCommands()).toEqual([
+      'desktop_prepare_access',
+      'desktop_api_request prepared',
+      'desktop_prepare_access',
+      'desktop_api_request prepared'
+    ]);
+  });
+
+  it('leaves other requests to Rust as before', async () => {
+    desktop([200]);
+    await desktopFetch('/api/settings', { method: 'PATCH', body: '{}' });
+    expect(nativeCommands()).toEqual(['desktop_api_request']);
+  });
+});
+
+describe('a migration run’s exemption', () => {
+  function desktop() {
+    (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ =
+      {};
+    vi.mocked(invoke).mockResolvedValue({
+      status: 200,
+      body: Array.from(new TextEncoder().encode('{}')),
+      contentType: 'application/json'
+    });
+  }
+
+  const nativePaths = () =>
+    vi
+      .mocked(invoke)
+      .mock.calls.filter(([command]) => command === 'desktop_api_request')
+      .map(([, args]) => (args as { request: { path: string } }).request.path);
+
+  it('covers the encrypt run’s own project, through its encrypted routes, while it works on it', async () => {
+    desktop();
+    const projectId = 'proj_run_encrypting';
+    const other = 'proj_run_other';
+    for (const id of [projectId, other]) {
+      otherTab().pin(id);
+      otherTab().markCutoverUnresolved(id);
+    }
+    const run = migrationRun('encrypt');
+    const fetcher = run.fetch(desktopFetch);
+    const post = (path: string) =>
+      fetcher(path, { method: 'POST', body: '{}' });
+    await run.during(projectId, async () => {
+      expect(
+        (await post(`/api/e2ee/projects/${projectId}/migration/cutover`)).status
+      ).toBe(200);
+      // Another project, while this one runs.
+      expect(
+        await codeOf(post(`/api/e2ee/projects/${other}/migration/cutover`))
+      ).toBe(E2EE_CUTOVER_UNRESOLVED_CODE);
+      // A plaintext route of the run's own project.
+      expect(
+        await codeOf(
+          fetcher(
+            `/api/projects/${projectId}/document`,
+            projectRequest(
+              { projectId, payload: 'plaintext' },
+              { method: 'PUT', body: '{}' }
+            )
+          )
+        )
+      ).toBe(E2EE_CUTOVER_UNRESOLVED_CODE);
+    });
+    // Once the run's work on it is over.
+    expect(
+      await codeOf(post(`/api/e2ee/projects/${projectId}/migration/cutover`))
+    ).toBe(E2EE_CUTOVER_UNRESOLVED_CODE);
+    expect(nativePaths()).toEqual([
+      `/api/e2ee/projects/${projectId}/migration/cutover`
+    ]);
+  });
+
+  it('lets the decrypt run stage only its own project’s plaintext, through its staging routes', async () => {
+    desktop();
+    const projectId = 'proj_run_decrypting';
+    const other = 'proj_run_decrypt_other';
+    otherTab().pin(projectId);
+    otherTab().pin(other);
+    const run = migrationRun('decrypt');
+    const fetcher = run.fetch(desktopFetch);
+    const put = (path: string, init: RequestInit = {}) =>
+      fetcher(path, { ...init, method: 'PUT', body: '{}' });
+    await run.during(projectId, async () => {
+      expect((await put(`/api/projects/${projectId}/document`)).status).toBe(
+        200
+      );
+      expect(
+        (
+          await put(
+            `/api/e2ee/projects/${projectId}/migration/plaintext/details`
+          )
+        ).status
+      ).toBe(200);
+      expect(
+        await codeOf(
+          put(
+            `/api/projects/${other}/document`,
+            projectRequest({ projectId: other, payload: 'plaintext' })
+          )
+        )
+      ).toBe(E2EE_PLAINTEXT_REFUSED_CODE);
+      // Not a route the run stages through.
+      await expect(
+        put(`/api/projects/${projectId}/measurements`)
+      ).rejects.toBeInstanceOf(UndeclaredProjectRequestError);
+    });
+    expect(nativePaths()).toEqual([
+      `/api/projects/${projectId}/document`,
+      `/api/e2ee/projects/${projectId}/migration/plaintext/details`
+    ]);
   });
 });

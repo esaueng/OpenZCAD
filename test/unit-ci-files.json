@@ -303,6 +303,7 @@
     "src/lib/projectBackupWorkerClient.test.ts",
     "src/lib/projectProperties.test.ts",
     "src/lib/projectRequestContext.test.ts",
+    "src/lib/projectRouteInventory.test.ts",
     "src/lib/projectShelf.test.ts",
     "src/lib/projectShelfNames.test.ts",
     "src/lib/projectTabOwnership.test.ts",

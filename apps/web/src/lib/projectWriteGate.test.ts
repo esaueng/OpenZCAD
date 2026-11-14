@@ -27,9 +27,9 @@ import { createReplacedEnvelopesApi } from './e2ee/replacedEnvelopes';
 import { createProjectMigrationsApi } from './e2ee/projectMigrationsApi';
 import { loadEncryptedRoomCodec } from './e2ee/encryptedRoomCodec';
 import {
+  migrationRun,
   projectRequest,
   projectWriteBlocked,
-  ungatedFetch,
   UnownedProjectWriteError
 } from './projectWriteGate';
 import { uploadArtifactBody } from './artifactUpload';
@@ -316,11 +316,20 @@ describe('a switch to encryption this device did not see finish', () => {
   });
 
   it('lets this device’s own encrypt run resolve it', async () => {
-    const migrations = createProjectMigrationsApi(ungatedFetch(desktopFetch));
-    await migrations.cutover(projectId, 'lease_1').catch(() => undefined);
+    const run = migrationRun('encrypt');
+    const migrations = createProjectMigrationsApi(run.fetch(desktopFetch));
+    await run.during(projectId, () =>
+      migrations.cutover(projectId, 'lease_1').catch(() => undefined)
+    );
     expect(network.mock.calls.map(([input]) => pathOf(input))).toContain(
       `/api/e2ee/projects/${projectId}/migration/cutover`
     );
+    // The run's fetcher outside its work on the project is checked as any.
+    network.mockClear();
+    expect(await codeOf(migrations.cutover(projectId, 'lease_1'))).toBe(
+      E2EE_CUTOVER_UNRESOLVED_CODE
+    );
+    expect(network).not.toHaveBeenCalled();
     // Only that call: the next ordinary one is refused again.
     network.mockClear();
     expect(

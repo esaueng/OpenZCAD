@@ -562,7 +562,13 @@ describe('desktop bridge', () => {
       vi.mocked(invoke).mockReset();
       vi.mocked(invoke).mockResolvedValue({ status: 200, body: [] });
       await desktopFetch(path, init);
-      expect(nativeCommands(), path).toEqual(['desktop_api_request']);
+      // A project write readies its credential first (projectWriteGate.ts).
+      expect(
+        nativeCommands().filter(
+          (command) => command !== 'desktop_prepare_access'
+        ),
+        path
+      ).toEqual(['desktop_api_request']);
     }
   });
 

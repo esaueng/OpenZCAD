@@ -46,9 +46,11 @@
  * checked an older generation and writes after another tab reset the
  * project writes a key nobody reads: it cannot undo that reset, nor
  * overwrite a pin or record another tab made under the newer generation,
- * however the tabs' storage operations interleave. A reset removes only
- * the records of the generations it replaced, never one of a newer
- * generation another tab may have written meanwhile. A record kept under
+ * however the tabs' storage operations interleave. A reset removes the
+ * records of the generations it replaced, and those of any generation
+ * saved before it that a stale tab left behind, never one of the
+ * generation saved now or of a newer one another tab may have written
+ * meanwhile. A record kept under
  * the bare `<prefix><projectId>` (written before records had generation
  * keys) still counts unless it names an older generation, as is safe.
  *
@@ -210,7 +212,20 @@ export function encryptCutoverUnresolvedKey(
   return `${ENCRYPTED_PROJECT_UNRESOLVED_PREFIX}${projectId}:${generation}`;
 }
 
-type PinStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
+type PinStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> &
+  Partial<Pick<Storage, 'key' | 'length'>>;
+
+/**
+ * When a reset generation was saved: 0 for `NO_RESET`, which precedes
+ * every reset; null for a value that is not a generation, whose age
+ * nothing here can tell.
+ */
+function generationTime(generation: string): number | null {
+  if (generation === NO_RESET) return 0;
+  if (!GENERATION.test(generation)) return null;
+  const time = parseInt(generation.slice(0, generation.indexOf('.')), 36);
+  return Number.isSafeInteger(time) ? time : null;
+}
 
 function resetToken(): string {
   const random =
@@ -393,6 +408,46 @@ export function localStorageEncryptedProjectPins(
       }
     }
   };
+  /**
+   * Removes the project's records of generations saved before `saved`,
+   * the one a reset just saved, wherever they came from: a tab that wrote
+   * under a generation it had seen before an earlier reset leaves keys no
+   * reset of its own knew. Conservative: never the generation saved now,
+   * nor one saved at the same moment or later (another tab may have reset
+   * and pinned the project again since), nor a key whose generation it
+   * cannot date. Only where storage lists its keys.
+   */
+  const sweepOlderRecords = (projectId: string, saved: string) => {
+    if (!storage || typeof storage.key !== 'function') return;
+    const savedTime = generationTime(saved);
+    if (savedTime === null) return;
+    const prefixes = [
+      `${ENCRYPTED_PROJECT_PIN_PREFIX}${projectId}:`,
+      `${ENCRYPTED_PROJECT_UNRESOLVED_PREFIX}${projectId}:`
+    ];
+    const older: string[] = [];
+    try {
+      const count = storage.length ?? 0;
+      for (let index = 0; index < count; index += 1) {
+        const key = storage.key(index);
+        const prefix = key && prefixes.find((p) => key.startsWith(p));
+        if (!key || !prefix) continue;
+        const generation = key.slice(prefix.length);
+        if (generation === saved) continue;
+        const time = generationTime(generation);
+        if (time !== null && time < savedTime) older.push(key);
+      }
+    } catch {
+      return;
+    }
+    for (const key of older) {
+      try {
+        storage.removeItem(key);
+      } catch {
+        // Not removed: it names a replaced generation, so nothing reads it.
+      }
+    }
+  };
   const stored = (projectId: string): boolean => {
     if (!storage) return false;
     const saved = current(ENCRYPTED_PROJECT_PIN_PREFIX, projectId);
@@ -470,6 +525,7 @@ export function localStorageEncryptedProjectPins(
     if (saved === undefined) return;
     older.delete(saved ?? NO_RESET);
     removeRecords(projectId, older);
+    if (saved !== null) sweepOlderRecords(projectId, saved);
   };
   /**
    * Removes the unresolved record this page wrote, under the generation it

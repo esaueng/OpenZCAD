@@ -387,6 +387,58 @@ async function nativeBlobStream(
   return new Response(body, { status: started.status, headers });
 }
 
+interface NativeApiRequest {
+  method: string;
+  path: string;
+  contentType?: string;
+  body?: number[];
+  shareToken?: string;
+  /**
+   * Send with the credential `desktop_prepare_access` readied, and hand a
+   * 401 back instead of refreshing and replaying the request.
+   */
+  prepared?: true;
+}
+
+/**
+ * A request that writes a project, through Rust. Rust would otherwise
+ * refresh an expiring credential before the send, and refresh and replay
+ * the request after a 401: requests to the account of their own, each an
+ * await the gate's check could not follow. So the credential is readied
+ * first, in a native call of its own (`desktop_prepare_access`); then the
+ * gate checks the request synchronously immediately before the send
+ * (`checkProjectRequest`), with nothing awaited in between; and Rust sends
+ * it with that credential only (`prepared`), returning a 401 here. A 401
+ * after a credential was ready readies a fresh one and is retried once,
+ * checked again immediately before that send.
+ */
+async function sendNativeProjectRequest(
+  invoke: NativeInvoke,
+  native: NativeApiRequest,
+  request: ResolvedProjectRequest,
+  signal: AbortSignal
+): Promise<NativeApiResponse> {
+  for (let attempt = 0; ; attempt += 1) {
+    // A desktop host without a credential answers its own 401 below.
+    const ready = (await invoke<boolean>('desktop_prepare_access')) !== false;
+    if (signal.aborted) {
+      throw new DOMException('The operation was aborted.', 'AbortError');
+    }
+    // Immediately before the native send, after loading Tauri, reading
+    // the body and readying the credential: a pin, an unresolved switch
+    // or a reset noted meanwhile sends nothing. Nothing is awaited
+    // between this check and the invoke.
+    checkProjectRequest(request);
+    const result = await invoke<NativeApiResponse>('desktop_api_request', {
+      request: { ...native, prepared: true }
+    });
+    if (result.status !== 401 || !ready || attempt > 0) return result;
+    if (signal.aborted) {
+      throw new DOMException('The operation was aborted.', 'AbortError');
+    }
+  }
+}
+
 function importTauriCore() {
   return import('@tauri-apps/api/core');
 }
@@ -405,8 +457,9 @@ function tauriCore(): ReturnType<typeof importTauriCore> {
  * plaintext of a project this device holds as encrypted, is refused
  * (`projectWriteGate.ts`): resolved from the request's own context first,
  * then checked again synchronously immediately before `fetch` or the
- * native invoke, after every await here, with nothing awaited between
- * that check and the send.
+ * native invoke, after every await here (for a project request, after
+ * its native credential is readied: `sendNativeProjectRequest`), with
+ * nothing awaited between that check and the send.
  */
 export async function desktopFetch(
   input: RequestInfo | URL,
@@ -460,19 +513,24 @@ async function sendCloudRequest(
   if (signal.aborted) {
     throw new DOMException('The operation was aborted.', 'AbortError');
   }
-  // Immediately before the native send, after loading Tauri and reading
-  // the body: a pin, an unresolved switch or a reset noted meanwhile
-  // sends nothing. Nothing is awaited between this check and the invoke.
-  checkProjectRequest(request);
-  const result = await invoke<NativeApiResponse>('desktop_api_request', {
-    request: {
-      method: init.method ?? 'GET',
-      path,
-      contentType: headers.get('content-type') ?? undefined,
-      body,
-      ...(shareToken ? { shareToken } : {})
-    }
-  });
+  const native: NativeApiRequest = {
+    method: init.method ?? 'GET',
+    path,
+    contentType: headers.get('content-type') ?? undefined,
+    body,
+    ...(shareToken ? { shareToken } : {})
+  };
+  let result: NativeApiResponse;
+  if (request.projectId === null) {
+    // Immediately before the native send, after loading Tauri and reading
+    // the body. Nothing is awaited between this check and the invoke.
+    checkProjectRequest(request);
+    result = await invoke<NativeApiResponse>('desktop_api_request', {
+      request: native
+    });
+  } else {
+    result = await sendNativeProjectRequest(invoke, native, request, signal);
+  }
   assertCloudFunctionsEnabled();
   if (signal.aborted) {
     throw new DOMException('The operation was aborted.', 'AbortError');

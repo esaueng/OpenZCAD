@@ -8,9 +8,16 @@ import {
   type AssistantReply,
   type CadDocumentDigest
 } from '@openzcad/ai-contracts';
-import { isEncryptedProject } from './api';
+import {
+  ApiError,
+  E2EE_CUTOVER_UNRESOLVED_CODE,
+  E2EE_PLAINTEXT_REFUSED_CODE,
+  encryptCutoverUnresolved,
+  isEncryptedProject
+} from './api';
 import { ENCRYPTED_PROJECT_ASSISTANT_NOTICE } from './assistant/encryptedProject';
 import { desktopFetch } from './desktopBridge';
+import { assistantProjectRequest } from './projectWriteGate';
 
 interface AssistantStreamOptions {
   signal?: AbortSignal;
@@ -338,28 +345,52 @@ async function streamAssistantReplyAttempt(
 ): Promise<AssistantReply> {
   // ADR-024 D7 and Phase 6: nothing of an encrypted project reaches the
   // assistant, whichever entry point asked, unless its consent verified.
+  const projectId = request.digest.projectId;
+  const consented = request.consentedProjectId === projectId;
   if (
-    isEncryptedProject(request.digest.projectId) &&
-    request.consentedProjectId !== request.digest.projectId
+    !consented &&
+    (isEncryptedProject(projectId) || encryptCutoverUnresolved(projectId))
   ) {
     throw new AssistantStreamError(
       'AI_E2EE_PROJECT',
       ENCRYPTED_PROJECT_ASSISTANT_NOTICE
     );
   }
-  const response = await desktopFetch('/api/assistant/proposals', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      prompt: request.prompt,
-      digest: request.digest,
-      history: request.history ?? [],
-      attachments: request.attachments ?? [],
-      retryAttempt,
-      operations: CAD_PATCH_OPERATION_KINDS
-    }),
-    signal: options.signal
-  });
+  let response: Response;
+  try {
+    // The digest, conversation and attachments are the project's content
+    // in plaintext: declared as such, with the consent bound to this
+    // project, so the gate checks them again immediately before the send
+    // (`projectWriteGate.ts`) whatever was pinned meanwhile.
+    response = await desktopFetch(
+      '/api/assistant/proposals',
+      assistantProjectRequest(projectId, consented, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          prompt: request.prompt,
+          digest: request.digest,
+          history: request.history ?? [],
+          attachments: request.attachments ?? [],
+          retryAttempt,
+          operations: CAD_PATCH_OPERATION_KINDS
+        }),
+        signal: options.signal
+      })
+    );
+  } catch (error) {
+    if (
+      error instanceof ApiError &&
+      (error.code === E2EE_PLAINTEXT_REFUSED_CODE ||
+        error.code === E2EE_CUTOVER_UNRESOLVED_CODE)
+    ) {
+      throw new AssistantStreamError(
+        'AI_E2EE_PROJECT',
+        ENCRYPTED_PROJECT_ASSISTANT_NOTICE
+      );
+    }
+    throw error;
+  }
   const requestId = safeRequestId(response);
   if (!response.ok || !response.body) {
     const error = (await response.json().catch(() => null)) as {
