@@ -1,4 +1,5 @@
 import {
+  JsonComplexityGuard,
   ownEntry,
   documentNodesWithHistory,
   documentAssetsWithHistory,
@@ -226,6 +227,37 @@ export async function packBackupFile(
     base64: btoa(binary),
     sha256: await checksum(bytes)
   };
+}
+
+/**
+ * A backup file's text, streamed under the size cap and a nesting/size guard
+ * so a hostile file is refused before it is ever handed to `JSON.parse`.
+ */
+export async function readProjectBackupText(file: Blob): Promise<string> {
+  if (file.size > MAX_PROJECT_BACKUP_BYTES)
+    throw new Error('Project backup exceeds the 256 MB limit.');
+  const reader = file.stream().getReader();
+  const decoder = new TextDecoder();
+  const structure = new JsonComplexityGuard(72, 2_000_000);
+  const chunks: string[] = [];
+  let bytes = 0;
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      bytes += chunk.value.byteLength;
+      if (bytes > MAX_PROJECT_BACKUP_BYTES)
+        throw new Error('Project backup exceeds the 256 MB limit.');
+      const text = decoder.decode(chunk.value, { stream: true });
+      structure.consume(text);
+      chunks.push(text);
+    }
+  } finally {
+    await reader.cancel();
+    reader.releaseLock();
+  }
+  chunks.push(decoder.decode());
+  return chunks.join('');
 }
 
 export async function parseProjectBackup(text: string): Promise<ProjectBackup> {

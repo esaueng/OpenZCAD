@@ -67,3 +67,82 @@ describe('runStepImport naming', () => {
     expect(names(manager.document, 'body')).toEqual(['root', 'root 2']);
   });
 });
+
+describe('runStepImport layout', () => {
+  it('groups solids into the bodies a layout names, with its extras, in one step', async () => {
+    const manager = new CommandManager(
+      createProjectDocument('Target', toUserId('user_step_layout'))
+    );
+    const finished: string[] = [];
+    const seen: (readonly number[])[] = [];
+    const result = await runStepImport({
+      file: new File([STEP_TEXT], 'Gearbox.step'),
+      contentType: 'model/step',
+      inspectSolids: async () => [0, 1, 2],
+      layout: ({ solidIndices }) => {
+        seen.push(solidIndices);
+        return {
+          label: 'Insert Gearbox',
+          bodies: [
+            { name: 'Housing', solidIndices: [0, 1] },
+            { name: 'Shaft', solidIndices: [2] }
+          ],
+          extras: (ids) => [
+            commandFactories.setNodeMetadata({
+              nodeId: ids[1]!.bodyNodeId,
+              metadata: { color: '#5f8fe8', colorChosen: true }
+            })
+          ]
+        };
+      },
+      store: {
+        ...localStepImportSourceStore,
+        ensureLocalProjectStorage: async () => 'unavailable'
+      },
+      archive: async () => 'artifact_gearbox',
+      validatedFeature: {
+        reserve: () => ({ release() {} }),
+        run: async (_command, options) => {
+          manager.execute(await options.finalize!());
+          return 'committed';
+        }
+      },
+      status: { setStatus() {}, setFeatureFormError() {} },
+      progress: {
+        start() {},
+        update() {},
+        finish: (outcome) => finished.push(outcome.message)
+      },
+      marks: {
+        inFlight: createInFlightImportChecksums(),
+        abandoned: new Set()
+      },
+      currentDocument: () => manager.document,
+      editDisabledReason: () => null,
+      newId: () => crypto.randomUUID()
+    });
+    expect(result.outcome).toBe('committed');
+    expect(seen).toEqual([[0, 1, 2]]);
+    const features = listNodesByKind(manager.document, 'feature');
+    expect(features.map((feature) => feature.name)).toEqual([
+      'Housing',
+      'Shaft'
+    ]);
+    expect(
+      features.map((feature) =>
+        feature.data.featureKind === 'imported-step'
+          ? feature.data.solidIndices
+          : null
+      )
+    ).toEqual([[0, 1], [2]]);
+    const shaft = listNodesByKind(manager.document, 'body')[1]!;
+    expect(shaft.metadata).toMatchObject({
+      color: '#5f8fe8',
+      colorChosen: true
+    });
+    // One undo removes the whole insert.
+    manager.undo();
+    expect(listNodesByKind(manager.document, 'feature')).toEqual([]);
+    expect(finished).toEqual(['2 bodies']);
+  });
+});

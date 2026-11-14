@@ -164,6 +164,8 @@ interface TopBarProps {
   onImportFiles(files: File[]): void;
   projectTransferBusy?: boolean;
   onImportProject?(file: File): void;
+  /** Brings another project's bodies into this one: File › Insert project…. */
+  onInsertProject?(file: File): void;
   onExportProject?(): void;
   onDownloadArtifact?(artifact: ArtifactRecord): void;
   onExportStep(): void;
@@ -318,6 +320,7 @@ export function TopBar({
   onImportFiles,
   projectTransferBusy,
   onImportProject,
+  onInsertProject,
   onExportProject,
   onDownloadArtifact,
   onExportStep,
@@ -364,6 +367,7 @@ export function TopBar({
   const fileMenuRef = useRef<HTMLDetailsElement>(null);
   const [fileMenuOpen, setFileMenuOpen] = useState(false);
   const importInputRef = useRef<HTMLInputElement>(null);
+  const insertProjectInputRef = useRef<HTMLInputElement>(null);
   const topbarRef = useRef<HTMLElement>(null);
   // A saved document can still be preparing its model. Keep the storage
   // label and show preparation separately, rather than relying on a spinner.
@@ -1148,6 +1152,33 @@ export function TopBar({
                   shortLabel="Import project…"
                   hint=".openzcad backup"
                 />
+              )}
+              {onInsertProject && (
+                <>
+                  <button
+                    type="button"
+                    className="topbar-menu-item"
+                    title="Copy another project's bodies into this one, with their names and colours. Its history stays behind."
+                    disabled={projectTransferBusy}
+                    onClick={() => insertProjectInputRef.current?.click()}
+                  >
+                    <Upload size={13} aria-hidden="true" />
+                    <span>Insert project…</span>
+                    <small>.openzcad into this project</small>
+                  </button>
+                  <input
+                    ref={insertProjectInputRef}
+                    type="file"
+                    aria-label="Insert a project backup into this project"
+                    accept={fileAccept('.openzcad')}
+                    hidden
+                    onChange={(event: ChangeEvent<HTMLInputElement>) => {
+                      const file = event.target.files?.[0];
+                      event.target.value = '';
+                      if (file) onInsertProject(file);
+                    }}
+                  />
+                </>
               )}
               <div className="topbar-menu-sep" />
               <strong className="topbar-menu-label">Export</strong>
