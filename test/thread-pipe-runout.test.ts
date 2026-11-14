@@ -3,7 +3,9 @@ import {
   addPrimitiveFeature,
   createProjectDocument,
   normalizeDocument,
+  resolveParamValue,
   threadBody,
+  transformBody,
   type ThreadInput
 } from '@openzcad/document-core';
 import {
@@ -32,9 +34,30 @@ import {
   threadEndSpec,
   threadPrintAdvisories
 } from '../packages/kernel-adapter/src/exact-thread';
-import { keepStoredEndKinds } from '../apps/web/src/lib/inPlace/thread';
+import {
+  keepStoredEndKinds,
+  threadEditOptions,
+  threadFace,
+  threadSpec
+} from '../apps/web/src/lib/inPlace/thread';
+import { facePickCylinder } from '../apps/web/src/lib/inPlace/cylinderSide';
+import type { FacePick } from '../apps/web/src/lib/inPlace/tools';
 
 type ThreadData = Extract<FeatureData, { featureKind: 'thread' }>;
+type ThreadInputFields = Omit<ThreadInput, 'name'>;
+
+const EMPTY_SLOTS = {
+  profiles: [],
+  axis: null,
+  path: [],
+  guide: [],
+  faces: [],
+  bodies: [],
+  plane: null,
+  edges: [],
+  refs: [],
+  image: null
+};
 
 const values = {
   optional: (value: ParamValue | undefined) =>
@@ -732,6 +755,95 @@ describe('runouts and pipe threads on the exact kernel', () => {
     expect(runout.body.bbox.max.x - runout.body.bbox.min.x).toBeLessThan(
       6 + 1e-6
     );
+  }, 240_000);
+
+  it('never writes a chamfer the build refuses on a transformed boss (re-check of 642908ed)', async () => {
+    // Sol's probe: a Ø6 × 20 boss moved and turned, where the axis ends
+    // give the face 19.999999999999996 long and the kernel 20.000000000000004.
+    let document = addPrimitiveFeature(
+      createProjectDocument('Moved', toUserId('user_thread')),
+      {
+        name: 'Boss',
+        primitiveKind: 'cylinder',
+        dimensions: { radius: 3, height: 20 }
+      }
+    );
+    const moved = transformBody(document, {
+      name: 'Place',
+      targetBodyId: document.bodyOrder[0]!,
+      translation: { x: 13, y: -9, z: 4 },
+      rotationDeg: { x: 1, y: 2, z: 3 }
+    });
+    document = moved.document;
+    const body = (await adapter.syncDocument(document)).bodyRepresentations[
+      moved.bodyId
+    ]!;
+    const side = body.topology!.faces.find(
+      (face) => face.geometry?.surfaceType === 'cylinder'
+    )!;
+    const geometry = side.geometry!;
+    // The pick as the app builds it, with the kernel's axial length.
+    const pick: FacePick = {
+      bodyId: moved.bodyId,
+      hash: side.hash,
+      topologyId: side.topologyId,
+      cylinder: facePickCylinder(geometry, body.mesh, side)!,
+      savedPosition: true
+    };
+    expect(threadFace(pick)!.length).toBe(geometry.axialLength);
+    const saved = {
+      featureKind: 'thread' as const,
+      targetBodyId: moved.bodyId,
+      faceHash: side.hash,
+      profile: 'iso-metric' as const,
+      anchor: 'end' as const,
+      length: 19.9999999801,
+      chamferStart: true
+    };
+    const evaluate = (value: ParamValue) =>
+      resolveParamValue(value, {}, undefined, 'mm');
+    const values: Record<string, ParamValue> = {
+      ...Object.fromEntries(threadSpec.values.map((v) => [v.id, v.initial])),
+      length: '19.99999998+0',
+      offset: 0
+    };
+    const options = {
+      ...Object.fromEntries(
+        (threadSpec.options ?? []).map((option) => [option.id, option.initial])
+      ),
+      ...threadEditOptions(saved, evaluate, 'mm')
+    };
+    const numbers = Object.fromEntries(
+      Object.entries(values).map(([id, value]) => [id, evaluate(value)])
+    );
+    const request = threadSpec.request(
+      { ...EMPTY_SLOTS, faces: [pick] },
+      values,
+      options,
+      {
+        sketchViews: [],
+        datumAxes: undefined,
+        datumLabel: () => '',
+        units: 'mm',
+        saved,
+        evaluate,
+        touched: ['length']
+      },
+      numbers
+    ) as { thread: ThreadInputFields };
+    const threaded = threadBody(document, {
+      name: 'Thread',
+      ...request.thread
+    });
+    const derived = await adapter.syncDocument(threaded.document);
+    expect(
+      derived.featureWarnings!.filter(
+        (warning) => warning.kind === 'build-failed'
+      )
+    ).toEqual([]);
+    // Past the snap, the start runs out instead.
+    expect(request.thread.runoutStart).toBe(true);
+    expect(request.thread.chamferStart).toBeUndefined();
   }, 240_000);
 
   it('refuses runouts that overlap with plain-language copy', async () => {

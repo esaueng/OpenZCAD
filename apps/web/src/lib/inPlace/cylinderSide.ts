@@ -1,4 +1,37 @@
-import type { MeshGeometry, Vector3 } from '@openzcad/shared';
+import type { FaceGeometry, MeshGeometry, Vector3 } from '@openzcad/shared';
+import type { FacePick } from './tools';
+
+/**
+ * A cylindrical face as an in-place pick carries it: its axis ends, its
+ * radius, the kernel's axial length and (from the mesh) boss or bore. The
+ * one place picks are built from face geometry.
+ */
+export function facePickCylinder(
+  geometry: FaceGeometry | undefined,
+  mesh: MeshGeometry | undefined,
+  face: { triangleStart: number; triangleCount: number }
+): FacePick['cylinder'] {
+  if (
+    geometry?.surfaceType !== 'cylinder' ||
+    !geometry.axisStart ||
+    !geometry.axisEnd ||
+    geometry.radius === undefined
+  ) {
+    return undefined;
+  }
+  const boss = mesh
+    ? cylinderFaceIsBoss(mesh, face, geometry.axisStart, geometry.axisEnd)
+    : null;
+  return {
+    axisStart: geometry.axisStart,
+    axisEnd: geometry.axisEnd,
+    radius: geometry.radius,
+    ...(geometry.axialLength === undefined
+      ? {}
+      : { axialLength: geometry.axialLength }),
+    ...(boss === null ? {} : { boss })
+  };
+}
 
 /**
  * Which side of a cylindrical face the body's material lies on, read from

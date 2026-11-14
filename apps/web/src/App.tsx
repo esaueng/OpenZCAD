@@ -41,7 +41,6 @@ import {
   type DrawingSheetId,
   type GeometryBodyRepresentation,
   type GeometryReadyState,
-  type MeshGeometry,
   type ParameterKind,
   type PrimitiveKind,
   type UserId
@@ -759,7 +758,7 @@ import {
   selectedFeatureFaces
 } from './lib/selectionFeature';
 import { cylinderResizeFold } from './lib/interaction/cylinderResizeFold';
-import { cylinderFaceIsBoss } from './lib/inPlace/cylinderSide';
+import { facePickCylinder } from './lib/inPlace/cylinderSide';
 import {
   cylinderRadialFrame,
   type CylinderRadiusEdit,
@@ -11003,19 +11002,6 @@ export function App() {
     });
   }
 
-  /** A cylinder's boss-or-bore side for its pick, where the mesh says. */
-  function cylinderSide(
-    mesh: MeshGeometry | undefined,
-    face: { triangleStart: number; triangleCount: number },
-    axisStart: Vector3,
-    axisEnd: Vector3
-  ): { boss?: boolean } {
-    const boss = mesh
-      ? cylinderFaceIsBoss(mesh, face, axisStart, axisEnd)
-      : null;
-    return boss === null ? {} : { boss };
-  }
-
   /** A model face as an in-place command's face slot holds it. */
   function inPlaceFacePick(
     bodyId: string,
@@ -11119,6 +11105,11 @@ export function App() {
     }
     if (!face) return null;
     const geometry = face.geometry;
+    const cylinder = facePickCylinder(
+      geometry,
+      representations[resolvedBodyId]?.mesh,
+      face
+    );
     return {
       bodyId: resolvedBodyId,
       hash: face.hash,
@@ -11129,24 +11120,7 @@ export function App() {
       ...(geometry?.normal ? { normal: geometry.normal } : {}),
       ...(geometry?.centroid ? { centroid: geometry.centroid } : {}),
       ...(geometry?.center ? { center: geometry.center } : {}),
-      ...(geometry?.surfaceType === 'cylinder' &&
-      geometry.axisStart &&
-      geometry.axisEnd &&
-      geometry.radius !== undefined
-        ? {
-            cylinder: {
-              axisStart: geometry.axisStart,
-              axisEnd: geometry.axisEnd,
-              radius: geometry.radius,
-              ...cylinderSide(
-                representations[resolvedBodyId]?.mesh,
-                face,
-                geometry.axisStart,
-                geometry.axisEnd
-              )
-            }
-          }
-        : {}),
+      ...(cylinder ? { cylinder } : {}),
       ...(point ? { point } : {})
     };
   }

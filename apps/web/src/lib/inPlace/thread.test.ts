@@ -1564,6 +1564,31 @@ describe('in-place thread edits keep a stored end kind (review #1458)', () => {
     expect(past.runoutStart).toBe(true);
   });
 
+  it('chamfers a stored runout only where an edit carries its end onto the face’s end', () => {
+    // Owner's rule: a stored runout stays one unless that end goes from
+    // stopping short (as stored) to reaching the face (as edited).
+    const runout = stored({ runoutStart: undefined, runoutEnd: true });
+    // Stored 5 of 20 from the start, its end stops short; extended to 20 it
+    // reaches the face's end, which is chamfered.
+    const extended = finish(runout, { face: long, values: { length: 20 } });
+    expect(extended.chamferEnd).toBe(true);
+    expect(extended.runoutEnd).toBeUndefined();
+    // A runout stored where the span already reaches the face's end (a
+    // shoulder) stays a runout, untouched or edited elsewhere.
+    const shoulder = stored({
+      runoutStart: undefined,
+      runoutEnd: true,
+      length: 20
+    });
+    expect(finish(shoulder, { face: long }).runoutEnd).toBe(true);
+    expect(
+      finish(shoulder, { face: long, options: { profile: 'printable' } })
+        .runoutEnd
+    ).toBe(true);
+    // The first repro: a runout at the start the span reaches, untouched.
+    expect(finish(stored(), { face: long }).runoutStart).toBe(true);
+  });
+
   it('holds to the snap in an inch document, where it is under any rounding tolerance', () => {
     // The same boss in inches: 0.7874 long, snap 7.874e-10 in.
     const inches: FacePick = {

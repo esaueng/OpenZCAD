@@ -186,6 +186,12 @@ export interface FacePick {
      * where the mesh cannot say. A thread's build reads the solid itself.
      */
     boss?: boolean;
+    /**
+     * The face's length along its axis as the kernel measured it, which the
+     * thread build reads: a thread's ends are settled from this, not from
+     * the axis ends, which a transformed face can carry a few bits apart.
+     */
+    axialLength?: number;
   };
   /**
    * `point` is where an edited hole already stands, not a click: its stored

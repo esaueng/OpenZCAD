@@ -302,7 +302,8 @@ export function threadFace(face: FacePick | undefined): ThreadFace | null {
     start: cylinder.axisStart,
     end: cylinder.axisEnd,
     axis,
-    length,
+    // The kernel's own length where the pick carries it, as the build reads.
+    length: cylinder.axialLength ?? length,
     radius: cylinder.radius,
     radial
   };
@@ -942,9 +943,10 @@ export function threadRequestFields(
  * evaluated offset and length, the same arithmetic and the same snap),
  * never by comparing the edit with what it started from.
  *
- * - A runout the edited feature stores stays a runout: the kernel builds
+ * - A runout the edited feature stores stays a runout (the kernel builds
  *   one at any end, a shoulder at the end of the face included, which the
- *   one Ends row could not otherwise express.
+ *   one Ends row could not otherwise express), unless the edit carries an
+ *   end that stopped short of the face onto its end: then it is chamfered.
  * - Every other finished end is a chamfer where the span reaches that end
  *   of the face and a runout where it stops short, so a chamfer the build
  *   would refuse is never written.
@@ -963,32 +965,39 @@ export function keepStoredEndKinds(
       : typeof value === 'number'
         ? value
         : (evaluate?.(value) ?? null);
-  const offset = number(thread.offset) ?? 0;
-  const typed = number(thread.length);
-  const pipe = thread.profile === 'npt' || thread.profile === 'bspt';
-  // An absent length is the rest of the face from the offset, as the build
-  // reads it; a pipe thread's is its standard's, which only the build knows.
-  const length =
-    typed === undefined
-      ? !face || pipe || offset === null
-        ? null
-        : face.length - offset
-      : typed;
-  const span =
-    face &&
-    offset !== null &&
-    Number.isFinite(offset) &&
-    length !== null &&
-    Number.isFinite(length)
+  /** A thread's span as the build places it, or null where it cannot. */
+  const spanOf = (data: ThreadRequest) => {
+    const offset = number(data.offset) ?? 0;
+    const typed = number(data.length);
+    const pipe = data.profile === 'npt' || data.profile === 'bspt';
+    // An absent length is the rest of the face from the offset, as the
+    // build reads it; a pipe thread's is its standard's, which only the
+    // build knows.
+    const length =
+      typed === undefined
+        ? !face || pipe || offset === null
+          ? null
+          : face.length - offset
+        : typed;
+    return face &&
+      offset !== null &&
+      Number.isFinite(offset) &&
+      length !== null &&
+      Number.isFinite(length)
       ? threadSpanOnFace({
           offset,
           length,
-          anchor: thread.anchor ?? 'start',
+          anchor: data.anchor ?? 'start',
           faceLength: face.length,
           radius: face.radius
         })
       : null;
+  };
+  const span = spanOf(thread);
   const stored = saved?.featureKind === 'thread' ? saved : undefined;
+  const before = stored ? spanOf(stored) : null;
+  const reaches = (on: typeof span, end: 'start' | 'end') =>
+    on ? (end === 'start' ? on.reachesStart : on.reachesEnd) : null;
   const next: ThreadRequest = { ...thread };
   const keys = {
     start: { chamfer: 'chamferStart', runout: 'runoutStart' },
@@ -997,13 +1006,18 @@ export function keepStoredEndKinds(
   for (const end of ['start', 'end'] as const) {
     const { chamfer, runout } = keys[end];
     if (!(next[chamfer] || next[runout])) continue;
+    const now = reaches(span, end);
+    // A stored runout stays one, unless the edit carries an end that
+    // stopped short onto the face's end: then it is chamfered there.
     const kind = stored?.[runout]
-      ? runout
-      : span
-        ? (end === 'start' ? span.reachesStart : span.reachesEnd)
+      ? reaches(before, end) === false && now === true
+        ? chamfer
+        : runout
+      : now === null
+        ? next[chamfer]
           ? chamfer
           : runout
-        : next[chamfer]
+        : now
           ? chamfer
           : runout;
     delete next[chamfer];
