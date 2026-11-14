@@ -23,7 +23,6 @@ import {
   motionStudyValues,
   type AssemblyCouplingEnd,
   type AssemblyMotionStudy,
-  type AssemblyPlayback,
   type AssemblySet,
   type UnitSystem
 } from '@openzcad/shared';

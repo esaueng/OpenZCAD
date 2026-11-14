@@ -221,6 +221,8 @@
 }
 
 .motion-playback .assembly-select {
+  flex: none;
+  width: auto;
   height: 24px;
   font-size: var(--fs-xs);
 }
