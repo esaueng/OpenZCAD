@@ -1016,6 +1016,30 @@ describe('persisted enum selectors and freeform values', () => {
     );
   });
 
+  it.each(['metadata', 'dimensions'])(
+    'checks a node named "%s" like any other node',
+    (nodeId) => {
+      const json = JSON.parse(JSON.stringify(valid())) as {
+        nodes: Record<
+          string,
+          { kind?: string; data?: Record<string, unknown> }
+        >;
+      };
+      const [key, node] = Object.entries(json.nodes).find(
+        ([, candidate]) =>
+          candidate.kind === 'feature' &&
+          candidate.data?.featureKind === 'primitive'
+      )!;
+      delete json.nodes[key];
+      json.nodes[nodeId] = {
+        ...node,
+        id: nodeId,
+        data: { ...node.data, primitiveKind: 'constructor' }
+      } as never;
+      expect(reservedDocumentIdentifierError(json as object)).not.toBeNull();
+    }
+  );
+
   it('still refuses a reserved metadata key', () => {
     const value = received((json) => {
       const node = json.nodes[json.activePartId] as unknown as {

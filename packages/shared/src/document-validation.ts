@@ -444,6 +444,28 @@ const FREEFORM_FIELDS: ReadonlySet<string> = new Set([
   'dimensions'
 ]);
 
+/**
+ * Whether `record` is where a freeform field really lives, rather than a map
+ * whose entry happens to be named like one (a node or body id "metadata"):
+ * node `metadata` sits on a node, a node snapshot or a metadata command
+ * (they name a `kind` or a `nodeId`); primitive `dimensions` sit on primitive
+ * feature data or a primitive command (they name a `primitiveKind` or a
+ * `featureKind`).
+ */
+function ownsFreeformField(
+  record: Readonly<Record<string, unknown>>,
+  key: string
+): boolean {
+  if (key === 'metadata')
+    return typeof record.kind === 'string' || typeof record.nodeId === 'string';
+  if (key === 'dimensions')
+    return (
+      typeof record.primitiveKind === 'string' ||
+      typeof record.featureKind === 'string'
+    );
+  return false;
+}
+
 /** Whether a string under `field` is a key, id or selector: never reserved. */
 function isKeyLikeField(field: string | undefined): boolean {
   return (
@@ -542,7 +564,9 @@ export function reservedIdentifierError(
     for (const key of Object.keys(current)) {
       if (RESERVED_RECORD_KEYS.has(key))
         return `"${path(entry)}" uses the reserved key "${key}".`;
-      const freeform = entry.freeform || FREEFORM_FIELDS.has(key);
+      const freeform =
+        entry.freeform ||
+        (FREEFORM_FIELDS.has(key) && ownsFreeformField(current, key));
       pending.push({
         value: current[key],
         field: key,
