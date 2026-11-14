@@ -2971,8 +2971,12 @@
 
   /* With no folder row to carry it, Projects stays lit while one of its
      folders is open: the strip still says which shelf the folder is on. */
-  .start-shelf-tabs button.is-parent {
+  /* Hover too: the shared hover rules exclude only .is-active, and their
+     :hover:not() outranks a bare .is-parent, so they would wash it out. */
+  .start-shelf-tabs button.is-parent,
+  .start-shelf-tabs button.is-parent:hover:not(.is-active) {
     background: var(--color-accent-dim);
+    box-shadow: none;
   }
 
   .start-shelf-tabs button.is-parent > svg {

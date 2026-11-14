@@ -329,8 +329,15 @@ describe('start screen folder navigation', () => {
       .split(/@media\s*\(max-width:\s*900px\)/)
       .find((chunk) => /\.start-folders\s*\{\s*display:\s*none/.test(chunk));
     expect(narrow).toBeDefined();
-    expect(rule(narrow!, '.start-shelf-tabs button.is-parent')).toMatch(
-      /background:\s*var\(--color-accent-dim\)/
-    );
+    // The shared hover rules (here and in buttons.css) exclude only
+    // .is-active and outrank a bare .is-parent, so hover keeps the wash at
+    // the same weight as theirs.
+    const lit =
+      /(?:^|[}\n])\s*\.start-shelf-tabs button\.is-parent,\s*\.start-shelf-tabs button\.is-parent:hover:not\(\.is-active\)\s*\{([^}]*)\}/.exec(
+        narrow!
+      )?.[1];
+    expect(lit).toBeDefined();
+    expect(lit).toMatch(/background:\s*var\(--color-accent-dim\)/);
+    expect(lit).toMatch(/box-shadow:\s*none/);
   });
 });
