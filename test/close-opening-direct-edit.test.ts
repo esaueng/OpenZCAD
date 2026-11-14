@@ -421,45 +421,54 @@ describe('closing a shaped window by pushing its floor', () => {
  * it up to the top still closes the window exactly.
  */
 describe('closing a window whose floor is not convex', () => {
-  /** The rib: 8 wide, 1 proud of the wall's inside, the wall's full height. */
-  const RIB_VOLUME = 8 * 1 * 40;
+  interface Ribbed {
+    /** Where the 8-wide rib starts along the wall. */
+    ribX: number;
+    /** How far the rib stands proud of the wall's inside. */
+    ribDepth: number;
+    /** How far the whole part sits above the origin. */
+    lift: number;
+  }
 
-  /** The window (x 20 to 36) and a rib from `ribX`, 1 deep where they meet. */
-  async function ribbedWindow(ribX: number) {
+  /** The window (x 20 to 36) across a full-height rib inside the wall. */
+  async function ribbedWindow({ ribX, ribDepth, lift }: Ribbed) {
+    const ribbedVolume = WALL_VOLUME + 8 * ribDepth * 40;
     const floorArea =
-      16 * 4 + (Math.min(36, ribX + 8) - Math.max(20, ribX)) * 1;
+      16 * 4 + (Math.min(36, ribX + 8) - Math.max(20, ribX)) * ribDepth;
     adapter ??= await createExactKernelAdapter();
     let document = createProjectDocument('Window', toUserId('user_window'));
+    const place = (name: string, x: number, y: number, z: number) => {
+      document = transformBody(document, {
+        name,
+        targetBodyId: document.bodyOrder.at(-1)!,
+        translation: { x, y, z: z + lift },
+        rotationDeg: { x: 0, y: 0, z: 0 }
+      }).document;
+      return document.bodyOrder.at(-1)!;
+    };
     document = addPrimitiveFeature(document, {
       name: 'Wall',
       primitiveKind: 'box',
       dimensions: { width: 60, height: 4, depth: 40 }
     });
-    const wall = document.bodyOrder.at(-1)!;
+    const wall =
+      lift === 0
+        ? document.bodyOrder.at(-1)!
+        : place('Place the wall', 0, 0, 0);
     document = addPrimitiveFeature(document, {
       name: 'Rib',
       primitiveKind: 'box',
-      dimensions: { width: 8, height: 1, depth: 40 }
+      dimensions: { width: 8, height: ribDepth, depth: 40 }
     });
-    document = transformBody(document, {
-      name: 'Place the rib',
-      targetBodyId: document.bodyOrder.at(-1)!,
-      translation: { x: ribX, y: 4, z: 0 },
-      rotationDeg: { x: 0, y: 0, z: 0 }
-    }).document;
-    const rib = document.bodyOrder.at(-1)!;
+    const rib = place('Place the rib', ribX, 4, 0);
     document = addPrimitiveFeature(document, {
       name: 'Window tool',
       primitiveKind: 'box',
       dimensions: { width: 16, height: 10, depth: WINDOW_HEIGHT }
     });
-    document = transformBody(document, {
-      name: 'Place the window',
-      targetBodyId: document.bodyOrder.at(-1)!,
-      translation: { x: 20, y: -3, z: 10 },
-      rotationDeg: { x: 0, y: 0, z: 0 }
-    }).document;
-    const tool = document.bodyOrder.at(-1)!;
+    const tool = place('Place the window', 20, -3, 10);
+    // Volumes far from the origin keep fewer exact digits.
+    const digits = lift === 0 ? 6 : 3;
     const manager = new CommandManager(document);
     manager.execute(
       commandFactories.booleanBodies({
@@ -471,7 +480,7 @@ describe('closing a window whose floor is not convex', () => {
     const ribbedId = manager.document.bodyOrder.at(-1)!;
     const ribbed = (await adapter.syncDocument(manager.document))
       .bodyRepresentations[ribbedId]!;
-    expect(ribbed.volume).toBeCloseTo(WALL_VOLUME + RIB_VOLUME, 6);
+    expect(ribbed.volume).toBeCloseTo(ribbedVolume, digits);
     manager.execute(
       commandFactories.booleanBodies({
         name: 'Cut the window',
@@ -489,39 +498,56 @@ describe('closing a window whose floor is not convex', () => {
           !derived.bodyRepresentations[id].consumed
       )!;
     expect(derived.bodyRepresentations[bodyId]!.volume).toBeCloseTo(
-      WALL_VOLUME + RIB_VOLUME - floorArea * WINDOW_HEIGHT,
-      6
+      ribbedVolume - floorArea * WINDOW_HEIGHT,
+      digits
     );
     const floor = derived.bodyRepresentations[bodyId]!.topology!.faces.find(
       (face) =>
         face.geometry?.surfaceType === 'plane' &&
         face.geometry.normal!.z > 0.9 &&
-        Math.abs(face.geometry.center.z - 10) < 1e-9
+        Math.abs(face.geometry.center.z - (10 + lift)) < 1e-6
     );
-    expect(floor?.geometry!.area).toBeCloseTo(floorArea, 9);
+    expect(floor?.geometry!.area).toBeCloseTo(floorArea, digits);
     return {
       document: { ...manager.document, derived },
       bodyId,
       floor: floor!,
       floorArea,
-      ribbedFaceCount: ribbed.faceCount
+      ribbedVolume,
+      ribbedFaceCount: ribbed.faceCount,
+      digits
     };
   }
 
-  for (const [shape, ribX] of [
-    ['L', 16],
-    ['T', 24]
+  for (const [shape, ribbed] of [
+    // The window takes the rib's end: one reflex corner.
+    ['an L-shaped floor', { ribX: 16, ribDepth: 1, lift: 0 }],
+    // The rib runs through the window: a reflex corner at each side of it.
+    ['a T-shaped floor', { ribX: 24, ribDepth: 1, lift: 0 }],
+    // A 0.05 rib on a part a kilometre up: the outline's tolerance follows
+    // the face, not how far from the origin it is.
+    [
+      'a thin-ribbed floor far from the origin',
+      { ribX: 16, ribDepth: 0.05, lift: 1e6 }
+    ]
   ] as const) {
-    it(`pushes the ${shape}-shaped floor to the top and closes the window`, async () => {
-      const { document, bodyId, floor, floorArea, ribbedFaceCount } =
-        await ribbedWindow(ribX);
+    it(`pushes ${shape} to the top and closes the window`, async () => {
+      const {
+        document,
+        bodyId,
+        floor,
+        floorArea,
+        ribbedVolume,
+        ribbedFaceCount,
+        digits
+      } = await ribbedWindow(ribbed);
 
       // Short of the top the kernel's own move does it, as before.
       const partial = await edit(document, bodyId, offsetBottom(floor, 10));
       expect(partial.warnings).toEqual([]);
       expect(partial.bodyRepresentations[bodyId]!.volume).toBeCloseTo(
-        WALL_VOLUME + RIB_VOLUME - floorArea * (WINDOW_HEIGHT - 10),
-        6
+        ribbedVolume - floorArea * (WINDOW_HEIGHT - 10),
+        digits
       );
 
       // At the top, and past it into the wall above, the window closes and
@@ -534,10 +560,10 @@ describe('closing a window whose floor is not convex', () => {
         );
         expect(closed.warnings).toEqual([]);
         const body = closed.bodyRepresentations[bodyId]!;
-        expect(body.volume).toBeCloseTo(WALL_VOLUME + RIB_VOLUME, 6);
+        expect(body.volume).toBeCloseTo(ribbedVolume, digits);
         expect(body.faceCount).toBe(ribbedFaceCount);
-        expect(body.bbox.max.z).toBeCloseTo(40, 9);
-        expect(body.bbox.max.y).toBeCloseTo(5, 9);
+        expect(body.bbox.max.z).toBeCloseTo(40 + ribbed.lift, 6);
+        expect(body.bbox.max.y).toBeCloseTo(4 + ribbed.ribDepth, 6);
       }
     }, 60_000);
   }

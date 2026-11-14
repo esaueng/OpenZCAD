@@ -362,8 +362,15 @@ function planSweep(
     // face's prism, the union of the prisms of convex pieces of it; leaning
     // sides or blends keep the refusal.
     if (!parallel || blends.length > 0) return null;
+    // Each edge of the face lies on the side face across it.
+    const lineOf = new Map<number, number>();
+    Array.from(sideFaces).forEach((sideFace, index) => {
+      for (const edge of kernel.sharedEdges(face, sideFace)) {
+        lineOf.set(edge, index);
+      }
+    });
     const planes = sides.map(({ plane }) => plane);
-    const pieces = convexSides(kernel, face, direction, planes);
+    const pieces = convexSides(kernel, face, direction, planes, lineOf);
     return pieces && { base, sides: [], blends, blendHeight: 0, pieces };
   }
   let blendHeight = 0;
@@ -380,14 +387,16 @@ function planSweep(
 
 /**
  * The sides of each convex piece of a face with a reflex corner, every one
- * an exact plane of a side of the face; null when an edge of the face lies
- * on no side plane or the outline does not cut cleanly.
+ * the exact plane of a side face of the face (`planes`, indexed per edge by
+ * `lineOf`); null when an edge has no side face or the outline does not cut
+ * cleanly.
  */
 function convexSides(
   kernel: RemusKernel,
   face: number,
   direction: Vec3,
-  planes: readonly Plane[]
+  planes: readonly Plane[],
+  lineOf: ReadonlyMap<number, number>
 ): Side[][] | null {
   const wire = kernel.getFaceWires(face)[0]!;
   const loop = Array.from(kernel.getWireEdges(wire), (edge) => {
@@ -395,37 +404,47 @@ function convexSides(
     const start = kernel.isEdgeForwardInWire(edge, wire) ? 0 : 3;
     const end = 3 - start;
     return {
+      edge,
       start: { x: ends[start]!, y: ends[start + 1]!, z: ends[start + 2]! },
       end: { x: ends[end]!, y: ends[end + 1]!, z: ends[end + 2]! }
     };
   });
   if (loop.length < 3) return null;
-  const size = loop.reduce(
-    (largest, { start }) =>
-      Math.max(
-        largest,
-        Math.abs(start.x),
-        Math.abs(start.y),
-        Math.abs(start.z)
-      ),
-    1
-  );
-  const tolerance = 1e-7 * size;
+  // Lengths in the outline are measured from its first corner. The
+  // tolerance follows the face's own size, plus what rounding leaves of
+  // coordinates far from the origin: an absolute size would grow past a
+  // thin rib's width on a part placed far away.
+  const origin = loop[0]!.start;
+  let extent = 0;
+  let magnitude = 0;
+  for (const { start } of loop) {
+    extent = Math.max(
+      extent,
+      Math.hypot(start.x - origin.x, start.y - origin.y, start.z - origin.z)
+    );
+    magnitude = Math.max(
+      magnitude,
+      Math.abs(start.x),
+      Math.abs(start.y),
+      Math.abs(start.z)
+    );
+  }
+  const tolerance = 1e-7 * Math.max(1, extent) + 1e-12 * magnitude;
   // In-plane axes: any direction across the push, and the one across both.
   const axis =
     Math.abs(direction.x) < 0.6 ? { x: 1, y: 0, z: 0 } : { x: 0, y: 1, z: 0 };
   const across = unit(cross(direction, axis))!;
   const third = cross(direction, across);
-  const lift = dot(loop[0]!.start, direction);
   const outline: OutlineCorner[] = [];
-  for (const { start, end } of loop) {
-    const line = planes.findIndex(
-      (plane) =>
-        Math.abs(height(plane, start)) <= tolerance &&
-        Math.abs(height(plane, end)) <= tolerance
-    );
-    if (line < 0) return null;
-    outline.push({ u: dot(start, across), v: dot(start, third), line });
+  for (const { edge, start } of loop) {
+    const line = lineOf.get(edge);
+    if (line === undefined) return null;
+    const offset = {
+      x: start.x - origin.x,
+      y: start.y - origin.y,
+      z: start.z - origin.z
+    };
+    outline.push({ u: dot(offset, across), v: dot(offset, third), line });
   }
   let area = 0;
   for (let i = 0; i < outline.length; i += 1) {
@@ -459,15 +478,11 @@ function convexSides(
       }),
       { u: 0, v: 0 }
     );
-    const probe = along(
-      {
-        x: across.x * inside.u + third.x * inside.v,
-        y: across.y * inside.u + third.y * inside.v,
-        z: across.z * inside.u + third.z * inside.v
-      },
-      direction,
-      lift
-    );
+    const probe = {
+      x: origin.x + across.x * inside.u + third.x * inside.v,
+      y: origin.y + across.y * inside.u + third.y * inside.v,
+      z: origin.z + across.z * inside.u + third.z * inside.v
+    };
     return [...new Set(piece.map((corner) => corner.line))].map((line) => {
       const plane = planes[line]!;
       return { plane, keepPositive: height(plane, probe) > 0 };
