@@ -1698,11 +1698,25 @@ describe('a face offset says what its number means', () => {
     open({ totalBaseline: 24.01, totalSense: 1, initialOffset: 0 });
     const input = screen.getByRole('textbox', { name: 'Total' });
     expect(input).toHaveAccessibleDescription(
-      'Total: the size this face sets, now 24.01 mm'
+      'Total: the size this face sets, 24.01 mm before this edit'
     );
     fireEvent.change(input, { target: { value: '5' } });
     expect(input).toHaveAccessibleDescription(
-      'Total: the size this face sets, now 24.01 mm · moves the face −19.01 mm'
+      'Total: the size this face sets, 24.01 mm before this edit · moves the face −19.01 mm'
+    );
+  });
+
+  it('names the size before the edit, not the dragged preview, after a drag', () => {
+    open({
+      totalBaseline: 35,
+      totalSense: 1,
+      initialOffset: 2,
+      initial: '37'
+    });
+    expect(
+      screen.getByRole('textbox', { name: 'Total' })
+    ).toHaveAccessibleDescription(
+      'Total: the size this face sets, 35 mm before this edit · moves the face +2 mm'
     );
   });
 

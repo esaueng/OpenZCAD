@@ -946,15 +946,16 @@ export function NumericKeypad({
   // signed distance it moves, and the two read nothing alike: typing 5 for
   // a 24 mm body's top face moved it by -19 (QA 2026-11-14 finding #9). The
   // field says which one it takes, and in Total what the face does with it,
-  // so a Total of 1e6 is seen to move the face a kilometre.
+  // so a Total of 1e6 is seen to move the face a kilometre. The baseline is
+  // the size before this edit, not the dragged preview's size.
   const offsetMeaning =
     request.kind !== 'offset'
       ? null
       : request.totalBaseline === undefined
         ? 'Offset: how far the face moves, + out, − in'
-        : `Total: the size this face sets, now ${formatNumber(
+        : `Total: the size this face sets, ${formatNumber(
             Math.round(request.totalBaseline * 100) / 100
-          )} ${unitText}${
+          )} ${unitText} before this edit${
             evaluation.ok && normalizedValue !== undefined
               ? ` · moves the face ${signedHundredths(normalizedValue)} ${unitText}`
               : ''
