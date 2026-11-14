@@ -38,8 +38,10 @@ describe('plainRefusal', () => {
   it.each(['__proto__', 'constructor', 'toString'])(
     'falls back for a category named "%s"',
     (category) => {
-      const plain = plainRefusal('The kernel refused this.', category);
+      // A raw kernel sentence, so the category sentence is consulted.
+      const plain = plainRefusal('boolean operation failed', category);
       expect(typeof plain.message).toBe('string');
+      expect(plain.message.length).toBeGreaterThan(0);
     }
   );
 

@@ -1032,7 +1032,7 @@ function FaceDirectEdit({
       ? 'Imported blend'
       : geometry.featureType === 'through-hole'
         ? 'Through hole'
-        : (SURFACE_LABELS[geometry.surfaceType] ??
+        : (ownEntry(SURFACE_LABELS, geometry.surfaceType) ??
           `${geometry.surfaceType} face`);
 
   return (
