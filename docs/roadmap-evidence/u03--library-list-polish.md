@@ -11,5 +11,7 @@ arrow keys to its controls and Shift+F10 to its menu, and Tab starts at New
 project; the folder notice floats instead of pushing the grid and clears
 once the folder is named; Escape unmakes a just-made folder; Ungroup is not
 red; the first-run demo cards go two to a row at 1024px; the startup screen's
-Back to projects is a button (`StartScreen.test.tsx`,
-`StartupScreen.test.tsx`, `library-list-polish.spec.ts`).
+Back to projects is a button; Help & controls lists the guided tour's own
+steps instead of a separate five-step guide (`StartScreen.test.tsx`,
+`StartupScreen.test.tsx`, `ShortcutsOverlay.test.tsx`,
+`library-list-polish.spec.ts`).

@@ -14,9 +14,7 @@ describe('ShortcutsOverlay', () => {
     const steps = Array.from(
       document.querySelectorAll('.shortcuts-guide > li strong')
     ).map((title) => title.textContent);
-    expect(steps).toEqual(
-      WORKSPACE_TOUR_STEPS.map((step) => `${step.title}:`)
-    );
+    expect(steps).toEqual(WORKSPACE_TOUR_STEPS.map((step) => `${step.title}:`));
     fireEvent.click(
       screen.getByRole('button', { name: 'Open modeling guide' })
     );
