@@ -757,7 +757,7 @@ import {
   isRemovableDetail,
   selectedFeatureFaces
 } from './lib/selectionFeature';
-import { toggleFaceInSet } from './lib/faceSetSelection';
+import { heldFaceSetBody, toggleFaceInSet } from './lib/faceSetSelection';
 import { cylinderResizeFold } from './lib/interaction/cylinderResizeFold';
 import {
   cylinderRadialFrame,
@@ -3110,6 +3110,10 @@ export function App() {
     selectedEdges.length === 0
       ? boxFaces.faces
       : null;
+  /** The faces a Shift pick adds to: a swept or Shift-built set, or one face. */
+  const heldFaces =
+    boxSelectedFaces ??
+    (selectedTopology?.kind === 'face' ? [selectedTopology] : null);
   const [selectedSketchProfileId, setSelectedSketchProfileId] =
     useState<SketchId | null>(null);
   const [selectedProfiles, setSelectedProfiles] = useState<RegionPickData[]>(
@@ -18906,14 +18910,8 @@ export function App() {
       tool === null &&
       interaction.mode !== 'sketch'
     ) {
-      const held =
-        boxSelectedFaces ??
-        (selectedTopology?.kind === 'face' ? [selectedTopology] : null);
-      if (
-        held &&
-        held.length > 0 &&
-        held.every((face) => face.bodyId === selection.bodyId)
-      ) {
+      const held = heldFaces;
+      if (held && heldFaceSetBody(held) === selection.bodyId) {
         const next = toggleFaceInSet(held, selection);
         if (next.length === 0) {
           clearSelection();
@@ -33468,6 +33466,11 @@ export function App() {
                 }
               : {})}
             facePickOnly={toFacePick !== null}
+            faceSetPickBodyId={
+              tool === null && interaction.mode !== 'sketch'
+                ? heldFaceSetBody(heldFaces)
+                : null
+            }
             modeOverlay={
               modelingLocked ? (
                 <>
