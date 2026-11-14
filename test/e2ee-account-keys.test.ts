@@ -2145,7 +2145,9 @@ describe('account-key history', () => {
     async () => {
       const srv = server();
       srv.db
-        .prepare('INSERT INTO account_erasure_requests VALUES (?, ?, ?, ?)')
+        .prepare(
+          'INSERT INTO account_erasure_requests (user_id, scope, started_at, updated_at) VALUES (?, ?, ?, ?)'
+        )
         .run(USER, 'profile', 1, 1);
       expect(() =>
         srv.db
@@ -5341,7 +5343,7 @@ describe.each(['development', 'browser', 'desktop'] as const)(
             if (phase === 'erasing') {
               srv.db
                 .prepare(
-                  'INSERT INTO account_erasure_requests VALUES (?, ?, ?, ?)'
+                  'INSERT INTO account_erasure_requests (user_id, scope, started_at, updated_at) VALUES (?, ?, ?, ?)'
                 )
                 .run(USER, 'profile', 1, 1);
               return;
