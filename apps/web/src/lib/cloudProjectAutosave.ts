@@ -86,6 +86,11 @@ export type CloudProjectSyncState =
  */
 export type WorkspaceSaveState =
   | CloudProjectSyncState
+  /**
+   * The account answered with a server error: reachable, but the save was
+   * not taken. Presented apart from `offline` (design review I8).
+   */
+  | 'server-error'
   | 'saving'
   | 'local-source'
   | 'device-failed'
@@ -875,9 +880,10 @@ export class CloudProjectAutosave {
         error.code === 'DOCUMENT_TOO_LARGE'
           ? error.details?.limitBytes
           : null;
-      const limitBytes = overValueCeiling || complexity
-        ? MAX_CLOUD_PROJECT_DOCUMENT_BYTES
-        : limit;
+      const limitBytes =
+        overValueCeiling || complexity
+          ? MAX_CLOUD_PROJECT_DOCUMENT_BYTES
+          : limit;
       if (
         typeof limitBytes === 'number' &&
         Number.isSafeInteger(limitBytes) &&
