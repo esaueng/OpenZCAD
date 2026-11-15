@@ -3239,6 +3239,36 @@ export class D1R2PersistenceService implements PersistenceService {
     return { ...current, organization };
   }
 
+  async resetProjectShelfState(
+    userId: UserId,
+    projectId: string
+  ): Promise<ProjectSummary> {
+    if (!this.env.DB) {
+      return getInMemoryPersistence().resetProjectShelfState(userId, projectId);
+    }
+    // One statement against the row as it stands, not a read-then-write: a
+    // project trashed on another device since the browser listed it keeps
+    // its status and deleted_at, and only a row still archived is restored.
+    const updated = await this.env.DB.prepare(
+      `UPDATE projects SET pinned = 0, sort_order = 0,
+         status = CASE WHEN status = 'archived' THEN 'active' ELSE status END,
+         archived_at = CASE WHEN status = 'deleted' THEN archived_at ELSE NULL END
+       WHERE id = ? AND user_id = ?
+       AND NOT EXISTS (SELECT 1 FROM project_copy_cleanup_claims WHERE project_id = projects.id)`
+    )
+      .bind(projectId, userId)
+      .run();
+    if (updated.meta?.changes === 0) throw new ProjectNotFoundError(projectId);
+    const row = await this.env.DB.prepare(
+      `${projectSummaryColumns(await this.storageFormatColumn(''))} FROM projects WHERE id = ? AND user_id = ?`
+    )
+      .bind(projectId, userId)
+      .first<ProjectRow>();
+    const current = row ? summaryFromRow(row) : null;
+    if (!current) throw new ProjectNotFoundError(projectId);
+    return current;
+  }
+
   async reorderProjects(
     userId: UserId,
     request: ReorderProjectsRequest

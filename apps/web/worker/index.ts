@@ -329,6 +329,7 @@ function assertEditorLeaseEligible(
 
 const PROJECT_ROUTE = /^\/api\/projects\/([^/]+)$/;
 const PROJECT_DUPLICATE_ROUTE = /^\/api\/projects\/([^/]+)\/duplicate$/;
+const PROJECT_SHELF_RESET_ROUTE = /^\/api\/projects\/([^/]+)\/shelf\/reset$/;
 const PROJECT_REVISIONS_ROUTE = /^\/api\/projects\/([^/]+)\/revisions$/;
 const PROJECT_REVISION_ROUTE = /^\/api\/projects\/([^/]+)\/revisions\/([^/]+)$/;
 const PROJECT_DOCUMENT_ROUTE = /^\/api\/projects\/([^/]+)\/document$/;
@@ -2387,6 +2388,20 @@ async function handleApiRequest(request: Request, env: Env): Promise<Response> {
     return env
       .PROJECT_ROOM!.getByName(projectId)
       .fetch(new Request(roomUrl, { method: 'PUT', headers }));
+  }
+
+  // The sealed shelf migration's reset (ADR-024 amendment 2026-11-14): pin
+  // and order back to the defaults, the archive cleared only while the row
+  // is still archived, the trash never touched. It discloses nothing, so it
+  // needs no library rule; only the owner's row changes.
+  const shelfResetMatch = PROJECT_SHELF_RESET_ROUTE.exec(pathname);
+  if (request.method === 'POST' && shelfResetMatch) {
+    return json({
+      project: await persistence.resetProjectShelfState(
+        userId,
+        shelfResetMatch[1]!
+      )
+    });
   }
 
   const duplicateMatch = PROJECT_DUPLICATE_ROUTE.exec(pathname);

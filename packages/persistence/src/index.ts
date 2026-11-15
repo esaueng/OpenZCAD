@@ -608,6 +608,19 @@ export interface PersistenceService {
     userId: UserId,
     request: UpdateProjectRequest
   ): Promise<ProjectSummary>;
+  /**
+   * Clears a project's readable pin, manual order and archive (ADR-024
+   * amendment 2026-11-14), once its account's sealed library record holds
+   * them. One conditional write against the row as it stands: the archive
+   * is cleared only while the row is still archived, and the trash (status
+   * 'deleted', its time) is never changed, so a project trashed meanwhile
+   * on another device stays in the trash.
+   * @throws ProjectNotFoundError when the account does not own the project.
+   */
+  resetProjectShelfState(
+    userId: UserId,
+    projectId: string
+  ): Promise<ProjectSummary>;
   /** Renumbers the listed projects into the order they are given. */
   reorderProjects(
     userId: UserId,
@@ -1677,6 +1690,26 @@ export class InMemoryPersistenceService implements PersistenceService {
     this.organization.set(
       request.projectId,
       applyOrganizationUpdate(this.organizationOf(request.projectId), request)
+    );
+    return this.summarize(document);
+  }
+
+  async resetProjectShelfState(
+    userId: UserId,
+    projectId: string
+  ): Promise<ProjectSummary> {
+    const document = this.projects.get(projectId);
+    if (!document || document.ownerUserId !== userId) {
+      throw new ProjectNotFoundError(projectId);
+    }
+    if (this.projectCopyCleanupClaims.has(projectId))
+      throw new ProjectNotFoundError(projectId);
+    const current = this.organizationOf(projectId);
+    this.organization.set(
+      projectId,
+      current.status === 'deleted'
+        ? { ...current, pinned: false, sortOrder: 0 }
+        : { status: 'active', pinned: false, sortOrder: 0 }
     );
     return this.summarize(document);
   }

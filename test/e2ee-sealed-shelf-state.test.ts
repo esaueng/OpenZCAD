@@ -195,6 +195,70 @@ describe('sealed shelf state (ADR-024 amendment 2026-11-14)', () => {
     });
   });
 
+  it('resets a sealed row as it stands, never touching the trash', async () => {
+    const { call, db, row, plaintextId, secondId, encryptedId } =
+      await seed(projectsOn);
+    // Both rows held readable shelf state from before the library was
+    // encrypted; a listing saw both archived and pinned.
+    db.prepare(
+      `UPDATE projects SET status = 'archived', pinned = 1, sort_order = 4,
+         archived_at = '2026-11-01T00:00:00.000Z' WHERE id IN (?, ?)`
+    ).run(plaintextId, secondId);
+    // Before this device's migration resets them, another device trashes
+    // one of them.
+    const trash = await call('PATCH', `/api/projects/${plaintextId}`, {
+      body: { status: 'deleted' }
+    });
+    expect(trash.status).toBe(200);
+    const trashed = row(plaintextId);
+    expect(trashed.status).toBe('deleted');
+    expect(trashed.deleted_at).not.toBeNull();
+
+    const reset = await call(
+      'POST',
+      `/api/projects/${plaintextId}/shelf/reset`
+    );
+    expect(reset.status).toBe(200);
+    // Still in the trash, from the same time; only pin and order cleared.
+    expect(row(plaintextId)).toMatchObject({
+      status: 'deleted',
+      deleted_at: trashed.deleted_at,
+      pinned: 0,
+      sort_order: 0
+    });
+    expect(
+      ((await reset.json()) as { project: { organization?: unknown } }).project
+        .organization
+    ).toMatchObject({ status: 'deleted', pinned: false, sortOrder: 0 });
+
+    // A row still archived leaves the archive.
+    expect(
+      (await call('POST', `/api/projects/${secondId}/shelf/reset`)).status
+    ).toBe(200);
+    expect(row(secondId)).toEqual({
+      status: 'active',
+      pinned: 0,
+      sort_order: 0,
+      archived_at: null,
+      deleted_at: null
+    });
+
+    // Only the owner's row: a member's reset changes nothing.
+    db.prepare('UPDATE projects SET pinned = 1 WHERE id = ?').run(encryptedId);
+    const memberReset = await call(
+      'POST',
+      `/api/projects/${encryptedId}/shelf/reset`,
+      { user: MEMBER }
+    );
+    expect(memberReset.status, await memberReset.clone().text()).toBe(404);
+    expect(row(encryptedId).pinned).toBe(1);
+    // The owner resets it, encrypted or not: the route reads no document.
+    expect(
+      (await call('POST', `/api/projects/${encryptedId}/shelf/reset`)).status
+    ).toBe(200);
+    expect(row(encryptedId).pinned).toBe(0);
+  });
+
   it('applies to a member of an encrypted project', async () => {
     const { call, encryptedId } = await seed(projectsOn);
     const response = await call('PATCH', `/api/projects/${encryptedId}`, {
