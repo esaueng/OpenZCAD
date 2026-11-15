@@ -359,7 +359,13 @@ export async function copyBlobObjects(
   rows: readonly CopiedBlobRow[],
   written: string[],
   partBytes = ARTIFACT_UPLOAD_PART_BYTES,
-  pending?: { db: D1Database; attempt: string; ownerUserId: string }
+  pending?: {
+    db: D1Database;
+    attempt: string;
+    ownerUserId: string;
+    /** The request's session/erasure fence, held in the pending INSERT. */
+    authority?: { sql: string; binds: readonly unknown[] };
+  }
 ): Promise<void> {
   const record =
     pending && (await isPendingObjectStorageReady(pending.db)) ? pending : null;
@@ -393,7 +399,8 @@ export async function copyBlobObjects(
         projectId,
         ownerUserId: record.ownerUserId,
         bytes: size,
-        bucket: 'artifacts'
+        bucket: 'artifacts',
+        ...(record.authority ? { authority: record.authority } : {})
       });
       if (admission !== 'recorded') {
         throw new PendingObjectRefusedError(admission);

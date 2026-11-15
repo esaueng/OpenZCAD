@@ -1872,3 +1872,27 @@ describe('pending admission for an erased account (PR #1477 review, round 8)', (
     ).toEqual([{ owner_user_id: OWNER }]);
   });
 });
+
+describe('pending admission under the write’s own authority (PR #1477 review, round 9)', () => {
+  it('admits nothing once the write’s session or erasure fence no longer holds', async () => {
+    const { recordPendingObject } =
+      await import('@openzcad/cloudflare-adapters');
+    const db = database();
+    const d1 = sqliteD1(db);
+    const input = (key: string, sessionHeld: number) => ({
+      key,
+      attempt: key,
+      projectId: 'p1',
+      ownerUserId: OWNER,
+      bytes: 3,
+      bucket: 'project-storage' as const,
+      cap: 8,
+      authority: { sql: '? = 1', binds: [sessionHeld] }
+    });
+    expect(await recordPendingObject(d1, input('k/held', 1))).toBe('recorded');
+    expect(await recordPendingObject(d1, input('k/ended', 0))).toBe('revoked');
+    expect(
+      db.prepare('SELECT object_key FROM r2_pending_objects').all()
+    ).toEqual([{ object_key: 'k/held' }]);
+  });
+});

@@ -700,7 +700,8 @@ async function storeBody(
       ownerUserId: ctx.ownerUserId ?? ctx.userId,
       bytes: size,
       bucket: 'project-storage',
-      cap: PENDING_OBJECTS_PER_PROJECT
+      cap: PENDING_OBJECTS_PER_PROJECT,
+      authority: ctx.authorization
     });
     if (admission !== 'recorded') {
       await pendingAdmissionRefusal(ctx, projectId, admission, 'save');
@@ -735,9 +736,10 @@ async function pendingAdmissionRefusal(
   admission: Exclude<PendingObjectAdmission, 'recorded'>,
   write: 'save' | 'copy'
 ): Promise<never> {
-  // The account was erased after this write was admitted: nothing was put,
-  // and the session that admitted it is gone with the account.
-  if (admission === 'owner-gone') {
+  // The session that admitted this write ended (an erasure of its account
+  // among the ways), or the account it is charged to is gone: nothing was
+  // put, and a retry must sign in again.
+  if (admission === 'owner-gone' || admission === 'revoked') {
     refuse(
       401,
       'E2EE_SESSION_REQUIRED',
@@ -1774,7 +1776,8 @@ async function createProject(
       await copyBlobObjects(objects, projectId, copy.rows, copied, undefined, {
         db: ctx.db,
         attempt: copyAttempt,
-        ownerUserId: ctx.userId
+        ownerUserId: ctx.userId,
+        authority: ctx.authorization
       });
       await verifyCopiedObjects(objects, copied);
     }

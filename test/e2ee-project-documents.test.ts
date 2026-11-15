@@ -5,6 +5,7 @@
  * Worker routes over SQLite, with every migration applied unless a case
  * says otherwise.
  */
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import {
   afterEach,
@@ -3004,4 +3005,205 @@ describe('pending admission after a full account erasure (PR #1477 review, round
       )
     ).toEqual([]);
   });
+});
+
+describe('pending admission bound to the write’s own session (PR #1477 review, round 9)', () => {
+  const EMAIL = 'hosted@example.test';
+  // Hosted sign-in derives a stable user id from the email address.
+  const HOSTED = `user_${createHash('sha256').update(EMAIL).digest('hex').slice(0, 24)}`;
+  let hostedOwner: Account;
+
+  beforeAll(async () => {
+    hostedOwner = await makeAccount(HOSTED, ['hosted_laptop']);
+  });
+
+  it.each([false, true])(
+    'a save paused before its pending record admits nothing once a full erasure ended its session (signed in again: %s)',
+    async (signInAgain) => {
+      const worker = (await import('../apps/web/worker/index')).default;
+      const { verifyEmailLogin, hashLoginCode } =
+        await import('../apps/web/worker/auth');
+      const srv = newServer([hostedOwner]);
+      srv.db.exec('PRAGMA foreign_keys=ON');
+      const laptop = device(srv, hostedOwner, 'hosted_laptop');
+      const { document: v1 } = await createEncrypted(laptop);
+      const projectId = v1.projectId;
+      const head = rows<{ version_hash: string }>(
+        srv,
+        'SELECT version_hash FROM e2ee_project_versions WHERE project_id = ?',
+        projectId
+      )[0]!;
+      // Large enough that its body goes to R2 through a pending record.
+      const payload = new Uint8Array(400_000);
+      for (let n = 0; n < payload.length; n += 65536) {
+        crypto.getRandomValues(
+          payload.subarray(n, Math.min(payload.length, n + 65536))
+        );
+      }
+      const hand = await handVersion(
+        laptop,
+        projectId,
+        {
+          documentVersion: v1.version + 1,
+          keyEpoch: 0,
+          previousVersionHash: fromHex(head.version_hash)
+        },
+        { expectedVersion: v1.version, plaintext: payload }
+      );
+      // Hosted email-code sign-in; challenges are seeded, nothing is sent.
+      const hosted = {
+        ...srv.env,
+        AUTH_MODE: 'email-code',
+        AUTH_OTP_PEPPER: 'test-only-pepper',
+        AUTH_EMAIL_FROM: EMAIL,
+        TURNSTILE_SITE_KEY: 'test',
+        TURNSTILE_SECRET_KEY: 'test',
+        EMAIL: {
+          send: async () => {
+            throw new Error('not used');
+          }
+        }
+      };
+      const signIn = async () => {
+        const challengeId = crypto.randomUUID();
+        const code = '123456';
+        const now = Math.floor(Date.now() / 1000);
+        srv.db
+          .prepare(
+            `INSERT INTO auth_email_challenges
+               (id, email, code_hash, attempts, created_at, expires_at)
+             VALUES (?, ?, ?, 0, ?, ?)`
+          )
+          .run(
+            challengeId,
+            EMAIL,
+            await hashLoginCode(
+              challengeId,
+              EMAIL,
+              code,
+              hosted.AUTH_OTP_PEPPER
+            ),
+            now,
+            now + 600
+          );
+        const signed = await verifyEmailLogin(
+          { challengeId, code },
+          hosted as never
+        );
+        expect(signed.session.userId).toBe(HOSTED);
+        return signed.cookie.split(';')[0]!;
+      };
+      let cookie = await signIn();
+      const call = (
+        method: string,
+        path: string,
+        body?: unknown,
+        raw?: Uint8Array<ArrayBuffer>
+      ) =>
+        worker.fetch(
+          new Request(`https://example.com${path}`, {
+            method,
+            headers: {
+              cookie,
+              origin: 'https://example.com',
+              ...(raw
+                ? { 'content-type': FRAME }
+                : body === undefined
+                  ? {}
+                  : { 'content-type': 'application/json' })
+            },
+            body: raw ?? (body === undefined ? undefined : JSON.stringify(body))
+          }),
+          hosted as never
+        );
+      // The save passed its checks and pauses right before its pending
+      // record's INSERT.
+      const db = srv.env.DB as D1Database;
+      const prepare = db.prepare.bind(db);
+      let enter!: () => void;
+      let release!: () => void;
+      const entered = new Promise<void>((resolve) => (enter = resolve));
+      const released = new Promise<void>((resolve) => (release = resolve));
+      let once = true;
+      const pass = <T extends object>(target: T, property: PropertyKey) => {
+        const value = Reflect.get(target, property) as unknown;
+        return typeof value === 'function'
+          ? (value as (...args: unknown[]) => unknown).bind(target)
+          : value;
+      };
+      db.prepare = (sql: string) => {
+        const wrap = (statement: D1PreparedStatement): D1PreparedStatement =>
+          new Proxy(statement, {
+            get(target, property) {
+              if (property === 'bind') {
+                return (...args: unknown[]) => wrap(target.bind(...args));
+              }
+              if (
+                property === 'run' &&
+                once &&
+                sql.includes('INSERT INTO r2_pending_objects')
+              ) {
+                return async () => {
+                  once = false;
+                  enter();
+                  await released;
+                  return target.run();
+                };
+              }
+              return pass(target, property);
+            }
+          });
+        return wrap(prepare(sql));
+      };
+      const stale = call(
+        'PUT',
+        `/api/e2ee/projects/${projectId}/document`,
+        undefined,
+        encodeE2eeFrame({ version: hand.upload }, hand.envelope)
+      );
+      await entered;
+      // The account's full erasure completes meanwhile...
+      const erased = await call('POST', '/api/account/delete-data', {
+        scope: 'all',
+        confirmation: EMAIL
+      });
+      expect(erased.status).toBe(200);
+      expect(rows(srv, 'SELECT * FROM users WHERE id = ?', HOSTED)).toEqual([]);
+      // ...and the same person may sign in again, under the same user id.
+      if (signInAgain) {
+        cookie = await signIn();
+        expect(rows(srv, 'SELECT id FROM users WHERE id = ?', HOSTED)).toEqual([
+          { id: HOSTED }
+        ]);
+      }
+      const objectsBefore = new Set(srv.bucket.objects.keys());
+      // Storage misbehaves, so a save that did put could not clean up.
+      (
+        srv.bucket.head as unknown as Mock<(key: string) => Promise<unknown>>
+      ).mockImplementation(async () => {
+        throw new Error('temporary R2 head outage');
+      });
+      (
+        srv.bucket.delete as unknown as Mock<(key: string) => Promise<void>>
+      ).mockImplementation(async () => {
+        throw new Error('temporary R2 delete outage');
+      });
+      release();
+      const result = await stale;
+      db.prepare = prepare;
+      // Its own session ended with the erasure: refused at admission.
+      expect(result.status).toBe(401);
+      expect(((await result.json()) as { code: string }).code).toBe(
+        'E2EE_SESSION_REQUIRED'
+      );
+      expect(rows(srv, 'SELECT * FROM r2_pending_objects')).toEqual([]);
+      expect(new Set(srv.bucket.objects.keys())).toEqual(objectsBefore);
+      expect(
+        [...srv.bucket.objects.keys()].filter((key) =>
+          key.startsWith(`e2ee/${projectId}/`)
+        )
+      ).toEqual([]);
+    },
+    60_000
+  );
 });

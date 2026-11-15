@@ -629,7 +629,9 @@ export const PENDING_OBJECTS_PER_ACCOUNT = 2_400;
  * - `key-deleting`: a cleanup holds a fresh claim on the key and may be
  *   about to delete it (retry once it is done);
  * - `owner-gone`: the account it is charged to no longer exists (its full
- *   erasure completed after this write was admitted).
+ *   erasure completed after this write was admitted);
+ * - `revoked`: the write's own authority (`authority`) no longer holds:
+ *   its session ended, or an erasure of its account began or completed.
  */
 export type PendingObjectAdmission =
   | 'recorded'
@@ -637,7 +639,8 @@ export type PendingObjectAdmission =
   | 'account-full'
   | 'too-large'
   | 'key-deleting'
-  | 'owner-gone';
+  | 'owner-gone'
+  | 'revoked';
 
 /**
  * Records that `attempt` is about to put `key` (migration 0055), before the
@@ -660,6 +663,14 @@ export async function recordPendingObject(
     bytes: number;
     bucket: PendingObjectBucket;
     cap?: number;
+    /**
+     * The write's own authority (its session and erasure fence): one SQL
+     * condition with `?` placeholders. The record is admitted only while
+     * it holds, in the INSERT itself, so a write whose session an erasure
+     * revoked admits nothing, even once the account is created again
+     * under the same id.
+     */
+    authority?: { sql: string; binds: readonly unknown[] };
   }
 ): Promise<PendingObjectAdmission> {
   let result: Awaited<ReturnType<D1PreparedStatement['run']>>;
@@ -671,7 +682,8 @@ export async function recordPendingObject(
             bucket, created_at)
          SELECT ?, ?, ?, ?, ?, ?, ?
          WHERE (SELECT COUNT(*) FROM r2_pending_objects
-                WHERE project_id = ? AND bucket = ?) < ?`
+                WHERE project_id = ? AND bucket = ?) < ?
+           AND ${input.authority?.sql ?? '1'}`
       )
       .bind(
         input.key,
@@ -683,7 +695,8 @@ export async function recordPendingObject(
         Date.now(),
         input.projectId,
         input.bucket,
-        input.cap ?? Number.MAX_SAFE_INTEGER
+        input.cap ?? Number.MAX_SAFE_INTEGER,
+        ...(input.authority?.binds ?? [])
       )
       .run();
   } catch (error) {
@@ -694,7 +707,19 @@ export async function recordPendingObject(
     if (message.includes('r2_pending_account_limit')) return 'account-full';
     throw error;
   }
-  return (result.meta?.changes ?? 0) === 1 ? 'recorded' : 'project-full';
+  if ((result.meta?.changes ?? 0) >= 1) return 'recorded';
+  // Refused by the cap or by the write's authority: which one only shapes
+  // the answer; the INSERT itself admitted nothing either way.
+  if (
+    input.authority &&
+    !(await db
+      .prepare(`SELECT 1 AS held WHERE ${input.authority.sql}`)
+      .bind(...input.authority.binds)
+      .first<{ held: number }>())
+  ) {
+    return 'revoked';
+  }
+  return 'project-full';
 }
 
 /** Drops `attempt`'s records of `keys` once their objects are gone. */
