@@ -14,6 +14,7 @@ import {
   isProjectCheckpoint,
   isRevisionRecord,
   objectFolderSetError,
+  printClearanceError,
   assemblySetError,
   referenceImageSetError,
   reservedIdentifierError,
@@ -282,6 +283,12 @@ export function assertStorableDocument(value: unknown): ProjectDocument {
     [
       'assembly',
       record.assembly === undefined ? null : assemblySetError(record.assembly)
+    ],
+    [
+      'printClearance',
+      record.printClearance === undefined
+        ? null
+        : printClearanceError(record.printClearance)
     ]
   ] as const) {
     if (error)

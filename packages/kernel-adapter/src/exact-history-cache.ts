@@ -19,7 +19,9 @@
  * before returning so the kernel stack and adapter table remain aligned.
  */
 import {
+  documentPrintClearance,
   expressionIdentifiers,
+  featureReadsPrintClearance,
   findSketch,
   getParameterScope,
   parameterKindsOf,
@@ -266,6 +268,11 @@ export function historyFeatureDigest(
     // Read only resolved values named by the explicitly audited expression
     // fields. Other builders conservatively depend on the whole scope.
     scope: digestScope(feature, scope),
+    // L09: a thread or gear without its own clearance builds from the
+    // document's print clearance, which no feature node carries.
+    ...(featureReadsPrintClearance(feature.data)
+      ? { printClearance: printClearanceDigest(document, scope) }
+      : {}),
     // Whether this boolean ran the entity-evolution probe depends on the
     // features AFTER it, so appending a referencing feature changes this
     // boolean's own digest and the prefix cache rebuilds it with the probe
@@ -281,6 +288,18 @@ export function historyFeatureDigest(
         }
       : {})
   });
+}
+
+/** The resolved print clearance, or why it does not resolve. */
+function printClearanceDigest(
+  document: ProjectDocument,
+  scope: Record<string, number>
+): number | null | { error: string } {
+  try {
+    return documentPrintClearance(document, scope) ?? null;
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 /**

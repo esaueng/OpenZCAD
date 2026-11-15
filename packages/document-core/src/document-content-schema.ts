@@ -38,6 +38,14 @@ export function assertAssemblyCouplingSchema(version: unknown): void {
 }
 
 /**
+ * L09 document print clearance (schema v60): `printClearance` and its
+ * command. An older reader would build threads and gears without it.
+ */
+export function assertPrintClearanceSchema(version: unknown): void {
+  assertMinimumProjectSchema(version, 60, 'A print clearance');
+}
+
+/**
  * M15 thread runouts and pipe threads (schema v57): a thread carrying either
  * needs a document that declares it, or an older reader would build a plain
  * end or a cylindrical thread in its place.
@@ -140,6 +148,8 @@ export function assertDocumentContentCommandSchema(
       assertAssemblyCouplingSchema(document.schemaVersion);
     if (command.kind === 'feature.sheet-metal')
       assertSheetMetalSchema(document.schemaVersion);
+    if (command.kind === 'printClearance.set')
+      assertPrintClearanceSchema(document.schemaVersion);
     if (!record(command.payload)) continue;
     if (
       command.kind === 'sketch.composite.add' &&
@@ -187,6 +197,15 @@ export function assertDocumentContentSchema(document: ProjectDocument): void {
         (change.before !== undefined || change.after !== undefined)
       )
         assertObjectFolderSchema(document.schemaVersion);
+  if (document.printClearance !== undefined)
+    assertPrintClearanceSchema(document.schemaVersion);
+  for (const entry of document.editHistory?.entries ?? [])
+    for (const change of entry.changes)
+      if (
+        change.field === 'printClearance' &&
+        (change.before !== undefined || change.after !== undefined)
+      )
+        assertPrintClearanceSchema(document.schemaVersion);
   if (document.assembly !== undefined)
     assertAssemblySchema(document.schemaVersion);
   if (hasCouplings(document.assembly))

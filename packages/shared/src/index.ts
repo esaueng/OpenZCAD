@@ -14,6 +14,7 @@ export * from './mass-density';
 export * from './keymap-settings';
 export * from './drawings';
 export * from './object-folders';
+export * from './print-clearance';
 export * from './assembly';
 export * from './assembly-coupling';
 export * from './assembly-kinematics';
@@ -250,7 +251,13 @@ export type SketchCompositeId = Brand<string, 'SketchCompositeId'>;
 // shape with a construction centre line). An older client would refuse the
 // unknown object, or drop the composite record on its next save and leave
 // four unrelated curves, so it must refuse the document. Builds on v58.
-export const PROJECT_DOCUMENT_SCHEMA_VERSION = 59 as const;
+// v60 adds the L09 document print clearance (`printClearance`): one radial
+// allowance for printed fits that threads and gears read where they leave
+// their own clearance or backlash unset. Absent means none, so every older
+// document builds unchanged and is never rewritten. An older client would
+// build those threads and gears without it, so it must refuse. Builds on
+// v59.
+export const PROJECT_DOCUMENT_SCHEMA_VERSION = 60 as const;
 export type ProjectDocumentSchemaVersion =
   typeof PROJECT_DOCUMENT_SCHEMA_VERSION;
 
@@ -3760,6 +3767,16 @@ export interface ProjectDocument {
    * project has no assembly.
    */
   assembly?: AssemblySet;
+  /**
+   * L09 print clearance (schema v60): the radial gap a printed part leaves
+   * to its mate, a length in document units (a number, or an expression that
+   * may use units and parameters). Read by every thread that leaves its own
+   * `clearance` unset (pipe threads excepted: they mate standard fittings)
+   * and every gear that leaves its `backlash` unset, as each flank offset by
+   * this much. Absent means none: those threads and gears build exactly as
+   * before. See `documentPrintClearance` in document-core.
+   */
+  printClearance?: ParamValue;
 }
 
 export interface SerializedCommand<TPayload = unknown> {
