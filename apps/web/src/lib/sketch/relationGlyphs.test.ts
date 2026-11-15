@@ -183,6 +183,28 @@ describe('sketchRelationGlyphs', () => {
     ).toEqual([]);
   });
 
+  it('also shows relations a drawing commit just inferred (S08)', () => {
+    const inferred = rectangle.find(
+      (entry) => entry.data.constraintKind === 'vertical'
+    )!;
+    const options = {
+      visibility: 'selected' as const,
+      selectedObjectId: null,
+      alsoShownConstraintIds: new Set([String(inferred.constraintId)])
+    };
+    const chips = sketchRelationGlyphs(objects, rectangle, resolve, options);
+    expect(
+      chips.flatMap((chip) => chip.glyphs.map((glyph) => glyph.constraintId))
+    ).toEqual([String(inferred.constraintId)]);
+    // Hidden still means hidden; the status line names them instead.
+    expect(
+      sketchRelationGlyphs(objects, rectangle, resolve, {
+        ...options,
+        visibility: 'hidden'
+      })
+    ).toEqual([]);
+  });
+
   it('flags glyphs whose relation the last solve named as conflicting', () => {
     const parallel = rectangle[7]!;
     const chips = sketchRelationGlyphs(objects, rectangle, resolve, {

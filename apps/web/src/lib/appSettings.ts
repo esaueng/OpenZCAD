@@ -286,6 +286,11 @@ export function normalizeAppSettings(value: unknown): AppSettings {
         sketching.inferenceEnabled,
         defaults.sketching.inferenceEnabled
       ),
+      // Absent from settings written before S08: off (opt-in).
+      autoConstrain: boolean(
+        sketching.autoConstrain,
+        defaults.sketching.autoConstrain
+      ),
       linearSnap: boundedNumber(
         sketching.linearSnap,
         defaults.sketching.linearSnap,
