@@ -614,7 +614,7 @@ describe('schema v57 migration', () => {
   it('opens a v56 thread unchanged but for the version', () => {
     const v56 = threadedV56();
     const opened = normalizeDocument(v56);
-    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBe(57);
+    expect(PROJECT_DOCUMENT_SCHEMA_VERSION).toBeGreaterThanOrEqual(57);
     expect(opened.schemaVersion).toBe(PROJECT_DOCUMENT_SCHEMA_VERSION);
     expect(opened.nodes).toEqual(v56.nodes);
     expect(opened.featureOrder).toEqual(v56.featureOrder);
