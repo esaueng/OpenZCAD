@@ -81,6 +81,7 @@
   "settings-reload-cover.spec.ts": 4,
   "settings.spec.ts": 8,
   "shoulder-cap-offset.spec.ts": 668,
+  "sketch-guides.spec.ts": 14,
   "sketch-inference.spec.ts": 18,
   "sketch-modify-tools.spec.ts": 12,
   "sketch-move.spec.ts": 14,

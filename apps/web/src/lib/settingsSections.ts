@@ -163,6 +163,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionMeta[] = [
       'Snap tolerance',
       'Automatic inferencing',
       'Auto-constrain',
+      'Snap hints',
       'Relation glyphs',
       'Glyph kinds'
     ]

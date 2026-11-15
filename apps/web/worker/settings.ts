@@ -437,6 +437,10 @@ export function parseUpdateAppSettingsRequest(
           typeof sketching.autoConstrain === 'boolean'
             ? sketching.autoConstrain
             : DEFAULT_APP_SETTINGS.sketching.autoConstrain,
+        snapHints:
+          typeof sketching.snapHints === 'boolean'
+            ? sketching.snapHints
+            : DEFAULT_APP_SETTINGS.sketching.snapHints,
         linearSnap: requiredNumber(sketching, 'linearSnap', 0.001, 10_000),
         angleSnap: requiredNumber(sketching, 'angleSnap', 1, 90),
         snapTolerancePx:
