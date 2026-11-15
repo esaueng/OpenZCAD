@@ -502,6 +502,98 @@ test('drags a part about its joint and soft-stops at the limit (AS02)', async ({
   await expect(joints).toContainText('25.0°');
 });
 
+/** The device copy's stored joint value, read straight from IndexedDB. */
+function storedJointValue(page: Page, name: string, jointId: string) {
+  return page.evaluate(
+    ({ name, jointId }) =>
+      new Promise<number | null>((resolve, reject) => {
+        const open = indexedDB.open('openzcad-v2');
+        open.onerror = () => reject(new Error('Could not open storage.'));
+        open.onsuccess = () => {
+          const database = open.result;
+          const all = database
+            .transaction('projects', 'readonly')
+            .objectStore('projects')
+            .getAll();
+          all.onerror = () => {
+            database.close();
+            reject(new Error('Could not read projects.'));
+          };
+          all.onsuccess = () => {
+            database.close();
+            const project = (
+              all.result as {
+                name: string;
+                assembly?: { joints: { id: string; values: number[] }[] };
+              }[]
+            ).find((entry) => entry.name === name);
+            resolve(
+              project?.assembly?.joints.find((joint) => joint.id === jointId)
+                ?.values[0] ?? null
+            );
+          };
+        };
+      }),
+    { name, jointId }
+  );
+}
+
+// AS01/AS02 offline save and reopen: a drag made with the network down is a
+// saved transform on the device, and the reopened project shows that pose
+// with the drag still one undo step.
+test(
+  'a part dragged offline reopens at the dragged pose and undoes as one step (AS01/AS02)',
+  { tag: '@ci-smoke' },
+  async ({ page, context }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const name = 'Assembly offline drag';
+    await openDocument(page, blades(name, true));
+    await assemble(page);
+    const joints = panel(page).getByRole('region', { name: 'Joints' });
+    await joints.getByText('Pivot', { exact: true }).click();
+    const angle = page.getByRole('textbox', { name: 'Angle', exact: true });
+    await angle.fill('25');
+    await angle.press('Enter');
+    await angle.blur();
+    await expect(joints).toContainText('25.0°');
+    await expect
+      .poll(() => storedJointValue(page, name, 'joint_pivot'))
+      .toBe(25);
+
+    await context.setOffline(true);
+    try {
+      expect(await page.evaluate(() => navigator.onLine)).toBe(false);
+      await page.mouse.move(930, 445);
+      await page.mouse.down();
+      await page.mouse.move(925, 420, { steps: 5 });
+      await page.mouse.move(900, 330, { steps: 10 });
+      await expect(page.getByText('35.0° · max')).toBeVisible();
+      await page.mouse.up();
+      await expect(joints).toContainText('35.0°');
+      // Saved on the device while still offline.
+      await expect
+        .poll(() => storedJointValue(page, name, 'joint_pivot'))
+        .toBe(35);
+    } finally {
+      // Static preview has no offline app-shell cache: reconnect for the
+      // reload itself. The edit and its device save happened offline.
+      await context.setOffline(false);
+    }
+
+    await page.reload();
+    await expect(page.locator('.viewer-host canvas')).toHaveAttribute(
+      'data-e2e-rendered-bodies',
+      '2',
+      { timeout: 30_000 }
+    );
+    await assemble(page);
+    await expect(joints).toContainText('35.0°');
+    await page.keyboard.press('ControlOrMeta+z');
+    await expect(joints).toContainText('25.0°');
+  }
+);
+
 test(
   'sets up a lift-out motion from the sidebar and plays it back and forth (AS02/AS06)',
   { tag: '@ci-smoke' },
