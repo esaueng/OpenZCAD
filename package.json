@@ -30,6 +30,7 @@
     "test:e2e": "playwright test",
     "test:e2e:full": "playwright test --config playwright.full.config.ts",
     "lint": "node --max-old-space-size=6144 node_modules/eslint/bin/eslint.js apps packages test types --ext .ts,.tsx",
+    "lint:paths": "node --max-old-space-size=6144 node_modules/eslint/bin/eslint.js --ext .ts,.tsx",
     "format": "prettier --write .",
     "selfhost:check": "node scripts/validate-deployment-config.mjs --config wrangler.selfhost.jsonc --target selfhost",
     "check:release-build": "node scripts/check-release-build.mjs",

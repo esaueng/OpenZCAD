@@ -79,6 +79,7 @@
     "test/ci-qualification.test.ts",
     "test/ci-runtime-optimization.test.ts",
     "test/ci-selection.test.ts",
+    "test/ci-staged-fleet.test.ts",
     "test/cloud-project-autosave.test.ts",
     "test/cloudflare-adapters.test.ts",
     "test/collaboration-checkpoint.test.ts",
