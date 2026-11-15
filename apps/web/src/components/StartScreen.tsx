@@ -344,11 +344,13 @@ const LIBRARY_VIEW_KEY = 'openzcad.start.view';
 const LIBRARY_DRAFT_KEY = 'openzcad.start.draft';
 
 /**
- * The name suggested since this page loaded. The draft in sessionStorage
- * outlives a reload but this does not, which is how a remount tells the two
- * apart.
+ * This page load, recorded with the draft. The draft in sessionStorage
+ * outlives a reload but this does not, which is how a remount (back from a
+ * project, same load) tells a suggestion to keep from one to replace.
  */
-let pageSuggestion: string | null = null;
+const PAGE_LOAD_ID = `${Date.now().toString(36)}-${Math.random()
+  .toString(36)
+  .slice(2)}`;
 
 /** One empty list, so effects keyed on the projects settle while pending. */
 const NO_PROJECTS: ProjectSummary[] = [];
@@ -358,16 +360,23 @@ function readLibraryDraft(): {
   units: UnitSystem;
   /** The name is still the suggestion nobody has typed over. */
   suggested: boolean;
+  /** The suggestion was made since this page loaded. */
+  thisPage: boolean;
 } | null {
   try {
     const stored: unknown = JSON.parse(
       sessionStorage.getItem(LIBRARY_DRAFT_KEY) ?? 'null'
     );
     if (!stored || typeof stored !== 'object') return null;
-    const { name, units, suggested } = stored as Record<string, unknown>;
+    const { name, units, suggested, page } = stored as Record<string, unknown>;
     return typeof name === 'string' &&
       (units === 'mm' || units === 'cm' || units === 'm' || units === 'inch')
-      ? { name, units, suggested: suggested === true }
+      ? {
+          name,
+          units,
+          suggested: suggested === true,
+          thisPage: page === PAGE_LOAD_ID
+        }
       : null;
   } catch {
     return null;
@@ -670,17 +679,14 @@ export function StartScreen({
   // A typed name survives a reload; a suggestion survives only a remount
   // (back from a project), so each reload suggests a fresh name.
   const [name, setName] = useState(() => {
-    if (
-      initialDraft &&
-      (!initialDraft.suggested || initialDraft.name === pageSuggestion)
-    ) {
+    if (initialDraft && (!initialDraft.suggested || initialDraft.thisPage)) {
       return initialDraft.name;
     }
-    pageSuggestion = generateCutePartName(
-      undefined,
-      projects.map((project) => project.name)
-    );
-    return pageSuggestion;
+    // The suggestion from before the reload is avoided too, while any other
+    // name is free.
+    const taken = projects.map((project) => project.name);
+    if (initialDraft) taken.push(initialDraft.name);
+    return generateCutePartName(undefined, taken);
   });
   const [units, setUnits] = useState<UnitSystem>(
     initialDraft?.units ?? defaultUnits
@@ -705,11 +711,19 @@ export function StartScreen({
   // the caret.
   const nameSuggested = useRef(initialDraft?.suggested ?? true);
   const keepSuggestionSelected = useRef(false);
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  /** Select the replacement suggestion once it is in the focused field. */
+  const reselectSuggestion = useRef(false);
   useEffect(() => {
     try {
       sessionStorage.setItem(
         LIBRARY_DRAFT_KEY,
-        JSON.stringify({ name, units, suggested: nameSuggested.current })
+        JSON.stringify({
+          name,
+          units,
+          suggested: nameSuggested.current,
+          page: PAGE_LOAD_ID
+        })
       );
     } catch {
       // Draft persistence is optional when browser storage is unavailable.
@@ -862,9 +876,18 @@ export function StartScreen({
       projects.map((project) => project.name)
     );
     if (sameNamedProject(fresh, projects)) return;
-    pageSuggestion = fresh;
+    // A focused suggestion stays selected, so the next key still replaces
+    // it rather than appending to the new one.
+    reselectSuggestion.current =
+      nameInputRef.current !== null &&
+      nameInputRef.current === document.activeElement;
     setName(fresh);
   }, [nameTaken, projects]);
+  useLayoutEffect(() => {
+    if (!reselectSuggestion.current) return;
+    reselectSuggestion.current = false;
+    nameInputRef.current?.select();
+  }, [name]);
 
   useEffect(() => {
     if (!unitsEdited.current) setUnits(defaultUnits);
@@ -3036,7 +3059,6 @@ export function StartScreen({
       } catch {
         /* optional */
       }
-      pageSuggestion = null;
       onCreate(trimmedName, units);
     }
   }
@@ -3347,6 +3369,7 @@ export function StartScreen({
           <div className="start-launch-field">
             <label className="start-field start-field-name">
               <input
+                ref={nameInputRef}
                 value={name}
                 aria-label="Project name"
                 placeholder="Project name"
