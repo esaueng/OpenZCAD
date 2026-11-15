@@ -244,6 +244,38 @@ describe('S08 inference on the pinned kernel', () => {
     expectStill(await sketch.solve(), sketch.objects());
   });
 
+  it('a line started on an extension is held on that line', async () => {
+    const sketch = drawing();
+    await sketch.draw(segment(0, 0, 10, 0));
+    const held = await sketch.draw(segment(16, 0, 16, 8), {
+      hints: [
+        { x: 16, y: 0, kind: 'extension', sourceId: sketch.objects()[0]!.id }
+      ]
+    });
+    expect(held.kinds).toEqual(['on-curve', 'vertical']);
+    expectStill(await sketch.solve(), sketch.objects());
+  });
+
+  it('a line ending on a tangent point keeps the tangent, not a singular hold', async () => {
+    const sketch = drawing();
+    await sketch.draw({
+      objectKind: 'circle',
+      centerX: 0,
+      centerY: 0,
+      radius: 5
+    });
+    const circleId = sketch.objects()[0]!.id;
+    const spread = Math.acos(5 / 10);
+    const touch = { x: 5 * Math.cos(spread), y: 5 * Math.sin(spread) };
+    const result = await sketch.draw(segment(10, 0, touch.x, touch.y), {
+      hints: [{ ...touch, kind: 'tangent', sourceId: circleId }]
+    });
+    // At exact tangency the hold on the circle and the tangent have the
+    // same gradient along the line, so the solve keeps the tangent alone.
+    expect(result.kinds).toEqual(['tangent']);
+    expectStill(await sketch.solve(), sketch.objects());
+  });
+
   it('undo removes the entity and every relation inferred with it', async () => {
     const sketch = drawing();
     await sketch.draw(segment(0, 0, 10, 0));

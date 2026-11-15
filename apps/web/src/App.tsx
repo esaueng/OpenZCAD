@@ -20817,6 +20817,7 @@ export function App() {
       gridVisible: appSettings.sketching.gridVisible,
       geometrySnapEnabled: appSettings.sketching.geometrySnapEnabled,
       inferenceEnabled: appSettings.sketching.inferenceEnabled,
+      snapHints: appSettings.sketching.snapHints,
       snapTolerancePx: appSettings.sketching.snapTolerancePx,
       drawing: session.drawing,
       objects,
@@ -20991,9 +20992,11 @@ export function App() {
         construction: sketchConstruction
       }
     );
+    // With nothing drawn before it, what an entity infers about itself can
+    // never restate an existing relation, so it needs no settling solve.
     const commands =
-      plan.optional.length === 0
-        ? plan.commands
+      plan.optional.length === 0 || existing.length === 0
+        ? [...plan.commands, ...plan.optional]
         : await settleOptionalRelations(
             base,
             plan.sketchId,

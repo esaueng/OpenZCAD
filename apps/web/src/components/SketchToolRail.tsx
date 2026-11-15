@@ -1539,6 +1539,18 @@ export function SketchToolRail({
             <label>
               <input
                 type="checkbox"
+                checked={settings.snapHints}
+                onChange={(event) =>
+                  patchSettings({
+                    snapHints: event.currentTarget.checked
+                  })
+                }
+              />
+              Snap hints
+            </label>
+            <label>
+              <input
+                type="checkbox"
                 checked={settings.snapEnabled}
                 onChange={(event) =>
                   patchSettings({

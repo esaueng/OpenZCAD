@@ -4914,6 +4914,8 @@ export interface AppSettings {
      * only connected endpoints and midpoints.
      */
     autoConstrain: boolean;
+    /** S08: name the engaged snap in text beside its glyph. */
+    snapHints: boolean;
     linearSnap: number;
     angleSnap: number;
     /** Screen-space radius used for sketch snap candidates. */
@@ -5070,6 +5072,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     geometrySnapEnabled: true,
     inferenceEnabled: true,
     autoConstrain: false,
+    snapHints: true,
     linearSnap: 1,
     angleSnap: 15,
     snapTolerancePx: 10,
