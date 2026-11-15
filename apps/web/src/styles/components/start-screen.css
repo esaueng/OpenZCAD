@@ -3168,15 +3168,6 @@
     padding: var(--sp-3) var(--sp-3) 0;
     border-top: 0;
   }
-
-  /* Above the library here, so the readout keeps its meter's row whether
-     or not the meter is drawn yet: "Checking account…" then a storage
-     figure moved every card 11 px down mid-reload. Padding, line, gap and
-     meter; at least the touch floor too. */
-  .start-column-foot .start-account-head {
-    min-height: max(44px, calc(7px + 20px + 7px + 4px + 7px));
-    align-content: start;
-  }
 }
 
 @media (max-width: 560px) {
