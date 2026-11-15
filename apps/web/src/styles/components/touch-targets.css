@@ -141,6 +141,7 @@
   .start-search input,
   .start-sort select,
   .start-empty-actions > button,
+  .start-learn-toggle,
   .start-tile-menu [role='menuitem'],
   .topbar-menu-item,
   .palette-row,
