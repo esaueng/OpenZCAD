@@ -27,11 +27,22 @@ describe('project listing failures', () => {
     );
   });
 
-  it('names a failure that never reached the Worker', () => {
+  it('names a failure by its kind, never by its message', () => {
     expect(
       describeProjectListingFailure(new TypeError('Failed to fetch'))
-    ).toBe('TypeError: Failed to fetch');
-    expect(describeProjectListingFailure('nope')).toBe('Unknown error');
+    ).toBe('network error');
+    // A body that is not JSON fails parsing with a message that quotes it.
+    expect(
+      describeProjectListingFailure(
+        new SyntaxError(
+          'Unexpected token \'p\', "private-project" is not valid JSON'
+        )
+      )
+    ).toBe('unreadable response');
+    expect(
+      describeProjectListingFailure(new Error('private-project-name'))
+    ).toBe('unexpected error');
+    expect(describeProjectListingFailure('nope')).toBe('unexpected error');
   });
 
   it('logs the reason to the console and the activity log', () => {

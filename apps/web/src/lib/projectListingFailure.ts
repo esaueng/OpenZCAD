@@ -4,7 +4,8 @@ import { recordActivity } from './activityLog';
 /**
  * Why the account's project list could not be read, in a few words: the
  * HTTP status and the API's error code when the Worker answered, otherwise
- * the kind of failure (a network error, say). No URL, ids or response body.
+ * the kind of failure. Never an error's message: a body that is not JSON
+ * fails parsing with a message that quotes it. No URL, ids or body.
  */
 export function describeProjectListingFailure(error: unknown): string {
   if (error instanceof ApiError) {
@@ -13,10 +14,12 @@ export function describeProjectListingFailure(error: unknown): string {
       : `HTTP ${error.status}`;
   }
   if (error instanceof Error) {
-    const message = error.message.slice(0, 120);
-    return message ? `${error.name}: ${message}` : error.name;
+    if (error.name === 'TypeError') return 'network error';
+    if (error.name === 'SyntaxError') return 'unreadable response';
+    if (error.name === 'AbortError') return 'request aborted';
+    return 'unexpected error';
   }
-  return 'Unknown error';
+  return 'unexpected error';
 }
 
 /**
