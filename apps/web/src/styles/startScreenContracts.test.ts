@@ -214,6 +214,26 @@ describe('start screen folder tab', () => {
   });
 });
 
+describe('start screen launch form', () => {
+  it('marks the focused units inside the shared ring', () => {
+    // 14 Nov 2026 review: tabbing from the name to the units kept the same
+    // ring and only lost the caret.
+    expect(
+      rule(css, '.start-launch-field .start-field-units select:focus-visible')
+    ).toMatch(/background:\s*var\(--color-surface-hover\)/);
+    expect(
+      rule(css, '.start-field-units:has(select:focus-visible)::after')
+    ).toMatch(/background:\s*var\(--color-accent\)/);
+  });
+
+  it('packs New project and the name to the top of the launch row', () => {
+    // 14 Nov 2026: on the first run the shelf spans the column's rows, and
+    // its height opened gaps between New project and the name field.
+    expect(rule(css, '.start-launch')).toMatch(/align-content:\s*start/);
+    expect(rule(css, '.start-launch-form')).toMatch(/align-content:\s*start/);
+  });
+});
+
 describe('start screen encryption mark', () => {
   it('draws the not-encrypted mark in the warning hue', () => {
     expect(rule(css, '.start-tile-mark.is-plaintext')).toMatch(
