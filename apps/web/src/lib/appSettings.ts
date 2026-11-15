@@ -291,6 +291,8 @@ export function normalizeAppSettings(value: unknown): AppSettings {
         sketching.autoConstrain,
         defaults.sketching.autoConstrain
       ),
+      // Absent from settings written before S08: on, as the labels were.
+      snapHints: boolean(sketching.snapHints, defaults.sketching.snapHints),
       linearSnap: boundedNumber(
         sketching.linearSnap,
         defaults.sketching.linearSnap,

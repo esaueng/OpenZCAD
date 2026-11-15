@@ -189,6 +189,7 @@ export function inferSketchRelations(
     namedPoints(object, resolve)
   );
   const existingById = new Map(existing.map((object) => [object.id, object]));
+  const addedById = new Map(added.map((object) => [object.id, object]));
   const midpoints = existing.flatMap((object) =>
     lineMidpoints(object, resolve)
   );
@@ -259,6 +260,57 @@ export function inferSketchRelations(
       return null;
     }
     let held = false;
+    // A guideline snap: on a line's extension, or where a line from the
+    // chain's anchor touches a circle or arc.
+    if (
+      (hint?.kind === 'extension' || hint?.kind === 'tangent') &&
+      hint.sourceId
+    ) {
+      const curve = existingById.get(hint.sourceId);
+      if (
+        curve &&
+        holdsPoints(curve.data) &&
+        onCurve(curve.data, point.at, resolve)
+      ) {
+        held = true;
+        relations.push({
+          kind: 'on-curve',
+          data: {
+            constraintKind: 'point-on-object',
+            point: point.ref,
+            objectId: hint.sourceId as EntityId
+          },
+          connected: false,
+          optional: true
+        });
+        const drawn = addedById.get(point.ref.objectId);
+        if (
+          hint.kind === 'tangent' &&
+          curve.data.objectKind === 'circle' &&
+          drawn &&
+          lineDirection(drawn.data, resolve) &&
+          tangentAt(
+            {
+              x: resolve(curve.data.centerX),
+              y: resolve(curve.data.centerY)
+            },
+            point.at,
+            lineDirection(drawn.data, resolve)!.u
+          )
+        ) {
+          relations.push({
+            kind: 'tangent',
+            data: {
+              constraintKind: 'tangent',
+              a: point.ref.objectId,
+              b: hint.sourceId as EntityId
+            },
+            connected: false,
+            optional: true
+          });
+        }
+      }
+    }
     if (hint?.kind === 'intersection' && hint.sourceIds) {
       for (const curveId of hint.sourceIds) {
         const curve = existingById.get(curveId);

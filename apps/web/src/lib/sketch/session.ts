@@ -693,6 +693,7 @@ export type SnapTargetKind =
   | 'vertical'
   | 'perpendicular'
   | 'tangent'
+  | 'extension'
   | 'grid';
 
 export interface SnapTarget extends SketchPoint {
@@ -739,6 +740,7 @@ export const SKETCH_SNAP_PRIORITY: Record<SnapTargetKind, number> = {
   vertical: 6,
   perpendicular: 6,
   tangent: 6,
+  extension: 6,
   grid: 7
 };
 
@@ -753,6 +755,7 @@ export const SKETCH_SNAP_LABELS: Record<SnapTargetKind, string> = {
   vertical: 'Vertical',
   perpendicular: 'Perpendicular',
   tangent: 'Tangent',
+  extension: 'Extension',
   grid: 'Grid'
 };
 
@@ -767,6 +770,7 @@ export const SKETCH_SNAP_GLYPHS: Record<SnapTargetKind, string> = {
   vertical: '|',
   perpendicular: '⊥',
   tangent: '○',
+  extension: '+',
   grid: '•'
 };
 

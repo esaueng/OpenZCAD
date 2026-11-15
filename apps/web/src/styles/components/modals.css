@@ -1037,6 +1037,112 @@
   }
 }
 
+/* ── Sheet-metal flat pattern (M16) ── */
+
+.flat-pattern-dialog {
+  width: min(760px, 100%);
+}
+
+.flat-pattern-warning {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--color-warning);
+  border-radius: var(--radius-md);
+  color: var(--color-text);
+  font-size: var(--fs-sm);
+}
+
+/* The drawing is black on white whatever the theme, as it prints. */
+.flat-pattern-preview {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 320px;
+  object-fit: contain;
+  background: #ffffff;
+  border: var(--border-thin);
+  border-radius: var(--radius-md);
+}
+
+.flat-pattern-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-3);
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+
+.flat-pattern-key {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  color: var(--color-text-muted);
+}
+
+.flat-pattern-key::before {
+  content: '';
+  width: 22px;
+  border-top: 2px dashed #1f5fbf;
+}
+
+.flat-pattern-key[data-direction='down']::before {
+  border-top: 2px dotted #c62828;
+}
+
+.flat-pattern-size {
+  margin-left: auto;
+  color: var(--color-text-muted);
+}
+
+.flat-pattern-size strong {
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.flat-pattern-table-wrap {
+  overflow-x: auto;
+}
+
+.flat-pattern-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.flat-pattern-table th,
+.flat-pattern-table td {
+  padding: 4px var(--sp-2);
+  border-bottom: var(--border-thin);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.flat-pattern-table th:nth-child(-n + 2),
+.flat-pattern-table td:nth-child(-n + 2) {
+  text-align: left;
+}
+
+.flat-pattern-table th {
+  /* Headings wrap so all eight columns fit the dialog; values never do. */
+  white-space: normal;
+  vertical-align: bottom;
+  color: var(--color-text-subtle);
+  font-weight: var(--fw-medium);
+  font-size: var(--fs-xs);
+}
+
+.flat-pattern-actions {
+  flex-wrap: wrap;
+}
+
+.flat-pattern-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
 /* ── Shapr3D paired migration preview ───────────────────── */
 
 .shapr-import-dialog {

@@ -53,6 +53,8 @@
 @import './components/selection-rail.css';
 /* The in-viewport edit control: value, state, refusal, keypad. */
 @import './components/edit-control.css';
+/* M16 Bend's table over the command bar, which the quiet stage placed. */
+@import './components/sheet-metal.css';
 /* After every sizing rule: it only adds hit area, never moves a control. */
 @import './components/target-size.css';
 /* A touch phone held upright: one-column rails and a short instrument set.

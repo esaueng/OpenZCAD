@@ -129,6 +129,23 @@ export const threadGlyph = glyph(
   </>
 );
 
+/** A thin plate lying flat, its edge showing its thickness. */
+export const sheetMetalGlyph = glyph(
+  <>
+    <path d="M3 15l6-5h12l-6 5z" />
+    <path d="M3 15v2l12 .01L21 12v-2" />
+  </>
+);
+
+/** A plate folded up through a round bend, the way it turns dashed. */
+export const bendGlyph = glyph(
+  <>
+    <path d="M3 20h9a6 6 0 0 0 6-6V4" />
+    <path d="M3 16h9a2 2 0 0 0 2-2V4" />
+    <path d="M3 4l7 7" strokeDasharray={DASH} />
+  </>
+);
+
 /** A solid hollowed to an open cup. */
 export const shellGlyph = glyph(
   <>

@@ -5179,8 +5179,24 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
     document: ProjectDocument,
     featureId: FeatureId
   ): Promise<SheetMetalFlatPattern> {
-    return this.withExportBuild(document, (kernel, build) =>
-      sheetMetalFlatPattern(
+    return this.withExportBuild(document, (kernel, build) => {
+      // The pattern is planned on its own, without the fold, so a refusal
+      // only the fold raises (folded-overlap, fold-failed) would never reach
+      // it. A part the build refused is not a part to cut: refuse with the
+      // build's own message.
+      const refusal = build.featureWarnings.find(
+        (entry) =>
+          entry.featureId === featureId &&
+          (entry.kind === 'build-failed' ||
+            entry.kind === 'refusal' ||
+            entry.kind === 'suppressed')
+      );
+      if (refusal) {
+        throw new Error(
+          `${refusal.message.split('\n')[0]} The flat pattern is not exported until the part builds.`
+        );
+      }
+      return sheetMetalFlatPattern(
         kernel,
         // The sketches as the build read them: a linked projection that
         // moved is re-projected there, not in the stored document.
@@ -5189,8 +5205,8 @@ export class RemusKernelAdapter implements ExactKernelAdapter {
         build,
         featureId,
         millimetresPerUnit(document.units)
-      )
-    );
+      );
+    });
   }
 
   async sheetMetalFoldPreview(

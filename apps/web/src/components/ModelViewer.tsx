@@ -346,6 +346,14 @@ import {
   type SketchSnapHint
 } from '../lib/sketch/inference';
 import {
+  extensionTargets,
+  modelGuideTargets,
+  tangentTargets,
+  viewIsOrthogonal,
+  type ModelGuidepoint,
+  type SketchGuideTarget
+} from '../lib/sketch/guides';
+import {
   arcDimension,
   arcObjectFromPoints,
   arcPreviewPoints,
@@ -644,6 +652,8 @@ export interface SketchModeState {
   gridVisible: boolean;
   geometrySnapEnabled: boolean;
   inferenceEnabled: boolean;
+  /** S08: name the engaged snap in text beside its glyph. */
+  snapHints?: boolean;
   snapTolerancePx: number;
   /** True while a line chain (or drag) is in flight; cleared by Escape. */
   drawing: boolean;
@@ -8704,18 +8714,24 @@ export function ModelViewer({
       sketchPointerOnCanvas = true;
       if (freeValue(event)) {
         activeSketchSnap = null;
+        activeSketchGuide = null;
         sketchSnapCycle = 0;
         hideSketchSnapMarker();
         latestSketchPoint = point;
         return point;
       }
+      activeSketchGuide = null;
       if (mode.geometrySnapEnabled) {
+        const tolerance =
+          mode.snapTolerancePx *
+          pointerSlack(event) *
+          sketchWorldPerPixel(mode.basis.origin);
         const resolved = resolveSketchSnap(
           point,
-          targets,
-          mode.snapTolerancePx *
-            pointerSlack(event) *
-            sketchWorldPerPixel(mode.basis.origin),
+          targets === snapTargetsRef.current
+            ? [...targets, ...sketchGuideTargets(mode, point, tolerance)]
+            : targets,
+          tolerance,
           {
             lockedId: activeSketchSnap?.id,
             cycle: sketchSnapCycle
@@ -8723,6 +8739,8 @@ export function ModelViewer({
         );
         if (resolved) {
           activeSketchSnap = resolved.target;
+          activeSketchGuide =
+            (resolved.target as SketchGuideTarget).guide ?? null;
           positionSketchSnapMarker(
             event,
             resolved.target.kind,
@@ -8746,6 +8764,80 @@ export function ModelViewer({
       }
       latestSketchPoint = point;
       return point;
+    }
+
+    /**
+     * S08 guidelines and guidepoints offered beside the sketch's own snaps:
+     * model points on the plane (and, while the view looks straight down
+     * its normal, those behind or in front of it), line extensions near the
+     * pointer, and the tangent points of circles and arcs from the end of
+     * the line being drawn.
+     */
+    let activeSketchGuide: SketchGuideTarget['guide'] | null = null;
+    let modelGuideCache: {
+      bodies: unknown;
+      points: ModelGuidepoint[];
+    } | null = null;
+    function modelGuidepoints(): ModelGuidepoint[] {
+      const bodies = bodiesRef.current;
+      if (modelGuideCache?.bodies === bodies) return modelGuideCache.points;
+      const points: ModelGuidepoint[] = [];
+      for (const body of bodies) {
+        if (body.consumed || !body.topology) continue;
+        for (const snap of snapsFromEdges(body.topology.edges, {
+          kinds: ['endpoint', 'midpoint', 'center']
+        })) {
+          if (
+            snap.kind === 'endpoint' ||
+            snap.kind === 'midpoint' ||
+            snap.kind === 'center'
+          ) {
+            points.push({ kind: snap.kind, point: snap.point });
+          }
+        }
+        for (const face of body.topology.faces) {
+          const centroid = face.geometry?.centroid;
+          if (centroid) {
+            points.push({
+              kind: 'center',
+              point: centroid,
+              role: 'face-center'
+            });
+          }
+        }
+      }
+      modelGuideCache = { bodies, points };
+      return points;
+    }
+    function sketchGuideTargets(
+      mode: SketchModeState,
+      point: SketchPoint,
+      tolerance: number
+    ): SnapTarget[] {
+      const view = context.activeCamera.getWorldDirection(new THREE.Vector3());
+      const targets: SnapTarget[] = modelGuideTargets(
+        modelGuidepoints(),
+        mode.basis,
+        {
+          orthogonal: viewIsOrthogonal(view, mode.basis.normal),
+          planeTolerance: 1e-4
+        }
+      );
+      if (
+        mode.inferenceEnabled &&
+        mode.tool !== 'select' &&
+        mode.tool !== 'project'
+      ) {
+        const resolve = sketchModeResolver(mode);
+        targets.push(
+          ...extensionTargets(point, mode.objects, resolve, tolerance)
+        );
+        const anchor = sketchGestureRef.current.chainAnchor;
+        if (mode.tool === 'line' && anchor) {
+          targets.push(...tangentTargets(anchor, mode.objects, resolve));
+        }
+      }
+      return targets;
     }
 
     /** Approximate world units per CSS pixel at the sketch plane. */
@@ -8781,7 +8873,8 @@ export function ModelViewer({
       label = SKETCH_SNAP_LABELS[kind]
     ) {
       sketchSnapMarker.dataset.kind = kind;
-      if (kind === 'grid') {
+      // S08: the text hint naming the snap is optional; the glyph stays.
+      if (kind === 'grid' || sketchModeRef.current?.snapHints === false) {
         delete sketchSnapMarker.dataset.label;
       } else {
         sketchSnapMarker.dataset.label = label;
@@ -9455,7 +9548,7 @@ export function ModelViewer({
       if (!point) {
         return;
       }
-      rig.setInference(null);
+      rig.setInference(activeSketchGuide ? [activeSketchGuide] : null);
       sketchCenterTarget.hidden = true;
       if (
         mode.tool !== 'select' &&
@@ -11149,6 +11242,11 @@ export function ModelViewer({
           curvePickThreshold(event)
         );
         if (curveId) {
+          // The press is the curve's, as an axis line's is: its release must
+          // not also land on what is under it (a bend's sheet, which takes a
+          // click as its fixed region).
+          lockedHandlePointerId = event.pointerId;
+          gestures.capture(event, null);
           event.preventDefault();
           onPickCurveRef.current?.(curveId, addsToSelection(event));
           requestRender();
@@ -15726,11 +15824,20 @@ export function ModelViewer({
     const rig = buildCurvePickerRig(curvePickerCandidatesRef.current);
     context.scene.add(rig.group);
     curvePickerRigRef.current = rig;
+    // E2E: how many curves a click can take now (a bend's lines, say).
+    if (E2E_CANVAS_HOOKS_ENABLED) {
+      context.renderer.domElement.dataset.e2eCurvePicker = String(
+        curvePickerCandidatesRef.current.length
+      );
+    }
     context.requestRender();
     return () => {
       context.scene.remove(rig.group);
       rig.dispose();
       if (curvePickerRigRef.current === rig) curvePickerRigRef.current = null;
+      if (E2E_CANVAS_HOOKS_ENABLED) {
+        delete context.renderer.domElement.dataset.e2eCurvePicker;
+      }
       context.requestRender();
     };
   }, [curvePickerKey]);

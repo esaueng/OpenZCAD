@@ -1792,6 +1792,20 @@ export function SettingsPage({
                     }
                   />
                 </SettingRow>
+                <SettingRow
+                  title="Snap hints"
+                  hint="Name the snap in text beside its marker."
+                >
+                  <Toggle
+                    checked={settings.sketching.snapHints}
+                    label="Snap hints"
+                    onChange={(snapHints) =>
+                      patch({
+                        sketching: { ...settings.sketching, snapHints }
+                      })
+                    }
+                  />
+                </SettingRow>
               </Group>
               <Group title="Relations">
                 <SettingRow
